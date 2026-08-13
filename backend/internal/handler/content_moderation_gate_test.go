@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -12,6 +15,64 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestContentModerationErrorReturnsMatchedKeyword(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+
+	h := &OpenAIGatewayHandler{}
+	h.openAIContentModerationError(c, &service.ContentModerationDecision{
+		Blocked:         true,
+		Flagged:         true,
+		Message:         "内容审计命中风险规则，请调整输入后重试",
+		StatusCode:      http.StatusForbidden,
+		MatchedKeyword:  "secret-token",
+		HighestCategory: "keyword",
+		Action:          service.ContentModerationActionKeywordBlock,
+	})
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	var payload struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.Equal(t, "content_policy_violation", payload.Error.Type)
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试（命中敏感词：secret-token）", payload.Error.Message)
+}
+
+func TestContentModerationDecisionMessageReturnsNonKeywordReason(t *testing.T) {
+	require.Equal(t,
+		"内容审计命中风险规则，请调整输入后重试（违规类型：jailbreak）",
+		contentModerationDecisionMessage(&service.ContentModerationDecision{
+			Blocked: true, Message: "内容审计命中风险规则，请调整输入后重试",
+			HighestCategory: "jailbreak", Action: service.ContentModerationActionSecondLayerBlock,
+		}),
+	)
+	require.Equal(t,
+		"内容审计命中风险规则，请调整输入后重试（命中历史风险内容）",
+		contentModerationDecisionMessage(&service.ContentModerationDecision{
+			Blocked: true, Message: "内容审计命中风险规则，请调整输入后重试",
+			Action: service.ContentModerationActionCacheBlock,
+		}),
+	)
+}
+
+func TestContentModerationWSCloseReasonTruncatesAtUTF8Boundary(t *testing.T) {
+	reason := contentModerationWSCloseReason(&service.ContentModerationDecision{
+		Blocked:        true,
+		Message:        "内容审计命中风险规则，请调整输入后重试",
+		MatchedKeyword: strings.Repeat("敏感词", 100),
+		Action:         service.ContentModerationActionKeywordBlock,
+	})
+
+	require.LessOrEqual(t, len(reason), 120)
+	require.True(t, utf8.ValidString(reason))
+	require.Contains(t, reason, "命中敏感词")
+}
 
 // Ported from upstream's websocket security-audit logging fix: dedupe-cache
 // hits must still emit an audit log entry (cached=true) instead of returning

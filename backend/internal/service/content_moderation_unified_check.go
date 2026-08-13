@@ -122,7 +122,15 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				case ContentModerationFragmentAllow:
 					continue
 				case ContentModerationFragmentBlock:
-					return s.unifiedBlockDecision(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, "fragment_cache", "")
+					category := "fragment_cache"
+					keyword := ""
+					if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
+						if matched, hit := runtime.keywordMatcher.Match(fragment.Text); hit {
+							category = contentModerationKeywordCategory
+							keyword = matched
+						}
+					}
+					return s.unifiedBlockDecision(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, category, keyword)
 				}
 			}
 		}
@@ -202,6 +210,7 @@ func (s *ContentModerationService) unifiedBlockDecision(ctx context.Context, inp
 		Message:         message,
 		StatusCode:      cfg.BlockStatus,
 		InputHash:       fragment.Hash,
+		MatchedKeyword:  keyword,
 		HighestCategory: category,
 		HighestScore:    1,
 		CategoryScores:  scores,

@@ -23,10 +23,25 @@ func contentModerationDecisionErrorCode(decision *service.ContentModerationDecis
 }
 
 func contentModerationDecisionMessage(decision *service.ContentModerationDecision) string {
+	message := "Request blocked by content policy"
 	if decision != nil && strings.TrimSpace(decision.Message) != "" {
-		return decision.Message
+		message = strings.TrimSpace(decision.Message)
 	}
-	return "Request blocked by content policy"
+	if decision == nil || !decision.Blocked {
+		return message
+	}
+	if keyword := strings.TrimSpace(decision.MatchedKeyword); keyword != "" {
+		return message + "（命中敏感词：" + keyword + "）"
+	}
+	switch decision.Action {
+	case service.ContentModerationActionHashBlock, service.ContentModerationActionCacheBlock:
+		return message + "（命中历史风险内容）"
+	case service.ContentModerationActionBlock, service.ContentModerationActionSecondLayerBlock:
+		if category := strings.TrimSpace(decision.HighestCategory); category != "" {
+			return message + "（违规类型：" + category + "）"
+		}
+	}
+	return message
 }
 
 func (h *OpenAIGatewayHandler) openAIContentModerationError(c *gin.Context, decision *service.ContentModerationDecision) {
@@ -159,10 +174,7 @@ func contentModerationWSCloseReason(decision *service.ContentModerationDecision)
 		return riskControlCapacityErrorCode
 	}
 	if decision.Blocked {
-		message := strings.TrimSpace(decision.Message)
-		if message != "" {
-			return message
-		}
+		return truncateString(contentModerationDecisionMessage(decision), 120)
 	}
 	return contentModerationDecisionErrorCode(decision)
 }

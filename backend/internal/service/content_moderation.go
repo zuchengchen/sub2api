@@ -444,6 +444,7 @@ type ContentModerationDecision struct {
 	Message         string             `json:"message"`
 	StatusCode      int                `json:"status_code"`
 	InputHash       string             `json:"input_hash,omitempty"`
+	MatchedKeyword  string             `json:"matched_keyword,omitempty"`
 	HighestCategory string             `json:"highest_category"`
 	HighestScore    float64            `json:"highest_score"`
 	CategoryScores  map[string]float64 `json:"category_scores"`
@@ -1274,6 +1275,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 					Flagged:         true,
 					Message:         cfg.BlockMessage,
 					StatusCode:      cfg.BlockStatus,
+					MatchedKeyword:  keyword,
 					HighestCategory: contentModerationKeywordCategory,
 					HighestScore:    1.0,
 					CategoryScores:  scores,

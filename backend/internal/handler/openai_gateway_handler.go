@@ -2861,9 +2861,7 @@ func closeOpenAIClientWS(conn *coderws.Conn, status coderws.StatusCode, reason s
 		return
 	}
 	reason = strings.TrimSpace(reason)
-	if len(reason) > 120 {
-		reason = reason[:120]
-	}
+	reason = truncateString(reason, 120)
 	_ = conn.Close(status, reason)
 	_ = conn.CloseNow()
 }
@@ -2896,10 +2894,7 @@ func writeContentModerationWSError(ctx context.Context, conn *coderws.Conn, deci
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	message := strings.TrimSpace(decision.Message)
-	if message == "" {
-		message = "content moderation blocked this request"
-	}
+	message := contentModerationDecisionMessage(decision)
 	payload, err := json.Marshal(gin.H{
 		"event_id": "evt_content_moderation_blocked",
 		"type":     "error",
