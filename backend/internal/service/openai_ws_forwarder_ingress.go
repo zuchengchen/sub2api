@@ -970,7 +970,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,
 						Message:        msg,
-						Body:           truncateString(string(upstreamMessage), 4096),
+						Body:           buildCyberPolicyMarkBody(upstreamMessage),
 						UpstreamStatus: http.StatusOK,
 						UpstreamInTok:  usage.InputTokens,
 						UpstreamOutTok: usage.OutputTokens,

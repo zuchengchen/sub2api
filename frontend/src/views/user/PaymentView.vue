@@ -48,7 +48,7 @@
             <div class="card p-6">
               <AmountInput
                 v-model="amount"
-                :amounts="[10, 20, 50, 100, 200, 500, 1000, 2000, 5000]"
+                :amounts="[50, 100, 150, 200]"
                 :min="globalMinAmount"
                 :max="globalMaxAmount"
               />

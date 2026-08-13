@@ -145,3 +145,62 @@ func TestGroupRepository_DeleteCascade_PreservesApiKeyGroupID(t *testing.T) {
 	require.Equal(t, targetGroup.ID, *keyAfter.GroupID)
 	require.Nil(t, keyAfter.Group)
 }
+
+func TestGroupRepository_DeleteCascade_ClearsFallbacksAndEnqueuesOutbox(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	entClient := tx.Client()
+
+	target, err := entClient.Group.Create().
+		SetName(uniqueTestValue(t, "fallback-target")).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	primaryDependent, err := entClient.Group.Create().
+		SetName(uniqueTestValue(t, "fallback-primary-dependent")).
+		SetStatus(service.StatusActive).
+		SetFallbackGroupID(target.ID).
+		Save(ctx)
+	require.NoError(t, err)
+	invalidDependent, err := entClient.Group.Create().
+		SetName(uniqueTestValue(t, "fallback-invalid-dependent")).
+		SetStatus(service.StatusActive).
+		SetFallbackGroupIDOnInvalidRequest(target.ID).
+		Save(ctx)
+	require.NoError(t, err)
+	bothDependent, err := entClient.Group.Create().
+		SetName(uniqueTestValue(t, "fallback-both-dependent")).
+		SetStatus(service.StatusActive).
+		SetFallbackGroupID(target.ID).
+		SetFallbackGroupIDOnInvalidRequest(target.ID).
+		Save(ctx)
+	require.NoError(t, err)
+
+	groupRepo := newGroupRepositoryWithSQL(entClient, tx)
+	_, err = groupRepo.DeleteCascade(ctx, target.ID)
+	require.NoError(t, err)
+
+	for _, dependentID := range []int64{primaryDependent.ID, invalidDependent.ID, bothDependent.ID} {
+		var primaryFallback, invalidFallback *int64
+		require.NoError(t, scanSingleRow(
+			ctx,
+			tx,
+			"SELECT fallback_group_id, fallback_group_id_on_invalid_request FROM groups WHERE id = $1",
+			[]any{dependentID},
+			&primaryFallback,
+			&invalidFallback,
+		))
+		require.Nil(t, primaryFallback)
+		require.Nil(t, invalidFallback)
+
+		var outboxCount int
+		require.NoError(t, scanSingleRow(
+			ctx,
+			tx,
+			"SELECT COUNT(*) FROM scheduler_outbox WHERE event_type = $1 AND group_id = $2",
+			[]any{service.SchedulerOutboxEventGroupChanged, dependentID},
+			&outboxCount,
+		))
+		require.Equal(t, 1, outboxCount)
+	}
+}

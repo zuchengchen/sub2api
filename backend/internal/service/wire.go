@@ -625,8 +625,11 @@ func ProvideBackupService(
 	encryptor SecretEncryptor,
 	storeFactory BackupObjectStoreFactory,
 	dumper DBDumper,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 ) *BackupService {
 	svc := NewBackupService(settingRepo, cfg, encryptor, storeFactory, dumper)
+	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
 }
@@ -744,6 +747,45 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+func ProvideContentModerationService(
+	settingRepo SettingRepository,
+	repo ContentModerationRepository,
+	hashCache ContentModerationHashCache,
+	groupRepo GroupRepository,
+	userRepo UserRepository,
+	proxyRepo ProxyRepository,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	emailService *EmailService,
+	apiKeyRepo APIKeyRepository,
+	cfg *config.Config,
+) (*ContentModerationService, error) {
+	svc := NewContentModerationService(
+		settingRepo, repo, hashCache, groupRepo, userRepo, proxyRepo,
+		authCacheInvalidator, emailService,
+	)
+	svc.apiKeyRepo = apiKeyRepo
+	archiveRepo, ok := repo.(ContentModerationArchiveRepository)
+	if !ok || cfg == nil {
+		return svc, nil
+	}
+	archiveCfg := cfg.ContentModerationArchive
+	runtime, err := newContentModerationArchiveRuntime(archiveRepo, ContentModerationArchiveRuntimeOptions{
+		KeyRingPath:      archiveCfg.KeyRingPath,
+		RetryDir:         archiveCfg.RetryDir,
+		EmergencyDir:     archiveCfg.EmergencyDir,
+		ChunkBytes:       archiveCfg.ChunkBytes,
+		DiskMinFreeBytes: archiveCfg.DiskMinFreeBytes,
+		RetryInitial:     time.Duration(archiveCfg.RetryInitialSeconds) * time.Second,
+		RetryMax:         time.Duration(archiveCfg.RetryMaxSeconds) * time.Second,
+	})
+	if err != nil {
+		return nil, err
+	}
+	svc.archiveRuntime = runtime
+	runtime.SetDispositionProcessor(svc.retryCyberPolicyDisposition)
+	return svc, nil
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
@@ -852,8 +894,9 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
+	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
 	NewModelPricingResolver,
-	NewContentModerationService,
+	ProvideContentModerationService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,
 	ProvidePaymentService,

@@ -1,0 +1,19 @@
+# Machine-readable order asserted by deploy/tests/runtime-risk-cutover-test.sh.
+01 verify-backup
+02 online-prepare
+03 enable-maintenance-503
+04 terminate-connections
+05 stop-old-service
+06 finalize-transaction
+07 start-new-service-once
+08 health-check
+09 finalized-keyring-queue-gate
+10 restore-live-route
+
+# Rollback order is deliberately independent of the forward sequence.
+rollback-01 stop-new-service
+rollback-02 restore-old-tables
+rollback-03 restore-old-prompt-config
+rollback-04 start-old-service
+rollback-05 health-check-old
+rollback-06 restore-live-route

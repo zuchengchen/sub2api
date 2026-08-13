@@ -347,6 +347,8 @@ func TestContentModerationRuntimeSnapshotRefreshReusesUnchangedMatcher(t *testin
 	refreshed := svc.runtimeSnapshot.Load()
 	require.Same(t, current.config, refreshed.config)
 	require.Same(t, current.keywordMatcher, refreshed.keywordMatcher)
+	require.NotEmpty(t, refreshed.fragmentCacheNamespace)
+	require.Equal(t, current.fragmentCacheNamespace, refreshed.fragmentCacheNamespace)
 	_, calls := repo.calls()
 	require.Equal(t, 2, calls)
 }

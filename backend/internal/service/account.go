@@ -118,6 +118,11 @@ const (
 	openAIAuthModeLegacyCredentialKey = "openai_auth_mode"
 )
 
+// AnthropicAPIKeyCacheControlRewriteExtraKey enables proxy-managed message
+// cache breakpoints for an Anthropic API key account. It remains opt-in because
+// rewriting anchors supplied by a native client can reduce cache reuse.
+const AnthropicAPIKeyCacheControlRewriteExtraKey = "anthropic_apikey_cache_control_rewrite"
+
 func isOpenAIPersonalAccessTokenAuthMode(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "personalaccesstoken", "personal_access_token":
@@ -1915,6 +1920,16 @@ func (a *Account) IsAnthropicAPIKeyPassthroughEnabled() bool {
 		return false
 	}
 	enabled, ok := a.Extra["anthropic_passthrough"].(bool)
+	return ok && enabled
+}
+
+// IsAnthropicAPIKeyCacheControlRewriteEnabled reports whether this Anthropic
+// API key account opted into proxy-managed metadata and message breakpoints.
+func (a *Account) IsAnthropicAPIKeyCacheControlRewriteEnabled() bool {
+	if a == nil || a.Platform != PlatformAnthropic || a.Type != AccountTypeAPIKey || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra[AnthropicAPIKeyCacheControlRewriteExtraKey].(bool)
 	return ok && enabled
 }
 

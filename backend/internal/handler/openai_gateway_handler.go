@@ -17,7 +17,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -36,7 +35,6 @@ type OpenAIGatewayHandler struct {
 	usageRecordWorkerPool      *service.UsageRecordWorkerPool
 	errorPassthroughService    *service.ErrorPassthroughService
 	contentModerationService   *service.ContentModerationService
-	securityAuditCoordinator   *securityaudit.Coordinator
 	grokMediaEligibilityProber grokMediaEligibilityProber
 	opsService                 *service.OpsService
 	concurrencyHelper          *ConcurrencyHelper
@@ -348,8 +346,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && !decision.AllowNextStage {
-		h.openAISecurityAuditError(c, decision)
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && !decision.Allowed {
+		h.openAIContentModerationError(c, decision)
 		return
 	}
 
@@ -961,8 +959,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && !decision.AllowNextStage {
-		h.anthropicSecurityAuditError(c, decision)
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && !decision.Allowed {
+		h.anthropicContentModerationError(c, decision)
 		return
 	}
 
@@ -1724,9 +1722,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, true)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeWSV2))
 
-	if decision := h.checkSecurityAuditStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, firstMessage, "first_turn"); decision != nil && !decision.AllowNextStage {
-		writeSecurityAuditWSError(ctx, wsConn, decision)
-		closeOpenAIClientWS(wsConn, securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision))
+	if decision := h.checkContentModerationStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, firstMessage, "first_turn"); decision != nil && !decision.Allowed {
+		writeContentModerationGateWSError(ctx, wsConn, decision)
+		closeOpenAIClientWS(wsConn, contentModerationWSCloseStatus(decision), contentModerationWSCloseReason(decision))
 		return
 	}
 
@@ -2027,7 +2025,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			MaxReasoningEffort:      maxReasoningEffort,
 			ReasoningEffortMappings: reasoningEffortMappings,
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
-				c.Set(securityAuditWSTurnContextKey, turn)
+				c.Set(contentModerationWSTurnContextKey, turn)
 				if turn == 1 {
 					return nil
 				}
@@ -2041,9 +2039,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if model == "" {
 					model = reqModel
 				}
-				if decision := h.checkSecurityAuditStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, model, payload, "subsequent_turn"); decision != nil && !decision.AllowNextStage {
-					writeSecurityAuditWSError(ctx, wsConn, decision)
-					return service.NewOpenAIWSClientCloseError(securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision), nil)
+				if decision := h.checkContentModerationStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, model, payload, "subsequent_turn"); decision != nil && !decision.Allowed {
+					writeContentModerationGateWSError(ctx, wsConn, decision)
+					return service.NewOpenAIWSClientCloseError(contentModerationWSCloseStatus(decision), contentModerationWSCloseReason(decision), nil)
 				}
 				return nil
 			},
@@ -3164,6 +3162,16 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	if c.GetBool(cyberPolicyRecordedKey) {
 		return
 	}
+	moderationInput, hasModerationInput := currentContentModerationInput(c)
+	if apiKey != nil {
+		scope := contentModerationScopeSnapshot(c, apiKey)
+		if !scope.InScope {
+			return
+		}
+		if !hasModerationInput {
+			moderationInput.Scope = &scope
+		}
+	}
 	c.Set(cyberPolicyRecordedKey, true)
 	model = clientRequestedModel(c, model)
 
@@ -3238,7 +3246,11 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		ClientIP:        clientIPStr,
 		CreatedAt:       time.Now(),
 	}
+	reservationHeld := moderationInput.Reservation != nil && moderationInput.Reservation.Retain()
 	go func() {
+		if reservationHeld {
+			defer moderationInput.Reservation.Release()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if cmSvc != nil {
@@ -3257,6 +3269,10 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 				UpstreamStatus:  mark.UpstreamStatus,
 				UpstreamInTok:   mark.UpstreamInTok,
 				UpstreamOutTok:  mark.UpstreamOutTok,
+				Protocol:        moderationInput.Protocol,
+				Scope:           moderationInput.Scope,
+				RawRequest:      moderationInput.RawRequest,
+				UserRole:        moderationInput.UserRole,
 			})
 		}
 		if forwardErrored && gwSvc != nil {

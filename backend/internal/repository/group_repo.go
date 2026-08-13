@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -56,6 +57,10 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 	if groupIn == nil {
 		return errors.New("group is nil")
 	}
+	modelPricing, err := json.Marshal(groupIn.ModelPricing)
+	if err != nil {
+		return fmt.Errorf("marshal group model pricing: %w", err)
+	}
 	builder := client.Group.Create().
 		SetName(groupIn.Name).
 		SetDescription(groupIn.Description).
@@ -88,6 +93,8 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 		SetNillableAudioRealtimePricePerMin(groupIn.AudioRealtimePricePerMin).
 		SetNillableAudioTtsPricePerMillionChars(groupIn.AudioTTSPricePerMillionChars).
 		SetNillableAudioSttPricePerHour(groupIn.AudioSTTPricePerHour).
+		SetLongContextPricingEnabled(groupIn.LongContextPricingEnabled).
+		SetModelPricing(modelPricing).
 		SetDefaultValidityDays(groupIn.DefaultValidityDays).
 		SetClaudeCodeOnly(groupIn.ClaudeCodeOnly).
 		SetNillableFallbackGroupID(groupIn.FallbackGroupID).
@@ -234,6 +241,10 @@ func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.G
 }
 
 func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) error {
+	modelPricing, err := json.Marshal(groupIn.ModelPricing)
+	if err != nil {
+		return fmt.Errorf("marshal group model pricing: %w", err)
+	}
 	builder := r.client.Group.UpdateOneID(groupIn.ID).
 		SetName(groupIn.Name).
 		SetDescription(groupIn.Description).
@@ -260,6 +271,8 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetNillableVideoPrice720p(groupIn.VideoPrice720P).
 		SetNillableVideoPrice1080p(groupIn.VideoPrice1080P).
 		SetVideoModelPrices(service.NormalizeVideoModelPrices(groupIn.VideoModelPrices)).
+		SetLongContextPricingEnabled(groupIn.LongContextPricingEnabled).
+		SetModelPricing(modelPricing).
 		SetDefaultValidityDays(groupIn.DefaultValidityDays).
 		SetClaudeCodeOnly(groupIn.ClaudeCodeOnly).
 		SetModelRoutingEnabled(groupIn.ModelRoutingEnabled).
@@ -830,6 +843,40 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 		return nil, service.ErrGroupNotFound
 	}
 
+	// Ent implements Delete as a soft delete, so PostgreSQL ON DELETE SET NULL
+	// does not fire. Clear both fallback references while the target is locked
+	// and retain the affected IDs for scheduler invalidation in this transaction.
+	rows, err = exec.QueryContext(ctx, `
+		UPDATE groups
+		SET fallback_group_id = CASE WHEN fallback_group_id = $1 THEN NULL ELSE fallback_group_id END,
+			fallback_group_id_on_invalid_request = CASE
+				WHEN fallback_group_id_on_invalid_request = $1 THEN NULL
+				ELSE fallback_group_id_on_invalid_request
+			END,
+			updated_at = NOW()
+		WHERE id <> $1
+		  AND deleted_at IS NULL
+		  AND (fallback_group_id = $1 OR fallback_group_id_on_invalid_request = $1)
+		RETURNING id`, id)
+	if err != nil {
+		return nil, err
+	}
+	var fallbackReferenceGroupIDs []int64
+	for rows.Next() {
+		var groupID int64
+		if err := rows.Scan(&groupID); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		fallbackReferenceGroupIDs = append(fallbackReferenceGroupIDs, groupID)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	var affectedUserIDs []int64
 	if groupSvc.IsSubscriptionType() {
 		// 只查询未软删除的订阅，避免通知已取消订阅的用户
@@ -879,13 +926,22 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 		return nil, err
 	}
 
+	// Outbox rows are part of the same transaction as the cleanup and soft
+	// delete. A failed invalidation must roll the state change back.
+	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventGroupChanged, nil, &id, nil); err != nil {
+		return nil, err
+	}
+	for _, groupID := range fallbackReferenceGroupIDs {
+		groupID := groupID
+		if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &id, nil); err != nil {
-		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group cascade delete failed: group=%d err=%v", id, err)
 	}
 
 	return affectedUserIDs, nil

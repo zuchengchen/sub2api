@@ -443,7 +443,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
 	}
 	if account.Platform == PlatformGrok && account.Type == AccountTypeOAuth && !account.IsShadow() {
-		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
+		s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.Header, resp.StatusCode)
 	}
 
 	if account.Type == AccountTypeOAuth && promptCacheKey != "" {
@@ -563,7 +563,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			MarkOpsCyberPolicy(c, CyberPolicyMark{
 				Code:           code,
 				Message:        msg,
-				Body:           truncateString(string(payload), 4096),
+				Body:           buildCyberPolicyMarkBody(payload),
 				UpstreamStatus: http.StatusOK,
 				UpstreamInTok:  usage.InputTokens,
 				UpstreamOutTok: usage.OutputTokens,
@@ -938,7 +938,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,
 						Message:        msg,
-						Body:           truncateString(payload, 4096),
+						Body:           buildCyberPolicyMarkBody([]byte(payload)),
 						UpstreamStatus: http.StatusOK,
 						UpstreamInTok:  usage.InputTokens,
 						UpstreamOutTok: usage.OutputTokens,

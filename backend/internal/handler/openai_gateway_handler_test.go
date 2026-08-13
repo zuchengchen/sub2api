@@ -1251,28 +1251,17 @@ func (r *contentModerationHandlerTestRepo) CleanupExpiredLogs(ctx context.Contex
 	return &service.ContentModerationCleanupResult{}, nil
 }
 
-func (r *contentModerationHandlerTestRepo) UpdateLogEmailSent(ctx context.Context, id int64, sent bool) error {
-	return nil
-}
-
 func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	moderationServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/v1/moderations", r.URL.Path)
-		_, _ = w.Write([]byte(`{"results":[{"category_scores":{"sexual":0.9}}]}`))
-	}))
-	defer moderationServer.Close()
-
 	cfg := &service.ContentModerationConfig{
-		Enabled:      true,
-		Mode:         service.ContentModerationModePreBlock,
-		BaseURL:      moderationServer.URL,
-		Model:        "omni-moderation-latest",
-		APIKeys:      []string{"sk-test"},
-		SampleRate:   100,
-		AllGroups:    true,
-		BlockMessage: "内容审计测试阻断",
+		Enabled:             true,
+		Mode:                service.ContentModerationModePreBlock,
+		SampleRate:          100,
+		AllGroups:           true,
+		BlockedKeywords:     []string{"bad prompt"},
+		KeywordBlockingMode: service.ContentModerationKeywordModeKeywordOnly,
+		BlockMessage:        "内容审计测试阻断",
 	}
 	rawCfg, err := json.Marshal(cfg)
 	require.NoError(t, err)
@@ -1292,6 +1281,7 @@ func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T
 		nil,
 		nil,
 	)
+	scope := service.NewContentModerationScopeSnapshot(nil, "GPT-test")
 	decision, err := moderationSvc.Check(context.Background(), service.ContentModerationCheckInput{
 		UserID:   1,
 		Endpoint: "/v1/responses",
@@ -1299,6 +1289,7 @@ func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T
 		Model:    "gpt-5.5",
 		Protocol: service.ContentModerationProtocolOpenAIResponses,
 		Body:     []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"bad prompt"}]}]}`),
+		Scope:    &scope,
 	})
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
@@ -1313,7 +1304,7 @@ func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T
 		contentModerationService: moderationSvc,
 		concurrencyHelper:        NewConcurrencyHelper(service.NewConcurrencyService(&concurrencyCacheMock{}), SSEPingFormatNone, time.Second),
 	}
-	wsServer := newOpenAIWSHandlerTestServer(t, h, middleware.AuthSubject{UserID: 1, Concurrency: 1})
+	wsServer := newOpenAIWSHandlerTestServerForGroup(t, h, middleware.AuthSubject{UserID: 1, Concurrency: 1}, "GPT-test")
 	defer wsServer.Close()
 
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1351,7 +1342,7 @@ func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T
 		return len(logs) == 1
 	}, time.Second, 10*time.Millisecond)
 	require.True(t, logs[0].Flagged)
-	require.Equal(t, service.ContentModerationActionBlock, logs[0].Action)
+	require.Equal(t, service.ContentModerationActionKeywordBlock, logs[0].Action)
 	require.Equal(t, "bad prompt", logs[0].InputExcerpt)
 }
 
@@ -1747,12 +1738,19 @@ func newOpenAIHandlerForPreviousResponseIDValidation(t *testing.T, cache *concur
 }
 
 func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject middleware.AuthSubject) *httptest.Server {
+	return newOpenAIWSHandlerTestServerForGroup(t, h, subject, "")
+}
+
+func newOpenAIWSHandlerTestServerForGroup(t *testing.T, h *OpenAIGatewayHandler, subject middleware.AuthSubject, groupName string) *httptest.Server {
 	t.Helper()
 	groupID := int64(2)
 	apiKey := &service.APIKey{
 		ID:      101,
 		GroupID: &groupID,
 		User:    &service.User{ID: subject.UserID},
+	}
+	if groupName != "" {
+		apiKey.Group = &service.Group{ID: groupID, Name: groupName}
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {

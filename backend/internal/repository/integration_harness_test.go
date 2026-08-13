@@ -38,6 +38,8 @@ var (
 	integrationDB        *sql.DB
 	integrationEntClient *dbent.Client
 	integrationRedis     *redisclient.Client
+	integrationPostgres  *tcpostgres.PostgresContainer
+	integrationDSN       string
 
 	redisNamespaceSeq uint64
 )
@@ -73,6 +75,7 @@ func TestMain(m *testing.M) {
 		log.Printf("failed to start postgres container: %v", err)
 		os.Exit(1)
 	}
+	integrationPostgres = pgContainer
 	defer func() { _ = pgContainer.Terminate(ctx) }()
 
 	redisContainer, err := tcredis.Run(
@@ -90,6 +93,7 @@ func TestMain(m *testing.M) {
 		log.Printf("failed to get postgres dsn: %v", err)
 		os.Exit(1)
 	}
+	integrationDSN = dsn
 
 	integrationDB, err = openSQLWithRetry(ctx, dsn, 30*time.Second)
 	if err != nil {

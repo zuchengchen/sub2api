@@ -78,8 +78,8 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	reqLog = reqLog.With(zap.String("model", requestedModel))
 	setOpsRequestContext(c, requestedModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, "openai_alpha_search", requestedModel, body); decision != nil && !decision.AllowNextStage {
-		h.openAISecurityAuditError(c, decision)
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, "openai_alpha_search", requestedModel, body); decision != nil && !decision.Allowed {
+		h.openAIContentModerationError(c, decision)
 		return
 	}
 

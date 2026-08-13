@@ -854,7 +854,16 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		return ""
 	}
 
-	// 1. 最高优先级：从 metadata.user_id 提取 session_xxx
+	// 1. 最高优先级：客户端显式会话标识。它在对话增长时保持稳定，
+	// 也比可由请求体重写产生的 metadata/cache breakpoint 更接近客户端意图。
+	if parsed.SessionContext != nil {
+		if sessionID := strings.TrimSpace(parsed.SessionContext.ClientSessionID); sessionID != "" {
+			slog.Info("sticky.hash_source", "source", "client_session_id")
+			return sessionID
+		}
+	}
+
+	// 2. 从 metadata.user_id 提取 session_xxx
 	if parsed.MetadataUserID != "" {
 		uid := ParseMetadataUserID(parsed.MetadataUserID)
 		if uid != nil && uid.SessionID != "" {
@@ -872,7 +881,7 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		)
 	}
 
-	// 2. 提取带 cache_control: {type: "ephemeral"} 的内容
+	// 3. 提取带 cache_control: {type: "ephemeral"} 的内容
 	cacheableContent := s.extractCacheableContent(parsed)
 	if cacheableContent != "" {
 		hash := s.hashContent(cacheableContent)
@@ -883,7 +892,7 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		return hash
 	}
 
-	// 3. 最后 fallback: 使用 session上下文 + system + 所有消息的完整摘要串
+	// 4. 最后 fallback: 使用 session上下文 + system + 所有消息的完整摘要串
 	var combined strings.Builder
 	// 混入请求上下文区分因子，避免不同用户相同消息产生相同 hash
 	if parsed.SessionContext != nil {

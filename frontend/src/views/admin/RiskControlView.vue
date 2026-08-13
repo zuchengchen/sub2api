@@ -1106,6 +1106,67 @@
             </div>
             <pre class="mt-4 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ inputDetailText }}</pre>
           </div>
+
+          <div v-if="inputDetailRow.archive_id" class="border-t border-gray-100 pt-5 dark:border-dark-700" data-test="archive-section">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.archiveTitle') }}</p>
+                  <span class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="archiveStatusClass(inputDetailRow.archive_status)">
+                    {{ archiveStatusLabel(inputDetailRow.archive_status) }}
+                  </span>
+                  <span v-if="inputDetailRow.archive_incomplete" class="inline-flex rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                    {{ t('admin.riskControl.archiveIncomplete') }}
+                  </span>
+                </div>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ formatBytes(inputDetailRow.archive_bytes) }} · {{ inputDetailRow.transport || '-' }} · {{ inputDetailRow.request_stage || '-' }}
+                </p>
+              </div>
+              <div v-if="archiveAvailable(inputDetailRow)" class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="btn btn-secondary inline-flex items-center gap-2"
+                  :disabled="archiveAction !== null"
+                  data-test="preview-archive"
+                  @click="loadArchivePreview"
+                >
+                  <Icon name="eye" size="sm" />
+                  {{ archiveAction === 'preview' ? t('common.loading') : t('admin.riskControl.archivePreview') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary inline-flex items-center gap-2"
+                  :disabled="archiveAction !== null"
+                  data-test="download-archive"
+                  @click="downloadArchive"
+                >
+                  <Icon name="download" size="sm" />
+                  {{ archiveAction === 'download' ? t('common.processing') : t('admin.riskControl.archiveDownload') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn inline-flex items-center gap-2 border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300"
+                  :disabled="archiveAction !== null"
+                  data-test="delete-archive"
+                  @click="deleteArchive"
+                >
+                  <Icon name="trash" size="sm" />
+                  {{ archiveAction === 'delete' ? t('common.processing') : t('admin.riskControl.archiveDelete') }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="archivePreviewText !== null" class="mt-4" data-test="archive-preview-result">
+              <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span>{{ t('admin.riskControl.archivePreviewBytes', { returned: formatBytes(archivePreviewReturnedBytes), total: formatBytes(archivePreviewTotalBytes) }) }}</span>
+                <span v-if="archivePreviewTruncated" class="font-medium text-amber-700 dark:text-amber-300" data-test="archive-preview-truncated">
+                  {{ t('admin.riskControl.archivePreviewTruncated') }}
+                </span>
+              </div>
+              <pre class="mt-2 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ archivePreviewText }}</pre>
+            </div>
+          </div>
         </div>
 
         <template #footer>
@@ -1146,7 +1207,7 @@ import type {
 import type { AdminGroup, Proxy, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import { formatDateTime as formatDateTimeValue } from '@/utils/format'
+import { formatBytes, formatDateTime as formatDateTimeValue } from '@/utils/format'
 
 type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'riskThresholds' | 'retention' | 'keywords'
 type WorkerSlotState = 'active' | 'idle' | 'disabled'
@@ -1221,6 +1282,11 @@ const moderationTestPrompt = ref('')
 const moderationTestImages = ref<string[]>([])
 const moderationTestResult = ref<ContentModerationTestAuditResult | null>(null)
 const inputDetailRow = ref<ContentModerationLog | null>(null)
+const archiveAction = ref<'preview' | 'download' | 'delete' | null>(null)
+const archivePreviewText = ref<string | null>(null)
+const archivePreviewReturnedBytes = ref(0)
+const archivePreviewTotalBytes = ref(0)
+const archivePreviewTruncated = ref(false)
 let statusTimer: number | null = null
 
 const configForm = reactive({
@@ -1885,11 +1951,85 @@ function inputSummaryText(row: ContentModerationLog): string {
 }
 
 function openInputDetail(row: ContentModerationLog) {
+  clearArchivePreview()
   inputDetailRow.value = row
 }
 
 function closeInputDetail() {
+  clearArchivePreview()
+  archiveAction.value = null
   inputDetailRow.value = null
+}
+
+function clearArchivePreview() {
+  archivePreviewText.value = null
+  archivePreviewReturnedBytes.value = 0
+  archivePreviewTotalBytes.value = 0
+  archivePreviewTruncated.value = false
+}
+
+function archiveAvailable(row: ContentModerationLog): boolean {
+  return Boolean(row.archive_id && row.archive_status === 'available' && !row.archive_deleted_at)
+}
+
+async function loadArchivePreview() {
+  const row = inputDetailRow.value
+  if (!row || !archiveAvailable(row) || archiveAction.value !== null) return
+  archiveAction.value = 'preview'
+  clearArchivePreview()
+  try {
+    const preview = await adminAPI.riskControl.previewArchive(row.id)
+    archivePreviewText.value = decodeBase64UTF8(preview.data_base64)
+    archivePreviewReturnedBytes.value = preview.returned_bytes
+    archivePreviewTotalBytes.value = preview.total_bytes
+    archivePreviewTruncated.value = preview.truncated
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.archivePreviewFailed')))
+  } finally {
+    archiveAction.value = null
+  }
+}
+
+async function downloadArchive() {
+  const row = inputDetailRow.value
+  if (!row || !archiveAvailable(row) || archiveAction.value !== null) return
+  archiveAction.value = 'download'
+  try {
+    const blob = await adminAPI.riskControl.downloadArchive(row.id)
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `risk-archive-${row.id}.json`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.archiveDownloadFailed')))
+  } finally {
+    archiveAction.value = null
+  }
+}
+
+async function deleteArchive() {
+  const row = inputDetailRow.value
+  if (!row || !archiveAvailable(row) || archiveAction.value !== null) return
+  if (!window.confirm(t('admin.riskControl.archiveDeleteConfirm'))) return
+  archiveAction.value = 'delete'
+  try {
+    const result = await adminAPI.riskControl.deleteArchive(row.id)
+    if (result.deleted) {
+      const updated = { ...row, archive_status: 'deleted', archive_deleted_at: new Date().toISOString() }
+      logs.value = logs.value.map((item) => item.id === row.id ? updated : item)
+      inputDetailRow.value = updated
+      clearArchivePreview()
+      appStore.showSuccess(t('admin.riskControl.archiveDeleted'))
+    }
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.archiveDeleteFailed')))
+  } finally {
+    archiveAction.value = null
+  }
 }
 
 async function unbanUser(row: ContentModerationLog) {
@@ -2144,6 +2284,26 @@ function resultBadgeClass(row: ContentModerationLog): string {
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+}
+
+function archiveStatusLabel(statusValue: string): string {
+  const key = ['available', 'emergency', 'retrying', 'content_lost', 'deleted'].includes(statusValue)
+    ? statusValue
+    : 'none'
+  return t(`admin.riskControl.archiveStatus.${key}`)
+}
+
+function archiveStatusClass(statusValue: string): string {
+  if (statusValue === 'available') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300'
+  if (statusValue === 'deleted') return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
+  if (statusValue === 'content_lost') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+}
+
+function decodeBase64UTF8(value: string): string {
+  const binary = window.atob(value)
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
 }
 
 function workerSlotClass(state: WorkerSlotState): string {

@@ -39,7 +39,7 @@ func (h *BatchImageHandler) Submit(c *gin.Context) {
 		batchImageError(c, infraerrors.New(http.StatusUnauthorized, "API_KEY_REQUIRED", "API key is required"))
 		return
 	}
-	if !h.checkSecurityAuditBeforeSubmit(c, &req) {
+	if !h.checkContentModerationBeforeSubmit(c, &req) {
 		return
 	}
 	if sessionID := service.ExtractClientSessionID(c); sessionID != "" {
@@ -53,7 +53,7 @@ func (h *BatchImageHandler) Submit(c *gin.Context) {
 	c.JSON(http.StatusOK, got)
 }
 
-func (h *BatchImageHandler) checkSecurityAuditBeforeSubmit(c *gin.Context, req *service.BatchImageSubmitRequest) bool {
+func (h *BatchImageHandler) checkContentModerationBeforeSubmit(c *gin.Context, req *service.BatchImageSubmitRequest) bool {
 	if h == nil || h.openAI == nil || req == nil {
 		return true
 	}
@@ -83,9 +83,9 @@ func (h *BatchImageHandler) checkSecurityAuditBeforeSubmit(c *gin.Context, req *
 	}
 	reqLog := requestLogger(c, "handler.batch_image.security_audit",
 		zap.Int64("user_id", subject.UserID), zap.Int64("api_key_id", apiKey.ID), zap.String("model", req.Model))
-	decision := h.openAI.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIImages, req.Model, body)
-	if decision != nil && !decision.AllowNextStage {
-		h.openAI.openAISecurityAuditError(c, decision)
+	decision := h.openAI.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIImages, req.Model, body)
+	if decision != nil && !decision.Allowed {
+		h.openAI.openAIContentModerationError(c, decision)
 		return false
 	}
 	return true

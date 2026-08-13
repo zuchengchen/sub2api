@@ -17,7 +17,7 @@ func TestBuildContentModerationLogWhere_BlockedIncludesAllBlockActions(t *testin
 
 	require.Empty(t, args)
 	sql := strings.Join(where, " AND ")
-	require.Contains(t, sql, "l.action IN ('block', 'keyword_block', 'hash_block')")
+	require.Contains(t, sql, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block', 'cyber_policy')")
 	require.NotContains(t, sql, "l.action = 'block'")
 }
 
@@ -29,7 +29,7 @@ func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesHashBlock(t 
 	repo := NewContentModerationRepository(db)
 	since := time.Now().Add(-time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("AND action <> 'hash_block'")).
-		WithArgs(int64(1001), since, false).
+		WithArgs(int64(1001), since, false, "").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
 	count, err := repo.CountFlaggedByUserSince(context.Background(), 1001, since, false)
@@ -47,12 +47,52 @@ func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesCyberPolicyW
 	repo := NewContentModerationRepository(db)
 	since := time.Now().Add(-time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("AND ($3::bool IS FALSE OR action <> 'cyber_policy')")).
-		WithArgs(int64(1001), since, true).
+		WithArgs(int64(1001), since, true, "").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
 
 	count, err := repo.CountFlaggedByUserSince(context.Background(), 1001, since, true)
 
 	require.NoError(t, err)
 	require.Equal(t, 3, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContentModerationRepositoryClaimLogEmailDeliveryWinsOnlyOnce(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	repo, ok := NewContentModerationRepository(db).(service.ContentModerationEmailDeliveryRepository)
+	require.True(t, ok)
+
+	mock.ExpectExec(regexp.QuoteMeta("WHERE id = $1 AND email_delivery_claimed_at IS NULL")).
+		WithArgs(int64(77)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	claim, err := repo.ClaimLogEmailDelivery(context.Background(), 77)
+	require.NoError(t, err)
+	require.Equal(t, service.ContentModerationEmailDeliveryClaim{Exists: true, Claimed: true, Status: "claimed"}, claim)
+
+	mock.ExpectExec(regexp.QuoteMeta("WHERE id = $1 AND email_delivery_claimed_at IS NULL")).
+		WithArgs(int64(77)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT email_delivery_status FROM content_moderation_logs WHERE id = $1")).
+		WithArgs(int64(77)).
+		WillReturnRows(sqlmock.NewRows([]string{"email_delivery_status"}).AddRow("claimed"))
+	claim, err = repo.ClaimLogEmailDelivery(context.Background(), 77)
+	require.NoError(t, err)
+	require.Equal(t, service.ContentModerationEmailDeliveryClaim{Exists: true, Status: "claimed"}, claim)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContentModerationRepositoryEmailCompletionRequiresClaim(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	repo, ok := NewContentModerationRepository(db).(service.ContentModerationEmailDeliveryRepository)
+	require.True(t, ok)
+
+	mock.ExpectExec(regexp.QuoteMeta("WHERE archive_id = $1::uuid AND email_delivery_claimed_at IS NOT NULL")).
+		WithArgs("b411db6f-39c3-4ff7-acfb-ecb860d6a68b", "sent", true).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.CompleteLogEmailDeliveryByArchiveID(context.Background(), "b411db6f-39c3-4ff7-acfb-ecb860d6a68b", true))
 	require.NoError(t, mock.ExpectationsWereMet())
 }

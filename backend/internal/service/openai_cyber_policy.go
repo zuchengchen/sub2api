@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // opsCyberPolicyKey 在 gin context 中携带 cyber_policy 命中标记。
@@ -85,4 +86,29 @@ func detectOpenAICyberPolicy(payload []byte) (bool, string, string) {
 		msg = gjson.GetBytes(payload, "response.error.message").String()
 	}
 	return true, "cyber_policy", strings.TrimSpace(msg)
+}
+
+const cyberPolicyMarkBodyMaxBytes = 4096
+
+const cyberPolicyBodyDroppedInstructions = "[dropped: agent system prompt, not diagnostic]"
+
+// buildCyberPolicyMarkBody removes echoed agent instructions before applying
+// the diagnostic size cap. The encrypted request archive is built from the
+// original inbound bytes and never passes through this helper.
+func buildCyberPolicyMarkBody(payload []byte) string {
+	raw := string(payload)
+	if !gjson.ValidBytes(payload) {
+		return truncateString(raw, cyberPolicyMarkBodyMaxBytes)
+	}
+	trimmed := raw
+	for _, path := range []string{"instructions", "response.instructions"} {
+		if !gjson.Get(trimmed, path).Exists() {
+			continue
+		}
+		next, err := sjson.Set(trimmed, path, cyberPolicyBodyDroppedInstructions)
+		if err == nil {
+			trimmed = next
+		}
+	}
+	return truncateString(trimmed, cyberPolicyMarkBodyMaxBytes)
 }

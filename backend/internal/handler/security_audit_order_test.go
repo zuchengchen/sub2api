@@ -12,27 +12,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type promptAuditOrderCase struct {
+type contentModerationOrderCase struct {
 	file       string
 	function   string
 	auditToken string
 }
 
-func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.T) {
-	tests := []promptAuditOrderCase{
-		{file: "gateway_handler.go", function: "Messages", auditToken: "checkSecurityAudit"},
-		{file: "gateway_handler_chat_completions.go", function: "ChatCompletions", auditToken: "checkSecurityAudit"},
-		{file: "gateway_handler_responses.go", function: "Responses", auditToken: "checkSecurityAudit"},
-		{file: "gemini_v1beta_handler.go", function: "GeminiV1BetaModels", auditToken: "checkSecurityAudit"},
-		{file: "openai_gateway_handler.go", function: "Responses", auditToken: "checkSecurityAudit"},
-		{file: "openai_gateway_handler.go", function: "Messages", auditToken: "checkSecurityAudit"},
-		{file: "openai_chat_completions.go", function: "ChatCompletions", auditToken: "checkSecurityAudit"},
-		{file: "openai_images.go", function: "Images", auditToken: "checkSecurityAudit"},
-		{file: "grok_media.go", function: "handleGrokMedia", auditToken: "checkSecurityAudit"},
-		{file: "openai_embeddings.go", function: "Embeddings", auditToken: "checkSecurityAudit"},
-		{file: "openai_alpha_search.go", function: "AlphaSearch", auditToken: "checkSecurityAudit"},
-		{file: "image_task_handler.go", function: "Submit", auditToken: "checkSecurityAuditBeforeSubmit"},
-		{file: "batch_image_handler.go", function: "Submit", auditToken: "checkSecurityAuditBeforeSubmit"},
+func TestContentModerationGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.T) {
+	tests := []contentModerationOrderCase{
+		{file: "gateway_handler.go", function: "Messages", auditToken: "checkContentModeration"},
+		{file: "gateway_handler_chat_completions.go", function: "ChatCompletions", auditToken: "checkContentModeration"},
+		{file: "gateway_handler_responses.go", function: "Responses", auditToken: "checkContentModeration"},
+		{file: "gemini_v1beta_handler.go", function: "GeminiV1BetaModels", auditToken: "checkContentModeration"},
+		{file: "openai_gateway_handler.go", function: "Responses", auditToken: "checkContentModeration"},
+		{file: "openai_gateway_handler.go", function: "Messages", auditToken: "checkContentModeration"},
+		{file: "openai_chat_completions.go", function: "ChatCompletions", auditToken: "checkContentModeration"},
+		{file: "openai_images.go", function: "Images", auditToken: "checkContentModeration"},
+		{file: "grok_media.go", function: "handleGrokMedia", auditToken: "checkContentModeration"},
+		{file: "openai_embeddings.go", function: "Embeddings", auditToken: "checkContentModeration"},
+		{file: "openai_alpha_search.go", function: "AlphaSearch", auditToken: "checkContentModeration"},
+		{file: "image_task_handler.go", function: "Submit", auditToken: "checkContentModerationBeforeSubmit"},
+		{file: "batch_image_handler.go", function: "Submit", auditToken: "checkContentModerationBeforeSubmit"},
 	}
 	sideEffectTokens := []string{
 		"CheckBillingEligibility(", "SelectAccount", ".Forward", "acquireResponsesUserSlot(",
@@ -43,7 +43,7 @@ func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.
 		t.Run(tt.file+"/"+tt.function, func(t *testing.T) {
 			functionSource := stripGoComments(goFunctionSource(t, tt.file, tt.function))
 			auditIndex := strings.Index(functionSource, tt.auditToken)
-			require.NotEqual(t, -1, auditIndex, "missing Prompt Audit gate")
+			require.NotEqual(t, -1, auditIndex, "missing Content Moderation gate")
 			foundSideEffect := false
 			for _, sideEffect := range sideEffectTokens {
 				index := strings.Index(functionSource, sideEffect)

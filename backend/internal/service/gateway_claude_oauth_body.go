@@ -221,6 +221,45 @@ func ensureClaudeOAuthMetadataUserID(body []byte, userID string) ([]byte, bool) 
 	return setJSONRawBytes(body, "metadata", raw)
 }
 
+// injectAnthropicAPIKeyCacheMetadata gives opt-in API key accounts a stable
+// account/session identity while preserving an identity supplied by the client.
+func injectAnthropicAPIKeyCacheMetadata(body []byte, parsed *ParsedRequest, account *Account) []byte {
+	if len(body) == 0 || account == nil || !account.IsAnthropicAPIKeyCacheControlRewriteEnabled() {
+		return body
+	}
+
+	existing := gjson.GetBytes(body, "metadata.user_id")
+	if existing.Type == gjson.String && strings.TrimSpace(existing.String()) != "" {
+		return body
+	}
+
+	accountID := strconv.FormatInt(account.ID, 10)
+	clientDiscriminator := ""
+	if parsed != nil && parsed.SessionContext != nil {
+		if sessionID := sanitizeSessionID(parsed.SessionContext.ClientSessionID); sessionID != "" {
+			clientDiscriminator = "client-session:" + sessionID
+		} else {
+			clientDiscriminator = sessionContextDiscriminator(parsed.SessionContext)
+		}
+	}
+	if clientDiscriminator == "" {
+		clientDiscriminator = "account:" + accountID
+	}
+
+	deviceDigest := sha256.Sum256([]byte("sub2api-anthropic-apikey-device:" + accountID))
+	sessionSeed := buildStableSessionSeed(account.ID, clientDiscriminator, "")
+	metadataUserID := FormatMetadataUserID(
+		fmt.Sprintf("%x", deviceDigest[:]),
+		"",
+		generateSessionUUID(sessionSeed),
+		"",
+	)
+	if next, changed := ensureClaudeOAuthMetadataUserID(body, metadataUserID); changed {
+		return next
+	}
+	return body
+}
+
 func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAuthNormalizeOptions) ([]byte, string) {
 	if len(body) == 0 {
 		return body, modelID

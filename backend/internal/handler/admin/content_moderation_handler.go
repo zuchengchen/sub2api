@@ -1,12 +1,17 @@
 package admin
 
 import (
+	"bytes"
+	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -55,6 +60,14 @@ type contentModerationConfigRequest struct {
 	BlockedKeywords                *[]string                             `json:"blocked_keywords"`
 	KeywordBlockingMode            *string                               `json:"keyword_blocking_mode"`
 	ModelFilter                    *service.ContentModerationModelFilter `json:"model_filter"`
+	CacheVersion                   *string                               `json:"cache_version"`
+	CacheMaxEntries                *int                                  `json:"cache_max_entries"`
+	CacheMaxBytes                  *int64                                `json:"cache_max_bytes"`
+	SecondLayerEnabled             *bool                                 `json:"second_layer_enabled"`
+	SecondLayerEndpoints           *[]service.ContentModerationEndpoint  `json:"second_layer_endpoints"`
+	SecondLayerScanners            *[]string                             `json:"second_layer_scanners"`
+	CandidateAsset                 *string                               `json:"candidate_asset"`
+	CandidateEnabled               *bool                                 `json:"candidate_enabled"`
 }
 
 type contentModerationAPIKeyTestRequest struct {
@@ -119,6 +132,14 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		BlockedKeywords:                req.BlockedKeywords,
 		KeywordBlockingMode:            req.KeywordBlockingMode,
 		ModelFilter:                    req.ModelFilter,
+		CacheVersion:                   req.CacheVersion,
+		CacheMaxEntries:                req.CacheMaxEntries,
+		CacheMaxBytes:                  req.CacheMaxBytes,
+		SecondLayerEnabled:             req.SecondLayerEnabled,
+		SecondLayerEndpoints:           req.SecondLayerEndpoints,
+		SecondLayerScanners:            req.SecondLayerScanners,
+		CandidateAsset:                 req.CandidateAsset,
+		CandidateEnabled:               req.CandidateEnabled,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -240,6 +261,71 @@ func (h *ContentModerationHandler) ClearFlaggedHashes(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+func (h *ContentModerationHandler) PreviewArchive(c *gin.Context) {
+	logID, ok := parseContentModerationLogID(c)
+	if !ok {
+		return
+	}
+	preview, err := h.service.PreviewArchive(c.Request.Context(), logID, contentModerationActorID(c), contentModerationAdminRequestID(c))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, preview)
+}
+
+func (h *ContentModerationHandler) DownloadArchive(c *gin.Context) {
+	logID, ok := parseContentModerationLogID(c)
+	if !ok {
+		return
+	}
+	raw, err := h.service.DownloadArchive(c.Request.Context(), logID, contentModerationActorID(c), contentModerationAdminRequestID(c))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=risk-archive-%d.json", logID))
+	c.DataFromReader(http.StatusOK, int64(len(raw)), "application/json", bytes.NewReader(raw), nil)
+}
+
+func (h *ContentModerationHandler) DeleteArchive(c *gin.Context) {
+	logID, ok := parseContentModerationLogID(c)
+	if !ok {
+		return
+	}
+	deleted, err := h.service.DeleteArchive(c.Request.Context(), logID, contentModerationActorID(c), contentModerationAdminRequestID(c))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"deleted": deleted})
+}
+
+func parseContentModerationLogID(c *gin.Context) (int64, bool) {
+	logID, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || logID <= 0 {
+		response.BadRequest(c, "Invalid log id")
+		return 0, false
+	}
+	return logID, true
+}
+
+func contentModerationActorID(c *gin.Context) int64 {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		return 0
+	}
+	return subject.UserID
+}
+
+func contentModerationAdminRequestID(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	requestID, _ := c.Request.Context().Value(ctxkey.RequestID).(string)
+	return strings.TrimSpace(requestID)
 }
 
 func parseContentModerationDate(raw string) (time.Time, bool, error) {

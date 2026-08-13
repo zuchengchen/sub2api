@@ -11,13 +11,14 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler"
-	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
+	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
-func TestEveryGatewayPOSTRouteIsClassifiedForPromptAuditCoverage(t *testing.T) {
+func TestEveryGatewayPOSTRouteIsClassifiedForContentModerationCoverage(t *testing.T) {
 	routeSource, err := os.ReadFile("gateway.go")
 	require.NoError(t, err)
 	pattern := regexp.MustCompile(`(?:gateway|gemini|r|codexDirect|antigravityV1|antigravityV1Beta)\.POST\("([^"]+)"`)
@@ -48,6 +49,7 @@ func TestEveryGatewayPOSTRouteIsClassifiedForPromptAuditCoverage(t *testing.T) {
 		"/models/*modelAction":      {"gemini_v1beta_handler.go"},
 		"/tts":                      {"grok_audio.go"},
 		"/web_search":               {"gateway_web_search.go"},
+		"/x_search":                 {"gateway_web_search.go"},
 	}
 	excluded := map[string]string{
 		"/messages/count_tokens":     "tokenization only; it does not execute a model request",
@@ -71,11 +73,11 @@ func TestEveryGatewayPOSTRouteIsClassifiedForPromptAuditCoverage(t *testing.T) {
 
 	for route, files := range audited {
 		_, exists := actual[route]
-		require.Truef(t, exists, "stale prompt-audit route manifest entry %s", route)
+		require.Truef(t, exists, "stale content-moderation route manifest entry %s", route)
 		for _, filename := range files {
 			source, readErr := os.ReadFile(filepath.Join("..", "..", "handler", filename))
 			require.NoError(t, readErr)
-			require.Containsf(t, string(source), "checkSecurityAudit", "%s route handler %s bypasses Coordinator", route, filename)
+			require.Containsf(t, string(source), "checkContentModeration", "%s route handler %s bypasses unified risk control", route, filename)
 		}
 	}
 
@@ -86,13 +88,13 @@ func TestEveryGatewayPOSTRouteIsClassifiedForPromptAuditCoverage(t *testing.T) {
 	}
 }
 
-func TestResponsesWebSocketHasFirstAndSubsequentTurnPromptGates(t *testing.T) {
+func TestResponsesWebSocketHasFirstAndSubsequentTurnContentModerationGates(t *testing.T) {
 	routeSource, err := os.ReadFile("gateway.go")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, strings.Count(string(routeSource), `.GET("/responses"`), 2)
 	handlerSource, err := os.ReadFile(filepath.Join("..", "..", "handler", "openai_gateway_handler.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(handlerSource), `checkSecurityAuditStage`)
+	require.Contains(t, string(handlerSource), `checkContentModerationStage`)
 	require.Contains(t, string(handlerSource), `"first_turn"`)
 	require.Contains(t, string(handlerSource), `"subsequent_turn"`)
 	wsStart := strings.Index(string(handlerSource), `func (h *OpenAIGatewayHandler) ResponsesWebSocket`)
@@ -105,39 +107,27 @@ func TestResponsesWebSocketHasFirstAndSubsequentTurnPromptGates(t *testing.T) {
 	)
 }
 
-func TestPromptAuditAdminRoutesRejectUnauthenticatedAndNonAdminRequests(t *testing.T) {
+func TestLegacyPromptAuditAdminAPIIsNotRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{
-		PromptAudit: securityaudit.NewPromptAdminHandler(nil),
+		ContentModeration: admin.NewContentModerationHandler((*service.ContentModerationService)(nil)),
 	}}
-	adminAuth := servermiddleware.AdminAuthMiddleware(func(c *gin.Context) {
-		if c.GetHeader("Authorization") == "" {
-			servermiddleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Authorization required")
-			return
-		}
-		servermiddleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Admin access required")
-	})
+	adminAuth := servermiddleware.AdminAuthMiddleware(func(c *gin.Context) { c.Next() })
 	auditLog := servermiddleware.AuditLogMiddleware(func(c *gin.Context) { c.Next() })
 	stepUp := servermiddleware.StepUpAuthMiddleware(func(c *gin.Context) { c.Next() })
 	RegisterAdminRoutes(router.Group("/api/v1"), handlers, adminAuth, auditLog, stepUp, nil, nil)
 
-	for _, tc := range []struct {
-		name       string
-		auth       string
-		wantStatus int
-	}{
-		{name: "unauthenticated", wantStatus: http.StatusUnauthorized},
-		{name: "non-admin", auth: "Bearer user-token", wantStatus: http.StatusForbidden},
+	for _, path := range []string{
+		"/api/v1/admin/prompt-audit/config",
+		"/api/v1/admin/prompt-audit/runtime",
+		"/api/v1/admin/prompt-audit/events",
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/prompt-audit/config", nil)
-			if tc.auth != "" {
-				request.Header.Set("Authorization", tc.auth)
-			}
+			request := httptest.NewRequest(http.MethodGet, path, nil)
 			router.ServeHTTP(recorder, request)
-			require.Equal(t, tc.wantStatus, recorder.Code)
+			require.Equal(t, http.StatusNotFound, recorder.Code)
 		})
 	}
 }

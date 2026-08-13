@@ -25,7 +25,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
-	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -50,7 +49,6 @@ type GatewayHandler struct {
 	usageRecordWorkerPool     *service.UsageRecordWorkerPool
 	errorPassthroughService   *service.ErrorPassthroughService
 	contentModerationService  *service.ContentModerationService
-	securityAuditCoordinator  *securityaudit.Coordinator
 	concurrencyHelper         *ConcurrencyHelper
 	userMsgQueueHelper        *UserMsgQueueHelper
 	maxAccountSwitches        int
@@ -209,8 +207,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && !decision.AllowNextStage {
-		h.anthropicSecurityAuditError(c, decision)
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && !decision.Allowed {
+		h.anthropicContentModerationError(c, decision)
 		return
 	}
 
@@ -254,9 +252,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// 计算粘性会话hash
 	parsedReq.SessionContext = &service.SessionContext{
-		ClientIP:  ip.GetClientIP(c),
-		UserAgent: c.GetHeader("User-Agent"),
-		APIKeyID:  apiKey.ID,
+		ClientIP:        ip.GetClientIP(c),
+		UserAgent:       c.GetHeader("User-Agent"),
+		APIKeyID:        apiKey.ID,
+		ClientSessionID: service.ExtractClientSessionID(c),
 	}
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
@@ -1249,7 +1248,7 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 
 func grokModelSupportsConfigurableReasoning(modelID string) bool {
 	switch strings.ToLower(strings.TrimSpace(modelID)) {
-	case "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
+	case "grok-4.6", "grok-4.6-latest", "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
 		return true
 	default:
 		return false
@@ -2048,9 +2047,10 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 
 	// 计算粘性会话 hash
 	parsedReq.SessionContext = &service.SessionContext{
-		ClientIP:  ip.GetClientIP(c),
-		UserAgent: c.GetHeader("User-Agent"),
-		APIKeyID:  apiKey.ID,
+		ClientIP:        ip.GetClientIP(c),
+		UserAgent:       c.GetHeader("User-Agent"),
+		APIKeyID:        apiKey.ID,
+		ClientSessionID: service.ExtractClientSessionID(c),
 	}
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 

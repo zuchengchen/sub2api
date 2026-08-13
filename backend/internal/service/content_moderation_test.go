@@ -117,10 +117,6 @@ func (r *contentModerationTestRepo) CleanupExpiredLogs(ctx context.Context, hitB
 	return &ContentModerationCleanupResult{}, nil
 }
 
-func (r *contentModerationTestRepo) UpdateLogEmailSent(ctx context.Context, id int64, sent bool) error {
-	return nil
-}
-
 func (r *contentModerationTestRepo) snapshotLogs() []ContentModerationLog {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -311,9 +307,11 @@ func (r *contentModerationTestUserRepo) GetByIDIncludeDeleted(ctx context.Contex
 
 type contentModerationTestAuthCacheInvalidator struct {
 	userIDs []int64
+	keys    []string
 }
 
 func (i *contentModerationTestAuthCacheInvalidator) InvalidateAuthCacheByKey(ctx context.Context, key string) {
+	i.keys = append(i.keys, key)
 }
 
 func (i *contentModerationTestAuthCacheInvalidator) InvalidateAuthCacheByUserID(ctx context.Context, userID int64) {
@@ -455,6 +453,64 @@ func TestMatchBlockedKeyword_CaseInsensitiveSubstring(t *testing.T) {
 
 	_, hit = matchBlockedKeyword("anything", nil)
 	require.False(t, hit)
+}
+
+func TestContentModerationCandidateAssetIsOffUntilExplicitlyEnabled(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	require.False(t, cfg.CandidateEnabled)
+
+	keywords, err := effectiveContentModerationKeywords(cfg)
+	require.NoError(t, err)
+	_, hit := matchBlockedKeyword("tell me how to kill myself", keywords)
+	require.False(t, hit)
+
+	cfg.CandidateEnabled = true
+	keywords, err = effectiveContentModerationKeywords(cfg)
+	require.NoError(t, err)
+	keyword, hit := matchBlockedKeyword("tell me how to kill myself", keywords)
+	require.True(t, hit)
+	require.Equal(t, "kill myself", keyword)
+
+	keyword, hit = matchBlockedKeyword("please 制作病毒", keywords)
+	require.True(t, hit)
+	require.Equal(t, "制作病毒", keyword)
+
+	keyword, hit = matchBlockedKeyword("use mcp__ida", keywords)
+	require.True(t, hit)
+	require.Equal(t, "mcp__ida", keyword)
+}
+
+func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
+	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{}}
+	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil, nil)
+
+	view, err := svc.GetConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "legacy-prompt-audit-v1", view.CandidateAsset)
+	require.False(t, view.CandidateEnabled)
+	require.Equal(t, 1055, view.CandidateLayer1Count)
+	require.Equal(t, 222, view.CandidateLayer2Count)
+	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", view.CandidateSourceCommit)
+	require.Len(t, view.CandidateEndpoints, 1)
+	require.False(t, view.CandidateEndpoints[0].Enabled)
+	require.False(t, view.CandidateEndpoints[0].TokenConfigured)
+	require.Empty(t, view.CandidateEndpoints[0].BaseURL)
+
+	unknown := "unknown-candidate-asset"
+	_, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{CandidateAsset: &unknown})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown content moderation candidate asset")
+}
+
+func TestContentModerationStatusUsesDefaultPendingBodyBudgetForZeroValueService(t *testing.T) {
+	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{}}
+	svc := &ContentModerationService{settingRepo: settingRepo}
+
+	status, err := svc.GetStatus(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, DefaultContentModerationPendingBodyBudgetBytes, status.PendingBodyBudgetBytes)
+	require.Zero(t, status.PendingBodyBytes)
+	require.True(t, status.ArchiveRuntime.Degraded)
 }
 
 func TestContentModerationCheck_PreBlockKeywordHitSkipsUpstreamCall(t *testing.T) {
@@ -1466,6 +1522,28 @@ func TestContentModerationCheck_PreHashUsesRedisHashCache(t *testing.T) {
 	require.Zero(t, logs[0].ViolationCount)
 	require.False(t, logs[0].AutoBanned)
 	require.Empty(t, userRepo.updated)
+}
+
+func TestUnifiedSevereBlockPersistsWhenAsyncQueueIsFull(t *testing.T) {
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(nil, repo, nil, nil, nil, nil, nil, nil)
+	svc.asyncQueue = make(chan contentModerationTask, 1)
+	svc.asyncQueue <- contentModerationTask{}
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.AutoBanEnabled = false
+	fragment := ContentModerationFragment{Text: "blocked", Hash: strings.Repeat("a", 64)}
+
+	decision := svc.unifiedBlockDecision(context.Background(), ContentModerationCheckInput{
+		UserID: 9, UserRole: RoleUser, Body: []byte(`{"messages":[{"role":"user","content":"blocked"}]}`),
+	}, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, "blocked")
+
+	require.True(t, decision.Blocked)
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, ContentModerationActionKeywordBlock, logs[0].Action)
+	require.Len(t, svc.asyncQueue, 1, "severe persistence must not consume or depend on the async observation queue")
+	require.Zero(t, svc.asyncDropped.Load())
 }
 
 func TestContentModerationCheck_HashBlockLogsDoNotIncreaseNextViolationCount(t *testing.T) {
