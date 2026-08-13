@@ -4,9 +4,9 @@
   "source_commit": "99c8e4bf7564823bafbab369acab6539e734c1bb",
   "layer1": {
     "file": "layer1-hard-block.json",
-    "entries": 186,
-    "source_sha256": "1379ca4bab9c7efcb50963caef0794276937b3fbbf7ea65785b872871692df33",
-    "embedded_sha256": "ea79f48caaed2641e6f3b0fcf066396f9a7537edeea413a65a82a61e1becd2a8"
+    "entries": 1055,
+    "source_sha256": "9137d75ca5ca051c408b9b3f30393a5f59d498dcdac5c4a2e126b2241b9021a2",
+    "embedded_sha256": "6ea6c33149589f309ff08c3239882390d795f6ed55c1baedc90710404d23aa8d"
   },
   "layer2": {
     "file": "layer2-prefilter.json",

@@ -128,7 +128,7 @@ const baseConfig = (): ContentModerationConfig => ({
   second_layer_scanners: [],
   candidate_asset: 'legacy-prompt-audit-v1',
   candidate_enabled: false,
-  candidate_layer1_count: 186,
+  candidate_layer1_count: 1055,
   candidate_layer2_count: 222,
   candidate_source_commit: '99c8e4bf7564823bafbab369acab6539e734c1bb',
   candidate_endpoints: [],

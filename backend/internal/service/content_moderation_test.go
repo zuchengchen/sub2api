@@ -470,6 +470,14 @@ func TestContentModerationCandidateAssetIsOffUntilExplicitlyEnabled(t *testing.T
 	keyword, hit := matchBlockedKeyword("tell me how to kill myself", keywords)
 	require.True(t, hit)
 	require.Equal(t, "kill myself", keyword)
+
+	keyword, hit = matchBlockedKeyword("please 制作病毒", keywords)
+	require.True(t, hit)
+	require.Equal(t, "制作病毒", keyword)
+
+	keyword, hit = matchBlockedKeyword("use mcp__ida", keywords)
+	require.True(t, hit)
+	require.Equal(t, "mcp__ida", keyword)
 }
 
 func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
@@ -480,7 +488,7 @@ func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "legacy-prompt-audit-v1", view.CandidateAsset)
 	require.False(t, view.CandidateEnabled)
-	require.Equal(t, 186, view.CandidateLayer1Count)
+	require.Equal(t, 1055, view.CandidateLayer1Count)
 	require.Equal(t, 222, view.CandidateLayer2Count)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", view.CandidateSourceCommit)
 	require.Len(t, view.CandidateEndpoints, 1)
