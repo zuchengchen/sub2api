@@ -270,6 +270,15 @@ func createVerifiedBackup(ctx context.Context, sourceDB, adminDB *sql.DB, source
 		return err
 	}
 	listDigest := sha256.Sum256(listOutput)
+	isolatedList, err := isolatedRestoreList(listOutput)
+	if err != nil {
+		return err
+	}
+	isolatedListPath := temporaryArchive + ".restore-list"
+	if err := os.WriteFile(isolatedListPath, isolatedList, 0o600); err != nil {
+		return fmt.Errorf("write isolated restore list: %w", err)
+	}
+	defer func() { _ = os.Remove(isolatedListPath) }()
 
 	restoreDatabase := safeRestoreDatabaseName(options.restorePrefix)
 	if _, err := adminDB.ExecContext(ctx, `CREATE DATABASE `+pq.QuoteIdentifier(restoreDatabase)); err != nil {
@@ -296,7 +305,7 @@ func createVerifiedBackup(ctx context.Context, sourceDB, adminDB *sql.DB, source
 	}
 	restoreArgs := []string{
 		"--clean", "--if-exists", "--exit-on-error", "--no-owner", "--no-privileges",
-		"--dbname=" + restoreDatabase, temporaryArchive,
+		"--use-list=" + isolatedListPath, "--dbname=" + restoreDatabase, temporaryArchive,
 	}
 	if _, err := runPostgresTool(ctx, options.pgRestorePath, restoreArgs, restoreConfig); err != nil {
 		return fmt.Errorf("restore Prompt Audit pg_dump in isolation: %w", err)
@@ -442,6 +451,13 @@ func validateRestoreList(list []byte) error {
 		"TABLE public prompt_audit_jobs", "TABLE DATA public prompt_audit_jobs",
 		"TABLE public prompt_audit_events", "TABLE DATA public prompt_audit_events",
 		"INDEX public idx_prompt_audit_jobs_schedule", "INDEX public idx_prompt_audit_events_job",
+		"FK CONSTRAINT public prompt_audit_events prompt_audit_events_api_key_id_fkey",
+		"FK CONSTRAINT public prompt_audit_events prompt_audit_events_group_id_fkey",
+		"FK CONSTRAINT public prompt_audit_events prompt_audit_events_job_id_fkey",
+		"FK CONSTRAINT public prompt_audit_events prompt_audit_events_user_id_fkey",
+		"FK CONSTRAINT public prompt_audit_jobs prompt_audit_jobs_api_key_id_fkey",
+		"FK CONSTRAINT public prompt_audit_jobs prompt_audit_jobs_group_id_fkey",
+		"FK CONSTRAINT public prompt_audit_jobs prompt_audit_jobs_user_id_fkey",
 	}
 	for _, marker := range required {
 		if !strings.Contains(text, marker) {
@@ -449,6 +465,30 @@ func validateRestoreList(list []byte) error {
 		}
 	}
 	return nil
+}
+
+func isolatedRestoreList(list []byte) ([]byte, error) {
+	const internalForeignKey = "FK CONSTRAINT public prompt_audit_events prompt_audit_events_job_id_fkey"
+	const promptAuditForeignKey = "FK CONSTRAINT public prompt_audit_"
+
+	var result bytes.Buffer
+	removed := 0
+	internalFound := false
+	for _, line := range bytes.SplitAfter(list, []byte("\n")) {
+		text := string(line)
+		if strings.Contains(text, internalForeignKey) {
+			internalFound = true
+		}
+		if strings.Contains(text, promptAuditForeignKey) && !strings.Contains(text, internalForeignKey) {
+			removed++
+			continue
+		}
+		_, _ = result.Write(line)
+	}
+	if !internalFound || removed != 6 {
+		return nil, fmt.Errorf("unexpected Prompt Audit foreign-key layout: internal_found=%t external_count=%d", internalFound, removed)
+	}
+	return result.Bytes(), nil
 }
 
 func runPostgresTool(ctx context.Context, executable string, args []string, database config.DatabaseConfig) ([]byte, error) {
