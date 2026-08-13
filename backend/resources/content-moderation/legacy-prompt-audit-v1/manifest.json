@@ -1,0 +1,29 @@
+{
+  "id": "legacy-prompt-audit-v1",
+  "enabled_by_default": false,
+  "source_commit": "99c8e4bf7564823bafbab369acab6539e734c1bb",
+  "layer1": {
+    "file": "layer1-hard-block.json",
+    "entries": 186,
+    "source_sha256": "1379ca4bab9c7efcb50963caef0794276937b3fbbf7ea65785b872871692df33",
+    "embedded_sha256": "ea79f48caaed2641e6f3b0fcf066396f9a7537edeea413a65a82a61e1becd2a8"
+  },
+  "layer2": {
+    "file": "layer2-prefilter.json",
+    "entries": 222,
+    "source_sha256": "c6f34e4a79b408438060b29df570922cc428b1657ad47c68b7fc1d3386a851a3",
+    "embedded_sha256": "d9afeb6daba616242ce5e66db47de4d00cccee0c99745620d2fe89445b7e377b"
+  },
+  "candidate_endpoints": [
+    {
+      "id": "legacy-qwen3guard",
+      "name": "Legacy Qwen3Guard",
+      "base_url": "",
+      "model": "sileader/qwen3guard:0.6b",
+      "token": "",
+      "enabled": false,
+      "timeout_ms": 3000,
+      "input_limit": 4000
+    }
+  ]
+}

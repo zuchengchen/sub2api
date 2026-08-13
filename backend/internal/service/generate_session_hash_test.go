@@ -176,6 +176,26 @@ func TestGenerateSessionHash_MetadataOverridesSessionContext(t *testing.T) {
 	require.Equal(t, "123e4567-e89b-12d3-a456-426614174000", hash, "metadata session_id should take priority over SessionContext")
 }
 
+func TestGenerateSessionHash_ClientSessionIDOverridesMetadataAndBody(t *testing.T) {
+	svc := &GatewayService{}
+	metadata := "user_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2_account__session_123e4567-e89b-12d3-a456-426614174000"
+	ctx := &SessionContext{
+		ClientIP:        "192.168.1.1",
+		UserAgent:       "claude-cli/2.1.87",
+		APIKeyID:        100,
+		ClientSessionID: "client-session-abcdef",
+	}
+	first := mustParseSessionHashRequest(t, anthropicSessionBody(nil, []any{msg("user", "hello")}, metadata), ctx)
+	second := mustParseSessionHashRequest(t, anthropicSessionBody(nil, []any{
+		msg("user", "hello"),
+		msg("assistant", "hi"),
+		msg("user", "continue"),
+	}, metadata), ctx)
+
+	require.Equal(t, "client-session-abcdef", svc.GenerateSessionHash(first))
+	require.Equal(t, "client-session-abcdef", svc.GenerateSessionHash(second))
+}
+
 func TestGenerateSessionHash_MetadataJSON_HasHighestPriority(t *testing.T) {
 	svc := &GatewayService{}
 	metadata := `{"device_id":"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2","account_uuid":"","session_id":"c72554f2-1234-5678-abcd-123456789abc"}`

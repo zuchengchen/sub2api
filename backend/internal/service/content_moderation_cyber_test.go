@@ -24,15 +24,8 @@ func (r *cyberOrderingTestRepo) CreateLog(ctx context.Context, log *ContentModer
 	r.calls = append(r.calls, "create")
 	if log != nil {
 		r.emailSents = append(r.emailSents, log.EmailSent)
-		log.ID = 1 // simulate DB-assigned ID so UpdateLogEmailSent guard passes
+		log.ID = 1 // simulate the database-assigned ID used by later delivery claims
 	}
-	return nil
-}
-
-func (r *cyberOrderingTestRepo) UpdateLogEmailSent(ctx context.Context, id int64, sent bool) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, "update_email_sent")
 	return nil
 }
 
@@ -46,6 +39,14 @@ func (r *cyberOrderingTestRepo) CountFlaggedByUserSince(ctx context.Context, use
 
 func (r *cyberOrderingTestRepo) CleanupExpiredLogs(ctx context.Context, hitBefore time.Time, nonHitBefore time.Time) (*ContentModerationCleanupResult, error) {
 	return &ContentModerationCleanupResult{}, nil
+}
+
+func (r *cyberOrderingTestRepo) DisableUserIfActive(context.Context, int64) (bool, error) {
+	return true, nil
+}
+
+func (r *cyberOrderingTestRepo) DisableAPIKeyIfActive(context.Context, int64) (string, bool, error) {
+	return "", false, nil
 }
 
 func (r *cyberOrderingTestRepo) snapshot() []string {
@@ -64,8 +65,46 @@ func (r *cyberOrderingTestRepo) snapshotEmailSents() []bool {
 	return out
 }
 
-func TestRecordCyberPolicyEvent_DisabledWhenRiskControlOff(t *testing.T) {
-	repo := &contentModerationTestRepo{}
+type cyberDispositionTestRepo struct {
+	contentModerationTestRepo
+	dispositionMu    sync.Mutex
+	userActive       bool
+	keyActive        bool
+	keyCredential    string
+	disableUserCalls int
+	disableKeyCalls  int
+}
+
+func (r *cyberDispositionTestRepo) DisableUserIfActive(context.Context, int64) (bool, error) {
+	r.dispositionMu.Lock()
+	defer r.dispositionMu.Unlock()
+	r.disableUserCalls++
+	if !r.userActive {
+		return false, nil
+	}
+	r.userActive = false
+	return true, nil
+}
+
+func (r *cyberDispositionTestRepo) DisableAPIKeyIfActive(context.Context, int64) (string, bool, error) {
+	r.dispositionMu.Lock()
+	defer r.dispositionMu.Unlock()
+	r.disableKeyCalls++
+	if !r.keyActive {
+		return "", false, nil
+	}
+	r.keyActive = false
+	return r.keyCredential, true, nil
+}
+
+func gptCyberScope() *ContentModerationScopeSnapshot {
+	scope := NewContentModerationScopeSnapshot(nil, "  gPt-production")
+	return &scope
+}
+
+func TestRecordCyberPolicyEvent_RiskControlOffStillForcesUserDisposition(t *testing.T) {
+	repo := &cyberDispositionTestRepo{userActive: true}
+	invalidator := &contentModerationTestAuthCacheInvalidator{}
 	svc := NewContentModerationService(
 		&contentModerationTestSettingRepo{values: map[string]string{
 			SettingKeyRiskControlEnabled: "false",
@@ -75,7 +114,7 @@ func TestRecordCyberPolicyEvent_DisabledWhenRiskControlOff(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		nil,
+		invalidator,
 		nil,
 	)
 
@@ -87,13 +126,21 @@ func TestRecordCyberPolicyEvent_DisabledWhenRiskControlOff(t *testing.T) {
 		UpstreamMessage: "flagged",
 		UpstreamBody:    `{"error":{"code":"cyber_policy"}}`,
 		UpstreamStatus:  400,
+		Scope:           gptCyberScope(),
+		UserRole:        RoleUser,
 	})
 
-	require.Empty(t, repo.snapshotLogs(), "CreateLog must NOT be called when risk_control_enabled is off")
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, "disabled", logs[0].DispositionStatus)
+	require.Equal(t, "user", logs[0].DispositionTarget)
+	require.True(t, logs[0].DispositionTransitioned)
+	require.True(t, logs[0].AutoBanned)
+	require.Equal(t, []int64{1}, invalidator.userIDs)
 }
 
-func TestRecordCyberPolicyEvent_WritesLogWhenEnabled(t *testing.T) {
-	repo := &contentModerationTestRepo{}
+func TestRecordCyberPolicyEvent_NonGPTSkipsAllSideEffects(t *testing.T) {
+	repo := &cyberDispositionTestRepo{userActive: true}
 	svc := NewContentModerationService(
 		&contentModerationTestSettingRepo{values: map[string]string{
 			SettingKeyRiskControlEnabled: "true",
@@ -104,8 +151,9 @@ func TestRecordCyberPolicyEvent_WritesLogWhenEnabled(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		nil, // emailService=nil: email path safely skipped
+		nil,
 	)
+	scope := NewContentModerationScopeSnapshot(nil, "claude")
 
 	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
 		UserID:          1,
@@ -115,17 +163,37 @@ func TestRecordCyberPolicyEvent_WritesLogWhenEnabled(t *testing.T) {
 		UpstreamMessage: "flagged",
 		UpstreamBody:    `{"error":{"code":"cyber_policy"}}`,
 		UpstreamStatus:  400,
+		Scope:           &scope,
+		UserRole:        RoleUser,
 	})
+	require.Empty(t, repo.snapshotLogs())
+	require.Equal(t, 0, repo.disableUserCalls)
+}
+
+func TestRecordCyberPolicyEvent_WritesLogAndDisablesUserOnce(t *testing.T) {
+	repo := &cyberDispositionTestRepo{userActive: true}
+	invalidator := &contentModerationTestAuthCacheInvalidator{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{SettingKeyRiskControlEnabled: "true"}},
+		repo, nil, nil, nil, nil, invalidator, nil,
+	)
+	input := CyberPolicyRecordInput{
+		UserID: 1, UserEmail: "u@x.com", Model: "gpt-5", Endpoint: "/v1/responses",
+		UpstreamMessage: "flagged", UpstreamBody: `{"error":{"code":"cyber_policy"}}`,
+		UpstreamStatus: 400, Scope: gptCyberScope(), UserRole: RoleUser,
+	}
+	svc.RecordCyberPolicyEvent(context.Background(), input)
+	svc.RecordCyberPolicyEvent(context.Background(), input)
 
 	logs := repo.snapshotLogs()
-	require.Len(t, logs, 1)
+	require.Len(t, logs, 2)
 	log := logs[0]
 
 	require.Equal(t, "cyber_policy", log.Action)
 	require.True(t, log.Flagged)
 	require.Equal(t, "cyber_policy", log.HighestCategory)
 	require.Contains(t, log.Error, "flagged")
-	require.False(t, log.AutoBanned)
+	require.True(t, log.AutoBanned)
 	// emailService is nil, so EmailSent must be false
 	require.False(t, log.EmailSent)
 
@@ -148,28 +216,48 @@ func TestRecordCyberPolicyEvent_WritesLogWhenEnabled(t *testing.T) {
 	// endpoint
 	require.Equal(t, "/v1/responses", log.Endpoint)
 
-	// violation count >= 1 (side-effects ran)
-	require.GreaterOrEqual(t, log.ViolationCount, 1)
+	require.Equal(t, 0, log.ViolationCount, "upstream cyber disposition is independent of the local violation window")
+	require.Equal(t, "disabled", log.DispositionStatus)
+	require.Equal(t, "already_disabled", logs[1].DispositionStatus)
+	require.Equal(t, []int64{1}, invalidator.userIDs, "auth cache is invalidated only for the winning transition")
 
 	// Error field should also contain the upstream body JSON
 	require.True(t, strings.Contains(log.Error, "cyber_policy") || strings.Contains(log.Error, "flagged"),
 		"Error should mention flagged or cyber_policy")
 }
 
+func TestRecordCyberPolicyEvent_AdminDisablesOnlyTriggeringAPIKey(t *testing.T) {
+	repo := &cyberDispositionTestRepo{userActive: true, keyActive: true, keyCredential: "sk-triggering"}
+	invalidator := &contentModerationTestAuthCacheInvalidator{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{}},
+		repo, nil, nil, nil, nil, invalidator, nil,
+	)
+	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
+		UserID: 7, APIKeyID: 42, UserRole: RoleAdmin, Scope: gptCyberScope(),
+		Model: "gpt-5", Endpoint: "/v1/responses", UpstreamMessage: "blocked",
+	})
+
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, "api_key", logs[0].DispositionTarget)
+	require.Equal(t, "disabled", logs[0].DispositionStatus)
+	require.Equal(t, 0, repo.disableUserCalls)
+	require.Equal(t, 1, repo.disableKeyCalls)
+	require.Empty(t, invalidator.userIDs)
+	require.Equal(t, []string{"sk-triggering"}, invalidator.keys)
+}
+
 // TestRecordCyberPolicyEvent_CreateLogBeforeEmail verifies F7: the moderation
-// log is persisted BEFORE email delivery, and EmailSent is patched afterwards —
-// SMTP hangs can no longer swallow the audit record.
+// log is persisted before the durable email-delivery claim is attempted, so an
+// SMTP hang cannot swallow the audit record.
 //
 // Note on email ordering: EmailService is a concrete type with no injectable
 // send interface, so SMTP-success cannot be simulated in unit tests.
-// With emailService=nil the email block is skipped and UpdateLogEmailSent is not
-// called (correct: logPersisted && emailSent guard). The test therefore asserts
-// the two invariants that ARE observable without real SMTP:
+// With emailService=nil the email block is skipped. The test therefore asserts
+// the two invariants that are observable without real SMTP:
 //  1. CreateLog runs first (calls[0]=="create").
 //  2. The log is stored with EmailSent=false (not pre-set to true).
-//
-// The update_email_sent path is covered by integration/e2e tests where a real
-// (or test-double) SMTP endpoint is available.
 func TestRecordCyberPolicyEvent_CreateLogBeforeEmail(t *testing.T) {
 	repo := &cyberOrderingTestRepo{}
 	svc := NewContentModerationService(
@@ -191,22 +279,20 @@ func TestRecordCyberPolicyEvent_CreateLogBeforeEmail(t *testing.T) {
 		UserEmail:       "u@example.com",
 		Model:           "gpt-5",
 		UpstreamMessage: "blocked",
+		Scope:           gptCyberScope(),
+		UserRole:        RoleUser,
 	})
 
 	calls := repo.snapshot()
 	require.GreaterOrEqual(t, len(calls), 1, "CreateLog must be called")
 	require.Equal(t, "create", calls[0], "CreateLog must run first (F7: log-before-email)")
 
-	// EmailSent must be false when the log is first persisted (new code sets it
-	// false before CreateLog; email result is patched via UpdateLogEmailSent).
+	// EmailSent must be false when the log is first persisted; a later atomic
+	// claim owns the sole SMTP attempt.
 	emailSents := repo.snapshotEmailSents()
 	require.NotEmpty(t, emailSents, "CreateLog must have captured EmailSent value")
 	require.False(t, emailSents[0], "log must be stored with EmailSent=false initially (F7)")
 
-	// With emailService=nil, no email is sent, so UpdateLogEmailSent must NOT
-	// be called (logPersisted && emailSent guard correctly suppresses the patch).
-	require.NotContains(t, calls, "update_email_sent",
-		"UpdateLogEmailSent must not be called when no email was sent")
 }
 
 // banCountArgsTestRepo 在 contentModerationTestRepo 基础上记录
@@ -251,12 +337,12 @@ func TestApplyFlaggedAccountSideEffects_PassesExcludeCyberFlag(t *testing.T) {
 		"applyFlaggedAccountSideEffects 必须把 cfg.CyberPolicyExcludeFromBanCount 透传给 COUNT 查询")
 }
 
-func TestRecordCyberPolicyEvent_ExcludeFromBanCount_SkipsBanJudgment(t *testing.T) {
-	repo := &banCountArgsTestRepo{}
+func TestRecordCyberPolicyEvent_AutoBanAndCountConfigDoNotControlCyberDisposition(t *testing.T) {
+	repo := &cyberDispositionTestRepo{userActive: true}
 	svc := NewContentModerationService(
 		&contentModerationTestSettingRepo{values: map[string]string{
 			SettingKeyRiskControlEnabled:      "true",
-			SettingKeyContentModerationConfig: `{"cyber_policy_exclude_from_ban_count":true}`,
+			SettingKeyContentModerationConfig: `{"cyber_policy_exclude_from_ban_count":true,"auto_ban_enabled":false}`,
 		}},
 		repo, nil, nil, nil, nil, nil, nil,
 	)
@@ -268,38 +354,14 @@ func TestRecordCyberPolicyEvent_ExcludeFromBanCount_SkipsBanJudgment(t *testing.
 		Endpoint:        "/v1/responses",
 		UpstreamMessage: "flagged",
 		UpstreamStatus:  400,
+		Scope:           gptCyberScope(),
+		UserRole:        RoleUser,
 	})
 
-	require.Empty(t, repo.snapshotCountCalls(), "开关开时不得执行封号计数查询")
-	logs := repo.snapshotLogs()
-	require.Len(t, logs, 1, "风控日志必须照记")
-	require.True(t, logs[0].Flagged, "日志仍标记 Flagged=true（列表可见可筛）")
-	require.Equal(t, "cyber_policy", logs[0].Action)
-	require.Equal(t, 0, logs[0].ViolationCount, "不参与计数时 ViolationCount 保持 0")
-	require.False(t, logs[0].AutoBanned)
-}
-
-func TestRecordCyberPolicyEvent_DefaultCountsTowardBan(t *testing.T) {
-	repo := &banCountArgsTestRepo{}
-	svc := NewContentModerationService(
-		&contentModerationTestSettingRepo{values: map[string]string{
-			SettingKeyRiskControlEnabled: "true",
-		}},
-		repo, nil, nil, nil, nil, nil, nil,
-	)
-
-	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
-		UserID:          1,
-		UserEmail:       "u@x.com",
-		Model:           "gpt-5",
-		Endpoint:        "/v1/responses",
-		UpstreamMessage: "flagged",
-		UpstreamStatus:  400,
-	})
-
-	require.Equal(t, []bool{false}, repo.snapshotCountCalls(),
-		"默认配置必须执行计数查询且不排除 cyber 行")
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 1)
-	require.GreaterOrEqual(t, logs[0].ViolationCount, 1, "默认路径行为不变（现状回归）")
+	require.True(t, logs[0].Flagged)
+	require.Equal(t, "cyber_policy", logs[0].Action)
+	require.Equal(t, "disabled", logs[0].DispositionStatus)
+	require.True(t, logs[0].DispositionTransitioned)
 }

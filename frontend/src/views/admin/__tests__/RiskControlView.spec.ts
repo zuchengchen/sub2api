@@ -4,13 +4,16 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
 
 import RiskControlView from '../RiskControlView.vue'
-import type { ContentModerationConfig, UpdateContentModerationConfig } from '@/api/admin/riskControl'
+import type { ContentModerationConfig, ContentModerationLog, UpdateContentModerationConfig } from '@/api/admin/riskControl'
 
 const {
   getConfig,
   updateConfig,
   getStatus,
   listLogs,
+  previewArchive,
+  downloadArchive,
+  deleteArchive,
   getGroups,
   getProxies,
   showError,
@@ -20,6 +23,9 @@ const {
   updateConfig: vi.fn(),
   getStatus: vi.fn(),
   listLogs: vi.fn(),
+  previewArchive: vi.fn(),
+  downloadArchive: vi.fn(),
+  deleteArchive: vi.fn(),
   getGroups: vi.fn(),
   getProxies: vi.fn(),
   showError: vi.fn(),
@@ -33,6 +39,9 @@ vi.mock('@/api/admin', () => ({
       updateConfig,
       getStatus,
       listLogs,
+      previewArchive,
+      downloadArchive,
+      deleteArchive,
       testAPIKeys: vi.fn(),
       deleteFlaggedHash: vi.fn(),
       clearFlaggedHashes: vi.fn(),
@@ -111,6 +120,19 @@ const baseConfig = (): ContentModerationConfig => ({
     type: 'all',
     models: [],
   },
+  cache_version: 'v1',
+  cache_max_entries: 100000,
+  cache_max_bytes: 67108864,
+  second_layer_enabled: false,
+  second_layer_endpoints: [],
+  second_layer_scanners: [],
+  candidate_asset: 'legacy-prompt-audit-v1',
+  candidate_enabled: false,
+  candidate_layer1_count: 186,
+  candidate_layer2_count: 222,
+  candidate_source_commit: '99c8e4bf7564823bafbab369acab6539e734c1bb',
+  candidate_endpoints: [],
+  cyber_policy_exclude_from_ban_count: false,
 })
 
 const runtimeStatus = () => ({
@@ -142,6 +164,76 @@ const runtimeStatus = () => ({
   flagged_hash_count: 0,
   last_cleanup_deleted_hit: 0,
   last_cleanup_deleted_non_hit: 0,
+  pending_body_bytes: 0,
+  pending_body_max_seen: 0,
+  pending_body_budget_bytes: 1073741824,
+  pending_body_rejections: 0,
+  observed_request_body_max: 0,
+  request_body_histogram: [],
+  fragment_cache_hits: 0,
+  fragment_cache_misses: 0,
+  fragment_cache_errors: 0,
+  fragment_cache_writes: 0,
+  fragment_cache_write_errors: 0,
+  archive_runtime: {
+    degraded: false,
+    retry_queue_depth: 0,
+    emergency_queue_depth: 0,
+    archive_retry_attempts: 0,
+    archive_retry_errors: 0,
+    content_lost: 0,
+    disk_free_bytes: 10737418240,
+    disposition_queue_depth: 0,
+    disposition_retry_attempts: 0,
+    disposition_retry_errors: 0,
+    lost_summary_queue_depth: 0,
+  },
+})
+
+const archivedLog = (): ContentModerationLog => ({
+  id: 41,
+  request_id: 'req-41',
+  user_id: 9,
+  user_email: 'user@example.com',
+  api_key_id: 7,
+  api_key_name: 'test-key',
+  group_id: 3,
+  group_name: 'GPT Production',
+  endpoint: '/v1/responses',
+  provider: 'openai',
+  model: 'gpt-5.5',
+  mode: 'pre_block',
+  action: 'keyword_block',
+  flagged: true,
+  highest_category: 'content_policy',
+  highest_score: 1,
+  matched_keyword: 'blocked term',
+  category_scores: { content_policy: 1 },
+  threshold_snapshot: {},
+  input_excerpt: '[redacted summary]',
+  upstream_latency_ms: null,
+  error: '',
+  violation_count: 1,
+  auto_banned: false,
+  email_sent: false,
+  user_status: 'active',
+  queue_delay_ms: null,
+  protocol: 'openai_responses',
+  transport: 'http',
+  request_stage: 'http',
+  request_target: '/v1/responses?stream=true',
+  input_hash: 'a'.repeat(64),
+  archive_id: 'archive-41',
+  archive_version: 1,
+  archive_key_id: 'key-current',
+  archive_bytes: 2048,
+  archive_status: 'available',
+  archive_incomplete: false,
+  archive_content_lost: false,
+  disposition_status: 'not_required',
+  disposition_target: '',
+  disposition_transitioned: false,
+  created_at: '2026-08-13T00:00:00Z',
 })
 
 const AppLayoutStub = { template: '<div><slot /></div>' }
@@ -196,6 +288,9 @@ describe('admin RiskControlView', () => {
     updateConfig.mockReset()
     getStatus.mockReset()
     listLogs.mockReset()
+    previewArchive.mockReset()
+    downloadArchive.mockReset()
+    deleteArchive.mockReset()
     getGroups.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
@@ -215,6 +310,14 @@ describe('admin RiskControlView', () => {
       api_key_masks: [],
       api_key_statuses: [],
     }))
+    previewArchive.mockResolvedValue({
+      data_base64: window.btoa('{"archive_id":"archive-41"}'),
+      returned_bytes: 27,
+      total_bytes: 2097152,
+      truncated: true,
+    })
+    downloadArchive.mockResolvedValue(new Blob(['{"archive_id":"archive-41"}'], { type: 'application/json' }))
+    deleteArchive.mockResolvedValue({ deleted: true })
   })
 
   it('saves the selected model filter mode and models', async () => {
@@ -414,5 +517,104 @@ describe('admin RiskControlView', () => {
       'max-h-[280px]',
       'overflow-y-auto',
     ]))
+  })
+
+  it('keeps archive content out of list and summary requests until explicit preview', async () => {
+    listLogs.mockResolvedValue({ items: [archivedLog()], total: 1, page: 1, page_size: 20, pages: 1 })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(previewArchive).not.toHaveBeenCalled()
+    await findButtonByText(wrapper, '[redacted summary]').trigger('click')
+    expect(wrapper.get('[data-test="archive-section"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('archive-41')
+    expect(previewArchive).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-test="preview-archive"]').trigger('click')
+    await flushPromises()
+
+    expect(previewArchive).toHaveBeenCalledOnce()
+    expect(previewArchive).toHaveBeenCalledWith(41)
+    expect(wrapper.get('[data-test="archive-preview-result"]').text()).toContain('archive-41')
+    expect(wrapper.get('[data-test="archive-preview-truncated"]').text()).toContain('admin.riskControl.archivePreviewTruncated')
+  })
+
+  it('downloads the full archive through the dedicated blob endpoint', async () => {
+    listLogs.mockResolvedValue({ items: [archivedLog()], total: 1, page: 1, page_size: 20, pages: 1 })
+    const createObjectURL = vi.fn(() => 'blob:risk-archive')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(window.URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(window.URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+    await flushPromises()
+    await findButtonByText(wrapper, '[redacted summary]').trigger('click')
+    await wrapper.get('[data-test="download-archive"]').trigger('click')
+    await flushPromises()
+
+    expect(downloadArchive).toHaveBeenCalledWith(41)
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(click).toHaveBeenCalledOnce()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:risk-archive')
+
+    click.mockRestore()
+    Reflect.deleteProperty(window.URL, 'revokeObjectURL')
+    Reflect.deleteProperty(window.URL, 'createObjectURL')
+  })
+
+  it('deletes only archive content and retains the audit row summary', async () => {
+    listLogs.mockResolvedValue({ items: [archivedLog()], total: 1, page: 1, page_size: 20, pages: 1 })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+    await flushPromises()
+    await findButtonByText(wrapper, '[redacted summary]').trigger('click')
+    await wrapper.get('[data-test="delete-archive"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteArchive).toHaveBeenCalledWith(41)
+    expect(wrapper.text()).toContain('[redacted summary]')
+    expect(wrapper.text()).toContain('admin.riskControl.archiveStatus.deleted')
+    expect(wrapper.find('[data-test="preview-archive"]').exists()).toBe(false)
+    expect(showSuccess).toHaveBeenCalledWith('admin.riskControl.archiveDeleted')
+    confirm.mockRestore()
   })
 })

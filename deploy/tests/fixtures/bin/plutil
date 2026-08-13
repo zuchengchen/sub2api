@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -euo pipefail
+
+[[ ${1-} == "-extract" ]] || exit 2
+path=${2-}
+format=${3-}
+[[ ${4-} == "-o" && ${5-} == "-" && ${6-} == "-" ]] || exit 2
+
+case "${path}:${format}" in
+    0.configuration.labels:json)
+        jq -c '.[0].configuration.labels'
+        ;;
+    0.status.networks.0.ipv4Address:raw)
+        jq -r '.[0].status.networks[0].ipv4Address'
+        ;;
+    *)
+        printf 'unsupported fake plutil extraction: %s %s\n' "${path}" "${format}" >&2
+        exit 2
+        ;;
+esac

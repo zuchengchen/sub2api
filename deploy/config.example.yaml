@@ -994,6 +994,24 @@ redis:
   enable_tls: false
 
 # =============================================================================
+# Content Moderation encrypted archive runtime
+# 内容风控加密归档运行时
+# =============================================================================
+content_moderation_archive:
+  # External 0600 key-ring file. Never store keys in this repository or DB.
+  # 仓库外 0600 密钥环文件；不得把密钥写入仓库或数据库。
+  key_ring_path: "/etc/sub2api/secrets/content-moderation-keyring.json"
+  # Single-instance persistent queues. Directories must be owned by the service
+  # account, mode 0700, and must not be shared by multiple processes.
+  # 单实例持久队列目录，必须归服务账号所有、权限 0700，且不得被多进程共享。
+  retry_dir: "/var/lib/sub2api/content-moderation/retry"
+  emergency_dir: "/var/lib/sub2api/content-moderation/emergency"
+  chunk_bytes: 1048576
+  disk_min_free_bytes: 536870912
+  retry_initial_seconds: 1
+  retry_max_seconds: 300
+
+# =============================================================================
 # Ops Monitoring (Optional)
 # 运维监控 (可选)
 # =============================================================================

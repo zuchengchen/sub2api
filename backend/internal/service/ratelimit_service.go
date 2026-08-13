@@ -921,6 +921,18 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		"account may be suspended or lack permissions",
 	)
 
+	// HTML and anti-bot challenges are scoped to the edge path, not the
+	// credential. Fail this request over within the existing switch budget, but
+	// do not increment account counters or alter persistent/runtime scheduling.
+	if isOpenAIEdgeChallenge403(responseBody) {
+		slog.Warn(
+			"openai_403_edge_challenge_ignored",
+			"account_id", account.ID,
+			"platform", account.Platform,
+		)
+		return true
+	}
+
 	if s.openAI403CounterCache == nil {
 		s.handleAuthError(ctx, account, msg)
 		return true

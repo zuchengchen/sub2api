@@ -317,11 +317,12 @@ func TestForwardGrokVideoStatusRewritesOnlyProtectedContentURL(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Equal(t, "/v1/videos/task-1/content", gjson.Get(recorder.Body.String(), "url").String())
-	require.Equal(t, "/v1/videos/task-1/content", gjson.Get(recorder.Body.String(), "download_url").String())
+	require.Equal(t, "https://api.example/v1/videos/task-1/content", gjson.Get(recorder.Body.String(), "url").String())
+	require.Equal(t, "https://api.example/v1/videos/task-1/content", gjson.Get(recorder.Body.String(), "download_url").String())
 	require.Equal(t, "https://vidgen.x.ai/task-1.mp4", gjson.Get(recorder.Body.String(), "video_url").String())
 	require.Equal(t, "9007199254740993", gjson.Get(recorder.Body.String(), "counter").String())
 	require.NotContains(t, recorder.Body.String(), "malicious.invalid")
+	require.Contains(t, recorder.Body.String(), "vidgen.x.ai/task-1.mp4")
 }
 
 func TestRewriteGrokMediaVideoContentURLsPreservesOtherIDsAndHandlesNestedEscapedID(t *testing.T) {
@@ -333,12 +334,44 @@ func TestRewriteGrokMediaVideoContentURLsPreservesOtherIDsAndHandlesNestedEscape
 	require.Equal(t, "https://relay.example/v1/videos/task-two/content", gjson.GetBytes(rewritten, "nested.1.url").String())
 }
 
-func TestRewriteGrokMediaVideoContentURLsRewritesSignedVideoURL(t *testing.T) {
-	body := []byte(`{"status":"done","video":{"url":"https://vidgen.x.ai/signed-token/xai-video-request-1.mp4","duration":8}}`)
+func TestRewriteGrokMediaVideoContentURLsRewritesSignedVideoURLToAbsoluteMediaProxy(t *testing.T) {
+	body := []byte(`{"status":"done","video":{"url":"https://vidgen.x.ai/xai-vidgen-bucket/xai-video-request-1.mp4","duration":8,"download_url":"https://vidgen.x.ai/xai-vidgen-bucket/xai-video-request-1.mp4"},"thumbs":["https://imgen.x.ai/preview.jpg"]}`)
 
-	rewritten := rewriteGrokMediaVideoContentURLs(body, "request-1", "/v1/videos/request-1/content")
+	rewritten := rewriteGrokMediaVideoContentURLs(body, "request-1", "https://mofa.love.gd/v1/videos/request-1/content")
 
-	require.Equal(t, "/v1/videos/request-1/content", gjson.GetBytes(rewritten, "video.url").String())
+	require.Equal(t, "https://mofa.love.gd/v1/media/vidgen/xai-vidgen-bucket/xai-video-request-1.mp4", gjson.GetBytes(rewritten, "video.url").String())
+	require.Equal(t, "https://mofa.love.gd/v1/media/vidgen/xai-vidgen-bucket/xai-video-request-1.mp4", gjson.GetBytes(rewritten, "video.download_url").String())
+	require.Equal(t, "https://mofa.love.gd/v1/media/imgen/preview.jpg", gjson.GetBytes(rewritten, "thumbs.0").String())
 	require.Equal(t, "8", gjson.GetBytes(rewritten, "video.duration").String())
 	require.Equal(t, "done", gjson.GetBytes(rewritten, "status").String())
+	require.NotContains(t, string(rewritten), "vidgen.x.ai")
+	require.NotContains(t, string(rewritten), "imgen.x.ai")
+}
+
+func TestRewriteOfficialXAIMediaURLRejectsAPIHostsAndSSRFShapes(t *testing.T) {
+	origin := "https://mofa.love.gd"
+	_, ok := rewriteOfficialXAIMediaURL("https://api.x.ai/v1/videos/x", origin)
+	require.False(t, ok)
+	_, ok = rewriteOfficialXAIMediaURL("https://vidgen.x.ai.attacker.invalid/xai-vidgen-bucket/a.mp4", origin)
+	require.False(t, ok)
+	_, ok = rewriteOfficialXAIMediaURL("http://vidgen.x.ai/xai-vidgen-bucket/a.mp4", origin)
+	require.False(t, ok)
+	_, ok = rewriteOfficialXAIMediaURL("https://vidgen.x.ai:444/xai-vidgen-bucket/a.mp4", origin)
+	require.False(t, ok)
+	_, ok = rewriteOfficialXAIMediaURL("https://vidgen.x.ai/signed-token/a.mp4", origin)
+	require.False(t, ok)
+
+	got, ok := rewriteOfficialXAIMediaURL("https://vidgen.x.ai/xai-vidgen-bucket/xai-video-1.mp4?sig=1", origin)
+	require.True(t, ok)
+	require.Equal(t, "https://mofa.love.gd/v1/media/vidgen/xai-vidgen-bucket/xai-video-1.mp4?sig=1", got)
+}
+
+func TestIsAllowedGrokVidgenObject(t *testing.T) {
+	require.True(t, IsAllowedGrokVidgenObject("xai-vidgen-bucket/xai-video-9e26a899-ebd5-93b8-9d46-56245c466659.mp4"))
+	require.True(t, IsAllowedGrokVidgenObject("/xai-vidgen-bucket/xai-video-1.mp4"))
+	require.False(t, IsAllowedGrokVidgenObject("signed-token/xai-video-1.mp4"))
+	require.False(t, IsAllowedGrokVidgenObject("xai-vidgen-bucket/../secret.mp4"))
+	require.False(t, IsAllowedGrokVidgenObject("xai-vidgen-bucket/dir/a.mp4"))
+	require.False(t, IsAllowedGrokVidgenObject("https://evil.example/x.mp4"))
+	require.False(t, IsAllowedGrokVidgenObject("xai-vidgen-bucket/a.txt"))
 }

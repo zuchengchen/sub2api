@@ -102,6 +102,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		passthroughModel := parsed.Model
+		if account.IsAnthropicAPIKeyCacheControlRewriteEnabled() {
+			passthroughBody = injectAnthropicAPIKeyCacheMetadata(passthroughBody, parsed, account)
+			passthroughBody = rewriteMessageCacheControlBody(passthroughBody)
+		}
 		if passthroughModel != "" {
 			if mappedModel := account.GetMappedModel(passthroughModel); mappedModel != passthroughModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
@@ -241,6 +245,15 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			if err := replaceBody(applyToolsLastCacheBreakpoint(body)); err != nil {
 				return nil, err
 			}
+		}
+	}
+
+	if account.IsAnthropicAPIKeyCacheControlRewriteEnabled() {
+		if err := replaceBody(injectAnthropicAPIKeyCacheMetadata(body, parsed, account)); err != nil {
+			return nil, err
+		}
+		if err := replaceBody(rewriteMessageCacheControlBody(body)); err != nil {
+			return nil, err
 		}
 	}
 

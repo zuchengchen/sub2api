@@ -5,7 +5,7 @@
       <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
         {{ t('payment.quickAmounts') }}
       </label>
-      <div class="grid grid-cols-3 gap-2">
+      <div class="grid grid-cols-4 gap-2">
         <button
           v-for="amt in filteredAmounts"
           :key="amt"
@@ -55,7 +55,7 @@ const props = withDefaults(defineProps<{
   min?: number
   max?: number
 }>(), {
-  amounts: () => [10, 20, 50, 100, 200, 500, 1000, 2000, 5000],
+  amounts: () => [50, 100, 150, 200],
   min: 0,
   max: 0,
 })

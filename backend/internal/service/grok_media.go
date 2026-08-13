@@ -710,12 +710,15 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 			}
 		}
 	}
-	if endpoint == GrokMediaEndpointVideoStatus {
+	switch endpoint {
+	case GrokMediaEndpointVideoStatus, GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
 		respBody = rewriteGrokMediaVideoContentURLs(
 			respBody,
 			requestID,
 			grokMediaContentProxyURL(c, requestID),
 		)
+	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits:
+		respBody = rewriteGrokMediaCDNURLStrings(respBody, grokMediaPublicOrigin(c))
 	}
 	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
 	usage := grokMediaUsageFromResponse(endpoint, requestInfo, respBody)
@@ -893,13 +896,20 @@ func grokMediaSignedVideoContentURL(body []byte, requestID string) (string, erro
 	if isGrokMediaVideoContentURL(rawURL, requestID) {
 		return "", nil
 	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") ||
-		!strings.EqualFold(parsed.Hostname(), "vidgen.x.ai") ||
-		(parsed.Port() != "" && parsed.Port() != "443") || parsed.User != nil {
+	if !isOfficialGrokSignedVideoURL(rawURL) {
 		return "", fmt.Errorf("grok media status returned an unsupported video content URL")
 	}
-	return parsed.String(), nil
+	return strings.TrimSpace(rawURL), nil
+}
+
+func isOfficialGrokSignedVideoURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	return err == nil &&
+		strings.EqualFold(parsed.Scheme, "https") &&
+		strings.EqualFold(parsed.Hostname(), "vidgen.x.ai") &&
+		(parsed.Port() == "" || parsed.Port() == "443") &&
+		parsed.User == nil &&
+		parsed.Path != ""
 }
 
 func isGrokCLIProxyTarget(rawURL string) bool {
@@ -1367,7 +1377,7 @@ func writeGrokMediaContentResponse(c *gin.Context, resp *http.Response) error {
 }
 
 func rewriteGrokMediaVideoContentURLs(body []byte, requestID, proxyURL string) []byte {
-	if len(body) == 0 || strings.TrimSpace(requestID) == "" || strings.TrimSpace(proxyURL) == "" || !gjson.ValidBytes(body) {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return body
 	}
 
@@ -1377,8 +1387,17 @@ func rewriteGrokMediaVideoContentURLs(body []byte, requestID, proxyURL string) [
 	if err := decoder.Decode(&value); err != nil {
 		return body
 	}
-	changed := rewriteGrokMediaKnownVideoURL(&value, proxyURL)
-	if rewriteGrokMediaVideoContentURLValue(&value, requestID, proxyURL) {
+	publicOrigin := originFromAbsoluteURL(proxyURL)
+	changed := false
+	if strings.TrimSpace(proxyURL) != "" && strings.TrimSpace(requestID) != "" {
+		if rewriteGrokMediaKnownVideoURL(&value, proxyURL, publicOrigin) {
+			changed = true
+		}
+		if rewriteGrokMediaVideoContentURLValue(&value, requestID, proxyURL) {
+			changed = true
+		}
+	}
+	if rewriteGrokMediaCDNURLValue(&value, publicOrigin) {
 		changed = true
 	}
 	if !changed {
@@ -1391,7 +1410,7 @@ func rewriteGrokMediaVideoContentURLs(body []byte, requestID, proxyURL string) [
 	return rewritten
 }
 
-func rewriteGrokMediaKnownVideoURL(value *any, proxyURL string) bool {
+func rewriteGrokMediaKnownVideoURL(value *any, proxyURL, publicOrigin string) bool {
 	if value == nil {
 		return false
 	}
@@ -1405,6 +1424,20 @@ func rewriteGrokMediaKnownVideoURL(value *any, proxyURL string) bool {
 	}
 	rawURL, ok := video["url"].(string)
 	if !ok || strings.TrimSpace(rawURL) == "" {
+		return false
+	}
+	// Official Grok CLI GETs video.url with no Authorization. Relative
+	// /v1/videos/{id}/content makes reqwest fail ("builder error") and
+	// domestic clients cannot reach vidgen.x.ai. Rewrite signed CDN URLs
+	// to an absolute same-origin media proxy.
+	if rewritten, ok := rewriteOfficialXAIMediaURL(rawURL, publicOrigin); ok {
+		video["url"] = rewritten
+		return true
+	}
+	if isOfficialGrokSignedVideoURL(rawURL) || isGrokMediaCDNProxyURL(rawURL) {
+		return false
+	}
+	if strings.TrimSpace(proxyURL) == "" {
 		return false
 	}
 	video["url"] = proxyURL
@@ -1472,5 +1505,9 @@ func grokMediaContentProxyURL(c *gin.Context, requestID string) string {
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
 		pathPrefix = "/v1"
 	}
-	return pathPrefix + "/videos/" + url.PathEscape(strings.Trim(requestID, "/")) + "/content"
+	path := pathPrefix + "/videos/" + url.PathEscape(strings.Trim(requestID, "/")) + "/content"
+	if origin := grokMediaPublicOrigin(c); origin != "" {
+		return origin + path
+	}
+	return path
 }

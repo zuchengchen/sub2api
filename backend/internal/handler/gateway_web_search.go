@@ -60,6 +60,19 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 		return
 	}
 
+	subject, _ := middleware2.GetAuthSubjectFromContext(c)
+	reqLog := requestLogger(c, "handler.gateway.web_search")
+	// Check user input before billing and upstream side effects.
+	auditBody, _ := json.Marshal(map[string]any{
+		"messages": []map[string]any{{
+			"role": "user", "content": req.Query,
+		}},
+	})
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIChat, xai.DefaultTextModel, auditBody); decision != nil && !decision.Allowed {
+		h.openAIContentModerationError(c, decision)
+		return
+	}
+
 	// Billing eligibility (same as other requests)
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
@@ -68,31 +81,6 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
 		}
 		c.JSON(status, gin.H{"error": gin.H{"type": code, "message": message}})
-		return
-	}
-
-	subject, _ := middleware2.GetAuthSubjectFromContext(c)
-	reqLog := requestLogger(c, "handler.gateway.web_search")
-	// Audit user search query before upstream Grok web_search traffic.
-	auditBody, _ := json.Marshal(map[string]any{
-		"messages": []map[string]any{{
-			"role": "user", "content": req.Query,
-		}},
-	})
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIChat, xai.DefaultTextModel, auditBody); decision != nil && !decision.AllowNextStage {
-		status := decision.HTTPStatus
-		if status == 0 {
-			status = http.StatusForbidden
-		}
-		code := decision.ErrorCode
-		if code == "" {
-			code = "content_policy_violation"
-		}
-		msg := decision.ClientMessage
-		if msg == "" {
-			msg = "Request blocked by content policy"
-		}
-		c.JSON(status, gin.H{"error": gin.H{"type": code, "message": msg}})
 		return
 	}
 

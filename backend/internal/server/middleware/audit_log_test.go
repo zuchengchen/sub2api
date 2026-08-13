@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func (r *auditCaptureRepository) DeleteBefore(context.Context, time.Time, int) (
 	return 0, nil
 }
 
-func TestPromptAuditAdminOperationsUseOmittedBodiesAndAllowlistedDetails(t *testing.T) {
+func TestRiskControlArchiveOperationsUseStableAuditedActions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := &auditCaptureRepository{}
 	auditService := service.NewAuditLogService(repository, nil)
@@ -75,74 +76,62 @@ func TestPromptAuditAdminOperationsUseOmittedBodiesAndAllowlistedDetails(t *test
 		c.Next()
 	})
 	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
-	router.PUT("/api/v1/admin/prompt-audit/config", func(c *gin.Context) {
+	router.GET("/api/v1/admin/risk-control/logs/:id/archive/preview", func(c *gin.Context) {
 		SetAuditExtra(c, map[string]any{
-			"result": "failed", "error_code": "prompt_audit_config_conflict", "config_version": int64(9),
-			"token": "audit-canary-secret", "raw_prompt": "audit-canary-prompt", "nested": map[string]any{"unsafe": true},
-		})
-		c.JSON(http.StatusConflict, gin.H{"ok": false})
-	})
-	router.POST("/api/v1/admin/prompt-audit/endpoints/probe", func(c *gin.Context) {
-		SetAuditExtra(c, map[string]any{
-			"result": "success", "guard_endpoint_id": "guard-1", "http_status": 200,
-			"latency_ms": 12, "token_applied": true,
+			"result": "success", "token": "audit-canary-secret", "raw_prompt": "audit-canary-prompt",
 		})
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
+	router.GET("/api/v1/admin/risk-control/logs/:id/archive/download", func(c *gin.Context) {
+		c.Data(http.StatusOK, "application/json", []byte(`{"ok":true}`))
+	})
+	router.DELETE("/api/v1/admin/risk-control/logs/:id/archive", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"deleted": true})
+	})
 
 	for _, request := range []*http.Request{
-		httptest.NewRequest(http.MethodPut, "/api/v1/admin/prompt-audit/config", bytes.NewBufferString(`{"expected_config_version":8,"token":"audit-canary-secret"}`)),
-		httptest.NewRequest(http.MethodPost, "/api/v1/admin/prompt-audit/endpoints/probe", bytes.NewBufferString(`{"endpoint":{"token":"audit-canary-secret"}}`)),
+		httptest.NewRequest(http.MethodGet, "/api/v1/admin/risk-control/logs/41/archive/preview", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/admin/risk-control/logs/41/archive/download", nil),
+		httptest.NewRequest(http.MethodDelete, "/api/v1/admin/risk-control/logs/41/archive", nil),
 	} {
-		request.Header.Set("Content-Type", "application/json")
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusOK, recorder.Code)
 	}
 	auditService.Stop()
 
 	repository.mu.Lock()
 	logs := append([]*service.AuditLog(nil), repository.logs...)
 	repository.mu.Unlock()
-	require.Len(t, logs, 2)
+	require.Len(t, logs, 3)
 
 	byAction := make(map[string]*service.AuditLog, len(logs))
 	for _, entry := range logs {
 		byAction[entry.Action] = entry
-		require.Equal(t, "<credential-bearing body omitted>", entry.RequestBody)
+		require.Empty(t, entry.RequestBody)
 		require.NotContains(t, entry.RequestBody, "audit-canary")
 		require.NotContains(t, entry.Extra, "token")
 		require.NotContains(t, entry.Extra, "raw_prompt")
-		require.NotContains(t, entry.Extra, "nested")
+		require.Equal(t, map[string]string{"id": "41"}, entry.Extra["params"])
 	}
 
-	config := byAction["admin.prompt_audit.config.update"]
-	require.NotNil(t, config)
-	require.Equal(t, http.StatusConflict, config.StatusCode)
-	require.Equal(t, "failed", config.Extra["result"])
-	require.Equal(t, "prompt_audit_config_conflict", config.Extra["error_code"])
-	require.EqualValues(t, 9, config.Extra["config_version"])
-
-	probe := byAction["admin.prompt_audit.endpoint.probe"]
-	require.NotNil(t, probe)
-	require.Equal(t, http.StatusOK, probe.StatusCode)
-	require.Equal(t, "success", probe.Extra["result"])
-	require.Equal(t, "guard-1", probe.Extra["guard_endpoint_id"])
-	require.Equal(t, true, probe.Extra["token_applied"])
+	require.Equal(t, "success", byAction["admin.risk_control.archive.preview"].Extra["result"])
+	require.NotNil(t, byAction["admin.risk_control.archive.download"])
+	require.NotNil(t, byAction["admin.risk_control.archive.delete"])
 }
 
-func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing.T) {
+func TestRiskControlArchiveAuditRoutesHaveStableActions(t *testing.T) {
 	expected := map[string]string{
-		"PUT /api/v1/admin/prompt-audit/config":                   "admin.prompt_audit.config.update",
-		"POST /api/v1/admin/prompt-audit/endpoints/probe":         "admin.prompt_audit.endpoint.probe",
-		"DELETE /api/v1/admin/prompt-audit/events/:id":            "admin.prompt_audit.event.delete",
-		"POST /api/v1/admin/prompt-audit/events/batch-delete":     "admin.prompt_audit.events.batch_delete",
-		"POST /api/v1/admin/prompt-audit/events/delete-preview":   "admin.prompt_audit.events.delete_preview",
-		"POST /api/v1/admin/prompt-audit/events/delete-by-filter": "admin.prompt_audit.events.filter_delete",
+		"GET /api/v1/admin/risk-control/logs/:id/archive/preview":  "admin.risk_control.archive.preview",
+		"GET /api/v1/admin/risk-control/logs/:id/archive/download": "admin.risk_control.archive.download",
+		"DELETE /api/v1/admin/risk-control/logs/:id/archive":       "admin.risk_control.archive.delete",
 	}
 	for route, action := range expected {
-		require.Equal(t, action, auditActionOverrides[route])
-		_, omitted := auditBodyOmittedRoutes[route]
-		require.Truef(t, omitted, "%s must not persist its credential or confirmation-bearing body", route)
+		if strings.HasPrefix(route, "GET ") {
+			require.Equal(t, action, auditSensitiveReads[route])
+		} else {
+			require.Equal(t, action, auditActionOverrides[route])
+		}
 	}
 }
 

@@ -96,7 +96,7 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 		imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	if !h.checkSecurityAuditBeforeSubmit(c, apiKey, platform, body) {
+	if !h.checkContentModerationBeforeSubmit(c, apiKey, platform, body) {
 		return
 	}
 
@@ -125,7 +125,7 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 	go h.run(task.ID, platform, taskCtx, recorder, cancel)
 }
 
-func (h *AsyncImageHandler) checkSecurityAuditBeforeSubmit(c *gin.Context, apiKey *service.APIKey, platform string, body []byte) bool {
+func (h *AsyncImageHandler) checkContentModerationBeforeSubmit(c *gin.Context, apiKey *service.APIKey, platform string, body []byte) bool {
 	if h == nil || h.openAI == nil {
 		return true
 	}
@@ -148,14 +148,14 @@ func (h *AsyncImageHandler) checkSecurityAuditBeforeSubmit(c *gin.Context, apiKe
 		model, moderationBody = parsed.Model, parsed.ModerationBody()
 	}
 	if len(moderationBody) == 0 {
-		c.Set(securityAuditCompletedContextKey, true)
+		c.Set(contentModerationCompletedContextKey, true)
 		return true
 	}
 	reqLog := requestLogger(c, "handler.async_image.security_audit",
 		zap.Int64("user_id", subject.UserID), zap.Int64("api_key_id", apiKey.ID), zap.String("model", model))
-	decision := h.openAI.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIImages, model, moderationBody)
-	if decision != nil && !decision.AllowNextStage {
-		h.openAI.openAISecurityAuditError(c, decision)
+	decision := h.openAI.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIImages, model, moderationBody)
+	if decision != nil && !decision.Allowed {
+		h.openAI.openAIContentModerationError(c, decision)
 		return false
 	}
 	return true

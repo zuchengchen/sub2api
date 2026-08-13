@@ -384,12 +384,28 @@ validate_ipv4_address() {
     done
 }
 
+file_owner_id() {
+    if stat -f '%u' "$1" >/dev/null 2>&1; then
+        stat -f '%u' "$1"
+    else
+        stat -c '%u' "$1"
+    fi
+}
+
+file_permission_mode() {
+    if stat -f '%Lp' "$1" >/dev/null 2>&1; then
+        stat -f '%Lp' "$1"
+    else
+        stat -c '%a' "$1"
+    fi
+}
+
 validate_env_file_security() {
     local owner mode permissions
 
     [[ -f "${ENV_FILE}" ]] || die "Environment file not found: ${ENV_FILE}. Run '$0 init' first."
-    owner="$(stat -f '%u' "${ENV_FILE}")" || die "Unable to read owner for ${ENV_FILE}."
-    mode="$(stat -f '%Lp' "${ENV_FILE}")" || die "Unable to read permissions for ${ENV_FILE}."
+	owner="$(file_owner_id "${ENV_FILE}")" || die "Unable to read owner for ${ENV_FILE}."
+	mode="$(file_permission_mode "${ENV_FILE}")" || die "Unable to read permissions for ${ENV_FILE}."
     [[ "${owner}" == "${EUID}" ]] || die "Environment file must be owned by the current user: ${ENV_FILE}"
     [[ "${mode}" =~ ^[0-7]+$ ]] || die "Unable to parse permissions for ${ENV_FILE}: ${mode}"
     permissions=$((8#${mode}))

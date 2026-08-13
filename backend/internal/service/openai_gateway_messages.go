@@ -563,7 +563,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			MarkOpsCyberPolicy(c, CyberPolicyMark{
 				Code:           code,
 				Message:        msg,
-				Body:           truncateString(string(payload), 4096),
+				Body:           buildCyberPolicyMarkBody(payload),
 				UpstreamStatus: http.StatusOK,
 				UpstreamInTok:  usage.InputTokens,
 				UpstreamOutTok: usage.OutputTokens,
@@ -938,7 +938,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,
 						Message:        msg,
-						Body:           truncateString(payload, 4096),
+						Body:           buildCyberPolicyMarkBody([]byte(payload)),
 						UpstreamStatus: http.StatusOK,
 						UpstreamInTok:  usage.InputTokens,
 						UpstreamOutTok: usage.OutputTokens,

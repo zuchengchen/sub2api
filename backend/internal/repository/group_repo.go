@@ -830,6 +830,40 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 		return nil, service.ErrGroupNotFound
 	}
 
+	// Ent implements Delete as a soft delete, so PostgreSQL ON DELETE SET NULL
+	// does not fire. Clear both fallback references while the target is locked
+	// and retain the affected IDs for scheduler invalidation in this transaction.
+	rows, err = exec.QueryContext(ctx, `
+		UPDATE groups
+		SET fallback_group_id = CASE WHEN fallback_group_id = $1 THEN NULL ELSE fallback_group_id END,
+			fallback_group_id_on_invalid_request = CASE
+				WHEN fallback_group_id_on_invalid_request = $1 THEN NULL
+				ELSE fallback_group_id_on_invalid_request
+			END,
+			updated_at = NOW()
+		WHERE id <> $1
+		  AND deleted_at IS NULL
+		  AND (fallback_group_id = $1 OR fallback_group_id_on_invalid_request = $1)
+		RETURNING id`, id)
+	if err != nil {
+		return nil, err
+	}
+	var fallbackReferenceGroupIDs []int64
+	for rows.Next() {
+		var groupID int64
+		if err := rows.Scan(&groupID); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		fallbackReferenceGroupIDs = append(fallbackReferenceGroupIDs, groupID)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	var affectedUserIDs []int64
 	if groupSvc.IsSubscriptionType() {
 		// 只查询未软删除的订阅，避免通知已取消订阅的用户
@@ -879,13 +913,22 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 		return nil, err
 	}
 
+	// Outbox rows are part of the same transaction as the cleanup and soft
+	// delete. A failed invalidation must roll the state change back.
+	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventGroupChanged, nil, &id, nil); err != nil {
+		return nil, err
+	}
+	for _, groupID := range fallbackReferenceGroupIDs {
+		groupID := groupID
+		if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &id, nil); err != nil {
-		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group cascade delete failed: group=%d err=%v", id, err)
 	}
 
 	return affectedUserIDs, nil

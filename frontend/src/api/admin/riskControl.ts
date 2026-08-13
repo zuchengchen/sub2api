@@ -9,6 +9,18 @@ export interface ContentModerationModelFilter {
   models: string[]
 }
 
+export interface ContentModerationEndpoint {
+  id: string
+  name: string
+  base_url: string
+  model: string
+  enabled: boolean
+  timeout_ms: number
+  input_limit: number
+  token_configured: boolean
+  token_masked: string
+}
+
 export interface ContentModerationConfig {
   enabled: boolean
   mode: ModerationMode
@@ -41,6 +53,18 @@ export interface ContentModerationConfig {
   blocked_keywords: string[]
   keyword_blocking_mode: KeywordBlockingMode
   model_filter: ContentModerationModelFilter
+  cache_version: string
+  cache_max_entries: number
+  cache_max_bytes: number
+  second_layer_enabled: boolean
+  second_layer_endpoints: ContentModerationEndpoint[]
+  second_layer_scanners: string[]
+  candidate_asset: string
+  candidate_enabled: boolean
+  candidate_layer1_count: number
+  candidate_layer2_count: number
+  candidate_source_commit: string
+  candidate_endpoints: ContentModerationEndpoint[]
   cyber_policy_exclude_from_ban_count: boolean
 }
 
@@ -121,7 +145,34 @@ export interface UpdateContentModerationConfig {
   blocked_keywords?: string[]
   keyword_blocking_mode?: KeywordBlockingMode
   model_filter?: ContentModerationModelFilter
+  cache_version?: string
+  cache_max_entries?: number
+  cache_max_bytes?: number
+  second_layer_enabled?: boolean
+  second_layer_endpoints?: Array<Omit<ContentModerationEndpoint, 'token_configured' | 'token_masked'> & { token?: string }>
+  second_layer_scanners?: string[]
+  candidate_asset?: string
+  candidate_enabled?: boolean
   cyber_policy_exclude_from_ban_count?: boolean
+}
+
+export interface ContentModerationArchiveRuntimeStatus {
+  degraded: boolean
+  retry_queue_depth: number
+  emergency_queue_depth: number
+  archive_retry_attempts: number
+  archive_retry_errors: number
+  content_lost: number
+  disk_free_bytes: number
+  disposition_queue_depth: number
+  disposition_retry_attempts: number
+  disposition_retry_errors: number
+  lost_summary_queue_depth: number
+}
+
+export interface ContentModerationBodySizeBucket {
+  upper_bound_bytes: number
+  count: number
 }
 
 export interface ContentModerationRuntimeStatus {
@@ -154,6 +205,18 @@ export interface ContentModerationRuntimeStatus {
   last_cleanup_at?: string
   last_cleanup_deleted_hit: number
   last_cleanup_deleted_non_hit: number
+  pending_body_bytes: number
+  pending_body_max_seen: number
+  pending_body_budget_bytes: number
+  pending_body_rejections: number
+  observed_request_body_max: number
+  request_body_histogram: ContentModerationBodySizeBucket[]
+  fragment_cache_hits: number
+  fragment_cache_misses: number
+  fragment_cache_errors: number
+  fragment_cache_writes: number
+  fragment_cache_write_errors: number
+  archive_runtime: ContentModerationArchiveRuntimeStatus
 }
 
 export interface ContentModerationAPIKeyLoad {
@@ -198,7 +261,35 @@ export interface ContentModerationLog {
   email_sent: boolean
   user_status: string
   queue_delay_ms: number | null
+  protocol: string
+  transport: string
+  request_stage: string
+  request_target: string
+  input_hash: string
+  archive_id?: string
+  archive_version?: number
+  archive_key_id?: string
+  archive_bytes: number
+  archive_status: string
+  archive_incomplete: boolean
+  archive_content_lost: boolean
+  archive_deleted_at?: string
+  disposition_status: string
+  disposition_target: string
+  disposition_transitioned: boolean
+  legacy_source_job_id?: number
   created_at: string
+}
+
+export interface ContentModerationArchivePreview {
+  data_base64: string
+  returned_bytes: number
+  total_bytes: number
+  truncated: boolean
+}
+
+export interface DeleteContentModerationArchiveResponse {
+  deleted: boolean
 }
 
 export interface ListContentModerationLogsParams {
@@ -228,10 +319,14 @@ export interface ContentModerationUnbanUserResponse {
 export interface DeleteFlaggedHashResponse {
   input_hash: string
   deleted: boolean
+  cache_version: string
+  cache_namespace: string
 }
 
 export interface ClearFlaggedHashesResponse {
   deleted: number
+  cache_version: string
+  cache_namespace: string
 }
 
 export async function getConfig(): Promise<ContentModerationConfig> {
@@ -267,6 +362,28 @@ export async function listLogs(
   return data
 }
 
+export async function previewArchive(logID: number): Promise<ContentModerationArchivePreview> {
+  const { data } = await apiClient.get<ContentModerationArchivePreview>(
+    `/admin/risk-control/logs/${logID}/archive/preview`
+  )
+  return data
+}
+
+export async function downloadArchive(logID: number): Promise<Blob> {
+  const { data } = await apiClient.get<Blob>(
+    `/admin/risk-control/logs/${logID}/archive/download`,
+    { responseType: 'blob' }
+  )
+  return data
+}
+
+export async function deleteArchive(logID: number): Promise<DeleteContentModerationArchiveResponse> {
+  const { data } = await apiClient.delete<DeleteContentModerationArchiveResponse>(
+    `/admin/risk-control/logs/${logID}/archive`
+  )
+  return data
+}
+
 export async function unbanUser(userID: number): Promise<ContentModerationUnbanUserResponse> {
   const { data } = await apiClient.post<ContentModerationUnbanUserResponse>(
     `/admin/risk-control/users/${userID}/unban`
@@ -292,6 +409,9 @@ export const riskControlAPI = {
   getStatus,
   testAPIKeys,
   listLogs,
+  previewArchive,
+  downloadArchive,
+  deleteArchive,
   unbanUser,
   deleteFlaggedHash,
   clearFlaggedHashes,

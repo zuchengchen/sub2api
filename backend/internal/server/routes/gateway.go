@@ -33,6 +33,10 @@ func RegisterGatewayRoutes(
 	compositeResolver *service.CompositeRouteResolver,
 	cfg *config.Config,
 ) {
+	// The unified moderation service owns the request-body budget. Install the
+	// lifecycle hook before gateway routes so reservations survive until the
+	// handler has observed the upstream result and then release exactly once.
+	r.Use(handler.ContentModerationRequestLifecycle())
 	bodyLimit := middleware.RequestBodyLimit(cfg.Gateway.MaxBodySize)
 	textBodyLimit := middleware.RequestBodyLimit(cfg.Gateway.TextMaxBodySize)
 	clientRequestID := middleware.ClientRequestID()
