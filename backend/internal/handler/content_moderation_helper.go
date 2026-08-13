@@ -81,6 +81,7 @@ func runContentModerationStage(c *gin.Context, reqLog *zap.Logger, svc *service.
 			zap.String("protocol", input.Protocol),
 			zap.String("model", input.Model),
 			zap.Int("body_bytes", len(body)),
+			zap.Bool("cached", false),
 		)
 	}
 	decision, err := svc.Check(c.Request.Context(), input)
@@ -100,6 +101,7 @@ func runContentModerationStage(c *gin.Context, reqLog *zap.Logger, svc *service.
 			zap.Int("status_code", decision.StatusCode),
 			zap.String("highest_category", decision.HighestCategory),
 			zap.Float64("highest_score", decision.HighestScore),
+			zap.Bool("cached", false),
 		)
 	}
 	return decision

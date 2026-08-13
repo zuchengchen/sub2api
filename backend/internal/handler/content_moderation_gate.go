@@ -81,6 +81,7 @@ func runUnifiedContentModeration(c *gin.Context, reqLog *zap.Logger, unified *se
 				if entry, ok := cached.(contentModerationWSDedupeEntry); ok &&
 					entry.stage == stage && entry.turn == turnNo && entry.bodyHash == bodyHash {
 					decision := entry.decision
+					logContentModerationCachedDecision(c, reqLog, stage, &decision)
 					return &decision
 				}
 			}
@@ -104,6 +105,31 @@ func runUnifiedContentModeration(c *gin.Context, reqLog *zap.Logger, unified *se
 		c.Set(contentModerationCompletedContextKey, true)
 	}
 	return decision
+}
+
+// logContentModerationCachedDecision restores audit visibility for websocket
+// turns served from the per-connection dedupe cache, which would otherwise
+// bypass the start/done logs emitted by runContentModerationStage.
+func logContentModerationCachedDecision(c *gin.Context, reqLog *zap.Logger, stage string, decision *service.ContentModerationDecision) {
+	if reqLog == nil || decision == nil {
+		return
+	}
+	requestID := ""
+	if c != nil && c.Request != nil {
+		requestID = contentModerationRequestID(c.Request.Context())
+	}
+	reqLog.Info("content_moderation.gateway_check_done",
+		zap.String("request_id", requestID),
+		zap.Bool("allowed", decision.Allowed),
+		zap.Bool("blocked", decision.Blocked),
+		zap.Bool("flagged", decision.Flagged),
+		zap.String("action", decision.Action),
+		zap.Int("status_code", decision.StatusCode),
+		zap.String("highest_category", decision.HighestCategory),
+		zap.Float64("highest_score", decision.HighestScore),
+		zap.Bool("cached", true),
+		zap.String("stage", stage),
+	)
 }
 
 func contentModerationWSTurn(c *gin.Context) (int, bool) {
