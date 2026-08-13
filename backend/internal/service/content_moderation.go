@@ -803,14 +803,18 @@ type ContentModerationService struct {
 	fragmentCacheErrors      atomic.Int64
 	fragmentCacheWrites      atomic.Int64
 	fragmentCacheWriteErrors atomic.Int64
+	secondLayerClients       sync.Map
+	secondLayerEndpointSlots sync.Map
 }
 
 type contentModerationRuntimeSnapshot struct {
-	riskControlEnabled bool
-	config             *ContentModerationConfig
-	keywordMatcher     *contentModerationKeywordMatcher
-	configDigest       [sha256.Size]byte
-	loadedAt           time.Time
+	riskControlEnabled          bool
+	config                      *ContentModerationConfig
+	keywordMatcher              *contentModerationKeywordMatcher
+	secondLayerPrefilterMatcher *contentModerationPrefilterMatcher
+	fragmentCacheNamespace      string
+	configDigest                [sha256.Size]byte
+	loadedAt                    time.Time
 }
 
 type contentModerationTask struct {
@@ -2004,11 +2008,13 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 	configDigest := sha256.Sum256([]byte(rawConfig))
 	if current := s.runtimeSnapshot.Load(); current != nil && current.configDigest == configDigest {
 		snapshot := &contentModerationRuntimeSnapshot{
-			riskControlEnabled: values[SettingKeyRiskControlEnabled] == "true",
-			config:             current.config,
-			keywordMatcher:     current.keywordMatcher,
-			configDigest:       configDigest,
-			loadedAt:           time.Now(),
+			riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
+			config:                      current.config,
+			keywordMatcher:              current.keywordMatcher,
+			secondLayerPrefilterMatcher: current.secondLayerPrefilterMatcher,
+			fragmentCacheNamespace:      current.fragmentCacheNamespace,
+			configDigest:                configDigest,
+			loadedAt:                    time.Now(),
 		}
 		s.runtimeSnapshot.Store(snapshot)
 		s.runtimeRefreshRetryAt.Store(0)
@@ -2022,12 +2028,18 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 	if err != nil {
 		return nil, err
 	}
+	effectiveSecondLayerKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	if err != nil {
+		return nil, err
+	}
 	snapshot := &contentModerationRuntimeSnapshot{
-		riskControlEnabled: values[SettingKeyRiskControlEnabled] == "true",
-		config:             cfg,
-		keywordMatcher:     newContentModerationKeywordMatcher(effectiveKeywords),
-		configDigest:       configDigest,
-		loadedAt:           time.Now(),
+		riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
+		config:                      cfg,
+		keywordMatcher:              newContentModerationKeywordMatcher(effectiveKeywords),
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher(effectiveSecondLayerKeywords),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+		configDigest:                configDigest,
+		loadedAt:                    time.Now(),
 	}
 	s.runtimeSnapshot.Store(snapshot)
 	s.runtimeRefreshRetryAt.Store(0)
@@ -2050,7 +2062,14 @@ func (s *ContentModerationService) replaceRuntimeConfig(cfg *ContentModerationCo
 		slog.Error("content_moderation.candidate_asset_invalid_after_validation", "error", err)
 		return
 	}
+	effectiveSecondLayerKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	if err != nil {
+		slog.Error("content_moderation.candidate_asset_invalid_after_validation", "error", err)
+		return
+	}
 	keywordMatcher := newContentModerationKeywordMatcher(effectiveKeywords)
+	secondLayerPrefilterMatcher := newContentModerationPrefilterMatcher(effectiveSecondLayerKeywords)
+	fragmentCacheNamespace := cfg.fragmentCacheNamespace()
 	configDigest := sha256.Sum256(raw)
 
 	s.runtimeRefreshMu.Lock()
@@ -2060,11 +2079,13 @@ func (s *ContentModerationService) replaceRuntimeConfig(cfg *ContentModerationCo
 		return
 	}
 	s.runtimeSnapshot.Store(&contentModerationRuntimeSnapshot{
-		riskControlEnabled: current.riskControlEnabled,
-		config:             config,
-		keywordMatcher:     keywordMatcher,
-		configDigest:       configDigest,
-		loadedAt:           time.Now(),
+		riskControlEnabled:          current.riskControlEnabled,
+		config:                      config,
+		keywordMatcher:              keywordMatcher,
+		secondLayerPrefilterMatcher: secondLayerPrefilterMatcher,
+		fragmentCacheNamespace:      fragmentCacheNamespace,
+		configDigest:                configDigest,
+		loadedAt:                    time.Now(),
 	})
 }
 
@@ -3065,6 +3086,17 @@ func effectiveContentModerationKeywords(cfg *ContentModerationConfig) ([]string,
 		return nil, err
 	}
 	return normalizeBlockedKeywords(append(keywords, asset.Layer1...)), nil
+}
+
+func effectiveContentModerationSecondLayerKeywords(cfg *ContentModerationConfig) ([]string, error) {
+	if cfg == nil || !cfg.CandidateEnabled {
+		return nil, nil
+	}
+	asset, err := contentmoderationassets.Load(cfg.CandidateAsset)
+	if err != nil {
+		return nil, err
+	}
+	return canonicalContentModerationPrefilterKeywords(asset.Layer2), nil
 }
 
 func candidateEndpointViews(endpoints []contentmoderationassets.CandidateEndpoint) []ContentModerationEndpointView {

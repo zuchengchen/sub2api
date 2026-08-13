@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -103,7 +104,10 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		return allow
 	}
 	cache, _ := s.hashCache.(ContentModerationFragmentCache)
-	namespace := cfg.fragmentCacheNamespace()
+	namespace := runtime.fragmentCacheNamespace
+	if namespace == "" {
+		namespace = cfg.fragmentCacheNamespace()
+	}
 	for _, fragment := range fragments {
 		if cache != nil {
 			result, found, err := cache.GetFragmentResult(ctx, namespace, fragment.Hash)
@@ -131,9 +135,21 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		}
 
 		if cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly {
+			if cfg.CandidateEnabled {
+				if runtime.secondLayerPrefilterMatcher == nil {
+					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+					continue
+				}
+				if _, hit := runtime.secondLayerPrefilterMatcher.Match(fragment.Text); !hit {
+					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+					continue
+				}
+			}
 			result, attempted, err := s.scanUnifiedSecondLayer(ctx, cfg, fragment.Text)
 			if err != nil {
-				slog.Warn("content_moderation.second_layer_failed", "error", err)
+				if !errors.Is(err, errContentModerationSecondLayerBusy) {
+					slog.Warn("content_moderation.second_layer_failed", "error", err)
+				}
 				continue
 			}
 			if attempted && result.Blocked {

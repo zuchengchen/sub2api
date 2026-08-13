@@ -17,6 +17,8 @@ import (
 
 const maxContentModerationSecondLayerResponseBytes int64 = 256 * 1024
 
+var errContentModerationSecondLayerBusy = errors.New("second-layer endpoint is busy")
+
 type contentModerationSecondLayerResult struct {
 	Blocked  bool
 	Category string
@@ -40,7 +42,7 @@ func (s *ContentModerationService) scanUnifiedSecondLayer(ctx context.Context, c
 	}
 	chunks := splitContentModerationRunes(text, limit)
 	for _, chunk := range chunks {
-		result, err := scanContentModerationSecondLayerChunk(ctx, endpoints, chunk, scanners)
+		result, err := s.scanContentModerationSecondLayerChunk(ctx, endpoints, chunk, scanners)
 		if err != nil {
 			return contentModerationSecondLayerResult{}, true, err
 		}
@@ -51,22 +53,39 @@ func (s *ContentModerationService) scanUnifiedSecondLayer(ctx context.Context, c
 	return contentModerationSecondLayerResult{}, true, nil
 }
 
-func scanContentModerationSecondLayerChunk(ctx context.Context, endpoints []ContentModerationEndpoint, chunk string, scanners []string) (contentModerationSecondLayerResult, error) {
+func (s *ContentModerationService) scanContentModerationSecondLayerChunk(ctx context.Context, endpoints []ContentModerationEndpoint, chunk string, scanners []string) (contentModerationSecondLayerResult, error) {
 	var lastErr error
+	busy := false
 	for _, endpoint := range endpoints {
-		result, err := callContentModerationSecondLayer(ctx, endpoint, chunk, scanners)
+		resourceKey := contentModerationSecondLayerResourceKey(endpoint)
+		if !s.tryAcquireContentModerationSecondLayer(resourceKey) {
+			busy = true
+			continue
+		}
+		result, err := func() (contentModerationSecondLayerResult, error) {
+			defer s.releaseContentModerationSecondLayer(resourceKey)
+			client := s.contentModerationSecondLayerClient(endpoint)
+			return callContentModerationSecondLayerWithClient(ctx, endpoint, chunk, scanners, client)
+		}()
 		if err == nil {
 			return result, nil
 		}
 		lastErr = err
 	}
-	if lastErr == nil {
-		lastErr = errors.New("no content moderation second-layer endpoint available")
+	if lastErr != nil {
+		return contentModerationSecondLayerResult{}, lastErr
 	}
-	return contentModerationSecondLayerResult{}, lastErr
+	if busy {
+		return contentModerationSecondLayerResult{}, errContentModerationSecondLayerBusy
+	}
+	return contentModerationSecondLayerResult{}, errors.New("no content moderation second-layer endpoint available")
 }
 
 func callContentModerationSecondLayer(ctx context.Context, endpoint ContentModerationEndpoint, chunk string, scanners []string) (contentModerationSecondLayerResult, error) {
+	return callContentModerationSecondLayerWithClient(ctx, endpoint, chunk, scanners, newContentModerationSecondLayerClient(endpoint.TimeoutMS))
+}
+
+func callContentModerationSecondLayerWithClient(ctx context.Context, endpoint ContentModerationEndpoint, chunk string, scanners []string, client *http.Client) (contentModerationSecondLayerResult, error) {
 	baseURL, err := normalizeContentModerationSecondLayerBaseURL(endpoint.BaseURL)
 	if err != nil {
 		return contentModerationSecondLayerResult{}, err
@@ -91,13 +110,16 @@ func callContentModerationSecondLayer(ctx context.Context, endpoint ContentModer
 	if endpoint.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+endpoint.Token)
 	}
-	client := newContentModerationSecondLayerClient(endpoint.TimeoutMS)
+	if client == nil {
+		client = newContentModerationSecondLayerClient(endpoint.TimeoutMS)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return contentModerationSecondLayerResult{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxContentModerationSecondLayerResponseBytes))
 		return contentModerationSecondLayerResult{}, fmt.Errorf("second-layer HTTP status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxContentModerationSecondLayerResponseBytes+1))
@@ -112,6 +134,74 @@ func callContentModerationSecondLayer(ctx context.Context, endpoint ContentModer
 		return contentModerationSecondLayerResult{}, err
 	}
 	return parseContentModerationSecondLayerOutput(content, scanners)
+}
+
+func contentModerationSecondLayerResourceKey(endpoint ContentModerationEndpoint) string {
+	baseURL, err := normalizeContentModerationSecondLayerBaseURL(endpoint.BaseURL)
+	if err != nil {
+		baseURL = strings.TrimRight(strings.TrimSpace(endpoint.BaseURL), "/")
+	}
+	return strings.ToLower(baseURL)
+}
+
+func (s *ContentModerationService) contentModerationSecondLayerSlot(resourceKey string) chan struct{} {
+	if s == nil {
+		return nil
+	}
+	if resourceKey == "" {
+		resourceKey = "invalid"
+	}
+	if existing, ok := s.secondLayerEndpointSlots.Load(resourceKey); ok {
+		return existing.(chan struct{})
+	}
+	slot := make(chan struct{}, 1)
+	actual, _ := s.secondLayerEndpointSlots.LoadOrStore(resourceKey, slot)
+	return actual.(chan struct{})
+}
+
+func (s *ContentModerationService) tryAcquireContentModerationSecondLayer(resourceKey string) bool {
+	slot := s.contentModerationSecondLayerSlot(resourceKey)
+	if slot == nil {
+		return true
+	}
+	select {
+	case slot <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *ContentModerationService) releaseContentModerationSecondLayer(resourceKey string) {
+	slot := s.contentModerationSecondLayerSlot(resourceKey)
+	if slot == nil {
+		return
+	}
+	select {
+	case <-slot:
+	default:
+	}
+}
+
+func (s *ContentModerationService) contentModerationSecondLayerClient(endpoint ContentModerationEndpoint) *http.Client {
+	if s == nil {
+		return newContentModerationSecondLayerClient(endpoint.TimeoutMS)
+	}
+	baseURL, err := normalizeContentModerationSecondLayerBaseURL(endpoint.BaseURL)
+	if err != nil {
+		baseURL = strings.TrimRight(strings.TrimSpace(endpoint.BaseURL), "/")
+	}
+	key := fmt.Sprintf("%s|%d", strings.ToLower(baseURL), endpoint.TimeoutMS)
+	if existing, ok := s.secondLayerClients.Load(key); ok {
+		return existing.(*http.Client)
+	}
+	client := newContentModerationSecondLayerClient(endpoint.TimeoutMS)
+	actual, loaded := s.secondLayerClients.LoadOrStore(key, client)
+	if loaded {
+		client.CloseIdleConnections()
+		return actual.(*http.Client)
+	}
+	return client
 }
 
 func normalizeContentModerationSecondLayerBaseURL(raw string) (string, error) {
@@ -148,7 +238,7 @@ func newContentModerationSecondLayerClient(timeoutMS int) *http.Client {
 		},
 		Transport: &http.Transport{
 			Proxy: nil, ForceAttemptHTTP2: true, DialContext: dialer.DialContext,
-			MaxIdleConns: 64, MaxIdleConnsPerHost: 16, IdleConnTimeout: 90 * time.Second,
+			MaxConnsPerHost: 1, MaxIdleConns: 1, MaxIdleConnsPerHost: 1, IdleConnTimeout: 90 * time.Second,
 			TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: timeout,
 			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},

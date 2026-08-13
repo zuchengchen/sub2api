@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"strings"
 	"unicode"
+
+	contentmoderationassets "github.com/Wei-Shaw/sub2api/resources/content-moderation"
 )
 
 const (
@@ -138,6 +140,8 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespace() string {
 		Keywords      []string                    `json:"keywords"`
 		Candidate     string                      `json:"candidate"`
 		CandidateOn   bool                        `json:"candidate_on"`
+		CandidateRev  string                      `json:"candidate_revision"`
+		Prefilter     string                      `json:"second_layer_prefilter"`
 		SecondLayerOn bool                        `json:"second_layer_on"`
 		Endpoints     []ContentModerationEndpoint `json:"endpoints"`
 		Scanners      []string                    `json:"scanners"`
@@ -146,6 +150,8 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespace() string {
 		Keywords:      normalizeBlockedKeywords(cfg.BlockedKeywords),
 		Candidate:     strings.TrimSpace(cfg.CandidateAsset),
 		CandidateOn:   cfg.CandidateEnabled,
+		CandidateRev:  contentModerationCandidateRevision(cfg),
+		Prefilter:     contentModerationSecondLayerPrefilterCacheRevision(cfg),
 		SecondLayerOn: cfg.SecondLayerEnabled,
 		Endpoints:     normalizeContentModerationEndpoints(cfg.SecondLayerEndpoints),
 		Scanners:      normalizeContentModerationScannerIDs(cfg.SecondLayerScanners),
@@ -153,6 +159,24 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespace() string {
 	raw, _ := json.Marshal(policy)
 	digest := sha256.Sum256(raw)
 	return policy.Version + ":" + hex.EncodeToString(digest[:16])
+}
+
+func contentModerationCandidateRevision(cfg *ContentModerationConfig) string {
+	if cfg == nil || !cfg.CandidateEnabled {
+		return ""
+	}
+	asset, err := contentmoderationassets.Load(cfg.CandidateAsset)
+	if err != nil {
+		return "invalid:" + strings.TrimSpace(cfg.CandidateAsset)
+	}
+	return asset.Manifest.SourceCommit + ":" + asset.Manifest.Layer1.EmbeddedSHA256 + ":" + asset.Manifest.Layer2.EmbeddedSHA256
+}
+
+func contentModerationSecondLayerPrefilterCacheRevision(cfg *ContentModerationConfig) string {
+	if cfg == nil || !cfg.CandidateEnabled {
+		return ""
+	}
+	return contentModerationSecondLayerPrefilterPolicyVersion
 }
 
 func contentModerationEndpointViews(endpoints []ContentModerationEndpoint) []ContentModerationEndpointView {
