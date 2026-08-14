@@ -22,10 +22,9 @@ type SystemHandler struct {
 	lockSvc   *service.SystemOperationLockService
 }
 
-// systemUpdateTimeout bounds a full in-place update or rollback: the release
-// manifest fetch plus a large binary download over slow links. It must stay
-// above the GitHub download client timeout (10 minutes) so the download owns
-// its own deadline.
+// systemUpdateTimeout bounds a full in-place update or rollback. Updates may
+// download a large release over slow links; local rollback still copies and
+// hashes a full binary. It stays above the GitHub client's 10-minute timeout.
 const systemUpdateTimeout = 15 * time.Minute
 
 // systemUpdateContext detaches a long-running update/rollback from the HTTP
@@ -141,13 +140,13 @@ func (h *SystemHandler) GetRollbackVersions(c *gin.Context) {
 	})
 }
 
-// Rollback restores a previous version.
-// Without a body (or with an empty version) it restores the local .backup binary
-// left by the last in-place update. With {"version": "x.y.z"} it downloads and
-// installs that specific release (must be one of the recent rollback versions).
+// Rollback restores a checksum-verified binary from local installation history.
+// The UI sends the opaque history ID. The version field remains accepted for
+// compatibility with older clients and resolves only against local entries.
 // POST /api/v1/admin/system/rollback
 func (h *SystemHandler) Rollback(c *gin.Context) {
 	var req struct {
+		ID      string `json:"id"`
 		Version string `json:"version"`
 	}
 	if c.Request.Body != nil && c.Request.ContentLength > 0 {
@@ -156,14 +155,17 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 			return
 		}
 	}
-	targetVersion := strings.TrimSpace(req.Version)
+	targetID := strings.TrimSpace(req.ID)
+	if targetID == "" {
+		targetID = strings.TrimSpace(req.Version)
+	}
 
 	operation := "rollback"
-	if targetVersion != "" {
-		operation = "rollback:" + targetVersion
+	if targetID != "" {
+		operation = "rollback:" + targetID
 	}
 	operationID := buildSystemOperationID(c, operation)
-	payload := gin.H{"operation_id": operationID, "version": targetVersion}
+	payload := gin.H{"operation_id": operationID, "rollback_id": targetID}
 	executeAdminIdempotentJSON(c, "admin.system.rollback", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		lock, release, err := h.acquireSystemLock(ctx, operationID)
 		if err != nil {
@@ -175,11 +177,11 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 			release(releaseReason, succeeded)
 		}()
 
-		if targetVersion != "" {
-			// 指定版本回退同样要下载完整二进制，与更新一样和请求生命周期解耦。
+		if targetID != "" {
+			// Copying and verifying a large local binary should survive a client disconnect.
 			rollbackCtx, cancel := systemUpdateContext(ctx)
 			defer cancel()
-			err = h.updateSvc.RollbackToVersion(rollbackCtx, targetVersion)
+			err = h.updateSvc.RollbackToVersion(rollbackCtx, targetID)
 		} else {
 			err = h.updateSvc.Rollback()
 		}
@@ -192,7 +194,7 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 		return gin.H{
 			"message":      "Rollback completed. Please restart the service.",
 			"need_restart": true,
-			"version":      targetVersion,
+			"rollback_id":  targetID,
 			"operation_id": lock.OperationID(),
 		}, nil
 	})

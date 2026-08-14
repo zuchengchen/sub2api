@@ -40,23 +40,16 @@ export default {
     restarting: 'Restarting...',
     retry: 'Retry',
     rollback: 'Version Rollback',
-    rollbackSelectVersion: 'Select a version to roll back to (last 3 versions)',
+    rollbackSelectVersion: 'Last two versions installed on this host',
     rollbackConfirm: 'Roll back to {version}',
     rollbackWarning:
-      'Rollback downloads the selected version and replaces the current binary. A service restart is required afterwards.',
+      'Uses the verified local binary and retains the current version as the newest rollback entry.',
     rollingBack: 'Rolling back...',
     rollbackComplete: 'Rollback Complete',
     rollbackFailed: 'Rollback Failed',
-    manualRollbackCommand: 'Manual rollback',
-    copyCommand: 'Copy',
-    copied: 'Copied',
-    noRollbackVersions: 'No versions available for rollback',
-    loadVersionsFailed: 'Failed to load versions',
-    rollbackSourceHint: 'Online rollback is not available for source builds',
-    deployScript: 'Script',
-    deployDocker: 'Docker',
-    dockerEditCompose: 'Edit the image tag in docker-compose.yml',
-    dockerRecreate: 'Recreate the container'
+    noRollbackVersions: 'No verified local rollback versions',
+    loadVersionsFailed: 'Failed to load local version history',
+    rollbackSourceHint: 'In-app rollback is not available for source builds'
   },
 
   // Recharge / Subscription Page

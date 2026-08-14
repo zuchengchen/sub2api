@@ -46,13 +46,16 @@ export interface UpdateResult {
 }
 
 export interface RollbackVersionInfo {
+  id: string
   version: string
-  published_at: string
-  html_url: string
+  commit: string
+  installed_at: string
+  archived_at: string
+  sha256: string
 }
 
 /**
- * Get versions available for rollback (up to 3 versions older than current)
+ * Get the two most recent checksum-verified binaries installed locally.
  */
 export async function getRollbackVersions(): Promise<{ versions: RollbackVersionInfo[] }> {
   const { data } = await apiClient.get<{ versions: RollbackVersionInfo[] }>(
@@ -62,10 +65,8 @@ export async function getRollbackVersions(): Promise<{ versions: RollbackVersion
 }
 
 /**
- * In-place update/rollback downloads a full release binary from GitHub, which
- * can take several minutes on slow links. The global 30s axios timeout would
- * abort the request mid-download (#4504), so these calls wait as long as the
- * backend allows (15 minutes server-side).
+ * In-place updates can download a full release binary, while rollback copies
+ * and verifies a local binary. Both operations survive the normal API timeout.
  */
 const UPDATE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
 
@@ -81,13 +82,13 @@ export async function performUpdate(): Promise<UpdateResult> {
 }
 
 /**
- * Rollback to a previous version
- * @param version - Target version (e.g. "0.1.146"); omit to restore the local backup binary
+ * Rollback to a previously installed local binary.
+ * @param id - Opaque local history ID; omit to restore the newest verified entry.
  */
-export async function rollback(version?: string): Promise<UpdateResult> {
+export async function rollback(id?: string): Promise<UpdateResult> {
   const { data } = await apiClient.post<UpdateResult>(
     '/admin/system/rollback',
-    version ? { version } : undefined,
+    id ? { id } : undefined,
     { timeout: UPDATE_REQUEST_TIMEOUT_MS }
   )
   return data
