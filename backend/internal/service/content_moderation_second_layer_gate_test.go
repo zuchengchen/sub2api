@@ -204,10 +204,12 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 func TestContentModerationFragmentCacheNamespaceTracksPrefilterPolicy(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	withoutPrefilter := cfg.fragmentCacheNamespace()
+	previousKeywordContext := cfg.fragmentCacheNamespaceWithKeywordContextRevision("powershell-doc-v1")
 
 	cfg.CandidateEnabled = true
 	withPrefilter := cfg.fragmentCacheNamespace()
 
+	require.NotEqual(t, previousKeywordContext, withoutPrefilter)
 	require.NotEqual(t, withoutPrefilter, withPrefilter)
 	require.Equal(t, contentModerationSecondLayerPrefilterPolicyVersion, contentModerationSecondLayerPrefilterCacheRevision(cfg))
 }

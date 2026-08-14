@@ -132,29 +132,35 @@ func normalizeContentModerationScannerIDs(values []string) []string {
 }
 
 func (cfg *ContentModerationConfig) fragmentCacheNamespace() string {
+	return cfg.fragmentCacheNamespaceWithKeywordContextRevision(contentModerationKeywordContextPolicyRevision)
+}
+
+func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithKeywordContextRevision(keywordContextRevision string) string {
 	if cfg == nil {
 		return ""
 	}
 	policy := struct {
-		Version       string                      `json:"version"`
-		Keywords      []string                    `json:"keywords"`
-		Candidate     string                      `json:"candidate"`
-		CandidateOn   bool                        `json:"candidate_on"`
-		CandidateRev  string                      `json:"candidate_revision"`
-		Prefilter     string                      `json:"second_layer_prefilter"`
-		SecondLayerOn bool                        `json:"second_layer_on"`
-		Endpoints     []ContentModerationEndpoint `json:"endpoints"`
-		Scanners      []string                    `json:"scanners"`
+		Version           string                      `json:"version"`
+		Keywords          []string                    `json:"keywords"`
+		KeywordContextRev string                      `json:"keyword_context_revision"`
+		Candidate         string                      `json:"candidate"`
+		CandidateOn       bool                        `json:"candidate_on"`
+		CandidateRev      string                      `json:"candidate_revision"`
+		Prefilter         string                      `json:"second_layer_prefilter"`
+		SecondLayerOn     bool                        `json:"second_layer_on"`
+		Endpoints         []ContentModerationEndpoint `json:"endpoints"`
+		Scanners          []string                    `json:"scanners"`
 	}{
-		Version:       normalizeContentModerationCacheVersion(cfg.CacheVersion),
-		Keywords:      normalizeBlockedKeywords(cfg.BlockedKeywords),
-		Candidate:     strings.TrimSpace(cfg.CandidateAsset),
-		CandidateOn:   cfg.CandidateEnabled,
-		CandidateRev:  contentModerationCandidateRevision(cfg),
-		Prefilter:     contentModerationSecondLayerPrefilterCacheRevision(cfg),
-		SecondLayerOn: cfg.SecondLayerEnabled,
-		Endpoints:     normalizeContentModerationEndpoints(cfg.SecondLayerEndpoints),
-		Scanners:      normalizeContentModerationScannerIDs(cfg.SecondLayerScanners),
+		Version:           normalizeContentModerationCacheVersion(cfg.CacheVersion),
+		Keywords:          normalizeBlockedKeywords(cfg.BlockedKeywords),
+		KeywordContextRev: strings.TrimSpace(keywordContextRevision),
+		Candidate:         strings.TrimSpace(cfg.CandidateAsset),
+		CandidateOn:       cfg.CandidateEnabled,
+		CandidateRev:      contentModerationCandidateRevision(cfg),
+		Prefilter:         contentModerationSecondLayerPrefilterCacheRevision(cfg),
+		SecondLayerOn:     cfg.SecondLayerEnabled,
+		Endpoints:         normalizeContentModerationEndpoints(cfg.SecondLayerEndpoints),
+		Scanners:          normalizeContentModerationScannerIDs(cfg.SecondLayerScanners),
 	}
 	raw, _ := json.Marshal(policy)
 	digest := sha256.Sum256(raw)
