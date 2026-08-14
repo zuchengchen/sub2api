@@ -51,15 +51,19 @@ type ContentModerationFragment struct {
 	Hash string `json:"hash"`
 }
 
+const contentModerationFragmentHashDomain = "sub2api/content-moderation/fragment/v2\x00"
+
 func newContentModerationFragment(role, kind, path, text string) (ContentModerationFragment, bool) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ContentModerationFragment{}, false
 	}
-	digest := sha256.Sum256([]byte(text))
+	role = strings.ToLower(strings.TrimSpace(role))
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	digest := sha256.Sum256([]byte(contentModerationFragmentHashDomain + role + "\x00" + kind + "\x00" + text))
 	return ContentModerationFragment{
-		Role: strings.ToLower(strings.TrimSpace(role)),
-		Kind: strings.ToLower(strings.TrimSpace(kind)),
+		Role: role,
+		Kind: kind,
 		Path: path,
 		Text: text,
 		Hash: hex.EncodeToString(digest[:]),
