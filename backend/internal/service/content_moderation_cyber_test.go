@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +32,40 @@ func (r *cyberOrderingTestRepo) CreateLog(ctx context.Context, log *ContentModer
 	return nil
 }
 
+func (r *cyberOrderingTestRepo) CreateLogWithArchive(ctx context.Context, log *ContentModerationLog, archive *ContentModerationEncryptedArchive) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "archive")
+	if log != nil {
+		r.emailSents = append(r.emailSents, log.EmailSent)
+		log.ID = 1
+	}
+	return nil
+}
+
+func (r *cyberOrderingTestRepo) CreateContentLostLog(ctx context.Context, log *ContentModerationLog) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "content_lost")
+	return nil
+}
+
+func (r *cyberOrderingTestRepo) GetArchive(context.Context, int64) (*ContentModerationLog, *ContentModerationEncryptedArchive, error) {
+	return nil, nil, sql.ErrNoRows
+}
+
+func (r *cyberOrderingTestRepo) DeleteArchive(context.Context, ContentModerationArchiveAccess) (bool, error) {
+	return false, nil
+}
+
+func (r *cyberOrderingTestRepo) RecordArchiveAccess(context.Context, ContentModerationArchiveAccess) error {
+	return nil
+}
+
+func (r *cyberOrderingTestRepo) ReferencedArchiveKeyIDs(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (r *cyberOrderingTestRepo) ListLogs(ctx context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error) {
 	return nil, nil, nil
 }
@@ -43,10 +79,16 @@ func (r *cyberOrderingTestRepo) CleanupExpiredLogs(ctx context.Context, hitBefor
 }
 
 func (r *cyberOrderingTestRepo) DisableUserIfActive(context.Context, int64) (bool, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, "disable_user")
+	r.mu.Unlock()
 	return true, nil
 }
 
 func (r *cyberOrderingTestRepo) DisableAPIKeyIfActive(context.Context, int64) (string, bool, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, "disable_api_key")
+	r.mu.Unlock()
 	return "", false, nil
 }
 
@@ -301,17 +343,17 @@ func TestRecordCyberPolicyEvent_RuntimeSnapshotRefreshFailureKeepsStaleScope(t *
 	require.Equal(t, 2, getMultiple)
 }
 
-// TestRecordCyberPolicyEvent_CreateLogBeforeEmail verifies F7: the moderation
-// log is persisted before the durable email-delivery claim is attempted, so an
-// SMTP hang cannot swallow the audit record.
+// TestRecordCyberPolicyEvent_DisablesBeforeLogAndEmail verifies the synchronous
+// fallback path: disposition happens before audit persistence, and persistence
+// happens before any email-delivery claim.
 //
 // Note on email ordering: EmailService is a concrete type with no injectable
 // send interface, so SMTP-success cannot be simulated in unit tests.
 // With emailService=nil the email block is skipped. The test therefore asserts
 // the two invariants that are observable without real SMTP:
-//  1. CreateLog runs first (calls[0]=="create").
+//  1. DisableUserIfActive runs before CreateLog.
 //  2. The log is stored with EmailSent=false (not pre-set to true).
-func TestRecordCyberPolicyEvent_CreateLogBeforeEmail(t *testing.T) {
+func TestRecordCyberPolicyEvent_DisablesBeforeLogAndEmail(t *testing.T) {
 	repo := &cyberOrderingTestRepo{}
 	svc := NewContentModerationService(
 		&contentModerationTestSettingRepo{values: map[string]string{
@@ -337,8 +379,8 @@ func TestRecordCyberPolicyEvent_CreateLogBeforeEmail(t *testing.T) {
 	})
 
 	calls := repo.snapshot()
-	require.GreaterOrEqual(t, len(calls), 1, "CreateLog must be called")
-	require.Equal(t, "create", calls[0], "CreateLog must run first (F7: log-before-email)")
+	require.GreaterOrEqual(t, len(calls), 2, "disposition and CreateLog must both be called")
+	require.Equal(t, []string{"disable_user", "create"}, calls[:2])
 
 	// EmailSent must be false when the log is first persisted; a later atomic
 	// claim owns the sole SMTP attempt.
@@ -346,6 +388,33 @@ func TestRecordCyberPolicyEvent_CreateLogBeforeEmail(t *testing.T) {
 	require.NotEmpty(t, emailSents, "CreateLog must have captured EmailSent value")
 	require.False(t, emailSents[0], "log must be stored with EmailSent=false initially (F7)")
 
+}
+
+func TestRecordCyberPolicyEvent_DisablesBeforeArchive(t *testing.T) {
+	repo := &cyberOrderingTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{}},
+		repo, nil, nil, nil, nil, nil, nil,
+	)
+	root := t.TempDir()
+	keyRingPath := filepath.Join(root, "keyring.json")
+	writeModerationArchiveTestKeyRing(t, keyRingPath, "k1", map[string][]byte{
+		"k1": []byte("0123456789abcdef0123456789abcdef"),
+	})
+	runtime, err := newContentModerationArchiveRuntime(repo, moderationArchiveRuntimeOptions(root, keyRingPath))
+	require.NoError(t, err)
+	t.Cleanup(runtime.Close)
+	svc.archiveRuntime = runtime
+
+	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
+		RequestID: "req-archive-order", UserID: 7, UserRole: RoleUser,
+		Model: "gpt-5", Scope: gptCyberScope(),
+		RawRequest: ContentModerationRawRequest{Body: []byte(`{"input":"blocked"}`)},
+	})
+
+	calls := repo.snapshot()
+	require.GreaterOrEqual(t, len(calls), 2, "disposition and archive must both be called")
+	require.Equal(t, []string{"disable_user", "archive"}, calls[:2])
 }
 
 // banCountArgsTestRepo 在 contentModerationTestRepo 基础上记录

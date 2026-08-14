@@ -98,8 +98,6 @@ const baseConfig = (): ContentModerationConfig => ({
   all_groups: true,
   group_ids: [],
   record_non_hits: false,
-  worker_count: 4,
-  queue_size: 32768,
   block_status: 403,
   block_message: '内容审计命中风险规则，请调整输入后重试',
   email_on_hit: true,
@@ -139,17 +137,6 @@ const runtimeStatus = () => ({
   enabled: true,
   risk_control_enabled: true,
   mode: 'pre_block',
-  worker_count: 4,
-  max_workers: 32,
-  active_workers: 0,
-  idle_workers: 4,
-  queue_size: 32768,
-  queue_length: 0,
-  queue_usage_percent: 0,
-  enqueued: 0,
-  dropped: 0,
-  processed: 0,
-  errors: 0,
   pre_block_active: 0,
   pre_block_checked: 0,
   pre_block_allowed: 0,
@@ -320,6 +307,37 @@ describe('admin RiskControlView', () => {
     deleteArchive.mockResolvedValue({ deleted: true })
   })
 
+  it('requests only blocked and cyber policy audit records', async () => {
+    listLogs.mockResolvedValue({
+      items: [{ ...archivedLog(), action: 'hash_block', flagged: false }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(listLogs).toHaveBeenCalledWith(expect.objectContaining({ result: 'blocked' }))
+    expect(wrapper.get('[data-test="audit-result"]').text()).toBe('admin.riskControl.action.block')
+    expect(wrapper.get('[data-test="audit-result"]').classes()).toContain('bg-red-100')
+    expect(wrapper.text()).not.toContain('admin.riskControl.result.pass')
+  })
+
   it('saves the selected model filter mode and models', async () => {
     const wrapper = mount(RiskControlView, {
       global: {
@@ -388,39 +406,7 @@ describe('admin RiskControlView', () => {
     expect(showError).not.toHaveBeenCalled()
   })
 
-  it('describes worker runtime as async audit and pre-block record processing', async () => {
-    getStatus.mockResolvedValue({
-      ...runtimeStatus(),
-      mode: 'observe',
-      processed: 12,
-      queue_length: 2,
-    })
-
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('admin.riskControl.workerStatusHint')
-    expect(wrapper.text()).not.toContain('admin.riskControl.preBlockSyncStatus')
-    expect(wrapper.text()).toContain('admin.riskControl.records')
-    expect(wrapper.text()).toContain('12')
-    expect(wrapper.text()).toContain('2 / 32,768')
-  })
-
-  it('shows pre-block synchronous moderation metrics separately from worker queue', async () => {
+  it('shows pre-block synchronous moderation metrics', async () => {
     getStatus.mockResolvedValue({
       ...runtimeStatus(),
       pre_block_active: 2,
@@ -432,8 +418,6 @@ describe('admin RiskControlView', () => {
       pre_block_api_key_active: 2,
       pre_block_api_key_available_count: 2,
       pre_block_api_key_total_calls: 128,
-      active_workers: 3,
-      worker_count: 7,
       pre_block_api_key_loads: [
         {
           index: 0,
@@ -483,7 +467,6 @@ describe('admin RiskControlView', () => {
 
     expect(wrapper.text()).toContain('admin.riskControl.preBlockSyncStatus')
     expect(wrapper.text()).toContain('admin.riskControl.preBlockSyncHint')
-    expect(wrapper.text()).not.toContain('admin.riskControl.workerStatus')
     expect(wrapper.text()).toContain('admin.riskControl.records')
     expect(wrapper.text()).toContain('128')
     expect(wrapper.text()).toContain('120')
@@ -494,7 +477,7 @@ describe('admin RiskControlView', () => {
     expect(wrapper.text()).toContain('sk-...two')
     expect(wrapper.text()).toContain('72')
     expect(wrapper.text()).toContain('56')
-    expect(wrapper.text()).toContain('同步并发 2 / 可用 Key 2，累计 128 次，worker：3 / 7')
+    expect(wrapper.text()).toContain('同步并发 2 / 可用 Key 2，累计 128 次')
 
     const runtimeCards = wrapper.get('[data-test="pre-block-runtime-cards"]')
     const syncCard = wrapper.get('[data-test="pre-block-sync-card"]')

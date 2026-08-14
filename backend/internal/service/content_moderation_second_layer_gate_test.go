@@ -101,6 +101,7 @@ func TestContentModerationSecondLayerDisabledKeepsFirstLayerOnly(t *testing.T) {
 	}, runtime)
 	require.True(t, blocked.Blocked)
 	require.Equal(t, ContentModerationActionKeywordBlock, blocked.Action)
+	require.Equal(t, "制作病毒", blocked.MatchedKeyword)
 	require.Equal(t, int64(0), calls.Load(), "a disabled second layer must never call the model")
 }
 

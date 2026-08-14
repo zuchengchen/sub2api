@@ -1,6 +1,6 @@
 import { apiClient } from '../client'
 
-export type ModerationMode = 'off' | 'observe' | 'pre_block'
+export type ModerationMode = 'off' | 'pre_block'
 export type KeywordBlockingMode = 'keyword_only' | 'keyword_and_api' | 'api_only'
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
 
@@ -38,8 +38,6 @@ export interface ContentModerationConfig {
   group_ids: number[]
   record_non_hits: boolean
   thresholds: Record<string, number>
-  worker_count: number
-  queue_size: number
   block_status: number
   block_message: string
   email_on_hit: boolean
@@ -130,8 +128,6 @@ export interface UpdateContentModerationConfig {
   group_ids?: number[]
   record_non_hits?: boolean
   thresholds?: Record<string, number>
-  worker_count?: number
-  queue_size?: number
   block_status?: number
   block_message?: string
   email_on_hit?: boolean
@@ -179,17 +175,6 @@ export interface ContentModerationRuntimeStatus {
   enabled: boolean
   risk_control_enabled: boolean
   mode: ModerationMode
-  worker_count: number
-  max_workers: number
-  active_workers: number
-  idle_workers: number
-  queue_size: number
-  queue_length: number
-  queue_usage_percent: number
-  enqueued: number
-  dropped: number
-  processed: number
-  errors: number
   pre_block_active: number
   pre_block_checked: number
   pre_block_allowed: number
@@ -295,7 +280,7 @@ export interface DeleteContentModerationArchiveResponse {
 export interface ListContentModerationLogsParams {
   page?: number
   page_size?: number
-  result?: string
+  result?: 'blocked'
   group_id?: number
   endpoint?: string
   search?: string

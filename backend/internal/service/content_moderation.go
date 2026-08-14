@@ -29,9 +29,9 @@ import (
 )
 
 const (
-	ContentModerationModeOff      = "off"
-	ContentModerationModeObserve  = "observe"
-	ContentModerationModePreBlock = "pre_block"
+	ContentModerationModeOff           = "off"
+	ContentModerationModePreBlock      = "pre_block"
+	legacyContentModerationModeObserve = "observe"
 
 	contentModerationAPIKeysModeAppend  = "append"
 	contentModerationAPIKeysModeReplace = "replace"
@@ -69,10 +69,6 @@ const (
 	maxModerationInputRunes           = 12000
 	maxModerationExcerptRunes         = 240
 
-	defaultContentModerationWorkerCount                = 4
-	maxContentModerationWorkerCount                    = 32
-	defaultContentModerationQueueSize                  = 32768
-	maxContentModerationQueueSize                      = 100000
 	defaultContentModerationBanThreshold               = 10
 	defaultContentModerationViolationWindowHours       = 720
 	defaultContentModerationBlockHTTPStatus            = http.StatusForbidden
@@ -163,8 +159,6 @@ type ContentModerationConfig struct {
 	GroupIDs             []int64                      `json:"group_ids"`
 	RecordNonHits        bool                         `json:"record_non_hits"`
 	Thresholds           map[string]float64           `json:"thresholds"`
-	WorkerCount          int                          `json:"worker_count"`
-	QueueSize            int                          `json:"queue_size"`
 	BlockStatus          int                          `json:"block_status"`
 	BlockMessage         string                       `json:"block_message"`
 	EmailOnHit           bool                         `json:"email_on_hit"`
@@ -209,8 +203,6 @@ type ContentModerationConfigView struct {
 	GroupIDs                       []int64                         `json:"group_ids"`
 	RecordNonHits                  bool                            `json:"record_non_hits"`
 	Thresholds                     map[string]float64              `json:"thresholds"`
-	WorkerCount                    int                             `json:"worker_count"`
-	QueueSize                      int                             `json:"queue_size"`
 	BlockStatus                    int                             `json:"block_status"`
 	BlockMessage                   string                          `json:"block_message"`
 	EmailOnHit                     bool                            `json:"email_on_hit"`
@@ -336,8 +328,6 @@ type UpdateContentModerationConfigInput struct {
 	GroupIDs                       *[]int64                      `json:"group_ids"`
 	RecordNonHits                  *bool                         `json:"record_non_hits"`
 	Thresholds                     *map[string]float64           `json:"thresholds"`
-	WorkerCount                    *int                          `json:"worker_count"`
-	QueueSize                      *int                          `json:"queue_size"`
 	BlockStatus                    *int                          `json:"block_status"`
 	BlockMessage                   *string                       `json:"block_message"`
 	EmailOnHit                     *bool                         `json:"email_on_hit"`
@@ -444,6 +434,7 @@ type ContentModerationDecision struct {
 	Message         string             `json:"message"`
 	StatusCode      int                `json:"status_code"`
 	InputHash       string             `json:"input_hash,omitempty"`
+	MatchedKeyword  string             `json:"matched_keyword,omitempty"`
 	HighestCategory string             `json:"highest_category"`
 	HighestScore    float64            `json:"highest_score"`
 	CategoryScores  map[string]float64 `json:"category_scores"`
@@ -663,17 +654,6 @@ type ContentModerationRuntimeStatus struct {
 	Enabled                      bool                                  `json:"enabled"`
 	RiskControlEnabled           bool                                  `json:"risk_control_enabled"`
 	Mode                         string                                `json:"mode"`
-	WorkerCount                  int                                   `json:"worker_count"`
-	MaxWorkers                   int                                   `json:"max_workers"`
-	ActiveWorkers                int                                   `json:"active_workers"`
-	IdleWorkers                  int                                   `json:"idle_workers"`
-	QueueSize                    int                                   `json:"queue_size"`
-	QueueLength                  int                                   `json:"queue_length"`
-	QueueUsagePercent            float64                               `json:"queue_usage_percent"`
-	Enqueued                     int64                                 `json:"enqueued"`
-	Dropped                      int64                                 `json:"dropped"`
-	Processed                    int64                                 `json:"processed"`
-	Errors                       int64                                 `json:"errors"`
 	PreBlockActive               int                                   `json:"pre_block_active"`
 	PreBlockChecked              int64                                 `json:"pre_block_checked"`
 	PreBlockAllowed              int64                                 `json:"pre_block_allowed"`
@@ -770,14 +750,7 @@ type ContentModerationService struct {
 	dispositionRepo          ContentModerationDispositionRepository
 	httpClient               *http.Client
 	moderationProxyCache     atomic.Pointer[moderationProxyURLCacheEntry]
-	asyncQueue               chan contentModerationTask
-	workerCount              int
 	apiKeyCursor             atomic.Uint64
-	asyncActive              atomic.Int64
-	asyncEnqueued            atomic.Int64
-	asyncDropped             atomic.Int64
-	asyncProcessed           atomic.Int64
-	asyncErrors              atomic.Int64
 	preBlockActive           atomic.Int64
 	preBlockChecked          atomic.Int64
 	preBlockAllowed          atomic.Int64
@@ -815,14 +788,6 @@ type contentModerationRuntimeSnapshot struct {
 	fragmentCacheNamespace      string
 	configDigest                [sha256.Size]byte
 	loadedAt                    time.Time
-}
-
-type contentModerationTask struct {
-	input           ContentModerationCheckInput
-	content         ContentModerationInput
-	inputHash       string
-	reservationHeld bool
-	enqueuedAt      time.Time
 }
 
 type contentModerationKeyHealth struct {
@@ -863,8 +828,6 @@ func NewContentModerationService(
 		authCacheInvalidator: authCacheInvalidator,
 		emailService:         emailService,
 		httpClient:           servertiming.InstrumentClient(nil),
-		workerCount:          maxContentModerationWorkerCount,
-		asyncQueue:           make(chan contentModerationTask, maxContentModerationQueueSize),
 		keyHealth:            make(map[string]*contentModerationKeyHealth),
 		pendingBodyBudget:    NewContentModerationPendingBodyBudget(),
 	}
@@ -873,9 +836,6 @@ func NewContentModerationService(
 		svc.dispositionRepo = dispositionRepo
 	}
 	if settingRepo != nil && repo != nil {
-		for i := 0; i < svc.workerCount; i++ {
-			go svc.worker(i)
-		}
 		go svc.cleanupWorker()
 	}
 	return svc
@@ -898,7 +858,11 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 		cfg.Enabled = *input.Enabled
 	}
 	if input.Mode != nil {
-		cfg.Mode = strings.TrimSpace(*input.Mode)
+		mode := strings.TrimSpace(*input.Mode)
+		if err := validateContentModerationMode(mode); err != nil {
+			return nil, err
+		}
+		cfg.Mode = mode
 	}
 	if input.BaseURL != nil {
 		cfg.BaseURL = strings.TrimSpace(*input.BaseURL)
@@ -919,12 +883,6 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if input.SampleRate != nil {
 		cfg.SampleRate = *input.SampleRate
-	}
-	if input.WorkerCount != nil {
-		cfg.WorkerCount = *input.WorkerCount
-	}
-	if input.QueueSize != nil {
-		cfg.QueueSize = *input.QueueSize
 	}
 	if input.BlockStatus != nil {
 		cfg.BlockStatus = *input.BlockStatus
@@ -1274,6 +1232,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 					Flagged:         true,
 					Message:         cfg.BlockMessage,
 					StatusCode:      cfg.BlockStatus,
+					MatchedKeyword:  keyword,
 					HighestCategory: contentModerationKeywordCategory,
 					HighestScore:    1.0,
 					CategoryScores:  scores,
@@ -1351,24 +1310,12 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"protocol", input.Protocol)
 		return allow, nil
 	}
-	if cfg.Mode == ContentModerationModeObserve {
-		slog.Info("content_moderation.enqueue_observe",
-			"user_id", input.UserID,
-			"api_key_id", input.APIKeyID,
-			"group_id", contentModerationLogGroupID(input.GroupID),
-			"endpoint", input.Endpoint,
-			"protocol", input.Protocol,
-			"queue_len", len(s.asyncQueue))
-		s.enqueueAsync(input, cfg, content, hashText)
-		return allow, nil
-	}
-
-	return s.checkSync(ctx, input, cfg, content, hashText, nil, true), nil
+	return s.checkSync(ctx, input, cfg, content, hashText), nil
 }
 
-func (s *ContentModerationService) checkSync(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, hashText string, queueDelay *int, allowBlock bool) *ContentModerationDecision {
+func (s *ContentModerationService) checkSync(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, hashText string) *ContentModerationDecision {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
-	trackPreBlock := queueDelay == nil && allowBlock && cfg != nil && cfg.Mode == ContentModerationModePreBlock
+	trackPreBlock := cfg != nil && cfg.Mode == ContentModerationModePreBlock
 	if trackPreBlock {
 		s.preBlockActive.Add(1)
 		defer s.preBlockActive.Add(-1)
@@ -1387,15 +1334,10 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 			"endpoint", input.Endpoint,
 			"protocol", input.Protocol,
 			"mode", cfg.Mode,
-			"allow_block", allowBlock,
-			"queue_delay_ms", queueDelay,
 			"latency_ms", latency,
 			"error", err)
-		if queueDelay != nil {
-			s.asyncErrors.Add(1)
-		}
 		if cfg.RecordNonHits {
-			log := s.buildLog(input, cfg, ContentModerationActionError, false, "", 0, nil, content.ExcerptText(), &latency, queueDelay, err.Error())
+			log := s.buildLog(input, cfg, ContentModerationActionError, false, "", 0, nil, content.ExcerptText(), &latency, nil, err.Error())
 			_ = s.repo.CreateLog(ctx, log)
 		}
 		return allow
@@ -1404,7 +1346,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 	flagged, highestCategory, highestScore := evaluateModerationScores(result.CategoryScores, cfg.Thresholds)
 	action := ContentModerationActionAllow
 	blocked := false
-	if allowBlock && flagged && cfg.Mode == ContentModerationModePreBlock {
+	if flagged && cfg.Mode == ContentModerationModePreBlock {
 		action = ContentModerationActionBlock
 		blocked = true
 	}
@@ -1419,16 +1361,14 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		"endpoint", input.Endpoint,
 		"protocol", input.Protocol,
 		"mode", cfg.Mode,
-		"allow_block", allowBlock,
 		"flagged", flagged,
 		"blocked", blocked,
 		"action", action,
 		"highest_category", highestCategory,
 		"highest_score", highestScore,
-		"latency_ms", latency,
-		"queue_delay_ms", queueDelay)
+		"latency_ms", latency)
 	if flagged || cfg.RecordNonHits {
-		log := s.buildLog(input, cfg, action, flagged, highestCategory, highestScore, result.CategoryScores, content.ExcerptText(), &latency, queueDelay, "")
+		log := s.buildLog(input, cfg, action, flagged, highestCategory, highestScore, result.CategoryScores, content.ExcerptText(), &latency, nil, "")
 		s.persistContentModerationLogWithInput(ctx, cfg, log, hashText, flagged, flagged, &input)
 	}
 	if blocked {
@@ -1474,103 +1414,10 @@ func (s *ContentModerationService) recordPreBlockSyncMetric(latencyMS int, actio
 	}
 }
 
-func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, hashText string) {
-	if s == nil || s.asyncQueue == nil {
-		return
-	}
-	queueSize := defaultContentModerationQueueSize
-	if cfg != nil && cfg.QueueSize > 0 {
-		queueSize = cfg.QueueSize
-	}
-	if len(s.asyncQueue) >= queueSize {
-		slog.Warn("content_moderation.async_queue_full", "user_id", input.UserID, "endpoint", input.Endpoint, "queue_size", queueSize)
-		s.asyncDropped.Add(1)
-		return
-	}
-	reservationHeld := input.Reservation != nil && input.Reservation.Retain()
-	task := contentModerationTask{
-		input:           input,
-		content:         content,
-		inputHash:       hashText,
-		reservationHeld: reservationHeld,
-		enqueuedAt:      time.Now(),
-	}
-	select {
-	case s.asyncQueue <- task:
-		s.asyncEnqueued.Add(1)
-	default:
-		if reservationHeld {
-			input.Reservation.Release()
-		}
-		slog.Warn("content_moderation.async_queue_full", "user_id", input.UserID, "endpoint", input.Endpoint)
-		s.asyncDropped.Add(1)
-	}
-}
-
-func (s *ContentModerationService) worker(id int) {
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), maxContentModerationTimeoutMS*time.Millisecond+10*time.Second)
-		runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx)
-		if err != nil || runtimeSnapshot == nil || runtimeSnapshot.config == nil || id >= runtimeSnapshot.config.WorkerCount {
-			cancel()
-			time.Sleep(time.Second)
-			continue
-		}
-		cfg := runtimeSnapshot.config
-		task, ok := s.dequeueAsyncTask(ctx, time.Second)
-		if !ok {
-			cancel()
-			continue
-		}
-		func() {
-			defer cancel()
-			if task.reservationHeld && task.input.Reservation != nil {
-				defer task.input.Reservation.Release()
-			}
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("content_moderation.worker_panic", "worker_id", id, "recover", r)
-				}
-			}()
-			if !cfg.Enabled || cfg.Mode == ContentModerationModeOff || len(cfg.apiKeys()) == 0 {
-				return
-			}
-			if !cfg.includesGroup(task.input.GroupID) {
-				return
-			}
-			if !cfg.includesModel(task.input.Model) {
-				return
-			}
-			s.asyncActive.Add(1)
-			defer s.asyncActive.Add(-1)
-			queueDelay := int(time.Since(task.enqueuedAt).Milliseconds())
-			_ = s.checkSync(ctx, task.input, cfg, task.content, task.inputHash, &queueDelay, false)
-			s.asyncProcessed.Add(1)
-		}()
-	}
-}
-
-func (s *ContentModerationService) dequeueAsyncTask(ctx context.Context, idleWait time.Duration) (contentModerationTask, bool) {
-	var zero contentModerationTask
-	if s == nil || s.asyncQueue == nil {
-		return zero, false
-	}
-	if idleWait <= 0 {
-		idleWait = time.Second
-	}
-	timer := time.NewTimer(idleWait)
-	defer timer.Stop()
-	select {
-	case task, ok := <-s.asyncQueue:
-		return task, ok
-	case <-ctx.Done():
-		return zero, false
-	case <-timer.C:
-		return zero, false
-	}
-}
-
 func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error) {
+	// The security audit is an incident view. Keep non-blocking observations in
+	// storage for retention/diagnostics, but never include them in this listing.
+	filter.Result = "blocked"
 	if filter.Pagination.Page <= 0 {
 		filter.Pagination.Page = 1
 	}
@@ -1789,13 +1636,6 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		return nil, err
 	}
 	riskEnabled := s.isRiskControlEnabled(ctx)
-	active := int(s.asyncActive.Load())
-	if active < 0 {
-		active = 0
-	}
-	if active > cfg.WorkerCount {
-		active = cfg.WorkerCount
-	}
 	preBlockActive := int(s.preBlockActive.Load())
 	if preBlockActive < 0 {
 		preBlockActive = 0
@@ -1804,14 +1644,6 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 	preBlockAvgLatency := int64(0)
 	if preBlockChecked > 0 {
 		preBlockAvgLatency = s.preBlockLatencyTotalMS.Load() / preBlockChecked
-	}
-	queueLength := 0
-	if s.asyncQueue != nil {
-		queueLength = len(s.asyncQueue)
-	}
-	queueUsage := 0.0
-	if cfg.QueueSize > 0 {
-		queueUsage = float64(queueLength) * 100 / float64(cfg.QueueSize)
 	}
 	var flaggedHashCount int64
 	if s.hashCache != nil {
@@ -1840,17 +1672,6 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		Enabled:                      cfg.Enabled,
 		RiskControlEnabled:           riskEnabled,
 		Mode:                         cfg.Mode,
-		WorkerCount:                  cfg.WorkerCount,
-		MaxWorkers:                   maxContentModerationWorkerCount,
-		ActiveWorkers:                active,
-		IdleWorkers:                  cfg.WorkerCount - active,
-		QueueSize:                    cfg.QueueSize,
-		QueueLength:                  queueLength,
-		QueueUsagePercent:            queueUsage,
-		Enqueued:                     s.asyncEnqueued.Load(),
-		Dropped:                      s.asyncDropped.Load(),
-		Processed:                    s.asyncProcessed.Load(),
-		Errors:                       s.asyncErrors.Load(),
 		PreBlockActive:               preBlockActive,
 		PreBlockChecked:              preBlockChecked,
 		PreBlockAllowed:              s.preBlockAllowed.Load(),
@@ -1937,6 +1758,9 @@ func parseContentModerationConfig(raw string) (*ContentModerationConfig, error) 
 	}
 	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CONFIG", "内容审计配置不是有效 JSON")
+	}
+	if strings.TrimSpace(cfg.Mode) == legacyContentModerationModeObserve {
+		cfg.Mode = ContentModerationModePreBlock
 	}
 	cfg.normalize()
 	return cfg, nil
@@ -2121,10 +1945,8 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 	if _, err := effectiveContentModerationKeywords(cfg); err != nil {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CANDIDATE_ASSET", err.Error())
 	}
-	switch cfg.Mode {
-	case ContentModerationModeOff, ContentModerationModeObserve, ContentModerationModePreBlock:
-	default:
-		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_MODE", "内容审计模式无效")
+	if err := validateContentModerationMode(cfg.Mode); err != nil {
+		return err
 	}
 	if _, err := url.ParseRequestURI(cfg.BaseURL); err != nil {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_BASE_URL", "OpenAI Base URL 无效")
@@ -2148,6 +1970,15 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 		}
 	}
 	return nil
+}
+
+func validateContentModerationMode(mode string) error {
+	switch strings.TrimSpace(mode) {
+	case ContentModerationModeOff, ContentModerationModePreBlock:
+		return nil
+	default:
+		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_MODE", "内容审计模式仅支持 off 或 pre_block")
+	}
 }
 
 func (s *ContentModerationService) callModeration(ctx context.Context, cfg *ContentModerationConfig, input any, trackKeyLoad ...bool) (*moderationAPIResult, error) {
@@ -2667,8 +2498,6 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		GroupIDs:             []int64{},
 		RecordNonHits:        false,
 		Thresholds:           ContentModerationDefaultThresholds(),
-		WorkerCount:          defaultContentModerationWorkerCount,
-		QueueSize:            defaultContentModerationQueueSize,
 		BlockStatus:          defaultContentModerationBlockHTTPStatus,
 		BlockMessage:         defaultContentModerationBlockMessage,
 		EmailOnHit:           true,
@@ -2723,7 +2552,7 @@ func (cfg *ContentModerationConfig) normalize() {
 	} else {
 		cfg.APIKeys = normalizeModerationAPIKeys(cfg.APIKeys)
 	}
-	if cfg.Mode == "" {
+	if cfg.Mode == "" || cfg.Mode == legacyContentModerationModeObserve {
 		cfg.Mode = ContentModerationModePreBlock
 	}
 	if cfg.BaseURL == "" {
@@ -2748,18 +2577,6 @@ func (cfg *ContentModerationConfig) normalize() {
 	}
 	if cfg.SampleRate > 100 {
 		cfg.SampleRate = 100
-	}
-	if cfg.WorkerCount <= 0 {
-		cfg.WorkerCount = defaultContentModerationWorkerCount
-	}
-	if cfg.WorkerCount > maxContentModerationWorkerCount {
-		cfg.WorkerCount = maxContentModerationWorkerCount
-	}
-	if cfg.QueueSize <= 0 {
-		cfg.QueueSize = defaultContentModerationQueueSize
-	}
-	if cfg.QueueSize > maxContentModerationQueueSize {
-		cfg.QueueSize = maxContentModerationQueueSize
 	}
 	if strings.TrimSpace(cfg.BlockMessage) == "" {
 		cfg.BlockMessage = defaultContentModerationBlockMessage
@@ -3039,8 +2856,6 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		GroupIDs:                       append([]int64(nil), cfg.GroupIDs...),
 		RecordNonHits:                  cfg.RecordNonHits,
 		Thresholds:                     cloneFloatMap(cfg.Thresholds),
-		WorkerCount:                    cfg.WorkerCount,
-		QueueSize:                      cfg.QueueSize,
 		BlockStatus:                    cfg.BlockStatus,
 		BlockMessage:                   cfg.BlockMessage,
 		EmailOnHit:                     cfg.EmailOnHit,
@@ -3658,8 +3473,8 @@ type CyberPolicyRecordInput struct {
 	UserRole        string                          `json:"user_role"`
 }
 
-// RecordCyberPolicyEvent 把一次 cyber_policy 硬阻断写入风控中心日志、计入违规计数、
-// 并给用户发邮件。当前请求已由 gateway 透传给用户；本方法仅做事后记录/通知/计数。
+// RecordCyberPolicyEvent 对一次 cyber_policy 硬阻断立即执行账户处置，随后写入风控归档
+// 并按配置发送通知。账户处置不受本地累计违规阈值约束。
 // 仅受请求时的 GPT 分组 scope 快照约束；不受 risk_control_enabled 总开关和内容审核
 // Enabled/Mode/group/model/sample 约束，确保严重违规始终留痕并处置。
 func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, in CyberPolicyRecordInput) {
@@ -3668,12 +3483,6 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 	}
 	if in.Scope != nil && !in.Scope.InScope {
 		return
-	}
-	cfg := &ContentModerationConfig{}
-	if runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx); err != nil {
-		slog.Warn("content_moderation.cyber_runtime_snapshot_load_failed", "error", err)
-	} else if runtimeSnapshot.config != nil {
-		cfg = runtimeSnapshot.config
 	}
 	var userID *int64
 	if in.UserID > 0 {
@@ -3732,6 +3541,12 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 	} else if createErr := s.repo.CreateLog(ctx, log); createErr != nil {
 		archiveErr = createErr
 		slog.Warn("content_moderation.cyber_create_log_failed", "user_id", in.UserID, "error", createErr)
+	}
+	cfg := &ContentModerationConfig{}
+	if runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx); err != nil {
+		slog.Warn("content_moderation.cyber_runtime_snapshot_load_failed", "error", err)
+	} else if runtimeSnapshot.config != nil {
+		cfg = runtimeSnapshot.config
 	}
 	emailEnabled := transitioned && cfg.EmailOnHit && s.emailService != nil && strings.TrimSpace(log.UserEmail) != ""
 	emailRequired := emailEnabled

@@ -153,6 +153,58 @@ func TestUnifiedFragmentCacheMetricsAreFixedCounters(t *testing.T) {
 	require.NotContains(t, strings.ToLower(decision.Message), "redis")
 }
 
+func TestUnifiedFragmentCacheBlockPreservesMatchedKeyword(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled: true,
+		config:             cfg,
+		keywordMatcher:     newContentModerationKeywordMatcher([]string{"secret-token"}),
+	}
+	cache := &contentModerationMetricCache{result: ContentModerationFragmentBlock, found: true}
+	svc := &ContentModerationService{hashCache: cache, repo: &contentModerationTestRepo{}}
+	scope := NewContentModerationScopeSnapshot(nil, "GPT")
+
+	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+		Body:     []byte(`{"messages":[{"role":"user","content":"leak SECRET-TOKEN"}]}`),
+		Scope:    &scope,
+		Protocol: ContentModerationProtocolOpenAIChat,
+	}, runtime)
+
+	require.True(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionCacheBlock, decision.Action)
+	require.Equal(t, contentModerationKeywordCategory, decision.HighestCategory)
+	require.Equal(t, "secret-token", decision.MatchedKeyword)
+}
+
+func TestUnifiedFragmentCacheBlockDoesNotReportDisabledKeywordLayer(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeAPIOnly
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled: true,
+		config:             cfg,
+		keywordMatcher:     newContentModerationKeywordMatcher([]string{"secret-token"}),
+	}
+	cache := &contentModerationMetricCache{result: ContentModerationFragmentBlock, found: true}
+	svc := &ContentModerationService{hashCache: cache, repo: &contentModerationTestRepo{}}
+	scope := NewContentModerationScopeSnapshot(nil, "GPT")
+
+	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+		Body:     []byte(`{"messages":[{"role":"user","content":"leak SECRET-TOKEN"}]}`),
+		Scope:    &scope,
+		Protocol: ContentModerationProtocolOpenAIChat,
+	}, runtime)
+
+	require.True(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionCacheBlock, decision.Action)
+	require.Equal(t, "fragment_cache", decision.HighestCategory)
+	require.Empty(t, decision.MatchedKeyword)
+}
+
 func TestContentModerationRawRequestCloneMetadataPreservesRepeatedHeaders(t *testing.T) {
 	raw := ContentModerationRawRequest{Headers: http.Header{"X-Test": {"one", "two"}}, Body: []byte("raw")}
 	clone := raw.CloneMetadata()

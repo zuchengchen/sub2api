@@ -556,6 +556,7 @@ func TestContentModerationCheck_PreBlockKeywordHitSkipsUpstreamCall(t *testing.T
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
 	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	require.Equal(t, "secret-token", decision.MatchedKeyword)
 	require.False(t, upstreamCalled, "keyword block must short-circuit upstream moderation call")
 	logs := requireContentModerationLogCount(t, repo, 1)
 	require.True(t, logs[0].Flagged)
@@ -564,49 +565,24 @@ func TestContentModerationCheck_PreBlockKeywordHitSkipsUpstreamCall(t *testing.T
 	require.Equal(t, "secret-token", logs[0].MatchedKeyword, "blocked log must record which keyword was hit")
 }
 
-func TestContentModerationCheck_KeywordsIgnoredInObserveMode(t *testing.T) {
-	upstreamHits := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamHits++
-		_ = json.NewEncoder(w).Encode(moderationAPIResponse{Results: []moderationAPIResult{{CategoryScores: map[string]float64{"sexual": 0.1}}}})
-	}))
-	defer server.Close()
+func TestParseContentModerationConfig_MigratesLegacyObserveToPreBlock(t *testing.T) {
+	cfg, err := parseContentModerationConfig(`{"mode":"observe"}`)
 
-	cfg := defaultContentModerationConfig()
-	cfg.Enabled = true
-	cfg.Mode = ContentModerationModeObserve
-	cfg.BaseURL = server.URL
-	cfg.APIKeys = []string{"sk-test"}
-	cfg.BlockedKeywords = []string{"secret-token"}
-	rawCfg, err := json.Marshal(cfg)
 	require.NoError(t, err)
+	require.Equal(t, ContentModerationModePreBlock, cfg.Mode)
+}
 
-	repo := &contentModerationTestRepo{}
+func TestContentModerationUpdateConfig_RejectsObserveMode(t *testing.T) {
 	svc := NewContentModerationService(
-		&contentModerationTestSettingRepo{values: map[string]string{
-			SettingKeyRiskControlEnabled:      "true",
-			SettingKeyContentModerationConfig: string(rawCfg),
-		}},
-		repo,
-		&contentModerationTestHashCache{},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
+		&contentModerationTestSettingRepo{values: map[string]string{}},
+		&contentModerationTestRepo{}, nil, nil, nil, nil, nil, nil,
 	)
+	mode := "observe"
 
-	body := []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`)
-	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
-		Endpoint: "/v1/messages",
-		Provider: "anthropic",
-		Protocol: ContentModerationProtocolAnthropicMessages,
-		Body:     body,
-	})
+	_, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{Mode: &mode})
 
-	require.NoError(t, err)
-	require.True(t, decision.Allowed, "observe mode must let the request through even on keyword hit")
-	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "off 或 pre_block")
 }
 
 func TestContentModerationCheck_KeywordOnlyStrategySkipsAPIOnMiss(t *testing.T) {
@@ -1524,11 +1500,9 @@ func TestContentModerationCheck_PreHashUsesRedisHashCache(t *testing.T) {
 	require.Empty(t, userRepo.updated)
 }
 
-func TestUnifiedSevereBlockPersistsWhenAsyncQueueIsFull(t *testing.T) {
+func TestUnifiedSevereBlockPersistsSynchronously(t *testing.T) {
 	repo := &contentModerationTestRepo{}
 	svc := NewContentModerationService(nil, repo, nil, nil, nil, nil, nil, nil)
-	svc.asyncQueue = make(chan contentModerationTask, 1)
-	svc.asyncQueue <- contentModerationTask{}
 	cfg := defaultContentModerationConfig()
 	cfg.Enabled = true
 	cfg.AutoBanEnabled = false
@@ -1542,8 +1516,6 @@ func TestUnifiedSevereBlockPersistsWhenAsyncQueueIsFull(t *testing.T) {
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 1)
 	require.Equal(t, ContentModerationActionKeywordBlock, logs[0].Action)
-	require.Len(t, svc.asyncQueue, 1, "severe persistence must not consume or depend on the async observation queue")
-	require.Zero(t, svc.asyncDropped.Load())
 }
 
 func TestContentModerationCheck_HashBlockLogsDoNotIncreaseNextViolationCount(t *testing.T) {
@@ -1810,50 +1782,6 @@ func TestContentModerationClearFlaggedInputHashesAndStatusCount(t *testing.T) {
 	status, err = svc.GetStatus(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, int64(0), status.FlaggedHashCount)
-}
-
-func TestContentModerationCheck_AsyncFlaggedWritesRedisHashCache(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(moderationAPIResponse{
-			Results: []moderationAPIResult{{
-				CategoryScores: map[string]float64{"sexual": 0.9},
-			}},
-		})
-	}))
-	defer server.Close()
-
-	cfg := defaultContentModerationConfig()
-	cfg.Enabled = true
-	cfg.Mode = ContentModerationModeObserve
-	cfg.BaseURL = server.URL
-	cfg.APIKeys = []string{"sk-test"}
-	rawCfg, err := json.Marshal(cfg)
-	require.NoError(t, err)
-
-	repo := &contentModerationTestRepo{}
-	hashCache := &contentModerationTestHashCache{}
-	svc := NewContentModerationService(
-		&contentModerationTestSettingRepo{values: map[string]string{
-			SettingKeyRiskControlEnabled:      "true",
-			SettingKeyContentModerationConfig: string(rawCfg),
-		}},
-		repo,
-		hashCache,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
-
-	decision := svc.checkSync(context.Background(), ContentModerationCheckInput{
-		Protocol: ContentModerationProtocolOpenAIChat,
-		Body:     []byte(`{"messages":[{"role":"user","content":"bad prompt"}]}`),
-	}, cfg, ContentModerationInput{Text: "bad prompt"}, strings.Repeat("b", 64), contentModerationIntPtr(25), false)
-
-	require.False(t, decision.Blocked)
-	requireRecordedHashCount(t, hashCache, 1)
-	requireContentModerationLogCount(t, repo, 1)
 }
 
 func TestBuildContentModerationAccountDisabledEmailBody_ContainsBanDetails(t *testing.T) {
