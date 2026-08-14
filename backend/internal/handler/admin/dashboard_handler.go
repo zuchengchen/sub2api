@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -31,37 +32,75 @@ func NewDashboardHandler(dashboardService *service.DashboardService, aggregation
 	}
 }
 
-// parseTimeRange parses start_date, end_date query parameters
+func parseOptionalUsageTimeRange(c *gin.Context) (*time.Time, *time.Time, error) {
+	userTZ := c.Query("timezone")
+	parseBoundary := func(timeKey, dateKey string, endDate bool) (*time.Time, error) {
+		if raw := strings.TrimSpace(c.Query(timeKey)); raw != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				return nil, fmt.Errorf("invalid %s format, use RFC3339", timeKey)
+			}
+			return &parsed, nil
+		}
+		raw := strings.TrimSpace(c.Query(dateKey))
+		if raw == "" {
+			return nil, nil
+		}
+		parsed, err := timezone.ParseInUserLocation("2006-01-02", raw, userTZ)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s format, use YYYY-MM-DD", dateKey)
+		}
+		if endDate {
+			parsed = parsed.AddDate(0, 0, 1)
+		}
+		return &parsed, nil
+	}
+
+	startTime, err := parseBoundary("start_time", "start_date", false)
+	if err != nil {
+		return nil, nil, err
+	}
+	endTime, err := parseBoundary("end_time", "end_date", true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if startTime != nil && endTime != nil && startTime.After(*endTime) {
+		return nil, nil, fmt.Errorf("invalid time range: start must be <= end")
+	}
+	return startTime, endTime, nil
+}
+
+// parseTimeRange parses exact timestamps first, then falls back to calendar dates.
 // Uses user's timezone if provided, otherwise falls back to server timezone
 func parseTimeRange(c *gin.Context) (time.Time, time.Time) {
 	userTZ := c.Query("timezone") // Get user's timezone from request
 	now := timezone.NowInUserLocation(userTZ)
-	startDate := c.Query("start_date")
-	endDate := c.Query("end_date")
-
-	var startTime, endTime time.Time
-
-	if startDate != "" {
-		if t, err := timezone.ParseInUserLocation("2006-01-02", startDate, userTZ); err == nil {
-			startTime = t
-		} else {
-			startTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
-		}
-	} else {
-		startTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
+	startPtr, endPtr, err := parseOptionalUsageTimeRange(c)
+	if err != nil {
+		startPtr, endPtr = nil, nil
 	}
 
-	if endDate != "" {
-		if t, err := timezone.ParseInUserLocation("2006-01-02", endDate, userTZ); err == nil {
-			endTime = t.Add(24 * time.Hour) // Include the end date
-		} else {
-			endTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
-		}
-	} else {
-		endTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+	startTime := timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
+	if startPtr != nil {
+		startTime = *startPtr
+	}
+	endTime := timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+	if endPtr != nil {
+		endTime = *endPtr
 	}
 
 	return startTime, endTime
+}
+
+func formatDashboardRangeEndDate(c *gin.Context, endTime time.Time) string {
+	return formatDashboardRangeEndDateValue(endTime, strings.TrimSpace(c.Query("end_time")) != "")
+}
+
+func formatDashboardRangeEndDateValue(endTime time.Time, exactTimeRange bool) string {
+	if exactTimeRange {
+		return endTime.Format("2006-01-02")
+	}
+	return endTime.AddDate(0, 0, -1).Format("2006-01-02")
 }
 
 func parseOptionalBoolDashboardFilter(c *gin.Context, name string) (*bool, error) {
@@ -278,7 +317,7 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    formatDashboardRangeEndDate(c, endTime),
 		"granularity": granularity,
 	})
 }
@@ -365,7 +404,7 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 	response.Success(c, gin.H{
 		"models":     stats,
 		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":   formatDashboardRangeEndDate(c, endTime),
 	})
 }
 
@@ -442,7 +481,7 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 	response.Success(c, gin.H{
 		"groups":     stats,
 		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":   formatDashboardRangeEndDate(c, endTime),
 	})
 }
 
@@ -468,7 +507,7 @@ func (h *DashboardHandler) GetAPIKeyUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    formatDashboardRangeEndDate(c, endTime),
 		"granularity": granularity,
 	})
 }
@@ -495,7 +534,7 @@ func (h *DashboardHandler) GetUserUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    formatDashboardRangeEndDate(c, endTime),
 		"granularity": granularity,
 	})
 }
@@ -554,7 +593,7 @@ func (h *DashboardHandler) GetUserSpendingRanking(c *gin.Context) {
 		"total_requests":    ranking.TotalRequests,
 		"total_tokens":      ranking.TotalTokens,
 		"start_date":        startTime.Format("2006-01-02"),
-		"end_date":          endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":          formatDashboardRangeEndDate(c, endTime),
 	}
 	dashboardUsersRankingCache.Set(cacheKey, payload)
 	c.Header("X-Snapshot-Cache", "miss")
@@ -729,6 +768,6 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 	response.Success(c, gin.H{
 		"users":      stats,
 		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":   formatDashboardRangeEndDate(c, endTime),
 	})
 }

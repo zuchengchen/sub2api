@@ -41,13 +41,6 @@ const messages: Record<string, string> = {
 	'common.no': 'No',
 }
 
-const formatLocalDate = (date: Date): string => {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     usage: {
@@ -197,6 +190,25 @@ describe('admin UsageView route filters', () => {
   afterEach(() => {
     Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
     vi.useRealTimers()
+  })
+
+  it('uses one exact rolling 24-hour range for the default usage requests', async () => {
+    vi.setSystemTime(new Date('2026-08-15T07:30:45.123Z'))
+
+    mountRouteFilteredUsageView()
+    await flushPromises()
+
+    const requests = [
+      list.mock.calls[0][0],
+      getStats.mock.calls[0][0],
+      getModelStats.mock.calls[0][0],
+    ]
+    for (const params of requests) {
+      expect(params.start_date).toBeUndefined()
+      expect(params.end_date).toBeUndefined()
+      expect(params.start_time).toBe('2026-08-14T07:30:45.123Z')
+      expect(params.end_time).toBe('2026-08-15T07:30:45.123Z')
+    }
   })
 
   it('shows the routed user while applying user_id to usage requests', async () => {
@@ -365,13 +377,13 @@ describe('admin UsageView distribution metric toggles', () => {
     await flushPromises()
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
-    const now = new Date()
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
-      start_date: formatLocalDate(yesterday),
-      end_date: formatLocalDate(now),
-      granularity: 'hour'
+    const snapshotParams = getSnapshotV2.mock.calls[0][0]
+    expect(snapshotParams).toEqual(expect.objectContaining({
+      start_date: undefined,
+      end_date: undefined,
+      granularity: 'hour',
     }))
+    expect(Date.parse(snapshotParams.end_time) - Date.parse(snapshotParams.start_time)).toBe(24 * 60 * 60 * 1000)
 
     const modelChart = wrapper.find('[data-test="model-chart"]')
     const groupChart = wrapper.find('[data-test="group-chart"]')

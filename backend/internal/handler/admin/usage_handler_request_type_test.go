@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
@@ -119,6 +120,24 @@ func TestAdminUsageListRequestIDFilter(t *testing.T) {
 	require.Equal(t, "req-0123", repo.listFilters.RequestID)
 }
 
+func TestAdminUsageListPrefersExactTimeRange(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+	start := "2026-08-14T07:30:45.123Z"
+	end := "2026-08-15T07:30:45.123Z"
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage?start_date=2026-08-01&end_date=2026-08-31&start_time="+start+"&end_time="+end, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, repo.listFilters.StartTime)
+	require.NotNil(t, repo.listFilters.EndTime)
+	require.Equal(t, start, repo.listFilters.StartTime.Format(time.RFC3339Nano))
+	require.Equal(t, end, repo.listFilters.EndTime.Format(time.RFC3339Nano))
+	require.Equal(t, 24*time.Hour, repo.listFilters.EndTime.Sub(*repo.listFilters.StartTime))
+}
+
 func TestAdminUsageListInvalidExactTotal(t *testing.T) {
 	repo := &adminUsageRepoCapture{}
 	router := newAdminUsageRequestTypeTestRouter(repo)
@@ -177,4 +196,20 @@ func TestAdminUsageStatsInvalidStream(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestAdminUsageStatsUsesExactTimeRange(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+	start := "2026-08-14T07:30:45Z"
+	end := "2026-08-15T07:30:45Z"
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/stats?start_time="+start+"&end_time="+end, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, repo.statsFilters.StartTime)
+	require.NotNil(t, repo.statsFilters.EndTime)
+	require.Equal(t, 24*time.Hour, repo.statsFilters.EndTime.Sub(*repo.statsFilters.StartTime))
 }

@@ -233,6 +233,12 @@ import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatReasoningEffort } from '@/utils/format'
 import { getBillingModeLabel, getDisplayBillingMode as resolveDisplayBillingMode } from '@/utils/billingMode'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
+import {
+  buildUsageRangeQuery,
+  createLast24HoursRange,
+  LAST_24_HOURS_PRESET,
+  type ExactUsageTimeRange,
+} from '@/utils/usageTimeRange'
 import type {
   ApiKey,
   EndpointStat,
@@ -324,24 +330,20 @@ let chartReqSeq = 0
 let statsReqSeq = 0
 let modelStatsReqSeq = 0
 
-const formatLocalDate = (date: Date): string =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-
-const getLast24HoursRangeDates = () => {
-  const end = new Date()
-  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
-  return { start: formatLocalDate(start), end: formatLocalDate(end) }
-}
-
 const getGranularityForRange = (start: string, end: string): 'day' | 'hour' => {
   const startTime = new Date(`${start}T00:00:00`).getTime()
   const endTime = new Date(`${end}T00:00:00`).getTime()
   return Math.ceil((endTime - startTime) / (1000 * 60 * 60 * 24)) <= 1 ? 'hour' : 'day'
 }
 
-const defaultRange = getLast24HoursRangeDates()
+const defaultRange = createLast24HoursRange()
 const startDate = ref(defaultRange.start)
 const endDate = ref(defaultRange.end)
+const activeDatePreset = ref<string | null>(LAST_24_HOURS_PRESET)
+const exactTimeRange = ref<ExactUsageTimeRange | null>({
+  start_time: defaultRange.start_time,
+  end_time: defaultRange.end_time,
+})
 const granularity = ref<'day' | 'hour'>(getGranularityForRange(startDate.value, endDate.value))
 
 const modelDistributionMetric = ref<DistributionMetric>('tokens')
@@ -358,6 +360,23 @@ const filters = ref<UsageQueryParams>({
   billing_type: null,
   billing_mode: null,
 })
+
+const refreshRollingRange = () => {
+  if (activeDatePreset.value !== LAST_24_HOURS_PRESET) return
+  const range = createLast24HoursRange()
+  startDate.value = range.start
+  endDate.value = range.end
+  filters.value.start_date = range.start
+  filters.value.end_date = range.end
+  exactTimeRange.value = {
+    start_time: range.start_time,
+    end_time: range.end_time,
+  }
+}
+
+const usageRangeQuery = computed(() =>
+  buildUsageRangeQuery(startDate.value, endDate.value, exactTimeRange.value)
+)
 
 const pagination = reactive({
   page: 1,
@@ -415,8 +434,7 @@ const normalizedFilters = computed<UsageQueryParams>(() => {
   const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
   return {
     ...filters.value,
-    start_date: startDate.value,
-    end_date: endDate.value,
+    ...usageRangeQuery.value,
     stream: legacyStream === null ? undefined : legacyStream,
   }
 })
@@ -527,6 +545,7 @@ const refreshModelOptions = (models: ModelStat[]) => {
 }
 
 const applyFilters = () => {
+  refreshRollingRange()
   pagination.page = 1
   void loadLogs()
   void loadStats()
@@ -536,6 +555,7 @@ const applyFilters = () => {
 }
 
 const refreshData = () => {
+  refreshRollingRange()
   void loadLogs()
   void loadStats()
   void loadModelStats()
@@ -544,9 +564,14 @@ const refreshData = () => {
 }
 
 const resetFilters = () => {
-  const range = getLast24HoursRangeDates()
+  activeDatePreset.value = LAST_24_HOURS_PRESET
+  const range = createLast24HoursRange()
   startDate.value = range.start
   endDate.value = range.end
+  exactTimeRange.value = {
+    start_time: range.start_time,
+    end_time: range.end_time,
+  }
   filters.value = {
     start_date: range.start,
     end_date: range.end,
@@ -563,10 +588,14 @@ const resetFilters = () => {
 }
 
 const onDateRangeChange = (range: { startDate: string; endDate: string; preset: string | null }) => {
+  activeDatePreset.value = range.preset
   startDate.value = range.startDate
   endDate.value = range.endDate
   filters.value.start_date = range.startDate
   filters.value.end_date = range.endDate
+  exactTimeRange.value = range.preset === LAST_24_HOURS_PRESET
+    ? exactTimeRange.value
+    : null
   granularity.value = getGranularityForRange(range.startDate, range.endDate)
   applyFilters()
 }
@@ -828,8 +857,7 @@ const loadErrors = async () => {
     const resp = await usageAPI.listMyErrorRequests({
       page: errorPage.value,
       page_size: errorPageSize.value,
-      start_date: startDate.value,
-      end_date: endDate.value,
+      ...usageRangeQuery.value,
       model: (errorFilter.value.model ?? '').trim() || undefined,
       category: errorFilter.value.category || undefined,
       api_key_id: errorFilter.value.api_key_id ?? undefined,
