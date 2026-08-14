@@ -4,7 +4,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,9 +32,8 @@ func (s *updateServiceCacheStub) SetUpdateInfo(_ context.Context, data string, _
 }
 
 type updateServiceGitHubClientStub struct {
-	release        *GitHubRelease
-	recentReleases []*GitHubRelease
-	recentErr      error
+	release     *GitHubRelease
+	recentCalls int
 }
 
 func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, string) (*GitHubRelease, error) {
@@ -38,7 +41,8 @@ func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, stri
 }
 
 func (s *updateServiceGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {
-	return s.recentReleases, s.recentErr
+	s.recentCalls++
+	return nil, errors.New("rollback history must not use GitHub")
 }
 
 func (s *updateServiceGitHubClientStub) DownloadFile(context.Context, string, string, int64) error {
@@ -59,6 +63,7 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 			},
 		},
 		"0.1.132",
+		"test-commit",
 		"release",
 	)
 
@@ -69,119 +74,127 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoUpdateAvailable)
 }
 
-func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateService {
-	return NewUpdateService(
-		&updateServiceCacheStub{},
-		&updateServiceGitHubClientStub{recentReleases: releases},
-		current,
-		"release",
-	)
-}
+func TestUpdateServiceListRollbackVersionsUsesVerifiedLocalHistory(t *testing.T) {
+	svc, exePath, github := newLocalRollbackTestService(t, "current-binary")
+	baseTime := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 
-func TestUpdateServiceListRollbackVersionsFiltersAndCaps(t *testing.T) {
-	releases := []*GitHubRelease{
-		{TagName: "v0.1.148", PublishedAt: "2026-07-09T00:00:00Z"},                       // newer than current: excluded
-		{TagName: "v0.1.147", PublishedAt: "2026-07-08T00:00:00Z"},                       // current: excluded
-		{TagName: "v0.1.146-rc1", PublishedAt: "2026-07-07T12:00:00Z", Prerelease: true}, // prerelease: excluded
-		{TagName: "v0.1.146", PublishedAt: "2026-07-07T00:00:00Z"},
-		{TagName: "v0.1.145", PublishedAt: "2026-07-06T00:00:00Z", Draft: true}, // draft: excluded
-		{TagName: "v0.1.144", PublishedAt: "2026-07-05T00:00:00Z"},
-		{TagName: "v0.1.144", PublishedAt: "2026-07-05T00:00:00Z"}, // duplicate: excluded
-		{TagName: "v0.1.143", PublishedAt: "2026-07-04T00:00:00Z"},
-		{TagName: "v0.1.142", PublishedAt: "2026-07-03T00:00:00Z"}, // beyond cap of 3: excluded
-	}
-	svc := newRollbackTestService("0.1.147", releases)
+	writeRollbackTestEntry(t, exePath, "entry-current", "0.1.176.1", "current-commit", "current-binary", baseTime.Add(4*time.Hour))
+	writeRollbackTestEntry(t, exePath, "entry-newest", "0.1.176", "commit-newest", "newest-binary", baseTime.Add(3*time.Hour))
+	writeRollbackTestEntry(t, exePath, "entry-second", "0.1.175.2", "commit-second", "second-binary", baseTime.Add(2*time.Hour))
+	writeRollbackTestEntry(t, exePath, "entry-third", "0.1.174", "commit-third", "third-binary", baseTime.Add(time.Hour))
+	corrupt := writeRollbackTestEntry(t, exePath, "entry-corrupt", "0.1.999", "commit-corrupt", "corrupt-binary", baseTime.Add(5*time.Hour))
+	require.NoError(t, os.WriteFile(corrupt.binaryPath, []byte("tampered"), 0755))
 
 	versions, err := svc.ListRollbackVersions(context.Background())
 
 	require.NoError(t, err)
-	require.Len(t, versions, 3)
-	require.Equal(t, "0.1.146", versions[0].Version)
-	require.Equal(t, "0.1.144", versions[1].Version)
-	require.Equal(t, "0.1.143", versions[2].Version)
+	require.Len(t, versions, 2)
+	require.Equal(t, "entry-newest", versions[0].ID)
+	require.Equal(t, "0.1.176", versions[0].Version)
+	require.Equal(t, "commit-newest", versions[0].Commit)
+	require.Equal(t, "entry-second", versions[1].ID)
+	require.Equal(t, 0, github.recentCalls)
 }
 
-func TestUpdateServiceListRollbackVersionsSortsUnorderedInput(t *testing.T) {
-	releases := []*GitHubRelease{
-		{TagName: "v0.1.144"},
-		{TagName: "v0.1.146"},
-		{TagName: "v0.1.145"},
-	}
-	svc := newRollbackTestService("0.1.147", releases)
+func TestUpdateServiceRollbackRejectsUnknownCorruptAndCurrentEntries(t *testing.T) {
+	svc, exePath, _ := newLocalRollbackTestService(t, "current-binary")
+	baseTime := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	writeRollbackTestEntry(t, exePath, "entry-current", "0.1.176.1", "current-commit", "current-binary", baseTime)
+	corrupt := writeRollbackTestEntry(t, exePath, "entry-corrupt", "0.1.175", "old-commit", "old-binary", baseTime.Add(-time.Hour))
+	require.NoError(t, os.WriteFile(corrupt.binaryPath, []byte("tampered"), 0755))
 
-	versions, err := svc.ListRollbackVersions(context.Background())
-
-	require.NoError(t, err)
-	require.Len(t, versions, 3)
-	require.Equal(t, "0.1.146", versions[0].Version)
-	require.Equal(t, "0.1.145", versions[1].Version)
-	require.Equal(t, "0.1.144", versions[2].Version)
-}
-
-func TestUpdateServiceListRollbackVersionsEmptyWhenNoneOlder(t *testing.T) {
-	releases := []*GitHubRelease{
-		{TagName: "v0.1.147"},
-		{TagName: "v0.1.148"},
-	}
-	svc := newRollbackTestService("0.1.147", releases)
-
-	versions, err := svc.ListRollbackVersions(context.Background())
-
-	require.NoError(t, err)
-	require.Empty(t, versions)
-}
-
-func TestUpdateServiceListRollbackVersionsPropagatesFetchError(t *testing.T) {
-	svc := NewUpdateService(
-		&updateServiceCacheStub{},
-		&updateServiceGitHubClientStub{recentErr: errors.New("github unavailable")},
-		"0.1.147",
-		"release",
-	)
-
-	_, err := svc.ListRollbackVersions(context.Background())
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "github unavailable")
-}
-
-func TestUpdateServiceRollbackToVersionRejectsDisallowedTargets(t *testing.T) {
-	releases := []*GitHubRelease{
-		{TagName: "v0.1.148"},
-		{TagName: "v0.1.147"},
-		{TagName: "v0.1.146"},
-		{TagName: "v0.1.145"},
-		{TagName: "v0.1.144"},
-		{TagName: "v0.1.143"},
-		{TagName: "v0.1.142"},
-	}
-	svc := newRollbackTestService("0.1.147", releases)
-
-	for _, target := range []string{
-		"",         // empty
-		"0.1.147",  // current version
-		"v0.1.147", // current version with prefix
-		"0.1.148",  // newer than current
-		"0.1.142",  // older than the 3 most recent
-		"9.9.9",    // nonexistent
-	} {
+	for _, target := range []string{"", "missing", "entry-current", "entry-corrupt", "9.9.9"} {
 		err := svc.RollbackToVersion(context.Background(), target)
 		require.ErrorIs(t, err, ErrRollbackVersionNotAllowed, "target %q should be rejected", target)
 	}
 }
 
-func TestUpdateServiceRollbackToVersionAcceptsVPrefix(t *testing.T) {
-	// No platform asset in the release: the target passes the allowlist check
-	// and fails later at asset lookup, proving the version itself was accepted.
-	releases := []*GitHubRelease{
-		{TagName: "v0.1.147"},
-		{TagName: "v0.1.146"},
+func TestUpdateServiceRollbackRotatesVerifiedLocalHistory(t *testing.T) {
+	svc, exePath, github := newLocalRollbackTestService(t, "current-binary")
+	baseTime := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return baseTime }
+	selected := writeRollbackTestEntry(t, exePath, "entry-selected", "0.1.176", "selected-commit", "selected-binary", baseTime.Add(-2*time.Hour))
+	writeRollbackTestEntry(t, exePath, "entry-older", "0.1.175", "older-commit", "older-binary", baseTime.Add(-3*time.Hour))
+
+	err := svc.RollbackToVersion(context.Background(), selected.ID)
+
+	require.NoError(t, err)
+	installedBinary, err := os.ReadFile(exePath)
+	require.NoError(t, err)
+	require.Equal(t, "selected-binary", string(installedBinary))
+
+	currentMetadata, err := readCurrentInstallationMetadata(exePath)
+	require.NoError(t, err)
+	require.Equal(t, "0.1.176", currentMetadata.Version)
+	require.Equal(t, "selected-commit", currentMetadata.Commit)
+	require.Equal(t, baseTime.Format(time.RFC3339Nano), currentMetadata.InstalledAt)
+	require.Equal(t, testSHA256("selected-binary"), currentMetadata.SHA256)
+
+	versions, err := svc.ListRollbackVersions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, versions, 2)
+	require.Equal(t, "0.1.176.1", versions[0].Version)
+	require.Equal(t, "current-commit", versions[0].Commit)
+	require.Equal(t, "0.1.175", versions[1].Version)
+	require.Equal(t, 0, github.recentCalls)
+
+	_, err = os.Stat(selected.directoryPath)
+	require.True(t, os.IsNotExist(err))
+}
+
+func newLocalRollbackTestService(t *testing.T, currentBinary string) (*UpdateService, string, *updateServiceGitHubClientStub) {
+	t.Helper()
+	directory := t.TempDir()
+	exePath := filepath.Join(directory, "sub2api")
+	require.NoError(t, os.WriteFile(exePath, []byte(currentBinary), 0755))
+	installedAt := time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(exePath, installedAt, installedAt))
+
+	github := &updateServiceGitHubClientStub{}
+	svc := NewUpdateService(
+		&updateServiceCacheStub{},
+		github,
+		"0.1.176.1",
+		"current-commit",
+		"release",
+	)
+	svc.executablePath = func() (string, error) { return exePath, nil }
+	svc.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+	require.NoError(t, writeCurrentInstallationMetadata(exePath, localInstallationMetadata{
+		Version:     "0.1.176.1",
+		Commit:      "current-commit",
+		InstalledAt: installedAt.Format(time.RFC3339Nano),
+		SHA256:      testSHA256(currentBinary),
+	}))
+	return svc, exePath, github
+}
+
+func writeRollbackTestEntry(t *testing.T, exePath, id, version, commit, binary string, installedAt time.Time) localHistoryEntry {
+	t.Helper()
+	directoryPath := filepath.Join(versionHistoryEntriesRoot(exePath), id)
+	require.NoError(t, os.MkdirAll(directoryPath, 0750))
+	binaryPath := filepath.Join(directoryPath, versionHistoryBinaryName)
+	require.NoError(t, os.WriteFile(binaryPath, []byte(binary), 0755))
+	archivedAt := installedAt.Add(30 * time.Minute)
+	metadata := RollbackVersion{
+		ID:          id,
+		Version:     version,
+		Commit:      commit,
+		InstalledAt: installedAt.UTC().Format(time.RFC3339Nano),
+		ArchivedAt:  archivedAt.UTC().Format(time.RFC3339Nano),
+		SHA256:      testSHA256(binary),
 	}
-	svc := newRollbackTestService("0.1.147", releases)
+	require.NoError(t, writeJSONFile(filepath.Join(directoryPath, versionHistoryMetadata), metadata, 0600))
+	return localHistoryEntry{
+		RollbackVersion: metadata,
+		directoryPath:   directoryPath,
+		binaryPath:      binaryPath,
+		installedAt:     installedAt,
+		archivedAt:      archivedAt,
+	}
+}
 
-	err := svc.RollbackToVersion(context.Background(), "v0.1.146")
-
-	require.Error(t, err)
-	require.NotErrorIs(t, err, ErrRollbackVersionNotAllowed)
-	require.Contains(t, err.Error(), "no compatible release found")
+func testSHA256(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }

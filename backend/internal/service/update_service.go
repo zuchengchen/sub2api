@@ -10,11 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +24,7 @@ import (
 
 var (
 	ErrNoUpdateAvailable         = infraerrors.Conflict("ALREADY_UP_TO_DATE", "no update available; current version is latest")
-	ErrRollbackVersionNotAllowed = infraerrors.BadRequest("ROLLBACK_VERSION_NOT_ALLOWED", "version is not in the allowed rollback list")
+	ErrRollbackVersionNotAllowed = infraerrors.BadRequest("ROLLBACK_VERSION_NOT_ALLOWED", "target is not a verified local rollback version")
 )
 
 const (
@@ -38,11 +38,6 @@ const (
 
 	// Security: max download size (500MB)
 	maxDownloadSize = 500 * 1024 * 1024
-
-	// Rollback: expose at most the 3 most recent versions older than current
-	maxRollbackVersions = 3
-	// Fetch a few extra releases so filtering (current/newer/prerelease) still leaves enough candidates
-	rollbackFetchPageSize = 15
 )
 
 // UpdateCache defines cache operations for update service
@@ -64,16 +59,22 @@ type UpdateService struct {
 	cache          UpdateCache
 	githubClient   GitHubReleaseClient
 	currentVersion string
+	currentCommit  string
 	buildType      string // "source" for manual builds, "release" for CI builds
+	executablePath func() (string, error)
+	now            func() time.Time
 }
 
 // NewUpdateService creates a new UpdateService
-func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, buildType string) *UpdateService {
+func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, commit, buildType string) *UpdateService {
 	return &UpdateService{
 		cache:          cache,
 		githubClient:   githubClient,
 		currentVersion: version,
+		currentCommit:  commit,
 		buildType:      buildType,
+		executablePath: resolvedExecutablePath,
+		now:            time.Now,
 	}
 }
 
@@ -116,11 +117,14 @@ type GitHubRelease struct {
 	Assets      []GitHubAsset `json:"assets"`
 }
 
-// RollbackVersion describes a release version the system can roll back to
+// RollbackVersion describes a verified binary that was previously installed locally.
 type RollbackVersion struct {
-	Version     string `json:"version"` // without "v" prefix, e.g. "0.1.146"
-	PublishedAt string `json:"published_at"`
-	HTMLURL     string `json:"html_url"`
+	ID          string `json:"id"`
+	Version     string `json:"version"`
+	Commit      string `json:"commit"`
+	InstalledAt string `json:"installed_at"`
+	ArchivedAt  string `json:"archived_at"`
+	SHA256      string `json:"sha256"`
 }
 
 type GitHubAsset struct {
@@ -172,13 +176,12 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 		return ErrNoUpdateAvailable
 	}
 
-	return s.applyReleaseAssets(ctx, info.ReleaseInfo.Assets)
+	return s.applyReleaseAssets(ctx, info.ReleaseInfo.Assets, info.LatestVersion)
 }
 
 // applyReleaseAssets downloads the platform archive from the given release assets,
 // verifies its checksum, and atomically swaps the running binary.
-// Shared by PerformUpdate (latest) and RollbackToVersion (specific older version).
-func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []Asset) error {
+func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []Asset, targetVersion string) error {
 	// Find matching archive and checksum for current platform
 	archiveName := s.getArchiveName()
 	var downloadURL string
@@ -208,13 +211,9 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 	}
 
 	// Get current executable path
-	exePath, err := os.Executable()
+	exePath, err := s.executablePath()
 	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-	exePath, err = filepath.EvalSymlinks(exePath)
-	if err != nil {
-		return fmt.Errorf("failed to resolve symlinks: %w", err)
+		return err
 	}
 
 	exeDir := filepath.Dir(exePath)
@@ -251,152 +250,34 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 		return fmt.Errorf("chmod failed: %w", err)
 	}
 
-	// Atomic replacement using rename pattern:
-	// 1. Rename current -> backup (atomic on Unix)
-	// 2. Rename new -> current (atomic on Unix, same filesystem)
-	// If step 2 fails, restore backup
-	backupPath := exePath + ".backup"
-
-	// Remove old backup if exists
-	_ = os.Remove(backupPath)
-
-	// Step 1: Move current binary to backup
-	if err := os.Rename(exePath, backupPath); err != nil {
-		return fmt.Errorf("backup failed: %w", err)
-	}
-
-	// Step 2: Move new binary to target location (atomic, same filesystem)
-	if err := os.Rename(newBinaryPath, exePath); err != nil {
-		// Restore backup on failure
-		if restoreErr := os.Rename(backupPath, exePath); restoreErr != nil {
-			return fmt.Errorf("replace failed and restore failed: %w (restore error: %v)", err, restoreErr)
-		}
-		return fmt.Errorf("replace failed (restored backup): %w", err)
-	}
-
-	// Success - backup file is kept for rollback capability
-	// It will be cleaned up on next successful update
-	return nil
-}
-
-// Rollback restores the previous version
-func (s *UpdateService) Rollback() error {
-	exePath, err := os.Executable()
+	archivedID, err := s.archiveCurrentExecutable(ctx, exePath, false)
 	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
+		return fmt.Errorf("failed to archive current version: %w", err)
 	}
-	exePath, err = filepath.EvalSymlinks(exePath)
+
+	newHash, err := hashRegularFile(newBinaryPath)
 	if err != nil {
-		return fmt.Errorf("failed to resolve symlinks: %w", err)
+		_ = s.removeHistoryEntry(exePath, archivedID)
+		return fmt.Errorf("failed to hash replacement binary: %w", err)
 	}
-
-	backupFile := exePath + ".backup"
-	if _, err := os.Stat(backupFile); os.IsNotExist(err) {
-		return fmt.Errorf("no backup found")
-	}
-
-	// Replace current with backup
-	if err := os.Rename(backupFile, exePath); err != nil {
-		return fmt.Errorf("rollback failed: %w", err)
-	}
-
-	return nil
-}
-
-// ListRollbackVersions returns up to maxRollbackVersions release versions that are
-// strictly older than the current version (the current version itself is excluded),
-// newest first. Draft and prerelease entries are skipped.
-func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVersion, error) {
-	releases, err := s.fetchRollbackCandidates(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	versions := make([]RollbackVersion, 0, len(releases))
-	for _, r := range releases {
-		versions = append(versions, RollbackVersion{
-			Version:     strings.TrimPrefix(r.TagName, "v"),
-			PublishedAt: r.PublishedAt,
-			HTMLURL:     r.HTMLURL,
-		})
-	}
-	return versions, nil
-}
-
-// RollbackToVersion downloads and installs a specific older version.
-// The target must be one of the versions returned by ListRollbackVersions;
-// anything else (including the current version) is rejected.
-func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) error {
-	target := strings.TrimPrefix(strings.TrimSpace(version), "v")
-	if target == "" {
-		return ErrRollbackVersionNotAllowed
-	}
-
-	releases, err := s.fetchRollbackCandidates(ctx)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
+		_ = s.removeHistoryEntry(exePath, archivedID)
 		return err
 	}
-
-	var match *GitHubRelease
-	for _, r := range releases {
-		if strings.TrimPrefix(r.TagName, "v") == target {
-			match = r
-			break
-		}
+	metadata := localInstallationMetadata{
+		Version:     strings.TrimPrefix(strings.TrimSpace(targetVersion), "v"),
+		Commit:      "unknown",
+		InstalledAt: s.nowUTC().Format(time.RFC3339Nano),
+		SHA256:      newHash,
 	}
-	if match == nil {
-		return ErrRollbackVersionNotAllowed
+	if err := s.replaceExecutable(exePath, newBinaryPath, metadata); err != nil {
+		_ = s.removeHistoryEntry(exePath, archivedID)
+		return err
 	}
-
-	assets := make([]Asset, len(match.Assets))
-	for i, a := range match.Assets {
-		assets[i] = Asset{
-			Name:        a.Name,
-			DownloadURL: a.BrowserDownloadURL,
-			Size:        a.Size,
-		}
+	if err := s.pruneLocalHistory(exePath); err != nil {
+		slog.Warn("local rollback history pruning failed after update", "error", err)
 	}
-
-	return s.applyReleaseAssets(ctx, assets)
-}
-
-// fetchRollbackCandidates fetches recent releases and keeps the newest
-// maxRollbackVersions entries strictly older than the current version.
-func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubRelease, error) {
-	releases, err := s.githubClient.FetchRecentReleases(ctx, githubRepo, rollbackFetchPageSize)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool, len(releases))
-	candidates := make([]*GitHubRelease, 0, maxRollbackVersions)
-	for _, r := range releases {
-		if r == nil || r.Draft || r.Prerelease {
-			continue
-		}
-		v := strings.TrimPrefix(r.TagName, "v")
-		if v == "" || seen[v] {
-			continue
-		}
-		// Only versions strictly older than current (also excludes current itself)
-		if compareVersions(v, s.currentVersion) >= 0 {
-			continue
-		}
-		seen[v] = true
-		candidates = append(candidates, r)
-	}
-
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return compareVersions(
-			strings.TrimPrefix(candidates[i].TagName, "v"),
-			strings.TrimPrefix(candidates[j].TagName, "v"),
-		) > 0
-	})
-
-	if len(candidates) > maxRollbackVersions {
-		candidates = candidates[:maxRollbackVersions]
-	}
-	return candidates, nil
+	return nil
 }
 
 func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
