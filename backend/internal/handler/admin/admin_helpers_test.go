@@ -32,6 +32,22 @@ func TestParseTimeRange(t *testing.T) {
 	require.False(t, end.IsZero())
 }
 
+func TestParseTimeRangePrefersExactTimestamps(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/?start_date=2024-01-01&end_date=2024-01-02&start_time=2026-08-14T07:30:45Z&end_time=2026-08-15T07:30:45Z",
+		nil,
+	)
+
+	start, end := parseTimeRange(c)
+	require.Equal(t, time.Date(2026, 8, 14, 7, 30, 45, 0, time.UTC), start)
+	require.Equal(t, time.Date(2026, 8, 15, 7, 30, 45, 0, time.UTC), end)
+	require.Equal(t, 24*time.Hour, end.Sub(start))
+}
+
 func TestParseOpsViewParam(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
