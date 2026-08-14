@@ -190,6 +190,12 @@ import { useAppStore } from '@/stores/app'; import { adminAPI } from '@/api/admi
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatReasoningEffort } from '@/utils/format'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
+import {
+  buildUsageRangeQuery,
+  createLast24HoursRange,
+  LAST_24_HOURS_PRESET,
+  type ExactUsageTimeRange,
+} from '@/utils/usageTimeRange'
 import AppLayout from '@/components/layout/AppLayout.vue'; import Pagination from '@/components/common/Pagination.vue'; import Select from '@/components/common/Select.vue'; import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'; import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'; import UsageExportProgress from '@/components/admin/usage/UsageExportProgress.vue'
@@ -238,7 +244,7 @@ const showBalanceHistoryModal = ref(false)
 const balanceHistoryUser = ref<AdminUser | null>(null)
 
 const breakdownFilters = computed(() => {
-  const f: Record<string, any> = {}
+  const f: Record<string, any> = { ...usageRangeQuery.value }
   if (filters.value.user_id) f.user_id = filters.value.user_id
   if (filters.value.api_key_id) f.api_key_id = filters.value.api_key_id
   if (filters.value.account_id) f.account_id = filters.value.account_id
@@ -272,30 +278,39 @@ const handleRankingSelectUser = (userId: number, email: string) => {
 }
 
 const granularityOptions = computed(() => [{ value: 'day', label: t('admin.dashboard.day') }, { value: 'hour', label: t('admin.dashboard.hour') }])
-// Use local timezone to avoid UTC timezone issues
-const formatLD = (d: Date) => {
-  const year = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-const getLast24HoursRangeDates = (): { start: string; end: string } => {
-  const end = new Date()
-  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
-  return {
-    start: formatLD(start),
-    end: formatLD(end)
-  }
-}
 const getGranularityForRange = (start: string, end: string): 'day' | 'hour' => {
   const startTime = new Date(`${start}T00:00:00`).getTime()
   const endTime = new Date(`${end}T00:00:00`).getTime()
   const daysDiff = Math.ceil((endTime - startTime) / (1000 * 60 * 60 * 24))
   return daysDiff <= 1 ? 'hour' : 'day'
 }
-const defaultRange = getLast24HoursRangeDates()
+const defaultRange = createLast24HoursRange()
 const startDate = ref(defaultRange.start); const endDate = ref(defaultRange.end)
+const activeDatePreset = ref<string | null>(LAST_24_HOURS_PRESET)
+const exactTimeRange = ref<ExactUsageTimeRange | null>({
+  start_time: defaultRange.start_time,
+  end_time: defaultRange.end_time,
+})
 const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
+const refreshRollingRange = () => {
+  if (activeDatePreset.value !== LAST_24_HOURS_PRESET) return
+  const range = createLast24HoursRange()
+  startDate.value = range.start
+  endDate.value = range.end
+  filters.value.start_date = range.start
+  filters.value.end_date = range.end
+  exactTimeRange.value = {
+    start_time: range.start_time,
+    end_time: range.end_time,
+  }
+}
+const usageRangeQuery = computed(() =>
+  buildUsageRangeQuery(startDate.value, endDate.value, exactTimeRange.value)
+)
+const normalizedFilters = computed<AdminUsageQueryParams>(() => ({
+  ...filters.value,
+  ...usageRangeQuery.value,
+}))
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0 })
 const sortState = reactive({
   sort_by: 'created_at',
@@ -324,6 +339,10 @@ const applyRouteQueryFilters = () => {
   }
   if (queryEndDate) {
     endDate.value = queryEndDate
+  }
+  if (queryStartDate || queryEndDate) {
+    activeDatePreset.value = null
+    exactTimeRange.value = null
   }
 
   filters.value = {
@@ -356,12 +375,16 @@ const loadRouteUserFilterLabel = async () => {
 }
 
 const onDateRangeChange = (range: { startDate: string; endDate: string; preset: string | null }) => {
+  activeDatePreset.value = range.preset
   startDate.value = range.startDate
   endDate.value = range.endDate
   filters.value = {
     ...filters.value,
     start_date: range.startDate,
     end_date: range.endDate
+  }
+  if (range.preset !== LAST_24_HOURS_PRESET) {
+    exactTimeRange.value = null
   }
   granularity.value = getGranularityForRange(range.startDate, range.endDate)
   applyFilters()
@@ -378,7 +401,7 @@ const buildUsageListParams = (
     page,
     page_size: pageSize,
     exact_total: exactTotal,
-    ...filters.value,
+    ...normalizedFilters.value,
     stream: legacyStream === null ? undefined : legacyStream,
     sort_by: sortState.sort_by,
     sort_order: sortState.sort_order
@@ -402,7 +425,7 @@ const loadStats = async (force = false) => {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
     const s = await adminAPI.usage.getStats({
-      ...filters.value,
+      ...normalizedFilters.value,
       stream: legacyStream === null ? undefined : legacyStream,
       ...(force ? { nocache: 1 } : {}),
     })
@@ -440,8 +463,7 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
     const baseParams = {
-      start_date: filters.value.start_date || startDate.value,
-      end_date: filters.value.end_date || endDate.value,
+      ...usageRangeQuery.value,
       user_id: filters.value.user_id,
       model: filters.value.model,
       api_key_id: filters.value.api_key_id,
@@ -489,8 +511,7 @@ const loadChartData = async () => {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
     const snapshot = await adminAPI.dashboard.getSnapshotV2({
-      start_date: filters.value.start_date || startDate.value,
-      end_date: filters.value.end_date || endDate.value,
+      ...usageRangeQuery.value,
       granularity: granularity.value,
       user_id: filters.value.user_id,
       model: filters.value.model,
@@ -513,6 +534,7 @@ const loadChartData = async () => {
   } catch (error) { console.error('Failed to load chart data:', error) } finally { if (seq === chartReqSeq) chartsLoading.value = false }
 }
 const applyFilters = () => {
+  refreshRollingRange()
   pagination.page = 1
   invalidateModelStatsCache()
   loadLogs()
@@ -527,6 +549,7 @@ const applyFilters = () => {
   }
 }
 const refreshData = () => {
+  refreshRollingRange()
   invalidateModelStatsCache()
   loadLogs()
   loadStats(true)
@@ -536,9 +559,14 @@ const refreshData = () => {
   if (rankingMounted.value) rankingRef.value?.reload()
 }
 const resetFilters = () => {
-  const range = getLast24HoursRangeDates()
+  activeDatePreset.value = LAST_24_HOURS_PRESET
+  const range = createLast24HoursRange()
   startDate.value = range.start
   endDate.value = range.end
+  exactTimeRange.value = {
+    start_time: range.start_time,
+    end_time: range.end_time,
+  }
   filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null, billing_mode: undefined }
   granularity.value = getGranularityForRange(startDate.value, endDate.value)
   applyFilters()
@@ -616,7 +644,7 @@ const exportToExcel = async () => {
     if(!c.signal.aborted) {
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Usage')
-      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${filters.value.start_date}_to_${filters.value.end_date}.xlsx`)
+      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${startDate.value}_to_${endDate.value}.xlsx`)
       appStore.showSuccess(t('usage.exportSuccess'))
     }
   } catch (error) { console.error('Failed to export:', error); appStore.showError('Export Failed') }
@@ -810,8 +838,8 @@ const loadAdminErrors = async () => {
       page: errPage.value,
       page_size: errPageSize.value,
       view: 'all',
-      start_time: toRFC3339(filters.value.start_date),
-      end_time: toRFC3339(filters.value.end_date, true),
+      start_time: usageRangeQuery.value.start_time ?? toRFC3339(usageRangeQuery.value.start_date),
+      end_time: usageRangeQuery.value.end_time ?? toRFC3339(usageRangeQuery.value.end_date, true),
       user_id: filters.value.user_id ?? undefined,
       api_key_id: filters.value.api_key_id ?? undefined,
       account_id: filters.value.account_id ?? undefined,

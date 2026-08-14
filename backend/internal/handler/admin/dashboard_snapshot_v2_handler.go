@@ -67,10 +67,12 @@ type dashboardSnapshotV2CacheKey struct {
 	IncludeGroups         bool   `json:"include_groups"`
 	IncludeUsersTrend     bool   `json:"include_users_trend"`
 	UsersTrendLimit       int    `json:"users_trend_limit"`
+	ExactTimeRange        bool   `json:"exact_time_range"`
 }
 
 func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 	startTime, endTime := parseTimeRange(c)
+	exactTimeRange := strings.TrimSpace(c.Query("end_time")) != ""
 	granularity := strings.TrimSpace(c.DefaultQuery("granularity", "day"))
 	if granularity != "hour" {
 		granularity = "day"
@@ -113,6 +115,7 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		IncludeGroups:         includeGroups,
 		IncludeUsersTrend:     includeUsersTrend,
 		UsersTrendLimit:       usersTrendLimit,
+		ExactTimeRange:        exactTimeRange,
 	})
 	cacheKey := string(keyRaw)
 
@@ -129,6 +132,7 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 			includeGroups,
 			includeUsersTrend,
 			usersTrendLimit,
+			exactTimeRange,
 		)
 	})
 	if err != nil {
@@ -154,11 +158,12 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	filters *dashboardSnapshotV2Filters,
 	includeStats, includeTrend, includeModels, includeGroups, includeUsersTrend bool,
 	usersTrendLimit int,
+	exactTimeRange bool,
 ) (*dashboardSnapshotV2Response, error) {
 	resp := &dashboardSnapshotV2Response{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		StartDate:   startTime.Format("2006-01-02"),
-		EndDate:     endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		EndDate:     formatDashboardRangeEndDateValue(endTime, exactTimeRange),
 		Granularity: granularity,
 	}
 

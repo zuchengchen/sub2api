@@ -205,6 +205,18 @@ describe('user UsageView', () => {
     }))
     expect(list).toHaveBeenCalledWith(1, 100)
     expect(getAvailable).toHaveBeenCalled()
+
+    const requests = [
+      query.mock.calls[0][0],
+      getStats.mock.calls[0][0],
+      getDashboardModels.mock.calls[0][0],
+      getDashboardSnapshotV2.mock.calls[0][0],
+    ]
+    for (const params of requests) {
+      expect(params.start_date).toBeUndefined()
+      expect(params.end_date).toBeUndefined()
+      expect(Date.parse(params.end_time) - Date.parse(params.start_time)).toBe(24 * 60 * 60 * 1000)
+    }
   })
 
   it('exports csv with current filters and without admin-only fields', async () => {

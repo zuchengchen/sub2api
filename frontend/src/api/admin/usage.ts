@@ -128,6 +128,8 @@ export async function getStats(params: {
   period?: string
   start_date?: string
   end_date?: string
+  start_time?: string
+  end_time?: string
   timezone?: string
   nocache?: number
 }): Promise<AdminUsageStatsResponse> {
