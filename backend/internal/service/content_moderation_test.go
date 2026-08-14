@@ -99,7 +99,8 @@ func (r *contentModerationTestRepo) CountFlaggedByUserSince(ctx context.Context,
 	defer r.mu.Unlock()
 	count := 0
 	for _, log := range r.logs {
-		if log.UserID == nil || *log.UserID != userID || !log.Flagged || log.Action == ContentModerationActionHashBlock {
+		if log.UserID == nil || *log.UserID != userID || !log.Flagged ||
+			log.Action == ContentModerationActionHashBlock || log.Action == ContentModerationActionCacheBlock {
 			continue
 		}
 		if excludeCyberPolicy && log.Action == ContentModerationActionCyberPolicy {
@@ -1547,7 +1548,7 @@ func TestUnifiedSevereBlockPersistsSynchronously(t *testing.T) {
 	require.Equal(t, ContentModerationActionKeywordBlock, logs[0].Action)
 }
 
-func TestContentModerationCheck_HashBlockLogsDoNotIncreaseNextViolationCount(t *testing.T) {
+func TestContentModerationCheck_ReplayBlockLogsDoNotIncreaseNextViolationCount(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(moderationAPIResponse{
 			Results: []moderationAPIResult{{
@@ -1568,15 +1569,17 @@ func TestContentModerationCheck_HashBlockLogsDoNotIncreaseNextViolationCount(t *
 
 	userID := int64(1001)
 	repo := &contentModerationTestRepo{}
-	hashLog := &ContentModerationLog{
-		UserID:          &userID,
-		Action:          ContentModerationActionHashBlock,
-		Flagged:         true,
-		HighestCategory: "hash",
-		HighestScore:    1,
-		CreatedAt:       time.Now(),
+	for _, action := range []string{ContentModerationActionHashBlock, ContentModerationActionCacheBlock} {
+		replayLog := &ContentModerationLog{
+			UserID:          &userID,
+			Action:          action,
+			Flagged:         true,
+			HighestCategory: "replay",
+			HighestScore:    1,
+			CreatedAt:       time.Now(),
+		}
+		require.NoError(t, repo.CreateLog(context.Background(), replayLog))
 	}
-	require.NoError(t, repo.CreateLog(context.Background(), hashLog))
 
 	svc := NewContentModerationService(
 		&contentModerationTestSettingRepo{values: map[string]string{
@@ -1600,10 +1603,11 @@ func TestContentModerationCheck_HashBlockLogsDoNotIncreaseNextViolationCount(t *
 
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
-	logs := requireContentModerationLogCount(t, repo, 2)
+	logs := requireContentModerationLogCount(t, repo, 3)
 	require.Equal(t, ContentModerationActionHashBlock, logs[0].Action)
-	require.Equal(t, ContentModerationActionBlock, logs[1].Action)
-	require.Equal(t, 1, logs[1].ViolationCount)
+	require.Equal(t, ContentModerationActionCacheBlock, logs[1].Action)
+	require.Equal(t, ContentModerationActionBlock, logs[2].Action)
+	require.Equal(t, 1, logs[2].ViolationCount)
 }
 
 func TestContentModerationAutoBanSkipsAdminAccount(t *testing.T) {

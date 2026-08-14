@@ -21,14 +21,14 @@ func TestBuildContentModerationLogWhere_BlockedIncludesAllBlockActions(t *testin
 	require.NotContains(t, sql, "l.action = 'block'")
 }
 
-func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesHashBlock(t *testing.T) {
+func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesReplayBlocks(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
 	repo := NewContentModerationRepository(db)
 	since := time.Now().Add(-time.Hour)
-	mock.ExpectQuery(regexp.QuoteMeta("AND action <> 'hash_block'")).
+	mock.ExpectQuery(regexp.QuoteMeta("AND action NOT IN ('hash_block', 'cache_block')")).
 		WithArgs(int64(1001), since, false, "").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
