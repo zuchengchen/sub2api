@@ -80,6 +80,53 @@ func TestExtractContentModerationFragments_AllClientControlledRolesAndReferences
 	require.Equal(t, "url", texts["https://files.example/brief.txt"].Kind)
 }
 
+func TestExtractContentModerationFragments_SkipsInlineBase64MediaURLs(t *testing.T) {
+	body := []byte(`{
+		"messages":[{"role":"user","content":[
+			{"type":"input_text","text":"describe this image"},
+			{"type":"input_image","image_url":"data:image/png;base64,AAAsh3llBBB"},
+			{"type":"input_audio","url":"DATA:AUDIO/WAV;CHARSET=binary;BASE64,AAAsp00fBBB"},
+			{"type":"input_text","text":"https://images.example/photo.png"}
+		]}]
+	}`)
+
+	fragments := ExtractContentModerationFragments(ContentModerationProtocolOpenAIResponses, body)
+	texts := make([]string, 0, len(fragments))
+	for _, fragment := range fragments {
+		texts = append(texts, fragment.Text)
+	}
+	require.Contains(t, texts, "describe this image")
+	require.Contains(t, texts, "https://images.example/photo.png")
+	require.NotContains(t, texts, "data:image/png;base64,AAAsh3llBBB")
+	require.NotContains(t, texts, "DATA:AUDIO/WAV;CHARSET=binary;BASE64,AAAsp00fBBB")
+}
+
+func TestUnifiedModerationDoesNotMatchKeywordInsideInlineBase64Media(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordOnly
+	cfg.SecondLayerEnabled = false
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled: true,
+		config:             cfg,
+		keywordMatcher:     newContentModerationKeywordMatcher([]string{"sh3ll"}),
+	}
+	svc := &ContentModerationService{repo: &contentModerationTestRepo{}}
+	scope := NewContentModerationScopeSnapshot(nil, "GPT")
+
+	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+		Body: []byte(`{"messages":[{"role":"user","content":[
+			{"type":"text","text":"describe the attached image"},
+			{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,AAAsh3llBBB"}}
+		]}]}`),
+		Scope:    &scope,
+		Protocol: ContentModerationProtocolOpenAIChat,
+	}, runtime)
+
+	require.True(t, decision.Allowed)
+}
+
 func TestContentModerationPendingBodyBudget(t *testing.T) {
 	budget := NewContentModerationPendingBodyBudget()
 	first, ok := budget.TryReserve(7, 10)

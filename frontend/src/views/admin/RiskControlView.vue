@@ -1849,7 +1849,7 @@ async function loadArchivePreview() {
   clearArchivePreview()
   try {
     const preview = await adminAPI.riskControl.previewArchive(row.id)
-    archivePreviewText.value = decodeBase64UTF8(preview.data_base64)
+    archivePreviewText.value = preview.content
     archivePreviewReturnedBytes.value = preview.returned_bytes
     archivePreviewTotalBytes.value = preview.total_bytes
     archivePreviewTruncated.value = preview.truncated
@@ -2173,12 +2173,6 @@ function archiveStatusClass(statusValue: string): string {
   if (statusValue === 'deleted') return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
   if (statusValue === 'content_lost') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-}
-
-function decodeBase64UTF8(value: string): string {
-  const binary = window.atob(value)
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
-  return new TextDecoder().decode(bytes)
 }
 
 function percent(value: number): string {

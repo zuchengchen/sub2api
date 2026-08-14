@@ -316,6 +316,8 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, preview.Truncated)
 		require.Equal(t, int64(ContentModerationArchivePreviewMaxBytes), preview.ReturnedBytes)
+		require.Equal(t, int64(len(rawBody)), preview.TotalBytes)
+		require.Contains(t, preview.Content, secret)
 		download, err := svc.DownloadArchive(context.Background(), 77, 9, "acceptance-download")
 		require.NoError(t, err)
 		require.Equal(t, plaintext, download)

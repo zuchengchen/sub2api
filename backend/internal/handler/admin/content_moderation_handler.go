@@ -259,6 +259,7 @@ func (h *ContentModerationHandler) ClearFlaggedHashes(c *gin.Context) {
 }
 
 func (h *ContentModerationHandler) PreviewArchive(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	logID, ok := parseContentModerationLogID(c)
 	if !ok {
 		return
@@ -272,6 +273,7 @@ func (h *ContentModerationHandler) PreviewArchive(c *gin.Context) {
 }
 
 func (h *ContentModerationHandler) DownloadArchive(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	logID, ok := parseContentModerationLogID(c)
 	if !ok {
 		return
