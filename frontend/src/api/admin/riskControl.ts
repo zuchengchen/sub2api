@@ -267,7 +267,7 @@ export interface ContentModerationLog {
 }
 
 export interface ContentModerationArchivePreview {
-  data_base64: string
+  content: string
   returned_bytes: number
   total_bytes: number
   truncated: boolean

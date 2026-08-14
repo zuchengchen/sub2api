@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -105,25 +106,61 @@ func newModerationArchiveServiceFixture(t *testing.T, plaintext []byte) (*Conten
 }
 
 func TestContentModerationArchivePreviewCapsAtOneMiBAndAuditsReturnedBytes(t *testing.T) {
-	plaintext := make([]byte, ContentModerationArchivePreviewMaxBytes+321)
-	for i := range plaintext {
-		plaintext[i] = byte(i % 251)
+	body := make([]byte, ContentModerationArchivePreviewMaxBytes+321)
+	for i := range body {
+		body[i] = byte('a' + (i % 26))
 	}
+	plaintext, err := json.Marshal(ContentModerationArchiveEnvelope{
+		Request: ContentModerationArchiveRequest{BodyBase64: base64.StdEncoding.EncodeToString(body)},
+	})
+	require.NoError(t, err)
 	svc, repo, _ := newModerationArchiveServiceFixture(t, plaintext)
 
 	preview, err := svc.PreviewArchive(context.Background(), 77, 9, "req-preview")
 	require.NoError(t, err)
 	require.True(t, preview.Truncated)
-	require.Equal(t, int64(len(plaintext)), preview.TotalBytes)
+	require.Equal(t, int64(len(body)), preview.TotalBytes)
 	require.Equal(t, int64(ContentModerationArchivePreviewMaxBytes), preview.ReturnedBytes)
-	decoded, err := base64.StdEncoding.DecodeString(preview.DataBase64)
-	require.NoError(t, err)
-	require.Equal(t, plaintext[:ContentModerationArchivePreviewMaxBytes], decoded)
+	require.Equal(t, string(body[:ContentModerationArchivePreviewMaxBytes]), preview.Content)
 	audits := repo.snapshotAudits()
 	require.Len(t, audits, 1)
 	require.Equal(t, "preview", audits[0].Action)
 	require.Equal(t, int64(ContentModerationArchivePreviewMaxBytes), audits[0].BytesServed)
 	require.Equal(t, int64(9), audits[0].ActorUserID)
+}
+
+func TestContentModerationArchivePreviewReturnsDecodedUTF8Body(t *testing.T) {
+	body := []byte(`{"input":"系统管理员查看请求原文"}`)
+	plaintext, err := json.Marshal(ContentModerationArchiveEnvelope{
+		Request: ContentModerationArchiveRequest{BodyBase64: base64.StdEncoding.EncodeToString(body)},
+	})
+	require.NoError(t, err)
+	svc, repo, _ := newModerationArchiveServiceFixture(t, plaintext)
+
+	preview, err := svc.PreviewArchive(context.Background(), 77, 9, "req-preview-utf8")
+	require.NoError(t, err)
+	require.Equal(t, string(body), preview.Content)
+	require.Equal(t, int64(len(body)), preview.ReturnedBytes)
+	require.Equal(t, int64(len(body)), preview.TotalBytes)
+	require.False(t, preview.Truncated)
+	require.Equal(t, int64(len(body)), repo.snapshotAudits()[0].BytesServed)
+}
+
+func TestContentModerationArchivePreviewRejectsInvalidBodyEncodingAndAuditsFailure(t *testing.T) {
+	plaintext, err := json.Marshal(ContentModerationArchiveEnvelope{
+		Request: ContentModerationArchiveRequest{BodyBase64: "not-base64"},
+	})
+	require.NoError(t, err)
+	svc, repo, _ := newModerationArchiveServiceFixture(t, plaintext)
+
+	preview, err := svc.PreviewArchive(context.Background(), 77, 9, "req-preview-invalid")
+	require.ErrorIs(t, err, ErrModerationArchiveIntegrity)
+	require.Nil(t, preview)
+	audits := repo.snapshotAudits()
+	require.Len(t, audits, 1)
+	require.Equal(t, "preview", audits[0].Action)
+	require.Equal(t, "failed", audits[0].Result)
+	require.Zero(t, audits[0].BytesServed)
 }
 
 func TestContentModerationArchiveDownloadRequiresSuccessfulAudit(t *testing.T) {
