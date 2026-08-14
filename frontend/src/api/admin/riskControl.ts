@@ -280,7 +280,7 @@ export interface DeleteContentModerationArchiveResponse {
 export interface ListContentModerationLogsParams {
   page?: number
   page_size?: number
-  result?: string
+  result?: 'blocked'
   group_id?: number
   endpoint?: string
   search?: string

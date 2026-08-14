@@ -183,7 +183,6 @@ func (h *ContentModerationHandler) ListLogs(c *gin.Context) {
 			PageSize:  pageSize,
 			SortOrder: pagination.SortOrderDesc,
 		},
-		Result:   c.Query("result"),
 		Endpoint: c.Query("endpoint"),
 		Search:   c.Query("search"),
 	}

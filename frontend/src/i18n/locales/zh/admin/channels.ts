@@ -204,7 +204,7 @@ export default {
       settingsTitle: '内容审计设置',
       refreshStatus: '刷新状态',
       records: '审核记录',
-      recordsHint: '展示命中、拦截、异常和已采样记录。',
+      recordsHint: '仅展示被内容审核拦截或收到 cyber policy 的记录。',
       saveConfig: '保存内容审计配置',
       statusFailed: '加载运行状态失败',
       enabled: '开启内容审计',

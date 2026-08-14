@@ -204,7 +204,7 @@ export default {
       settingsTitle: 'Content Moderation Settings',
       refreshStatus: 'Refresh Status',
       records: 'Audit Records',
-      recordsHint: 'Shows hits, blocks, errors, and sampled records.',
+      recordsHint: 'Shows only requests blocked by content moderation or cyber policy.',
       saveConfig: 'Save Moderation Config',
       statusFailed: 'Failed to load runtime status',
       enabled: 'Enable Content Moderation',

@@ -184,8 +184,7 @@
               </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-              <Select v-model="filters.result" :options="resultOptions" @change="reloadLogsFromFirstPage" />
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
               <Select v-model="filters.group_id" :options="groupFilterOptions" @change="reloadLogsFromFirstPage" />
               <Select v-model="filters.endpoint" :options="endpointOptions" @change="reloadLogsFromFirstPage" />
               <input v-model.trim="filters.search" type="search" class="input" :placeholder="t('admin.riskControl.filters.search')" @keyup.enter="reloadLogsFromFirstPage" />
@@ -231,7 +230,7 @@
                       <div class="text-xs text-gray-400">{{ row.provider || '-' }} / {{ row.model || '-' }}</div>
                     </td>
                     <td class="whitespace-nowrap px-5 py-4">
-                      <span class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="resultBadgeClass(row)">
+                      <span data-test="audit-result" class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="resultBadgeClass(row)">
                         {{ resultLabel(row) }}
                       </span>
                     </td>
@@ -1246,7 +1245,6 @@ const pagination = reactive({
 })
 
 const filters = reactive({
-  result: '',
   group_id: 0,
   endpoint: '',
   search: '',
@@ -1358,14 +1356,6 @@ const keywordNotice = computed<KeywordNoticeView>(() => {
     description: t('admin.riskControl.blockedKeywordsDescription'),
   }
 })
-
-const resultOptions = computed<SelectOption[]>(() => [
-  { value: '', label: t('admin.riskControl.result.all') },
-  { value: 'hit', label: t('admin.riskControl.result.hit') },
-  { value: 'blocked', label: t('admin.riskControl.result.blocked') },
-  { value: 'pass', label: t('admin.riskControl.result.pass') },
-  { value: 'error', label: t('admin.riskControl.result.error') },
-])
 
 const endpointOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('admin.riskControl.filters.allEndpoints') },
@@ -1802,7 +1792,7 @@ async function loadLogs() {
     const params = {
       page: pagination.page,
       page_size: pagination.page_size,
-      result: filters.result || undefined,
+      result: 'blocked' as const,
       group_id: filters.group_id || undefined,
       endpoint: filters.endpoint || undefined,
       search: filters.search || undefined,
@@ -2149,17 +2139,23 @@ function modeDescription(mode: ModerationMode): string {
   return descriptions[mode] ?? ''
 }
 
+const blockingAuditActions = new Set(['block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block'])
+
+function isBlockingAuditAction(action: string): boolean {
+  return blockingAuditActions.has(action)
+}
+
 function resultLabel(row: ContentModerationLog): string {
   if (row.action === 'cyber_policy') return t('admin.riskControl.action.cyberPolicy')
   if (row.action === 'keyword_block') return t('admin.riskControl.action.keywordBlock')
-  if (row.action === 'block') return t('admin.riskControl.action.block')
+  if (isBlockingAuditAction(row.action)) return t('admin.riskControl.action.block')
   if (row.action === 'error' || row.error) return t('admin.riskControl.action.error')
   if (row.flagged) return t('admin.riskControl.result.hit')
   return t('admin.riskControl.result.pass')
 }
 
 function resultBadgeClass(row: ContentModerationLog): string {
-  if (row.action === 'block' || row.action === 'keyword_block' || row.action === 'cyber_policy') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  if (isBlockingAuditAction(row.action) || row.action === 'cyber_policy') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'

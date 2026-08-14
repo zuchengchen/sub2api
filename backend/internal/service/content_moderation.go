@@ -1415,6 +1415,9 @@ func (s *ContentModerationService) recordPreBlockSyncMetric(latencyMS int, actio
 }
 
 func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error) {
+	// The security audit is an incident view. Keep non-blocking observations in
+	// storage for retention/diagnostics, but never include them in this listing.
+	filter.Result = "blocked"
 	if filter.Pagination.Page <= 0 {
 		filter.Pagination.Page = 1
 	}

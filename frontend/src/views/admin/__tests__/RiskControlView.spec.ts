@@ -307,6 +307,37 @@ describe('admin RiskControlView', () => {
     deleteArchive.mockResolvedValue({ deleted: true })
   })
 
+  it('requests only blocked and cyber policy audit records', async () => {
+    listLogs.mockResolvedValue({
+      items: [{ ...archivedLog(), action: 'hash_block', flagged: false }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(listLogs).toHaveBeenCalledWith(expect.objectContaining({ result: 'blocked' }))
+    expect(wrapper.get('[data-test="audit-result"]').text()).toBe('admin.riskControl.action.block')
+    expect(wrapper.get('[data-test="audit-result"]').classes()).toContain('bg-red-100')
+    expect(wrapper.text()).not.toContain('admin.riskControl.result.pass')
+  })
+
   it('saves the selected model filter mode and models', async () => {
     const wrapper = mount(RiskControlView, {
       global: {
