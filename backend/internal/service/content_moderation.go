@@ -585,7 +585,7 @@ type ContentModerationArchiveAccess struct {
 const ContentModerationArchivePreviewMaxBytes = 1 << 20
 
 type ContentModerationArchivePreview struct {
-	DataBase64    string `json:"data_base64"`
+	Content       string `json:"content"`
 	ReturnedBytes int64  `json:"returned_bytes"`
 	TotalBytes    int64  `json:"total_bytes"`
 	Truncated     bool   `json:"truncated"`
@@ -1522,8 +1522,13 @@ func (s *ContentModerationService) ClearFlaggedInputHashes(ctx context.Context) 
 }
 
 func (s *ContentModerationService) PreviewArchive(ctx context.Context, logID, actorUserID int64, requestID string) (*ContentModerationArchivePreview, error) {
-	raw, repo, err := s.decryptContentModerationArchive(ctx, logID, actorUserID, requestID, "preview")
+	archiveRaw, repo, err := s.decryptContentModerationArchive(ctx, logID, actorUserID, requestID, "preview")
 	if err != nil {
+		return nil, err
+	}
+	raw, err := contentModerationArchiveBody(archiveRaw)
+	if err != nil {
+		s.recordFailedArchiveAccess(ctx, repo, logID, actorUserID, "preview", requestID, err)
 		return nil, err
 	}
 	returned := len(raw)
@@ -1538,9 +1543,21 @@ func (s *ContentModerationService) PreviewArchive(ctx context.Context, logID, ac
 		return nil, fmt.Errorf("record content moderation archive preview before serving: %w", err)
 	}
 	return &ContentModerationArchivePreview{
-		DataBase64:    base64.StdEncoding.EncodeToString(raw[:returned]),
+		Content:       string(raw[:returned]),
 		ReturnedBytes: int64(returned), TotalBytes: int64(len(raw)), Truncated: truncated,
 	}, nil
+}
+
+func contentModerationArchiveBody(raw []byte) ([]byte, error) {
+	var envelope ContentModerationArchiveEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, fmt.Errorf("%w: decode archive envelope", ErrModerationArchiveIntegrity)
+	}
+	body, err := base64.StdEncoding.DecodeString(envelope.Request.BodyBase64)
+	if err != nil {
+		return nil, fmt.Errorf("%w: decode archived request body", ErrModerationArchiveIntegrity)
+	}
+	return body, nil
 }
 
 func (s *ContentModerationService) DownloadArchive(ctx context.Context, logID, actorUserID int64, requestID string) ([]byte, error) {

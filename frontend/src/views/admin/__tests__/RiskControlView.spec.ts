@@ -298,7 +298,7 @@ describe('admin RiskControlView', () => {
       api_key_statuses: [],
     }))
     previewArchive.mockResolvedValue({
-      data_base64: window.btoa('{"archive_id":"archive-41"}'),
+      content: '{"archive_id":"archive-41"}',
       returned_bytes: 27,
       total_bytes: 2097152,
       truncated: true,
