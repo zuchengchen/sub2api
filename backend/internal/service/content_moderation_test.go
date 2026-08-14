@@ -475,9 +475,38 @@ func TestContentModerationCandidateAssetIsOffUntilExplicitlyEnabled(t *testing.T
 	require.True(t, hit)
 	require.Equal(t, "制作病毒", keyword)
 
-	keyword, hit = matchBlockedKeyword("use mcp__ida", keywords)
+	_, hit = matchBlockedKeyword("use mcp__ida", keywords)
+	require.False(t, hit)
+
+	secondLayerKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	require.NoError(t, err)
+	keyword, hit = newContentModerationPrefilterMatcher(secondLayerKeywords).Match("use mcp__ida")
 	require.True(t, hit)
-	require.Equal(t, "mcp__ida", keyword)
+	require.Equal(t, "mcp ida", keyword)
+}
+
+func TestContentModerationCandidateAssetOverridesLegacyCustomLayer1Duplicates(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.CandidateEnabled = true
+	cfg.BlockedKeywords = []string{"mcp__ida", "sh3ll", "custom-hard-block"}
+
+	keywords, err := effectiveContentModerationKeywords(cfg)
+	require.NoError(t, err)
+	_, hit := matchBlockedKeyword("use mcp__ida", keywords)
+	require.False(t, hit)
+	_, hit = matchBlockedKeyword("contains sh3ll", keywords)
+	require.False(t, hit)
+	keyword, hit := matchBlockedKeyword("contains CUSTOM-HARD-BLOCK", keywords)
+	require.True(t, hit)
+	require.Equal(t, "custom-hard-block", keyword)
+
+	secondLayerKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	require.NoError(t, err)
+	matcher := newContentModerationPrefilterMatcher(secondLayerKeywords)
+	_, hit = matcher.Match("use mcp__ida")
+	require.True(t, hit)
+	_, hit = matcher.Match("contains sh3ll")
+	require.False(t, hit)
 }
 
 func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
@@ -488,8 +517,8 @@ func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "legacy-prompt-audit-v1", view.CandidateAsset)
 	require.False(t, view.CandidateEnabled)
-	require.Equal(t, 1055, view.CandidateLayer1Count)
-	require.Equal(t, 222, view.CandidateLayer2Count)
+	require.Equal(t, 972, view.CandidateLayer1Count)
+	require.Equal(t, 246, view.CandidateLayer2Count)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", view.CandidateSourceCommit)
 	require.Len(t, view.CandidateEndpoints, 1)
 	require.False(t, view.CandidateEndpoints[0].Enabled)

@@ -46,6 +46,40 @@ func TestContentModerationSecondLayerCandidatePrefilterGatesModel(t *testing.T) 
 	require.Equal(t, int64(1), calls.Load())
 }
 
+func TestContentModerationSecondLayerSkipsInlineBase64Media(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := secondLayerGateTestConfig(server.URL)
+	cfg.CandidateEnabled = true
+	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	require.NoError(t, err)
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher(keywords),
+	}
+	svc := &ContentModerationService{repo: &contentModerationTestRepo{}}
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
+
+	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+		Body: []byte(`{"messages":[{"role":"user","content":[
+			{"type":"text","text":"describe the image"},
+			{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAobfuscatorBBB"}}
+		]}]}`),
+		Scope:    &scope,
+		Protocol: ContentModerationProtocolOpenAIChat,
+	}, runtime)
+
+	require.True(t, decision.Allowed)
+	require.Zero(t, calls.Load())
+}
+
 func TestContentModerationSecondLayerCandidateDisabledPreservesAuditAll(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -157,9 +191,13 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 	cfg.CandidateAsset = "legacy-prompt-audit-v1"
 	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
-	require.Len(t, keywords, 222)
+	require.Len(t, keywords, 246)
 	matcher := newContentModerationPrefilterMatcher(keywords)
 	_, ok := matcher.Match("REVERSE---SHELL")
+	require.True(t, ok)
+	_, ok = matcher.Match("use MCP__IDA")
+	require.True(t, ok)
+	_, ok = matcher.Match("讨论一次降级攻击")
 	require.True(t, ok)
 }
 

@@ -169,7 +169,11 @@ func contentModerationCandidateRevision(cfg *ContentModerationConfig) string {
 	if err != nil {
 		return "invalid:" + strings.TrimSpace(cfg.CandidateAsset)
 	}
-	return asset.Manifest.SourceCommit + ":" + asset.Manifest.Layer1.EmbeddedSHA256 + ":" + asset.Manifest.Layer2.EmbeddedSHA256
+	return asset.Manifest.SourceCommit + ":" +
+		asset.Manifest.Layer1.EmbeddedSHA256 + ":" +
+		asset.Manifest.Layer2.EmbeddedSHA256 + ":" +
+		asset.Manifest.Layer1Demotions.EmbeddedSHA256 + ":" +
+		asset.Manifest.Layer1Suppressions.EmbeddedSHA256
 }
 
 func contentModerationSecondLayerPrefilterCacheRevision(cfg *ContentModerationConfig) string {

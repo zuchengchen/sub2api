@@ -2900,7 +2900,22 @@ func effectiveContentModerationKeywords(cfg *ContentModerationConfig) ([]string,
 	if err != nil {
 		return nil, err
 	}
+	keywords = filterCandidateLayer1Overrides(keywords, asset)
 	return normalizeBlockedKeywords(append(keywords, asset.Layer1...)), nil
+}
+
+func filterCandidateLayer1Overrides(values []string, asset contentmoderationassets.Asset) []string {
+	overridden := make(map[string]struct{}, len(asset.Layer1Demotions)+len(asset.Layer1Suppressions))
+	for _, term := range append(append([]string(nil), asset.Layer1Demotions...), asset.Layer1Suppressions...) {
+		overridden[strings.ToLower(strings.TrimSpace(term))] = struct{}{}
+	}
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, exists := overridden[strings.ToLower(strings.TrimSpace(value))]; !exists {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func effectiveContentModerationSecondLayerKeywords(cfg *ContentModerationConfig) ([]string, error) {

@@ -221,11 +221,33 @@ func collectUnifiedModerationValue(value gjson.Result, role, path, kind string, 
 }
 
 func appendUnifiedModerationFragment(out *[]ContentModerationFragment, role, kind, path, text string) {
+	if isInlineBase64MediaURL(text) {
+		return
+	}
 	fragment, ok := newContentModerationFragment(role, kind, path, text)
 	if !ok {
 		return
 	}
 	*out = append(*out, fragment)
+}
+
+func isInlineBase64MediaURL(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < len("data:x;base64,") || !strings.HasPrefix(strings.ToLower(value), "data:") {
+		return false
+	}
+	comma := strings.IndexByte(value, ',')
+	if comma < 0 {
+		return false
+	}
+	header := strings.ToLower(value[len("data:"):comma])
+	if !strings.Contains(header, ";base64") {
+		return false
+	}
+	mediaType, _, _ := strings.Cut(header, ";")
+	return strings.HasPrefix(mediaType, "image/") ||
+		strings.HasPrefix(mediaType, "audio/") ||
+		strings.HasPrefix(mediaType, "video/")
 }
 
 func normalizeModerationRole(role string) string {
