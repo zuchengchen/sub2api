@@ -206,7 +206,7 @@ func TestSystemHandlerRollbackToVersionSurvivesClientDisconnect(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/rollback",
-		strings.NewReader(`{"version":"0.1.146"}`))
+		strings.NewReader(`{"id":"installed-0.1.146"}`))
 	req.Header.Set("Content-Type", "application/json")
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -245,7 +245,7 @@ func TestSystemHandlerRollbackWithVersionCallsRollbackToVersion(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/rollback",
-		strings.NewReader(`{"version":"0.1.146"}`))
+		strings.NewReader(`{"id":"installed-0.1.146"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "rollback-to-146")
 	router.ServeHTTP(rec, req)
@@ -253,7 +253,7 @@ func TestSystemHandlerRollbackWithVersionCallsRollbackToVersion(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, 0, updateSvc.rollbackCall)
 	require.Equal(t, 1, updateSvc.rollbackToCall)
-	require.Equal(t, []string{"0.1.146"}, updateSvc.rollbackToVersions)
+	require.Equal(t, []string{"installed-0.1.146"}, updateSvc.rollbackToVersions)
 	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
 
 	var body systemUpdateResponseEnvelope
@@ -271,7 +271,7 @@ func TestSystemHandlerRollbackWithDisallowedVersionReturnsBadRequest(t *testing.
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/rollback",
-		strings.NewReader(`{"version":"9.9.9"}`))
+		strings.NewReader(`{"id":"missing-entry"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "rollback-to-bad")
 	router.ServeHTTP(rec, req)
@@ -283,8 +283,8 @@ func TestSystemHandlerRollbackWithDisallowedVersionReturnsBadRequest(t *testing.
 func TestSystemHandlerGetRollbackVersions(t *testing.T) {
 	updateSvc := &systemHandlerUpdateServiceStub{
 		rollbackVersions: []service.RollbackVersion{
-			{Version: "0.1.146", PublishedAt: "2026-07-07T00:00:00Z", HTMLURL: "https://example.com/v0.1.146"},
-			{Version: "0.1.145", PublishedAt: "2026-07-06T00:00:00Z", HTMLURL: "https://example.com/v0.1.145"},
+			{ID: "installed-146", Version: "0.1.146", Commit: "abc146", InstalledAt: "2026-07-07T00:00:00Z", SHA256: "sha146"},
+			{ID: "installed-145", Version: "0.1.145", Commit: "abc145", InstalledAt: "2026-07-06T00:00:00Z", SHA256: "sha145"},
 		},
 	}
 	repo := newMemoryIdempotencyRepoStub()

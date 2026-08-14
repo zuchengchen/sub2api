@@ -40,22 +40,15 @@ export default {
     restarting: '正在重启...',
     retry: '重试',
     rollback: '版本回退',
-    rollbackSelectVersion: '选择要回退到的版本（近 3 个版本）',
+    rollbackSelectVersion: '本机最近安装的两个版本',
     rollbackConfirm: '回退到 {version}',
-    rollbackWarning: '回退将下载所选版本并替换当前程序，完成后需重启服务',
+    rollbackWarning: '将使用校验通过的本机二进制；当前版本会保留为新的回退项',
     rollingBack: '正在回退...',
     rollbackComplete: '回退完成',
     rollbackFailed: '回退失败',
-    manualRollbackCommand: '手动回退方式',
-    copyCommand: '复制',
-    copied: '已复制',
-    noRollbackVersions: '暂无可回退的版本',
-    loadVersionsFailed: '获取版本列表失败',
-    rollbackSourceHint: '源码构建不支持在线回退',
-    deployScript: '脚本部署',
-    deployDocker: 'Docker',
-    dockerEditCompose: '修改 docker-compose.yml 中的镜像版本',
-    dockerRecreate: '重新创建容器'
+    noRollbackVersions: '本机暂无已验证的回退版本',
+    loadVersionsFailed: '读取本机版本历史失败',
+    rollbackSourceHint: '源码构建不提供应用内回退'
   },
 
   // Recharge / Subscription Page
