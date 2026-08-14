@@ -42,8 +42,6 @@ type contentModerationConfigRequest struct {
 	GroupIDs             *[]int64            `json:"group_ids"`
 	RecordNonHits        *bool               `json:"record_non_hits"`
 	Thresholds           *map[string]float64 `json:"thresholds"`
-	WorkerCount          *int                `json:"worker_count"`
-	QueueSize            *int                `json:"queue_size"`
 	BlockStatus          *int                `json:"block_status"`
 	BlockMessage         *string             `json:"block_message"`
 	EmailOnHit           *bool               `json:"email_on_hit"`
@@ -116,8 +114,6 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		GroupIDs:                       req.GroupIDs,
 		RecordNonHits:                  req.RecordNonHits,
 		Thresholds:                     req.Thresholds,
-		WorkerCount:                    req.WorkerCount,
-		QueueSize:                      req.QueueSize,
 		BlockStatus:                    req.BlockStatus,
 		BlockMessage:                   req.BlockMessage,
 		EmailOnHit:                     req.EmailOnHit,

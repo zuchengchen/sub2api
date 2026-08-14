@@ -3145,10 +3145,10 @@ func (h *OpenAIGatewayHandler) enqueueCyberSessionBlockedOpsEntry(c *gin.Context
 	enqueueOpsErrorLog(h.opsService, buildCyberSessionBlockedOpsEntry(meta))
 }
 
-// recordCyberPolicyIfMarked 在 gateway forward 返回后检查 cyber 标记，异步写风控日志/邮件，
-// 并在 forward 返回错误时写一条 tokens=0 用量行。标记由 gateway 服务层在透传 cyber 后设置；
-// 当前请求已发给用户，本方法只做事后记录，不影响响应。forwardErrored 为 true 时才写用量行，
-// 避免与正常 RecordUsage(forward 成功路径)重复。每请求至多记录一次。
+// recordCyberPolicyIfMarked 在 gateway forward 返回后检查 cyber 标记，同步完成账户处置和
+// 风控归档，再异步补写用量、会话屏蔽和运维日志。标记由 gateway 服务层在透传 cyber 后设置；
+// forwardErrored 为 true 时才写用量行，避免与正常 RecordUsage(forward 成功路径)重复。
+// 每请求至多记录一次。
 func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey *service.APIKey, account *service.Account, subscription *service.UserSubscription, model string, forwardErrored bool, cyberBlockKey string, channelFields service.ChannelUsageFields, requestPayloadHash string) {
 	mark := service.GetOpsCyberPolicy(c)
 	if mark == nil {
@@ -3241,35 +3241,34 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		ClientIP:        clientIPStr,
 		CreatedAt:       time.Now(),
 	}
-	reservationHeld := moderationInput.Reservation != nil && moderationInput.Reservation.Retain()
+	markSnapshot := *mark
+	if cmSvc != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cmSvc.RecordCyberPolicyEvent(ctx, service.CyberPolicyRecordInput{
+			RequestID:       requestID,
+			UserID:          userID,
+			UserEmail:       userEmail,
+			APIKeyID:        apiKeyID,
+			APIKeyName:      apiKeyName,
+			GroupID:         groupID,
+			GroupName:       groupName,
+			Endpoint:        inboundEndpoint,
+			Model:           model,
+			UpstreamMessage: markSnapshot.Message,
+			UpstreamBody:    markSnapshot.Body,
+			UpstreamStatus:  markSnapshot.UpstreamStatus,
+			UpstreamInTok:   markSnapshot.UpstreamInTok,
+			UpstreamOutTok:  markSnapshot.UpstreamOutTok,
+			Protocol:        moderationInput.Protocol,
+			Scope:           moderationInput.Scope,
+			RawRequest:      moderationInput.RawRequest,
+			UserRole:        moderationInput.UserRole,
+		})
+		cancel()
+	}
 	go func() {
-		if reservationHeld {
-			defer moderationInput.Reservation.Release()
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if cmSvc != nil {
-			cmSvc.RecordCyberPolicyEvent(ctx, service.CyberPolicyRecordInput{
-				RequestID:       requestID,
-				UserID:          userID,
-				UserEmail:       userEmail,
-				APIKeyID:        apiKeyID,
-				APIKeyName:      apiKeyName,
-				GroupID:         groupID,
-				GroupName:       groupName,
-				Endpoint:        inboundEndpoint,
-				Model:           model,
-				UpstreamMessage: mark.Message,
-				UpstreamBody:    mark.Body,
-				UpstreamStatus:  mark.UpstreamStatus,
-				UpstreamInTok:   mark.UpstreamInTok,
-				UpstreamOutTok:  mark.UpstreamOutTok,
-				Protocol:        moderationInput.Protocol,
-				Scope:           moderationInput.Scope,
-				RawRequest:      moderationInput.RawRequest,
-				UserRole:        moderationInput.UserRole,
-			})
-		}
 		if forwardErrored && gwSvc != nil {
 			gwSvc.RecordCyberPolicyUsageLog(ctx, service.CyberPolicyUsageInput{
 				APIKey:             apiKey,
@@ -3278,8 +3277,8 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 				RequestID:          requestID,
 				Model:              model,
 				Stream:             stream,
-				InputTokens:        mark.UpstreamInTok,
-				OutputTokens:       mark.UpstreamOutTok,
+				InputTokens:        markSnapshot.UpstreamInTok,
+				OutputTokens:       markSnapshot.UpstreamOutTok,
 				InboundEndpoint:    inboundEndpoint,
 				UpstreamEndpoint:   upstreamEndpoint,
 				UserAgent:          userAgent,
@@ -3294,7 +3293,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 			gwSvc.MarkCyberSessionBlocked(ctx, cyberBlockKey)
 		}
 		if opsSvc != nil {
-			enqueueOpsErrorLog(opsSvc, buildCyberPolicyOpsErrorEntry(opsMeta, mark))
+			enqueueOpsErrorLog(opsSvc, buildCyberPolicyOpsErrorEntry(opsMeta, &markSnapshot))
 		}
 	}()
 }

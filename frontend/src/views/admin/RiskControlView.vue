@@ -151,85 +151,6 @@
           </div>
         </div>
 
-        <div v-if="showWorkerRuntimeCard" class="card">
-          <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-4 dark:border-dark-700 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.workerStatus') }}</h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.workerStatusHint') }}</p>
-            </div>
-            <div class="flex flex-wrap items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-              <span>{{ t('admin.riskControl.autoRefresh') }}</span>
-              <span v-if="status?.last_cleanup_at">
-                {{ t('admin.riskControl.lastCleanup', { time: formatDateTime(status.last_cleanup_at) }) }}
-              </span>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-1 gap-6 p-6 xl:grid-cols-[minmax(0,360px)_1fr]">
-            <div class="space-y-4">
-              <div class="rounded-lg border border-gray-100 p-4 dark:border-dark-700">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.queueUsage') }}</p>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {{ formatNumber(status?.queue_length ?? 0) }} / {{ formatNumber(status?.queue_size ?? configForm.queue_size) }}
-                    </p>
-                  </div>
-                  <span class="text-sm font-semibold text-gray-900 dark:text-white">{{ queueUsagePercent }}</span>
-                </div>
-                <div class="mt-4 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
-                  <div class="h-full rounded-full bg-primary-500 transition-all duration-300" :style="queueUsageStyle"></div>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-2 gap-3">
-                <div class="rounded-lg bg-gray-50 p-4 dark:bg-dark-700/50">
-                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.activeWorkers') }}</p>
-                  <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ status?.active_workers ?? 0 }}</p>
-                </div>
-                <div class="rounded-lg bg-emerald-50 p-4 dark:bg-emerald-900/10">
-                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.idleWorkers') }}</p>
-                  <p class="mt-2 text-2xl font-semibold text-emerald-700 dark:text-emerald-300">{{ status?.idle_workers ?? configForm.worker_count }}</p>
-                </div>
-                <div class="rounded-lg bg-gray-50 p-4 dark:bg-dark-700/50">
-                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.processed') }}</p>
-                  <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ formatNumber(status?.processed ?? 0) }}</p>
-                </div>
-                <div class="rounded-lg bg-gray-50 p-4 dark:bg-dark-700/50">
-                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.droppedErrors') }}</p>
-                  <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ formatNumber((status?.dropped ?? 0) + (status?.errors ?? 0)) }}</p>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <div class="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.workerPool') }}</p>
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('admin.riskControl.workerPoolMeta', { active: status?.active_workers ?? 0, idle: status?.idle_workers ?? configForm.worker_count, total: status?.worker_count ?? configForm.worker_count }) }}
-                  </p>
-                </div>
-                <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-gray-300">
-                  {{ modeLabel(status?.mode ?? configForm.mode) }}
-                </span>
-              </div>
-              <div class="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-6 xl:grid-cols-8 2xl:grid-cols-10">
-                <div
-                  v-for="worker in workerSlots"
-                  :key="worker.id"
-                  class="flex h-12 items-center justify-between rounded-lg border px-3 transition-colors"
-                  :class="workerSlotClass(worker.state)"
-                  :title="worker.label"
-                >
-                  <span class="text-sm font-semibold">#{{ worker.id }}</span>
-                  <span class="h-2.5 w-2.5 rounded-full" :class="workerDotClass(worker.state)"></span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div class="card">
           <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -802,23 +723,15 @@
             </div>
           </div>
 
-          <div v-else-if="activeSettingsTab === 'runtime'" class="grid grid-cols-1 gap-5 lg:grid-cols-2">
-            <div>
-              <label class="input-label">{{ t('admin.riskControl.workerCount') }}</label>
-              <input v-model.number="configForm.worker_count" type="number" min="1" max="32" class="input" />
-            </div>
-            <div>
-              <label class="input-label">{{ t('admin.riskControl.queueSize') }}</label>
-              <input v-model.number="configForm.queue_size" type="number" min="100" max="100000" class="input" />
-            </div>
-            <div class="flex items-center justify-between rounded-lg border border-gray-100 p-4 dark:border-dark-700 lg:col-span-2">
+          <div v-else-if="activeSettingsTab === 'runtime'" class="grid grid-cols-1 gap-5">
+            <div class="flex items-center justify-between rounded-lg border border-gray-100 p-4 dark:border-dark-700">
               <div>
                 <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.recordNonHits') }}</p>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.recordNonHitsHint') }}</p>
               </div>
               <Toggle v-model="configForm.record_non_hits" />
             </div>
-            <div class="space-y-4 rounded-lg border border-gray-100 p-4 dark:border-dark-700 lg:col-span-2">
+            <div class="space-y-4 rounded-lg border border-gray-100 p-4 dark:border-dark-700">
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.preHashCheck') }}</p>
@@ -1210,7 +1123,6 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatBytes, formatDateTime as formatDateTimeValue } from '@/utils/format'
 
 type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'riskThresholds' | 'retention' | 'keywords'
-type WorkerSlotState = 'active' | 'idle' | 'disabled'
 type APIKeysWriteMode = 'append' | 'replace'
 type OverviewIcon = 'shield' | 'key' | 'users' | 'document'
 type OverviewItem = {
@@ -1309,8 +1221,6 @@ const configForm = reactive({
   all_groups: true,
   group_ids: [] as number[],
   record_non_hits: false,
-  worker_count: 4,
-  queue_size: 32768,
   block_status: 403,
   block_message: defaultBlockMessage(),
   email_on_hit: true,
@@ -1356,7 +1266,6 @@ const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
 
 const modeOptions = computed<SelectOption[]>(() => [
   { value: 'pre_block', label: t('admin.riskControl.modePreBlock') },
-  { value: 'observe', label: t('admin.riskControl.modeObserve') },
   { value: 'off', label: t('admin.riskControl.modeOff') },
 ])
 
@@ -1655,17 +1564,9 @@ const inputDetailText = computed(() => {
   return inputDetailRow.value.input_excerpt || inputDetailRow.value.error || '-'
 })
 
-const queueUsagePercent = computed(() => `${Math.min(100, Math.max(0, status.value?.queue_usage_percent ?? 0)).toFixed(1)}%`)
-
-const queueUsageStyle = computed(() => ({
-  width: queueUsagePercent.value,
-}))
-
 const runtimeMode = computed<ModerationMode>(() => status.value?.mode ?? configForm.mode)
 
 const showPreBlockRuntimeCard = computed(() => runtimeMode.value === 'pre_block')
-
-const showWorkerRuntimeCard = computed(() => runtimeMode.value === 'observe')
 
 const preBlockMetricItems = computed(() => [
   {
@@ -1728,28 +1629,11 @@ const preBlockAPIKeyLoadSummaryText = computed(() => t('admin.riskControl.preBlo
   active: formatNumber(status.value?.pre_block_api_key_active ?? 0),
   available: formatNumber(status.value?.pre_block_api_key_available_count ?? 0),
   total: formatNumber(status.value?.pre_block_api_key_total_calls ?? 0),
-  workerActive: formatNumber(status.value?.active_workers ?? 0),
-  workerTotal: formatNumber(status.value?.worker_count ?? configForm.worker_count),
 }))
 
 function preBlockAPIKeyLoadWidth(total: number): string {
   return `${Math.min(100, Math.max(0, (total / preBlockAPIKeyMaxTotal.value) * 100)).toFixed(1)}%`
 }
-
-const workerSlots = computed(() => {
-  const total = Math.max(0, status.value?.worker_count ?? configForm.worker_count)
-  const active = Math.max(0, status.value?.active_workers ?? 0)
-  const enabled = Boolean(status.value?.risk_control_enabled && status.value?.enabled && status.value?.mode !== 'off')
-  return Array.from({ length: total }, (_, index) => ({
-    id: index + 1,
-    state: (!enabled ? 'disabled' : index < active ? 'active' : 'idle') as WorkerSlotState,
-    label: !enabled
-      ? t('admin.riskControl.workerDisabled')
-      : index < active
-        ? t('admin.riskControl.workerActive')
-        : t('admin.riskControl.workerIdle'),
-  }))
-})
 
 const runtimeBadgeText = computed(() => {
   if (!status.value?.risk_control_enabled) return t('admin.riskControl.riskSwitchOff')
@@ -1787,8 +1671,6 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.all_groups = config.all_groups
   configForm.group_ids = Array.isArray(config.group_ids) ? [...config.group_ids] : []
   configForm.record_non_hits = config.record_non_hits
-  configForm.worker_count = config.worker_count || 4
-  configForm.queue_size = config.queue_size || 32768
   configForm.block_status = config.block_status || 403
   configForm.block_message = config.block_message || defaultBlockMessage()
   configForm.email_on_hit = config.email_on_hit ?? true
@@ -1873,8 +1755,6 @@ async function saveConfig() {
       group_ids: configForm.all_groups ? [] : [...configForm.group_ids],
       record_non_hits: configForm.record_non_hits,
       clear_api_key: configForm.clear_api_key,
-      worker_count: Number(configForm.worker_count) || 4,
-      queue_size: Number(configForm.queue_size) || 32768,
       block_status: Number(configForm.block_status) || 403,
       block_message: configForm.block_message || defaultBlockMessage(),
       email_on_hit: configForm.email_on_hit,
@@ -2264,7 +2144,6 @@ function modeLabel(mode: ModerationMode): string {
 function modeDescription(mode: ModerationMode): string {
   const descriptions: Record<ModerationMode, string> = {
     pre_block: t('admin.riskControl.modePreBlockDesc'),
-    observe: t('admin.riskControl.modeObserveDesc'),
     off: t('admin.riskControl.modeOffDesc'),
   }
   return descriptions[mode] ?? ''
@@ -2304,22 +2183,6 @@ function decodeBase64UTF8(value: string): string {
   const binary = window.atob(value)
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
   return new TextDecoder().decode(bytes)
-}
-
-function workerSlotClass(state: WorkerSlotState): string {
-  if (state === 'active') {
-    return 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-900/20 dark:text-sky-300'
-  }
-  if (state === 'idle') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-300'
-  }
-  return 'border-gray-100 bg-white text-gray-400 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-500'
-}
-
-function workerDotClass(state: WorkerSlotState): string {
-  if (state === 'active') return 'bg-sky-500'
-  if (state === 'idle') return 'bg-emerald-500'
-  return 'bg-gray-300 dark:bg-dark-500'
 }
 
 function percent(value: number): string {

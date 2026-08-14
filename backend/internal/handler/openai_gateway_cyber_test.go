@@ -1,14 +1,36 @@
 package handler
 
 import (
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type blockingCyberDispositionRepo struct {
+	contentModerationHandlerTestRepo
+	dispositionEntered chan struct{}
+	dispositionRelease chan struct{}
+}
+
+func (r *blockingCyberDispositionRepo) DisableUserIfActive(ctx context.Context, userID int64) (bool, error) {
+	close(r.dispositionEntered)
+	select {
+	case <-r.dispositionRelease:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (r *blockingCyberDispositionRepo) DisableAPIKeyIfActive(context.Context, int64) (string, bool, error) {
+	return "", false, nil
+}
 
 // newTestGinContext builds a bare gin.Context backed by an httptest recorder.
 func newTestGinContext() *gin.Context {
@@ -59,6 +81,51 @@ func TestRecordCyberPolicyIfMarked_WithMark(t *testing.T) {
 	// Flag should still be true (not toggled or cleared).
 	require.True(t, c.GetBool(cyberPolicyRecordedKey),
 		"cyberPolicyRecordedKey must remain true after second call (guard)")
+}
+
+func TestRecordCyberPolicyIfMarked_WaitsForDispositionAndAuditPersistence(t *testing.T) {
+	c := newTestGinContext()
+	c.Request = httptest.NewRequest("POST", "/openai/v1/responses", strings.NewReader(`{}`))
+	service.MarkOpsCyberPolicy(c, service.CyberPolicyMark{
+		Message: "flagged", UpstreamStatus: 400,
+	})
+	repo := &blockingCyberDispositionRepo{
+		dispositionEntered: make(chan struct{}),
+		dispositionRelease: make(chan struct{}),
+	}
+	moderationSvc := service.NewContentModerationService(
+		&contentModerationHandlerSettingRepo{values: map[string]string{}},
+		repo, nil, nil, nil, nil, nil, nil,
+	)
+	h := &OpenAIGatewayHandler{contentModerationService: moderationSvc}
+	apiKey := &service.APIKey{
+		ID:    11,
+		User:  &service.User{ID: 7, Role: service.RoleUser},
+		Group: &service.Group{Name: "GPT-test"},
+	}
+	returned := make(chan struct{})
+	go func() {
+		h.recordCyberPolicyIfMarked(c, apiKey, nil, nil, "gpt-5", false, "", service.ChannelUsageFields{}, "")
+		close(returned)
+	}()
+
+	select {
+	case <-repo.dispositionEntered:
+	case <-time.After(time.Second):
+		t.Fatal("cyber disposition did not start")
+	}
+	select {
+	case <-returned:
+		t.Fatal("recordCyberPolicyIfMarked returned before disposition completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(repo.dispositionRelease)
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("recordCyberPolicyIfMarked did not return after disposition was released")
+	}
+	require.Len(t, repo.logSnapshot(), 1, "audit persistence must finish before return")
 }
 
 // TestRecordCyberPolicyIfMarked_ForwardSuccessSkipsUsageLog verifies the semantic:
