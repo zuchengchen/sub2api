@@ -317,7 +317,8 @@ func (r *contentModerationRepository) CountFlaggedByUserSinceExcludingArchive(ct
 	if userID <= 0 {
 		return 0, nil
 	}
-	// SQL 中的 'cyber_policy' 字面量须与 service.ContentModerationActionCyberPolicy 保持一致。
+	// SQL action literals must stay aligned with the service constants. Replay
+	// rows prove no new violation and therefore do not contribute to auto-ban.
 	var count int
 	err := r.db.QueryRowContext(ctx, `
 WITH last_auto_ban AS (
@@ -329,7 +330,7 @@ SELECT COUNT(*)
 FROM content_moderation_logs
 WHERE user_id = $1
   AND flagged = TRUE
-  AND action <> 'hash_block'
+  AND action NOT IN ('hash_block', 'cache_block')
   AND ($3::bool IS FALSE OR action <> 'cyber_policy')
   AND ($4::text = '' OR archive_id IS NULL OR archive_id <> NULLIF($4::text, '')::uuid)
   AND created_at >= $2

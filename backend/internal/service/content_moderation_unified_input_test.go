@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,6 +17,54 @@ type contentModerationMetricCache struct {
 	found  bool
 	getErr error
 	putErr error
+}
+
+type contentModerationFragmentMapCache struct {
+	contentModerationTestHashCache
+	results map[string]string
+}
+
+func (c *contentModerationFragmentMapCache) GetFragmentResult(_ context.Context, namespace, hash string) (string, bool, error) {
+	result, found := c.results[namespace+":"+hash]
+	return result, found, nil
+}
+
+func (c *contentModerationFragmentMapCache) PutFragmentResult(_ context.Context, namespace, hash, result string, _ int64, _ int, _ int64) error {
+	if c.results == nil {
+		c.results = make(map[string]string)
+	}
+	c.results[namespace+":"+hash] = result
+	return nil
+}
+
+func (c *contentModerationFragmentMapCache) DeleteFragmentResult(_ context.Context, namespace, hash string) (bool, error) {
+	key := namespace + ":" + hash
+	_, found := c.results[key]
+	delete(c.results, key)
+	return found, nil
+}
+
+func (c *contentModerationFragmentMapCache) ClearFragmentResults(_ context.Context, namespace string) (int64, error) {
+	prefix := namespace + ":"
+	var deleted int64
+	for key := range c.results {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.results, key)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func (c *contentModerationFragmentMapCache) CountFragmentResults(_ context.Context, namespace string) (int64, error) {
+	prefix := namespace + ":"
+	var count int64
+	for key := range c.results {
+		if strings.HasPrefix(key, prefix) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (c *contentModerationMetricCache) GetFragmentResult(context.Context, string, string) (string, bool, error) {
@@ -78,6 +127,66 @@ func TestExtractContentModerationFragments_AllClientControlledRolesAndReferences
 	require.Equal(t, "tool", texts["tool output"].Role)
 	require.Equal(t, "file", texts["brief.txt"].Kind)
 	require.Equal(t, "url", texts["https://files.example/brief.txt"].Kind)
+}
+
+func TestContentModerationFragmentHashSeparatesRoleAndKind(t *testing.T) {
+	toolText, ok := newContentModerationFragment(" Tool ", " Text ", "messages.1.content", "same text")
+	require.True(t, ok)
+	sameContext, ok := newContentModerationFragment("tool", "text", "messages.9.content", "same text")
+	require.True(t, ok)
+	userText, ok := newContentModerationFragment("user", "text", "messages.1.content", "same text")
+	require.True(t, ok)
+	toolFile, ok := newContentModerationFragment("tool", "file", "messages.1.content", "same text")
+	require.True(t, ok)
+
+	require.Equal(t, toolText.Hash, sameContext.Hash, "path must not reduce cache reuse")
+	require.NotEqual(t, toolText.Hash, userText.Hash)
+	require.NotEqual(t, toolText.Hash, toolFile.Hash)
+}
+
+func TestUnifiedModerationAllowsOnlyPlaceholderEncodedCommandInToolMarkdown(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordOnly
+	cfg.SecondLayerEnabled = false
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled: true,
+		config:             cfg,
+		keywordMatcher: newContentModerationKeywordMatcher([]string{
+			"powershell -enc",
+			"powershell -EncodedCommand",
+		}),
+	}
+	cache := &contentModerationFragmentMapCache{}
+	svc := &ContentModerationService{hashCache: cache, repo: &contentModerationTestRepo{}}
+	scope := NewContentModerationScopeSnapshot(nil, "GPT")
+	markdown := `<file-view path="C:\work\backlog.md" title="backlog.md">
+40|critical turbo=confirm | powershell -EncodedCommand <base64>
+</file-view>`
+
+	check := func(role, text string) *ContentModerationDecision {
+		t.Helper()
+		body := []byte(`{"messages":[{"role":"` + role + `","content":` + strconv.Quote(text) + `}]}`)
+		return svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+			Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIChat,
+		}, runtime)
+	}
+
+	require.True(t, check("tool", markdown).Allowed)
+	require.True(t, check("user", markdown).Blocked, "a tool allow-cache entry must not apply to user input")
+
+	for name, text := range map[string]string{
+		"real payload": strings.Replace(markdown, "<base64>", "SQBFAFgAKABOAGUAdwA=", 1),
+		"short flag":   strings.Replace(markdown, "-EncodedCommand", "-enc", 1),
+		"non-markdown": strings.Replace(markdown, "backlog.md", "backlog.txt", 2),
+		"mixed": strings.Replace(markdown, "</file-view>",
+			"powershell -EncodedCommand SQBFAFgAKABOAGUAdwA=\n</file-view>", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, check("tool", text).Blocked)
+		})
+	}
 }
 
 func TestExtractContentModerationFragments_SkipsInlineBase64MediaURLs(t *testing.T) {
