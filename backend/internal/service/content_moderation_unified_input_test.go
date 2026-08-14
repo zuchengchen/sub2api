@@ -156,6 +156,7 @@ func TestUnifiedModerationAllowsOnlyPlaceholderEncodedCommandInToolMarkdown(t *t
 		keywordMatcher: newContentModerationKeywordMatcher([]string{
 			"powershell -enc",
 			"powershell -EncodedCommand",
+			"write a virus",
 		}),
 	}
 	cache := &contentModerationFragmentMapCache{}
@@ -163,6 +164,7 @@ func TestUnifiedModerationAllowsOnlyPlaceholderEncodedCommandInToolMarkdown(t *t
 	scope := NewContentModerationScopeSnapshot(nil, "GPT")
 	markdown := `<file-view path="C:\work\backlog.md" title="backlog.md">
 40|critical turbo=confirm | powershell -EncodedCommand <base64>
+90|powershell -EncodedCommand <base64 rm -rf />    → critical turbo=confirm
 </file-view>`
 
 	check := func(role, text string) *ContentModerationDecision {
@@ -173,13 +175,28 @@ func TestUnifiedModerationAllowsOnlyPlaceholderEncodedCommandInToolMarkdown(t *t
 		}, runtime)
 	}
 
-	require.True(t, check("tool", markdown).Allowed)
+	fragment, ok := newContentModerationFragment("tool", "text", "messages.0.content", markdown)
+	require.True(t, ok)
+	oldNamespace := cfg.fragmentCacheNamespaceWithKeywordContextRevision("powershell-doc-v1")
+	newNamespace := cfg.fragmentCacheNamespace()
+	require.NotEqual(t, oldNamespace, newNamespace)
+	cache.results = map[string]string{
+		oldNamespace + ":" + fragment.Hash: ContentModerationFragmentBlock,
+	}
+
+	require.True(t, check("tool", markdown).Allowed, "an old cached block must not survive a context-policy revision")
+	require.Equal(t, ContentModerationFragmentAllow, cache.results[newNamespace+":"+fragment.Hash])
+	require.True(t, check("tool", markdown).Allowed, "the corrected allow decision must be reusable from cache")
 	require.True(t, check("user", markdown).Blocked, "a tool allow-cache entry must not apply to user input")
 
 	for name, text := range map[string]string{
-		"real payload": strings.Replace(markdown, "<base64>", "SQBFAFgAKABOAGUAdwA=", 1),
-		"short flag":   strings.Replace(markdown, "-EncodedCommand", "-enc", 1),
-		"non-markdown": strings.Replace(markdown, "backlog.md", "backlog.txt", 2),
+		"real payload":           strings.Replace(markdown, "<base64>", "SQBFAFgAKABOAGUAdwA=", 1),
+		"short real payload":     strings.Replace(strings.Replace(markdown, "-EncodedCommand", "-enc", 1), "<base64>", "SQBFAFgAKABOAGUAdwA=", 1),
+		"non-markdown":           strings.Replace(markdown, "backlog.md", "backlog.txt", 2),
+		"unclosed placeholder":   strings.Replace(markdown, "<base64>", "<base64", 1),
+		"unmarked placeholder":   strings.Replace(markdown, "<base64>", "<documentation>", 1),
+		"oversized placeholder":  strings.Replace(markdown, "<base64>", "<base64 "+strings.Repeat("x", maxDocumentationCommandPlaceholderBytes)+">", 1),
+		"different risk keyword": strings.Replace(markdown, "</file-view>", "write a virus\n</file-view>", 1),
 		"mixed": strings.Replace(markdown, "</file-view>",
 			"powershell -EncodedCommand SQBFAFgAKABOAGUAdwA=\n</file-view>", 1),
 	} {
@@ -187,6 +204,9 @@ func TestUnifiedModerationAllowsOnlyPlaceholderEncodedCommandInToolMarkdown(t *t
 			require.True(t, check("tool", text).Blocked)
 		})
 	}
+
+	shortFlag := strings.ReplaceAll(markdown, "-EncodedCommand", "-enc")
+	require.True(t, check("tool", shortFlag).Allowed, "a short flag followed only by placeholders is documentation")
 }
 
 func TestExtractContentModerationFragments_SkipsInlineBase64MediaURLs(t *testing.T) {

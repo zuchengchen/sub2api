@@ -137,7 +137,10 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 
 		if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
 			if keyword, hit := runtime.keywordMatcher.Match(fragment.Text); hit {
-				if !suppressToolDocumentationKeyword(fragment, keyword) {
+				if suppressToolDocumentationKeyword(fragment, keyword) {
+					keyword, hit = runtime.keywordMatcher.Match(withoutPowerShellDocumentationCommands(fragment.Text))
+				}
+				if hit {
 					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentBlock)
 					return s.unifiedBlockDecision(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, keyword)
 				}
