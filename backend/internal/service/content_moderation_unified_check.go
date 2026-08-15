@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -109,28 +110,43 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		namespace = cfg.fragmentCacheNamespace()
 	}
 	for _, fragment := range fragments {
+		releaseDecisionLock := s.acquireContentModerationFragmentDecisionLock(namespace + "\x00" + fragment.Hash)
 		if cache != nil {
-			result, found, err := cache.GetFragmentResult(ctx, namespace, fragment.Hash)
+			entry, found, err := s.getUnifiedFragmentCache(ctx, cache, namespace, fragment.Hash)
 			if err != nil {
 				s.fragmentCacheErrors.Add(1)
 				slog.Warn("content_moderation.fragment_cache_get_failed", "error", err)
 			} else if !found {
+				if entry.Expired {
+					s.fragmentCacheExpired.Add(1)
+				}
 				s.fragmentCacheMisses.Add(1)
 			} else {
 				s.fragmentCacheHits.Add(1)
-				switch result {
+				switch entry.Result {
 				case ContentModerationFragmentAllow:
+					releaseDecisionLock()
 					continue
 				case ContentModerationFragmentBlock:
-					category := "fragment_cache"
-					keyword := ""
-					if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
+					s.fragmentCacheReplays.Add(1)
+					category := entry.Category
+					keyword := entry.MatchedKeyword
+					if category == "" && cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
 						if matched, hit := runtime.keywordMatcher.Match(fragment.Text); hit {
 							category = contentModerationKeywordCategory
 							keyword = matched
 						}
 					}
-					return s.unifiedBlockDecision(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, category, keyword)
+					category = defaultContentModerationString(category, "fragment_cache")
+					decision, _, _ := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, category, keyword, unifiedModerationAudit{
+						CacheHit: true, DecisionSource: "cache_replay", SourceLogID: entry.SourceLogID,
+						ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, fragment.Hash), CacheNamespace: namespace,
+						ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion, EvidenceMode: entry.EvidenceMode,
+						EvidenceTruncated: entry.EvidenceTruncated, ParserStatus: entry.ParserStatus,
+						KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID,
+					})
+					releaseDecisionLock()
+					return decision
 				}
 			}
 		}
@@ -141,51 +157,184 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					keyword, hit = runtime.keywordMatcher.Match(withoutPowerShellDocumentationCommands(fragment.Text))
 				}
 				if hit {
-					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentBlock)
-					return s.unifiedBlockDecision(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, keyword)
+					decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, keyword, unifiedModerationAudit{
+						DecisionSource: "keyword_high_confidence", CacheNamespace: namespace, KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
+					})
+					if persisted {
+						s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentCacheEntry{
+							Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
+							DecisionSource: "keyword_high_confidence", Category: contentModerationKeywordCategory, MatchedKeyword: keyword,
+							KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
+						})
+					}
+					releaseDecisionLock()
+					return decision
 				}
 			}
 		}
 
 		if cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly {
-			if cfg.CandidateEnabled {
-				if runtime.secondLayerPrefilterMatcher == nil {
-					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
-					continue
-				}
-				if _, hit := runtime.secondLayerPrefilterMatcher.Match(fragment.Text); !hit {
-					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
-					continue
-				}
+			candidateRouting := cfg.CandidateEnabled || len(cfg.CandidateKeywords) > 0
+			keywordTier := "unfiltered"
+			keywordRuleID := ""
+			candidateKeyword := ""
+			candidateHit := false
+			if candidateRouting && runtime.secondLayerPrefilterMatcher != nil {
+				candidateKeyword, candidateHit = runtime.secondLayerPrefilterMatcher.Match(fragment.Text)
 			}
-			result, attempted, err := s.scanUnifiedSecondLayer(ctx, cfg, fragment.Text)
+			if candidateHit && matchesContentModerationAllowlist(fragment.Text, cfg.KeywordAllowlist) {
+				candidateHit = false
+			}
+			switch {
+			case candidateHit:
+				keywordTier = "candidate"
+				keywordRuleID = contentModerationKeywordRuleID(candidateKeyword)
+			case requiresSecondLayerContextScan(fragment.ContextClass):
+				keywordTier = "context_required"
+			case candidateRouting:
+				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+				releaseDecisionLock()
+				continue
+			}
+			result, attempted, err := s.scanUnifiedSecondLayerFragmentWithTier(ctx, cfg, fragment, keywordTier, keywordRuleID)
 			if err != nil {
 				if !errors.Is(err, errContentModerationSecondLayerBusy) {
 					slog.Warn("content_moderation.second_layer_failed", "error", err)
 				}
+				releaseDecisionLock()
 				continue
 			}
 			if attempted && result.Blocked {
-				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentBlock)
-				return s.unifiedBlockDecision(ctx, input, cfg, fragment, ContentModerationActionSecondLayerBlock, result.Category, "")
+				if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+					log := s.buildLog(input, cfg, ContentModerationActionSecondLayerShadow, false, result.Category, 1, map[string]float64{result.Category: 1}, fragment.Text, nil, nil, "")
+					applyUnifiedModerationAudit(log, fragment, cfg, unifiedModerationAudit{
+						DecisionSource: "model_shadow", CacheNamespace: namespace, ModelProfile: result.Profile,
+						PromptVersion: result.PromptVersion, EvidenceMode: result.EvidenceMode,
+						EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
+						KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
+					})
+					s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, false, &input)
+					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+					releaseDecisionLock()
+					continue
+				}
+				decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionSecondLayerBlock, result.Category, "", unifiedModerationAudit{
+					DecisionSource: "model", CacheNamespace: namespace, ModelProfile: result.Profile,
+					PromptVersion: result.PromptVersion, EvidenceMode: result.EvidenceMode,
+					EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
+					KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
+				})
+				if persisted {
+					s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentCacheEntry{
+						Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
+						DecisionSource: "model", Category: result.Category, ModelProfile: result.Profile,
+						PromptVersion: result.PromptVersion, KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID, EvidenceMode: result.EvidenceMode,
+						EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
+					})
+				}
+				releaseDecisionLock()
+				return decision
 			}
 			if attempted {
+				if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow || cfg.RecordNonHits {
+					action := ContentModerationActionAllow
+					decisionSource := "model"
+					if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+						action = ContentModerationActionSecondLayerShadow
+						decisionSource = "model_shadow"
+					}
+					log := s.buildLog(input, cfg, action, false, "", 0, nil, fragment.Text, nil, nil, "")
+					applyUnifiedModerationAudit(log, fragment, cfg, unifiedModerationAudit{
+						DecisionSource: decisionSource, CacheNamespace: namespace, ModelProfile: result.Profile,
+						PromptVersion: result.PromptVersion, EvidenceMode: result.EvidenceMode,
+						EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
+						KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
+					})
+					s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, false, &input)
+				}
 				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 			}
+			releaseDecisionLock()
 			continue
 		}
 
 		s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+		releaseDecisionLock()
 	}
 	return allow
 }
 
+func (s *ContentModerationService) acquireContentModerationFragmentDecisionLock(key string) func() {
+	if s == nil {
+		return func() {}
+	}
+	s.fragmentDecisionMu.Lock()
+	if s.fragmentDecisionLocks == nil {
+		s.fragmentDecisionLocks = make(map[string]*contentModerationFragmentDecisionLock)
+	}
+	lock := s.fragmentDecisionLocks[key]
+	if lock == nil {
+		lock = &contentModerationFragmentDecisionLock{}
+		s.fragmentDecisionLocks[key] = lock
+	}
+	lock.refs++
+	s.fragmentDecisionMu.Unlock()
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.fragmentDecisionMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.fragmentDecisionLocks, key)
+		}
+		s.fragmentDecisionMu.Unlock()
+	}
+}
+
+func requiresSecondLayerContextScan(contextClass string) bool {
+	switch contextClass {
+	case "tool", "service_log", "code", "config", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func matchesContentModerationAllowlist(text string, values []string) bool {
+	text = strings.ToLower(text)
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" && strings.Contains(text, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *ContentModerationService) getUnifiedFragmentCache(ctx context.Context, cache ContentModerationFragmentCache, namespace, fragmentHash string) (ContentModerationFragmentCacheEntry, bool, error) {
+	if ttlCache, ok := cache.(ContentModerationFragmentTTLCache); ok {
+		return ttlCache.GetFragmentCacheEntry(ctx, namespace, fragmentHash)
+	}
+	result, found, err := cache.GetFragmentResult(ctx, namespace, fragmentHash)
+	return ContentModerationFragmentCacheEntry{Result: result}, found, err
+}
+
 func (s *ContentModerationService) putUnifiedFragmentCache(ctx context.Context, cache ContentModerationFragmentCache, namespace string, cfg *ContentModerationConfig, fragment ContentModerationFragment, result string) {
+	s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentCacheEntry{Result: result})
+}
+
+func (s *ContentModerationService) putUnifiedFragmentCacheEntry(ctx context.Context, cache ContentModerationFragmentCache, namespace string, cfg *ContentModerationConfig, fragment ContentModerationFragment, entry ContentModerationFragmentCacheEntry) {
 	if cache == nil || cfg == nil {
 		return
 	}
-	estimatedBytes := int64(len(fragment.Hash) + len(result) + len(namespace) + 64)
-	if err := cache.PutFragmentResult(ctx, namespace, fragment.Hash, result, estimatedBytes, cfg.CacheMaxEntries, cfg.CacheMaxBytes); err != nil {
+	estimatedBytes := int64(len(fragment.Hash) + len(entry.Result) + len(namespace) + entryEstimatedBytes(entry) + 64)
+	var err error
+	if ttlCache, ok := cache.(ContentModerationFragmentTTLCache); ok {
+		err = ttlCache.PutFragmentCacheEntry(ctx, namespace, fragment.Hash, entry, estimatedBytes, cfg.CacheMaxEntries, cfg.CacheMaxBytes, moderationFragmentTTL(cfg, entry.Result))
+	} else {
+		err = cache.PutFragmentResult(ctx, namespace, fragment.Hash, entry.Result, estimatedBytes, cfg.CacheMaxEntries, cfg.CacheMaxBytes)
+	}
+	if err != nil {
 		s.fragmentCacheWriteErrors.Add(1)
 		slog.Warn("content_moderation.fragment_cache_put_failed", "error", err)
 	} else {
@@ -194,13 +343,35 @@ func (s *ContentModerationService) putUnifiedFragmentCache(ctx context.Context, 
 }
 
 func (s *ContentModerationService) unifiedBlockDecision(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, fragment ContentModerationFragment, action, category, keyword string) *ContentModerationDecision {
+	decision, _, _ := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, action, category, keyword, unifiedModerationAudit{})
+	return decision
+}
+
+type unifiedModerationAudit struct {
+	CacheHit          bool
+	DecisionSource    string
+	SourceLogID       *int64
+	ReplayOfInputHash string
+	CacheNamespace    string
+	ModelProfile      string
+	PromptVersion     string
+	EvidenceMode      string
+	EvidenceTruncated bool
+	ParserStatus      string
+	KeywordTier       string
+	KeywordRuleID     string
+}
+
+func (s *ContentModerationService) unifiedBlockDecisionWithAudit(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, fragment ContentModerationFragment, action, category, keyword string, audit unifiedModerationAudit) (*ContentModerationDecision, *ContentModerationLog, bool) {
 	if category == "" {
 		category = "content_policy"
 	}
 	scores := map[string]float64{category: 1}
 	log := s.buildLog(input, cfg, action, true, category, 1, scores, fragment.Text, nil, nil, "")
 	log.MatchedKeyword = keyword
-	s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, true, &input)
+	applyUnifiedModerationAudit(log, fragment, cfg, audit)
+	applySideEffects := !audit.CacheHit && action != ContentModerationActionCacheBlock
+	persisted := s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, applySideEffects, &input)
 	s.recordPreBlockSyncMetric(0, action)
 
 	blocked := cfg.Mode == ContentModerationModePreBlock
@@ -220,7 +391,64 @@ func (s *ContentModerationService) unifiedBlockDecision(ctx context.Context, inp
 		HighestScore:    1,
 		CategoryScores:  scores,
 		Action:          action,
+	}, log, persisted
+}
+
+func applyUnifiedModerationAudit(log *ContentModerationLog, fragment ContentModerationFragment, cfg *ContentModerationConfig, audit unifiedModerationAudit) {
+	if log == nil {
+		return
 	}
+	log.CacheHit = audit.CacheHit
+	log.DecisionSource = audit.DecisionSource
+	log.SourceLogID = audit.SourceLogID
+	log.ReplayOfInputHash = audit.ReplayOfInputHash
+	log.FragmentRole = fragment.Role
+	log.FragmentKind = fragment.Kind
+	log.ContextClass = fragment.ContextClass
+	log.FragmentPath = redactContentModerationPath(fragment.Path)
+	log.CacheNamespace = audit.CacheNamespace
+	log.ModelProfile = audit.ModelProfile
+	log.PromptVersion = audit.PromptVersion
+	log.EvidencePolicyVersion = cfg.EvidencePolicyVersion
+	log.PolicyVersion = contentModerationPolicyDigest(cfg)
+	log.KeywordTier = audit.KeywordTier
+	log.KeywordRuleID = audit.KeywordRuleID
+	log.EvidenceMode = audit.EvidenceMode
+	log.EvidenceTruncated = audit.EvidenceTruncated
+	log.ParserStatus = audit.ParserStatus
+	if audit.CacheHit {
+		log.ViolationCount = 0
+		log.DispositionStatus = "not_counted"
+	}
+}
+
+func contentModerationLogIDPtr(log *ContentModerationLog) *int64 {
+	if log == nil || log.ID <= 0 {
+		return nil
+	}
+	id := log.ID
+	return &id
+}
+
+func entryEstimatedBytes(entry ContentModerationFragmentCacheEntry) int {
+	return len(entry.ReplayOfInputHash) + len(entry.DecisionSource) + len(entry.Category) + len(entry.MatchedKeyword) +
+		len(entry.ModelProfile) + len(entry.PromptVersion) + len(entry.EvidenceMode) + len(entry.ParserStatus) + 96
+}
+
+func contentModerationKeywordRuleID(keyword string) string {
+	if strings.TrimSpace(keyword) == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(keyword))))
+	return fmt.Sprintf("kw-%x", digest[:6])
+}
+
+func redactContentModerationPath(path string) string {
+	path = strings.TrimSpace(path)
+	if len(path) > 240 {
+		path = path[:240]
+	}
+	return evidenceSecretPattern.ReplaceAllString(path, "$1$2[REDACTED]")
 }
 
 func (cfg *ContentModerationConfig) enabledSecondLayerEndpoints() []ContentModerationEndpoint {
@@ -254,6 +482,20 @@ func (s *ContentModerationService) validateUnifiedConfig(cfg *ContentModerationC
 		if _, err := normalizeContentModerationSecondLayerBaseURL(endpoint.BaseURL); err != nil {
 			return err
 		}
+		if profile := strings.ToLower(strings.TrimSpace(endpoint.Profile)); profile != "" &&
+			profile != ContentModerationModelProfileQwen && profile != "qwen" && profile != "qwen3guard" &&
+			profile != ContentModerationModelProfileYuFengXGuard && profile != "yufeng" && profile != "yufeng-xguard" {
+			return fmt.Errorf("unsupported second-layer model profile %q", endpoint.Profile)
+		}
+	}
+	if cfg.FragmentBlockTTLSeconds != 0 && (cfg.FragmentBlockTTLSeconds < MinContentModerationFragmentBlockTTLSeconds || cfg.FragmentBlockTTLSeconds > MaxContentModerationFragmentBlockTTLSeconds) {
+		return fmt.Errorf("fragment block TTL must be between %d and %d seconds", MinContentModerationFragmentBlockTTLSeconds, MaxContentModerationFragmentBlockTTLSeconds)
+	}
+	if cfg.FragmentAllowTTLSeconds < 0 || cfg.FragmentAllowTTLSeconds > MaxContentModerationFragmentAllowTTLSeconds {
+		return fmt.Errorf("fragment allow TTL must be between 1 and %d seconds", MaxContentModerationFragmentAllowTTLSeconds)
+	}
+	if stage := strings.TrimSpace(cfg.SecondLayerStage); stage != "" && stage != ContentModerationSecondLayerStageEnforce && stage != ContentModerationSecondLayerStageShadow {
+		return fmt.Errorf("unsupported second-layer stage %q", cfg.SecondLayerStage)
 	}
 	if strings.TrimSpace(cfg.CacheVersion) == "" {
 		return fmt.Errorf("content moderation cache version is required")

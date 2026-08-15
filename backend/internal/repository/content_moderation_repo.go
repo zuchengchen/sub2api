@@ -103,6 +103,11 @@ INSERT INTO content_moderation_logs (
     category_scores, threshold_snapshot, input_excerpt, upstream_latency_ms, error,
     violation_count, auto_banned, email_sent, queue_delay_ms, matched_keyword,
     protocol, transport, request_stage, request_target, input_hash,
+    cache_hit, decision_source, source_log_id, replay_of_input_hash,
+    fragment_role, fragment_kind, context_class, fragment_path,
+    cache_namespace, policy_version, model_profile, prompt_version,
+    evidence_policy_version, keyword_tier, keyword_rule_id, evidence_mode,
+    evidence_truncated, parser_status,
     archive_id, archive_version, archive_key_id, archive_plaintext_sha256,
     archive_plaintext_bytes, archive_status, archive_incomplete, archive_content_lost,
     archive_deleted_at, disposition_status, disposition_target,
@@ -114,17 +119,27 @@ INSERT INTO content_moderation_logs (
     $16::jsonb, $17::jsonb, $18, $19, $20,
     $21, $22, $23, $24, $25,
     $26, $27, $28, $29, $30,
-    NULLIF($31, '')::uuid, NULLIF($32, 0), $33, $34,
+    $31, $32, $33, $34,
     $35, $36, $37, $38,
-    $39, $40, $41,
-    $42, $43, $44,
-    $45, $46::jsonb, COALESCE($47, NOW())
+    $39, $40, $41, $42,
+    $43, $44, $45, $46,
+    $47, $48,
+    NULLIF($49, '')::uuid, NULLIF($50, 0), $51, $52,
+    $53, $54, $55, $56,
+    $57, $58, $59,
+    $60, $61, $62,
+    $63, $64::jsonb, COALESCE($65, NOW())
 ) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
 		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, latency, log.Error,
 		log.ViolationCount, log.AutoBanned, log.EmailSent, nullableIntPtr(log.QueueDelayMS), log.MatchedKeyword,
 		log.Protocol, transport, requestStage, log.RequestTarget, log.InputHash,
+		log.CacheHit, log.DecisionSource, nullableInt64Ptr(log.SourceLogID), log.ReplayOfInputHash,
+		log.FragmentRole, log.FragmentKind, log.ContextClass, log.FragmentPath,
+		log.CacheNamespace, log.PolicyVersion, log.ModelProfile, log.PromptVersion,
+		log.EvidencePolicyVersion, log.KeywordTier, log.KeywordRuleID, log.EvidenceMode,
+		log.EvidenceTruncated, log.ParserStatus,
 		log.ArchiveID, log.ArchiveVersion, log.ArchiveKeyID, nullableBytes(log.ArchiveSHA256),
 		log.ArchiveBytes, archiveStatus, log.ArchiveIncomplete, log.ArchiveContentLost,
 		log.ArchiveDeletedAt, log.DispositionStatus, log.DispositionTarget,
@@ -187,6 +202,11 @@ SELECT
     l.violation_count, l.auto_banned, l.email_sent, l.email_delivery_status,
     l.email_delivery_claimed_at, COALESCE(u.status, ''), l.queue_delay_ms, l.matched_keyword,
     l.protocol, l.transport, l.request_stage, l.request_target, l.input_hash,
+    l.cache_hit, l.decision_source, l.source_log_id, l.replay_of_input_hash,
+    l.fragment_role, l.fragment_kind, l.context_class, l.fragment_path,
+    l.cache_namespace, l.policy_version, l.model_profile, l.prompt_version,
+    l.evidence_policy_version, l.keyword_tier, l.keyword_rule_id, l.evidence_mode,
+    l.evidence_truncated, l.parser_status,
     COALESCE(l.archive_id::text, ''), COALESCE(l.archive_version, 0), l.archive_key_id,
     l.archive_plaintext_bytes, l.archive_status, l.archive_incomplete, l.archive_content_lost,
     l.archive_deleted_at, l.disposition_status, l.disposition_target, l.disposition_transitioned,
@@ -206,7 +226,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 	items := make([]service.ContentModerationLog, 0)
 	for rows.Next() {
 		var item service.ContentModerationLog
-		var userID, apiKeyID, groupID, latency, queueDelay, legacySourceJobID sql.NullInt64
+		var userID, apiKeyID, groupID, latency, queueDelay, sourceLogID, legacySourceJobID sql.NullInt64
 		var archiveDeletedAt, emailDeliveryClaimedAt sql.NullTime
 		var scoresRaw, thresholdsRaw []byte
 		var legacyMetadataRaw []byte
@@ -245,6 +265,24 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&item.RequestStage,
 			&item.RequestTarget,
 			&item.InputHash,
+			&item.CacheHit,
+			&item.DecisionSource,
+			&sourceLogID,
+			&item.ReplayOfInputHash,
+			&item.FragmentRole,
+			&item.FragmentKind,
+			&item.ContextClass,
+			&item.FragmentPath,
+			&item.CacheNamespace,
+			&item.PolicyVersion,
+			&item.ModelProfile,
+			&item.PromptVersion,
+			&item.EvidencePolicyVersion,
+			&item.KeywordTier,
+			&item.KeywordRuleID,
+			&item.EvidenceMode,
+			&item.EvidenceTruncated,
+			&item.ParserStatus,
 			&item.ArchiveID,
 			&item.ArchiveVersion,
 			&item.ArchiveKeyID,
@@ -283,6 +321,10 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		if queueDelay.Valid {
 			v := int(queueDelay.Int64)
 			item.QueueDelayMS = &v
+		}
+		if sourceLogID.Valid {
+			value := sourceLogID.Int64
+			item.SourceLogID = &value
 		}
 		if archiveDeletedAt.Valid {
 			value := archiveDeletedAt.Time
@@ -331,6 +373,8 @@ FROM content_moderation_logs
 WHERE user_id = $1
   AND flagged = TRUE
   AND action NOT IN ('hash_block', 'cache_block')
+  AND cache_hit = FALSE
+  AND decision_source <> 'cache_replay'
   AND ($3::bool IS FALSE OR action <> 'cyber_policy')
   AND ($4::text = '' OR archive_id IS NULL OR archive_id <> NULLIF($4::text, '')::uuid)
   AND created_at >= $2
@@ -706,11 +750,23 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 	case "error":
 		where = append(where, "l.error <> ''")
 	}
+	if filter.LogID != nil {
+		add("l.id = $%d", *filter.LogID)
+	}
 	if filter.GroupID != nil {
 		add("l.group_id = $%d", *filter.GroupID)
 	}
 	if endpoint := strings.TrimSpace(filter.Endpoint); endpoint != "" {
 		add("l.endpoint = $%d", endpoint)
+	}
+	if contextClass := strings.TrimSpace(filter.ContextClass); contextClass != "" {
+		add("l.context_class = $%d", contextClass)
+	}
+	if profile := strings.TrimSpace(filter.ModelProfile); profile != "" {
+		add("l.model_profile = $%d", profile)
+	}
+	if source := strings.TrimSpace(filter.DecisionSource); source != "" {
+		add("l.decision_source = $%d", source)
 	}
 	if search := strings.TrimSpace(filter.Search); search != "" {
 		like := "%" + search + "%"

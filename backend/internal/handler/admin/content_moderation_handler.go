@@ -61,9 +61,19 @@ type contentModerationConfigRequest struct {
 	CacheVersion                   *string                               `json:"cache_version"`
 	CacheMaxEntries                *int                                  `json:"cache_max_entries"`
 	CacheMaxBytes                  *int64                                `json:"cache_max_bytes"`
+	FragmentBlockTTLSeconds        *int                                  `json:"fragment_block_ttl_seconds"`
+	FragmentAllowTTLSeconds        *int                                  `json:"fragment_allow_ttl_seconds"`
+	FragmentTTLPolicyVersion       *string                               `json:"fragment_ttl_policy_version"`
 	SecondLayerEnabled             *bool                                 `json:"second_layer_enabled"`
+	SecondLayerStage               *string                               `json:"second_layer_stage"`
 	SecondLayerEndpoints           *[]service.ContentModerationEndpoint  `json:"second_layer_endpoints"`
 	SecondLayerScanners            *[]string                             `json:"second_layer_scanners"`
+	HardBlockPatterns              *[]string                             `json:"hard_block_patterns"`
+	CandidateKeywords              *[]string                             `json:"candidate_keywords"`
+	KeywordAllowlist               *[]string                             `json:"keyword_allowlist"`
+	KeywordPolicyVersion           *string                               `json:"keyword_policy_version"`
+	ContextPolicyVersion           *string                               `json:"context_policy_version"`
+	EvidencePolicyVersion          *string                               `json:"evidence_policy_version"`
 	CandidateAsset                 *string                               `json:"candidate_asset"`
 	CandidateEnabled               *bool                                 `json:"candidate_enabled"`
 }
@@ -131,9 +141,19 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		CacheVersion:                   req.CacheVersion,
 		CacheMaxEntries:                req.CacheMaxEntries,
 		CacheMaxBytes:                  req.CacheMaxBytes,
+		FragmentBlockTTLSeconds:        req.FragmentBlockTTLSeconds,
+		FragmentAllowTTLSeconds:        req.FragmentAllowTTLSeconds,
+		FragmentTTLPolicyVersion:       req.FragmentTTLPolicyVersion,
 		SecondLayerEnabled:             req.SecondLayerEnabled,
+		SecondLayerStage:               req.SecondLayerStage,
 		SecondLayerEndpoints:           req.SecondLayerEndpoints,
 		SecondLayerScanners:            req.SecondLayerScanners,
+		HardBlockPatterns:              req.HardBlockPatterns,
+		CandidateKeywords:              req.CandidateKeywords,
+		KeywordAllowlist:               req.KeywordAllowlist,
+		KeywordPolicyVersion:           req.KeywordPolicyVersion,
+		ContextPolicyVersion:           req.ContextPolicyVersion,
+		EvidencePolicyVersion:          req.EvidencePolicyVersion,
 		CandidateAsset:                 req.CandidateAsset,
 		CandidateEnabled:               req.CandidateEnabled,
 	})
@@ -183,8 +203,20 @@ func (h *ContentModerationHandler) ListLogs(c *gin.Context) {
 			PageSize:  pageSize,
 			SortOrder: pagination.SortOrderDesc,
 		},
-		Endpoint: c.Query("endpoint"),
-		Search:   c.Query("search"),
+		Result:         c.Query("result"),
+		Endpoint:       c.Query("endpoint"),
+		ContextClass:   c.Query("context_class"),
+		ModelProfile:   c.Query("model_profile"),
+		DecisionSource: c.Query("decision_source"),
+		Search:         c.Query("search"),
+	}
+	if raw := strings.TrimSpace(c.Query("log_id")); raw != "" {
+		logID, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || logID <= 0 {
+			response.BadRequest(c, "Invalid log_id")
+			return
+		}
+		filter.LogID = &logID
 	}
 	if raw := strings.TrimSpace(c.Query("group_id")); raw != "" {
 		groupID, err := strconv.ParseInt(raw, 10, 64)
