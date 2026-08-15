@@ -31,9 +31,9 @@ for each of its two parallel slots.
 ## Host prerequisites
 
 The validation host has an AMD EPYC 7571, 32 logical CPUs, 31 GiB RAM, and no
-swap. Loaded RSS was approximately 1,007 MiB. Required commands are
-`sha256sum`, `awk`, `curl`, and `jq`; the benchmark requires Python 3.9 or
-newer. The official archive also requires an OpenMP runtime. Set
+swap. Loaded RSS with two parallel slots was approximately 1.43 GiB. Required
+commands are `sha256sum`, `awk`, `curl`, and `jq`; the benchmark requires
+Python 3.9 or newer. The official archive also requires an OpenMP runtime. Set
 `OPENMP_LIB_DIR` to the directory containing `libgomp.so.1` when it is not in
 the system loader path.
 
@@ -60,19 +60,22 @@ The current default server arguments are:
 ```text
 --alias yufeng-xguard-q4 --host 127.0.0.1 --port 8088
 --ctx-size 8192 --parallel 2 --batch-size 512 --ubatch-size 512
---threads 28 --threads-batch 28 --flash-attn on --load-mode none
+--threads 14 --threads-batch 14 --flash-attn on --load-mode none
 --cache-ram 0 --no-cache-prompt --no-context-shift --no-mmproj --offline
 --no-webui --no-slots --metrics --n-gpu-layers 0
 --cors-origins localhost --no-cors-credentials --jinja --log-verbosity 2
 ```
 
-The launcher shares 28 inference and batch threads across two server slots.
-The 8,192-token shared context preserves approximately 4,096 tokens per slot,
-and the example systemd unit caps the service at 2,800% CPU, equivalent to 28
-fully utilized logical CPUs. Its 3 GiB memory-high threshold and 4 GiB hard
-limit leave headroom for the larger KV cache while retaining containment. The
-historical benchmark below used the previous 16-thread, single-slot setting
-and is not a 28-thread, two-slot performance guarantee.
+The launcher uses 14 inference and batch threads with two server slots. The
+8,192-token shared context preserves approximately 4,096 tokens per slot, and
+the example systemd unit caps the service at 2,800% CPU, equivalent to 28 fully
+utilized logical CPUs. Its 3 GiB memory-high threshold and 4 GiB hard limit
+leave headroom for the larger KV cache while retaining containment. A
+28-thread setting was rejected after concurrent probes exceeded the 25-second
+endpoint timeout. With 14 threads, three pairs of concurrent health checks all
+completed successfully; the complete safe-plus-unsafe chains took 14.76 to
+24.83 seconds. The historical benchmark below used the previous 16-thread,
+single-slot setting and is not a two-slot performance guarantee.
 
 From another shell:
 
