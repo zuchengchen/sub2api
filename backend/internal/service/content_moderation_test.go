@@ -444,10 +444,12 @@ func TestNormalizeBlockedKeywords_TrimsDedupesAndCaps(t *testing.T) {
 	require.Equal(t, []string{"foo", "bar", "baz"}, out)
 }
 
-func TestMatchBlockedKeyword_CaseInsensitiveSubstring(t *testing.T) {
+func TestMatchBlockedKeyword_CaseInsensitiveWordBoundary(t *testing.T) {
 	keyword, hit := matchBlockedKeyword("Please ignore the BadWord here", []string{"badword"})
 	require.True(t, hit)
 	require.Equal(t, "badword", keyword)
+	_, hit = matchBlockedKeyword("Please ignore the BadWords here", []string{"badword"})
+	require.False(t, hit)
 
 	_, hit = matchBlockedKeyword("clean prompt", []string{"badword"})
 	require.False(t, hit)
@@ -495,7 +497,15 @@ func TestContentModerationCandidateAssetIsOffUntilExplicitlyEnabled(t *testing.T
 func TestContentModerationCandidateAssetOverridesLegacyCustomLayer1Duplicates(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.CandidateEnabled = true
-	cfg.BlockedKeywords = []string{"mcp__ida", "sh3ll", "custom-hard-block"}
+	demotedKeywords := []string{
+		"metamorphic",
+		"do anything now",
+		"make a bomb",
+		"malicious payload",
+		"opposite mode",
+		"bypass content filter",
+	}
+	cfg.BlockedKeywords = append([]string{"mcp__ida", "sh3ll", "custom-hard-block"}, demotedKeywords...)
 
 	keywords, err := effectiveContentModerationKeywords(cfg)
 	require.NoError(t, err)
@@ -506,6 +516,10 @@ func TestContentModerationCandidateAssetOverridesLegacyCustomLayer1Duplicates(t 
 	keyword, hit := matchBlockedKeyword("contains CUSTOM-HARD-BLOCK", keywords)
 	require.True(t, hit)
 	require.Equal(t, "custom-hard-block", keyword)
+	for _, demotedKeyword := range demotedKeywords {
+		_, hit = matchBlockedKeyword("contains "+demotedKeyword+" example", keywords)
+		require.False(t, hit, demotedKeyword)
+	}
 
 	secondLayerKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
@@ -514,6 +528,11 @@ func TestContentModerationCandidateAssetOverridesLegacyCustomLayer1Duplicates(t 
 	require.True(t, hit)
 	_, hit = matcher.Match("contains sh3ll")
 	require.False(t, hit)
+	for _, demotedKeyword := range demotedKeywords {
+		keyword, hit = matcher.Match("contains " + demotedKeyword + " example")
+		require.True(t, hit, demotedKeyword)
+		require.Equal(t, demotedKeyword, keyword)
+	}
 }
 
 func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
@@ -524,8 +543,8 @@ func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "legacy-prompt-audit-v1", view.CandidateAsset)
 	require.False(t, view.CandidateEnabled)
-	require.Equal(t, 971, view.CandidateLayer1Count)
-	require.Equal(t, 247, view.CandidateLayer2Count)
+	require.Equal(t, 965, view.CandidateLayer1Count)
+	require.Equal(t, 253, view.CandidateLayer2Count)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", view.CandidateSourceCommit)
 	require.Len(t, view.CandidateEndpoints, 1)
 	require.False(t, view.CandidateEndpoints[0].Enabled)
