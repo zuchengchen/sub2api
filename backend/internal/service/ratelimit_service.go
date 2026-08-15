@@ -914,6 +914,18 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	// Known edge challenges should consume the existing failover budget while
+	// leaving account state untouched. Check them before the broader HTML guard,
+	// which deliberately returns the original response for generic HTML 403s.
+	if isOpenAIEdgeChallenge403(responseBody) {
+		slog.Warn(
+			"openai_403_edge_challenge_ignored",
+			"account_id", account.ID,
+			"platform", account.Platform,
+		)
+		return true
+	}
+
 	// 上游代理 / CDN 在请求到达 OpenAI API 之前就拦下时，回的是 HTML 403 页面而不是
 	// {"error":{...}} 结构化错误。这类响应描述的是「这条链路 / 这个端点被挡了」，
 	// 不构成账号凭据或权限失效的证据——例如无效的 /v1/responses 子路径（#5334）。
@@ -942,18 +954,6 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		responseBody,
 		"account may be suspended or lack permissions",
 	)
-
-	// HTML and anti-bot challenges are scoped to the edge path, not the
-	// credential. Fail this request over within the existing switch budget, but
-	// do not increment account counters or alter persistent/runtime scheduling.
-	if isOpenAIEdgeChallenge403(responseBody) {
-		slog.Warn(
-			"openai_403_edge_challenge_ignored",
-			"account_id", account.ID,
-			"platform", account.Platform,
-		)
-		return true
-	}
 
 	if s.openAI403CounterCache == nil {
 		s.handleAuthError(ctx, account, msg)
