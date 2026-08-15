@@ -133,7 +133,7 @@ const baseConfig = (): ContentModerationConfig => ({
   candidate_keywords: [],
   keyword_allowlist: [],
   keyword_policy_version: 'keyword-v2',
-  context_policy_version: 'context-v1',
+  context_policy_version: 'context-v2',
   evidence_policy_version: 'evidence-v1',
   candidate_asset: 'legacy-prompt-audit-v1',
   candidate_enabled: false,
@@ -476,7 +476,7 @@ describe('admin RiskControlView', () => {
     await wrapper.get('[data-test="fragment-allow-ttl"]').setValue('90000')
     await wrapper.get('[data-test="add-second-layer-endpoint"]').trigger('click')
     await wrapper.get('[data-test="second-layer-model-revision-0"]').setValue('c9766937')
-    await wrapper.get('[data-test="second-layer-prompt-version-0"]').setValue('yufeng-xguard-v2')
+    await wrapper.get('[data-test="second-layer-prompt-version-0"]').setValue('yufeng-xguard-v3')
     await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
     await flushPromises()
 
@@ -487,12 +487,12 @@ describe('admin RiskControlView', () => {
       second_layer_enabled: true,
       second_layer_stage: 'shadow',
       keyword_policy_version: 'keyword-v2',
-      context_policy_version: 'context-v1',
+      context_policy_version: 'context-v2',
       evidence_policy_version: 'evidence-v1',
       second_layer_endpoints: [expect.objectContaining({
         profile: 'yufeng_xguard',
         model_revision: 'c9766937',
-        prompt_version: 'yufeng-xguard-v2',
+        prompt_version: 'yufeng-xguard-v3',
       })],
     }))
   })
