@@ -478,12 +478,18 @@ func TestContentModerationCandidateAssetIsOffUntilExplicitlyEnabled(t *testing.T
 
 	_, hit = matchBlockedKeyword("use mcp__ida", keywords)
 	require.False(t, hit)
+	_, hit = matchBlockedKeyword("reject invalid/destructive payloads before commit", keywords)
+	require.False(t, hit)
 
 	secondLayerKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
-	keyword, hit = newContentModerationPrefilterMatcher(secondLayerKeywords).Match("use mcp__ida")
+	secondLayerMatcher := newContentModerationPrefilterMatcher(secondLayerKeywords)
+	keyword, hit = secondLayerMatcher.Match("use mcp__ida")
 	require.True(t, hit)
 	require.Equal(t, "mcp ida", keyword)
+	keyword, hit = secondLayerMatcher.Match("reject invalid/destructive payloads before commit")
+	require.True(t, hit)
+	require.Equal(t, "destructive payload", keyword)
 }
 
 func TestContentModerationCandidateAssetOverridesLegacyCustomLayer1Duplicates(t *testing.T) {
@@ -518,8 +524,8 @@ func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "legacy-prompt-audit-v1", view.CandidateAsset)
 	require.False(t, view.CandidateEnabled)
-	require.Equal(t, 972, view.CandidateLayer1Count)
-	require.Equal(t, 246, view.CandidateLayer2Count)
+	require.Equal(t, 971, view.CandidateLayer1Count)
+	require.Equal(t, 247, view.CandidateLayer2Count)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", view.CandidateSourceCommit)
 	require.Len(t, view.CandidateEndpoints, 1)
 	require.False(t, view.CandidateEndpoints[0].Enabled)
