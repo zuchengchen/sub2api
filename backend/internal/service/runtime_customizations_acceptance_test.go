@@ -320,13 +320,16 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		require.Contains(t, preview.Content, secret)
 		download, err := svc.DownloadArchive(context.Background(), 77, 9, "acceptance-download")
 		require.NoError(t, err)
-		require.Equal(t, plaintext, download)
-		var restored ContentModerationArchiveEnvelope
-		require.NoError(t, json.Unmarshal(download, &restored))
-		restoredBody, err := base64.StdEncoding.DecodeString(restored.Request.BodyBase64)
-		require.NoError(t, err)
-		require.Contains(t, string(restoredBody), secret)
-		require.Equal(t, []string{"session=" + secret, "preference=test"}, restored.Request.Headers.Values("Cookie"))
+		var exported struct {
+			Request struct {
+				Headers http.Header     `json:"headers"`
+				Body    json.RawMessage `json:"body"`
+			} `json:"request"`
+		}
+		require.NoError(t, json.Unmarshal(download, &exported))
+		require.JSONEq(t, string(rawBody), string(exported.Request.Body))
+		require.Contains(t, string(exported.Request.Body), secret)
+		require.Equal(t, []string{"session=" + secret, "preference=test"}, exported.Request.Headers.Values("Cookie"))
 
 		cfg := defaultContentModerationConfig()
 		diagnostic := svc.buildLog(
