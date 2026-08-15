@@ -56,37 +56,46 @@ type GitHubReleaseClient interface {
 
 // UpdateService handles software updates
 type UpdateService struct {
-	cache          UpdateCache
-	githubClient   GitHubReleaseClient
-	currentVersion string
-	currentCommit  string
-	buildType      string // "source" for manual builds, "release" for CI builds
-	executablePath func() (string, error)
-	now            func() time.Time
+	cache             UpdateCache
+	githubClient      GitHubReleaseClient
+	currentVersion    string
+	currentCommit     string
+	buildType         string // "source" for manual builds, "release" for CI builds
+	currentReleaseURL string // release page for the current custom build
+	executablePath    func() (string, error)
+	now               func() time.Time
 }
 
-// NewUpdateService creates a new UpdateService
-func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, commit, buildType string) *UpdateService {
+// NewUpdateService creates a new UpdateService. The optional releaseURL keeps
+// callers that construct the service directly compatible with older builds.
+func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, commit, buildType string, releaseURL ...string) *UpdateService {
+	currentReleaseURL := ""
+	if len(releaseURL) > 0 {
+		currentReleaseURL = strings.TrimSpace(releaseURL[0])
+	}
+
 	return &UpdateService{
-		cache:          cache,
-		githubClient:   githubClient,
-		currentVersion: version,
-		currentCommit:  commit,
-		buildType:      buildType,
-		executablePath: resolvedExecutablePath,
-		now:            time.Now,
+		cache:             cache,
+		githubClient:      githubClient,
+		currentVersion:    version,
+		currentCommit:     commit,
+		buildType:         buildType,
+		currentReleaseURL: currentReleaseURL,
+		executablePath:    resolvedExecutablePath,
+		now:               time.Now,
 	}
 }
 
 // UpdateInfo contains update information
 type UpdateInfo struct {
-	CurrentVersion string       `json:"current_version"`
-	LatestVersion  string       `json:"latest_version"`
-	HasUpdate      bool         `json:"has_update"`
-	ReleaseInfo    *ReleaseInfo `json:"release_info,omitempty"`
-	Cached         bool         `json:"cached"`
-	Warning        string       `json:"warning,omitempty"`
-	BuildType      string       `json:"build_type"` // "source" or "release"
+	CurrentVersion    string       `json:"current_version"`
+	LatestVersion     string       `json:"latest_version"`
+	HasUpdate         bool         `json:"has_update"`
+	ReleaseInfo       *ReleaseInfo `json:"release_info,omitempty"`
+	CurrentReleaseURL string       `json:"current_release_url,omitempty"`
+	Cached            bool         `json:"cached"`
+	Warning           string       `json:"warning,omitempty"`
+	BuildType         string       `json:"build_type"` // "source" or "release"
 }
 
 // ReleaseInfo contains GitHub release details
@@ -151,11 +160,12 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 			return cached, nil
 		}
 		return &UpdateInfo{
-			CurrentVersion: s.currentVersion,
-			LatestVersion:  s.currentVersion,
-			HasUpdate:      false,
-			Warning:        err.Error(),
-			BuildType:      s.buildType,
+			CurrentVersion:    s.currentVersion,
+			LatestVersion:     s.currentVersion,
+			HasUpdate:         false,
+			CurrentReleaseURL: s.currentReleaseURL,
+			Warning:           err.Error(),
+			BuildType:         s.buildType,
 		}, nil
 	}
 
@@ -298,9 +308,10 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 	}
 
 	return &UpdateInfo{
-		CurrentVersion: s.currentVersion,
-		LatestVersion:  latestVersion,
-		HasUpdate:      compareVersions(s.currentVersion, latestVersion) < 0,
+		CurrentVersion:    s.currentVersion,
+		LatestVersion:     latestVersion,
+		HasUpdate:         compareVersions(s.currentVersion, latestVersion) < 0,
+		CurrentReleaseURL: s.currentReleaseURL,
 		ReleaseInfo: &ReleaseInfo{
 			Name:        release.Name,
 			Body:        release.Body,
@@ -494,12 +505,13 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	return &UpdateInfo{
-		CurrentVersion: s.currentVersion,
-		LatestVersion:  cached.Latest,
-		HasUpdate:      compareVersions(s.currentVersion, cached.Latest) < 0,
-		ReleaseInfo:    cached.ReleaseInfo,
-		Cached:         true,
-		BuildType:      s.buildType,
+		CurrentVersion:    s.currentVersion,
+		LatestVersion:     cached.Latest,
+		HasUpdate:         compareVersions(s.currentVersion, cached.Latest) < 0,
+		ReleaseInfo:       cached.ReleaseInfo,
+		CurrentReleaseURL: s.currentReleaseURL,
+		Cached:            true,
+		BuildType:         s.buildType,
 	}, nil
 }
 

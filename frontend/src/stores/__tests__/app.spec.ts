@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
 import { getPublicSettings } from '@/api/auth'
+import { checkUpdates } from '@/api/admin/system'
 import type { PublicSettings } from '@/types'
 
 function createDeferred<T>() {
@@ -78,6 +79,7 @@ describe('useAppStore', () => {
     vi.useFakeTimers()
     localStorage.clear()
     vi.mocked(getPublicSettings).mockReset()
+    vi.mocked(checkUpdates).mockReset()
     // 清除 window.__APP_CONFIG__
     delete (window as any).__APP_CONFIG__
   })
@@ -318,6 +320,38 @@ describe('useAppStore', () => {
       expect(store.sidebarCollapsed).toBe(false)
       expect(store.loading).toBe(false)
       expect(store.toasts).toHaveLength(0)
+    })
+  })
+
+  // --- Version information ---
+
+  describe('Version information', () => {
+    it('keeps the current build release URL separate from the upstream update release', async () => {
+      const currentReleaseURL =
+        'https://github.com/zuchengchen/sub2api/releases/tag/czc-v2026.08.15.2'
+      vi.mocked(checkUpdates).mockResolvedValue({
+        current_version: '0.1.176.2',
+        latest_version: '0.1.176',
+        has_update: false,
+        build_type: 'release',
+        cached: false,
+        current_release_url: currentReleaseURL,
+        release_info: {
+          name: 'v0.1.176',
+          body: '',
+          published_at: '2026-08-14T00:00:00Z',
+          html_url: 'https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.176',
+        },
+      })
+      const store = useAppStore()
+
+      const result = await store.fetchVersion()
+
+      expect(result?.current_release_url).toBe(currentReleaseURL)
+      expect(store.currentReleaseURL).toBe(currentReleaseURL)
+      expect(store.releaseInfo?.html_url).toBe(
+        'https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.176'
+      )
     })
   })
 
