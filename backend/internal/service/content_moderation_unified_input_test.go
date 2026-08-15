@@ -129,17 +129,20 @@ func TestExtractContentModerationFragments_AllClientControlledRolesAndReferences
 	require.Equal(t, "url", texts["https://files.example/brief.txt"].Kind)
 }
 
-func TestContentModerationFragmentHashSeparatesRoleAndKind(t *testing.T) {
+func TestContentModerationFragmentHashSeparatesRoleKindPathAndContext(t *testing.T) {
 	toolText, ok := newContentModerationFragment(" Tool ", " Text ", "messages.1.content", "same text")
 	require.True(t, ok)
-	sameContext, ok := newContentModerationFragment("tool", "text", "messages.9.content", "same text")
+	samePath, ok := newContentModerationFragment("tool", "text", "  messages.1.content  ", "same text")
+	require.True(t, ok)
+	differentPath, ok := newContentModerationFragment("tool", "text", "messages.9.content", "same text")
 	require.True(t, ok)
 	userText, ok := newContentModerationFragment("user", "text", "messages.1.content", "same text")
 	require.True(t, ok)
 	toolFile, ok := newContentModerationFragment("tool", "file", "messages.1.content", "same text")
 	require.True(t, ok)
 
-	require.Equal(t, toolText.Hash, sameContext.Hash, "path must not reduce cache reuse")
+	require.Equal(t, toolText.Hash, samePath.Hash, "normalized metadata must keep a stable hash")
+	require.NotEqual(t, toolText.Hash, differentPath.Hash)
 	require.NotEqual(t, toolText.Hash, userText.Hash)
 	require.NotEqual(t, toolText.Hash, toolFile.Hash)
 }
