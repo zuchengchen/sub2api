@@ -16,6 +16,7 @@ export interface VersionInfo {
   latest_version: string
   has_update: boolean
   release_info?: ReleaseInfo
+  current_release_url?: string
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds
