@@ -76,8 +76,8 @@ exec "${server_path}" \
   --parallel 2 \
   --batch-size 512 \
   --ubatch-size 512 \
-  --threads 28 \
-  --threads-batch 28 \
+  --threads 14 \
+  --threads-batch 14 \
   --flash-attn on \
   --load-mode none \
   --cache-ram 0 \

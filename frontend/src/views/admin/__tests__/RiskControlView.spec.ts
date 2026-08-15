@@ -74,7 +74,7 @@ vi.mock('vue-i18n', async () => {
     useI18n: () => ({
       t: (key: string, params?: Record<string, string | number>) => {
         if (key === 'admin.riskControl.preBlockAPIKeyLoadSummary') {
-          return `同步并发 ${params?.active} / 可用 Key ${params?.available}，累计 ${params?.total} 次，worker：${params?.workerActive} / ${params?.workerTotal}`
+          return `同步并发 ${params?.active} / 可用 Key ${params?.available}，累计 ${params?.total} 次`
         }
         return key.replace(/\{(\w+)\}/g, (_, token) => String(params?.[token] ?? `{${token}}`))
       },
