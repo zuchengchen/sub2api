@@ -47,6 +47,11 @@ const (
 	ContentModerationActionError             = "error"
 	ContentModerationActionCyberPolicy       = "cyber_policy" // cyber_policy 硬阻断的风控日志 action（封号计数排除按此值过滤）
 
+	ContentModerationLogResultBlocked        = "blocked"
+	ContentModerationLogResultCyberPolicy    = "cyber_policy"
+	ContentModerationLogResultContentBlocked = "content_blocked"
+	ContentModerationLogResultRiskyShadow    = "risky_shadow"
+
 	contentModerationKeywordCategory = "keyword"
 
 	ContentModerationKeywordModeKeywordOnly   = "keyword_only"
@@ -1582,9 +1587,16 @@ func (s *ContentModerationService) recordPreBlockSyncMetric(latencyMS int, actio
 }
 
 func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error) {
-	// The security audit is an incident view. Keep non-blocking observations in
-	// storage for retention/diagnostics, but never include them in this listing.
-	filter.Result = "blocked"
+	// Keep the audit endpoint fail-closed to incident views. Unknown and legacy
+	// values retain the original combined blocked view.
+	switch result := strings.ToLower(strings.TrimSpace(filter.Result)); result {
+	case ContentModerationLogResultCyberPolicy,
+		ContentModerationLogResultContentBlocked,
+		ContentModerationLogResultRiskyShadow:
+		filter.Result = result
+	default:
+		filter.Result = ContentModerationLogResultBlocked
+	}
 	if filter.Pagination.Page <= 0 {
 		filter.Pagination.Page = 1
 	}

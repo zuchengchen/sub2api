@@ -184,8 +184,35 @@
               </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-              <Select v-model="filters.result" :options="resultFilterOptions" @change="reloadLogsFromFirstPage" />
+            <nav
+              class="grid grid-cols-1 gap-1 rounded-lg border border-gray-200 bg-gray-100 p-1 dark:border-dark-700 dark:bg-dark-900 sm:grid-cols-3"
+              role="tablist"
+              :aria-label="t('admin.riskControl.records')"
+            >
+              <button
+                v-for="tab in recordViewTabs"
+                :key="tab.value"
+                :id="`record-tab-${tab.value}`"
+                type="button"
+                role="tab"
+                :aria-selected="filters.result === tab.value"
+                aria-controls="record-log-panel"
+                :tabindex="filters.result === tab.value ? 0 : -1"
+                :data-test="`record-tab-${tab.value}`"
+                :class="[
+                  'min-h-10 px-3 py-2 text-sm font-medium text-gray-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-300',
+                  filters.result === tab.value
+                    ? 'rounded-md bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
+                    : 'hover:text-gray-900 dark:hover:text-white',
+                ]"
+                @click="selectRecordView(tab.value)"
+                @keydown="handleRecordViewKeydown($event, tab.value)"
+              >
+                {{ tab.label }}
+              </button>
+            </nav>
+
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               <Select v-model="filters.group_id" :options="groupFilterOptions" @change="reloadLogsFromFirstPage" />
               <Select v-model="filters.endpoint" :options="endpointOptions" @change="reloadLogsFromFirstPage" />
               <Select v-model="filters.context_class" :options="contextClassOptions" @change="reloadLogsFromFirstPage" />
@@ -197,7 +224,12 @@
             </div>
           </div>
 
-          <div class="overflow-x-auto">
+          <div
+            id="record-log-panel"
+            class="overflow-x-auto"
+            role="tabpanel"
+            :aria-labelledby="`record-tab-${filters.result}`"
+          >
             <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
               <thead class="bg-gray-50 dark:bg-dark-800">
                 <tr>
@@ -1369,6 +1401,7 @@ import type {
   ContentModerationConfig,
   ContentModerationEndpoint,
   ContentModerationLog,
+  ContentModerationLogView,
   ContentModerationModelFilter,
   ContentModerationModelFilterType,
   ContentModerationModelProfile,
@@ -1525,7 +1558,7 @@ const pagination = reactive({
 })
 
 const filters = reactive({
-  result: 'blocked',
+  result: 'cyber_policy' as ContentModerationLogView,
   group_id: 0,
   endpoint: '',
   context_class: '',
@@ -1662,12 +1695,10 @@ const endpointOptions = computed<SelectOption[]>(() => [
   { value: '/v1/images/edits', label: '/v1/images/edits' },
 ])
 
-const resultFilterOptions = computed<SelectOption[]>(() => [
-  { value: '', label: t('admin.riskControl.result.all') },
-  { value: 'blocked', label: t('admin.riskControl.result.blocked') },
-  { value: 'hit', label: t('admin.riskControl.result.hit') },
-  { value: 'pass', label: t('admin.riskControl.result.pass') },
-  { value: 'error', label: t('admin.riskControl.result.error') },
+const recordViewTabs = computed<Array<{ value: ContentModerationLogView; label: string }>>(() => [
+  { value: 'cyber_policy', label: t('admin.riskControl.recordTabs.cyberPolicy') },
+  { value: 'content_blocked', label: t('admin.riskControl.recordTabs.blocked') },
+  { value: 'risky_shadow', label: t('admin.riskControl.recordTabs.riskyShadow') },
 ])
 
 const contextClassOptions = computed<SelectOption[]>(() => [
@@ -1682,7 +1713,7 @@ const modelProfileOptions = computed<SelectOption[]>(() => [
 
 const decisionSourceOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('admin.riskControl.filters.allDecisionSources') },
-  ...['keyword_high_confidence', 'candidate_model', 'model', 'cache_replay'].map((value) => ({ value, label: value })),
+  ...['keyword_high_confidence', 'candidate_model', 'model', 'model_shadow', 'cache_replay'].map((value) => ({ value, label: value })),
 ])
 
 const groupFilterOptions = computed<SelectOption[]>(() => [
@@ -2172,7 +2203,7 @@ async function loadLogs() {
     const params = {
       page: pagination.page,
       page_size: pagination.page_size,
-      result: (filters.result || undefined) as 'blocked' | 'hit' | 'pass' | 'error' | undefined,
+      result: filters.result,
       group_id: filters.group_id || undefined,
       endpoint: filters.endpoint || undefined,
       context_class: filters.context_class || undefined,
@@ -2341,6 +2372,29 @@ function openSettings() {
 function reloadLogsFromFirstPage() {
   pagination.page = 1
   void loadLogs()
+}
+
+function selectRecordView(view: ContentModerationLogView) {
+  if (filters.result === view) return
+  filters.result = view
+  reloadLogsFromFirstPage()
+}
+
+function handleRecordViewKeydown(event: KeyboardEvent, currentView: ContentModerationLogView) {
+  const views = recordViewTabs.value.map((tab) => tab.value)
+  const currentIndex = views.indexOf(currentView)
+  let nextIndex: number | null = null
+
+  if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + views.length) % views.length
+  if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % views.length
+  if (event.key === 'Home') nextIndex = 0
+  if (event.key === 'End') nextIndex = views.length - 1
+  if (nextIndex === null) return
+
+  event.preventDefault()
+  const nextView = views[nextIndex]
+  selectRecordView(nextView)
+  document.getElementById(`record-tab-${nextView}`)?.focus()
 }
 
 function onPageChange(page: number) {
@@ -2572,6 +2626,7 @@ function resultLabel(row: ContentModerationLog): string {
 function resultBadgeClass(row: ContentModerationLog): string {
   if (isReplayRow(row)) return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
   if (isBlockingAuditAction(row.action) || row.action === 'cyber_policy') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  if (row.action === 'second_layer_shadow') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
