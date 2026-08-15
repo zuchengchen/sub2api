@@ -11,9 +11,9 @@ func TestLegacyPromptAuditCandidateAsset(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, asset.Manifest.EnabledByDefault)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", asset.Manifest.SourceCommit)
-	require.Len(t, asset.Layer1, 972)
-	require.Len(t, asset.Layer2, 246)
-	require.Len(t, asset.Layer1Demotions, 55)
+	require.Len(t, asset.Layer1, 971)
+	require.Len(t, asset.Layer2, 247)
+	require.Len(t, asset.Layer1Demotions, 56)
 	require.Len(t, asset.Layer1Suppressions, 28)
 	require.Len(t, asset.Manifest.CandidateEndpoints, 1)
 	require.False(t, asset.Manifest.CandidateEndpoints[0].Enabled)
@@ -47,6 +47,7 @@ func TestLegacyPromptAuditCandidateAssetAppliesLayerAssignments(t *testing.T) {
 		"firmware reverse engineering",
 		"pass-the-hash",
 		"zero_day",
+		"destructive payload",
 	} {
 		require.NotContains(t, asset.Layer1, keyword)
 		require.Contains(t, layer2, candidatePrefilterKey(keyword))
