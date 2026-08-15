@@ -16,9 +16,9 @@
   },
   "layer1_demotions": {
     "file": "layer1-demotions.json",
-    "entries": 62,
-    "source_sha256": "5a990edd0c2a07339580d2886ef5da119494c7a55229b3f1e248c65fcfd85fc1",
-    "embedded_sha256": "5a990edd0c2a07339580d2886ef5da119494c7a55229b3f1e248c65fcfd85fc1"
+    "entries": 63,
+    "source_sha256": "2cf4f7bfdaebaa75f71d0789dfe043e80622de47d8d32aa6fbb9005f110131b4",
+    "embedded_sha256": "2cf4f7bfdaebaa75f71d0789dfe043e80622de47d8d32aa6fbb9005f110131b4"
   },
   "layer1_suppressions": {
     "file": "layer1-suppressions.json",

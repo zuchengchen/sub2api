@@ -291,7 +291,7 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 	cfg.CandidateAsset = "legacy-prompt-audit-v1"
 	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
-	require.Len(t, keywords, 253)
+	require.Len(t, keywords, 254)
 	matcher := newContentModerationPrefilterMatcher(keywords)
 	_, ok := matcher.Match("REVERSE---SHELL")
 	require.True(t, ok)
@@ -310,6 +310,7 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 		{text: "do anything now", keyword: "do anything now"},
 		{text: "make a bomb", keyword: "make a bomb"},
 		{text: "malicious payload sample", keyword: "malicious payload"},
+		{text: "session hijacking research", keyword: "session hijack"},
 		{text: "opposite model behavior", keyword: "opposite mode"},
 		{text: "bypass content filtering", keyword: "bypass content filter"},
 	} {
