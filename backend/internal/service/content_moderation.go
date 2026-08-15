@@ -1768,9 +1768,99 @@ func contentModerationArchiveBody(raw []byte) ([]byte, error) {
 	return body, nil
 }
 
-func (s *ContentModerationService) DownloadArchive(ctx context.Context, logID, actorUserID int64, requestID string) ([]byte, error) {
-	raw, repo, err := s.decryptContentModerationArchive(ctx, logID, actorUserID, requestID, "download")
+func contentModerationArchiveDownload(raw []byte) ([]byte, error) {
+	body, err := contentModerationArchiveBody(raw)
 	if err != nil {
+		return nil, err
+	}
+
+	var exported map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &exported); err != nil {
+		return nil, fmt.Errorf("%w: decode archive export", ErrModerationArchiveIntegrity)
+	}
+	requestRaw, ok := exported["request"]
+	if !ok {
+		return nil, fmt.Errorf("%w: archived request is missing", ErrModerationArchiveIntegrity)
+	}
+	var request map[string]json.RawMessage
+	if err := json.Unmarshal(requestRaw, &request); err != nil {
+		return nil, fmt.Errorf("%w: decode archived request", ErrModerationArchiveIntegrity)
+	}
+	if request == nil {
+		return nil, fmt.Errorf("%w: archived request is invalid", ErrModerationArchiveIntegrity)
+	}
+	delete(request, "body_base64")
+	request["body"] = contentModerationReadableJSON(body)
+	requestRaw, err = json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode archived request", ErrModerationArchiveIntegrity)
+	}
+	exported["request"] = requestRaw
+
+	if legacyRaw, ok := exported["legacy_prompt_audit"]; ok && !bytes.Equal(bytes.TrimSpace(legacyRaw), []byte("null")) {
+		var legacy map[string]json.RawMessage
+		if err := json.Unmarshal(legacyRaw, &legacy); err != nil {
+			return nil, fmt.Errorf("%w: decode legacy prompt audit", ErrModerationArchiveIntegrity)
+		}
+		eventsRaw, ok := legacy["events"]
+		if !ok {
+			return nil, fmt.Errorf("%w: legacy prompt audit events are missing", ErrModerationArchiveIntegrity)
+		}
+		var events []map[string]json.RawMessage
+		if err := json.Unmarshal(eventsRaw, &events); err != nil {
+			return nil, fmt.Errorf("%w: decode legacy prompt audit events", ErrModerationArchiveIntegrity)
+		}
+		for index := range events {
+			promptRaw, ok := events[index]["full_prompt_base64"]
+			if !ok {
+				return nil, fmt.Errorf("%w: legacy prompt audit event %d is missing content", ErrModerationArchiveIntegrity, index)
+			}
+			var promptBase64 string
+			if err := json.Unmarshal(promptRaw, &promptBase64); err != nil {
+				return nil, fmt.Errorf("%w: decode legacy prompt audit event %d content", ErrModerationArchiveIntegrity, index)
+			}
+			prompt, err := base64.StdEncoding.DecodeString(promptBase64)
+			if err != nil {
+				return nil, fmt.Errorf("%w: decode legacy prompt audit event %d content", ErrModerationArchiveIntegrity, index)
+			}
+			delete(events[index], "full_prompt_base64")
+			events[index]["full_prompt"] = contentModerationReadableJSON(prompt)
+		}
+		eventsRaw, err = json.Marshal(events)
+		if err != nil {
+			return nil, fmt.Errorf("%w: encode legacy prompt audit events", ErrModerationArchiveIntegrity)
+		}
+		legacy["events"] = eventsRaw
+		legacyRaw, err = json.Marshal(legacy)
+		if err != nil {
+			return nil, fmt.Errorf("%w: encode legacy prompt audit", ErrModerationArchiveIntegrity)
+		}
+		exported["legacy_prompt_audit"] = legacyRaw
+	}
+
+	download, err := json.MarshalIndent(exported, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode archive export", ErrModerationArchiveIntegrity)
+	}
+	return append(download, '\n'), nil
+}
+
+func contentModerationReadableJSON(raw []byte) json.RawMessage {
+	if json.Valid(raw) {
+		return append(json.RawMessage(nil), raw...)
+	}
+	encoded, _ := json.Marshal(string(raw))
+	return encoded
+}
+
+func (s *ContentModerationService) DownloadArchive(ctx context.Context, logID, actorUserID int64, requestID string) ([]byte, error) {
+	archiveRaw, repo, err := s.decryptContentModerationArchive(ctx, logID, actorUserID, requestID, "download")
+	if err != nil {
+		return nil, err
+	}
+	raw, err := contentModerationArchiveDownload(archiveRaw)
+	if err != nil {
+		s.recordFailedArchiveAccess(ctx, repo, logID, actorUserID, "download", requestID, err)
 		return nil, err
 	}
 	if err := repo.RecordArchiveAccess(ctx, ContentModerationArchiveAccess{

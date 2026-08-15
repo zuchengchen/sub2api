@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -163,8 +164,143 @@ func TestContentModerationArchivePreviewRejectsInvalidBodyEncodingAndAuditsFailu
 	require.Zero(t, audits[0].BytesServed)
 }
 
+func TestContentModerationArchiveDownloadReturnsReadableExportAndAuditsBytes(t *testing.T) {
+	body := []byte("{\n  \"input\": \"system administrator downloads the full request\"\n}\n")
+	plaintext, err := json.Marshal(ContentModerationArchiveEnvelope{
+		ArchiveID: "4fb15011-24a0-4fa8-a563-fbe205c27411",
+		Request: ContentModerationArchiveRequest{
+			Method: "POST", Target: "/v1/responses",
+			Headers:    http.Header{"Authorization": {"Bearer secret"}},
+			BodyBase64: base64.StdEncoding.EncodeToString(body), Transport: "http", Stage: "http",
+		},
+	})
+	require.NoError(t, err)
+	svc, repo, _ := newModerationArchiveServiceFixture(t, plaintext)
+
+	download, err := svc.DownloadArchive(context.Background(), 77, 9, "req-download")
+	require.NoError(t, err)
+	require.NotEqual(t, plaintext, download)
+	require.NotContains(t, string(download), "body_base64")
+	var exported struct {
+		ArchiveID string `json:"archive_id"`
+		Request   struct {
+			Method  string          `json:"method"`
+			Headers http.Header     `json:"headers"`
+			Body    json.RawMessage `json:"body"`
+		} `json:"request"`
+	}
+	require.NoError(t, json.Unmarshal(download, &exported))
+	require.Equal(t, "4fb15011-24a0-4fa8-a563-fbe205c27411", exported.ArchiveID)
+	require.Equal(t, "POST", exported.Request.Method)
+	require.Equal(t, "Bearer secret", exported.Request.Headers.Get("Authorization"))
+	require.JSONEq(t, string(body), string(exported.Request.Body))
+
+	audits := repo.snapshotAudits()
+	require.Len(t, audits, 1)
+	require.Equal(t, "download", audits[0].Action)
+	require.Equal(t, "success", audits[0].Result)
+	require.Equal(t, int64(len(download)), audits[0].BytesServed)
+}
+
+func TestContentModerationArchiveDownloadDecodesEveryLegacyPrompt(t *testing.T) {
+	body := []byte(`{"input":"first hit"}`)
+	plaintext, err := json.Marshal(ContentModerationArchiveEnvelope{
+		ArchiveID:  "4fb15011-24a0-4fa8-a563-fbe205c27411",
+		Incomplete: true,
+		Request: ContentModerationArchiveRequest{
+			BodyBase64: base64.StdEncoding.EncodeToString(body), Transport: "legacy", Stage: "legacy_prompt_only",
+		},
+		LegacyPromptAudit: &ContentModerationLegacyPromptAuditArchive{
+			SourceJobID: 51,
+			Status:      "blocked",
+			Events: []ContentModerationLegacyPromptAuditEvent{
+				{SourceEventID: 9007199254740993, FullPromptBase64: base64.StdEncoding.EncodeToString(body)},
+				{SourceEventID: 9007199254740995, FullPromptBase64: base64.StdEncoding.EncodeToString([]byte("plain text prompt"))},
+			},
+		},
+	})
+	require.NoError(t, err)
+	svc, _, _ := newModerationArchiveServiceFixture(t, plaintext)
+
+	download, err := svc.DownloadArchive(context.Background(), 77, 9, "req-download-legacy")
+	require.NoError(t, err)
+	require.NotContains(t, string(download), "body_base64")
+	require.NotContains(t, string(download), "full_prompt_base64")
+	var exported struct {
+		LegacyPromptAudit struct {
+			Events []struct {
+				SourceEventID int64           `json:"source_event_id"`
+				FullPrompt    json.RawMessage `json:"full_prompt"`
+			} `json:"events"`
+		} `json:"legacy_prompt_audit"`
+	}
+	require.NoError(t, json.Unmarshal(download, &exported))
+	require.Len(t, exported.LegacyPromptAudit.Events, 2)
+	require.Equal(t, int64(9007199254740993), exported.LegacyPromptAudit.Events[0].SourceEventID)
+	require.JSONEq(t, string(body), string(exported.LegacyPromptAudit.Events[0].FullPrompt))
+	var plainPrompt string
+	require.NoError(t, json.Unmarshal(exported.LegacyPromptAudit.Events[1].FullPrompt, &plainPrompt))
+	require.Equal(t, "plain text prompt", plainPrompt)
+}
+
+func TestContentModerationArchiveDownloadRejectsInvalidLegacyPromptAndAuditsFailure(t *testing.T) {
+	body := []byte(`{"input":"first hit"}`)
+	plaintext, err := json.Marshal(ContentModerationArchiveEnvelope{
+		Request: ContentModerationArchiveRequest{BodyBase64: base64.StdEncoding.EncodeToString(body)},
+		LegacyPromptAudit: &ContentModerationLegacyPromptAuditArchive{
+			Events: []ContentModerationLegacyPromptAuditEvent{{SourceEventID: 12, FullPromptBase64: "not-base64"}},
+		},
+	})
+	require.NoError(t, err)
+	svc, repo, _ := newModerationArchiveServiceFixture(t, plaintext)
+
+	download, err := svc.DownloadArchive(context.Background(), 77, 9, "req-download-invalid-legacy")
+	require.ErrorIs(t, err, ErrModerationArchiveIntegrity)
+	require.Nil(t, download)
+	audits := repo.snapshotAudits()
+	require.Len(t, audits, 1)
+	require.Equal(t, "download", audits[0].Action)
+	require.Equal(t, "failed", audits[0].Result)
+	require.Zero(t, audits[0].BytesServed)
+}
+
+func TestContentModerationArchiveDownloadRejectsInvalidBodyEncodingAndAuditsFailure(t *testing.T) {
+	plaintext, err := json.Marshal(ContentModerationArchiveEnvelope{
+		Request: ContentModerationArchiveRequest{BodyBase64: "not-base64"},
+	})
+	require.NoError(t, err)
+	svc, repo, _ := newModerationArchiveServiceFixture(t, plaintext)
+
+	download, err := svc.DownloadArchive(context.Background(), 77, 9, "req-download-invalid")
+	require.ErrorIs(t, err, ErrModerationArchiveIntegrity)
+	require.Nil(t, download)
+	audits := repo.snapshotAudits()
+	require.Len(t, audits, 1)
+	require.Equal(t, "download", audits[0].Action)
+	require.Equal(t, "failed", audits[0].Result)
+	require.Zero(t, audits[0].BytesServed)
+}
+
+func TestContentModerationArchiveDownloadRejectsNullRequestAndAuditsFailure(t *testing.T) {
+	svc, repo, _ := newModerationArchiveServiceFixture(t, []byte(`{"archive_id":"4fb15011-24a0-4fa8-a563-fbe205c27411","request":null}`))
+
+	download, err := svc.DownloadArchive(context.Background(), 77, 9, "req-download-null-request")
+	require.ErrorIs(t, err, ErrModerationArchiveIntegrity)
+	require.Nil(t, download)
+	audits := repo.snapshotAudits()
+	require.Len(t, audits, 1)
+	require.Equal(t, "download", audits[0].Action)
+	require.Equal(t, "failed", audits[0].Result)
+	require.Zero(t, audits[0].BytesServed)
+}
+
 func TestContentModerationArchiveDownloadRequiresSuccessfulAudit(t *testing.T) {
-	svc, repo, _ := newModerationArchiveServiceFixture(t, []byte("full envelope"))
+	body := []byte(`{"input":"sensitive request"}`)
+	plaintext, err := json.Marshal(ContentModerationArchiveEnvelope{
+		Request: ContentModerationArchiveRequest{BodyBase64: base64.StdEncoding.EncodeToString(body)},
+	})
+	require.NoError(t, err)
+	svc, repo, _ := newModerationArchiveServiceFixture(t, plaintext)
 	repo.auditErr = errors.New("audit database unavailable")
 
 	raw, err := svc.DownloadArchive(context.Background(), 77, 9, "req-download")
