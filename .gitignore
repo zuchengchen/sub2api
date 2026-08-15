@@ -121,6 +121,9 @@ tests
 CLAUDE.md
 .claude
 scripts
+!scripts/
+!scripts/content-moderation/
+!scripts/content-moderation/**
 !backend/scripts/
 !backend/scripts/resolve-version.sh
 .code-review-state
@@ -132,6 +135,9 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/content-moderation-yufeng-design.md
+!docs/runbooks/
+!docs/runbooks/content-moderation-yufeng.md
 !docs/runtime-customizations-migration-ledger.md
 !docs/runtime-risk-cutover-runbook.md
 !docs/runtime-risk-rehearsal-evidence.md

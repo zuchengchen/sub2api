@@ -184,9 +184,13 @@
               </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+              <Select v-model="filters.result" :options="resultFilterOptions" @change="reloadLogsFromFirstPage" />
               <Select v-model="filters.group_id" :options="groupFilterOptions" @change="reloadLogsFromFirstPage" />
               <Select v-model="filters.endpoint" :options="endpointOptions" @change="reloadLogsFromFirstPage" />
+              <Select v-model="filters.context_class" :options="contextClassOptions" @change="reloadLogsFromFirstPage" />
+              <Select v-model="filters.model_profile" :options="modelProfileOptions" @change="reloadLogsFromFirstPage" />
+              <Select v-model="filters.decision_source" :options="decisionSourceOptions" @change="reloadLogsFromFirstPage" />
               <input v-model.trim="filters.search" type="search" class="input" :placeholder="t('admin.riskControl.filters.search')" @keyup.enter="reloadLogsFromFirstPage" />
               <input v-model="filters.from" type="datetime-local" class="input" :title="t('admin.riskControl.filters.from')" @change="reloadLogsFromFirstPage" />
               <input v-model="filters.to" type="datetime-local" class="input" :title="t('admin.riskControl.filters.to')" @change="reloadLogsFromFirstPage" />
@@ -217,7 +221,13 @@
                   <td colspan="10" class="px-5 py-12 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.emptyLogs') }}</td>
                 </tr>
                 <template v-else>
-                  <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50 dark:hover:bg-dark-700/60">
+                  <tr
+                    v-for="row in logs"
+                    :id="`moderation-log-${row.id}`"
+                    :key="row.id"
+                    class="hover:bg-gray-50 dark:hover:bg-dark-700/60"
+                    :class="isReplayRow(row) ? 'border-l-2 border-l-sky-300 bg-sky-50/30 dark:border-l-sky-700 dark:bg-sky-900/5' : ''"
+                  >
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(row.created_at) }}</td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">{{ row.group_name || '-' }}</td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
@@ -233,6 +243,17 @@
                       <span data-test="audit-result" class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="resultBadgeClass(row)">
                         {{ resultLabel(row) }}
                       </span>
+                      <button
+                        v-if="isReplayRow(row) && row.source_log_id"
+                        type="button"
+                        class="mt-1 block text-xs font-medium text-sky-700 hover:underline dark:text-sky-300"
+                        @click="openSourceDecision(row)"
+                      >
+                        {{ t('admin.riskControl.replaySource', { id: row.source_log_id }) }}
+                      </button>
+                      <div v-else-if="replayCount(row) > 0" class="mt-1 text-xs font-medium text-sky-700 dark:text-sky-300">
+                        {{ t('admin.riskControl.replayCount', { count: replayCount(row) }) }}
+                      </div>
                     </td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <div>{{ row.highest_category || '-' }}</div>
@@ -243,7 +264,10 @@
                     </td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <div>{{ violationCountText(row) }}</div>
-                      <div class="text-xs text-gray-400">
+                      <div v-if="isReplayRow(row)" class="text-xs text-gray-400">
+                        {{ t('admin.riskControl.replayNoSideEffects') }}
+                      </div>
+                      <div v-else class="text-xs text-gray-400">
                         {{ row.email_sent ? t('admin.riskControl.emailSent') : t('admin.riskControl.emailNotSent') }}
                         <span v-if="row.auto_banned"> / {{ t('admin.riskControl.autoBanned') }}</span>
                       </div>
@@ -777,6 +801,163 @@
             </div>
           </div>
 
+          <div v-else-if="activeSettingsTab === 'secondLayer'" class="space-y-6">
+            <div class="flex flex-col gap-4 border-b border-gray-100 pb-5 dark:border-dark-700 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.secondLayerTitle') }}</h3>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.secondLayerHint') }}</p>
+              </div>
+              <Toggle v-model="configForm.second_layer_enabled" />
+            </div>
+
+            <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.secondLayerStage') }}</label>
+                <div class="inline-flex w-full rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
+                  <button
+                    v-for="option in secondLayerStageOptions"
+                    :key="String(option.value)"
+                    type="button"
+                    :data-test="`second-layer-stage-${option.value}`"
+                    class="min-w-0 flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors"
+                    :class="configForm.second_layer_stage === option.value
+                      ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-800 dark:text-white'
+                      : 'text-gray-500 dark:text-gray-400'"
+                    @click="configForm.second_layer_stage = option.value"
+                  >
+                    {{ option.label }}
+                  </button>
+                </div>
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {{ configForm.second_layer_stage === 'shadow' ? t('admin.riskControl.secondLayerStageShadowHint') : t('admin.riskControl.secondLayerStageEnforceHint') }}
+                </p>
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.fragmentBlockTTL') }}</label>
+                <input v-model.number="configForm.fragment_block_ttl_seconds" data-test="fragment-block-ttl" type="number" min="300" max="900" class="input" />
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.fragmentBlockTTLHint') }}</p>
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.fragmentAllowTTL') }}</label>
+                <input v-model.number="configForm.fragment_allow_ttl_seconds" data-test="fragment-allow-ttl" type="number" min="1" max="86400" class="input" />
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.fragmentAllowTTLHint') }}</p>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 border-y border-gray-100 py-5 dark:border-dark-700 md:grid-cols-2 xl:grid-cols-4">
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.ttlPolicyVersion') }}</label>
+                <input v-model.trim="configForm.fragment_ttl_policy_version" type="text" class="input font-mono" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.keywordPolicyVersion') }}</label>
+                <input v-model.trim="configForm.keyword_policy_version" type="text" class="input font-mono" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.contextPolicyVersion') }}</label>
+                <input v-model.trim="configForm.context_policy_version" type="text" class="input font-mono" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.evidencePolicyVersion') }}</label>
+                <input v-model.trim="configForm.evidence_policy_version" type="text" class="input font-mono" />
+              </div>
+            </div>
+
+            <div class="space-y-4">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.secondLayerEndpoints') }}</h3>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.secondLayerEndpointsHint') }}</p>
+                </div>
+                <button type="button" data-test="add-second-layer-endpoint" class="btn btn-secondary inline-flex items-center justify-center gap-2" @click="addSecondLayerEndpoint">
+                  <Icon name="plus" size="sm" />
+                  {{ t('admin.riskControl.addSecondLayerEndpoint') }}
+                </button>
+              </div>
+
+              <p v-if="configForm.second_layer_endpoints.length === 0" class="border-y border-gray-100 py-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-gray-400">
+                {{ t('admin.riskControl.noSecondLayerEndpoints') }}
+              </p>
+
+              <div
+                v-for="(endpoint, index) in configForm.second_layer_endpoints"
+                :key="endpoint.id || index"
+                class="space-y-4 border-t border-gray-100 pt-5 first:border-t-0 first:pt-0 dark:border-dark-700"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex min-w-0 items-center gap-3">
+                    <Toggle v-model="endpoint.enabled" />
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-semibold text-gray-900 dark:text-white">{{ endpoint.name || endpoint.id || t('admin.riskControl.secondLayerEndpoint') }}</p>
+                      <p class="truncate font-mono text-xs text-gray-500 dark:text-gray-400">{{ endpoint.base_url || '-' }}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                    :title="t('admin.riskControl.removeSecondLayerEndpoint')"
+                    @click="removeSecondLayerEndpoint(index)"
+                  >
+                    <Icon name="trash" size="sm" />
+                  </button>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointID') }}</label>
+                    <input v-model.trim="endpoint.id" type="text" class="input font-mono" />
+                  </div>
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointName') }}</label>
+                    <input v-model.trim="endpoint.name" type="text" class="input" />
+                  </div>
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointProfile') }}</label>
+                    <Select v-model="endpoint.profile" :options="secondLayerProfileOptions" @change="onSecondLayerProfileChange(endpoint)" />
+                  </div>
+                  <div class="md:col-span-2">
+                    <label class="input-label">{{ t('admin.riskControl.endpointBaseURL') }}</label>
+                    <input v-model.trim="endpoint.base_url" type="url" class="input font-mono" placeholder="http://127.0.0.1:8088" />
+                  </div>
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointModel') }}</label>
+                    <input v-model.trim="endpoint.model" type="text" class="input font-mono" />
+                  </div>
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointModelRevision') }}</label>
+                    <input v-model.trim="endpoint.model_revision" :data-test="`second-layer-model-revision-${index}`" type="text" class="input font-mono" />
+                  </div>
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointPromptVersion') }}</label>
+                    <input v-model.trim="endpoint.prompt_version" :data-test="`second-layer-prompt-version-${index}`" type="text" class="input font-mono" />
+                  </div>
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointToken') }}</label>
+                    <input v-model="endpoint.token" type="password" class="input" autocomplete="new-password" :placeholder="endpoint.token_configured ? endpoint.token_masked : t('admin.riskControl.endpointTokenOptional')" />
+                  </div>
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointTimeout') }}</label>
+                    <input v-model.number="endpoint.timeout_ms" type="number" min="100" max="30000" class="input" />
+                  </div>
+                  <div>
+                    <label class="input-label">{{ t('admin.riskControl.endpointInputLimit') }}</label>
+                    <input v-model.number="endpoint.input_limit" type="number" min="128" max="100000" class="input" />
+                  </div>
+                  <div class="md:col-span-2 xl:col-span-3">
+                    <label class="input-label">{{ t('admin.riskControl.endpointStopTokens') }}</label>
+                    <textarea v-model="endpoint.stop_tokens_text" class="input min-h-20 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.endpointStopTokensPlaceholder')"></textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label class="input-label">{{ t('admin.riskControl.secondLayerScanners') }}</label>
+              <textarea v-model="configForm.second_layer_scanners_text" class="input min-h-28 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.secondLayerScannersPlaceholder')"></textarea>
+              <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.secondLayerScannersHint') }}</p>
+            </div>
+          </div>
+
           <div v-else-if="activeSettingsTab === 'response'" class="space-y-5">
             <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <div>
@@ -921,6 +1102,37 @@
               </div>
             </div>
 
+            <div class="border-y border-gray-100 py-5 dark:border-dark-700">
+              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.keywordTiersTitle') }}</h3>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.keywordTiersHint') }}</p>
+              <div class="mt-4 grid grid-cols-1 gap-5 xl:grid-cols-3">
+                <div>
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <label class="input-label mb-0">{{ t('admin.riskControl.hardBlockPatterns') }}</label>
+                    <span class="text-xs text-gray-400">{{ hardBlockPatternList.length }}</span>
+                  </div>
+                  <textarea v-model="configForm.hard_block_patterns_text" class="input min-h-40 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.hardBlockPatternsPlaceholder')"></textarea>
+                  <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.hardBlockPatternsHint') }}</p>
+                </div>
+                <div>
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <label class="input-label mb-0">{{ t('admin.riskControl.candidateKeywords') }}</label>
+                    <span class="text-xs text-gray-400">{{ candidateKeywordList.length }}</span>
+                  </div>
+                  <textarea v-model="configForm.candidate_keywords_text" class="input min-h-40 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.candidateKeywordsPlaceholder')"></textarea>
+                  <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.candidateKeywordsHint') }}</p>
+                </div>
+                <div>
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <label class="input-label mb-0">{{ t('admin.riskControl.keywordAllowlist') }}</label>
+                    <span class="text-xs text-gray-400">{{ keywordAllowlist.length }}</span>
+                  </div>
+                  <textarea v-model="configForm.keyword_allowlist_text" class="input min-h-40 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.keywordAllowlistPlaceholder')"></textarea>
+                  <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.keywordAllowlistHint') }}</p>
+                </div>
+              </div>
+            </div>
+
             <div>
               <div class="mb-2 flex items-center justify-between">
                 <label class="input-label mb-0">{{ t('admin.riskControl.blockedKeywords') }}</label>
@@ -937,6 +1149,7 @@
               <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.riskControl.blockedKeywordsLimit', { max: blockedKeywordMax }) }}
               </p>
+              <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">{{ t('admin.riskControl.legacyKeywordsHint') }}</p>
             </div>
           </div>
 
@@ -1003,6 +1216,53 @@
               <p class="mt-1 truncate text-sm font-semibold text-red-700 dark:text-red-200" :title="inputDetailRow.matched_keyword">{{ inputDetailRow.matched_keyword }}</p>
             </div>
           </div>
+
+          <dl class="grid grid-cols-1 gap-x-5 gap-y-4 border-y border-gray-100 py-4 text-sm dark:border-dark-700 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditRequestID') }}</dt>
+              <dd class="mt-1 break-all font-mono text-gray-900 dark:text-white">{{ inputDetailRow.request_id || '-' }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditDecisionSource') }}</dt>
+              <dd class="mt-1 font-mono text-gray-900 dark:text-white">{{ inputDetailRow.decision_source || '-' }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditFragment') }}</dt>
+              <dd class="mt-1 text-gray-900 dark:text-white">{{ inputDetailRow.fragment_role || '-' }} / {{ inputDetailRow.fragment_kind || '-' }} / {{ inputDetailRow.context_class || '-' }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditFragmentPath') }}</dt>
+              <dd class="mt-1 break-all font-mono text-gray-900 dark:text-white">{{ inputDetailRow.fragment_path || '-' }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditModelProfile') }}</dt>
+              <dd class="mt-1 text-gray-900 dark:text-white">{{ inputDetailRow.model_profile || '-' }} / {{ inputDetailRow.prompt_version || '-' }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditPolicy') }}</dt>
+              <dd class="mt-1 break-all font-mono text-gray-900 dark:text-white">{{ inputDetailRow.policy_version || '-' }} / {{ inputDetailRow.evidence_policy_version || '-' }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditEvidence') }}</dt>
+              <dd class="mt-1 text-gray-900 dark:text-white">{{ inputDetailRow.evidence_mode || '-' }}<span v-if="inputDetailRow.evidence_truncated"> / {{ t('admin.riskControl.auditEvidenceTruncated') }}</span> / {{ inputDetailRow.parser_status || '-' }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditKeywordRule') }}</dt>
+              <dd class="mt-1 break-all font-mono text-gray-900 dark:text-white">{{ inputDetailRow.keyword_tier || '-' }} / {{ inputDetailRow.keyword_rule_id || '-' }}</dd>
+            </div>
+            <div v-if="inputDetailRow.source_log_id">
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditReplaySource') }}</dt>
+              <dd class="mt-1">
+                <button type="button" class="font-medium text-sky-700 hover:underline dark:text-sky-300" @click="openSourceDecision(inputDetailRow)">
+                  #{{ inputDetailRow.source_log_id }}
+                </button>
+              </dd>
+            </div>
+            <div v-if="inputDetailRow.cache_namespace">
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditCacheNamespace') }}</dt>
+              <dd class="mt-1 break-all font-mono text-gray-900 dark:text-white">{{ inputDetailRow.cache_namespace }}</dd>
+            </div>
+          </dl>
 
           <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800">
             <div class="flex flex-wrap items-center justify-between gap-3">
@@ -1107,10 +1367,13 @@ import type {
   ContentModerationAPIKeyLoad,
   ContentModerationAPIKeyStatus,
   ContentModerationConfig,
+  ContentModerationEndpoint,
   ContentModerationLog,
   ContentModerationModelFilter,
   ContentModerationModelFilterType,
+  ContentModerationModelProfile,
   ContentModerationRuntimeStatus,
+  ContentModerationSecondLayerStage,
   ContentModerationTestAuditResult,
   KeywordBlockingMode,
   ModerationMode,
@@ -1121,8 +1384,12 @@ import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatBytes, formatDateTime as formatDateTimeValue } from '@/utils/format'
 
-type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'riskThresholds' | 'retention' | 'keywords'
+type SettingsTab = 'basic' | 'scope' | 'runtime' | 'secondLayer' | 'response' | 'riskThresholds' | 'retention' | 'keywords'
 type APIKeysWriteMode = 'append' | 'replace'
+type EditableModerationEndpoint = ContentModerationEndpoint & {
+  token: string
+  stop_tokens_text: string
+}
 type OverviewIcon = 'shield' | 'key' | 'users' | 'document'
 type OverviewItem = {
   key: string
@@ -1235,6 +1502,19 @@ const configForm = reactive({
   keyword_blocking_mode: 'keyword_and_api' as KeywordBlockingMode,
   model_filter_type: 'all' as ContentModerationModelFilterType,
   model_filter_models: [] as string[],
+  fragment_block_ttl_seconds: 600,
+  fragment_allow_ttl_seconds: 3600,
+  fragment_ttl_policy_version: 'ttl-v1',
+  second_layer_enabled: false,
+  second_layer_stage: 'enforce' as ContentModerationSecondLayerStage,
+  second_layer_endpoints: [] as EditableModerationEndpoint[],
+  second_layer_scanners_text: '',
+  hard_block_patterns_text: '',
+  candidate_keywords_text: '',
+  keyword_allowlist_text: '',
+  keyword_policy_version: 'keyword-v2',
+  context_policy_version: 'context-v1',
+  evidence_policy_version: 'evidence-v1',
 })
 
 const pagination = reactive({
@@ -1245,8 +1525,12 @@ const pagination = reactive({
 })
 
 const filters = reactive({
+  result: 'blocked',
   group_id: 0,
   endpoint: '',
+  context_class: '',
+  model_profile: '',
+  decision_source: '',
   search: '',
   from: '',
   to: '',
@@ -1256,6 +1540,7 @@ const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
   { id: 'basic', label: t('admin.riskControl.tabs.basic') },
   { id: 'scope', label: t('admin.riskControl.tabs.scope') },
   { id: 'runtime', label: t('admin.riskControl.tabs.runtime') },
+  { id: 'secondLayer', label: t('admin.riskControl.tabs.secondLayer') },
   { id: 'response', label: t('admin.riskControl.tabs.response') },
   { id: 'riskThresholds', label: t('admin.riskControl.tabs.riskThresholds') },
   { id: 'keywords', label: t('admin.riskControl.tabs.keywords') },
@@ -1265,6 +1550,16 @@ const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
 const modeOptions = computed<SelectOption[]>(() => [
   { value: 'pre_block', label: t('admin.riskControl.modePreBlock') },
   { value: 'off', label: t('admin.riskControl.modeOff') },
+])
+
+const secondLayerStageOptions = computed<Array<{ value: ContentModerationSecondLayerStage; label: string }>>(() => [
+  { value: 'shadow', label: t('admin.riskControl.secondLayerStageShadow') },
+  { value: 'enforce', label: t('admin.riskControl.secondLayerStageEnforce') },
+])
+
+const secondLayerProfileOptions = computed<Array<{ value: ContentModerationModelProfile; label: string }>>(() => [
+  { value: 'yufeng_xguard', label: t('admin.riskControl.profileYuFeng') },
+  { value: 'qwen_guard', label: t('admin.riskControl.profileQwenGuard') },
 ])
 
 const keywordBlockingModeOptions = computed<Array<{ value: KeywordBlockingMode; label: string; description: string }>>(() => [
@@ -1367,6 +1662,29 @@ const endpointOptions = computed<SelectOption[]>(() => [
   { value: '/v1/images/edits', label: '/v1/images/edits' },
 ])
 
+const resultFilterOptions = computed<SelectOption[]>(() => [
+  { value: '', label: t('admin.riskControl.result.all') },
+  { value: 'blocked', label: t('admin.riskControl.result.blocked') },
+  { value: 'hit', label: t('admin.riskControl.result.hit') },
+  { value: 'pass', label: t('admin.riskControl.result.pass') },
+  { value: 'error', label: t('admin.riskControl.result.error') },
+])
+
+const contextClassOptions = computed<SelectOption[]>(() => [
+  { value: '', label: t('admin.riskControl.filters.allContexts') },
+  ...['user', 'tool', 'service_log', 'code', 'config', 'unknown'].map((value) => ({ value, label: value })),
+])
+
+const modelProfileOptions = computed<SelectOption[]>(() => [
+  { value: '', label: t('admin.riskControl.filters.allProfiles') },
+  ...secondLayerProfileOptions.value,
+])
+
+const decisionSourceOptions = computed<SelectOption[]>(() => [
+  { value: '', label: t('admin.riskControl.filters.allDecisionSources') },
+  ...['keyword_high_confidence', 'candidate_model', 'model', 'cache_replay'].map((value) => ({ value, label: value })),
+])
+
 const groupFilterOptions = computed<SelectOption[]>(() => [
   { value: 0, label: t('admin.riskControl.filters.allGroups') },
   ...groups.value.map((group) => ({
@@ -1406,6 +1724,21 @@ const inputApiKeyCount = computed(() => parseApiKeys(configForm.api_keys_text).l
 const blockedKeywordList = computed(() => parseBlockedKeywords(configForm.blocked_keywords_text))
 
 const blockedKeywordCount = computed(() => blockedKeywordList.value.length)
+
+const hardBlockPatternList = computed(() => parseBlockedKeywords(configForm.hard_block_patterns_text))
+
+const candidateKeywordList = computed(() => parseBlockedKeywords(configForm.candidate_keywords_text))
+
+const keywordAllowlist = computed(() => parseBlockedKeywords(configForm.keyword_allowlist_text))
+
+const replayHitCounts = computed(() => {
+  const counts = new Map<number, number>()
+  for (const row of logs.value) {
+    if (!row.source_log_id) continue
+    counts.set(row.source_log_id, (counts.get(row.source_log_id) ?? 0) + 1)
+  }
+  return counts
+})
 
 const pendingDeletedApiKeyCount = computed(() => pendingDeleteApiKeyHashes.value.length)
 
@@ -1677,6 +2010,27 @@ function applyConfig(config: ContentModerationConfig) {
   const modelFilter = normalizeModelFilter(config.model_filter)
   configForm.model_filter_type = modelFilter.type
   configForm.model_filter_models = modelFilter.models
+  configForm.fragment_block_ttl_seconds = config.fragment_block_ttl_seconds ?? 600
+  configForm.fragment_allow_ttl_seconds = config.fragment_allow_ttl_seconds ?? 3600
+  configForm.fragment_ttl_policy_version = config.fragment_ttl_policy_version || 'ttl-v1'
+  configForm.second_layer_enabled = config.second_layer_enabled ?? false
+  configForm.second_layer_stage = config.second_layer_stage === 'shadow' ? 'shadow' : 'enforce'
+  configForm.second_layer_endpoints = Array.isArray(config.second_layer_endpoints)
+    ? config.second_layer_endpoints.map((endpoint) => ({
+        ...endpoint,
+        profile: endpoint.profile === 'yufeng_xguard' ? 'yufeng_xguard' : 'qwen_guard',
+        stop_tokens: Array.isArray(endpoint.stop_tokens) ? [...endpoint.stop_tokens] : [],
+        token: '',
+        stop_tokens_text: Array.isArray(endpoint.stop_tokens) ? endpoint.stop_tokens.join('\n') : '',
+      }))
+    : []
+  configForm.second_layer_scanners_text = Array.isArray(config.second_layer_scanners) ? config.second_layer_scanners.join('\n') : ''
+  configForm.hard_block_patterns_text = Array.isArray(config.hard_block_patterns) ? config.hard_block_patterns.join('\n') : ''
+  configForm.candidate_keywords_text = Array.isArray(config.candidate_keywords) ? config.candidate_keywords.join('\n') : ''
+  configForm.keyword_allowlist_text = Array.isArray(config.keyword_allowlist) ? config.keyword_allowlist.join('\n') : ''
+  configForm.keyword_policy_version = config.keyword_policy_version || 'keyword-v2'
+  configForm.context_policy_version = config.context_policy_version || 'context-v1'
+  configForm.evidence_policy_version = config.evidence_policy_version || 'evidence-v1'
 }
 
 async function loadAll() {
@@ -1759,6 +2113,32 @@ async function saveConfig() {
       blocked_keywords: blockedKeywordList.value,
       keyword_blocking_mode: configForm.keyword_blocking_mode,
       model_filter: modelFilterPayload,
+      fragment_block_ttl_seconds: clampInteger(configForm.fragment_block_ttl_seconds, 300, 900, 600),
+      fragment_allow_ttl_seconds: clampInteger(configForm.fragment_allow_ttl_seconds, 1, 86400, 3600),
+      fragment_ttl_policy_version: configForm.fragment_ttl_policy_version.trim() || 'ttl-v1',
+      second_layer_enabled: configForm.second_layer_enabled,
+      second_layer_stage: configForm.second_layer_stage,
+      second_layer_endpoints: configForm.second_layer_endpoints.map((endpoint) => ({
+        id: endpoint.id.trim(),
+        name: endpoint.name.trim(),
+        base_url: endpoint.base_url.trim(),
+        model: endpoint.model.trim(),
+        profile: endpoint.profile,
+        model_revision: endpoint.model_revision?.trim() || undefined,
+        prompt_version: endpoint.prompt_version?.trim() || undefined,
+        stop_tokens: parseLineList(endpoint.stop_tokens_text),
+        enabled: endpoint.enabled,
+        timeout_ms: clampInteger(endpoint.timeout_ms, 100, 30000, 3000),
+        input_limit: clampInteger(endpoint.input_limit, 128, 100000, 4000),
+        token: endpoint.token.trim() || undefined,
+      })),
+      second_layer_scanners: parseLineList(configForm.second_layer_scanners_text),
+      hard_block_patterns: hardBlockPatternList.value,
+      candidate_keywords: candidateKeywordList.value,
+      keyword_allowlist: keywordAllowlist.value,
+      keyword_policy_version: configForm.keyword_policy_version.trim() || 'keyword-v2',
+      context_policy_version: configForm.context_policy_version.trim() || 'context-v1',
+      evidence_policy_version: configForm.evidence_policy_version.trim() || 'evidence-v1',
     }
     const keys = parseApiKeys(configForm.api_keys_text)
     if (!payload.clear_api_key && configForm.api_keys_mode === 'replace' && keys.length === 0) {
@@ -1792,9 +2172,12 @@ async function loadLogs() {
     const params = {
       page: pagination.page,
       page_size: pagination.page_size,
-      result: 'blocked' as const,
+      result: (filters.result || undefined) as 'blocked' | 'hit' | 'pass' | 'error' | undefined,
       group_id: filters.group_id || undefined,
       endpoint: filters.endpoint || undefined,
+      context_class: filters.context_class || undefined,
+      model_profile: filters.model_profile || undefined,
+      decision_source: filters.decision_source || undefined,
       search: filters.search || undefined,
       from: normalizeDateTimeLocal(filters.from),
       to: normalizeDateTimeLocal(filters.to),
@@ -2126,6 +2509,36 @@ function isGroupSelected(groupID: number): boolean {
   return configForm.group_ids.includes(groupID)
 }
 
+function addSecondLayerEndpoint() {
+  configForm.second_layer_endpoints.push({
+    id: `yufeng-local-${Date.now()}`,
+    name: 'YuFeng XGuard Q4',
+    base_url: 'http://127.0.0.1:8088',
+    model: 'yufeng-xguard-q4',
+    profile: 'yufeng_xguard',
+    model_revision: '',
+    prompt_version: 'yufeng-xguard-v1',
+    stop_tokens: [],
+    stop_tokens_text: '',
+    enabled: true,
+    timeout_ms: 25000,
+    input_limit: 4000,
+    token_configured: false,
+    token_masked: '',
+    token: '',
+  })
+}
+
+function removeSecondLayerEndpoint(index: number) {
+  configForm.second_layer_endpoints.splice(index, 1)
+}
+
+function onSecondLayerProfileChange(endpoint: EditableModerationEndpoint) {
+  if (endpoint.profile === 'yufeng_xguard' && !endpoint.prompt_version?.trim()) {
+    endpoint.prompt_version = 'yufeng-xguard-v1'
+  }
+}
+
 function modeLabel(mode: ModerationMode): string {
   const found = modeOptions.value.find((option) => option.value === mode)
   return found?.label ?? mode
@@ -2146,8 +2559,10 @@ function isBlockingAuditAction(action: string): boolean {
 }
 
 function resultLabel(row: ContentModerationLog): string {
+  if (isReplayRow(row)) return t('admin.riskControl.action.cacheReplay')
   if (row.action === 'cyber_policy') return t('admin.riskControl.action.cyberPolicy')
   if (row.action === 'keyword_block') return t('admin.riskControl.action.keywordBlock')
+  if (row.action === 'second_layer_shadow') return t('admin.riskControl.action.shadowBlock')
   if (isBlockingAuditAction(row.action)) return t('admin.riskControl.action.block')
   if (row.action === 'error' || row.error) return t('admin.riskControl.action.error')
   if (row.flagged) return t('admin.riskControl.result.hit')
@@ -2155,10 +2570,39 @@ function resultLabel(row: ContentModerationLog): string {
 }
 
 function resultBadgeClass(row: ContentModerationLog): string {
+  if (isReplayRow(row)) return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
   if (isBlockingAuditAction(row.action) || row.action === 'cyber_policy') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+}
+
+function isReplayRow(row: ContentModerationLog): boolean {
+  return row.cache_hit || row.decision_source === 'cache_replay' || row.action === 'cache_block'
+}
+
+function replayCount(row: ContentModerationLog): number {
+  return replayHitCounts.value.get(row.id) ?? 0
+}
+
+async function openSourceDecision(row: ContentModerationLog) {
+  if (!row.source_log_id) return
+  const visibleSource = logs.value.find((item) => item.id === row.source_log_id)
+  if (visibleSource) {
+    openInputDetail(visibleSource)
+    return
+  }
+  try {
+    const result = await adminAPI.riskControl.listLogs({ page: 1, page_size: 1, log_id: row.source_log_id })
+    const source = result.items[0]
+    if (source) {
+      openInputDetail(source)
+      return
+    }
+    appStore.showError(t('admin.riskControl.replaySourceUnavailable'))
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.replaySourceUnavailable')))
+  }
 }
 
 function archiveStatusLabel(statusValue: string): string {
@@ -2349,7 +2793,18 @@ function parseBlockedKeywords(value: string): string[] {
   return out
 }
 
+function parseLineList(value: string): string[] {
+  return parseBlockedKeywords(value)
+}
+
+function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.min(max, Math.max(min, Math.round(numeric)))
+}
+
 function violationCountText(row: ContentModerationLog): string {
+  if (isReplayRow(row)) return t('admin.riskControl.replayNotCounted')
   if (!row.flagged) return '-'
   if (row.violation_count === 0) return t('admin.riskControl.violationNotCounted')
   return t('admin.riskControl.violationCount', { count: row.violation_count || 1 })

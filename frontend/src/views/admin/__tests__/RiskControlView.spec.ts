@@ -121,9 +121,19 @@ const baseConfig = (): ContentModerationConfig => ({
   cache_version: 'v1',
   cache_max_entries: 100000,
   cache_max_bytes: 67108864,
+  fragment_block_ttl_seconds: 600,
+  fragment_allow_ttl_seconds: 3600,
+  fragment_ttl_policy_version: 'ttl-v1',
   second_layer_enabled: false,
+  second_layer_stage: 'enforce',
   second_layer_endpoints: [],
   second_layer_scanners: [],
+  hard_block_patterns: [],
+  candidate_keywords: [],
+  keyword_allowlist: [],
+  keyword_policy_version: 'keyword-v2',
+  context_policy_version: 'context-v1',
+  evidence_policy_version: 'evidence-v1',
   candidate_asset: 'legacy-prompt-audit-v1',
   candidate_enabled: false,
   candidate_layer1_count: 972,
@@ -159,9 +169,12 @@ const runtimeStatus = () => ({
   request_body_histogram: [],
   fragment_cache_hits: 0,
   fragment_cache_misses: 0,
+  fragment_cache_expired: 0,
+  fragment_cache_replays: 0,
   fragment_cache_errors: 0,
   fragment_cache_writes: 0,
   fragment_cache_write_errors: 0,
+  second_layer_metrics: [],
   archive_runtime: {
     degraded: false,
     retry_queue_depth: 0,
@@ -191,6 +204,9 @@ const archivedLog = (): ContentModerationLog => ({
   model: 'gpt-5.5',
   mode: 'pre_block',
   action: 'keyword_block',
+  cache_hit: false,
+  decision_source: 'keyword_high_confidence',
+  evidence_truncated: false,
   flagged: true,
   highest_category: 'content_policy',
   highest_score: 1,
@@ -336,6 +352,96 @@ describe('admin RiskControlView', () => {
     expect(wrapper.get('[data-test="audit-result"]').text()).toBe('admin.riskControl.action.block')
     expect(wrapper.get('[data-test="audit-result"]').classes()).toContain('bg-red-100')
     expect(wrapper.text()).not.toContain('admin.riskControl.result.pass')
+  })
+
+  it('renders cache replay rows as non-counting retries linked to the original decision', async () => {
+    const source = { ...archivedLog(), request_id: 'req-original' }
+    const replay: ContentModerationLog = {
+      ...archivedLog(),
+      id: 42,
+      request_id: 'req-replay',
+      action: 'cache_block',
+      cache_hit: true,
+      decision_source: 'cache_replay',
+      source_log_id: 41,
+      violation_count: 0,
+      email_sent: false,
+      archive_id: undefined,
+      archive_status: 'none',
+      input_excerpt: '[replay summary]',
+    }
+    listLogs.mockResolvedValue({ items: [replay, source], total: 2, page: 1, page_size: 20, pages: 1 })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const replayResult = wrapper.findAll('[data-test="audit-result"]')[0]
+    expect(replayResult.text()).toBe('admin.riskControl.action.cacheReplay')
+    expect(replayResult.classes()).toContain('bg-sky-50')
+    expect(wrapper.text()).toContain('admin.riskControl.replayNotCounted')
+    expect(wrapper.text()).toContain('admin.riskControl.replayNoSideEffects')
+
+    await findButtonByText(wrapper, 'admin.riskControl.replaySource').trigger('click')
+    expect(wrapper.text()).toContain('req-original')
+  })
+
+  it('saves staged YuFeng endpoint, bounded TTLs, and policy versions', async () => {
+    getConfig.mockResolvedValue({ ...baseConfig(), second_layer_enabled: true })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.secondLayer').trigger('click')
+    await wrapper.get('[data-test="second-layer-stage-shadow"]').trigger('click')
+    await wrapper.get('[data-test="fragment-block-ttl"]').setValue('120')
+    await wrapper.get('[data-test="fragment-allow-ttl"]').setValue('90000')
+    await wrapper.get('[data-test="add-second-layer-endpoint"]').trigger('click')
+    await wrapper.get('[data-test="second-layer-model-revision-0"]').setValue('c9766937')
+    await wrapper.get('[data-test="second-layer-prompt-version-0"]').setValue('yufeng-xguard-v2')
+    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+    await flushPromises()
+
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+      fragment_block_ttl_seconds: 300,
+      fragment_allow_ttl_seconds: 86400,
+      fragment_ttl_policy_version: 'ttl-v1',
+      second_layer_enabled: true,
+      second_layer_stage: 'shadow',
+      keyword_policy_version: 'keyword-v2',
+      context_policy_version: 'context-v1',
+      evidence_policy_version: 'evidence-v1',
+      second_layer_endpoints: [expect.objectContaining({
+        profile: 'yufeng_xguard',
+        model_revision: 'c9766937',
+        prompt_version: 'yufeng-xguard-v2',
+      })],
+    }))
   })
 
   it('saves the selected model filter mode and models', async () => {

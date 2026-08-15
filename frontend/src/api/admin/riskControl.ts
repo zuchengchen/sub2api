@@ -2,6 +2,8 @@ import { apiClient } from '../client'
 
 export type ModerationMode = 'off' | 'pre_block'
 export type KeywordBlockingMode = 'keyword_only' | 'keyword_and_api' | 'api_only'
+export type ContentModerationModelProfile = 'qwen_guard' | 'yufeng_xguard'
+export type ContentModerationSecondLayerStage = 'enforce' | 'shadow'
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
 
 export interface ContentModerationModelFilter {
@@ -14,6 +16,10 @@ export interface ContentModerationEndpoint {
   name: string
   base_url: string
   model: string
+  profile: ContentModerationModelProfile
+  model_revision?: string
+  prompt_version?: string
+  stop_tokens?: string[]
   enabled: boolean
   timeout_ms: number
   input_limit: number
@@ -54,9 +60,19 @@ export interface ContentModerationConfig {
   cache_version: string
   cache_max_entries: number
   cache_max_bytes: number
+  fragment_block_ttl_seconds: number
+  fragment_allow_ttl_seconds: number
+  fragment_ttl_policy_version: string
   second_layer_enabled: boolean
+  second_layer_stage: ContentModerationSecondLayerStage
   second_layer_endpoints: ContentModerationEndpoint[]
   second_layer_scanners: string[]
+  hard_block_patterns: string[]
+  candidate_keywords: string[]
+  keyword_allowlist: string[]
+  keyword_policy_version: string
+  context_policy_version: string
+  evidence_policy_version: string
   candidate_asset: string
   candidate_enabled: boolean
   candidate_layer1_count: number
@@ -144,9 +160,19 @@ export interface UpdateContentModerationConfig {
   cache_version?: string
   cache_max_entries?: number
   cache_max_bytes?: number
+  fragment_block_ttl_seconds?: number
+  fragment_allow_ttl_seconds?: number
+  fragment_ttl_policy_version?: string
   second_layer_enabled?: boolean
+  second_layer_stage?: ContentModerationSecondLayerStage
   second_layer_endpoints?: Array<Omit<ContentModerationEndpoint, 'token_configured' | 'token_masked'> & { token?: string }>
   second_layer_scanners?: string[]
+  hard_block_patterns?: string[]
+  candidate_keywords?: string[]
+  keyword_allowlist?: string[]
+  keyword_policy_version?: string
+  context_policy_version?: string
+  evidence_policy_version?: string
   candidate_asset?: string
   candidate_enabled?: boolean
   cyber_policy_exclude_from_ban_count?: boolean
@@ -198,10 +224,28 @@ export interface ContentModerationRuntimeStatus {
   request_body_histogram: ContentModerationBodySizeBucket[]
   fragment_cache_hits: number
   fragment_cache_misses: number
+  fragment_cache_expired: number
+  fragment_cache_replays: number
   fragment_cache_errors: number
   fragment_cache_writes: number
   fragment_cache_write_errors: number
+  second_layer_metrics: ContentModerationSecondLayerMetric[]
   archive_runtime: ContentModerationArchiveRuntimeStatus
+}
+
+export interface ContentModerationSecondLayerMetric {
+  endpoint_id: string
+  profile: string
+  context_class: string
+  evidence_mode: string
+  keyword_tier: string
+  requests: number
+  safe: number
+  blocked: number
+  uncertain: number
+  parser_failures: number
+  timeouts: number
+  avg_latency_ms: number
 }
 
 export interface ContentModerationAPIKeyLoad {
@@ -232,6 +276,24 @@ export interface ContentModerationLog {
   model: string
   mode: string
   action: string
+  cache_hit: boolean
+  decision_source: string
+  source_log_id?: number
+  replay_of_input_hash?: string
+  fragment_role?: string
+  fragment_kind?: string
+  context_class?: string
+  fragment_path?: string
+  cache_namespace?: string
+  policy_version?: string
+  model_profile?: string
+  prompt_version?: string
+  evidence_policy_version?: string
+  keyword_tier?: string
+  keyword_rule_id?: string
+  evidence_mode?: string
+  evidence_truncated: boolean
+  parser_status?: string
   flagged: boolean
   highest_category: string
   highest_score: number
@@ -280,9 +342,13 @@ export interface DeleteContentModerationArchiveResponse {
 export interface ListContentModerationLogsParams {
   page?: number
   page_size?: number
-  result?: 'blocked'
+  log_id?: number
+  result?: 'blocked' | 'hit' | 'pass' | 'error'
   group_id?: number
   endpoint?: string
+  context_class?: string
+  model_profile?: string
+  decision_source?: string
   search?: string
   from?: string
   to?: string
