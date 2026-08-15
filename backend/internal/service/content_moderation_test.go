@@ -1868,10 +1868,6 @@ func TestContentModerationUnbanUser_ActiveUserOnlyInvalidatesAuthCache(t *testin
 	require.Equal(t, []int64{1001}, invalidator.userIDs)
 }
 
-func contentModerationIntPtr(v int) *int {
-	return &v
-}
-
 func TestContentModerationUpdateConfig_CyberPolicyExcludeFromBanCount(t *testing.T) {
 	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{}}
 	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil, nil)

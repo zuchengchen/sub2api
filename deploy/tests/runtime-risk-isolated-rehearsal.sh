@@ -118,9 +118,9 @@ printf 'evidence_dir=%s\n' "$evidence_dir"
 docker run --rm \
     -v "$repo_root:/repo" \
     -v "$evidence_dir/build:/out" \
-    -v sub2api-go-mod-1265:/go/pkg/mod \
-    -v sub2api-go-build-1265:/root/.cache/go-build \
-    -w /repo/backend golang:1.26.5 \
+    -v sub2api-go-mod-1266:/go/pkg/mod \
+    -v sub2api-go-build-1266:/root/.cache/go-build \
+    -w /repo/backend golang:1.26.6 \
     sh -c 'export PATH=/usr/local/go/bin:$PATH; set -eu; CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/sub2api-new ./cmd/server; CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/unified-risk-migration ./cmd/unified-risk-migration; CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/connection-stub /repo/deploy/tests/fixtures/runtime-risk-connection-stub.go'
 chmod 0755 "$evidence_dir/build/sub2api-new" "$evidence_dir/build/unified-risk-migration" "$evidence_dir/build/connection-stub"
 chmod 0700 "$evidence_dir/build"

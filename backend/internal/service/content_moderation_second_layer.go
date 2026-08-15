@@ -158,24 +158,6 @@ func (s *ContentModerationService) scanContentModerationSecondLayerInput(ctx con
 	return contentModerationSecondLayerResult{}, errors.New("no content moderation second-layer endpoint available")
 }
 
-func (s *ContentModerationService) scanContentModerationSecondLayerChunk(ctx context.Context, endpoints []ContentModerationEndpoint, chunk string, scanners []string) (contentModerationSecondLayerResult, error) {
-	fragment, _ := newContentModerationFragment("user", "text", "legacy", chunk)
-	return s.scanContentModerationSecondLayerInput(ctx, endpoints, contentModerationSecondLayerInput{
-		Fragment: fragment, Evidence: moderationEvidence{Text: chunk, Mode: "legacy_chunk"},
-	}, scanners)
-}
-
-func callContentModerationSecondLayer(ctx context.Context, endpoint ContentModerationEndpoint, chunk string, scanners []string) (contentModerationSecondLayerResult, error) {
-	return callContentModerationSecondLayerWithClient(ctx, endpoint, chunk, scanners, newContentModerationSecondLayerClient(endpoint.TimeoutMS))
-}
-
-func callContentModerationSecondLayerWithClient(ctx context.Context, endpoint ContentModerationEndpoint, chunk string, scanners []string, client *http.Client) (contentModerationSecondLayerResult, error) {
-	fragment, _ := newContentModerationFragment("user", "text", "legacy", chunk)
-	return callContentModerationSecondLayerInputWithClient(ctx, endpoint, contentModerationSecondLayerInput{
-		Fragment: fragment, Evidence: moderationEvidence{Text: chunk, Mode: "legacy_chunk"},
-	}, scanners, client)
-}
-
 func callContentModerationSecondLayerInputWithClient(ctx context.Context, endpoint ContentModerationEndpoint, input contentModerationSecondLayerInput, scanners []string, client *http.Client) (contentModerationSecondLayerResult, error) {
 	baseURL, err := normalizeContentModerationSecondLayerBaseURL(endpoint.BaseURL)
 	if err != nil {
@@ -306,11 +288,19 @@ func (s *ContentModerationService) contentModerationSecondLayerSlot(resourceKey 
 		resourceKey = "invalid"
 	}
 	if existing, ok := s.secondLayerEndpointSlots.Load(resourceKey); ok {
-		return existing.(chan struct{})
+		existingSlot, typeOK := existing.(chan struct{})
+		if !typeOK || existingSlot == nil {
+			panic("content moderation second-layer slot has unexpected type")
+		}
+		return existingSlot
 	}
 	slot := make(chan struct{}, 1)
 	actual, _ := s.secondLayerEndpointSlots.LoadOrStore(resourceKey, slot)
-	return actual.(chan struct{})
+	actualSlot, ok := actual.(chan struct{})
+	if !ok || actualSlot == nil {
+		panic("content moderation second-layer slot has unexpected type")
+	}
+	return actualSlot
 }
 
 func (s *ContentModerationService) tryAcquireContentModerationSecondLayer(resourceKey string) bool {
@@ -347,13 +337,21 @@ func (s *ContentModerationService) contentModerationSecondLayerClient(endpoint C
 	}
 	key := fmt.Sprintf("%s|%d", strings.ToLower(baseURL), endpoint.TimeoutMS)
 	if existing, ok := s.secondLayerClients.Load(key); ok {
-		return existing.(*http.Client)
+		existingClient, typeOK := existing.(*http.Client)
+		if !typeOK || existingClient == nil {
+			panic("content moderation second-layer client has unexpected type")
+		}
+		return existingClient
 	}
 	client := newContentModerationSecondLayerClient(endpoint.TimeoutMS)
 	actual, loaded := s.secondLayerClients.LoadOrStore(key, client)
 	if loaded {
+		actualClient, ok := actual.(*http.Client)
+		if !ok || actualClient == nil {
+			panic("content moderation second-layer client has unexpected type")
+		}
 		client.CloseIdleConnections()
-		return actual.(*http.Client)
+		return actualClient
 	}
 	return client
 }
@@ -373,7 +371,10 @@ func (s *ContentModerationService) recordContentModerationSecondLayerMetric(endp
 		evidenceMode: evidenceMode, keywordTier: keywordTier,
 	}
 	actual, _ := s.secondLayerMetrics.LoadOrStore(key, candidate)
-	counter := actual.(*contentModerationSecondLayerMetricCounter)
+	counter, ok := actual.(*contentModerationSecondLayerMetricCounter)
+	if !ok || counter == nil {
+		panic("content moderation second-layer metric has unexpected type")
+	}
 	counter.requests.Add(1)
 	latencyMS := elapsed.Milliseconds()
 	if latencyMS < 0 {
@@ -419,7 +420,10 @@ func (s *ContentModerationService) contentModerationSecondLayerMetrics() []Conte
 	}
 	out := make([]ContentModerationSecondLayerMetric, 0)
 	s.secondLayerMetrics.Range(func(_, value any) bool {
-		counter := value.(*contentModerationSecondLayerMetricCounter)
+		counter, ok := value.(*contentModerationSecondLayerMetricCounter)
+		if !ok || counter == nil {
+			return true
+		}
 		requests := counter.requests.Load()
 		avgLatency := int64(0)
 		if requests > 0 {
