@@ -97,6 +97,7 @@ const baseConfig = (): ContentModerationConfig => ({
   sample_rate: 100,
   all_groups: true,
   group_ids: [],
+  user_email_whitelist: [],
   record_non_hits: false,
   block_status: 403,
   block_message: '内容审计命中风险规则，请调整输入后重试',
@@ -526,6 +527,42 @@ describe('admin RiskControlView', () => {
         type: 'include',
         models: ['gpt-5.5', 'gpt-5.4'],
       },
+    }))
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('loads and saves the user email whitelist from the scope settings', async () => {
+    getConfig.mockResolvedValue({
+      ...baseConfig(),
+      user_email_whitelist: ['existing@example.com'],
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.scope').trigger('click')
+    const whitelist = wrapper.get('[data-test="user-email-whitelist"]')
+    expect((whitelist.element as HTMLTextAreaElement).value).toBe('existing@example.com')
+
+    await whitelist.setValue('Allowed@Example.COM\nallowed@example.com\nsecond@example.net')
+    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+    await flushPromises()
+
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+      user_email_whitelist: ['allowed@example.com', 'second@example.net'],
     }))
     expect(showError).not.toHaveBeenCalled()
   })

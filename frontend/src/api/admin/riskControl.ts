@@ -42,6 +42,7 @@ export interface ContentModerationConfig {
   sample_rate: number
   all_groups: boolean
   group_ids: number[]
+  user_email_whitelist: string[]
   record_non_hits: boolean
   thresholds: Record<string, number>
   block_status: number
@@ -142,6 +143,7 @@ export interface UpdateContentModerationConfig {
   sample_rate?: number
   all_groups?: boolean
   group_ids?: number[]
+  user_email_whitelist?: string[]
   record_non_hits?: boolean
   thresholds?: Record<string, number>
   block_status?: number

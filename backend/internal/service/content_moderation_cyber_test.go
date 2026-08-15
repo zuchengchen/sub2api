@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -211,6 +212,61 @@ func TestRecordCyberPolicyEvent_NonGPTSkipsAllSideEffects(t *testing.T) {
 	})
 	require.Empty(t, repo.snapshotLogs())
 	require.Equal(t, 0, repo.disableUserCalls)
+}
+
+func TestRecordCyberPolicyEvent_UserEmailWhitelistSkipsAllSideEffects(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &cyberDispositionTestRepo{userActive: true}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo, nil, nil, nil, nil, nil, nil,
+	)
+
+	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
+		UserID:          1,
+		UserEmail:       "Allowed@Example.COM",
+		Model:           "gpt-5",
+		Endpoint:        "/v1/responses",
+		UpstreamMessage: "flagged",
+		UpstreamBody:    `{"error":{"code":"cyber_policy"}}`,
+		UpstreamStatus:  400,
+		Scope:           gptCyberScope(),
+		UserRole:        RoleUser,
+	})
+
+	require.Empty(t, repo.snapshotLogs())
+	require.Equal(t, 0, repo.disableUserCalls)
+}
+
+func TestRetryCyberPolicyDisposition_UserEmailWhitelistCancelsPendingSideEffects(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &cyberDispositionTestRepo{userActive: true}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo, nil, nil, nil, nil, nil, nil,
+	)
+
+	err = svc.retryCyberPolicyDisposition(context.Background(), &contentModerationDispositionRetryFile{
+		Kind:      contentModerationDispositionCyber,
+		UserID:    1,
+		UserEmail: "ALLOWED@example.com",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, repo.disableUserCalls)
+	require.Empty(t, repo.snapshotLogs())
 }
 
 func TestRecordCyberPolicyEvent_WritesLogAndDisablesUserOnce(t *testing.T) {

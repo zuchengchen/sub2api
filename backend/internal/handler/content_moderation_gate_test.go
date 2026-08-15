@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,61 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+type contentModerationWhitelistSettingRepo struct {
+	values map[string]string
+}
+
+func (r *contentModerationWhitelistSettingRepo) Get(_ context.Context, key string) (*service.Setting, error) {
+	value, ok := r.values[key]
+	if !ok {
+		return nil, service.ErrSettingNotFound
+	}
+	return &service.Setting{Key: key, Value: value}, nil
+}
+
+func (r *contentModerationWhitelistSettingRepo) GetValue(_ context.Context, key string) (string, error) {
+	value, ok := r.values[key]
+	if !ok {
+		return "", service.ErrSettingNotFound
+	}
+	return value, nil
+}
+
+func (r *contentModerationWhitelistSettingRepo) Set(_ context.Context, key, value string) error {
+	r.values[key] = value
+	return nil
+}
+
+func (r *contentModerationWhitelistSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := r.values[key]; ok {
+			values[key] = value
+		}
+	}
+	return values, nil
+}
+
+func (r *contentModerationWhitelistSettingRepo) SetMultiple(_ context.Context, values map[string]string) error {
+	for key, value := range values {
+		r.values[key] = value
+	}
+	return nil
+}
+
+func (r *contentModerationWhitelistSettingRepo) GetAll(_ context.Context) (map[string]string, error) {
+	values := make(map[string]string, len(r.values))
+	for key, value := range r.values {
+		values[key] = value
+	}
+	return values, nil
+}
+
+func (r *contentModerationWhitelistSettingRepo) Delete(_ context.Context, key string) error {
+	delete(r.values, key)
+	return nil
+}
 
 func TestContentModerationErrorReturnsMatchedKeyword(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -103,4 +159,44 @@ func TestRunUnifiedContentModerationLogsWebSocketChecksAndCacheHits(t *testing.T
 	require.Equal(t, true, doneLogs[1].ContextMap()["cached"])
 	require.Equal(t, true, doneLogs[1].ContextMap()["allowed"])
 	require.Equal(t, "subsequent_turn", doneLogs[1].ContextMap()["stage"])
+}
+
+func TestRunContentModerationStage_UserEmailWhitelistBypassesBodyBudget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := map[string]any{
+		"enabled":              true,
+		"mode":                 "pre_block",
+		"user_email_whitelist": []string{"allowed@example.com"},
+	}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	svc := service.NewContentModerationService(
+		&contentModerationWhitelistSettingRepo{values: map[string]string{
+			service.SettingKeyRiskControlEnabled:      "true",
+			service.SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		nil, nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetPendingRequestBodyBudgetForTest(1)
+	groupID := int64(7)
+	apiKey := &service.APIKey{
+		ID:      11,
+		Name:    "whitelisted-key",
+		GroupID: &groupID,
+		Group:   &service.Group{ID: groupID, Name: "GPT Production"},
+		User:    &service.User{ID: 42, Email: "Allowed@Example.COM"},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	decision := runContentModerationStage(
+		c, zap.NewNop(), svc, apiKey, middleware2.AuthSubject{UserID: 42},
+		service.ContentModerationProtocolOpenAIResponses, "gpt-5.5", []byte(`{"input":"larger than budget"}`), "http",
+	)
+
+	require.NotNil(t, decision)
+	require.True(t, decision.Allowed)
+	require.Equal(t, int64(0), svc.PendingRequestBodyBytes())
+	require.False(t, contentModerationScopeSnapshot(c, apiKey).InScope)
 }
