@@ -11,9 +11,9 @@ func TestLegacyPromptAuditCandidateAsset(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, asset.Manifest.EnabledByDefault)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", asset.Manifest.SourceCommit)
-	require.Len(t, asset.Layer1, 965)
-	require.Len(t, asset.Layer2, 253)
-	require.Len(t, asset.Layer1Demotions, 62)
+	require.Len(t, asset.Layer1, 964)
+	require.Len(t, asset.Layer2, 254)
+	require.Len(t, asset.Layer1Demotions, 63)
 	require.Len(t, asset.Layer1Suppressions, 28)
 	require.Len(t, asset.Manifest.CandidateEndpoints, 1)
 	require.False(t, asset.Manifest.CandidateEndpoints[0].Enabled)
@@ -56,6 +56,7 @@ func TestLegacyPromptAuditCandidateAssetAppliesLayerAssignments(t *testing.T) {
 		"do anything now",
 		"make a bomb",
 		"malicious payload",
+		"session hijacking",
 		"opposite mode",
 		"bypass content filter",
 	} {
@@ -67,6 +68,7 @@ func TestLegacyPromptAuditCandidateAssetAppliesLayerAssignments(t *testing.T) {
 		"do anything now",
 		"make a bomb",
 		"malicious payload",
+		"session hijacking",
 		"opposite mode",
 		"bypass content filter",
 	} {
