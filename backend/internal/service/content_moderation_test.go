@@ -855,6 +855,35 @@ func TestContentModerationCheck_ModelFilterUsesRequestedModelNotBodyModel(t *tes
 	require.Equal(t, "gpt-5.5", logs[0].Model)
 }
 
+func TestContentModerationCheck_UserEmailWhitelistBypassesUnifiedModeration(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
+	svc, repo := newContentModerationModelFilterTestService(t, cfg)
+	scope := NewContentModerationScopeSnapshot(nil, "GPT Production")
+	input := ContentModerationCheckInput{
+		UserID:    42,
+		UserEmail: "Allowed@Example.COM",
+		Model:     "gpt-5.5",
+		Protocol:  ContentModerationProtocolOpenAIChat,
+		Body:      []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+		Scope:     &scope,
+	}
+
+	decision, err := svc.Check(context.Background(), input)
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.Empty(t, repo.snapshotLogs())
+
+	input.UserEmail = "other@example.com"
+	decision, err = svc.Check(context.Background(), input)
+
+	require.NoError(t, err)
+	require.True(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+}
+
 func defaultContentModerationModelFilterTestConfig() *ContentModerationConfig {
 	cfg := defaultContentModerationConfig()
 	cfg.Enabled = true
@@ -909,6 +938,34 @@ func TestContentModerationUpdateConfig_AppendsAndDeletesAPIKeys(t *testing.T) {
 	var saved ContentModerationConfig
 	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &saved))
 	require.Equal(t, []string{"sk-old-b", "sk-new-c"}, saved.apiKeys())
+}
+
+func TestContentModerationUpdateConfig_NormalizesAndValidatesUserEmailWhitelist(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
+	emails := []string{" Allowed@Example.COM ", "allowed@example.com", "second@example.net"}
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		UserEmailWhitelist: &emails,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"allowed@example.com", "second@example.net"}, view.UserEmailWhitelist)
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &saved))
+	require.Equal(t, view.UserEmailWhitelist, saved.UserEmailWhitelist)
+
+	invalid := []string{"not-an-email"}
+	_, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		UserEmailWhitelist: &invalid,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "用户邮箱白名单地址无效")
 }
 
 func TestContentModerationUpdateConfig_ReplacesAPIKeysWhenRequested(t *testing.T) {
