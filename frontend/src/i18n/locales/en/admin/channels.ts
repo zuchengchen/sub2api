@@ -204,7 +204,12 @@ export default {
       settingsTitle: 'Content Moderation Settings',
       refreshStatus: 'Refresh Status',
       records: 'Audit Records',
-      recordsHint: 'Shows only requests blocked by content moderation or cyber policy.',
+      recordsHint: 'Review cyber policy, content moderation blocks, and risky shadow decisions by category.',
+      recordTabs: {
+        cyberPolicy: 'Cyber Policy',
+        blocked: 'Blocked',
+        riskyShadow: 'Risky Shadow',
+      },
       saveConfig: 'Save Moderation Config',
       statusFailed: 'Failed to load runtime status',
       enabled: 'Enable Content Moderation',

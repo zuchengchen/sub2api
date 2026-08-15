@@ -339,11 +339,22 @@ export interface DeleteContentModerationArchiveResponse {
   deleted: boolean
 }
 
+export type ContentModerationLogResult =
+  | 'blocked'
+  | 'hit'
+  | 'pass'
+  | 'error'
+  | 'cyber_policy'
+  | 'content_blocked'
+  | 'risky_shadow'
+
+export type ContentModerationLogView = 'cyber_policy' | 'content_blocked' | 'risky_shadow'
+
 export interface ListContentModerationLogsParams {
   page?: number
   page_size?: number
   log_id?: number
-  result?: 'blocked' | 'hit' | 'pass' | 'error'
+  result?: ContentModerationLogResult
   group_id?: number
   endpoint?: string
   context_class?: string

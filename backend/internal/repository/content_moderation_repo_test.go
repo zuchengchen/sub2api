@@ -21,6 +21,45 @@ func TestBuildContentModerationLogWhere_BlockedIncludesAllBlockActions(t *testin
 	require.NotContains(t, sql, "l.action = 'block'")
 }
 
+func TestBuildContentModerationLogWhere_AuditRecordViews(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     string
+		contains   string
+		notContain string
+	}{
+		{
+			name:     "cyber policy",
+			result:   service.ContentModerationLogResultCyberPolicy,
+			contains: "l.action = 'cyber_policy'",
+		},
+		{
+			name:       "content blocked",
+			result:     service.ContentModerationLogResultContentBlocked,
+			contains:   "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block')",
+			notContain: "'cyber_policy'",
+		},
+		{
+			name:     "risky shadow",
+			result:   service.ContentModerationLogResultRiskyShadow,
+			contains: "l.action = 'second_layer_shadow' AND COALESCE(BTRIM(l.highest_category), '') <> ''",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: tt.result})
+
+			require.Empty(t, args)
+			sql := strings.Join(where, " AND ")
+			require.Contains(t, sql, tt.contains)
+			if tt.notContain != "" {
+				require.NotContains(t, sql, tt.notContain)
+			}
+		})
+	}
+}
+
 func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesReplayBlocks(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
