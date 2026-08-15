@@ -78,7 +78,8 @@ func normalizeContentModerationEndpoints(endpoints []ContentModerationEndpoint) 
 			endpoint.Model = defaultContentModerationSecondLayerModel
 		}
 		if endpoint.Profile == ContentModerationModelProfileYuFengXGuard &&
-			(endpoint.PromptVersion == "" || endpoint.PromptVersion == contentModerationYuFengLegacyPromptVersion) {
+			(endpoint.PromptVersion == "" || endpoint.PromptVersion == contentModerationYuFengLegacyPromptVersion ||
+				endpoint.PromptVersion == contentModerationYuFengPreviousPromptVersion) {
 			endpoint.PromptVersion = ContentModerationYuFengPromptVersion
 		}
 		if endpoint.TimeoutMS <= 0 {

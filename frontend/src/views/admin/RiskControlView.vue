@@ -1572,7 +1572,7 @@ const configForm = reactive({
   candidate_keywords_text: '',
   keyword_allowlist_text: '',
   keyword_policy_version: 'keyword-v2',
-  context_policy_version: 'context-v1',
+  context_policy_version: 'context-v2',
   evidence_policy_version: 'evidence-v1',
 })
 
@@ -1729,7 +1729,7 @@ const recordViewTabs = computed<Array<{ value: ContentModerationLogView; label: 
 
 const contextClassOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('admin.riskControl.filters.allContexts') },
-  ...['user', 'tool', 'service_log', 'code', 'config', 'unknown'].map((value) => ({ value, label: value })),
+  ...['user', 'assistant_untrusted', 'tool', 'service_log', 'code', 'config', 'unknown'].map((value) => ({ value, label: value })),
 ])
 
 const modelProfileOptions = computed<SelectOption[]>(() => [
@@ -2091,7 +2091,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.candidate_keywords_text = Array.isArray(config.candidate_keywords) ? config.candidate_keywords.join('\n') : ''
   configForm.keyword_allowlist_text = Array.isArray(config.keyword_allowlist) ? config.keyword_allowlist.join('\n') : ''
   configForm.keyword_policy_version = config.keyword_policy_version || 'keyword-v2'
-  configForm.context_policy_version = config.context_policy_version || 'context-v1'
+  configForm.context_policy_version = config.context_policy_version || 'context-v2'
   configForm.evidence_policy_version = config.evidence_policy_version || 'evidence-v1'
 }
 
@@ -2200,7 +2200,7 @@ async function saveConfig() {
       candidate_keywords: candidateKeywordList.value,
       keyword_allowlist: keywordAllowlist.value,
       keyword_policy_version: configForm.keyword_policy_version.trim() || 'keyword-v2',
-      context_policy_version: configForm.context_policy_version.trim() || 'context-v1',
+      context_policy_version: configForm.context_policy_version.trim() || 'context-v2',
       evidence_policy_version: configForm.evidence_policy_version.trim() || 'evidence-v1',
     }
     const keys = parseApiKeys(configForm.api_keys_text)
@@ -2603,7 +2603,7 @@ function addSecondLayerEndpoint() {
     model: 'yufeng-xguard-q4',
     profile: 'yufeng_xguard',
     model_revision: '',
-    prompt_version: 'yufeng-xguard-v2',
+    prompt_version: 'yufeng-xguard-v3',
     stop_tokens: [],
     stop_tokens_text: '',
     enabled: true,
@@ -2621,7 +2621,7 @@ function removeSecondLayerEndpoint(index: number) {
 
 function onSecondLayerProfileChange(endpoint: EditableModerationEndpoint) {
   if (endpoint.profile === 'yufeng_xguard' && !endpoint.prompt_version?.trim()) {
-    endpoint.prompt_version = 'yufeng-xguard-v2'
+    endpoint.prompt_version = 'yufeng-xguard-v3'
   }
 }
 

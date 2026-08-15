@@ -191,7 +191,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				keywordRuleID = contentModerationKeywordRuleID(candidateKeyword)
 			case requiresSecondLayerContextScan(fragment.ContextClass):
 				keywordTier = "context_required"
-			case candidateRouting:
+			case requiresSecondLayerCandidateSignal(fragment.ContextClass) || candidateRouting:
 				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 				releaseDecisionLock()
 				continue
@@ -293,11 +293,17 @@ func (s *ContentModerationService) acquireContentModerationFragmentDecisionLock(
 
 func requiresSecondLayerContextScan(contextClass string) bool {
 	switch contextClass {
-	case "tool", "service_log", "code", "config", "unknown":
+	case ContentModerationContextTool, ContentModerationContextServiceLog,
+		ContentModerationContextCode, ContentModerationContextConfig,
+		ContentModerationContextUnknown:
 		return true
 	default:
 		return false
 	}
+}
+
+func requiresSecondLayerCandidateSignal(contextClass string) bool {
+	return contextClass == ContentModerationContextAssistant
 }
 
 func matchesContentModerationAllowlist(text string, values []string) bool {
