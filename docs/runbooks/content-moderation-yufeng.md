@@ -25,7 +25,8 @@ as the artifact identity.
 The validated binary reports `0.1.0-dev (build 10430, commit 4c1a0af40)`.
 The GGUF reports Q4_K Medium, 751,632,384 parameters, a 40,960-token training
 context, and the embedded YuFeng chat template. The service deliberately uses
-a 4,096-token runtime context.
+an 8,192-token shared runtime context, preserving approximately 4,096 tokens
+for each of its two parallel slots.
 
 ## Host prerequisites
 
@@ -54,16 +55,24 @@ export OPENMP_LIB_DIR=/path/to/openmp/lib
 scripts/content-moderation/run-yufeng-llama.sh
 ```
 
-Validated server arguments are:
+The current default server arguments are:
 
 ```text
 --alias yufeng-xguard-q4 --host 127.0.0.1 --port 8088
---ctx-size 4096 --parallel 1 --batch-size 512 --ubatch-size 512
---threads 16 --threads-batch 16 --flash-attn on --load-mode none
+--ctx-size 8192 --parallel 2 --batch-size 512 --ubatch-size 512
+--threads 28 --threads-batch 28 --flash-attn on --load-mode none
 --cache-ram 0 --no-cache-prompt --no-context-shift --no-mmproj --offline
 --no-webui --no-slots --metrics --n-gpu-layers 0
 --cors-origins localhost --no-cors-credentials --jinja --log-verbosity 2
 ```
+
+The launcher shares 28 inference and batch threads across two server slots.
+The 8,192-token shared context preserves approximately 4,096 tokens per slot,
+and the example systemd unit caps the service at 2,800% CPU, equivalent to 28
+fully utilized logical CPUs. Its 3 GiB memory-high threshold and 4 GiB hard
+limit leave headroom for the larger KV cache while retaining containment. The
+historical benchmark below used the previous 16-thread, single-slot setting
+and is not a 28-thread, two-slot performance guarantee.
 
 From another shell:
 

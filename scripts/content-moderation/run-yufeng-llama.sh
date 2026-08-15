@@ -72,12 +72,12 @@ exec "${server_path}" \
   --alias yufeng-xguard-q4 \
   --host "${bind_address}" \
   --port "${port}" \
-  --ctx-size 4096 \
-  --parallel 1 \
+  --ctx-size 8192 \
+  --parallel 2 \
   --batch-size 512 \
   --ubatch-size 512 \
-  --threads 16 \
-  --threads-batch 16 \
+  --threads 28 \
+  --threads-batch 28 \
   --flash-attn on \
   --load-mode none \
   --cache-ram 0 \
