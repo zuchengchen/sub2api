@@ -53,6 +53,33 @@ func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, strin
 	panic("FetchChecksumFile should not be called when no update is available")
 }
 
+func TestUpdateServiceSeparatesCurrentReleaseURLFromUpdateSource(t *testing.T) {
+	cache := &updateServiceCacheStub{}
+	github := &updateServiceGitHubClientStub{
+		release: &GitHubRelease{
+			TagName: "v0.1.176",
+			Name:    "v0.1.176",
+			HTMLURL: "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.176",
+		},
+	}
+	currentReleaseURL := "https://github.com/zuchengchen/sub2api/releases/tag/czc-v2026.08.15.2"
+	svc := NewUpdateService(cache, github, "0.1.176.2", "current-commit", "release", currentReleaseURL)
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.False(t, info.HasUpdate)
+	require.Equal(t, currentReleaseURL, info.CurrentReleaseURL)
+	require.Equal(t, github.release.HTMLURL, info.ReleaseInfo.HTMLURL)
+
+	cached, err := svc.CheckUpdate(context.Background(), false)
+
+	require.NoError(t, err)
+	require.True(t, cached.Cached)
+	require.Equal(t, currentReleaseURL, cached.CurrentReleaseURL)
+	require.Equal(t, github.release.HTMLURL, cached.ReleaseInfo.HTMLURL)
+}
+
 func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	svc := NewUpdateService(
 		&updateServiceCacheStub{},
