@@ -16,7 +16,7 @@ func annotateContentModerationYuFengResult(result contentModerationSecondLayerRe
 
 func isContentModerationYuFengNonUserContext(contextClass string) bool {
 	switch contextClass {
-	case ContentModerationContextTool, ContentModerationContextServiceLog,
+	case ContentModerationContextAssistant, ContentModerationContextTool, ContentModerationContextServiceLog,
 		ContentModerationContextCode, ContentModerationContextConfig:
 		return true
 	default:

@@ -3037,7 +3037,7 @@ func (cfg *ContentModerationConfig) normalize() {
 	if strings.TrimSpace(cfg.KeywordPolicyVersion) == "" {
 		cfg.KeywordPolicyVersion = ContentModerationKeywordPolicyVersion
 	}
-	if strings.TrimSpace(cfg.ContextPolicyVersion) == "" {
+	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion {
 		cfg.ContextPolicyVersion = ContentModerationContextPolicyVersion
 	}
 	if strings.TrimSpace(cfg.EvidencePolicyVersion) == "" {

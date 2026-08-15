@@ -21,12 +21,15 @@ const (
 	MaxContentModerationFragmentBlockTTLSeconds     = 900
 	MaxContentModerationFragmentAllowTTLSeconds     = 86400
 	ContentModerationFragmentTTLPolicyVersion       = "ttl-v1"
-	ContentModerationContextPolicyVersion           = "context-v1"
+	ContentModerationContextPolicyVersion           = "context-v2"
 	ContentModerationEvidencePolicyVersion          = "evidence-v1"
 	ContentModerationKeywordPolicyVersion           = "keyword-v2"
-	ContentModerationYuFengPromptVersion            = "yufeng-xguard-v2"
+	ContentModerationYuFengPromptVersion            = "yufeng-xguard-v3"
+	contentModerationLegacyContextPolicyVersion     = "context-v1"
 	contentModerationYuFengLegacyPromptVersion      = "yufeng-xguard-v1"
+	contentModerationYuFengPreviousPromptVersion    = "yufeng-xguard-v2"
 	ContentModerationContextUser                    = "user"
+	ContentModerationContextAssistant               = "assistant_untrusted"
 	ContentModerationContextTool                    = "tool"
 	ContentModerationContextServiceLog              = "service_log"
 	ContentModerationContextCode                    = "code"
@@ -73,6 +76,9 @@ func classifyContentModerationContext(fragment ContentModerationFragment) string
 	}
 	if role == "user" || role == "developer" || role == "system" {
 		return ContentModerationContextUser
+	}
+	if role == "assistant" {
+		return ContentModerationContextAssistant
 	}
 	return ContentModerationContextUnknown
 }
