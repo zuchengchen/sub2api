@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"sort"
 	"strings"
@@ -94,6 +95,8 @@ const (
 	maxContentModerationTestImageDataURLBytes          = 12 * 1024 * 1024
 	maxContentModerationBlockedKeywords                = 10000
 	maxContentModerationBlockedKeywordRunes            = 200
+	maxContentModerationUserEmailWhitelist             = 1000
+	maxContentModerationUserEmailRunes                 = 254
 	maxContentModerationModelFilterModels              = 1000
 	maxContentModerationModelFilterRunes               = 200
 	defaultContentModerationCacheVersion               = "v1"
@@ -163,6 +166,7 @@ type ContentModerationConfig struct {
 	SampleRate               int                          `json:"sample_rate"`
 	AllGroups                bool                         `json:"all_groups"`
 	GroupIDs                 []int64                      `json:"group_ids"`
+	UserEmailWhitelist       []string                     `json:"user_email_whitelist"`
 	RecordNonHits            bool                         `json:"record_non_hits"`
 	Thresholds               map[string]float64           `json:"thresholds"`
 	BlockStatus              int                          `json:"block_status"`
@@ -217,6 +221,7 @@ type ContentModerationConfigView struct {
 	SampleRate                     int                             `json:"sample_rate"`
 	AllGroups                      bool                            `json:"all_groups"`
 	GroupIDs                       []int64                         `json:"group_ids"`
+	UserEmailWhitelist             []string                        `json:"user_email_whitelist"`
 	RecordNonHits                  bool                            `json:"record_non_hits"`
 	Thresholds                     map[string]float64              `json:"thresholds"`
 	BlockStatus                    int                             `json:"block_status"`
@@ -360,6 +365,7 @@ type UpdateContentModerationConfigInput struct {
 	SampleRate                     *int                          `json:"sample_rate"`
 	AllGroups                      *bool                         `json:"all_groups"`
 	GroupIDs                       *[]int64                      `json:"group_ids"`
+	UserEmailWhitelist             *[]string                     `json:"user_email_whitelist"`
 	RecordNonHits                  *bool                         `json:"record_non_hits"`
 	Thresholds                     *map[string]float64           `json:"thresholds"`
 	BlockStatus                    *int                          `json:"block_status"`
@@ -1126,6 +1132,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if input.GroupIDs != nil {
 		cfg.GroupIDs = normalizeInt64IDs(*input.GroupIDs)
 	}
+	if input.UserEmailWhitelist != nil {
+		cfg.UserEmailWhitelist = normalizeContentModerationUserEmailWhitelist(*input.UserEmailWhitelist)
+	}
 	if input.RecordNonHits != nil {
 		cfg.RecordNonHits = *input.RecordNonHits
 	}
@@ -1282,6 +1291,16 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"error", err)
 		return allow, nil
 	}
+	cfg := runtimeSnapshot.config
+	if cfg != nil && cfg.includesUserEmail(input.UserEmail) {
+		slog.Info("content_moderation.skip_user_email_whitelist",
+			"user_id", input.UserID,
+			"api_key_id", input.APIKeyID,
+			"group_id", contentModerationLogGroupID(input.GroupID),
+			"endpoint", input.Endpoint,
+			"protocol", input.Protocol)
+		return allow, nil
+	}
 	if input.Scope != nil {
 		return s.checkUnifiedFragments(ctx, input, runtimeSnapshot), nil
 	}
@@ -1294,7 +1313,6 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"protocol", input.Protocol)
 		return allow, nil
 	}
-	cfg := runtimeSnapshot.config
 	inGroupScope := cfg.includesGroup(input.GroupID)
 	inModelScope := cfg.includesModel(input.Model)
 	slog.Info("content_moderation.config_loaded",
@@ -2141,6 +2159,19 @@ func (s *ContentModerationService) isRiskControlEnabled(ctx context.Context) boo
 	return raw == "true"
 }
 
+// IsUserEmailWhitelisted reports whether an exact user email is exempt from
+// local content-moderation checks and dispositions. Matching is case-insensitive.
+func (s *ContentModerationService) IsUserEmailWhitelisted(ctx context.Context, email string) (bool, error) {
+	if strings.TrimSpace(email) == "" {
+		return false, nil
+	}
+	runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx)
+	if err != nil {
+		return false, err
+	}
+	return runtimeSnapshot != nil && runtimeSnapshot.config != nil && runtimeSnapshot.config.includesUserEmail(email), nil
+}
+
 func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *ContentModerationConfig) error {
 	if err := s.validateUnifiedConfig(cfg); err != nil {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_SECOND_LAYER", err.Error())
@@ -2171,6 +2202,18 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 	}
 	if cfg.ModelFilter.Type != ContentModerationModelFilterAll && len(cfg.ModelFilter.Models) == 0 {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_MODEL_FILTER", "指定或排除模型时至少需要配置 1 个模型")
+	}
+	if len(cfg.UserEmailWhitelist) > maxContentModerationUserEmailWhitelist {
+		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_USER_EMAIL_WHITELIST", fmt.Sprintf("用户邮箱白名单最多配置 %d 项", maxContentModerationUserEmailWhitelist))
+	}
+	for _, email := range cfg.UserEmailWhitelist {
+		if len([]rune(email)) > maxContentModerationUserEmailRunes {
+			return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_USER_EMAIL_WHITELIST", fmt.Sprintf("用户邮箱白名单地址过长: %s", email))
+		}
+		address, err := mail.ParseAddress(email)
+		if err != nil || !strings.EqualFold(address.Address, email) {
+			return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_USER_EMAIL_WHITELIST", fmt.Sprintf("用户邮箱白名单地址无效: %s", email))
+		}
 	}
 	if !cfg.AllGroups && len(cfg.GroupIDs) > 0 && s.groupRepo != nil {
 		for _, groupID := range cfg.GroupIDs {
@@ -2723,6 +2766,7 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		SampleRate:           100,
 		AllGroups:            true,
 		GroupIDs:             []int64{},
+		UserEmailWhitelist:   []string{},
 		RecordNonHits:        false,
 		Thresholds:           ContentModerationDefaultThresholds(),
 		BlockStatus:          defaultContentModerationBlockHTTPStatus,
@@ -2771,6 +2815,7 @@ func cloneContentModerationConfig(cfg *ContentModerationConfig) *ContentModerati
 	clone.ProxyID = cloneInt64Ptr(cfg.ProxyID)
 	clone.APIKeys = append([]string(nil), cfg.APIKeys...)
 	clone.GroupIDs = append([]int64(nil), cfg.GroupIDs...)
+	clone.UserEmailWhitelist = append([]string(nil), cfg.UserEmailWhitelist...)
 	clone.BlockedKeywords = append([]string(nil), cfg.BlockedKeywords...)
 	clone.HardBlockPatterns = append([]string(nil), cfg.HardBlockPatterns...)
 	clone.CandidateKeywords = append([]string(nil), cfg.CandidateKeywords...)
@@ -2853,6 +2898,7 @@ func (cfg *ContentModerationConfig) normalize() {
 		cfg.NonHitRetentionDays = maxContentModerationNonHitRetentionDays
 	}
 	cfg.GroupIDs = normalizeInt64IDs(cfg.GroupIDs)
+	cfg.UserEmailWhitelist = normalizeContentModerationUserEmailWhitelist(cfg.UserEmailWhitelist)
 	cfg.Thresholds = mergeContentModerationThresholds(ContentModerationDefaultThresholds(), cfg.Thresholds)
 	cfg.BlockedKeywords = normalizeBlockedKeywords(cfg.BlockedKeywords)
 	cfg.KeywordBlockingMode = normalizeKeywordBlockingMode(cfg.KeywordBlockingMode)
@@ -2925,6 +2971,22 @@ func (cfg *ContentModerationConfig) includesGroup(groupID *int64) bool {
 	}
 	for _, id := range cfg.GroupIDs {
 		if id == *groupID {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg *ContentModerationConfig) includesUserEmail(email string) bool {
+	if cfg == nil {
+		return false
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return false
+	}
+	for _, allowed := range cfg.UserEmailWhitelist {
+		if email == strings.ToLower(strings.TrimSpace(allowed)) {
 			return true
 		}
 	}
@@ -3132,6 +3194,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		SampleRate:                     cfg.SampleRate,
 		AllGroups:                      cfg.AllGroups,
 		GroupIDs:                       append([]int64(nil), cfg.GroupIDs...),
+		UserEmailWhitelist:             append([]string(nil), cfg.UserEmailWhitelist...),
 		RecordNonHits:                  cfg.RecordNonHits,
 		Thresholds:                     cloneFloatMap(cfg.Thresholds),
 		BlockStatus:                    cfg.BlockStatus,
@@ -3543,6 +3606,26 @@ func normalizeInt64IDs(ids []int64) []int64 {
 	return out
 }
 
+func normalizeContentModerationUserEmailWhitelist(in []string) []string {
+	if len(in) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, raw := range in {
+		email := strings.ToLower(strings.TrimSpace(raw))
+		if email == "" {
+			continue
+		}
+		if _, ok := seen[email]; ok {
+			continue
+		}
+		seen[email] = struct{}{}
+		out = append(out, email)
+	}
+	return out
+}
+
 func normalizeBlockedKeywords(in []string) []string {
 	if len(in) == 0 {
 		return []string{}
@@ -3800,6 +3883,21 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 	if in.Scope != nil && !in.Scope.InScope {
 		return
 	}
+	cfg := &ContentModerationConfig{}
+	if runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx); err != nil {
+		slog.Warn("content_moderation.cyber_runtime_snapshot_load_failed", "error", err)
+	} else if runtimeSnapshot.config != nil {
+		cfg = runtimeSnapshot.config
+	}
+	if cfg.includesUserEmail(in.UserEmail) {
+		slog.Info("content_moderation.skip_user_email_whitelist",
+			"user_id", in.UserID,
+			"api_key_id", in.APIKeyID,
+			"endpoint", in.Endpoint,
+			"protocol", in.Protocol,
+			"source", ContentModerationActionCyberPolicy)
+		return
+	}
 	var userID *int64
 	if in.UserID > 0 {
 		userID = &in.UserID
@@ -3858,12 +3956,6 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		archiveErr = createErr
 		slog.Warn("content_moderation.cyber_create_log_failed", "user_id", in.UserID, "error", createErr)
 	}
-	cfg := &ContentModerationConfig{}
-	if runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx); err != nil {
-		slog.Warn("content_moderation.cyber_runtime_snapshot_load_failed", "error", err)
-	} else if runtimeSnapshot.config != nil {
-		cfg = runtimeSnapshot.config
-	}
 	emailEnabled := transitioned && cfg.EmailOnHit && s.emailService != nil && strings.TrimSpace(log.UserEmail) != ""
 	emailRequired := emailEnabled
 	emailCompletionRequired := false
@@ -3906,6 +3998,19 @@ func (s *ContentModerationService) retryCyberPolicyDisposition(ctx context.Conte
 	}
 	if kind != contentModerationDispositionCyber && kind != contentModerationDispositionLocal {
 		return fmt.Errorf("unknown content moderation disposition retry kind %q", kind)
+	}
+	if strings.TrimSpace(entry.UserEmail) != "" && s.settingRepo != nil {
+		whitelisted, err := s.IsUserEmailWhitelisted(ctx, entry.UserEmail)
+		if err != nil {
+			return fmt.Errorf("load content moderation user email whitelist: %w", err)
+		}
+		if whitelisted {
+			slog.Info("content_moderation.skip_user_email_whitelist",
+				"user_id", entry.UserID,
+				"api_key_id", entry.APIKeyID,
+				"source", kind+"_retry")
+			return nil
+		}
 	}
 	log := &ContentModerationLog{
 		ID: entry.LogID, ArchiveID: entry.ArchiveID, Action: ContentModerationActionCyberPolicy,

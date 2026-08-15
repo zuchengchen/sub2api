@@ -40,6 +40,7 @@ type contentModerationConfigRequest struct {
 	SampleRate           *int                `json:"sample_rate"`
 	AllGroups            *bool               `json:"all_groups"`
 	GroupIDs             *[]int64            `json:"group_ids"`
+	UserEmailWhitelist   *[]string           `json:"user_email_whitelist"`
 	RecordNonHits        *bool               `json:"record_non_hits"`
 	Thresholds           *map[string]float64 `json:"thresholds"`
 	BlockStatus          *int                `json:"block_status"`
@@ -122,6 +123,7 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		SampleRate:                     req.SampleRate,
 		AllGroups:                      req.AllGroups,
 		GroupIDs:                       req.GroupIDs,
+		UserEmailWhitelist:             req.UserEmailWhitelist,
 		RecordNonHits:                  req.RecordNonHits,
 		Thresholds:                     req.Thresholds,
 		BlockStatus:                    req.BlockStatus,

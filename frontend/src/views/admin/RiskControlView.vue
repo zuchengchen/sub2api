@@ -731,6 +731,31 @@
               </div>
             </div>
 
+            <div class="space-y-3 rounded-lg border border-gray-100 p-4 dark:border-dark-700">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <label for="risk-control-user-email-whitelist" class="text-sm font-semibold text-gray-900 dark:text-white">
+                    {{ t('admin.riskControl.userEmailWhitelist') }}
+                  </label>
+                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    {{ t('admin.riskControl.userEmailWhitelistHint') }}
+                  </p>
+                </div>
+                <span class="inline-flex w-fit flex-shrink-0 rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-gray-300">
+                  {{ t('admin.riskControl.userEmailWhitelistCount', { count: userEmailWhitelistCount }) }}
+                </span>
+              </div>
+              <textarea
+                id="risk-control-user-email-whitelist"
+                v-model="configForm.user_email_whitelist_text"
+                data-test="user-email-whitelist"
+                class="input min-h-32 resize-y font-mono text-sm"
+                autocomplete="off"
+                spellcheck="false"
+                :placeholder="t('admin.riskControl.userEmailWhitelistPlaceholder')"
+              ></textarea>
+            </div>
+
             <div class="space-y-4 rounded-lg border border-gray-100 p-4 dark:border-dark-700">
               <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                 <div>
@@ -1519,6 +1544,7 @@ const configForm = reactive({
   sample_rate: 100,
   all_groups: true,
   group_ids: [] as number[],
+  user_email_whitelist_text: '',
   record_non_hits: false,
   block_status: 403,
   block_message: defaultBlockMessage(),
@@ -1751,6 +1777,10 @@ const filteredGroups = computed(() => {
 })
 
 const inputApiKeyCount = computed(() => parseApiKeys(configForm.api_keys_text).length)
+
+const userEmailWhitelist = computed(() => parseUserEmailWhitelist(configForm.user_email_whitelist_text))
+
+const userEmailWhitelistCount = computed(() => userEmailWhitelist.value.length)
 
 const blockedKeywordList = computed(() => parseBlockedKeywords(configForm.blocked_keywords_text))
 
@@ -2024,6 +2054,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.sample_rate = config.sample_rate ?? 100
   configForm.all_groups = config.all_groups
   configForm.group_ids = Array.isArray(config.group_ids) ? [...config.group_ids] : []
+  configForm.user_email_whitelist_text = Array.isArray(config.user_email_whitelist) ? config.user_email_whitelist.join('\n') : ''
   configForm.record_non_hits = config.record_non_hits
   configForm.block_status = config.block_status || 403
   configForm.block_message = config.block_message || defaultBlockMessage()
@@ -2128,6 +2159,7 @@ async function saveConfig() {
       sample_rate: Number(configForm.sample_rate) || 0,
       all_groups: configForm.all_groups,
       group_ids: configForm.all_groups ? [] : [...configForm.group_ids],
+      user_email_whitelist: userEmailWhitelist.value,
       record_non_hits: configForm.record_non_hits,
       clear_api_key: configForm.clear_api_key,
       block_status: Number(configForm.block_status) || 403,
@@ -2850,6 +2882,10 @@ function parseBlockedKeywords(value: string): string[] {
 
 function parseLineList(value: string): string[] {
   return parseBlockedKeywords(value)
+}
+
+function parseUserEmailWhitelist(value: string): string[] {
+  return parseLineList(value).map((email) => email.toLowerCase())
 }
 
 function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
