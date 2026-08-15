@@ -355,6 +355,144 @@ func TestYuFengXGuardParserAndStructuredRequest(t *testing.T) {
 	require.NotContains(t, userMessage, `"quoted_data"`)
 }
 
+func TestYuFengPornographicContextAnnotationPreservesDecision(t *testing.T) {
+	cases := []struct {
+		name           string
+		contextClass   string
+		truncated      bool
+		label          string
+		category       string
+		wantParserStat string
+	}{
+		{
+			name: "complete tool pc is marked for review", contextClass: ContentModerationContextTool,
+			label: "pc", category: "pornographic_contraband",
+			wantParserStat: contentModerationYuFengContextReviewParserStatus,
+		},
+		{
+			name: "complete code pc is marked for review", contextClass: ContentModerationContextCode,
+			label: "pc", category: "pornographic_contraband",
+			wantParserStat: contentModerationYuFengContextReviewParserStatus,
+		},
+		{
+			name: "user pc remains parsed", contextClass: ContentModerationContextUser,
+			label: "pc", category: "pornographic_contraband", wantParserStat: "parsed",
+		},
+		{
+			name: "unknown pc remains parsed", contextClass: ContentModerationContextUnknown,
+			label: "pc", category: "pornographic_contraband", wantParserStat: "parsed",
+		},
+		{
+			name: "truncated tool pc remains parsed", contextClass: ContentModerationContextTool,
+			truncated: true, label: "pc", category: "pornographic_contraband", wantParserStat: "parsed",
+		},
+		{
+			name: "other labels remain parsed", contextClass: ContentModerationContextTool,
+			label: "mc", category: "malicious_code", wantParserStat: "parsed",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fragment, ok := newContentModerationFragment("tool", "text", "messages.1.tool_result", "test content")
+			require.True(t, ok)
+			fragment.ContextClass = tc.contextClass
+			result := annotateContentModerationYuFengResult(contentModerationSecondLayerResult{
+				Blocked: true, Label: tc.label, Category: tc.category, ParserStatus: "parsed",
+			}, contentModerationSecondLayerInput{
+				Fragment: fragment,
+				Evidence: moderationEvidence{Text: fragment.Text, Truncated: tc.truncated},
+			})
+			require.True(t, result.Blocked)
+			require.Equal(t, tc.label, result.Label)
+			require.Equal(t, tc.category, result.Category)
+			require.Equal(t, tc.wantParserStat, result.ParserStatus)
+		})
+	}
+}
+
+func TestContentModerationYuFengPcContextAnnotationInDecisionFlow(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		stage            string
+		body             string
+		wantBlocked      bool
+		wantParserStatus string
+	}{
+		{
+			name: "shadow preserves tool pc risk", stage: ContentModerationSecondLayerStageShadow,
+			body:             `{"input":[{"type":"function_call_output","call_id":"call_1","output":"ffmpeg -i input.mp3 output.mp3"}]}`,
+			wantParserStatus: contentModerationYuFengContextReviewParserStatus,
+		},
+		{
+			name: "shadow preserves user pc risk", stage: ContentModerationSecondLayerStageShadow,
+			body:             `{"input":"ordinary user text"}`,
+			wantParserStatus: "parsed",
+		},
+		{
+			name: "enforce preserves tool pc block", stage: ContentModerationSecondLayerStageEnforce,
+			body:        `{"input":[{"type":"function_call_output","call_id":"call_1","output":"ffmpeg -i input.mp3 output.mp3"}]}`,
+			wantBlocked: true, wantParserStatus: contentModerationYuFengContextReviewParserStatus,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"pc"}}]}`))
+			}))
+			defer server.Close()
+
+			cfg := secondLayerGateTestConfig(server.URL)
+			cfg.SecondLayerEndpoints[0].Profile = ContentModerationModelProfileYuFengXGuard
+			cfg.SecondLayerEndpoints[0].PromptVersion = ContentModerationYuFengPromptVersion
+			cfg.SecondLayerStage = tc.stage
+			cfg.normalize()
+			cache := &contentModerationReplayCache{}
+			repo := &contentModerationTestRepo{}
+			svc := &ContentModerationService{repo: repo, hashCache: cache}
+			scope := NewContentModerationScopeSnapshot(nil, "gpt-yufeng")
+			decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+				Body: []byte(tc.body), Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
+			}, &contentModerationRuntimeSnapshot{
+				riskControlEnabled: true, config: cfg, fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
+			})
+			require.Equal(t, tc.wantBlocked, decision.Blocked)
+			require.Equal(t, !tc.wantBlocked, decision.Allowed)
+			logs := append([]ContentModerationLog(nil), repo.logs...)
+			require.Len(t, logs, 1)
+			require.Equal(t, "pornographic_contraband", logs[0].HighestCategory)
+			require.True(t, logs[0].HighestScore > 0)
+			require.Equal(t, tc.wantParserStatus, logs[0].ParserStatus)
+			if tc.wantBlocked {
+				require.Equal(t, ContentModerationActionSecondLayerBlock, decision.Action)
+			} else {
+				require.Equal(t, ContentModerationActionAllow, decision.Action)
+				require.Equal(t, ContentModerationActionSecondLayerShadow, logs[0].Action)
+			}
+		})
+	}
+}
+
+func TestContentModerationYuFengLegacyPromptVersionNormalizesToCurrentPolicy(t *testing.T) {
+	endpoints := normalizeContentModerationEndpoints([]ContentModerationEndpoint{
+		{ID: "legacy", BaseURL: "http://127.0.0.1:8088", Profile: ContentModerationModelProfileYuFengXGuard, PromptVersion: contentModerationYuFengLegacyPromptVersion},
+		{ID: "empty", BaseURL: "http://127.0.0.1:8089", Profile: ContentModerationModelProfileYuFengXGuard},
+		{ID: "custom", BaseURL: "http://127.0.0.1:8090", Profile: ContentModerationModelProfileYuFengXGuard, PromptVersion: "site-policy-v3"},
+	})
+
+	require.Len(t, endpoints, 3)
+	require.Equal(t, ContentModerationYuFengPromptVersion, endpoints[0].PromptVersion)
+	require.Equal(t, ContentModerationYuFengPromptVersion, endpoints[1].PromptVersion)
+	require.Equal(t, "site-policy-v3", endpoints[2].PromptVersion)
+
+	disabled := &ContentModerationConfig{SecondLayerEndpoints: endpoints}
+	require.Empty(t, contentModerationYuFengPolicyCacheRevision(disabled))
+	qwen := &ContentModerationConfig{SecondLayerEnabled: true, SecondLayerEndpoints: []ContentModerationEndpoint{{Profile: ContentModerationModelProfileQwen}}}
+	require.Empty(t, contentModerationYuFengPolicyCacheRevision(qwen))
+	yufeng := &ContentModerationConfig{SecondLayerEnabled: true, SecondLayerEndpoints: endpoints}
+	require.Equal(t, ContentModerationYuFengPromptVersion, contentModerationYuFengPolicyCacheRevision(yufeng))
+}
+
 func TestContentModerationSecondLayerRuntimeMetrics(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0

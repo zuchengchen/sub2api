@@ -38,7 +38,11 @@ different policy.
 6. Parse only a known YuFeng label. Empty or unknown output is a parser error
    and follows the existing second-layer failure policy; it is never silently
    converted to safe.
-7. Persist the original audit row before publishing a block cache entry.
+7. Preserve every model risk decision. A complete non-user fragment labeled
+   `pc` is marked `context_review_pc` for audit review, but remains risky in
+   shadow mode and remains blocked in enforce mode. Context class is not an
+   authorization boundary because API clients can submit tool-shaped content.
+8. Persist the original audit row before publishing a block cache entry.
 
 ## Original, replay, expiry, and deletion
 

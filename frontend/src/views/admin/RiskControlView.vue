@@ -2571,7 +2571,7 @@ function addSecondLayerEndpoint() {
     model: 'yufeng-xguard-q4',
     profile: 'yufeng_xguard',
     model_revision: '',
-    prompt_version: 'yufeng-xguard-v1',
+    prompt_version: 'yufeng-xguard-v2',
     stop_tokens: [],
     stop_tokens_text: '',
     enabled: true,
@@ -2589,7 +2589,7 @@ function removeSecondLayerEndpoint(index: number) {
 
 function onSecondLayerProfileChange(endpoint: EditableModerationEndpoint) {
   if (endpoint.profile === 'yufeng_xguard' && !endpoint.prompt_version?.trim()) {
-    endpoint.prompt_version = 'yufeng-xguard-v1'
+    endpoint.prompt_version = 'yufeng-xguard-v2'
   }
 }
 
