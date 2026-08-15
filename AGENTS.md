@@ -68,8 +68,9 @@ different workflow for a specific task.
 4. Before tagging, add `.github/releases/<tag>.md` with user-facing release
    notes that describe the actual changes since the previous customized tag,
    upgrade guidance, compatibility or migration impact, verification, and
-   rollback information. Short tag annotations are not a substitute for a
-   complete GitHub Release.
+   rollback information. Verification must list failed and skipped checks as
+   well as successful checks. Short tag annotations are not a substitute for
+   a complete GitHub Release.
 5. Run release checks on `main-czc` and create a `czc-*` tag for production
    releases. Verify that the matching GitHub Release was published with the
    detailed notes.

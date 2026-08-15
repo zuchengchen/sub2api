@@ -15,7 +15,8 @@ must include:
 - fixes, features, and explicitly unchanged behavior;
 - guidance about who should upgrade and who can defer;
 - database, configuration, and API compatibility impact;
-- tests and production checks that were actually completed;
+- tests and production checks that were actually completed, including failures
+  and skipped checks;
 - rollback availability and a full comparison link.
 
 The `Publish CZC Release Notes` workflow creates or updates the matching GitHub
