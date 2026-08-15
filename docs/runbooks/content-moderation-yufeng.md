@@ -75,7 +75,7 @@ leave headroom for the larger KV cache while retaining containment. A
 endpoint timeout. With 14 threads, three pairs of concurrent health checks all
 completed successfully; the complete safe-plus-unsafe chains took 14.76 to
 24.83 seconds. After the v2 prompt was added, two more concurrent pairs ran the
-expanded safe, unsafe, benign-media, and explicit-content checks. All eight
+expanded safe, unsafe, benign-media, and explicit-content checks. All four
 chains returned the expected labels without a per-request timeout; each
 four-request chain took 49.67 to 54.69 seconds. The historical benchmark below
 used the previous 16-thread, single-slot setting and is not a two-slot
