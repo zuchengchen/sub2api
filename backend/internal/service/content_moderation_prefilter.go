@@ -18,7 +18,7 @@ func newContentModerationPrefilterMatcher(values []string) *contentModerationPre
 	if len(keywords) == 0 {
 		return nil
 	}
-	return &contentModerationPrefilterMatcher{matcher: newContentModerationKeywordMatcher(keywords)}
+	return &contentModerationPrefilterMatcher{matcher: newContentModerationSubstringMatcher(keywords)}
 }
 
 func (m *contentModerationPrefilterMatcher) Match(text string) (string, bool) {

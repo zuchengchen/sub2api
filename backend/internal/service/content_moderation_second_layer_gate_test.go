@@ -291,7 +291,7 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 	cfg.CandidateAsset = "legacy-prompt-audit-v1"
 	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
-	require.Len(t, keywords, 247)
+	require.Len(t, keywords, 253)
 	matcher := newContentModerationPrefilterMatcher(keywords)
 	_, ok := matcher.Match("REVERSE---SHELL")
 	require.True(t, ok)
@@ -302,17 +302,37 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 	keyword, ok := matcher.Match("reject invalid/destructive payloads before commit")
 	require.True(t, ok)
 	require.Equal(t, "destructive payload", keyword)
+	for _, test := range []struct {
+		text    string
+		keyword string
+	}{
+		{text: "metamorphic testing", keyword: "metamorphic"},
+		{text: "do anything now", keyword: "do anything now"},
+		{text: "make a bomb", keyword: "make a bomb"},
+		{text: "malicious payload sample", keyword: "malicious payload"},
+		{text: "opposite model behavior", keyword: "opposite mode"},
+		{text: "bypass content filtering", keyword: "bypass content filter"},
+	} {
+		keyword, ok = matcher.Match(test.text)
+		require.True(t, ok, test.text)
+		require.Equal(t, test.keyword, keyword, test.text)
+	}
 }
 
 func TestContentModerationFragmentCacheNamespaceTracksPrefilterPolicy(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	withoutPrefilter := cfg.fragmentCacheNamespace()
 	previousKeywordContext := cfg.fragmentCacheNamespaceWithKeywordContextRevision("powershell-doc-v1")
+	previousKeywordMatcher := cfg.fragmentCacheNamespaceWithPolicyRevisions(
+		contentModerationKeywordContextPolicyRevision,
+		"substring-v1",
+	)
 
 	cfg.CandidateEnabled = true
 	withPrefilter := cfg.fragmentCacheNamespace()
 
 	require.NotEqual(t, previousKeywordContext, withoutPrefilter)
+	require.NotEqual(t, previousKeywordMatcher, withoutPrefilter)
 	require.NotEqual(t, withoutPrefilter, withPrefilter)
 	require.Equal(t, contentModerationSecondLayerPrefilterPolicyVersion, contentModerationSecondLayerPrefilterCacheRevision(cfg))
 }
