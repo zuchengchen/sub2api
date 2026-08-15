@@ -1,0 +1,95 @@
+name: Publish CZC Release Notes
+
+on:
+  push:
+    branches:
+      - main-czc
+    tags:
+      - 'czc-*'
+    paths:
+      - '.github/releases/czc-*.md'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: czc-release-notes-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository and tags
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Select release note files
+        id: notes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+
+          notes_list="$RUNNER_TEMP/czc-release-note-files"
+          : > "$notes_list"
+
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            printf '.github/releases/%s.md\n' "$REF_NAME" >> "$notes_list"
+          elif [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            git diff-tree --root --no-commit-id --name-only --diff-filter=AM -r "$GITHUB_SHA" -- \
+              '.github/releases/czc-*.md' >> "$notes_list"
+          else
+            git diff --name-only --diff-filter=AM "$BEFORE_SHA" "$GITHUB_SHA" -- \
+              '.github/releases/czc-*.md' >> "$notes_list"
+          fi
+
+          if [[ ! -s "$notes_list" ]]; then
+            echo "No customized release note files were selected." >&2
+            exit 1
+          fi
+
+          while IFS= read -r notes_file; do
+            if [[ ! -f "$notes_file" ]]; then
+              echo "Release note file does not exist: $notes_file" >&2
+              exit 1
+            fi
+          done < "$notes_list"
+
+          echo "path=$notes_list" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub releases
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          NOTES_LIST: ${{ steps.notes.outputs.path }}
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r notes_file; do
+            tag=$(basename "$notes_file" .md)
+            title=$(sed -n '1s/^# //p' "$notes_file")
+
+            if [[ -z "$title" ]]; then
+              echo "The first line of $notes_file must be an H1 release title." >&2
+              exit 1
+            fi
+            if ! git rev-parse --verify --quiet "refs/tags/$tag^{commit}" >/dev/null; then
+              echo "Release tag does not exist: $tag" >&2
+              exit 1
+            fi
+
+            body_file=$(mktemp)
+            tail -n +2 "$notes_file" > "$body_file"
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release edit "$tag" --title "$title" --notes-file "$body_file"
+            else
+              gh release create "$tag" --verify-tag --title "$title" --notes-file "$body_file"
+            fi
+
+            rm -f "$body_file"
+          done < "$NOTES_LIST"

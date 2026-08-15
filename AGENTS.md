@@ -65,9 +65,15 @@ different workflow for a specific task.
 2. Merge them into `dev-czc` and run the appropriate integration tests.
 3. Merge the tested `dev-czc` state into `main-czc` through a pull request or an
    explicit merge commit.
-4. Run release checks on `main-czc` and create a `czc-*` tag for production
-   releases.
-5. Never promote changes by rewriting branch history.
+4. Before tagging, add `.github/releases/<tag>.md` with user-facing release
+   notes that describe the actual changes since the previous customized tag,
+   upgrade guidance, compatibility or migration impact, verification, and
+   rollback information. Short tag annotations are not a substitute for a
+   complete GitHub Release.
+5. Run release checks on `main-czc` and create a `czc-*` tag for production
+   releases. Verify that the matching GitHub Release was published with the
+   detailed notes.
+6. Never promote changes by rewriting branch history.
 
 ## Synchronizing Upstream Changes
 
