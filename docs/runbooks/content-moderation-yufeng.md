@@ -74,8 +74,12 @@ leave headroom for the larger KV cache while retaining containment. A
 28-thread setting was rejected after concurrent probes exceeded the 25-second
 endpoint timeout. With 14 threads, three pairs of concurrent health checks all
 completed successfully; the complete safe-plus-unsafe chains took 14.76 to
-24.83 seconds. The historical benchmark below used the previous 16-thread,
-single-slot setting and is not a two-slot performance guarantee.
+24.83 seconds. After the v2 prompt was added, two more concurrent pairs ran the
+expanded safe, unsafe, benign-media, and explicit-content checks. All four
+chains returned the expected labels without a per-request timeout; each
+four-request chain took 49.67 to 54.69 seconds. The historical benchmark below
+used the previous 16-thread, single-slot setting and is not a two-slot
+performance guarantee.
 
 From another shell:
 
@@ -86,7 +90,9 @@ YUFENG_BASE_URL=http://127.0.0.1:8088 \
 
 The check requires `/health=status:ok`, the pinned model alias, a `sec` result
 for a normal service status, and a known non-`sec` result for an embedded
-secret-exfiltration and shell-execution instruction. It sends no credential.
+secret-exfiltration and shell-execution instruction. It also requires ordinary
+FFmpeg/FFprobe output to remain `sec` and an explicit sexual-content sample to
+return `pc`. It sends no credential.
 
 ## Sub2API shadow configuration
 
@@ -99,7 +105,7 @@ base_url: http://127.0.0.1:8088
 model: yufeng-xguard-q4
 profile: yufeng_xguard
 model_revision: a457e581bb00997ff1eb1f9ae0bf21488c6a632c
-prompt_version: yufeng-xguard-v1
+prompt_version: yufeng-xguard-v2
 timeout_ms: 25000
 input_limit: 4000
 stage: shadow
@@ -114,6 +120,14 @@ allow_ttl_seconds: 3600
 The 25-second endpoint timeout exceeds the observed 4K p95 plus margin while
 remaining below the 30-second configuration limit. Evidence selection and
 bounded fallback are still required; timeout is not a substitute for them.
+
+The v2 policy tells the model not to infer `pc` (Pornographic Contraband) from
+ordinary FFmpeg/media editing, file names, paths, rendering, transcoding,
+probing, or verification text. The service never changes a returned risk label
+to safe based on context or a finite keyword list. A complete non-user
+fragment that still receives `pc` remains visible in the risky shadow view and
+is marked `context_review_pc`; in enforce mode it remains blocked. This avoids
+turning client-supplied tool-shaped content into a bypass.
 
 ## Replay benchmark
 

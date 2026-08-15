@@ -77,7 +77,8 @@ func normalizeContentModerationEndpoints(endpoints []ContentModerationEndpoint) 
 		if endpoint.Model == "" {
 			endpoint.Model = defaultContentModerationSecondLayerModel
 		}
-		if endpoint.PromptVersion == "" && endpoint.Profile == ContentModerationModelProfileYuFengXGuard {
+		if endpoint.Profile == ContentModerationModelProfileYuFengXGuard &&
+			(endpoint.PromptVersion == "" || endpoint.PromptVersion == contentModerationYuFengLegacyPromptVersion) {
 			endpoint.PromptVersion = ContentModerationYuFengPromptVersion
 		}
 		if endpoint.TimeoutMS <= 0 {
@@ -195,6 +196,7 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		KeywordPolicy     string                      `json:"keyword_policy"`
 		ContextPolicy     string                      `json:"context_policy"`
 		EvidencePolicy    string                      `json:"evidence_policy"`
+		YuFengPolicy      string                      `json:"yufeng_policy,omitempty"`
 		PolicyDigest      string                      `json:"policy_digest"`
 	}{
 		Version:           normalizeContentModerationCacheVersion(cfg.CacheVersion),
@@ -218,11 +220,24 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		KeywordPolicy:     strings.TrimSpace(cfg.KeywordPolicyVersion),
 		ContextPolicy:     strings.TrimSpace(cfg.ContextPolicyVersion),
 		EvidencePolicy:    strings.TrimSpace(cfg.EvidencePolicyVersion),
+		YuFengPolicy:      contentModerationYuFengPolicyCacheRevision(cfg),
 		PolicyDigest:      contentModerationPolicyDigest(cfg),
 	}
 	raw, _ := json.Marshal(policy)
 	digest := sha256.Sum256(raw)
 	return policy.Version + ":" + hex.EncodeToString(digest[:16])
+}
+
+func contentModerationYuFengPolicyCacheRevision(cfg *ContentModerationConfig) string {
+	if cfg == nil || !cfg.SecondLayerEnabled {
+		return ""
+	}
+	for _, endpoint := range cfg.SecondLayerEndpoints {
+		if normalizeContentModerationModelProfile(endpoint.Profile) == ContentModerationModelProfileYuFengXGuard {
+			return ContentModerationYuFengPromptVersion
+		}
+	}
+	return ""
 }
 
 func contentModerationCandidateRevision(cfg *ContentModerationConfig) string {
