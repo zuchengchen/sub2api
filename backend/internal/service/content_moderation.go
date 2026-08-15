@@ -3645,7 +3645,7 @@ func matchBlockedKeyword(text string, keywords []string) (string, bool) {
 		if kw == "" {
 			continue
 		}
-		if strings.Contains(lower, strings.ToLower(kw)) {
+		if containsContentModerationHardKeyword(lower, strings.ToLower(kw)) {
 			return kw, true
 		}
 	}

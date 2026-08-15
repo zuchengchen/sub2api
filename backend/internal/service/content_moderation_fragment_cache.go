@@ -156,10 +156,20 @@ func normalizeContentModerationScannerIDs(values []string) []string {
 }
 
 func (cfg *ContentModerationConfig) fragmentCacheNamespace() string {
-	return cfg.fragmentCacheNamespaceWithKeywordContextRevision(contentModerationKeywordContextPolicyRevision)
+	return cfg.fragmentCacheNamespaceWithPolicyRevisions(
+		contentModerationKeywordContextPolicyRevision,
+		contentModerationHardKeywordMatcherPolicyVersion,
+	)
 }
 
 func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithKeywordContextRevision(keywordContextRevision string) string {
+	return cfg.fragmentCacheNamespaceWithPolicyRevisions(
+		keywordContextRevision,
+		contentModerationHardKeywordMatcherPolicyVersion,
+	)
+}
+
+func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(keywordContextRevision, keywordMatcherRevision string) string {
 	if cfg == nil {
 		return ""
 	}
@@ -170,6 +180,7 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithKeywordContextRevi
 		CandidateKeywords []string                    `json:"candidate_keywords"`
 		KeywordAllowlist  []string                    `json:"keyword_allowlist"`
 		KeywordContextRev string                      `json:"keyword_context_revision"`
+		KeywordMatcherRev string                      `json:"keyword_matcher_revision"`
 		Candidate         string                      `json:"candidate"`
 		CandidateOn       bool                        `json:"candidate_on"`
 		CandidateRev      string                      `json:"candidate_revision"`
@@ -192,6 +203,7 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithKeywordContextRevi
 		CandidateKeywords: normalizeBlockedKeywords(cfg.CandidateKeywords),
 		KeywordAllowlist:  normalizeBlockedKeywords(cfg.KeywordAllowlist),
 		KeywordContextRev: strings.TrimSpace(keywordContextRevision),
+		KeywordMatcherRev: strings.TrimSpace(keywordMatcherRevision),
 		Candidate:         strings.TrimSpace(cfg.CandidateAsset),
 		CandidateOn:       cfg.CandidateEnabled,
 		CandidateRev:      contentModerationCandidateRevision(cfg),

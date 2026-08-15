@@ -11,9 +11,9 @@ func TestLegacyPromptAuditCandidateAsset(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, asset.Manifest.EnabledByDefault)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", asset.Manifest.SourceCommit)
-	require.Len(t, asset.Layer1, 971)
-	require.Len(t, asset.Layer2, 247)
-	require.Len(t, asset.Layer1Demotions, 56)
+	require.Len(t, asset.Layer1, 965)
+	require.Len(t, asset.Layer2, 253)
+	require.Len(t, asset.Layer1Demotions, 62)
 	require.Len(t, asset.Layer1Suppressions, 28)
 	require.Len(t, asset.Manifest.CandidateEndpoints, 1)
 	require.False(t, asset.Manifest.CandidateEndpoints[0].Enabled)
@@ -39,6 +39,10 @@ func TestLegacyPromptAuditCandidateAssetAppliesLayerAssignments(t *testing.T) {
 	for _, keyword := range asset.Layer2 {
 		layer2[candidatePrefilterKey(keyword)] = struct{}{}
 	}
+	demotions := make(map[string]struct{}, len(asset.Layer1Demotions))
+	for _, keyword := range asset.Layer1Demotions {
+		demotions[normalizedCandidateTerm(keyword)] = struct{}{}
+	}
 	for _, keyword := range []string{
 		"mcp__ida",
 		"remote access trojan",
@@ -48,9 +52,25 @@ func TestLegacyPromptAuditCandidateAssetAppliesLayerAssignments(t *testing.T) {
 		"pass-the-hash",
 		"zero_day",
 		"destructive payload",
+		"metamorphic",
+		"do anything now",
+		"make a bomb",
+		"malicious payload",
+		"opposite mode",
+		"bypass content filter",
 	} {
 		require.NotContains(t, asset.Layer1, keyword)
 		require.Contains(t, layer2, candidatePrefilterKey(keyword))
+	}
+	for _, keyword := range []string{
+		"metamorphic",
+		"do anything now",
+		"make a bomb",
+		"malicious payload",
+		"opposite mode",
+		"bypass content filter",
+	} {
+		require.Contains(t, demotions, normalizedCandidateTerm(keyword))
 	}
 
 	for _, keyword := range []string{"hax0r", "sh3ll", "sp00f", "zer0day"} {
