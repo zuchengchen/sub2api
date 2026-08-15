@@ -74,7 +74,7 @@ vi.mock('vue-i18n', async () => {
     useI18n: () => ({
       t: (key: string, params?: Record<string, string | number>) => {
         if (key === 'admin.riskControl.preBlockAPIKeyLoadSummary') {
-          return `同步并发 ${params?.active} / 可用 Key ${params?.available}，累计 ${params?.total} 次，worker：${params?.workerActive} / ${params?.workerTotal}`
+          return `同步并发 ${params?.active} / 可用 Key ${params?.available}，累计 ${params?.total} 次`
         }
         return key.replace(/\{(\w+)\}/g, (_, token) => String(params?.[token] ?? `{${token}}`))
       },
@@ -323,7 +323,7 @@ describe('admin RiskControlView', () => {
     deleteArchive.mockResolvedValue({ deleted: true })
   })
 
-  it('requests only blocked and cyber policy audit records', async () => {
+  it('requests cyber policy records by default and switches between the three audit views', async () => {
     listLogs.mockResolvedValue({
       items: [{ ...archivedLog(), action: 'hash_block', flagged: false }],
       total: 1,
@@ -348,7 +348,19 @@ describe('admin RiskControlView', () => {
 
     await flushPromises()
 
-    expect(listLogs).toHaveBeenCalledWith(expect.objectContaining({ result: 'blocked' }))
+    expect(listLogs).toHaveBeenCalledWith(expect.objectContaining({ result: 'cyber_policy' }))
+
+    const blockedTab = wrapper.get('[data-test="record-tab-content_blocked"]')
+    await blockedTab.trigger('click')
+    await flushPromises()
+    expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'content_blocked' }))
+    expect(blockedTab.attributes('aria-selected')).toBe('true')
+
+    const shadowTab = wrapper.get('[data-test="record-tab-risky_shadow"]')
+    await shadowTab.trigger('click')
+    await flushPromises()
+    expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'risky_shadow' }))
+    expect(shadowTab.attributes('aria-selected')).toBe('true')
     expect(wrapper.get('[data-test="audit-result"]').text()).toBe('admin.riskControl.action.block')
     expect(wrapper.get('[data-test="audit-result"]').classes()).toContain('bg-red-100')
     expect(wrapper.text()).not.toContain('admin.riskControl.result.pass')
@@ -396,6 +408,46 @@ describe('admin RiskControlView', () => {
 
     await findButtonByText(wrapper, 'admin.riskControl.replaySource').trigger('click')
     expect(wrapper.text()).toContain('req-original')
+  })
+
+  it('renders risky shadow decisions as observations instead of passes', async () => {
+    listLogs.mockResolvedValue({
+      items: [{
+        ...archivedLog(),
+        action: 'second_layer_shadow',
+        decision_source: 'model_shadow',
+        flagged: false,
+        highest_category: 'jailbreak',
+        violation_count: 0,
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-test="record-tab-risky_shadow"]').trigger('click')
+    await flushPromises()
+
+    const result = wrapper.get('[data-test="audit-result"]')
+    expect(result.text()).toBe('admin.riskControl.action.shadowBlock')
+    expect(result.classes()).toContain('bg-amber-100')
+    expect(result.text()).not.toBe('admin.riskControl.result.pass')
   })
 
   it('saves staged YuFeng endpoint, bounded TTLs, and policy versions', async () => {

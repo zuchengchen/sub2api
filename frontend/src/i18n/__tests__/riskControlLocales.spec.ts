@@ -4,16 +4,14 @@ import en from '../locales/en'
 import zh from '../locales/zh'
 
 describe('risk control locale copy', () => {
-  it('describes worker runtime as audit and pre-block record processing', () => {
-    expect(zh.admin.riskControl.workerStatusHint).toContain('前置拦截记录任务')
-    expect(zh.admin.riskControl.workerStatusHint).not.toContain('异步观察任务')
-    expect(en.admin.riskControl.workerStatusHint).toContain('pre-block record tasks')
-    expect(en.admin.riskControl.workerStatusHint).not.toContain('observation tasks')
+  it('keeps synchronous counters separate from async record processing', () => {
+    expect(zh.admin.riskControl.preBlockSyncHint).toContain('不包含异步写记录任务')
+    expect(en.admin.riskControl.preBlockSyncHint).toContain('excluding async record tasks')
   })
 
-  it('keeps pre-block audit key summary aware of async worker load', () => {
-    expect(zh.admin.riskControl.preBlockAPIKeyLoadSummary).toContain('worker：{workerActive} / {workerTotal}')
-    expect(en.admin.riskControl.preBlockAPIKeyLoadSummary).toContain('worker: {workerActive} / {workerTotal}')
+  it('summarizes only fields exposed by the synchronous audit-key status', () => {
+    expect(zh.admin.riskControl.preBlockAPIKeyLoadSummary).toBe('同步并发 {active} / 可用 Key {available}，累计 {total} 次')
+    expect(en.admin.riskControl.preBlockAPIKeyLoadSummary).toBe('Sync active {active} / usable keys {available}, {total} total')
   })
 
   it('does not describe pre-block audit key polling as bypassing the worker pool', () => {

@@ -22,6 +22,9 @@ TimeoutStartSec=180s
 TimeoutStopSec=30s
 KillSignal=SIGINT
 LimitNOFILE=65536
+MemoryHigh=3G
+MemoryMax=4G
+CPUQuota=2800%
 
 NoNewPrivileges=true
 PrivateDevices=true

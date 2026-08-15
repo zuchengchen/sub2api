@@ -204,7 +204,12 @@ export default {
       settingsTitle: '内容审计设置',
       refreshStatus: '刷新状态',
       records: '审核记录',
-      recordsHint: '仅展示被内容审核拦截或收到 cyber policy 的记录。',
+      recordsHint: '按类别查看 Cyber Policy、内容审计拦截和影子模型风险记录。',
+      recordTabs: {
+        cyberPolicy: 'Cyber Policy',
+        blocked: '已拦截',
+        riskyShadow: 'Shadow 风险',
+      },
       saveConfig: '保存内容审计配置',
       statusFailed: '加载运行状态失败',
       enabled: '开启内容审计',
