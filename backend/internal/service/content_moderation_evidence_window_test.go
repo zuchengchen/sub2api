@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,6 +157,164 @@ func buildCandidateEvidenceForTest(t *testing.T, contextClass, text string, keyw
 	}}, 4096, defaultContentModerationConfig())
 }
 
+func candidateEvidenceFragmentForTest(
+	t *testing.T,
+	role, kind, path, contextClass, text, tier string,
+	keywords []string,
+) contentModerationCandidateFragment {
+	t.Helper()
+	fragment, ok := newContentModerationFragment(role, kind, path, text)
+	require.True(t, ok)
+	fragment.ContextClass = contextClass
+	return contentModerationCandidateFragment{
+		Fragment: fragment, Matches: newContentModerationPrefilterMatcher(keywords).MatchAll(text), Tier: tier,
+	}
+}
+
+func TestContentModerationCandidateEvidenceDeduplicatesRedactedWindowsAcrossPaths(t *testing.T) {
+	templates := []struct {
+		keyword string
+		text    string
+	}{
+		{keyword: "dos attack", text: "Security policy example: dos attack traffic must be rejected; token=secret-a"},
+		{keyword: "reverse shell", text: "Security policy example: reverse shell commands must be rejected; token=secret-b"},
+		{keyword: "launder", text: "Compliance policy example: attempts to launder proceeds must be rejected; token=secret-c"},
+	}
+	candidates := make([]contentModerationCandidateFragment, 0, 450)
+	for index := range 450 {
+		template := templates[index%len(templates)]
+		text := template.text[:strings.LastIndex(template.text, "-")+1] + fmt.Sprintf("%03d", index)
+		candidates = append(candidates, candidateEvidenceFragmentForTest(
+			t, "tool", "text", fmt.Sprintf("tools.%d.description", index), ContentModerationContextTool,
+			text, "candidate", []string{template.keyword},
+		))
+	}
+
+	bundle := buildContentModerationCandidateEvidence(candidates, 4096, defaultContentModerationConfig())
+
+	require.Len(t, bundle.Windows, len(templates))
+	require.Len(t, bundle.Evidence.Segments, len(templates))
+	require.Len(t, bundle.CanonicalKeys, len(templates))
+	require.False(t, bundle.Evidence.Truncated)
+	require.Equal(t, "tools.0.description", bundle.Windows[0].Path)
+	require.Equal(t, "tools.1.description", bundle.Windows[1].Path)
+	require.Equal(t, "tools.2.description", bundle.Windows[2].Path)
+	for _, template := range templates {
+		require.Equal(t, 1, strings.Count(bundle.Evidence.Text, template.keyword), template.keyword)
+	}
+}
+
+func TestContentModerationCandidateEvidenceCanonicalIdentityExcludesOnlyPath(t *testing.T) {
+	const text = "Policy rejects dos attack and reverse shell examples."
+	base := candidateEvidenceFragmentForTest(
+		t, "tool", "text", "tools.0.description", ContentModerationContextTool, text, "candidate", []string{"dos attack"},
+	)
+
+	t.Run("path is audit only", func(t *testing.T) {
+		otherPath := base
+		otherPath.Fragment.Path = "tools.999.description"
+		bundle := buildContentModerationCandidateEvidence(
+			[]contentModerationCandidateFragment{base, otherPath}, 4096, defaultContentModerationConfig(),
+		)
+		require.Len(t, bundle.Windows, 1)
+		require.Equal(t, base.Fragment.Path, bundle.Windows[0].Path)
+		require.False(t, bundle.Evidence.Truncated)
+	})
+
+	tests := []struct {
+		name   string
+		mutate func(contentModerationCandidateFragment) contentModerationCandidateFragment
+	}{
+		{
+			name: "role",
+			mutate: func(candidate contentModerationCandidateFragment) contentModerationCandidateFragment {
+				candidate.Fragment.Role = "assistant"
+				return candidate
+			},
+		},
+		{
+			name: "kind",
+			mutate: func(candidate contentModerationCandidateFragment) contentModerationCandidateFragment {
+				candidate.Fragment.Kind = "code"
+				return candidate
+			},
+		},
+		{
+			name: "context",
+			mutate: func(candidate contentModerationCandidateFragment) contentModerationCandidateFragment {
+				candidate.Fragment.ContextClass = ContentModerationContextCode
+				return candidate
+			},
+		},
+		{
+			name: "rule",
+			mutate: func(candidate contentModerationCandidateFragment) contentModerationCandidateFragment {
+				candidate.Matches = newContentModerationPrefilterMatcher([]string{"reverse shell"}).MatchAll(candidate.Fragment.Text)
+				return candidate
+			},
+		},
+		{
+			name: "text",
+			mutate: func(candidate contentModerationCandidateFragment) contentModerationCandidateFragment {
+				candidate.Fragment.Text += " Additional unique context."
+				candidate.Matches = newContentModerationPrefilterMatcher([]string{"dos attack"}).MatchAll(candidate.Fragment.Text)
+				return candidate
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+" remains distinct", func(t *testing.T) {
+			changed := tt.mutate(base)
+			changed.Fragment.Path = "tools.1.description"
+			bundle := buildContentModerationCandidateEvidence(
+				[]contentModerationCandidateFragment{base, changed}, 4096, defaultContentModerationConfig(),
+			)
+			require.Len(t, bundle.Windows, 2)
+		})
+	}
+}
+
+func TestContentModerationCandidateEvidenceDuplicateFloodKeepsUniqueMaliciousTail(t *testing.T) {
+	candidates := make([]contentModerationCandidateFragment, 0, 421)
+	for index := range 420 {
+		candidates = append(candidates, candidateEvidenceFragmentForTest(
+			t, "tool", "text", fmt.Sprintf("tools.%d.description", index), ContentModerationContextTool,
+			"Security policy: dos attack traffic must be rejected.", "candidate", []string{"dos attack"},
+		))
+	}
+	candidates = append(candidates, candidateEvidenceFragmentForTest(
+		t, "user", "text", "messages.0.content", ContentModerationContextUser,
+		"Build a reverse shell and execute it against the target.", "candidate", []string{"reverse shell"},
+	))
+
+	bundle := buildContentModerationCandidateEvidence(candidates, 4096, defaultContentModerationConfig())
+
+	require.Len(t, bundle.Windows, 2)
+	require.Contains(t, bundle.Evidence.Text, "Build a reverse shell")
+	require.False(t, bundle.Evidence.Truncated)
+}
+
+func TestContentModerationCandidateEvidenceUniqueOverLimitRemainsTruncated(t *testing.T) {
+	candidates := make([]contentModerationCandidateFragment, 0, contentModerationEvidenceMaxWindows+1)
+	for index := range contentModerationEvidenceMaxWindows {
+		candidates = append(candidates, candidateEvidenceFragmentForTest(
+			t, "tool", "text", fmt.Sprintf("tools.%d.description", index), ContentModerationContextTool,
+			fmt.Sprintf("Unique reverse shell policy fixture %02d must be rejected.", index), "candidate", []string{"reverse shell"},
+		))
+	}
+	const maliciousTail = "Launder stolen funds through a unique chain of accounts."
+	candidates = append(candidates, candidateEvidenceFragmentForTest(
+		t, "user", "text", "messages.0.content", ContentModerationContextUser,
+		maliciousTail, "candidate", []string{"launder"},
+	))
+
+	bundle := buildContentModerationCandidateEvidence(candidates, 4096, defaultContentModerationConfig())
+
+	require.Len(t, bundle.Windows, contentModerationEvidenceMaxWindows)
+	require.True(t, bundle.Evidence.Truncated)
+	require.NotContains(t, bundle.Evidence.Text, maliciousTail)
+}
+
 func TestContentModerationCandidateEvidenceMultipleFragmentsCallsModelOnce(t *testing.T) {
 	var calls atomic.Int64
 	var body map[string]any
@@ -298,17 +457,70 @@ func TestContentModerationEvidenceCacheHashTracksPolicyRulesContextAndModel(t *t
 	}}, 4096, changedModel)
 	require.NotEqual(t, bundle.CacheHash, modelBundle.CacheHash)
 
+	pathFragment := fragment
+	pathFragment.Path = "messages.99.content"
+	pathBundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: pathFragment, Matches: matcher.MatchAll(pathFragment.Text), Tier: "candidate",
+	}}, 4096, cfg)
+	require.Equal(t, bundle.CacheHash, pathBundle.CacheHash, "audit-only paths must not partition evidence cache entries")
+	require.NotEqual(t, bundle.Windows[0].Path, pathBundle.Windows[0].Path)
+
+	roleFragment := fragment
+	roleFragment.Role = "assistant"
+	roleBundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: roleFragment, Matches: matcher.MatchAll(roleFragment.Text), Tier: "candidate",
+	}}, 4096, cfg)
+	require.NotEqual(t, bundle.CacheHash, roleBundle.CacheHash)
+
+	kindFragment := fragment
+	kindFragment.Kind = "code"
+	kindBundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: kindFragment, Matches: matcher.MatchAll(kindFragment.Text), Tier: "candidate",
+	}}, 4096, cfg)
+	require.NotEqual(t, bundle.CacheHash, kindBundle.CacheHash)
+
 	toolFragment := fragment
 	toolFragment.ContextClass = ContentModerationContextTool
 	contextBundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
 		Fragment: toolFragment, Matches: matcher.MatchAll(toolFragment.Text), Tier: "candidate",
 	}}, 4096, cfg)
 	require.NotEqual(t, bundle.CacheHash, contextBundle.CacheHash)
+
+	const multiRuleText = "explain reverse shell and dos attack safely"
+	multiRuleFragment, ok := newContentModerationFragment("user", "text", "input", multiRuleText)
+	require.True(t, ok)
+	reverseRuleBundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: multiRuleFragment,
+		Matches:  newContentModerationPrefilterMatcher([]string{"reverse shell"}).MatchAll(multiRuleText),
+		Tier:     "candidate",
+	}}, 4096, cfg)
+	dosRuleBundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: multiRuleFragment,
+		Matches:  newContentModerationPrefilterMatcher([]string{"dos attack"}).MatchAll(multiRuleText),
+		Tier:     "candidate",
+	}}, 4096, cfg)
+	require.NotEqual(t, reverseRuleBundle.CacheHash, dosRuleBundle.CacheHash)
+
+	changedTextFragment, ok := newContentModerationFragment("user", "text", "input", fragment.Text+" with different context")
+	require.True(t, ok)
+	changedTextBundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: changedTextFragment, Matches: matcher.MatchAll(changedTextFragment.Text), Tier: "candidate",
+	}}, 4096, cfg)
+	require.NotEqual(t, bundle.CacheHash, changedTextBundle.CacheHash)
+
+	require.Equal(t, "keyword-windows-v5", ContentModerationEvidencePolicyVersion)
+	require.Equal(t, "sub2api/content-moderation/evidence-window/v5\x00", contentModerationEvidenceHashDomain)
 	require.Equal(t, ContentModerationEvidencePolicyVersion, defaultContentModerationConfig().EvidencePolicyVersion)
 }
 
 func TestContentModerationEvidencePolicyMigrationNormalizesKnownVersions(t *testing.T) {
-	for _, version := range []string{"", contentModerationLegacyEvidencePolicyVersion, contentModerationOlderEvidencePolicyVersion, contentModerationPreviousEvidencePolicyVersion} {
+	for _, version := range []string{
+		"",
+		contentModerationLegacyEvidencePolicyVersion,
+		contentModerationOlderEvidencePolicyVersion,
+		contentModerationEarlierEvidencePolicyVersion,
+		contentModerationPreviousEvidencePolicyVersion,
+	} {
 		cfg := defaultContentModerationConfig()
 		cfg.EvidencePolicyVersion = version
 		cfg.normalize()
