@@ -27,7 +27,7 @@ func TestMaliciousMacroKeywordContextDisposition(t *testing.T) {
 			name: "English defensive scanner",
 			role: "user", kind: "text", path: "messages.0.content",
 			text:    "Scan uploaded documents for malicious macros before parsing them.",
-			keyword: "malicious macros", disposition: contentModerationKeywordContextAllow,
+			keyword: "malicious macros", disposition: contentModerationKeywordContextReview,
 		},
 		{
 			name: "Chinese construction",
@@ -138,16 +138,16 @@ func TestMaliciousMacroKeywordContextDisposition(t *testing.T) {
 			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
 		},
 		{
-			name: "protective governor around construction is allowed",
+			name: "protective governor around construction is reviewed",
 			role: "user", kind: "text", path: "messages.0.content",
 			text:    "如何防止攻击者制作恶意宏？",
-			keyword: "恶意宏", disposition: contentModerationKeywordContextAllow,
+			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
 		},
 		{
-			name: "prohibited construction is allowed",
+			name: "prohibited construction is reviewed",
 			role: "user", kind: "text", path: "messages.0.content",
 			text:    "禁止制作恶意宏。",
-			keyword: "恶意宏", disposition: contentModerationKeywordContextAllow,
+			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
 		},
 		{
 			name: "quoted construction is reviewed",
@@ -195,7 +195,7 @@ func TestMaliciousMacroKeywordContextDisposition(t *testing.T) {
 			name: "protective governor overrides described behavior",
 			role: "user", kind: "text", path: "messages.0.content",
 			text:    "如何阻止恶意宏自动执行并隔离文档？",
-			keyword: "恶意宏", disposition: contentModerationKeywordContextAllow,
+			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
 		},
 		{
 			name: "Chinese neutral question",
@@ -231,19 +231,37 @@ func TestMaliciousMacroKeywordContextDisposition(t *testing.T) {
 			name: "defensive artifact is not construction intent",
 			role: "user", kind: "text", path: "messages.0.content",
 			text:    "请编写恶意宏检测规则并加入上传扫描。",
-			keyword: "恶意宏", disposition: contentModerationKeywordContextAllow,
+			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
 		},
 		{
 			name: "defensive purpose is not construction intent",
 			role: "user", kind: "text", path: "messages.0.content",
 			text:    "请编写用于检测恶意宏的规则并加入上传扫描。",
-			keyword: "恶意宏", disposition: contentModerationKeywordContextAllow,
+			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
 		},
 		{
 			name: "English defensive artifact is not construction intent",
 			role: "user", kind: "text", path: "messages.0.content",
 			text:    "Write a detector for malicious macros and quarantine matching files.",
-			keyword: "malicious macros", disposition: contentModerationKeywordContextAllow,
+			keyword: "malicious macros", disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name: "closed defensive template remains local allow",
+			role: "user", kind: "text", path: "messages.0.content",
+			text:    "请扫描恶意宏。",
+			keyword: "恶意宏", disposition: contentModerationKeywordContextAllow,
+		},
+		{
+			name: "English defensive analysis is reviewed",
+			role: "user", kind: "text", path: "messages.0.content",
+			text:    "Explain how attackers create a malicious macro so defenders can detect it.",
+			keyword: "malicious macro", disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name: "Chinese defensive analysis is reviewed",
+			role: "user", kind: "text", path: "messages.0.content",
+			text:    "分析攻击者制作恶意宏后防护系统如何检测它。",
+			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
 		},
 	}
 
@@ -259,7 +277,7 @@ func TestMaliciousMacroKeywordContextDisposition(t *testing.T) {
 }
 
 func TestMaliciousMacroKeywordContextUsesOnlyLocalWindow(t *testing.T) {
-	t.Run("distant risk sentence does not contaminate defensive sentence", func(t *testing.T) {
+	t.Run("distant risk sentence does not hard block defensive sentence", func(t *testing.T) {
 		text := "制作一个普通办公模板。" + strings.Repeat("项目背景信息。", 40) +
 			"上传文件需要进行恶意宏和病毒扫描。"
 		fragment, ok := newContentModerationFragment("user", "text", "messages.0.content", text)
@@ -267,7 +285,7 @@ func TestMaliciousMacroKeywordContextUsesOnlyLocalWindow(t *testing.T) {
 
 		disposition, configured := classifyContentModerationKeywordContext(fragment, "恶意宏")
 		require.True(t, configured)
-		require.Equal(t, contentModerationKeywordContextAllow, disposition)
+		require.Equal(t, contentModerationKeywordContextReview, disposition)
 	})
 
 	t.Run("distant defensive sentence does not allow ambiguous mention", func(t *testing.T) {
@@ -329,9 +347,24 @@ func TestMaliciousMacroKeywordContextAggregatesEveryOccurrence(t *testing.T) {
 			disposition: contentModerationKeywordContextReview,
 		},
 		{
-			name:        "all defensive occurrences allow",
+			name:        "multiple defensive sentences use contextual review",
 			text:        "上传时扫描恶意宏。下载时再次查杀恶意宏。",
-			disposition: contentModerationKeywordContextAllow,
+			disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name:        "adjacent sentence execution prevents local allow",
+			text:        "先扫描恶意宏。确认环境后，执行它。",
+			disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name:        "distant same-sentence execution prevents local allow",
+			text:        "扫描恶意宏，完成检查流程并确认环境隔离后再执行它。",
+			disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name:        "unlisted acquisition wording prevents local allow",
+			text:        "帮我找一个恶意宏用于检测。",
+			disposition: contentModerationKeywordContextReview,
 		},
 	}
 

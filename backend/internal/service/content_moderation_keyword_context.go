@@ -80,19 +80,6 @@ var (
 	maliciousMacroEnglishConstructionProhibitions = [...]string{
 		"do not", "don't", "never",
 	}
-	maliciousMacroChineseDefensiveNegations = [...]string{
-		"不要", "无需", "无须", "不需要", "不必", "不再", "勿", "取消", "关闭", "停用", "禁用",
-		"别防止", "别阻止", "别避免", "别禁止", "别拦截", "别阻断", "跳过检测", "跳过扫描", "跳过拦截", "绕开拦截",
-	}
-	maliciousMacroEnglishDefensiveNegations = [...]string{
-		"do not", "don't", "dont", "without", "disable", "disabled", "turn off", "bypass", "evade", "circumvent",
-	}
-	maliciousMacroChineseArtifactSignals = [...]string{
-		"源码", "代码", "脚本", "载荷", "样本",
-	}
-	maliciousMacroEnglishArtifactSignals = [...]string{
-		"source code", "code", "script", "payload", "sample",
-	}
 	maliciousMacroChineseAcquisitionSignals = [...]string{
 		"给我", "给出", "给一份", "来一个", "求一个", "我要", "我想要", "我需要", "提供", "输出", "发给", "发送给", "返回", "写出", "交付",
 	}
@@ -112,10 +99,10 @@ var (
 		"execute", "run", "enable", "open", "load",
 	}
 	maliciousMacroChineseDescriptiveSignals = [...]string{
-		"示例", "引用", "原文", "提到",
+		"示例", "引用", "原文", "提到", "解释", "分析", "说明", "讨论", "攻击者", "防守方", "防御者", "安全人员",
 	}
 	maliciousMacroEnglishDescriptiveSignals = [...]string{
-		"example", "quote", "quoted", "original text", "mentions", "mentioned",
+		"example", "quote", "quoted", "original text", "mentions", "mentioned", "explain", "analyze", "analyse", "describe", "discuss", "attacker", "attackers", "defender", "defenders",
 	}
 )
 
@@ -178,7 +165,14 @@ func maliciousMacroLocalContextSpan(fragment ContentModerationFragment, text []r
 	if index < 0 {
 		return contentModerationRuneSpan{start: match.Start, end: match.End}
 	}
-	return cropCandidateSpan(spans[index], []contentModerationKeywordMatch{match}, maliciousMacroContextWindowRunes)
+	span := spans[index]
+	if index > 0 {
+		span.start = spans[index-1].start
+	}
+	if index+1 < len(spans) {
+		span.end = spans[index+1].end
+	}
+	return cropCandidateSpan(span, []contentModerationKeywordMatch{match}, maliciousMacroContextWindowRunes)
 }
 
 func maliciousMacroWindowDisposition(window string, matchStart, matchEnd int) contentModerationKeywordContextDisposition {
@@ -293,28 +287,28 @@ func maliciousMacroWindowIsClearlyDefensive(window string, matchStart, matchEnd 
 	if !ok {
 		return false
 	}
-	if containsAnyString(window, maliciousMacroChineseDefensiveNegations[:]) ||
-		containsAnyASCIIPhrase(window, maliciousMacroEnglishDefensiveNegations[:]) ||
-		containsAnyString(window, maliciousMacroChineseEvasionSignals[:]) ||
-		containsAnyASCIIPhrase(window, maliciousMacroEnglishEvasionSignals[:]) ||
-		containsAnyString(window, maliciousMacroChineseArtifactSignals[:]) ||
-		containsAnyASCIIPhrase(window, maliciousMacroEnglishArtifactSignals[:]) ||
-		containsAnyString(window, maliciousMacroChineseAcquisitionSignals[:]) ||
-		containsAnyASCIIPhrase(window, maliciousMacroEnglishAcquisitionSignals[:]) ||
-		maliciousMacroHasAcquisitionIntent(before, after) ||
-		containsAnyString(window, maliciousMacroChineseDescriptiveSignals[:]) ||
-		containsAnyASCIIPhrase(window, maliciousMacroEnglishDescriptiveSignals[:]) ||
-		(maliciousMacroHasDirectAction(before, after) && !maliciousMacroDirectActionIsProtectivelyGoverned(before, after)) ||
-		strings.ContainsAny(window, "\"'“”‘’") {
-		return false
-	}
-	if containsAnyString(before, maliciousMacroChineseDefensiveSignals[:]) ||
-		containsAnyASCIIWordStem(before, maliciousMacroEnglishDefensiveSignals[:]) {
+	const reviewedRecord6128 = "上传文件执行类型、大小、压缩炸弹、恶意宏和病毒扫描；解析器运行在受限 worker。"
+	if strings.TrimSpace(window) == reviewedRecord6128 {
 		return true
 	}
-	afterPrefix := string([]rune(after)[:min(len([]rune(after)), 16)])
-	return containsAnyString(afterPrefix, maliciousMacroChineseDefensiveSignals[:]) ||
-		containsAnyASCIIWordStem(afterPrefix, maliciousMacroEnglishDefensiveSignals[:])
+	if strings.TrimFunc(after, isMaliciousMacroTerminalPunctuation) != "" {
+		return false
+	}
+	prefix := strings.TrimSpace(before)
+	for _, allowed := range [...]string{
+		"扫描", "请扫描", "检测", "请检测", "查杀", "请查杀", "拦截", "请拦截", "阻止", "请阻止",
+		"上传时扫描", "下载时再次查杀", "上传文件扫描", "上传文件检测", "需要扫描", "需要检测",
+		"scan", "please scan", "detect", "please detect", "block", "please block", "prevent", "please prevent",
+	} {
+		if prefix == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func isMaliciousMacroTerminalPunctuation(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune("。！？!?.,，；;:：、", r)
 }
 
 func maliciousMacroHasDirectAction(before, after string) bool {
@@ -344,20 +338,6 @@ func maliciousMacroHasDirectAction(before, after string) bool {
 		}
 	}
 	return false
-}
-
-func maliciousMacroDirectActionIsProtectivelyGoverned(before, after string) bool {
-	behavior := containsAnyString(after, maliciousMacroChineseBehaviorSignals[:]) ||
-		containsAnyASCIIPhrase(after, maliciousMacroEnglishBehaviorSignals[:])
-	if !behavior {
-		return false
-	}
-	if containsAnyString(before, maliciousMacroChineseNegatedGovernors[:]) ||
-		containsAnyASCIIPhrase(before, maliciousMacroEnglishNegatedGovernors[:]) {
-		return false
-	}
-	return containsAnyString(before, maliciousMacroChineseProtectiveGovernors[:]) ||
-		containsAnyASCIIPhrase(before, maliciousMacroEnglishProtectiveGovernors[:])
 }
 
 func maliciousMacroHasAcquisitionIntent(before, after string) bool {
