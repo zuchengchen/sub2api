@@ -77,6 +77,85 @@ func TestContentModerationCandidateEvidenceKeepsLocalNegationAndMiddleLogLines(t
 	require.Equal(t, "reverse---shell", strings.ToLower(string(windowRunes[match.Start:match.End])))
 }
 
+func TestContentModerationCandidateEvidenceKeepsShortContextUnchanged(t *testing.T) {
+	text := "BEGIN " + strings.Repeat("ordinary ", 12) + "reverse shell " + strings.Repeat("routine ", 12) + "END"
+	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextTool, text, []string{"reverse shell"})
+
+	require.Len(t, bundle.Windows, 1)
+	require.Equal(t, text, bundle.Windows[0].Text)
+	require.LessOrEqual(t, len([]rune(bundle.Windows[0].Text)), contentModerationEvidenceDefaultMatchRunes)
+	require.False(t, bundle.Evidence.Truncated)
+	require.False(t, bundle.Evidence.Segments[0].Truncated)
+}
+
+func TestContentModerationCandidateEvidenceAdaptivelyExpandsContextTo480Runes(t *testing.T) {
+	text := "BEGIN " + strings.Repeat("ordinary ", 20) + "reverse shell " + strings.Repeat("routine ", 20) + "END"
+	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextUser, text, []string{"reverse shell"})
+
+	require.Len(t, bundle.Windows, 1)
+	require.Equal(t, text, bundle.Windows[0].Text)
+	require.Greater(t, len([]rune(bundle.Windows[0].Text)), contentModerationEvidenceDefaultMatchRunes)
+	require.LessOrEqual(t, len([]rune(bundle.Windows[0].Text)), contentModerationEvidenceExpandedMatchRunes)
+	require.Contains(t, bundle.Windows[0].Text, "BEGIN")
+	require.Contains(t, bundle.Windows[0].Text, "END")
+	require.False(t, bundle.Evidence.Truncated)
+	require.False(t, bundle.Evidence.Segments[0].Truncated)
+}
+
+func TestContentModerationCandidateEvidenceCapsExpandedContextAt480Runes(t *testing.T) {
+	text := "BEGIN " + strings.Repeat("ordinary ", 35) + "reverse shell " + strings.Repeat("routine ", 35) + "END"
+	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextTool, text, []string{"reverse shell"})
+
+	require.Len(t, bundle.Windows, 1)
+	require.Len(t, []rune(bundle.Windows[0].Text), contentModerationEvidenceExpandedMatchRunes)
+	require.Contains(t, bundle.Windows[0].Text, "reverse shell")
+	require.True(t, bundle.Evidence.Truncated)
+	require.True(t, bundle.Evidence.Segments[0].Truncated)
+}
+
+func TestContentModerationCandidateEvidenceMergedWindowsStayWithin480Runes(t *testing.T) {
+	text := strings.Repeat("alpha ", 45) + "reverse shell " + strings.Repeat("middle ", 12) + "session hijack " + strings.Repeat("omega ", 45)
+	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextTool, text, []string{"reverse shell", "session hijack"})
+
+	require.Len(t, bundle.Windows, 2)
+	for _, window := range bundle.Windows {
+		require.LessOrEqual(t, len([]rune(window.Text)), contentModerationEvidenceExpandedMatchRunes)
+	}
+	require.Contains(t, bundle.Evidence.Text, "reverse shell")
+	require.Contains(t, bundle.Evidence.Text, "session hijack")
+	require.LessOrEqual(t, len([]rune(bundle.Evidence.Text)), contentModerationEvidenceWindowBudgetRunes)
+}
+
+func TestContentModerationCandidateEvidenceCapsRedactionExpansionAroundKeyword(t *testing.T) {
+	text := strings.Repeat("token=x ", 50) + "reverse shell near the end"
+	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextTool, text, []string{"reverse shell"})
+
+	require.Len(t, bundle.Windows, 1)
+	window := bundle.Windows[0]
+	require.LessOrEqual(t, len([]rune(window.Text)), contentModerationEvidenceExpandedMatchRunes)
+	require.Contains(t, window.Text, "reverse shell", "post-redaction cropping must stay centered on the candidate match")
+	require.Len(t, window.Matches, 1)
+	windowRunes := []rune(window.Text)
+	require.Equal(t, "reverse shell", string(windowRunes[window.Matches[0].Start:window.Matches[0].End]))
+	require.True(t, bundle.Evidence.Truncated)
+	require.True(t, bundle.Evidence.Segments[0].Truncated)
+}
+
+func buildCandidateEvidenceForTest(t *testing.T, contextClass, text string, keywords []string) contentModerationEvidenceBundle {
+	t.Helper()
+	role := "tool"
+	if contextClass == ContentModerationContextUser || contextClass == ContentModerationContextAssistant {
+		role = contextClass
+	}
+	fragment, ok := newContentModerationFragment(role, "text", "messages.0.content", text)
+	require.True(t, ok)
+	fragment.ContextClass = contextClass
+	matcher := newContentModerationPrefilterMatcher(keywords)
+	return buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: fragment, Matches: matcher.MatchAll(text), Tier: "candidate",
+	}}, 4096, defaultContentModerationConfig())
+}
+
 func TestContentModerationCandidateEvidenceMultipleFragmentsCallsModelOnce(t *testing.T) {
 	var calls atomic.Int64
 	var body map[string]any
@@ -226,6 +305,20 @@ func TestContentModerationEvidenceCacheHashTracksPolicyRulesContextAndModel(t *t
 	}}, 4096, cfg)
 	require.NotEqual(t, bundle.CacheHash, contextBundle.CacheHash)
 	require.Equal(t, ContentModerationEvidencePolicyVersion, defaultContentModerationConfig().EvidencePolicyVersion)
+}
+
+func TestContentModerationEvidencePolicyMigrationNormalizesKnownVersions(t *testing.T) {
+	for _, version := range []string{"", contentModerationLegacyEvidencePolicyVersion, contentModerationPreviousEvidencePolicyVersion} {
+		cfg := defaultContentModerationConfig()
+		cfg.EvidencePolicyVersion = version
+		cfg.normalize()
+		require.Equal(t, ContentModerationEvidencePolicyVersion, cfg.EvidencePolicyVersion)
+	}
+
+	cfg := defaultContentModerationConfig()
+	cfg.EvidencePolicyVersion = "site-keyword-windows-v9"
+	cfg.normalize()
+	require.Equal(t, "site-keyword-windows-v9", cfg.EvidencePolicyVersion)
 }
 
 func TestContentModerationCandidateEvidenceKeepsDistantMatchesOnOneLongLine(t *testing.T) {

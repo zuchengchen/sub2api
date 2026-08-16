@@ -38,7 +38,7 @@ var (
 	// ReleaseURL identifies the repository release page for this custom build.
 	// Release builds can override it with ldflags when a new custom tag is
 	// created; the current production tag is the safe default for this branch.
-	ReleaseURL = "https://github.com/zuchengchen/sub2api/releases/tag/czc-v2026.08.16.4"
+	ReleaseURL = "https://github.com/zuchengchen/sub2api/releases/tag/czc-v2026.08.16.5"
 )
 
 func init() {
