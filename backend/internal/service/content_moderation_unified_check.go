@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var contentModerationBodySizeUpperBounds = [...]int64{
@@ -23,8 +25,25 @@ var contentModerationBodySizeUpperBounds = [...]int64{
 const contentModerationWhitelistShadowCacheSuffix = ":whitelist-shadow-v1"
 
 const (
-	contentModerationShadowQueueCapacity = 64
+	contentModerationShadowQueueCapacity    = 64
+	contentModerationContextScopeMaxRunes   = 4096
+	contentModerationContextScopeMaxBytes   = contentModerationContextScopeMaxRunes * utf8.UTFMax
+	contentModerationContextScopeMaxWindows = 64
 )
+
+type contentModerationFragmentScope struct {
+	Fragments []ContentModerationFragment
+	Owner     int
+	Active    bool
+	Truncated bool
+}
+
+type contentModerationCheckFragment struct {
+	Fragment               ContentModerationFragment
+	WholeFragment          bool
+	WholeFragmentTruncated bool
+	CacheEligible          bool
+}
 
 func (s *ContentModerationService) ReservePendingRequestBody(bytes int64) (*ContentModerationPendingReservation, bool) {
 	if s == nil {
@@ -113,11 +132,18 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	if len(fragments) == 0 {
 		return allow
 	}
-	var contextualUserScope ContentModerationFragment
-	contextualUserScopeExpanded := false
+	var scopeKeywordMatcher *contentModerationKeywordMatcher
 	if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly {
-		contextualUserScope, contextualUserScopeExpanded = buildContentModerationContextualUserScope(fragments, runtime.contextualKeywordMatcher)
+		scopeKeywordMatcher = runtime.keywordMatcher
 	}
+	var scopeCandidateMatcher *contentModerationPrefilterMatcher
+	if cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly {
+		scopeCandidateMatcher = runtime.secondLayerPrefilterMatcher
+	}
+	fragmentScopes := buildContentModerationFragmentScopes(
+		fragments, scopeKeywordMatcher, scopeCandidateMatcher, cfg.KeywordAllowlist,
+	)
+	checkFragments := buildContentModerationCheckFragments(fragments, fragmentScopes)
 	cache, _ := s.hashCache.(ContentModerationFragmentCache)
 	namespace := runtime.fragmentCacheNamespace
 	if namespace == "" {
@@ -126,20 +152,13 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	if whitelistShadow {
 		namespace += contentModerationWhitelistShadowCacheSuffix
 	}
-	candidates := make([]contentModerationCandidateFragment, 0, len(fragments))
-	for _, fragment := range fragments {
+	candidates := make([]contentModerationCandidateFragment, 0, len(checkFragments))
+	for _, checkFragment := range checkFragments {
+		fragment := checkFragment.Fragment
+		fragmentCacheEligible := checkFragment.CacheEligible
 		shadowRiskObserved := false
-		contextualReviewFragment := fragment
-		expandedContextualReview := false
-		if contextualUserScopeExpanded && fragment.ContextClass == ContentModerationContextUser &&
-			cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.contextualKeywordMatcher != nil {
-			if _, hit := runtime.contextualKeywordMatcher.Match(fragment.Text); hit {
-				contextualReviewFragment = contextualUserScope
-				expandedContextualReview = true
-			}
-		}
 		releaseDecisionLock := s.acquireContentModerationFragmentDecisionLock(namespace + "\x00" + fragment.Hash)
-		if cache != nil && !expandedContextualReview {
+		if cache != nil && fragmentCacheEligible {
 			entry, found, err := s.getUnifiedFragmentCache(ctx, cache, namespace, fragment.Hash)
 			if err != nil {
 				s.fragmentCacheErrors.Add(1)
@@ -208,9 +227,10 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 
 		var contextualMatches []contentModerationKeywordMatch
 		if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
-			keyword, hardMatches, reviewMatches, reviewFragment := classifyUnifiedHardKeywordMatches(
-				fragment, contextualReviewFragment, expandedContextualReview, runtime,
-			)
+			keyword, hardMatches, reviewMatches := classifyUnifiedHardKeywordMatches(fragment, runtime)
+			if keyword == "" && len(reviewMatches) == 0 && checkFragment.WholeFragmentTruncated && runtime.contextualKeywordMatcher != nil {
+				reviewMatches = runtime.contextualKeywordMatcher.MatchAll(fragment.Text)
+			}
 			if keyword == "" && len(reviewMatches) > 0 &&
 				(!cfg.SecondLayerEnabled || cfg.KeywordBlockingMode == ContentModerationKeywordModeKeywordOnly) {
 				keyword = reviewMatches[0].Keyword
@@ -218,7 +238,6 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				reviewMatches = nil
 			}
 			contextualMatches = reviewMatches
-			contextualReviewFragment = reviewFragment
 			if keyword != "" {
 				hardEvidence := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
 					Fragment: fragment, Matches: hardMatches, Tier: "high_confidence",
@@ -239,7 +258,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionFirstLayerShadow, contentModerationKeywordCategory, keyword, audit)
 				} else {
 					decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, keyword, audit)
-					if persisted {
+					if persisted && fragmentCacheEligible {
 						s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentCacheEntry{
 							Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
 							DecisionSource: "keyword_high_confidence", Category: contentModerationKeywordCategory, MatchedKeyword: keyword,
@@ -254,8 +273,8 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		}
 		if len(contextualMatches) > 0 {
 			candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
-				Fragment: contextualReviewFragment, Matches: contextualMatches, Tier: "contextual_review",
-				WholeFragment: expandedContextualReview,
+				Fragment: fragment, Matches: contextualMatches, Tier: "contextual_review",
+				WholeFragment: checkFragment.WholeFragment, WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
 			})
 		}
 
@@ -272,7 +291,14 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			}
 			candidateMatches := runtime.secondLayerPrefilterMatcher.MatchAllExcluding(fragment.Text, cfg.KeywordAllowlist)
 			if len(candidateMatches) > 0 {
-				candidates = append(candidates, contentModerationCandidateFragment{Fragment: fragment, Matches: candidateMatches, Tier: "candidate"})
+				tier := "candidate"
+				if checkFragment.WholeFragmentTruncated {
+					tier = "contextual_review"
+				}
+				candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
+					Fragment: fragment, Matches: candidateMatches, Tier: tier,
+					WholeFragment: checkFragment.WholeFragment, WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
+				})
 				releaseDecisionLock()
 				continue
 			}
@@ -280,7 +306,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				releaseDecisionLock()
 				continue
 			}
-			if !whitelistShadow && !shadowRiskObserved {
+			if fragmentCacheEligible && !whitelistShadow && !shadowRiskObserved {
 				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 			}
 			releaseDecisionLock()
@@ -291,7 +317,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			continue
 		}
 
-		if !shadowRiskObserved {
+		if fragmentCacheEligible && !shadowRiskObserved {
 			s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 		}
 		releaseDecisionLock()
@@ -304,16 +330,14 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 
 func classifyUnifiedHardKeywordMatches(
 	fragment ContentModerationFragment,
-	contextualReviewFragment ContentModerationFragment,
-	expandContextualReview bool,
 	runtime *contentModerationRuntimeSnapshot,
-) (string, []contentModerationKeywordMatch, []contentModerationKeywordMatch, ContentModerationFragment) {
+) (string, []contentModerationKeywordMatch, []contentModerationKeywordMatch) {
 	if runtime == nil || runtime.keywordMatcher == nil {
-		return "", nil, nil, fragment
+		return "", nil, nil
 	}
 	firstKeyword, hit := runtime.keywordMatcher.Match(fragment.Text)
 	if !hit {
-		return "", nil, nil, fragment
+		return "", nil, nil
 	}
 	unconditional := runtime.unconditionalKeywordMatcher
 	contextual := runtime.contextualKeywordMatcher
@@ -322,7 +346,7 @@ func classifyUnifiedHardKeywordMatches(
 	}
 	_, firstIsContextual := maliciousMacroContextKeywords[normalizedContentModerationKeywordKey(firstKeyword)]
 	if !firstIsContextual && !suppressToolDocumentationKeyword(fragment, firstKeyword) {
-		return firstKeyword, contentModerationHardMatchesForKeyword(fragment.Text, firstKeyword), nil, fragment
+		return firstKeyword, contentModerationHardMatchesForKeyword(fragment.Text, firstKeyword), nil
 	}
 	if unconditional != nil {
 		matchText := fragment.Text
@@ -332,14 +356,11 @@ func classifyUnifiedHardKeywordMatches(
 			keyword, hardHit = unconditional.Match(matchText)
 		}
 		if hardHit {
-			return keyword, contentModerationHardMatchesForKeyword(matchText, keyword), nil, fragment
+			return keyword, contentModerationHardMatchesForKeyword(matchText, keyword), nil
 		}
 	}
 	if contextual == nil {
-		return "", nil, nil, fragment
-	}
-	if !expandContextualReview {
-		contextualReviewFragment = fragment
+		return "", nil, nil
 	}
 	reviewMatches := make([]contentModerationKeywordMatch, 0, 4)
 	for _, keyword := range contextual.keywords {
@@ -349,46 +370,594 @@ func classifyUnifiedHardKeywordMatches(
 		}
 		disposition, configured := classifyContentModerationKeywordContext(fragment, keyword)
 		if !configured || disposition == contentModerationKeywordContextHardBlock {
-			return keyword, matches, reviewMatches, fragment
+			return keyword, matches, reviewMatches
 		}
-		if disposition == contentModerationKeywordContextReview ||
-			(disposition == contentModerationKeywordContextAllow && expandContextualReview) {
-			reviewMatches = append(reviewMatches, contentModerationHardMatchesForKeyword(contextualReviewFragment.Text, keyword)...)
+		if disposition == contentModerationKeywordContextReview {
+			reviewMatches = append(reviewMatches, matches...)
 		}
 	}
-	return "", nil, sortAndDeduplicateContentModerationKeywordMatches(reviewMatches), contextualReviewFragment
+	return "", nil, sortAndDeduplicateContentModerationKeywordMatches(reviewMatches)
 }
 
-func buildContentModerationContextualUserScope(fragments []ContentModerationFragment, contextualMatcher *contentModerationKeywordMatcher) (ContentModerationFragment, bool) {
-	if contextualMatcher == nil {
-		return ContentModerationFragment{}, false
+func buildContentModerationFragmentScopes(
+	fragments []ContentModerationFragment,
+	keywordMatcher *contentModerationKeywordMatcher,
+	candidateMatcher *contentModerationPrefilterMatcher,
+	keywordAllowlist []string,
+) []contentModerationFragmentScope {
+	scopes := make([]contentModerationFragmentScope, len(fragments))
+	if keywordMatcher == nil && candidateMatcher == nil {
+		return scopes
 	}
-	texts := make([]string, 0, len(fragments))
-	hasContextualKeyword := false
-	for _, fragment := range fragments {
-		if fragment.ContextClass == ContentModerationContextUser {
-			texts = append(texts, fragment.Text)
-			if !hasContextualKeyword {
-				_, hasContextualKeyword = contextualMatcher.Match(fragment.Text)
+	type fragmentGroup struct {
+		role    string
+		path    string
+		members []int
+	}
+	groups := make(map[string]*fragmentGroup)
+	orderedGroups := make([]*fragmentGroup, 0)
+	for index, fragment := range fragments {
+		key, path, ok := contentModerationInstructionGroupKey(fragment)
+		if !ok {
+			continue
+		}
+		group := groups[key]
+		if group == nil {
+			group = &fragmentGroup{role: fragment.Role, path: path}
+			groups[key] = group
+			orderedGroups = append(orderedGroups, group)
+		}
+		group.members = append(group.members, index)
+	}
+
+	for _, group := range orderedGroups {
+		if len(group.members) < 2 {
+			continue
+		}
+		groupFragments := make([]ContentModerationFragment, 0, len(group.members))
+		for _, index := range group.members {
+			groupFragments = append(groupFragments, fragments[index])
+		}
+		if contentModerationFragmentGroupBytes(groupFragments) > contentModerationContextScopeMaxBytes {
+			scopeFragments := buildLargeContentModerationScopeFragments(
+				group.role, group.path, groupFragments, keywordMatcher, candidateMatcher, keywordAllowlist,
+			)
+			if len(scopeFragments) == 0 {
+				continue
+			}
+			owner := group.members[0]
+			for _, index := range group.members {
+				scopes[index] = contentModerationFragmentScope{
+					Fragments: scopeFragments, Owner: owner, Active: true, Truncated: true,
+				}
+			}
+			continue
+		}
+		text, matches, ok := contentModerationFragmentScopeText(groupFragments, keywordMatcher, candidateMatcher, keywordAllowlist)
+		if !ok {
+			continue
+		}
+		scopeFragments, truncated := newContentModerationScopeFragments(group.role, group.path, text, matches)
+		if len(scopeFragments) == 0 {
+			continue
+		}
+		owner := group.members[0]
+		for _, index := range group.members {
+			scopes[index] = contentModerationFragmentScope{
+				Fragments: scopeFragments, Owner: owner, Active: true, Truncated: truncated,
 			}
 		}
 	}
-	if len(texts) < 2 || !hasContextualKeyword {
-		return ContentModerationFragment{}, false
+	return scopes
+}
+
+func contentModerationFragmentGroupBytes(fragments []ContentModerationFragment) int {
+	total := 0
+	for _, fragment := range fragments {
+		if len(fragment.Text) > contentModerationContextScopeMaxBytes-total {
+			return contentModerationContextScopeMaxBytes + 1
+		}
+		total += len(fragment.Text)
 	}
-	scope, ok := newContentModerationFragment("user", "text", "moderation.contextual_user_scope", strings.Join(texts, "\n"))
-	if !ok {
-		return ContentModerationFragment{}, false
+	return total
+}
+
+func buildLargeContentModerationScopeFragments(
+	role string,
+	path string,
+	fragments []ContentModerationFragment,
+	keywordMatcher *contentModerationKeywordMatcher,
+	candidateMatcher *contentModerationPrefilterMatcher,
+	keywordAllowlist []string,
+) []ContentModerationFragment {
+	windowTexts := make([]string, 0, 8)
+	seen := make(map[string]struct{}, 8)
+	addWindow := func(text string) bool {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return true
+		}
+		if _, exists := seen[text]; exists {
+			return true
+		}
+		seen[text] = struct{}{}
+		windowTexts = append(windowTexts, text)
+		return len(windowTexts) < contentModerationContextScopeMaxWindows
 	}
-	scope.ContextClass = ContentModerationContextUser
-	return scope, true
+
+	if len(windowTexts) < contentModerationContextScopeMaxWindows {
+		limit := contentModerationScopeBoundaryBytes(keywordMatcher, nil)
+		if limit > 0 && len(fragments) > 1 {
+			tails := [3]string{
+				contentModerationSuffixBytes(fragments[0].Text, limit),
+				contentModerationSuffixBytes(fragments[0].Text, limit),
+				contentModerationSuffixBytes(fragments[0].Text, limit),
+			}
+			for index := 1; index < len(fragments) && len(windowTexts) < contentModerationContextScopeMaxWindows; index++ {
+				fragment := fragments[index]
+				prefix := contentModerationPrefixBytes(fragment.Text, limit)
+				rawSeparator := ""
+				if fragments[index-1].trailingSpace || fragment.leadingSpace {
+					rawSeparator = " "
+				}
+				separators := [3]string{rawSeparator, " ", ""}
+				for variant := range tails {
+					boundary := tails[variant] + separators[variant] + prefix
+					if len(contentModerationScopeTriggerMatches(boundary, keywordMatcher, nil, nil)) > 0 && !addWindow(boundary) {
+						break
+					}
+				}
+				for variant := range tails {
+					if len(fragment.Text) >= limit {
+						tails[variant] = contentModerationSuffixBytes(fragment.Text, limit)
+						continue
+					}
+					tails[variant] = contentModerationSuffixBytes(tails[variant]+separators[variant]+fragment.Text, limit)
+				}
+			}
+		}
+	}
+
+	// Original fragments are scanned again by the normal request loop. Only
+	// full layer-one terms need a synthetic window here: contextual terms need
+	// sibling-aware fail-closed review, while unconditional terms are retained
+	// to prioritize them ahead of lower-risk boundary candidates.
+	for _, fragment := range fragments {
+		matches := contentModerationScopeTriggerMatches(fragment.Text, keywordMatcher, nil, nil)
+		for _, window := range contentModerationRuneWindows(fragment.Text, matches, contentModerationContextScopeMaxRunes) {
+			if !addWindow(window) {
+				break
+			}
+		}
+		if len(windowTexts) >= contentModerationContextScopeMaxWindows {
+			break
+		}
+	}
+
+	if candidateMatcher != nil && len(windowTexts) < contentModerationContextScopeMaxWindows && len(fragments) > 1 {
+		limit := maxContentModerationBlockedKeywordRunes + 2
+		firstTail, _ := contentModerationPrefilterNormalizedSuffix(fragments[0].Text, limit)
+		tails := [3]string{firstTail, firstTail, firstTail}
+		for index := 1; index < len(fragments) && len(windowTexts) < contentModerationContextScopeMaxWindows; index++ {
+			fragment := fragments[index]
+			prefix := contentModerationPrefilterNormalizedPrefix(fragment.Text, limit)
+			rawSeparator := ""
+			if fragments[index-1].trailingSpace || fragment.leadingSpace {
+				rawSeparator = " "
+			}
+			separators := [3]string{rawSeparator, " ", ""}
+			for variant := range tails {
+				boundary := tails[variant] + separators[variant] + prefix
+				if len(candidateMatcher.MatchAllExcluding(boundary, keywordAllowlist)) > 0 && !addWindow(boundary) {
+					break
+				}
+			}
+			fragmentTail, saturated := contentModerationPrefilterNormalizedSuffix(fragment.Text, limit)
+			for variant := range tails {
+				if saturated {
+					tails[variant] = fragmentTail
+					continue
+				}
+				tails[variant], _ = contentModerationPrefilterNormalizedSuffix(tails[variant]+separators[variant]+fragmentTail, limit)
+			}
+		}
+	}
+
+	scopeFragments := make([]ContentModerationFragment, 0, len(windowTexts))
+	for _, windowText := range windowTexts {
+		fragment, ok := newContentModerationFragment(role, "text", path, windowText)
+		if !ok {
+			continue
+		}
+		fragment.ContextClass = ContentModerationContextUser
+		updateContentModerationFragmentHash(&fragment)
+		scopeFragments = append(scopeFragments, fragment)
+	}
+	return scopeFragments
+}
+
+func contentModerationScopeBoundaryBytes(
+	keywordMatcher *contentModerationKeywordMatcher,
+	candidateMatcher *contentModerationPrefilterMatcher,
+) int {
+	limit := 0
+	if keywordMatcher != nil {
+		limit = keywordMatcher.maxPatternByteLength
+	}
+	if candidateMatcher != nil && candidateMatcher.matcher != nil && candidateMatcher.matcher.maxPatternByteLength > limit {
+		limit = candidateMatcher.matcher.maxPatternByteLength
+	}
+	if limit > contentModerationContextScopeMaxBytes/2 {
+		limit = contentModerationContextScopeMaxBytes / 2
+	}
+	return limit
+}
+
+func contentModerationPrefixBytes(text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end]
+}
+
+func contentModerationSuffixBytes(text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	start := len(text) - limit
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return text[start:]
+}
+
+func contentModerationRuneWindows(text string, matches []contentModerationKeywordMatch, limit int) []string {
+	if limit <= 0 || len(matches) == 0 {
+		return nil
+	}
+	type runeWindow struct {
+		startRune int
+		endRune   int
+		startByte int
+		endByte   int
+	}
+	windows := make([]runeWindow, len(matches))
+	for index, match := range matches {
+		start := match.Start - limit/2
+		if start < 0 {
+			start = 0
+		}
+		windows[index] = runeWindow{startRune: start, endRune: start + limit, endByte: len(text)}
+	}
+	startIndex := 0
+	endIndex := 0
+	runeIndex := 0
+	for byteIndex := range text {
+		for startIndex < len(windows) && windows[startIndex].startRune == runeIndex {
+			windows[startIndex].startByte = byteIndex
+			startIndex++
+		}
+		for endIndex < len(windows) && windows[endIndex].endRune == runeIndex {
+			windows[endIndex].endByte = byteIndex
+			endIndex++
+		}
+		runeIndex++
+	}
+	texts := make([]string, 0, len(windows))
+	for _, window := range windows {
+		texts = append(texts, text[window.startByte:window.endByte])
+	}
+	return texts
+}
+
+func contentModerationPrefilterNormalizedPrefix(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	out := make([]rune, 0, limit)
+	lastSpace := false
+	emitted := false
+	for _, original := range text {
+		lower := unicode.ToLower(original)
+		if unicode.IsLetter(lower) || unicode.IsDigit(lower) {
+			out = append(out, lower)
+			lastSpace = false
+			emitted = true
+		} else if emitted && !lastSpace {
+			out = append(out, ' ')
+			lastSpace = true
+		}
+		if len(out) >= limit {
+			break
+		}
+	}
+	return string(out)
+}
+
+func contentModerationPrefilterNormalizedSuffix(text string, limit int) (string, bool) {
+	if limit <= 0 {
+		return "", false
+	}
+	ring := make([]rune, limit)
+	start := 0
+	count := 0
+	total := 0
+	lastSpace := false
+	emitted := false
+	appendRune := func(value rune) {
+		if count < limit {
+			ring[(start+count)%limit] = value
+			count++
+		} else {
+			ring[start] = value
+			start = (start + 1) % limit
+		}
+		total++
+	}
+	for _, original := range text {
+		lower := unicode.ToLower(original)
+		if unicode.IsLetter(lower) || unicode.IsDigit(lower) {
+			appendRune(lower)
+			lastSpace = false
+			emitted = true
+		} else if emitted && !lastSpace {
+			appendRune(' ')
+			lastSpace = true
+		}
+	}
+	out := make([]rune, count)
+	for index := range out {
+		out[index] = ring[(start+index)%limit]
+	}
+	return string(out), total >= limit
+}
+
+func contentModerationFragmentScopeText(
+	fragments []ContentModerationFragment,
+	keywordMatcher *contentModerationKeywordMatcher,
+	candidateMatcher *contentModerationPrefilterMatcher,
+	keywordAllowlist []string,
+) (string, []contentModerationKeywordMatch, bool) {
+	if len(fragments) < 2 {
+		return "", nil, false
+	}
+	texts := make([]string, 0, len(fragments))
+	for _, fragment := range fragments {
+		texts = append(texts, fragment.Text)
+	}
+	rawJoined := joinContentModerationFragmentsAtOriginalWhitespace(fragments)
+	spaceJoined := strings.Join(texts, " ")
+	boundaryless := strings.Join(texts, "")
+	type scopeVariant struct {
+		text    string
+		matches []contentModerationKeywordMatch
+	}
+	variants := make([]scopeVariant, 0, 3)
+	seenTexts := make(map[string]struct{}, 3)
+	for _, text := range []string{rawJoined, spaceJoined, boundaryless} {
+		if _, exists := seenTexts[text]; exists {
+			continue
+		}
+		seenTexts[text] = struct{}{}
+		matches := contentModerationScopeTriggerMatches(text, keywordMatcher, candidateMatcher, keywordAllowlist)
+		if len(matches) > 0 {
+			variants = append(variants, scopeVariant{text: text, matches: matches})
+		}
+	}
+	if len(variants) == 0 {
+		return "", nil, false
+	}
+	selected := variants[0].text
+	selectedMatches := variants[0].matches
+	for _, variant := range variants[1:] {
+		if !contentModerationMatchKeywordSetsEqual(selectedMatches, variant.matches) {
+			parts := make([]string, 0, len(variants))
+			for _, current := range variants {
+				parts = append(parts, current.text)
+			}
+			// Retain both interpretations only when fragment boundaries expose
+			// different rules. This closes both word-boundary and mid-word splits
+			// without duplicating normal multipart messages in reviewer evidence.
+			selected = strings.Join(parts, "\n")
+			selectedMatches = contentModerationScopeTriggerMatches(selected, keywordMatcher, candidateMatcher, keywordAllowlist)
+			break
+		}
+	}
+	if len(selectedMatches) == 0 {
+		return "", nil, false
+	}
+	return selected, selectedMatches, true
+}
+
+func joinContentModerationFragmentsAtOriginalWhitespace(fragments []ContentModerationFragment) string {
+	var combined strings.Builder
+	for index, fragment := range fragments {
+		if index > 0 && (fragments[index-1].trailingSpace || fragment.leadingSpace) {
+			combined.WriteByte(' ')
+		}
+		combined.WriteString(fragment.Text)
+	}
+	return combined.String()
+}
+
+func newContentModerationScopeFragments(
+	role string,
+	path string,
+	text string,
+	matches []contentModerationKeywordMatch,
+) ([]ContentModerationFragment, bool) {
+	runes := []rune(text)
+	truncated := len(runes) > contentModerationContextScopeMaxRunes
+	windowTexts := []string{text}
+	if truncated {
+		windowTexts = make([]string, 0, len(matches))
+		seen := make(map[string]struct{}, len(matches))
+		for _, match := range matches {
+			start := match.Start - contentModerationContextScopeMaxRunes/2
+			if start < 0 {
+				start = 0
+			}
+			end := start + contentModerationContextScopeMaxRunes
+			if end > len(runes) {
+				end = len(runes)
+				start = end - contentModerationContextScopeMaxRunes
+			}
+			windowText := string(runes[start:end])
+			if _, exists := seen[windowText]; exists {
+				continue
+			}
+			seen[windowText] = struct{}{}
+			windowTexts = append(windowTexts, windowText)
+		}
+	}
+	fragments := make([]ContentModerationFragment, 0, len(windowTexts))
+	for _, windowText := range windowTexts {
+		fragment, ok := newContentModerationFragment(role, "text", path, windowText)
+		if !ok {
+			continue
+		}
+		fragment.ContextClass = ContentModerationContextUser
+		updateContentModerationFragmentHash(&fragment)
+		fragments = append(fragments, fragment)
+	}
+	return fragments, truncated
+}
+
+func contentModerationScopeTriggerMatches(
+	text string,
+	keywordMatcher *contentModerationKeywordMatcher,
+	candidateMatcher *contentModerationPrefilterMatcher,
+	keywordAllowlist []string,
+) []contentModerationKeywordMatch {
+	matches := make([]contentModerationKeywordMatch, 0, 4)
+	if keywordMatcher != nil {
+		matches = append(matches, keywordMatcher.MatchAll(text)...)
+	}
+	if candidateMatcher != nil {
+		matches = append(matches, candidateMatcher.MatchAllExcluding(text, keywordAllowlist)...)
+	}
+	return sortAndDeduplicateContentModerationKeywordMatches(matches)
+}
+
+func contentModerationMatchKeywordSetsEqual(left, right []contentModerationKeywordMatch) bool {
+	leftKeywords := make(map[string]struct{}, len(left))
+	rightKeywords := make(map[string]struct{}, len(right))
+	for _, match := range left {
+		leftKeywords[normalizedContentModerationKeywordKey(match.Keyword)] = struct{}{}
+	}
+	for _, match := range right {
+		rightKeywords[normalizedContentModerationKeywordKey(match.Keyword)] = struct{}{}
+	}
+	if len(leftKeywords) != len(rightKeywords) {
+		return false
+	}
+	for keyword := range leftKeywords {
+		if _, exists := rightKeywords[keyword]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func buildContentModerationCheckFragments(fragments []ContentModerationFragment, scopes []contentModerationFragmentScope) []contentModerationCheckFragment {
+	items := make([]contentModerationCheckFragment, 0, len(fragments)+1)
+	for index, fragment := range fragments {
+		if index >= len(scopes) || !scopes[index].Active {
+			items = append(items, contentModerationCheckFragment{Fragment: fragment, CacheEligible: true})
+			continue
+		}
+		scope := scopes[index]
+		if !scope.Truncated {
+			if index == scope.Owner {
+				for _, scopeFragment := range scope.Fragments {
+					items = append(items, contentModerationCheckFragment{
+						Fragment: scopeFragment, WholeFragment: true, CacheEligible: true,
+					})
+				}
+			}
+			continue
+		}
+
+		// A bounded composite cannot replace original first-layer and candidate
+		// scans. Keep every original member, then add one fail-closed composite
+		// item that detects contextual keywords split across member boundaries.
+		items = append(items, contentModerationCheckFragment{Fragment: fragment})
+		if index == scope.Owner {
+			for _, scopeFragment := range scope.Fragments {
+				items = append(items, contentModerationCheckFragment{
+					Fragment: scopeFragment, WholeFragment: true, WholeFragmentTruncated: true,
+				})
+			}
+		}
+	}
+	return items
+}
+
+func contentModerationInstructionGroupKey(fragment ContentModerationFragment) (string, string, bool) {
+	if strings.ToLower(strings.TrimSpace(fragment.Kind)) != "text" {
+		return "", "", false
+	}
+	role := strings.ToLower(strings.TrimSpace(fragment.Role))
+	if role != "user" && role != "developer" && role != "system" {
+		return "", "", false
+	}
+	trustedMetadata := ContentModerationFragment{Role: role, Kind: fragment.Kind, Path: fragment.Path}
+	if classifyContentModerationContext(trustedMetadata) != ContentModerationContextUser {
+		return "", "", false
+	}
+	parts := strings.Split(strings.TrimSpace(fragment.Path), ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", "", false
+	}
+	root := parts[0]
+	path := ""
+	switch root {
+	case "messages", "contents":
+		if len(parts) < 2 || !contentModerationPathPartIsIndex(parts[1]) {
+			return "", "", false
+		}
+		path = root + "." + parts[1]
+	case "input":
+		if len(parts) == 1 {
+			path = root
+		} else if !contentModerationPathPartIsIndex(parts[1]) {
+			path = root
+		} else if len(parts) == 2 {
+			// Bare input array strings are one logical Responses input value.
+			path = root
+		} else {
+			path = root + "." + parts[1]
+		}
+	case "system", "system_instruction", "systemInstruction", "developer", "instructions", "prompt", "negative_prompt":
+		path = root
+	default:
+		return "", "", false
+	}
+	return role + "\x00" + path, path, true
+}
+
+func contentModerationPathPartIsIndex(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, current := range value {
+		if current < '0' || current > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func appendOrMergeContentModerationCandidate(candidates []contentModerationCandidateFragment, candidate contentModerationCandidateFragment) []contentModerationCandidateFragment {
 	for index := range candidates {
 		existing := &candidates[index]
 		if existing.Tier != candidate.Tier || existing.Fragment.Hash != candidate.Fragment.Hash ||
-			existing.WholeFragment != candidate.WholeFragment {
+			existing.WholeFragment != candidate.WholeFragment ||
+			existing.WholeFragmentTruncated != candidate.WholeFragmentTruncated {
 			continue
 		}
 		existing.Matches = sortAndDeduplicateContentModerationKeywordMatches(append(existing.Matches, candidate.Matches...))

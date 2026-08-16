@@ -37,10 +37,11 @@ type ContentModerationEvidenceWindow struct {
 }
 
 type contentModerationCandidateFragment struct {
-	Fragment      ContentModerationFragment
-	Matches       []contentModerationKeywordMatch
-	Tier          string
-	WholeFragment bool
+	Fragment               ContentModerationFragment
+	Matches                []contentModerationKeywordMatch
+	Tier                   string
+	WholeFragment          bool
+	WholeFragmentTruncated bool
 }
 
 type contentModerationEvidenceBundle struct {
@@ -120,7 +121,7 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 		}
 		for _, candidateSpan := range spans {
 			span := candidateSpan.contentModerationRuneSpan
-			spanTruncated := candidateSpan.truncated
+			spanTruncated := candidateSpan.truncated || candidate.WholeFragmentTruncated
 			if len(windows) >= contentModerationEvidenceMaxWindows || remainingMatchBudget <= 0 {
 				truncated = true
 				break
