@@ -352,7 +352,7 @@ func TestContentModerationSecondLayerSkipsInlineBase64Media(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
-func TestContentModerationCandidateSystemUnavailableFallsBackToYuFeng(t *testing.T) {
+func TestContentModerationCandidateSystemUnavailableSkipsYuFeng(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -373,7 +373,7 @@ func TestContentModerationCandidateSystemUnavailableFallsBackToYuFeng(t *testing
 		Protocol: ContentModerationProtocolOpenAIChat,
 	}, runtime)
 	require.True(t, decision.Allowed)
-	require.Equal(t, int64(1), calls.Load(), "a missing candidate matcher must fall back to YuFeng")
+	require.Zero(t, calls.Load(), "a missing candidate matcher must never fall back to full-text YuFeng review")
 }
 
 func TestContentModerationSecondLayerDisabledKeepsFirstLayerOnly(t *testing.T) {
@@ -443,10 +443,14 @@ func TestContentModerationSecondLayerIsBoundedAndReusesClient(t *testing.T) {
 		t.Fatal("first second-layer request did not reach the test server")
 	}
 
-	_, attempted, err := svc.scanUnifiedSecondLayer(context.Background(), cfg, "reverse shell")
+	fragment, ok := newContentModerationFragment("user", "text", "input", "reverse shell")
+	require.True(t, ok)
+	_, attempted, err := svc.scanUnifiedSecondLayerPrepared(context.Background(), cfg, contentModerationSecondLayerInput{
+		Fragment: fragment, Evidence: moderationEvidence{Text: fragment.Text}, Background: true,
+	})
 	require.True(t, attempted)
 	require.ErrorIs(t, err, errContentModerationSecondLayerBusy)
-	require.Equal(t, int64(1), calls.Load(), "busy requests must not open another model request")
+	require.Equal(t, int64(1), calls.Load(), "background requests must not open another model request")
 
 	clientA := svc.contentModerationSecondLayerClient(cfg.SecondLayerEndpoints[0])
 	clientB := svc.contentModerationSecondLayerClient(cfg.SecondLayerEndpoints[0])
@@ -457,6 +461,88 @@ func TestContentModerationSecondLayerIsBoundedAndReusesClient(t *testing.T) {
 
 	close(release)
 	require.NoError(t, <-firstDone)
+}
+
+func TestContentModerationSecondLayerEnforceWaitsForInFlightShadow(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		call := calls.Add(1)
+		if call == 1 {
+			started <- struct{}{}
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := secondLayerGateTestConfig(server.URL)
+	svc := &ContentModerationService{}
+	fragment, ok := newContentModerationFragment("user", "text", "input", "reverse shell")
+	require.True(t, ok)
+	shadowInput := contentModerationSecondLayerInput{
+		Fragment: fragment, Evidence: moderationEvidence{Text: fragment.Text}, Background: true,
+	}
+	shadowDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.scanUnifiedSecondLayerPrepared(context.Background(), cfg, shadowInput)
+		shadowDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("shadow request did not reach the model")
+	}
+
+	enforceDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.scanUnifiedSecondLayer(context.Background(), cfg, "reverse shell")
+		enforceDone <- err
+	}()
+	select {
+	case err := <-enforceDone:
+		t.Fatalf("enforce request bypassed the busy model: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	require.NoError(t, <-shadowDone)
+	require.NoError(t, <-enforceDone)
+	require.Equal(t, int64(2), calls.Load())
+}
+
+func TestContentModerationSecondLayerShadowYieldsToWaitingEnforce(t *testing.T) {
+	svc := &ContentModerationService{}
+	resourceKey := "http://127.0.0.1:8088"
+	acquired, err := svc.acquireContentModerationSecondLayer(context.Background(), resourceKey, true)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	enforceAcquired := make(chan struct{})
+	enforceRelease := make(chan struct{})
+	go func() {
+		got, acquireErr := svc.acquireContentModerationSecondLayer(context.Background(), resourceKey, false)
+		if acquireErr == nil && got {
+			close(enforceAcquired)
+			<-enforceRelease
+			svc.releaseContentModerationSecondLayer(resourceKey)
+		}
+	}()
+	gate := svc.contentModerationSecondLayerGate(resourceKey)
+	require.Eventually(t, func() bool { return gate.enforceWaiters.Load() == 1 }, time.Second, time.Millisecond)
+
+	backgroundAcquired, err := svc.acquireContentModerationSecondLayer(context.Background(), resourceKey, true)
+	require.NoError(t, err)
+	require.False(t, backgroundAcquired)
+	svc.releaseContentModerationSecondLayer(resourceKey)
+	select {
+	case <-enforceAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("waiting enforce request did not receive the released slot")
+	}
+	close(enforceRelease)
 }
 
 func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {

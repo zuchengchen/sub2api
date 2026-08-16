@@ -76,6 +76,12 @@ vi.mock('vue-i18n', async () => {
         if (key === 'admin.riskControl.preBlockAPIKeyLoadSummary') {
           return `同步并发 ${params?.active} / 可用 Key ${params?.available}，累计 ${params?.total} 次`
         }
+        if (key === 'admin.riskControl.evidenceWindowSummary') {
+          return `${params?.windows} evidence windows / ${params?.matches} matches`
+        }
+        if (key === 'admin.riskControl.evidenceMatchMeta') {
+          return `${params?.tier} / ${params?.rule}`
+        }
         return key.replace(/\{(\w+)\}/g, (_, token) => String(params?.[token] ?? `{${token}}`))
       },
     }),
@@ -814,6 +820,115 @@ describe('admin RiskControlView', () => {
       'max-h-[280px]',
       'overflow-y-auto',
     ]))
+  })
+
+  it('renders every evidence window and safely highlights rune-offset keyword matches', async () => {
+    const evidenceLog: ContentModerationLog = {
+      ...archivedLog(),
+      input_excerpt: '[legacy evidence summary]',
+      matched_keyword: 'danger-zone',
+      evidence_windows: [
+        {
+          path: 'messages[0].content[1].text',
+          context_class: 'tool',
+          text: '前😀 danger-zone <img src=x onerror=alert(1)>',
+          matches: [
+            { keyword: 'danger', rule_id: 'layer1-danger', tier: 'layer1', start: 3, end: 9 },
+            { keyword: 'danger-zone', rule_id: 'layer2-danger-zone', tier: 'layer2', start: 3, end: 14 },
+            { keyword: 'onerror', rule_id: 'layer2-onerror', tier: 'layer2', start: 26, end: 33 },
+          ],
+        },
+        {
+          path: 'tools[0].config',
+          context_class: 'config',
+          text: 'config token=secret',
+          matches: [
+            { keyword: 'secret', rule_id: 'layer2-secret', tier: 'layer2', start: 13, end: 19 },
+          ],
+        },
+      ],
+    }
+    listLogs.mockResolvedValue({ items: [evidenceLog], total: 1, page: 1, page_size: 20, pages: 1 })
+
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+    await flushPromises()
+    await findButtonByText(wrapper, '[legacy evidence summary]').trigger('click')
+
+    const evidenceWindows = wrapper.findAll('[data-test="evidence-window"]')
+    expect(evidenceWindows).toHaveLength(2)
+    expect(wrapper.get('[data-test="evidence-window-summary"]').text()).toContain('2')
+    expect(wrapper.get('[data-test="evidence-window-summary"]').text()).toContain('4')
+    expect(evidenceWindows[0].get('[data-test="evidence-window-context"]').text()).toBe('tool')
+    expect(evidenceWindows[0].get('[data-test="evidence-window-path"]').text()).toBe('messages[0].content[1].text')
+    expect(evidenceWindows[1].get('[data-test="evidence-window-context"]').text()).toBe('config')
+    expect(evidenceWindows[1].get('[data-test="evidence-window-path"]').text()).toBe('tools[0].config')
+
+    const matches = wrapper.findAll('[data-test="evidence-match"]')
+    expect(matches).toHaveLength(4)
+    expect(wrapper.findAll('[data-test="evidence-match-keyword"]').map((item) => item.text())).toEqual([
+      'danger',
+      'danger-zone',
+      'onerror',
+      'secret',
+    ])
+    expect(wrapper.findAll('[data-test="evidence-match-meta"]').map((item) => item.text())).toEqual([
+      '(layer1 / layer1-danger)',
+      '(layer2 / layer2-danger-zone)',
+      '(layer2 / layer2-onerror)',
+      '(layer2 / layer2-secret)',
+    ])
+
+    expect(evidenceWindows[0].findAll('[data-test="evidence-highlight"]').map((item) => item.text())).toEqual([
+      'danger-zone',
+      'onerror',
+    ])
+    expect(evidenceWindows[1].get('[data-test="evidence-highlight"]').text()).toBe('secret')
+    expect(evidenceWindows[0].get('[data-test="evidence-window-text"]').text()).toContain('<img src=x onerror=alert(1)>')
+    expect(evidenceWindows[0].find('img').exists()).toBe(false)
+    expect(wrapper.find('[data-test="evidence-fallback"]').exists()).toBe(false)
+  })
+
+  it('falls back to the saved input excerpt when evidence windows are absent or empty', async () => {
+    listLogs.mockResolvedValue({
+      items: [{ ...archivedLog(), evidence_windows: [] }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+    await flushPromises()
+    await findButtonByText(wrapper, '[redacted summary]').trigger('click')
+
+    expect(wrapper.find('[data-test="evidence-windows"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="evidence-fallback"]').text()).toContain('[redacted summary]')
+    expect(wrapper.get('[data-test="evidence-fallback"]').text()).toContain('admin.riskControl.evidenceFallbackHint')
   })
 
   it('keeps archive content out of list and summary requests until explicit preview', async () => {

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -56,11 +57,6 @@ func (s *ContentModerationService) scanUnifiedSecondLayerFragmentWithTier(ctx co
 	if len(endpoints) == 0 {
 		return contentModerationSecondLayerResult{}, false, nil
 	}
-	scanners := normalizeContentModerationScannerIDs(cfg.SecondLayerScanners)
-	if len(scanners) == 0 {
-		scanners = append([]string(nil), contentModerationScannerIDs...)
-	}
-
 	limit := endpoints[0].InputLimit
 	for _, endpoint := range endpoints[1:] {
 		if endpoint.InputLimit < limit {
@@ -68,25 +64,28 @@ func (s *ContentModerationService) scanUnifiedSecondLayerFragmentWithTier(ctx co
 		}
 	}
 	evidence := buildModerationEvidence(fragment, limit)
-	requests := []contentModerationSecondLayerInput{{
+	return s.scanUnifiedSecondLayerPrepared(ctx, cfg, contentModerationSecondLayerInput{
 		Fragment: fragment, Evidence: evidence, KeywordTier: keywordTier, KeywordRuleID: keywordRuleID,
-	}}
-	if evidence.Truncated {
-		fallback := boundedContentModerationFallbackEvidence(fragment, limit, keywordTier, keywordRuleID)
-		requests = append(requests, fallback...)
+	})
+}
+
+func (s *ContentModerationService) scanUnifiedSecondLayerPrepared(ctx context.Context, cfg *ContentModerationConfig, input contentModerationSecondLayerInput) (contentModerationSecondLayerResult, bool, error) {
+	endpoints := cfg.enabledSecondLayerEndpoints()
+	if len(endpoints) == 0 || strings.TrimSpace(input.Evidence.Text) == "" {
+		return contentModerationSecondLayerResult{}, false, nil
 	}
-	var lastResult contentModerationSecondLayerResult
-	for _, request := range requests {
-		result, err := s.scanContentModerationSecondLayerInput(ctx, endpoints, request, scanners)
-		if err != nil {
-			return contentModerationSecondLayerResult{}, true, err
-		}
-		lastResult = result
-		if result.Blocked {
-			return result, true, nil
-		}
+	// A request is classified at most once. Endpoint failover would turn an
+	// outage into a second model classification and violate that guarantee.
+	endpoints = endpoints[:1]
+	scanners := normalizeContentModerationScannerIDs(cfg.SecondLayerScanners)
+	if len(scanners) == 0 {
+		scanners = append([]string(nil), contentModerationScannerIDs...)
 	}
-	return lastResult, true, nil
+	result, err := s.scanContentModerationSecondLayerInput(ctx, endpoints, input, scanners)
+	if err != nil {
+		return contentModerationSecondLayerResult{}, true, err
+	}
+	return result, true, nil
 }
 
 type contentModerationSecondLayerInput struct {
@@ -94,8 +93,11 @@ type contentModerationSecondLayerInput struct {
 	Evidence      moderationEvidence
 	KeywordTier   string
 	KeywordRuleID string
+	Background    bool
 }
 
+// boundedContentModerationFallbackEvidence is retained only for the local
+// #5978 diagnostic and legacy regression fixtures. No request path calls it.
 func boundedContentModerationFallbackEvidence(fragment ContentModerationFragment, limit int, keywordMetadata ...string) []contentModerationSecondLayerInput {
 	chunks := splitContentModerationRunes(redactContentModerationSecrets(fragment.Text), limit)
 	if len(chunks) == 0 {
@@ -133,7 +135,12 @@ func (s *ContentModerationService) scanContentModerationSecondLayerInput(ctx con
 	busy := false
 	for _, endpoint := range endpoints {
 		resourceKey := contentModerationSecondLayerResourceKey(endpoint)
-		if !s.tryAcquireContentModerationSecondLayer(resourceKey) {
+		acquired, acquireErr := s.acquireContentModerationSecondLayer(ctx, resourceKey, input.Background)
+		if acquireErr != nil {
+			lastErr = acquireErr
+			continue
+		}
+		if !acquired {
 			busy = true
 			continue
 		}
@@ -283,7 +290,12 @@ func contentModerationSecondLayerResourceKey(endpoint ContentModerationEndpoint)
 	return strings.ToLower(baseURL)
 }
 
-func (s *ContentModerationService) contentModerationSecondLayerSlot(resourceKey string) chan struct{} {
+type contentModerationSecondLayerGate struct {
+	slot           chan struct{}
+	enforceWaiters atomic.Int64
+}
+
+func (s *ContentModerationService) contentModerationSecondLayerGate(resourceKey string) *contentModerationSecondLayerGate {
 	if s == nil {
 		return nil
 	}
@@ -291,41 +303,59 @@ func (s *ContentModerationService) contentModerationSecondLayerSlot(resourceKey 
 		resourceKey = "invalid"
 	}
 	if existing, ok := s.secondLayerEndpointSlots.Load(resourceKey); ok {
-		existingSlot, typeOK := existing.(chan struct{})
-		if !typeOK || existingSlot == nil {
+		existingGate, typeOK := existing.(*contentModerationSecondLayerGate)
+		if !typeOK || existingGate == nil {
 			panic("content moderation second-layer slot has unexpected type")
 		}
-		return existingSlot
+		return existingGate
 	}
-	slot := make(chan struct{}, 1)
-	actual, _ := s.secondLayerEndpointSlots.LoadOrStore(resourceKey, slot)
-	actualSlot, ok := actual.(chan struct{})
-	if !ok || actualSlot == nil {
+	gate := &contentModerationSecondLayerGate{slot: make(chan struct{}, 1)}
+	actual, _ := s.secondLayerEndpointSlots.LoadOrStore(resourceKey, gate)
+	actualGate, ok := actual.(*contentModerationSecondLayerGate)
+	if !ok || actualGate == nil {
 		panic("content moderation second-layer slot has unexpected type")
 	}
-	return actualSlot
+	return actualGate
 }
 
-func (s *ContentModerationService) tryAcquireContentModerationSecondLayer(resourceKey string) bool {
-	slot := s.contentModerationSecondLayerSlot(resourceKey)
-	if slot == nil {
-		return true
+func (s *ContentModerationService) acquireContentModerationSecondLayer(ctx context.Context, resourceKey string, background bool) (bool, error) {
+	gate := s.contentModerationSecondLayerGate(resourceKey)
+	if gate == nil {
+		return true, nil
 	}
+	if background {
+		if gate.enforceWaiters.Load() > 0 {
+			return false, nil
+		}
+		select {
+		case gate.slot <- struct{}{}:
+			if gate.enforceWaiters.Load() > 0 {
+				s.releaseContentModerationSecondLayer(resourceKey)
+				return false, nil
+			}
+			return true, nil
+		default:
+			return false, nil
+		}
+	}
+
+	gate.enforceWaiters.Add(1)
+	defer gate.enforceWaiters.Add(-1)
 	select {
-	case slot <- struct{}{}:
-		return true
-	default:
-		return false
+	case gate.slot <- struct{}{}:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
 	}
 }
 
 func (s *ContentModerationService) releaseContentModerationSecondLayer(resourceKey string) {
-	slot := s.contentModerationSecondLayerSlot(resourceKey)
-	if slot == nil {
+	gate := s.contentModerationSecondLayerGate(resourceKey)
+	if gate == nil {
 		return
 	}
 	select {
-	case <-slot:
+	case <-gate.slot:
 	default:
 	}
 }

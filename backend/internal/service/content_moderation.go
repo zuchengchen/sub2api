@@ -504,75 +504,76 @@ type ContentModerationDecision struct {
 }
 
 type ContentModerationLog struct {
-	ID                      int64              `json:"id"`
-	RequestID               string             `json:"request_id"`
-	UserID                  *int64             `json:"user_id,omitempty"`
-	UserEmail               string             `json:"user_email"`
-	APIKeyID                *int64             `json:"api_key_id,omitempty"`
-	APIKeyName              string             `json:"api_key_name"`
-	GroupID                 *int64             `json:"group_id,omitempty"`
-	GroupName               string             `json:"group_name"`
-	Endpoint                string             `json:"endpoint"`
-	Provider                string             `json:"provider"`
-	Model                   string             `json:"model"`
-	Mode                    string             `json:"mode"`
-	Action                  string             `json:"action"`
-	CacheHit                bool               `json:"cache_hit"`
-	DecisionSource          string             `json:"decision_source"`
-	SourceLogID             *int64             `json:"source_log_id,omitempty"`
-	ReplayOfInputHash       string             `json:"replay_of_input_hash,omitempty"`
-	FragmentRole            string             `json:"fragment_role,omitempty"`
-	FragmentKind            string             `json:"fragment_kind,omitempty"`
-	ContextClass            string             `json:"context_class,omitempty"`
-	FragmentPath            string             `json:"fragment_path,omitempty"`
-	CacheNamespace          string             `json:"cache_namespace,omitempty"`
-	PolicyVersion           string             `json:"policy_version,omitempty"`
-	ModelProfile            string             `json:"model_profile,omitempty"`
-	PromptVersion           string             `json:"prompt_version,omitempty"`
-	EvidencePolicyVersion   string             `json:"evidence_policy_version,omitempty"`
-	KeywordTier             string             `json:"keyword_tier,omitempty"`
-	KeywordRuleID           string             `json:"keyword_rule_id,omitempty"`
-	EvidenceMode            string             `json:"evidence_mode,omitempty"`
-	EvidenceTruncated       bool               `json:"evidence_truncated"`
-	ParserStatus            string             `json:"parser_status,omitempty"`
-	Flagged                 bool               `json:"flagged"`
-	HighestCategory         string             `json:"highest_category"`
-	HighestScore            float64            `json:"highest_score"`
-	MatchedKeyword          string             `json:"matched_keyword"`
-	CategoryScores          map[string]float64 `json:"category_scores"`
-	ThresholdSnapshot       map[string]float64 `json:"threshold_snapshot"`
-	InputExcerpt            string             `json:"input_excerpt"`
-	UpstreamLatencyMS       *int               `json:"upstream_latency_ms,omitempty"`
-	Error                   string             `json:"error"`
-	ViolationCount          int                `json:"violation_count"`
-	AutoBanned              bool               `json:"auto_banned"`
-	EmailSent               bool               `json:"email_sent"`
-	EmailDeliveryStatus     string             `json:"email_delivery_status"`
-	EmailDeliveryClaimedAt  *time.Time         `json:"email_delivery_claimed_at,omitempty"`
-	UserStatus              string             `json:"user_status"`
-	QueueDelayMS            *int               `json:"queue_delay_ms,omitempty"`
-	Protocol                string             `json:"protocol"`
-	Transport               string             `json:"transport"`
-	RequestStage            string             `json:"request_stage"`
-	RequestTarget           string             `json:"request_target"`
-	InputHash               string             `json:"input_hash"`
-	ArchiveID               string             `json:"archive_id,omitempty"`
-	ArchiveVersion          int                `json:"archive_version,omitempty"`
-	ArchiveKeyID            string             `json:"archive_key_id,omitempty"`
-	ArchiveSHA256           []byte             `json:"-"`
-	ArchiveBytes            int64              `json:"archive_bytes"`
-	ArchiveStatus           string             `json:"archive_status"`
-	ArchiveIncomplete       bool               `json:"archive_incomplete"`
-	ArchiveContentLost      bool               `json:"archive_content_lost"`
-	ArchiveDeletedAt        *time.Time         `json:"archive_deleted_at,omitempty"`
-	DispositionStatus       string             `json:"disposition_status"`
-	DispositionTarget       string             `json:"disposition_target"`
-	DispositionTransitioned bool               `json:"disposition_transitioned"`
-	LegacySourceJobID       *int64             `json:"legacy_source_job_id,omitempty"`
-	LegacyStatus            string             `json:"legacy_status,omitempty"`
-	LegacyEventCount        int                `json:"legacy_event_count,omitempty"`
-	LegacyMetadata          json.RawMessage    `json:"-"`
-	CreatedAt               time.Time          `json:"created_at"`
+	ID                      int64                             `json:"id"`
+	RequestID               string                            `json:"request_id"`
+	UserID                  *int64                            `json:"user_id,omitempty"`
+	UserEmail               string                            `json:"user_email"`
+	APIKeyID                *int64                            `json:"api_key_id,omitempty"`
+	APIKeyName              string                            `json:"api_key_name"`
+	GroupID                 *int64                            `json:"group_id,omitempty"`
+	GroupName               string                            `json:"group_name"`
+	Endpoint                string                            `json:"endpoint"`
+	Provider                string                            `json:"provider"`
+	Model                   string                            `json:"model"`
+	Mode                    string                            `json:"mode"`
+	Action                  string                            `json:"action"`
+	CacheHit                bool                              `json:"cache_hit"`
+	DecisionSource          string                            `json:"decision_source"`
+	SourceLogID             *int64                            `json:"source_log_id,omitempty"`
+	ReplayOfInputHash       string                            `json:"replay_of_input_hash,omitempty"`
+	FragmentRole            string                            `json:"fragment_role,omitempty"`
+	FragmentKind            string                            `json:"fragment_kind,omitempty"`
+	ContextClass            string                            `json:"context_class,omitempty"`
+	FragmentPath            string                            `json:"fragment_path,omitempty"`
+	CacheNamespace          string                            `json:"cache_namespace,omitempty"`
+	PolicyVersion           string                            `json:"policy_version,omitempty"`
+	ModelProfile            string                            `json:"model_profile,omitempty"`
+	PromptVersion           string                            `json:"prompt_version,omitempty"`
+	EvidencePolicyVersion   string                            `json:"evidence_policy_version,omitempty"`
+	KeywordTier             string                            `json:"keyword_tier,omitempty"`
+	KeywordRuleID           string                            `json:"keyword_rule_id,omitempty"`
+	EvidenceMode            string                            `json:"evidence_mode,omitempty"`
+	EvidenceTruncated       bool                              `json:"evidence_truncated"`
+	EvidenceWindows         []ContentModerationEvidenceWindow `json:"evidence_windows"`
+	ParserStatus            string                            `json:"parser_status,omitempty"`
+	Flagged                 bool                              `json:"flagged"`
+	HighestCategory         string                            `json:"highest_category"`
+	HighestScore            float64                           `json:"highest_score"`
+	MatchedKeyword          string                            `json:"matched_keyword"`
+	CategoryScores          map[string]float64                `json:"category_scores"`
+	ThresholdSnapshot       map[string]float64                `json:"threshold_snapshot"`
+	InputExcerpt            string                            `json:"input_excerpt"`
+	UpstreamLatencyMS       *int                              `json:"upstream_latency_ms,omitempty"`
+	Error                   string                            `json:"error"`
+	ViolationCount          int                               `json:"violation_count"`
+	AutoBanned              bool                              `json:"auto_banned"`
+	EmailSent               bool                              `json:"email_sent"`
+	EmailDeliveryStatus     string                            `json:"email_delivery_status"`
+	EmailDeliveryClaimedAt  *time.Time                        `json:"email_delivery_claimed_at,omitempty"`
+	UserStatus              string                            `json:"user_status"`
+	QueueDelayMS            *int                              `json:"queue_delay_ms,omitempty"`
+	Protocol                string                            `json:"protocol"`
+	Transport               string                            `json:"transport"`
+	RequestStage            string                            `json:"request_stage"`
+	RequestTarget           string                            `json:"request_target"`
+	InputHash               string                            `json:"input_hash"`
+	ArchiveID               string                            `json:"archive_id,omitempty"`
+	ArchiveVersion          int                               `json:"archive_version,omitempty"`
+	ArchiveKeyID            string                            `json:"archive_key_id,omitempty"`
+	ArchiveSHA256           []byte                            `json:"-"`
+	ArchiveBytes            int64                             `json:"archive_bytes"`
+	ArchiveStatus           string                            `json:"archive_status"`
+	ArchiveIncomplete       bool                              `json:"archive_incomplete"`
+	ArchiveContentLost      bool                              `json:"archive_content_lost"`
+	ArchiveDeletedAt        *time.Time                        `json:"archive_deleted_at,omitempty"`
+	DispositionStatus       string                            `json:"disposition_status"`
+	DispositionTarget       string                            `json:"disposition_target"`
+	DispositionTransitioned bool                              `json:"disposition_transitioned"`
+	LegacySourceJobID       *int64                            `json:"legacy_source_job_id,omitempty"`
+	LegacyStatus            string                            `json:"legacy_status,omitempty"`
+	LegacyEventCount        int                               `json:"legacy_event_count,omitempty"`
+	LegacyMetadata          json.RawMessage                   `json:"-"`
+	CreatedAt               time.Time                         `json:"created_at"`
 }
 
 const (
@@ -766,6 +767,10 @@ type ContentModerationRuntimeStatus struct {
 	FragmentCacheWrites          int64                                 `json:"fragment_cache_writes"`
 	FragmentCacheWriteErrors     int64                                 `json:"fragment_cache_write_errors"`
 	SecondLayerMetrics           []ContentModerationSecondLayerMetric  `json:"second_layer_metrics"`
+	SecondLayerShadowQueued      int64                                 `json:"second_layer_shadow_queued"`
+	SecondLayerShadowDropped     int64                                 `json:"second_layer_shadow_dropped"`
+	SecondLayerShadowCompleted   int64                                 `json:"second_layer_shadow_completed"`
+	SecondLayerShadowQueueDepth  int                                   `json:"second_layer_shadow_queue_depth"`
 	ArchiveRuntime               ContentModerationArchiveRuntimeStatus `json:"archive_runtime"`
 }
 
@@ -917,6 +922,12 @@ type ContentModerationService struct {
 	secondLayerClients       sync.Map
 	secondLayerEndpointSlots sync.Map
 	secondLayerMetrics       sync.Map
+	secondLayerShadowOnce    sync.Once
+	secondLayerShadowMu      sync.RWMutex
+	secondLayerShadowQueue   chan func()
+	secondLayerShadowQueued  atomic.Int64
+	secondLayerShadowDropped atomic.Int64
+	secondLayerShadowDone    atomic.Int64
 }
 
 type contentModerationSecondLayerMetricCounter struct {
@@ -2056,6 +2067,10 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		FragmentCacheWrites:          s.fragmentCacheWrites.Load(),
 		FragmentCacheWriteErrors:     s.fragmentCacheWriteErrors.Load(),
 		SecondLayerMetrics:           s.contentModerationSecondLayerMetrics(),
+		SecondLayerShadowQueued:      s.secondLayerShadowQueued.Load(),
+		SecondLayerShadowDropped:     s.secondLayerShadowDropped.Load(),
+		SecondLayerShadowCompleted:   s.secondLayerShadowDone.Load(),
+		SecondLayerShadowQueueDepth:  s.contentModerationShadowQueueDepth(),
 		ArchiveRuntime:               s.archiveRuntime.Status(),
 	}, nil
 }
@@ -2214,11 +2229,44 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 	}
 	effectiveKeywords, err := effectiveContentModerationKeywords(cfg)
 	if err != nil {
-		return nil, err
+		if s.runtimeSnapshot.Load() != nil {
+			return nil, err
+		}
+		// Legacy configs can reference an asset that is no longer available.
+		// Preserve their explicit local block list while keeping layer two off.
+		slog.Error("content_moderation.candidate_asset_unavailable_at_startup", "error", err)
+		snapshot := &contentModerationRuntimeSnapshot{
+			riskControlEnabled:     values[SettingKeyRiskControlEnabled] == "true",
+			config:                 cfg,
+			keywordMatcher:         newContentModerationKeywordMatcher(normalizeBlockedKeywords(cfg.BlockedKeywords)),
+			fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
+			configDigest:           configDigest,
+			loadedAt:               time.Now(),
+		}
+		s.runtimeSnapshot.Store(snapshot)
+		s.runtimeRefreshRetryAt.Store(0)
+		return snapshot, nil
 	}
 	effectiveSecondLayerKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	if err != nil {
-		return nil, err
+		if s.runtimeSnapshot.Load() != nil {
+			return nil, err
+		}
+		// A cold start must not disable deterministic high-confidence blocking
+		// because the optional candidate policy is invalid. Keep layer one live,
+		// expose layer two as unavailable, and avoid caching candidate decisions.
+		slog.Error("content_moderation.candidate_system_unavailable_at_startup", "error", err)
+		snapshot := &contentModerationRuntimeSnapshot{
+			riskControlEnabled:     values[SettingKeyRiskControlEnabled] == "true",
+			config:                 cfg,
+			keywordMatcher:         newContentModerationKeywordMatcher(effectiveKeywords),
+			fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
+			configDigest:           configDigest,
+			loadedAt:               time.Now(),
+		}
+		s.runtimeSnapshot.Store(snapshot)
+		s.runtimeRefreshRetryAt.Store(0)
+		return snapshot, nil
 	}
 	snapshot := &contentModerationRuntimeSnapshot{
 		riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
@@ -2321,6 +2369,9 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 	}
 	if _, err := effectiveContentModerationKeywords(cfg); err != nil {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CANDIDATE_ASSET", err.Error())
+	}
+	if _, err := effectiveContentModerationSecondLayerKeywords(cfg); err != nil {
+		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CANDIDATE_SYSTEM", err.Error())
 	}
 	if err := validateContentModerationMode(cfg.Mode); err != nil {
 		return err
@@ -3091,7 +3142,7 @@ func (cfg *ContentModerationConfig) normalize() {
 	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion {
 		cfg.ContextPolicyVersion = ContentModerationContextPolicyVersion
 	}
-	if strings.TrimSpace(cfg.EvidencePolicyVersion) == "" {
+	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion {
 		cfg.EvidencePolicyVersion = ContentModerationEvidencePolicyVersion
 	}
 	cfg.KeywordPolicyVersion = normalizeContentModerationCacheVersion(cfg.KeywordPolicyVersion)
@@ -3330,7 +3381,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 	case layer2Err != nil:
 		candidateSystemError = layer2Err.Error()
 	case len(effectiveLayer2Keywords) == 0:
-		candidateSystemError = "Layer 2 candidate keywords are empty; requests fall back to YuFeng"
+		candidateSystemError = "Layer 2 candidate keywords are empty; YuFeng review is health-protected and skipped"
 	}
 	view := &ContentModerationConfigView{
 		Enabled:                        cfg.Enabled,
@@ -3438,7 +3489,11 @@ func effectiveContentModerationSecondLayerKeywords(cfg *ContentModerationConfig)
 	if err != nil {
 		return nil, err
 	}
-	return canonicalContentModerationPrefilterKeywords(keywords), nil
+	keywords = canonicalContentModerationPrefilterKeywords(keywords)
+	if cfg != nil && cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly && len(keywords) == 0 {
+		return nil, errors.New("second-layer candidate keywords are empty")
+	}
+	return keywords, nil
 }
 
 func contentModerationSecondLayerKeywordValues(cfg *ContentModerationConfig) ([]string, error) {

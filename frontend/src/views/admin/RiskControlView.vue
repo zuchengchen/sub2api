@@ -1273,7 +1273,7 @@
                 {{ inputDetailRow.highest_category || '-' }} / {{ percent(inputDetailRow.highest_score) }}
               </p>
             </div>
-            <div v-if="inputDetailRow.matched_keyword" class="rounded-lg border border-red-100 bg-red-50 p-4 dark:border-red-900/60 dark:bg-red-900/20">
+            <div v-if="!hasEvidenceWindows && inputDetailRow.matched_keyword" class="rounded-lg border border-red-100 bg-red-50 p-4 dark:border-red-900/60 dark:bg-red-900/20">
               <p class="text-xs font-medium text-red-500 dark:text-red-300">{{ t('admin.riskControl.matchedKeyword') }}</p>
               <p class="mt-1 truncate text-sm font-semibold text-red-700 dark:text-red-200" :title="inputDetailRow.matched_keyword">{{ inputDetailRow.matched_keyword }}</p>
             </div>
@@ -1338,7 +1338,56 @@
                 {{ inputDetailRow.group_name }}
               </span>
             </div>
-            <pre class="mt-4 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ inputDetailText }}</pre>
+            <div v-if="hasEvidenceWindows" class="mt-4" data-test="evidence-windows">
+              <p class="text-xs text-gray-500 dark:text-gray-400" data-test="evidence-window-summary">
+                {{ t('admin.riskControl.evidenceWindowSummary', { windows: evidenceWindows.length, matches: evidenceMatchCount }) }}
+              </p>
+              <section
+                v-for="(window, windowIndex) in evidenceWindows"
+                :key="`${window.path}:${windowIndex}`"
+                class="mt-4 border-t border-gray-100 pt-4 first:mt-3 dark:border-dark-700"
+                data-test="evidence-window"
+              >
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <p class="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">
+                    {{ t('admin.riskControl.evidenceWindowLabel', { index: windowIndex + 1 }) }}
+                  </p>
+                  <div class="flex min-w-0 flex-wrap items-center justify-end gap-2 text-xs">
+                    <span class="inline-flex max-w-full items-center gap-1 rounded bg-sky-50 px-2 py-1 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
+                      <span class="font-medium">{{ t('admin.riskControl.evidenceContext') }}:</span>
+                      <span data-test="evidence-window-context">{{ window.context_class || '-' }}</span>
+                    </span>
+                    <span class="inline-flex max-w-full items-center gap-1 rounded bg-gray-100 px-2 py-1 text-gray-700 dark:bg-dark-700 dark:text-gray-200">
+                      <span class="font-medium">{{ t('admin.riskControl.evidencePath') }}:</span>
+                      <code class="break-all" data-test="evidence-window-path">{{ window.path || '-' }}</code>
+                    </span>
+                  </div>
+                </div>
+
+                <div v-if="window.matches.length > 0" class="mt-3">
+                  <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.evidenceMatches') }}</p>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span
+                      v-for="(match, matchIndex) in window.matches"
+                      :key="`${match.start}:${match.end}:${match.rule_id}:${matchIndex}`"
+                      class="inline-flex max-w-full flex-wrap items-baseline gap-x-1.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+                      data-test="evidence-match"
+                    >
+                      <span class="break-all font-semibold" data-test="evidence-match-keyword">{{ match.keyword || '-' }}</span>
+                      <span class="break-all font-mono text-[11px] opacity-75" data-test="evidence-match-meta">
+                        ({{ t('admin.riskControl.evidenceMatchMeta', { tier: match.tier || '-', rule: match.rule_id || '-' }) }})
+                      </span>
+                    </span>
+                  </div>
+                </div>
+
+                <pre class="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50" data-test="evidence-window-text"><template v-for="(segment, segmentIndex) in window.segments" :key="segmentIndex"><mark v-if="segment.highlighted" class="rounded-sm bg-amber-300 font-semibold text-gray-950" data-test="evidence-highlight">{{ segment.text }}</mark><span v-else>{{ segment.text }}</span></template></pre>
+              </section>
+            </div>
+            <div v-else class="mt-4" data-test="evidence-fallback">
+              <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.evidenceFallbackHint') }}</p>
+              <pre class="mt-2 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ inputDetailText }}</pre>
+            </div>
           </div>
 
           <div v-if="inputDetailRow.archive_id" class="border-t border-gray-100 pt-5 dark:border-dark-700" data-test="archive-section">
@@ -1430,6 +1479,8 @@ import type {
   ContentModerationAPIKeyStatus,
   ContentModerationConfig,
   ContentModerationEndpoint,
+  ContentModerationEvidenceMatch,
+  ContentModerationEvidenceWindow,
   ContentModerationLog,
   ContentModerationLogView,
   ContentModerationModelFilter,
@@ -1475,6 +1526,51 @@ type RiskThresholdRow = {
   category: string
   value: number
   defaultValue: number
+}
+type EvidenceTextSegment = {
+  text: string
+  highlighted: boolean
+}
+type EvidenceWindowView = ContentModerationEvidenceWindow & {
+  matches: ContentModerationEvidenceMatch[]
+  segments: EvidenceTextSegment[]
+}
+
+function segmentEvidenceText(text: string, matches: ContentModerationEvidenceMatch[]): EvidenceTextSegment[] {
+  const runes = Array.from(text)
+  const ranges = matches
+    .map((match) => {
+      if (!Number.isFinite(match.start) || !Number.isFinite(match.end)) return null
+      const start = Math.max(0, Math.min(runes.length, Math.trunc(match.start)))
+      const end = Math.max(0, Math.min(runes.length, Math.trunc(match.end)))
+      return end > start ? { start, end } : null
+    })
+    .filter((range): range is { start: number; end: number } => range !== null)
+    .sort((left, right) => left.start - right.start || left.end - right.end)
+
+  const mergedRanges: Array<{ start: number; end: number }> = []
+  for (const range of ranges) {
+    const previous = mergedRanges[mergedRanges.length - 1]
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end)
+      continue
+    }
+    mergedRanges.push({ ...range })
+  }
+
+  const segments: EvidenceTextSegment[] = []
+  let cursor = 0
+  for (const range of mergedRanges) {
+    if (range.start > cursor) {
+      segments.push({ text: runes.slice(cursor, range.start).join(''), highlighted: false })
+    }
+    segments.push({ text: runes.slice(range.start, range.end).join(''), highlighted: true })
+    cursor = range.end
+  }
+  if (cursor < runes.length || segments.length === 0) {
+    segments.push({ text: runes.slice(cursor).join(''), highlighted: false })
+  }
+  return segments
 }
 
 const maxModerationTestImages = 1
@@ -1955,6 +2051,28 @@ const inputDetailText = computed(() => {
   if (!inputDetailRow.value) return '-'
   return inputDetailRow.value.input_excerpt || inputDetailRow.value.error || '-'
 })
+
+const evidenceWindows = computed<EvidenceWindowView[]>(() => {
+  const windows = inputDetailRow.value?.evidence_windows
+  if (!Array.isArray(windows) || windows.length === 0) return []
+
+  return windows.map((window) => {
+    const matches = Array.isArray(window.matches) ? window.matches : []
+    return {
+      ...window,
+      path: typeof window.path === 'string' ? window.path : '',
+      context_class: typeof window.context_class === 'string' ? window.context_class : '',
+      text: typeof window.text === 'string' ? window.text : '',
+      matches,
+      segments: segmentEvidenceText(typeof window.text === 'string' ? window.text : '', matches),
+    }
+  })
+})
+
+const hasEvidenceWindows = computed(() => evidenceWindows.value.length > 0)
+const evidenceMatchCount = computed(() => (
+  evidenceWindows.value.reduce((total, window) => total + window.matches.length, 0)
+))
 
 const runtimeMode = computed<ModerationMode>(() => status.value?.mode ?? configForm.mode)
 
