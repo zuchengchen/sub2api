@@ -864,31 +864,38 @@
                 <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.secondLayerTitle') }}</h3>
                 <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.secondLayerHint') }}</p>
               </div>
-              <Toggle v-model="configForm.second_layer_enabled" />
+              <div class="flex items-center gap-3">
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.riskControl.secondLayerEnabled') }}</span>
+                <Toggle v-model="configForm.second_layer_enabled" />
+              </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-              <div>
-                <label class="input-label">{{ t('admin.riskControl.secondLayerStage') }}</label>
-                <div class="inline-flex w-full rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
-                  <button
-                    v-for="option in secondLayerStageOptions"
-                    :key="String(option.value)"
-                    type="button"
-                    :data-test="`second-layer-stage-${option.value}`"
-                    class="min-w-0 flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors"
-                    :class="configForm.second_layer_stage === option.value
-                      ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-800 dark:text-white'
-                      : 'text-gray-500 dark:text-gray-400'"
-                    @click="configForm.second_layer_stage = option.value"
-                  >
-                    {{ option.label }}
-                  </button>
+            <div class="grid grid-cols-1 gap-x-8 border-b border-gray-100 pb-5 dark:border-dark-700 md:grid-cols-2">
+              <div class="flex min-h-[76px] items-start justify-between gap-4 py-3">
+                <div>
+                  <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.firstLayerShadowMode') }}</p>
+                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.firstLayerShadowModeHint') }}</p>
                 </div>
-                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                  {{ configForm.second_layer_stage === 'shadow' ? t('admin.riskControl.secondLayerStageShadowHint') : t('admin.riskControl.secondLayerStageEnforceHint') }}
-                </p>
+                <Toggle
+                  data-test="first-layer-shadow-toggle"
+                  :model-value="configForm.first_layer_stage === 'shadow'"
+                  @update:model-value="configForm.first_layer_stage = $event ? 'shadow' : 'enforce'"
+                />
               </div>
+              <div class="flex min-h-[76px] items-start justify-between gap-4 py-3">
+                <div>
+                  <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.secondLayerShadowMode') }}</p>
+                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.secondLayerShadowModeHint') }}</p>
+                </div>
+                <Toggle
+                  data-test="second-layer-shadow-toggle"
+                  :model-value="configForm.second_layer_stage === 'shadow'"
+                  @update:model-value="configForm.second_layer_stage = $event ? 'shadow' : 'enforce'"
+                />
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
               <div>
                 <label class="input-label">{{ t('admin.riskControl.fragmentBlockTTL') }}</label>
                 <input v-model.number="configForm.fragment_block_ttl_seconds" data-test="fragment-block-ttl" type="number" min="300" max="86400" class="input" />
@@ -1429,6 +1436,7 @@ import type {
   ContentModerationModelFilterType,
   ContentModerationModelProfile,
   ContentModerationRuntimeStatus,
+  ContentModerationFirstLayerStage,
   ContentModerationSecondLayerStage,
   ContentModerationTestAuditResult,
   KeywordBlockingMode,
@@ -1560,6 +1568,7 @@ const configForm = reactive({
   fragment_block_ttl_seconds: 36000,
   fragment_allow_ttl_seconds: 36000,
   fragment_ttl_policy_version: 'ttl-v2',
+  first_layer_stage: 'enforce' as ContentModerationFirstLayerStage,
   second_layer_enabled: false,
   second_layer_stage: 'enforce' as ContentModerationSecondLayerStage,
   second_layer_endpoints: [] as EditableModerationEndpoint[],
@@ -1605,11 +1614,6 @@ const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
 const modeOptions = computed<SelectOption[]>(() => [
   { value: 'pre_block', label: t('admin.riskControl.modePreBlock') },
   { value: 'off', label: t('admin.riskControl.modeOff') },
-])
-
-const secondLayerStageOptions = computed<Array<{ value: ContentModerationSecondLayerStage; label: string }>>(() => [
-  { value: 'shadow', label: t('admin.riskControl.secondLayerStageShadow') },
-  { value: 'enforce', label: t('admin.riskControl.secondLayerStageEnforce') },
 ])
 
 const secondLayerProfileOptions = computed<Array<{ value: ContentModerationModelProfile; label: string }>>(() => [
@@ -1737,6 +1741,7 @@ const decisionSourceOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('admin.riskControl.filters.allDecisionSources') },
   ...[
     'keyword_high_confidence',
+    'keyword_high_confidence_shadow',
     'keyword_high_confidence_whitelist_shadow',
     'candidate_model',
     'model',
@@ -2077,6 +2082,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.fragment_block_ttl_seconds = config.fragment_block_ttl_seconds ?? 36000
   configForm.fragment_allow_ttl_seconds = config.fragment_allow_ttl_seconds ?? 36000
   configForm.fragment_ttl_policy_version = config.fragment_ttl_policy_version || 'ttl-v2'
+  configForm.first_layer_stage = config.first_layer_stage === 'shadow' ? 'shadow' : 'enforce'
   configForm.second_layer_enabled = config.second_layer_enabled ?? false
   configForm.second_layer_stage = config.second_layer_stage === 'shadow' ? 'shadow' : 'enforce'
   configForm.second_layer_endpoints = Array.isArray(config.second_layer_endpoints)
@@ -2185,6 +2191,7 @@ async function saveConfig() {
       fragment_block_ttl_seconds: clampInteger(configForm.fragment_block_ttl_seconds, 300, 86400, 36000),
       fragment_allow_ttl_seconds: clampInteger(configForm.fragment_allow_ttl_seconds, 1, 86400, 36000),
       fragment_ttl_policy_version: configForm.fragment_ttl_policy_version.trim() || 'ttl-v2',
+      first_layer_stage: configForm.first_layer_stage,
       second_layer_enabled: configForm.second_layer_enabled,
       second_layer_stage: configForm.second_layer_stage,
       second_layer_endpoints: configForm.second_layer_endpoints.map((endpoint) => ({
@@ -2654,6 +2661,7 @@ function resultLabel(row: ContentModerationLog): string {
   if (isReplayRow(row)) return t('admin.riskControl.action.cacheReplay')
   if (row.action === 'cyber_policy') return t('admin.riskControl.action.cyberPolicy')
   if (row.action === 'keyword_block') return t('admin.riskControl.action.keywordBlock')
+  if (row.action === 'first_layer_shadow') return t('admin.riskControl.action.keywordShadow')
   if (row.action === 'whitelist_shadow' && row.decision_source.startsWith('keyword_')) return t('admin.riskControl.action.keywordShadow')
   if (row.action === 'second_layer_shadow' || row.action === 'whitelist_shadow') return t('admin.riskControl.action.shadowBlock')
   if (isBlockingAuditAction(row.action)) return t('admin.riskControl.action.block')
@@ -2665,7 +2673,7 @@ function resultLabel(row: ContentModerationLog): string {
 function resultBadgeClass(row: ContentModerationLog): string {
   if (isReplayRow(row)) return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
   if (isBlockingAuditAction(row.action) || row.action === 'cyber_policy') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
-  if (row.action === 'second_layer_shadow' || row.action === 'whitelist_shadow') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  if (row.action === 'first_layer_shadow' || row.action === 'second_layer_shadow' || row.action === 'whitelist_shadow') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'

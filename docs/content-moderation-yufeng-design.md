@@ -6,17 +6,22 @@ record.
 
 ## Staging and rollback
 
-`second_layer_stage=shadow` calls the configured second layer and records its
-result without changing the existing allow/block outcome. `enforce` makes the
-new profile authoritative. Promotion starts in shadow and requires reviewed
-replay results before enforce is considered.
+`first_layer_stage` and `second_layer_stage` independently accept `enforce` or
+`shadow`; missing values normalize to `enforce` for legacy configurations.
+First-layer shadow records a high-confidence keyword risk without blocking and,
+when the second layer is enabled, continues to it even when its candidate
+prefilter does not match.
+Second-layer shadow records an unsafe model decision without blocking or user
+side effects. A risky shadow result is not stored as an allow-cache entry, so a
+repeated risk remains auditable. Promotion starts in shadow and requires
+reviewed replay results before enforce is considered.
 
 Rollback does not require a code rollback: set the endpoint `profile` back to
 `qwen_guard`, restore its endpoint/model/prompt version, and keep the YuFeng
 endpoint disabled. Changing profile, endpoint, model revision, prompt version,
-context policy, evidence policy, keyword policy, TTL policy, or stage changes
-the fragment cache namespace, so a rollback cannot reuse a decision from a
-different policy.
+context policy, evidence policy, keyword policy, TTL policy, or either layer's
+stage changes the fragment cache namespace, so a rollback cannot reuse a
+decision from a different policy.
 
 ## Decision flow
 

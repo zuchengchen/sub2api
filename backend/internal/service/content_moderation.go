@@ -41,6 +41,7 @@ const (
 	ContentModerationActionBlock             = "block"
 	ContentModerationActionHashBlock         = "hash_block"
 	ContentModerationActionKeywordBlock      = "keyword_block"
+	ContentModerationActionFirstLayerShadow  = "first_layer_shadow"
 	ContentModerationActionSecondLayerBlock  = "second_layer_block"
 	ContentModerationActionSecondLayerShadow = "second_layer_shadow"
 	ContentModerationActionWhitelistShadow   = "whitelist_shadow"
@@ -189,6 +190,7 @@ type ContentModerationConfig struct {
 	FragmentBlockTTLSeconds  int                          `json:"fragment_block_ttl_seconds"`
 	FragmentAllowTTLSeconds  int                          `json:"fragment_allow_ttl_seconds"`
 	FragmentTTLPolicyVersion string                       `json:"fragment_ttl_policy_version"`
+	FirstLayerStage          string                       `json:"first_layer_stage"`
 	SecondLayerEnabled       bool                         `json:"second_layer_enabled"`
 	SecondLayerStage         string                       `json:"second_layer_stage"`
 	SecondLayerEndpoints     []ContentModerationEndpoint  `json:"second_layer_endpoints"`
@@ -244,6 +246,7 @@ type ContentModerationConfigView struct {
 	FragmentBlockTTLSeconds        int                             `json:"fragment_block_ttl_seconds"`
 	FragmentAllowTTLSeconds        int                             `json:"fragment_allow_ttl_seconds"`
 	FragmentTTLPolicyVersion       string                          `json:"fragment_ttl_policy_version"`
+	FirstLayerStage                string                          `json:"first_layer_stage"`
 	SecondLayerEnabled             bool                            `json:"second_layer_enabled"`
 	SecondLayerStage               string                          `json:"second_layer_stage"`
 	SecondLayerEndpoints           []ContentModerationEndpointView `json:"second_layer_endpoints"`
@@ -392,6 +395,7 @@ type UpdateContentModerationConfigInput struct {
 	FragmentBlockTTLSeconds        *int                          `json:"fragment_block_ttl_seconds"`
 	FragmentAllowTTLSeconds        *int                          `json:"fragment_allow_ttl_seconds"`
 	FragmentTTLPolicyVersion       *string                       `json:"fragment_ttl_policy_version"`
+	FirstLayerStage                *string                       `json:"first_layer_stage"`
 	SecondLayerEnabled             *bool                         `json:"second_layer_enabled"`
 	SecondLayerStage               *string                       `json:"second_layer_stage"`
 	SecondLayerEndpoints           *[]ContentModerationEndpoint  `json:"second_layer_endpoints"`
@@ -1097,6 +1101,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if input.FragmentTTLPolicyVersion != nil {
 		cfg.FragmentTTLPolicyVersion = strings.TrimSpace(*input.FragmentTTLPolicyVersion)
 	}
+	if input.FirstLayerStage != nil {
+		cfg.FirstLayerStage = strings.TrimSpace(*input.FirstLayerStage)
+	}
 	if input.SecondLayerEnabled != nil {
 		cfg.SecondLayerEnabled = *input.SecondLayerEnabled
 	}
@@ -1417,6 +1424,9 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 				if whitelistShadow {
 					action = ContentModerationActionWhitelistShadow
 					logFlagged = false
+				} else if cfg.FirstLayerStage == ContentModerationFirstLayerStageShadow {
+					action = ContentModerationActionFirstLayerShadow
+					logFlagged = false
 				}
 				s.recordPreBlockSyncMetric(0, action)
 				slog.Info("content_moderation.keyword_match",
@@ -1431,8 +1441,8 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 				scores := map[string]float64{contentModerationKeywordCategory: 1.0}
 				log := s.buildLog(input, cfg, action, logFlagged, contentModerationKeywordCategory, 1.0, scores, content.ExcerptText(), nil, nil, "")
 				log.MatchedKeyword = keyword
-				s.persistContentModerationLogWithInput(ctx, cfg, log, hashText, false, !whitelistShadow, &input)
-				if !whitelistShadow {
+				s.persistContentModerationLogWithInput(ctx, cfg, log, hashText, false, logFlagged, &input)
+				if logFlagged {
 					return &ContentModerationDecision{
 						Allowed:         false,
 						Blocked:         true,
@@ -2917,6 +2927,7 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		FragmentBlockTTLSeconds:        DefaultContentModerationFragmentBlockTTLSeconds,
 		FragmentAllowTTLSeconds:        DefaultContentModerationFragmentAllowTTLSeconds,
 		FragmentTTLPolicyVersion:       ContentModerationFragmentTTLPolicyVersion,
+		FirstLayerStage:                ContentModerationFirstLayerStageEnforce,
 		SecondLayerEnabled:             false,
 		SecondLayerStage:               ContentModerationSecondLayerStageEnforce,
 		SecondLayerEndpoints:           []ContentModerationEndpoint{},
@@ -3068,6 +3079,7 @@ func (cfg *ContentModerationConfig) normalize() {
 	}
 	cfg.FragmentTTLPolicyVersion = normalizeContentModerationCacheVersion(cfg.FragmentTTLPolicyVersion)
 	cfg.SecondLayerEndpoints = normalizeContentModerationEndpoints(cfg.SecondLayerEndpoints)
+	cfg.FirstLayerStage = normalizeContentModerationFirstLayerStage(cfg.FirstLayerStage)
 	cfg.SecondLayerStage = normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage)
 	cfg.SecondLayerScanners = normalizeContentModerationScannerIDs(cfg.SecondLayerScanners)
 	cfg.HardBlockPatterns = normalizeBlockedKeywords(cfg.HardBlockPatterns)
@@ -3357,6 +3369,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		FragmentBlockTTLSeconds:        cfg.FragmentBlockTTLSeconds,
 		FragmentAllowTTLSeconds:        cfg.FragmentAllowTTLSeconds,
 		FragmentTTLPolicyVersion:       cfg.FragmentTTLPolicyVersion,
+		FirstLayerStage:                cfg.FirstLayerStage,
 		SecondLayerEnabled:             cfg.SecondLayerEnabled,
 		SecondLayerStage:               cfg.SecondLayerStage,
 		SecondLayerEndpoints:           contentModerationEndpointViews(cfg.SecondLayerEndpoints),

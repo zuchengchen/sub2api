@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -207,6 +208,8 @@ func TestContentModerationTTLConfigBoundariesAndNamespaceIsolation(t *testing.T)
 		func(value *ContentModerationConfig) { value.ContextPolicyVersion = "context-v4" },
 		func(value *ContentModerationConfig) { value.EvidencePolicyVersion = "evidence-v2" },
 		func(value *ContentModerationConfig) { value.KeywordPolicyVersion = "keyword-v4" },
+		func(value *ContentModerationConfig) { value.FirstLayerStage = ContentModerationFirstLayerStageShadow },
+		func(value *ContentModerationConfig) { value.SecondLayerStage = ContentModerationSecondLayerStageShadow },
 		func(value *ContentModerationConfig) {
 			value.SecondLayerEndpoints = []ContentModerationEndpoint{{ID: "x", BaseURL: "http://127.0.0.1:8080", Model: "x", Profile: ContentModerationModelProfileYuFengXGuard, ModelRevision: "rev-2"}}
 		},
@@ -241,6 +244,28 @@ func TestContentModerationPolicyMigrationUsesTenHourCachesAndUnifiedContextPolic
 	require.Equal(t, 36000, parsed.FragmentBlockTTLSeconds)
 	require.Equal(t, 36000, parsed.FragmentAllowTTLSeconds)
 	require.Equal(t, ContentModerationFragmentTTLPolicyVersion, parsed.FragmentTTLPolicyVersion)
+	require.Equal(t, ContentModerationFirstLayerStageEnforce, parsed.FirstLayerStage)
+	require.Equal(t, ContentModerationSecondLayerStageEnforce, parsed.SecondLayerStage)
+}
+
+func TestContentModerationLayerStagesValidateIndependently(t *testing.T) {
+	svc := &ContentModerationService{}
+	cfg := defaultContentModerationConfig()
+
+	for _, stage := range []string{ContentModerationFirstLayerStageEnforce, ContentModerationFirstLayerStageShadow} {
+		candidate := cloneContentModerationConfig(cfg)
+		candidate.FirstLayerStage = stage
+		require.NoError(t, svc.validateUnifiedConfig(candidate))
+	}
+	invalidFirst := cloneContentModerationConfig(cfg)
+	invalidFirst.FirstLayerStage = "observe"
+	require.EqualError(t, svc.validateUnifiedConfig(invalidFirst), `unsupported first-layer stage "observe"`)
+
+	for _, stage := range []string{ContentModerationSecondLayerStageEnforce, ContentModerationSecondLayerStageShadow} {
+		candidate := cloneContentModerationConfig(cfg)
+		candidate.SecondLayerStage = stage
+		require.NoError(t, svc.validateUnifiedConfig(candidate))
+	}
 }
 
 func TestContentModerationContextClassifierAndEvidenceRedaction(t *testing.T) {
@@ -726,4 +751,113 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 	logs = repo.snapshotLogs()
 	require.Len(t, logs, 7)
 	require.Equal(t, ContentModerationActionKeywordBlock, logs[6].Action)
+}
+
+func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
+	tests := []struct {
+		name             string
+		firstStage       string
+		secondStage      string
+		wantBlocked      bool
+		wantDecision     string
+		wantModelCalls   int64
+		wantActions      []string
+		wantSources      []string
+		repeatShadowRisk bool
+	}{
+		{
+			name: "both enforce", firstStage: ContentModerationFirstLayerStageEnforce, secondStage: ContentModerationSecondLayerStageEnforce,
+			wantBlocked: true, wantDecision: ContentModerationActionKeywordBlock,
+			wantActions: []string{ContentModerationActionKeywordBlock}, wantSources: []string{"keyword_high_confidence"},
+		},
+		{
+			name: "first enforce second shadow", firstStage: ContentModerationFirstLayerStageEnforce, secondStage: ContentModerationSecondLayerStageShadow,
+			wantBlocked: true, wantDecision: ContentModerationActionKeywordBlock,
+			wantActions: []string{ContentModerationActionKeywordBlock}, wantSources: []string{"keyword_high_confidence"},
+		},
+		{
+			name: "first shadow second enforce", firstStage: ContentModerationFirstLayerStageShadow, secondStage: ContentModerationSecondLayerStageEnforce,
+			wantBlocked: true, wantDecision: ContentModerationActionSecondLayerBlock, wantModelCalls: 1,
+			wantActions: []string{ContentModerationActionFirstLayerShadow, ContentModerationActionSecondLayerBlock},
+			wantSources: []string{"keyword_high_confidence_shadow", "model"},
+		},
+		{
+			name: "both shadow", firstStage: ContentModerationFirstLayerStageShadow, secondStage: ContentModerationSecondLayerStageShadow,
+			wantDecision: ContentModerationActionAllow, wantModelCalls: 2, repeatShadowRisk: true,
+			wantActions: []string{ContentModerationActionFirstLayerShadow, ContentModerationActionSecondLayerShadow},
+			wantSources: []string{"keyword_high_confidence_shadow", "model_shadow"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"pc"}}]}`))
+			}))
+			defer server.Close()
+
+			cfg := defaultContentModerationConfig()
+			cfg.Enabled = true
+			cfg.AutoBanEnabled = false
+			cfg.BlockedKeywords = []string{"dangerous operation"}
+			cfg.FirstLayerStage = tc.firstStage
+			cfg.SecondLayerEnabled = true
+			cfg.SecondLayerStage = tc.secondStage
+			cfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
+				ID: "yufeng-stages", BaseURL: server.URL, Model: "yufeng-q4",
+				Profile: ContentModerationModelProfileYuFengXGuard, PromptVersion: ContentModerationYuFengPromptVersion,
+				Enabled: true, TimeoutMS: 1000, InputLimit: 4000,
+			}}
+			cfg.normalize()
+			repo := &contentModerationReplayRepo{}
+			cache := &contentModerationReplayCache{}
+			svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+			runtime := &contentModerationRuntimeSnapshot{
+				riskControlEnabled:          true,
+				config:                      cfg,
+				keywordMatcher:              newContentModerationKeywordMatcher(cfg.BlockedKeywords),
+				secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"unrelated layer two candidate"}),
+				fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+			}
+			scope := NewContentModerationScopeSnapshot(nil, "gpt-stage-test")
+			input := ContentModerationCheckInput{
+				RequestID: "layer-stage", UserID: 52, UserRole: RoleUser, Scope: &scope,
+				Protocol: ContentModerationProtocolOpenAIResponses,
+				Body:     []byte(`{"input":"perform dangerous operation"}`),
+			}
+
+			repeats := 1
+			if tc.repeatShadowRisk {
+				repeats = 2
+			}
+			for index := range repeats {
+				input.RequestID = fmt.Sprintf("layer-stage-%d", index)
+				decision := svc.checkUnifiedFragments(context.Background(), input, runtime)
+				require.Equal(t, tc.wantBlocked, decision.Blocked)
+				require.Equal(t, !tc.wantBlocked, decision.Allowed)
+				require.Equal(t, tc.wantDecision, decision.Action)
+			}
+
+			require.Equal(t, tc.wantModelCalls, calls.Load(), "a first-layer shadow hit must reach layer two even when its candidate prefilter misses")
+			logs := repo.snapshotLogs()
+			require.Len(t, logs, len(tc.wantActions)*repeats)
+			for index, log := range logs {
+				wantIndex := index % len(tc.wantActions)
+				require.Equal(t, tc.wantActions[wantIndex], log.Action)
+				require.Equal(t, tc.wantSources[wantIndex], log.DecisionSource)
+				if log.Action == ContentModerationActionFirstLayerShadow || log.Action == ContentModerationActionSecondLayerShadow {
+					require.False(t, log.Flagged)
+					require.False(t, log.AutoBanned)
+				}
+			}
+			if tc.repeatShadowRisk {
+				count, err := cache.CountFragmentResults(context.Background(), runtime.fragmentCacheNamespace)
+				require.NoError(t, err)
+				require.Zero(t, count, "risky shadow results must not become allow-cache entries")
+			}
+		})
+	}
 }

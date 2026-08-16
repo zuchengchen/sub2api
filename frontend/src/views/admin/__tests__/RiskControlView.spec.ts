@@ -125,6 +125,7 @@ const baseConfig = (): ContentModerationConfig => ({
   fragment_block_ttl_seconds: 36000,
   fragment_allow_ttl_seconds: 36000,
   fragment_ttl_policy_version: 'ttl-v2',
+  first_layer_stage: 'enforce',
   second_layer_enabled: false,
   second_layer_stage: 'enforce',
   second_layer_endpoints: [],
@@ -514,7 +515,8 @@ describe('admin RiskControlView', () => {
     await flushPromises()
     await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
     await findButtonByText(wrapper, 'admin.riskControl.tabs.secondLayer').trigger('click')
-    await wrapper.get('[data-test="second-layer-stage-shadow"]').trigger('click')
+    wrapper.getComponent('[data-test="second-layer-shadow-toggle"]').vm.$emit('update:modelValue', true)
+    await flushPromises()
     await wrapper.get('[data-test="fragment-block-ttl"]').setValue('120')
     await wrapper.get('[data-test="fragment-allow-ttl"]').setValue('90000')
     await wrapper.get('[data-test="add-second-layer-endpoint"]').trigger('click')
@@ -527,6 +529,7 @@ describe('admin RiskControlView', () => {
       fragment_block_ttl_seconds: 300,
       fragment_allow_ttl_seconds: 86400,
       fragment_ttl_policy_version: 'ttl-v2',
+      first_layer_stage: 'enforce',
       second_layer_enabled: true,
       second_layer_stage: 'shadow',
       keyword_policy_version: 'keyword-v3',
@@ -537,6 +540,37 @@ describe('admin RiskControlView', () => {
         model_revision: 'c9766937',
         prompt_version: 'yufeng-xguard-v3',
       })],
+    }))
+  })
+
+  it('saves the first-layer shadow switch independently from layer two', async () => {
+    getConfig.mockResolvedValue({ ...baseConfig(), second_layer_enabled: true })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.secondLayer').trigger('click')
+    wrapper.getComponent('[data-test="first-layer-shadow-toggle"]').vm.$emit('update:modelValue', true)
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+    await flushPromises()
+
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+      first_layer_stage: 'shadow',
+      second_layer_stage: 'enforce',
     }))
   })
 
