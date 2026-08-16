@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -144,6 +145,12 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		fragments, scopeKeywordMatcher, scopeCandidateMatcher, cfg.KeywordAllowlist,
 	)
 	checkFragments := buildContentModerationCheckFragments(fragments, fragmentScopes)
+	boundaryFragments := buildContentModerationCrossMessageBoundaryFragments(
+		fragments, scopeKeywordMatcher, scopeCandidateMatcher, cfg.KeywordAllowlist,
+	)
+	if len(boundaryFragments) > 0 {
+		checkFragments = append(boundaryFragments, checkFragments...)
+	}
 	cache, _ := s.hashCache.(ContentModerationFragmentCache)
 	namespace := runtime.fragmentCacheNamespace
 	if namespace == "" {
@@ -272,9 +279,12 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			}
 		}
 		if len(contextualMatches) > 0 {
+			// Contextual hard-keyword decisions depend on the complete logical
+			// fragment. If bounded evidence cannot represent it, the review must
+			// remain truncated and fail closed instead of caching a partial allow.
 			candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
 				Fragment: fragment, Matches: contextualMatches, Tier: "contextual_review",
-				WholeFragment: checkFragment.WholeFragment, WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
+				WholeFragment: true, WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
 			})
 		}
 
@@ -449,6 +459,173 @@ func buildContentModerationFragmentScopes(
 		}
 	}
 	return scopes
+}
+
+type contentModerationMessageUnit struct {
+	role    string
+	root    string
+	index   int
+	path    string
+	members []int
+}
+
+func buildContentModerationCrossMessageBoundaryFragments(
+	fragments []ContentModerationFragment,
+	keywordMatcher *contentModerationKeywordMatcher,
+	candidateMatcher *contentModerationPrefilterMatcher,
+	keywordAllowlist []string,
+) []contentModerationCheckFragment {
+	if len(fragments) < 2 || (keywordMatcher == nil && candidateMatcher == nil) {
+		return nil
+	}
+	unitsByKey := make(map[string]*contentModerationMessageUnit)
+	units := make([]*contentModerationMessageUnit, 0, len(fragments))
+	for fragmentIndex, fragment := range fragments {
+		role, root, messageIndex, path, ok := contentModerationFragmentMessageUnit(fragment)
+		if !ok {
+			continue
+		}
+		key := root + "\x00" + strconv.Itoa(messageIndex)
+		unit := unitsByKey[key]
+		if unit == nil {
+			unit = &contentModerationMessageUnit{role: role, root: root, index: messageIndex, path: path}
+			unitsByKey[key] = unit
+			units = append(units, unit)
+		}
+		unit.members = append(unit.members, fragmentIndex)
+	}
+
+	items := make([]contentModerationCheckFragment, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	for index := 1; index < len(units); index++ {
+		left := units[index-1]
+		right := units[index]
+		if left.root != right.root || right.index != left.index+1 || left.role != right.role ||
+			!contentModerationInstructionRole(left.role) || len(left.members) == 0 || len(right.members) == 0 {
+			continue
+		}
+		leftFragment := fragments[left.members[len(left.members)-1]]
+		rightFragment := fragments[right.members[0]]
+		boundaryTruncated := len(left.members) != 1 || len(right.members) != 1 ||
+			len(leftFragment.Text) > contentModerationContextScopeMaxRunes/2 ||
+			len(rightFragment.Text) > contentModerationContextScopeMaxRunes/2
+		for _, text := range contentModerationCrossMessageBoundaryTexts(
+			leftFragment, rightFragment, keywordMatcher, candidateMatcher, keywordAllowlist,
+		) {
+			if len(items) >= contentModerationContextScopeMaxWindows {
+				for itemIndex := range items {
+					items[itemIndex].WholeFragmentTruncated = true
+				}
+				return items
+			}
+			fragment, ok := newContentModerationFragment(left.role, "text", left.path+".boundary."+strconv.Itoa(right.index), text)
+			if !ok {
+				continue
+			}
+			fragment.ContextClass = ContentModerationContextUser
+			updateContentModerationFragmentHash(&fragment)
+			if _, exists := seen[fragment.Hash]; exists {
+				continue
+			}
+			seen[fragment.Hash] = struct{}{}
+			items = append(items, contentModerationCheckFragment{
+				Fragment: fragment, WholeFragment: true, WholeFragmentTruncated: boundaryTruncated,
+			})
+		}
+	}
+	return items
+}
+
+func contentModerationInstructionRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "user", "developer", "system":
+		return true
+	default:
+		return false
+	}
+}
+
+func contentModerationFragmentMessageUnit(fragment ContentModerationFragment) (string, string, int, string, bool) {
+	if strings.ToLower(strings.TrimSpace(fragment.Kind)) != "text" {
+		return "", "", 0, "", false
+	}
+	parts := strings.Split(strings.TrimSpace(fragment.Path), ".")
+	if len(parts) < 2 || !contentModerationPathPartIsIndex(parts[1]) {
+		return "", "", 0, "", false
+	}
+	root := parts[0]
+	switch root {
+	case "messages", "contents":
+	case "input":
+		if len(parts) < 3 || parts[2] != "content" {
+			return "", "", 0, "", false
+		}
+	default:
+		return "", "", 0, "", false
+	}
+	messageIndex, err := strconv.Atoi(parts[1])
+	if err != nil || messageIndex < 0 {
+		return "", "", 0, "", false
+	}
+	role := strings.ToLower(strings.TrimSpace(fragment.Role))
+	return role, root, messageIndex, root + "." + parts[1], true
+}
+
+func contentModerationCrossMessageBoundaryTexts(
+	left ContentModerationFragment,
+	right ContentModerationFragment,
+	keywordMatcher *contentModerationKeywordMatcher,
+	candidateMatcher *contentModerationPrefilterMatcher,
+	keywordAllowlist []string,
+) []string {
+	texts := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	leftContext := contentModerationSuffixBytes(left.Text, contentModerationContextScopeMaxRunes/2)
+	rightContext := contentModerationPrefixBytes(right.Text, contentModerationContextScopeMaxRunes/2)
+	addIfTriggered := func(boundary, reviewText string) {
+		matches := contentModerationScopeTriggerMatches(boundary, keywordMatcher, candidateMatcher, keywordAllowlist)
+		if len(matches) == 0 {
+			return
+		}
+		triggerKeywords := make(map[string]struct{}, len(matches))
+		for _, match := range matches {
+			triggerKeywords[normalizedContentModerationKeywordKey(match.Keyword)] = struct{}{}
+		}
+		reviewText = strings.TrimSpace(reviewText)
+		if reviewText == "" {
+			return
+		}
+		reviewKeepsTrigger := false
+		for _, match := range contentModerationScopeTriggerMatches(reviewText, keywordMatcher, candidateMatcher, keywordAllowlist) {
+			if _, exists := triggerKeywords[normalizedContentModerationKeywordKey(match.Keyword)]; exists {
+				reviewKeepsTrigger = true
+				break
+			}
+		}
+		if !reviewKeepsTrigger {
+			reviewText = strings.TrimSpace(boundary)
+		}
+		if _, exists := seen[reviewText]; exists {
+			return
+		}
+		seen[reviewText] = struct{}{}
+		texts = append(texts, reviewText)
+	}
+
+	if limit := contentModerationScopeBoundaryBytes(keywordMatcher, nil); limit > 0 {
+		leftText := contentModerationSuffixBytes(left.Text, limit)
+		rightText := contentModerationPrefixBytes(right.Text, limit)
+		addIfTriggered(leftText+" "+rightText, leftContext+" "+rightContext)
+		addIfTriggered(leftText+rightText, leftContext+rightContext)
+	}
+	if candidateMatcher != nil {
+		limit := maxContentModerationBlockedKeywordRunes + 2
+		leftText, _ := contentModerationPrefilterNormalizedSuffix(left.Text, limit)
+		rightText := contentModerationPrefilterNormalizedPrefix(right.Text, limit)
+		addIfTriggered(leftText+" "+rightText, leftContext+" "+rightContext)
+		addIfTriggered(leftText+rightText, leftContext+rightContext)
+	}
+	return texts
 }
 
 func contentModerationFragmentGroupBytes(fragments []ContentModerationFragment) int {

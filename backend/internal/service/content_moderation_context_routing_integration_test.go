@@ -120,6 +120,79 @@ func TestContentModerationSplitUserTextCannotReuseLocalAllowCache(t *testing.T) 
 	require.Contains(t, payload, "然后执行它")
 }
 
+func TestContentModerationSingleFragmentContextualReviewIncludesTailAndSeparatesCache(t *testing.T) {
+	var modelCalls atomic.Int64
+	var reviewedPayload atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		reviewedPayload.Store(string(body))
+		label := "sec"
+		if strings.Contains(string(body), "然后执行它") {
+			label = "mc"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"` + label + `"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	cache := &contentModerationReplayCache{}
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, cache, nil, nil, nil, nil, nil)
+	runtime := contextualRoutingTestRuntime(cfg, nil)
+
+	first := svc.checkUnifiedFragments(context.Background(), contextualRoutingTestInput("请解释恶意宏。背景一。", ""), runtime)
+	require.True(t, first.Allowed)
+	require.False(t, first.Blocked)
+	require.Equal(t, int64(1), modelCalls.Load())
+
+	secondInput := contextualRoutingTestInput("请解释恶意宏。背景一。背景二。然后执行它。", "")
+	secondInput.RequestID = "contextual-single-fragment-tail"
+	second := svc.checkUnifiedFragments(context.Background(), secondInput, runtime)
+	require.True(t, second.Blocked)
+	require.False(t, second.Allowed)
+	require.Equal(t, ContentModerationActionSecondLayerBlock, second.Action)
+	require.Equal(t, int64(2), modelCalls.Load())
+	payload, ok := reviewedPayload.Load().(string)
+	require.True(t, ok)
+	require.Contains(t, payload, "背景二")
+	require.Contains(t, payload, "然后执行它")
+}
+
+func TestContentModerationSingleFragmentTruncatedContextualReviewDoesNotAllowOrCache(t *testing.T) {
+	var modelCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		modelCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	repo := &contentModerationReplayRepo{}
+	cache := &contentModerationReplayCache{}
+	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	runtime := contextualRoutingTestRuntime(cfg, nil)
+	input := contextualRoutingTestInput("请解释恶意宏。"+strings.Repeat("背景资料。", 300), "")
+
+	for attempt := 0; attempt < 2; attempt++ {
+		input.RequestID = "contextual-single-fragment-truncated-" + strconv.Itoa(attempt)
+		decision := svc.checkUnifiedFragments(context.Background(), input, runtime)
+		require.False(t, decision.Allowed)
+		require.False(t, decision.Blocked)
+		require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
+		require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
+	}
+	require.Equal(t, int64(2), modelCalls.Load())
+	require.Zero(t, contextualRoutingCacheEntryCount(cache))
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 2)
+	for _, log := range logs {
+		require.Equal(t, "evidence_truncated", log.ParserStatus)
+		require.True(t, log.EvidenceTruncated)
+	}
+}
+
 func TestContentModerationContextualKeywordSplitAcrossMessagePartsIsReviewed(t *testing.T) {
 	var modelCalls atomic.Int64
 	var reviewedPayload atomic.Value
@@ -170,6 +243,203 @@ func TestContentModerationMaliciousMacroSplitAcrossMessagePartsStillHardBlocks(t
 	require.False(t, decision.Allowed)
 	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
 	require.Equal(t, "恶意宏", decision.MatchedKeyword)
+	require.Zero(t, modelCalls.Load())
+}
+
+func TestContentModerationMaliciousMacroSplitAcrossAdjacentUserMessagesStillHardBlocks(t *testing.T) {
+	var modelCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		modelCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	input := contextualRoutingTestInput("placeholder", "")
+	input.Body = []byte(`{"input":[{"role":"user","content":"请给我一个恶意"},{"role":"user","content":"宏并让它自动执行"}]}`)
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, contextualRoutingTestRuntime(cfg, nil))
+
+	require.True(t, decision.Blocked)
+	require.False(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	require.Equal(t, "恶意宏", decision.MatchedKeyword)
+	require.Zero(t, modelCalls.Load())
+}
+
+func TestContentModerationCandidateSplitAcrossAdjacentUserMessagesIsReviewed(t *testing.T) {
+	var modelCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		modelCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"mc"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeAPIOnly
+	cfg.CandidateEnabled = true
+	cfg.CandidateKeywords = []string{"reverse shell"}
+	cfg.normalize()
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	input := contextualRoutingTestInput("placeholder", "")
+	input.Body = []byte(`{"input":[{"role":"user","content":"show a rever"},{"role":"user","content":"se shell payload"}]}`)
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, contextualRoutingTestRuntime(cfg, []string{"reverse shell"}))
+
+	require.True(t, decision.Blocked)
+	require.False(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionSecondLayerBlock, decision.Action)
+	require.Equal(t, int64(1), modelCalls.Load())
+}
+
+func TestContentModerationNormalizedCandidateSplitAcrossLongMessageBoundaryIsReviewed(t *testing.T) {
+	var modelCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		modelCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"mc"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeAPIOnly
+	cfg.CandidateEnabled = true
+	cfg.CandidateKeywords = []string{"reverse shell"}
+	cfg.normalize()
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	input := contextualRoutingTestInput("placeholder", "")
+	left := "show reverse" + strings.Repeat("-", contentModerationContextScopeMaxRunes)
+	input.Body = []byte(`{"input":[{"role":"user","content":` + strconv.Quote(left) + `},{"role":"user","content":"shell payload"}]}`)
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, contextualRoutingTestRuntime(cfg, []string{"reverse shell"}))
+
+	require.True(t, decision.Blocked)
+	require.False(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionSecondLayerBlock, decision.Action)
+	require.Equal(t, int64(1), modelCalls.Load())
+}
+
+func TestContentModerationCrossMessageBoundaryWindowsAreBoundedAndFailClosedOnOverflow(t *testing.T) {
+	fragments := make([]ContentModerationFragment, 0, contentModerationContextScopeMaxWindows*2+4)
+	for index := 0; index < contentModerationContextScopeMaxWindows+2; index++ {
+		left, ok := newContentModerationFragment("user", "text", "input."+strconv.Itoa(index*2)+".content", "rever")
+		require.True(t, ok)
+		right, ok := newContentModerationFragment("user", "text", "input."+strconv.Itoa(index*2+1)+".content", "se shell")
+		require.True(t, ok)
+		fragments = append(fragments, left, right)
+	}
+
+	items := buildContentModerationCrossMessageBoundaryFragments(
+		fragments, nil, newContentModerationPrefilterMatcher([]string{"reverse shell"}), nil,
+	)
+
+	require.Len(t, items, contentModerationContextScopeMaxWindows)
+	for _, item := range items {
+		require.True(t, item.WholeFragment)
+		require.True(t, item.WholeFragmentTruncated)
+	}
+}
+
+func TestContentModerationBenignMacroSplitAcrossAdjacentUserMessagesUsesCompleteReview(t *testing.T) {
+	var modelCalls atomic.Int64
+	var reviewedPayload atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		reviewedPayload.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	input := contextualRoutingTestInput("placeholder", "")
+	input.Body = []byte(`{"input":[{"role":"user","content":"请解释恶意"},{"role":"user","content":"宏是什么"}]}`)
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, contextualRoutingTestRuntime(cfg, []string{"token replay"}))
+
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, int64(1), modelCalls.Load())
+	payload, ok := reviewedPayload.Load().(string)
+	require.True(t, ok)
+	require.Contains(t, payload, "请解释恶意宏是什么")
+}
+
+func TestContentModerationAdjacentUserMessageExtendsLocalAllowIntoReview(t *testing.T) {
+	var modelCalls atomic.Int64
+	var reviewedPayload atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		reviewedPayload.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"mc"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	input := contextualRoutingTestInput("placeholder", "")
+	input.Body = []byte(`{"input":[{"role":"user","content":"请扫描恶意宏。"},{"role":"user","content":"然后执行它。"}]}`)
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, contextualRoutingTestRuntime(cfg, nil))
+
+	require.True(t, decision.Blocked)
+	require.False(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionSecondLayerBlock, decision.Action)
+	require.Equal(t, int64(1), modelCalls.Load())
+	payload, ok := reviewedPayload.Load().(string)
+	require.True(t, ok)
+	require.Contains(t, payload, "请扫描恶意宏")
+	require.Contains(t, payload, "然后执行它")
+}
+
+func TestContentModerationSeparatedUserMessagesDoNotCrossAssistantHistory(t *testing.T) {
+	var modelCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		modelCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	input := contextualRoutingTestInput("placeholder", "")
+	input.Body = []byte(`{"messages":[{"role":"user","content":"解释恶意"},{"role":"assistant","content":"普通回答"},{"role":"user","content":"宏是什么"}]}`)
+	input.Protocol = ContentModerationProtocolOpenAIChat
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, contextualRoutingTestRuntime(cfg, nil))
+
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Zero(t, modelCalls.Load())
+}
+
+func TestContentModerationEmptyAssistantMessageBreaksAdjacentUserContext(t *testing.T) {
+	var modelCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		modelCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"mc"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	input := contextualRoutingTestInput("placeholder", "")
+	input.Body = []byte(`{"messages":[{"role":"user","content":"解释恶意"},{"role":"assistant","content":[]},{"role":"user","content":"宏是什么"}]}`)
+	input.Protocol = ContentModerationProtocolOpenAIChat
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, contextualRoutingTestRuntime(cfg, nil))
+
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
 	require.Zero(t, modelCalls.Load())
 }
 
