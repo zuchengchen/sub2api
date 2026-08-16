@@ -105,29 +105,30 @@ base_url: http://127.0.0.1:8088
 model: yufeng-xguard-q4
 profile: yufeng_xguard
 model_revision: a457e581bb00997ff1eb1f9ae0bf21488c6a632c
-prompt_version: yufeng-xguard-v2
+prompt_version: yufeng-xguard-v3
 timeout_ms: 25000
 input_limit: 4000
 stage: shadow
-context_policy_version: context-v1
+context_policy_version: context-v3
 evidence_policy_version: evidence-v1
-keyword_policy_version: keyword-v2
-fragment_ttl_policy_version: ttl-v1
-block_ttl_seconds: 600
-allow_ttl_seconds: 3600
+keyword_policy_version: keyword-v3
+fragment_ttl_policy_version: ttl-v2
+block_ttl_seconds: 36000
+allow_ttl_seconds: 36000
 ```
 
 The 25-second endpoint timeout exceeds the observed 4K p95 plus margin while
 remaining below the 30-second configuration limit. Evidence selection and
 bounded fallback are still required; timeout is not a substitute for them.
 
-The v2 policy tells the model not to infer `pc` (Pornographic Contraband) from
+The v3 prompt tells the model not to infer `pc` (Pornographic Contraband) from
 ordinary FFmpeg/media editing, file names, paths, rendering, transcoding,
-probing, or verification text. The service never changes a returned risk label
-to safe based on context or a finite keyword list. A complete non-user
-fragment that still receives `pc` remains visible in the risky shadow view and
-is marked `context_review_pc`; in enforce mode it remains blocked. This avoids
-turning client-supplied tool-shaped content into a bypass.
+probing, or verification text. Before YuFeng is called, every context uses the
+same two-layer policy: Layer 1 high-confidence keywords block directly, Layer 2
+candidate keywords route to YuFeng, and candidate misses are allowed and
+cached. If the Layer 2 matcher is unavailable or empty, the service disables
+that fast-allow path and sends second-layer content to YuFeng as a health
+fallback.
 
 ## Replay benchmark
 

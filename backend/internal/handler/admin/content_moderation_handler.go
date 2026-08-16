@@ -71,6 +71,8 @@ type contentModerationConfigRequest struct {
 	SecondLayerScanners            *[]string                             `json:"second_layer_scanners"`
 	HardBlockPatterns              *[]string                             `json:"hard_block_patterns"`
 	CandidateKeywords              *[]string                             `json:"candidate_keywords"`
+	Layer1Keywords                 *[]string                             `json:"layer1_keywords"`
+	Layer2Keywords                 *[]string                             `json:"layer2_keywords"`
 	KeywordAllowlist               *[]string                             `json:"keyword_allowlist"`
 	KeywordPolicyVersion           *string                               `json:"keyword_policy_version"`
 	ContextPolicyVersion           *string                               `json:"context_policy_version"`
@@ -152,6 +154,8 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		SecondLayerScanners:            req.SecondLayerScanners,
 		HardBlockPatterns:              req.HardBlockPatterns,
 		CandidateKeywords:              req.CandidateKeywords,
+		Layer1Keywords:                 req.Layer1Keywords,
+		Layer2Keywords:                 req.Layer2Keywords,
 		KeywordAllowlist:               req.KeywordAllowlist,
 		KeywordPolicyVersion:           req.KeywordPolicyVersion,
 		ContextPolicyVersion:           req.ContextPolicyVersion,

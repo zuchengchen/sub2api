@@ -5,7 +5,7 @@ import (
 	"unicode"
 )
 
-const contentModerationSecondLayerPrefilterPolicyVersion = "layer2-prefilter-v1"
+const contentModerationSecondLayerPrefilterPolicyVersion = "layer2-candidate-keywords-v2"
 
 // contentModerationPrefilterMatcher admits suspicious-looking fragments to the
 // expensive second-layer model without making a moderation decision itself.

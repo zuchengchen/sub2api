@@ -11,6 +11,8 @@ func TestLegacyPromptAuditCandidateAsset(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, asset.Manifest.EnabledByDefault)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", asset.Manifest.SourceCommit)
+	require.Equal(t, "layer1-high-confidence-keywords.json", asset.Manifest.Layer1.File)
+	require.Equal(t, "layer2-candidate-keywords.json", asset.Manifest.Layer2.File)
 	require.Len(t, asset.Layer1, 964)
 	require.Len(t, asset.Layer2, 254)
 	require.Len(t, asset.Layer1Demotions, 63)
