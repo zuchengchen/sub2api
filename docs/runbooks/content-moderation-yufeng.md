@@ -115,7 +115,7 @@ first_layer_stage: enforce
 second_layer_stage: shadow
 context_policy_version: context-v3
 evidence_policy_version: evidence-v1
-keyword_policy_version: keyword-v3
+keyword_policy_version: keyword-v4
 fragment_ttl_policy_version: ttl-v2
 block_ttl_seconds: 36000
 allow_ttl_seconds: 36000
