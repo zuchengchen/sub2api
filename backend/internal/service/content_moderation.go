@@ -259,6 +259,10 @@ type ContentModerationConfigView struct {
 	CandidateLayer2Count           int                             `json:"candidate_layer2_count"`
 	CandidateSourceCommit          string                          `json:"candidate_source_commit"`
 	CandidateEndpoints             []ContentModerationEndpointView `json:"candidate_endpoints"`
+	Layer1Keywords                 []string                        `json:"layer1_keywords"`
+	Layer2Keywords                 []string                        `json:"layer2_keywords"`
+	CandidateSystemReady           bool                            `json:"candidate_system_ready"`
+	CandidateSystemError           string                          `json:"candidate_system_error,omitempty"`
 	CyberPolicyExcludeFromBanCount bool                            `json:"cyber_policy_exclude_from_ban_count"`
 }
 
@@ -393,6 +397,8 @@ type UpdateContentModerationConfigInput struct {
 	SecondLayerScanners            *[]string                     `json:"second_layer_scanners"`
 	HardBlockPatterns              *[]string                     `json:"hard_block_patterns"`
 	CandidateKeywords              *[]string                     `json:"candidate_keywords"`
+	Layer1Keywords                 *[]string                     `json:"layer1_keywords"`
+	Layer2Keywords                 *[]string                     `json:"layer2_keywords"`
 	KeywordAllowlist               *[]string                     `json:"keyword_allowlist"`
 	KeywordPolicyVersion           *string                       `json:"keyword_policy_version"`
 	ContextPolicyVersion           *string                       `json:"context_policy_version"`
@@ -1107,6 +1113,16 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if input.CandidateKeywords != nil {
 		cfg.CandidateKeywords = normalizeBlockedKeywords(*input.CandidateKeywords)
+	}
+	if input.Layer1Keywords != nil {
+		cfg.HardBlockPatterns = normalizeBlockedKeywords(*input.Layer1Keywords)
+	}
+	if input.Layer2Keywords != nil {
+		cfg.CandidateKeywords = normalizeBlockedKeywords(*input.Layer2Keywords)
+	}
+	if input.Layer1Keywords != nil || input.Layer2Keywords != nil {
+		// Canonical two-layer updates replace the legacy mixed keyword bucket.
+		cfg.BlockedKeywords = []string{}
 	}
 	if input.KeywordAllowlist != nil {
 		cfg.KeywordAllowlist = normalizeBlockedKeywords(*input.KeywordAllowlist)
@@ -2077,6 +2093,12 @@ func parseContentModerationConfig(raw string) (*ContentModerationConfig, error) 
 	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CONFIG", "内容审计配置不是有效 JSON")
 	}
+	var storedPolicy struct {
+		FragmentTTLPolicyVersion *string `json:"fragment_ttl_policy_version"`
+	}
+	if err := json.Unmarshal([]byte(raw), &storedPolicy); err == nil && storedPolicy.FragmentTTLPolicyVersion == nil {
+		cfg.FragmentTTLPolicyVersion = contentModerationLegacyFragmentTTLPolicyVersion
+	}
 	if strings.TrimSpace(cfg.Mode) == legacyContentModerationModeObserve {
 		cfg.Mode = ContentModerationModePreBlock
 	}
@@ -3009,6 +3031,12 @@ func (cfg *ContentModerationConfig) normalize() {
 	if cfg.CacheMaxBytes > maxContentModerationCacheMaxBytes {
 		cfg.CacheMaxBytes = maxContentModerationCacheMaxBytes
 	}
+	ttlPolicyVersion := strings.TrimSpace(cfg.FragmentTTLPolicyVersion)
+	if ttlPolicyVersion == "" || ttlPolicyVersion == contentModerationLegacyFragmentTTLPolicyVersion {
+		cfg.FragmentBlockTTLSeconds = DefaultContentModerationFragmentBlockTTLSeconds
+		cfg.FragmentAllowTTLSeconds = DefaultContentModerationFragmentAllowTTLSeconds
+		cfg.FragmentTTLPolicyVersion = ContentModerationFragmentTTLPolicyVersion
+	}
 	if cfg.FragmentBlockTTLSeconds <= 0 {
 		cfg.FragmentBlockTTLSeconds = DefaultContentModerationFragmentBlockTTLSeconds
 	}
@@ -3024,9 +3052,6 @@ func (cfg *ContentModerationConfig) normalize() {
 	if cfg.FragmentAllowTTLSeconds > MaxContentModerationFragmentAllowTTLSeconds {
 		cfg.FragmentAllowTTLSeconds = MaxContentModerationFragmentAllowTTLSeconds
 	}
-	if strings.TrimSpace(cfg.FragmentTTLPolicyVersion) == "" {
-		cfg.FragmentTTLPolicyVersion = ContentModerationFragmentTTLPolicyVersion
-	}
 	cfg.FragmentTTLPolicyVersion = normalizeContentModerationCacheVersion(cfg.FragmentTTLPolicyVersion)
 	cfg.SecondLayerEndpoints = normalizeContentModerationEndpoints(cfg.SecondLayerEndpoints)
 	cfg.SecondLayerStage = normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage)
@@ -3034,10 +3059,10 @@ func (cfg *ContentModerationConfig) normalize() {
 	cfg.HardBlockPatterns = normalizeBlockedKeywords(cfg.HardBlockPatterns)
 	cfg.CandidateKeywords = normalizeBlockedKeywords(cfg.CandidateKeywords)
 	cfg.KeywordAllowlist = normalizeBlockedKeywords(cfg.KeywordAllowlist)
-	if strings.TrimSpace(cfg.KeywordPolicyVersion) == "" {
+	if keywordPolicyVersion := strings.TrimSpace(cfg.KeywordPolicyVersion); keywordPolicyVersion == "" || keywordPolicyVersion == contentModerationPreviousKeywordPolicyVersion {
 		cfg.KeywordPolicyVersion = ContentModerationKeywordPolicyVersion
 	}
-	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion {
+	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion {
 		cfg.ContextPolicyVersion = ContentModerationContextPolicyVersion
 	}
 	if strings.TrimSpace(cfg.EvidencePolicyVersion) == "" {
@@ -3269,6 +3294,18 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 	if assetErr == nil {
 		candidateEndpoints = candidateEndpointViews(asset.Manifest.CandidateEndpoints)
 	}
+	layer1Keywords, layer1Err := effectiveContentModerationKeywords(cfg)
+	layer2Keywords, layer2Err := contentModerationSecondLayerKeywordValues(cfg)
+	effectiveLayer2Keywords := canonicalContentModerationPrefilterKeywords(layer2Keywords)
+	candidateSystemError := ""
+	switch {
+	case layer1Err != nil:
+		candidateSystemError = layer1Err.Error()
+	case layer2Err != nil:
+		candidateSystemError = layer2Err.Error()
+	case len(effectiveLayer2Keywords) == 0:
+		candidateSystemError = "Layer 2 candidate keywords are empty; requests fall back to YuFeng"
+	}
 	view := &ContentModerationConfigView{
 		Enabled:                        cfg.Enabled,
 		Mode:                           cfg.Mode,
@@ -3319,6 +3356,10 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		CandidateAsset:                 cfg.CandidateAsset,
 		CandidateEnabled:               cfg.CandidateEnabled,
 		CandidateEndpoints:             candidateEndpoints,
+		Layer1Keywords:                 append([]string(nil), layer1Keywords...),
+		Layer2Keywords:                 append([]string(nil), layer2Keywords...),
+		CandidateSystemReady:           candidateSystemError == "",
+		CandidateSystemError:           candidateSystemError,
 		CyberPolicyExcludeFromBanCount: cfg.CyberPolicyExcludeFromBanCount,
 	}
 	if assetErr == nil {
@@ -3366,6 +3407,14 @@ func filterCandidateLayer1Overrides(values []string, asset contentmoderationasse
 }
 
 func effectiveContentModerationSecondLayerKeywords(cfg *ContentModerationConfig) ([]string, error) {
+	keywords, err := contentModerationSecondLayerKeywordValues(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return canonicalContentModerationPrefilterKeywords(keywords), nil
+}
+
+func contentModerationSecondLayerKeywordValues(cfg *ContentModerationConfig) ([]string, error) {
 	if cfg == nil {
 		return nil, nil
 	}
@@ -3380,7 +3429,7 @@ func effectiveContentModerationSecondLayerKeywords(cfg *ContentModerationConfig)
 		}
 		keywords = append(keywords, asset.Layer2...)
 	}
-	return canonicalContentModerationPrefilterKeywords(keywords), nil
+	return normalizeBlockedKeywords(keywords), nil
 }
 
 func candidateEndpointViews(endpoints []contentmoderationassets.CandidateEndpoint) []ContentModerationEndpointView {

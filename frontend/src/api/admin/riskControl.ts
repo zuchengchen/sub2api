@@ -80,6 +80,10 @@ export interface ContentModerationConfig {
   candidate_layer2_count: number
   candidate_source_commit: string
   candidate_endpoints: ContentModerationEndpoint[]
+  layer1_keywords: string[]
+  layer2_keywords: string[]
+  candidate_system_ready: boolean
+  candidate_system_error?: string
   cyber_policy_exclude_from_ban_count: boolean
 }
 
@@ -171,6 +175,8 @@ export interface UpdateContentModerationConfig {
   second_layer_scanners?: string[]
   hard_block_patterns?: string[]
   candidate_keywords?: string[]
+  layer1_keywords?: string[]
+  layer2_keywords?: string[]
   keyword_allowlist?: string[]
   keyword_policy_version?: string
   context_policy_version?: string

@@ -550,11 +550,45 @@ func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
 	require.False(t, view.CandidateEndpoints[0].Enabled)
 	require.False(t, view.CandidateEndpoints[0].TokenConfigured)
 	require.Empty(t, view.CandidateEndpoints[0].BaseURL)
+	require.Empty(t, view.Layer1Keywords)
+	require.Empty(t, view.Layer2Keywords)
+	require.False(t, view.CandidateSystemReady)
+	require.NotEmpty(t, view.CandidateSystemError)
 
 	unknown := "unknown-candidate-asset"
 	_, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{CandidateAsset: &unknown})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown content moderation candidate asset")
+}
+
+func TestContentModerationUpdateConfigUsesCanonicalKeywordLayers(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.BlockedKeywords = []string{"legacy-mixed-keyword"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil, nil)
+	layer1 := []string{" direct-block ", "DIRECT-BLOCK"}
+	layer2 := []string{" candidate-review ", "CANDIDATE-REVIEW"}
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		Layer1Keywords: &layer1,
+		Layer2Keywords: &layer2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"direct-block"}, view.Layer1Keywords)
+	require.Equal(t, []string{"candidate-review"}, view.Layer2Keywords)
+	require.True(t, view.CandidateSystemReady)
+	require.Empty(t, view.CandidateSystemError)
+	require.Empty(t, view.BlockedKeywords)
+
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(settingRepo.values[SettingKeyContentModerationConfig]), &saved))
+	require.Equal(t, view.Layer1Keywords, saved.HardBlockPatterns)
+	require.Equal(t, view.Layer2Keywords, saved.CandidateKeywords)
+	require.Empty(t, saved.BlockedKeywords)
 }
 
 func TestContentModerationStatusUsesDefaultPendingBodyBudgetForZeroValueService(t *testing.T) {

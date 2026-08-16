@@ -174,12 +174,12 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		}
 
 		if cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly {
-			candidateRouting := cfg.CandidateEnabled || len(cfg.CandidateKeywords) > 0
-			keywordTier := "unfiltered"
+			keywordTier := "candidate_unavailable"
 			keywordRuleID := ""
 			candidateKeyword := ""
 			candidateHit := false
-			if candidateRouting && runtime.secondLayerPrefilterMatcher != nil {
+			candidateSystemReady := runtime.secondLayerPrefilterMatcher != nil
+			if candidateSystemReady {
 				candidateKeyword, candidateHit = runtime.secondLayerPrefilterMatcher.Match(fragment.Text)
 			}
 			if candidateHit && matchesContentModerationAllowlist(fragment.Text, cfg.KeywordAllowlist) {
@@ -189,9 +189,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			case candidateHit:
 				keywordTier = "candidate"
 				keywordRuleID = contentModerationKeywordRuleID(candidateKeyword)
-			case requiresSecondLayerContextScan(fragment.ContextClass):
-				keywordTier = "context_required"
-			case requiresSecondLayerCandidateSignal(fragment.ContextClass) || candidateRouting:
+			case candidateSystemReady:
 				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 				releaseDecisionLock()
 				continue
@@ -289,21 +287,6 @@ func (s *ContentModerationService) acquireContentModerationFragmentDecisionLock(
 		}
 		s.fragmentDecisionMu.Unlock()
 	}
-}
-
-func requiresSecondLayerContextScan(contextClass string) bool {
-	switch contextClass {
-	case ContentModerationContextTool, ContentModerationContextServiceLog,
-		ContentModerationContextCode, ContentModerationContextConfig,
-		ContentModerationContextUnknown:
-		return true
-	default:
-		return false
-	}
-}
-
-func requiresSecondLayerCandidateSignal(contextClass string) bool {
-	return contextClass == ContentModerationContextAssistant
 }
 
 func matchesContentModerationAllowlist(text string, values []string) bool {

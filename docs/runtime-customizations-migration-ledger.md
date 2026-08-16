@@ -72,7 +72,7 @@ copied here.
 | `backend/internal/securityaudit/prompt_prefilter_test.go` | adapted | Normalization, canonicalization, and matching behavior are covered by the unified keyword matcher parity tests. |
 | `backend/internal/securityaudit/prompt_production_config_test.go` | excluded | The old private Prompt Audit production configuration is removed; repository examples contain no endpoints or tokens. |
 | `backend/internal/securityaudit/prompt_responses_protocol_test.go` | adapted | OpenAI Responses extraction and keyword blocking are covered by unified input and route tests. |
-| `backend/internal/securityaudit/testdata/prefilter_keywords.json` | adapted | Its candidate values are represented by `backend/resources/content-moderation/legacy-prompt-audit-v1/layer2-prefilter.json`, disabled by the manifest. |
+| `backend/internal/securityaudit/testdata/prefilter_keywords.json` | adapted | Its candidate values are represented by `backend/resources/content-moderation/legacy-prompt-audit-v1/layer2-candidate-keywords.json`, disabled by the manifest. |
 | `backend/internal/service/account_anthropic_cache_test.go` | adapted | Retained as regression coverage for the account cache-control flag. |
 | `backend/internal/service/gateway_apikey_cache_metadata_test.go` | adapted | Retained as regression coverage for metadata preservation. |
 | `backend/internal/service/openai_403_edge_challenge.go` | adapted | Retained as the bounded, format-aware edge challenge classifier. |
@@ -84,9 +84,9 @@ copied here.
 | `keywords/__pycache__/validate_against_traffic.cpython-314.pyc` | excluded | Generated Python bytecode. |
 | `keywords/generate_keywords.py` | excluded | Offline keyword-generation script; generator code and its external inputs are outside the runtime migration. |
 | `keywords/generate_two_layer.py` | excluded | Offline candidate-generation script; only reviewed versioned output assets are migrated. |
-| `keywords/layer1_hard_block.json` | adapted | Normalized into `legacy-prompt-audit-v1/layer1-hard-block.json` as a disabled candidate asset, not merged into the 50 active production rules. |
+| `keywords/layer1_hard_block.json` | adapted | Normalized into `legacy-prompt-audit-v1/layer1-high-confidence-keywords.json` as a disabled candidate asset, not merged into the 50 active production rules. |
 | `keywords/layer2_broad.py` | excluded | Offline broad-list generator; executable generation tooling is outside scope. |
-| `keywords/layer2_prefilter.json` | adapted | Normalized into `legacy-prompt-audit-v1/layer2-prefilter.json` and disabled by default. |
+| `keywords/layer2_prefilter.json` | adapted | Normalized into `legacy-prompt-audit-v1/layer2-candidate-keywords.json` and disabled by default. |
 | `keywords/prefilter_keywords.json` | adapted | Duplicate source for the reviewed layer-two candidate set; represented once by the versioned unified asset. |
 | `keywords/validate_against_traffic.py` | excluded | Traffic-validation script and its private traffic inputs are explicitly outside scope. |
 | `keywords/validate_two_layer.py` | excluded | Offline validation script; deterministic repository tests replace it for release gating. |

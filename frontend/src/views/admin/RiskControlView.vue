@@ -891,7 +891,7 @@
               </div>
               <div>
                 <label class="input-label">{{ t('admin.riskControl.fragmentBlockTTL') }}</label>
-                <input v-model.number="configForm.fragment_block_ttl_seconds" data-test="fragment-block-ttl" type="number" min="300" max="900" class="input" />
+                <input v-model.number="configForm.fragment_block_ttl_seconds" data-test="fragment-block-ttl" type="number" min="300" max="86400" class="input" />
                 <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.fragmentBlockTTLHint') }}</p>
               </div>
               <div>
@@ -1160,23 +1160,37 @@
             </div>
 
             <div class="border-y border-gray-100 py-5 dark:border-dark-700">
-              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.keywordTiersTitle') }}</h3>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.keywordTiersHint') }}</p>
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.keywordTiersTitle') }}</h3>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.keywordTiersHint') }}</p>
+                </div>
+                <span
+                  data-test="candidate-system-health"
+                  class="inline-flex flex-shrink-0 items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-medium"
+                  :class="candidateSystemReady
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300'
+                    : 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300'"
+                >
+                  <span class="h-1.5 w-1.5 rounded-full" :class="candidateSystemReady ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+                  {{ candidateSystemReady ? t('admin.riskControl.candidateSystemReady') : t('admin.riskControl.candidateSystemFallback') }}
+                </span>
+              </div>
               <div class="mt-4 grid grid-cols-1 gap-5 xl:grid-cols-3">
                 <div>
                   <div class="mb-2 flex items-center justify-between gap-2">
                     <label class="input-label mb-0">{{ t('admin.riskControl.hardBlockPatterns') }}</label>
-                    <span class="text-xs text-gray-400">{{ hardBlockPatternList.length }}</span>
+                    <span class="text-xs text-gray-400">{{ layer1KeywordList.length }}</span>
                   </div>
-                  <textarea v-model="configForm.hard_block_patterns_text" class="input min-h-40 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.hardBlockPatternsPlaceholder')"></textarea>
+                  <textarea v-model="configForm.layer1_keywords_text" data-test="layer1-keywords" class="input min-h-40 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.hardBlockPatternsPlaceholder')"></textarea>
                   <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.hardBlockPatternsHint') }}</p>
                 </div>
                 <div>
                   <div class="mb-2 flex items-center justify-between gap-2">
                     <label class="input-label mb-0">{{ t('admin.riskControl.candidateKeywords') }}</label>
-                    <span class="text-xs text-gray-400">{{ candidateKeywordList.length }}</span>
+                    <span class="text-xs text-gray-400">{{ layer2KeywordList.length }}</span>
                   </div>
-                  <textarea v-model="configForm.candidate_keywords_text" class="input min-h-40 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.candidateKeywordsPlaceholder')"></textarea>
+                  <textarea v-model="configForm.layer2_keywords_text" data-test="layer2-keywords" class="input min-h-40 resize-y font-mono text-sm" :placeholder="t('admin.riskControl.candidateKeywordsPlaceholder')"></textarea>
                   <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.candidateKeywordsHint') }}</p>
                 </div>
                 <div>
@@ -1188,25 +1202,9 @@
                   <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.keywordAllowlistHint') }}</p>
                 </div>
               </div>
-            </div>
-
-            <div>
-              <div class="mb-2 flex items-center justify-between">
-                <label class="input-label mb-0">{{ t('admin.riskControl.blockedKeywords') }}</label>
-                <span class="inline-flex rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-500 dark:bg-dark-700 dark:text-gray-300">
-                  {{ t('admin.riskControl.blockedKeywordCount', { count: blockedKeywordCount }) }}
-                </span>
-              </div>
-              <textarea
-                v-model="configForm.blocked_keywords_text"
-                class="input min-h-52 resize-y font-mono text-sm"
-                :placeholder="t('admin.riskControl.blockedKeywordsPlaceholder')"
-                :disabled="configForm.keyword_blocking_mode === 'api_only'"
-              ></textarea>
-              <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.riskControl.blockedKeywordsLimit', { max: blockedKeywordMax }) }}
+              <p v-if="!candidateSystemReady" class="mt-4 text-xs text-amber-700 dark:text-amber-300">
+                {{ t('admin.riskControl.candidateSystemHealthHint') }}
               </p>
-              <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">{{ t('admin.riskControl.legacyKeywordsHint') }}</p>
             </div>
           </div>
 
@@ -1474,7 +1472,6 @@ type RiskThresholdRow = {
 const maxModerationTestImages = 1
 const maxModerationTestImageSize = 8 * 1024 * 1024
 const maxVisibleApiKeyRows: number = 3
-const blockedKeywordMax = 10000
 const riskThresholdDefaults: Record<string, number> = {
   harassment: 98,
   'harassment/threatening': 90,
@@ -1557,22 +1554,21 @@ const configForm = reactive({
   non_hit_retention_days: 3,
   pre_hash_check_enabled: false,
   thresholds: { ...riskThresholdDefaults } as Record<string, number>,
-  blocked_keywords_text: '',
   keyword_blocking_mode: 'keyword_and_api' as KeywordBlockingMode,
   model_filter_type: 'all' as ContentModerationModelFilterType,
   model_filter_models: [] as string[],
-  fragment_block_ttl_seconds: 600,
-  fragment_allow_ttl_seconds: 3600,
-  fragment_ttl_policy_version: 'ttl-v1',
+  fragment_block_ttl_seconds: 36000,
+  fragment_allow_ttl_seconds: 36000,
+  fragment_ttl_policy_version: 'ttl-v2',
   second_layer_enabled: false,
   second_layer_stage: 'enforce' as ContentModerationSecondLayerStage,
   second_layer_endpoints: [] as EditableModerationEndpoint[],
   second_layer_scanners_text: '',
-  hard_block_patterns_text: '',
-  candidate_keywords_text: '',
+  layer1_keywords_text: '',
+  layer2_keywords_text: '',
   keyword_allowlist_text: '',
-  keyword_policy_version: 'keyword-v2',
-  context_policy_version: 'context-v2',
+  keyword_policy_version: 'keyword-v3',
+  context_policy_version: 'context-v3',
   evidence_policy_version: 'evidence-v1',
 })
 
@@ -1782,13 +1778,11 @@ const userEmailWhitelist = computed(() => parseUserEmailWhitelist(configForm.use
 
 const userEmailWhitelistCount = computed(() => userEmailWhitelist.value.length)
 
-const blockedKeywordList = computed(() => parseBlockedKeywords(configForm.blocked_keywords_text))
+const layer1KeywordList = computed(() => parseBlockedKeywords(configForm.layer1_keywords_text))
 
-const blockedKeywordCount = computed(() => blockedKeywordList.value.length)
+const layer2KeywordList = computed(() => parseBlockedKeywords(configForm.layer2_keywords_text))
 
-const hardBlockPatternList = computed(() => parseBlockedKeywords(configForm.hard_block_patterns_text))
-
-const candidateKeywordList = computed(() => parseBlockedKeywords(configForm.candidate_keywords_text))
+const candidateSystemReady = computed(() => layer2KeywordList.value.length > 0)
 
 const keywordAllowlist = computed(() => parseBlockedKeywords(configForm.keyword_allowlist_text))
 
@@ -2067,14 +2061,13 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.non_hit_retention_days = Math.min(Math.max(config.non_hit_retention_days || 3, 1), 3)
   configForm.pre_hash_check_enabled = config.pre_hash_check_enabled ?? false
   configForm.thresholds = riskThresholdsFromConfig(config.thresholds)
-  configForm.blocked_keywords_text = Array.isArray(config.blocked_keywords) ? config.blocked_keywords.join('\n') : ''
   configForm.keyword_blocking_mode = normalizeKeywordBlockingMode(config.keyword_blocking_mode)
   const modelFilter = normalizeModelFilter(config.model_filter)
   configForm.model_filter_type = modelFilter.type
   configForm.model_filter_models = modelFilter.models
-  configForm.fragment_block_ttl_seconds = config.fragment_block_ttl_seconds ?? 600
-  configForm.fragment_allow_ttl_seconds = config.fragment_allow_ttl_seconds ?? 3600
-  configForm.fragment_ttl_policy_version = config.fragment_ttl_policy_version || 'ttl-v1'
+  configForm.fragment_block_ttl_seconds = config.fragment_block_ttl_seconds ?? 36000
+  configForm.fragment_allow_ttl_seconds = config.fragment_allow_ttl_seconds ?? 36000
+  configForm.fragment_ttl_policy_version = config.fragment_ttl_policy_version || 'ttl-v2'
   configForm.second_layer_enabled = config.second_layer_enabled ?? false
   configForm.second_layer_stage = config.second_layer_stage === 'shadow' ? 'shadow' : 'enforce'
   configForm.second_layer_endpoints = Array.isArray(config.second_layer_endpoints)
@@ -2087,11 +2080,15 @@ function applyConfig(config: ContentModerationConfig) {
       }))
     : []
   configForm.second_layer_scanners_text = Array.isArray(config.second_layer_scanners) ? config.second_layer_scanners.join('\n') : ''
-  configForm.hard_block_patterns_text = Array.isArray(config.hard_block_patterns) ? config.hard_block_patterns.join('\n') : ''
-  configForm.candidate_keywords_text = Array.isArray(config.candidate_keywords) ? config.candidate_keywords.join('\n') : ''
+  configForm.layer1_keywords_text = Array.isArray(config.layer1_keywords)
+    ? config.layer1_keywords.join('\n')
+    : (Array.isArray(config.hard_block_patterns) ? config.hard_block_patterns.join('\n') : '')
+  configForm.layer2_keywords_text = Array.isArray(config.layer2_keywords)
+    ? config.layer2_keywords.join('\n')
+    : (Array.isArray(config.candidate_keywords) ? config.candidate_keywords.join('\n') : '')
   configForm.keyword_allowlist_text = Array.isArray(config.keyword_allowlist) ? config.keyword_allowlist.join('\n') : ''
-  configForm.keyword_policy_version = config.keyword_policy_version || 'keyword-v2'
-  configForm.context_policy_version = config.context_policy_version || 'context-v2'
+  configForm.keyword_policy_version = config.keyword_policy_version || 'keyword-v3'
+  configForm.context_policy_version = config.context_policy_version || 'context-v3'
   configForm.evidence_policy_version = config.evidence_policy_version || 'evidence-v1'
 }
 
@@ -2173,12 +2170,12 @@ async function saveConfig() {
       non_hit_retention_days: Math.min(Math.max(Number(configForm.non_hit_retention_days) || 3, 1), 3),
       pre_hash_check_enabled: configForm.pre_hash_check_enabled,
       thresholds: buildRiskThresholdPayload(),
-      blocked_keywords: blockedKeywordList.value,
+      blocked_keywords: [],
       keyword_blocking_mode: configForm.keyword_blocking_mode,
       model_filter: modelFilterPayload,
-      fragment_block_ttl_seconds: clampInteger(configForm.fragment_block_ttl_seconds, 300, 900, 600),
-      fragment_allow_ttl_seconds: clampInteger(configForm.fragment_allow_ttl_seconds, 1, 86400, 3600),
-      fragment_ttl_policy_version: configForm.fragment_ttl_policy_version.trim() || 'ttl-v1',
+      fragment_block_ttl_seconds: clampInteger(configForm.fragment_block_ttl_seconds, 300, 86400, 36000),
+      fragment_allow_ttl_seconds: clampInteger(configForm.fragment_allow_ttl_seconds, 1, 86400, 36000),
+      fragment_ttl_policy_version: configForm.fragment_ttl_policy_version.trim() || 'ttl-v2',
       second_layer_enabled: configForm.second_layer_enabled,
       second_layer_stage: configForm.second_layer_stage,
       second_layer_endpoints: configForm.second_layer_endpoints.map((endpoint) => ({
@@ -2196,11 +2193,11 @@ async function saveConfig() {
         token: endpoint.token.trim() || undefined,
       })),
       second_layer_scanners: parseLineList(configForm.second_layer_scanners_text),
-      hard_block_patterns: hardBlockPatternList.value,
-      candidate_keywords: candidateKeywordList.value,
+      layer1_keywords: layer1KeywordList.value,
+      layer2_keywords: layer2KeywordList.value,
       keyword_allowlist: keywordAllowlist.value,
-      keyword_policy_version: configForm.keyword_policy_version.trim() || 'keyword-v2',
-      context_policy_version: configForm.context_policy_version.trim() || 'context-v2',
+      keyword_policy_version: configForm.keyword_policy_version.trim() || 'keyword-v3',
+      context_policy_version: configForm.context_policy_version.trim() || 'context-v3',
       evidence_policy_version: configForm.evidence_policy_version.trim() || 'evidence-v1',
     }
     const keys = parseApiKeys(configForm.api_keys_text)

@@ -122,9 +122,9 @@ const baseConfig = (): ContentModerationConfig => ({
   cache_version: 'v1',
   cache_max_entries: 100000,
   cache_max_bytes: 67108864,
-  fragment_block_ttl_seconds: 600,
-  fragment_allow_ttl_seconds: 3600,
-  fragment_ttl_policy_version: 'ttl-v1',
+  fragment_block_ttl_seconds: 36000,
+  fragment_allow_ttl_seconds: 36000,
+  fragment_ttl_policy_version: 'ttl-v2',
   second_layer_enabled: false,
   second_layer_stage: 'enforce',
   second_layer_endpoints: [],
@@ -132,15 +132,19 @@ const baseConfig = (): ContentModerationConfig => ({
   hard_block_patterns: [],
   candidate_keywords: [],
   keyword_allowlist: [],
-  keyword_policy_version: 'keyword-v2',
-  context_policy_version: 'context-v2',
+  keyword_policy_version: 'keyword-v3',
+  context_policy_version: 'context-v3',
   evidence_policy_version: 'evidence-v1',
   candidate_asset: 'legacy-prompt-audit-v1',
   candidate_enabled: false,
-  candidate_layer1_count: 972,
-  candidate_layer2_count: 246,
+  candidate_layer1_count: 964,
+  candidate_layer2_count: 254,
   candidate_source_commit: '99c8e4bf7564823bafbab369acab6539e734c1bb',
   candidate_endpoints: [],
+  layer1_keywords: [],
+  layer2_keywords: [],
+  candidate_system_ready: false,
+  candidate_system_error: 'Layer 2 candidate keywords are empty; requests fall back to YuFeng',
   cyber_policy_exclude_from_ban_count: false,
 })
 
@@ -483,11 +487,11 @@ describe('admin RiskControlView', () => {
     expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
       fragment_block_ttl_seconds: 300,
       fragment_allow_ttl_seconds: 86400,
-      fragment_ttl_policy_version: 'ttl-v1',
+      fragment_ttl_policy_version: 'ttl-v2',
       second_layer_enabled: true,
       second_layer_stage: 'shadow',
-      keyword_policy_version: 'keyword-v2',
-      context_policy_version: 'context-v2',
+      keyword_policy_version: 'keyword-v3',
+      context_policy_version: 'context-v3',
       evidence_policy_version: 'evidence-v1',
       second_layer_endpoints: [expect.objectContaining({
         profile: 'yufeng_xguard',
@@ -495,6 +499,48 @@ describe('admin RiskControlView', () => {
         prompt_version: 'yufeng-xguard-v3',
       })],
     }))
+  })
+
+  it('edits and saves canonical Layer 1 and Layer 2 keyword lists', async () => {
+    getConfig.mockResolvedValue({
+      ...baseConfig(),
+      layer1_keywords: ['existing-direct-block'],
+      layer2_keywords: ['existing-candidate'],
+      candidate_system_ready: true,
+      candidate_system_error: undefined,
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.keywords').trigger('click')
+    expect(wrapper.get('[data-test="candidate-system-health"]').text()).toContain('admin.riskControl.candidateSystemReady')
+    await wrapper.get('[data-test="layer1-keywords"]').setValue('direct-one\ndirect-two\ndirect-one')
+    await wrapper.get('[data-test="layer2-keywords"]').setValue('review-one\nreview-two')
+    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+    await flushPromises()
+
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+      blocked_keywords: [],
+      layer1_keywords: ['direct-one', 'direct-two'],
+      layer2_keywords: ['review-one', 'review-two'],
+    }))
+    const payload = updateConfig.mock.calls.at(-1)?.[0]
+    expect(payload).not.toHaveProperty('hard_block_patterns')
+    expect(payload).not.toHaveProperty('candidate_keywords')
   })
 
   it('saves the selected model filter mode and models', async () => {
