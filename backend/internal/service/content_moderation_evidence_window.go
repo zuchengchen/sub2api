@@ -139,8 +139,12 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 				continue
 			}
 			redacted := redactContentModerationEvidenceText(rawText)
-			if redactedRunes := []rune(redacted); len(redactedRunes) > remaining {
-				redacted = string(redactedRunes[:remaining])
+			redactedLimit := remaining
+			if redactedLimit > contentModerationEvidenceExpandedMatchRunes {
+				redactedLimit = contentModerationEvidenceExpandedMatchRunes
+			}
+			if boundedRedacted, redactedTruncated := cropContentModerationRedactedWindow(redacted, spanMatches, candidate.Tier, redactedLimit); redactedTruncated {
+				redacted = boundedRedacted
 				spanTruncated = true
 				truncated = true
 			}
@@ -389,6 +393,30 @@ func redactContentModerationEvidenceText(text string) string {
 	text = evidenceAuthorizationPattern.ReplaceAllString(text, "$1$2[REDACTED]")
 	text = evidenceSecretPattern.ReplaceAllString(text, "$1$2[REDACTED]")
 	return redactContentModerationSecrets(text)
+}
+
+func cropContentModerationRedactedWindow(text string, source []contentModerationKeywordMatch, tier string, limit int) (string, bool) {
+	runes := []rune(text)
+	if limit <= 0 || len(runes) <= limit {
+		return text, false
+	}
+
+	span := contentModerationRuneSpan{end: len(runes)}
+	redactedMatches := evidenceMatchesInRedactedWindow(text, source, tier)
+	if len(redactedMatches) > 0 {
+		focus := make([]contentModerationKeywordMatch, 0, len(redactedMatches))
+		for _, match := range redactedMatches {
+			focus = append(focus, contentModerationKeywordMatch{
+				Keyword: match.Keyword,
+				Start:   match.Start,
+				End:     match.End,
+			})
+		}
+		span = cropCandidateSpan(span, focus, limit)
+	} else {
+		span.end = limit
+	}
+	return strings.TrimSpace(string(runes[span.start:span.end])), true
 }
 
 func evidenceMatchesInRedactedWindow(text string, source []contentModerationKeywordMatch, tier string) []ContentModerationEvidenceMatch {

@@ -126,6 +126,21 @@ func TestContentModerationCandidateEvidenceMergedWindowsStayWithin480Runes(t *te
 	require.LessOrEqual(t, len([]rune(bundle.Evidence.Text)), contentModerationEvidenceWindowBudgetRunes)
 }
 
+func TestContentModerationCandidateEvidenceCapsRedactionExpansionAroundKeyword(t *testing.T) {
+	text := strings.Repeat("token=x ", 50) + "reverse shell near the end"
+	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextTool, text, []string{"reverse shell"})
+
+	require.Len(t, bundle.Windows, 1)
+	window := bundle.Windows[0]
+	require.LessOrEqual(t, len([]rune(window.Text)), contentModerationEvidenceExpandedMatchRunes)
+	require.Contains(t, window.Text, "reverse shell", "post-redaction cropping must stay centered on the candidate match")
+	require.Len(t, window.Matches, 1)
+	windowRunes := []rune(window.Text)
+	require.Equal(t, "reverse shell", string(windowRunes[window.Matches[0].Start:window.Matches[0].End]))
+	require.True(t, bundle.Evidence.Truncated)
+	require.True(t, bundle.Evidence.Segments[0].Truncated)
+}
+
 func buildCandidateEvidenceForTest(t *testing.T, contextClass, text string, keywords []string) contentModerationEvidenceBundle {
 	t.Helper()
 	role := "tool"
