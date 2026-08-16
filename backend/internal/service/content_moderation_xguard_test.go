@@ -207,7 +207,7 @@ func TestContentModerationTTLConfigBoundariesAndNamespaceIsolation(t *testing.T)
 	changes := []func(*ContentModerationConfig){
 		func(value *ContentModerationConfig) { value.ContextPolicyVersion = "context-v4" },
 		func(value *ContentModerationConfig) { value.EvidencePolicyVersion = "evidence-v2" },
-		func(value *ContentModerationConfig) { value.KeywordPolicyVersion = "keyword-v4" },
+		func(value *ContentModerationConfig) { value.KeywordPolicyVersion = "keyword-v5" },
 		func(value *ContentModerationConfig) { value.FirstLayerStage = ContentModerationFirstLayerStageShadow },
 		func(value *ContentModerationConfig) { value.SecondLayerStage = ContentModerationSecondLayerStageShadow },
 		func(value *ContentModerationConfig) {
@@ -246,6 +246,22 @@ func TestContentModerationPolicyMigrationUsesTenHourCachesAndUnifiedContextPolic
 	require.Equal(t, ContentModerationFragmentTTLPolicyVersion, parsed.FragmentTTLPolicyVersion)
 	require.Equal(t, ContentModerationFirstLayerStageEnforce, parsed.FirstLayerStage)
 	require.Equal(t, ContentModerationSecondLayerStageEnforce, parsed.SecondLayerStage)
+}
+
+func TestContentModerationOlderKeywordPolicyMigration(t *testing.T) {
+	for _, version := range []string{
+		contentModerationOlderKeywordPolicyVersion,
+		contentModerationPreviousKeywordPolicyVersion,
+	} {
+		cfg := defaultContentModerationConfig()
+		cfg.KeywordPolicyVersion = version
+		legacyNamespace := cfg.fragmentCacheNamespace()
+
+		cfg.normalize()
+
+		require.Equal(t, ContentModerationKeywordPolicyVersion, cfg.KeywordPolicyVersion)
+		require.NotEqual(t, legacyNamespace, cfg.fragmentCacheNamespace())
+	}
 }
 
 func TestContentModerationLayerStagesValidateIndependently(t *testing.T) {

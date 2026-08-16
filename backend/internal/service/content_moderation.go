@@ -3170,7 +3170,7 @@ func (cfg *ContentModerationConfig) normalize() {
 	cfg.HardBlockPatterns = normalizeBlockedKeywords(cfg.HardBlockPatterns)
 	cfg.CandidateKeywords = normalizeBlockedKeywords(cfg.CandidateKeywords)
 	cfg.KeywordAllowlist = normalizeBlockedKeywords(cfg.KeywordAllowlist)
-	if keywordPolicyVersion := strings.TrimSpace(cfg.KeywordPolicyVersion); keywordPolicyVersion == "" || keywordPolicyVersion == contentModerationPreviousKeywordPolicyVersion {
+	if keywordPolicyVersion := strings.TrimSpace(cfg.KeywordPolicyVersion); keywordPolicyVersion == "" || keywordPolicyVersion == contentModerationOlderKeywordPolicyVersion || keywordPolicyVersion == contentModerationPreviousKeywordPolicyVersion {
 		cfg.KeywordPolicyVersion = ContentModerationKeywordPolicyVersion
 	}
 	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion {
