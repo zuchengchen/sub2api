@@ -66,7 +66,10 @@ func TestContentModerationAssistantWithoutRiskSignalSkipsYuFeng(t *testing.T) {
 	repo := &contentModerationTestRepo{}
 	svc := &ContentModerationService{repo: repo, hashCache: cache}
 	runtime := &contentModerationRuntimeSnapshot{
-		riskControlEnabled: true, config: cfg, fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
+		riskControlEnabled:          true,
+		config:                      cfg,
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"reverse shell"}),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
 	}
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
 	text := "你已经选定 A：严格视觉与交互复刻。我先把这个决策固化到范围记录和可视化伴侣里，然后继续确认一个会直接影响最终交付合法性与素材处理方式的边界。"
@@ -85,6 +88,59 @@ func TestContentModerationAssistantWithoutRiskSignalSkipsYuFeng(t *testing.T) {
 	require.Zero(t, calls.Load(), "an assistant candidate miss must not call YuFeng")
 	require.Empty(t, repo.logs)
 	require.Equal(t, ContentModerationYuFengPromptVersion, cfg.SecondLayerEndpoints[0].PromptVersion)
+}
+
+func TestContentModerationRiskReview5978ToolCandidateMissSkipsYuFengAndCachesAllow(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"mc"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := secondLayerGateTestConfig(server.URL)
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
+	cfg.CandidateEnabled = true
+	cfg.SecondLayerEndpoints[0].Profile = ContentModerationModelProfileYuFengXGuard
+	cfg.SecondLayerEndpoints[0].PromptVersion = ContentModerationYuFengPromptVersion
+	cfg.normalize()
+	hardKeywords, err := effectiveContentModerationKeywords(cfg)
+	require.NoError(t, err)
+	candidateKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	require.NoError(t, err)
+	cache := &contentModerationReplayCache{}
+	repo := &contentModerationTestRepo{}
+	svc := &ContentModerationService{repo: repo, hashCache: cache}
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		keywordMatcher:              newContentModerationKeywordMatcher(hardKeywords),
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher(candidateKeywords),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+	}
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
+	body := []byte(`{"messages":[{"role":"tool","tool_call_id":"call_5978","content":"[{\"name\":\"Knallerfrauen.S01E01.mkv\",\"size\":734003200},{\"name\":\"Knallerfrauen.S01E02.mkv\",\"size\":738197504},{\"name\":\"Knallerfrauen.S01E03.mkv\",\"size\":729808896},{\"name\":\"Knallerfrauen.S01E04.mkv\",\"size\":742391808},{\"name\":\"屌丝女士.S01E01.mkv\",\"size\":524288000},{\"name\":\"屌丝女士.S01E02.mkv\",\"size\":528482304},{\"name\":\"屌丝女士.S01E03.mkv\",\"size\":532676608},{\"name\":\"屌丝女士.S01E04.mkv\",\"size\":536870912}]"}]}`)
+
+	fragments := ExtractContentModerationFragments(ContentModerationProtocolOpenAIChat, body)
+	require.Len(t, fragments, 1)
+	require.Equal(t, ContentModerationContextTool, fragments[0].ContextClass)
+	_, hardHit := runtime.keywordMatcher.Match(fragments[0].Text)
+	require.False(t, hardHit)
+	_, candidateHit := runtime.secondLayerPrefilterMatcher.Match(fragments[0].Text)
+	require.False(t, candidateHit)
+
+	for range 2 {
+		decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+			Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIChat,
+		}, runtime)
+		require.True(t, decision.Allowed)
+		require.False(t, decision.Blocked)
+	}
+	require.Zero(t, calls.Load(), "#5978 candidate misses must never reach YuFeng")
+	require.Empty(t, repo.logs)
+	require.Equal(t, int64(1), svc.fragmentCacheHits.Load())
+	require.Equal(t, int64(1), svc.fragmentCacheWrites.Load())
 }
 
 func TestContentModerationAssistantCandidateStillRoutesToYuFeng(t *testing.T) {
@@ -296,26 +352,28 @@ func TestContentModerationSecondLayerSkipsInlineBase64Media(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
-func TestContentModerationSecondLayerCandidateDisabledPreservesAuditAll(t *testing.T) {
+func TestContentModerationCandidateSystemUnavailableFallsBackToYuFeng(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
 	}))
 	defer server.Close()
 
 	cfg := secondLayerGateTestConfig(server.URL)
 	cfg.CandidateEnabled = false
+	cfg.SecondLayerEndpoints[0].Profile = ContentModerationModelProfileYuFengXGuard
+	cfg.SecondLayerEndpoints[0].PromptVersion = ContentModerationYuFengPromptVersion
 	runtime := &contentModerationRuntimeSnapshot{riskControlEnabled: true, config: cfg}
 	svc := &ContentModerationService{repo: &contentModerationTestRepo{}}
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
 	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
-		Body: []byte(`{"input":"ordinary text"}`), Scope: &scope,
-		Protocol: ContentModerationProtocolOpenAIResponses,
+		Body: []byte(`{"messages":[{"role":"tool","content":"ordinary tool output"}]}`), Scope: &scope,
+		Protocol: ContentModerationProtocolOpenAIChat,
 	}, runtime)
 	require.True(t, decision.Allowed)
-	require.Equal(t, int64(1), calls.Load())
+	require.Equal(t, int64(1), calls.Load(), "a missing candidate matcher must fall back to YuFeng")
 }
 
 func TestContentModerationSecondLayerDisabledKeepsFirstLayerOnly(t *testing.T) {

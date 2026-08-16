@@ -186,26 +186,26 @@ func TestUnifiedFragmentReplayCountsOriginalOnlyOnce(t *testing.T) {
 
 func TestContentModerationTTLConfigBoundariesAndNamespaceIsolation(t *testing.T) {
 	cfg := defaultContentModerationConfig()
-	require.Equal(t, 600, cfg.FragmentBlockTTLSeconds)
-	require.Equal(t, 3600, cfg.FragmentAllowTTLSeconds)
+	require.Equal(t, 36000, cfg.FragmentBlockTTLSeconds)
+	require.Equal(t, 36000, cfg.FragmentAllowTTLSeconds)
 	base := cfg.fragmentCacheNamespace()
 
-	for _, ttl := range []int{300, 900} {
+	for _, ttl := range []int{300, 86400} {
 		candidate := cloneContentModerationConfig(cfg)
 		candidate.FragmentBlockTTLSeconds = ttl
 		require.NoError(t, (&ContentModerationService{}).validateUnifiedConfig(candidate))
 		require.NotEqual(t, base, candidate.fragmentCacheNamespace())
 	}
-	for _, ttl := range []int{299, 901} {
+	for _, ttl := range []int{299, 86401} {
 		candidate := cloneContentModerationConfig(cfg)
 		candidate.FragmentBlockTTLSeconds = ttl
 		require.Error(t, (&ContentModerationService{}).validateUnifiedConfig(candidate))
 	}
 
 	changes := []func(*ContentModerationConfig){
-		func(value *ContentModerationConfig) { value.ContextPolicyVersion = "context-v3" },
+		func(value *ContentModerationConfig) { value.ContextPolicyVersion = "context-v4" },
 		func(value *ContentModerationConfig) { value.EvidencePolicyVersion = "evidence-v2" },
-		func(value *ContentModerationConfig) { value.KeywordPolicyVersion = "keyword-v3" },
+		func(value *ContentModerationConfig) { value.KeywordPolicyVersion = "keyword-v4" },
 		func(value *ContentModerationConfig) {
 			value.SecondLayerEndpoints = []ContentModerationEndpoint{{ID: "x", BaseURL: "http://127.0.0.1:8080", Model: "x", Profile: ContentModerationModelProfileYuFengXGuard, ModelRevision: "rev-2"}}
 		},
@@ -215,6 +215,31 @@ func TestContentModerationTTLConfigBoundariesAndNamespaceIsolation(t *testing.T)
 		change(candidate)
 		require.NotEqual(t, base, candidate.fragmentCacheNamespace())
 	}
+}
+
+func TestContentModerationPolicyMigrationUsesTenHourCachesAndUnifiedContextPolicy(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.FragmentBlockTTLSeconds = 600
+	cfg.FragmentAllowTTLSeconds = 3600
+	cfg.FragmentTTLPolicyVersion = contentModerationLegacyFragmentTTLPolicyVersion
+	cfg.ContextPolicyVersion = contentModerationPreviousContextPolicyVersion
+	cfg.KeywordPolicyVersion = contentModerationPreviousKeywordPolicyVersion
+	legacyNamespace := cfg.fragmentCacheNamespace()
+
+	cfg.normalize()
+
+	require.Equal(t, 36000, cfg.FragmentBlockTTLSeconds)
+	require.Equal(t, 36000, cfg.FragmentAllowTTLSeconds)
+	require.Equal(t, ContentModerationFragmentTTLPolicyVersion, cfg.FragmentTTLPolicyVersion)
+	require.Equal(t, ContentModerationContextPolicyVersion, cfg.ContextPolicyVersion)
+	require.Equal(t, ContentModerationKeywordPolicyVersion, cfg.KeywordPolicyVersion)
+	require.NotEqual(t, legacyNamespace, cfg.fragmentCacheNamespace(), "legacy block entries must not replay after migration")
+
+	parsed, err := parseContentModerationConfig(`{"fragment_block_ttl_seconds":600,"fragment_allow_ttl_seconds":3600}`)
+	require.NoError(t, err)
+	require.Equal(t, 36000, parsed.FragmentBlockTTLSeconds)
+	require.Equal(t, 36000, parsed.FragmentAllowTTLSeconds)
+	require.Equal(t, ContentModerationFragmentTTLPolicyVersion, parsed.FragmentTTLPolicyVersion)
 }
 
 func TestContentModerationContextClassifierAndEvidenceRedaction(t *testing.T) {
@@ -539,7 +564,7 @@ func TestContentModerationSecondLayerRuntimeMetrics(t *testing.T) {
 	require.True(t, ok)
 	input := contentModerationSecondLayerInput{
 		Fragment: fragment, Evidence: moderationEvidence{Text: fragment.Text, Mode: "selected"},
-		KeywordTier: "context_required",
+		KeywordTier: "candidate_unavailable",
 	}
 
 	result, err := svc.scanContentModerationSecondLayerInput(context.Background(), []ContentModerationEndpoint{endpoint}, input, contentModerationScannerIDs)
@@ -561,7 +586,7 @@ func TestContentModerationSecondLayerRuntimeMetrics(t *testing.T) {
 	require.Equal(t, ContentModerationModelProfileYuFengXGuard, metrics[0].Profile)
 	require.Equal(t, "tool", metrics[0].ContextClass)
 	require.Equal(t, "selected", metrics[0].EvidenceMode)
-	require.Equal(t, "context_required", metrics[0].KeywordTier)
+	require.Equal(t, "candidate_unavailable", metrics[0].KeywordTier)
 	require.Equal(t, int64(4), metrics[0].Requests)
 	require.Equal(t, int64(1), metrics[0].Safe)
 	require.Equal(t, int64(1), metrics[0].Blocked)

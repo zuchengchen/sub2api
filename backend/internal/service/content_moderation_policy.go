@@ -15,17 +15,20 @@ const (
 	ContentModerationSecondLayerStageEnforce  = "enforce"
 	ContentModerationSecondLayerStageShadow   = "shadow"
 
-	DefaultContentModerationFragmentBlockTTLSeconds = 600
-	DefaultContentModerationFragmentAllowTTLSeconds = 3600
+	DefaultContentModerationFragmentBlockTTLSeconds = 10 * 60 * 60
+	DefaultContentModerationFragmentAllowTTLSeconds = 10 * 60 * 60
 	MinContentModerationFragmentBlockTTLSeconds     = 300
-	MaxContentModerationFragmentBlockTTLSeconds     = 900
+	MaxContentModerationFragmentBlockTTLSeconds     = 86400
 	MaxContentModerationFragmentAllowTTLSeconds     = 86400
-	ContentModerationFragmentTTLPolicyVersion       = "ttl-v1"
-	ContentModerationContextPolicyVersion           = "context-v2"
+	ContentModerationFragmentTTLPolicyVersion       = "ttl-v2"
+	ContentModerationContextPolicyVersion           = "context-v3"
 	ContentModerationEvidencePolicyVersion          = "evidence-v1"
-	ContentModerationKeywordPolicyVersion           = "keyword-v2"
+	ContentModerationKeywordPolicyVersion           = "keyword-v3"
 	ContentModerationYuFengPromptVersion            = "yufeng-xguard-v3"
+	contentModerationLegacyFragmentTTLPolicyVersion = "ttl-v1"
 	contentModerationLegacyContextPolicyVersion     = "context-v1"
+	contentModerationPreviousContextPolicyVersion   = "context-v2"
+	contentModerationPreviousKeywordPolicyVersion   = "keyword-v2"
 	contentModerationYuFengLegacyPromptVersion      = "yufeng-xguard-v1"
 	contentModerationYuFengPreviousPromptVersion    = "yufeng-xguard-v2"
 	ContentModerationContextUser                    = "user"
