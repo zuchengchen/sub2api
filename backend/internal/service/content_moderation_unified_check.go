@@ -46,6 +46,11 @@ type contentModerationCheckFragment struct {
 	CacheEligible          bool
 }
 
+type contentModerationShadowReview struct {
+	key string
+	run func()
+}
+
 func (s *ContentModerationService) ReservePendingRequestBody(bytes int64) (*ContentModerationPendingReservation, bool) {
 	if s == nil {
 		return nil, true
@@ -1205,18 +1210,21 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 		asyncInput.Reservation = nil
 		primary.Text = bundle.Evidence.Text
 		asyncCfg := cloneContentModerationConfig(cfg)
-		enqueued := s.enqueueContentModerationShadowReview(func() {
+		shadowOwner := "anonymous"
+		if input.UserID > 0 {
+			shadowOwner = "user:" + strconv.FormatInt(input.UserID, 10)
+		} else if input.APIKeyID > 0 {
+			shadowOwner = "api_key:" + strconv.FormatInt(input.APIKeyID, 10)
+		}
+		s.enqueueContentModerationShadowReviewKey(namespace+"\x00"+shadowOwner+"\x00"+bundle.CacheHash, func() {
 			timeout := contentModerationShadowReviewTimeout(asyncCfg)
 			shadowCtx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			_ = s.checkUnifiedCandidateEvidenceBundle(shadowCtx, asyncInput, asyncCfg, namespace, cache, bundle, primary, whitelistShadow, reviewRequired)
 		})
-		if !enqueued {
-			slog.Warn("content_moderation.second_layer_shadow_queue_full", "request_id", input.RequestID)
-			if reviewRequired {
-				return s.handleContextualReviewUnavailable(ctx, input, cfg, namespace, bundle, primary, whitelistShadow, "busy", errContentModerationSecondLayerBusy)
-			}
-		}
+		// Capacity pressure is reported through the aggregate shadow counters.
+		// Shadow mode remains fail-open and must not create one unavailable audit
+		// row per request when its bounded background queue is full.
 		return allow
 	}
 	return s.checkUnifiedCandidateEvidenceBundle(ctx, input, cfg, namespace, cache, bundle, primary, whitelistShadow, reviewRequired)
@@ -1287,6 +1295,10 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
 		Background: whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,
 	})
 	if err != nil {
+		if errors.Is(err, errContentModerationSecondLayerShadowWaitExpired) &&
+			(whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow) {
+			return allow
+		}
 		if !errors.Is(err, errContentModerationSecondLayerBusy) {
 			slog.Warn("content_moderation.second_layer_failed", "error", err)
 		}
@@ -1454,13 +1466,18 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 }
 
 func (s *ContentModerationService) enqueueContentModerationShadowReview(job func()) bool {
+	return s.enqueueContentModerationShadowReviewKey("", job)
+}
+
+func (s *ContentModerationService) enqueueContentModerationShadowReviewKey(key string, job func()) bool {
 	if s == nil || job == nil {
 		return false
 	}
 	s.secondLayerShadowOnce.Do(func() {
-		queue := make(chan func(), contentModerationShadowQueueCapacity)
+		queue := make(chan contentModerationShadowReview, contentModerationShadowQueueCapacity)
 		s.secondLayerShadowMu.Lock()
 		s.secondLayerShadowQueue = queue
+		s.secondLayerShadowPending = make(map[string]struct{})
 		s.secondLayerShadowMu.Unlock()
 		go func() {
 			for queued := range queue {
@@ -1469,21 +1486,36 @@ func (s *ContentModerationService) enqueueContentModerationShadowReview(job func
 						if recovered := recover(); recovered != nil {
 							slog.Error("content_moderation.second_layer_shadow_panic", "panic", recovered)
 						}
+						if queued.key != "" {
+							s.secondLayerShadowMu.Lock()
+							delete(s.secondLayerShadowPending, queued.key)
+							s.secondLayerShadowMu.Unlock()
+						}
 						s.secondLayerShadowDone.Add(1)
 					}()
-					queued()
+					queued.run()
 				}()
 			}
 		}()
 	})
-	s.secondLayerShadowMu.RLock()
+	s.secondLayerShadowMu.Lock()
+	defer s.secondLayerShadowMu.Unlock()
 	queue := s.secondLayerShadowQueue
-	s.secondLayerShadowMu.RUnlock()
+	if key != "" {
+		if _, pending := s.secondLayerShadowPending[key]; pending {
+			s.secondLayerShadowCoalesced.Add(1)
+			return true
+		}
+		s.secondLayerShadowPending[key] = struct{}{}
+	}
 	select {
-	case queue <- job:
+	case queue <- contentModerationShadowReview{key: key, run: job}:
 		s.secondLayerShadowQueued.Add(1)
 		return true
 	default:
+		if key != "" {
+			delete(s.secondLayerShadowPending, key)
+		}
 		s.secondLayerShadowDropped.Add(1)
 		return false
 	}
@@ -1505,7 +1537,7 @@ func contentModerationShadowReviewTimeout(cfg *ContentModerationConfig) time.Dur
 	timeout := 30 * time.Second
 	if cfg != nil {
 		for _, endpoint := range cfg.enabledSecondLayerEndpoints() {
-			candidate := time.Duration(endpoint.TimeoutMS)*time.Millisecond + 5*time.Second
+			candidate := 2*time.Duration(endpoint.TimeoutMS)*time.Millisecond + 5*time.Second
 			if candidate > timeout {
 				timeout = candidate
 			}

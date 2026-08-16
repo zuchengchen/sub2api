@@ -242,6 +242,13 @@ export interface ContentModerationRuntimeStatus {
   fragment_cache_writes: number
   fragment_cache_write_errors: number
   second_layer_metrics: ContentModerationSecondLayerMetric[]
+  second_layer_shadow_queued: number
+  second_layer_shadow_coalesced: number
+  second_layer_shadow_dropped: number
+  second_layer_shadow_waited: number
+  second_layer_shadow_wait_expired: number
+  second_layer_shadow_completed: number
+  second_layer_shadow_queue_depth: number
   archive_runtime: ContentModerationArchiveRuntimeStatus
 }
 

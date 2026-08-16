@@ -812,7 +812,7 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 		},
 		{
 			name: "both shadow", firstStage: ContentModerationFirstLayerStageShadow, secondStage: ContentModerationSecondLayerStageShadow,
-			wantDecision: ContentModerationActionAllow, wantModelCalls: 2, repeatShadowRisk: true,
+			wantDecision: ContentModerationActionAllow, wantModelCalls: 1, repeatShadowRisk: true,
 			wantActions: []string{ContentModerationActionFirstLayerShadow, ContentModerationActionSecondLayerShadow},
 			wantSources: []string{"keyword_high_confidence_shadow", "model_shadow"},
 		},
@@ -821,8 +821,18 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int64
+			modelStarted := make(chan struct{})
+			modelRelease := make(chan struct{})
+			var releaseOnce sync.Once
+			if tc.repeatShadowRisk {
+				t.Cleanup(func() { releaseOnce.Do(func() { close(modelRelease) }) })
+			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				calls.Add(1)
+				call := calls.Add(1)
+				if tc.repeatShadowRisk && call == 1 {
+					close(modelStarted)
+					<-modelRelease
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"pc"}}]}`))
 			}))
@@ -868,22 +878,42 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 				require.Equal(t, tc.wantBlocked, decision.Blocked)
 				require.Equal(t, !tc.wantBlocked, decision.Allowed)
 				require.Equal(t, tc.wantDecision, decision.Action)
+				if tc.repeatShadowRisk && index == 0 {
+					select {
+					case <-modelStarted:
+					case <-time.After(time.Second):
+						t.Fatal("first shadow model call did not start")
+					}
+				}
+			}
+			if tc.repeatShadowRisk {
+				releaseOnce.Do(func() { close(modelRelease) })
 			}
 
+			wantActionCounts := make(map[string]int)
+			wantSourceCounts := make(map[string]int)
+			wantLogCount := 0
+			for _, action := range tc.wantActions {
+				count := repeats
+				if tc.repeatShadowRisk && action == ContentModerationActionSecondLayerShadow {
+					count = 1
+				}
+				wantActionCounts[action] += count
+				wantLogCount += count
+			}
+			for _, source := range tc.wantSources {
+				count := repeats
+				if tc.repeatShadowRisk && source == "model_shadow" {
+					count = 1
+				}
+				wantSourceCounts[source] += count
+			}
 			require.Eventually(t, func() bool {
-				return calls.Load() == tc.wantModelCalls && len(repo.snapshotLogs()) == len(tc.wantActions)*repeats
+				return calls.Load() == tc.wantModelCalls && len(repo.snapshotLogs()) == wantLogCount
 			}, time.Second, 10*time.Millisecond)
 			require.Equal(t, tc.wantModelCalls, calls.Load(), "a first-layer shadow hit with a candidate signal must reach layer two")
 			logs := repo.snapshotLogs()
-			require.Len(t, logs, len(tc.wantActions)*repeats)
-			wantActionCounts := make(map[string]int)
-			wantSourceCounts := make(map[string]int)
-			for _, action := range tc.wantActions {
-				wantActionCounts[action] += repeats
-			}
-			for _, source := range tc.wantSources {
-				wantSourceCounts[source] += repeats
-			}
+			require.Len(t, logs, wantLogCount)
 			for _, log := range logs {
 				wantActionCounts[log.Action]--
 				wantSourceCounts[log.DecisionSource]--
@@ -899,6 +929,7 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 				require.Zero(t, remaining, "unexpected decision source count for %s", source)
 			}
 			if tc.repeatShadowRisk {
+				require.Equal(t, int64(1), svc.secondLayerShadowCoalesced.Load())
 				count, err := cache.CountFragmentResults(context.Background(), runtime.fragmentCacheNamespace)
 				require.NoError(t, err)
 				require.Zero(t, count, "risky shadow results must not become allow-cache entries")

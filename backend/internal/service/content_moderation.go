@@ -771,7 +771,10 @@ type ContentModerationRuntimeStatus struct {
 	FragmentCacheWriteErrors     int64                                 `json:"fragment_cache_write_errors"`
 	SecondLayerMetrics           []ContentModerationSecondLayerMetric  `json:"second_layer_metrics"`
 	SecondLayerShadowQueued      int64                                 `json:"second_layer_shadow_queued"`
+	SecondLayerShadowCoalesced   int64                                 `json:"second_layer_shadow_coalesced"`
 	SecondLayerShadowDropped     int64                                 `json:"second_layer_shadow_dropped"`
+	SecondLayerShadowWaited      int64                                 `json:"second_layer_shadow_waited"`
+	SecondLayerShadowWaitExpired int64                                 `json:"second_layer_shadow_wait_expired"`
 	SecondLayerShadowCompleted   int64                                 `json:"second_layer_shadow_completed"`
 	SecondLayerShadowQueueDepth  int                                   `json:"second_layer_shadow_queue_depth"`
 	ArchiveRuntime               ContentModerationArchiveRuntimeStatus `json:"archive_runtime"`
@@ -879,58 +882,62 @@ type ContentModerationFragmentAliasCache interface {
 }
 
 type ContentModerationService struct {
-	settingRepo              SettingRepository
-	repo                     ContentModerationRepository
-	hashCache                ContentModerationHashCache
-	groupRepo                GroupRepository
-	userRepo                 UserRepository
-	proxyRepo                ProxyRepository
-	authCacheInvalidator     APIKeyAuthCacheInvalidator
-	emailService             *EmailService
-	apiKeyRepo               APIKeyRepository
-	archiveRuntime           *contentModerationArchiveRuntime
-	dispositionRepo          ContentModerationDispositionRepository
-	httpClient               *http.Client
-	moderationProxyCache     atomic.Pointer[moderationProxyURLCacheEntry]
-	apiKeyCursor             atomic.Uint64
-	preBlockActive           atomic.Int64
-	preBlockChecked          atomic.Int64
-	preBlockAllowed          atomic.Int64
-	preBlockBlocked          atomic.Int64
-	preBlockErrors           atomic.Int64
-	preBlockLatencyTotalMS   atomic.Int64
-	lastCleanupUnix          atomic.Int64
-	lastCleanupDeletedHit    atomic.Int64
-	lastCleanupDeletedNonHit atomic.Int64
-	runtimeSnapshot          atomic.Pointer[contentModerationRuntimeSnapshot]
-	runtimeRefreshMu         sync.Mutex
-	runtimeCacheTTL          time.Duration
-	runtimeRefreshRetryAt    atomic.Int64
-	keyHealthMu              sync.Mutex
-	keyHealth                map[string]*contentModerationKeyHealth
-	pendingBodyBudget        *ContentModerationPendingBodyBudget
-	pendingBodyBudgetOnce    sync.Once
-	pendingBodyBudgetBytes   atomic.Int64
-	observedRequestBodyMax   atomic.Int64
-	requestBodyBuckets       [6]atomic.Int64
-	fragmentCacheHits        atomic.Int64
-	fragmentCacheMisses      atomic.Int64
-	fragmentCacheExpired     atomic.Int64
-	fragmentCacheReplays     atomic.Int64
-	fragmentCacheErrors      atomic.Int64
-	fragmentCacheWrites      atomic.Int64
-	fragmentCacheWriteErrors atomic.Int64
-	fragmentDecisionMu       sync.Mutex
-	fragmentDecisionLocks    map[string]*contentModerationFragmentDecisionLock
-	secondLayerClients       sync.Map
-	secondLayerEndpointSlots sync.Map
-	secondLayerMetrics       sync.Map
-	secondLayerShadowOnce    sync.Once
-	secondLayerShadowMu      sync.RWMutex
-	secondLayerShadowQueue   chan func()
-	secondLayerShadowQueued  atomic.Int64
-	secondLayerShadowDropped atomic.Int64
-	secondLayerShadowDone    atomic.Int64
+	settingRepo                SettingRepository
+	repo                       ContentModerationRepository
+	hashCache                  ContentModerationHashCache
+	groupRepo                  GroupRepository
+	userRepo                   UserRepository
+	proxyRepo                  ProxyRepository
+	authCacheInvalidator       APIKeyAuthCacheInvalidator
+	emailService               *EmailService
+	apiKeyRepo                 APIKeyRepository
+	archiveRuntime             *contentModerationArchiveRuntime
+	dispositionRepo            ContentModerationDispositionRepository
+	httpClient                 *http.Client
+	moderationProxyCache       atomic.Pointer[moderationProxyURLCacheEntry]
+	apiKeyCursor               atomic.Uint64
+	preBlockActive             atomic.Int64
+	preBlockChecked            atomic.Int64
+	preBlockAllowed            atomic.Int64
+	preBlockBlocked            atomic.Int64
+	preBlockErrors             atomic.Int64
+	preBlockLatencyTotalMS     atomic.Int64
+	lastCleanupUnix            atomic.Int64
+	lastCleanupDeletedHit      atomic.Int64
+	lastCleanupDeletedNonHit   atomic.Int64
+	runtimeSnapshot            atomic.Pointer[contentModerationRuntimeSnapshot]
+	runtimeRefreshMu           sync.Mutex
+	runtimeCacheTTL            time.Duration
+	runtimeRefreshRetryAt      atomic.Int64
+	keyHealthMu                sync.Mutex
+	keyHealth                  map[string]*contentModerationKeyHealth
+	pendingBodyBudget          *ContentModerationPendingBodyBudget
+	pendingBodyBudgetOnce      sync.Once
+	pendingBodyBudgetBytes     atomic.Int64
+	observedRequestBodyMax     atomic.Int64
+	requestBodyBuckets         [6]atomic.Int64
+	fragmentCacheHits          atomic.Int64
+	fragmentCacheMisses        atomic.Int64
+	fragmentCacheExpired       atomic.Int64
+	fragmentCacheReplays       atomic.Int64
+	fragmentCacheErrors        atomic.Int64
+	fragmentCacheWrites        atomic.Int64
+	fragmentCacheWriteErrors   atomic.Int64
+	fragmentDecisionMu         sync.Mutex
+	fragmentDecisionLocks      map[string]*contentModerationFragmentDecisionLock
+	secondLayerClients         sync.Map
+	secondLayerEndpointSlots   sync.Map
+	secondLayerMetrics         sync.Map
+	secondLayerShadowOnce      sync.Once
+	secondLayerShadowMu        sync.RWMutex
+	secondLayerShadowQueue     chan contentModerationShadowReview
+	secondLayerShadowPending   map[string]struct{}
+	secondLayerShadowQueued    atomic.Int64
+	secondLayerShadowCoalesced atomic.Int64
+	secondLayerShadowDropped   atomic.Int64
+	secondLayerShadowWaited    atomic.Int64
+	secondLayerShadowExpired   atomic.Int64
+	secondLayerShadowDone      atomic.Int64
 }
 
 type contentModerationSecondLayerMetricCounter struct {
@@ -2074,7 +2081,10 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		FragmentCacheWriteErrors:     s.fragmentCacheWriteErrors.Load(),
 		SecondLayerMetrics:           s.contentModerationSecondLayerMetrics(),
 		SecondLayerShadowQueued:      s.secondLayerShadowQueued.Load(),
+		SecondLayerShadowCoalesced:   s.secondLayerShadowCoalesced.Load(),
 		SecondLayerShadowDropped:     s.secondLayerShadowDropped.Load(),
+		SecondLayerShadowWaited:      s.secondLayerShadowWaited.Load(),
+		SecondLayerShadowWaitExpired: s.secondLayerShadowExpired.Load(),
 		SecondLayerShadowCompleted:   s.secondLayerShadowDone.Load(),
 		SecondLayerShadowQueueDepth:  s.contentModerationShadowQueueDepth(),
 		ArchiveRuntime:               s.archiveRuntime.Status(),
