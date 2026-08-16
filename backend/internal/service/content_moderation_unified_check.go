@@ -113,6 +113,11 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	if len(fragments) == 0 {
 		return allow
 	}
+	var contextualUserScope ContentModerationFragment
+	contextualUserScopeExpanded := false
+	if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly {
+		contextualUserScope, contextualUserScopeExpanded = buildContentModerationContextualUserScope(fragments, runtime.contextualKeywordMatcher)
+	}
 	cache, _ := s.hashCache.(ContentModerationFragmentCache)
 	namespace := runtime.fragmentCacheNamespace
 	if namespace == "" {
@@ -124,8 +129,17 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	candidates := make([]contentModerationCandidateFragment, 0, len(fragments))
 	for _, fragment := range fragments {
 		shadowRiskObserved := false
+		contextualReviewFragment := fragment
+		expandedContextualReview := false
+		if contextualUserScopeExpanded && fragment.ContextClass == ContentModerationContextUser &&
+			cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.contextualKeywordMatcher != nil {
+			if _, hit := runtime.contextualKeywordMatcher.Match(fragment.Text); hit {
+				contextualReviewFragment = contextualUserScope
+				expandedContextualReview = true
+			}
+		}
 		releaseDecisionLock := s.acquireContentModerationFragmentDecisionLock(namespace + "\x00" + fragment.Hash)
-		if cache != nil {
+		if cache != nil && !expandedContextualReview {
 			entry, found, err := s.getUnifiedFragmentCache(ctx, cache, namespace, fragment.Hash)
 			if err != nil {
 				s.fragmentCacheErrors.Add(1)
@@ -194,7 +208,9 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 
 		var contextualMatches []contentModerationKeywordMatch
 		if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
-			keyword, hardMatches, reviewMatches := classifyUnifiedHardKeywordMatches(fragment, runtime)
+			keyword, hardMatches, reviewMatches, reviewFragment := classifyUnifiedHardKeywordMatches(
+				fragment, contextualReviewFragment, expandedContextualReview, runtime,
+			)
 			if keyword == "" && len(reviewMatches) > 0 &&
 				(!cfg.SecondLayerEnabled || cfg.KeywordBlockingMode == ContentModerationKeywordModeKeywordOnly) {
 				keyword = reviewMatches[0].Keyword
@@ -202,6 +218,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				reviewMatches = nil
 			}
 			contextualMatches = reviewMatches
+			contextualReviewFragment = reviewFragment
 			if keyword != "" {
 				hardEvidence := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
 					Fragment: fragment, Matches: hardMatches, Tier: "high_confidence",
@@ -236,8 +253,9 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			}
 		}
 		if len(contextualMatches) > 0 {
-			candidates = append(candidates, contentModerationCandidateFragment{
-				Fragment: fragment, Matches: contextualMatches, Tier: "contextual_review",
+			candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
+				Fragment: contextualReviewFragment, Matches: contextualMatches, Tier: "contextual_review",
+				WholeFragment: expandedContextualReview,
 			})
 		}
 
@@ -284,13 +302,18 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	return allow
 }
 
-func classifyUnifiedHardKeywordMatches(fragment ContentModerationFragment, runtime *contentModerationRuntimeSnapshot) (string, []contentModerationKeywordMatch, []contentModerationKeywordMatch) {
+func classifyUnifiedHardKeywordMatches(
+	fragment ContentModerationFragment,
+	contextualReviewFragment ContentModerationFragment,
+	expandContextualReview bool,
+	runtime *contentModerationRuntimeSnapshot,
+) (string, []contentModerationKeywordMatch, []contentModerationKeywordMatch, ContentModerationFragment) {
 	if runtime == nil || runtime.keywordMatcher == nil {
-		return "", nil, nil
+		return "", nil, nil, fragment
 	}
 	firstKeyword, hit := runtime.keywordMatcher.Match(fragment.Text)
 	if !hit {
-		return "", nil, nil
+		return "", nil, nil, fragment
 	}
 	unconditional := runtime.unconditionalKeywordMatcher
 	contextual := runtime.contextualKeywordMatcher
@@ -299,7 +322,7 @@ func classifyUnifiedHardKeywordMatches(fragment ContentModerationFragment, runti
 	}
 	_, firstIsContextual := maliciousMacroContextKeywords[normalizedContentModerationKeywordKey(firstKeyword)]
 	if !firstIsContextual && !suppressToolDocumentationKeyword(fragment, firstKeyword) {
-		return firstKeyword, contentModerationHardMatchesForKeyword(fragment.Text, firstKeyword), nil
+		return firstKeyword, contentModerationHardMatchesForKeyword(fragment.Text, firstKeyword), nil, fragment
 	}
 	if unconditional != nil {
 		matchText := fragment.Text
@@ -309,11 +332,14 @@ func classifyUnifiedHardKeywordMatches(fragment ContentModerationFragment, runti
 			keyword, hardHit = unconditional.Match(matchText)
 		}
 		if hardHit {
-			return keyword, contentModerationHardMatchesForKeyword(matchText, keyword), nil
+			return keyword, contentModerationHardMatchesForKeyword(matchText, keyword), nil, fragment
 		}
 	}
 	if contextual == nil {
-		return "", nil, nil
+		return "", nil, nil, fragment
+	}
+	if !expandContextualReview {
+		contextualReviewFragment = fragment
 	}
 	reviewMatches := make([]contentModerationKeywordMatch, 0, 4)
 	for _, keyword := range contextual.keywords {
@@ -323,13 +349,52 @@ func classifyUnifiedHardKeywordMatches(fragment ContentModerationFragment, runti
 		}
 		disposition, configured := classifyContentModerationKeywordContext(fragment, keyword)
 		if !configured || disposition == contentModerationKeywordContextHardBlock {
-			return keyword, matches, reviewMatches
+			return keyword, matches, reviewMatches, fragment
 		}
-		if disposition == contentModerationKeywordContextReview {
-			reviewMatches = append(reviewMatches, matches...)
+		if disposition == contentModerationKeywordContextReview ||
+			(disposition == contentModerationKeywordContextAllow && expandContextualReview) {
+			reviewMatches = append(reviewMatches, contentModerationHardMatchesForKeyword(contextualReviewFragment.Text, keyword)...)
 		}
 	}
-	return "", nil, sortAndDeduplicateContentModerationKeywordMatches(reviewMatches)
+	return "", nil, sortAndDeduplicateContentModerationKeywordMatches(reviewMatches), contextualReviewFragment
+}
+
+func buildContentModerationContextualUserScope(fragments []ContentModerationFragment, contextualMatcher *contentModerationKeywordMatcher) (ContentModerationFragment, bool) {
+	if contextualMatcher == nil {
+		return ContentModerationFragment{}, false
+	}
+	texts := make([]string, 0, len(fragments))
+	hasContextualKeyword := false
+	for _, fragment := range fragments {
+		if fragment.ContextClass == ContentModerationContextUser {
+			texts = append(texts, fragment.Text)
+			if !hasContextualKeyword {
+				_, hasContextualKeyword = contextualMatcher.Match(fragment.Text)
+			}
+		}
+	}
+	if len(texts) < 2 || !hasContextualKeyword {
+		return ContentModerationFragment{}, false
+	}
+	scope, ok := newContentModerationFragment("user", "text", "moderation.contextual_user_scope", strings.Join(texts, "\n"))
+	if !ok {
+		return ContentModerationFragment{}, false
+	}
+	scope.ContextClass = ContentModerationContextUser
+	return scope, true
+}
+
+func appendOrMergeContentModerationCandidate(candidates []contentModerationCandidateFragment, candidate contentModerationCandidateFragment) []contentModerationCandidateFragment {
+	for index := range candidates {
+		existing := &candidates[index]
+		if existing.Tier != candidate.Tier || existing.Fragment.Hash != candidate.Fragment.Hash ||
+			existing.WholeFragment != candidate.WholeFragment {
+			continue
+		}
+		existing.Matches = sortAndDeduplicateContentModerationKeywordMatches(append(existing.Matches, candidate.Matches...))
+		return candidates
+	}
+	return append(candidates, candidate)
 }
 
 func normalizedContentModerationKeywordKey(keyword string) string {

@@ -9,7 +9,7 @@ const (
 	powerShellEncodedCommand                      = "powershell -encodedcommand"
 	powerShellShortEncodedCommand                 = "powershell -enc"
 	maxDocumentationCommandPlaceholderBytes       = 128
-	contentModerationKeywordContextPolicyRevision = "keyword-context-v3"
+	contentModerationKeywordContextPolicyRevision = "keyword-context-v4"
 	maliciousMacroContextWindowRunes              = 192
 	maliciousMacroIntentDistanceRunes             = 32
 )

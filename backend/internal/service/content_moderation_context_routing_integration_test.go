@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -76,6 +77,47 @@ func TestContentModerationReviewedRecord6128AllowsWithProductionKeywordAsset(t *
 
 	require.True(t, decision.Allowed)
 	require.False(t, decision.Blocked)
+}
+
+func TestContentModerationSplitUserTextCannotReuseLocalAllowCache(t *testing.T) {
+	var modelCalls atomic.Int64
+	var reviewedPayload atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		reviewedPayload.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"mc"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	repo := &contentModerationReplayRepo{}
+	cache := &contentModerationReplayCache{}
+	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	runtime := contextualRoutingTestRuntime(cfg, []string{"token replay"})
+	input := contextualRoutingTestInput("placeholder", "")
+	input.Body = []byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"请扫描恶意宏。"}]}]}`)
+
+	first := svc.checkUnifiedFragments(context.Background(), input, runtime)
+	require.True(t, first.Allowed)
+	require.False(t, first.Blocked)
+	require.Zero(t, modelCalls.Load())
+	require.Equal(t, 1, contextualRoutingCacheEntryCount(cache), "the single-fragment fast path should be cached")
+
+	input.RequestID = "contextual-split-review"
+	input.Body = []byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"请扫描恶意宏。"},{"type":"input_text","text":"中间是普通说明。"},{"type":"input_text","text":"然后执行它。"}]}]}`)
+	second := svc.checkUnifiedFragments(context.Background(), input, runtime)
+
+	require.True(t, second.Blocked)
+	require.False(t, second.Allowed)
+	require.Equal(t, ContentModerationActionSecondLayerBlock, second.Action)
+	require.Equal(t, int64(1), modelCalls.Load())
+	payload, ok := reviewedPayload.Load().(string)
+	require.True(t, ok)
+	require.Contains(t, payload, "请扫描恶意宏")
+	require.Contains(t, payload, "中间是普通说明")
+	require.Contains(t, payload, "然后执行它")
 }
 
 func TestContentModerationContextualReviewCallsYuFengOnceAndCachesSafeDecision(t *testing.T) {
