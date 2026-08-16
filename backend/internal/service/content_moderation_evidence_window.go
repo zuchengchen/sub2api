@@ -14,7 +14,7 @@ const (
 	contentModerationEvidenceExpandedMatchRunes = 1024
 	contentModerationEvidenceMaxWindows         = 16
 	contentModerationEvidenceMaxMatches         = 64
-	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v4\x00"
+	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v5\x00"
 )
 
 // ContentModerationEvidenceMatch offsets are Unicode rune indexes relative to
@@ -53,6 +53,7 @@ type contentModerationEvidenceBundle struct {
 	PrimaryKeyword string
 	PrimaryRuleID  string
 	CacheHash      string
+	CanonicalKeys  []contentModerationEvidenceCanonicalKey
 }
 
 type contentModerationRuneSpan struct {
@@ -65,6 +66,23 @@ type contentModerationCandidateSpan struct {
 	truncated bool
 }
 
+type contentModerationEvidenceCanonicalKey struct {
+	Role          string
+	Kind          string
+	ContextClass  string
+	RuleSignature string
+	Text          string
+}
+
+type contentModerationCanonicalWindow struct {
+	Window        ContentModerationEvidenceWindow
+	Role          string
+	Kind          string
+	Tier          string
+	RuleSignature string
+	Truncated     bool
+}
+
 func buildContentModerationCandidateEvidence(candidates []contentModerationCandidateFragment, endpointLimit int, cfg *ContentModerationConfig) contentModerationEvidenceBundle {
 	budget := contentModerationEvidenceWindowBudgetRunes
 	if endpointLimit > 0 && endpointLimit < budget {
@@ -74,18 +92,12 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 		budget = 1
 	}
 
-	windows := make([]ContentModerationEvidenceWindow, 0, len(candidates))
-	segments := make([]moderationEvidenceSegment, 0, len(candidates))
 	allRuleIDSet := make(map[string]struct{})
 	allContextSet := make(map[string]struct{})
 	allRuleIDs := make([]string, 0, len(candidates))
 	allContexts := make([]string, 0, len(candidates))
 	primaryKeyword := ""
 	primaryRuleID := ""
-	remaining := budget
-	remainingMatchBudget := contentModerationEvidenceMaxMatches
-	truncated := false
-	totalCandidateMatches := 0
 
 	for _, candidate := range candidates {
 		contextClass := strings.TrimSpace(candidate.Fragment.ContextClass)
@@ -94,7 +106,6 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 			allContexts = append(allContexts, contextClass)
 		}
 		candidateMatches := normalizedCandidateMatches(candidate.Fragment.Text, candidate.Matches)
-		totalCandidateMatches += len(candidateMatches)
 		for _, match := range candidateMatches {
 			ruleID := contentModerationKeywordRuleID(match.Keyword)
 			if _, exists := allRuleIDSet[ruleID]; !exists {
@@ -108,6 +119,9 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 		}
 	}
 
+	canonicalWindows := make([]contentModerationCanonicalWindow, 0, len(candidates))
+	canonicalIndexes := make(map[contentModerationEvidenceCanonicalKey]int, len(candidates))
+	sourceTruncated := false
 	for _, candidate := range candidates {
 		matches := normalizedCandidateMatches(candidate.Fragment.Text, candidate.Matches)
 		if len(matches) == 0 {
@@ -119,82 +133,123 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 		if candidate.WholeFragment {
 			spans = wholeFragmentCandidateEvidenceSpan(runes, matches)
 		}
+		if len(spans) == 0 {
+			sourceTruncated = true
+			continue
+		}
 		for _, candidateSpan := range spans {
 			span := candidateSpan.contentModerationRuneSpan
 			spanTruncated := candidateSpan.truncated || candidate.WholeFragmentTruncated
-			if len(windows) >= contentModerationEvidenceMaxWindows || remainingMatchBudget <= 0 {
-				truncated = true
-				break
-			}
-			if remaining <= 0 {
-				truncated = true
-				break
-			}
 			spanMatches := matchesWithinSpan(matches, span)
 			if len(spanMatches) == 0 {
 				continue
 			}
-			if span.end-span.start > remaining {
-				span = cropCandidateSpan(span, spanMatches, remaining)
-				spanTruncated = true
-				truncated = true
-			}
 			rawText := strings.TrimSpace(string(runes[span.start:span.end]))
 			if rawText == "" {
+				sourceTruncated = true
 				continue
 			}
 			redacted := redactContentModerationEvidenceText(rawText)
-			redactedLimit := remaining
-			if redactedLimit > contentModerationEvidenceExpandedMatchRunes {
-				redactedLimit = contentModerationEvidenceExpandedMatchRunes
-			}
-			if boundedRedacted, redactedTruncated := cropContentModerationRedactedWindow(redacted, spanMatches, candidate.Tier, redactedLimit); redactedTruncated {
+			if boundedRedacted, redactedTruncated := cropContentModerationRedactedWindow(
+				redacted, spanMatches, candidate.Tier, contentModerationEvidenceExpandedMatchRunes,
+			); redactedTruncated {
 				redacted = boundedRedacted
 				spanTruncated = true
-				truncated = true
 			}
 			windowMatches := evidenceMatchesInRedactedWindow(redacted, spanMatches, candidate.Tier)
-			if len(windowMatches) > remainingMatchBudget {
-				windowMatches = windowMatches[:remainingMatchBudget]
-				truncated = true
-			}
-			remainingMatchBudget -= len(windowMatches)
-			if len(windowMatches) == 0 {
+			if len(windowMatches) < len(spanMatches) {
 				// Secret redaction may replace a matched value. Keep the bounded
 				// context, but never publish offsets that no longer match its text.
-				truncated = true
+				spanTruncated = true
 			}
 			window := ContentModerationEvidenceWindow{
 				Path: redactContentModerationPath(candidate.Fragment.Path), ContextClass: candidate.Fragment.ContextClass,
 				Text: redacted, Matches: windowMatches,
 			}
-			windows = append(windows, window)
-			segments = append(segments, moderationEvidenceSegment{
-				Text: redacted, Origin: window.Path, Role: candidate.Fragment.Role, Kind: candidate.Fragment.Kind,
-				ContextClass: candidate.Fragment.ContextClass, ExtractorVersion: ContentModerationEvidencePolicyVersion,
-				Truncated: spanTruncated,
+			ruleSignature := contentModerationEvidenceRuleSignature(spanMatches, candidate.Tier)
+			key := contentModerationEvidenceCanonicalKey{
+				Role: strings.TrimSpace(candidate.Fragment.Role), Kind: strings.TrimSpace(candidate.Fragment.Kind),
+				ContextClass: strings.TrimSpace(candidate.Fragment.ContextClass), RuleSignature: ruleSignature, Text: redacted,
+			}
+			if existingIndex, exists := canonicalIndexes[key]; exists {
+				// The first path remains the audit origin. A duplicate window does
+				// not consume evidence budget, but any real source cropping remains
+				// security-significant.
+				canonicalWindows[existingIndex].Truncated = canonicalWindows[existingIndex].Truncated || spanTruncated
+				continue
+			}
+			canonicalIndexes[key] = len(canonicalWindows)
+			canonicalWindows = append(canonicalWindows, contentModerationCanonicalWindow{
+				Window: window, Role: candidate.Fragment.Role, Kind: candidate.Fragment.Kind, Tier: candidate.Tier,
+				RuleSignature: ruleSignature, Truncated: spanTruncated,
 			})
-			if spanTruncated {
-				truncated = true
-			}
-			remaining -= len([]rune(redacted))
-			if remaining > 0 {
-				remaining-- // Account for the newline inserted between windows.
-			}
-		}
-		if remaining <= 0 {
-			break
 		}
 	}
 
+	windows := make([]ContentModerationEvidenceWindow, 0, len(canonicalWindows))
+	segments := make([]moderationEvidenceSegment, 0, len(canonicalWindows))
+	canonicalKeys := make([]contentModerationEvidenceCanonicalKey, 0, len(canonicalWindows))
+	remaining := budget
+	remainingMatchBudget := contentModerationEvidenceMaxMatches
+	truncated := sourceTruncated
+	for _, canonical := range canonicalWindows {
+		if len(windows) >= contentModerationEvidenceMaxWindows || remainingMatchBudget <= 0 {
+			truncated = true
+			break
+		}
+		separatorRunes := 0
+		if len(windows) > 0 {
+			separatorRunes = 1
+		}
+		available := remaining - separatorRunes
+		if available <= 0 {
+			truncated = true
+			break
+		}
+
+		window := canonical.Window
+		windowTruncated := canonical.Truncated
+		if len([]rune(window.Text)) > available {
+			sourceMatches := candidateMatchesFromEvidenceMatches(window.Matches)
+			window.Text, _ = cropContentModerationRedactedWindow(window.Text, sourceMatches, canonical.Tier, available)
+			window.Matches = evidenceMatchesInRedactedWindow(window.Text, sourceMatches, canonical.Tier)
+			windowTruncated = true
+		}
+		if strings.TrimSpace(window.Text) == "" {
+			truncated = true
+			continue
+		}
+		if len(window.Matches) > remainingMatchBudget {
+			window.Matches = window.Matches[:remainingMatchBudget]
+			windowTruncated = true
+		}
+		remainingMatchBudget -= len(window.Matches)
+		if len(window.Matches) == 0 {
+			windowTruncated = true
+		}
+
+		windows = append(windows, window)
+		canonicalKeys = append(canonicalKeys, contentModerationEvidenceCanonicalKey{
+			Role: strings.TrimSpace(canonical.Role), Kind: strings.TrimSpace(canonical.Kind),
+			ContextClass: strings.TrimSpace(window.ContextClass), RuleSignature: canonical.RuleSignature, Text: window.Text,
+		})
+		segments = append(segments, moderationEvidenceSegment{
+			Text: window.Text, Origin: window.Path, Role: canonical.Role, Kind: canonical.Kind,
+			ContextClass: window.ContextClass, ExtractorVersion: ContentModerationEvidencePolicyVersion,
+			Truncated: windowTruncated,
+		})
+		if windowTruncated {
+			truncated = true
+		}
+		remaining -= separatorRunes + len([]rune(window.Text))
+	}
+	if len(windows) < len(canonicalWindows) {
+		truncated = true
+	}
+
 	parts := make([]string, 0, len(windows))
-	shownMatches := 0
 	for _, window := range windows {
 		parts = append(parts, window.Text)
-		shownMatches += len(window.Matches)
-	}
-	if shownMatches < totalCandidateMatches {
-		truncated = true
 	}
 	evidenceText := strings.Join(parts, "\n")
 	role := "tool"
@@ -223,10 +278,36 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 	sort.Strings(allContexts)
 	bundle := contentModerationEvidenceBundle{
 		Fragment: fragment, Evidence: evidence, Windows: windows, AllRuleIDs: allRuleIDs, AllContexts: allContexts,
-		PrimaryKeyword: primaryKeyword, PrimaryRuleID: primaryRuleID,
+		PrimaryKeyword: primaryKeyword, PrimaryRuleID: primaryRuleID, CanonicalKeys: canonicalKeys,
 	}
 	bundle.CacheHash = contentModerationEvidenceCacheHash(bundle, cfg)
 	return bundle
+}
+
+func contentModerationEvidenceRuleSignature(matches []contentModerationKeywordMatch, tier string) string {
+	ruleIDSet := make(map[string]struct{}, len(matches))
+	ruleIDs := make([]string, 0, len(matches))
+	for _, match := range matches {
+		ruleID := contentModerationKeywordRuleID(match.Keyword)
+		if ruleID == "" {
+			continue
+		}
+		if _, exists := ruleIDSet[ruleID]; exists {
+			continue
+		}
+		ruleIDSet[ruleID] = struct{}{}
+		ruleIDs = append(ruleIDs, ruleID)
+	}
+	sort.Strings(ruleIDs)
+	return strings.TrimSpace(tier) + "\x00" + strings.Join(ruleIDs, "\x00")
+}
+
+func candidateMatchesFromEvidenceMatches(matches []ContentModerationEvidenceMatch) []contentModerationKeywordMatch {
+	out := make([]contentModerationKeywordMatch, 0, len(matches))
+	for _, match := range matches {
+		out = append(out, contentModerationKeywordMatch{Keyword: match.Keyword, Start: match.Start, End: match.End})
+	}
+	return out
 }
 
 func wholeFragmentCandidateEvidenceSpan(text []rune, matches []contentModerationKeywordMatch) []contentModerationCandidateSpan {
@@ -459,8 +540,13 @@ func evidenceMatchesInRedactedWindow(text string, source []contentModerationKeyw
 
 func contentModerationEvidenceCacheHash(bundle contentModerationEvidenceBundle, cfg *ContentModerationConfig) string {
 	parts := []string{contentModerationEvidenceHashDomain, ContentModerationEvidencePolicyVersion, bundle.Evidence.Text}
-	for _, window := range bundle.Windows {
-		parts = append(parts, window.Path, window.ContextClass, window.Text)
+	for index, window := range bundle.Windows {
+		if index < len(bundle.CanonicalKeys) {
+			key := bundle.CanonicalKeys[index]
+			parts = append(parts, "window", key.Role, key.Kind, key.ContextClass, key.RuleSignature, key.Text)
+		} else {
+			parts = append(parts, "window", window.ContextClass, window.Text)
+		}
 		for _, match := range window.Matches {
 			parts = append(parts, match.Keyword, match.RuleID, match.Tier, itoa(match.Start), itoa(match.End))
 		}

@@ -3176,7 +3176,7 @@ func (cfg *ContentModerationConfig) normalize() {
 	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion {
 		cfg.ContextPolicyVersion = ContentModerationContextPolicyVersion
 	}
-	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationLegacyEvidencePolicyVersion || evidencePolicyVersion == contentModerationOlderEvidencePolicyVersion || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion {
+	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationLegacyEvidencePolicyVersion || evidencePolicyVersion == contentModerationOlderEvidencePolicyVersion || evidencePolicyVersion == contentModerationEarlierEvidencePolicyVersion || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion {
 		cfg.EvidencePolicyVersion = ContentModerationEvidencePolicyVersion
 	}
 	cfg.KeywordPolicyVersion = normalizeContentModerationCacheVersion(cfg.KeywordPolicyVersion)
