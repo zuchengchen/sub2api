@@ -419,7 +419,7 @@ export default {
       searchGroups: '搜索分组名称或平台',
       noGroups: '暂无可用分组',
       userEmailWhitelist: '用户邮箱白名单',
-      userEmailWhitelistHint: '名单内用户跳过本地内容审核、审计记录和自动封禁；上游服务自身的安全策略仍可能拒绝请求。仅支持完整邮箱精确匹配，每行一个。',
+      userEmailWhitelistHint: '名单内用户仍接受本地两层审核；关键词或模型风险仅记录，不拦截、不自动封禁。上游真实 cyber_policy 仍会硬阻断并执行账号处置。仅支持完整邮箱精确匹配，每行一个。',
       userEmailWhitelistPlaceholder: "user{'@'}example.com",
       userEmailWhitelistCount: '已配置 {count} 个邮箱',
       modelFilter: '模型范围',
@@ -552,6 +552,7 @@ export default {
       action: {
         block: '拦截',
         keywordBlock: '关键词拦截',
+        keywordShadow: '关键词影子命中',
         cacheReplay: '重试命中',
         shadowBlock: '影子模型命中',
         cyberPolicy: '网络安全策略',

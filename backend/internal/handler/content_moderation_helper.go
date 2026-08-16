@@ -49,14 +49,6 @@ func runContentModerationStage(c *gin.Context, reqLog *zap.Logger, svc *service.
 		return nil
 	}
 	input := buildContentModerationInputForStage(c, apiKey, subject, protocol, model, body, stage)
-	if whitelisted, err := svc.IsUserEmailWhitelisted(c.Request.Context(), input.UserEmail); err == nil && whitelisted {
-		if input.Scope != nil {
-			scope := *input.Scope
-			scope.InScope = false
-			input.Scope = &scope
-			c.Set(contentModerationScopeContextKey, scope)
-		}
-	}
 	if input.Scope != nil && input.Scope.InScope {
 		reservation, ok := contentModerationReservation(c)
 		if !ok {

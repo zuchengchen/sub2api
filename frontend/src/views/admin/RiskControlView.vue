@@ -1735,7 +1735,16 @@ const modelProfileOptions = computed<SelectOption[]>(() => [
 
 const decisionSourceOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('admin.riskControl.filters.allDecisionSources') },
-  ...['keyword_high_confidence', 'candidate_model', 'model', 'model_shadow', 'cache_replay'].map((value) => ({ value, label: value })),
+  ...[
+    'keyword_high_confidence',
+    'keyword_high_confidence_whitelist_shadow',
+    'candidate_model',
+    'model',
+    'model_shadow',
+    'model_whitelist_shadow',
+    'cache_replay',
+    'cache_replay_whitelist_shadow',
+  ].map((value) => ({ value, label: value })),
 ])
 
 const groupFilterOptions = computed<SelectOption[]>(() => [
@@ -2645,7 +2654,8 @@ function resultLabel(row: ContentModerationLog): string {
   if (isReplayRow(row)) return t('admin.riskControl.action.cacheReplay')
   if (row.action === 'cyber_policy') return t('admin.riskControl.action.cyberPolicy')
   if (row.action === 'keyword_block') return t('admin.riskControl.action.keywordBlock')
-  if (row.action === 'second_layer_shadow') return t('admin.riskControl.action.shadowBlock')
+  if (row.action === 'whitelist_shadow' && row.decision_source.startsWith('keyword_')) return t('admin.riskControl.action.keywordShadow')
+  if (row.action === 'second_layer_shadow' || row.action === 'whitelist_shadow') return t('admin.riskControl.action.shadowBlock')
   if (isBlockingAuditAction(row.action)) return t('admin.riskControl.action.block')
   if (row.action === 'error' || row.error) return t('admin.riskControl.action.error')
   if (row.flagged) return t('admin.riskControl.result.hit')
@@ -2655,7 +2665,7 @@ function resultLabel(row: ContentModerationLog): string {
 function resultBadgeClass(row: ContentModerationLog): string {
   if (isReplayRow(row)) return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
   if (isBlockingAuditAction(row.action) || row.action === 'cyber_policy') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
-  if (row.action === 'second_layer_shadow') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  if (row.action === 'second_layer_shadow' || row.action === 'whitelist_shadow') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'

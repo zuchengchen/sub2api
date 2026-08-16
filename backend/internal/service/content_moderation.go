@@ -43,6 +43,7 @@ const (
 	ContentModerationActionKeywordBlock      = "keyword_block"
 	ContentModerationActionSecondLayerBlock  = "second_layer_block"
 	ContentModerationActionSecondLayerShadow = "second_layer_shadow"
+	ContentModerationActionWhitelistShadow   = "whitelist_shadow"
 	ContentModerationActionCacheBlock        = "cache_block"
 	ContentModerationActionBudgetRejected    = "budget_rejected"
 	ContentModerationActionError             = "error"
@@ -1308,18 +1309,10 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		return allow, nil
 	}
 	cfg := runtimeSnapshot.config
-	if cfg != nil && cfg.includesUserEmail(input.UserEmail) {
-		slog.Info("content_moderation.skip_user_email_whitelist",
-			"user_id", input.UserID,
-			"api_key_id", input.APIKeyID,
-			"group_id", contentModerationLogGroupID(input.GroupID),
-			"endpoint", input.Endpoint,
-			"protocol", input.Protocol)
-		return allow, nil
-	}
 	if input.Scope != nil {
 		return s.checkUnifiedFragments(ctx, input, runtimeSnapshot), nil
 	}
+	whitelistShadow := cfg != nil && cfg.includesUserEmail(input.UserEmail)
 	if !runtimeSnapshot.riskControlEnabled {
 		slog.Info("content_moderation.skip_feature_disabled",
 			"user_id", input.UserID,
@@ -1419,31 +1412,40 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 	if cfg.Mode == ContentModerationModePreBlock {
 		if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && len(cfg.BlockedKeywords) > 0 {
 			if keyword, hit := runtimeSnapshot.matchBlockedKeyword(content.Text); hit {
-				s.recordPreBlockSyncMetric(0, ContentModerationActionKeywordBlock)
-				slog.Info("content_moderation.keyword_block",
+				action := ContentModerationActionKeywordBlock
+				logFlagged := true
+				if whitelistShadow {
+					action = ContentModerationActionWhitelistShadow
+					logFlagged = false
+				}
+				s.recordPreBlockSyncMetric(0, action)
+				slog.Info("content_moderation.keyword_match",
 					"user_id", input.UserID,
 					"api_key_id", input.APIKeyID,
 					"group_id", contentModerationLogGroupID(input.GroupID),
 					"endpoint", input.Endpoint,
 					"protocol", input.Protocol,
 					"keyword_blocking_mode", cfg.KeywordBlockingMode,
+					"action", action,
 					"keyword", keyword)
 				scores := map[string]float64{contentModerationKeywordCategory: 1.0}
-				log := s.buildLog(input, cfg, ContentModerationActionKeywordBlock, true, contentModerationKeywordCategory, 1.0, scores, content.ExcerptText(), nil, nil, "")
+				log := s.buildLog(input, cfg, action, logFlagged, contentModerationKeywordCategory, 1.0, scores, content.ExcerptText(), nil, nil, "")
 				log.MatchedKeyword = keyword
-				s.persistContentModerationLogWithInput(ctx, cfg, log, hashText, false, true, &input)
-				return &ContentModerationDecision{
-					Allowed:         false,
-					Blocked:         true,
-					Flagged:         true,
-					Message:         cfg.BlockMessage,
-					StatusCode:      cfg.BlockStatus,
-					MatchedKeyword:  keyword,
-					HighestCategory: contentModerationKeywordCategory,
-					HighestScore:    1.0,
-					CategoryScores:  scores,
-					Action:          ContentModerationActionKeywordBlock,
-				}, nil
+				s.persistContentModerationLogWithInput(ctx, cfg, log, hashText, false, !whitelistShadow, &input)
+				if !whitelistShadow {
+					return &ContentModerationDecision{
+						Allowed:         false,
+						Blocked:         true,
+						Flagged:         true,
+						Message:         cfg.BlockMessage,
+						StatusCode:      cfg.BlockStatus,
+						MatchedKeyword:  keyword,
+						HighestCategory: contentModerationKeywordCategory,
+						HighestScore:    1.0,
+						CategoryScores:  scores,
+						Action:          ContentModerationActionKeywordBlock,
+					}, nil
+				}
 			}
 		}
 		if cfg.KeywordBlockingMode == ContentModerationKeywordModeKeywordOnly {
@@ -1463,8 +1465,14 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			slog.Warn("content_moderation.hash_check_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
 		}
 		if matched {
+			action := ContentModerationActionHashBlock
+			logFlagged := true
+			if whitelistShadow {
+				action = ContentModerationActionWhitelistShadow
+				logFlagged = false
+			}
 			if cfg.Mode == ContentModerationModePreBlock {
-				s.recordPreBlockSyncMetric(0, ContentModerationActionHashBlock)
+				s.recordPreBlockSyncMetric(0, action)
 			}
 			slog.Info("content_moderation.hash_block",
 				"user_id", input.UserID,
@@ -1478,17 +1486,19 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 				message = fmt.Sprintf("%s（hash: %s）", message, hashText)
 			}
 			scores := map[string]float64{"hash": 1.0}
-			log := s.buildLog(input, cfg, ContentModerationActionHashBlock, true, "hash", 1.0, scores, content.ExcerptText(), nil, nil, "")
+			log := s.buildLog(input, cfg, action, logFlagged, "hash", 1.0, scores, content.ExcerptText(), nil, nil, "")
 			s.persistContentModerationLogWithInput(ctx, cfg, log, hashText, false, false, &input)
-			return &ContentModerationDecision{
-				Allowed:    false,
-				Blocked:    true,
-				Flagged:    true,
-				Message:    message,
-				StatusCode: cfg.BlockStatus,
-				InputHash:  hashText,
-				Action:     ContentModerationActionHashBlock,
-			}, nil
+			if !whitelistShadow {
+				return &ContentModerationDecision{
+					Allowed:    false,
+					Blocked:    true,
+					Flagged:    true,
+					Message:    message,
+					StatusCode: cfg.BlockStatus,
+					InputHash:  hashText,
+					Action:     ContentModerationActionHashBlock,
+				}, nil
+			}
 		}
 	}
 	if !cfg.shouldSample(hashText) {
@@ -1521,6 +1531,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 
 func (s *ContentModerationService) checkSync(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, hashText string) *ContentModerationDecision {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
+	whitelistShadow := cfg != nil && cfg.includesUserEmail(input.UserEmail)
 	trackPreBlock := cfg != nil && cfg.Mode == ContentModerationModePreBlock
 	if trackPreBlock {
 		s.preBlockActive.Add(1)
@@ -1552,7 +1563,9 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 	flagged, highestCategory, highestScore := evaluateModerationScores(result.CategoryScores, cfg.Thresholds)
 	action := ContentModerationActionAllow
 	blocked := false
-	if flagged && cfg.Mode == ContentModerationModePreBlock {
+	if flagged && whitelistShadow {
+		action = ContentModerationActionWhitelistShadow
+	} else if flagged && cfg.Mode == ContentModerationModePreBlock {
 		action = ContentModerationActionBlock
 		blocked = true
 	}
@@ -1574,8 +1587,9 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		"highest_score", highestScore,
 		"latency_ms", latency)
 	if flagged || cfg.RecordNonHits {
-		log := s.buildLog(input, cfg, action, flagged, highestCategory, highestScore, result.CategoryScores, content.ExcerptText(), &latency, nil, "")
-		s.persistContentModerationLogWithInput(ctx, cfg, log, hashText, flagged, flagged, &input)
+		logFlagged := flagged && !whitelistShadow
+		log := s.buildLog(input, cfg, action, logFlagged, highestCategory, highestScore, result.CategoryScores, content.ExcerptText(), &latency, nil, "")
+		s.persistContentModerationLogWithInput(ctx, cfg, log, hashText, logFlagged, logFlagged, &input)
 	}
 	if blocked {
 		return &ContentModerationDecision{
@@ -1592,7 +1606,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 	}
 	return &ContentModerationDecision{
 		Allowed:         true,
-		Flagged:         flagged,
+		Flagged:         flagged && !whitelistShadow,
 		Message:         "",
 		HighestCategory: highestCategory,
 		HighestScore:    highestScore,
@@ -2271,8 +2285,8 @@ func (s *ContentModerationService) isRiskControlEnabled(ctx context.Context) boo
 	return raw == "true"
 }
 
-// IsUserEmailWhitelisted reports whether an exact user email is exempt from
-// local content-moderation checks and dispositions. Matching is case-insensitive.
+// IsUserEmailWhitelisted reports whether an exact user email uses local
+// shadow-only moderation. Matching is case-insensitive.
 func (s *ContentModerationService) IsUserEmailWhitelisted(ctx context.Context, email string) (bool, error) {
 	if strings.TrimSpace(email) == "" {
 		return false, nil
@@ -4028,15 +4042,6 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 	} else if runtimeSnapshot.config != nil {
 		cfg = runtimeSnapshot.config
 	}
-	if cfg.includesUserEmail(in.UserEmail) {
-		slog.Info("content_moderation.skip_user_email_whitelist",
-			"user_id", in.UserID,
-			"api_key_id", in.APIKeyID,
-			"endpoint", in.Endpoint,
-			"protocol", in.Protocol,
-			"source", ContentModerationActionCyberPolicy)
-		return
-	}
 	var userID *int64
 	if in.UserID > 0 {
 		userID = &in.UserID
@@ -4138,7 +4143,7 @@ func (s *ContentModerationService) retryCyberPolicyDisposition(ctx context.Conte
 	if kind != contentModerationDispositionCyber && kind != contentModerationDispositionLocal {
 		return fmt.Errorf("unknown content moderation disposition retry kind %q", kind)
 	}
-	if strings.TrimSpace(entry.UserEmail) != "" && s.settingRepo != nil {
+	if kind == contentModerationDispositionLocal && strings.TrimSpace(entry.UserEmail) != "" && s.settingRepo != nil {
 		whitelisted, err := s.IsUserEmailWhitelisted(ctx, entry.UserEmail)
 		if err != nil {
 			return fmt.Errorf("load content moderation user email whitelist: %w", err)

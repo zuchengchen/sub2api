@@ -161,7 +161,7 @@ func TestRunUnifiedContentModerationLogsWebSocketChecksAndCacheHits(t *testing.T
 	require.Equal(t, "subsequent_turn", doneLogs[1].ContextMap()["stage"])
 }
 
-func TestRunContentModerationStage_UserEmailWhitelistBypassesBodyBudget(t *testing.T) {
+func TestRunContentModerationStage_UserEmailWhitelistRemainsInScopeAndUsesBodyBudget(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := map[string]any{
 		"enabled":              true,
@@ -196,7 +196,10 @@ func TestRunContentModerationStage_UserEmailWhitelistBypassesBodyBudget(t *testi
 	)
 
 	require.NotNil(t, decision)
-	require.True(t, decision.Allowed)
+	require.False(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
+	require.Equal(t, service.ContentModerationActionBudgetRejected, decision.Action)
 	require.Equal(t, int64(0), svc.PendingRequestBodyBytes())
-	require.False(t, contentModerationScopeSnapshot(c, apiKey).InScope)
+	require.True(t, contentModerationScopeSnapshot(c, apiKey).InScope)
 }
