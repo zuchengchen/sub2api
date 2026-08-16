@@ -44,6 +44,11 @@ func TestBuildContentModerationLogWhere_AuditRecordViews(t *testing.T) {
 			result:   service.ContentModerationLogResultRiskyShadow,
 			contains: "l.action IN ('first_layer_shadow', 'second_layer_shadow', 'whitelist_shadow') AND COALESCE(BTRIM(l.highest_category), '') <> ''",
 		},
+		{
+			name:     "review unavailable",
+			result:   service.ContentModerationLogResultReviewFailure,
+			contains: "l.action = 'review_unavailable'",
+		},
 	}
 
 	for _, tt := range tests {

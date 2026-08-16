@@ -1819,8 +1819,9 @@ const endpointOptions = computed<SelectOption[]>(() => [
 
 const recordViewTabs = computed<Array<{ value: ContentModerationLogView; label: string }>>(() => [
   { value: 'cyber_policy', label: t('admin.riskControl.recordTabs.cyberPolicy') },
-  { value: 'content_blocked', label: t('admin.riskControl.recordTabs.blocked') },
-  { value: 'risky_shadow', label: t('admin.riskControl.recordTabs.riskyShadow') },
+	{ value: 'content_blocked', label: t('admin.riskControl.recordTabs.blocked') },
+	{ value: 'risky_shadow', label: t('admin.riskControl.recordTabs.riskyShadow') },
+	{ value: 'review_unavailable', label: t('admin.riskControl.recordTabs.reviewUnavailable') },
 ])
 
 const contextClassOptions = computed<SelectOption[]>(() => [
@@ -2777,6 +2778,7 @@ function isBlockingAuditAction(action: string): boolean {
 
 function resultLabel(row: ContentModerationLog): string {
   if (isReplayRow(row)) return t('admin.riskControl.action.cacheReplay')
+  if (row.action === 'review_unavailable') return t('admin.riskControl.action.error')
   if (row.action === 'cyber_policy') return t('admin.riskControl.action.cyberPolicy')
   if (row.action === 'keyword_block') return t('admin.riskControl.action.keywordBlock')
   if (row.action === 'first_layer_shadow') return t('admin.riskControl.action.keywordShadow')
@@ -2790,6 +2792,7 @@ function resultLabel(row: ContentModerationLog): string {
 
 function resultBadgeClass(row: ContentModerationLog): string {
   if (isReplayRow(row)) return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+  if (row.action === 'review_unavailable') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (isBlockingAuditAction(row.action) || row.action === 'cyber_policy') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'first_layer_shadow' || row.action === 'second_layer_shadow' || row.action === 'whitelist_shadow') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'

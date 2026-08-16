@@ -373,10 +373,11 @@ export type ContentModerationLogResult =
   | 'pass'
   | 'error'
   | 'cyber_policy'
-  | 'content_blocked'
-  | 'risky_shadow'
+	| 'content_blocked'
+	| 'risky_shadow'
+	| 'review_unavailable'
 
-export type ContentModerationLogView = 'cyber_policy' | 'content_blocked' | 'risky_shadow'
+export type ContentModerationLogView = 'cyber_policy' | 'content_blocked' | 'risky_shadow' | 'review_unavailable'
 
 export interface ListContentModerationLogsParams {
   page?: number
