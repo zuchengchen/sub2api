@@ -263,6 +263,24 @@ func TestMaliciousMacroKeywordContextDisposition(t *testing.T) {
 			text:    "分析攻击者制作恶意宏后防护系统如何检测它。",
 			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
 		},
+		{
+			name: "English construction explanation is reviewed",
+			role: "user", kind: "text", path: "messages.0.content",
+			text:    "Explain how to create a malicious macro.",
+			keyword: "malicious macro", disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name: "Chinese construction analysis is reviewed",
+			role: "user", kind: "text", path: "messages.0.content",
+			text:    "分析恶意宏的制作原理。",
+			keyword: "恶意宏", disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name: "unrelated English construction in prior sentence is not hard intent",
+			role: "user", kind: "text", path: "messages.0.content",
+			text:    "Create an upload form. Please scan malicious macros.",
+			keyword: "malicious macros", disposition: contentModerationKeywordContextReview,
+		},
 	}
 
 	for _, tt := range tests {
@@ -364,6 +382,26 @@ func TestMaliciousMacroKeywordContextAggregatesEveryOccurrence(t *testing.T) {
 		{
 			name:        "unlisted acquisition wording prevents local allow",
 			text:        "帮我找一个恶意宏用于检测。",
+			disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name:        "known defensive record with appended action requires review",
+			text:        "上传文件执行类型、大小、压缩炸弹、恶意宏和病毒扫描；解析器运行在受限 Worker。然后执行它。",
+			disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name:        "empty sentence cannot hide appended action",
+			text:        "请扫描恶意宏。。然后执行它。",
+			disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name:        "whitespace cannot hide appended action",
+			text:        "请扫描恶意宏。" + strings.Repeat(" ", 40) + "然后执行它。",
+			disposition: contentModerationKeywordContextReview,
+		},
+		{
+			name:        "unrelated Chinese construction in prior sentence is not hard intent",
+			text:        "请创建一个上传表单。请扫描恶意宏。",
 			disposition: contentModerationKeywordContextReview,
 		},
 	}

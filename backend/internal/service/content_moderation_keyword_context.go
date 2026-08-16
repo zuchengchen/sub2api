@@ -126,11 +126,13 @@ func classifyContentModerationKeywordContext(fragment ContentModerationFragment,
 	}
 
 	text := []rune(fragment.Text)
-	// MatchAll is deliberately bounded. Never locally allow a fragment when
-	// additional occurrences may exist beyond that bound.
-	allDefensive := len(matches) < contentModerationKeywordMatchLimit
+	// MatchAll is deliberately bounded. Local allow is limited to a small set
+	// of complete-fragment templates so appended instructions cannot hide
+	// outside the keyword's bounded intent window.
+	allDefensive := len(matches) < contentModerationKeywordMatchLimit &&
+		maliciousMacroFragmentIsClosedDefensiveTemplate(fragment.Text)
 	for _, match := range matches {
-		span := maliciousMacroLocalContextSpan(fragment, text, match)
+		span := maliciousMacroKeywordContextSpan(fragment, text, match)
 		window := strings.ToLower(string(text[span.start:span.end]))
 		matchStart := match.Start - span.start
 		matchEnd := match.End - span.start
@@ -140,9 +142,6 @@ func classifyContentModerationKeywordContext(fragment ContentModerationFragment,
 		case contentModerationKeywordContextReview:
 			allDefensive = false
 		}
-		if !maliciousMacroWindowIsClearlyDefensive(window, matchStart, matchEnd) {
-			allDefensive = false
-		}
 	}
 	if allDefensive {
 		return contentModerationKeywordContextAllow, true
@@ -150,7 +149,7 @@ func classifyContentModerationKeywordContext(fragment ContentModerationFragment,
 	return contentModerationKeywordContextReview, true
 }
 
-func maliciousMacroLocalContextSpan(fragment ContentModerationFragment, text []rune, match contentModerationKeywordMatch) contentModerationRuneSpan {
+func maliciousMacroKeywordContextSpan(fragment ContentModerationFragment, text []rune, match contentModerationKeywordMatch) contentModerationRuneSpan {
 	// ContextClass is derived by the request extractor, but recomputing from
 	// role/kind/path prevents a caller-provided ContextClass or body text from
 	// upgrading user content into a trusted line-oriented context.
@@ -166,12 +165,6 @@ func maliciousMacroLocalContextSpan(fragment ContentModerationFragment, text []r
 		return contentModerationRuneSpan{start: match.Start, end: match.End}
 	}
 	span := spans[index]
-	if index > 0 {
-		span.start = spans[index-1].start
-	}
-	if index+1 < len(spans) {
-		span.end = spans[index+1].end
-	}
 	return cropCandidateSpan(span, []contentModerationKeywordMatch{match}, maliciousMacroContextWindowRunes)
 }
 
@@ -181,6 +174,9 @@ func maliciousMacroWindowDisposition(window string, matchStart, matchEnd int) co
 		return contentModerationKeywordContextReview
 	}
 
+	if maliciousMacroConstructionIsDescriptive(before, after) {
+		return contentModerationKeywordContextReview
+	}
 	if maliciousMacroHasConstructionIntent(before, after) {
 		return contentModerationKeywordContextHardBlock
 	}
@@ -282,25 +278,25 @@ func maliciousMacroIntentSlices(window string, matchStart, matchEnd int) (string
 	return string(windowRunes[beforeStart:matchStart]), string(windowRunes[matchEnd:afterEnd]), true
 }
 
-func maliciousMacroWindowIsClearlyDefensive(window string, matchStart, matchEnd int) bool {
-	before, after, ok := maliciousMacroIntentSlices(window, matchStart, matchEnd)
-	if !ok {
-		return false
-	}
-	const reviewedRecord6128 = "上传文件执行类型、大小、压缩炸弹、恶意宏和病毒扫描；解析器运行在受限 worker。"
-	if strings.TrimSpace(window) == reviewedRecord6128 {
+func maliciousMacroFragmentIsClosedDefensiveTemplate(text string) bool {
+	normalized := strings.TrimFunc(strings.ToLower(text), isMaliciousMacroTerminalPunctuation)
+	const reviewedUploadPolicy = "上传文件执行类型、大小、压缩炸弹、恶意宏和病毒扫描；解析器运行在受限 worker"
+	if normalized == reviewedUploadPolicy {
 		return true
 	}
-	if strings.TrimFunc(after, isMaliciousMacroTerminalPunctuation) != "" {
-		return false
-	}
-	prefix := strings.TrimSpace(before)
-	for _, allowed := range [...]string{
+
+	for _, prefix := range [...]string{
 		"扫描", "请扫描", "检测", "请检测", "查杀", "请查杀", "拦截", "请拦截", "阻止", "请阻止",
 		"上传时扫描", "下载时再次查杀", "上传文件扫描", "上传文件检测", "需要扫描", "需要检测",
+	} {
+		if normalized == prefix+"恶意宏" {
+			return true
+		}
+	}
+	for _, prefix := range [...]string{
 		"scan", "please scan", "detect", "please detect", "block", "please block", "prevent", "please prevent",
 	} {
-		if prefix == allowed {
+		if normalized == prefix+" malicious macro" || normalized == prefix+" malicious macros" {
 			return true
 		}
 	}
@@ -448,11 +444,6 @@ func maliciousMacroEnglishConstructionIsProtectivelyGoverned(before, verb string
 
 func maliciousMacroConstructionIsDescriptive(before, after string) bool {
 	local := before + " " + after
-	defensive := containsAnyString(local, maliciousMacroChineseDefensiveSignals[:]) ||
-		containsAnyASCIIWordStem(local, maliciousMacroEnglishDefensiveSignals[:])
-	if !defensive {
-		return false
-	}
 	return containsAnyString(local, maliciousMacroChineseDescriptiveSignals[:]) ||
 		containsAnyASCIIPhrase(local, maliciousMacroEnglishDescriptiveSignals[:]) ||
 		strings.ContainsAny(local, "\"'“”‘’")
