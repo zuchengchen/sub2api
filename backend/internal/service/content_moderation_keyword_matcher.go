@@ -1,10 +1,26 @@
 package service
 
 import (
+	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
-const contentModerationHardKeywordMatcherPolicyVersion = "ascii-word-boundary-v1"
+const contentModerationHardKeywordMatcherPolicyVersion = "ascii-word-boundary-v2-all-offsets"
+const contentModerationKeywordMatchLimit = 64
+
+// contentModerationKeywordMatch offsets are Unicode rune indexes in the input
+// passed to MatchAll. Rune indexes are stable across UTF-8 byte widths and are
+// also what the evidence API exposes for client-side highlighting.
+type contentModerationKeywordMatch struct {
+	Keyword         string `json:"keyword"`
+	Start           int    `json:"start"`
+	End             int    `json:"end"`
+	keywordIndex    int
+	normalizedStart int
+	normalizedEnd   int
+}
 
 type contentModerationKeywordMatcher struct {
 	nodes                 []contentModerationKeywordNode
@@ -13,6 +29,7 @@ type contentModerationKeywordMatcher struct {
 	keywords              []string
 	patterns              []contentModerationKeywordPattern
 	requireWordBoundaries bool
+	maxPatternByteLength  int
 }
 
 type contentModerationKeywordNode struct {
@@ -58,6 +75,7 @@ func newContentModerationKeywordMatcherWithMode(keywords []string, requireWordBo
 	buildEdges := make([]contentModerationKeywordBuildEdge, 0)
 	originalKeywords := append([]string(nil), keywords...)
 	patterns := make([]contentModerationKeywordPattern, len(keywords))
+	maxPatternByteLength := 0
 
 	for keywordIndex, keyword := range keywords {
 		if keyword == "" {
@@ -65,6 +83,9 @@ func newContentModerationKeywordMatcherWithMode(keywords []string, requireWordBo
 		}
 		lowerKeyword := strings.ToLower(keyword)
 		patterns[keywordIndex] = newContentModerationKeywordPattern(lowerKeyword)
+		if len(lowerKeyword) > maxPatternByteLength {
+			maxPatternByteLength = len(lowerKeyword)
+		}
 		state := int32(0)
 		for _, label := range []byte(lowerKeyword) {
 			next := contentModerationKeywordBuildTransition(buildNodes, buildEdges, state, label)
@@ -157,6 +178,7 @@ func newContentModerationKeywordMatcherWithMode(keywords []string, requireWordBo
 		keywords:              originalKeywords,
 		patterns:              patterns,
 		requireWordBoundaries: requireWordBoundaries,
+		maxPatternByteLength:  maxPatternByteLength,
 	}
 }
 
@@ -202,46 +224,219 @@ func (m *contentModerationKeywordMatcher) Match(text string) (string, bool) {
 	if m == nil || text == "" || len(m.nodes) == 0 || len(m.keywords) == 0 {
 		return "", false
 	}
-	lower := strings.ToLower(text)
-	state := int32(0)
-	bestKeyword := int32(-1)
-	for index := 0; index < len(lower); index++ {
-		label := lower[index]
-		for {
-			next := m.next(state, label)
-			if next != 0 {
-				state = next
-				break
-			}
-			if state == 0 {
-				break
-			}
-			state = m.nodes[state].failure
+	scanner := newContentModerationKeywordScanner(m, false)
+	runeIndex := 0
+	for _, original := range text {
+		if !emitLowerContentModerationRune(scanner, unicode.ToLower(original), runeIndex, runeIndex+1) {
+			break
 		}
-		if !m.requireWordBoundaries {
-			bestKeyword = minKeywordIndex(bestKeyword, m.nodes[state].bestKeyword)
-		} else {
-			for outputState := state; outputState != 0; outputState = m.nodes[outputState].outputLink {
-				keywordIndex := m.nodes[outputState].terminalKeyword
-				if keywordIndex < 0 || int(keywordIndex) >= len(m.patterns) {
-					continue
-				}
-				pattern := m.patterns[keywordIndex]
-				end := index + 1
-				start := end - pattern.byteLength
-				if contentModerationKeywordMatchHasBoundaries(lower, start, end, pattern) {
-					bestKeyword = minKeywordIndex(bestKeyword, keywordIndex)
-				}
-			}
-		}
-		if bestKeyword == 0 {
-			return m.keywords[0], true
-		}
+		runeIndex++
 	}
-	if bestKeyword < 0 || int(bestKeyword) >= len(m.keywords) {
+	scanner.finish()
+	if scanner.bestKeyword < 0 || int(scanner.bestKeyword) >= len(m.keywords) {
 		return "", false
 	}
-	return m.keywords[bestKeyword], true
+	return m.keywords[scanner.bestKeyword], true
+}
+
+// MatchAll returns a bounded set of accepted occurrences in source order. The
+// scanner keeps only enough byte-to-rune mapping for the longest configured
+// pattern, so a large request cannot amplify into input-sized offset tables.
+func (m *contentModerationKeywordMatcher) MatchAll(text string) []contentModerationKeywordMatch {
+	if m == nil || text == "" || len(m.nodes) == 0 || len(m.keywords) == 0 {
+		return nil
+	}
+	scanner := newContentModerationKeywordScanner(m, true)
+	runeIndex := 0
+	for _, original := range text {
+		if !emitLowerContentModerationRune(scanner, unicode.ToLower(original), runeIndex, runeIndex+1) {
+			break
+		}
+		runeIndex++
+	}
+	scanner.finish()
+	return sortAndDeduplicateContentModerationKeywordMatches(scanner.matches)
+}
+
+type contentModerationKeywordScanner struct {
+	matcher     *contentModerationKeywordMatcher
+	state       int32
+	position    int
+	labels      []byte
+	runeStarts  []int
+	pending     []contentModerationKeywordMatch
+	matches     []contentModerationKeywordMatch
+	bestKeyword int32
+	collect     bool
+	matchLimit  int
+	onMatch     func(contentModerationKeywordMatch) bool
+	stopped     bool
+}
+
+func newContentModerationKeywordScanner(m *contentModerationKeywordMatcher, collect bool) *contentModerationKeywordScanner {
+	ringSize := 1
+	if m != nil && m.maxPatternByteLength >= ringSize {
+		ringSize = m.maxPatternByteLength + 1
+	}
+	return &contentModerationKeywordScanner{
+		matcher: m, labels: make([]byte, ringSize), runeStarts: make([]int, ringSize),
+		bestKeyword: -1, collect: collect, matchLimit: contentModerationKeywordMatchLimit,
+	}
+}
+
+func emitLowerContentModerationRune(scanner *contentModerationKeywordScanner, value rune, runeStart, runeEnd int) bool {
+	if scanner == nil {
+		return false
+	}
+	var encoded [utf8.UTFMax]byte
+	length := utf8.EncodeRune(encoded[:], value)
+	for index := 0; index < length; index++ {
+		if !scanner.emit(encoded[index], runeStart, runeEnd) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *contentModerationKeywordScanner) emit(label byte, runeStart, runeEnd int) bool {
+	if s == nil || s.matcher == nil {
+		return false
+	}
+	if !s.resolvePending(label, false) {
+		return false
+	}
+	ringIndex := s.position % len(s.labels)
+	s.labels[ringIndex] = label
+	s.runeStarts[ringIndex] = runeStart
+
+	for {
+		next := s.matcher.next(s.state, label)
+		if next != 0 {
+			s.state = next
+			break
+		}
+		if s.state == 0 {
+			break
+		}
+		s.state = s.matcher.nodes[s.state].failure
+	}
+	for outputState := s.state; outputState != 0; outputState = s.matcher.nodes[outputState].outputLink {
+		keywordIndex := s.matcher.nodes[outputState].terminalKeyword
+		if keywordIndex < 0 || int(keywordIndex) >= len(s.matcher.patterns) {
+			continue
+		}
+		pattern := s.matcher.patterns[keywordIndex]
+		endByte := s.position + 1
+		startByte := endByte - pattern.byteLength
+		if startByte < 0 || s.matcher.requireWordBoundaries && pattern.leftBoundary && startByte > 0 && isASCIIContentModerationWordByte(s.labelAt(startByte-1)) {
+			continue
+		}
+		match := contentModerationKeywordMatch{
+			Keyword: s.matcher.keywords[keywordIndex], Start: s.runeStartAt(startByte), End: runeEnd,
+			keywordIndex: int(keywordIndex), normalizedStart: startByte, normalizedEnd: endByte,
+		}
+		if s.matcher.requireWordBoundaries && pattern.rightBoundary {
+			if s.canKeepAnotherMatch() {
+				s.pending = append(s.pending, match)
+			}
+			continue
+		}
+		if !s.accept(match) {
+			return false
+		}
+	}
+	s.position++
+	return !s.done()
+}
+
+func (s *contentModerationKeywordScanner) finish() {
+	if s == nil {
+		return
+	}
+	_ = s.resolvePending(0, true)
+}
+
+func (s *contentModerationKeywordScanner) resolvePending(next byte, eof bool) bool {
+	if len(s.pending) == 0 {
+		return true
+	}
+	pending := s.pending
+	s.pending = s.pending[:0]
+	if !eof && isASCIIContentModerationWordByte(next) {
+		return true
+	}
+	for _, match := range pending {
+		if !s.accept(match) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *contentModerationKeywordScanner) accept(match contentModerationKeywordMatch) bool {
+	s.bestKeyword = minKeywordIndex(s.bestKeyword, int32(match.keywordIndex))
+	if s.onMatch != nil {
+		if !s.onMatch(match) {
+			s.stopped = true
+			return false
+		}
+		return true
+	}
+	if s.collect && len(s.matches) < s.matchLimit {
+		s.matches = append(s.matches, match)
+	}
+	return !s.done()
+}
+
+func (s *contentModerationKeywordScanner) canKeepAnotherMatch() bool {
+	if s.onMatch != nil {
+		return !s.stopped
+	}
+	return !s.collect || len(s.matches)+len(s.pending) < s.matchLimit
+}
+
+func (s *contentModerationKeywordScanner) done() bool {
+	if s.onMatch != nil {
+		return s.stopped
+	}
+	if s.collect {
+		return len(s.matches) >= s.matchLimit
+	}
+	return s.bestKeyword == 0
+}
+
+func (s *contentModerationKeywordScanner) labelAt(position int) byte {
+	return s.labels[position%len(s.labels)]
+}
+
+func (s *contentModerationKeywordScanner) runeStartAt(position int) int {
+	return s.runeStarts[position%len(s.runeStarts)]
+}
+
+func sortAndDeduplicateContentModerationKeywordMatches(matches []contentModerationKeywordMatch) []contentModerationKeywordMatch {
+	if len(matches) < 2 {
+		return matches
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].Start != matches[j].Start {
+			return matches[i].Start < matches[j].Start
+		}
+		if matches[i].End != matches[j].End {
+			return matches[i].End < matches[j].End
+		}
+		return matches[i].keywordIndex < matches[j].keywordIndex
+	})
+	out := matches[:0]
+	for _, match := range matches {
+		if len(out) > 0 {
+			last := out[len(out)-1]
+			if last.Start == match.Start && last.End == match.End && last.Keyword == match.Keyword {
+				continue
+			}
+		}
+		out = append(out, match)
+	}
+	return out
 }
 
 func newContentModerationKeywordPattern(keyword string) contentModerationKeywordPattern {

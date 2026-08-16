@@ -118,7 +118,10 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		}
 		repo := &contentModerationTestRepo{}
 		svc := &ContentModerationService{repo: repo}
-		runtime := &contentModerationRuntimeSnapshot{riskControlEnabled: true, config: cfg}
+		candidateMatcher := newContentModerationPrefilterMatcher([]string{"evaluate this request"})
+		runtime := &contentModerationRuntimeSnapshot{
+			riskControlEnabled: true, config: cfg, secondLayerPrefilterMatcher: candidateMatcher,
+		}
 
 		blocked := svc.checkUnifiedFragments(context.Background(), input, runtime)
 		require.True(t, blocked.Blocked)
@@ -131,7 +134,7 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 			Model: "stub-guard", Enabled: true, TimeoutMS: 1_000, InputLimit: 4_096,
 		}}
 		continued := svc.checkUnifiedFragments(context.Background(), input, &contentModerationRuntimeSnapshot{
-			riskControlEnabled: true, config: failureCfg,
+			riskControlEnabled: true, config: failureCfg, secondLayerPrefilterMatcher: candidateMatcher,
 		})
 		require.True(t, continued.Allowed, "a failed second layer must continue to the real upstream")
 		require.False(t, continued.Flagged)

@@ -3,9 +3,10 @@ package service
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
-const contentModerationSecondLayerPrefilterPolicyVersion = "layer2-candidate-keywords-v2"
+const contentModerationSecondLayerPrefilterPolicyVersion = "layer2-candidate-keywords-v3-offsets"
 
 // contentModerationPrefilterMatcher admits suspicious-looking fragments to the
 // expensive second-layer model without making a moderation decision itself.
@@ -22,10 +23,157 @@ func newContentModerationPrefilterMatcher(values []string) *contentModerationPre
 }
 
 func (m *contentModerationPrefilterMatcher) Match(text string) (string, bool) {
-	if m == nil || m.matcher == nil {
+	if m == nil || m.matcher == nil || text == "" {
 		return "", false
 	}
-	return m.matcher.Match(normalizeContentModerationPrefilterText(text))
+	scanner := m.scan(text, false)
+	if scanner.bestKeyword < 0 || int(scanner.bestKeyword) >= len(m.matcher.keywords) {
+		return "", false
+	}
+	return m.matcher.keywords[scanner.bestKeyword], true
+}
+
+func (m *contentModerationPrefilterMatcher) MatchAll(text string) []contentModerationKeywordMatch {
+	if m == nil || m.matcher == nil || text == "" {
+		return nil
+	}
+	scanner := m.scan(text, true)
+	return sortAndDeduplicateContentModerationKeywordMatches(scanner.matches)
+}
+
+// MatchAllExcluding applies the output cap after allowlist suppression. The
+// two automata advance over the same normalized stream, retaining candidate
+// matches only until no future allowlist phrase can overlap them.
+func (m *contentModerationPrefilterMatcher) MatchAllExcluding(text string, allowlist []string) []contentModerationKeywordMatch {
+	excluded := newContentModerationPrefilterMatcher(allowlist)
+	if m == nil || m.matcher == nil || text == "" || excluded == nil || excluded.matcher == nil {
+		return m.MatchAll(text)
+	}
+	type pendingCandidate struct {
+		match      contentModerationKeywordMatch
+		suppressed bool
+	}
+	pending := make([]pendingCandidate, 0, 16)
+	recentExcludes := make([]contentModerationKeywordMatch, 0, 16)
+	out := make([]contentModerationKeywordMatch, 0, 4)
+	candidateScanner := newContentModerationKeywordScanner(m.matcher, false)
+	excludeScanner := newContentModerationKeywordScanner(excluded.matcher, false)
+	candidateScanner.onMatch = func(match contentModerationKeywordMatch) bool {
+		candidate := pendingCandidate{match: match}
+		for _, excludedMatch := range recentExcludes {
+			if match.normalizedStart < excludedMatch.normalizedEnd && match.normalizedEnd > excludedMatch.normalizedStart {
+				candidate.suppressed = true
+				break
+			}
+		}
+		pending = append(pending, candidate)
+		return true
+	}
+	excludeScanner.onMatch = func(match contentModerationKeywordMatch) bool {
+		recentExcludes = append(recentExcludes, match)
+		for index := range pending {
+			candidate := pending[index].match
+			if candidate.normalizedStart < match.normalizedEnd && candidate.normalizedEnd > match.normalizedStart {
+				pending[index].suppressed = true
+			}
+		}
+		return true
+	}
+	flush := func(normalizedEnd int, eof bool) bool {
+		kept := pending[:0]
+		for _, candidate := range pending {
+			if !eof && normalizedEnd < candidate.match.normalizedEnd+excluded.matcher.maxPatternByteLength {
+				kept = append(kept, candidate)
+				continue
+			}
+			if !candidate.suppressed {
+				out = append(out, candidate.match)
+				if len(out) >= contentModerationKeywordMatchLimit {
+					pending = kept
+					return false
+				}
+			}
+		}
+		pending = kept
+		return true
+	}
+	pruneExcludes := func(normalizedEnd int) {
+		kept := recentExcludes[:0]
+		for _, excludedMatch := range recentExcludes {
+			if normalizedEnd < excludedMatch.normalizedEnd+m.matcher.maxPatternByteLength {
+				kept = append(kept, excludedMatch)
+			}
+		}
+		recentExcludes = kept
+	}
+	emit := func(label byte, runeStart, runeEnd int) bool {
+		if !candidateScanner.emit(label, runeStart, runeEnd) || !excludeScanner.emit(label, runeStart, runeEnd) {
+			return false
+		}
+		if !flush(candidateScanner.position, false) {
+			return false
+		}
+		pruneExcludes(candidateScanner.position)
+		return true
+	}
+
+	lastSpace := false
+	emitted := false
+	originalRuneIndex := 0
+	keepScanning := true
+	for _, original := range text {
+		lower := unicode.ToLower(original)
+		if unicode.IsLetter(lower) || unicode.IsDigit(lower) {
+			var encoded [utf8.UTFMax]byte
+			length := utf8.EncodeRune(encoded[:], lower)
+			for index := 0; index < length; index++ {
+				if !emit(encoded[index], originalRuneIndex, originalRuneIndex+1) {
+					keepScanning = false
+					break
+				}
+			}
+			lastSpace = false
+			emitted = true
+		} else if emitted && !lastSpace {
+			keepScanning = emit(' ', originalRuneIndex, originalRuneIndex+1)
+			lastSpace = true
+		}
+		originalRuneIndex++
+		if !keepScanning {
+			break
+		}
+	}
+	if keepScanning {
+		candidateScanner.finish()
+		excludeScanner.finish()
+		_ = flush(candidateScanner.position, true)
+	}
+	return sortAndDeduplicateContentModerationKeywordMatches(out)
+}
+
+func (m *contentModerationPrefilterMatcher) scan(text string, collect bool) *contentModerationKeywordScanner {
+	scanner := newContentModerationKeywordScanner(m.matcher, collect)
+	lastSpace := false
+	emitted := false
+	originalRuneIndex := 0
+	for _, original := range text {
+		lower := unicode.ToLower(original)
+		if unicode.IsLetter(lower) || unicode.IsDigit(lower) {
+			if !emitLowerContentModerationRune(scanner, lower, originalRuneIndex, originalRuneIndex+1) {
+				break
+			}
+			lastSpace = false
+			emitted = true
+		} else if emitted && !lastSpace {
+			if !scanner.emit(' ', originalRuneIndex, originalRuneIndex+1) {
+				break
+			}
+			lastSpace = true
+		}
+		originalRuneIndex++
+	}
+	scanner.finish()
+	return scanner
 }
 
 func canonicalContentModerationPrefilterKeywords(values []string) []string {
@@ -49,16 +197,19 @@ func normalizeContentModerationPrefilterText(value string) string {
 	var builder strings.Builder
 	builder.Grow(len(value))
 	lastSpace := false
-	for _, r := range strings.ToLower(value) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			_, _ = builder.WriteRune(r)
+	for _, original := range value {
+		lower := unicode.ToLower(original)
+		if unicode.IsLetter(lower) || unicode.IsDigit(lower) {
+			_, _ = builder.WriteRune(lower)
 			lastSpace = false
-			continue
-		}
-		if !lastSpace {
+		} else if !lastSpace && builder.Len() > 0 {
 			_ = builder.WriteByte(' ')
 			lastSpace = true
 		}
 	}
-	return strings.TrimSpace(builder.String())
+	normalized := builder.String()
+	if lastSpace && len(normalized) > 0 {
+		normalized = normalized[:len(normalized)-1]
+	}
+	return normalized
 }

@@ -513,10 +513,12 @@ func TestContentModerationYuFengPcContextAnnotationInDecisionFlow(t *testing.T) 
 				Body: []byte(tc.body), Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
 			}, &contentModerationRuntimeSnapshot{
 				riskControlEnabled: true, config: cfg, fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
+				secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"ffmpeg", "ordinary user text"}),
 			})
 			require.Equal(t, tc.wantBlocked, decision.Blocked)
 			require.Equal(t, !tc.wantBlocked, decision.Allowed)
-			logs := append([]ContentModerationLog(nil), repo.logs...)
+			require.Eventually(t, func() bool { return len(repo.snapshotLogs()) == 1 }, time.Second, 10*time.Millisecond)
+			logs := repo.snapshotLogs()
 			require.Len(t, logs, 1)
 			require.Equal(t, "pornographic_contraband", logs[0].HighestCategory)
 			require.True(t, logs[0].HighestScore > 0)
@@ -644,6 +646,7 @@ func TestContentModerationShadowRecordsSafeModelProvenanceWithoutSideEffects(t *
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
 	runtime := &contentModerationRuntimeSnapshot{
 		riskControlEnabled: true, config: cfg, fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"ordinary user question"}),
 	}
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-shadow")
 	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
@@ -653,6 +656,7 @@ func TestContentModerationShadowRecordsSafeModelProvenanceWithoutSideEffects(t *
 
 	require.True(t, decision.Allowed)
 	require.False(t, decision.Blocked)
+	require.Eventually(t, func() bool { return len(repo.snapshotLogs()) == 1 }, time.Second, 10*time.Millisecond)
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 1)
 	require.Equal(t, ContentModerationActionSecondLayerShadow, logs[0].Action)
@@ -697,7 +701,7 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 		riskControlEnabled:          true,
 		config:                      cfg,
 		keywordMatcher:              newContentModerationKeywordMatcher(cfg.BlockedKeywords),
-		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"unrelated layer two candidate"}),
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"dangerous operation"}),
 		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
 	}
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-whitelist")
@@ -711,6 +715,9 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 
 	require.True(t, decision.Allowed)
 	require.False(t, decision.Blocked)
+	require.Eventually(t, func() bool {
+		return calls.Load() == 1 && len(repo.snapshotLogs()) == 2
+	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int64(1), calls.Load(), "a whitelist keyword hit must still reach the second layer")
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 2)
@@ -729,6 +736,9 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 	input.RequestID = "whitelist-shadow-repeat"
 	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
 	require.True(t, decision.Allowed)
+	require.Eventually(t, func() bool {
+		return calls.Load() == 2 && len(repo.snapshotLogs()) == 4
+	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int64(2), calls.Load(), "a repeated whitelist risk must be reviewed and recorded again")
 	require.Len(t, repo.snapshotLogs(), 4)
 
@@ -737,6 +747,9 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 	input.UserEmail = "allowed@example.com"
 	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
 	require.True(t, decision.Allowed)
+	require.Eventually(t, func() bool {
+		return calls.Load() == 3 && len(repo.snapshotLogs()) == 6
+	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int64(3), calls.Load(), "a whitelist risk cache must not suppress another user's audit")
 	require.Len(t, repo.snapshotLogs(), 6)
 
@@ -819,7 +832,7 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 				riskControlEnabled:          true,
 				config:                      cfg,
 				keywordMatcher:              newContentModerationKeywordMatcher(cfg.BlockedKeywords),
-				secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"unrelated layer two candidate"}),
+				secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"dangerous operation"}),
 				fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
 			}
 			scope := NewContentModerationScopeSnapshot(nil, "gpt-stage-test")
@@ -841,17 +854,33 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 				require.Equal(t, tc.wantDecision, decision.Action)
 			}
 
-			require.Equal(t, tc.wantModelCalls, calls.Load(), "a first-layer shadow hit must reach layer two even when its candidate prefilter misses")
+			require.Eventually(t, func() bool {
+				return calls.Load() == tc.wantModelCalls && len(repo.snapshotLogs()) == len(tc.wantActions)*repeats
+			}, time.Second, 10*time.Millisecond)
+			require.Equal(t, tc.wantModelCalls, calls.Load(), "a first-layer shadow hit with a candidate signal must reach layer two")
 			logs := repo.snapshotLogs()
 			require.Len(t, logs, len(tc.wantActions)*repeats)
-			for index, log := range logs {
-				wantIndex := index % len(tc.wantActions)
-				require.Equal(t, tc.wantActions[wantIndex], log.Action)
-				require.Equal(t, tc.wantSources[wantIndex], log.DecisionSource)
+			wantActionCounts := make(map[string]int)
+			wantSourceCounts := make(map[string]int)
+			for _, action := range tc.wantActions {
+				wantActionCounts[action] += repeats
+			}
+			for _, source := range tc.wantSources {
+				wantSourceCounts[source] += repeats
+			}
+			for _, log := range logs {
+				wantActionCounts[log.Action]--
+				wantSourceCounts[log.DecisionSource]--
 				if log.Action == ContentModerationActionFirstLayerShadow || log.Action == ContentModerationActionSecondLayerShadow {
 					require.False(t, log.Flagged)
 					require.False(t, log.AutoBanned)
 				}
+			}
+			for action, remaining := range wantActionCounts {
+				require.Zero(t, remaining, "unexpected action count for %s", action)
+			}
+			for source, remaining := range wantSourceCounts {
+				require.Zero(t, remaining, "unexpected decision source count for %s", source)
 			}
 			if tc.repeatShadowRisk {
 				count, err := cache.CountFragmentResults(context.Background(), runtime.fragmentCacheNamespace)

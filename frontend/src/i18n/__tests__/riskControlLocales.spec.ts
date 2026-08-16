@@ -19,4 +19,11 @@ describe('risk control locale copy', () => {
     expect(zh.admin.riskControl.preBlockAPIKeyLoadHint).not.toContain('Worker 池')
     expect(en.admin.riskControl.preBlockAPIKeyLoadHint).not.toContain('worker pool')
   })
+
+  it('labels stored windows as the evidence actually sent for moderation', () => {
+    expect(zh.admin.riskControl.inputDetailContent).toBe('实际送审证据')
+    expect(zh.admin.riskControl.evidenceMatches).toBe('全部命中词')
+    expect(en.admin.riskControl.inputDetailContent).toBe('Evidence Sent for Review')
+    expect(en.admin.riskControl.evidenceMatches).toBe('All matched keywords')
+  })
 })
