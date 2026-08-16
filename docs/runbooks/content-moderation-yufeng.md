@@ -108,7 +108,8 @@ model_revision: a457e581bb00997ff1eb1f9ae0bf21488c6a632c
 prompt_version: yufeng-xguard-v3
 timeout_ms: 25000
 input_limit: 4000
-stage: shadow
+first_layer_stage: enforce
+second_layer_stage: shadow
 context_policy_version: context-v3
 evidence_policy_version: evidence-v1
 keyword_policy_version: keyword-v3
@@ -124,11 +125,15 @@ bounded fallback are still required; timeout is not a substitute for them.
 The v3 prompt tells the model not to infer `pc` (Pornographic Contraband) from
 ordinary FFmpeg/media editing, file names, paths, rendering, transcoding,
 probing, or verification text. Before YuFeng is called, every context uses the
-same two-layer policy: Layer 1 high-confidence keywords block directly, Layer 2
-candidate keywords route to YuFeng, and candidate misses are allowed and
-cached. If the Layer 2 matcher is unavailable or empty, the service disables
-that fast-allow path and sends second-layer content to YuFeng as a health
-fallback.
+same two-layer policy. With `first_layer_stage=enforce`, Layer 1
+high-confidence keywords block directly. With `first_layer_stage=shadow`, a
+Layer 1 hit is recorded and, while Layer 2 is enabled, always continues to
+YuFeng, including when the Layer 2 candidate prefilter misses. Otherwise Layer
+2 candidate keywords route to YuFeng, and candidate misses are allowed and
+cached. If the Layer 2 matcher
+is unavailable or empty, the service disables that fast-allow path and sends
+second-layer content to YuFeng as a health fallback. The two stage switches are
+independent; neither changes the `cyber_policy` hard-block path.
 
 ## Replay benchmark
 

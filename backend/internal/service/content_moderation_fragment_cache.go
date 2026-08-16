@@ -187,6 +187,7 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		CandidateOn       bool                        `json:"candidate_on"`
 		CandidateRev      string                      `json:"candidate_revision"`
 		Prefilter         string                      `json:"second_layer_prefilter"`
+		FirstLayerStage   string                      `json:"first_layer_stage"`
 		SecondLayerOn     bool                        `json:"second_layer_on"`
 		SecondLayerStage  string                      `json:"second_layer_stage"`
 		Endpoints         []ContentModerationEndpoint `json:"endpoints"`
@@ -211,6 +212,7 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		CandidateOn:       cfg.CandidateEnabled,
 		CandidateRev:      contentModerationCandidateRevision(cfg),
 		Prefilter:         contentModerationSecondLayerPrefilterCacheRevision(cfg),
+		FirstLayerStage:   normalizeContentModerationFirstLayerStage(cfg.FirstLayerStage),
 		SecondLayerOn:     cfg.SecondLayerEnabled,
 		SecondLayerStage:  normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage),
 		Endpoints:         normalizeContentModerationEndpoints(cfg.SecondLayerEndpoints),

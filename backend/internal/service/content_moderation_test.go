@@ -591,6 +591,26 @@ func TestContentModerationUpdateConfigUsesCanonicalKeywordLayers(t *testing.T) {
 	require.Empty(t, saved.BlockedKeywords)
 }
 
+func TestContentModerationUpdateConfigPersistsIndependentLayerStages(t *testing.T) {
+	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{}}
+	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil, nil)
+	firstStage := ContentModerationFirstLayerStageShadow
+	secondStage := ContentModerationSecondLayerStageEnforce
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		FirstLayerStage:  &firstStage,
+		SecondLayerStage: &secondStage,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, ContentModerationFirstLayerStageShadow, view.FirstLayerStage)
+	require.Equal(t, ContentModerationSecondLayerStageEnforce, view.SecondLayerStage)
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(settingRepo.values[SettingKeyContentModerationConfig]), &saved))
+	require.Equal(t, view.FirstLayerStage, saved.FirstLayerStage)
+	require.Equal(t, view.SecondLayerStage, saved.SecondLayerStage)
+}
+
 func TestContentModerationStatusUsesDefaultPendingBodyBudgetForZeroValueService(t *testing.T) {
 	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{}}
 	svc := &ContentModerationService{settingRepo: settingRepo}

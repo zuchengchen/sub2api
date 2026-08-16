@@ -12,6 +12,8 @@ import (
 const (
 	ContentModerationModelProfileQwen         = "qwen_guard"
 	ContentModerationModelProfileYuFengXGuard = "yufeng_xguard"
+	ContentModerationFirstLayerStageEnforce   = "enforce"
+	ContentModerationFirstLayerStageShadow    = "shadow"
 	ContentModerationSecondLayerStageEnforce  = "enforce"
 	ContentModerationSecondLayerStageShadow   = "shadow"
 
@@ -56,6 +58,13 @@ func normalizeContentModerationSecondLayerStage(value string) string {
 		return ContentModerationSecondLayerStageShadow
 	}
 	return ContentModerationSecondLayerStageEnforce
+}
+
+func normalizeContentModerationFirstLayerStage(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), ContentModerationFirstLayerStageShadow) {
+		return ContentModerationFirstLayerStageShadow
+	}
+	return ContentModerationFirstLayerStageEnforce
 }
 
 // classifyContentModerationContext is intentionally deterministic and uses
@@ -245,7 +254,8 @@ func contentModerationPolicyDigest(cfg *ContentModerationConfig) string {
 	}
 	value := strings.Join([]string{
 		cfg.FragmentTTLPolicyVersion, cfg.KeywordPolicyVersion, cfg.ContextPolicyVersion,
-		cfg.EvidencePolicyVersion, normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage),
+		cfg.EvidencePolicyVersion, normalizeContentModerationFirstLayerStage(cfg.FirstLayerStage),
+		normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage),
 	}, "\x00")
 	digest := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(digest[:8])
