@@ -44,17 +44,20 @@ func asciiLower(value byte) byte {
 }
 
 type ContentModerationFragment struct {
-	Role         string `json:"role"`
-	Kind         string `json:"kind"`
-	Path         string `json:"path"`
-	ContextClass string `json:"context_class"`
-	Text         string `json:"text,omitempty"`
-	Hash         string `json:"hash"`
+	Role          string `json:"role"`
+	Kind          string `json:"kind"`
+	Path          string `json:"path"`
+	ContextClass  string `json:"context_class"`
+	Text          string `json:"text,omitempty"`
+	Hash          string `json:"hash"`
+	leadingSpace  bool
+	trailingSpace bool
 }
 
 const contentModerationFragmentHashDomain = "sub2api/content-moderation/fragment/v3\x00"
 
 func newContentModerationFragment(role, kind, path, text string) (ContentModerationFragment, bool) {
+	rawText := text
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ContentModerationFragment{}, false
@@ -63,15 +66,24 @@ func newContentModerationFragment(role, kind, path, text string) (ContentModerat
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	path = strings.TrimSpace(path)
 	fragment := ContentModerationFragment{
-		Role: role,
-		Kind: kind,
-		Path: path,
-		Text: text,
+		Role:          role,
+		Kind:          kind,
+		Path:          path,
+		Text:          text,
+		leadingSpace:  len(strings.TrimLeftFunc(rawText, unicode.IsSpace)) != len(rawText),
+		trailingSpace: len(strings.TrimRightFunc(rawText, unicode.IsSpace)) != len(rawText),
 	}
 	fragment.ContextClass = classifyContentModerationContext(fragment)
-	digest := sha256.Sum256([]byte(contentModerationFragmentHashDomain + role + "\x00" + kind + "\x00" + fragment.ContextClass + "\x00" + path + "\x00" + text))
-	fragment.Hash = hex.EncodeToString(digest[:])
+	updateContentModerationFragmentHash(&fragment)
 	return fragment, true
+}
+
+func updateContentModerationFragmentHash(fragment *ContentModerationFragment) {
+	if fragment == nil {
+		return
+	}
+	digest := sha256.Sum256([]byte(contentModerationFragmentHashDomain + fragment.Role + "\x00" + fragment.Kind + "\x00" + fragment.ContextClass + "\x00" + fragment.Path + "\x00" + fragment.Text))
+	fragment.Hash = hex.EncodeToString(digest[:])
 }
 
 // ExtractContentModerationFragments extracts every directly parseable,
@@ -199,10 +211,7 @@ func collectUnifiedModerationValue(value gjson.Result, role, path, kind string, 
 		})
 	case value.IsObject():
 		typeName := strings.ToLower(strings.TrimSpace(value.Get("type").String()))
-		objectRole := normalizeModerationRole(value.Get("role").String())
-		if objectRole == "" {
-			objectRole = role
-		}
+		objectRole := role
 		if objectRole == "" {
 			objectRole = roleForContentType(typeName)
 		}

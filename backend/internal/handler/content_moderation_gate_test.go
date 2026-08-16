@@ -11,6 +11,7 @@ import (
 
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -128,6 +129,64 @@ func TestContentModerationWSCloseReasonTruncatesAtUTF8Boundary(t *testing.T) {
 	require.LessOrEqual(t, len(reason), 120)
 	require.True(t, utf8.ValidString(reason))
 	require.Contains(t, reason, "命中敏感词")
+}
+
+func TestContentModerationReviewUnavailableResponsesAreRetryable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	decision := &service.ContentModerationDecision{
+		Allowed: false, Blocked: false, StatusCode: http.StatusServiceUnavailable,
+		Message: "Risk-control review is temporarily unavailable; retry later",
+		Action:  service.ContentModerationActionReviewUnavailable, RetryAfter: 1,
+	}
+
+	t.Run("http", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		(&OpenAIGatewayHandler{}).openAIContentModerationError(c, decision)
+
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		require.Equal(t, "1", recorder.Header().Get("Retry-After"))
+		var payload struct {
+			Error struct {
+				Type    string `json:"type"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+		require.Equal(t, "api_error", payload.Error.Type)
+		require.Equal(t, riskControlReviewUnavailableErrorCode, payload.Error.Code)
+		require.Equal(t, decision.Message, payload.Error.Message)
+	})
+
+	t.Run("websocket", func(t *testing.T) {
+		require.Equal(t, riskControlReviewUnavailableErrorCode, contentModerationWSCloseReason(decision))
+		require.Equal(t, coderws.StatusTryAgainLater, contentModerationWSCloseStatus(decision))
+	})
+
+	t.Run("google", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/test:generateContent", nil)
+		googleContentModerationError(c, decision)
+
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		require.Equal(t, "1", recorder.Header().Get("Retry-After"))
+		var payload struct {
+			Error struct {
+				Code    int    `json:"code"`
+				Status  string `json:"status"`
+				Details []struct {
+					Reason string `json:"reason"`
+				} `json:"details"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+		require.Equal(t, http.StatusServiceUnavailable, payload.Error.Code)
+		require.Equal(t, "UNAVAILABLE", payload.Error.Status)
+		require.Len(t, payload.Error.Details, 1)
+		require.Equal(t, riskControlReviewUnavailableErrorCode, payload.Error.Details[0].Reason)
+	})
 }
 
 // Ported from upstream's websocket security-audit logging fix: dedupe-cache

@@ -335,7 +335,7 @@ describe('admin RiskControlView', () => {
     deleteArchive.mockResolvedValue({ deleted: true })
   })
 
-  it('requests cyber policy records by default and switches between the three audit views', async () => {
+	it('requests cyber policy records by default and switches between the audit views', async () => {
     listLogs.mockResolvedValue({
       items: [{ ...archivedLog(), action: 'hash_block', flagged: false }],
       total: 1,
@@ -371,11 +371,57 @@ describe('admin RiskControlView', () => {
     const shadowTab = wrapper.get('[data-test="record-tab-risky_shadow"]')
     await shadowTab.trigger('click')
     await flushPromises()
-    expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'risky_shadow' }))
-    expect(shadowTab.attributes('aria-selected')).toBe('true')
+		expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'risky_shadow' }))
+		expect(shadowTab.attributes('aria-selected')).toBe('true')
+
+		const reviewFailureTab = wrapper.get('[data-test="record-tab-review_unavailable"]')
+		await reviewFailureTab.trigger('click')
+		await flushPromises()
+		expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'review_unavailable' }))
+		expect(reviewFailureTab.attributes('aria-selected')).toBe('true')
     expect(wrapper.get('[data-test="audit-result"]').text()).toBe('admin.riskControl.action.block')
     expect(wrapper.get('[data-test="audit-result"]').classes()).toContain('bg-red-100')
     expect(wrapper.text()).not.toContain('admin.riskControl.result.pass')
+  })
+
+  it('renders contextual review failures as retryable errors instead of blocks or passes', async () => {
+    listLogs.mockResolvedValue({
+      items: [{
+        ...archivedLog(),
+        action: 'review_unavailable',
+        decision_source: 'review_unavailable',
+        flagged: false,
+        highest_category: '',
+        violation_count: 0,
+        error: 'contextual review timed out',
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-test="record-tab-review_unavailable"]').trigger('click')
+    await flushPromises()
+
+    const result = wrapper.get('[data-test="audit-result"]')
+    expect(result.text()).toBe('admin.riskControl.action.error')
+    expect(result.classes()).toContain('bg-amber-100')
   })
 
   it('renders cache replay rows as non-counting retries linked to the original decision', async () => {

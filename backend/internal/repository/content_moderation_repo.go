@@ -762,6 +762,8 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 		where = append(where, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block')")
 	case service.ContentModerationLogResultRiskyShadow:
 		where = append(where, "l.action IN ('first_layer_shadow', 'second_layer_shadow', 'whitelist_shadow') AND COALESCE(BTRIM(l.highest_category), '') <> ''")
+	case service.ContentModerationLogResultReviewFailure:
+		where = append(where, "l.action = 'review_unavailable'")
 	case "pass", "allow":
 		where = append(where, "l.flagged = FALSE AND l.error = ''")
 	case "error":

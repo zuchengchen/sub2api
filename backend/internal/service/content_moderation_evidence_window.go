@@ -37,9 +37,11 @@ type ContentModerationEvidenceWindow struct {
 }
 
 type contentModerationCandidateFragment struct {
-	Fragment ContentModerationFragment
-	Matches  []contentModerationKeywordMatch
-	Tier     string
+	Fragment               ContentModerationFragment
+	Matches                []contentModerationKeywordMatch
+	Tier                   string
+	WholeFragment          bool
+	WholeFragmentTruncated bool
 }
 
 type contentModerationEvidenceBundle struct {
@@ -114,9 +116,12 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 
 		runes := []rune(candidate.Fragment.Text)
 		spans := candidateEvidenceSpans(runes, candidate.Fragment.ContextClass, matches)
+		if candidate.WholeFragment {
+			spans = wholeFragmentCandidateEvidenceSpan(runes, matches)
+		}
 		for _, candidateSpan := range spans {
 			span := candidateSpan.contentModerationRuneSpan
-			spanTruncated := candidateSpan.truncated
+			spanTruncated := candidateSpan.truncated || candidate.WholeFragmentTruncated
 			if len(windows) >= contentModerationEvidenceMaxWindows || remainingMatchBudget <= 0 {
 				truncated = true
 				break
@@ -222,6 +227,16 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 	}
 	bundle.CacheHash = contentModerationEvidenceCacheHash(bundle, cfg)
 	return bundle
+}
+
+func wholeFragmentCandidateEvidenceSpan(text []rune, matches []contentModerationKeywordMatch) []contentModerationCandidateSpan {
+	span := contentModerationRuneSpan{end: len(text)}
+	candidate := contentModerationCandidateSpan{contentModerationRuneSpan: span}
+	if len(text) > contentModerationEvidenceExpandedMatchRunes {
+		candidate.contentModerationRuneSpan = cropCandidateSpan(span, matches, contentModerationEvidenceExpandedMatchRunes)
+		candidate.truncated = true
+	}
+	return []contentModerationCandidateSpan{candidate}
 }
 
 func normalizedCandidateMatches(text string, matches []contentModerationKeywordMatch) []contentModerationKeywordMatch {
