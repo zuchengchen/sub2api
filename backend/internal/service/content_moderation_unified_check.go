@@ -116,6 +116,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		namespace += contentModerationWhitelistShadowCacheSuffix
 	}
 	for _, fragment := range fragments {
+		whitelistRiskObserved := false
 		releaseDecisionLock := s.acquireContentModerationFragmentDecisionLock(namespace + "\x00" + fragment.Hash)
 		if cache != nil {
 			entry, found, err := s.getUnifiedFragmentCache(ctx, cache, namespace, fragment.Hash)
@@ -145,6 +146,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					}
 					category = defaultContentModerationString(category, "fragment_cache")
 					if whitelistShadow {
+						whitelistRiskObserved = true
 						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, category, keyword, unifiedModerationAudit{
 							CacheHit: true, DecisionSource: "cache_replay_whitelist_shadow", SourceLogID: entry.SourceLogID,
 							ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, fragment.Hash), CacheNamespace: namespace,
@@ -152,7 +154,6 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 							EvidenceTruncated: entry.EvidenceTruncated, ParserStatus: entry.ParserStatus,
 							KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID,
 						})
-						s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 						releaseDecisionLock()
 						continue
 					}
@@ -179,6 +180,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						DecisionSource: "keyword_high_confidence", CacheNamespace: namespace, KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
 					}
 					if whitelistShadow {
+						whitelistRiskObserved = true
 						audit.DecisionSource = "keyword_high_confidence_whitelist_shadow"
 						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, contentModerationKeywordCategory, keyword, audit)
 					} else {
@@ -214,9 +216,13 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				keywordTier = "candidate"
 				keywordRuleID = contentModerationKeywordRuleID(candidateKeyword)
 			case candidateSystemReady:
-				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
-				releaseDecisionLock()
-				continue
+				if whitelistShadow {
+					keywordTier = "whitelist_shadow"
+				} else {
+					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+					releaseDecisionLock()
+					continue
+				}
 			}
 			result, attempted, err := s.scanUnifiedSecondLayerFragmentWithTier(ctx, cfg, fragment, keywordTier, keywordRuleID)
 			if err != nil {
@@ -231,6 +237,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					action := ContentModerationActionSecondLayerShadow
 					decisionSource := "model_shadow"
 					if whitelistShadow {
+						whitelistRiskObserved = true
 						action = ContentModerationActionWhitelistShadow
 						decisionSource = "model_whitelist_shadow"
 					}
@@ -240,7 +247,9 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
 						KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
 					})
-					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+					if !whitelistRiskObserved {
+						s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+					}
 					releaseDecisionLock()
 					continue
 				}
@@ -278,13 +287,17 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					})
 					s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, false, &input)
 				}
-				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+				if !whitelistRiskObserved {
+					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+				}
 			}
 			releaseDecisionLock()
 			continue
 		}
 
-		s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+		if !whitelistRiskObserved {
+			s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
+		}
 		releaseDecisionLock()
 	}
 	return allow

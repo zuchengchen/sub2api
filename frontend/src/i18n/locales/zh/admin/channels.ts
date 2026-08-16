@@ -552,6 +552,7 @@ export default {
       action: {
         block: '拦截',
         keywordBlock: '关键词拦截',
+        keywordShadow: '关键词影子命中',
         cacheReplay: '重试命中',
         shadowBlock: '影子模型命中',
         cyberPolicy: '网络安全策略',

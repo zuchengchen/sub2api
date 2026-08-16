@@ -669,10 +669,11 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
 	runtime := &contentModerationRuntimeSnapshot{
-		riskControlEnabled:     true,
-		config:                 cfg,
-		keywordMatcher:         newContentModerationKeywordMatcher(cfg.BlockedKeywords),
-		fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
+		riskControlEnabled:          true,
+		config:                      cfg,
+		keywordMatcher:              newContentModerationKeywordMatcher(cfg.BlockedKeywords),
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"unrelated layer two candidate"}),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
 	}
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-whitelist")
 	input := ContentModerationCheckInput{
@@ -700,6 +701,20 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 		require.Zero(t, log.ViolationCount)
 	}
 
+	input.RequestID = "whitelist-shadow-repeat"
+	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
+	require.True(t, decision.Allowed)
+	require.Equal(t, int64(2), calls.Load(), "a repeated whitelist risk must be reviewed and recorded again")
+	require.Len(t, repo.snapshotLogs(), 4)
+
+	input.RequestID = "whitelist-shadow-other-user"
+	input.UserID = 44
+	input.UserEmail = "allowed@example.com"
+	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
+	require.True(t, decision.Allowed)
+	require.Equal(t, int64(3), calls.Load(), "a whitelist risk cache must not suppress another user's audit")
+	require.Len(t, repo.snapshotLogs(), 6)
+
 	input.RequestID = "regular-enforce"
 	input.UserID = 43
 	input.UserEmail = "regular@example.com"
@@ -707,8 +722,8 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 
 	require.True(t, decision.Blocked, "whitelist allow cache must not leak into enforce traffic")
 	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
-	require.Equal(t, int64(1), calls.Load(), "the regular request must block at layer one")
+	require.Equal(t, int64(3), calls.Load(), "the regular request must block at layer one")
 	logs = repo.snapshotLogs()
-	require.Len(t, logs, 3)
-	require.Equal(t, ContentModerationActionKeywordBlock, logs[2].Action)
+	require.Len(t, logs, 7)
+	require.Equal(t, ContentModerationActionKeywordBlock, logs[6].Action)
 }

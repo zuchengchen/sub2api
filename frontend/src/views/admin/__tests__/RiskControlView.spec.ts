@@ -455,6 +455,45 @@ describe('admin RiskControlView', () => {
     expect(result.text()).not.toBe('admin.riskControl.result.pass')
   })
 
+  it('labels allowlist keyword observations separately from model shadows', async () => {
+    listLogs.mockResolvedValue({
+      items: [{
+        ...archivedLog(),
+        action: 'whitelist_shadow',
+        decision_source: 'keyword_high_confidence_whitelist_shadow',
+        flagged: false,
+        highest_category: 'keyword',
+        violation_count: 0,
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-test="record-tab-risky_shadow"]').trigger('click')
+    await flushPromises()
+
+    const result = wrapper.get('[data-test="audit-result"]')
+    expect(result.text()).toBe('admin.riskControl.action.keywordShadow')
+    expect(result.classes()).toContain('bg-amber-100')
+  })
+
   it('saves staged YuFeng endpoint, bounded TTLs, and policy versions', async () => {
     getConfig.mockResolvedValue({ ...baseConfig(), second_layer_enabled: true })
     const wrapper = mount(RiskControlView, {

@@ -552,6 +552,7 @@ export default {
       action: {
         block: 'Blocked',
         keywordBlock: 'Keyword Blocked',
+        keywordShadow: 'Keyword shadow hit',
         cacheReplay: 'Replay hit',
         shadowBlock: 'Shadow model hit',
         cyberPolicy: 'Cyber policy',
