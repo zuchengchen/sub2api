@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -416,6 +417,23 @@ func TestBuildContentModerationLog_RedactsInputExcerpt(t *testing.T) {
 
 	require.NotContains(t, log.InputExcerpt, "sk-proj-1234567890abcdef")
 	require.Contains(t, log.InputExcerpt, "[已脱敏]")
+}
+
+func TestBuildContentModerationLog_KeepsExpandedInputExcerpt(t *testing.T) {
+	svc := &ContentModerationService{}
+	text := strings.Repeat("证", maxModerationExcerptRunes+100)
+
+	log := svc.buildLog(ContentModerationCheckInput{}, defaultContentModerationConfig(), ContentModerationActionAllow, false, "", 0, nil, text, nil, nil, "")
+
+	require.Len(t, []rune(log.InputExcerpt), maxModerationExcerptRunes)
+	require.Equal(t, 1024, maxModerationExcerptRunes)
+}
+
+func TestAppendContentModerationError_PreservesDiagnosticLimit(t *testing.T) {
+	result := appendContentModerationError("", "diagnostic", errors.New(strings.Repeat("ordinary text ", maxModerationErrorRunes)))
+
+	require.Len(t, []rune(result), maxModerationErrorRunes)
+	require.Equal(t, 960, maxModerationErrorRunes)
 }
 
 func TestRedactContentModerationSecrets_LongHexAndTokens(t *testing.T) {

@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	contentModerationEvidenceWindowBudgetRunes  = 1024
+	contentModerationEvidenceWindowBudgetRunes  = 4000
 	contentModerationEvidenceWindowContext      = 1
 	contentModerationEvidenceDefaultMatchRunes  = 320
-	contentModerationEvidenceExpandedMatchRunes = 480
+	contentModerationEvidenceExpandedMatchRunes = 1024
 	contentModerationEvidenceMaxWindows         = 16
 	contentModerationEvidenceMaxMatches         = 64
-	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v3\x00"
+	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v4\x00"
 )
 
 // ContentModerationEvidenceMatch offsets are Unicode rune indexes relative to

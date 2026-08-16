@@ -24,7 +24,7 @@ const (
 	MaxContentModerationFragmentAllowTTLSeconds     = 86400
 	ContentModerationFragmentTTLPolicyVersion       = "ttl-v2"
 	ContentModerationContextPolicyVersion           = "context-v3"
-	ContentModerationEvidencePolicyVersion          = "keyword-windows-v3"
+	ContentModerationEvidencePolicyVersion          = "keyword-windows-v4"
 	ContentModerationKeywordPolicyVersion           = "keyword-v3"
 	ContentModerationYuFengPromptVersion            = "yufeng-xguard-v3"
 	contentModerationLegacyFragmentTTLPolicyVersion = "ttl-v1"
@@ -32,7 +32,8 @@ const (
 	contentModerationPreviousContextPolicyVersion   = "context-v2"
 	contentModerationPreviousKeywordPolicyVersion   = "keyword-v2"
 	contentModerationLegacyEvidencePolicyVersion    = "evidence-v1"
-	contentModerationPreviousEvidencePolicyVersion  = "keyword-windows-v2"
+	contentModerationOlderEvidencePolicyVersion     = "keyword-windows-v2"
+	contentModerationPreviousEvidencePolicyVersion  = "keyword-windows-v3"
 	contentModerationYuFengLegacyPromptVersion      = "yufeng-xguard-v1"
 	contentModerationYuFengPreviousPromptVersion    = "yufeng-xguard-v2"
 	ContentModerationContextUser                    = "user"
