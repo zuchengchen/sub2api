@@ -8,12 +8,13 @@ import (
 )
 
 const (
-	contentModerationEvidenceWindowBudgetRunes = 1024
-	contentModerationEvidenceWindowContext     = 1
-	contentModerationEvidencePerMatchRunes     = 320
-	contentModerationEvidenceMaxWindows        = 16
-	contentModerationEvidenceMaxMatches        = 64
-	contentModerationEvidenceHashDomain        = "sub2api/content-moderation/evidence-window/v2\x00"
+	contentModerationEvidenceWindowBudgetRunes  = 1024
+	contentModerationEvidenceWindowContext      = 1
+	contentModerationEvidenceDefaultMatchRunes  = 320
+	contentModerationEvidenceExpandedMatchRunes = 480
+	contentModerationEvidenceMaxWindows         = 16
+	contentModerationEvidenceMaxMatches         = 64
+	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v3\x00"
 )
 
 // ContentModerationEvidenceMatch offsets are Unicode rune indexes relative to
@@ -55,6 +56,11 @@ type contentModerationEvidenceBundle struct {
 type contentModerationRuneSpan struct {
 	start int
 	end   int
+}
+
+type contentModerationCandidateSpan struct {
+	contentModerationRuneSpan
+	truncated bool
 }
 
 func buildContentModerationCandidateEvidence(candidates []contentModerationCandidateFragment, endpointLimit int, cfg *ContentModerationConfig) contentModerationEvidenceBundle {
@@ -108,7 +114,9 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 
 		runes := []rune(candidate.Fragment.Text)
 		spans := candidateEvidenceSpans(runes, candidate.Fragment.ContextClass, matches)
-		for _, span := range spans {
+		for _, candidateSpan := range spans {
+			span := candidateSpan.contentModerationRuneSpan
+			spanTruncated := candidateSpan.truncated
 			if len(windows) >= contentModerationEvidenceMaxWindows || remainingMatchBudget <= 0 {
 				truncated = true
 				break
@@ -121,9 +129,9 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 			if len(spanMatches) == 0 {
 				continue
 			}
-			originalSpan := span
 			if span.end-span.start > remaining {
 				span = cropCandidateSpan(span, spanMatches, remaining)
+				spanTruncated = true
 				truncated = true
 			}
 			rawText := strings.TrimSpace(string(runes[span.start:span.end]))
@@ -133,6 +141,7 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 			redacted := redactContentModerationEvidenceText(rawText)
 			if redactedRunes := []rune(redacted); len(redactedRunes) > remaining {
 				redacted = string(redactedRunes[:remaining])
+				spanTruncated = true
 				truncated = true
 			}
 			windowMatches := evidenceMatchesInRedactedWindow(redacted, spanMatches, candidate.Tier)
@@ -154,8 +163,11 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 			segments = append(segments, moderationEvidenceSegment{
 				Text: redacted, Origin: window.Path, Role: candidate.Fragment.Role, Kind: candidate.Fragment.Kind,
 				ContextClass: candidate.Fragment.ContextClass, ExtractorVersion: ContentModerationEvidencePolicyVersion,
-				Truncated: originalSpan != span,
+				Truncated: spanTruncated,
 			})
+			if spanTruncated {
+				truncated = true
+			}
 			remaining -= len([]rune(redacted))
 			if remaining > 0 {
 				remaining-- // Account for the newline inserted between windows.
@@ -236,18 +248,20 @@ func normalizedCandidateMatches(text string, matches []contentModerationKeywordM
 	return valid
 }
 
-func candidateEvidenceSpans(text []rune, contextClass string, matches []contentModerationKeywordMatch) []contentModerationRuneSpan {
+func candidateEvidenceSpans(text []rune, contextClass string, matches []contentModerationKeywordMatch) []contentModerationCandidateSpan {
 	boundaries := contentModerationSentenceSpans(text)
 	switch contextClass {
 	case ContentModerationContextTool, ContentModerationContextServiceLog, ContentModerationContextCode,
 		ContentModerationContextConfig, ContentModerationContextUnknown:
 		boundaries = contentModerationLineSpans(text)
 	}
-	spans := make([]contentModerationRuneSpan, 0, len(matches))
+	spans := make([]contentModerationCandidateSpan, 0, len(matches))
 	for _, match := range matches {
 		index := containingContentModerationSpan(boundaries, match.Start, match.End)
 		if index < 0 {
-			spans = append(spans, contentModerationRuneSpan{start: match.Start, end: match.End})
+			spans = append(spans, contentModerationCandidateSpan{
+				contentModerationRuneSpan: contentModerationRuneSpan{start: match.Start, end: match.End},
+			})
 			continue
 		}
 		first := index - contentModerationEvidenceWindowContext
@@ -259,12 +273,18 @@ func candidateEvidenceSpans(text []rune, contextClass string, matches []contentM
 			last = len(boundaries) - 1
 		}
 		span := contentModerationRuneSpan{start: boundaries[first].start, end: boundaries[last].end}
-		if span.end-span.start > contentModerationEvidencePerMatchRunes {
-			span = cropCandidateSpan(span, []contentModerationKeywordMatch{match}, contentModerationEvidencePerMatchRunes)
+		limit := contentModerationEvidenceDefaultMatchRunes
+		if span.end-span.start > contentModerationEvidenceDefaultMatchRunes {
+			limit = contentModerationEvidenceExpandedMatchRunes
 		}
-		spans = append(spans, span)
+		candidateSpan := contentModerationCandidateSpan{contentModerationRuneSpan: span}
+		if span.end-span.start > limit {
+			candidateSpan.contentModerationRuneSpan = cropCandidateSpan(span, []contentModerationKeywordMatch{match}, limit)
+			candidateSpan.truncated = true
+		}
+		spans = append(spans, candidateSpan)
 	}
-	return mergeContentModerationRuneSpans(spans)
+	return mergeContentModerationCandidateSpans(spans)
 }
 
 func contentModerationLineSpans(text []rune) []contentModerationRuneSpan {
@@ -307,7 +327,7 @@ func containingContentModerationSpan(spans []contentModerationRuneSpan, start, e
 	return -1
 }
 
-func mergeContentModerationRuneSpans(spans []contentModerationRuneSpan) []contentModerationRuneSpan {
+func mergeContentModerationCandidateSpans(spans []contentModerationCandidateSpan) []contentModerationCandidateSpan {
 	if len(spans) < 2 {
 		return spans
 	}
@@ -315,10 +335,11 @@ func mergeContentModerationRuneSpans(spans []contentModerationRuneSpan) []conten
 	out := spans[:1]
 	for _, span := range spans[1:] {
 		last := &out[len(out)-1]
-		if span.start <= last.end {
+		if span.start <= last.end && span.end-last.start <= contentModerationEvidenceExpandedMatchRunes {
 			if span.end > last.end {
 				last.end = span.end
 			}
+			last.truncated = last.truncated || span.truncated
 			continue
 		}
 		out = append(out, span)
