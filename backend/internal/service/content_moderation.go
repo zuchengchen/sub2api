@@ -78,7 +78,8 @@ const (
 	defaultContentModerationTimeoutMS = 3000
 	maxContentModerationTimeoutMS     = 30000
 	maxModerationInputRunes           = 12000
-	maxModerationExcerptRunes         = 240
+	maxModerationExcerptRunes         = 1024
+	maxModerationErrorRunes           = 960
 
 	defaultContentModerationBanThreshold               = 10
 	defaultContentModerationViolationWindowHours       = 720
@@ -2825,7 +2826,7 @@ func appendContentModerationError(existing, label string, cause error) string {
 		return existing
 	}
 	part := strings.TrimSpace(label) + "=" + redactContentModerationSecrets(cause.Error())
-	return trimRunes(strings.TrimSpace(strings.TrimSpace(existing)+"\n"+part), maxModerationExcerptRunes*4)
+	return trimRunes(strings.TrimSpace(strings.TrimSpace(existing)+"\n"+part), maxModerationErrorRunes)
 }
 
 func (s *ContentModerationService) deliverClaimedContentModerationEmail(ctx context.Context, log *ContentModerationLog, send func() error) contentModerationEmailDeliveryOutcome {
@@ -3175,7 +3176,7 @@ func (cfg *ContentModerationConfig) normalize() {
 	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion {
 		cfg.ContextPolicyVersion = ContentModerationContextPolicyVersion
 	}
-	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationLegacyEvidencePolicyVersion || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion {
+	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationLegacyEvidencePolicyVersion || evidencePolicyVersion == contentModerationOlderEvidencePolicyVersion || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion {
 		cfg.EvidencePolicyVersion = ContentModerationEvidencePolicyVersion
 	}
 	cfg.KeywordPolicyVersion = normalizeContentModerationCacheVersion(cfg.KeywordPolicyVersion)
@@ -4175,7 +4176,7 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		Flagged:         true,
 		HighestCategory: "cyber_policy",
 		HighestScore:    1.0,
-		Error:           trimRunes(redactContentModerationSecrets(errBody), maxModerationExcerptRunes*4),
+		Error:           trimRunes(redactContentModerationSecrets(errBody), maxModerationErrorRunes),
 		CreatedAt:       time.Now(),
 		Protocol:        in.Protocol,
 		Transport:       defaultContentModerationString(in.RawRequest.Transport, "http"),
@@ -4186,7 +4187,7 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 	transitioned, dispositionErr := s.applyCyberPolicyDisposition(ctx, in, log)
 	if dispositionErr != nil {
 		log.DispositionStatus = "retry_required"
-		log.Error = trimRunes(log.Error+"\ndisposition_error="+redactContentModerationSecrets(dispositionErr.Error()), maxModerationExcerptRunes*4)
+		log.Error = trimRunes(log.Error+"\ndisposition_error="+redactContentModerationSecrets(dispositionErr.Error()), maxModerationErrorRunes)
 		slog.Error("content_moderation.cyber_disposition_failed", "user_id", in.UserID, "api_key_id", in.APIKeyID, "error", dispositionErr)
 	}
 	log.EmailSent = false

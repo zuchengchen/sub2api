@@ -88,7 +88,7 @@ func TestContentModerationCandidateEvidenceKeepsShortContextUnchanged(t *testing
 	require.False(t, bundle.Evidence.Segments[0].Truncated)
 }
 
-func TestContentModerationCandidateEvidenceAdaptivelyExpandsContextTo480Runes(t *testing.T) {
+func TestContentModerationCandidateEvidenceAdaptivelyExpandsBeyondDefaultLimit(t *testing.T) {
 	text := "BEGIN " + strings.Repeat("ordinary ", 20) + "reverse shell " + strings.Repeat("routine ", 20) + "END"
 	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextUser, text, []string{"reverse shell"})
 
@@ -102,8 +102,8 @@ func TestContentModerationCandidateEvidenceAdaptivelyExpandsContextTo480Runes(t 
 	require.False(t, bundle.Evidence.Segments[0].Truncated)
 }
 
-func TestContentModerationCandidateEvidenceCapsExpandedContextAt480Runes(t *testing.T) {
-	text := "BEGIN " + strings.Repeat("ordinary ", 35) + "reverse shell " + strings.Repeat("routine ", 35) + "END"
+func TestContentModerationCandidateEvidenceCapsExpandedContextAtConfiguredLimit(t *testing.T) {
+	text := "BEGIN" + strings.Repeat("甲", 900) + "reverse shell" + strings.Repeat("乙", 900) + "END"
 	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextTool, text, []string{"reverse shell"})
 
 	require.Len(t, bundle.Windows, 1)
@@ -113,8 +113,8 @@ func TestContentModerationCandidateEvidenceCapsExpandedContextAt480Runes(t *test
 	require.True(t, bundle.Evidence.Segments[0].Truncated)
 }
 
-func TestContentModerationCandidateEvidenceMergedWindowsStayWithin480Runes(t *testing.T) {
-	text := strings.Repeat("alpha ", 45) + "reverse shell " + strings.Repeat("middle ", 12) + "session hijack " + strings.Repeat("omega ", 45)
+func TestContentModerationCandidateEvidenceMergedWindowsStayWithinConfiguredLimit(t *testing.T) {
+	text := strings.Repeat("alpha ", 120) + "reverse shell " + strings.Repeat("middle ", 80) + "session hijack " + strings.Repeat("omega ", 120)
 	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextTool, text, []string{"reverse shell", "session hijack"})
 
 	require.Len(t, bundle.Windows, 2)
@@ -127,7 +127,7 @@ func TestContentModerationCandidateEvidenceMergedWindowsStayWithin480Runes(t *te
 }
 
 func TestContentModerationCandidateEvidenceCapsRedactionExpansionAroundKeyword(t *testing.T) {
-	text := strings.Repeat("token=x ", 50) + "reverse shell near the end"
+	text := strings.Repeat("token=x ", 200) + "reverse shell near the end"
 	bundle := buildCandidateEvidenceForTest(t, ContentModerationContextTool, text, []string{"reverse shell"})
 
 	require.Len(t, bundle.Windows, 1)
@@ -308,7 +308,7 @@ func TestContentModerationEvidenceCacheHashTracksPolicyRulesContextAndModel(t *t
 }
 
 func TestContentModerationEvidencePolicyMigrationNormalizesKnownVersions(t *testing.T) {
-	for _, version := range []string{"", contentModerationLegacyEvidencePolicyVersion, contentModerationPreviousEvidencePolicyVersion} {
+	for _, version := range []string{"", contentModerationLegacyEvidencePolicyVersion, contentModerationOlderEvidencePolicyVersion, contentModerationPreviousEvidencePolicyVersion} {
 		cfg := defaultContentModerationConfig()
 		cfg.EvidencePolicyVersion = version
 		cfg.normalize()
