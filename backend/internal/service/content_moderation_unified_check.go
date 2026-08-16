@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -191,48 +192,60 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			}
 		}
 
+		var contextualMatches []contentModerationKeywordMatch
 		if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
-			if keyword, hit := runtime.keywordMatcher.Match(fragment.Text); hit {
-				if suppressToolDocumentationKeyword(fragment, keyword) {
-					keyword, hit = runtime.keywordMatcher.Match(withoutPowerShellDocumentationCommands(fragment.Text))
+			keyword, hardMatches, reviewMatches := classifyUnifiedHardKeywordMatches(fragment, runtime)
+			if keyword == "" && len(reviewMatches) > 0 &&
+				(!cfg.SecondLayerEnabled || cfg.KeywordBlockingMode == ContentModerationKeywordModeKeywordOnly) {
+				keyword = reviewMatches[0].Keyword
+				hardMatches = reviewMatches
+				reviewMatches = nil
+			}
+			contextualMatches = reviewMatches
+			if keyword != "" {
+				hardEvidence := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+					Fragment: fragment, Matches: hardMatches, Tier: "high_confidence",
+				}}, contentModerationEvidenceWindowBudgetRunes, cfg)
+				audit := unifiedModerationAudit{
+					DecisionSource: "keyword_high_confidence", CacheNamespace: namespace, KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
+					EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
+					EvidenceText: hardEvidence.Evidence.Text, EvidenceWindows: hardEvidence.Windows,
 				}
-				if hit {
-					hardMatches := contentModerationHardMatchesForKeyword(fragment.Text, keyword)
-					hardEvidence := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
-						Fragment: fragment, Matches: hardMatches, Tier: "high_confidence",
-					}}, contentModerationEvidenceWindowBudgetRunes, cfg)
-					audit := unifiedModerationAudit{
-						DecisionSource: "keyword_high_confidence", CacheNamespace: namespace, KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
-						EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
-						EvidenceText: hardEvidence.Evidence.Text, EvidenceWindows: hardEvidence.Windows,
+				if whitelistShadow {
+					shadowRiskObserved = true
+					audit.DecisionSource = "keyword_high_confidence_whitelist_shadow"
+					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, contentModerationKeywordCategory, keyword, audit)
+				} else if cfg.FirstLayerStage == ContentModerationFirstLayerStageShadow {
+					shadowRiskObserved = true
+					audit.DecisionSource = "keyword_high_confidence_shadow"
+					audit.KeywordTier = "first_layer_shadow"
+					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionFirstLayerShadow, contentModerationKeywordCategory, keyword, audit)
+				} else {
+					decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, keyword, audit)
+					if persisted {
+						s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentCacheEntry{
+							Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
+							DecisionSource: "keyword_high_confidence", Category: contentModerationKeywordCategory, MatchedKeyword: keyword,
+							KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
+							EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
+						})
 					}
-					if whitelistShadow {
-						shadowRiskObserved = true
-						audit.DecisionSource = "keyword_high_confidence_whitelist_shadow"
-						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, contentModerationKeywordCategory, keyword, audit)
-					} else if cfg.FirstLayerStage == ContentModerationFirstLayerStageShadow {
-						shadowRiskObserved = true
-						audit.DecisionSource = "keyword_high_confidence_shadow"
-						audit.KeywordTier = "first_layer_shadow"
-						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionFirstLayerShadow, contentModerationKeywordCategory, keyword, audit)
-					} else {
-						decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, keyword, audit)
-						if persisted {
-							s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentCacheEntry{
-								Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
-								DecisionSource: "keyword_high_confidence", Category: contentModerationKeywordCategory, MatchedKeyword: keyword,
-								KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
-								EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
-							})
-						}
-						releaseDecisionLock()
-						return decision
-					}
+					releaseDecisionLock()
+					return decision
 				}
 			}
 		}
+		if len(contextualMatches) > 0 {
+			candidates = append(candidates, contentModerationCandidateFragment{
+				Fragment: fragment, Matches: contextualMatches, Tier: "contextual_review",
+			})
+		}
 
 		if cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly {
+			if len(contextualMatches) > 0 && runtime.secondLayerPrefilterMatcher == nil {
+				releaseDecisionLock()
+				continue
+			}
 			candidateSystemReady := runtime.secondLayerPrefilterMatcher != nil
 			if !candidateSystemReady {
 				slog.Warn("content_moderation.candidate_system_unavailable", "request_id", input.RequestID)
@@ -245,9 +258,17 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				releaseDecisionLock()
 				continue
 			}
+			if len(contextualMatches) > 0 {
+				releaseDecisionLock()
+				continue
+			}
 			if !whitelistShadow && !shadowRiskObserved {
 				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 			}
+			releaseDecisionLock()
+			continue
+		}
+		if len(contextualMatches) > 0 {
 			releaseDecisionLock()
 			continue
 		}
@@ -261,6 +282,58 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		return s.checkUnifiedCandidateEvidence(ctx, input, cfg, namespace, cache, candidates, whitelistShadow)
 	}
 	return allow
+}
+
+func classifyUnifiedHardKeywordMatches(fragment ContentModerationFragment, runtime *contentModerationRuntimeSnapshot) (string, []contentModerationKeywordMatch, []contentModerationKeywordMatch) {
+	if runtime == nil || runtime.keywordMatcher == nil {
+		return "", nil, nil
+	}
+	firstKeyword, hit := runtime.keywordMatcher.Match(fragment.Text)
+	if !hit {
+		return "", nil, nil
+	}
+	unconditional := runtime.unconditionalKeywordMatcher
+	contextual := runtime.contextualKeywordMatcher
+	if unconditional == nil && contextual == nil {
+		_, unconditional, contextual = newContentModerationRuntimeKeywordMatchers(runtime.keywordMatcher.keywords)
+	}
+	_, firstIsContextual := maliciousMacroContextKeywords[normalizedContentModerationKeywordKey(firstKeyword)]
+	if !firstIsContextual && !suppressToolDocumentationKeyword(fragment, firstKeyword) {
+		return firstKeyword, contentModerationHardMatchesForKeyword(fragment.Text, firstKeyword), nil
+	}
+	if unconditional != nil {
+		matchText := fragment.Text
+		keyword, hardHit := unconditional.Match(matchText)
+		if hardHit && suppressToolDocumentationKeyword(fragment, keyword) {
+			matchText = withoutPowerShellDocumentationCommands(matchText)
+			keyword, hardHit = unconditional.Match(matchText)
+		}
+		if hardHit {
+			return keyword, contentModerationHardMatchesForKeyword(matchText, keyword), nil
+		}
+	}
+	if contextual == nil {
+		return "", nil, nil
+	}
+	reviewMatches := make([]contentModerationKeywordMatch, 0, 4)
+	for _, keyword := range contextual.keywords {
+		matches := contentModerationHardMatchesForKeyword(fragment.Text, keyword)
+		if len(matches) == 0 {
+			continue
+		}
+		disposition, configured := classifyContentModerationKeywordContext(fragment, keyword)
+		if !configured || disposition == contentModerationKeywordContextHardBlock {
+			return keyword, matches, reviewMatches
+		}
+		if disposition == contentModerationKeywordContextReview {
+			reviewMatches = append(reviewMatches, matches...)
+		}
+	}
+	return "", nil, sortAndDeduplicateContentModerationKeywordMatches(reviewMatches)
+}
+
+func normalizedContentModerationKeywordKey(keyword string) string {
+	return strings.ToLower(strings.TrimSpace(keyword))
 }
 
 func contentModerationHardMatchesForKeyword(text, keyword string) []contentModerationKeywordMatch {
@@ -281,22 +354,35 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	whitelistShadow bool,
 ) *ContentModerationDecision {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
-	endpoints := cfg.enabledSecondLayerEndpoints()
-	if len(endpoints) == 0 {
-		return allow
+	reviewRequired := contentModerationCandidatesRequireContextualReview(candidates)
+	if reviewRequired {
+		candidates = interleaveContextualReviewCandidates(candidates)
 	}
-	limit := endpoints[0].InputLimit
-	for _, endpoint := range endpoints[1:] {
-		if endpoint.InputLimit < limit {
-			limit = endpoint.InputLimit
+	endpoints := cfg.enabledSecondLayerEndpoints()
+	limit := contentModerationEvidenceWindowBudgetRunes
+	if len(endpoints) > 0 {
+		limit = endpoints[0].InputLimit
+		for _, endpoint := range endpoints[1:] {
+			if endpoint.InputLimit < limit {
+				limit = endpoint.InputLimit
+			}
 		}
 	}
 	bundle := buildContentModerationCandidateEvidence(candidates, limit, cfg)
+	primary := candidates[0].Fragment
 	if strings.TrimSpace(bundle.Evidence.Text) == "" || bundle.CacheHash == "" {
 		slog.Warn("content_moderation.candidate_evidence_empty", "request_id", input.RequestID)
+		if reviewRequired {
+			return s.handleContextualReviewUnavailable(ctx, input, cfg, namespace, bundle, primary, whitelistShadow, "not_attempted", errors.New("contextual review evidence is empty"))
+		}
 		return allow
 	}
-	primary := candidates[0].Fragment
+	if len(endpoints) == 0 {
+		if reviewRequired {
+			return s.handleContextualReviewUnavailable(ctx, input, cfg, namespace, bundle, primary, whitelistShadow, "not_attempted", errors.New("contextual review endpoint is unavailable"))
+		}
+		return allow
+	}
 	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
 		asyncInput := input
 		// Shadow decisions never archive or mutate the request. Keep only the
@@ -312,14 +398,17 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 			timeout := contentModerationShadowReviewTimeout(asyncCfg)
 			shadowCtx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			_ = s.checkUnifiedCandidateEvidenceBundle(shadowCtx, asyncInput, asyncCfg, namespace, cache, bundle, primary, whitelistShadow)
+			_ = s.checkUnifiedCandidateEvidenceBundle(shadowCtx, asyncInput, asyncCfg, namespace, cache, bundle, primary, whitelistShadow, reviewRequired)
 		})
 		if !enqueued {
 			slog.Warn("content_moderation.second_layer_shadow_queue_full", "request_id", input.RequestID)
+			if reviewRequired {
+				return s.handleContextualReviewUnavailable(ctx, input, cfg, namespace, bundle, primary, whitelistShadow, "busy", errContentModerationSecondLayerBusy)
+			}
 		}
 		return allow
 	}
-	return s.checkUnifiedCandidateEvidenceBundle(ctx, input, cfg, namespace, cache, bundle, primary, whitelistShadow)
+	return s.checkUnifiedCandidateEvidenceBundle(ctx, input, cfg, namespace, cache, bundle, primary, whitelistShadow, reviewRequired)
 }
 
 func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
@@ -331,6 +420,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
 	bundle contentModerationEvidenceBundle,
 	primary ContentModerationFragment,
 	whitelistShadow bool,
+	reviewRequired bool,
 ) *ContentModerationDecision {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
 	cacheFragment := bundle.Fragment
@@ -339,7 +429,8 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
 	releaseDecisionLock := s.acquireContentModerationFragmentDecisionLock(namespace + "\x00" + bundle.CacheHash)
 	defer releaseDecisionLock()
 
-	if cache != nil {
+	cacheEligible := !(reviewRequired && bundle.Evidence.Truncated)
+	if cache != nil && cacheEligible {
 		entry, found, err := s.getUnifiedFragmentCache(ctx, cache, namespace, bundle.CacheHash)
 		if err != nil {
 			s.fragmentCacheErrors.Add(1)
@@ -376,17 +467,27 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
 		}
 	}
 
+	keywordTier := "candidate"
+	if reviewRequired {
+		keywordTier = "contextual_review"
+	}
 	result, attempted, err := s.scanUnifiedSecondLayerPrepared(ctx, cfg, contentModerationSecondLayerInput{
-		Fragment: bundle.Fragment, Evidence: bundle.Evidence, KeywordTier: "candidate", KeywordRuleID: bundle.PrimaryRuleID,
+		Fragment: bundle.Fragment, Evidence: bundle.Evidence, KeywordTier: keywordTier, KeywordRuleID: bundle.PrimaryRuleID,
 		Background: whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,
 	})
 	if err != nil {
 		if !errors.Is(err, errContentModerationSecondLayerBusy) {
 			slog.Warn("content_moderation.second_layer_failed", "error", err)
 		}
+		if reviewRequired {
+			return s.handleContextualReviewUnavailable(ctx, input, cfg, namespace, bundle, primary, whitelistShadow, contentModerationContextualReviewFailureStatus(err, true), err)
+		}
 		return allow
 	}
 	if !attempted {
+		if reviewRequired {
+			return s.handleContextualReviewUnavailable(ctx, input, cfg, namespace, bundle, primary, whitelistShadow, "not_attempted", errors.New("contextual review was not attempted"))
+		}
 		return allow
 	}
 	audit := unifiedModerationAudit{
@@ -408,7 +509,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
 			return allow
 		}
 		decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, primary, ContentModerationActionSecondLayerBlock, result.Category, bundle.PrimaryKeyword, audit)
-		if persisted {
+		if persisted && cacheEligible {
 			s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, cacheFragment, ContentModerationFragmentCacheEntry{
 				Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: bundle.CacheHash,
 				DecisionSource: "model", Category: result.Category, MatchedKeyword: bundle.PrimaryKeyword,
@@ -418,6 +519,9 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
 			})
 		}
 		return decision
+	}
+	if reviewRequired && bundle.Evidence.Truncated {
+		return s.handleContextualReviewUnavailable(ctx, input, cfg, namespace, bundle, primary, whitelistShadow, "evidence_truncated", errors.New("contextual review evidence was truncated"))
 	}
 
 	if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow || cfg.RecordNonHits {
@@ -435,6 +539,107 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
 		s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, cacheFragment, ContentModerationFragmentAllow)
 	}
 	return allow
+}
+
+func contentModerationCandidatesRequireContextualReview(candidates []contentModerationCandidateFragment) bool {
+	for _, candidate := range candidates {
+		if candidate.Tier == "contextual_review" {
+			return true
+		}
+	}
+	return false
+}
+
+func interleaveContextualReviewCandidates(candidates []contentModerationCandidateFragment) []contentModerationCandidateFragment {
+	contextual := make([]contentModerationCandidateFragment, 0, len(candidates))
+	ordinary := make([]contentModerationCandidateFragment, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Tier == "contextual_review" {
+			contextual = append(contextual, candidate)
+		} else {
+			ordinary = append(ordinary, candidate)
+		}
+	}
+	ordered := make([]contentModerationCandidateFragment, 0, len(candidates))
+	for index := 0; index < len(contextual) || index < len(ordinary); index++ {
+		if index < len(contextual) {
+			ordered = append(ordered, contextual[index])
+		}
+		if index < len(ordinary) {
+			ordered = append(ordered, ordinary[index])
+		}
+	}
+	return ordered
+}
+
+func contentModerationContextualReviewFailureStatus(err error, attempted bool) string {
+	if !attempted {
+		return "not_attempted"
+	}
+	switch {
+	case errors.Is(err, errContentModerationSecondLayerBusy):
+		return "busy"
+	case errors.Is(err, errContentModerationSecondLayerParse):
+		return "parse_error"
+	case isContentModerationSecondLayerTimeout(err):
+		return "timeout"
+	default:
+		return "error"
+	}
+}
+
+func (s *ContentModerationService) handleContextualReviewUnavailable(
+	ctx context.Context,
+	input ContentModerationCheckInput,
+	cfg *ContentModerationConfig,
+	namespace string,
+	bundle contentModerationEvidenceBundle,
+	primary ContentModerationFragment,
+	whitelistShadow bool,
+	parserStatus string,
+	reviewErr error,
+) *ContentModerationDecision {
+	audit := unifiedModerationAudit{
+		DecisionSource:    "review_unavailable",
+		CacheNamespace:    namespace,
+		EvidenceMode:      bundle.Evidence.Mode,
+		EvidenceTruncated: bundle.Evidence.Truncated,
+		ParserStatus:      parserStatus,
+		KeywordTier:       "contextual_review",
+		KeywordRuleID:     bundle.PrimaryRuleID,
+		EvidenceText:      bundle.Evidence.Text,
+		EvidenceWindows:   bundle.Windows,
+		InputHash:         bundle.CacheHash,
+	}
+	if reviewErr != nil {
+		audit.Error = trimRunes(redactContentModerationSecrets(reviewErr.Error()), maxModerationExcerptRunes)
+	}
+	if endpoints := cfg.enabledSecondLayerEndpoints(); len(endpoints) > 0 {
+		audit.ModelProfile = endpoints[0].Profile
+		audit.PromptVersion = endpoints[0].PromptVersion
+	}
+	if whitelistShadow {
+		audit.DecisionSource = "review_unavailable_whitelist_shadow"
+	} else if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+		audit.DecisionSource = "review_unavailable_shadow"
+	}
+	s.persistUnifiedShadowAudit(ctx, input, cfg, primary, ContentModerationActionReviewUnavailable, "", bundle.PrimaryKeyword, audit)
+
+	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+		return &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
+	}
+
+	return &ContentModerationDecision{
+		Allowed:        false,
+		Blocked:        false,
+		Flagged:        false,
+		Message:        "Risk-control review is temporarily unavailable; retry later",
+		StatusCode:     http.StatusServiceUnavailable,
+		InputHash:      bundle.CacheHash,
+		MatchedKeyword: bundle.PrimaryKeyword,
+		Action:         ContentModerationActionReviewUnavailable,
+		RetryAfter:     1,
+	}
 }
 
 func (s *ContentModerationService) enqueueContentModerationShadowReview(job func()) bool {
@@ -578,7 +783,7 @@ func (s *ContentModerationService) persistUnifiedShadowAudit(ctx context.Context
 	if strings.TrimSpace(audit.EvidenceText) != "" {
 		logInput = audit.EvidenceText
 	}
-	log := s.buildLog(input, cfg, action, false, category, highestScore, scores, logInput, nil, nil, "")
+	log := s.buildLog(input, cfg, action, false, category, highestScore, scores, logInput, nil, nil, audit.Error)
 	log.MatchedKeyword = keyword
 	applyUnifiedModerationAudit(log, fragment, cfg, audit)
 	inputHash := fragment.Hash
@@ -605,6 +810,7 @@ type unifiedModerationAudit struct {
 	EvidenceText      string
 	EvidenceWindows   []ContentModerationEvidenceWindow
 	InputHash         string
+	Error             string
 }
 
 func (s *ContentModerationService) unifiedBlockDecisionWithAudit(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, fragment ContentModerationFragment, action, category, keyword string, audit unifiedModerationAudit) (*ContentModerationDecision, *ContentModerationLog, bool) {

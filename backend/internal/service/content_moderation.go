@@ -47,6 +47,7 @@ const (
 	ContentModerationActionWhitelistShadow   = "whitelist_shadow"
 	ContentModerationActionCacheBlock        = "cache_block"
 	ContentModerationActionBudgetRejected    = "budget_rejected"
+	ContentModerationActionReviewUnavailable = "review_unavailable"
 	ContentModerationActionError             = "error"
 	ContentModerationActionCyberPolicy       = "cyber_policy" // cyber_policy 硬阻断的风控日志 action（封号计数排除按此值过滤）
 
@@ -54,6 +55,7 @@ const (
 	ContentModerationLogResultCyberPolicy    = "cyber_policy"
 	ContentModerationLogResultContentBlocked = "content_blocked"
 	ContentModerationLogResultRiskyShadow    = "risky_shadow"
+	ContentModerationLogResultReviewFailure  = "review_unavailable"
 
 	contentModerationKeywordCategory = "keyword"
 
@@ -954,6 +956,8 @@ type contentModerationRuntimeSnapshot struct {
 	riskControlEnabled          bool
 	config                      *ContentModerationConfig
 	keywordMatcher              *contentModerationKeywordMatcher
+	unconditionalKeywordMatcher *contentModerationKeywordMatcher
+	contextualKeywordMatcher    *contentModerationKeywordMatcher
 	secondLayerPrefilterMatcher *contentModerationPrefilterMatcher
 	fragmentCacheNamespace      string
 	configDigest                [sha256.Size]byte
@@ -1661,7 +1665,8 @@ func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentM
 	switch result := strings.ToLower(strings.TrimSpace(filter.Result)); result {
 	case ContentModerationLogResultCyberPolicy,
 		ContentModerationLogResultContentBlocked,
-		ContentModerationLogResultRiskyShadow:
+		ContentModerationLogResultRiskyShadow,
+		ContentModerationLogResultReviewFailure:
 		filter.Result = result
 	default:
 		filter.Result = ContentModerationLogResultBlocked
@@ -2214,6 +2219,8 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 			riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
 			config:                      current.config,
 			keywordMatcher:              current.keywordMatcher,
+			unconditionalKeywordMatcher: current.unconditionalKeywordMatcher,
+			contextualKeywordMatcher:    current.contextualKeywordMatcher,
 			secondLayerPrefilterMatcher: current.secondLayerPrefilterMatcher,
 			fragmentCacheNamespace:      current.fragmentCacheNamespace,
 			configDigest:                configDigest,
@@ -2235,13 +2242,16 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 		// Legacy configs can reference an asset that is no longer available.
 		// Preserve their explicit local block list while keeping layer two off.
 		slog.Error("content_moderation.candidate_asset_unavailable_at_startup", "error", err)
+		keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(normalizeBlockedKeywords(cfg.BlockedKeywords))
 		snapshot := &contentModerationRuntimeSnapshot{
-			riskControlEnabled:     values[SettingKeyRiskControlEnabled] == "true",
-			config:                 cfg,
-			keywordMatcher:         newContentModerationKeywordMatcher(normalizeBlockedKeywords(cfg.BlockedKeywords)),
-			fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
-			configDigest:           configDigest,
-			loadedAt:               time.Now(),
+			riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
+			config:                      cfg,
+			keywordMatcher:              keywordMatcher,
+			unconditionalKeywordMatcher: unconditionalKeywordMatcher,
+			contextualKeywordMatcher:    contextualKeywordMatcher,
+			fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+			configDigest:                configDigest,
+			loadedAt:                    time.Now(),
 		}
 		s.runtimeSnapshot.Store(snapshot)
 		s.runtimeRefreshRetryAt.Store(0)
@@ -2256,22 +2266,28 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 		// because the optional candidate policy is invalid. Keep layer one live,
 		// expose layer two as unavailable, and avoid caching candidate decisions.
 		slog.Error("content_moderation.candidate_system_unavailable_at_startup", "error", err)
+		keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(effectiveKeywords)
 		snapshot := &contentModerationRuntimeSnapshot{
-			riskControlEnabled:     values[SettingKeyRiskControlEnabled] == "true",
-			config:                 cfg,
-			keywordMatcher:         newContentModerationKeywordMatcher(effectiveKeywords),
-			fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
-			configDigest:           configDigest,
-			loadedAt:               time.Now(),
+			riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
+			config:                      cfg,
+			keywordMatcher:              keywordMatcher,
+			unconditionalKeywordMatcher: unconditionalKeywordMatcher,
+			contextualKeywordMatcher:    contextualKeywordMatcher,
+			fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+			configDigest:                configDigest,
+			loadedAt:                    time.Now(),
 		}
 		s.runtimeSnapshot.Store(snapshot)
 		s.runtimeRefreshRetryAt.Store(0)
 		return snapshot, nil
 	}
+	keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(effectiveKeywords)
 	snapshot := &contentModerationRuntimeSnapshot{
 		riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
 		config:                      cfg,
-		keywordMatcher:              newContentModerationKeywordMatcher(effectiveKeywords),
+		keywordMatcher:              keywordMatcher,
+		unconditionalKeywordMatcher: unconditionalKeywordMatcher,
+		contextualKeywordMatcher:    contextualKeywordMatcher,
 		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher(effectiveSecondLayerKeywords),
 		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
 		configDigest:                configDigest,
@@ -2303,7 +2319,7 @@ func (s *ContentModerationService) replaceRuntimeConfig(cfg *ContentModerationCo
 		slog.Error("content_moderation.candidate_asset_invalid_after_validation", "error", err)
 		return
 	}
-	keywordMatcher := newContentModerationKeywordMatcher(effectiveKeywords)
+	keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(effectiveKeywords)
 	secondLayerPrefilterMatcher := newContentModerationPrefilterMatcher(effectiveSecondLayerKeywords)
 	fragmentCacheNamespace := cfg.fragmentCacheNamespace()
 	configDigest := sha256.Sum256(raw)
@@ -2318,11 +2334,28 @@ func (s *ContentModerationService) replaceRuntimeConfig(cfg *ContentModerationCo
 		riskControlEnabled:          current.riskControlEnabled,
 		config:                      config,
 		keywordMatcher:              keywordMatcher,
+		unconditionalKeywordMatcher: unconditionalKeywordMatcher,
+		contextualKeywordMatcher:    contextualKeywordMatcher,
 		secondLayerPrefilterMatcher: secondLayerPrefilterMatcher,
 		fragmentCacheNamespace:      fragmentCacheNamespace,
 		configDigest:                configDigest,
 		loadedAt:                    time.Now(),
 	})
+}
+
+func newContentModerationRuntimeKeywordMatchers(keywords []string) (*contentModerationKeywordMatcher, *contentModerationKeywordMatcher, *contentModerationKeywordMatcher) {
+	unconditional := make([]string, 0, len(keywords))
+	contextual := make([]string, 0, len(maliciousMacroContextKeywords))
+	for _, keyword := range keywords {
+		if _, configured := maliciousMacroContextKeywords[normalizedContentModerationKeywordKey(keyword)]; configured {
+			contextual = append(contextual, keyword)
+			continue
+		}
+		unconditional = append(unconditional, keyword)
+	}
+	return newContentModerationKeywordMatcher(keywords),
+		newContentModerationKeywordMatcher(unconditional),
+		newContentModerationKeywordMatcher(contextual)
 }
 
 func (s *contentModerationRuntimeSnapshot) matchBlockedKeyword(text string) (string, bool) {

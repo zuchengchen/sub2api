@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,11 +14,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const riskControlCapacityErrorCode = "risk_control_capacity_exhausted"
+const (
+	riskControlCapacityErrorCode          = "risk_control_capacity_exhausted"
+	riskControlReviewUnavailableErrorCode = "risk_control_review_unavailable"
+)
 
 func contentModerationDecisionErrorCode(decision *service.ContentModerationDecision) string {
-	if decision != nil && decision.Action == service.ContentModerationActionBudgetRejected {
-		return riskControlCapacityErrorCode
+	if decision != nil {
+		switch decision.Action {
+		case service.ContentModerationActionBudgetRejected:
+			return riskControlCapacityErrorCode
+		case service.ContentModerationActionReviewUnavailable:
+			return riskControlReviewUnavailableErrorCode
+		}
 	}
 	return "content_policy_violation"
 }
@@ -44,10 +53,18 @@ func contentModerationDecisionMessage(decision *service.ContentModerationDecisio
 	return message
 }
 
+func applyContentModerationRetryAfter(c *gin.Context, decision *service.ContentModerationDecision) {
+	if c == nil || decision == nil || decision.RetryAfter <= 0 {
+		return
+	}
+	c.Header("Retry-After", strconv.Itoa(decision.RetryAfter))
+}
+
 func (h *OpenAIGatewayHandler) openAIContentModerationError(c *gin.Context, decision *service.ContentModerationDecision) {
 	if decision == nil {
 		return
 	}
+	applyContentModerationRetryAfter(c, decision)
 	if decision.Blocked {
 		h.errorResponse(c, contentModerationStatus(decision), contentModerationDecisionErrorCode(decision), contentModerationDecisionMessage(decision))
 		return
@@ -61,6 +78,7 @@ func (h *GatewayHandler) openAIContentModerationError(c *gin.Context, decision *
 	if decision == nil {
 		return
 	}
+	applyContentModerationRetryAfter(c, decision)
 	if decision.Blocked {
 		h.chatCompletionsErrorResponse(c, contentModerationStatus(decision), contentModerationDecisionErrorCode(decision), contentModerationDecisionMessage(decision))
 		return
@@ -74,6 +92,7 @@ func (h *GatewayHandler) responsesContentModerationError(c *gin.Context, decisio
 	if decision == nil {
 		return
 	}
+	applyContentModerationRetryAfter(c, decision)
 	if decision.Blocked {
 		h.responsesErrorResponse(c, contentModerationStatus(decision), contentModerationDecisionErrorCode(decision), contentModerationDecisionMessage(decision))
 		return
@@ -87,6 +106,7 @@ func (h *GatewayHandler) anthropicContentModerationError(c *gin.Context, decisio
 	if decision == nil {
 		return
 	}
+	applyContentModerationRetryAfter(c, decision)
 	if decision.Blocked {
 		h.errorResponse(c, contentModerationStatus(decision), contentModerationDecisionErrorCode(decision), contentModerationDecisionMessage(decision))
 		return
@@ -100,6 +120,7 @@ func (h *OpenAIGatewayHandler) anthropicContentModerationError(c *gin.Context, d
 	if decision == nil {
 		return
 	}
+	applyContentModerationRetryAfter(c, decision)
 	if decision.Blocked {
 		h.anthropicErrorResponse(c, contentModerationStatus(decision), contentModerationDecisionErrorCode(decision), contentModerationDecisionMessage(decision))
 		return
@@ -113,6 +134,7 @@ func googleContentModerationError(c *gin.Context, decision *service.ContentModer
 	if decision == nil {
 		return
 	}
+	applyContentModerationRetryAfter(c, decision)
 	if decision.Blocked {
 		googleError(c, contentModerationStatus(decision), contentModerationDecisionMessage(decision))
 		return
