@@ -3,7 +3,9 @@ import { apiClient } from '../client'
 export type ModerationMode = 'off' | 'pre_block'
 export type KeywordBlockingMode = 'keyword_only' | 'keyword_and_api' | 'api_only'
 export type ContentModerationModelProfile = 'qwen_guard' | 'yufeng_xguard'
-export type ContentModerationSecondLayerStage = 'enforce' | 'shadow'
+export type ContentModerationLayerStage = 'enforce' | 'shadow'
+export type ContentModerationFirstLayerStage = ContentModerationLayerStage
+export type ContentModerationSecondLayerStage = ContentModerationLayerStage
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
 
 export interface ContentModerationModelFilter {
@@ -64,6 +66,7 @@ export interface ContentModerationConfig {
   fragment_block_ttl_seconds: number
   fragment_allow_ttl_seconds: number
   fragment_ttl_policy_version: string
+  first_layer_stage: ContentModerationFirstLayerStage
   second_layer_enabled: boolean
   second_layer_stage: ContentModerationSecondLayerStage
   second_layer_endpoints: ContentModerationEndpoint[]
@@ -169,6 +172,7 @@ export interface UpdateContentModerationConfig {
   fragment_block_ttl_seconds?: number
   fragment_allow_ttl_seconds?: number
   fragment_ttl_policy_version?: string
+  first_layer_stage?: ContentModerationFirstLayerStage
   second_layer_enabled?: boolean
   second_layer_stage?: ContentModerationSecondLayerStage
   second_layer_endpoints?: Array<Omit<ContentModerationEndpoint, 'token_configured' | 'token_masked'> & { token?: string }>

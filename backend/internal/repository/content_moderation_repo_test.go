@@ -42,7 +42,7 @@ func TestBuildContentModerationLogWhere_AuditRecordViews(t *testing.T) {
 		{
 			name:     "risky shadow",
 			result:   service.ContentModerationLogResultRiskyShadow,
-			contains: "l.action IN ('second_layer_shadow', 'whitelist_shadow') AND COALESCE(BTRIM(l.highest_category), '') <> ''",
+			contains: "l.action IN ('first_layer_shadow', 'second_layer_shadow', 'whitelist_shadow') AND COALESCE(BTRIM(l.highest_category), '') <> ''",
 		},
 	}
 

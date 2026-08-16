@@ -116,7 +116,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		namespace += contentModerationWhitelistShadowCacheSuffix
 	}
 	for _, fragment := range fragments {
-		whitelistRiskObserved := false
+		shadowRiskObserved := false
 		releaseDecisionLock := s.acquireContentModerationFragmentDecisionLock(namespace + "\x00" + fragment.Hash)
 		if cache != nil {
 			entry, found, err := s.getUnifiedFragmentCache(ctx, cache, namespace, fragment.Hash)
@@ -146,7 +146,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					}
 					category = defaultContentModerationString(category, "fragment_cache")
 					if whitelistShadow {
-						whitelistRiskObserved = true
+						shadowRiskObserved = true
 						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, category, keyword, unifiedModerationAudit{
 							CacheHit: true, DecisionSource: "cache_replay_whitelist_shadow", SourceLogID: entry.SourceLogID,
 							ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, fragment.Hash), CacheNamespace: namespace,
@@ -180,9 +180,14 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						DecisionSource: "keyword_high_confidence", CacheNamespace: namespace, KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
 					}
 					if whitelistShadow {
-						whitelistRiskObserved = true
+						shadowRiskObserved = true
 						audit.DecisionSource = "keyword_high_confidence_whitelist_shadow"
 						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, contentModerationKeywordCategory, keyword, audit)
+					} else if cfg.FirstLayerStage == ContentModerationFirstLayerStageShadow {
+						shadowRiskObserved = true
+						audit.DecisionSource = "keyword_high_confidence_shadow"
+						audit.KeywordTier = "first_layer_shadow"
+						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionFirstLayerShadow, contentModerationKeywordCategory, keyword, audit)
 					} else {
 						decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, keyword, audit)
 						if persisted {
@@ -218,6 +223,8 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			case candidateSystemReady:
 				if whitelistShadow {
 					keywordTier = "whitelist_shadow"
+				} else if shadowRiskObserved {
+					keywordTier = "first_layer_shadow"
 				} else {
 					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 					releaseDecisionLock()
@@ -234,10 +241,10 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			}
 			if attempted && result.Blocked {
 				if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+					shadowRiskObserved = true
 					action := ContentModerationActionSecondLayerShadow
 					decisionSource := "model_shadow"
 					if whitelistShadow {
-						whitelistRiskObserved = true
 						action = ContentModerationActionWhitelistShadow
 						decisionSource = "model_whitelist_shadow"
 					}
@@ -247,9 +254,6 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
 						KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
 					})
-					if !whitelistRiskObserved {
-						s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
-					}
 					releaseDecisionLock()
 					continue
 				}
@@ -287,7 +291,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					})
 					s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, false, &input)
 				}
-				if !whitelistRiskObserved {
+				if !shadowRiskObserved {
 					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 				}
 			}
@@ -295,7 +299,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			continue
 		}
 
-		if !whitelistRiskObserved {
+		if !shadowRiskObserved {
 			s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 		}
 		releaseDecisionLock()
@@ -539,6 +543,9 @@ func (s *ContentModerationService) validateUnifiedConfig(cfg *ContentModerationC
 	}
 	if cfg.FragmentAllowTTLSeconds < 0 || cfg.FragmentAllowTTLSeconds > MaxContentModerationFragmentAllowTTLSeconds {
 		return fmt.Errorf("fragment allow TTL must be between 1 and %d seconds", MaxContentModerationFragmentAllowTTLSeconds)
+	}
+	if stage := strings.TrimSpace(cfg.FirstLayerStage); stage != "" && stage != ContentModerationFirstLayerStageEnforce && stage != ContentModerationFirstLayerStageShadow {
+		return fmt.Errorf("unsupported first-layer stage %q", cfg.FirstLayerStage)
 	}
 	if stage := strings.TrimSpace(cfg.SecondLayerStage); stage != "" && stage != ContentModerationSecondLayerStageEnforce && stage != ContentModerationSecondLayerStageShadow {
 		return fmt.Errorf("unsupported second-layer stage %q", cfg.SecondLayerStage)

@@ -65,6 +65,7 @@ type contentModerationConfigRequest struct {
 	FragmentBlockTTLSeconds        *int                                  `json:"fragment_block_ttl_seconds"`
 	FragmentAllowTTLSeconds        *int                                  `json:"fragment_allow_ttl_seconds"`
 	FragmentTTLPolicyVersion       *string                               `json:"fragment_ttl_policy_version"`
+	FirstLayerStage                *string                               `json:"first_layer_stage"`
 	SecondLayerEnabled             *bool                                 `json:"second_layer_enabled"`
 	SecondLayerStage               *string                               `json:"second_layer_stage"`
 	SecondLayerEndpoints           *[]service.ContentModerationEndpoint  `json:"second_layer_endpoints"`
@@ -148,6 +149,7 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		FragmentBlockTTLSeconds:        req.FragmentBlockTTLSeconds,
 		FragmentAllowTTLSeconds:        req.FragmentAllowTTLSeconds,
 		FragmentTTLPolicyVersion:       req.FragmentTTLPolicyVersion,
+		FirstLayerStage:                req.FirstLayerStage,
 		SecondLayerEnabled:             req.SecondLayerEnabled,
 		SecondLayerStage:               req.SecondLayerStage,
 		SecondLayerEndpoints:           req.SecondLayerEndpoints,
