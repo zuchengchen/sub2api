@@ -419,7 +419,7 @@ export default {
       searchGroups: 'Search group name or platform',
       noGroups: 'No groups available',
       userEmailWhitelist: 'User email allowlist',
-      userEmailWhitelistHint: 'Listed users bypass local moderation, audit records, and automatic bans. Upstream safety policies may still reject requests. Enter one exact email per line.',
+      userEmailWhitelistHint: 'Listed users still receive both local moderation layers; keyword and model risks are recorded without blocking or automatic bans. A real upstream cyber_policy response still triggers hard enforcement. Enter one exact email per line.',
       userEmailWhitelistPlaceholder: "user{'@'}example.com",
       userEmailWhitelistCount: '{count} emails configured',
       modelFilter: 'Model scope',

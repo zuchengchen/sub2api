@@ -889,7 +889,7 @@ func TestContentModerationCheck_ModelFilterUsesRequestedModelNotBodyModel(t *tes
 	require.Equal(t, "gpt-5.5", logs[0].Model)
 }
 
-func TestContentModerationCheck_UserEmailWhitelistBypassesUnifiedModeration(t *testing.T) {
+func TestContentModerationCheck_UserEmailWhitelistShadowsUnifiedKeywordMatch(t *testing.T) {
 	cfg := defaultContentModerationModelFilterTestConfig()
 	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
 	svc, repo := newContentModerationModelFilterTestService(t, cfg)
@@ -908,7 +908,13 @@ func TestContentModerationCheck_UserEmailWhitelistBypassesUnifiedModeration(t *t
 	require.NoError(t, err)
 	require.True(t, decision.Allowed)
 	require.Equal(t, ContentModerationActionAllow, decision.Action)
-	require.Empty(t, repo.snapshotLogs())
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, ContentModerationActionWhitelistShadow, logs[0].Action)
+	require.Equal(t, "keyword_high_confidence_whitelist_shadow", logs[0].DecisionSource)
+	require.Equal(t, "secret-token", logs[0].MatchedKeyword)
+	require.False(t, logs[0].Flagged)
+	require.False(t, logs[0].AutoBanned)
 
 	input.UserEmail = "other@example.com"
 	decision, err = svc.Check(context.Background(), input)
@@ -916,6 +922,9 @@ func TestContentModerationCheck_UserEmailWhitelistBypassesUnifiedModeration(t *t
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
 	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	logs = repo.snapshotLogs()
+	require.Len(t, logs, 2)
+	require.Equal(t, ContentModerationActionKeywordBlock, logs[1].Action)
 }
 
 func defaultContentModerationModelFilterTestConfig() *ContentModerationConfig {

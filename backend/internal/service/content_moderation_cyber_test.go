@@ -214,7 +214,7 @@ func TestRecordCyberPolicyEvent_NonGPTSkipsAllSideEffects(t *testing.T) {
 	require.Equal(t, 0, repo.disableUserCalls)
 }
 
-func TestRecordCyberPolicyEvent_UserEmailWhitelistSkipsAllSideEffects(t *testing.T) {
+func TestRecordCyberPolicyEvent_UserEmailWhitelistStillForcesDisposition(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
 	rawCfg, err := json.Marshal(cfg)
@@ -240,11 +240,15 @@ func TestRecordCyberPolicyEvent_UserEmailWhitelistSkipsAllSideEffects(t *testing
 		UserRole:        RoleUser,
 	})
 
-	require.Empty(t, repo.snapshotLogs())
-	require.Equal(t, 0, repo.disableUserCalls)
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, ContentModerationActionCyberPolicy, logs[0].Action)
+	require.Equal(t, "disabled", logs[0].DispositionStatus)
+	require.True(t, logs[0].DispositionTransitioned)
+	require.Equal(t, 1, repo.disableUserCalls)
 }
 
-func TestRetryCyberPolicyDisposition_UserEmailWhitelistCancelsPendingSideEffects(t *testing.T) {
+func TestRetryCyberPolicyDisposition_UserEmailWhitelistStillForcesDisposition(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
 	rawCfg, err := json.Marshal(cfg)
@@ -260,6 +264,31 @@ func TestRetryCyberPolicyDisposition_UserEmailWhitelistCancelsPendingSideEffects
 
 	err = svc.retryCyberPolicyDisposition(context.Background(), &contentModerationDispositionRetryFile{
 		Kind:      contentModerationDispositionCyber,
+		UserID:    1,
+		UserEmail: "ALLOWED@example.com",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.disableUserCalls)
+	require.Empty(t, repo.snapshotLogs())
+}
+
+func TestRetryLocalDisposition_UserEmailWhitelistCancelsPendingSideEffects(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &cyberDispositionTestRepo{userActive: true}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo, nil, nil, nil, nil, nil, nil,
+	)
+
+	err = svc.retryCyberPolicyDisposition(context.Background(), &contentModerationDispositionRetryFile{
+		Kind:      contentModerationDispositionLocal,
 		UserID:    1,
 		UserEmail: "ALLOWED@example.com",
 	})
