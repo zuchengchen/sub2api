@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -638,4 +639,91 @@ func TestContentModerationShadowRecordsSafeModelProvenanceWithoutSideEffects(t *
 	require.False(t, logs[0].AutoBanned)
 	require.False(t, logs[0].EmailSent)
 	require.Empty(t, cache.snapshotRecorded())
+}
+
+func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"pc"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.AutoBanEnabled = false
+	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
+	cfg.BlockedKeywords = []string{"dangerous operation"}
+	cfg.CandidateEnabled = false
+	cfg.CandidateKeywords = nil
+	cfg.SecondLayerEnabled = true
+	cfg.SecondLayerStage = ContentModerationSecondLayerStageEnforce
+	cfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
+		ID: "yufeng-whitelist", BaseURL: server.URL, Model: "yufeng-q4",
+		Profile: ContentModerationModelProfileYuFengXGuard, PromptVersion: ContentModerationYuFengPromptVersion,
+		Enabled: true, TimeoutMS: 1000, InputLimit: 4000,
+	}}
+	cfg.normalize()
+	repo := &contentModerationReplayRepo{}
+	cache := &contentModerationReplayCache{}
+	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		keywordMatcher:              newContentModerationKeywordMatcher(cfg.BlockedKeywords),
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"unrelated layer two candidate"}),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+	}
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-whitelist")
+	input := ContentModerationCheckInput{
+		RequestID: "whitelist-shadow", UserID: 42, UserEmail: "Allowed@Example.COM", UserRole: RoleUser,
+		Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
+		Body: []byte(`{"input":"perform dangerous operation"}`),
+	}
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, runtime)
+
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, int64(1), calls.Load(), "a whitelist keyword hit must still reach the second layer")
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 2)
+	require.Equal(t, ContentModerationActionWhitelistShadow, logs[0].Action)
+	require.Equal(t, "keyword_high_confidence_whitelist_shadow", logs[0].DecisionSource)
+	require.Equal(t, "dangerous operation", logs[0].MatchedKeyword)
+	require.Equal(t, ContentModerationActionWhitelistShadow, logs[1].Action)
+	require.Equal(t, "model_whitelist_shadow", logs[1].DecisionSource)
+	require.Equal(t, "pornographic_contraband", logs[1].HighestCategory)
+	for _, log := range logs {
+		require.False(t, log.Flagged)
+		require.False(t, log.AutoBanned)
+		require.Zero(t, log.ViolationCount)
+	}
+
+	input.RequestID = "whitelist-shadow-repeat"
+	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
+	require.True(t, decision.Allowed)
+	require.Equal(t, int64(2), calls.Load(), "a repeated whitelist risk must be reviewed and recorded again")
+	require.Len(t, repo.snapshotLogs(), 4)
+
+	input.RequestID = "whitelist-shadow-other-user"
+	input.UserID = 44
+	input.UserEmail = "allowed@example.com"
+	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
+	require.True(t, decision.Allowed)
+	require.Equal(t, int64(3), calls.Load(), "a whitelist risk cache must not suppress another user's audit")
+	require.Len(t, repo.snapshotLogs(), 6)
+
+	input.RequestID = "regular-enforce"
+	input.UserID = 43
+	input.UserEmail = "regular@example.com"
+	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
+
+	require.True(t, decision.Blocked, "whitelist allow cache must not leak into enforce traffic")
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	require.Equal(t, int64(3), calls.Load(), "the regular request must block at layer one")
+	logs = repo.snapshotLogs()
+	require.Len(t, logs, 7)
+	require.Equal(t, ContentModerationActionKeywordBlock, logs[6].Action)
 }
