@@ -16,15 +16,15 @@
   },
   "layer1_demotions": {
     "file": "layer1-demotions.json",
-    "entries": 63,
-    "source_sha256": "2cf4f7bfdaebaa75f71d0789dfe043e80622de47d8d32aa6fbb9005f110131b4",
-    "embedded_sha256": "2cf4f7bfdaebaa75f71d0789dfe043e80622de47d8d32aa6fbb9005f110131b4"
+    "entries": 100,
+    "source_sha256": "1edf18bf41251f53463580fe31d8888950a870d1cac4f9399067f776051aa86e",
+    "embedded_sha256": "1edf18bf41251f53463580fe31d8888950a870d1cac4f9399067f776051aa86e"
   },
   "layer1_suppressions": {
     "file": "layer1-suppressions.json",
-    "entries": 28,
-    "source_sha256": "18459917532a5bd91a357816ae26630defe7a95faa211721bf92c3ad12aeed4f",
-    "embedded_sha256": "18459917532a5bd91a357816ae26630defe7a95faa211721bf92c3ad12aeed4f"
+    "entries": 29,
+    "source_sha256": "eb0af439a56f520eea6a90075ffe7aa71942660debc9e2d3c234f6a743df3059",
+    "embedded_sha256": "eb0af439a56f520eea6a90075ffe7aa71942660debc9e2d3c234f6a743df3059"
   },
   "candidate_endpoints": [
     {

