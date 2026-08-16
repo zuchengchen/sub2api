@@ -24,13 +24,14 @@ const (
 	MaxContentModerationFragmentAllowTTLSeconds     = 86400
 	ContentModerationFragmentTTLPolicyVersion       = "ttl-v2"
 	ContentModerationContextPolicyVersion           = "context-v3"
-	ContentModerationEvidencePolicyVersion          = "evidence-v1"
+	ContentModerationEvidencePolicyVersion          = "keyword-windows-v2"
 	ContentModerationKeywordPolicyVersion           = "keyword-v3"
 	ContentModerationYuFengPromptVersion            = "yufeng-xguard-v3"
 	contentModerationLegacyFragmentTTLPolicyVersion = "ttl-v1"
 	contentModerationLegacyContextPolicyVersion     = "context-v1"
 	contentModerationPreviousContextPolicyVersion   = "context-v2"
 	contentModerationPreviousKeywordPolicyVersion   = "keyword-v2"
+	contentModerationPreviousEvidencePolicyVersion  = "evidence-v1"
 	contentModerationYuFengLegacyPromptVersion      = "yufeng-xguard-v1"
 	contentModerationYuFengPreviousPromptVersion    = "yufeng-xguard-v2"
 	ContentModerationContextUser                    = "user"
@@ -138,8 +139,8 @@ var (
 )
 
 // buildModerationEvidence selects high-value lines first, then fills a stable
-// bounded context window. It never turns a truncated/uncertain selection into
-// an implicit allow; callers can choose a fallback chunk path.
+// bounded context window. Candidate-gated request handling uses keyword
+// windows instead; this selector remains for the legacy direct scanner API.
 func buildModerationEvidence(fragment ContentModerationFragment, limit int) moderationEvidence {
 	if limit <= 0 {
 		limit = defaultContentModerationSecondLayerInputLimit

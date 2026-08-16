@@ -80,8 +80,8 @@ exec "${server_path}" \
   --threads-batch 14 \
   --flash-attn on \
   --load-mode none \
-  --cache-ram 0 \
-  --no-cache-prompt \
+  --cache-ram 8192 \
+  --cache-prompt \
   --no-context-shift \
   --no-mmproj \
   --offline \

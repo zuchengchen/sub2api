@@ -173,6 +173,64 @@ func TestContentModerationRuntimeSnapshotCachesSettings(t *testing.T) {
 	require.Equal(t, 1, getMultiple)
 }
 
+func TestContentModerationRuntimeSnapshotColdStartKeepsLayerOneWhenCandidatesInvalid(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
+	cfg.HardBlockPatterns = []string{"blocked"}
+	cfg.BlockedKeywords = nil
+	cfg.CandidateKeywords = nil
+	cfg.CandidateEnabled = false
+	cfg.SecondLayerEnabled = true
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &contentModerationRuntimeSettingRepo{values: map[string]string{
+		SettingKeyRiskControlEnabled:      "true",
+		SettingKeyContentModerationConfig: string(raw),
+	}}
+	svc := runtimeCacheTestService(repo, time.Hour)
+
+	snapshot, err := svc.loadRuntimeSnapshot(context.Background())
+	require.NoError(t, err)
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-risk-cache-test")
+	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"blocked"}]}`),
+		Scope:    &scope,
+	}, snapshot)
+	require.True(t, decision.Blocked)
+	require.NotNil(t, snapshot)
+	require.NotNil(t, snapshot.keywordMatcher)
+	require.Nil(t, snapshot.secondLayerPrefilterMatcher)
+}
+
+func TestContentModerationRuntimeSnapshotColdStartKeepsLegacyLayerOneWhenAssetInvalid(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
+	cfg.BlockedKeywords = []string{"blocked"}
+	cfg.CandidateEnabled = true
+	cfg.CandidateAsset = "missing-candidate-asset"
+	cfg.SecondLayerEnabled = true
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &contentModerationRuntimeSettingRepo{values: map[string]string{
+		SettingKeyRiskControlEnabled:      "true",
+		SettingKeyContentModerationConfig: string(raw),
+	}}
+	svc := runtimeCacheTestService(repo, time.Hour)
+
+	snapshot, err := svc.loadRuntimeSnapshot(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.keywordMatcher)
+	require.Nil(t, snapshot.secondLayerPrefilterMatcher)
+	keyword, matched := snapshot.keywordMatcher.Match("blocked")
+	require.True(t, matched)
+	require.Equal(t, "blocked", keyword)
+}
+
 func TestContentModerationRuntimeSnapshotUpdateConfigIsImmediate(t *testing.T) {
 	repo := &contentModerationRuntimeSettingRepo{values: map[string]string{
 		SettingKeyRiskControlEnabled:      "true",

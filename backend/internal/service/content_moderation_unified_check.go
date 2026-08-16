@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 )
 
 var contentModerationBodySizeUpperBounds = [...]int64{
@@ -19,6 +20,10 @@ var contentModerationBodySizeUpperBounds = [...]int64{
 }
 
 const contentModerationWhitelistShadowCacheSuffix = ":whitelist-shadow-v1"
+
+const (
+	contentModerationShadowQueueCapacity = 64
+)
 
 func (s *ContentModerationService) ReservePendingRequestBody(bytes int64) (*ContentModerationPendingReservation, bool) {
 	if s == nil {
@@ -115,6 +120,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	if whitelistShadow {
 		namespace += contentModerationWhitelistShadowCacheSuffix
 	}
+	candidates := make([]contentModerationCandidateFragment, 0, len(fragments))
 	for _, fragment := range fragments {
 		shadowRiskObserved := false
 		releaseDecisionLock := s.acquireContentModerationFragmentDecisionLock(namespace + "\x00" + fragment.Hash)
@@ -145,14 +151,28 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						}
 					}
 					category = defaultContentModerationString(category, "fragment_cache")
+					cachedEvidence := contentModerationEvidenceBundle{}
+					if keyword != "" && runtime.keywordMatcher != nil {
+						cachedEvidence = buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+							Fragment: fragment,
+							Matches:  contentModerationHardMatchesForKeyword(fragment.Text, keyword),
+							Tier:     "high_confidence",
+						}}, contentModerationEvidenceWindowBudgetRunes, cfg)
+					}
+					evidenceMode := entry.EvidenceMode
+					if cachedEvidence.Evidence.Mode != "" {
+						evidenceMode = cachedEvidence.Evidence.Mode
+					}
+					evidenceTruncated := entry.EvidenceTruncated || cachedEvidence.Evidence.Truncated
 					if whitelistShadow {
 						shadowRiskObserved = true
 						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, category, keyword, unifiedModerationAudit{
 							CacheHit: true, DecisionSource: "cache_replay_whitelist_shadow", SourceLogID: entry.SourceLogID,
 							ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, fragment.Hash), CacheNamespace: namespace,
-							ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion, EvidenceMode: entry.EvidenceMode,
-							EvidenceTruncated: entry.EvidenceTruncated, ParserStatus: entry.ParserStatus,
+							ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion, EvidenceMode: evidenceMode,
+							EvidenceTruncated: evidenceTruncated, ParserStatus: entry.ParserStatus,
 							KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID,
+							EvidenceText: cachedEvidence.Evidence.Text, EvidenceWindows: cachedEvidence.Windows,
 						})
 						releaseDecisionLock()
 						continue
@@ -160,9 +180,10 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					decision, _, _ := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, category, keyword, unifiedModerationAudit{
 						CacheHit: true, DecisionSource: "cache_replay", SourceLogID: entry.SourceLogID,
 						ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, fragment.Hash), CacheNamespace: namespace,
-						ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion, EvidenceMode: entry.EvidenceMode,
-						EvidenceTruncated: entry.EvidenceTruncated, ParserStatus: entry.ParserStatus,
+						ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion, EvidenceMode: evidenceMode,
+						EvidenceTruncated: evidenceTruncated, ParserStatus: entry.ParserStatus,
 						KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID,
+						EvidenceText: cachedEvidence.Evidence.Text, EvidenceWindows: cachedEvidence.Windows,
 					})
 					releaseDecisionLock()
 					return decision
@@ -176,8 +197,14 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					keyword, hit = runtime.keywordMatcher.Match(withoutPowerShellDocumentationCommands(fragment.Text))
 				}
 				if hit {
+					hardMatches := contentModerationHardMatchesForKeyword(fragment.Text, keyword)
+					hardEvidence := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+						Fragment: fragment, Matches: hardMatches, Tier: "high_confidence",
+					}}, contentModerationEvidenceWindowBudgetRunes, cfg)
 					audit := unifiedModerationAudit{
 						DecisionSource: "keyword_high_confidence", CacheNamespace: namespace, KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
+						EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
+						EvidenceText: hardEvidence.Evidence.Text, EvidenceWindows: hardEvidence.Windows,
 					}
 					if whitelistShadow {
 						shadowRiskObserved = true
@@ -195,6 +222,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 								Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
 								DecisionSource: "keyword_high_confidence", Category: contentModerationKeywordCategory, MatchedKeyword: keyword,
 								KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
+								EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
 							})
 						}
 						releaseDecisionLock()
@@ -205,95 +233,20 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		}
 
 		if cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly {
-			keywordTier := "candidate_unavailable"
-			keywordRuleID := ""
-			candidateKeyword := ""
-			candidateHit := false
 			candidateSystemReady := runtime.secondLayerPrefilterMatcher != nil
-			if candidateSystemReady {
-				candidateKeyword, candidateHit = runtime.secondLayerPrefilterMatcher.Match(fragment.Text)
-			}
-			if candidateHit && matchesContentModerationAllowlist(fragment.Text, cfg.KeywordAllowlist) {
-				candidateHit = false
-			}
-			switch {
-			case candidateHit:
-				keywordTier = "candidate"
-				keywordRuleID = contentModerationKeywordRuleID(candidateKeyword)
-			case candidateSystemReady:
-				if whitelistShadow {
-					keywordTier = "whitelist_shadow"
-				} else if shadowRiskObserved {
-					keywordTier = "first_layer_shadow"
-				} else {
-					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
-					releaseDecisionLock()
-					continue
-				}
-			}
-			result, attempted, err := s.scanUnifiedSecondLayerFragmentWithTier(ctx, cfg, fragment, keywordTier, keywordRuleID)
-			if err != nil {
-				if !errors.Is(err, errContentModerationSecondLayerBusy) {
-					slog.Warn("content_moderation.second_layer_failed", "error", err)
-				}
+			if !candidateSystemReady {
+				slog.Warn("content_moderation.candidate_system_unavailable", "request_id", input.RequestID)
 				releaseDecisionLock()
 				continue
 			}
-			if attempted && result.Blocked {
-				if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
-					shadowRiskObserved = true
-					action := ContentModerationActionSecondLayerShadow
-					decisionSource := "model_shadow"
-					if whitelistShadow {
-						action = ContentModerationActionWhitelistShadow
-						decisionSource = "model_whitelist_shadow"
-					}
-					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, action, result.Category, "", unifiedModerationAudit{
-						DecisionSource: decisionSource, CacheNamespace: namespace, ModelProfile: result.Profile,
-						PromptVersion: result.PromptVersion, EvidenceMode: result.EvidenceMode,
-						EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
-						KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
-					})
-					releaseDecisionLock()
-					continue
-				}
-				decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionSecondLayerBlock, result.Category, "", unifiedModerationAudit{
-					DecisionSource: "model", CacheNamespace: namespace, ModelProfile: result.Profile,
-					PromptVersion: result.PromptVersion, EvidenceMode: result.EvidenceMode,
-					EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
-					KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
-				})
-				if persisted {
-					s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentCacheEntry{
-						Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
-						DecisionSource: "model", Category: result.Category, ModelProfile: result.Profile,
-						PromptVersion: result.PromptVersion, KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID, EvidenceMode: result.EvidenceMode,
-						EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
-					})
-				}
+			candidateMatches := runtime.secondLayerPrefilterMatcher.MatchAllExcluding(fragment.Text, cfg.KeywordAllowlist)
+			if len(candidateMatches) > 0 {
+				candidates = append(candidates, contentModerationCandidateFragment{Fragment: fragment, Matches: candidateMatches, Tier: "candidate"})
 				releaseDecisionLock()
-				return decision
+				continue
 			}
-			if attempted {
-				if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow || cfg.RecordNonHits {
-					action := ContentModerationActionAllow
-					decisionSource := "model"
-					if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
-						action = ContentModerationActionSecondLayerShadow
-						decisionSource = "model_shadow"
-					}
-					log := s.buildLog(input, cfg, action, false, "", 0, nil, fragment.Text, nil, nil, "")
-					applyUnifiedModerationAudit(log, fragment, cfg, unifiedModerationAudit{
-						DecisionSource: decisionSource, CacheNamespace: namespace, ModelProfile: result.Profile,
-						PromptVersion: result.PromptVersion, EvidenceMode: result.EvidenceMode,
-						EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
-						KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
-					})
-					s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, false, &input)
-				}
-				if !shadowRiskObserved {
-					s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
-				}
+			if !whitelistShadow && !shadowRiskObserved {
+				s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, fragment, ContentModerationFragmentAllow)
 			}
 			releaseDecisionLock()
 			continue
@@ -304,7 +257,248 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		}
 		releaseDecisionLock()
 	}
+	if len(candidates) > 0 {
+		return s.checkUnifiedCandidateEvidence(ctx, input, cfg, namespace, cache, candidates, whitelistShadow)
+	}
 	return allow
+}
+
+func contentModerationHardMatchesForKeyword(text, keyword string) []contentModerationKeywordMatch {
+	matcher := newContentModerationKeywordMatcher([]string{strings.TrimSpace(keyword)})
+	if matcher == nil {
+		return nil
+	}
+	return matcher.MatchAll(text)
+}
+
+func (s *ContentModerationService) checkUnifiedCandidateEvidence(
+	ctx context.Context,
+	input ContentModerationCheckInput,
+	cfg *ContentModerationConfig,
+	namespace string,
+	cache ContentModerationFragmentCache,
+	candidates []contentModerationCandidateFragment,
+	whitelistShadow bool,
+) *ContentModerationDecision {
+	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
+	endpoints := cfg.enabledSecondLayerEndpoints()
+	if len(endpoints) == 0 {
+		return allow
+	}
+	limit := endpoints[0].InputLimit
+	for _, endpoint := range endpoints[1:] {
+		if endpoint.InputLimit < limit {
+			limit = endpoint.InputLimit
+		}
+	}
+	bundle := buildContentModerationCandidateEvidence(candidates, limit, cfg)
+	if strings.TrimSpace(bundle.Evidence.Text) == "" || bundle.CacheHash == "" {
+		slog.Warn("content_moderation.candidate_evidence_empty", "request_id", input.RequestID)
+		return allow
+	}
+	primary := candidates[0].Fragment
+	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+		asyncInput := input
+		// Shadow decisions never archive or mutate the request. Keep only the
+		// scalar metadata needed for the audit row so queued work cannot retain
+		// a large gateway body or its reservation after the request returns.
+		asyncInput.Body = nil
+		asyncInput.RawRequest.Body = nil
+		asyncInput.RawRequest.Headers = nil
+		asyncInput.Reservation = nil
+		primary.Text = bundle.Evidence.Text
+		asyncCfg := cloneContentModerationConfig(cfg)
+		enqueued := s.enqueueContentModerationShadowReview(func() {
+			timeout := contentModerationShadowReviewTimeout(asyncCfg)
+			shadowCtx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			_ = s.checkUnifiedCandidateEvidenceBundle(shadowCtx, asyncInput, asyncCfg, namespace, cache, bundle, primary, whitelistShadow)
+		})
+		if !enqueued {
+			slog.Warn("content_moderation.second_layer_shadow_queue_full", "request_id", input.RequestID)
+		}
+		return allow
+	}
+	return s.checkUnifiedCandidateEvidenceBundle(ctx, input, cfg, namespace, cache, bundle, primary, whitelistShadow)
+}
+
+func (s *ContentModerationService) checkUnifiedCandidateEvidenceBundle(
+	ctx context.Context,
+	input ContentModerationCheckInput,
+	cfg *ContentModerationConfig,
+	namespace string,
+	cache ContentModerationFragmentCache,
+	bundle contentModerationEvidenceBundle,
+	primary ContentModerationFragment,
+	whitelistShadow bool,
+) *ContentModerationDecision {
+	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
+	cacheFragment := bundle.Fragment
+	cacheFragment.Hash = bundle.CacheHash
+	cacheFragment.Path = "moderation.evidence_windows"
+	releaseDecisionLock := s.acquireContentModerationFragmentDecisionLock(namespace + "\x00" + bundle.CacheHash)
+	defer releaseDecisionLock()
+
+	if cache != nil {
+		entry, found, err := s.getUnifiedFragmentCache(ctx, cache, namespace, bundle.CacheHash)
+		if err != nil {
+			s.fragmentCacheErrors.Add(1)
+			slog.Warn("content_moderation.evidence_cache_get_failed", "error", err)
+		} else if found {
+			s.fragmentCacheHits.Add(1)
+			if entry.Result == ContentModerationFragmentAllow {
+				return allow
+			}
+			if entry.Result == ContentModerationFragmentBlock {
+				s.fragmentCacheReplays.Add(1)
+				category := defaultContentModerationString(entry.Category, "fragment_cache")
+				audit := unifiedModerationAudit{
+					CacheHit: true, DecisionSource: "cache_replay", SourceLogID: entry.SourceLogID,
+					ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, bundle.CacheHash),
+					CacheNamespace:    namespace, ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion,
+					EvidenceMode: entry.EvidenceMode, EvidenceTruncated: entry.EvidenceTruncated,
+					ParserStatus: entry.ParserStatus, KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID,
+					EvidenceText: bundle.Evidence.Text, EvidenceWindows: bundle.Windows, InputHash: bundle.CacheHash,
+				}
+				if whitelistShadow {
+					audit.DecisionSource = "cache_replay_whitelist_shadow"
+					s.persistUnifiedShadowAudit(ctx, input, cfg, primary, ContentModerationActionWhitelistShadow, category, bundle.PrimaryKeyword, audit)
+					return allow
+				}
+				decision, _, _ := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, primary, ContentModerationActionCacheBlock, category, bundle.PrimaryKeyword, audit)
+				return decision
+			}
+		} else {
+			if entry.Expired {
+				s.fragmentCacheExpired.Add(1)
+			}
+			s.fragmentCacheMisses.Add(1)
+		}
+	}
+
+	result, attempted, err := s.scanUnifiedSecondLayerPrepared(ctx, cfg, contentModerationSecondLayerInput{
+		Fragment: bundle.Fragment, Evidence: bundle.Evidence, KeywordTier: "candidate", KeywordRuleID: bundle.PrimaryRuleID,
+		Background: whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,
+	})
+	if err != nil {
+		if !errors.Is(err, errContentModerationSecondLayerBusy) {
+			slog.Warn("content_moderation.second_layer_failed", "error", err)
+		}
+		return allow
+	}
+	if !attempted {
+		return allow
+	}
+	audit := unifiedModerationAudit{
+		DecisionSource: "model", CacheNamespace: namespace, ModelProfile: result.Profile,
+		PromptVersion: result.PromptVersion, EvidenceMode: result.EvidenceMode,
+		EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
+		KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
+		EvidenceText: bundle.Evidence.Text, EvidenceWindows: bundle.Windows, InputHash: bundle.CacheHash,
+	}
+	if result.Blocked {
+		if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+			action := ContentModerationActionSecondLayerShadow
+			audit.DecisionSource = "model_shadow"
+			if whitelistShadow {
+				action = ContentModerationActionWhitelistShadow
+				audit.DecisionSource = "model_whitelist_shadow"
+			}
+			s.persistUnifiedShadowAudit(ctx, input, cfg, primary, action, result.Category, bundle.PrimaryKeyword, audit)
+			return allow
+		}
+		decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, primary, ContentModerationActionSecondLayerBlock, result.Category, bundle.PrimaryKeyword, audit)
+		if persisted {
+			s.putUnifiedFragmentCacheEntry(ctx, cache, namespace, cfg, cacheFragment, ContentModerationFragmentCacheEntry{
+				Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: bundle.CacheHash,
+				DecisionSource: "model", Category: result.Category, MatchedKeyword: bundle.PrimaryKeyword,
+				ModelProfile: result.Profile, PromptVersion: result.PromptVersion, KeywordTier: result.KeywordTier,
+				KeywordRuleID: result.KeywordRuleID, EvidenceMode: result.EvidenceMode,
+				EvidenceTruncated: result.EvidenceTruncated, ParserStatus: result.ParserStatus,
+			})
+		}
+		return decision
+	}
+
+	if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow || cfg.RecordNonHits {
+		action := ContentModerationActionAllow
+		if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+			action = ContentModerationActionSecondLayerShadow
+			audit.DecisionSource = "model_shadow"
+		}
+		log := s.buildLog(input, cfg, action, false, "", 0, nil, bundle.Evidence.Text, nil, nil, "")
+		log.MatchedKeyword = bundle.PrimaryKeyword
+		applyUnifiedModerationAudit(log, primary, cfg, audit)
+		s.persistContentModerationLogWithInput(ctx, cfg, log, bundle.CacheHash, false, false, &input)
+	}
+	if !whitelistShadow {
+		s.putUnifiedFragmentCache(ctx, cache, namespace, cfg, cacheFragment, ContentModerationFragmentAllow)
+	}
+	return allow
+}
+
+func (s *ContentModerationService) enqueueContentModerationShadowReview(job func()) bool {
+	if s == nil || job == nil {
+		return false
+	}
+	s.secondLayerShadowOnce.Do(func() {
+		queue := make(chan func(), contentModerationShadowQueueCapacity)
+		s.secondLayerShadowMu.Lock()
+		s.secondLayerShadowQueue = queue
+		s.secondLayerShadowMu.Unlock()
+		go func() {
+			for queued := range queue {
+				func() {
+					defer func() {
+						if recovered := recover(); recovered != nil {
+							slog.Error("content_moderation.second_layer_shadow_panic", "panic", recovered)
+						}
+						s.secondLayerShadowDone.Add(1)
+					}()
+					queued()
+				}()
+			}
+		}()
+	})
+	s.secondLayerShadowMu.RLock()
+	queue := s.secondLayerShadowQueue
+	s.secondLayerShadowMu.RUnlock()
+	select {
+	case queue <- job:
+		s.secondLayerShadowQueued.Add(1)
+		return true
+	default:
+		s.secondLayerShadowDropped.Add(1)
+		return false
+	}
+}
+
+func (s *ContentModerationService) contentModerationShadowQueueDepth() int {
+	if s == nil {
+		return 0
+	}
+	s.secondLayerShadowMu.RLock()
+	defer s.secondLayerShadowMu.RUnlock()
+	if s.secondLayerShadowQueue == nil {
+		return 0
+	}
+	return len(s.secondLayerShadowQueue)
+}
+
+func contentModerationShadowReviewTimeout(cfg *ContentModerationConfig) time.Duration {
+	timeout := 30 * time.Second
+	if cfg != nil {
+		for _, endpoint := range cfg.enabledSecondLayerEndpoints() {
+			candidate := time.Duration(endpoint.TimeoutMS)*time.Millisecond + 5*time.Second
+			if candidate > timeout {
+				timeout = candidate
+			}
+		}
+	}
+	if timeout > 2*time.Minute {
+		return 2 * time.Minute
+	}
+	return timeout
 }
 
 func (s *ContentModerationService) acquireContentModerationFragmentDecisionLock(key string) func() {
@@ -332,17 +526,6 @@ func (s *ContentModerationService) acquireContentModerationFragmentDecisionLock(
 		}
 		s.fragmentDecisionMu.Unlock()
 	}
-}
-
-func matchesContentModerationAllowlist(text string, values []string) bool {
-	text = strings.ToLower(text)
-	for _, value := range values {
-		value = strings.ToLower(strings.TrimSpace(value))
-		if value != "" && strings.Contains(text, value) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *ContentModerationService) getUnifiedFragmentCache(ctx context.Context, cache ContentModerationFragmentCache, namespace, fragmentHash string) (ContentModerationFragmentCacheEntry, bool, error) {
@@ -391,10 +574,19 @@ func (s *ContentModerationService) persistUnifiedShadowAudit(ctx context.Context
 		highestScore = 1
 		scores = map[string]float64{category: highestScore}
 	}
-	log := s.buildLog(input, cfg, action, false, category, highestScore, scores, fragment.Text, nil, nil, "")
+	logInput := fragment.Text
+	if strings.TrimSpace(audit.EvidenceText) != "" {
+		logInput = audit.EvidenceText
+	}
+	log := s.buildLog(input, cfg, action, false, category, highestScore, scores, logInput, nil, nil, "")
 	log.MatchedKeyword = keyword
 	applyUnifiedModerationAudit(log, fragment, cfg, audit)
-	s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, false, &input)
+	inputHash := fragment.Hash
+	if strings.TrimSpace(audit.InputHash) != "" {
+		inputHash = audit.InputHash
+		log.InputHash = inputHash
+	}
+	s.persistContentModerationLogWithInput(ctx, cfg, log, inputHash, false, false, &input)
 }
 
 type unifiedModerationAudit struct {
@@ -410,6 +602,9 @@ type unifiedModerationAudit struct {
 	ParserStatus      string
 	KeywordTier       string
 	KeywordRuleID     string
+	EvidenceText      string
+	EvidenceWindows   []ContentModerationEvidenceWindow
+	InputHash         string
 }
 
 func (s *ContentModerationService) unifiedBlockDecisionWithAudit(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, fragment ContentModerationFragment, action, category, keyword string, audit unifiedModerationAudit) (*ContentModerationDecision, *ContentModerationLog, bool) {
@@ -417,11 +612,20 @@ func (s *ContentModerationService) unifiedBlockDecisionWithAudit(ctx context.Con
 		category = "content_policy"
 	}
 	scores := map[string]float64{category: 1}
-	log := s.buildLog(input, cfg, action, true, category, 1, scores, fragment.Text, nil, nil, "")
+	logInput := fragment.Text
+	if strings.TrimSpace(audit.EvidenceText) != "" {
+		logInput = audit.EvidenceText
+	}
+	log := s.buildLog(input, cfg, action, true, category, 1, scores, logInput, nil, nil, "")
 	log.MatchedKeyword = keyword
 	applyUnifiedModerationAudit(log, fragment, cfg, audit)
 	applySideEffects := !audit.CacheHit && action != ContentModerationActionCacheBlock
-	persisted := s.persistContentModerationLogWithInput(ctx, cfg, log, fragment.Hash, false, applySideEffects, &input)
+	inputHash := fragment.Hash
+	if strings.TrimSpace(audit.InputHash) != "" {
+		inputHash = audit.InputHash
+	}
+	log.InputHash = inputHash
+	persisted := s.persistContentModerationLogWithInput(ctx, cfg, log, inputHash, false, applySideEffects, &input)
 	s.recordPreBlockSyncMetric(0, action)
 
 	blocked := cfg.Mode == ContentModerationModePreBlock
@@ -435,7 +639,7 @@ func (s *ContentModerationService) unifiedBlockDecisionWithAudit(ctx context.Con
 		Flagged:         true,
 		Message:         message,
 		StatusCode:      cfg.BlockStatus,
-		InputHash:       fragment.Hash,
+		InputHash:       inputHash,
 		MatchedKeyword:  keyword,
 		HighestCategory: category,
 		HighestScore:    1,
@@ -466,10 +670,23 @@ func applyUnifiedModerationAudit(log *ContentModerationLog, fragment ContentMode
 	log.EvidenceMode = audit.EvidenceMode
 	log.EvidenceTruncated = audit.EvidenceTruncated
 	log.ParserStatus = audit.ParserStatus
+	log.EvidenceWindows = cloneContentModerationEvidenceWindows(audit.EvidenceWindows)
 	if audit.CacheHit {
 		log.ViolationCount = 0
 		log.DispositionStatus = "not_counted"
 	}
+}
+
+func cloneContentModerationEvidenceWindows(windows []ContentModerationEvidenceWindow) []ContentModerationEvidenceWindow {
+	if len(windows) == 0 {
+		return []ContentModerationEvidenceWindow{}
+	}
+	out := make([]ContentModerationEvidenceWindow, len(windows))
+	for index, window := range windows {
+		out[index] = window
+		out[index].Matches = append([]ContentModerationEvidenceMatch(nil), window.Matches...)
+	}
+	return out
 }
 
 func contentModerationLogIDPtr(log *ContentModerationLog) *int64 {

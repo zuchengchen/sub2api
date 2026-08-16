@@ -274,6 +274,21 @@ export interface ContentModerationAPIKeyLoad {
   last_http_status: number
 }
 
+export interface ContentModerationEvidenceMatch {
+  keyword: string
+  rule_id: string
+  tier: string
+  start: number
+  end: number
+}
+
+export interface ContentModerationEvidenceWindow {
+  path: string
+  context_class: string
+  text: string
+  matches: ContentModerationEvidenceMatch[]
+}
+
 export interface ContentModerationLog {
   id: number
   request_id: string
@@ -305,6 +320,7 @@ export interface ContentModerationLog {
   keyword_rule_id?: string
   evidence_mode?: string
   evidence_truncated: boolean
+  evidence_windows?: ContentModerationEvidenceWindow[]
   parser_status?: string
   flagged: boolean
   highest_category: string

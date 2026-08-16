@@ -61,6 +61,14 @@ func insertContentModerationLog(ctx context.Context, db contentModerationQueryRo
 	if err != nil {
 		return fmt.Errorf("marshal moderation thresholds: %w", err)
 	}
+	evidenceWindowValues := log.EvidenceWindows
+	if evidenceWindowValues == nil {
+		evidenceWindowValues = []service.ContentModerationEvidenceWindow{}
+	}
+	evidenceWindows, err := json.Marshal(evidenceWindowValues)
+	if err != nil {
+		return fmt.Errorf("marshal moderation evidence windows: %w", err)
+	}
 	legacyMetadata := log.LegacyMetadata
 	if len(legacyMetadata) == 0 {
 		legacyMetadata = json.RawMessage(`{}`)
@@ -107,7 +115,7 @@ INSERT INTO content_moderation_logs (
     fragment_role, fragment_kind, context_class, fragment_path,
     cache_namespace, policy_version, model_profile, prompt_version,
     evidence_policy_version, keyword_tier, keyword_rule_id, evidence_mode,
-    evidence_truncated, parser_status,
+    evidence_truncated, evidence_windows, parser_status,
     archive_id, archive_version, archive_key_id, archive_plaintext_sha256,
     archive_plaintext_bytes, archive_status, archive_incomplete, archive_content_lost,
     archive_deleted_at, disposition_status, disposition_target,
@@ -123,12 +131,12 @@ INSERT INTO content_moderation_logs (
     $35, $36, $37, $38,
     $39, $40, $41, $42,
     $43, $44, $45, $46,
-    $47, $48,
-    NULLIF($49, '')::uuid, NULLIF($50, 0), $51, $52,
-    $53, $54, $55, $56,
-    $57, $58, $59,
-    $60, $61, $62,
-    $63, $64::jsonb, COALESCE($65, NOW())
+    $47, $48::jsonb, $49,
+    NULLIF($50, '')::uuid, NULLIF($51, 0), $52, $53,
+    $54, $55, $56, $57,
+    $58, $59, $60,
+    $61, $62, $63,
+    $64, $65::jsonb, COALESCE($66, NOW())
 ) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
@@ -139,7 +147,7 @@ INSERT INTO content_moderation_logs (
 		log.FragmentRole, log.FragmentKind, log.ContextClass, log.FragmentPath,
 		log.CacheNamespace, log.PolicyVersion, log.ModelProfile, log.PromptVersion,
 		log.EvidencePolicyVersion, log.KeywordTier, log.KeywordRuleID, log.EvidenceMode,
-		log.EvidenceTruncated, log.ParserStatus,
+		log.EvidenceTruncated, string(evidenceWindows), log.ParserStatus,
 		log.ArchiveID, log.ArchiveVersion, log.ArchiveKeyID, nullableBytes(log.ArchiveSHA256),
 		log.ArchiveBytes, archiveStatus, log.ArchiveIncomplete, log.ArchiveContentLost,
 		log.ArchiveDeletedAt, log.DispositionStatus, log.DispositionTarget,
@@ -206,7 +214,7 @@ SELECT
     l.fragment_role, l.fragment_kind, l.context_class, l.fragment_path,
     l.cache_namespace, l.policy_version, l.model_profile, l.prompt_version,
     l.evidence_policy_version, l.keyword_tier, l.keyword_rule_id, l.evidence_mode,
-    l.evidence_truncated, l.parser_status,
+    l.evidence_truncated, l.evidence_windows, l.parser_status,
     COALESCE(l.archive_id::text, ''), COALESCE(l.archive_version, 0), l.archive_key_id,
     l.archive_plaintext_bytes, l.archive_status, l.archive_incomplete, l.archive_content_lost,
     l.archive_deleted_at, l.disposition_status, l.disposition_target, l.disposition_transitioned,
@@ -229,7 +237,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		var userID, apiKeyID, groupID, latency, queueDelay, sourceLogID, legacySourceJobID sql.NullInt64
 		var archiveDeletedAt, emailDeliveryClaimedAt sql.NullTime
 		var scoresRaw, thresholdsRaw []byte
-		var legacyMetadataRaw []byte
+		var legacyMetadataRaw, evidenceWindowsRaw []byte
 		if err := rows.Scan(
 			&item.ID,
 			&item.RequestID,
@@ -282,6 +290,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&item.KeywordRuleID,
 			&item.EvidenceMode,
 			&item.EvidenceTruncated,
+			&evidenceWindowsRaw,
 			&item.ParserStatus,
 			&item.ArchiveID,
 			&item.ArchiveVersion,
@@ -342,6 +351,8 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		_ = json.Unmarshal(scoresRaw, &item.CategoryScores)
 		item.ThresholdSnapshot = map[string]float64{}
 		_ = json.Unmarshal(thresholdsRaw, &item.ThresholdSnapshot)
+		item.EvidenceWindows = []service.ContentModerationEvidenceWindow{}
+		_ = json.Unmarshal(evidenceWindowsRaw, &item.EvidenceWindows)
 		item.LegacyMetadata = append(json.RawMessage(nil), legacyMetadataRaw...)
 		items = append(items, item)
 	}
