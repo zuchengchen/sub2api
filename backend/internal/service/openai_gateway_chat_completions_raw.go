@@ -93,11 +93,14 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(upstreamBody, upstreamModel); normalized {
 		upstreamBody = normalizedBody
 	}
-	managedBody, _, managedErr := enforceOpenAICompatibleNonReasoning(account, upstreamModel, upstreamBody, openAICompatibleWireChat)
+	managedBody, managedNonReasoning, managedErr := enforceOpenAICompatibleNonReasoning(account, upstreamModel, upstreamBody, openAICompatibleWireChat)
 	if managedErr != nil {
 		return nil, managedErr
 	}
 	upstreamBody = managedBody
+	if managedNonReasoning {
+		reasoningEffort = nil
+	}
 
 	// 4. Apply OpenAI fast policy on the CC body
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, upstreamBody)
