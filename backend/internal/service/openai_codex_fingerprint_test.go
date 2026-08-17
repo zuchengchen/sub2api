@@ -510,6 +510,28 @@ func TestApplyCodexFingerprintClientMetadataRaw_MatchesMapVariant(t *testing.T) 
 		for name, body := range bodies {
 			t.Run(string(mode)+"/"+name, func(t *testing.T) {
 				mapCM, rawCM := rawVsMapClientMetadata(t, []byte(body), ids)
+				mapTurnRaw, hasMapTurn := mapCM["x-codex-turn-metadata"].(string)
+				rawTurnRaw, hasRawTurn := rawCM["x-codex-turn-metadata"].(string)
+				require.Equal(t, hasMapTurn, hasRawTurn)
+				if hasMapTurn {
+					var mapTurn, rawTurn map[string]any
+					require.NoError(t, json.Unmarshal([]byte(mapTurnRaw), &mapTurn))
+					require.NoError(t, json.Unmarshal([]byte(rawTurnRaw), &rawTurn))
+					mapStarted, mapStartedOK := mapTurn["turn_started_at_unix_ms"].(float64)
+					rawStarted, rawStartedOK := rawTurn["turn_started_at_unix_ms"].(float64)
+					require.Equal(t, mapStartedOK, rawStartedOK)
+					if mapStartedOK {
+						require.InDelta(t, mapStarted, rawStarted, 100)
+						mapTurn["turn_started_at_unix_ms"] = float64(0)
+						rawTurn["turn_started_at_unix_ms"] = float64(0)
+					}
+					mapTurnNormalized, err := json.Marshal(mapTurn)
+					require.NoError(t, err)
+					rawTurnNormalized, err := json.Marshal(rawTurn)
+					require.NoError(t, err)
+					mapCM["x-codex-turn-metadata"] = string(mapTurnNormalized)
+					rawCM["x-codex-turn-metadata"] = string(rawTurnNormalized)
+				}
 				assert.Equal(t, mapCM, rawCM, "raw 字节版与 map 版的 client_metadata 结果必须逐点一致")
 			})
 		}

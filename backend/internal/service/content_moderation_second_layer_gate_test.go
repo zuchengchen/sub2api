@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +29,7 @@ func TestContentModerationSecondLayerCandidatePrefilterGatesModel(t *testing.T) 
 		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"reverse shell"}),
 	}
 	svc := &ContentModerationService{repo: &contentModerationTestRepo{}}
+	svc.markYuFengEndpointHealthy(cfg.enabledYuFengSecondLayerEndpoints()[0], time.Now())
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
 
 	allowed := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
@@ -265,6 +267,7 @@ func TestContentModerationDestructivePayloadDemotionRoutesToSecondLayer(t *testi
 			require.Equal(t, "destructive payload", keyword)
 
 			svc := &ContentModerationService{repo: &contentModerationTestRepo{}}
+			svc.markYuFengEndpointHealthy(cfg.enabledYuFengSecondLayerEndpoints()[0], time.Now())
 			scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
 			decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
 				Body: []byte(tt.body), Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,

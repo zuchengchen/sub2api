@@ -284,9 +284,9 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			}
 		}
 		if len(contextualMatches) > 0 {
-			// Contextual hard-keyword decisions depend on the complete logical
-			// fragment. If bounded evidence cannot represent it, the review must
-			// remain truncated and fail closed instead of caching a partial allow.
+			// Contextual hard-keyword decisions retain the complete logical
+			// fragment when it fits the reviewer budget. The builder distinguishes
+			// harmless metadata bounds from omitted context that must fail closed.
 			candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
 				Fragment: fragment, Matches: contextualMatches, Tier: "contextual_review",
 				WholeFragment: true, WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
@@ -511,9 +511,18 @@ func buildContentModerationCrossMessageBoundaryFragments(
 		}
 		leftFragment := fragments[left.members[len(left.members)-1]]
 		rightFragment := fragments[right.members[0]]
-		boundaryTruncated := len(left.members) != 1 || len(right.members) != 1 ||
-			len(leftFragment.Text) > contentModerationContextScopeMaxRunes/2 ||
-			len(rightFragment.Text) > contentModerationContextScopeMaxRunes/2
+		leftLogicalFragments := make([]ContentModerationFragment, 0, len(left.members))
+		for _, member := range left.members {
+			leftLogicalFragments = append(leftLogicalFragments, fragments[member])
+		}
+		rightLogicalFragments := make([]ContentModerationFragment, 0, len(right.members))
+		for _, member := range right.members {
+			rightLogicalFragments = append(rightLogicalFragments, fragments[member])
+		}
+		leftFragment.Text = joinContentModerationFragmentsAtOriginalWhitespace(leftLogicalFragments)
+		rightFragment.Text = joinContentModerationFragmentsAtOriginalWhitespace(rightLogicalFragments)
+		boundaryTruncated := utf8.RuneCountInString(leftFragment.Text)+utf8.RuneCountInString(rightFragment.Text)+1 >
+			contentModerationEvidenceWindowBudgetRunes
 		for _, text := range contentModerationCrossMessageBoundaryTexts(
 			leftFragment, rightFragment, keywordMatcher, candidateMatcher, keywordAllowlist,
 		) {
@@ -585,15 +594,34 @@ func contentModerationCrossMessageBoundaryTexts(
 ) []string {
 	texts := make([]string, 0, 4)
 	seen := make(map[string]struct{}, 4)
-	leftContext := contentModerationSuffixBytes(left.Text, contentModerationContextScopeMaxRunes/2)
-	rightContext := contentModerationPrefixBytes(right.Text, contentModerationContextScopeMaxRunes/2)
-	addIfTriggered := func(boundary, reviewText string) {
+	contextBudget := contentModerationEvidenceWindowBudgetRunes - 1
+	leftBudget := contextBudget / 2
+	rightBudget := contextBudget - leftBudget
+	leftRunes := utf8.RuneCountInString(left.Text)
+	rightRunes := utf8.RuneCountInString(right.Text)
+	if leftRunes < leftBudget {
+		rightBudget += leftBudget - leftRunes
+		leftBudget = leftRunes
+	}
+	if rightRunes < rightBudget {
+		leftBudget += rightBudget - rightRunes
+		rightBudget = rightRunes
+	}
+	leftContext := runeSuffix(left.Text, leftBudget)
+	rightContext := runePrefix(right.Text, rightBudget)
+	addIfTriggered := func(boundary, reviewText string, leftRunes, separatorRunes int) {
 		matches := contentModerationScopeTriggerMatches(boundary, keywordMatcher, candidateMatcher, keywordAllowlist)
-		if len(matches) == 0 {
+		crossingMatches := matches[:0]
+		for _, match := range matches {
+			if match.Start < leftRunes && match.End > leftRunes+separatorRunes {
+				crossingMatches = append(crossingMatches, match)
+			}
+		}
+		if len(crossingMatches) == 0 {
 			return
 		}
-		triggerKeywords := make(map[string]struct{}, len(matches))
-		for _, match := range matches {
+		triggerKeywords := make(map[string]struct{}, len(crossingMatches))
+		for _, match := range crossingMatches {
 			triggerKeywords[normalizedContentModerationKeywordKey(match.Keyword)] = struct{}{}
 		}
 		reviewText = strings.TrimSpace(reviewText)
@@ -620,15 +648,17 @@ func contentModerationCrossMessageBoundaryTexts(
 	if limit := contentModerationScopeBoundaryBytes(keywordMatcher, nil); limit > 0 {
 		leftText := contentModerationSuffixBytes(left.Text, limit)
 		rightText := contentModerationPrefixBytes(right.Text, limit)
-		addIfTriggered(leftText+" "+rightText, leftContext+" "+rightContext)
-		addIfTriggered(leftText+rightText, leftContext+rightContext)
+		leftTextRunes := utf8.RuneCountInString(leftText)
+		addIfTriggered(leftText+" "+rightText, leftContext+" "+rightContext, leftTextRunes, 1)
+		addIfTriggered(leftText+rightText, leftContext+rightContext, leftTextRunes, 0)
 	}
 	if candidateMatcher != nil {
 		limit := maxContentModerationBlockedKeywordRunes + 2
 		leftText, _ := contentModerationPrefilterNormalizedSuffix(left.Text, limit)
 		rightText := contentModerationPrefilterNormalizedPrefix(right.Text, limit)
-		addIfTriggered(leftText+" "+rightText, leftContext+" "+rightContext)
-		addIfTriggered(leftText+rightText, leftContext+rightContext)
+		leftTextRunes := utf8.RuneCountInString(leftText)
+		addIfTriggered(leftText+" "+rightText, leftContext+" "+rightContext, leftTextRunes, 1)
+		addIfTriggered(leftText+rightText, leftContext+rightContext, leftTextRunes, 0)
 	}
 	return texts
 }
@@ -959,9 +989,9 @@ func joinContentModerationFragmentsAtOriginalWhitespace(fragments []ContentModer
 	var combined strings.Builder
 	for index, fragment := range fragments {
 		if index > 0 && (fragments[index-1].trailingSpace || fragment.leadingSpace) {
-			combined.WriteByte(' ')
+			_ = combined.WriteByte(' ')
 		}
-		combined.WriteString(fragment.Text)
+		_, _ = combined.WriteString(fragment.Text)
 	}
 	return combined.String()
 }
@@ -1311,12 +1341,12 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundle(
 	if strings.TrimSpace(work.bundle.Evidence.Text) == "" || work.bundle.CacheHash == "" {
 		slog.Warn("content_moderation.candidate_evidence_empty")
 		return contentModerationCandidateReviewOutcome{
-			parserStatus: "not_attempted", err: errors.New("Layer 2 candidate evidence is empty"),
+			parserStatus: "not_attempted", err: errors.New("layer 2 candidate evidence is empty"),
 		}
 	}
 	if !cfg.DeepSeekEnabled && (!cfg.YuFengEnabled || len(cfg.enabledYuFengSecondLayerEndpoints()) == 0) {
 		return contentModerationCandidateReviewOutcome{
-			parserStatus: "not_attempted", err: errors.New("Layer 2 reviewer is unavailable"),
+			parserStatus: "not_attempted", err: errors.New("layer 2 reviewer is unavailable"),
 		}
 	}
 	flightKey := namespace + "\x00layer2-review\x00" + work.bundle.CacheHash
@@ -1329,7 +1359,7 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundle(
 				if recovered := recover(); recovered != nil {
 					slog.Error("content_moderation.layer2_review_panic", "panic", recovered)
 					outcome = contentModerationCandidateReviewOutcome{
-						parserStatus: "error", err: fmt.Errorf("Layer 2 review panic: %v", recovered),
+						parserStatus: "error", err: fmt.Errorf("layer 2 review panic: %v", recovered),
 					}
 				}
 				s.finishContentModerationCandidateReviewFlight(flightKey, flight, outcome)
@@ -1403,12 +1433,12 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 	}
 	if !attempted {
 		return contentModerationCandidateReviewOutcome{
-			result: result, parserStatus: "not_attempted", err: errors.New("Layer 2 review was not attempted"),
+			result: result, parserStatus: "not_attempted", err: errors.New("layer 2 review was not attempted"),
 		}
 	}
-	if work.reviewRequired && work.bundle.Evidence.Truncated && !result.Blocked {
+	if work.reviewRequired && !result.Blocked && (work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) {
 		return contentModerationCandidateReviewOutcome{
-			result: result, parserStatus: "evidence_truncated", err: errors.New("contextual review evidence was truncated"),
+			result: result, parserStatus: "evidence_truncated", err: errors.New("contextual review evidence coverage was incomplete"),
 		}
 	}
 	return contentModerationCandidateReviewOutcome{result: result}
@@ -1697,15 +1727,6 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	persisted := s.persistContentModerationLogWithInput(persistCtx, cfg, log, bundle.CacheHash, false, false, &input)
 	publishCache(log, persisted)
 	return allow
-}
-
-func contentModerationCandidatesRequireContextualReview(candidates []contentModerationCandidateFragment) bool {
-	for _, candidate := range candidates {
-		if candidate.Tier == "contextual_review" {
-			return true
-		}
-	}
-	return false
 }
 
 func interleaveContextualReviewCandidates(candidates []contentModerationCandidateFragment) []contentModerationCandidateFragment {

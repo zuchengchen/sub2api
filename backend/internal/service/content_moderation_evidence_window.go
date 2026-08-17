@@ -14,7 +14,7 @@ const (
 	contentModerationEvidenceExpandedMatchRunes = 1024
 	contentModerationEvidenceMaxWindows         = 16
 	contentModerationEvidenceMaxMatches         = 64
-	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v5\x00"
+	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v6\x00"
 )
 
 // ContentModerationEvidenceMatch offsets are Unicode rune indexes relative to
@@ -45,16 +45,22 @@ type contentModerationCandidateFragment struct {
 }
 
 type contentModerationEvidenceBundle struct {
-	Fragment       ContentModerationFragment
-	Evidence       moderationEvidence
-	Windows        []ContentModerationEvidenceWindow
-	AllRuleIDs     []string
-	AllContexts    []string
-	PrimaryKeyword string
-	PrimaryRuleID  string
-	PrimaryTier    string
-	CacheHash      string
-	CanonicalKeys  []contentModerationEvidenceCanonicalKey
+	Fragment ContentModerationFragment
+	Evidence moderationEvidence
+	// CoverageIncomplete is stricter than Evidence.Truncated. A bounded window
+	// can be truncated while still retaining every matched risk trigger.
+	CoverageIncomplete bool
+	// ContextIncomplete records that a contextual-review candidate could not
+	// retain its complete logical fragment within the reviewer input budget.
+	ContextIncomplete bool
+	Windows           []ContentModerationEvidenceWindow
+	AllRuleIDs        []string
+	AllContexts       []string
+	PrimaryKeyword    string
+	PrimaryRuleID     string
+	PrimaryTier       string
+	CacheHash         string
+	CanonicalKeys     []contentModerationEvidenceCanonicalKey
 }
 
 type contentModerationRuneSpan struct {
@@ -76,12 +82,13 @@ type contentModerationEvidenceCanonicalKey struct {
 }
 
 type contentModerationCanonicalWindow struct {
-	Window        ContentModerationEvidenceWindow
-	Role          string
-	Kind          string
-	Tier          string
-	RuleSignature string
-	Truncated     bool
+	Window             ContentModerationEvidenceWindow
+	Role               string
+	Kind               string
+	Tier               string
+	RuleSignature      string
+	Truncated          bool
+	CoverageIncomplete bool
 }
 
 func buildContentModerationCandidateEvidence(candidates []contentModerationCandidateFragment, endpointLimit int, cfg *ContentModerationConfig) contentModerationEvidenceBundle {
@@ -125,6 +132,9 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 	canonicalWindows := make([]contentModerationCanonicalWindow, 0, len(candidates))
 	canonicalIndexes := make(map[contentModerationEvidenceCanonicalKey]int, len(candidates))
 	sourceTruncated := false
+	coverageIncomplete := false
+	contextIncomplete := false
+	requiresWholeContext := false
 	for _, candidate := range candidates {
 		matches := normalizedCandidateMatches(candidate.Fragment.Text, candidate.Matches)
 		if len(matches) == 0 {
@@ -134,33 +144,54 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 		runes := []rune(candidate.Fragment.Text)
 		spans := candidateEvidenceSpans(runes, candidate.Fragment.ContextClass, matches)
 		if candidate.WholeFragment {
-			spans = wholeFragmentCandidateEvidenceSpan(runes, matches)
+			requiresWholeContext = true
+			spans = wholeFragmentCandidateEvidenceSpan(runes, matches, budget)
 		}
 		if len(spans) == 0 {
 			sourceTruncated = true
+			coverageIncomplete = true
 			continue
 		}
+		coveredMatches := make(map[string]struct{}, len(matches))
 		for _, candidateSpan := range spans {
 			span := candidateSpan.contentModerationRuneSpan
 			spanTruncated := candidateSpan.truncated || candidate.WholeFragmentTruncated
+			if candidate.WholeFragment && spanTruncated {
+				contextIncomplete = true
+			}
 			spanMatches := matchesWithinSpan(matches, span)
 			if len(spanMatches) == 0 {
 				continue
 			}
+			for _, match := range spanMatches {
+				coveredMatches[contentModerationSourceMatchKey(match)] = struct{}{}
+			}
 			rawText := strings.TrimSpace(string(runes[span.start:span.end]))
 			if rawText == "" {
 				sourceTruncated = true
+				coverageIncomplete = true
 				continue
 			}
 			redacted := redactContentModerationEvidenceText(rawText)
+			redactedLimit := contentModerationEvidenceExpandedMatchRunes
+			if candidate.WholeFragment {
+				redactedLimit = budget
+			}
 			if boundedRedacted, redactedTruncated := cropContentModerationRedactedWindow(
-				redacted, spanMatches, candidate.Tier, contentModerationEvidenceExpandedMatchRunes,
+				redacted, spanMatches, candidate.Tier, redactedLimit,
 			); redactedTruncated {
 				redacted = boundedRedacted
 				spanTruncated = true
+				if candidate.WholeFragment {
+					contextIncomplete = true
+				}
 			}
 			windowMatches := evidenceMatchesInRedactedWindow(redacted, spanMatches, candidate.Tier)
+			windowCoverageIncomplete := !contentModerationEvidenceMatchesCoverSource(spanMatches, windowMatches)
 			if len(windowMatches) < len(spanMatches) {
+				spanTruncated = true
+			}
+			if windowCoverageIncomplete {
 				// Secret redaction may replace a matched value. Keep the bounded
 				// context, but never publish offsets that no longer match its text.
 				spanTruncated = true
@@ -179,13 +210,24 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 				// not consume evidence budget, but any real source cropping remains
 				// security-significant.
 				canonicalWindows[existingIndex].Truncated = canonicalWindows[existingIndex].Truncated || spanTruncated
+				canonicalWindows[existingIndex].CoverageIncomplete = canonicalWindows[existingIndex].CoverageIncomplete || windowCoverageIncomplete
 				continue
 			}
 			canonicalIndexes[key] = len(canonicalWindows)
 			canonicalWindows = append(canonicalWindows, contentModerationCanonicalWindow{
 				Window: window, Role: candidate.Fragment.Role, Kind: candidate.Fragment.Kind, Tier: candidate.Tier,
-				RuleSignature: ruleSignature, Truncated: spanTruncated,
+				RuleSignature: ruleSignature, Truncated: spanTruncated, CoverageIncomplete: windowCoverageIncomplete,
 			})
+		}
+		for _, match := range matches {
+			if _, covered := coveredMatches[contentModerationSourceMatchKey(match)]; !covered {
+				coverageIncomplete = true
+				break
+			}
+		}
+		if candidate.WholeFragmentTruncated {
+			coverageIncomplete = true
+			contextIncomplete = true
 		}
 	}
 
@@ -198,6 +240,8 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 	for _, canonical := range canonicalWindows {
 		if len(windows) >= contentModerationEvidenceMaxWindows || remainingMatchBudget <= 0 {
 			truncated = true
+			coverageIncomplete = true
+			contextIncomplete = contextIncomplete || requiresWholeContext
 			break
 		}
 		separatorRunes := 0
@@ -207,29 +251,39 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 		available := remaining - separatorRunes
 		if available <= 0 {
 			truncated = true
+			coverageIncomplete = true
+			contextIncomplete = contextIncomplete || requiresWholeContext
 			break
 		}
 
 		window := canonical.Window
 		windowTruncated := canonical.Truncated
+		windowCoverageIncomplete := canonical.CoverageIncomplete
 		if len([]rune(window.Text)) > available {
 			sourceMatches := candidateMatchesFromEvidenceMatches(window.Matches)
 			window.Text, _ = cropContentModerationRedactedWindow(window.Text, sourceMatches, canonical.Tier, available)
 			window.Matches = evidenceMatchesInRedactedWindow(window.Text, sourceMatches, canonical.Tier)
 			windowTruncated = true
+			windowCoverageIncomplete = windowCoverageIncomplete || !contentModerationEvidenceMatchesCoverSource(sourceMatches, window.Matches)
+			contextIncomplete = contextIncomplete || requiresWholeContext
 		}
 		if strings.TrimSpace(window.Text) == "" {
 			truncated = true
+			coverageIncomplete = true
+			contextIncomplete = contextIncomplete || requiresWholeContext
 			continue
 		}
 		if len(window.Matches) > remainingMatchBudget {
 			window.Matches = window.Matches[:remainingMatchBudget]
 			windowTruncated = true
+			windowCoverageIncomplete = true
 		}
 		remainingMatchBudget -= len(window.Matches)
 		if len(window.Matches) == 0 {
 			windowTruncated = true
+			windowCoverageIncomplete = true
 		}
+		coverageIncomplete = coverageIncomplete || windowCoverageIncomplete
 
 		windows = append(windows, window)
 		canonicalKeys = append(canonicalKeys, contentModerationEvidenceCanonicalKey{
@@ -248,6 +302,8 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 	}
 	if len(windows) < len(canonicalWindows) {
 		truncated = true
+		coverageIncomplete = true
+		contextIncomplete = contextIncomplete || requiresWholeContext
 	}
 
 	parts := make([]string, 0, len(windows))
@@ -280,11 +336,27 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 	sort.Strings(allRuleIDs)
 	sort.Strings(allContexts)
 	bundle := contentModerationEvidenceBundle{
-		Fragment: fragment, Evidence: evidence, Windows: windows, AllRuleIDs: allRuleIDs, AllContexts: allContexts,
+		Fragment: fragment, Evidence: evidence, CoverageIncomplete: coverageIncomplete, ContextIncomplete: contextIncomplete,
+		Windows: windows, AllRuleIDs: allRuleIDs, AllContexts: allContexts,
 		PrimaryKeyword: primaryKeyword, PrimaryRuleID: primaryRuleID, PrimaryTier: primaryTier, CanonicalKeys: canonicalKeys,
 	}
 	bundle.CacheHash = contentModerationEvidenceCacheHash(bundle, cfg)
 	return bundle
+}
+
+func contentModerationSourceMatchKey(match contentModerationKeywordMatch) string {
+	return match.Keyword + "\x00" + itoa(match.Start) + "\x00" + itoa(match.End)
+}
+
+func contentModerationEvidenceMatchesCoverSource(source []contentModerationKeywordMatch, evidence []ContentModerationEvidenceMatch) bool {
+	required := make(map[string]struct{}, len(source))
+	for _, match := range source {
+		required[match.Keyword] = struct{}{}
+	}
+	for _, match := range evidence {
+		delete(required, match.Keyword)
+	}
+	return len(required) == 0
 }
 
 func contentModerationEvidenceRuleSignature(matches []contentModerationKeywordMatch, tier string) string {
@@ -313,11 +385,14 @@ func candidateMatchesFromEvidenceMatches(matches []ContentModerationEvidenceMatc
 	return out
 }
 
-func wholeFragmentCandidateEvidenceSpan(text []rune, matches []contentModerationKeywordMatch) []contentModerationCandidateSpan {
+func wholeFragmentCandidateEvidenceSpan(text []rune, matches []contentModerationKeywordMatch, limit int) []contentModerationCandidateSpan {
 	span := contentModerationRuneSpan{end: len(text)}
 	candidate := contentModerationCandidateSpan{contentModerationRuneSpan: span}
-	if len(text) > contentModerationEvidenceExpandedMatchRunes {
-		candidate.contentModerationRuneSpan = cropCandidateSpan(span, matches, contentModerationEvidenceExpandedMatchRunes)
+	if limit < 1 {
+		limit = 1
+	}
+	if len(text) > limit {
+		candidate.contentModerationRuneSpan = cropCandidateSpan(span, matches, limit)
 		candidate.truncated = true
 	}
 	return []contentModerationCandidateSpan{candidate}
