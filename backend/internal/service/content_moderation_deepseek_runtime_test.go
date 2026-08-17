@@ -744,7 +744,7 @@ func TestContentModerationDeepSeekRuntimeBreakerBlocksReadinessUntilHalfOpenRevi
 	state.mu.Lock()
 	state.cooldownUntil = time.Now().Add(-time.Second)
 	state.mu.Unlock()
-	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(cfg, time.Now())
+	ready, _ = svc.contentModerationSecondLayerEnforceReadiness(cfg, time.Now())
 	require.False(t, ready)
 	_, breaker, _, _, _, _, _ := state.snapshot(time.Now())
 	require.Equal(t, "half_open", breaker)
