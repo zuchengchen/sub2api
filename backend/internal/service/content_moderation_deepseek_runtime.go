@@ -25,8 +25,10 @@ import (
 const (
 	contentModerationDeepSeekCooldown         = 30 * time.Second
 	contentModerationDeepSeekRateCooldown     = 60 * time.Second
+	contentModerationDeepSeekHealthTTL        = 15 * time.Minute
 	contentModerationDeepSeekFailureTrip      = 3
 	contentModerationDeepSeekMaxResponseBytes = 64 * 1024
+	contentModerationDeepSeekRetryMinBudget   = 250 * time.Millisecond
 )
 
 var contentModerationDeepSeekCategories = map[string]struct{}{
@@ -57,7 +59,7 @@ type contentModerationDeepSeekChannelState struct {
 	cooldownUntil       time.Time
 	halfOpenProbe       bool
 	healthCheckedAt     time.Time
-	healthy             bool
+	healthyUntil        time.Time
 	lastLatencyMS       int
 	lastError           string
 }
@@ -88,7 +90,6 @@ func (s *ContentModerationService) deepSeekChannelState(channel ContentModeratio
 	state.mu.Lock()
 	if state.configDigest != digest {
 		credentialChanged := state.credentialDigest != credentialDigest
-		connectivityChanged := state.connectivityDigest != connectivityDigest
 		authDisabled := state.authDisabled && !credentialChanged
 		state.configDigest = digest
 		state.connectivityDigest = connectivityDigest
@@ -97,10 +98,8 @@ func (s *ContentModerationService) deepSeekChannelState(channel ContentModeratio
 		state.authDisabled = authDisabled
 		state.cooldownUntil = time.Time{}
 		state.halfOpenProbe = false
-		if connectivityChanged {
-			state.healthCheckedAt = time.Time{}
-			state.healthy = false
-		}
+		state.healthCheckedAt = time.Time{}
+		state.healthyUntil = time.Time{}
 		state.lastLatencyMS = 0
 		state.lastError = ""
 	}
@@ -169,10 +168,17 @@ func (state *contentModerationDeepSeekChannelState) finish(
 		state.consecutiveFailures = 0
 		state.authDisabled = false
 		state.cooldownUntil = time.Time{}
+		state.healthCheckedAt = now
+		state.healthyUntil = now.Add(contentModerationDeepSeekHealthTTL)
 		state.lastError = ""
 		return
 	}
 	state.lastError = trimRunes(redactContentModerationSecrets(callErr.Error()), 240)
+	if errors.Is(callErr, context.Canceled) {
+		return
+	}
+	state.healthCheckedAt = now
+	state.healthyUntil = time.Time{}
 	var httpErr *contentModerationDeepSeekHTTPError
 	if errors.As(callErr, &httpErr) {
 		switch httpErr.status {
@@ -195,18 +201,17 @@ func (state *contentModerationDeepSeekChannelState) finish(
 	}
 }
 
-func (state *contentModerationDeepSeekChannelState) markConnectivity(
+func (state *contentModerationDeepSeekChannelState) markReviewHealthy(
 	now time.Time,
-	reachable bool,
-	expectedDigest string,
+	expectedConfigDigest string,
 ) bool {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.connectivityDigest != expectedDigest {
+	if state.configDigest != expectedConfigDigest {
 		return false
 	}
 	state.healthCheckedAt = now
-	state.healthy = reachable
+	state.healthyUntil = now.Add(contentModerationDeepSeekHealthTTL)
 	return true
 }
 
@@ -217,7 +222,7 @@ func (state *contentModerationDeepSeekChannelState) markCredentialUnavailable(no
 	state.cooldownUntil = time.Time{}
 	state.halfOpenProbe = false
 	state.healthCheckedAt = now
-	state.healthy = false
+	state.healthyUntil = time.Time{}
 	state.lastLatencyMS = 0
 	state.lastError = "credential_unavailable"
 	if credentialErr != nil {
@@ -232,11 +237,15 @@ func (state *contentModerationDeepSeekChannelState) snapshot(now time.Time) (hea
 	if !state.healthCheckedAt.IsZero() {
 		checked := state.healthCheckedAt
 		checkedAt = &checked
-		if state.healthy {
+		if now.Before(state.healthyUntil) {
 			health = "reachable"
 		} else {
 			health = "unreachable"
 		}
+	}
+	if !state.healthyUntil.IsZero() {
+		until := state.healthyUntil
+		healthyUntil = &until
 	}
 	breaker = "closed"
 	switch {
@@ -400,30 +409,34 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	attempt := ContentModerationReviewAttempt{Reviewer: "deepseek", ChannelID: channel.ID, ChannelName: channel.Name, Model: channel.Model}
 	state := s.deepSeekChannelState(channel)
 	configDigest := contentModerationDeepSeekChannelDigest(channel)
-	connectivityDigest := contentModerationDeepSeekConnectivityDigest(channel)
 	if allowed, reason := state.begin(time.Now(), bypassBreaker); !allowed {
 		attempt.Outcome = "skipped"
 		attempt.Error = reason
 		return contentModerationSecondLayerResult{}, attempt, fmt.Errorf("DeepSeek channel %s is %s", channel.ID, reason)
 	}
 	started := time.Now()
+	finish := func(callErr error) {
+		latency := int(time.Since(started).Milliseconds())
+		attempt.LatencyMS = latency
+		state.finish(time.Now(), latency, callErr, configDigest)
+	}
 	payloadValue, err := buildContentModerationDeepSeekPayload(channel, input)
 	if err != nil {
-		state.finish(time.Now(), 0, err, configDigest)
+		finish(err)
 		attempt.Outcome = "error"
 		attempt.Error = "payload"
 		return contentModerationSecondLayerResult{}, attempt, err
 	}
 	payload, err := json.Marshal(payloadValue)
 	if err != nil {
-		state.finish(time.Now(), 0, err, configDigest)
+		finish(err)
 		attempt.Outcome = "error"
 		attempt.Error = "payload"
 		return contentModerationSecondLayerResult{}, attempt, err
 	}
 	endpoint, err := contentModerationDeepSeekChatURL(channel.BaseURL)
 	if err != nil {
-		state.finish(time.Now(), 0, err, configDigest)
+		finish(err)
 		attempt.Outcome = "error"
 		attempt.Error = "base_url"
 		return contentModerationSecondLayerResult{}, attempt, err
@@ -432,7 +445,7 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
-		state.finish(time.Now(), 0, err, configDigest)
+		finish(err)
 		attempt.Outcome = "error"
 		attempt.Error = "request"
 		return contentModerationSecondLayerResult{}, attempt, err
@@ -440,26 +453,18 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+channel.APIKey)
 	resp, err := s.deepSeekHTTPClient(channel).Do(req)
-	latency := int(time.Since(started).Milliseconds())
-	attempt.LatencyMS = latency
 	if err != nil {
-		state.markConnectivity(time.Now(), false, connectivityDigest)
-		state.finish(time.Now(), latency, err, configDigest)
+		finish(err)
 		attempt.Outcome = "error"
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
-			attempt.Error = "timeout"
-		} else {
-			attempt.Error = "network"
-		}
+		attempt.Error = contentModerationDeepSeekCallErrorKind(ctx, requestCtx, err, "network")
 		return contentModerationSecondLayerResult{}, attempt, err
 	}
-	state.markConnectivity(time.Now(), true, connectivityDigest)
 	defer func() { _ = resp.Body.Close() }()
 	attempt.HTTPStatus = resp.StatusCode
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, contentModerationDeepSeekMaxResponseBytes))
 		httpErr := &contentModerationDeepSeekHTTPError{status: resp.StatusCode, retryAfter: contentModerationDeepSeekRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
-		state.finish(time.Now(), latency, httpErr, configDigest)
+		finish(httpErr)
 		attempt.Outcome = "error"
 		attempt.Error = "http_" + strconv.Itoa(resp.StatusCode)
 		return contentModerationSecondLayerResult{}, attempt, httpErr
@@ -468,14 +473,16 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	if err != nil || len(body) > contentModerationDeepSeekMaxResponseBytes {
 		if err == nil {
 			err = errors.New("DeepSeek response too large")
+			attempt.Error = "response_too_large"
+		} else {
+			attempt.Error = contentModerationDeepSeekCallErrorKind(ctx, requestCtx, err, "response_read")
 		}
-		state.finish(time.Now(), latency, err, configDigest)
+		finish(err)
 		attempt.Outcome = "error"
-		attempt.Error = "response_read"
 		return contentModerationSecondLayerResult{}, attempt, err
 	}
 	result, err := parseContentModerationDeepSeekResponse(body)
-	state.finish(time.Now(), latency, err, configDigest)
+	finish(err)
 	if err != nil {
 		attempt.Outcome = "error"
 		attempt.Error = "invalid_json"
@@ -491,6 +498,88 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	result.KeywordRuleID = input.KeywordRuleID
 	attempt.Outcome = "success"
 	return result, attempt, nil
+}
+
+func contentModerationDeepSeekCallErrorKind(
+	parentCtx context.Context,
+	requestCtx context.Context,
+	err error,
+	fallback string,
+) string {
+	if parentCtx != nil && errors.Is(parentCtx.Err(), context.Canceled) {
+		return "canceled"
+	}
+	if requestCtx != nil && errors.Is(requestCtx.Err(), context.Canceled) {
+		return "canceled"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	timedOut := (parentCtx != nil && errors.Is(parentCtx.Err(), context.DeadlineExceeded)) ||
+		(requestCtx != nil && errors.Is(requestCtx.Err(), context.DeadlineExceeded)) ||
+		errors.Is(err, context.DeadlineExceeded)
+	if !timedOut {
+		var netErr net.Error
+		timedOut = errors.As(err, &netErr) && netErr.Timeout()
+	}
+	if timedOut {
+		if fallback == "response_read" {
+			return "response_read_timeout"
+		}
+		return "timeout"
+	}
+	return fallback
+}
+
+func contentModerationDeepSeekAttemptRetryable(attempt ContentModerationReviewAttempt) bool {
+	switch attempt.Error {
+	case "network", "timeout", "response_read", "response_read_timeout":
+		return true
+	}
+	if !strings.HasPrefix(attempt.Error, "http_") {
+		return false
+	}
+	status, err := strconv.Atoi(strings.TrimPrefix(attempt.Error, "http_"))
+	return err == nil && (status == http.StatusRequestTimeout ||
+		(status >= http.StatusInternalServerError && status <= 599 && status != 529))
+}
+
+func contentModerationDeepSeekHasRetryBudget(ctx context.Context, channel ContentModerationDeepSeekChannel) bool {
+	if ctx == nil || ctx.Err() != nil {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return true
+	}
+	minimum := contentModerationDeepSeekRetryMinBudget
+	channelTimeout := time.Duration(channel.TimeoutMS) * time.Millisecond
+	if channelTimeout > 0 && channelTimeout < minimum {
+		minimum = channelTimeout / 2
+	}
+	if minimum <= 0 {
+		return false
+	}
+	return time.Until(deadline) >= minimum
+}
+
+func (s *ContentModerationService) callContentModerationDeepSeekChannelWithRetry(
+	ctx context.Context,
+	channel ContentModerationDeepSeekChannel,
+	input contentModerationSecondLayerInput,
+) (contentModerationSecondLayerResult, []ContentModerationReviewAttempt, error) {
+	result, attempt, err := s.callContentModerationDeepSeekChannel(ctx, channel, input, false)
+	attempts := []ContentModerationReviewAttempt{attempt}
+	if err == nil || !contentModerationDeepSeekAttemptRetryable(attempt) ||
+		!contentModerationDeepSeekHasRetryBudget(ctx, channel) {
+		return result, attempts, err
+	}
+	retryResult, retryAttempt, retryErr := s.callContentModerationDeepSeekChannel(ctx, channel, input, false)
+	attempts = append(attempts, retryAttempt)
+	if retryErr == nil {
+		return retryResult, attempts, nil
+	}
+	return contentModerationSecondLayerResult{}, attempts, errors.Join(err, retryErr)
 }
 
 func contentModerationDeepSeekRetryAfter(value string, now time.Time) time.Duration {
@@ -584,13 +673,35 @@ func (s *ContentModerationService) scanContentModerationDeepSeek(
 	totalCtx, cancel := context.WithTimeout(ctx, time.Duration(totalTimeout)*time.Millisecond)
 	defer cancel()
 	channels := normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels)
-	attempts := make([]ContentModerationReviewAttempt, 0, len(channels))
+	attempts := make([]ContentModerationReviewAttempt, 0, len(channels)*2)
+	retryChannels := make([]ContentModerationDeepSeekChannel, 0, len(channels))
 	var failures []error
 	attempted := false
+	firstChannelID := ""
+	usedDifferentChannel := false
+	markChannel := func(channel ContentModerationDeepSeekChannel) {
+		if firstChannelID == "" {
+			firstChannelID = channel.ID
+			return
+		}
+		if channel.ID != firstChannelID {
+			usedDifferentChannel = true
+		}
+	}
+	returnSuccess := func(result contentModerationSecondLayerResult) (contentModerationSecondLayerResult, bool, error) {
+		result.Blocked = result.Confidence >= cfg.DeepSeekThreshold
+		result.ReviewAttempts = attempts
+		s.deepSeekSelectedCount.Add(1)
+		if usedDifferentChannel {
+			s.deepSeekFailoverCount.Add(1)
+		}
+		return result, true, nil
+	}
 	for _, channel := range channels {
 		if !channel.Enabled {
 			continue
 		}
+		markChannel(channel)
 		if strings.TrimSpace(channel.APIKey) == "" {
 			attempts = append(attempts, ContentModerationReviewAttempt{Reviewer: "deepseek", ChannelID: channel.ID, ChannelName: channel.Name, Model: channel.Model, Outcome: "skipped", Error: "key_unavailable"})
 			failures = append(failures, fmt.Errorf("DeepSeek channel %s API key is unavailable", channel.ID))
@@ -600,13 +711,25 @@ func (s *ContentModerationService) scanContentModerationDeepSeek(
 		result, attempt, err := s.callContentModerationDeepSeekChannel(totalCtx, channel, input, false)
 		attempts = append(attempts, attempt)
 		if err == nil {
-			result.Blocked = result.Confidence >= cfg.DeepSeekThreshold
-			result.ReviewAttempts = attempts
-			s.deepSeekSelectedCount.Add(1)
-			if len(attempts) > 1 {
-				s.deepSeekFailoverCount.Add(1)
-			}
-			return result, true, nil
+			return returnSuccess(result)
+		}
+		failures = append(failures, err)
+		if contentModerationDeepSeekAttemptRetryable(attempt) {
+			retryChannels = append(retryChannels, channel)
+		}
+		if totalCtx.Err() != nil {
+			break
+		}
+	}
+	for _, channel := range retryChannels {
+		if !contentModerationDeepSeekHasRetryBudget(totalCtx, channel) {
+			continue
+		}
+		markChannel(channel)
+		result, attempt, err := s.callContentModerationDeepSeekChannel(totalCtx, channel, input, false)
+		attempts = append(attempts, attempt)
+		if err == nil {
+			return returnSuccess(result)
 		}
 		failures = append(failures, err)
 		if totalCtx.Err() != nil {
@@ -707,14 +830,11 @@ func (s *ContentModerationService) probeDeepSeekChannelConnectivityOnce(
 	channel ContentModerationDeepSeekChannel,
 ) *TestContentModerationDeepSeekChannelResult {
 	started := time.Now()
-	state := s.deepSeekChannelState(channel)
-	connectivityDigest := contentModerationDeepSeekConnectivityDigest(channel)
 	requestCtx, cancel := context.WithTimeout(ctx, time.Duration(channel.TimeoutMS)*time.Millisecond)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodHead, channel.BaseURL, nil)
 	if err != nil {
 		now := time.Now()
-		state.markConnectivity(now, false, connectivityDigest)
 		return &TestContentModerationDeepSeekChannelResult{
 			ChannelID: channel.ID, LatencyMS: int(time.Since(started).Milliseconds()),
 			Error: trimRunes(redactContentModerationSecrets(err.Error()), 240), CheckedAt: &now,
@@ -732,7 +852,6 @@ func (s *ContentModerationService) probeDeepSeekChannelConnectivityOnce(
 		_ = resp.Body.Close()
 	}
 	now := time.Now()
-	state.markConnectivity(now, reachable, connectivityDigest)
 	result := &TestContentModerationDeepSeekChannelResult{
 		ChannelID: channel.ID, Reachable: reachable, HealthValid: reachable,
 		LatencyMS: latency, HTTPStatus: httpStatus, CheckedAt: &now,
@@ -759,6 +878,11 @@ func (s *ContentModerationService) contentModerationDeepSeekChannelView(channel 
 	return view
 }
 
+func (s *ContentModerationService) deepSeekChannelReviewReady(channel ContentModerationDeepSeekChannel, now time.Time) bool {
+	health, breaker, _, _, _, _, _ := s.deepSeekChannelState(channel).snapshot(now)
+	return health == "reachable" && breaker == "closed"
+}
+
 func (s *ContentModerationService) hasReachableDeepSeekChannel(cfg *ContentModerationConfig, now time.Time) bool {
 	if cfg == nil || !cfg.DeepSeekEnabled {
 		return false
@@ -770,9 +894,7 @@ func (s *ContentModerationService) hasReachableDeepSeekChannel(cfg *ContentModer
 		if strings.TrimSpace(channel.APIKey) == "" {
 			continue
 		}
-		state := s.deepSeekChannelState(channel)
-		health, _, _, _, _, _, _ := state.snapshot(now)
-		if health == "reachable" {
+		if s.deepSeekChannelReviewReady(channel, now) {
 			return true
 		}
 	}
@@ -792,8 +914,7 @@ func (s *ContentModerationService) contentModerationConfigWithReachableDeepSeekF
 		if !channel.Enabled || strings.TrimSpace(channel.APIKey) == "" {
 			continue
 		}
-		health, _, _, _, _, _, _ := s.deepSeekChannelState(channel).snapshot(now)
-		if health == "reachable" {
+		if s.deepSeekChannelReviewReady(channel, now) {
 			preferredIndex = index
 			break
 		}
@@ -811,6 +932,68 @@ func (s *ContentModerationService) contentModerationConfigWithReachableDeepSeekF
 	return clone
 }
 
+type contentModerationDeepSeekReviewProbeResult struct {
+	healthy bool
+}
+
+func contentModerationDeepSeekReviewProbeInput() contentModerationSecondLayerInput {
+	const text = "Sub2API content moderation reviewer health check."
+	fragment, _ := newContentModerationFragment("user", "text", "health_check", text)
+	return contentModerationSecondLayerInput{
+		Fragment: fragment,
+		Evidence: moderationEvidence{Text: text, Mode: "health_check"},
+	}
+}
+
+func (s *ContentModerationService) probeDeepSeekChannelReview(
+	ctx context.Context,
+	channel ContentModerationDeepSeekChannel,
+	retry bool,
+) bool {
+	if ctx == nil || ctx.Err() != nil {
+		return false
+	}
+	probeTimeout := 2 * time.Duration(channel.TimeoutMS) * time.Millisecond
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < probeTimeout {
+			probeTimeout = remaining
+		}
+	}
+	if probeTimeout <= 0 {
+		return false
+	}
+	flightKey := "review\x00" + strconv.FormatBool(retry) + "\x00" + contentModerationDeepSeekChannelDigest(channel)
+	resultCh := s.deepSeekProbeFlights.DoChan(flightKey, func() (any, error) {
+		probeCtx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		defer cancel()
+		var attempts []ContentModerationReviewAttempt
+		var err error
+		if retry {
+			_, attempts, err = s.callContentModerationDeepSeekChannelWithRetry(
+				probeCtx, channel, contentModerationDeepSeekReviewProbeInput(),
+			)
+		} else {
+			_, attempt, callErr := s.callContentModerationDeepSeekChannel(
+				probeCtx, channel, contentModerationDeepSeekReviewProbeInput(), false,
+			)
+			attempts = []ContentModerationReviewAttempt{attempt}
+			err = callErr
+		}
+		s.recordContentModerationReviewAttempts(attempts, err)
+		return contentModerationDeepSeekReviewProbeResult{healthy: err == nil}, nil
+	})
+	select {
+	case <-ctx.Done():
+		return false
+	case shared := <-resultCh:
+		if shared.Err != nil {
+			return false
+		}
+		result, ok := shared.Val.(contentModerationDeepSeekReviewProbeResult)
+		return ok && result.healthy
+	}
+}
+
 func (s *ContentModerationService) ensureContentModerationSecondLayerEnforceReadiness(
 	ctx context.Context,
 	cfg *ContentModerationConfig,
@@ -826,11 +1009,20 @@ func (s *ContentModerationService) ensureContentModerationSecondLayerEnforceRead
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(totalTimeout)*time.Millisecond)
 	defer cancel()
-	for _, channel := range normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels) {
+	channels := normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels)
+	eligible := make([]ContentModerationDeepSeekChannel, 0, len(channels))
+	for _, channel := range channels {
 		if !channel.Enabled || strings.TrimSpace(channel.APIKey) == "" {
 			continue
 		}
-		if result := s.probeDeepSeekChannelConnectivity(probeCtx, channel); result.Reachable {
+		_, breaker, _, _, _, _, _ := s.deepSeekChannelState(channel).snapshot(time.Now())
+		if breaker == "cooldown" || breaker == "auth_disabled" {
+			continue
+		}
+		eligible = append(eligible, channel)
+	}
+	for _, channel := range eligible {
+		if s.probeDeepSeekChannelReview(probeCtx, channel, len(eligible) == 1) {
 			break
 		}
 		if probeCtx.Err() != nil {
