@@ -17,6 +17,12 @@ var contentModerationSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`),
 }
 
+var contentModerationAuditReasonSensitivePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b`),
+	regexp.MustCompile(`(?:\+?\d[\d -]{6,}\d)`),
+	regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`),
+}
+
 func redactContentModerationSecrets(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -34,4 +40,12 @@ func redactContentModerationSecrets(text string) string {
 		}
 	}
 	return out
+}
+
+func redactContentModerationAuditReason(text string) string {
+	out := redactContentModerationSecrets(text)
+	for _, pattern := range contentModerationAuditReasonSensitivePatterns {
+		out = pattern.ReplaceAllString(out, `[已脱敏]`)
+	}
+	return trimRunes(strings.TrimSpace(out), 20)
 }

@@ -69,6 +69,14 @@ func insertContentModerationLog(ctx context.Context, db contentModerationQueryRo
 	if err != nil {
 		return fmt.Errorf("marshal moderation evidence windows: %w", err)
 	}
+	reviewAttemptValues := log.ReviewAttempts
+	if reviewAttemptValues == nil {
+		reviewAttemptValues = []service.ContentModerationReviewAttempt{}
+	}
+	reviewAttempts, err := json.Marshal(reviewAttemptValues)
+	if err != nil {
+		return fmt.Errorf("marshal moderation review attempts: %w", err)
+	}
 	legacyMetadata := log.LegacyMetadata
 	if len(legacyMetadata) == 0 {
 		legacyMetadata = json.RawMessage(`{}`)
@@ -116,6 +124,8 @@ INSERT INTO content_moderation_logs (
     cache_namespace, policy_version, model_profile, prompt_version,
     evidence_policy_version, keyword_tier, keyword_rule_id, evidence_mode,
     evidence_truncated, evidence_windows, parser_status,
+    deepseek_confidence, deepseek_category, deepseek_reason, review_outcome,
+    reviewer_disagreement, review_attempts,
     archive_id, archive_version, archive_key_id, archive_plaintext_sha256,
     archive_plaintext_bytes, archive_status, archive_incomplete, archive_content_lost,
     archive_deleted_at, disposition_status, disposition_target,
@@ -132,11 +142,13 @@ INSERT INTO content_moderation_logs (
     $39, $40, $41, $42,
     $43, $44, $45, $46,
     $47, $48::jsonb, $49,
-    NULLIF($50, '')::uuid, NULLIF($51, 0), $52, $53,
-    $54, $55, $56, $57,
-    $58, $59, $60,
-    $61, $62, $63,
-    $64, $65::jsonb, COALESCE($66, NOW())
+    $50, $51, $52, $53,
+    $54, $55::jsonb,
+    NULLIF($56, '')::uuid, NULLIF($57, 0), $58, $59,
+    $60, $61, $62, $63,
+    $64, $65, $66,
+    $67, $68, $69,
+    $70, $71::jsonb, COALESCE($72, NOW())
 ) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
@@ -148,6 +160,8 @@ INSERT INTO content_moderation_logs (
 		log.CacheNamespace, log.PolicyVersion, log.ModelProfile, log.PromptVersion,
 		log.EvidencePolicyVersion, log.KeywordTier, log.KeywordRuleID, log.EvidenceMode,
 		log.EvidenceTruncated, string(evidenceWindows), log.ParserStatus,
+		contentModerationDeepSeekConfidenceValue(log), log.DeepSeekCategory, log.DeepSeekReason, log.ReviewOutcome,
+		log.ReviewerDisagreement, string(reviewAttempts),
 		log.ArchiveID, log.ArchiveVersion, log.ArchiveKeyID, nullableBytes(log.ArchiveSHA256),
 		log.ArchiveBytes, archiveStatus, log.ArchiveIncomplete, log.ArchiveContentLost,
 		log.ArchiveDeletedAt, log.DispositionStatus, log.DispositionTarget,
@@ -179,6 +193,34 @@ func nullableTime(value time.Time) any {
 		return nil
 	}
 	return value
+}
+
+func contentModerationDeepSeekConfidenceValue(log *service.ContentModerationLog) any {
+	if log.DeepSeekConfidenceValue != nil {
+		return *log.DeepSeekConfidenceValue
+	}
+	outcome := strings.TrimSpace(log.ReviewOutcome)
+	if strings.EqualFold(outcome, "unavailable") {
+		return nil
+	}
+	if log.DeepSeekConfidence == 0 && outcome == "" &&
+		strings.TrimSpace(log.DeepSeekCategory) == "" &&
+		strings.TrimSpace(log.DeepSeekReason) == "" &&
+		len(log.ReviewAttempts) == 0 {
+		return nil
+	}
+	return log.DeepSeekConfidence
+}
+
+func setContentModerationDeepSeekConfidence(item *service.ContentModerationLog, scanned sql.NullFloat64) {
+	item.DeepSeekConfidence = 0
+	item.DeepSeekConfidenceValue = nil
+	if !scanned.Valid {
+		return
+	}
+	item.DeepSeekConfidence = scanned.Float64
+	value := scanned.Float64
+	item.DeepSeekConfidenceValue = &value
 }
 
 func (r *contentModerationRepository) ListLogs(ctx context.Context, filter service.ContentModerationLogFilter) ([]service.ContentModerationLog, *pagination.PaginationResult, error) {
@@ -215,6 +257,8 @@ SELECT
     l.cache_namespace, l.policy_version, l.model_profile, l.prompt_version,
     l.evidence_policy_version, l.keyword_tier, l.keyword_rule_id, l.evidence_mode,
     l.evidence_truncated, l.evidence_windows, l.parser_status,
+    l.deepseek_confidence, l.deepseek_category, l.deepseek_reason, l.review_outcome,
+    l.reviewer_disagreement, l.review_attempts,
     COALESCE(l.archive_id::text, ''), COALESCE(l.archive_version, 0), l.archive_key_id,
     l.archive_plaintext_bytes, l.archive_status, l.archive_incomplete, l.archive_content_lost,
     l.archive_deleted_at, l.disposition_status, l.disposition_target, l.disposition_transitioned,
@@ -235,9 +279,10 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 	for rows.Next() {
 		var item service.ContentModerationLog
 		var userID, apiKeyID, groupID, latency, queueDelay, sourceLogID, legacySourceJobID sql.NullInt64
+		var deepSeekConfidence sql.NullFloat64
 		var archiveDeletedAt, emailDeliveryClaimedAt sql.NullTime
 		var scoresRaw, thresholdsRaw []byte
-		var legacyMetadataRaw, evidenceWindowsRaw []byte
+		var legacyMetadataRaw, evidenceWindowsRaw, reviewAttemptsRaw []byte
 		if err := rows.Scan(
 			&item.ID,
 			&item.RequestID,
@@ -292,6 +337,12 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&item.EvidenceTruncated,
 			&evidenceWindowsRaw,
 			&item.ParserStatus,
+			&deepSeekConfidence,
+			&item.DeepSeekCategory,
+			&item.DeepSeekReason,
+			&item.ReviewOutcome,
+			&item.ReviewerDisagreement,
+			&reviewAttemptsRaw,
 			&item.ArchiveID,
 			&item.ArchiveVersion,
 			&item.ArchiveKeyID,
@@ -311,6 +362,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		); err != nil {
 			return nil, nil, fmt.Errorf("scan content moderation log: %w", err)
 		}
+		setContentModerationDeepSeekConfidence(&item, deepSeekConfidence)
 		if userID.Valid {
 			v := userID.Int64
 			item.UserID = &v
@@ -353,6 +405,8 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		_ = json.Unmarshal(thresholdsRaw, &item.ThresholdSnapshot)
 		item.EvidenceWindows = []service.ContentModerationEvidenceWindow{}
 		_ = json.Unmarshal(evidenceWindowsRaw, &item.EvidenceWindows)
+		item.ReviewAttempts = []service.ContentModerationReviewAttempt{}
+		_ = json.Unmarshal(reviewAttemptsRaw, &item.ReviewAttempts)
 		item.LegacyMetadata = append(json.RawMessage(nil), legacyMetadataRaw...)
 		items = append(items, item)
 	}
@@ -700,11 +754,25 @@ INSERT INTO content_moderation_archive_access_audits (
 
 func (r *contentModerationRepository) ReferencedArchiveKeyIDs(ctx context.Context) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT DISTINCT archive_key_id FROM content_moderation_logs
-WHERE archive_id IS NOT NULL AND archive_deleted_at IS NULL AND archive_key_id <> ''
-ORDER BY archive_key_id`)
+WITH referenced_keys AS (
+    SELECT archive_key_id AS key_id
+    FROM content_moderation_logs
+    WHERE archive_id IS NOT NULL AND archive_deleted_at IS NULL AND archive_key_id <> ''
+    UNION ALL
+    SELECT credential_key.value #>> '{}' AS key_id
+    FROM settings
+    CROSS JOIN LATERAL jsonb_path_query(
+        value::jsonb,
+        '$.deepseek_channels[*].api_key_envelope.key_id'
+    ) AS credential_key(value)
+    WHERE key = $1
+)
+SELECT DISTINCT key_id
+FROM referenced_keys
+WHERE BTRIM(COALESCE(key_id, '')) <> ''
+ORDER BY key_id`, service.SettingKeyContentModerationConfig)
 	if err != nil {
-		return nil, fmt.Errorf("list referenced content moderation archive keys: %w", err)
+		return nil, fmt.Errorf("list referenced content moderation keys: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var ids []string

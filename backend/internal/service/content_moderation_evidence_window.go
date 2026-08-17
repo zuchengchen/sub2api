@@ -52,6 +52,7 @@ type contentModerationEvidenceBundle struct {
 	AllContexts    []string
 	PrimaryKeyword string
 	PrimaryRuleID  string
+	PrimaryTier    string
 	CacheHash      string
 	CanonicalKeys  []contentModerationEvidenceCanonicalKey
 }
@@ -98,6 +99,7 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 	allContexts := make([]string, 0, len(candidates))
 	primaryKeyword := ""
 	primaryRuleID := ""
+	primaryTier := ""
 
 	for _, candidate := range candidates {
 		contextClass := strings.TrimSpace(candidate.Fragment.ContextClass)
@@ -115,6 +117,7 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 			if primaryKeyword == "" {
 				primaryKeyword = match.Keyword
 				primaryRuleID = ruleID
+				primaryTier = candidate.Tier
 			}
 		}
 	}
@@ -278,7 +281,7 @@ func buildContentModerationCandidateEvidence(candidates []contentModerationCandi
 	sort.Strings(allContexts)
 	bundle := contentModerationEvidenceBundle{
 		Fragment: fragment, Evidence: evidence, Windows: windows, AllRuleIDs: allRuleIDs, AllContexts: allContexts,
-		PrimaryKeyword: primaryKeyword, PrimaryRuleID: primaryRuleID, CanonicalKeys: canonicalKeys,
+		PrimaryKeyword: primaryKeyword, PrimaryRuleID: primaryRuleID, PrimaryTier: primaryTier, CanonicalKeys: canonicalKeys,
 	}
 	bundle.CacheHash = contentModerationEvidenceCacheHash(bundle, cfg)
 	return bundle

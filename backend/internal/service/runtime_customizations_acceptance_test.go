@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,8 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		cfg.Mode = ContentModerationModePreBlock
 		cfg.AutoBanEnabled = false
 		cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordOnly
+		cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
+		cfg.SecondLayerEnabled = false
 		runtime := &contentModerationRuntimeSnapshot{
 			riskControlEnabled: true,
 			config:             cfg,
@@ -69,6 +72,11 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		svc := &ContentModerationService{repo: repo}
 		input := ContentModerationCheckInput{Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses}
 		decision := svc.checkUnifiedFragments(context.Background(), input, runtime)
+		require.True(t, decision.Allowed, "developer history must not be reviewed")
+		require.Empty(t, repo.snapshotLogs())
+
+		input.Body = bytes.Replace(body, []byte("tool output"), []byte("tool output blocked-token"), 1)
+		decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
 		require.True(t, decision.Blocked)
 		require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
 		require.Len(t, repo.snapshotLogs(), 1)
@@ -91,7 +99,7 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 	t.Run("second layer block and failure continue contract", func(t *testing.T) {
 		blockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: jailbreak"}}]}`))
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ha"}}]}`))
 		}))
 		defer blockUpstream.Close()
 
@@ -106,10 +114,14 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		cfg.AutoBanEnabled = false
 		cfg.KeywordBlockingMode = ContentModerationKeywordModeAPIOnly
 		cfg.SecondLayerEnabled = true
+		cfg.SecondLayerStage = ContentModerationSecondLayerStageEnforce
+		cfg.DeepSeekEnabled = false
+		cfg.YuFengEnabled = true
 		cfg.SecondLayerScanners = []string{"jailbreak"}
 		cfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
 			ID: "stub-block", Name: "stub block", BaseURL: blockUpstream.URL,
-			Model: "stub-guard", Enabled: true, TimeoutMS: 1_000, InputLimit: 4_096,
+			Model: "stub-guard", Profile: ContentModerationModelProfileYuFengXGuard,
+			Enabled: true, TimeoutMS: 1_000, InputLimit: 4_096,
 		}}
 		scope := NewContentModerationScopeSnapshot(nil, " GPT-acceptance ")
 		input := ContentModerationCheckInput{
@@ -129,16 +141,20 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		require.Len(t, repo.snapshotLogs(), 1)
 
 		failureCfg := cloneContentModerationConfig(cfg)
+		failureCfg.SecondLayerStage = ContentModerationSecondLayerStageShadow
 		failureCfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
 			ID: "stub-failure", Name: "stub failure", BaseURL: failureUpstream.URL,
-			Model: "stub-guard", Enabled: true, TimeoutMS: 1_000, InputLimit: 4_096,
+			Model: "stub-guard", Profile: ContentModerationModelProfileYuFengXGuard,
+			Enabled: true, TimeoutMS: 1_000, InputLimit: 4_096,
 		}}
 		continued := svc.checkUnifiedFragments(context.Background(), input, &contentModerationRuntimeSnapshot{
 			riskControlEnabled: true, config: failureCfg, secondLayerPrefilterMatcher: candidateMatcher,
 		})
-		require.True(t, continued.Allowed, "a failed second layer must continue to the real upstream")
+		require.True(t, continued.Allowed, "a failed second layer in Shadow must continue to the real upstream")
 		require.False(t, continued.Flagged)
-		require.Len(t, repo.snapshotLogs(), 1, "second-layer infrastructure failures must not create violations")
+		require.Eventually(t, func() bool { return len(repo.snapshotLogs()) == 2 }, time.Second, 10*time.Millisecond,
+			"Shadow unavailability must be audited without creating a violation")
+		require.Equal(t, "unavailable", repo.snapshotLogs()[1].ReviewOutcome)
 	})
 
 	t.Run("GPT cyber disposition and non GPT passthrough", func(t *testing.T) {

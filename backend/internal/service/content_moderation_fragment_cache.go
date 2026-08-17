@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	defaultContentModerationSecondLayerModel      = "sileader/qwen3guard:0.6b"
+	defaultContentModerationSecondLayerModel      = "yufeng-xguard"
 	defaultContentModerationSecondLayerTimeoutMS  = 3000
 	defaultContentModerationSecondLayerInputLimit = 4000
 	minContentModerationSecondLayerTimeoutMS      = 100
@@ -60,6 +60,9 @@ func normalizeContentModerationEndpoints(endpoints []ContentModerationEndpoint) 
 		endpoint.BaseURL = strings.TrimRight(strings.TrimSpace(endpoint.BaseURL), "/")
 		endpoint.Model = strings.TrimSpace(endpoint.Model)
 		endpoint.Profile = normalizeContentModerationModelProfile(endpoint.Profile)
+		if endpoint.Profile != ContentModerationModelProfileYuFengXGuard {
+			continue
+		}
 		endpoint.ModelRevision = strings.TrimSpace(endpoint.ModelRevision)
 		endpoint.PromptVersion = strings.TrimSpace(endpoint.PromptVersion)
 		endpoint.StopTokens = normalizeContentModerationStopTokens(endpoint.StopTokens)
@@ -176,30 +179,35 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		return ""
 	}
 	policy := struct {
-		Version           string                      `json:"version"`
-		Keywords          []string                    `json:"keywords"`
-		HardPatterns      []string                    `json:"hard_patterns"`
-		CandidateKeywords []string                    `json:"candidate_keywords"`
-		KeywordAllowlist  []string                    `json:"keyword_allowlist"`
-		KeywordContextRev string                      `json:"keyword_context_revision"`
-		KeywordMatcherRev string                      `json:"keyword_matcher_revision"`
-		Candidate         string                      `json:"candidate"`
-		CandidateOn       bool                        `json:"candidate_on"`
-		CandidateRev      string                      `json:"candidate_revision"`
-		Prefilter         string                      `json:"second_layer_prefilter"`
-		FirstLayerStage   string                      `json:"first_layer_stage"`
-		SecondLayerOn     bool                        `json:"second_layer_on"`
-		SecondLayerStage  string                      `json:"second_layer_stage"`
-		Endpoints         []ContentModerationEndpoint `json:"endpoints"`
-		Scanners          []string                    `json:"scanners"`
-		BlockTTL          int                         `json:"block_ttl"`
-		AllowTTL          int                         `json:"allow_ttl"`
-		TTLPolicy         string                      `json:"ttl_policy"`
-		KeywordPolicy     string                      `json:"keyword_policy"`
-		ContextPolicy     string                      `json:"context_policy"`
-		EvidencePolicy    string                      `json:"evidence_policy"`
-		YuFengPolicy      string                      `json:"yufeng_policy,omitempty"`
-		PolicyDigest      string                      `json:"policy_digest"`
+		Version           string                             `json:"version"`
+		Keywords          []string                           `json:"keywords"`
+		HardPatterns      []string                           `json:"hard_patterns"`
+		CandidateKeywords []string                           `json:"candidate_keywords"`
+		KeywordAllowlist  []string                           `json:"keyword_allowlist"`
+		KeywordContextRev string                             `json:"keyword_context_revision"`
+		KeywordMatcherRev string                             `json:"keyword_matcher_revision"`
+		Candidate         string                             `json:"candidate"`
+		CandidateOn       bool                               `json:"candidate_on"`
+		CandidateRev      string                             `json:"candidate_revision"`
+		Prefilter         string                             `json:"second_layer_prefilter"`
+		FirstLayerStage   string                             `json:"first_layer_stage"`
+		SecondLayerOn     bool                               `json:"second_layer_on"`
+		SecondLayerStage  string                             `json:"second_layer_stage"`
+		Endpoints         []ContentModerationEndpoint        `json:"endpoints"`
+		DeepSeekEnabled   bool                               `json:"deepseek_enabled"`
+		YuFengEnabled     bool                               `json:"yufeng_enabled"`
+		DeepSeekTimeout   int                                `json:"deepseek_total_timeout_ms"`
+		DeepSeekThreshold float64                            `json:"deepseek_threshold"`
+		DeepSeekChannels  []ContentModerationDeepSeekChannel `json:"deepseek_channels"`
+		Scanners          []string                           `json:"scanners"`
+		BlockTTL          int                                `json:"block_ttl"`
+		AllowTTL          int                                `json:"allow_ttl"`
+		TTLPolicy         string                             `json:"ttl_policy"`
+		KeywordPolicy     string                             `json:"keyword_policy"`
+		ContextPolicy     string                             `json:"context_policy"`
+		EvidencePolicy    string                             `json:"evidence_policy"`
+		YuFengPolicy      string                             `json:"yufeng_policy,omitempty"`
+		PolicyDigest      string                             `json:"policy_digest"`
 	}{
 		Version:           normalizeContentModerationCacheVersion(cfg.CacheVersion),
 		Keywords:          normalizeBlockedKeywords(cfg.BlockedKeywords),
@@ -208,14 +216,19 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		KeywordAllowlist:  normalizeBlockedKeywords(cfg.KeywordAllowlist),
 		KeywordContextRev: strings.TrimSpace(keywordContextRevision),
 		KeywordMatcherRev: strings.TrimSpace(keywordMatcherRevision),
-		Candidate:         strings.TrimSpace(cfg.CandidateAsset),
-		CandidateOn:       cfg.CandidateEnabled,
+		Candidate:         contentmoderationassets.DeepSeekV4FlashAuditV1,
+		CandidateOn:       true,
 		CandidateRev:      contentModerationCandidateRevision(cfg),
 		Prefilter:         contentModerationSecondLayerPrefilterCacheRevision(cfg),
 		FirstLayerStage:   normalizeContentModerationFirstLayerStage(cfg.FirstLayerStage),
 		SecondLayerOn:     cfg.SecondLayerEnabled,
 		SecondLayerStage:  normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage),
 		Endpoints:         normalizeContentModerationEndpoints(cfg.SecondLayerEndpoints),
+		DeepSeekEnabled:   cfg.DeepSeekEnabled,
+		YuFengEnabled:     cfg.YuFengEnabled,
+		DeepSeekTimeout:   cfg.DeepSeekTotalTimeoutMS,
+		DeepSeekThreshold: cfg.DeepSeekThreshold,
+		DeepSeekChannels:  normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels),
 		Scanners:          normalizeContentModerationScannerIDs(cfg.SecondLayerScanners),
 		BlockTTL:          cfg.FragmentBlockTTLSeconds,
 		AllowTTL:          cfg.FragmentAllowTTLSeconds,
@@ -244,12 +257,12 @@ func contentModerationYuFengPolicyCacheRevision(cfg *ContentModerationConfig) st
 }
 
 func contentModerationCandidateRevision(cfg *ContentModerationConfig) string {
-	if cfg == nil || !cfg.CandidateEnabled {
+	if cfg == nil {
 		return ""
 	}
-	asset, err := contentmoderationassets.Load(cfg.CandidateAsset)
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV1)
 	if err != nil {
-		return "invalid:" + strings.TrimSpace(cfg.CandidateAsset)
+		return "invalid:" + contentmoderationassets.DeepSeekV4FlashAuditV1
 	}
 	return asset.Manifest.SourceCommit + ":" +
 		asset.Manifest.Layer1.EmbeddedSHA256 + ":" +
@@ -259,7 +272,7 @@ func contentModerationCandidateRevision(cfg *ContentModerationConfig) string {
 }
 
 func contentModerationSecondLayerPrefilterCacheRevision(cfg *ContentModerationConfig) string {
-	if cfg == nil || !cfg.CandidateEnabled {
+	if cfg == nil {
 		return ""
 	}
 	return contentModerationSecondLayerPrefilterPolicyVersion

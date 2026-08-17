@@ -114,7 +114,9 @@ func TestUnifiedFragmentReplayCountsOriginalOnlyOnce(t *testing.T) {
 	cfg.Enabled = true
 	cfg.AutoBanEnabled = true
 	cfg.BanThreshold = 1
-	cfg.BlockedKeywords = []string{"definitely dangerous operation"}
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
+	cfg.SecondLayerEnabled = false
+	cfg.HardBlockPatterns = []string{"definitely dangerous operation"}
 	cfg.normalize()
 	cache := &contentModerationReplayCache{}
 	repo := &contentModerationReplayRepo{}
@@ -122,7 +124,7 @@ func TestUnifiedFragmentReplayCountsOriginalOnlyOnce(t *testing.T) {
 	svc := NewContentModerationService(nil, repo, cache, nil, userRepo, nil, nil, nil)
 	runtime := &contentModerationRuntimeSnapshot{
 		riskControlEnabled: true, config: cfg,
-		keywordMatcher:         newContentModerationKeywordMatcher(cfg.BlockedKeywords),
+		keywordMatcher:         newContentModerationKeywordMatcher(cfg.HardBlockPatterns),
 		fragmentCacheNamespace: cfg.fragmentCacheNamespace(),
 	}
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-replay")
@@ -208,9 +210,12 @@ func TestContentModerationTTLConfigBoundariesAndNamespaceIsolation(t *testing.T)
 		func(value *ContentModerationConfig) { value.ContextPolicyVersion = "context-v4" },
 		func(value *ContentModerationConfig) { value.EvidencePolicyVersion = "evidence-v2" },
 		func(value *ContentModerationConfig) { value.KeywordPolicyVersion = "keyword-v5" },
-		func(value *ContentModerationConfig) { value.FirstLayerStage = ContentModerationFirstLayerStageShadow },
-		func(value *ContentModerationConfig) { value.SecondLayerStage = ContentModerationSecondLayerStageShadow },
+		func(value *ContentModerationConfig) { value.FirstLayerStage = ContentModerationFirstLayerStageEnforce },
 		func(value *ContentModerationConfig) {
+			value.SecondLayerStage = ContentModerationSecondLayerStageEnforce
+		},
+		func(value *ContentModerationConfig) {
+			value.YuFengEnabled = true
 			value.SecondLayerEndpoints = []ContentModerationEndpoint{{ID: "x", BaseURL: "http://127.0.0.1:8080", Model: "x", Profile: ContentModerationModelProfileYuFengXGuard, ModelRevision: "rev-2"}}
 		},
 	}
@@ -244,8 +249,8 @@ func TestContentModerationPolicyMigrationUsesTenHourCachesAndUnifiedContextPolic
 	require.Equal(t, 36000, parsed.FragmentBlockTTLSeconds)
 	require.Equal(t, 36000, parsed.FragmentAllowTTLSeconds)
 	require.Equal(t, ContentModerationFragmentTTLPolicyVersion, parsed.FragmentTTLPolicyVersion)
-	require.Equal(t, ContentModerationFirstLayerStageEnforce, parsed.FirstLayerStage)
-	require.Equal(t, ContentModerationSecondLayerStageEnforce, parsed.SecondLayerStage)
+	require.Equal(t, ContentModerationFirstLayerStageShadow, parsed.FirstLayerStage)
+	require.Equal(t, ContentModerationSecondLayerStageShadow, parsed.SecondLayerStage)
 }
 
 func TestContentModerationOlderKeywordPolicyMigration(t *testing.T) {
@@ -570,8 +575,6 @@ func TestContentModerationYuFengLegacyPromptVersionNormalizesToCurrentPolicy(t *
 
 	disabled := &ContentModerationConfig{SecondLayerEndpoints: endpoints}
 	require.Empty(t, contentModerationYuFengPolicyCacheRevision(disabled))
-	qwen := &ContentModerationConfig{SecondLayerEnabled: true, SecondLayerEndpoints: []ContentModerationEndpoint{{Profile: ContentModerationModelProfileQwen}}}
-	require.Empty(t, contentModerationYuFengPolicyCacheRevision(qwen))
 	yufeng := &ContentModerationConfig{SecondLayerEnabled: true, SecondLayerEndpoints: endpoints}
 	require.Equal(t, ContentModerationYuFengPromptVersion, contentModerationYuFengPolicyCacheRevision(yufeng))
 }
@@ -648,9 +651,10 @@ func TestContentModerationShadowRecordsSafeModelProvenanceWithoutSideEffects(t *
 
 	cfg := defaultContentModerationConfig()
 	cfg.Enabled = true
-	cfg.CandidateEnabled = false
 	cfg.CandidateKeywords = nil
 	cfg.SecondLayerEnabled = true
+	cfg.DeepSeekEnabled = false
+	cfg.YuFengEnabled = true
 	cfg.SecondLayerStage = ContentModerationSecondLayerStageShadow
 	cfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
 		ID: "yufeng-shadow", BaseURL: server.URL, Model: "yufeng-q4",
@@ -700,9 +704,11 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 	cfg.AutoBanEnabled = false
 	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
 	cfg.BlockedKeywords = []string{"dangerous operation"}
-	cfg.CandidateEnabled = false
 	cfg.CandidateKeywords = nil
 	cfg.SecondLayerEnabled = true
+	cfg.DeepSeekEnabled = false
+	cfg.YuFengEnabled = true
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
 	cfg.SecondLayerStage = ContentModerationSecondLayerStageEnforce
 	cfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
 		ID: "yufeng-whitelist", BaseURL: server.URL, Model: "yufeng-q4",
@@ -753,10 +759,13 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
 	require.True(t, decision.Allowed)
 	require.Eventually(t, func() bool {
-		return calls.Load() == 2 && len(repo.snapshotLogs()) == 4
+		return calls.Load() == 1 && len(repo.snapshotLogs()) == 4
 	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, int64(2), calls.Load(), "a repeated whitelist risk must be reviewed and recorded again")
-	require.Len(t, repo.snapshotLogs(), 4)
+	require.Equal(t, int64(1), calls.Load(), "a repeated whitelist risk must reuse the cached model result")
+	logs = repo.snapshotLogs()
+	require.Len(t, logs, 4)
+	require.True(t, logs[3].CacheHit)
+	require.Equal(t, "cache_replay", logs[3].DecisionSource)
 
 	input.RequestID = "whitelist-shadow-other-user"
 	input.UserID = 44
@@ -764,10 +773,13 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
 	require.True(t, decision.Allowed)
 	require.Eventually(t, func() bool {
-		return calls.Load() == 3 && len(repo.snapshotLogs()) == 6
+		return calls.Load() == 1 && len(repo.snapshotLogs()) == 6
 	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, int64(3), calls.Load(), "a whitelist risk cache must not suppress another user's audit")
-	require.Len(t, repo.snapshotLogs(), 6)
+	require.Equal(t, int64(1), calls.Load(), "whitelist users share the model result but retain separate audits")
+	logs = repo.snapshotLogs()
+	require.Len(t, logs, 6)
+	require.True(t, logs[5].CacheHit)
+	require.Equal(t, int64(44), *logs[5].UserID)
 
 	input.RequestID = "regular-enforce"
 	input.UserID = 43
@@ -776,7 +788,7 @@ func TestContentModerationWhitelistRunsBothLayersWithoutBlockingOrCacheLeak(t *t
 
 	require.True(t, decision.Blocked, "whitelist allow cache must not leak into enforce traffic")
 	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
-	require.Equal(t, int64(3), calls.Load(), "the regular request must block at layer one")
+	require.Equal(t, int64(1), calls.Load(), "the regular request must block at layer one")
 	logs = repo.snapshotLogs()
 	require.Len(t, logs, 7)
 	require.Equal(t, ContentModerationActionKeywordBlock, logs[6].Action)
@@ -844,6 +856,8 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 			cfg.BlockedKeywords = []string{"dangerous operation"}
 			cfg.FirstLayerStage = tc.firstStage
 			cfg.SecondLayerEnabled = true
+			cfg.DeepSeekEnabled = false
+			cfg.YuFengEnabled = true
 			cfg.SecondLayerStage = tc.secondStage
 			cfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
 				ID: "yufeng-stages", BaseURL: server.URL, Model: "yufeng-q4",
@@ -895,9 +909,6 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 			wantLogCount := 0
 			for _, action := range tc.wantActions {
 				count := repeats
-				if tc.repeatShadowRisk && action == ContentModerationActionSecondLayerShadow {
-					count = 1
-				}
 				wantActionCounts[action] += count
 				wantLogCount += count
 			}
@@ -907,6 +918,9 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 					count = 1
 				}
 				wantSourceCounts[source] += count
+			}
+			if tc.repeatShadowRisk {
+				wantSourceCounts["cache_replay"] = repeats - 1
 			}
 			require.Eventually(t, func() bool {
 				return calls.Load() == tc.wantModelCalls && len(repo.snapshotLogs()) == wantLogCount
@@ -929,10 +943,9 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 				require.Zero(t, remaining, "unexpected decision source count for %s", source)
 			}
 			if tc.repeatShadowRisk {
-				require.Equal(t, int64(1), svc.secondLayerShadowCoalesced.Load())
 				count, err := cache.CountFragmentResults(context.Background(), runtime.fragmentCacheNamespace)
 				require.NoError(t, err)
-				require.Zero(t, count, "risky shadow results must not become allow-cache entries")
+				require.Equal(t, int64(1), count, "identical risky shadow evidence must be cached once")
 			}
 		})
 	}

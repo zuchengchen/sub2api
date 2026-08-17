@@ -26,7 +26,16 @@ func TestContentModerationFragmentCacheTTLAndProvenance(t *testing.T) {
 	sourceID := int64(42)
 	entry := service.ContentModerationFragmentCacheEntry{
 		Result: service.ContentModerationFragmentBlock, SourceLogID: &sourceID,
-		DecisionSource: "model", ReplayOfInputHash: "abc", ModelProfile: service.ContentModerationModelProfileYuFengXGuard,
+		DecisionSource: "model", ReplayOfInputHash: "abc", ModelProfile: "deepseek_v4_flash",
+		PromptVersion: service.ContentModerationDeepSeekPromptVersion, Category: "cyber_abuse",
+		KeywordTier: "candidate", KeywordRuleID: "layer2:test", EvidenceMode: "complete_context",
+		ParserStatus: "parsed", ReviewCacheVersion: 2, DispositionApplied: true,
+		Confidence: 0.93, Reason: "explicit attack",
+		Label: "risk", EndpointID: "deepseek-official", ReviewOutcome: "risky",
+		ReviewerDisagreement: true,
+		ReviewAttempts: []service.ContentModerationReviewAttempt{{
+			Reviewer: "deepseek", ChannelID: "deepseek-official", Outcome: "risk", LatencyMS: 87,
+		}},
 	}
 	require.NoError(t, cache.PutFragmentCacheEntry(ctx, "v:test", "hash", entry, 256, 100, 1<<20, 20*time.Millisecond))
 
@@ -35,7 +44,24 @@ func TestContentModerationFragmentCacheTTLAndProvenance(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, entry.Result, got.Result)
 	require.Equal(t, entry.SourceLogID, got.SourceLogID)
+	require.Equal(t, entry.ReplayOfInputHash, got.ReplayOfInputHash)
+	require.Equal(t, entry.DecisionSource, got.DecisionSource)
+	require.Equal(t, entry.Category, got.Category)
 	require.Equal(t, entry.ModelProfile, got.ModelProfile)
+	require.Equal(t, entry.PromptVersion, got.PromptVersion)
+	require.Equal(t, entry.KeywordTier, got.KeywordTier)
+	require.Equal(t, entry.KeywordRuleID, got.KeywordRuleID)
+	require.Equal(t, entry.EvidenceMode, got.EvidenceMode)
+	require.Equal(t, entry.ParserStatus, got.ParserStatus)
+	require.Equal(t, entry.ReviewCacheVersion, got.ReviewCacheVersion)
+	require.Equal(t, entry.DispositionApplied, got.DispositionApplied)
+	require.Equal(t, entry.Confidence, got.Confidence)
+	require.Equal(t, entry.Reason, got.Reason)
+	require.Equal(t, entry.Label, got.Label)
+	require.Equal(t, entry.EndpointID, got.EndpointID)
+	require.Equal(t, entry.ReviewOutcome, got.ReviewOutcome)
+	require.Equal(t, entry.ReviewerDisagreement, got.ReviewerDisagreement)
+	require.Equal(t, entry.ReviewAttempts, got.ReviewAttempts)
 	require.False(t, got.ExpiresAt.IsZero())
 
 	time.Sleep(30 * time.Millisecond)
