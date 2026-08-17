@@ -1019,7 +1019,7 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 		return nil, err
 	}
 	if normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage) == ContentModerationSecondLayerStageEnforce {
-		ready, reason := s.contentModerationSecondLayerEnforceReadiness(cfg, time.Now())
+		ready, reason := s.ensureContentModerationSecondLayerEnforceReadiness(ctx, cfg, time.Now())
 		if !ready {
 			return nil, infraerrors.BadRequest("CONTENT_MODERATION_ENFORCE_NOT_READY", reason)
 		}

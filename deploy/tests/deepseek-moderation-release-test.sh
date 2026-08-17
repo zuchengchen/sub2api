@@ -190,10 +190,10 @@ validate_release_report() {
     .integration.migration == true and
     .integration.api_encryption == true and
     .integration.api_masking == true and
-    .integration.health_contract == true and
+    .integration.connectivity_probe == true and
     .integration.layer1_stage == true and
     .integration.layer2_stage == true and
-    .integration.health_digest_invalidation == true and
+    .integration.connectivity_digest_invalidation == true and
     .integration.cleanup == true and
     .sensitivity.invalid_report_rejected == true and
     .sensitivity.benign_collision_passed == true
@@ -511,17 +511,12 @@ jq -n \
   }' >"$run_dir/deepseek-moderation-database-check.json"
 chmod 0600 "$run_dir/deepseek-moderation-database-check.json"
 
-curl --silent --show-error --fail --max-time 5 \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --data-binary '{"channel":"primary","mode":"contract"}' \
-  "$stub_url/control" >"$work_dir/stub-primary-control.json"
 api_request POST /api/v1/admin/risk-control/deepseek/channels/primary/test '' "$work_dir/channel-test-response.json"
 jq -e '
-  .code == 0 and .data.channel_id == "primary" and .data.health_valid == true and
-  .data.safe_case.passed == true and .data.safe_case.flagged == false and
-  .data.risk_case.passed == true and .data.risk_case.flagged == true and
-  .data.risk_case.category == "cyber_abuse"
+  .code == 0 and .data.channel_id == "primary" and
+  .data.reachable == true and .data.health_valid == true and
+  (.data.latency_ms | type == "number" and . >= 0) and
+  (.data | has("safe_case") | not) and (.data | has("risk_case") | not)
 ' "$work_dir/channel-test-response.json" >/dev/null
 
 jq -n '{first_layer_stage:"enforce"}' >"$work_dir/layer1-enforce.json"
@@ -536,29 +531,22 @@ jq -e '.code == 0 and .data.first_layer_stage == "shadow" and .data.second_layer
 jq '{
   second_layer_stage: "shadow",
   deepseek_channels: [.data.deepseek_channels[] | {
-    id, name, base_url,
-    model: (if .id == "primary" then "deepseek-v4-flash-release-mutated" else .model end),
+    id, name,
+    base_url: (if .id == "primary" then (.base_url + "/connectivity-mutated") else .base_url end),
+    model,
     enabled, order, timeout_ms
   }]
-}' "$work_dir/layer2-enforce-response.json" >"$work_dir/model-change.json"
-api_request PUT /api/v1/admin/risk-control/config "$work_dir/model-change.json" "$work_dir/model-change-response.json"
+}' "$work_dir/layer2-enforce-response.json" >"$work_dir/endpoint-change.json"
+api_request PUT /api/v1/admin/risk-control/config "$work_dir/endpoint-change.json" "$work_dir/endpoint-change-response.json"
 jq -e '.code == 0 and .data.second_layer_stage == "shadow" and .data.deepseek_channels[0].health_status == "untested"' \
-  "$work_dir/model-change-response.json" >/dev/null
+  "$work_dir/endpoint-change-response.json" >/dev/null
 
-enforce_status=$(curl --silent --show-error --max-time 15 \
-  --request PUT \
-  --header @"$work_dir/admin-auth.header" \
-  --header 'Content-Type: application/json' \
-  --data-binary @"$work_dir/layer2-enforce.json" \
-  --output "$work_dir/enforce-after-change-response.json" \
-  --write-out '%{http_code}' \
-  "http://127.0.0.1:$app_port/api/v1/admin/risk-control/config")
-api_call_count=$((api_call_count + 1))
-case "$enforce_status" in
-  4??) ;;
-  *) fail "Layer 2 Enforce was not rejected after health digest invalidation" ;;
-esac
-jq -e '.code >= 400 and (.message | type == "string" and length > 0)' "$work_dir/enforce-after-change-response.json" >/dev/null
+api_request PUT /api/v1/admin/risk-control/config "$work_dir/layer2-enforce.json" \
+  "$work_dir/enforce-after-endpoint-change-response.json"
+jq -e '
+  .code == 0 and .data.second_layer_stage == "enforce" and
+  .data.deepseek_channels[0].health_status == "reachable"
+' "$work_dir/enforce-after-endpoint-change-response.json" >/dev/null
 
 jq '{
   first_layer_stage: "shadow",
@@ -566,7 +554,7 @@ jq '{
   deepseek_channels: [.data.deepseek_channels[] | {
     id, name, base_url, model: "deepseek-v4-flash", enabled, order, timeout_ms
   }]
-}' "$work_dir/model-change-response.json" >"$work_dir/final-shadow.json"
+}' "$work_dir/layer2-enforce-response.json" >"$work_dir/final-shadow.json"
 api_request PUT /api/v1/admin/risk-control/config "$work_dir/final-shadow.json" "$work_dir/final-shadow-response.json"
 jq -e '
   .code == 0 and .data.deepseek_enabled == true and .data.yufeng_enabled == false and
@@ -659,10 +647,10 @@ jq -n \
       migration: true,
       api_encryption: true,
       api_masking: true,
-      health_contract: true,
+      connectivity_probe: true,
       layer1_stage: true,
       layer2_stage: true,
-      health_digest_invalidation: true,
+      connectivity_digest_invalidation: true,
       cleanup: true
     },
     sensitivity: {

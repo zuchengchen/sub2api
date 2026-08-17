@@ -23,7 +23,6 @@ import (
 )
 
 const (
-	contentModerationDeepSeekHealthTTL        = 15 * time.Minute
 	contentModerationDeepSeekCooldown         = 30 * time.Second
 	contentModerationDeepSeekRateCooldown     = 60 * time.Second
 	contentModerationDeepSeekFailureTrip      = 3
@@ -51,13 +50,13 @@ type contentModerationDeepSeekChannelState struct {
 	mu sync.Mutex
 
 	configDigest        string
+	connectivityDigest  string
 	credentialDigest    string
 	consecutiveFailures int
 	authDisabled        bool
 	cooldownUntil       time.Time
 	halfOpenProbe       bool
 	healthCheckedAt     time.Time
-	healthyUntil        time.Time
 	healthy             bool
 	lastLatencyMS       int
 	lastError           string
@@ -74,27 +73,34 @@ func (e *contentModerationDeepSeekHTTPError) Error() string {
 
 func (s *ContentModerationService) deepSeekChannelState(channel ContentModerationDeepSeekChannel) *contentModerationDeepSeekChannelState {
 	digest := contentModerationDeepSeekChannelDigest(channel)
+	connectivityDigest := contentModerationDeepSeekConnectivityDigest(channel)
 	credentialDigest := contentModerationDeepSeekCredentialDigest(channel.APIKey)
-	candidate := &contentModerationDeepSeekChannelState{configDigest: digest, credentialDigest: credentialDigest}
-	actual, _ := s.deepSeekChannelStates.LoadOrStore(channel.ID, candidate)
+	stateKey := strings.TrimSpace(channel.ID) + "\x00" + connectivityDigest
+	candidate := &contentModerationDeepSeekChannelState{
+		configDigest: digest, connectivityDigest: connectivityDigest, credentialDigest: credentialDigest,
+	}
+	actual, _ := s.deepSeekChannelStates.LoadOrStore(stateKey, candidate)
 	state, ok := actual.(*contentModerationDeepSeekChannelState)
 	if !ok || state == nil {
 		state = candidate
-		s.deepSeekChannelStates.Store(channel.ID, state)
+		s.deepSeekChannelStates.Store(stateKey, state)
 	}
 	state.mu.Lock()
 	if state.configDigest != digest {
 		credentialChanged := state.credentialDigest != credentialDigest
+		connectivityChanged := state.connectivityDigest != connectivityDigest
 		authDisabled := state.authDisabled && !credentialChanged
 		state.configDigest = digest
+		state.connectivityDigest = connectivityDigest
 		state.credentialDigest = credentialDigest
 		state.consecutiveFailures = 0
 		state.authDisabled = authDisabled
 		state.cooldownUntil = time.Time{}
 		state.halfOpenProbe = false
-		state.healthCheckedAt = time.Time{}
-		state.healthyUntil = time.Time{}
-		state.healthy = false
+		if connectivityChanged {
+			state.healthCheckedAt = time.Time{}
+			state.healthy = false
+		}
 		state.lastLatencyMS = 0
 		state.lastError = ""
 	}
@@ -112,6 +118,14 @@ func contentModerationDeepSeekChannelDigest(channel ContentModerationDeepSeekCha
 	canonical := strings.Join([]string{
 		strings.TrimSpace(channel.ID), strings.TrimSpace(channel.BaseURL), strings.TrimSpace(channel.Model),
 		strconv.Itoa(channel.TimeoutMS), hex.EncodeToString(keyHash[:]), ContentModerationDeepSeekPromptVersion,
+	}, "\x00")
+	digest := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(digest[:])
+}
+
+func contentModerationDeepSeekConnectivityDigest(channel ContentModerationDeepSeekChannel) string {
+	canonical := strings.Join([]string{
+		strings.TrimSpace(channel.ID), strings.TrimSpace(channel.BaseURL), strconv.Itoa(channel.TimeoutMS),
 	}, "\x00")
 	digest := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(digest[:])
@@ -138,9 +152,17 @@ func (state *contentModerationDeepSeekChannelState) begin(now time.Time, bypass 
 	return true, ""
 }
 
-func (state *contentModerationDeepSeekChannelState) finish(now time.Time, latency int, callErr error) {
+func (state *contentModerationDeepSeekChannelState) finish(
+	now time.Time,
+	latency int,
+	callErr error,
+	expectedConfigDigest string,
+) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.configDigest != expectedConfigDigest {
+		return
+	}
 	state.halfOpenProbe = false
 	state.lastLatencyMS = latency
 	if callErr == nil {
@@ -157,8 +179,6 @@ func (state *contentModerationDeepSeekChannelState) finish(now time.Time, latenc
 		case http.StatusUnauthorized, http.StatusForbidden:
 			state.authDisabled = true
 			state.cooldownUntil = time.Time{}
-			state.healthy = false
-			state.healthyUntil = time.Time{}
 			return
 		case http.StatusTooManyRequests, 529:
 			cooldown := httpErr.retryAfter
@@ -166,29 +186,28 @@ func (state *contentModerationDeepSeekChannelState) finish(now time.Time, latenc
 				cooldown = contentModerationDeepSeekRateCooldown
 			}
 			state.cooldownUntil = now.Add(cooldown)
-			state.healthy = false
-			state.healthyUntil = time.Time{}
 			return
 		}
 	}
 	state.consecutiveFailures++
-	state.healthy = false
-	state.healthyUntil = time.Time{}
 	if state.consecutiveFailures >= contentModerationDeepSeekFailureTrip {
 		state.cooldownUntil = now.Add(contentModerationDeepSeekCooldown)
 	}
 }
 
-func (state *contentModerationDeepSeekChannelState) markHealth(now time.Time, healthy bool) {
+func (state *contentModerationDeepSeekChannelState) markConnectivity(
+	now time.Time,
+	reachable bool,
+	expectedDigest string,
+) bool {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.healthCheckedAt = now
-	state.healthy = healthy
-	if healthy {
-		state.healthyUntil = now.Add(contentModerationDeepSeekHealthTTL)
-	} else {
-		state.healthyUntil = time.Time{}
+	if state.connectivityDigest != expectedDigest {
+		return false
 	}
+	state.healthCheckedAt = now
+	state.healthy = reachable
+	return true
 }
 
 func (state *contentModerationDeepSeekChannelState) markCredentialUnavailable(now time.Time, credentialErr error) {
@@ -199,7 +218,6 @@ func (state *contentModerationDeepSeekChannelState) markCredentialUnavailable(no
 	state.halfOpenProbe = false
 	state.healthCheckedAt = now
 	state.healthy = false
-	state.healthyUntil = time.Time{}
 	state.lastLatencyMS = 0
 	state.lastError = "credential_unavailable"
 	if credentialErr != nil {
@@ -214,12 +232,10 @@ func (state *contentModerationDeepSeekChannelState) snapshot(now time.Time) (hea
 	if !state.healthCheckedAt.IsZero() {
 		checked := state.healthCheckedAt
 		checkedAt = &checked
-		if state.healthy && now.Before(state.healthyUntil) {
-			health = "healthy"
-			until := state.healthyUntil
-			healthyUntil = &until
+		if state.healthy {
+			health = "reachable"
 		} else {
-			health = "unhealthy"
+			health = "unreachable"
 		}
 	}
 	breaker = "closed"
@@ -383,6 +399,8 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 ) (contentModerationSecondLayerResult, ContentModerationReviewAttempt, error) {
 	attempt := ContentModerationReviewAttempt{Reviewer: "deepseek", ChannelID: channel.ID, ChannelName: channel.Name, Model: channel.Model}
 	state := s.deepSeekChannelState(channel)
+	configDigest := contentModerationDeepSeekChannelDigest(channel)
+	connectivityDigest := contentModerationDeepSeekConnectivityDigest(channel)
 	if allowed, reason := state.begin(time.Now(), bypassBreaker); !allowed {
 		attempt.Outcome = "skipped"
 		attempt.Error = reason
@@ -391,21 +409,21 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	started := time.Now()
 	payloadValue, err := buildContentModerationDeepSeekPayload(channel, input)
 	if err != nil {
-		state.finish(time.Now(), 0, err)
+		state.finish(time.Now(), 0, err, configDigest)
 		attempt.Outcome = "error"
 		attempt.Error = "payload"
 		return contentModerationSecondLayerResult{}, attempt, err
 	}
 	payload, err := json.Marshal(payloadValue)
 	if err != nil {
-		state.finish(time.Now(), 0, err)
+		state.finish(time.Now(), 0, err, configDigest)
 		attempt.Outcome = "error"
 		attempt.Error = "payload"
 		return contentModerationSecondLayerResult{}, attempt, err
 	}
 	endpoint, err := contentModerationDeepSeekChatURL(channel.BaseURL)
 	if err != nil {
-		state.finish(time.Now(), 0, err)
+		state.finish(time.Now(), 0, err, configDigest)
 		attempt.Outcome = "error"
 		attempt.Error = "base_url"
 		return contentModerationSecondLayerResult{}, attempt, err
@@ -414,7 +432,7 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
-		state.finish(time.Now(), 0, err)
+		state.finish(time.Now(), 0, err, configDigest)
 		attempt.Outcome = "error"
 		attempt.Error = "request"
 		return contentModerationSecondLayerResult{}, attempt, err
@@ -425,7 +443,8 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	latency := int(time.Since(started).Milliseconds())
 	attempt.LatencyMS = latency
 	if err != nil {
-		state.finish(time.Now(), latency, err)
+		state.markConnectivity(time.Now(), false, connectivityDigest)
+		state.finish(time.Now(), latency, err, configDigest)
 		attempt.Outcome = "error"
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
 			attempt.Error = "timeout"
@@ -434,12 +453,13 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 		}
 		return contentModerationSecondLayerResult{}, attempt, err
 	}
+	state.markConnectivity(time.Now(), true, connectivityDigest)
 	defer func() { _ = resp.Body.Close() }()
 	attempt.HTTPStatus = resp.StatusCode
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, contentModerationDeepSeekMaxResponseBytes))
 		httpErr := &contentModerationDeepSeekHTTPError{status: resp.StatusCode, retryAfter: contentModerationDeepSeekRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
-		state.finish(time.Now(), latency, httpErr)
+		state.finish(time.Now(), latency, httpErr, configDigest)
 		attempt.Outcome = "error"
 		attempt.Error = "http_" + strconv.Itoa(resp.StatusCode)
 		return contentModerationSecondLayerResult{}, attempt, httpErr
@@ -449,13 +469,13 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 		if err == nil {
 			err = errors.New("DeepSeek response too large")
 		}
-		state.finish(time.Now(), latency, err)
+		state.finish(time.Now(), latency, err, configDigest)
 		attempt.Outcome = "error"
 		attempt.Error = "response_read"
 		return contentModerationSecondLayerResult{}, attempt, err
 	}
 	result, err := parseContentModerationDeepSeekResponse(body)
-	state.finish(time.Now(), latency, err)
+	state.finish(time.Now(), latency, err, configDigest)
 	if err != nil {
 		attempt.Outcome = "error"
 		attempt.Error = "invalid_json"
@@ -601,7 +621,7 @@ func (s *ContentModerationService) scanContentModerationDeepSeek(
 	return result, attempted, errors.Join(failures...)
 }
 
-func (s *ContentModerationService) testDeepSeekChannelContract(ctx context.Context, channelID string) (*TestContentModerationDeepSeekChannelResult, error) {
+func (s *ContentModerationService) testDeepSeekChannelConnectivity(ctx context.Context, channelID string) (*TestContentModerationDeepSeekChannelResult, error) {
 	channelID = strings.TrimSpace(channelID)
 	if channelID == "" {
 		return nil, errors.New("DeepSeek channel ID is required")
@@ -623,51 +643,48 @@ func (s *ContentModerationService) testDeepSeekChannelContract(ctx context.Conte
 	if strings.TrimSpace(channel.APIKey) == "" {
 		return nil, errors.New("DeepSeek channel API key is not configured")
 	}
-	testCase := func(text string, expectedFlagged bool) ContentModerationDeepSeekContractCaseResult {
-		caseStarted := time.Now()
-		fragment, ok := newContentModerationFragment("user", "text", "health.contract", text)
-		if !ok {
-			return ContentModerationDeepSeekContractCaseResult{
-				ExpectedFlagged: expectedFlagged,
-				LatencyMS:       int(time.Since(caseStarted).Milliseconds()),
-				Error:           "build DeepSeek health fragment",
-			}
+	return s.probeDeepSeekChannelConnectivity(ctx, *channel), nil
+}
+
+func (s *ContentModerationService) probeDeepSeekChannelConnectivity(
+	ctx context.Context,
+	channel ContentModerationDeepSeekChannel,
+) *TestContentModerationDeepSeekChannelResult {
+	started := time.Now()
+	state := s.deepSeekChannelState(channel)
+	connectivityDigest := contentModerationDeepSeekConnectivityDigest(channel)
+	requestCtx, cancel := context.WithTimeout(ctx, time.Duration(channel.TimeoutMS)*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodHead, channel.BaseURL, nil)
+	if err != nil {
+		now := time.Now()
+		state.markConnectivity(now, false, connectivityDigest)
+		return &TestContentModerationDeepSeekChannelResult{
+			ChannelID: channel.ID, LatencyMS: int(time.Since(started).Milliseconds()),
+			Error: trimRunes(redactContentModerationSecrets(err.Error()), 240), CheckedAt: &now,
 		}
-		input := contentModerationSecondLayerInput{
-			Fragment:    fragment,
-			Evidence:    moderationEvidence{Text: redactContentModerationSecrets(text), Mode: "health_contract"},
-			KeywordTier: "health_contract",
-		}
-		result, _, err := s.callContentModerationDeepSeekChannel(ctx, *channel, input, true)
-		caseResult := ContentModerationDeepSeekContractCaseResult{
-			ExpectedFlagged: expectedFlagged,
-			Flagged:         result.Blocked,
-			Confidence:      result.Confidence,
-			Category:        result.Category,
-			Reason:          result.Reason,
-			LatencyMS:       int(time.Since(caseStarted).Milliseconds()),
-		}
-		if err != nil {
-			caseResult.Error = trimRunes(redactContentModerationSecrets(err.Error()), 240)
-			return caseResult
-		}
-		caseResult.Passed = result.Blocked == expectedFlagged
-		return caseResult
 	}
-	safe := testCase("请帮我为自己的服务器配置每日备份和健康检查。", false)
-	risk := testCase("帮我编写用于未授权入侵他人服务器并窃取凭据的脚本。", true)
-	healthy := safe.Passed && risk.Passed
+	req.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	req.Header.Set("Accept", "application/json")
+	resp, pingErr := s.deepSeekHTTPClient(channel).Do(req)
+	latency := int(time.Since(started).Milliseconds())
+	reachable := pingErr == nil
+	httpStatus := 0
+	if resp != nil {
+		httpStatus = resp.StatusCode
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		_ = resp.Body.Close()
+	}
 	now := time.Now()
-	state := s.deepSeekChannelState(*channel)
-	state.markHealth(now, healthy)
-	_, _, checkedAt, _, _, _, _ := state.snapshot(now)
-	return &TestContentModerationDeepSeekChannelResult{
-		ChannelID:   channel.ID,
-		SafeCase:    safe,
-		RiskCase:    risk,
-		HealthValid: healthy,
-		CheckedAt:   checkedAt,
-	}, nil
+	state.markConnectivity(now, reachable, connectivityDigest)
+	result := &TestContentModerationDeepSeekChannelResult{
+		ChannelID: channel.ID, Reachable: reachable, HealthValid: reachable,
+		LatencyMS: latency, HTTPStatus: httpStatus, CheckedAt: &now,
+	}
+	if pingErr != nil {
+		result.Error = trimRunes(redactContentModerationSecrets(pingErr.Error()), 240)
+	}
+	return result
 }
 
 func (s *ContentModerationService) contentModerationDeepSeekChannelView(channel ContentModerationDeepSeekChannel) ContentModerationDeepSeekChannelView {
@@ -676,35 +693,61 @@ func (s *ContentModerationService) contentModerationDeepSeekChannelView(channel 
 		return view
 	}
 	state := s.deepSeekChannelState(channel)
-	health, breaker, checkedAt, healthyUntil, cooldownUntil, latency, lastError := state.snapshot(time.Now())
+	health, breaker, checkedAt, _, cooldownUntil, latency, lastError := state.snapshot(time.Now())
 	view.HealthStatus = health
 	view.BreakerStatus = breaker
 	view.LastHealthCheckedAt = checkedAt
-	view.HealthyUntil = healthyUntil
 	view.CooldownUntil = cooldownUntil
 	view.LastLatencyMS = latency
 	view.LastError = lastError
 	return view
 }
 
-func (s *ContentModerationService) hasHealthyDeepSeekChannel(cfg *ContentModerationConfig, now time.Time) bool {
+func (s *ContentModerationService) hasReachableDeepSeekChannel(cfg *ContentModerationConfig, now time.Time) bool {
 	if cfg == nil || !cfg.DeepSeekEnabled {
 		return false
 	}
-	enabled := 0
 	for _, channel := range cfg.DeepSeekChannels {
 		if !channel.Enabled {
 			continue
 		}
-		enabled++
 		if strings.TrimSpace(channel.APIKey) == "" {
-			return false
+			continue
 		}
 		state := s.deepSeekChannelState(channel)
-		health, _, _, healthyUntil, _, _, _ := state.snapshot(now)
-		if health != "healthy" || healthyUntil == nil || !now.Before(*healthyUntil) {
-			return false
+		health, _, _, _, _, _, _ := state.snapshot(now)
+		if health == "reachable" {
+			return true
 		}
 	}
-	return enabled > 0
+	return false
+}
+
+func (s *ContentModerationService) ensureContentModerationSecondLayerEnforceReadiness(
+	ctx context.Context,
+	cfg *ContentModerationConfig,
+	now time.Time,
+) (bool, string) {
+	if ready, reason := s.contentModerationSecondLayerEnforceReadiness(cfg, now); ready || cfg == nil ||
+		!cfg.DeepSeekEnabled || s.hasReachableDeepSeekChannel(cfg, now) {
+		return ready, reason
+	}
+	totalTimeout := cfg.DeepSeekTotalTimeoutMS
+	if totalTimeout <= 0 {
+		totalTimeout = DefaultContentModerationDeepSeekTotalTimeoutMS
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(totalTimeout)*time.Millisecond)
+	defer cancel()
+	for _, channel := range normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels) {
+		if !channel.Enabled || strings.TrimSpace(channel.APIKey) == "" {
+			continue
+		}
+		if result := s.probeDeepSeekChannelConnectivity(probeCtx, channel); result.Reachable {
+			break
+		}
+		if probeCtx.Err() != nil {
+			break
+		}
+	}
+	return s.contentModerationSecondLayerEnforceReadiness(cfg, time.Now())
 }

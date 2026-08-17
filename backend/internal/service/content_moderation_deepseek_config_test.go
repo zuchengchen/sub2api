@@ -139,29 +139,42 @@ func TestValidateContentModerationDeepSeekBaseURL(t *testing.T) {
 	}
 }
 
-func TestContentModerationSecondLayerEnforceReadinessTracksChannelConfigDigest(t *testing.T) {
+func TestContentModerationSecondLayerEnforceReadinessRequiresOneReachableChannel(t *testing.T) {
 	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 	cfg := defaultContentModerationConfig()
 	cfg.DeepSeekChannels[0].APIKey = "sk-unit-test-health"
+	backup := cfg.DeepSeekChannels[0]
+	backup.ID = "deepseek-backup"
+	backup.Name = "DeepSeek Backup"
+	backup.BaseURL = "https://backup.example.com"
+	backup.Order = 1
+	backup.APIKey = "sk-unit-test-backup"
+	cfg.DeepSeekChannels = append(cfg.DeepSeekChannels, backup)
 	now := time.Now()
 
 	ready, reason := svc.contentModerationSecondLayerEnforceReadiness(cfg, now)
 	require.False(t, ready)
-	require.Contains(t, reason, "双样例健康检查")
+	require.Contains(t, reason, "连通性检查")
 
-	state := svc.deepSeekChannelState(cfg.DeepSeekChannels[0])
-	state.markHealth(now, true)
+	state := svc.deepSeekChannelState(cfg.DeepSeekChannels[1])
+	state.markConnectivity(now, true, contentModerationDeepSeekConnectivityDigest(cfg.DeepSeekChannels[1]))
 	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(cfg, now)
 	require.True(t, ready)
 	require.Empty(t, reason)
 	view := svc.configView(cfg)
-	require.Equal(t, "healthy", view.DeepSeekChannels[0].HealthStatus)
+	require.Equal(t, "untested", view.DeepSeekChannels[0].HealthStatus)
+	require.Equal(t, "reachable", view.DeepSeekChannels[1].HealthStatus)
 
 	changed := cloneContentModerationConfig(cfg)
-	changed.DeepSeekChannels[0].Model = "different-model"
+	changed.DeepSeekChannels[1].Model = "different-model"
+	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(changed, now)
+	require.True(t, ready)
+	require.Empty(t, reason)
+
+	changed.DeepSeekChannels[1].BaseURL = "https://changed.example.com"
 	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(changed, now)
 	require.False(t, ready)
-	require.Contains(t, reason, "双样例健康检查")
+	require.Contains(t, reason, "连通性检查")
 }
 
 func TestContentModerationSecondLayerEnforceReadinessRequiresRecentYuFengSuccess(t *testing.T) {
@@ -192,6 +205,6 @@ func TestContentModerationSecondLayerEnforceReadinessRequiresRecentYuFengSuccess
 	require.Contains(t, reason, "没有成功完成真实审核")
 
 	svc.markYuFengEndpointHealthy(changed.SecondLayerEndpoints[0], now)
-	ready, _ = svc.contentModerationSecondLayerEnforceReadiness(changed, now.Add(contentModerationDeepSeekHealthTTL+time.Second))
+	ready, _ = svc.contentModerationSecondLayerEnforceReadiness(changed, now.Add(contentModerationYuFengHealthTTL+time.Second))
 	require.False(t, ready)
 }

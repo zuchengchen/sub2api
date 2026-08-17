@@ -1369,14 +1369,24 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 			replayHash:         defaultContentModerationString(entry.ReplayOfInputHash, work.bundle.CacheHash),
 		}
 	}
+	reviewCtx := ctx
+	cancelReview := func() {}
+	if work.requireHealthyReviewer && cfg != nil && cfg.DeepSeekEnabled {
+		totalTimeout := cfg.DeepSeekTotalTimeoutMS
+		if totalTimeout <= 0 {
+			totalTimeout = DefaultContentModerationDeepSeekTotalTimeoutMS
+		}
+		reviewCtx, cancelReview = context.WithTimeout(ctx, time.Duration(totalTimeout)*time.Millisecond)
+	}
+	defer cancelReview()
 	if work.requireHealthyReviewer {
-		if ready, reason := s.contentModerationSecondLayerEnforceReadiness(cfg, time.Now()); !ready {
+		if ready, reason := s.ensureContentModerationSecondLayerEnforceReadiness(reviewCtx, cfg, time.Now()); !ready {
 			return contentModerationCandidateReviewOutcome{
 				parserStatus: "health_not_ready", err: errors.New(reason),
 			}
 		}
 	}
-	result, attempted, err := s.scanUnifiedSecondLayerPrepared(ctx, cfg, contentModerationSecondLayerInput{
+	result, attempted, err := s.scanUnifiedSecondLayerPrepared(reviewCtx, cfg, contentModerationSecondLayerInput{
 		Fragment: work.bundle.Fragment, Evidence: work.bundle.Evidence,
 		KeywordTier: defaultContentModerationString(work.bundle.PrimaryTier, "candidate"), KeywordRuleID: work.bundle.PrimaryRuleID,
 		Background: cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,

@@ -37,9 +37,8 @@ const riskConfig = {
       timeout_ms: 3000,
       api_key_configured: true,
       api_key_masked: 'sk-...a123',
-      health_status: 'healthy',
+      health_status: 'reachable',
       last_health_checked_at: '2026-08-17T00:00:00Z',
-      healthy_until: '2099-08-17T00:15:00Z',
       breaker_status: 'closed',
       last_latency_ms: 912,
     },
@@ -151,7 +150,7 @@ async function mockAPIs(page: Page) {
         deepseek_failover_count: 7,
         deepseek_unavailable_count: 1,
         second_layer_enforce_ready: false,
-        second_layer_enforce_reason: '请先完成双样例健康测试',
+        second_layer_enforce_reason: '请先完成渠道连通性检查',
       })
     }
     if (path.endsWith('/admin/risk-control/logs')) {
@@ -161,9 +160,10 @@ async function mockAPIs(page: Page) {
     if (path.includes('/admin/risk-control/deepseek/channels/') && path.endsWith('/test')) {
       return json(route, {
         channel_id: 'deepseek-official',
-        safe_case: { passed: true },
-        risk_case: { passed: true },
+        reachable: true,
         health_valid: true,
+        latency_ms: 18,
+        http_status: 404,
         checked_at: '2026-08-17T00:01:00Z',
       })
     }
@@ -188,7 +188,7 @@ test('风控中心在桌面与移动视口完整呈现', async ({ page }, testIn
   await expect(page.locator('[data-test="layer1-stage-shadow"]')).toBeVisible()
   await expect(page.locator('[data-test="layer2-stage-shadow"]')).toBeVisible()
   await expect(page.locator('[data-test="layer2-stage-enforce"]')).toBeDisabled()
-  await expect(page.locator('[data-test="enforce-health-gate"]')).toContainText('请先完成双样例健康测试')
+  await expect(page.locator('[data-test="enforce-health-gate"]')).toContainText('请先完成渠道连通性检查')
   await expect(page.locator('[data-test="audit-log-table"]')).toContainText('cyber_abuse')
 
   await page.locator('[data-test="deepseek-channel-move-up-1"]').click()
