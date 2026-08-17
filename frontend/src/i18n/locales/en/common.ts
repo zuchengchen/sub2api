@@ -201,8 +201,6 @@ export default {
     channelMonitor: 'Channel Monitor',
     channelStatus: 'Channel Status',
     riskControl: 'Risk Control',
-    securityAudit: 'Security Audit',
-    contentModeration: 'Content Moderation',
     auditLogs: 'Audit Logs',
   },
 

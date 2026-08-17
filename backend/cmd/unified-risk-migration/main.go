@@ -688,25 +688,18 @@ func verifyMigrationArchiveKeyReferences(ctx context.Context, db *sql.DB, path s
 	for _, keyID := range available {
 		availableSet[keyID] = struct{}{}
 	}
-	rows, err := db.QueryContext(ctx, `
-SELECT DISTINCT archive_key_id FROM content_moderation_logs
-WHERE archive_id IS NOT NULL AND archive_deleted_at IS NULL AND archive_key_id <> ''
-ORDER BY archive_key_id`)
+	archiveRepo, ok := repository.NewContentModerationRepository(db).(service.ContentModerationArchiveRepository)
+	if !ok {
+		return errors.New("content moderation archive repository is unavailable")
+	}
+	referenced, err := archiveRepo.ReferencedArchiveKeyIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("read referenced archive key IDs: %w", err)
+		return fmt.Errorf("read referenced content moderation key IDs: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var keyID string
-		if err := rows.Scan(&keyID); err != nil {
-			return fmt.Errorf("scan referenced archive key ID: %w", err)
-		}
+	for _, keyID := range referenced {
 		if _, ok := availableSet[keyID]; !ok {
-			return fmt.Errorf("archive key ring is missing referenced key ID %q", keyID)
+			return fmt.Errorf("content moderation key ring is missing referenced key ID %q", keyID)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate referenced archive key IDs: %w", err)
 	}
 	return nil
 }

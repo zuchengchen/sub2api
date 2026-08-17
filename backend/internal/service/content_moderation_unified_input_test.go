@@ -129,6 +129,48 @@ func TestExtractContentModerationFragments_AllClientControlledRolesAndReferences
 	require.Equal(t, "url", texts["https://files.example/brief.txt"].Kind)
 }
 
+func TestSelectContentModerationReviewFragments_LatestUserAndRelatedToolsOnly(t *testing.T) {
+	body := []byte(`{
+		"system":"system policy",
+		"messages":[
+			{"role":"user","content":"old user text"},
+			{"role":"assistant","tool_calls":[{"type":"function","function":{"name":"old_call","arguments":"old tool arguments"}}]},
+			{"role":"tool","content":"old tool output"},
+			{"role":"user","content":[{"type":"text","text":"latest user text"},{"type":"input_file","filename":"photo.png","file_url":"https://media.example/photo.png"}]},
+			{"role":"assistant","content":"assistant prose","tool_calls":[{"type":"function","function":{"name":"new_call","arguments":"related tool arguments"}}]},
+			{"role":"tool","content":"related tool output"}
+		],
+		"tools":[{"type":"function","function":{"name":"schema_only","description":"tool schema description"}}]
+	}`)
+
+	fragments := SelectContentModerationReviewFragments(ExtractContentModerationFragments(ContentModerationProtocolOpenAIChat, body))
+	texts := make(map[string]ContentModerationFragment, len(fragments))
+	for _, fragment := range fragments {
+		texts[fragment.Text] = fragment
+	}
+	for _, expected := range []string{"latest user text", "photo.png", "new_call", "related tool arguments", "related tool output"} {
+		require.Contains(t, texts, expected)
+	}
+	for _, excluded := range []string{
+		"system policy", "old user text", "old_call", "old tool arguments", "old tool output",
+		"assistant prose", "https://media.example/photo.png", "schema_only", "tool schema description",
+	} {
+		require.NotContains(t, texts, excluded)
+	}
+	require.Equal(t, "tool", texts["related tool arguments"].Role)
+}
+
+func TestSelectContentModerationReviewFragments_ToolOnlyContinuation(t *testing.T) {
+	body := []byte(`{"input":[
+		{"type":"function_call_output","call_id":"call_1","output":"current tool result"},
+		{"type":"input_image","image_url":"https://media.example/output.png"}
+	]}`)
+	fragments := SelectContentModerationReviewFragments(ExtractContentModerationFragments(ContentModerationProtocolOpenAIResponses, body))
+	require.Len(t, fragments, 1)
+	require.Equal(t, "tool", fragments[0].Role)
+	require.Equal(t, "current tool result", fragments[0].Text)
+}
+
 func TestContentModerationFragmentHashSeparatesRoleKindPathAndContext(t *testing.T) {
 	toolText, ok := newContentModerationFragment(" Tool ", " Text ", "messages.1.content", "same text")
 	require.True(t, ok)
@@ -152,6 +194,7 @@ func TestUnifiedModerationAllowsOnlyPlaceholderEncodedCommandInToolMarkdown(t *t
 	cfg.Enabled = true
 	cfg.Mode = ContentModerationModePreBlock
 	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordOnly
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
 	cfg.SecondLayerEnabled = false
 	runtime := &contentModerationRuntimeSnapshot{
 		riskControlEnabled: true,
@@ -299,6 +342,7 @@ func TestUnifiedFragmentCacheMetricsAreFixedCounters(t *testing.T) {
 		cfg := defaultContentModerationConfig()
 		cfg.Enabled = true
 		cfg.AutoBanEnabled = false
+		cfg.SecondLayerEnabled = false
 		return &contentModerationRuntimeSnapshot{riskControlEnabled: true, config: cfg}
 	}
 	input := ContentModerationCheckInput{

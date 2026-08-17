@@ -25,39 +25,30 @@ func NewContentModerationHandler(svc *service.ContentModerationService) *Content
 }
 
 type contentModerationConfigRequest struct {
-	Enabled *bool   `json:"enabled"`
-	Mode    *string `json:"mode"`
-	BaseURL *string `json:"base_url"`
-	Model   *string `json:"model"`
-	// 审计请求使用的代理服务器：null 不修改；0 清除（直连）；>0 指定代理。
-	ProxyID              *int64              `json:"proxy_id"`
-	APIKey               *string             `json:"api_key"`
-	APIKeys              *[]string           `json:"api_keys"`
-	APIKeysMode          string              `json:"api_keys_mode"`
-	DeleteAPIKeyHashes   *[]string           `json:"delete_api_key_hashes"`
-	ClearAPIKey          bool                `json:"clear_api_key"`
-	TimeoutMS            *int                `json:"timeout_ms"`
-	SampleRate           *int                `json:"sample_rate"`
-	AllGroups            *bool               `json:"all_groups"`
-	GroupIDs             *[]int64            `json:"group_ids"`
-	UserEmailWhitelist   *[]string           `json:"user_email_whitelist"`
-	RecordNonHits        *bool               `json:"record_non_hits"`
-	Thresholds           *map[string]float64 `json:"thresholds"`
-	BlockStatus          *int                `json:"block_status"`
-	BlockMessage         *string             `json:"block_message"`
-	EmailOnHit           *bool               `json:"email_on_hit"`
-	AutoBanEnabled       *bool               `json:"auto_ban_enabled"`
-	BanThreshold         *int                `json:"ban_threshold"`
-	ViolationWindowHours *int                `json:"violation_window_hours"`
+	Enabled                *bool                                            `json:"enabled"`
+	Mode                   *string                                          `json:"mode"`
+	DeepSeekEnabled        *bool                                            `json:"deepseek_enabled"`
+	YuFengEnabled          *bool                                            `json:"yufeng_enabled"`
+	DeepSeekTotalTimeoutMS *int                                             `json:"deepseek_total_timeout_ms"`
+	DeepSeekThreshold      *float64                                         `json:"deepseek_threshold"`
+	DeepSeekChannels       *[]service.ContentModerationDeepSeekChannelInput `json:"deepseek_channels"`
+	AllGroups              *bool                                            `json:"all_groups"`
+	GroupIDs               *[]int64                                         `json:"group_ids"`
+	UserEmailWhitelist     *[]string                                        `json:"user_email_whitelist"`
+	RecordNonHits          *bool                                            `json:"record_non_hits"`
+	BlockStatus            *int                                             `json:"block_status"`
+	BlockMessage           *string                                          `json:"block_message"`
+	EmailOnHit             *bool                                            `json:"email_on_hit"`
+	AutoBanEnabled         *bool                                            `json:"auto_ban_enabled"`
+	BanThreshold           *int                                             `json:"ban_threshold"`
+	ViolationWindowHours   *int                                             `json:"violation_window_hours"`
 	// cyber_policy 命中是否排除出自动封号计数；前端 RiskControlView 已发送该字段，
 	// service.UpdateContentModerationConfigInput 已支持，此前 handler 层缺透传导致开关静默失效。
 	CyberPolicyExcludeFromBanCount *bool                                 `json:"cyber_policy_exclude_from_ban_count"`
-	RetryCount                     *int                                  `json:"retry_count"`
 	HitRetentionDays               *int                                  `json:"hit_retention_days"`
 	NonHitRetentionDays            *int                                  `json:"non_hit_retention_days"`
 	PreHashCheckEnabled            *bool                                 `json:"pre_hash_check_enabled"`
 	BlockedKeywords                *[]string                             `json:"blocked_keywords"`
-	KeywordBlockingMode            *string                               `json:"keyword_blocking_mode"`
 	ModelFilter                    *service.ContentModerationModelFilter `json:"model_filter"`
 	CacheVersion                   *string                               `json:"cache_version"`
 	CacheMaxEntries                *int                                  `json:"cache_max_entries"`
@@ -68,8 +59,6 @@ type contentModerationConfigRequest struct {
 	FirstLayerStage                *string                               `json:"first_layer_stage"`
 	SecondLayerEnabled             *bool                                 `json:"second_layer_enabled"`
 	SecondLayerStage               *string                               `json:"second_layer_stage"`
-	SecondLayerEndpoints           *[]service.ContentModerationEndpoint  `json:"second_layer_endpoints"`
-	SecondLayerScanners            *[]string                             `json:"second_layer_scanners"`
 	HardBlockPatterns              *[]string                             `json:"hard_block_patterns"`
 	CandidateKeywords              *[]string                             `json:"candidate_keywords"`
 	Layer1Keywords                 *[]string                             `json:"layer1_keywords"`
@@ -78,18 +67,6 @@ type contentModerationConfigRequest struct {
 	KeywordPolicyVersion           *string                               `json:"keyword_policy_version"`
 	ContextPolicyVersion           *string                               `json:"context_policy_version"`
 	EvidencePolicyVersion          *string                               `json:"evidence_policy_version"`
-	CandidateAsset                 *string                               `json:"candidate_asset"`
-	CandidateEnabled               *bool                                 `json:"candidate_enabled"`
-}
-
-type contentModerationAPIKeyTestRequest struct {
-	APIKeys   []string `json:"api_keys"`
-	BaseURL   string   `json:"base_url"`
-	Model     string   `json:"model"`
-	TimeoutMS int      `json:"timeout_ms"`
-	ProxyID   *int64   `json:"proxy_id"`
-	Prompt    string   `json:"prompt"`
-	Images    []string `json:"images"`
 }
 
 type contentModerationHashRequest struct {
@@ -114,21 +91,15 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 	cfg, err := h.service.UpdateConfig(c.Request.Context(), service.UpdateContentModerationConfigInput{
 		Enabled:                        req.Enabled,
 		Mode:                           req.Mode,
-		BaseURL:                        req.BaseURL,
-		Model:                          req.Model,
-		ProxyID:                        req.ProxyID,
-		APIKey:                         req.APIKey,
-		APIKeys:                        req.APIKeys,
-		APIKeysMode:                    req.APIKeysMode,
-		DeleteAPIKeyHashes:             req.DeleteAPIKeyHashes,
-		ClearAPIKey:                    req.ClearAPIKey,
-		TimeoutMS:                      req.TimeoutMS,
-		SampleRate:                     req.SampleRate,
+		DeepSeekEnabled:                req.DeepSeekEnabled,
+		YuFengEnabled:                  req.YuFengEnabled,
+		DeepSeekTotalTimeoutMS:         req.DeepSeekTotalTimeoutMS,
+		DeepSeekThreshold:              req.DeepSeekThreshold,
+		DeepSeekChannels:               req.DeepSeekChannels,
 		AllGroups:                      req.AllGroups,
 		GroupIDs:                       req.GroupIDs,
 		UserEmailWhitelist:             req.UserEmailWhitelist,
 		RecordNonHits:                  req.RecordNonHits,
-		Thresholds:                     req.Thresholds,
 		BlockStatus:                    req.BlockStatus,
 		BlockMessage:                   req.BlockMessage,
 		EmailOnHit:                     req.EmailOnHit,
@@ -136,12 +107,10 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		BanThreshold:                   req.BanThreshold,
 		ViolationWindowHours:           req.ViolationWindowHours,
 		CyberPolicyExcludeFromBanCount: req.CyberPolicyExcludeFromBanCount,
-		RetryCount:                     req.RetryCount,
 		HitRetentionDays:               req.HitRetentionDays,
 		NonHitRetentionDays:            req.NonHitRetentionDays,
 		PreHashCheckEnabled:            req.PreHashCheckEnabled,
 		BlockedKeywords:                req.BlockedKeywords,
-		KeywordBlockingMode:            req.KeywordBlockingMode,
 		ModelFilter:                    req.ModelFilter,
 		CacheVersion:                   req.CacheVersion,
 		CacheMaxEntries:                req.CacheMaxEntries,
@@ -152,8 +121,6 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		FirstLayerStage:                req.FirstLayerStage,
 		SecondLayerEnabled:             req.SecondLayerEnabled,
 		SecondLayerStage:               req.SecondLayerStage,
-		SecondLayerEndpoints:           req.SecondLayerEndpoints,
-		SecondLayerScanners:            req.SecondLayerScanners,
 		HardBlockPatterns:              req.HardBlockPatterns,
 		CandidateKeywords:              req.CandidateKeywords,
 		Layer1Keywords:                 req.Layer1Keywords,
@@ -162,8 +129,6 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		KeywordPolicyVersion:           req.KeywordPolicyVersion,
 		ContextPolicyVersion:           req.ContextPolicyVersion,
 		EvidencePolicyVersion:          req.EvidencePolicyVersion,
-		CandidateAsset:                 req.CandidateAsset,
-		CandidateEnabled:               req.CandidateEnabled,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -172,21 +137,8 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 	response.Success(c, cfg)
 }
 
-func (h *ContentModerationHandler) TestAPIKeys(c *gin.Context) {
-	var req contentModerationAPIKeyTestRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	result, err := h.service.TestAPIKeys(c.Request.Context(), service.TestContentModerationAPIKeysInput{
-		APIKeys:   req.APIKeys,
-		BaseURL:   req.BaseURL,
-		Model:     req.Model,
-		TimeoutMS: req.TimeoutMS,
-		ProxyID:   req.ProxyID,
-		Prompt:    req.Prompt,
-		Images:    req.Images,
-	})
+func (h *ContentModerationHandler) TestDeepSeekChannel(c *gin.Context) {
+	result, err := h.service.TestDeepSeekChannel(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

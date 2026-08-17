@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,4 +59,28 @@ func TestIsolatedRestoreListKeepsInternalForeignKeyAndSkipsExternalParents(t *te
 func TestIsolatedRestoreListRejectsUnexpectedForeignKeyLayout(t *testing.T) {
 	_, err := isolatedRestoreList([]byte("1; 0 0 TABLE public prompt_audit_jobs sub2api\n"))
 	require.ErrorContains(t, err, "unexpected Prompt Audit foreign-key layout")
+}
+
+func TestVerifyMigrationArchiveKeyReferencesIncludesDeepSeekCredentialEnvelopes(t *testing.T) {
+	keyRingPath := filepath.Join(t.TempDir(), "keyring.json")
+	require.NoError(t, os.WriteFile(keyRingPath, []byte(`{
+  "current_key_id": "archive-key-2026-01",
+  "keys": {
+    "archive-key-2026-01": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  }
+}`), 0o600))
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery(`(?s)WITH referenced_keys AS .*jsonb_path_query.*api_key_envelope.key_id.*SELECT DISTINCT key_id`).
+		WithArgs("content_moderation_config").
+		WillReturnRows(sqlmock.NewRows([]string{"key_id"}).
+			AddRow("archive-key-2026-01").
+			AddRow("credential-key-2026-02"))
+
+	err = verifyMigrationArchiveKeyReferences(context.Background(), db, keyRingPath)
+
+	require.ErrorContains(t, err, `content moderation key ring is missing referenced key ID "credential-key-2026-02"`)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

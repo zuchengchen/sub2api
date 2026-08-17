@@ -20,7 +20,9 @@ paths and never place credentials in the repository or shell history.
   `proxy_buffering off`. Do not lower the application 256 MiB request limit.
 - Provision the key ring outside the repository as a `0600` regular file. It
   must contain the active 32-byte key and every historical Key ID still
-  referenced by `content_moderation_logs`.
+  referenced by either `content_moderation_logs` or a DeepSeek API-key envelope
+  in `settings.content_moderation_config`. Do not remove a historical key until
+  the finalized readiness check confirms that neither reference remains.
 - Provision retry and emergency directories as owned by the service account,
   mode `0700`, on monitored storage. Only one service instance may use them.
 - Ensure PostgreSQL has room for the encrypted staging payload and the backup;
@@ -89,8 +91,10 @@ new or changed source fingerprints, but performs full source/stage validation:
 ```
 
 Record both JSON reports. Job/event/status counts must match the live source;
-the second run must be stable. Do not continue with a missing referenced key,
-invalid archive, plaintext in staging, or unexplained count change.
+the second run must be stable. Referenced-key validation covers both encrypted
+archives and DeepSeek credential envelopes. Do not continue with a missing
+referenced key, invalid archive, plaintext in staging, or unexplained count
+change.
 
 ## Final window
 

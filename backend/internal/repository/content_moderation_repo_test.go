@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
@@ -83,6 +85,57 @@ func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesReplayBlocks
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestContentModerationDeepSeekConfidencePreservesDatabaseNullInAPI(t *testing.T) {
+	tests := []struct {
+		name          string
+		scanned       sql.NullFloat64
+		wantScore     float64
+		wantJSONValue *float64
+	}{
+		{name: "historical null"},
+		{name: "reviewed score", scanned: sql.NullFloat64{Float64: 0.91, Valid: true}, wantScore: 0.91, wantJSONValue: float64Ptr(0.91)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := service.ContentModerationLog{DeepSeekConfidence: 0.42, DeepSeekConfidenceValue: float64Ptr(0.42)}
+			setContentModerationDeepSeekConfidence(&item, tt.scanned)
+
+			require.Equal(t, tt.wantScore, item.DeepSeekConfidence)
+			if tt.wantJSONValue == nil {
+				require.Nil(t, item.DeepSeekConfidenceValue)
+			} else {
+				require.NotNil(t, item.DeepSeekConfidenceValue)
+				require.InDelta(t, *tt.wantJSONValue, *item.DeepSeekConfidenceValue, 0.00001)
+			}
+
+			raw, err := json.Marshal(item)
+			require.NoError(t, err)
+			var payload map[string]any
+			require.NoError(t, json.Unmarshal(raw, &payload))
+			jsonValue, present := payload["deepseek_confidence"]
+			require.True(t, present)
+			if tt.wantJSONValue == nil {
+				require.Nil(t, jsonValue)
+			} else {
+				require.InDelta(t, *tt.wantJSONValue, jsonValue, 0.00001)
+			}
+		})
+	}
+}
+
+func TestContentModerationDeepSeekConfidenceInsertValuePreservesAbsence(t *testing.T) {
+	require.Nil(t, contentModerationDeepSeekConfidenceValue(&service.ContentModerationLog{}))
+	require.Nil(t, contentModerationDeepSeekConfidenceValue(&service.ContentModerationLog{ReviewOutcome: "unavailable"}))
+	require.Equal(t, 0.0, contentModerationDeepSeekConfidenceValue(&service.ContentModerationLog{ReviewOutcome: "safe"}))
+	require.Equal(t, 0.0, contentModerationDeepSeekConfidenceValue(&service.ContentModerationLog{DeepSeekCategory: "safe"}))
+	require.Equal(t, 0.91, contentModerationDeepSeekConfidenceValue(&service.ContentModerationLog{DeepSeekConfidence: 0.91}))
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
+}
+
 func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesCyberPolicyWhenRequested(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -138,5 +191,25 @@ func TestContentModerationRepositoryEmailCompletionRequiresClaim(t *testing.T) {
 		WithArgs("b411db6f-39c3-4ff7-acfb-ecb860d6a68b", "sent", true).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	require.NoError(t, repo.CompleteLogEmailDeliveryByArchiveID(context.Background(), "b411db6f-39c3-4ff7-acfb-ecb860d6a68b", true))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContentModerationRepositoryReferencedArchiveKeyIDsIncludesDeepSeekCredentialEnvelopes(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	repo, ok := NewContentModerationRepository(db).(service.ContentModerationArchiveRepository)
+	require.True(t, ok)
+
+	mock.ExpectQuery(`(?s)WITH referenced_keys AS .*jsonb_path_query.*api_key_envelope.key_id.*SELECT DISTINCT key_id`).
+		WithArgs(service.SettingKeyContentModerationConfig).
+		WillReturnRows(sqlmock.NewRows([]string{"key_id"}).
+			AddRow("archive-key-2026-01").
+			AddRow("credential-key-2026-02"))
+
+	keyIDs, err := repo.ReferencedArchiveKeyIDs(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"archive-key-2026-01", "credential-key-2026-02"}, keyIDs)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

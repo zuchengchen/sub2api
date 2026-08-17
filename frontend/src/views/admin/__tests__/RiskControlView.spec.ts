@@ -1,36 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
-import { flushPromises, mount } from '@vue/test-utils'
-import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 
 import RiskControlView from '../RiskControlView.vue'
-import type { ContentModerationConfig, ContentModerationLog, UpdateContentModerationConfig } from '@/api/admin/riskControl'
+import type {
+  ContentModerationConfig,
+  ContentModerationLog,
+  UpdateContentModerationConfig,
+} from '@/api/admin/riskControl'
 
-const {
-  getConfig,
-  updateConfig,
-  getStatus,
-  listLogs,
-  previewArchive,
-  downloadArchive,
-  deleteArchive,
-  getGroups,
-  getProxies,
-  showError,
-  showSuccess,
-} = vi.hoisted(() => ({
-  getConfig: vi.fn(),
-  updateConfig: vi.fn(),
-  getStatus: vi.fn(),
-  listLogs: vi.fn(),
-  previewArchive: vi.fn(),
-  downloadArchive: vi.fn(),
-  deleteArchive: vi.fn(),
-  getGroups: vi.fn(),
-  getProxies: vi.fn(),
-  showError: vi.fn(),
-  showSuccess: vi.fn(),
-}))
+const { getConfig, updateConfig, getStatus, listLogs, testDeepSeekChannel, getGroups, showError, showSuccess } =
+  vi.hoisted(() => ({
+    getConfig: vi.fn(),
+    updateConfig: vi.fn(),
+    getStatus: vi.fn(),
+    listLogs: vi.fn(),
+    testDeepSeekChannel: vi.fn(),
+    getGroups: vi.fn(),
+    showError: vi.fn(),
+    showSuccess: vi.fn(),
+  }))
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
@@ -39,32 +28,18 @@ vi.mock('@/api/admin', () => ({
       updateConfig,
       getStatus,
       listLogs,
-      previewArchive,
-      downloadArchive,
-      deleteArchive,
-      testAPIKeys: vi.fn(),
-      deleteFlaggedHash: vi.fn(),
-      clearFlaggedHashes: vi.fn(),
-      unbanUser: vi.fn(),
+      testDeepSeekChannel,
     },
-    groups: {
-      getAll: getGroups,
-    },
-    proxies: {
-      getAll: getProxies,
-    },
+    groups: { getAll: getGroups },
   },
 }))
 
 vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({
-    showError,
-    showSuccess,
-  }),
+  useAppStore: () => ({ showError, showSuccess }),
 }))
 
 vi.mock('@/utils/apiError', () => ({
-  extractApiErrorMessage: (_err: unknown, fallback: string) => fallback,
+  extractApiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -72,229 +47,174 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string, params?: Record<string, string | number>) => {
-        if (key === 'admin.riskControl.preBlockAPIKeyLoadSummary') {
-          return `同步并发 ${params?.active} / 可用 Key ${params?.available}，累计 ${params?.total} 次`
-        }
-        if (key === 'admin.riskControl.evidenceWindowSummary') {
-          return `${params?.windows} evidence windows / ${params?.matches} matches`
-        }
-        if (key === 'admin.riskControl.evidenceMatchMeta') {
-          return `${params?.tier} / ${params?.rule}`
-        }
-        return key.replace(/\{(\w+)\}/g, (_, token) => String(params?.[token] ?? `{${token}}`))
-      },
+      t: (key: string, params?: Record<string, string | number>) =>
+        key.replace(/\{(\w+)\}/g, (_match, token) => String(params?.[token] ?? `{${token}}`)),
     }),
   }
+})
+
+const officialChannel = () => ({
+  id: 'deepseek-official',
+  name: 'DeepSeek Official',
+  base_url: 'https://api.deepseek.com',
+  model: 'deepseek-v4-flash',
+  enabled: true,
+  order: 0,
+  timeout_ms: 3000,
+  api_key_configured: true,
+  api_key_masked: 'sk-...1234',
+  health_status: 'healthy',
+  last_health_checked_at: '2026-08-17T01:00:00Z',
+  healthy_until: '2099-08-17T01:15:00Z',
+  breaker_status: 'closed' as const,
+  last_latency_ms: 820,
+})
+
+const backupChannel = () => ({
+  id: 'deepseek-backup',
+  name: 'Backup',
+  base_url: 'https://backup.example.com/v1',
+  model: 'deepseek-v4-flash',
+  enabled: true,
+  order: 1,
+  timeout_ms: 2800,
+  api_key_configured: true,
+  api_key_masked: 'sk-...5678',
+  health_status: 'unknown',
+  breaker_status: 'cooldown' as const,
+  cooldown_until: '2099-08-17T01:01:00Z',
+  last_latency_ms: 3000,
+  last_error: 'timeout',
 })
 
 const baseConfig = (): ContentModerationConfig => ({
   enabled: true,
   mode: 'pre_block',
-  base_url: 'https://api.openai.com',
-  model: 'omni-moderation-latest',
-  proxy_id: null,
-  api_key_configured: false,
-  api_key_masked: '',
-  api_key_count: 0,
-  api_key_masks: [],
-  api_key_statuses: [],
-  timeout_ms: 3000,
-  sample_rate: 100,
+  deepseek_enabled: true,
+  yufeng_enabled: false,
+  deepseek_total_timeout_ms: 10000,
+  deepseek_threshold: 0.8,
+  policy_version: 'deepseek-v4-flash-audit-v1',
+  deepseek_channels: [officialChannel(), backupChannel()],
   all_groups: true,
   group_ids: [],
   user_email_whitelist: [],
   record_non_hits: false,
   block_status: 403,
-  block_message: '内容审计命中风险规则，请调整输入后重试',
+  block_message: 'request blocked',
   email_on_hit: true,
   auto_ban_enabled: true,
+  cyber_policy_exclude_from_ban_count: false,
   ban_threshold: 10,
   violation_window_hours: 720,
-  retry_count: 2,
   hit_retention_days: 180,
   non_hit_retention_days: 3,
-  pre_hash_check_enabled: false,
-  blocked_keywords: [],
-  keyword_blocking_mode: 'keyword_and_api',
-  thresholds: {
-    harassment: 0.98,
-    sexual: 0.65,
-  },
-  model_filter: {
-    type: 'all',
-    models: [],
-  },
-  cache_version: 'v1',
-  cache_max_entries: 100000,
-  cache_max_bytes: 67108864,
-  fragment_block_ttl_seconds: 36000,
-  fragment_allow_ttl_seconds: 36000,
-  fragment_ttl_policy_version: 'ttl-v2',
-  first_layer_stage: 'enforce',
-  second_layer_enabled: false,
-  second_layer_stage: 'enforce',
-  second_layer_endpoints: [],
-  second_layer_scanners: [],
-  hard_block_patterns: [],
-  candidate_keywords: [],
-  keyword_allowlist: [],
-  keyword_policy_version: 'keyword-v3',
-  context_policy_version: 'context-v3',
-  evidence_policy_version: 'evidence-v1',
-  candidate_asset: 'legacy-prompt-audit-v1',
-  candidate_enabled: false,
-  candidate_layer1_count: 964,
-  candidate_layer2_count: 254,
-  candidate_source_commit: '99c8e4bf7564823bafbab369acab6539e734c1bb',
-  candidate_endpoints: [],
-  layer1_keywords: [],
-  layer2_keywords: [],
-  candidate_system_ready: false,
-  candidate_system_error: 'Layer 2 candidate keywords are empty; requests fall back to YuFeng',
-  cyber_policy_exclude_from_ban_count: false,
+  model_filter: { type: 'all', models: [] },
+  first_layer_stage: 'shadow',
+  second_layer_enabled: true,
+  second_layer_stage: 'shadow',
+  layer1_keywords: ['steal credentials from target'],
+  layer2_keywords: ['credentials'],
 })
 
-const runtimeStatus = () => ({
+const runtimeStatus = (enforceReady = true) => ({
   enabled: true,
   risk_control_enabled: true,
-  mode: 'pre_block',
-  pre_block_active: 0,
-  pre_block_checked: 0,
-  pre_block_allowed: 0,
-  pre_block_blocked: 0,
-  pre_block_errors: 0,
-  pre_block_avg_latency_ms: 0,
-  pre_block_api_key_active: 0,
-  pre_block_api_key_available_count: 0,
-  pre_block_api_key_total_calls: 0,
-  pre_block_api_key_loads: [],
-  api_key_statuses: [],
-  flagged_hash_count: 0,
-  last_cleanup_deleted_hit: 0,
-  last_cleanup_deleted_non_hit: 0,
-  pending_body_bytes: 0,
-  pending_body_max_seen: 0,
-  pending_body_budget_bytes: 1073741824,
-  pending_body_rejections: 0,
-  observed_request_body_max: 0,
-  request_body_histogram: [],
-  fragment_cache_hits: 0,
-  fragment_cache_misses: 0,
-  fragment_cache_expired: 0,
-  fragment_cache_replays: 0,
-  fragment_cache_errors: 0,
-  fragment_cache_writes: 0,
-  fragment_cache_write_errors: 0,
-  second_layer_metrics: [],
-  archive_runtime: {
-    degraded: false,
-    retry_queue_depth: 0,
-    emergency_queue_depth: 0,
-    archive_retry_attempts: 0,
-    archive_retry_errors: 0,
-    content_lost: 0,
-    disk_free_bytes: 10737418240,
-    disposition_queue_depth: 0,
-    disposition_retry_attempts: 0,
-    disposition_retry_errors: 0,
-    lost_summary_queue_depth: 0,
-  },
+  mode: 'pre_block' as const,
+  pre_block_checked: 42,
+  deepseek_failover_count: 3,
+  deepseek_unavailable_count: 1,
+  second_layer_cache_hits: 23,
+  second_layer_cache_misses: 7,
+  second_layer_cache_writes: 5,
+  second_layer_cache_errors: 1,
+  second_layer_enforce_ready: enforceReady,
+  second_layer_enforce_reason: enforceReady ? '' : 'health contract expired',
 })
 
-const archivedLog = (): ContentModerationLog => ({
-  id: 41,
-  request_id: 'req-41',
-  user_id: 9,
+const auditLog = (): ContentModerationLog => ({
+  id: 19,
+  created_at: '2026-08-17T01:00:00Z',
+  request_id: 'req-19',
+  user_id: 7,
   user_email: 'user@example.com',
-  api_key_id: 7,
-  api_key_name: 'test-key',
-  group_id: 3,
-  group_name: 'GPT Production',
-  endpoint: '/v1/responses',
-  provider: 'openai',
+  group_name: 'Production',
+  provider: 'deepseek',
   model: 'gpt-5.5',
-  mode: 'pre_block',
-  action: 'keyword_block',
-  cache_hit: false,
-  decision_source: 'keyword_high_confidence',
-  evidence_truncated: false,
+  action: 'second_layer_shadow',
+  decision_source: 'deepseek_primary',
+  keyword_tier: 'layer2',
   flagged: true,
-  highest_category: 'content_policy',
-  highest_score: 1,
-  matched_keyword: 'blocked term',
-  category_scores: { content_policy: 1 },
-  threshold_snapshot: {},
-  input_excerpt: '[redacted summary]',
-  upstream_latency_ms: null,
-  error: '',
-  violation_count: 1,
-  auto_banned: false,
-  email_sent: false,
-  user_status: 'active',
-  queue_delay_ms: null,
-  protocol: 'openai_responses',
-  transport: 'http',
-  request_stage: 'http',
-  request_target: '/v1/responses?stream=true',
-  input_hash: 'a'.repeat(64),
-  archive_id: 'archive-41',
-  archive_version: 1,
-  archive_key_id: 'key-current',
-  archive_bytes: 2048,
-  archive_status: 'available',
-  archive_incomplete: false,
-  archive_content_lost: false,
-  disposition_status: 'not_required',
-  disposition_target: '',
-  disposition_transitioned: false,
-  created_at: '2026-08-13T00:00:00Z',
+  input_excerpt: '[redacted evidence]',
+  upstream_latency_ms: 1120,
+  deepseek_confidence: 0.91,
+  deepseek_category: 'cyber_abuse',
+  deepseek_reason: '明确攻击意图',
+  review_outcome: 'shadow_risk',
+  reviewer_disagreement: true,
+  review_attempts: [
+    { channel_id: 'deepseek-official', channel_name: 'DeepSeek Official', outcome: 'timeout', latency_ms: 3000 },
+    { channel_id: 'deepseek-backup', channel_name: 'Backup', outcome: 'risk', latency_ms: 1120 },
+  ],
+  evidence_windows: [
+    {
+      path: 'messages[0].content',
+      context_class: 'user',
+      text: 'redacted text',
+      matches: [{ keyword: 'credentials', rule_id: 'layer2-1', tier: 'layer2', start: 0, end: 11 }],
+    },
+  ],
 })
 
 const AppLayoutStub = { template: '<div><slot /></div>' }
 const BaseDialogStub = defineComponent({
-  props: {
-    show: {
-      type: Boolean,
-      default: false,
-    },
-  },
+  props: { show: { type: Boolean, default: false } },
   template: '<div v-if="show"><slot /><slot name="footer" /></div>',
 })
-const ModelWhitelistSelectorStub = defineComponent({
-  props: {
-    modelValue: {
-      type: Array,
-      default: () => [],
-    },
-  },
+const ToggleStub = defineComponent({
+  inheritAttrs: false,
+  props: { modelValue: { type: Boolean, required: true } },
   emits: ['update:modelValue'],
-  setup(props, { emit }) {
-    const onInput = (event: Event) => {
-      const value = (event.target as HTMLInputElement).value
-      emit(
-        'update:modelValue',
-        value
-          .split(/[,\n]/)
-          .map((item) => item.trim())
-          .filter(Boolean)
-      )
-    }
+  setup(props, { attrs, emit }) {
     return () =>
-      h('input', {
-        'data-test': 'model-filter-input',
-        value: (props.modelValue as string[]).join('\n'),
-        onInput,
+      h('button', {
+        ...attrs,
+        type: 'button',
+        role: 'switch',
+        'aria-checked': String(props.modelValue),
+        onClick: () => emit('update:modelValue', !props.modelValue),
       })
   },
 })
 
-function findButtonByText(wrapper: VueWrapper, text: string): DOMWrapper<HTMLButtonElement> {
-  const button = wrapper.findAll<HTMLButtonElement>('button').find((item) => item.text().includes(text))
-  if (!button) {
-    throw new Error(`button not found: ${text}`)
+function mountView(): VueWrapper {
+  return mount(RiskControlView, {
+    global: {
+      stubs: {
+        AppLayout: AppLayoutStub,
+        BaseDialog: BaseDialogStub,
+        Icon: true,
+        Toggle: ToggleStub,
+        Pagination: true,
+      },
+    },
+  })
+}
+
+function configFromUpdate(payload: UpdateContentModerationConfig): ContentModerationConfig {
+  const channels = payload.deepseek_channels?.map((channel) => ({
+    ...channel,
+    api_key_configured: Boolean(channel.api_key) || channel.id !== 'new-without-key',
+    api_key_masked: channel.api_key ? 'sk-...new' : 'sk-...saved',
+    health_status: 'unknown',
+    breaker_status: 'unknown' as const,
+  }))
+  return {
+    ...baseConfig(),
+    ...payload,
+    deepseek_channels: channels ?? baseConfig().deepseek_channels,
+    model_filter: payload.model_filter ?? baseConfig().model_filter,
   }
-  return button
 }
 
 describe('admin RiskControlView', () => {
@@ -303,776 +223,177 @@ describe('admin RiskControlView', () => {
     updateConfig.mockReset()
     getStatus.mockReset()
     listLogs.mockReset()
-    previewArchive.mockReset()
-    downloadArchive.mockReset()
-    deleteArchive.mockReset()
+    testDeepSeekChannel.mockReset()
     getGroups.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
 
     getConfig.mockResolvedValue(baseConfig())
+    updateConfig.mockImplementation(async (payload: UpdateContentModerationConfig) => configFromUpdate(payload))
     getStatus.mockResolvedValue(runtimeStatus())
     listLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
+    testDeepSeekChannel.mockResolvedValue({
+      channel_id: 'deepseek-official',
+      safe_case: { passed: true },
+      risk_case: { passed: true },
+      health_valid: true,
+      checked_at: '2026-08-17T01:02:00Z',
+    })
     getGroups.mockResolvedValue([])
-    getProxies.mockResolvedValue([])
-    updateConfig.mockImplementation(async (payload: UpdateContentModerationConfig) => ({
-      ...baseConfig(),
-      ...payload,
-      model_filter: payload.model_filter ?? baseConfig().model_filter,
-      api_key_configured: false,
-      api_key_masked: '',
-      api_key_count: 0,
-      api_key_masks: [],
-      api_key_statuses: [],
-    }))
-    previewArchive.mockResolvedValue({
-      content: '{"archive_id":"archive-41"}',
-      returned_bytes: 27,
-      total_bytes: 2097152,
-      truncated: true,
-    })
-    downloadArchive.mockResolvedValue(new Blob(['{"archive_id":"archive-41"}'], { type: 'application/json' }))
-    deleteArchive.mockResolvedValue({ deleted: true })
   })
 
-	it('requests cyber policy records by default and switches between the audit views', async () => {
+  it('renders DeepSeek as the default risk reviewer', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="deepseek-enabled"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-test="yufeng-enabled"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('[data-test="deepseek-threshold"]').element).toHaveProperty('value', '80%')
+    expect(wrapper.text()).toContain('deepseek-v4-flash-audit-v1')
+    expect(wrapper.text()).toContain('admin.riskControl.nonThinking')
+    expect(wrapper.find('input[type="file"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('shows production Layer 2 dedup cache counters in the overview', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const cacheCard = wrapper.get('[data-test="risk-overview-second-layer-cache"]')
+    expect(cacheCard.text()).toContain('admin.riskControl.overview.secondLayerCache')
+    expect(cacheCard.attributes('data-cache-hits')).toBe('23')
+    expect(cacheCard.attributes('data-cache-misses')).toBe('7')
+    expect(cacheCard.attributes('data-cache-writes')).toBe('5')
+    expect(cacheCard.attributes('data-cache-errors')).toBe('1')
+    expect(cacheCard.find('.text-red-700').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('saves reviewer switches, ordered channels, masked-key replacement, and independent stages', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-test="yufeng-enabled"]').trigger('click')
+    await wrapper.get('[data-test="cyber-policy-exclude-ban"]').trigger('click')
+    await wrapper.get('[data-test="layer1-stage-enforce"]').trigger('click')
+    const moveDown = wrapper.get(
+      '[data-test="deepseek-channel-0"] button[aria-label="admin.riskControl.moveChannelDown"]'
+    )
+    await moveDown.trigger('click')
+    await wrapper.get('[data-test="deepseek-channel-key-0"]').setValue('replacement-key')
+    await wrapper.get('[data-test="save-risk-control"]').trigger('click')
+    await flushPromises()
+
+    expect(updateConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deepseek_enabled: true,
+        yufeng_enabled: true,
+        cyber_policy_exclude_from_ban_count: true,
+        deepseek_threshold: 0.8,
+        deepseek_total_timeout_ms: 10000,
+        first_layer_stage: 'enforce',
+        second_layer_stage: 'shadow',
+        deepseek_channels: [
+          expect.objectContaining({ id: 'deepseek-backup', order: 0, api_key: 'replacement-key' }),
+          expect.objectContaining({ id: 'deepseek-official', order: 1, api_key: undefined }),
+        ],
+      })
+    )
+
+    wrapper.unmount()
+  })
+
+  it('keeps Layer 2 Enforce disabled until the backend health gate is valid', async () => {
+    getStatus.mockResolvedValue(runtimeStatus(false))
+    const blockedWrapper = mountView()
+    await flushPromises()
+
+    expect(blockedWrapper.get('[data-test="layer2-stage-enforce"]').attributes('disabled')).toBeDefined()
+    expect(blockedWrapper.get('[data-test="enforce-health-gate"]').text()).toContain('health contract expired')
+    blockedWrapper.unmount()
+
+    getStatus.mockResolvedValue(runtimeStatus(true))
+    const readyWrapper = mountView()
+    await flushPromises()
+    const enforceButton = readyWrapper.get('[data-test="layer2-stage-enforce"]')
+    expect(enforceButton.attributes('disabled')).toBeUndefined()
+    await enforceButton.trigger('click')
+    await readyWrapper.get('[data-test="save-risk-control"]').trigger('click')
+    await flushPromises()
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ second_layer_stage: 'enforce' }))
+    readyWrapper.unmount()
+  })
+
+  it('runs the saved two-case contract test for a channel', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-test="test-deepseek-channel-0"]').trigger('click')
+    await flushPromises()
+
+    expect(testDeepSeekChannel).toHaveBeenCalledWith('deepseek-official')
+    expect(wrapper.get('[data-test="deepseek-channel-test-result-0"]').text()).toContain(
+      'admin.riskControl.channelTestHealthy'
+    )
+    expect(showSuccess).toHaveBeenCalledWith('admin.riskControl.channelTestComplete')
+    wrapper.unmount()
+  })
+
+  it('shows model fields, failover attempts, and reviewer disagreement in audit records', async () => {
+    listLogs.mockResolvedValue({ items: [auditLog()], total: 1, page: 1, page_size: 20, pages: 1 })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(listLogs).toHaveBeenCalledWith(expect.objectContaining({ result: 'risky_shadow' }))
+    expect(wrapper.text()).toContain('cyber_abuse')
+    expect(wrapper.text()).toContain('91%')
+    expect(wrapper.text()).toContain('admin.riskControl.reviewerDisagreement')
+    expect(wrapper.text()).toContain('DeepSeek Official')
+    expect(wrapper.text()).toContain('admin.riskControl.attemptCount')
+
+    const detailButton = wrapper.findAll('button').find((button) => button.text().includes('[redacted evidence]'))
+    expect(detailButton).toBeDefined()
+    await detailButton!.trigger('click')
+    expect(wrapper.get('[data-test="review-attempts"]').text()).toContain('Backup')
+    expect(wrapper.get('[data-test="evidence-window"]').text()).toContain('credentials')
+    wrapper.unmount()
+  })
+
+  it('falls back to the historical score when DeepSeek confidence is null', async () => {
     listLogs.mockResolvedValue({
-      items: [{ ...archivedLog(), action: 'hash_block', flagged: false }],
+      items: [{ ...auditLog(), deepseek_confidence: null, highest_score: 0.73 }],
       total: 1,
       page: 1,
       page_size: 20,
       pages: 1,
     })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
+    const wrapper = mountView()
     await flushPromises()
 
-    expect(listLogs).toHaveBeenCalledWith(expect.objectContaining({ result: 'cyber_policy' }))
-
-    const blockedTab = wrapper.get('[data-test="record-tab-content_blocked"]')
-    await blockedTab.trigger('click')
-    await flushPromises()
-    expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'content_blocked' }))
-    expect(blockedTab.attributes('aria-selected')).toBe('true')
-
-    const shadowTab = wrapper.get('[data-test="record-tab-risky_shadow"]')
-    await shadowTab.trigger('click')
-    await flushPromises()
-		expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'risky_shadow' }))
-		expect(shadowTab.attributes('aria-selected')).toBe('true')
-
-		const reviewFailureTab = wrapper.get('[data-test="record-tab-review_unavailable"]')
-		await reviewFailureTab.trigger('click')
-		await flushPromises()
-		expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'review_unavailable' }))
-		expect(reviewFailureTab.attributes('aria-selected')).toBe('true')
-    expect(wrapper.get('[data-test="audit-result"]').text()).toBe('admin.riskControl.action.block')
-    expect(wrapper.get('[data-test="audit-result"]').classes()).toContain('bg-red-100')
-    expect(wrapper.text()).not.toContain('admin.riskControl.result.pass')
+    expect(wrapper.get('[data-test="review-confidence"]').text()).toBe('73%')
+    wrapper.unmount()
   })
 
-  it('renders contextual review failures as retryable errors instead of blocks or passes', async () => {
-    listLogs.mockResolvedValue({
-      items: [{
-        ...archivedLog(),
-        action: 'review_unavailable',
-        decision_source: 'review_unavailable',
-        flagged: false,
-        highest_category: '',
-        violation_count: 0,
-        error: 'contextual review timed out',
-      }],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1,
-    })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-    await wrapper.get('[data-test="record-tab-review_unavailable"]').trigger('click')
+  it('saves canonical Layer 1 and Layer 2 keyword lists without legacy aliases', async () => {
+    const wrapper = mountView()
     await flushPromises()
 
-    const result = wrapper.get('[data-test="audit-result"]')
-    expect(result.text()).toBe('admin.riskControl.action.error')
-    expect(result.classes()).toContain('bg-amber-100')
-  })
-
-  it('renders cache replay rows as non-counting retries linked to the original decision', async () => {
-    const source = { ...archivedLog(), request_id: 'req-original' }
-    const replay: ContentModerationLog = {
-      ...archivedLog(),
-      id: 42,
-      request_id: 'req-replay',
-      action: 'cache_block',
-      cache_hit: true,
-      decision_source: 'cache_replay',
-      source_log_id: 41,
-      violation_count: 0,
-      email_sent: false,
-      archive_id: undefined,
-      archive_status: 'none',
-      input_excerpt: '[replay summary]',
-    }
-    listLogs.mockResolvedValue({ items: [replay, source], total: 2, page: 1, page_size: 20, pages: 1 })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
+    await wrapper.get('[data-test="layer1-keywords"]').setValue('explicit phrase\nexplicit phrase\nsecond phrase')
+    await wrapper.get('[data-test="layer2-keywords"]').setValue('candidate\ncontext term')
+    await wrapper.get('[data-test="save-risk-control"]').trigger('click')
     await flushPromises()
 
-    const replayResult = wrapper.findAll('[data-test="audit-result"]')[0]
-    expect(replayResult.text()).toBe('admin.riskControl.action.cacheReplay')
-    expect(replayResult.classes()).toContain('bg-sky-50')
-    expect(wrapper.text()).toContain('admin.riskControl.replayNotCounted')
-    expect(wrapper.text()).toContain('admin.riskControl.replayNoSideEffects')
-
-    await findButtonByText(wrapper, 'admin.riskControl.replaySource').trigger('click')
-    expect(wrapper.text()).toContain('req-original')
-  })
-
-  it('renders risky shadow decisions as observations instead of passes', async () => {
-    listLogs.mockResolvedValue({
-      items: [{
-        ...archivedLog(),
-        action: 'second_layer_shadow',
-        decision_source: 'model_shadow',
-        flagged: false,
-        highest_category: 'jailbreak',
-        violation_count: 0,
-      }],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1,
-    })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-    await wrapper.get('[data-test="record-tab-risky_shadow"]').trigger('click')
-    await flushPromises()
-
-    const result = wrapper.get('[data-test="audit-result"]')
-    expect(result.text()).toBe('admin.riskControl.action.shadowBlock')
-    expect(result.classes()).toContain('bg-amber-100')
-    expect(result.text()).not.toBe('admin.riskControl.result.pass')
-  })
-
-  it('labels allowlist keyword observations separately from model shadows', async () => {
-    listLogs.mockResolvedValue({
-      items: [{
-        ...archivedLog(),
-        action: 'whitelist_shadow',
-        decision_source: 'keyword_high_confidence_whitelist_shadow',
-        flagged: false,
-        highest_category: 'keyword',
-        violation_count: 0,
-      }],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1,
-    })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-    await wrapper.get('[data-test="record-tab-risky_shadow"]').trigger('click')
-    await flushPromises()
-
-    const result = wrapper.get('[data-test="audit-result"]')
-    expect(result.text()).toBe('admin.riskControl.action.keywordShadow')
-    expect(result.classes()).toContain('bg-amber-100')
-  })
-
-  it('saves staged YuFeng endpoint, bounded TTLs, and policy versions', async () => {
-    getConfig.mockResolvedValue({ ...baseConfig(), second_layer_enabled: true })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
-    await findButtonByText(wrapper, 'admin.riskControl.tabs.secondLayer').trigger('click')
-    wrapper.getComponent('[data-test="second-layer-shadow-toggle"]').vm.$emit('update:modelValue', true)
-    await flushPromises()
-    await wrapper.get('[data-test="fragment-block-ttl"]').setValue('120')
-    await wrapper.get('[data-test="fragment-allow-ttl"]').setValue('90000')
-    await wrapper.get('[data-test="add-second-layer-endpoint"]').trigger('click')
-    await wrapper.get('[data-test="second-layer-model-revision-0"]').setValue('c9766937')
-    await wrapper.get('[data-test="second-layer-prompt-version-0"]').setValue('yufeng-xguard-v3')
-    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
-    await flushPromises()
-
-    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
-      fragment_block_ttl_seconds: 300,
-      fragment_allow_ttl_seconds: 86400,
-      fragment_ttl_policy_version: 'ttl-v2',
-      first_layer_stage: 'enforce',
-      second_layer_enabled: true,
-      second_layer_stage: 'shadow',
-      keyword_policy_version: 'keyword-v3',
-      context_policy_version: 'context-v3',
-      evidence_policy_version: 'evidence-v1',
-      second_layer_endpoints: [expect.objectContaining({
-        profile: 'yufeng_xguard',
-        model_revision: 'c9766937',
-        prompt_version: 'yufeng-xguard-v3',
-      })],
-    }))
-  })
-
-  it('saves the first-layer shadow switch independently from layer two', async () => {
-    getConfig.mockResolvedValue({ ...baseConfig(), second_layer_enabled: true })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
-    await findButtonByText(wrapper, 'admin.riskControl.tabs.secondLayer').trigger('click')
-    wrapper.getComponent('[data-test="first-layer-shadow-toggle"]').vm.$emit('update:modelValue', true)
-    await flushPromises()
-    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
-    await flushPromises()
-
-    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
-      first_layer_stage: 'shadow',
-      second_layer_stage: 'enforce',
-    }))
-  })
-
-  it('edits and saves canonical Layer 1 and Layer 2 keyword lists', async () => {
-    getConfig.mockResolvedValue({
-      ...baseConfig(),
-      layer1_keywords: ['existing-direct-block'],
-      layer2_keywords: ['existing-candidate'],
-      candidate_system_ready: true,
-      candidate_system_error: undefined,
-    })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
-    await findButtonByText(wrapper, 'admin.riskControl.tabs.keywords').trigger('click')
-    expect(wrapper.get('[data-test="candidate-system-health"]').text()).toContain('admin.riskControl.candidateSystemReady')
-    await wrapper.get('[data-test="layer1-keywords"]').setValue('direct-one\ndirect-two\ndirect-one')
-    await wrapper.get('[data-test="layer2-keywords"]').setValue('review-one\nreview-two')
-    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
-    await flushPromises()
-
-    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
-      blocked_keywords: [],
-      layer1_keywords: ['direct-one', 'direct-two'],
-      layer2_keywords: ['review-one', 'review-two'],
-    }))
     const payload = updateConfig.mock.calls.at(-1)?.[0]
+    expect(payload).toEqual(
+      expect.objectContaining({
+        layer1_keywords: ['explicit phrase', 'second phrase'],
+        layer2_keywords: ['candidate', 'context term'],
+      })
+    )
     expect(payload).not.toHaveProperty('hard_block_patterns')
     expect(payload).not.toHaveProperty('candidate_keywords')
-  })
-
-  it('saves the selected model filter mode and models', async () => {
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
-    await findButtonByText(wrapper, 'admin.riskControl.tabs.scope').trigger('click')
-    await findButtonByText(wrapper, 'admin.riskControl.modelFilterInclude').trigger('click')
-    await wrapper.get('[data-test="model-filter-input"]').setValue('gpt-5.5, gpt-5.4')
-    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
-    await flushPromises()
-
-    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
-      model_filter: {
-        type: 'include',
-        models: ['gpt-5.5', 'gpt-5.4'],
-      },
-    }))
-    expect(showError).not.toHaveBeenCalled()
-  })
-
-  it('loads and saves the user email whitelist from the scope settings', async () => {
-    getConfig.mockResolvedValue({
-      ...baseConfig(),
-      user_email_whitelist: ['existing@example.com'],
-    })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
-    await findButtonByText(wrapper, 'admin.riskControl.tabs.scope').trigger('click')
-    const whitelist = wrapper.get('[data-test="user-email-whitelist"]')
-    expect((whitelist.element as HTMLTextAreaElement).value).toBe('existing@example.com')
-
-    await whitelist.setValue('Allowed@Example.COM\nallowed@example.com\nsecond@example.net')
-    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
-    await flushPromises()
-
-    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
-      user_email_whitelist: ['allowed@example.com', 'second@example.net'],
-    }))
-    expect(showError).not.toHaveBeenCalled()
-  })
-
-  it('submits edited risk control thresholds when saving moderation config', async () => {
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
-    await findButtonByText(wrapper, 'admin.riskControl.tabs.riskThresholds').trigger('click')
-    await wrapper.get('[data-test="risk-threshold-sexual"]').setValue('72')
-    await wrapper.get('[data-test="risk-threshold-harassment"]').setValue('99')
-    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
-    await flushPromises()
-
-    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
-      thresholds: expect.objectContaining({
-        sexual: 0.72,
-        harassment: 0.99,
-      }),
-    }))
-    expect(showError).not.toHaveBeenCalled()
-  })
-
-  it('shows pre-block synchronous moderation metrics', async () => {
-    getStatus.mockResolvedValue({
-      ...runtimeStatus(),
-      pre_block_active: 2,
-      pre_block_checked: 128,
-      pre_block_allowed: 120,
-      pre_block_blocked: 8,
-      pre_block_errors: 1,
-      pre_block_avg_latency_ms: 86,
-      pre_block_api_key_active: 2,
-      pre_block_api_key_available_count: 2,
-      pre_block_api_key_total_calls: 128,
-      pre_block_api_key_loads: [
-        {
-          index: 0,
-          key_hash: 'hash-one',
-          masked: 'sk-...one',
-          status: 'ok',
-          active: 1,
-          total: 72,
-          success: 70,
-          errors: 2,
-          avg_latency_ms: 84,
-          last_latency_ms: 80,
-          last_http_status: 200,
-        },
-        {
-          index: 1,
-          key_hash: 'hash-two',
-          masked: 'sk-...two',
-          status: 'ok',
-          active: 1,
-          total: 56,
-          success: 56,
-          errors: 0,
-          avg_latency_ms: 90,
-          last_latency_ms: 92,
-          last_http_status: 200,
-        },
-      ],
-    })
-
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('admin.riskControl.preBlockSyncStatus')
-    expect(wrapper.text()).toContain('admin.riskControl.preBlockSyncHint')
-    expect(wrapper.text()).toContain('admin.riskControl.records')
-    expect(wrapper.text()).toContain('128')
-    expect(wrapper.text()).toContain('120')
-    expect(wrapper.text()).toContain('8')
-    expect(wrapper.text()).toContain('86 ms')
-    expect(wrapper.text()).toContain('admin.riskControl.preBlockAPIKeyLoad')
-    expect(wrapper.text()).toContain('sk-...one')
-    expect(wrapper.text()).toContain('sk-...two')
-    expect(wrapper.text()).toContain('72')
-    expect(wrapper.text()).toContain('56')
-    expect(wrapper.text()).toContain('同步并发 2 / 可用 Key 2，累计 128 次')
-
-    const runtimeCards = wrapper.get('[data-test="pre-block-runtime-cards"]')
-    const syncCard = wrapper.get('[data-test="pre-block-sync-card"]')
-    const apiKeyLoadCard = wrapper.get('[data-test="pre-block-api-key-load-card"]')
-
-    expect(runtimeCards.classes()).toEqual(expect.arrayContaining([
-      'grid',
-      'grid-cols-1',
-      'xl:grid-cols-[minmax(0,520px)_minmax(0,1fr)]',
-    ]))
-    expect(syncCard.element.parentElement).toBe(runtimeCards.element)
-    expect(apiKeyLoadCard.element.parentElement).toBe(runtimeCards.element)
-    expect(syncCard.classes()).toContain('card')
-    expect(apiKeyLoadCard.classes()).toContain('card')
-    expect(syncCard.get('h2').text()).toBe('admin.riskControl.preBlockSyncStatus')
-    expect(syncCard.text()).toContain('admin.riskControl.preBlockSyncHint')
-    expect(apiKeyLoadCard.get('h2').text()).toBe('admin.riskControl.preBlockAPIKeyLoad')
-    expect(apiKeyLoadCard.text()).toContain('admin.riskControl.preBlockAPIKeyLoadHint')
-    expect(wrapper.get('[data-test="pre-block-api-key-load-list"]').classes()).toEqual(expect.arrayContaining([
-      'max-h-[280px]',
-      'overflow-y-auto',
-    ]))
-  })
-
-  it('renders every evidence window and safely highlights rune-offset keyword matches', async () => {
-    const evidenceLog: ContentModerationLog = {
-      ...archivedLog(),
-      input_excerpt: '[legacy evidence summary]',
-      matched_keyword: 'danger-zone',
-      evidence_windows: [
-        {
-          path: 'messages[0].content[1].text',
-          context_class: 'tool',
-          text: '前😀 danger-zone <img src=x onerror=alert(1)>',
-          matches: [
-            { keyword: 'danger', rule_id: 'layer1-danger', tier: 'layer1', start: 3, end: 9 },
-            { keyword: 'danger-zone', rule_id: 'layer2-danger-zone', tier: 'layer2', start: 3, end: 14 },
-            { keyword: 'onerror', rule_id: 'layer2-onerror', tier: 'layer2', start: 26, end: 33 },
-          ],
-        },
-        {
-          path: 'tools[0].config',
-          context_class: 'config',
-          text: 'config token=secret',
-          matches: [
-            { keyword: 'secret', rule_id: 'layer2-secret', tier: 'layer2', start: 13, end: 19 },
-          ],
-        },
-      ],
-    }
-    listLogs.mockResolvedValue({ items: [evidenceLog], total: 1, page: 1, page_size: 20, pages: 1 })
-
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-    await flushPromises()
-    await findButtonByText(wrapper, '[legacy evidence summary]').trigger('click')
-
-    const evidenceWindows = wrapper.findAll('[data-test="evidence-window"]')
-    expect(evidenceWindows).toHaveLength(2)
-    expect(wrapper.get('[data-test="evidence-window-summary"]').text()).toContain('2')
-    expect(wrapper.get('[data-test="evidence-window-summary"]').text()).toContain('4')
-    expect(evidenceWindows[0].get('[data-test="evidence-window-context"]').text()).toBe('tool')
-    expect(evidenceWindows[0].get('[data-test="evidence-window-path"]').text()).toBe('messages[0].content[1].text')
-    expect(evidenceWindows[1].get('[data-test="evidence-window-context"]').text()).toBe('config')
-    expect(evidenceWindows[1].get('[data-test="evidence-window-path"]').text()).toBe('tools[0].config')
-
-    const matches = wrapper.findAll('[data-test="evidence-match"]')
-    expect(matches).toHaveLength(4)
-    expect(wrapper.findAll('[data-test="evidence-match-keyword"]').map((item) => item.text())).toEqual([
-      'danger',
-      'danger-zone',
-      'onerror',
-      'secret',
-    ])
-    expect(wrapper.findAll('[data-test="evidence-match-meta"]').map((item) => item.text())).toEqual([
-      '(layer1 / layer1-danger)',
-      '(layer2 / layer2-danger-zone)',
-      '(layer2 / layer2-onerror)',
-      '(layer2 / layer2-secret)',
-    ])
-
-    expect(evidenceWindows[0].findAll('[data-test="evidence-highlight"]').map((item) => item.text())).toEqual([
-      'danger-zone',
-      'onerror',
-    ])
-    expect(evidenceWindows[1].get('[data-test="evidence-highlight"]').text()).toBe('secret')
-    expect(evidenceWindows[0].get('[data-test="evidence-window-text"]').text()).toContain('<img src=x onerror=alert(1)>')
-    expect(evidenceWindows[0].find('img').exists()).toBe(false)
-    expect(wrapper.find('[data-test="evidence-fallback"]').exists()).toBe(false)
-  })
-
-  it('falls back to the saved input excerpt when evidence windows are absent or empty', async () => {
-    listLogs.mockResolvedValue({
-      items: [{ ...archivedLog(), evidence_windows: [] }],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1,
-    })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-    await flushPromises()
-    await findButtonByText(wrapper, '[redacted summary]').trigger('click')
-
-    expect(wrapper.find('[data-test="evidence-windows"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="evidence-fallback"]').text()).toContain('[redacted summary]')
-    expect(wrapper.get('[data-test="evidence-fallback"]').text()).toContain('admin.riskControl.evidenceFallbackHint')
-  })
-
-  it('keeps archive content out of list and summary requests until explicit preview', async () => {
-    listLogs.mockResolvedValue({ items: [archivedLog()], total: 1, page: 1, page_size: 20, pages: 1 })
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-    await flushPromises()
-
-    expect(previewArchive).not.toHaveBeenCalled()
-    await findButtonByText(wrapper, '[redacted summary]').trigger('click')
-    expect(wrapper.get('[data-test="archive-section"]').exists()).toBe(true)
-    expect(wrapper.text()).not.toContain('archive-41')
-    expect(previewArchive).not.toHaveBeenCalled()
-
-    await wrapper.get('[data-test="preview-archive"]').trigger('click')
-    await flushPromises()
-
-    expect(previewArchive).toHaveBeenCalledOnce()
-    expect(previewArchive).toHaveBeenCalledWith(41)
-    expect(wrapper.get('[data-test="archive-preview-result"]').text()).toContain('archive-41')
-    expect(wrapper.get('[data-test="archive-preview-truncated"]').text()).toContain('admin.riskControl.archivePreviewTruncated')
-  })
-
-  it('downloads the full archive through the dedicated blob endpoint', async () => {
-    listLogs.mockResolvedValue({ items: [archivedLog()], total: 1, page: 1, page_size: 20, pages: 1 })
-    const createObjectURL = vi.fn(() => 'blob:risk-archive')
-    const revokeObjectURL = vi.fn()
-    Object.defineProperty(window.URL, 'createObjectURL', { configurable: true, value: createObjectURL })
-    Object.defineProperty(window.URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-    await flushPromises()
-    await findButtonByText(wrapper, '[redacted summary]').trigger('click')
-    await wrapper.get('[data-test="download-archive"]').trigger('click')
-    await flushPromises()
-
-    expect(downloadArchive).toHaveBeenCalledWith(41)
-    expect(createObjectURL).toHaveBeenCalledOnce()
-    expect(click).toHaveBeenCalledOnce()
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:risk-archive')
-
-    click.mockRestore()
-    Reflect.deleteProperty(window.URL, 'revokeObjectURL')
-    Reflect.deleteProperty(window.URL, 'createObjectURL')
-  })
-
-  it('deletes only archive content and retains the audit row summary', async () => {
-    listLogs.mockResolvedValue({ items: [archivedLog()], total: 1, page: 1, page_size: 20, pages: 1 })
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-    const wrapper = mount(RiskControlView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          BaseDialog: BaseDialogStub,
-          Icon: true,
-          Select: true,
-          Toggle: true,
-          Pagination: true,
-          ModelWhitelistSelector: ModelWhitelistSelectorStub,
-          ProxySelector: true,
-        },
-      },
-    })
-    await flushPromises()
-    await findButtonByText(wrapper, '[redacted summary]').trigger('click')
-    await wrapper.get('[data-test="delete-archive"]').trigger('click')
-    await flushPromises()
-
-    expect(deleteArchive).toHaveBeenCalledWith(41)
-    expect(wrapper.text()).toContain('[redacted summary]')
-    expect(wrapper.text()).toContain('admin.riskControl.archiveStatus.deleted')
-    expect(wrapper.find('[data-test="preview-archive"]').exists()).toBe(false)
-    expect(showSuccess).toHaveBeenCalledWith('admin.riskControl.archiveDeleted')
-    confirm.mockRestore()
+    wrapper.unmount()
   })
 })

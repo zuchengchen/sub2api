@@ -1257,10 +1257,11 @@ func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T
 	cfg := &service.ContentModerationConfig{
 		Enabled:             true,
 		Mode:                service.ContentModerationModePreBlock,
-		SampleRate:          100,
 		AllGroups:           true,
-		BlockedKeywords:     []string{"bad prompt"},
+		HardBlockPatterns:   []string{"bad prompt"},
 		KeywordBlockingMode: service.ContentModerationKeywordModeKeywordOnly,
+		FirstLayerStage:     service.ContentModerationFirstLayerStageEnforce,
+		SecondLayerEnabled:  false,
 		BlockMessage:        "内容审计测试阻断",
 	}
 	rawCfg, err := json.Marshal(cfg)

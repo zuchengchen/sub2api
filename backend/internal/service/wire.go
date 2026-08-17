@@ -766,6 +766,9 @@ func ProvideContentModerationService(
 		authCacheInvalidator, emailService,
 	)
 	svc.apiKeyRepo = apiKeyRepo
+	if cfg != nil {
+		svc.ConfigureContentModerationCredentialKeyRing(cfg.ContentModerationArchive.KeyRingPath)
+	}
 	archiveRepo, ok := repo.(ContentModerationArchiveRepository)
 	if !ok || cfg == nil {
 		return svc, nil
