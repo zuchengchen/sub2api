@@ -54,13 +54,14 @@ describe('admin risk-control DeepSeek API', () => {
     expect(payload).not.toHaveProperty('api_keys')
   })
 
-  it('runs the saved channel contract test with an empty request body', async () => {
+  it('runs the saved channel connectivity test with an empty request body', async () => {
     post.mockResolvedValue({
       data: {
         channel_id: 'official/channel',
-        safe_case: { passed: true },
-        risk_case: { passed: true },
+        reachable: true,
         health_valid: true,
+        latency_ms: 18,
+        http_status: 404,
       },
     })
 

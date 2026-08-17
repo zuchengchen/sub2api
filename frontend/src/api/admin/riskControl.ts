@@ -31,7 +31,6 @@ export interface DeepSeekModerationChannel {
   api_key_masked: string
   health_status?: string
   last_health_checked_at?: string
-  healthy_until?: string
   breaker_status?: DeepSeekBreakerState
   cooldown_until?: string
   last_latency_ms?: number
@@ -50,22 +49,13 @@ export interface UpdateDeepSeekModerationChannel {
   clear_api_key?: boolean
 }
 
-export interface DeepSeekContractCaseResult {
-  passed: boolean
-  expected_flagged?: boolean
-  flagged?: boolean
-  confidence?: number
-  category?: string
-  reason?: string
-  latency_ms?: number
-  error?: string
-}
-
 export interface TestDeepSeekChannelResponse {
   channel_id: string
-  safe_case: DeepSeekContractCaseResult
-  risk_case: DeepSeekContractCaseResult
+  reachable: boolean
   health_valid: boolean
+  latency_ms: number
+  http_status?: number
+  error?: string
   checked_at?: string
 }
 

@@ -65,30 +65,20 @@ type ContentModerationDeepSeekChannelView struct {
 	APIKeyMasked        string     `json:"api_key_masked"`
 	HealthStatus        string     `json:"health_status"`
 	LastHealthCheckedAt *time.Time `json:"last_health_checked_at,omitempty"`
-	HealthyUntil        *time.Time `json:"healthy_until,omitempty"`
 	BreakerStatus       string     `json:"breaker_status"`
 	CooldownUntil       *time.Time `json:"cooldown_until,omitempty"`
 	LastLatencyMS       int        `json:"last_latency_ms"`
 	LastError           string     `json:"last_error,omitempty"`
 }
 
-type ContentModerationDeepSeekContractCaseResult struct {
-	Passed          bool    `json:"passed"`
-	ExpectedFlagged bool    `json:"expected_flagged"`
-	Flagged         bool    `json:"flagged"`
-	Confidence      float64 `json:"confidence"`
-	Category        string  `json:"category"`
-	Reason          string  `json:"reason"`
-	LatencyMS       int     `json:"latency_ms"`
-	Error           string  `json:"error,omitempty"`
-}
-
 type TestContentModerationDeepSeekChannelResult struct {
-	ChannelID   string                                      `json:"channel_id"`
-	SafeCase    ContentModerationDeepSeekContractCaseResult `json:"safe_case"`
-	RiskCase    ContentModerationDeepSeekContractCaseResult `json:"risk_case"`
-	HealthValid bool                                        `json:"health_valid"`
-	CheckedAt   *time.Time                                  `json:"checked_at,omitempty"`
+	ChannelID   string     `json:"channel_id"`
+	Reachable   bool       `json:"reachable"`
+	HealthValid bool       `json:"health_valid"`
+	LatencyMS   int        `json:"latency_ms"`
+	HTTPStatus  int        `json:"http_status,omitempty"`
+	Error       string     `json:"error,omitempty"`
+	CheckedAt   *time.Time `json:"checked_at,omitempty"`
 }
 
 func defaultContentModerationDeepSeekChannels() []ContentModerationDeepSeekChannel {
@@ -365,10 +355,10 @@ func (s *ContentModerationService) contentModerationDeepSeekChannelViews(channel
 }
 
 // TestDeepSeekChannel is implemented by the DeepSeek runtime module. Keeping
-// the public service contract here lets the admin API remain independent of
-// the transport implementation.
+// the public service API here lets the admin handler remain independent of the
+// connectivity transport implementation.
 func (s *ContentModerationService) TestDeepSeekChannel(ctx context.Context, channelID string) (*TestContentModerationDeepSeekChannelResult, error) {
-	return s.testDeepSeekChannelContract(ctx, strings.TrimSpace(channelID))
+	return s.testDeepSeekChannelConnectivity(ctx, strings.TrimSpace(channelID))
 }
 
 func (s *ContentModerationService) contentModerationSecondLayerEnforceReadiness(cfg *ContentModerationConfig, now time.Time) (bool, string) {
@@ -378,8 +368,8 @@ func (s *ContentModerationService) contentModerationSecondLayerEnforceReadiness(
 	if !cfg.DeepSeekEnabled && !cfg.YuFengEnabled {
 		return false, "至少启用一个审核器后才能启用 Layer 2 Enforce"
 	}
-	if cfg.DeepSeekEnabled && !s.hasHealthyDeepSeekChannel(cfg, now) {
-		return false, "所有启用的 DeepSeek 渠道均须通过最近 15 分钟的双样例健康检查"
+	if cfg.DeepSeekEnabled && !s.hasReachableDeepSeekChannel(cfg, now) {
+		return false, "至少一个启用且已配置密钥的 DeepSeek 渠道须通过连通性检查"
 	}
 	if cfg.YuFengEnabled {
 		if len(cfg.enabledYuFengSecondLayerEndpoints()) == 0 {

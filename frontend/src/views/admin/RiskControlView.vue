@@ -114,11 +114,11 @@
                 </span>
                 <span
                   class="rounded-md px-2 py-1"
-                  :class="healthyChannelCount > 0 ? statusClasses.healthy : statusClasses.unknown"
+                  :class="reachableChannelCount > 0 ? statusClasses.healthy : statusClasses.unknown"
                 >
                   {{
                     t('admin.riskControl.channelHealthSummary', {
-                      healthy: healthyChannelCount,
+                      reachable: reachableChannelCount,
                       enabled: enabledChannelCount,
                     })
                   }}
@@ -415,7 +415,7 @@
               <div
                 v-if="channelTestResults[channel.id]"
                 class="mt-3 rounded-lg border px-3 py-2 text-sm"
-                :class="channelTestResults[channel.id]?.health_valid ? statusClasses.healthy : statusClasses.warning"
+                :class="channelTestResults[channel.id]?.reachable ? statusClasses.healthy : statusClasses.warning"
                 :data-test="`deepseek-channel-test-result-${index}`"
               >
                 {{ channelTestResultText(channelTestResults[channel.id]!) }}
@@ -1029,8 +1029,8 @@ const layerRows = computed(() => [
 ])
 
 const enabledChannelCount = computed(() => configForm.deepseek_channels.filter((channel) => channel.enabled).length)
-const healthyChannelCount = computed(
-  () => configForm.deepseek_channels.filter((channel) => channel.enabled && isChannelHealthy(channel)).length
+const reachableChannelCount = computed(
+  () => configForm.deepseek_channels.filter((channel) => channel.enabled && isChannelReachable(channel)).length
 )
 
 const secondLayerEnforceReady = computed(() => {
@@ -1039,7 +1039,7 @@ const secondLayerEnforceReady = computed(() => {
   }
   if (!configForm.deepseek_enabled && !configForm.yufeng_enabled) return false
   if (configForm.yufeng_enabled) return false
-  return configForm.deepseek_enabled && healthyChannelCount.value > 0
+  return configForm.deepseek_enabled && reachableChannelCount.value > 0
 })
 
 const enforceGateText = computed(() => {
@@ -1068,7 +1068,7 @@ const overviewItems = computed<OverviewItem[]>(() => [
       ? t('admin.riskControl.overview.enabled')
       : t('admin.riskControl.overview.disabled'),
     meta: t('admin.riskControl.channelHealthSummary', {
-      healthy: healthyChannelCount.value,
+      reachable: reachableChannelCount.value,
       enabled: enabledChannelCount.value,
     }),
     icon: 'cloud',
@@ -1441,17 +1441,15 @@ function channelKeyStatus(channel: EditableDeepSeekChannel): string {
   return t('admin.riskControl.channelKeyMissing')
 }
 
-function isChannelHealthy(channel: EditableDeepSeekChannel): boolean {
+function isChannelReachable(channel: EditableDeepSeekChannel): boolean {
   if (!isChannelPersisted(channel)) return false
-  if (channel.health_status === 'healthy' || channel.health_status === 'valid') return true
-  if (!channel.healthy_until) return false
-  return new Date(channel.healthy_until).getTime() > Date.now()
+  return channel.health_status === 'reachable' || channel.health_status === 'healthy' || channel.health_status === 'valid'
 }
 
 function channelStatusLabel(channel: EditableDeepSeekChannel): string {
   if (!channel.enabled) return t('admin.riskControl.channelDisabled')
   if (!isChannelPersisted(channel)) return t('admin.riskControl.channelNeedsSave')
-  if (isChannelHealthy(channel)) return t('admin.riskControl.channelHealthy')
+  if (isChannelReachable(channel)) return t('admin.riskControl.channelReachable')
   if (isBreakerUnavailable(channel.breaker_status)) return t('admin.riskControl.channelCircuitOpen')
   return t('admin.riskControl.channelNeedsTest')
 }
@@ -1459,7 +1457,7 @@ function channelStatusLabel(channel: EditableDeepSeekChannel): string {
 function channelStatusClass(channel: EditableDeepSeekChannel): string {
   if (!channel.enabled) return statusClasses.unknown
   if (!isChannelPersisted(channel)) return statusClasses.warning
-  if (isChannelHealthy(channel)) return statusClasses.healthy
+  if (isChannelReachable(channel)) return statusClasses.healthy
   if (isBreakerUnavailable(channel.breaker_status)) return statusClasses.danger
   return statusClasses.warning
 }
@@ -1492,9 +1490,8 @@ function breakerLabel(channel: EditableDeepSeekChannel): string {
 }
 
 function channelTestResultText(result: TestDeepSeekChannelResponse): string {
-  const passed = Number(result.safe_case?.passed) + Number(result.risk_case?.passed)
-  return t(result.health_valid ? 'admin.riskControl.channelTestHealthy' : 'admin.riskControl.channelTestUnhealthy', {
-    passed,
+  return t(result.reachable ? 'admin.riskControl.channelTestReachable' : 'admin.riskControl.channelTestUnreachable', {
+    latency: result.latency_ms,
   })
 }
 
