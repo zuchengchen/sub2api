@@ -257,9 +257,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			}
 		}
 	}
-	responsesBody, _, err = enforceOpenAICompatibleNonReasoning(account, upstreamModel, responsesBody, openAICompatibleWireResponses)
+	responsesBody, managedNonReasoning, err := enforceOpenAICompatibleNonReasoning(account, upstreamModel, responsesBody, openAICompatibleWireResponses)
 	if err != nil {
 		return nil, err
+	}
+	if managedNonReasoning {
+		responsesReq.Reasoning = nil
 	}
 
 	// 4c. Apply OpenAI fast policy (may filter service_tier or block the request).

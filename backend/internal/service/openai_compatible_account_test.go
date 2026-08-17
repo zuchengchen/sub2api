@@ -3,6 +3,9 @@
 package service
 
 import (
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -27,8 +30,8 @@ func TestAccountTestManagedProviderUsesPresetWirePolicy(t *testing.T) {
 		{openai_compat.ProviderAlibabaQwen, "qwen3.7-flash", "/responses", "reasoning.effort", "none"},
 	} {
 		t.Run(string(tc.provider), func(t *testing.T) {
-			account := managedOpenAICompatibleTestAccount(string(tc.provider), compatibleProviderPresetBaseURL(t, tc.provider), tc.model)
-			upstream := managedProviderRejectingUpstream()
+			account := accountTestManagedProviderAccount(t, tc.provider, compatibleProviderPresetBaseURL(t, tc.provider), tc.model)
+			upstream := accountTestRejectingUpstream()
 			svc := &AccountTestService{
 				cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 				httpUpstream: upstream,
@@ -51,8 +54,8 @@ func TestAccountTestManagedProviderUsesPresetWirePolicy(t *testing.T) {
 }
 
 func TestAccountTestManagedGLMRejectsResponsesCompactionProbe(t *testing.T) {
-	account := managedOpenAICompatibleTestAccount(string(openai_compat.ProviderZhipuGLM), compatibleProviderPresetBaseURL(t, openai_compat.ProviderZhipuGLM), "glm-4.7-flash")
-	upstream := managedProviderRejectingUpstream()
+	account := accountTestManagedProviderAccount(t, openai_compat.ProviderZhipuGLM, compatibleProviderPresetBaseURL(t, openai_compat.ProviderZhipuGLM), "glm-4.7-flash")
+	upstream := accountTestRejectingUpstream()
 	svc := &AccountTestService{
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 		httpUpstream: upstream,
@@ -70,4 +73,29 @@ func compatibleProviderPresetBaseURL(t *testing.T, provider openai_compat.Compat
 	preset, ok := openai_compat.CompatibleProviderPresetByID(string(provider))
 	require.True(t, ok)
 	return preset.BaseURL
+}
+
+func accountTestManagedProviderAccount(t *testing.T, provider openai_compat.CompatibleProviderID, baseURL, model string) *Account {
+	t.Helper()
+	return &Account{
+		ID:          902,
+		Name:        "account-test-" + string(provider),
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":       "sk-account-test",
+			"base_url":      baseURL,
+			"model_mapping": map[string]any{model: model},
+		},
+		Extra: map[string]any{openai_compat.ExtraKeyCompatibleProvider: string(provider)},
+	}
+}
+
+func accountTestRejectingUpstream() *httpUpstreamRecorder {
+	return &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"stop after request capture"}}`)),
+	}}
 }

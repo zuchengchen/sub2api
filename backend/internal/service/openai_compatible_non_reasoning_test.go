@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -169,6 +170,76 @@ func TestOpenAICompatibleNonReasoningFinalOutboundRequests(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestOpenAICompatibleNonReasoningClearsResultMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		provider openai_compat.CompatibleProviderID
+		model    string
+		ingress  string
+		wireAPI  openAICompatibleWireAPI
+	}{
+		{openai_compat.ProviderMiMo, "mimo-v2.5", "chat", openAICompatibleWireResponses},
+		{openai_compat.ProviderMiMo, "mimo-v2.5", "messages", openAICompatibleWireResponses},
+		{openai_compat.ProviderZhipuGLM, "glm-4.7-flash", "chat", openAICompatibleWireChat},
+		{openai_compat.ProviderZhipuGLM, "glm-4.7-flash", "responses", openAICompatibleWireChat},
+		{openai_compat.ProviderZhipuGLM, "glm-4.7-flashx", "messages", openAICompatibleWireChat},
+		{openai_compat.ProviderAlibabaQwen, "qwen3.7-flash", "responses", openAICompatibleWireResponses},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.provider)+"/"+tc.model+"/"+tc.ingress, func(t *testing.T) {
+			account := compatibleProviderGatewayTestAccount(t, tc.provider)
+			body, path := compatibleProviderIngressRequest(tc.model, tc.ingress)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			upstream := compatibleProviderSuccessfulUpstream(tc.wireAPI, tc.ingress, tc.model)
+			svc := &OpenAIGatewayService{
+				cfg:          compatibleProviderGatewayTestConfig(),
+				httpUpstream: upstream,
+			}
+
+			var (
+				result *OpenAIForwardResult
+				err    error
+			)
+			switch tc.ingress {
+			case "chat":
+				result, err = svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+			case "responses":
+				result, err = svc.Forward(context.Background(), c, account, body)
+			case "messages":
+				result, err = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Nil(t, result.ReasoningEffort, "usage metadata must reflect the enforced non-reasoning request")
+		})
+	}
+}
+
+func compatibleProviderSuccessfulUpstream(wireAPI openAICompatibleWireAPI, ingress, model string) *httpUpstreamRecorder {
+	contentType := "application/json"
+	body := `{"id":"chatcmpl_managed","object":"chat.completion","model":"` + model + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`
+	if wireAPI == openAICompatibleWireResponses {
+		response := `{"id":"resp_managed","object":"response","model":"` + model + `","status":"completed","output":[{"type":"message","id":"msg_managed","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}`
+		body = response
+		if ingress != "responses" {
+			contentType = "text/event-stream"
+			body = "data: {\"type\":\"response.completed\",\"response\":" + response + "}\n\ndata: [DONE]\n\n"
+		}
+	}
+	return &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{contentType}, "x-request-id": []string{"rid-managed"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}}
 }
 
 func compatibleProviderGatewayTestAccount(t *testing.T, provider openai_compat.CompatibleProviderID) *Account {

@@ -87,9 +87,12 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 			}
 		}
 	}
-	chatBody, _, err = enforceOpenAICompatibleNonReasoning(account, upstreamModel, chatBody, openAICompatibleWireChat)
+	chatBody, managedNonReasoning, err := enforceOpenAICompatibleNonReasoning(account, upstreamModel, chatBody, openAICompatibleWireChat)
 	if err != nil {
 		return nil, err
+	}
+	if managedNonReasoning {
+		reasoningEffort = nil
 	}
 	// Unlike forwardResponsesViaRawChatCompletions, applyOpenAIFastPolicyToBody
 	// is intentionally skipped: Anthropic Messages bodies carry no service_tier,
