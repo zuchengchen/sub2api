@@ -639,6 +639,80 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_supported).toBe(false)
   })
 
+  it('rehydrates a managed provider and submits a different provider preset', async () => {
+    const account = buildAccount()
+    account.credentials = {
+      api_key: 'sk-test',
+      base_url: 'https://api.xiaomimimo.com/v1',
+      model_mapping: { 'mimo-v2.5': 'mimo-v2.5' },
+      openai_capabilities: ['chat_completions']
+    }
+    account.extra = {
+      openai_compatible_provider: 'mimo',
+      openai_responses_mode: 'force_responses'
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    expect(wrapper.get('[data-testid="openai-provider-preset-mimo"]').attributes('aria-checked')).toBe(
+      'true'
+    )
+    expect(wrapper.get<HTMLInputElement>('[data-testid="api-key-base-url"]').element.disabled).toBe(
+      true
+    )
+    const webSocketMode = wrapper.get<HTMLSelectElement>(
+      '[data-testid="edit-openai-ws-mode-select"]'
+    )
+    expect(webSocketMode.element.disabled).toBe(true)
+    expect(webSocketMode.element.value).toBe('off')
+
+    await wrapper.get('[data-testid="openai-provider-preset-alibaba_qwen"]').trigger('click')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="api-key-base-url"]').element.value).toBe(
+      'https://dashscope.aliyuncs.com/compatible-mode/v1'
+    )
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload?.credentials?.base_url).toBe(
+      'https://dashscope.aliyuncs.com/compatible-mode/v1'
+    )
+    expect(payload?.credentials?.model_mapping).toEqual({
+      'qwen3.7-flash': 'qwen3.7-flash'
+    })
+    expect(payload?.credentials?.openai_capabilities).toEqual(['chat_completions'])
+    expect(payload?.extra?.openai_compatible_provider).toBe('alibaba_qwen')
+    expect(payload?.extra?.openai_responses_mode).toBe('force_responses')
+  })
+
+  it('removes the managed marker without discarding values when switched to custom', async () => {
+    const account = buildAccount()
+    account.credentials = {
+      api_key: 'sk-test',
+      base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      model_mapping: { 'qwen3.7-flash': 'qwen3.7-flash' },
+      openai_capabilities: ['chat_completions']
+    }
+    account.extra = {
+      openai_compatible_provider: 'alibaba_qwen',
+      openai_responses_mode: 'force_responses'
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="openai-provider-preset-custom"]').trigger('click')
+    const baseUrlInput = wrapper.get<HTMLInputElement>('[data-testid="api-key-base-url"]')
+    expect(baseUrlInput.element.disabled).toBe(false)
+    expect(baseUrlInput.element.value).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1')
+    await baseUrlInput.setValue('https://relay.example/v1')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload?.credentials?.base_url).toBe('https://relay.example/v1')
+    expect(payload?.extra).not.toHaveProperty('openai_compatible_provider')
+  })
+
   it('submits the account upstream billing auto-probe setting', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
