@@ -536,6 +536,174 @@ func TestContentModerationDeepSeekRuntimeEnforceReadinessProbesOnceOnColdStart(t
 	require.Equal(t, int32(1), hits.Load())
 }
 
+func TestContentModerationDeepSeekRuntimeConnectivityProbeCoalescesConcurrentCallers(t *testing.T) {
+	var hits atomic.Int32
+	var unexpectedMethods atomic.Int32
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	started := make(chan struct{})
+	release := make(chan struct{})
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			unexpectedMethods.Add(1)
+		}
+		hits.Add(1)
+		startedOnce.Do(func() { close(started) })
+		<-release
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+	channel := contentModerationDeepSeekRuntimeTestChannel("coalesced", server.URL, 0)
+	const callers = 16
+	begin := make(chan struct{})
+	results := make(chan *TestContentModerationDeepSeekChannelResult, callers)
+	var ready sync.WaitGroup
+	ready.Add(callers)
+	for range callers {
+		go func() {
+			ready.Done()
+			<-begin
+			results <- svc.probeDeepSeekChannelConnectivity(context.Background(), channel)
+		}()
+	}
+	ready.Wait()
+	close(begin)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "connectivity probe did not start")
+	}
+	time.Sleep(25 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return hits.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	unblock()
+	for range callers {
+		require.True(t, (<-results).Reachable)
+	}
+	require.Equal(t, int32(1), hits.Load())
+	require.Zero(t, unexpectedMethods.Load())
+}
+
+func TestContentModerationDeepSeekRuntimeConnectivityProbeKeepsLiveWaiterAfterLeaderCancel(t *testing.T) {
+	var hits atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+	channel := contentModerationDeepSeekRuntimeTestChannel("cancelled-leader", server.URL, 0)
+	channel.TimeoutMS = 500
+	leaderCtx, cancelLeader := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	leaderResult := make(chan *TestContentModerationDeepSeekChannelResult, 1)
+	go func() {
+		leaderResult <- svc.probeDeepSeekChannelConnectivity(leaderCtx, channel)
+	}()
+	<-started
+	followerResult := make(chan *TestContentModerationDeepSeekChannelResult, 1)
+	go func() {
+		followerResult <- svc.probeDeepSeekChannelConnectivity(context.Background(), channel)
+	}()
+	time.Sleep(25 * time.Millisecond)
+	cancelLeader()
+	require.False(t, (<-leaderResult).Reachable)
+	close(release)
+	require.True(t, (<-followerResult).Reachable)
+	require.Equal(t, int32(1), hits.Load())
+}
+
+func TestContentModerationDeepSeekRuntimeConnectivityProbeStopsAtLeaderBudget(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+	channel := contentModerationDeepSeekRuntimeTestChannel("bounded-flight", server.URL, 0)
+	channel.TimeoutMS = 1000
+	firstCtx, cancelFirst := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelFirst()
+	first := svc.probeDeepSeekChannelConnectivity(firstCtx, channel)
+	require.False(t, first.Reachable)
+	require.Eventually(t, func() bool {
+		secondCtx, cancelSecond := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancelSecond()
+		_ = svc.probeDeepSeekChannelConnectivity(secondCtx, channel)
+		return hits.Load() >= 2
+	}, time.Second, 10*time.Millisecond)
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := hits.Load()
+	result := svc.probeDeepSeekChannelConnectivity(cancelledCtx, channel)
+	require.False(t, result.Reachable)
+	require.Equal(t, before, hits.Load(), "an already-cancelled caller must not start a probe")
+}
+
+func TestContentModerationDeepSeekRuntimeColdStartUsesReachableBackupWithinTotalBudget(t *testing.T) {
+	var primaryPosts atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			time.Sleep(200 * time.Millisecond)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		primaryPosts.Add(1)
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+	}))
+	defer primary.Close()
+	var backupPosts atomic.Int32
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		backupPosts.Add(1)
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+	}))
+	defer backup.Close()
+
+	primaryChannel := contentModerationDeepSeekRuntimeTestChannel("slow-primary", primary.URL, 0)
+	primaryChannel.TimeoutMS = 50
+	backupChannel := contentModerationDeepSeekRuntimeTestChannel("reachable-backup", backup.URL, 1)
+	backupChannel.TimeoutMS = 50
+	cfg := contentModerationDeepSeekRuntimeTestConfig(primaryChannel, backupChannel)
+	cfg.DeepSeekTotalTimeoutMS = 150
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+	reviewCtx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+
+	readyForEnforce, reason := svc.ensureContentModerationSecondLayerEnforceReadiness(reviewCtx, cfg, time.Now())
+	require.True(t, readyForEnforce)
+	require.Empty(t, reason)
+	reviewCfg := svc.contentModerationConfigWithReachableDeepSeekFirst(cfg, time.Now())
+	require.Equal(t, "reachable-backup", reviewCfg.DeepSeekChannels[0].ID)
+	require.Equal(t, "slow-primary", cfg.DeepSeekChannels[0].ID, "runtime preference must not mutate persisted order")
+	result, attempted, err := svc.scanContentModerationDeepSeek(
+		reviewCtx, reviewCfg, contentModerationDeepSeekRuntimeTestInput(t, "审核文本"),
+	)
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.False(t, result.Blocked)
+	require.Equal(t, int32(0), primaryPosts.Load())
+	require.Equal(t, int32(1), backupPosts.Load())
+	require.Less(t, time.Since(startedAt), 150*time.Millisecond)
+}
+
 func TestContentModerationDeepSeekRuntimeYuFengFailureDoesNotReprobeReachableDeepSeek(t *testing.T) {
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

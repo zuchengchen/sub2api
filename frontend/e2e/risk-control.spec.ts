@@ -187,7 +187,7 @@ test('风控中心在桌面与移动视口完整呈现', async ({ page }, testIn
   await expect(page.locator('[data-test="deepseek-channel-key-0"]')).toHaveValue('')
   await expect(page.locator('[data-test="layer1-stage-shadow"]')).toBeVisible()
   await expect(page.locator('[data-test="layer2-stage-shadow"]')).toBeVisible()
-  await expect(page.locator('[data-test="layer2-stage-enforce"]')).toBeDisabled()
+  await expect(page.locator('[data-test="layer2-stage-enforce"]')).toBeEnabled()
   await expect(page.locator('[data-test="enforce-health-gate"]')).toContainText('请先完成渠道连通性检查')
   await expect(page.locator('[data-test="audit-log-table"]')).toContainText('cyber_abuse')
 

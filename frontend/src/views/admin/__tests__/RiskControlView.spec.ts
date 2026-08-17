@@ -305,25 +305,19 @@ describe('admin RiskControlView', () => {
     wrapper.unmount()
   })
 
-  it('keeps Layer 2 Enforce disabled until the backend health gate is valid', async () => {
+  it('lets the server perform the authoritative Enforce connectivity check', async () => {
     getStatus.mockResolvedValue(runtimeStatus(false))
     const blockedWrapper = mountView()
     await flushPromises()
 
-    expect(blockedWrapper.get('[data-test="layer2-stage-enforce"]').attributes('disabled')).toBeDefined()
-    expect(blockedWrapper.get('[data-test="enforce-health-gate"]').text()).toContain('connectivity check required')
-    blockedWrapper.unmount()
-
-    getStatus.mockResolvedValue(runtimeStatus(true))
-    const readyWrapper = mountView()
-    await flushPromises()
-    const enforceButton = readyWrapper.get('[data-test="layer2-stage-enforce"]')
+    const enforceButton = blockedWrapper.get('[data-test="layer2-stage-enforce"]')
     expect(enforceButton.attributes('disabled')).toBeUndefined()
+    expect(blockedWrapper.get('[data-test="enforce-health-gate"]').text()).toContain('connectivity check required')
     await enforceButton.trigger('click')
-    await readyWrapper.get('[data-test="save-risk-control"]').trigger('click')
+    await blockedWrapper.get('[data-test="save-risk-control"]').trigger('click')
     await flushPromises()
     expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ second_layer_stage: 'enforce' }))
-    readyWrapper.unmount()
+    blockedWrapper.unmount()
   })
 
   it('runs the saved connectivity test for a channel', async () => {

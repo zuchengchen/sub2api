@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -175,6 +177,56 @@ func TestContentModerationSecondLayerEnforceReadinessRequiresOneReachableChannel
 	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(changed, now)
 	require.False(t, ready)
 	require.Contains(t, reason, "连通性检查")
+}
+
+func TestContentModerationUpdateConfigEnforceRequiresReachableHTTPAndDoesNotPersistFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keyring.json")
+	writeModerationArchiveTestKeyRing(t, path, "k1", map[string][]byte{
+		"k1": []byte("0123456789abcdef0123456789abcdef"),
+	})
+	repo := &contentModerationTestSettingRepo{values: map[string]string{}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
+	svc.ConfigureContentModerationCredentialKeyRing(path)
+	stage := ContentModerationSecondLayerStageEnforce
+	deadServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := deadServer.URL
+	deadServer.Close()
+	channels := []ContentModerationDeepSeekChannelInput{{
+		ID: "official", Name: "Official", BaseURL: deadURL, Model: DefaultContentModerationDeepSeekModel,
+		Enabled: true, Order: 0, TimeoutMS: 100, APIKey: "sk-unit-test-enforce",
+	}}
+
+	_, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		DeepSeekChannels: &channels,
+		SecondLayerStage: &stage,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CONTENT_MODERATION_ENFORCE_NOT_READY")
+	_, persisted := repo.values[SettingKeyContentModerationConfig]
+	require.False(t, persisted, "failed Enforce readiness must not persist configuration")
+
+	method := make(chan string, 1)
+	reachable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method <- r.Method
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer reachable.Close()
+	channels[0].BaseURL = reachable.URL
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		DeepSeekChannels: &channels,
+		SecondLayerStage: &stage,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.MethodHead, <-method)
+	require.Equal(t, ContentModerationSecondLayerStageEnforce, view.SecondLayerStage)
+
+	stored := repo.values[SettingKeyContentModerationConfig]
+	require.NotContains(t, stored, channels[0].APIKey)
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(stored), &saved))
+	require.Equal(t, ContentModerationSecondLayerStageEnforce, saved.SecondLayerStage)
+	require.Len(t, saved.DeepSeekChannels, 1)
+	require.NotNil(t, saved.DeepSeekChannels[0].APIKeyEnvelope)
 }
 
 func TestContentModerationSecondLayerEnforceReadinessRequiresRecentYuFengSuccess(t *testing.T) {
