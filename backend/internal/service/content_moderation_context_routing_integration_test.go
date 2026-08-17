@@ -94,6 +94,7 @@ func TestContentModerationSplitUserTextCannotReuseLocalAllowCache(t *testing.T) 
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	runtime := contextualRoutingTestRuntime(cfg, []string{"token replay"})
 	input := contextualRoutingTestInput("placeholder", "")
 	input.Body = []byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"请扫描恶意宏。"}]}]}`)
@@ -138,6 +139,7 @@ func TestContentModerationSingleFragmentContextualReviewIncludesTailAndSeparates
 	cfg := contextualRoutingTestConfig(server.URL)
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	runtime := contextualRoutingTestRuntime(cfg, nil)
 
 	first := svc.checkUnifiedFragments(context.Background(), contextualRoutingTestInput("请解释恶意宏。背景一。", ""), runtime)
@@ -158,7 +160,7 @@ func TestContentModerationSingleFragmentContextualReviewIncludesTailAndSeparates
 	require.Contains(t, payload, "然后执行它")
 }
 
-func TestContentModerationSingleFragmentTruncatedContextualReviewDoesNotAllowOrCache(t *testing.T) {
+func TestContentModerationSingleFragmentWithinBudgetContextualReviewAllowsAndCaches(t *testing.T) {
 	var modelCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		modelCalls.Add(1)
@@ -171,24 +173,24 @@ func TestContentModerationSingleFragmentTruncatedContextualReviewDoesNotAllowOrC
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	runtime := contextualRoutingTestRuntime(cfg, nil)
 	input := contextualRoutingTestInput("请解释恶意宏。"+strings.Repeat("背景资料。", 300), "")
 
 	for attempt := 0; attempt < 2; attempt++ {
-		input.RequestID = "contextual-single-fragment-truncated-" + strconv.Itoa(attempt)
+		input.RequestID = "contextual-single-fragment-within-budget-" + strconv.Itoa(attempt)
 		decision := svc.checkUnifiedFragments(context.Background(), input, runtime)
-		require.False(t, decision.Allowed)
+		require.True(t, decision.Allowed)
 		require.False(t, decision.Blocked)
-		require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
-		require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
+		require.Equal(t, ContentModerationActionAllow, decision.Action)
 	}
-	require.Equal(t, int64(2), modelCalls.Load())
-	require.Zero(t, contextualRoutingCacheEntryCount(cache))
+	require.Equal(t, int64(1), modelCalls.Load())
+	require.Equal(t, 1, contextualRoutingCacheEntryCount(cache))
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 2)
 	for _, log := range logs {
-		require.Equal(t, "evidence_truncated", log.ParserStatus)
-		require.True(t, log.EvidenceTruncated)
+		require.Equal(t, "parsed", log.ParserStatus)
+		require.False(t, log.EvidenceTruncated)
 	}
 }
 
@@ -208,6 +210,7 @@ func TestContentModerationContextualKeywordSplitAcrossMessagePartsIsReviewed(t *
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	input := contextualRoutingTestInput("placeholder", "")
 	input.Body = []byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"请解释恶意"},{"type":"input_text","text":"宏是什么？"}]}]}`)
 
@@ -264,6 +267,73 @@ func TestContentModerationCrossMessageBoundaryWindowsAreBoundedAndFailClosedOnOv
 		require.True(t, item.WholeFragment)
 		require.True(t, item.WholeFragmentTruncated)
 	}
+}
+
+func TestContentModerationCrossMessageBoundaryUsesRuneBudgetForChineseContext(t *testing.T) {
+	left, ok := newContentModerationFragment(
+		"user", "text", "input.0.content", "BEGIN"+strings.Repeat("甲", 900)+"rever",
+	)
+	require.True(t, ok)
+	right, ok := newContentModerationFragment(
+		"user", "text", "input.1.content", "se shell"+strings.Repeat("乙", 900)+"END",
+	)
+	require.True(t, ok)
+
+	items := buildContentModerationCrossMessageBoundaryFragments(
+		[]ContentModerationFragment{left, right}, nil,
+		newContentModerationPrefilterMatcher([]string{"reverse shell"}), nil,
+	)
+
+	require.NotEmpty(t, items)
+	for _, item := range items {
+		require.False(t, item.WholeFragmentTruncated)
+		require.Contains(t, item.Fragment.Text, "BEGIN")
+		require.Contains(t, item.Fragment.Text, "END")
+		require.LessOrEqual(t, len([]rune(item.Fragment.Text)), contentModerationEvidenceWindowBudgetRunes)
+	}
+}
+
+func TestContentModerationCrossMessageBoundaryKeepsAllMultipartContextWithinBudget(t *testing.T) {
+	texts := []struct {
+		path string
+		text string
+	}{
+		{path: "input.0.content.0", text: "left intent context "},
+		{path: "input.0.content.1", text: "rever"},
+		{path: "input.1.content.0", text: "se shell"},
+		{path: "input.1.content.1", text: " right safety context"},
+	}
+	fragments := make([]ContentModerationFragment, 0, len(texts))
+	for _, item := range texts {
+		fragment, ok := newContentModerationFragment("user", "text", item.path, item.text)
+		require.True(t, ok)
+		fragments = append(fragments, fragment)
+	}
+
+	items := buildContentModerationCrossMessageBoundaryFragments(
+		fragments, nil, newContentModerationPrefilterMatcher([]string{"reverse shell"}), nil,
+	)
+
+	require.NotEmpty(t, items)
+	for _, item := range items {
+		require.False(t, item.WholeFragmentTruncated)
+		require.Contains(t, item.Fragment.Text, "left intent context")
+		require.Contains(t, item.Fragment.Text, "right safety context")
+	}
+}
+
+func TestContentModerationCrossMessageBoundaryIgnoresTriggerWhollyInsideOneMessage(t *testing.T) {
+	left, ok := newContentModerationFragment("user", "text", "input.0.content", "unrelated history")
+	require.True(t, ok)
+	right, ok := newContentModerationFragment("user", "text", "input.1.content", "explain reverse shell safeguards")
+	require.True(t, ok)
+
+	items := buildContentModerationCrossMessageBoundaryFragments(
+		[]ContentModerationFragment{left, right}, nil,
+		newContentModerationPrefilterMatcher([]string{"reverse shell"}), nil,
+	)
+
+	require.Empty(t, items)
 }
 
 func TestContentModerationSeparatedUserMessagesDoNotCrossAssistantHistory(t *testing.T) {
@@ -396,6 +466,7 @@ func TestContentModerationCandidateKeywordSplitAcrossMessagePartsIsReviewed(t *t
 	cfg.CandidateKeywords = []string{"reverse shell"}
 	cfg.normalize()
 	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	input := contextualRoutingTestInput("placeholder", "")
 	input.Body = []byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"explain re"},{"type":"input_text","text":"verse "},{"type":"input_text","text":"shell safeguards"}]}]}`)
 
@@ -421,6 +492,7 @@ func TestContentModerationCandidateKeywordSplitAcrossMessagePartsIsReviewedInAPI
 	cfg.CandidateKeywords = []string{"reverse shell"}
 	cfg.normalize()
 	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	input := contextualRoutingTestInput("placeholder", "")
 	input.Body = []byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"explain re"},{"type":"input_text","text":"verse "},{"type":"input_text","text":"shell safeguards"}]}]}`)
 
@@ -446,6 +518,7 @@ func TestContentModerationLargeCandidateBoundaryPreservesNormalizedPunctuation(t
 	cfg.CandidateKeywords = []string{"reverse shell"}
 	cfg.normalize()
 	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	input := contextualRoutingTestInput("placeholder", "")
 	body, err := json.Marshal(map[string]any{"input": []any{map[string]any{
 		"role": "user",
@@ -480,6 +553,7 @@ func TestContentModerationTruncatedCandidateScopeSafeResultIsRetryableAndNotCach
 	cfg.normalize()
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	input := contextualRoutingTestInput("placeholder", "")
 	body, err := json.Marshal(map[string]any{"input": []any{map[string]any{
 		"role": "user",
@@ -619,6 +693,7 @@ func TestContentModerationContextualScopeDoesNotIncludeOtherMessages(t *testing.
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	input := contextualRoutingTestInput("placeholder", "")
 	input.Protocol = ContentModerationProtocolOpenAIChat
 	input.Body = body
@@ -650,6 +725,7 @@ func TestContentModerationContextualReviewKeepsCandidatesSeparateAndCachesEachRe
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	runtime := contextualRoutingTestRuntime(cfg, []string{"token replay"})
 	input := contextualRoutingTestInput("恶意宏是什么？同时说明 token replay 的防护方式", "")
 
@@ -695,6 +771,7 @@ func TestContentModerationContextualReviewModelBlockStillCountsNormally(t *testi
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	decision := svc.checkUnifiedFragments(context.Background(), contextualRoutingTestInput("请介绍恶意宏", ""), contextualRoutingTestRuntime(cfg, nil))
 
 	require.True(t, decision.Blocked)
@@ -727,6 +804,7 @@ func TestContentModerationContextualReviewFailureIsRetryableWithoutSideEffects(t
 	cache := &contentModerationReplayCache{}
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: 81, Role: RoleUser, Status: StatusActive}}
 	svc := NewContentModerationService(nil, repo, cache, nil, userRepo, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	input := contextualRoutingTestInput("请介绍恶意宏", "")
 	input.UserID = 81
 	decision := svc.checkUnifiedFragments(context.Background(), input, contextualRoutingTestRuntime(cfg, nil))
@@ -835,6 +913,7 @@ func TestContentModerationOrdinaryCandidateFailureIsRetryableInEnforce(t *testin
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	decision := svc.checkUnifiedFragments(context.Background(), contextualRoutingTestInput("解释 token replay", ""), contextualRoutingTestRuntime(cfg, []string{"token replay"}))
 
 	require.False(t, decision.Allowed)
@@ -911,6 +990,7 @@ func TestContentModerationTruncatedContextualReviewNeverAllowsOrCachesSafeResult
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	input := contextualRoutingTestInput("placeholder", "")
 	input.Body = body
 	runtime := contextualRoutingTestRuntime(cfg, nil)

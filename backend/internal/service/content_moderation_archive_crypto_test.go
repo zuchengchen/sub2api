@@ -92,6 +92,7 @@ func TestContentModerationArchiveKeyRingRejectsUnsafeOrInvalidFiles(t *testing.T
 	path := filepath.Join(dir, "keyring.json")
 	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
 	require.NoError(t, os.WriteFile(path, []byte(`{"current_key_id":"k1","keys":{"k1":"`+key+`"}}`), 0o644))
+	require.NoError(t, os.Chmod(path, 0o644))
 
 	_, _, err := NewContentModerationArchiveKeyRingFile(path).Current()
 	require.ErrorIs(t, err, ErrModerationArchiveKeyUnavailable)

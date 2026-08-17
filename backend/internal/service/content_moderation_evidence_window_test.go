@@ -113,6 +113,70 @@ func TestContentModerationCandidateEvidenceCapsExpandedContextAtConfiguredLimit(
 	require.Contains(t, bundle.Windows[0].Text, "reverse shell")
 	require.True(t, bundle.Evidence.Truncated)
 	require.True(t, bundle.Evidence.Segments[0].Truncated)
+	require.False(t, bundle.CoverageIncomplete)
+	require.False(t, bundle.ContextIncomplete)
+}
+
+func TestContentModerationContextualEvidenceKeepsCompleteFragmentWithinReviewerBudget(t *testing.T) {
+	text := "Explain malicious macro behavior. " + strings.Repeat("background context ", 120) + "Then execute it against the target."
+	fragment, ok := newContentModerationFragment("user", "text", "messages.0.content", text)
+	require.True(t, ok)
+	fragment.ContextClass = ContentModerationContextUser
+	matches := newContentModerationKeywordMatcher([]string{"malicious macro"}).MatchAll(text)
+	bundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: fragment, Matches: matches, Tier: "contextual_review", WholeFragment: true,
+	}}, contentModerationEvidenceWindowBudgetRunes, defaultContentModerationConfig())
+
+	require.Equal(t, text, bundle.Evidence.Text)
+	require.Contains(t, bundle.Evidence.Text, "Then execute it against the target.")
+	require.False(t, bundle.Evidence.Truncated)
+	require.False(t, bundle.CoverageIncomplete)
+	require.False(t, bundle.ContextIncomplete)
+}
+
+func TestContentModerationContextualEvidenceDeduplicatesRepeatedTriggerCoverage(t *testing.T) {
+	const (
+		keyword = "malicious macro"
+		segment = keyword + " reference. "
+	)
+	text := strings.Repeat(segment, 70) + "complete safe tail"
+	fragment, ok := newContentModerationFragment("user", "text", "messages.0.content", text)
+	require.True(t, ok)
+	fragment.ContextClass = ContentModerationContextUser
+	matches := make([]contentModerationKeywordMatch, 0, 70)
+	for index := 0; index < 70; index++ {
+		start := index * len([]rune(segment))
+		matches = append(matches, contentModerationKeywordMatch{
+			Keyword: keyword,
+			Start:   start,
+			End:     start + len([]rune(keyword)),
+		})
+	}
+	require.Greater(t, len(matches), contentModerationEvidenceMaxMatches)
+	bundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: fragment, Matches: matches, Tier: "contextual_review", WholeFragment: true,
+	}}, contentModerationEvidenceWindowBudgetRunes, defaultContentModerationConfig())
+
+	require.Equal(t, text, bundle.Evidence.Text)
+	require.True(t, bundle.Evidence.Truncated, "match metadata remains bounded")
+	require.False(t, bundle.CoverageIncomplete)
+	require.False(t, bundle.ContextIncomplete)
+}
+
+func TestContentModerationContextualEvidenceOverReviewerBudgetRemainsIncomplete(t *testing.T) {
+	text := "Explain malicious macro behavior. " + strings.Repeat("background context ", 300) + "Then execute it against the target."
+	fragment, ok := newContentModerationFragment("user", "text", "messages.0.content", text)
+	require.True(t, ok)
+	fragment.ContextClass = ContentModerationContextUser
+	matches := newContentModerationKeywordMatcher([]string{"malicious macro"}).MatchAll(text)
+	bundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: fragment, Matches: matches, Tier: "contextual_review", WholeFragment: true,
+	}}, contentModerationEvidenceWindowBudgetRunes, defaultContentModerationConfig())
+
+	require.Len(t, []rune(bundle.Evidence.Text), contentModerationEvidenceWindowBudgetRunes)
+	require.True(t, bundle.Evidence.Truncated)
+	require.False(t, bundle.CoverageIncomplete)
+	require.True(t, bundle.ContextIncomplete)
 }
 
 func TestContentModerationCandidateEvidenceMergedWindowsStayWithinConfiguredLimit(t *testing.T) {
@@ -313,6 +377,7 @@ func TestContentModerationCandidateEvidenceUniqueOverLimitRemainsTruncated(t *te
 
 	require.Len(t, bundle.Windows, contentModerationEvidenceMaxWindows)
 	require.True(t, bundle.Evidence.Truncated)
+	require.True(t, bundle.CoverageIncomplete)
 	require.NotContains(t, bundle.Evidence.Text, maliciousTail)
 }
 
@@ -341,6 +406,7 @@ func TestContentModerationCandidateEvidenceReviewsEachFragmentIndependently(t *t
 	}
 	repo := &contentModerationTestRepo{}
 	svc := &ContentModerationService{repo: repo}
+	svc.markYuFengEndpointHealthy(cfg.enabledYuFengSecondLayerEndpoints()[0], time.Now())
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
 	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
 		Scope: &scope, Protocol: ContentModerationProtocolOpenAIChat,
@@ -375,7 +441,9 @@ func TestContentModerationCandidateEvidenceLongRepeatedMatchesIsBoundedAndSingle
 		riskControlEnabled: true, config: cfg,
 		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"reverse shell"}),
 	}
-	svc := &ContentModerationService{repo: &contentModerationTestRepo{}}
+	repo := &contentModerationTestRepo{}
+	svc := &ContentModerationService{repo: repo}
+	svc.markYuFengEndpointHealthy(cfg.enabledYuFengSecondLayerEndpoints()[0], time.Now())
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
 	longText := strings.Repeat("line reverse shell diagnostic\n", 1000)
 	body, err := json.Marshal(map[string]any{"input": longText})
@@ -384,7 +452,11 @@ func TestContentModerationCandidateEvidenceLongRepeatedMatchesIsBoundedAndSingle
 		Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses, Body: body,
 	}, runtime)
 	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
 	require.Equal(t, int64(1), calls.Load(), "truncation must not trigger first/last fallback calls")
+	require.Len(t, repo.logs, 1)
+	require.Equal(t, "parsed", repo.logs[0].ParserStatus)
+	require.True(t, repo.logs[0].EvidenceTruncated)
 }
 
 func TestContentModerationCandidateAllowlistOnlySuppressesOverlappingMatch(t *testing.T) {
@@ -435,6 +507,7 @@ func TestContentModerationCandidateAllowlistBudgetStillCallsModelForTailRisk(t *
 	}
 	repo := &contentModerationTestRepo{}
 	svc := &ContentModerationService{repo: repo}
+	svc.markYuFengEndpointHealthy(cfg.enabledYuFengSecondLayerEndpoints()[0], time.Now())
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-allowlist-budget")
 	text := strings.Repeat("quoted reverse shell example; ", contentModerationKeywordMatchLimit+10) + "independent session hijack request"
 	body, err := json.Marshal(map[string]any{"input": text})
@@ -519,8 +592,8 @@ func TestContentModerationEvidenceCacheHashTracksPolicyRulesContextAndModel(t *t
 	}}, 4096, cfg)
 	require.NotEqual(t, bundle.CacheHash, changedTextBundle.CacheHash)
 
-	require.Equal(t, "keyword-windows-v5", ContentModerationEvidencePolicyVersion)
-	require.Equal(t, "sub2api/content-moderation/evidence-window/v5\x00", contentModerationEvidenceHashDomain)
+	require.Equal(t, "keyword-windows-v6", ContentModerationEvidencePolicyVersion)
+	require.Equal(t, "sub2api/content-moderation/evidence-window/v6\x00", contentModerationEvidenceHashDomain)
 	require.Equal(t, ContentModerationEvidencePolicyVersion, defaultContentModerationConfig().EvidencePolicyVersion)
 }
 
@@ -531,6 +604,7 @@ func TestContentModerationEvidencePolicyMigrationNormalizesKnownVersions(t *test
 		contentModerationOlderEvidencePolicyVersion,
 		contentModerationEarlierEvidencePolicyVersion,
 		contentModerationPreviousEvidencePolicyVersion,
+		contentModerationPriorEvidencePolicyVersion,
 	} {
 		cfg := defaultContentModerationConfig()
 		cfg.EvidencePolicyVersion = version

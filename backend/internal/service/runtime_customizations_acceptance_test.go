@@ -130,6 +130,7 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		}
 		repo := &contentModerationTestRepo{}
 		svc := &ContentModerationService{repo: repo}
+		svc.markYuFengEndpointHealthy(cfg.enabledYuFengSecondLayerEndpoints()[0], time.Now())
 		candidateMatcher := newContentModerationPrefilterMatcher([]string{"evaluate this request"})
 		runtime := &contentModerationRuntimeSnapshot{
 			riskControlEnabled: true, config: cfg, secondLayerPrefilterMatcher: candidateMatcher,
