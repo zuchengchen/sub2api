@@ -173,6 +173,13 @@ export interface ContentModerationRuntimeStatus {
   deepseek_selected_count?: number
   deepseek_failover_count?: number
   deepseek_unavailable_count?: number
+  deepseek_response_read_timeout_count?: number
+  deepseek_breaker_skip_count?: number
+  deepseek_cooldown_skip_count?: number
+  deepseek_half_open_busy_skip_count?: number
+  review_unavailable_count?: number
+  review_unavailable_enforced_count?: number
+  last_review_unavailable_at?: string
   second_layer_cache_hits?: number
   second_layer_cache_misses?: number
   second_layer_cache_writes?: number

@@ -627,6 +627,14 @@ type ContentModerationRuntimeStatus struct {
 	DeepSeekFailoverCount      int64                                 `json:"deepseek_failover_count"`
 	DeepSeekUnavailableCount   int64                                 `json:"deepseek_unavailable_count"`
 	ArchiveRuntime             ContentModerationArchiveRuntimeStatus `json:"archive_runtime"`
+
+	DeepSeekResponseReadTimeoutCount int64      `json:"deepseek_response_read_timeout_count"`
+	DeepSeekBreakerSkipCount         int64      `json:"deepseek_breaker_skip_count"`
+	DeepSeekCooldownSkipCount        int64      `json:"deepseek_cooldown_skip_count"`
+	DeepSeekHalfOpenBusySkipCount    int64      `json:"deepseek_half_open_busy_skip_count"`
+	ReviewUnavailableCount           int64      `json:"review_unavailable_count"`
+	ReviewUnavailableEnforcedCount   int64      `json:"review_unavailable_enforced_count"`
+	LastReviewUnavailableAt          *time.Time `json:"last_review_unavailable_at,omitempty"`
 }
 
 type ContentModerationSecondLayerMetric struct {
@@ -756,6 +764,7 @@ type ContentModerationService struct {
 	deepSeekSelectedCount      atomic.Int64
 	deepSeekFailoverCount      atomic.Int64
 	deepSeekUnavailableCount   atomic.Int64
+	reviewObservability        contentModerationReviewObservability
 	dispositionRepo            ContentModerationDispositionRepository
 	preBlockActive             atomic.Int64
 	preBlockChecked            atomic.Int64
@@ -1466,6 +1475,11 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		pendingBodyBudgetBytes = DefaultContentModerationPendingBodyBudgetBytes
 	}
 	secondLayerEnforceReady, secondLayerEnforceReason := s.contentModerationSecondLayerEnforceReadiness(cfg, time.Now())
+	var lastReviewUnavailableAt *time.Time
+	if unixMilli := s.reviewObservability.lastReviewUnavailableUnixMilli.Load(); unixMilli > 0 {
+		observedAt := time.UnixMilli(unixMilli)
+		lastReviewUnavailableAt = &observedAt
+	}
 	return &ContentModerationRuntimeStatus{
 		Enabled:                    cfg.Enabled,
 		RiskControlEnabled:         riskEnabled,
@@ -1507,6 +1521,14 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		DeepSeekFailoverCount:      s.deepSeekFailoverCount.Load(),
 		DeepSeekUnavailableCount:   s.deepSeekUnavailableCount.Load(),
 		ArchiveRuntime:             s.archiveRuntime.Status(),
+
+		DeepSeekResponseReadTimeoutCount: s.reviewObservability.deepSeekResponseReadTimeoutCount.Load(),
+		DeepSeekBreakerSkipCount:         s.reviewObservability.deepSeekBreakerSkipCount.Load(),
+		DeepSeekCooldownSkipCount:        s.reviewObservability.deepSeekCooldownSkipCount.Load(),
+		DeepSeekHalfOpenBusySkipCount:    s.reviewObservability.deepSeekHalfOpenBusySkipCount.Load(),
+		ReviewUnavailableCount:           s.reviewObservability.reviewUnavailableCount.Load(),
+		ReviewUnavailableEnforcedCount:   s.reviewObservability.reviewUnavailableEnforcedCount.Load(),
+		LastReviewUnavailableAt:          lastReviewUnavailableAt,
 	}, nil
 }
 

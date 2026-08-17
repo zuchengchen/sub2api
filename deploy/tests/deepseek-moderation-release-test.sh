@@ -545,7 +545,10 @@ api_request PUT /api/v1/admin/risk-control/config "$work_dir/layer2-enforce.json
   "$work_dir/enforce-after-endpoint-change-response.json"
 jq -e '
   .code == 0 and .data.second_layer_stage == "enforce" and
-  .data.deepseek_channels[0].health_status == "reachable"
+  any(.data.deepseek_channels[];
+    .api_key_configured == true and
+    .health_status == "reachable" and
+    .breaker_status == "closed")
 ' "$work_dir/enforce-after-endpoint-change-response.json" >/dev/null
 
 jq '{

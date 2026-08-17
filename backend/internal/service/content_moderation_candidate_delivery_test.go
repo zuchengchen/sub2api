@@ -42,30 +42,19 @@ func TestContentModerationEveryLayer2CandidateGetsIndependentDeepSeekReview(t *t
 	require.Len(t, repo.snapshotLogs(), 2)
 }
 
-func TestContentModerationEnforceColdStartUsesReachableBackupWithinTotalBudget(t *testing.T) {
-	var primaryHeads atomic.Int64
+func TestContentModerationEnforceColdStartUsesReviewHealthyBackupWithinTotalBudget(t *testing.T) {
 	var primaryPosts atomic.Int64
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			primaryHeads.Add(1)
-			time.Sleep(200 * time.Millisecond)
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
 		primaryPosts.Add(1)
-		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
-		)
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-r.Context().Done()
 	}))
 	defer primary.Close()
-	var backupHeads atomic.Int64
 	var backupPosts atomic.Int64
-	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			backupHeads.Add(1)
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		backupPosts.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
 			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
@@ -92,10 +81,8 @@ func TestContentModerationEnforceColdStartUsesReachableBackupWithinTotalBudget(t
 	require.True(t, decision.Allowed)
 	require.False(t, decision.Blocked)
 	require.Less(t, time.Since(started), 300*time.Millisecond)
-	require.Equal(t, int64(1), primaryHeads.Load())
-	require.Equal(t, int64(1), backupHeads.Load())
-	require.Zero(t, primaryPosts.Load())
-	require.Equal(t, int64(1), backupPosts.Load())
+	require.Equal(t, int64(1), primaryPosts.Load())
+	require.Equal(t, int64(2), backupPosts.Load())
 	require.Len(t, repo.snapshotLogs(), 1)
 }
 
@@ -460,10 +447,23 @@ func TestContentModerationLayer2CacheInvalidatesWhenDecisionConfigChanges(t *tes
 }
 
 func contentModerationCandidateDeliveryConnectivityProbe(w http.ResponseWriter, r *http.Request) bool {
-	if r.Method != http.MethodHead {
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	if r.Method != http.MethodPost || r.Body == nil {
 		return false
 	}
-	w.WriteHeader(http.StatusNoContent)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+	if !strings.Contains(string(body), "Sub2API content moderation reviewer health check.") {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"choices":[{"finish_reason":"stop","message":{"content":"{\"confidence\":0.05,\"category\":\"safe\",\"reason\":\"\"}"}}]}`)
 	return true
 }
 

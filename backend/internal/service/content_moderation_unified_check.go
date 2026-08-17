@@ -13,6 +13,9 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 )
 
 var contentModerationBodySizeUpperBounds = [...]int64{
@@ -1425,8 +1428,13 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 		KeywordTier: defaultContentModerationString(work.bundle.PrimaryTier, "candidate"), KeywordRuleID: work.bundle.PrimaryRuleID,
 		Background: cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,
 	})
+	s.recordContentModerationReviewAttempts(result.ReviewAttempts, err)
 	if err != nil {
-		slog.Warn("content_moderation.second_layer_failed", "error", err)
+		logger.FromContext(reviewCtx).Warn("content_moderation.second_layer_failed",
+			zap.String("component", "service.content_moderation"),
+			zap.String("failure_class", contentModerationReviewFailureClass(err, result.ReviewAttempts)),
+			zap.Int("review_attempt_count", len(result.ReviewAttempts)),
+		)
 		return contentModerationCandidateReviewOutcome{
 			result: result, parserStatus: contentModerationContextualReviewFailureStatus(err, true), err: err,
 		}
@@ -1815,6 +1823,7 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 	} else if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
 		audit.DecisionSource = "review_unavailable_shadow"
 	}
+	s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
 	s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionReviewUnavailable, "", bundle.PrimaryKeyword, audit)
 
 	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
