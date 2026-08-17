@@ -165,6 +165,82 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
     expect(createAccountMock).toHaveBeenCalledTimes(1)
     expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(false)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra).not.toHaveProperty(
+      'openai_compatible_provider'
+    )
+  })
+
+  it.each([
+    {
+      provider: 'mimo',
+      baseUrl: 'https://api.xiaomimimo.com/v1',
+      modelMapping: { 'mimo-v2.5': 'mimo-v2.5' },
+      responsesMode: 'force_responses'
+    },
+    {
+      provider: 'zhipu_glm',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      modelMapping: {
+        'glm-4.7-flash': 'glm-4.7-flash',
+        'glm-4.7-flashx': 'glm-4.7-flashx'
+      },
+      responsesMode: 'force_chat_completions'
+    },
+    {
+      provider: 'alibaba_qwen',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      modelMapping: { 'qwen3.7-flash': 'qwen3.7-flash' },
+      responsesMode: 'force_responses'
+    }
+  ])('applies and submits the $provider provider preset', async ({
+    provider,
+    baseUrl,
+    modelMapping,
+    responsesMode
+  }) => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get(`[data-testid="openai-provider-preset-${provider}"]`).trigger('click')
+
+    const baseUrlInput = wrapper.get<HTMLInputElement>('[data-testid="api-key-base-url"]')
+    expect(baseUrlInput.element.value).toBe(baseUrl)
+    expect(baseUrlInput.element.disabled).toBe(true)
+    expect(wrapper.get('[data-testid="openai-provider-force-non-reasoning"]').exists()).toBe(true)
+
+    await wrapper.get('form#create-account-form input[type="text"]').setValue(`${provider} account`)
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.credentials?.base_url).toBe(baseUrl)
+    expect(payload?.credentials?.model_mapping).toEqual(modelMapping)
+    expect(payload?.credentials?.openai_capabilities).toEqual(['chat_completions'])
+    expect(payload?.extra?.openai_compatible_provider).toBe(provider)
+    expect(payload?.extra?.openai_responses_mode).toBe(responsesMode)
+  })
+
+  it('keeps provider-populated values editable when switching back to custom', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('[data-testid="openai-provider-preset-mimo"]').trigger('click')
+    await wrapper.get('[data-testid="openai-provider-preset-custom"]').trigger('click')
+
+    const baseUrlInput = wrapper.get<HTMLInputElement>('[data-testid="api-key-base-url"]')
+    expect(baseUrlInput.element.disabled).toBe(false)
+    expect(baseUrlInput.element.value).toBe('https://api.xiaomimimo.com/v1')
+    await baseUrlInput.setValue('https://relay.example/v1')
+
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('custom account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.credentials?.base_url).toBe('https://relay.example/v1')
+    expect(payload?.extra).not.toHaveProperty('openai_compatible_provider')
   })
 
   // namespace 摊平是仅 OAuth 的兼容开关：API Key 走 chat completions 回退桥时由桥自行摊平

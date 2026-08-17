@@ -49,6 +49,46 @@ func TestProbeOpenAIAPIKeyResponsesSupportUsesCodexProbeHeaders(t *testing.T) {
 	require.Equal(t, true, updates[openai_compat.ExtraKeyResponsesSupported])
 }
 
+func TestProbeOpenAIAPIKeyResponsesSupportSkipsManagedProvider(t *testing.T) {
+	updateCalls := make(chan map[string]any, 1)
+	account := Account{
+		ID:          97,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://api.xiaomimimo.com/v1",
+		},
+		Extra: map[string]any{
+			openai_compat.ExtraKeyCompatibleProvider: openai_compat.ProviderMiMo,
+		},
+	}
+	repo := &snapshotUpdateAccountRepo{
+		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
+		updateExtraCalls:      updateCalls,
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call"}]}`)),
+	}}
+	svc := &AccountTestService{
+		accountRepo:  repo,
+		httpUpstream: upstream,
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+
+	svc.ProbeOpenAIAPIKeyResponsesSupport(context.Background(), account.ID)
+
+	require.Nil(t, upstream.lastReq)
+	select {
+	case update := <-updateCalls:
+		t.Fatalf("managed provider must not persist probe metadata: %#v", update)
+	default:
+	}
+}
+
 func TestDecideResponsesProbeSupport(t *testing.T) {
 	fnCall := []byte(`{"output":[{"type":"reasoning"},{"type":"function_call","name":"probe_ping"}]}`)
 	reasoningOnly := []byte(`{"output":[{"type":"reasoning"}]}`)

@@ -22,6 +22,8 @@ func TestResolveResponsesSupport(t *testing.T) {
 		{"invalid mode follows probe", map[string]any{ExtraKeyResponsesMode: "bogus", ExtraKeyResponsesSupported: true}, ResponsesSupportYes},
 		{"force responses overrides probe false", map[string]any{ExtraKeyResponsesMode: string(ResponsesSupportModeForceResponses), ExtraKeyResponsesSupported: false}, ResponsesSupportYes},
 		{"force chat completions overrides probe true", map[string]any{ExtraKeyResponsesMode: string(ResponsesSupportModeForceChatCompletions), ExtraKeyResponsesSupported: true}, ResponsesSupportNo},
+		{"managed MiMo forces responses", map[string]any{ExtraKeyCompatibleProvider: string(ProviderMiMo), ExtraKeyResponsesMode: string(ResponsesSupportModeForceChatCompletions), ExtraKeyResponsesSupported: false}, ResponsesSupportYes},
+		{"managed GLM forces chat completions", map[string]any{ExtraKeyCompatibleProvider: string(ProviderZhipuGLM), ExtraKeyResponsesMode: string(ResponsesSupportModeForceResponses), ExtraKeyResponsesSupported: true}, ResponsesSupportNo},
 	}
 
 	for _, tc := range tests {

@@ -76,6 +76,17 @@ func NormalizeResponsesSupportMode(mode string) ResponsesSupportMode {
 // 标记缺失或类型不匹配时返回 ResponsesSupportUnknown——调用方应按
 // "未探测=保留旧行为=走 Responses" 处理（参见 ShouldUseResponsesAPI）。
 func ResolveResponsesSupport(extra map[string]any) AccountResponsesSupport {
+	// Managed presets are server-owned contracts. Resolve their wire API before
+	// probe/manual fields so stale metadata cannot route GLM to /responses or
+	// route MiMo/Qwen away from their declared Responses endpoint.
+	if preset, ok := ResolveCompatibleProviderPreset(extra); ok {
+		switch preset.ResponsesMode {
+		case ResponsesSupportModeForceResponses:
+			return ResponsesSupportYes
+		case ResponsesSupportModeForceChatCompletions:
+			return ResponsesSupportNo
+		}
+	}
 	if extra == nil {
 		return ResponsesSupportUnknown
 	}

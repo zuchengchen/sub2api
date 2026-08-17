@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
 )
@@ -606,14 +607,16 @@ func TestUpdateAccountExtraDropsManagedBillingProbeFields(t *testing.T) {
 	}}
 
 	err := (&adminServiceImpl{accountRepo: repo}).UpdateAccountExtra(context.Background(), accountID, map[string]any{
-		"custom":                               "value",
-		UpstreamBillingProbeEnabledExtraKey:    true,
-		UpstreamBillingRateSyncEnabledExtraKey: true,
-		UpstreamBillingProbeExtraKey:           map[string]any{"status": "ok"},
+		"custom":                                 "value",
+		openai_compat.ExtraKeyCompatibleProvider: "mimo",
+		UpstreamBillingProbeEnabledExtraKey:      true,
+		UpstreamBillingRateSyncEnabledExtraKey:   true,
+		UpstreamBillingProbeExtraKey:             map[string]any{"status": "ok"},
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, "value", repo.accounts[accountID].Extra["custom"])
+	require.NotContains(t, repo.accounts[accountID].Extra, openai_compat.ExtraKeyCompatibleProvider)
 	require.NotContains(t, repo.accounts[accountID].Extra, UpstreamBillingProbeEnabledExtraKey)
 	require.NotContains(t, repo.accounts[accountID].Extra, UpstreamBillingRateSyncEnabledExtraKey)
 	require.NotContains(t, repo.accounts[accountID].Extra, UpstreamBillingProbeExtraKey)
@@ -625,10 +628,11 @@ func TestBulkUpdateAccountsDropsManagedUpstreamBillingProbeState(t *testing.T) {
 	input := &BulkUpdateAccountsInput{
 		AccountIDs: []int64{1},
 		Extra: map[string]any{
-			"custom":                               "value",
-			UpstreamBillingProbeEnabledExtraKey:    true,
-			UpstreamBillingRateSyncEnabledExtraKey: true,
-			UpstreamBillingProbeExtraKey:           map[string]any{"status": "ok"},
+			"custom":                                 "value",
+			openai_compat.ExtraKeyCompatibleProvider: "mimo",
+			UpstreamBillingProbeEnabledExtraKey:      true,
+			UpstreamBillingRateSyncEnabledExtraKey:   true,
+			UpstreamBillingProbeExtraKey:             map[string]any{"status": "ok"},
 		},
 	}
 
@@ -638,6 +642,7 @@ func TestBulkUpdateAccountsDropsManagedUpstreamBillingProbeState(t *testing.T) {
 	require.Equal(t, 1, result.Success)
 	require.Len(t, repo.bulkUpdates, 1)
 	require.Equal(t, "value", repo.bulkUpdates[0].Extra["custom"])
+	require.NotContains(t, repo.bulkUpdates[0].Extra, openai_compat.ExtraKeyCompatibleProvider)
 	require.NotContains(t, repo.bulkUpdates[0].Extra, UpstreamBillingProbeEnabledExtraKey)
 	require.NotContains(t, repo.bulkUpdates[0].Extra, UpstreamBillingRateSyncEnabledExtraKey)
 	require.NotContains(t, repo.bulkUpdates[0].Extra, UpstreamBillingProbeExtraKey)

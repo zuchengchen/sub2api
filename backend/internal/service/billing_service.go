@@ -381,7 +381,7 @@ func (s *BillingService) initFallbackPricing() {
 
 	// ============================================================
 	// 国产 LLM 兜底定价（数据源：各家官方定价页/USD 口径）
-	// 顺序：DeepSeek → 智谱 GLM → 月之暗面 Kimi → MiniMax
+	// 顺序：DeepSeek → 小米 MiMo → 智谱 GLM → 阿里云 Qwen → 月之暗面 Kimi → MiniMax
 	// 覆盖逻辑见同文件 getFallbackPricing()
 	// ============================================================
 
@@ -398,6 +398,16 @@ func (s *BillingService) initFallbackPricing() {
 		InputPricePerToken:     1.4e-7, // $0.14 per MTok (cache miss)
 		OutputPricePerToken:    2.8e-7, // $0.28 per MTok
 		CacheReadPricePerToken: 2.8e-9, // $0.0028 per MTok (cache hit)
+		SupportsCacheBreakdown: false,
+	}
+
+	// ---- 小米 MiMo ----
+	// Source: https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go
+	// 官方同时给出 USD 价：cache miss $0.14 / output $0.28 / cache hit $0.0028 per MTok。
+	s.fallbackPrices["mimo-v2.5"] = &ModelPricing{
+		InputPricePerToken:     0.14e-6,
+		OutputPricePerToken:    0.28e-6,
+		CacheReadPricePerToken: 0.0028e-6,
 		SupportsCacheBreakdown: false,
 	}
 
@@ -486,6 +496,18 @@ func (s *BillingService) initFallbackPricing() {
 	s.fallbackPrices["glm-4.7-flash"] = &ModelPricing{
 		InputPricePerToken:     0,
 		OutputPricePerToken:    0,
+		SupportsCacheBreakdown: false,
+	}
+
+	// ---- 阿里云百炼 Qwen ----
+	// Source: https://help.aliyun.com/zh/model-studio/model-pricing
+	// 华北 2 qwen3.7-flash 的 0-32K 档为 ¥0.2/¥0.8 per MTok，按本表统一
+	// ¥1≈$0.14 口径换算。32K 以上必须由渠道 pricing intervals 显式配置，不能
+	// 依赖这个基础档兜底价。隐式缓存命中按输入价 20% 计费。
+	s.fallbackPrices["qwen3.7-flash"] = &ModelPricing{
+		InputPricePerToken:     0.028e-6,
+		OutputPricePerToken:    0.112e-6,
+		CacheReadPricePerToken: 0.0056e-6,
 		SupportsCacheBreakdown: false,
 	}
 
@@ -698,6 +720,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	if strings.Contains(modelLower, "deepseek-chat") || strings.Contains(modelLower, "deepseek-reasoner") {
 		return s.fallbackPrices["deepseek-v4-flash"]
 	}
+	if modelLower == "mimo-v2.5" || strings.HasSuffix(modelLower, "/mimo-v2.5") {
+		return s.fallbackPrices["mimo-v2.5"]
+	}
 
 	// ---- 国产 LLM 兜底匹配 ----
 	// 匹配策略：长 key 优先（具体模型 → 系列 / 厂商），未知型号不回退以避免误计价。
@@ -744,6 +769,10 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 	if strings.Contains(modelLower, "glm-4.5") {
 		return s.fallbackPrices["glm-4.5"]
+	}
+	if modelLower == "qwen3.7-flash" || modelLower == "qwen3.7-flash-2026-07-15" ||
+		strings.HasSuffix(modelLower, "/qwen3.7-flash") || strings.HasSuffix(modelLower, "/qwen3.7-flash-2026-07-15") {
+		return s.fallbackPrices["qwen3.7-flash"]
 	}
 	if strings.Contains(modelLower, "glm-4-32b") {
 		return s.fallbackPrices["glm-4-32b-0414-128k"]

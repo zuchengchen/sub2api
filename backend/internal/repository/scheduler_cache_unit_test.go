@@ -308,6 +308,7 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 			"openai_oauth_responses_websockets_v2_mode":    service.OpenAIWSIngressModePassthrough,
 			"openai_ws_force_http":                         true,
 			"openai_responses_mode":                        "force_chat_completions",
+			"openai_compatible_provider":                   "zhipu_glm",
 			"openai_responses_supported":                   false,
 			"mixed_scheduling":                             true,
 			"unused_large_field":                           "drop-me",
@@ -320,6 +321,7 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	require.Equal(t, service.OpenAIWSIngressModePassthrough, got.Extra["openai_oauth_responses_websockets_v2_mode"])
 	require.Equal(t, true, got.Extra["openai_ws_force_http"])
 	require.Equal(t, "force_chat_completions", got.Extra["openai_responses_mode"])
+	require.Equal(t, "zhipu_glm", got.Extra["openai_compatible_provider"])
 	require.Equal(t, false, got.Extra["openai_responses_supported"])
 	require.Equal(t, true, got.Extra["mixed_scheduling"])
 	require.Nil(t, got.Extra["unused_large_field"])

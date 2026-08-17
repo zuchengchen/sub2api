@@ -39,6 +39,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		})
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
+	managedModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	if managedModel != "" {
+		managedModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(managedModel))
+		managedBody, _, managedErr := enforceOpenAICompatibleNonReasoning(account, managedModel, body, openAICompatibleWireResponses)
+		if managedErr != nil {
+			return nil, managedErr
+		}
+		body = managedBody
+	}
 
 	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)
 	if err != nil {

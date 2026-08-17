@@ -586,6 +586,14 @@ export default {
       openai: {
         baseUrlHint: '留空使用官方 OpenAI API',
         apiKeyHint: '您的 OpenAI API Key',
+        providerPreset: {
+          label: 'OpenAI 兼容服务商',
+          custom: '自定义',
+          mimo: '小米 MiMo',
+          zhipuGlm: '智谱 GLM',
+          alibabaQwen: '阿里云千问',
+          forceNonReasoning: '此服务商预设将强制使用非推理模式'
+        },
         oauthPassthrough: '自动透传（仅替换认证）',
         oauthPassthroughDesc:
           '开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。',

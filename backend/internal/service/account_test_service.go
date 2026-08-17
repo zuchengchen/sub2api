@@ -693,7 +693,14 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
 	payload := createOpenAITestPayload(upstreamTestModelID, isOAuth)
-	payloadBytes, _ := json.Marshal(payload)
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to encode OpenAI test request")
+	}
+	payloadBytes, _, err = enforceOpenAICompatibleNonReasoning(credentialAccount, upstreamTestModelID, payloadBytes, openAICompatibleWireResponses)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to apply provider policy: %s", err.Error()))
+	}
 
 	// Send test_start event once. A task-invalid Agent Identity response may
 	// restart this probe after registering a replacement task.
@@ -1934,7 +1941,14 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	c.Writer.Flush()
 
 	payload := createOpenAIChatCompletionsTestPayload(testModelID, prompt)
-	payloadBytes, _ := json.Marshal(payload)
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to encode Chat Completions test request")
+	}
+	payloadBytes, _, err = enforceOpenAICompatibleNonReasoning(account, testModelID, payloadBytes, openAICompatibleWireChat)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to apply provider policy: %s", err.Error()))
+	}
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过 /v1/chat/completions 测试连接"})
@@ -2034,7 +2048,18 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	if isOAuth {
 		testModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
-	payloadBytes, _ := json.Marshal(createOpenAICompactProbePayload(testModelID, isOAuth))
+	if preset, ok := openai_compat.ResolveCompatibleProviderPreset(credentialAccount.Extra); ok &&
+		preset.ResponsesMode == openai_compat.ResponsesSupportModeForceChatCompletions {
+		return s.sendErrorAndEnd(c, "Managed provider uses Chat Completions and does not support Responses compaction")
+	}
+	payloadBytes, err := json.Marshal(createOpenAICompactProbePayload(testModelID, isOAuth))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to encode OpenAI compact probe request")
+	}
+	payloadBytes, _, err = enforceOpenAICompatibleNonReasoning(credentialAccount, testModelID, payloadBytes, openAICompatibleWireResponses)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to apply provider policy: %s", err.Error()))
+	}
 	if !agentIdentityTaskRecoveryWasTried(ctx) {
 		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 	}
