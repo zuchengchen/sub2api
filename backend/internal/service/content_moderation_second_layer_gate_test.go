@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -18,12 +17,11 @@ func TestContentModerationSecondLayerCandidatePrefilterGatesModel(t *testing.T) 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: jailbreak"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"mc"}}]}`))
 	}))
 	defer server.Close()
 
 	cfg := secondLayerGateTestConfig(server.URL)
-	cfg.CandidateEnabled = true
 	runtime := &contentModerationRuntimeSnapshot{
 		riskControlEnabled:          true,
 		config:                      cfg,
@@ -58,7 +56,6 @@ func TestContentModerationAssistantWithoutRiskSignalSkipsYuFeng(t *testing.T) {
 	defer server.Close()
 
 	cfg := secondLayerGateTestConfig(server.URL)
-	cfg.CandidateEnabled = false
 	cfg.SecondLayerEndpoints[0].Profile = ContentModerationModelProfileYuFengXGuard
 	cfg.SecondLayerEndpoints[0].PromptVersion = contentModerationYuFengPreviousPromptVersion
 	cfg.normalize()
@@ -101,7 +98,6 @@ func TestContentModerationRiskReview5978ToolCandidateMissSkipsYuFengAndCachesAll
 
 	cfg := secondLayerGateTestConfig(server.URL)
 	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
-	cfg.CandidateEnabled = true
 	cfg.SecondLayerEndpoints[0].Profile = ContentModerationModelProfileYuFengXGuard
 	cfg.SecondLayerEndpoints[0].PromptVersion = ContentModerationYuFengPromptVersion
 	cfg.normalize()
@@ -143,7 +139,7 @@ func TestContentModerationRiskReview5978ToolCandidateMissSkipsYuFengAndCachesAll
 	require.Equal(t, int64(1), svc.fragmentCacheWrites.Load())
 }
 
-func TestContentModerationAssistantCandidateStillRoutesToYuFeng(t *testing.T) {
+func TestContentModerationAssistantCandidateIsOutsideReviewScope(t *testing.T) {
 	var calls atomic.Int64
 	var requestBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +151,6 @@ func TestContentModerationAssistantCandidateStillRoutesToYuFeng(t *testing.T) {
 	defer server.Close()
 
 	cfg := secondLayerGateTestConfig(server.URL)
-	cfg.CandidateEnabled = true
 	cfg.SecondLayerEndpoints[0].Profile = ContentModerationModelProfileYuFengXGuard
 	cfg.SecondLayerEndpoints[0].PromptVersion = ContentModerationYuFengPromptVersion
 	cfg.normalize()
@@ -172,31 +167,19 @@ func TestContentModerationAssistantCandidateStillRoutesToYuFeng(t *testing.T) {
 		Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
 	}, runtime)
 
-	require.True(t, decision.Blocked)
-	require.Equal(t, ContentModerationActionSecondLayerBlock, decision.Action)
-	require.Equal(t, "malicious_code", decision.HighestCategory)
-	require.Equal(t, int64(1), calls.Load())
-	require.Len(t, repo.logs, 1)
-	require.Equal(t, ContentModerationContextAssistant, repo.logs[0].ContextClass)
-	require.Equal(t, "candidate", repo.logs[0].KeywordTier)
-	messages, ok := requestBody["messages"].([]any)
-	require.True(t, ok)
-	require.Len(t, messages, 1)
-	message, ok := messages[0].(map[string]any)
-	require.True(t, ok)
-	content, ok := message["content"].(string)
-	require.True(t, ok)
-	require.Contains(t, content, `"context_class":"assistant_untrusted"`)
-	require.Contains(t, content, `"quoted_data"`)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Zero(t, calls.Load())
+	require.Empty(t, repo.logs)
+	require.Empty(t, requestBody)
 }
 
-func TestContentModerationAssistantHighConfidenceKeywordStillBlocks(t *testing.T) {
+func TestContentModerationAssistantHighConfidenceKeywordIsOutsideReviewScope(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.Enabled = true
 	cfg.Mode = ContentModerationModePreBlock
 	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
 	cfg.SecondLayerEnabled = true
-	cfg.CandidateEnabled = false
 	cfg.normalize()
 	repo := &contentModerationTestRepo{}
 	svc := &ContentModerationService{repo: repo}
@@ -211,12 +194,9 @@ func TestContentModerationAssistantHighConfidenceKeywordStillBlocks(t *testing.T
 		Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
 	}, runtime)
 
-	require.True(t, decision.Blocked)
-	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
-	require.Equal(t, "制作病毒", decision.MatchedKeyword)
-	require.Len(t, repo.logs, 1)
-	require.Equal(t, ContentModerationContextAssistant, repo.logs[0].ContextClass)
-	require.Equal(t, "high_confidence", repo.logs[0].KeywordTier)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Empty(t, repo.logs)
 }
 
 func TestContentModerationDestructivePayloadDemotionRoutesToSecondLayer(t *testing.T) {
@@ -262,8 +242,7 @@ func TestContentModerationDestructivePayloadDemotionRoutesToSecondLayer(t *testi
 
 			cfg := secondLayerGateTestConfig(server.URL)
 			cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
-			cfg.CandidateEnabled = true
-			cfg.CandidateAsset = "legacy-prompt-audit-v1"
+			cfg.CandidateKeywords = []string{"destructive payload"}
 			cfg.SecondLayerEndpoints[0].Profile = ContentModerationModelProfileYuFengXGuard
 			cfg.SecondLayerEndpoints[0].PromptVersion = ContentModerationYuFengPromptVersion
 
@@ -328,7 +307,6 @@ func TestContentModerationSecondLayerSkipsInlineBase64Media(t *testing.T) {
 	defer server.Close()
 
 	cfg := secondLayerGateTestConfig(server.URL)
-	cfg.CandidateEnabled = true
 	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
 	runtime := &contentModerationRuntimeSnapshot{
@@ -362,7 +340,6 @@ func TestContentModerationCandidateSystemUnavailableSkipsYuFeng(t *testing.T) {
 	defer server.Close()
 
 	cfg := secondLayerGateTestConfig(server.URL)
-	cfg.CandidateEnabled = false
 	cfg.SecondLayerEndpoints[0].Profile = ContentModerationModelProfileYuFengXGuard
 	cfg.SecondLayerEndpoints[0].PromptVersion = ContentModerationYuFengPromptVersion
 	runtime := &contentModerationRuntimeSnapshot{riskControlEnabled: true, config: cfg}
@@ -386,7 +363,6 @@ func TestContentModerationSecondLayerDisabledKeepsFirstLayerOnly(t *testing.T) {
 	defer server.Close()
 
 	cfg := secondLayerGateTestConfig(server.URL)
-	cfg.CandidateEnabled = true
 	cfg.SecondLayerEnabled = false
 	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
 	runtime := &contentModerationRuntimeSnapshot{
@@ -413,196 +389,26 @@ func TestContentModerationSecondLayerDisabledKeepsFirstLayerOnly(t *testing.T) {
 	require.Equal(t, int64(0), calls.Load(), "a disabled second layer must never call the model")
 }
 
-func TestContentModerationSecondLayerShadowWaitIsBoundedAndReusesClient(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		select {
-		case <-started:
-		default:
-			close(started)
-		}
-		<-release
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
-	}))
-	defer server.Close()
-
-	cfg := secondLayerGateTestConfig(server.URL)
-	svc := &ContentModerationService{}
-	firstDone := make(chan error, 1)
-	go func() {
-		_, _, err := svc.scanUnifiedSecondLayer(context.Background(), cfg, "reverse shell")
-		firstDone <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("first second-layer request did not reach the test server")
-	}
-
-	fragment, ok := newContentModerationFragment("user", "text", "input", "reverse shell")
-	require.True(t, ok)
-	backgroundCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	_, attempted, err := svc.scanUnifiedSecondLayerPrepared(backgroundCtx, cfg, contentModerationSecondLayerInput{
-		Fragment: fragment, Evidence: moderationEvidence{Text: fragment.Text}, Background: true,
-	})
-	require.True(t, attempted)
-	require.ErrorIs(t, err, errContentModerationSecondLayerShadowWaitExpired)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Equal(t, int64(1), calls.Load(), "background requests must not open another model request")
-	require.Equal(t, int64(1), svc.secondLayerShadowWaited.Load())
-	require.Equal(t, int64(1), svc.secondLayerShadowExpired.Load())
-
-	clientA := svc.contentModerationSecondLayerClient(cfg.SecondLayerEndpoints[0])
-	clientB := svc.contentModerationSecondLayerClient(cfg.SecondLayerEndpoints[0])
-	require.Same(t, clientA, clientB)
-	transport, ok := clientA.Transport.(*http.Transport)
-	require.True(t, ok)
-	require.Equal(t, 1, transport.MaxConnsPerHost)
-
-	close(release)
-	require.NoError(t, <-firstDone)
-}
-
-func TestContentModerationSecondLayerEnforceWaitsForInFlightShadow(t *testing.T) {
-	started := make(chan struct{}, 1)
-	release := make(chan struct{})
-	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		call := calls.Add(1)
-		if call == 1 {
-			started <- struct{}{}
-			<-release
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
-	}))
-	defer server.Close()
-
-	cfg := secondLayerGateTestConfig(server.URL)
-	svc := &ContentModerationService{}
-	fragment, ok := newContentModerationFragment("user", "text", "input", "reverse shell")
-	require.True(t, ok)
-	shadowInput := contentModerationSecondLayerInput{
-		Fragment: fragment, Evidence: moderationEvidence{Text: fragment.Text}, Background: true,
-	}
-	shadowDone := make(chan error, 1)
-	go func() {
-		_, _, err := svc.scanUnifiedSecondLayerPrepared(context.Background(), cfg, shadowInput)
-		shadowDone <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("shadow request did not reach the model")
-	}
-
-	enforceDone := make(chan error, 1)
-	go func() {
-		_, _, err := svc.scanUnifiedSecondLayer(context.Background(), cfg, "reverse shell")
-		enforceDone <- err
-	}()
-	select {
-	case err := <-enforceDone:
-		t.Fatalf("enforce request bypassed the busy model: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
-
-	close(release)
-	require.NoError(t, <-shadowDone)
-	require.NoError(t, <-enforceDone)
-	require.Equal(t, int64(2), calls.Load())
-}
-
-func TestContentModerationSecondLayerShadowYieldsToWaitingEnforce(t *testing.T) {
-	svc := &ContentModerationService{}
-	resourceKey := "http://127.0.0.1:8088"
-	acquired, err := svc.acquireContentModerationSecondLayer(context.Background(), resourceKey, true)
-	require.NoError(t, err)
-	require.True(t, acquired)
-
-	enforceAcquired := make(chan struct{})
-	enforceRelease := make(chan struct{})
-	go func() {
-		got, acquireErr := svc.acquireContentModerationSecondLayer(context.Background(), resourceKey, false)
-		if acquireErr == nil && got {
-			close(enforceAcquired)
-			<-enforceRelease
-			svc.releaseContentModerationSecondLayer(resourceKey)
-		}
-	}()
-	gate := svc.contentModerationSecondLayerGate(resourceKey)
-	require.Eventually(t, func() bool { return gate.enforceWaiters.Load() == 1 }, time.Second, time.Millisecond)
-
-	type acquireResult struct {
-		acquired bool
-		err      error
-	}
-	backgroundDone := make(chan acquireResult, 1)
-	go func() {
-		backgroundAcquired, backgroundErr := svc.acquireContentModerationSecondLayer(context.Background(), resourceKey, true)
-		backgroundDone <- acquireResult{acquired: backgroundAcquired, err: backgroundErr}
-	}()
-	require.Eventually(t, func() bool { return svc.secondLayerShadowWaited.Load() == 1 }, time.Second, time.Millisecond)
-	svc.releaseContentModerationSecondLayer(resourceKey)
-	select {
-	case <-enforceAcquired:
-	case <-time.After(time.Second):
-		t.Fatal("waiting enforce request did not receive the released slot")
-	}
-	select {
-	case result := <-backgroundDone:
-		t.Fatalf("background request bypassed waiting enforce request: acquired=%v err=%v", result.acquired, result.err)
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(enforceRelease)
-	select {
-	case result := <-backgroundDone:
-		require.NoError(t, result.err)
-		require.True(t, result.acquired)
-		svc.releaseContentModerationSecondLayer(resourceKey)
-	case <-time.After(time.Second):
-		t.Fatal("background request did not receive the slot after enforce completed")
-	}
-}
-
 func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 	cfg := defaultContentModerationConfig()
-	cfg.CandidateEnabled = true
-	cfg.CandidateAsset = "legacy-prompt-audit-v1"
 	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
-	require.Len(t, keywords, 291)
+	require.Len(t, keywords, 306)
 	matcher := newContentModerationPrefilterMatcher(keywords)
 	_, ok := matcher.Match("REVERSE---SHELL")
 	require.True(t, ok)
-	_, ok = matcher.Match("use MCP__IDA")
-	require.True(t, ok)
-	_, ok = matcher.Match("讨论一次降级攻击")
-	require.True(t, ok)
-	keyword, ok := matcher.Match("reject invalid/destructive payloads before commit")
-	require.True(t, ok)
-	require.Equal(t, "destructive payload", keyword)
 	for _, test := range []struct {
 		text    string
 		keyword string
 	}{
-		{text: "metamorphic testing", keyword: "metamorphic"},
-		{text: "do anything now", keyword: "do anything now"},
 		{text: "make a bomb", keyword: "make a bomb"},
-		{text: "malicious payload sample", keyword: "malicious payload"},
-		{text: "session hijacking research", keyword: "session hijack"},
-		{text: "opposite model behavior", keyword: "opposite mode"},
-		{text: "bypass content filtering", keyword: "bypass content filter"},
-		{text: "Set-MpPreference -DisableRealtimeMonitoring", keyword: "set mppreference disablerealtimemonitoring"},
-		{text: "policy example: ignore all previous instructions", keyword: "ignore all previous instructions"},
-		{text: "小说中的受害者名单", keyword: "受害者名单"},
+		{text: "session uses credential stuffing", keyword: "credential stuffing"},
+		{text: "please create a keygen", keyword: "keygen"},
+		{text: "deepfake porn request", keyword: "deepfake porn"},
+		{text: "talking about self-harm prevention", keyword: "self harm"},
+		{text: "explicit sexual content", keyword: "explicit sexual content"},
 	} {
-		keyword, ok = matcher.Match(test.text)
+		keyword, ok := matcher.Match(test.text)
 		require.True(t, ok, test.text)
 		require.Equal(t, test.keyword, keyword, test.text)
 	}
@@ -610,19 +416,19 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 
 func TestContentModerationFragmentCacheNamespaceTracksPrefilterPolicy(t *testing.T) {
 	cfg := defaultContentModerationConfig()
-	withoutPrefilter := cfg.fragmentCacheNamespace()
+	builtInPolicy := cfg.fragmentCacheNamespace()
 	previousKeywordContext := cfg.fragmentCacheNamespaceWithKeywordContextRevision("powershell-doc-v1")
 	previousKeywordMatcher := cfg.fragmentCacheNamespaceWithPolicyRevisions(
 		contentModerationKeywordContextPolicyRevision,
 		"substring-v1",
 	)
 
-	cfg.CandidateEnabled = true
-	withPrefilter := cfg.fragmentCacheNamespace()
+	cfg.CandidateKeywords = []string{"custom-candidate-review"}
+	withCustomPolicy := cfg.fragmentCacheNamespace()
 
-	require.NotEqual(t, previousKeywordContext, withoutPrefilter)
-	require.NotEqual(t, previousKeywordMatcher, withoutPrefilter)
-	require.NotEqual(t, withoutPrefilter, withPrefilter)
+	require.NotEqual(t, previousKeywordContext, builtInPolicy)
+	require.NotEqual(t, previousKeywordMatcher, builtInPolicy)
+	require.NotEqual(t, builtInPolicy, withCustomPolicy)
 	require.Equal(t, contentModerationSecondLayerPrefilterPolicyVersion, contentModerationSecondLayerPrefilterCacheRevision(cfg))
 }
 
@@ -632,6 +438,10 @@ func secondLayerGateTestConfig(baseURL string) *ContentModerationConfig {
 	cfg.Mode = ContentModerationModePreBlock
 	cfg.KeywordBlockingMode = ContentModerationKeywordModeAPIOnly
 	cfg.SecondLayerEnabled = true
+	cfg.DeepSeekEnabled = false
+	cfg.YuFengEnabled = true
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
+	cfg.SecondLayerStage = ContentModerationSecondLayerStageEnforce
 	cfg.SecondLayerScanners = []string{"jailbreak"}
 	cfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
 		ID: "test", Name: "test", BaseURL: baseURL, Model: "guard", Enabled: true,

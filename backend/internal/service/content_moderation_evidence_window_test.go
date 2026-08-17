@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -315,14 +316,19 @@ func TestContentModerationCandidateEvidenceUniqueOverLimitRemainsTruncated(t *te
 	require.NotContains(t, bundle.Evidence.Text, maliciousTail)
 }
 
-func TestContentModerationCandidateEvidenceMultipleFragmentsCallsModelOnce(t *testing.T) {
+func TestContentModerationCandidateEvidenceReviewsEachFragmentIndependently(t *testing.T) {
 	var calls atomic.Int64
-	var body map[string]any
+	var bodiesMu sync.Mutex
+	bodies := make([]map[string]any, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		bodiesMu.Lock()
+		bodies = append(bodies, body)
+		bodiesMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
 	}))
 	defer server.Close()
 
@@ -342,11 +348,16 @@ func TestContentModerationCandidateEvidenceMultipleFragmentsCallsModelOnce(t *te
 	}, runtime)
 
 	require.True(t, decision.Allowed)
-	require.Equal(t, int64(1), calls.Load())
-	require.Len(t, repo.logs, 1)
-	require.Len(t, repo.logs[0].EvidenceWindows, 2)
-	require.Equal(t, "reverse shell", repo.logs[0].MatchedKeyword)
-	require.NotEmpty(t, body)
+	require.Equal(t, int64(2), calls.Load())
+	require.Len(t, repo.logs, 2)
+	require.Len(t, repo.logs[0].EvidenceWindows, 1)
+	require.Len(t, repo.logs[1].EvidenceWindows, 1)
+	require.ElementsMatch(t, []string{"reverse shell", "session hijack"}, []string{
+		repo.logs[0].MatchedKeyword, repo.logs[1].MatchedKeyword,
+	})
+	bodiesMu.Lock()
+	require.Len(t, bodies, 2)
+	bodiesMu.Unlock()
 }
 
 func TestContentModerationCandidateEvidenceLongRepeatedMatchesIsBoundedAndSingleCall(t *testing.T) {
@@ -354,7 +365,7 @@ func TestContentModerationCandidateEvidenceLongRepeatedMatchesIsBoundedAndSingle
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
 	}))
 	defer server.Close()
 
@@ -410,7 +421,7 @@ func TestContentModerationCandidateAllowlistBudgetStillCallsModelForTailRisk(t *
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
 	}))
 	defer server.Close()
 
@@ -547,28 +558,16 @@ func TestContentModerationCandidateEvidenceKeepsDistantMatchesOnOneLongLine(t *t
 	require.LessOrEqual(t, len([]rune(bundle.Evidence.Text)), contentModerationEvidenceWindowBudgetRunes)
 }
 
-func TestContentModerationCandidateHealthRejectsEmptyPolicyAndKeepsLastKnownGood(t *testing.T) {
-	invalid := defaultContentModerationConfig()
-	invalid.SecondLayerEnabled = true
-	invalid.KeywordBlockingMode = ContentModerationKeywordModeAPIOnly
-	invalid.CandidateEnabled = false
-	invalid.BlockedKeywords = nil
-	invalid.HardBlockPatterns = nil
-	invalid.CandidateKeywords = nil
-	_, err := effectiveContentModerationSecondLayerKeywords(invalid)
-	require.ErrorContains(t, err, "candidate keywords are empty")
-
-	valid := cloneContentModerationConfig(invalid)
-	valid.CandidateKeywords = []string{"reverse shell"}
-	matcher := newContentModerationPrefilterMatcher(valid.CandidateKeywords)
-	svc := &ContentModerationService{}
-	current := &contentModerationRuntimeSnapshot{
-		riskControlEnabled: true, config: valid, secondLayerPrefilterMatcher: matcher,
-	}
-	svc.runtimeSnapshot.Store(current)
-	svc.replaceRuntimeConfig(invalid, []byte(`{"invalid":"candidate-policy"}`))
-	require.Same(t, current, svc.runtimeSnapshot.Load())
-	require.Same(t, matcher, svc.runtimeSnapshot.Load().secondLayerPrefilterMatcher)
+func TestContentModerationBuiltInCandidatePolicyCannotBeEmpty(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.SecondLayerEnabled = true
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeAPIOnly
+	cfg.HardBlockPatterns = nil
+	cfg.CandidateKeywords = nil
+	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	require.NoError(t, err)
+	require.Len(t, keywords, 306)
+	require.NotNil(t, newContentModerationPrefilterMatcher(keywords))
 }
 
 func TestContentModerationHardBlockCacheReplayRebuildsEvidenceWindows(t *testing.T) {
@@ -576,6 +575,8 @@ func TestContentModerationHardBlockCacheReplayRebuildsEvidenceWindows(t *testing
 	cfg.Enabled = true
 	cfg.Mode = ContentModerationModePreBlock
 	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordOnly
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
+	cfg.SecondLayerEnabled = false
 	cfg.BlockedKeywords = []string{"dangerous operation"}
 	cfg.normalize()
 	repo := &contentModerationReplayRepo{}
@@ -604,14 +605,14 @@ func TestContentModerationHardBlockCacheReplayRebuildsEvidenceWindows(t *testing
 	require.Equal(t, "keyword_windows", logs[1].EvidenceMode)
 }
 
-func TestContentModerationShadowReviewIsAsynchronousAndBounded(t *testing.T) {
+func TestContentModerationShadowReviewIsAsynchronous(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		started <- struct{}{}
 		<-release
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: none"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
 	}))
 	defer server.Close()
 
@@ -636,25 +637,12 @@ func TestContentModerationShadowReviewIsAsynchronousAndBounded(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("shadow worker did not start")
 	}
-	require.Equal(t, int64(1), svc.secondLayerShadowQueued.Load())
+	require.Equal(t, int64(1), svc.secondLayerShadowSubmitted.Load())
+	require.Equal(t, int64(1), svc.secondLayerShadowInFlight.Load())
 	close(release)
 	require.Eventually(t, func() bool {
-		return svc.secondLayerShadowDone.Load() == 1 && len(repo.snapshotLogs()) == 1
+		return svc.secondLayerShadowCompleted.Load() == 1 &&
+			svc.secondLayerShadowInFlight.Load() == 0 &&
+			len(repo.snapshotLogs()) == 1
 	}, time.Second, 10*time.Millisecond)
-
-	block := make(chan struct{})
-	blockStarted := make(chan struct{})
-	require.True(t, svc.enqueueContentModerationShadowReview(func() { close(blockStarted); <-block }))
-	select {
-	case <-blockStarted:
-	case <-time.After(time.Second):
-		t.Fatal("bounded queue worker did not start blocking job")
-	}
-	for range contentModerationShadowQueueCapacity {
-		require.True(t, svc.enqueueContentModerationShadowReview(func() {}))
-	}
-	require.False(t, svc.enqueueContentModerationShadowReview(func() {}))
-	require.Equal(t, int64(1), svc.secondLayerShadowDropped.Load())
-	close(block)
-	require.Eventually(t, func() bool { return svc.secondLayerShadowDone.Load() == 66 }, time.Second, 10*time.Millisecond)
 }

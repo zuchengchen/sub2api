@@ -1,0 +1,39 @@
+{
+  "id": "deepseek-v4-flash-audit-v1",
+  "enabled_by_default": true,
+  "source_commit": "fc7c22fcd5ead2525dabffcfd9c6d7a95e9f292f",
+  "policy_version": "deepseek-v4-flash-audit-v1",
+  "default_model": "deepseek-v4-flash",
+  "thinking_type": "disabled",
+  "response_format": "json_object",
+  "confidence_threshold": 0.8,
+  "reason_max_runes": 20,
+  "risk_categories": [
+    "cyber_abuse",
+    "cracking",
+    "security_bypass",
+    "account_abuse",
+    "sexual_deepfake",
+    "doxxing",
+    "violent_threat",
+    "self_harm",
+    "weapons",
+    "sexual_content"
+  ],
+  "system_prompt": {
+    "file": "system-prompt.txt",
+    "sha256": "820613a1927e5c2bf1d1d4eb4f40b24a5bee73c43334e147d87aa6e217308c01"
+  },
+  "layer1": {
+    "file": "layer1-high-confidence-keywords.json",
+    "entries": 103,
+    "source_sha256": "525e4e089ed9fe8352dc3281d10ec6b332db60e46e9b23a014a26c3c03092a9c",
+    "embedded_sha256": "525e4e089ed9fe8352dc3281d10ec6b332db60e46e9b23a014a26c3c03092a9c"
+  },
+  "layer2": {
+    "file": "layer2-candidate-keywords.json",
+    "entries": 306,
+    "source_sha256": "2dd5aced91fd799a0efe961c3d33a8fa36f29be226c17f4d838249366b7fb8c5",
+    "embedded_sha256": "2dd5aced91fd799a0efe961c3d33a8fa36f29be226c17f4d838249366b7fb8c5"
+  }
+}

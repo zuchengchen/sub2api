@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "report_type": "deepseek_moderation_release_check",
+  "run_id": "fixture-real-failure",
+  "check_id": "validator-sensitivity",
+  "git_commit": "0000000000000000000000000000000000000001",
+  "started_at": "2026-08-17T00:00:00Z",
+  "finished_at": "2026-08-17T00:00:01Z",
+  "start_epoch": 1786924800,
+  "finish_epoch": 1786924801,
+  "config_summary": {
+    "model": "deepseek-v4-flash",
+    "thinking": "disabled",
+    "response_format": "json_object",
+    "threshold": 0.8,
+    "per_channel_timeout_ms": 3000,
+    "total_timeout_ms": 10000,
+    "deepseek_enabled": true,
+    "yufeng_enabled": false,
+    "layer1_stage": "shadow",
+    "layer2_stage": "shadow"
+  },
+  "actual_count": 1,
+  "status": "failed",
+  "exit_code": 1,
+  "tests": [
+    {
+      "package": "fixture",
+      "name": "unsafe_response_was_accepted",
+      "status": "failed",
+      "diagnostic": "strict response validation assertion failed"
+    }
+  ]
+}

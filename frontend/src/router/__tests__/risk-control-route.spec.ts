@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
 const authStore = vi.hoisted(() => ({
@@ -40,5 +43,16 @@ describe('unified risk-control routes', () => {
     expect(router.getRoutes().some((route) => route.path === '/admin/prompt-audit')).toBe(false)
     expect(router.getRoutes().some((route) => route.name === 'AdminPromptAudit')).toBe(false)
     expect(router.resolve('/admin/prompt-audit').name).toBe('NotFound')
+  })
+
+  it('exposes Risk Control as a direct sidebar item', () => {
+    const sidebarPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../components/layout/AppSidebar.vue')
+    const source = readFileSync(sidebarPath, 'utf8')
+    const riskItem = source.match(
+      /\{\s*path: '\/admin\/risk-control',[\s\S]*?featureFlag: flagRiskControl,[\s\S]*?\}/
+    )?.[0]
+
+    expect(riskItem).toContain("label: t('nav.riskControl')")
+    expect(riskItem).not.toContain('children:')
   })
 })

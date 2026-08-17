@@ -133,7 +133,8 @@ func runtimeCacheTestConfig(t *testing.T, keywords ...string) string {
 	cfg.Enabled = true
 	cfg.Mode = ContentModerationModePreBlock
 	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordOnly
-	cfg.BlockedKeywords = keywords
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
+	cfg.HardBlockPatterns = keywords
 	raw, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	return string(raw)
@@ -148,10 +149,12 @@ func runtimeCacheTestService(repo *contentModerationRuntimeSettingRepo, ttl time
 }
 
 func runtimeCacheTestInput(text string) ContentModerationCheckInput {
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-risk-cache-test")
 	return ContentModerationCheckInput{
 		Protocol: ContentModerationProtocolOpenAIChat,
 		Model:    "risk-cache-test",
 		Body:     []byte(`{"messages":[{"role":"user","content":"` + text + `"}]}`),
+		Scope:    &scope,
 	}
 }
 
@@ -173,7 +176,7 @@ func TestContentModerationRuntimeSnapshotCachesSettings(t *testing.T) {
 	require.Equal(t, 1, getMultiple)
 }
 
-func TestContentModerationRuntimeSnapshotColdStartKeepsLayerOneWhenCandidatesInvalid(t *testing.T) {
+func TestContentModerationRuntimeSnapshotColdStartBuildsBothKeywordLayers(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.Enabled = true
 	cfg.Mode = ContentModerationModePreBlock
@@ -181,8 +184,8 @@ func TestContentModerationRuntimeSnapshotColdStartKeepsLayerOneWhenCandidatesInv
 	cfg.HardBlockPatterns = []string{"blocked"}
 	cfg.BlockedKeywords = nil
 	cfg.CandidateKeywords = nil
-	cfg.CandidateEnabled = false
 	cfg.SecondLayerEnabled = true
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
 	raw, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	repo := &contentModerationRuntimeSettingRepo{values: map[string]string{
@@ -202,33 +205,7 @@ func TestContentModerationRuntimeSnapshotColdStartKeepsLayerOneWhenCandidatesInv
 	require.True(t, decision.Blocked)
 	require.NotNil(t, snapshot)
 	require.NotNil(t, snapshot.keywordMatcher)
-	require.Nil(t, snapshot.secondLayerPrefilterMatcher)
-}
-
-func TestContentModerationRuntimeSnapshotColdStartKeepsLegacyLayerOneWhenAssetInvalid(t *testing.T) {
-	cfg := defaultContentModerationConfig()
-	cfg.Enabled = true
-	cfg.Mode = ContentModerationModePreBlock
-	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
-	cfg.BlockedKeywords = []string{"blocked"}
-	cfg.CandidateEnabled = true
-	cfg.CandidateAsset = "missing-candidate-asset"
-	cfg.SecondLayerEnabled = true
-	raw, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	repo := &contentModerationRuntimeSettingRepo{values: map[string]string{
-		SettingKeyRiskControlEnabled:      "true",
-		SettingKeyContentModerationConfig: string(raw),
-	}}
-	svc := runtimeCacheTestService(repo, time.Hour)
-
-	snapshot, err := svc.loadRuntimeSnapshot(context.Background())
-	require.NoError(t, err)
-	require.NotNil(t, snapshot.keywordMatcher)
-	require.Nil(t, snapshot.secondLayerPrefilterMatcher)
-	keyword, matched := snapshot.keywordMatcher.Match("blocked")
-	require.True(t, matched)
-	require.Equal(t, "blocked", keyword)
+	require.NotNil(t, snapshot.secondLayerPrefilterMatcher)
 }
 
 func TestContentModerationRuntimeSnapshotUpdateConfigIsImmediate(t *testing.T) {
@@ -244,7 +221,7 @@ func TestContentModerationRuntimeSnapshotUpdateConfigIsImmediate(t *testing.T) {
 
 	keywords := []string{"new-keyword"}
 	_, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-		BlockedKeywords: &keywords,
+		Layer1Keywords: &keywords,
 	})
 	require.NoError(t, err)
 
@@ -294,7 +271,7 @@ func TestContentModerationRuntimeSnapshotUpdateWinsOverInitialLoad(t *testing.T)
 	go func() {
 		keywords := []string{"new-keyword"}
 		_, updateErr := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-			BlockedKeywords: &keywords,
+			Layer1Keywords: &keywords,
 		})
 		updateDone <- updateErr
 	}()
@@ -447,7 +424,7 @@ func TestContentModerationRuntimeSnapshotUpdateWinsOverInFlightRefresh(t *testin
 	go func() {
 		keywords := []string{"new-keyword"}
 		_, updateErr := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-			BlockedKeywords: &keywords,
+			Layer1Keywords: &keywords,
 		})
 		updateDone <- updateErr
 	}()
@@ -499,7 +476,7 @@ func TestContentModerationRuntimeSnapshotConcurrentReadAndReplace(t *testing.T) 
 	for i := 1; i <= 20; i++ {
 		keywords := []string{"blocked-" + time.Duration(i).String()}
 		_, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-			BlockedKeywords: &keywords,
+			Layer1Keywords: &keywords,
 		})
 		require.NoError(t, err)
 	}

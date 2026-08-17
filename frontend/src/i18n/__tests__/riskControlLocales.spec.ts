@@ -4,26 +4,41 @@ import en from '../locales/en'
 import zh from '../locales/zh'
 
 describe('risk control locale copy', () => {
-  it('keeps synchronous counters separate from async record processing', () => {
-    expect(zh.admin.riskControl.preBlockSyncHint).toContain('不包含异步写记录任务')
-    expect(en.admin.riskControl.preBlockSyncHint).toContain('excluding async record tasks')
+  it('uses one Risk Control name and matching settings copy', () => {
+    expect(zh.nav.riskControl).toBe('风控中心')
+    expect(en.nav.riskControl).toBe('Risk Control')
+    expect(zh.admin.riskControl.saveConfig).toBe('保存风控配置')
+    expect(en.admin.riskControl.saveConfig).toBe('Save Risk Settings')
   })
 
-  it('summarizes only fields exposed by the synchronous audit-key status', () => {
-    expect(zh.admin.riskControl.preBlockAPIKeyLoadSummary).toBe('同步并发 {active} / 可用 Key {available}，累计 {total} 次')
-    expect(en.admin.riskControl.preBlockAPIKeyLoadSummary).toBe('Sync active {active} / usable keys {available}, {total} total')
+  it('describes ordered failover and independent Shadow stages', () => {
+    expect(zh.admin.riskControl.deepseekChannelsSummary).toContain('按优先级顺序')
+    expect(zh.admin.riskControl.layerStagesSummary).toContain('Shadow')
+    expect(en.admin.riskControl.deepseekChannelsSummary).toContain('priority order')
+    expect(en.admin.riskControl.layerStagesSummary).toContain('Shadow')
   })
 
-  it('does not describe pre-block audit key polling as bypassing the worker pool', () => {
-    expect(zh.admin.riskControl.preBlockAPIKeyLoadHint).toBe('同步前置拦截直接轮询可用审核 Key。')
-    expect(zh.admin.riskControl.preBlockAPIKeyLoadHint).not.toContain('Worker 池')
-    expect(en.admin.riskControl.preBlockAPIKeyLoadHint).not.toContain('worker pool')
+  it('labels API keys as encrypted and never echoed', () => {
+    expect(zh.admin.riskControl.channelKeyStored).toContain('已加密保存')
+    expect(zh.admin.riskControl.channelKeyWillReplace).toContain('不会回显明文')
+    expect(en.admin.riskControl.channelKeyStored).toContain('Encrypted')
+    expect(en.admin.riskControl.channelKeyWillReplace).toContain('never echoed')
   })
 
-  it('labels stored windows as the evidence actually sent for moderation', () => {
-    expect(zh.admin.riskControl.inputDetailContent).toBe('实际送审证据')
-    expect(zh.admin.riskControl.evidenceMatches).toBe('全部命中词')
-    expect(en.admin.riskControl.inputDetailContent).toBe('Evidence Sent for Review')
-    expect(en.admin.riskControl.evidenceMatches).toBe('All matched keywords')
+  it('covers every expanded risk category in both locales', () => {
+    const expected = ['cyber', 'accountAbuse', 'deepfakeDoxThreat', 'selfHarm', 'weapons', 'sexualContent']
+    expect(Object.keys(zh.admin.riskControl.policyCategories)).toEqual(expected)
+    expect(Object.keys(en.admin.riskControl.policyCategories)).toEqual(expected)
+  })
+
+  it('labels every production Layer 2 dedup cache counter', () => {
+    expect(zh.admin.riskControl.overview.secondLayerCache).toContain('去重缓存')
+    expect(en.admin.riskControl.overview.secondLayerCache).toContain('Dedup Cache')
+    expect(zh.admin.riskControl.overview.cacheHits).toContain('{count}')
+    expect(en.admin.riskControl.overview.cacheHits).toContain('{count}')
+    for (const token of ['{misses}', '{writes}', '{errors}']) {
+      expect(zh.admin.riskControl.overview.cacheActivity).toContain(token)
+      expect(en.admin.riskControl.overview.cacheActivity).toContain(token)
+    }
   })
 })

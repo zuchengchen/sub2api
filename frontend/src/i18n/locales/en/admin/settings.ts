@@ -52,7 +52,7 @@ export default {
         riskControl: {
           title: 'Risk Control',
           description: 'Enable the content moderation menu and gateway audit entry point. Disabled by default.',
-          configureLink: 'Configure content moderation in Risk Control',
+          configureLink: 'Configure in Risk Control',
           enabled: 'Enable Risk Control',
           enabledHint: 'When off, the admin sidebar entry is hidden and gateway moderation is skipped.',
           cyberSessionBlock: 'Cyber session auto-block',

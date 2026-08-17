@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	ContentModerationModelProfileQwen         = "qwen_guard"
 	ContentModerationModelProfileYuFengXGuard = "yufeng_xguard"
 	ContentModerationFirstLayerStageEnforce   = "enforce"
 	ContentModerationFirstLayerStageShadow    = "shadow"
@@ -49,12 +48,10 @@ const (
 
 func normalizeContentModerationModelProfile(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "qwen", "qwen_guard", "qwen-guard", "qwen3guard":
-		return ContentModerationModelProfileQwen
-	case "yufeng", "yufeng_xguard", "yufeng-xguard", "xguard":
+	case "", "yufeng", "yufeng_xguard", "yufeng-xguard", "xguard":
 		return ContentModerationModelProfileYuFengXGuard
 	default:
-		return ContentModerationModelProfileQwen
+		return strings.ToLower(strings.TrimSpace(value))
 	}
 }
 

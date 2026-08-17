@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -130,6 +131,64 @@ func ExtractContentModerationFragments(protocol string, body []byte) []ContentMo
 	return fragments
 }
 
+// SelectContentModerationReviewFragments keeps the current user turn and the
+// actual tool calls/results that belong to it. Prompt history and tool schemas
+// are useful model context, but they are not authored content for this gate.
+func SelectContentModerationReviewFragments(fragments []ContentModerationFragment) []ContentModerationFragment {
+	type messageUnit struct {
+		root  string
+		index int
+		key   string
+		ok    bool
+	}
+	unitFor := func(fragment ContentModerationFragment) messageUnit {
+		parts := strings.Split(strings.TrimSpace(fragment.Path), ".")
+		if len(parts) >= 2 {
+			root := strings.ToLower(parts[0])
+			if root == "messages" || root == "input" || root == "contents" {
+				index, err := strconv.Atoi(parts[1])
+				if err == nil && index >= 0 {
+					return messageUnit{root: root, index: index, key: root + "." + parts[1], ok: true}
+				}
+			}
+		}
+		return messageUnit{root: "top", key: "top", ok: true}
+	}
+
+	latestUser := messageUnit{}
+	hasUser := false
+	for _, fragment := range fragments {
+		if fragment.Role != "user" || fragment.Kind == "url" {
+			continue
+		}
+		latestUser = unitFor(fragment)
+		hasUser = true
+	}
+
+	out := make([]ContentModerationFragment, 0, len(fragments))
+	for _, fragment := range fragments {
+		if fragment.Kind == "url" || fragment.Role == "system" || fragment.Role == "developer" || fragment.Role == "assistant" {
+			continue
+		}
+		unit := unitFor(fragment)
+		switch fragment.Role {
+		case "user":
+			if hasUser && unit.key == latestUser.key {
+				out = append(out, fragment)
+			}
+		case "tool":
+			root := strings.ToLower(strings.SplitN(strings.TrimSpace(fragment.Path), ".", 2)[0])
+			if root == "tools" || root == "tool_choice" {
+				continue
+			}
+			if !hasUser || (unit.root == latestUser.root && unit.index >= latestUser.index) || latestUser.root == "top" {
+				out = append(out, fragment)
+			}
+		}
+	}
+	return out
+}
+
 func collectUnifiedModerationMessages(messages gjson.Result, path string, out *[]ContentModerationFragment) {
 	if !messages.IsArray() {
 		return
@@ -143,6 +202,11 @@ func collectUnifiedModerationMessages(messages gjson.Result, path string, out *[
 		messagePath := path + "." + itoa(index)
 		if content := message.Get("content"); content.Exists() {
 			collectUnifiedModerationValue(content, role, messagePath+".content", "text", out)
+		}
+		for _, field := range []string{"tool_calls", "function_call", "function_calls"} {
+			if value := message.Get(field); value.Exists() {
+				collectUnifiedModerationValue(value, "tool", messagePath+"."+field, "tool", out)
+			}
 		}
 		for _, field := range []string{"text", "name", "filename", "file_name", "url", "uri"} {
 			if value := message.Get(field); value.Exists() {
@@ -220,15 +284,17 @@ func collectUnifiedModerationValue(value gjson.Result, role, path, kind string, 
 				collectUnifiedModerationValue(child, objectRole, path+"."+field, fieldKind(field), out)
 			}
 		}
-		if typeName == "tool" || typeName == "function" || strings.Contains(typeName, "tool_") || strings.Contains(typeName, "function_") {
+		if objectRole == "tool" || typeName == "tool" || typeName == "function" || strings.Contains(typeName, "tool_") || strings.Contains(typeName, "function_") {
 			if child := value.Get("name"); child.Exists() {
 				collectUnifiedModerationValue(child, "tool", path+".name", "tool", out)
 			}
 		}
-		for _, field := range []string{"content", "parts", "input", "output", "arguments", "source", "image_url", "file", "files", "attachments", "file_data", "fileData"} {
+		for _, field := range []string{"content", "parts", "input", "output", "arguments", "function", "source", "image_url", "file", "files", "attachments", "file_data", "fileData"} {
 			if child := value.Get(field); child.Exists() {
 				childKind := kind
-				if field == "file" || field == "files" || field == "attachments" || field == "file_data" || field == "fileData" {
+				if strings.Contains(strings.ToLower(field), "url") || strings.Contains(strings.ToLower(field), "uri") {
+					childKind = "url"
+				} else if field == "file" || field == "files" || field == "attachments" || field == "file_data" || field == "fileData" {
 					childKind = "file"
 				}
 				collectUnifiedModerationValue(child, objectRole, path+"."+field, childKind, out)
