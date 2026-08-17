@@ -52,6 +52,7 @@ export interface UpdateDeepSeekModerationChannel {
 export interface TestDeepSeekChannelResponse {
   channel_id: string
   reachable: boolean
+  /** @deprecated Compatibility alias for reachable. */
   health_valid: boolean
   latency_ms: number
   http_status?: number

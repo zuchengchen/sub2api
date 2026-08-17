@@ -22,6 +22,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	contentmoderationassets "github.com/Wei-Shaw/sub2api/resources/content-moderation"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -753,6 +754,7 @@ type ContentModerationService struct {
 	credentialCipher           *ContentModerationCredentialCipher
 	deepSeekChannelStates      sync.Map
 	deepSeekHTTPClients        sync.Map
+	deepSeekProbeFlights       singleflight.Group
 	deepSeekSelectedCount      atomic.Int64
 	deepSeekFailoverCount      atomic.Int64
 	deepSeekUnavailableCount   atomic.Int64

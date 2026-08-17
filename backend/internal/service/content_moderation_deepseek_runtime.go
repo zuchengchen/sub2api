@@ -650,6 +650,62 @@ func (s *ContentModerationService) probeDeepSeekChannelConnectivity(
 	ctx context.Context,
 	channel ContentModerationDeepSeekChannel,
 ) *TestContentModerationDeepSeekChannelResult {
+	if err := ctx.Err(); err != nil {
+		return contentModerationDeepSeekCanceledConnectivityResult(channel.ID, err)
+	}
+	probeTimeout := time.Duration(channel.TimeoutMS) * time.Millisecond
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < probeTimeout {
+			probeTimeout = remaining
+		}
+	}
+	if probeTimeout <= 0 {
+		return contentModerationDeepSeekCanceledConnectivityResult(channel.ID, context.DeadlineExceeded)
+	}
+	digest := contentModerationDeepSeekConnectivityDigest(channel)
+	resultCh := s.deepSeekProbeFlights.DoChan(digest, func() (any, error) {
+		probeCtx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		defer cancel()
+		return s.probeDeepSeekChannelConnectivityOnce(probeCtx, channel), nil
+	})
+	select {
+	case <-ctx.Done():
+		return contentModerationDeepSeekCanceledConnectivityResult(channel.ID, ctx.Err())
+	case shared := <-resultCh:
+		if shared.Err != nil {
+			return &TestContentModerationDeepSeekChannelResult{
+				ChannelID: channel.ID,
+				Error:     trimRunes(redactContentModerationSecrets(shared.Err.Error()), 240),
+			}
+		}
+		result, ok := shared.Val.(*TestContentModerationDeepSeekChannelResult)
+		if !ok || result == nil {
+			return &TestContentModerationDeepSeekChannelResult{
+				ChannelID: channel.ID,
+				Error:     "invalid shared connectivity result",
+			}
+		}
+		return result
+	}
+}
+
+func contentModerationDeepSeekCanceledConnectivityResult(
+	channelID string,
+	err error,
+) *TestContentModerationDeepSeekChannelResult {
+	if err == nil {
+		err = context.Canceled
+	}
+	return &TestContentModerationDeepSeekChannelResult{
+		ChannelID: channelID,
+		Error:     trimRunes(redactContentModerationSecrets(err.Error()), 240),
+	}
+}
+
+func (s *ContentModerationService) probeDeepSeekChannelConnectivityOnce(
+	ctx context.Context,
+	channel ContentModerationDeepSeekChannel,
+) *TestContentModerationDeepSeekChannelResult {
 	started := time.Now()
 	state := s.deepSeekChannelState(channel)
 	connectivityDigest := contentModerationDeepSeekConnectivityDigest(channel)
@@ -721,6 +777,38 @@ func (s *ContentModerationService) hasReachableDeepSeekChannel(cfg *ContentModer
 		}
 	}
 	return false
+}
+
+func (s *ContentModerationService) contentModerationConfigWithReachableDeepSeekFirst(
+	cfg *ContentModerationConfig,
+	now time.Time,
+) *ContentModerationConfig {
+	if cfg == nil || !cfg.DeepSeekEnabled {
+		return cfg
+	}
+	channels := normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels)
+	preferredIndex := -1
+	for index, channel := range channels {
+		if !channel.Enabled || strings.TrimSpace(channel.APIKey) == "" {
+			continue
+		}
+		health, _, _, _, _, _, _ := s.deepSeekChannelState(channel).snapshot(now)
+		if health == "reachable" {
+			preferredIndex = index
+			break
+		}
+	}
+	if preferredIndex <= 0 {
+		return cfg
+	}
+	preferred := channels[preferredIndex]
+	channels = append([]ContentModerationDeepSeekChannel{preferred}, append(channels[:preferredIndex], channels[preferredIndex+1:]...)...)
+	for index := range channels {
+		channels[index].Order = index
+	}
+	clone := cloneContentModerationConfig(cfg)
+	clone.DeepSeekChannels = channels
+	return clone
 }
 
 func (s *ContentModerationService) ensureContentModerationSecondLayerEnforceReadiness(
