@@ -87,6 +87,10 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 			}
 		}
 	}
+	chatBody, _, err = enforceOpenAICompatibleNonReasoning(account, upstreamModel, chatBody, openAICompatibleWireChat)
+	if err != nil {
+		return nil, err
+	}
 	// Unlike forwardResponsesViaRawChatCompletions, applyOpenAIFastPolicyToBody
 	// is intentionally skipped: Anthropic Messages bodies carry no service_tier,
 	// so the converted Chat Completions body never contains one and the policy

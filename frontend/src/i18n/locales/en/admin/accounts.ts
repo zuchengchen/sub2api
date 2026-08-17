@@ -509,6 +509,14 @@ export default {
       openai: {
         baseUrlHint: 'Leave default for official OpenAI API',
         apiKeyHint: 'Your OpenAI API Key',
+        providerPreset: {
+          label: 'OpenAI-compatible provider',
+          custom: 'Custom',
+          mimo: 'Xiaomi MiMo',
+          zhipuGlm: 'Zhipu GLM',
+          alibabaQwen: 'Alibaba Qwen',
+          forceNonReasoning: 'Non-reasoning mode is enforced by this provider preset'
+        },
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',

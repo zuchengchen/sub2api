@@ -28,12 +28,19 @@
 
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
+        <OpenAICompatibleProviderPresetSelector
+          v-if="account.platform === 'openai'"
+          :model-value="openAICompatibleProviderSelection"
+          @update:model-value="selectOpenAICompatibleProvider"
+        />
         <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="editBaseUrl"
             type="text"
             class="input"
+            data-testid="api-key-base-url"
+            :disabled="isOpenAICompatibleProviderManaged"
             :placeholder="
               account.platform === 'openai'
                 ? 'https://api.openai.com'
@@ -97,8 +104,9 @@
               <button
                 type="button"
                 @click="modelRestrictionMode = 'whitelist'"
+                :disabled="isOpenAICompatibleProviderManaged"
                 :class="[
-                  'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+                  'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60',
                   modelRestrictionMode === 'whitelist'
                     ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
@@ -122,8 +130,9 @@
               <button
                 type="button"
                 @click="modelRestrictionMode = 'mapping'"
+                :disabled="isOpenAICompatibleProviderManaged"
                 :class="[
-                  'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+                  'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60',
                   modelRestrictionMode === 'mapping'
                     ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
@@ -189,6 +198,7 @@
                   v-model="mapping.from"
                   type="text"
                   class="input flex-1"
+                  :disabled="isOpenAICompatibleProviderManaged"
                   :placeholder="t('admin.accounts.requestModel')"
                 />
                 <svg
@@ -208,9 +218,11 @@
                   v-model="mapping.to"
                   type="text"
                   class="input flex-1"
+                  :disabled="isOpenAICompatibleProviderManaged"
                   :placeholder="t('admin.accounts.actualModel')"
                 />
                 <button
+                  v-if="!isOpenAICompatibleProviderManaged"
                   type="button"
                   @click="removeModelMapping(index)"
                   class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
@@ -228,6 +240,7 @@
             </div>
 
             <button
+              v-if="!isOpenAICompatibleProviderManaged"
               type="button"
               @click="addModelMapping"
               class="mb-3 w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300"
@@ -249,7 +262,7 @@
             </button>
 
               <!-- Quick Add Buttons -->
-              <div class="flex flex-wrap gap-2">
+              <div v-if="!isOpenAICompatibleProviderManaged" class="flex flex-wrap gap-2">
                 <button
                   v-for="preset in presetMappings"
                   :key="preset.label"
@@ -1657,7 +1670,12 @@
             </p>
           </div>
           <div class="w-52">
-            <Select v-model="openaiResponsesWebSocketV2Mode" data-testid="edit-openai-ws-mode-select" :options="openAIWSModeOptions" />
+            <Select
+              v-model="openaiResponsesWebSocketV2Mode"
+              data-testid="edit-openai-ws-mode-select"
+              :options="openAIWSModeOptions"
+              :disabled="isOpenAICompatibleProviderManaged"
+            />
           </div>
         </div>
       </div>
@@ -1678,7 +1696,7 @@
             <Select
               v-model="openAIResponsesMode"
               :options="openAIResponsesModeOptions"
-              :disabled="!openAITextGenerationCapabilityEnabled"
+              :disabled="!openAITextGenerationCapabilityEnabled || isOpenAICompatibleProviderManaged"
               data-testid="openai-responses-mode-select"
             />
           </div>
@@ -1702,13 +1720,17 @@
             <label
               v-for="option in openAIEndpointCapabilityOptions"
               :key="option.value"
-              class="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-600"
+              :class="[
+                'flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-600',
+                isOpenAICompatibleProviderManaged ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+              ]"
             >
               <input
                 type="checkbox"
                 class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
                 :data-testid="`openai-endpoint-capability-${option.value}`"
                 :checked="openAIEndpointCapabilities.includes(option.value)"
+                :disabled="isOpenAICompatibleProviderManaged"
                 @change="toggleOpenAIEndpointCapability(option.value, $event)"
               />
               <span class="text-gray-700 dark:text-gray-200">{{ option.label }}</span>
@@ -2739,6 +2761,14 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
+import OpenAICompatibleProviderPresetSelector from '@/components/account/OpenAICompatibleProviderPresetSelector.vue'
+import {
+  applyOpenAICompatibleProviderSelection,
+  buildOpenAICompatibleProviderModelMappings,
+  getOpenAICompatibleProviderPreset,
+  readOpenAICompatibleProviderSelection,
+  type OpenAICompatibleProviderSelection
+} from '@/components/account/openAICompatibleProviderPresets'
 import {
   applyAntigravityProjectID,
   applyHeaderOverride,
@@ -2975,6 +3005,13 @@ const editPlanType = ref<string>('')
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
+const openAICompatibleProviderSelection = ref<OpenAICompatibleProviderSelection>('custom')
+const isOpenAICompatibleProviderManaged = computed(
+  () =>
+    props.account?.platform === 'openai' &&
+    props.account.type === 'apikey' &&
+    openAICompatibleProviderSelection.value !== 'custom'
+)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
@@ -3195,6 +3232,20 @@ const applyOpenAIEndpointCapabilities = (credentials: Record<string, unknown>) =
     return
   }
   credentials.openai_capabilities = capabilities
+}
+
+const selectOpenAICompatibleProvider = (selection: OpenAICompatibleProviderSelection) => {
+  openAICompatibleProviderSelection.value = selection
+  const preset = getOpenAICompatibleProviderPreset(selection)
+  if (!preset) return
+
+  editBaseUrl.value = preset.baseUrl
+  modelRestrictionMode.value = 'mapping'
+  allowedModels.value = []
+  modelMappings.value = buildOpenAICompatibleProviderModelMappings(preset)
+  openAIResponsesMode.value = preset.responsesMode
+  openAIEndpointCapabilities.value = [...preset.endpointCapabilities]
+  openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
 }
 const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
   if (mode === 'force_responses' || mode === 'force_chat_completions') {
@@ -3435,6 +3486,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
+  openAICompatibleProviderSelection.value = readOpenAICompatibleProviderSelection(extra)
   openAICompactModelMappings.value = []
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -3634,6 +3686,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
     // Load model mappings and detect mode
     loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
+    if (newAccount.platform === 'openai' && isOpenAICompatibleProviderManaged.value) {
+      selectOpenAICompatibleProvider(openAICompatibleProviderSelection.value)
+    }
 
     // Load pool mode
     poolModeEnabled.value = credentials.pool_mode === true
@@ -4782,35 +4837,39 @@ const handleSubmit = async () => {
       } else {
         newExtra.openai_compact_mode = openAICompactMode.value
       }
-		if (props.account.type === 'apikey') {
+      if (props.account.type === 'apikey') {
         if (!openAITextGenerationCapabilityEnabled.value || openAIResponsesMode.value === 'auto') {
           delete newExtra.openai_responses_mode
         } else {
           newExtra.openai_responses_mode = openAIResponsesMode.value
         }
-		}
-		if (autoPause5hThreshold.value != null && autoPause5hThreshold.value > 0) {
-			newExtra.auto_pause_5h_threshold = autoPause5hThreshold.value / 100
-		} else {
-			delete newExtra.auto_pause_5h_threshold
-		}
-		if (autoPause7dThreshold.value != null && autoPause7dThreshold.value > 0) {
-			newExtra.auto_pause_7d_threshold = autoPause7dThreshold.value / 100
-		} else {
-			delete newExtra.auto_pause_7d_threshold
-		}
-		if (autoPause5hDisabled.value) {
-			newExtra.auto_pause_5h_disabled = true
-		} else {
-			delete newExtra.auto_pause_5h_disabled
-		}
-		if (autoPause7dDisabled.value) {
-			newExtra.auto_pause_7d_disabled = true
-		} else {
-			delete newExtra.auto_pause_7d_disabled
-		}
+      }
+      applyOpenAICompatibleProviderSelection(
+        newExtra,
+        props.account.type === 'apikey' ? openAICompatibleProviderSelection.value : 'custom'
+      )
+      if (autoPause5hThreshold.value != null && autoPause5hThreshold.value > 0) {
+        newExtra.auto_pause_5h_threshold = autoPause5hThreshold.value / 100
+      } else {
+        delete newExtra.auto_pause_5h_threshold
+      }
+      if (autoPause7dThreshold.value != null && autoPause7dThreshold.value > 0) {
+        newExtra.auto_pause_7d_threshold = autoPause7dThreshold.value / 100
+      } else {
+        delete newExtra.auto_pause_7d_threshold
+      }
+      if (autoPause5hDisabled.value) {
+        newExtra.auto_pause_5h_disabled = true
+      } else {
+        delete newExtra.auto_pause_5h_disabled
+      }
+      if (autoPause7dDisabled.value) {
+        newExtra.auto_pause_7d_disabled = true
+      } else {
+        delete newExtra.auto_pause_7d_disabled
+      }
 
-		delete newExtra.codex_image_generation_bridge_enabled
+      delete newExtra.codex_image_generation_bridge_enabled
       switch (codexImageToolMode.value) {
         case 'enabled':
         case 'disabled':

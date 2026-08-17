@@ -257,6 +257,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			}
 		}
 	}
+	responsesBody, _, err = enforceOpenAICompatibleNonReasoning(account, upstreamModel, responsesBody, openAICompatibleWireResponses)
+	if err != nil {
+		return nil, err
+	}
 
 	// 4c. Apply OpenAI fast policy (may filter service_tier or block the request).
 	// Mirrors the Claude anthropic-beta "fast-mode-2026-02-01" filter, but keyed

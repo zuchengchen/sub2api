@@ -520,6 +520,14 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 			expectedCacheRead: floatPtr(0.24e-6),
 		},
 		{
+			name:              "mimo v2.5",
+			model:             "mimo-v2.5",
+			expectedInput:     0.14e-6,
+			expectedOutput:    floatPtr(0.28e-6),
+			expectedCacheRead: floatPtr(0.0028e-6),
+		},
+		{name: "mimo v2.5 pro does not inherit base price", model: "mimo-v2.5-pro", expectNilPricing: true},
+		{
 			name:              "glm 4.7",
 			model:             "glm-4.7",
 			expectedInput:     0.6e-6,
@@ -603,6 +611,23 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 			expectedOutput:    floatPtr(1.1e-6),
 			expectedCacheRead: floatPtr(0.03e-6),
 		},
+
+		// ---- 阿里云百炼 Qwen ----
+		{
+			name:              "qwen 3.7 flash base tier",
+			model:             "qwen3.7-flash",
+			expectedInput:     0.028e-6,
+			expectedOutput:    floatPtr(0.112e-6),
+			expectedCacheRead: floatPtr(0.0056e-6),
+		},
+		{
+			name:              "qwen 3.7 flash fixed snapshot",
+			model:             "qwen3.7-flash-2026-07-15",
+			expectedInput:     0.028e-6,
+			expectedOutput:    floatPtr(0.112e-6),
+			expectedCacheRead: floatPtr(0.0056e-6),
+		},
+		{name: "qwen unknown flash suffix does not inherit price", model: "qwen3.7-flash-pro", expectNilPricing: true},
 
 		// ---- 月之暗面 Kimi ----
 		{

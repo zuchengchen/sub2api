@@ -16,6 +16,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
 
@@ -312,6 +313,15 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
+	input.Credentials, accountExtra, err = normalizeOpenAICompatibleProviderConfig(
+		input.Platform,
+		input.Type,
+		input.Credentials,
+		accountExtra,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("normalize duplicate provider preset: %w", err)
+	}
 	duplicate, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
 		return nil, err
@@ -497,6 +507,15 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 	// Never persist ephemeral SSO/password secrets after OAuth conversion.
 	input.Credentials = SanitizeStoredCredentials(input.Platform, input.Credentials)
+	input.Credentials, accountExtra, err = normalizeOpenAICompatibleProviderConfig(
+		input.Platform,
+		input.Type,
+		input.Credentials,
+		accountExtra,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	account, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
@@ -761,6 +780,15 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Status != "" {
 		account.Status = input.Status
 	}
+	account.Credentials, account.Extra, err = normalizeOpenAICompatibleProviderConfig(
+		account.Platform,
+		account.Type,
+		account.Credentials,
+		account.Extra,
+	)
+	if err != nil {
+		return nil, err
+	}
 	if input.ExpiresAt != nil {
 		if *input.ExpiresAt <= 0 {
 			account.ExpiresAt = nil
@@ -852,6 +880,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	// Managed provider presets must be changed through UpdateAccount so the
+	// provider marker, base URL, model mapping, transport, and runtime policy
+	// remain one atomic contract.
+	delete(updates, openai_compat.ExtraKeyCompatibleProvider)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
 	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(updates, UpstreamBillingProbeExtraKey)
@@ -876,6 +908,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	// A bulk marker update cannot safely apply provider-specific credentials to
+	// heterogeneous accounts. Require the single-account managed preset path.
+	delete(input.Extra, openai_compat.ExtraKeyCompatibleProvider)
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingRateSyncEnabledExtraKey)

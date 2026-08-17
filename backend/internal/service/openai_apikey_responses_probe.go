@@ -123,6 +123,13 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 		// 仅 OpenAI APIKey 账号需要探测；其他账号类型无能力差异。
 		return
 	}
+	// Managed presets already declare their wire API server-side. Probing them
+	// would add a paid/slow cold-start request and could only produce stale
+	// metadata that ResolveResponsesSupport intentionally ignores.
+	if preset, ok := openai_compat.ResolveCompatibleProviderPreset(account.Extra); ok {
+		logger.LegacyPrintf("service.openai_probe", "probe_skip_managed_provider: account_id=%d provider=%s mode=%s", account.ID, preset.ID, preset.ResponsesMode)
+		return
+	}
 
 	apiKey := account.GetOpenAIApiKey()
 	if apiKey == "" {
@@ -145,7 +152,13 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 	probeCtx, cancel := context.WithTimeout(ctx, openaiResponsesProbeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, probeURL, bytes.NewReader(openaiResponsesProbePayload(probeModel)))
+	probeBody := openaiResponsesProbePayload(probeModel)
+	probeBody, _, err = enforceOpenAICompatibleNonReasoning(account, probeModel, probeBody, openAICompatibleWireResponses)
+	if err != nil {
+		logger.LegacyPrintf("service.openai_probe", "probe_apply_provider_policy_failed: account_id=%d err=%v", accountID, err)
+		return
+	}
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, probeURL, bytes.NewReader(probeBody))
 	if err != nil {
 		logger.LegacyPrintf("service.openai_probe", "probe_build_request_failed: account_id=%d err=%v", accountID, err)
 		return
