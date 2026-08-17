@@ -234,8 +234,52 @@ func TestContentModerationDeepSeekRuntimeAuthFailureDisablesUntilConfigChanges(t
 	changed.APIKey = "rotated-test-key"
 	changedState := svc.deepSeekChannelState(changed)
 	health, breaker, _, _, _, _, _ := changedState.snapshot(time.Now())
-	require.Equal(t, "untested", health)
+	require.Equal(t, "reachable", health)
 	require.Equal(t, "closed", breaker)
+}
+
+func TestContentModerationDeepSeekRuntimeStaleAuthFailureCannotDisableRotatedKey(t *testing.T) {
+	oldStarted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer test-key-auth-rotate" {
+			close(oldStarted)
+			<-releaseOld
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+	}))
+	defer server.Close()
+
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+	oldChannel := contentModerationDeepSeekRuntimeTestChannel("auth-rotate", server.URL, 0)
+	input := contentModerationDeepSeekRuntimeTestInput(t, "审核文本")
+	type callResult struct {
+		attempt ContentModerationReviewAttempt
+		err     error
+	}
+	oldResultCh := make(chan callResult, 1)
+	go func() {
+		_, attempt, err := svc.callContentModerationDeepSeekChannel(context.Background(), oldChannel, input, false)
+		oldResultCh <- callResult{attempt: attempt, err: err}
+	}()
+	<-oldStarted
+
+	rotated := oldChannel
+	rotated.APIKey = "rotated-test-key"
+	rotatedState := svc.deepSeekChannelState(rotated)
+	close(releaseOld)
+	oldResult := <-oldResultCh
+	require.Error(t, oldResult.err)
+	require.Equal(t, "http_401", oldResult.attempt.Error)
+	_, breaker, _, _, _, _, _ := rotatedState.snapshot(time.Now())
+	require.Equal(t, "closed", breaker)
+
+	result, attempt, err := svc.callContentModerationDeepSeekChannel(context.Background(), rotated, input, false)
+	require.NoError(t, err)
+	require.Equal(t, "success", attempt.Outcome)
+	require.False(t, result.Blocked)
 }
 
 func TestContentModerationDeepSeekRuntimeRateLimitHonorsRetryAfter(t *testing.T) {
@@ -424,14 +468,12 @@ func TestContentModerationDeepSeekRuntimeTotalBudgetStopsFailover(t *testing.T) 
 	require.Len(t, result.ReviewAttempts, 1)
 }
 
-func TestContentModerationDeepSeekRuntimeHealthRequiresBothContractCases(t *testing.T) {
+func TestContentModerationDeepSeekRuntimeConnectivityProbeUsesOneHeadRequest(t *testing.T) {
 	var hits atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if hits.Add(1) == 1 {
-			contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
-			return
-		}
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.95,"category":"cyber_abuse","reason":"未授权攻击"}`, "stop")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodHead, r.Method)
+		hits.Add(1)
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
 
@@ -458,15 +500,99 @@ func TestContentModerationDeepSeekRuntimeHealthRequiresBothContractCases(t *test
 	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
 	svc.setContentModerationCredentialCipherForTest(cipher)
 
-	result, err := svc.testDeepSeekChannelContract(context.Background(), channel.ID)
+	result, err := svc.testDeepSeekChannelConnectivity(context.Background(), channel.ID)
 	require.NoError(t, err)
+	require.True(t, result.Reachable)
 	require.True(t, result.HealthValid)
-	require.True(t, result.SafeCase.Passed)
-	require.True(t, result.RiskCase.Passed)
-	require.Equal(t, int32(2), hits.Load())
+	require.Equal(t, http.StatusNotFound, result.HTTPStatus)
+	require.Equal(t, int32(1), hits.Load())
 	loaded, err := svc.loadConfig(context.Background())
 	require.NoError(t, err)
-	require.True(t, svc.hasHealthyDeepSeekChannel(loaded, time.Now()))
+	require.True(t, svc.hasReachableDeepSeekChannel(loaded, time.Now()))
+}
+
+func TestContentModerationDeepSeekRuntimeEnforceReadinessProbesOnceOnColdStart(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodHead, r.Method)
+		hits.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+	cfg := contentModerationDeepSeekRuntimeTestConfig(
+		contentModerationDeepSeekRuntimeTestChannel("cold-start", server.URL, 0),
+	)
+
+	ready, reason := svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
+	require.True(t, ready)
+	require.Empty(t, reason)
+	require.Equal(t, int32(1), hits.Load())
+
+	ready, reason = svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
+	require.True(t, ready)
+	require.Empty(t, reason)
+	require.Equal(t, int32(1), hits.Load())
+}
+
+func TestContentModerationDeepSeekRuntimeYuFengFailureDoesNotReprobeReachableDeepSeek(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+	channel := contentModerationDeepSeekRuntimeTestChannel("already-reachable", server.URL, 0)
+	cfg := contentModerationDeepSeekRuntimeTestConfig(channel)
+	cfg.YuFengEnabled = true
+	cfg.SecondLayerEndpoints = []ContentModerationEndpoint{{
+		ID: "yufeng-unready", BaseURL: "http://127.0.0.1:8088", Model: "yufeng",
+		Profile: ContentModerationModelProfileYuFengXGuard, Enabled: true, TimeoutMS: 1000, InputLimit: 4000,
+	}}
+	state := svc.deepSeekChannelState(channel)
+	state.markConnectivity(time.Now(), true, contentModerationDeepSeekConnectivityDigest(channel))
+
+	ready, reason := svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
+	require.False(t, ready)
+	require.Contains(t, reason, "YuFeng")
+	require.Equal(t, int32(0), hits.Load())
+}
+
+func TestContentModerationDeepSeekRuntimeStaleProbeCannotMarkChangedEndpointReachable(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	oldServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer oldServer.Close()
+	newServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer newServer.Close()
+
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+	oldChannel := contentModerationDeepSeekRuntimeTestChannel("same-id", oldServer.URL, 0)
+	resultCh := make(chan *TestContentModerationDeepSeekChannelResult, 1)
+	go func() {
+		resultCh <- svc.probeDeepSeekChannelConnectivity(context.Background(), oldChannel)
+	}()
+	<-started
+
+	changedChannel := oldChannel
+	changedChannel.BaseURL = newServer.URL
+	changedConfig := contentModerationDeepSeekRuntimeTestConfig(changedChannel)
+	require.False(t, svc.hasReachableDeepSeekChannel(changedConfig, time.Now()))
+
+	close(release)
+	oldResult := <-resultCh
+	require.True(t, oldResult.Reachable)
+	require.False(t, svc.hasReachableDeepSeekChannel(changedConfig, time.Now()))
+	require.Equal(t, "untested", svc.contentModerationDeepSeekChannelView(changedChannel).HealthStatus)
 }
 
 func TestContentModerationDeepSeekRuntimeTripsAfterThreeFailuresAndRecoversHalfOpen(t *testing.T) {
@@ -515,39 +641,45 @@ func TestContentModerationDeepSeekRuntimeTripsAfterThreeFailuresAndRecoversHalfO
 	require.Equal(t, "closed", breaker)
 }
 
-func TestContentModerationDeepSeekRuntimeHealthInvalidatesOnConfigDigestChange(t *testing.T) {
+func TestContentModerationDeepSeekRuntimeConnectivityInvalidatesOnlyOnEndpointChange(t *testing.T) {
 	base := contentModerationDeepSeekRuntimeTestChannel("health", "https://api.deepseek.com", 0)
 	now := time.Now()
 
 	tests := []struct {
-		name   string
-		change func(*ContentModerationDeepSeekChannel)
+		name        string
+		invalidates bool
+		change      func(*ContentModerationDeepSeekChannel)
 	}{
-		{name: "base URL", change: func(channel *ContentModerationDeepSeekChannel) { channel.BaseURL = "https://backup.deepseek.com" }},
+		{name: "base URL", invalidates: true, change: func(channel *ContentModerationDeepSeekChannel) { channel.BaseURL = "https://backup.deepseek.com" }},
 		{name: "model", change: func(channel *ContentModerationDeepSeekChannel) { channel.Model = "deepseek-v4-flash-alt" }},
 		{name: "API key", change: func(channel *ContentModerationDeepSeekChannel) { channel.APIKey = "rotated-test-key" }},
-		{name: "timeout", change: func(channel *ContentModerationDeepSeekChannel) { channel.TimeoutMS++ }},
+		{name: "timeout", invalidates: true, change: func(channel *ContentModerationDeepSeekChannel) { channel.TimeoutMS++ }},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 			state := svc.deepSeekChannelState(base)
-			state.markHealth(now, true)
+			state.markConnectivity(now, true, contentModerationDeepSeekConnectivityDigest(base))
 			cfg := contentModerationDeepSeekRuntimeTestConfig(base)
-			require.True(t, svc.hasHealthyDeepSeekChannel(cfg, now))
+			require.True(t, svc.hasReachableDeepSeekChannel(cfg, now))
 
 			changed := base
 			tt.change(&changed)
 			require.NotEqual(t, contentModerationDeepSeekChannelDigest(base), contentModerationDeepSeekChannelDigest(changed))
 			changedCfg := contentModerationDeepSeekRuntimeTestConfig(changed)
-			require.False(t, svc.hasHealthyDeepSeekChannel(changedCfg, now))
+			require.Equal(t, !tt.invalidates, svc.hasReachableDeepSeekChannel(changedCfg, now))
 			changedState := svc.deepSeekChannelState(changed)
 			health, breaker, checkedAt, healthyUntil, _, _, _ := changedState.snapshot(now)
-			require.Equal(t, "untested", health)
 			require.Equal(t, "closed", breaker)
-			require.Nil(t, checkedAt)
 			require.Nil(t, healthyUntil)
+			if tt.invalidates {
+				require.Equal(t, "untested", health)
+				require.Nil(t, checkedAt)
+			} else {
+				require.Equal(t, "reachable", health)
+				require.NotNil(t, checkedAt)
+			}
 		})
 	}
 }

@@ -63,9 +63,8 @@ const officialChannel = () => ({
   timeout_ms: 3000,
   api_key_configured: true,
   api_key_masked: 'sk-...1234',
-  health_status: 'healthy',
+  health_status: 'reachable',
   last_health_checked_at: '2026-08-17T01:00:00Z',
-  healthy_until: '2099-08-17T01:15:00Z',
   breaker_status: 'closed' as const,
   last_latency_ms: 820,
 })
@@ -129,7 +128,7 @@ const runtimeStatus = (enforceReady = true) => ({
   second_layer_cache_writes: 5,
   second_layer_cache_errors: 1,
   second_layer_enforce_ready: enforceReady,
-  second_layer_enforce_reason: enforceReady ? '' : 'health contract expired',
+  second_layer_enforce_reason: enforceReady ? '' : 'connectivity check required',
 })
 
 const auditLog = (): ContentModerationLog => ({
@@ -234,9 +233,10 @@ describe('admin RiskControlView', () => {
     listLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
     testDeepSeekChannel.mockResolvedValue({
       channel_id: 'deepseek-official',
-      safe_case: { passed: true },
-      risk_case: { passed: true },
+      reachable: true,
       health_valid: true,
+      latency_ms: 18,
+      http_status: 404,
       checked_at: '2026-08-17T01:02:00Z',
     })
     getGroups.mockResolvedValue([])
@@ -311,7 +311,7 @@ describe('admin RiskControlView', () => {
     await flushPromises()
 
     expect(blockedWrapper.get('[data-test="layer2-stage-enforce"]').attributes('disabled')).toBeDefined()
-    expect(blockedWrapper.get('[data-test="enforce-health-gate"]').text()).toContain('health contract expired')
+    expect(blockedWrapper.get('[data-test="enforce-health-gate"]').text()).toContain('connectivity check required')
     blockedWrapper.unmount()
 
     getStatus.mockResolvedValue(runtimeStatus(true))
@@ -326,7 +326,7 @@ describe('admin RiskControlView', () => {
     readyWrapper.unmount()
   })
 
-  it('runs the saved two-case contract test for a channel', async () => {
+  it('runs the saved connectivity test for a channel', async () => {
     const wrapper = mountView()
     await flushPromises()
 
@@ -335,7 +335,7 @@ describe('admin RiskControlView', () => {
 
     expect(testDeepSeekChannel).toHaveBeenCalledWith('deepseek-official')
     expect(wrapper.get('[data-test="deepseek-channel-test-result-0"]').text()).toContain(
-      'admin.riskControl.channelTestHealthy'
+      'admin.riskControl.channelTestReachable'
     )
     expect(showSuccess).toHaveBeenCalledWith('admin.riskControl.channelTestComplete')
     wrapper.unmount()

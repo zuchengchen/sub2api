@@ -17,7 +17,10 @@ import (
 
 func TestContentModerationEveryLayer2CandidateGetsIndependentDeepSeekReview(t *testing.T) {
 	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
 			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
@@ -41,7 +44,10 @@ func TestContentModerationEveryLayer2CandidateGetsIndependentDeepSeekReview(t *t
 
 func TestContentModerationLayer2SafeResultIsAlwaysAuditedBeforeCaching(t *testing.T) {
 	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
 			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
@@ -79,6 +85,9 @@ func TestContentModerationLayer2SafeResultIsAlwaysAuditedBeforeCaching(t *testin
 func TestContentModerationEnforceReviewsAllCandidatesBeforeAnyDisposition(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
 		calls.Add(1)
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -124,7 +133,10 @@ func TestContentModerationEnforceReviewsAllCandidatesBeforeAnyDisposition(t *tes
 
 func TestContentModerationLayer2RiskCacheBlocksEveryRequestAndAppliesSideEffectsOnce(t *testing.T) {
 	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
 			t, w, `{"confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
@@ -176,7 +188,10 @@ func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *tes
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var startedOnce sync.Once
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
 		calls.Add(1)
 		startedOnce.Do(func() { close(started) })
 		<-release
@@ -256,7 +271,10 @@ func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *tes
 
 func TestContentModerationWhitelistRiskCacheIsSharedAndPromotedForEnforce(t *testing.T) {
 	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
 			t, w, `{"confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
@@ -310,7 +328,10 @@ func TestContentModerationWhitelistRiskCacheIsSharedAndPromotedForEnforce(t *tes
 
 func TestContentModerationLayer2FailuresAreNeverCached(t *testing.T) {
 	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `not-json`, "stop")
 	}))
@@ -342,7 +363,10 @@ func TestContentModerationLayer2FailuresAreNeverCached(t *testing.T) {
 
 func TestContentModerationLayer2CacheInvalidatesWhenDecisionConfigChanges(t *testing.T) {
 	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
 			t, w, `{"confidence":0.55,"category":"safe","reason":"上下文不足"}`, "stop",
@@ -376,6 +400,14 @@ func TestContentModerationLayer2CacheInvalidatesWhenDecisionConfigChanges(t *tes
 	require.False(t, logs[0].CacheHit)
 	require.False(t, logs[1].CacheHit)
 	require.True(t, logs[2].CacheHit)
+}
+
+func contentModerationCandidateDeliveryConnectivityProbe(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodHead {
+		return false
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return true
 }
 
 func contentModerationCandidateDeliveryConfig(baseURL, stage string) *ContentModerationConfig {

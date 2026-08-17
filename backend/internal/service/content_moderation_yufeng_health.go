@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const contentModerationYuFengHealthTTL = 15 * time.Minute
+
 type contentModerationYuFengEndpointHealthState struct {
 	mu           sync.Mutex
 	configDigest [sha256.Size]byte
@@ -53,7 +55,7 @@ func (s *ContentModerationService) markYuFengEndpointHealthy(endpoint ContentMod
 	}
 	state := s.yuFengEndpointHealthState(endpoint)
 	state.mu.Lock()
-	state.healthyUntil = now.Add(contentModerationDeepSeekHealthTTL)
+	state.healthyUntil = now.Add(contentModerationYuFengHealthTTL)
 	state.mu.Unlock()
 }
 
