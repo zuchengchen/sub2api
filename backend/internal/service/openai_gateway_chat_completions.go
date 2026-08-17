@@ -176,9 +176,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			return nil, fmt.Errorf("marshal responses request: %w", err)
 		}
 	}
-	responsesBody, _, err = enforceOpenAICompatibleNonReasoning(account, upstreamModel, responsesBody, openAICompatibleWireResponses)
+	responsesBody, managedNonReasoning, err := enforceOpenAICompatibleNonReasoning(account, upstreamModel, responsesBody, openAICompatibleWireResponses)
 	if err != nil {
 		return nil, err
+	}
+	if managedNonReasoning {
+		responsesReq.Reasoning = nil
 	}
 
 	logFields := []zap.Field{
