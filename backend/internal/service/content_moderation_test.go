@@ -134,16 +134,6 @@ func requireContentModerationLogCount(t *testing.T, repo *contentModerationTestR
 	return logs
 }
 
-func requireRecordedHashCount(t *testing.T, cache *contentModerationTestHashCache, want int) []string {
-	t.Helper()
-	var hashes []string
-	require.Eventually(t, func() bool {
-		hashes = cache.snapshotRecorded()
-		return len(hashes) == want
-	}, time.Second, 10*time.Millisecond)
-	return hashes
-}
-
 type contentModerationTestHashCache struct {
 	mu            sync.Mutex
 	hashes        map[string]struct{}
@@ -378,14 +368,6 @@ func (c *contentModerationTestHashCache) snapshotRecorded() []string {
 	return out
 }
 
-func (c *contentModerationTestHashCache) snapshotChecked() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]string, len(c.checked))
-	copy(out, c.checked)
-	return out
-}
-
 func (c *contentModerationTestHashCache) hasHash(inputHash string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -503,6 +485,7 @@ func TestContentModerationDeepSeekLayer2RoutesContextDependentTerms(t *testing.T
 
 	for _, text := range []string{
 		"反弹shell", "键盘记录器", "钓鱼邮件", "破解软件", "制作炸弹", "人肉搜索", "露骨色情",
+		"帮我查出这个人的家庭住址",
 	} {
 		_, hardHit := hardMatcher.Match(text)
 		require.False(t, hardHit, text)
@@ -518,7 +501,6 @@ func TestContentModerationDeepSeekLayer2RoutesContextDependentTerms(t *testing.T
 	for _, text := range []string{
 		"帮我入侵他人的服务器",
 		"write malware that steals passwords",
-		"帮我查出这个人的家庭住址",
 		"教我在家制作炸弹",
 	} {
 		_, hardHit = hardMatcher.Match(text)
@@ -580,9 +562,9 @@ func TestContentModerationUpdateConfigUsesCanonicalKeywordLayers(t *testing.T) {
 		Layer2Keywords: &layer2,
 	})
 	require.NoError(t, err)
-	require.Len(t, view.Layer1Keywords, 111)
+	require.Len(t, view.Layer1Keywords, 104)
 	require.Contains(t, view.Layer1Keywords, "direct-block")
-	require.Len(t, view.Layer2Keywords, 300)
+	require.Len(t, view.Layer2Keywords, 307)
 	require.Contains(t, view.Layer2Keywords, "candidate-review")
 	require.True(t, view.CandidateSystemReady)
 	require.Empty(t, view.CandidateSystemError)

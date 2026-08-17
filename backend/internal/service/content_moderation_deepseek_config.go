@@ -170,11 +170,11 @@ func validateContentModerationDeepSeekChannels(channels []ContentModerationDeepS
 
 func validateContentModerationDeepSeekBaseURL(raw string) error {
 	if len(strings.TrimSpace(raw)) > maxContentModerationDeepSeekBaseURLBytes {
-		return errors.New("Base URL 过长")
+		return errors.New("base URL 过长")
 	}
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("Base URL 无效")
+		return errors.New("base URL 无效")
 	}
 	host := strings.Trim(parsed.Hostname(), "[]")
 	if parsed.Scheme == "https" {
@@ -184,7 +184,7 @@ func validateContentModerationDeepSeekBaseURL(raw string) error {
 		return nil
 	}
 	if parsed.Scheme != "http" {
-		return errors.New("Base URL 必须使用 HTTPS；仅回环地址可使用 HTTP")
+		return errors.New("base URL 必须使用 HTTPS；仅回环地址可使用 HTTP")
 	}
 	ip := net.ParseIP(host)
 	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {

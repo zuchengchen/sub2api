@@ -529,6 +529,7 @@ func TestContentModerationYuFengPcContextAnnotationInDecisionFlow(t *testing.T) 
 			cache := &contentModerationReplayCache{}
 			repo := &contentModerationTestRepo{}
 			svc := &ContentModerationService{repo: repo, hashCache: cache}
+			svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 			scope := NewContentModerationScopeSnapshot(nil, "gpt-yufeng")
 			decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
 				Body: []byte(tc.body), Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
@@ -868,6 +869,7 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 			repo := &contentModerationReplayRepo{}
 			cache := &contentModerationReplayCache{}
 			svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+			svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 			runtime := &contentModerationRuntimeSnapshot{
 				riskControlEnabled:          true,
 				config:                      cfg,

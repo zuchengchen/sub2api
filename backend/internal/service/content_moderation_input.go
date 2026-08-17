@@ -1,9 +1,7 @@
 package service
 
 import (
-	"crypto/rand"
 	"fmt"
-	"math/big"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -290,17 +288,6 @@ func normalizeModerationImages(images []string) []string {
 		out = append(out, image)
 	}
 	return out
-}
-
-func limitContentModerationImages(images []string) []string {
-	if len(images) <= maxContentModerationInputImages {
-		return images
-	}
-	idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(images))))
-	if err != nil {
-		return images[:maxContentModerationInputImages]
-	}
-	return []string{images[int(idx.Int64())]}
 }
 
 func addModerationText(parts *[]string, text string) {

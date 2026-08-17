@@ -66,12 +66,10 @@ const (
 	ContentModerationProtocolGemini            = "gemini"
 	ContentModerationProtocolOpenAIImages      = "openai_images"
 
-	maxContentModerationTimeoutMS   = 30000
-	maxModerationInputRunes         = 12000
-	maxModerationExcerptRunes       = 1024
-	maxModerationErrorRunes         = 960
-	maxContentModerationInputImages = 1
-
+	maxContentModerationTimeoutMS                      = 30000
+	maxModerationInputRunes                            = 12000
+	maxModerationExcerptRunes                          = 1024
+	maxModerationErrorRunes                            = 960
 	defaultContentModerationBanThreshold               = 10
 	defaultContentModerationViolationWindowHours       = 720
 	defaultContentModerationBlockHTTPStatus            = http.StatusForbidden
@@ -1781,16 +1779,6 @@ func newContentModerationRuntimeKeywordMatchers(keywords []string) (*contentMode
 		newContentModerationKeywordMatcher(contextual)
 }
 
-func (s *contentModerationRuntimeSnapshot) matchBlockedKeyword(text string) (string, bool) {
-	if s == nil || s.config == nil {
-		return "", false
-	}
-	if s.keywordMatcher != nil {
-		return s.keywordMatcher.Match(text)
-	}
-	return matchBlockedKeyword(text, s.config.BlockedKeywords)
-}
-
 func (s *ContentModerationService) isRiskControlEnabled(ctx context.Context) bool {
 	raw, err := s.settingRepo.GetValue(ctx, SettingKeyRiskControlEnabled)
 	if err != nil {
@@ -2399,27 +2387,12 @@ func (cfg *ContentModerationConfig) normalize() {
 	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion {
 		cfg.ContextPolicyVersion = ContentModerationContextPolicyVersion
 	}
-	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationLegacyEvidencePolicyVersion || evidencePolicyVersion == contentModerationOlderEvidencePolicyVersion || evidencePolicyVersion == contentModerationEarlierEvidencePolicyVersion || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion {
+	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationLegacyEvidencePolicyVersion || evidencePolicyVersion == contentModerationOlderEvidencePolicyVersion || evidencePolicyVersion == contentModerationEarlierEvidencePolicyVersion || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion || evidencePolicyVersion == contentModerationPriorEvidencePolicyVersion {
 		cfg.EvidencePolicyVersion = ContentModerationEvidencePolicyVersion
 	}
 	cfg.KeywordPolicyVersion = normalizeContentModerationCacheVersion(cfg.KeywordPolicyVersion)
 	cfg.ContextPolicyVersion = normalizeContentModerationCacheVersion(cfg.ContextPolicyVersion)
 	cfg.EvidencePolicyVersion = normalizeContentModerationCacheVersion(cfg.EvidencePolicyVersion)
-}
-
-func (cfg *ContentModerationConfig) includesGroup(groupID *int64) bool {
-	if cfg.AllGroups {
-		return true
-	}
-	if groupID == nil {
-		return false
-	}
-	for _, id := range cfg.GroupIDs {
-		if id == *groupID {
-			return true
-		}
-	}
-	return false
 }
 
 func (cfg *ContentModerationConfig) includesUserEmail(email string) bool {
@@ -2436,28 +2409,6 @@ func (cfg *ContentModerationConfig) includesUserEmail(email string) bool {
 		}
 	}
 	return false
-}
-
-func (cfg *ContentModerationConfig) includesModel(model string) bool {
-	if cfg == nil {
-		return true
-	}
-	filter := normalizeContentModerationModelFilter(cfg.ModelFilter)
-	switch filter.Type {
-	case ContentModerationModelFilterInclude:
-		return contentModerationModelListContains(filter.Models, model)
-	case ContentModerationModelFilterExclude:
-		return !contentModerationModelListContains(filter.Models, model)
-	default:
-		return true
-	}
-}
-
-func contentModerationLogGroupID(groupID *int64) int64 {
-	if groupID == nil {
-		return 0
-	}
-	return *groupID
 }
 
 func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *ContentModerationConfigView {
@@ -2698,19 +2649,6 @@ func normalizeContentModerationModelNames(models []string) []string {
 		}
 	}
 	return out
-}
-
-func contentModerationModelListContains(models []string, model string) bool {
-	model = strings.ToLower(strings.TrimSpace(model))
-	if model == "" {
-		return false
-	}
-	for _, candidate := range models {
-		if strings.ToLower(strings.TrimSpace(candidate)) == model {
-			return true
-		}
-	}
-	return false
 }
 
 func matchBlockedKeyword(text string, keywords []string) (string, bool) {
