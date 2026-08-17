@@ -1386,7 +1386,11 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 			}
 		}
 	}
-	result, attempted, err := s.scanUnifiedSecondLayerPrepared(reviewCtx, cfg, contentModerationSecondLayerInput{
+	reviewCfg := cfg
+	if work.requireHealthyReviewer && cfg != nil && cfg.DeepSeekEnabled {
+		reviewCfg = s.contentModerationConfigWithReachableDeepSeekFirst(cfg, time.Now())
+	}
+	result, attempted, err := s.scanUnifiedSecondLayerPrepared(reviewCtx, reviewCfg, contentModerationSecondLayerInput{
 		Fragment: work.bundle.Fragment, Evidence: work.bundle.Evidence,
 		KeywordTier: defaultContentModerationString(work.bundle.PrimaryTier, "candidate"), KeywordRuleID: work.bundle.PrimaryRuleID,
 		Background: cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,

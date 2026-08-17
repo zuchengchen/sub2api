@@ -42,6 +42,63 @@ func TestContentModerationEveryLayer2CandidateGetsIndependentDeepSeekReview(t *t
 	require.Len(t, repo.snapshotLogs(), 2)
 }
 
+func TestContentModerationEnforceColdStartUsesReachableBackupWithinTotalBudget(t *testing.T) {
+	var primaryHeads atomic.Int64
+	var primaryPosts atomic.Int64
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			primaryHeads.Add(1)
+			time.Sleep(200 * time.Millisecond)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		primaryPosts.Add(1)
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+		)
+	}))
+	defer primary.Close()
+	var backupHeads atomic.Int64
+	var backupPosts atomic.Int64
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			backupHeads.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		backupPosts.Add(1)
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+		)
+	}))
+	defer backup.Close()
+
+	cfg := contentModerationCandidateDeliveryConfig(primary.URL, ContentModerationSecondLayerStageEnforce)
+	cfg.DeepSeekChannels[0].ID = "slow-primary"
+	cfg.DeepSeekChannels[0].TimeoutMS = 100
+	backupChannel := contentModerationDeepSeekRuntimeTestChannel("reachable-backup", backup.URL, 1)
+	backupChannel.TimeoutMS = 100
+	cfg.DeepSeekChannels = append(cfg.DeepSeekChannels, backupChannel)
+	cfg.DeepSeekTotalTimeoutMS = 300
+	cfg.normalize()
+	repo := &contentModerationReplayRepo{}
+	svc := NewContentModerationService(nil, repo, nil, nil, nil, nil, nil, nil)
+	started := time.Now()
+	decision := svc.checkUnifiedCandidateEvidence(
+		context.Background(), ContentModerationCheckInput{RequestID: "cold-backup-enforce"},
+		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t)[:1], false,
+	)
+
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Less(t, time.Since(started), 300*time.Millisecond)
+	require.Equal(t, int64(1), primaryHeads.Load())
+	require.Equal(t, int64(1), backupHeads.Load())
+	require.Zero(t, primaryPosts.Load())
+	require.Equal(t, int64(1), backupPosts.Load())
+	require.Len(t, repo.snapshotLogs(), 1)
+}
+
 func TestContentModerationLayer2SafeResultIsAlwaysAuditedBeforeCaching(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -190,7 +190,6 @@
                       ? stage.activeClass
                       : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'
                   "
-                  :disabled="stage.value === 'enforce' && layer.id === 'layer2' && !secondLayerEnforceReady"
                   :data-test="`${layer.id}-stage-${stage.value}`"
                   @click="setLayerStage(layer.id, stage.value)"
                 >
@@ -1332,10 +1331,6 @@ function validateConfig(): boolean {
     }
     ids.add(id)
   }
-  if (configForm.second_layer_stage === 'enforce' && !secondLayerEnforceReady.value) {
-    appStore.showError(t('admin.riskControl.enforceGateBlocked'))
-    return false
-  }
   if (configForm.model_filter_type !== 'all' && parseLineList(configForm.model_filter_models_text).length === 0) {
     appStore.showError(t('admin.riskControl.modelFilterModelsRequired'))
     return false
@@ -1402,7 +1397,6 @@ async function testChannel(channel: EditableDeepSeekChannel) {
 }
 
 function setLayerStage(layer: LayerID, stage: ContentModerationLayerStage) {
-  if (layer === 'layer2' && stage === 'enforce' && !secondLayerEnforceReady.value) return
   if (layer === 'layer1') configForm.first_layer_stage = stage
   else configForm.second_layer_stage = stage
 }
@@ -1449,16 +1443,16 @@ function isChannelReachable(channel: EditableDeepSeekChannel): boolean {
 function channelStatusLabel(channel: EditableDeepSeekChannel): string {
   if (!channel.enabled) return t('admin.riskControl.channelDisabled')
   if (!isChannelPersisted(channel)) return t('admin.riskControl.channelNeedsSave')
-  if (isChannelReachable(channel)) return t('admin.riskControl.channelReachable')
   if (isBreakerUnavailable(channel.breaker_status)) return t('admin.riskControl.channelCircuitOpen')
+  if (isChannelReachable(channel)) return t('admin.riskControl.channelReachable')
   return t('admin.riskControl.channelNeedsTest')
 }
 
 function channelStatusClass(channel: EditableDeepSeekChannel): string {
   if (!channel.enabled) return statusClasses.unknown
   if (!isChannelPersisted(channel)) return statusClasses.warning
-  if (isChannelReachable(channel)) return statusClasses.healthy
   if (isBreakerUnavailable(channel.breaker_status)) return statusClasses.danger
+  if (isChannelReachable(channel)) return statusClasses.healthy
   return statusClasses.warning
 }
 
@@ -1492,6 +1486,7 @@ function breakerLabel(channel: EditableDeepSeekChannel): string {
 function channelTestResultText(result: TestDeepSeekChannelResponse): string {
   return t(result.reachable ? 'admin.riskControl.channelTestReachable' : 'admin.riskControl.channelTestUnreachable', {
     latency: result.latency_ms,
+    status: result.http_status || '-',
   })
 }
 
