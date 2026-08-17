@@ -141,7 +141,7 @@ func TestValidateContentModerationDeepSeekBaseURL(t *testing.T) {
 	}
 }
 
-func TestContentModerationSecondLayerEnforceReadinessRequiresOneReachableChannel(t *testing.T) {
+func TestContentModerationSecondLayerEnforceReadinessRequiresRecentSuccessfulReview(t *testing.T) {
 	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 	cfg := defaultContentModerationConfig()
 	cfg.DeepSeekChannels[0].APIKey = "sk-unit-test-health"
@@ -156,19 +156,30 @@ func TestContentModerationSecondLayerEnforceReadinessRequiresOneReachableChannel
 
 	ready, reason := svc.contentModerationSecondLayerEnforceReadiness(cfg, now)
 	require.False(t, ready)
-	require.Contains(t, reason, "连通性检查")
+	require.Contains(t, reason, "真实审核")
 
 	state := svc.deepSeekChannelState(cfg.DeepSeekChannels[1])
-	state.markConnectivity(now, true, contentModerationDeepSeekConnectivityDigest(cfg.DeepSeekChannels[1]))
+	state.markReviewHealthy(now, contentModerationDeepSeekChannelDigest(cfg.DeepSeekChannels[1]))
 	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(cfg, now)
 	require.True(t, ready)
 	require.Empty(t, reason)
 	view := svc.configView(cfg)
 	require.Equal(t, "untested", view.DeepSeekChannels[0].HealthStatus)
 	require.Equal(t, "reachable", view.DeepSeekChannels[1].HealthStatus)
+	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(
+		cfg, now.Add(contentModerationDeepSeekHealthTTL+time.Second),
+	)
+	require.False(t, ready)
+	require.Contains(t, reason, "真实审核")
 
 	changed := cloneContentModerationConfig(cfg)
 	changed.DeepSeekChannels[1].Model = "different-model"
+	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(changed, now)
+	require.False(t, ready)
+	require.Contains(t, reason, "真实审核")
+	svc.deepSeekChannelState(changed.DeepSeekChannels[1]).markReviewHealthy(
+		now, contentModerationDeepSeekChannelDigest(changed.DeepSeekChannels[1]),
+	)
 	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(changed, now)
 	require.True(t, ready)
 	require.Empty(t, reason)
@@ -176,10 +187,10 @@ func TestContentModerationSecondLayerEnforceReadinessRequiresOneReachableChannel
 	changed.DeepSeekChannels[1].BaseURL = "https://changed.example.com"
 	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(changed, now)
 	require.False(t, ready)
-	require.Contains(t, reason, "连通性检查")
+	require.Contains(t, reason, "真实审核")
 }
 
-func TestContentModerationUpdateConfigEnforceRequiresReachableHTTPAndDoesNotPersistFailure(t *testing.T) {
+func TestContentModerationUpdateConfigEnforceRequiresSuccessfulReviewAndDoesNotPersistFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keyring.json")
 	writeModerationArchiveTestKeyRing(t, path, "k1", map[string][]byte{
 		"k1": []byte("0123456789abcdef0123456789abcdef"),
@@ -208,7 +219,9 @@ func TestContentModerationUpdateConfigEnforceRequiresReachableHTTPAndDoesNotPers
 	method := make(chan string, 1)
 	reachable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method <- r.Method
-		w.WriteHeader(http.StatusServiceUnavailable)
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+		)
 	}))
 	defer reachable.Close()
 	channels[0].BaseURL = reachable.URL
@@ -217,7 +230,7 @@ func TestContentModerationUpdateConfigEnforceRequiresReachableHTTPAndDoesNotPers
 		SecondLayerStage: &stage,
 	})
 	require.NoError(t, err)
-	require.Equal(t, http.MethodHead, <-method)
+	require.Equal(t, http.MethodPost, <-method)
 	require.Equal(t, ContentModerationSecondLayerStageEnforce, view.SecondLayerStage)
 
 	stored := repo.values[SettingKeyContentModerationConfig]

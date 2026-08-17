@@ -369,7 +369,7 @@ func (s *ContentModerationService) contentModerationSecondLayerEnforceReadiness(
 		return false, "至少启用一个审核器后才能启用 Layer 2 Enforce"
 	}
 	if cfg.DeepSeekEnabled && !s.hasReachableDeepSeekChannel(cfg, now) {
-		return false, "至少一个启用且已配置密钥的 DeepSeek 渠道须通过连通性检查"
+		return false, "至少一个启用且已配置密钥的 DeepSeek 渠道须在最近 15 分钟内成功完成真实审核且熔断器可用"
 	}
 	if cfg.YuFengEnabled {
 		if len(cfg.enabledYuFengSecondLayerEndpoints()) == 0 {
