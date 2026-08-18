@@ -82,7 +82,7 @@
                 v-model="invitationCode"
                 type="text"
                 class="input w-full"
-                :placeholder="t('auth.invitationCodePlaceholder')"
+                :placeholder="t('auth.registrationGateCodePlaceholder')"
                 :disabled="isSubmitting"
                 @keyup.enter="handleSubmitInvitation"
               />

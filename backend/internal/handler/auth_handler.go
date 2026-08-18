@@ -55,7 +55,7 @@ type RegisterRequest struct {
 	TencentCaptchaTicket  string `json:"tencent_captcha_ticket"`
 	TencentCaptchaRandstr string `json:"tencent_captcha_randstr"`
 	PromoCode             string `json:"promo_code"`      // 注册优惠码
-	InvitationCode        string `json:"invitation_code"` // 邀请码
+	InvitationCode        string `json:"invitation_code"` // 注册准入码（邀请码或推广码）
 	AffCode               string `json:"aff_code"`        // 邀请返利码
 }
 
@@ -554,29 +554,20 @@ func (h *AuthHandler) ValidateInvitationCode(c *gin.Context) {
 		return
 	}
 
-	// 验证邀请码
-	redeemCode, err := h.redeemService.GetByCode(c.Request.Context(), req.Code)
-	if err != nil {
+	if h.authService == nil || h.authService.ValidateRegistrationAdmissionCode(c.Request.Context(), req.Code) != nil {
+		errorCode := "INVITATION_CODE_INVALID"
+		if h.redeemService != nil {
+			redeemCode, err := h.redeemService.GetByCode(c.Request.Context(), req.Code)
+			switch {
+			case err != nil:
+				errorCode = "INVITATION_CODE_NOT_FOUND"
+			case redeemCode != nil && redeemCode.Type == service.RedeemTypeInvitation && redeemCode.Status != service.StatusUnused:
+				errorCode = "INVITATION_CODE_USED"
+			}
+		}
 		response.Success(c, ValidateInvitationCodeResponse{
 			Valid:     false,
-			ErrorCode: "INVITATION_CODE_NOT_FOUND",
-		})
-		return
-	}
-
-	// 检查类型和状态
-	if redeemCode.Type != service.RedeemTypeInvitation {
-		response.Success(c, ValidateInvitationCodeResponse{
-			Valid:     false,
-			ErrorCode: "INVITATION_CODE_INVALID",
-		})
-		return
-	}
-
-	if redeemCode.Status != service.StatusUnused {
-		response.Success(c, ValidateInvitationCodeResponse{
-			Valid:     false,
-			ErrorCode: "INVITATION_CODE_USED",
+			ErrorCode: errorCode,
 		})
 		return
 	}
