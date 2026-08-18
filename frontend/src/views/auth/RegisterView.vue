@@ -90,7 +90,7 @@
         <!-- Invitation Code Input (Required when enabled) -->
         <div v-if="invitationCodeEnabled">
           <label for="invitation_code" class="input-label">
-            {{ t('auth.invitationCodeLabel') }}
+            {{ admissionCodeLabel }}
           </label>
           <div class="relative">
             <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
@@ -106,7 +106,7 @@
                 'border-green-500 focus:border-green-500 focus:ring-green-500': invitationValidation.valid,
                 'border-red-500 focus:border-red-500 focus:ring-red-500': invitationValidation.invalid || errors.invitation_code
               }"
-              :placeholder="t('auth.invitationCodePlaceholder')"
+              :placeholder="admissionCodePlaceholder"
               @input="handleInvitationCodeInput"
             />
             <!-- Validation indicator -->
@@ -128,7 +128,7 @@
             <div v-if="invitationValidation.valid" class="mt-2 flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 dark:bg-green-900/20">
               <Icon name="checkCircle" size="sm" class="text-green-600 dark:text-green-400" />
               <span class="text-sm text-green-700 dark:text-green-400">
-                {{ t('auth.invitationCodeValid') }}
+                {{ admissionCodeValid }}
               </span>
             </div>
           </transition>
@@ -137,7 +137,7 @@
         <!-- Affiliate Invitation Code Input (Optional) -->
         <div v-else-if="affiliateEnabled" data-testid="affiliate-invitation-field">
           <label for="affiliate_code" class="input-label">
-            {{ t('auth.invitationCodeLabel') }}
+            {{ t('auth.affiliateCodeLabel') }}
             <span class="ml-1 text-xs font-normal text-gray-400 dark:text-dark-500">({{ t('common.optional') }})</span>
           </label>
           <div class="relative">
@@ -150,7 +150,7 @@
               type="text"
               :disabled="registrationActionDisabled"
               class="input pl-11"
-              :placeholder="t('auth.invitationCodePlaceholder')"
+              :placeholder="t('auth.affiliateCodePlaceholder')"
             />
           </div>
         </div>
@@ -416,6 +416,32 @@ const loginAgreementDocuments = ref<LoginAgreementDocument[]>([])
 const agreementAccepted = ref<boolean>(false)
 const showAgreementModal = ref<boolean>(false)
 
+const admissionCodeLabel = computed(() =>
+  t(affiliateEnabled.value ? 'auth.registrationAccessCodeLabel' : 'auth.invitationCodeLabel')
+)
+const admissionCodePlaceholder = computed(() =>
+  t(affiliateEnabled.value ? 'auth.registrationAccessCodePlaceholder' : 'auth.invitationCodePlaceholder')
+)
+const admissionCodeRequired = computed(() =>
+  t(affiliateEnabled.value ? 'auth.registrationAccessCodeRequired' : 'auth.invitationCodeRequired')
+)
+const admissionCodeValid = computed(() =>
+  t(affiliateEnabled.value ? 'auth.registrationAccessCodeValid' : 'auth.invitationCodeValid')
+)
+const admissionCodeInvalid = computed(() =>
+  t(affiliateEnabled.value ? 'auth.registrationAccessCodeInvalid' : 'auth.invitationCodeInvalid')
+)
+const admissionCodeValidating = computed(() =>
+  t(affiliateEnabled.value ? 'auth.registrationAccessCodeValidating' : 'auth.invitationCodeValidating')
+)
+const admissionCodeInvalidCannotRegister = computed(() =>
+  t(
+    affiliateEnabled.value
+      ? 'auth.registrationAccessCodeInvalidCannotRegister'
+      : 'auth.invitationCodeInvalidCannotRegister'
+  )
+)
+
 // Turnstile
 const turnstileRef = ref<InstanceType<typeof TurnstileWidget> | null>(null)
 const turnstileToken = ref<string>('')
@@ -508,6 +534,14 @@ function syncAffiliateReferralCode(): string {
   const code = resolveAffiliateReferralCode(route.query.aff, route.query.aff_code)
   if (code) {
     formData.aff_code = code
+    if (
+      invitationCodeEnabled.value &&
+      affiliateEnabled.value &&
+      !formData.invitation_code.trim()
+    ) {
+      formData.invitation_code = code
+      void validateInvitationCodeDebounced(code)
+    }
   }
   return code
 }
@@ -524,6 +558,7 @@ onMounted(async () => {
     promoCodeEnabled.value = settings.promo_code_enabled
     invitationCodeEnabled.value = settings.invitation_code_enabled
     affiliateEnabled.value = settings.affiliate_enabled
+    syncAffiliateReferralCode()
     turnstileEnabled.value = settings.turnstile_enabled
     turnstileSiteKey.value = settings.turnstile_site_key || ''
     tencentCaptchaEnabled.value = settings.tencent_captcha_enabled === true
@@ -759,7 +794,7 @@ async function validateInvitationCodeDebounced(code: string): Promise<void> {
   } catch {
     invitationValidation.valid = false
     invitationValidation.invalid = true
-    invitationValidation.message = t('auth.invitationCodeInvalid')
+    invitationValidation.message = admissionCodeInvalid.value
   } finally {
     invitationValidating.value = false
   }
@@ -768,15 +803,15 @@ async function validateInvitationCodeDebounced(code: string): Promise<void> {
 function getInvitationErrorMessage(errorCode?: string): string {
   switch (errorCode) {
     case 'INVITATION_CODE_NOT_FOUND':
-      return t('auth.invitationCodeInvalid')
+      return admissionCodeInvalid.value
     case 'INVITATION_CODE_INVALID':
-      return t('auth.invitationCodeInvalid')
+      return admissionCodeInvalid.value
     case 'INVITATION_CODE_USED':
-      return t('auth.invitationCodeInvalid')
+      return admissionCodeInvalid.value
     case 'INVITATION_CODE_DISABLED':
-      return t('auth.invitationCodeInvalid')
+      return admissionCodeInvalid.value
     default:
-      return t('auth.invitationCodeInvalid')
+      return admissionCodeInvalid.value
   }
 }
 
@@ -923,7 +958,7 @@ function validateForm(): boolean {
   // Invitation code validation (required when enabled)
   if (invitationCodeEnabled.value) {
     if (!formData.invitation_code.trim()) {
-      errors.invitation_code = t('auth.invitationCodeRequired')
+      errors.invitation_code = admissionCodeRequired.value
       isValid = false
     }
   }
@@ -966,21 +1001,21 @@ async function handleRegister(): Promise<void> {
   if (invitationCodeEnabled.value) {
     // If still validating, wait
     if (invitationValidating.value) {
-      errorMessage.value = t('auth.invitationCodeValidating')
+      errorMessage.value = admissionCodeValidating.value
       return
     }
     // If invitation code is invalid, block submission
     if (invitationValidation.invalid) {
-      errorMessage.value = t('auth.invitationCodeInvalidCannotRegister')
+      errorMessage.value = admissionCodeInvalidCannotRegister.value
       return
     }
     // If invitation code is required but not validated yet
     if (formData.invitation_code.trim() && !invitationValidation.valid) {
-      errorMessage.value = t('auth.invitationCodeValidating')
+      errorMessage.value = admissionCodeValidating.value
       // Trigger validation
       await validateInvitationCodeDebounced(formData.invitation_code.trim())
       if (!invitationValidation.valid) {
-        errorMessage.value = t('auth.invitationCodeInvalidCannotRegister')
+        errorMessage.value = admissionCodeInvalidCannotRegister.value
         return
       }
     }
