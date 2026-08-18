@@ -2,10 +2,12 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RegisterView from '@/views/auth/RegisterView.vue'
 
-const { getPublicSettingsMock, registerMock, showErrorMock } = vi.hoisted(() => ({
+const { getPublicSettingsMock, registerMock, showErrorMock, validateInvitationCodeMock, routeQuery } = vi.hoisted(() => ({
   getPublicSettingsMock: vi.fn(),
   registerMock: vi.fn(),
-  showErrorMock: vi.fn()
+  showErrorMock: vi.fn(),
+  validateInvitationCodeMock: vi.fn(),
+  routeQuery: {} as Record<string, string>
 }))
 
 const publicSettings = {
@@ -27,7 +29,7 @@ const publicSettings = {
 
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: vi.fn() }),
-  useRoute: () => ({ query: {} })
+  useRoute: () => ({ query: routeQuery })
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -58,7 +60,8 @@ vi.mock('@/api/auth', async () => {
   const actual = await vi.importActual<typeof import('@/api/auth')>('@/api/auth')
   return {
     ...actual,
-    getPublicSettings: (...args: unknown[]) => getPublicSettingsMock(...args)
+    getPublicSettings: (...args: unknown[]) => getPublicSettingsMock(...args),
+    validateInvitationCode: (...args: unknown[]) => validateInvitationCodeMock(...args)
   }
 })
 
@@ -86,8 +89,11 @@ describe('RegisterView invitation layout', () => {
     getPublicSettingsMock.mockReset()
     registerMock.mockReset()
     showErrorMock.mockReset()
+    validateInvitationCodeMock.mockReset()
+    Object.keys(routeQuery).forEach(key => delete routeQuery[key])
     getPublicSettingsMock.mockResolvedValue(publicSettings)
     registerMock.mockResolvedValue({})
+    validateInvitationCodeMock.mockResolvedValue({ valid: true })
   })
 
   it('keeps the optional affiliate invitation field before Turnstile', async () => {
@@ -116,6 +122,34 @@ describe('RegisterView invitation layout', () => {
 
     expect(wrapper.find('[data-testid="affiliate-invitation-field"]').exists()).toBe(false)
     expect(wrapper.get('#invitation_code').exists()).toBe(true)
+  })
+
+  it('uses a referral link code as the required registration admission code', async () => {
+    routeQuery.aff = 'FGDZC7AJ7ZKZ'
+    getPublicSettingsMock.mockResolvedValueOnce({
+      ...publicSettings,
+      invitation_code_enabled: true,
+      turnstile_enabled: false
+    })
+
+    const wrapper = mountRegister()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('auth.registrationAccessCodeLabel')
+    expect((wrapper.get('#invitation_code').element as HTMLInputElement).value).toBe('FGDZC7AJ7ZKZ')
+    expect(validateInvitationCodeMock).toHaveBeenCalledWith('FGDZC7AJ7ZKZ')
+
+    await wrapper.get('#email').setValue('referred@example.com')
+    await wrapper.get('#password').setValue('secret-123')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(registerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invitation_code: 'FGDZC7AJ7ZKZ',
+        aff_code: 'FGDZC7AJ7ZKZ'
+      })
+    )
   })
 
   it('submits a non-whitelist email domain so the backend can enforce its registration quota', async () => {

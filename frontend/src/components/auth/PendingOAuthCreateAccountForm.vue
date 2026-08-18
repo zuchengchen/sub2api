@@ -73,7 +73,7 @@
       :data-testid="`${testIdPrefix}-create-account-invitation-code`"
       type="text"
       class="input w-full"
-      :placeholder="t('auth.invitationCodePlaceholder')"
+      :placeholder="t(affiliateEnabled ? 'auth.registrationAccessCodePlaceholder' : 'auth.invitationCodePlaceholder')"
       :disabled="isSubmitting"
     />
     <button
@@ -137,6 +137,7 @@ const sendCodeError = ref('')
 const sendCodeSuccess = ref(false)
 const countdown = ref(0)
 const invitationCodeEnabled = ref(false)
+const affiliateEnabled = ref(false)
 const emailVerifyEnabled = ref(true)
 const turnstileEnabled = ref(false)
 const turnstileSiteKey = ref('')
@@ -347,6 +348,7 @@ onMounted(async () => {
   try {
     const settings = await getPublicSettings()
     invitationCodeEnabled.value = settings.invitation_code_enabled === true
+    affiliateEnabled.value = settings.affiliate_enabled === true
     emailVerifyEnabled.value = settings.email_verify_enabled !== false
     turnstileEnabled.value = settings.turnstile_enabled === true
     turnstileSiteKey.value = settings.turnstile_site_key || ''
@@ -359,6 +361,7 @@ onMounted(async () => {
     aliyunCaptchaRegion.value = settings.aliyun_captcha_region || 'cn'
   } catch {
     invitationCodeEnabled.value = false
+    affiliateEnabled.value = false
     emailVerifyEnabled.value = true
     turnstileEnabled.value = false
     turnstileSiteKey.value = ''
