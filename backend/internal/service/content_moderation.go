@@ -99,10 +99,17 @@ const (
 )
 
 type ContentModerationConfig struct {
-	Enabled                  bool                               `json:"enabled"`
-	Mode                     string                             `json:"mode"`
-	DeepSeekEnabled          bool                               `json:"deepseek_enabled"`
+	Enabled         bool   `json:"enabled"`
+	Mode            string `json:"mode"`
+	DeepSeekEnabled bool   `json:"deepseek_enabled"`
+	// RemoteReviewersEnabled is the provider-neutral alias for the legacy
+	// DeepSeek toggle. The legacy field remains persisted for compatibility.
+	RemoteReviewersEnabled   bool                               `json:"remote_reviewers_enabled,omitempty"`
+	RemoteConsensusRequired  int                                `json:"remote_consensus_required,omitempty"`
+	RemoteUnavailablePolicy  string                             `json:"remote_unavailable_policy,omitempty"`
+	RemoteReviewersVersion   int                                `json:"remote_reviewers_version"`
 	YuFengEnabled            bool                               `json:"yufeng_enabled"`
+	YuFengMode               string                             `json:"yufeng_mode,omitempty"`
 	DeepSeekTotalTimeoutMS   int                                `json:"deepseek_total_timeout_ms"`
 	DeepSeekThreshold        float64                            `json:"deepseek_threshold"`
 	DeepSeekChannels         []ContentModerationDeepSeekChannel `json:"deepseek_channels"`
@@ -149,11 +156,16 @@ type ContentModerationConfigView struct {
 	Enabled                        bool                                   `json:"enabled"`
 	Mode                           string                                 `json:"mode"`
 	DeepSeekEnabled                bool                                   `json:"deepseek_enabled"`
+	RemoteReviewersEnabled         bool                                   `json:"remote_reviewers_enabled"`
+	RemoteConsensusRequired        int                                    `json:"remote_consensus_required"`
+	RemoteUnavailablePolicy        string                                 `json:"remote_unavailable_policy"`
 	YuFengEnabled                  bool                                   `json:"yufeng_enabled"`
+	YuFengMode                     string                                 `json:"yufeng_mode"`
 	DeepSeekTotalTimeoutMS         int                                    `json:"deepseek_total_timeout_ms"`
 	DeepSeekThreshold              float64                                `json:"deepseek_threshold"`
 	PolicyVersion                  string                                 `json:"policy_version"`
 	DeepSeekChannels               []ContentModerationDeepSeekChannelView `json:"deepseek_channels"`
+	RemoteReviewers                []ContentModerationDeepSeekChannelView `json:"remote_reviewers"`
 	AllGroups                      bool                                   `json:"all_groups"`
 	GroupIDs                       []int64                                `json:"group_ids"`
 	UserEmailWhitelist             []string                               `json:"user_email_whitelist"`
@@ -232,10 +244,15 @@ type UpdateContentModerationConfigInput struct {
 	Enabled                        *bool                                    `json:"enabled"`
 	Mode                           *string                                  `json:"mode"`
 	DeepSeekEnabled                *bool                                    `json:"deepseek_enabled"`
+	RemoteReviewersEnabled         *bool                                    `json:"remote_reviewers_enabled"`
+	RemoteConsensusRequired        *int                                     `json:"remote_consensus_required"`
+	RemoteUnavailablePolicy        *string                                  `json:"remote_unavailable_policy"`
 	YuFengEnabled                  *bool                                    `json:"yufeng_enabled"`
+	YuFengMode                     *string                                  `json:"yufeng_mode"`
 	DeepSeekTotalTimeoutMS         *int                                     `json:"deepseek_total_timeout_ms"`
 	DeepSeekThreshold              *float64                                 `json:"deepseek_threshold"`
 	DeepSeekChannels               *[]ContentModerationDeepSeekChannelInput `json:"deepseek_channels"`
+	RemoteReviewers                *[]ContentModerationDeepSeekChannelInput `json:"remote_reviewers"`
 	AllGroups                      *bool                                    `json:"all_groups"`
 	GroupIDs                       *[]int64                                 `json:"group_ids"`
 	UserEmailWhitelist             *[]string                                `json:"user_email_whitelist"`
@@ -626,6 +643,9 @@ type ContentModerationRuntimeStatus struct {
 	DeepSeekSelectedCount      int64                                 `json:"deepseek_selected_count"`
 	DeepSeekFailoverCount      int64                                 `json:"deepseek_failover_count"`
 	DeepSeekUnavailableCount   int64                                 `json:"deepseek_unavailable_count"`
+	RemoteSelectedCount        int64                                 `json:"remote_selected_count"`
+	RemoteFailoverCount        int64                                 `json:"remote_failover_count"`
+	RemoteUnavailableCount     int64                                 `json:"remote_unavailable_count"`
 	ArchiveRuntime             ContentModerationArchiveRuntimeStatus `json:"archive_runtime"`
 
 	DeepSeekResponseReadTimeoutCount int64      `json:"deepseek_response_read_timeout_count"`
@@ -729,6 +749,8 @@ type ContentModerationFragmentCacheEntry struct {
 	EndpointID           string                           `json:"endpoint_id,omitempty"`
 	ReviewOutcome        string                           `json:"review_outcome,omitempty"`
 	ReviewerDisagreement bool                             `json:"reviewer_disagreement,omitempty"`
+	ConsensusStatus      string                           `json:"consensus_status,omitempty"`
+	RemoteVotes          int                              `json:"remote_votes,omitempty"`
 	ReviewAttempts       []ContentModerationReviewAttempt `json:"review_attempts,omitempty"`
 	ExpiresAt            time.Time                        `json:"expires_at,omitempty"`
 	Expired              bool                             `json:"-"`
@@ -882,6 +904,7 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if err != nil {
 		return nil, err
 	}
+	legacyRemoteReviewerConfig := cfg.RemoteReviewersVersion == 0
 	if input.Enabled != nil {
 		cfg.Enabled = *input.Enabled
 	}
@@ -894,9 +917,30 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if input.DeepSeekEnabled != nil {
 		cfg.DeepSeekEnabled = *input.DeepSeekEnabled
+		cfg.RemoteReviewersEnabled = *input.DeepSeekEnabled
+	}
+	usesRemoteReviewerPoolInput := input.RemoteReviewers != nil ||
+		input.RemoteReviewersEnabled != nil || input.RemoteConsensusRequired != nil ||
+		input.RemoteUnavailablePolicy != nil
+	if input.RemoteReviewersEnabled != nil {
+		if *input.RemoteReviewersEnabled && legacyRemoteReviewerConfig {
+			cfg.DeepSeekChannels = migrateContentModerationRemoteReviewerChannels(cfg.DeepSeekChannels)
+		}
+		cfg.RemoteReviewersEnabled = *input.RemoteReviewersEnabled
+		cfg.DeepSeekEnabled = *input.RemoteReviewersEnabled
+		cfg.RemoteReviewersVersion = 1
+	}
+	if input.RemoteConsensusRequired != nil {
+		cfg.RemoteConsensusRequired = *input.RemoteConsensusRequired
+	}
+	if input.RemoteUnavailablePolicy != nil {
+		cfg.RemoteUnavailablePolicy = strings.TrimSpace(*input.RemoteUnavailablePolicy)
 	}
 	if input.YuFengEnabled != nil {
 		cfg.YuFengEnabled = *input.YuFengEnabled
+	}
+	if input.YuFengMode != nil {
+		cfg.YuFengMode = strings.TrimSpace(*input.YuFengMode)
 	}
 	if input.DeepSeekTotalTimeoutMS != nil {
 		cfg.DeepSeekTotalTimeoutMS = *input.DeepSeekTotalTimeoutMS
@@ -904,12 +948,34 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if input.DeepSeekThreshold != nil {
 		cfg.DeepSeekThreshold = *input.DeepSeekThreshold
 	}
-	if input.DeepSeekChannels != nil {
+	if input.RemoteReviewers != nil {
+		baseChannels := cfg.DeepSeekChannels
+		if legacyRemoteReviewerConfig && cfg.RemoteReviewersEnabled {
+			baseChannels = migrateContentModerationRemoteReviewerChannels(baseChannels)
+		}
+		channels, err := s.mergeContentModerationDeepSeekChannelInputs(baseChannels, *input.RemoteReviewers)
+		if err != nil {
+			return nil, infraerrors.BadRequest("INVALID_REMOTE_REVIEWERS", err.Error())
+		}
+		if legacyRemoteReviewerConfig && cfg.RemoteReviewersEnabled {
+			channels = migrateContentModerationRemoteReviewerChannels(channels)
+		}
+		cfg.DeepSeekChannels = channels
+		cfg.RemoteReviewersVersion = 1
+	} else if input.DeepSeekChannels != nil {
 		channels, err := s.mergeContentModerationDeepSeekChannelInputs(cfg.DeepSeekChannels, *input.DeepSeekChannels)
 		if err != nil {
 			return nil, infraerrors.BadRequest("INVALID_DEEPSEEK_CHANNELS", err.Error())
 		}
 		cfg.DeepSeekChannels = channels
+		if !usesRemoteReviewerPoolInput {
+			// Keep the old write-only DeepSeek API compatible. The explicit zero
+			// version survives a reload and prevents this legacy one-channel write
+			// from being silently expanded until the caller opts into
+			// remote_reviewers.
+			cfg.RemoteReviewersVersion = 0
+			cfg.RemoteReviewersEnabled = cfg.DeepSeekEnabled
+		}
 	}
 	if input.BlockStatus != nil {
 		cfg.BlockStatus = *input.BlockStatus
@@ -1520,6 +1586,9 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		DeepSeekSelectedCount:      s.deepSeekSelectedCount.Load(),
 		DeepSeekFailoverCount:      s.deepSeekFailoverCount.Load(),
 		DeepSeekUnavailableCount:   s.deepSeekUnavailableCount.Load(),
+		RemoteSelectedCount:        s.deepSeekSelectedCount.Load(),
+		RemoteFailoverCount:        s.deepSeekFailoverCount.Load(),
+		RemoteUnavailableCount:     s.deepSeekUnavailableCount.Load(),
 		ArchiveRuntime:             s.archiveRuntime.Status(),
 
 		DeepSeekResponseReadTimeoutCount: s.reviewObservability.deepSeekResponseReadTimeoutCount.Load(),
@@ -1589,24 +1658,99 @@ func (s *ContentModerationService) loadConfig(ctx context.Context) (*ContentMode
 
 func parseContentModerationConfig(raw string) (*ContentModerationConfig, error) {
 	cfg := defaultContentModerationConfig()
-	if strings.TrimSpace(raw) == "" {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		upgradeContentModerationRemoteReviewerConfig(cfg)
 		cfg.normalize()
 		return cfg, nil
 	}
-	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
+	if err := json.Unmarshal([]byte(trimmed), cfg); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CONFIG", "内容审计配置不是有效 JSON")
 	}
 	var storedPolicy struct {
 		FragmentTTLPolicyVersion *string `json:"fragment_ttl_policy_version"`
 	}
-	if err := json.Unmarshal([]byte(raw), &storedPolicy); err == nil && storedPolicy.FragmentTTLPolicyVersion == nil {
+	if err := json.Unmarshal([]byte(trimmed), &storedPolicy); err == nil && storedPolicy.FragmentTTLPolicyVersion == nil {
 		cfg.FragmentTTLPolicyVersion = contentModerationLegacyFragmentTTLPolicyVersion
 	}
+	upgradeContentModerationRemoteReviewerConfigFromJSON(cfg, trimmed)
 	if strings.TrimSpace(cfg.Mode) == legacyContentModerationModeObserve {
 		cfg.Mode = ContentModerationModePreBlock
 	}
 	cfg.normalize()
 	return cfg, nil
+}
+
+// upgradeContentModerationRemoteReviewerConfig moves the effective default or
+// a legacy persisted configuration to the provider-neutral reviewer pool.
+// Keeping this boundary outside normalize is intentional: normalize is also
+// used by in-memory legacy evaluators and test fixtures that only have one
+// DeepSeek channel.
+func upgradeContentModerationRemoteReviewerConfig(cfg *ContentModerationConfig) {
+	if cfg == nil {
+		return
+	}
+	cfg.DeepSeekChannels = migrateContentModerationRemoteReviewerChannels(cfg.DeepSeekChannels)
+	cfg.RemoteReviewersEnabled = true
+	cfg.DeepSeekEnabled = true
+	cfg.RemoteConsensusRequired = contentModerationRemoteConsensusVotes
+	cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableFailClosed
+	cfg.RemoteReviewersVersion = 1
+}
+
+func upgradeContentModerationRemoteReviewerConfigFromJSON(cfg *ContentModerationConfig, raw string) {
+	if cfg == nil {
+		return
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return
+	}
+	if len(fields) == 0 {
+		upgradeContentModerationRemoteReviewerConfig(cfg)
+		return
+	}
+	// A partial legacy object such as {"mode":"observe"} is commonly used
+	// by callers as an in-memory override. Only upgrade objects that actually
+	// carry moderation-provider settings; an empty setting is handled above.
+	_, hasLegacyToggle := fields["deepseek_enabled"]
+	_, hasLegacyChannels := fields["deepseek_channels"]
+	_, hasLocalReviewer := fields["yufeng_enabled"]
+	_, hasRemoteToggle := fields["remote_reviewers_enabled"]
+	_, hasRemoteChannels := fields["remote_reviewers"]
+	_, hasRemoteVersion := fields["remote_reviewers_version"]
+	if !hasLegacyToggle && !hasLegacyChannels && !hasLocalReviewer &&
+		!hasRemoteToggle && !hasRemoteChannels && !hasRemoteVersion {
+		return
+	}
+	if hasRemoteVersion && cfg.RemoteReviewersVersion == 0 {
+		// An explicit zero is written by legacy API callers and is different
+		// from an old persisted object that predates the version field.
+		return
+	}
+	if cfg.RemoteReviewersVersion >= 1 {
+		cfg.DeepSeekEnabled = cfg.RemoteReviewersEnabled
+		cfg.RemoteConsensusRequired = contentModerationRemoteConsensusVotes
+		return
+	}
+	if hasRemoteToggle && !cfg.RemoteReviewersEnabled {
+		cfg.DeepSeekChannels = migrateContentModerationRemoteReviewerChannels(cfg.DeepSeekChannels)
+		cfg.DeepSeekEnabled = false
+		cfg.RemoteReviewersVersion = 1
+		cfg.RemoteConsensusRequired = contentModerationRemoteConsensusVotes
+		return
+	}
+	// An explicitly disabled legacy DeepSeek reviewer remains local-only, but
+	// is still versioned so YuFeng cannot become an Enforce blocker after the
+	// migration. The remote channels are retained for later re-enablement.
+	if hasLegacyToggle && !cfg.DeepSeekEnabled && !hasRemoteToggle && !hasRemoteChannels {
+		cfg.DeepSeekChannels = migrateContentModerationRemoteReviewerChannels(cfg.DeepSeekChannels)
+		cfg.RemoteReviewersEnabled = false
+		cfg.RemoteReviewersVersion = 1
+		cfg.RemoteConsensusRequired = contentModerationRemoteConsensusVotes
+		return
+	}
+	upgradeContentModerationRemoteReviewerConfig(cfg)
 }
 
 func (s *ContentModerationService) loadRuntimeSnapshot(ctx context.Context) (*contentModerationRuntimeSnapshot, error) {
@@ -2242,28 +2386,36 @@ func (s *ContentModerationService) siteName(ctx context.Context) string {
 
 func defaultContentModerationConfig() *ContentModerationConfig {
 	return &ContentModerationConfig{
-		Enabled:                false,
-		Mode:                   ContentModerationModePreBlock,
-		DeepSeekEnabled:        true,
-		YuFengEnabled:          false,
-		DeepSeekTotalTimeoutMS: DefaultContentModerationDeepSeekTotalTimeoutMS,
-		DeepSeekThreshold:      DefaultContentModerationDeepSeekThreshold,
-		DeepSeekChannels:       defaultContentModerationDeepSeekChannels(),
-		AllGroups:              true,
-		GroupIDs:               []int64{},
-		UserEmailWhitelist:     []string{},
-		RecordNonHits:          false,
-		BlockStatus:            defaultContentModerationBlockHTTPStatus,
-		BlockMessage:           defaultContentModerationBlockMessage,
-		EmailOnHit:             true,
-		AutoBanEnabled:         true,
-		BanThreshold:           defaultContentModerationBanThreshold,
-		ViolationWindowHours:   defaultContentModerationViolationWindowHours,
-		HitRetentionDays:       defaultContentModerationHitRetentionDays,
-		NonHitRetentionDays:    defaultContentModerationNonHitRetentionDays,
-		PreHashCheckEnabled:    false,
-		BlockedKeywords:        []string{},
-		KeywordBlockingMode:    ContentModerationKeywordModeKeywordAndAPI,
+		Enabled:         false,
+		Mode:            ContentModerationModePreBlock,
+		DeepSeekEnabled: true,
+		// The constructor remains compatible with callers that build an
+		// in-memory legacy config. parseContentModerationConfig upgrades the
+		// actual persisted/default config to the four-provider pool.
+		RemoteReviewersEnabled:  false,
+		RemoteConsensusRequired: 1,
+		RemoteUnavailablePolicy: ContentModerationRemoteUnavailableFailClosed,
+		RemoteReviewersVersion:  0,
+		YuFengEnabled:           false,
+		YuFengMode:              ContentModerationYuFengModeShadow,
+		DeepSeekTotalTimeoutMS:  DefaultContentModerationDeepSeekTotalTimeoutMS,
+		DeepSeekThreshold:       DefaultContentModerationDeepSeekThreshold,
+		DeepSeekChannels:        defaultContentModerationDeepSeekChannels(),
+		AllGroups:               true,
+		GroupIDs:                []int64{},
+		UserEmailWhitelist:      []string{},
+		RecordNonHits:           false,
+		BlockStatus:             defaultContentModerationBlockHTTPStatus,
+		BlockMessage:            defaultContentModerationBlockMessage,
+		EmailOnHit:              true,
+		AutoBanEnabled:          true,
+		BanThreshold:            defaultContentModerationBanThreshold,
+		ViolationWindowHours:    defaultContentModerationViolationWindowHours,
+		HitRetentionDays:        defaultContentModerationHitRetentionDays,
+		NonHitRetentionDays:     defaultContentModerationNonHitRetentionDays,
+		PreHashCheckEnabled:     false,
+		BlockedKeywords:         []string{},
+		KeywordBlockingMode:     ContentModerationKeywordModeKeywordAndAPI,
 		ModelFilter: ContentModerationModelFilter{
 			Type:   ContentModerationModelFilterAll,
 			Models: []string{},
@@ -2320,8 +2472,38 @@ func (cfg *ContentModerationConfig) normalize() {
 	if cfg.DeepSeekThreshold == 0 {
 		cfg.DeepSeekThreshold = DefaultContentModerationDeepSeekThreshold
 	}
+	if cfg.RemoteReviewersVersion == 0 && !cfg.DeepSeekEnabled {
+		// Legacy callers used DeepSeekEnabled as the sole switch. Preserve an
+		// explicit local-only configuration while it is being migrated.
+		cfg.RemoteReviewersEnabled = false
+	}
+	if cfg.RemoteReviewersVersion >= 1 {
+		// The provider-neutral toggle is authoritative once the pool schema is
+		// present. Keep the legacy alias synchronized for older API consumers,
+		// including the explicit disabled state.
+		cfg.DeepSeekEnabled = cfg.RemoteReviewersEnabled
+		cfg.RemoteConsensusRequired = contentModerationRemoteConsensusVotes
+	} else if cfg.RemoteConsensusRequired <= 0 {
+		cfg.RemoteConsensusRequired = 1
+	}
+	if cfg.RemoteUnavailablePolicy == "" {
+		cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableFailClosed
+	}
+	if cfg.RemoteUnavailablePolicy != ContentModerationRemoteUnavailableFailClosed {
+		cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableFailClosed
+	}
+	if cfg.YuFengMode == "" {
+		cfg.YuFengMode = ContentModerationYuFengModeShadow
+	}
+	if cfg.YuFengMode != ContentModerationYuFengModeShadow {
+		cfg.YuFengMode = ContentModerationYuFengModeShadow
+	}
 	if cfg.DeepSeekChannels == nil {
-		cfg.DeepSeekChannels = defaultContentModerationDeepSeekChannels()
+		if cfg.RemoteReviewersVersion >= 1 {
+			cfg.DeepSeekChannels = defaultContentModerationRemoteReviewerChannels()
+		} else {
+			cfg.DeepSeekChannels = defaultContentModerationDeepSeekChannels()
+		}
 	} else {
 		cfg.DeepSeekChannels = normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels)
 	}
@@ -2451,11 +2633,16 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		Enabled:                        cfg.Enabled,
 		Mode:                           cfg.Mode,
 		DeepSeekEnabled:                cfg.DeepSeekEnabled,
+		RemoteReviewersEnabled:         contentModerationRemoteReviewersEnabled(cfg),
+		RemoteConsensusRequired:        contentModerationRemoteConsensusVotesRequired(cfg),
+		RemoteUnavailablePolicy:        cfg.RemoteUnavailablePolicy,
 		YuFengEnabled:                  cfg.YuFengEnabled,
+		YuFengMode:                     cfg.YuFengMode,
 		DeepSeekTotalTimeoutMS:         cfg.DeepSeekTotalTimeoutMS,
 		DeepSeekThreshold:              cfg.DeepSeekThreshold,
 		PolicyVersion:                  ContentModerationDeepSeekPromptVersion,
 		DeepSeekChannels:               s.contentModerationDeepSeekChannelViews(cfg.DeepSeekChannels),
+		RemoteReviewers:                s.contentModerationDeepSeekChannelViews(cfg.DeepSeekChannels),
 		AllGroups:                      cfg.AllGroups,
 		GroupIDs:                       append([]int64(nil), cfg.GroupIDs...),
 		UserEmailWhitelist:             append([]string(nil), cfg.UserEmailWhitelist...),

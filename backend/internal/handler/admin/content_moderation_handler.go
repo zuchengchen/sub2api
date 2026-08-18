@@ -25,23 +25,28 @@ func NewContentModerationHandler(svc *service.ContentModerationService) *Content
 }
 
 type contentModerationConfigRequest struct {
-	Enabled                *bool                                            `json:"enabled"`
-	Mode                   *string                                          `json:"mode"`
-	DeepSeekEnabled        *bool                                            `json:"deepseek_enabled"`
-	YuFengEnabled          *bool                                            `json:"yufeng_enabled"`
-	DeepSeekTotalTimeoutMS *int                                             `json:"deepseek_total_timeout_ms"`
-	DeepSeekThreshold      *float64                                         `json:"deepseek_threshold"`
-	DeepSeekChannels       *[]service.ContentModerationDeepSeekChannelInput `json:"deepseek_channels"`
-	AllGroups              *bool                                            `json:"all_groups"`
-	GroupIDs               *[]int64                                         `json:"group_ids"`
-	UserEmailWhitelist     *[]string                                        `json:"user_email_whitelist"`
-	RecordNonHits          *bool                                            `json:"record_non_hits"`
-	BlockStatus            *int                                             `json:"block_status"`
-	BlockMessage           *string                                          `json:"block_message"`
-	EmailOnHit             *bool                                            `json:"email_on_hit"`
-	AutoBanEnabled         *bool                                            `json:"auto_ban_enabled"`
-	BanThreshold           *int                                             `json:"ban_threshold"`
-	ViolationWindowHours   *int                                             `json:"violation_window_hours"`
+	Enabled                 *bool                                            `json:"enabled"`
+	Mode                    *string                                          `json:"mode"`
+	DeepSeekEnabled         *bool                                            `json:"deepseek_enabled"`
+	RemoteReviewersEnabled  *bool                                            `json:"remote_reviewers_enabled"`
+	RemoteConsensusRequired *int                                             `json:"remote_consensus_required"`
+	RemoteUnavailablePolicy *string                                          `json:"remote_unavailable_policy"`
+	YuFengEnabled           *bool                                            `json:"yufeng_enabled"`
+	YuFengMode              *string                                          `json:"yufeng_mode"`
+	DeepSeekTotalTimeoutMS  *int                                             `json:"deepseek_total_timeout_ms"`
+	DeepSeekThreshold       *float64                                         `json:"deepseek_threshold"`
+	DeepSeekChannels        *[]service.ContentModerationDeepSeekChannelInput `json:"deepseek_channels"`
+	RemoteReviewers         *[]service.ContentModerationDeepSeekChannelInput `json:"remote_reviewers"`
+	AllGroups               *bool                                            `json:"all_groups"`
+	GroupIDs                *[]int64                                         `json:"group_ids"`
+	UserEmailWhitelist      *[]string                                        `json:"user_email_whitelist"`
+	RecordNonHits           *bool                                            `json:"record_non_hits"`
+	BlockStatus             *int                                             `json:"block_status"`
+	BlockMessage            *string                                          `json:"block_message"`
+	EmailOnHit              *bool                                            `json:"email_on_hit"`
+	AutoBanEnabled          *bool                                            `json:"auto_ban_enabled"`
+	BanThreshold            *int                                             `json:"ban_threshold"`
+	ViolationWindowHours    *int                                             `json:"violation_window_hours"`
 	// cyber_policy 命中是否排除出自动封号计数；前端 RiskControlView 已发送该字段，
 	// service.UpdateContentModerationConfigInput 已支持，此前 handler 层缺透传导致开关静默失效。
 	CyberPolicyExcludeFromBanCount *bool                                 `json:"cyber_policy_exclude_from_ban_count"`
@@ -92,10 +97,15 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		Enabled:                        req.Enabled,
 		Mode:                           req.Mode,
 		DeepSeekEnabled:                req.DeepSeekEnabled,
+		RemoteReviewersEnabled:         req.RemoteReviewersEnabled,
+		RemoteConsensusRequired:        req.RemoteConsensusRequired,
+		RemoteUnavailablePolicy:        req.RemoteUnavailablePolicy,
 		YuFengEnabled:                  req.YuFengEnabled,
+		YuFengMode:                     req.YuFengMode,
 		DeepSeekTotalTimeoutMS:         req.DeepSeekTotalTimeoutMS,
 		DeepSeekThreshold:              req.DeepSeekThreshold,
 		DeepSeekChannels:               req.DeepSeekChannels,
+		RemoteReviewers:                req.RemoteReviewers,
 		AllGroups:                      req.AllGroups,
 		GroupIDs:                       req.GroupIDs,
 		UserEmailWhitelist:             req.UserEmailWhitelist,

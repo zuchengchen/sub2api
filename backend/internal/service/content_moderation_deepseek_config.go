@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 )
 
 const (
@@ -25,11 +27,40 @@ const (
 	maxContentModerationDeepSeekModelRunes           = 128
 )
 
+func contentModerationRemoteReviewersEnabled(cfg *ContentModerationConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	// A zero schema version identifies an in-memory/legacy configuration that
+	// only knows the DeepSeek toggle. Once the pool schema is persisted, the
+	// provider-neutral toggle is authoritative and can be explicitly disabled.
+	return cfg.RemoteReviewersEnabled || (cfg.RemoteReviewersVersion == 0 && cfg.DeepSeekEnabled)
+}
+
+func contentModerationRemoteConsensusVotesRequired(cfg *ContentModerationConfig) int {
+	if cfg != nil && cfg.RemoteReviewersVersion == 0 {
+		// Compatibility for direct callers that predate the provider pool. All
+		// persisted pool configurations use version 1 and require two votes.
+		return 1
+	}
+	return contentModerationRemoteConsensusVotes
+}
+
+const (
+	ContentModerationRemoteProviderDeepSeek      = "deepseek"
+	ContentModerationRemoteProviderQwen          = "alibaba_qwen"
+	ContentModerationRemoteProviderGLM           = "zhipu_glm"
+	ContentModerationRemoteProviderMiMo          = "mimo"
+	ContentModerationRemoteUnavailableFailClosed = "fail_closed"
+	ContentModerationYuFengModeShadow            = "shadow"
+)
+
 var contentModerationDeepSeekChannelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 type ContentModerationDeepSeekChannel struct {
 	ID             string                               `json:"id"`
 	Name           string                               `json:"name"`
+	Provider       string                               `json:"provider,omitempty"`
 	BaseURL        string                               `json:"base_url"`
 	Model          string                               `json:"model"`
 	Enabled        bool                                 `json:"enabled"`
@@ -44,6 +75,7 @@ type ContentModerationDeepSeekChannel struct {
 type ContentModerationDeepSeekChannelInput struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
+	Provider    string `json:"provider,omitempty"`
 	BaseURL     string `json:"base_url"`
 	Model       string `json:"model"`
 	Enabled     bool   `json:"enabled"`
@@ -56,6 +88,7 @@ type ContentModerationDeepSeekChannelInput struct {
 type ContentModerationDeepSeekChannelView struct {
 	ID                  string     `json:"id"`
 	Name                string     `json:"name"`
+	Provider            string     `json:"provider"`
 	BaseURL             string     `json:"base_url"`
 	Model               string     `json:"model"`
 	Enabled             bool       `json:"enabled"`
@@ -81,16 +114,96 @@ type TestContentModerationDeepSeekChannelResult struct {
 	CheckedAt   *time.Time `json:"checked_at,omitempty"`
 }
 
+// defaultContentModerationDeepSeekChannels preserves the pre-pool in-memory
+// default used by legacy callers. Persisted configurations are upgraded by
+// parseContentModerationConfig to the provider pool below.
 func defaultContentModerationDeepSeekChannels() []ContentModerationDeepSeekChannel {
 	return []ContentModerationDeepSeekChannel{{
-		ID:        "deepseek-official",
-		Name:      "DeepSeek 官方",
-		BaseURL:   DefaultContentModerationDeepSeekBaseURL,
-		Model:     DefaultContentModerationDeepSeekModel,
-		Enabled:   true,
-		Order:     0,
-		TimeoutMS: DefaultContentModerationDeepSeekChannelTimeoutMS,
+		ID: "deepseek-official", Name: "DeepSeek", Provider: ContentModerationRemoteProviderDeepSeek,
+		BaseURL: DefaultContentModerationDeepSeekBaseURL, Model: DefaultContentModerationDeepSeekModel,
+		Enabled: true, Order: 0, TimeoutMS: DefaultContentModerationDeepSeekChannelTimeoutMS,
 	}}
+}
+
+func defaultContentModerationRemoteReviewerChannels() []ContentModerationDeepSeekChannel {
+	return []ContentModerationDeepSeekChannel{
+		{
+			ID: "deepseek-primary", Name: "DeepSeek", Provider: ContentModerationRemoteProviderDeepSeek,
+			BaseURL: DefaultContentModerationDeepSeekBaseURL, Model: DefaultContentModerationDeepSeekModel,
+			Enabled: true, Order: 0, TimeoutMS: DefaultContentModerationDeepSeekChannelTimeoutMS,
+		},
+		{
+			ID: "qwen-primary", Name: "Qwen", Provider: ContentModerationRemoteProviderQwen,
+			BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Model: "qwen3.7-flash",
+			Enabled: true, Order: 1, TimeoutMS: DefaultContentModerationDeepSeekChannelTimeoutMS,
+		},
+		{
+			ID: "glm-primary", Name: "GLM", Provider: ContentModerationRemoteProviderGLM,
+			BaseURL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-4.7-flashx",
+			Enabled: true, Order: 2, TimeoutMS: DefaultContentModerationDeepSeekChannelTimeoutMS,
+		},
+		{
+			ID: "mimo-primary", Name: "MiMo", Provider: ContentModerationRemoteProviderMiMo,
+			BaseURL: "https://api.xiaomimimo.com/v1", Model: "mimo-v2.5",
+			Enabled: true, Order: 3, TimeoutMS: DefaultContentModerationDeepSeekChannelTimeoutMS,
+		},
+	}
+}
+
+func contentModerationRemoteProviderOrder(provider string) int {
+	switch normalizeContentModerationRemoteProvider(provider) {
+	case ContentModerationRemoteProviderDeepSeek:
+		return 0
+	case ContentModerationRemoteProviderQwen:
+		return 1
+	case ContentModerationRemoteProviderGLM:
+		return 2
+	case ContentModerationRemoteProviderMiMo:
+		return 3
+	default:
+		return 99
+	}
+}
+
+func normalizeContentModerationRemoteProvider(raw string) string {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	switch normalized {
+	case "", "deepseek", "ds":
+		return ContentModerationRemoteProviderDeepSeek
+	case "qwen", "alibaba_qwen", "alibaba-qwen":
+		return ContentModerationRemoteProviderQwen
+	case "glm", "zhipu_glm", "zhipu-glm":
+		return ContentModerationRemoteProviderGLM
+	case "mimo", "mi-mo":
+		return ContentModerationRemoteProviderMiMo
+	default:
+		// Preserve an explicit unknown value so validation can reject it. It
+		// must never silently become the DeepSeek channel.
+		return normalized
+	}
+}
+
+func isSupportedContentModerationRemoteProvider(provider string) bool {
+	switch normalizeContentModerationRemoteProvider(provider) {
+	case ContentModerationRemoteProviderDeepSeek, ContentModerationRemoteProviderQwen,
+		ContentModerationRemoteProviderGLM, ContentModerationRemoteProviderMiMo:
+		return true
+	default:
+		return false
+	}
+}
+
+func contentModerationRemoteProviderPreset(provider string) (openai_compat.CompatibleProviderPreset, bool) {
+	switch normalizeContentModerationRemoteProvider(provider) {
+	case ContentModerationRemoteProviderQwen:
+		return openai_compat.CompatibleProviderPresetByID(string(openai_compat.ProviderAlibabaQwen))
+	case ContentModerationRemoteProviderGLM:
+		return openai_compat.CompatibleProviderPresetByID(string(openai_compat.ProviderZhipuGLM))
+	case ContentModerationRemoteProviderMiMo:
+		return openai_compat.CompatibleProviderPresetByID(string(openai_compat.ProviderMiMo))
+	default:
+		return openai_compat.CompatibleProviderPreset{}, false
+	}
 }
 
 func normalizeContentModerationDeepSeekChannels(channels []ContentModerationDeepSeekChannel) []ContentModerationDeepSeekChannel {
@@ -98,11 +211,23 @@ func normalizeContentModerationDeepSeekChannels(channels []ContentModerationDeep
 	for _, channel := range channels {
 		channel.ID = strings.TrimSpace(channel.ID)
 		channel.Name = strings.TrimSpace(channel.Name)
+		channel.Provider = normalizeContentModerationRemoteProvider(channel.Provider)
 		channel.BaseURL = strings.TrimRight(strings.TrimSpace(channel.BaseURL), "/")
 		channel.Model = strings.TrimSpace(channel.Model)
 		channel.APIKey = strings.TrimSpace(channel.APIKey)
 		if channel.Name == "" {
 			channel.Name = channel.ID
+		}
+		if channel.Provider == "" {
+			channel.Provider = ContentModerationRemoteProviderDeepSeek
+		}
+		if preset, ok := contentModerationRemoteProviderPreset(channel.Provider); ok {
+			if channel.BaseURL == "" {
+				channel.BaseURL = strings.TrimRight(preset.BaseURL, "/")
+			}
+			if channel.Model == "" && len(preset.Models) > 0 {
+				channel.Model = preset.Models[0]
+			}
 		}
 		if channel.Model == "" {
 			channel.Model = DefaultContentModerationDeepSeekModel
@@ -117,12 +242,56 @@ func normalizeContentModerationDeepSeekChannels(channels []ContentModerationDeep
 		out = append(out, channel)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if providerOrder := contentModerationRemoteProviderOrder(out[i].Provider) - contentModerationRemoteProviderOrder(out[j].Provider); providerOrder != 0 {
+			return providerOrder < 0
+		}
 		if out[i].Order == out[j].Order {
 			return out[i].ID < out[j].ID
 		}
 		return out[i].Order < out[j].Order
 	})
 	return out
+}
+
+// migrateContentModerationRemoteReviewerChannels upgrades pre-pool settings
+// that only contained a DeepSeek channel. Existing channel credentials and
+// names are preserved; missing managed providers are appended in policy order.
+func migrateContentModerationRemoteReviewerChannels(channels []ContentModerationDeepSeekChannel) []ContentModerationDeepSeekChannel {
+	channels = normalizeContentModerationDeepSeekChannels(channels)
+	if len(channels) == 0 {
+		return defaultContentModerationRemoteReviewerChannels()
+	}
+	seenProviders := make(map[string]struct{}, len(channels))
+	seenIDs := make(map[string]struct{}, len(channels))
+	maxOrder := -1
+	for _, channel := range channels {
+		seenProviders[contentModerationRemoteProvider(channel)] = struct{}{}
+		seenIDs[channel.ID] = struct{}{}
+		if channel.Order > maxOrder {
+			maxOrder = channel.Order
+		}
+	}
+	for _, preset := range defaultContentModerationRemoteReviewerChannels() {
+		if _, exists := seenProviders[preset.Provider]; exists {
+			continue
+		}
+		candidate := preset
+		candidate.Order = maxOrder + 1
+		maxOrder++
+		if _, exists := seenIDs[candidate.ID]; exists {
+			base := candidate.ID
+			for suffix := 2; ; suffix++ {
+				candidate.ID = fmt.Sprintf("%s-%d", base, suffix)
+				if _, used := seenIDs[candidate.ID]; !used {
+					break
+				}
+			}
+		}
+		channels = append(channels, candidate)
+		seenProviders[candidate.Provider] = struct{}{}
+		seenIDs[candidate.ID] = struct{}{}
+	}
+	return normalizeContentModerationDeepSeekChannels(channels)
 }
 
 func validateContentModerationDeepSeekChannels(channels []ContentModerationDeepSeekChannel) error {
@@ -141,6 +310,24 @@ func validateContentModerationDeepSeekChannels(channels []ContentModerationDeepS
 		ids[channel.ID] = struct{}{}
 		if channel.Order < 0 {
 			return fmt.Errorf("DeepSeek 渠道 %q 的顺序不能为负数", channel.ID)
+		}
+		if !isSupportedContentModerationRemoteProvider(channel.Provider) {
+			return fmt.Errorf("审核供应商 %q 不受支持", channel.Provider)
+		}
+		if channel.Provider == "" {
+			return errors.New("审核供应商不能为空")
+		}
+		if channel.Provider != ContentModerationRemoteProviderDeepSeek {
+			preset, ok := contentModerationRemoteProviderPreset(channel.Provider)
+			if !ok {
+				return fmt.Errorf("审核供应商 %q 不受支持", channel.Provider)
+			}
+			if strings.TrimRight(channel.BaseURL, "/") != strings.TrimRight(preset.BaseURL, "/") {
+				return fmt.Errorf("审核供应商 %q 的 Base URL 必须使用受管预设", channel.Provider)
+			}
+			if !preset.SupportsModel(channel.Model) {
+				return fmt.Errorf("审核供应商 %q 不支持模型 %q", channel.Provider, channel.Model)
+			}
 		}
 		if _, exists := orders[channel.Order]; exists {
 			return fmt.Errorf("DeepSeek 渠道顺序 %d 重复", channel.Order)
@@ -274,16 +461,26 @@ func (s *ContentModerationService) mergeContentModerationDeepSeekChannelInputs(
 		if input.ClearAPIKey && apiKey != "" {
 			return nil, fmt.Errorf("DeepSeek 渠道 %q 不能同时设置和清除 API Key", id)
 		}
+		old, hasOld := oldByID[id]
+		provider := strings.TrimSpace(input.Provider)
+		if provider == "" && hasOld {
+			// Older admin clients did not send provider. Preserve a managed
+			// provider identity when editing such a channel instead of silently
+			// converting it to the DeepSeek default.
+			provider = old.Provider
+		}
 		channel := ContentModerationDeepSeekChannel{
 			ID:        id,
 			Name:      input.Name,
+			Provider:  provider,
 			BaseURL:   input.BaseURL,
 			Model:     input.Model,
 			Enabled:   input.Enabled,
 			Order:     input.Order,
 			TimeoutMS: input.TimeoutMS,
 		}
-		if old, ok := oldByID[id]; ok && !input.ClearAPIKey && apiKey == "" {
+		if hasOld && !input.ClearAPIKey && apiKey == "" &&
+			normalizeContentModerationRemoteProvider(old.Provider) == normalizeContentModerationRemoteProvider(channel.Provider) {
 			channel.APIKeyEnvelope = cloneContentModerationCredentialEnvelope(old.APIKeyEnvelope)
 			channel.APIKey = old.APIKey
 		}
@@ -331,6 +528,7 @@ func contentModerationDeepSeekChannelViews(channels []ContentModerationDeepSeekC
 		out = append(out, ContentModerationDeepSeekChannelView{
 			ID:               channel.ID,
 			Name:             channel.Name,
+			Provider:         channel.Provider,
 			BaseURL:          channel.BaseURL,
 			Model:            channel.Model,
 			Enabled:          channel.Enabled,
@@ -365,19 +563,38 @@ func (s *ContentModerationService) contentModerationSecondLayerEnforceReadiness(
 	if cfg == nil {
 		return false, "风控配置不可用"
 	}
-	if !cfg.DeepSeekEnabled && !cfg.YuFengEnabled {
-		return false, "至少启用一个审核器后才能启用 Layer 2 Enforce"
+	if cfg.RemoteReviewersVersion == 0 && cfg.YuFengEnabled && !s.hasHealthyYuFengEndpoint(cfg, now) {
+		// Legacy configurations treated the local YuFeng endpoint as part of
+		// the Enforce gate. Versioned reviewer-pool configurations intentionally
+		// run YuFeng as shadow-only and do not use it as a gate.
+		return false, "YuFeng 没有成功完成真实审核"
 	}
-	if cfg.DeepSeekEnabled && !s.hasReachableDeepSeekChannel(cfg, now) {
-		return false, "至少一个启用且已配置密钥的 DeepSeek 渠道须在最近 15 分钟内成功完成真实审核且熔断器可用"
+	if !contentModerationRemoteReviewersEnabled(cfg) {
+		if cfg.RemoteReviewersVersion == 0 && cfg.YuFengEnabled && s.hasHealthyYuFengEndpoint(cfg, now) {
+			// Legacy local-only configurations remain readable while they are
+			// migrated. Persisted provider-pool configurations never use YuFeng
+			// as an Enforce gate.
+			return true, ""
+		}
+		if cfg.RemoteReviewersVersion == 0 && cfg.YuFengEnabled {
+			return false, "YuFeng 没有成功完成真实审核"
+		}
+		return false, "线上审核池未启用；YuFeng 旁路审核不会单独触发 Enforce"
 	}
-	if cfg.YuFengEnabled {
-		if len(cfg.enabledYuFengSecondLayerEndpoints()) == 0 {
-			return false, "YuFeng 已启用但没有可用审核端点"
+	requiredVotes := contentModerationRemoteConsensusVotesRequired(cfg)
+	configured := countConfiguredContentModerationRemoteProviders(cfg)
+	if configured < requiredVotes {
+		if requiredVotes <= 1 {
+			return false, "线上审核渠道尚未配置密钥"
 		}
-		if !s.hasHealthyYuFengEndpoint(cfg, now) {
-			return false, "YuFeng 审核器最近 15 分钟内没有成功完成真实审核"
+		return false, "线上审核池至少需要两个不同且已配置密钥的供应商才能启用 Enforce"
+	}
+	reachable := s.countReachableContentModerationRemoteProviders(cfg, now)
+	if reachable < requiredVotes {
+		if requiredVotes <= 1 {
+			return false, "线上审核渠道没有成功完成真实审核；熔断器可用状态缺失"
 		}
+		return false, "线上审核池至少需要两个不同供应商在最近 15 分钟内完成真实审核且熔断器可用"
 	}
 	return true, ""
 }
