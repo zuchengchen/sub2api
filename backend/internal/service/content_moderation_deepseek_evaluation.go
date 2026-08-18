@@ -52,6 +52,11 @@ func NewContentModerationDeepSeekEvaluator(
 	cfg := defaultContentModerationConfig()
 	cfg.Enabled = true
 	cfg.DeepSeekEnabled = true
+	// The offline evaluator may intentionally be constructed with one legacy
+	// DeepSeek channel; production configs use schema version 1 and require
+	// two distinct online votes.
+	cfg.RemoteReviewersEnabled = false
+	cfg.RemoteReviewersVersion = 0
 	cfg.YuFengEnabled = false
 	cfg.DeepSeekTotalTimeoutMS = totalTimeoutMS
 	cfg.DeepSeekThreshold = DefaultContentModerationDeepSeekThreshold

@@ -121,6 +121,37 @@ func TestContentModerationDeepSeekConfigRejectsInvalidChannelAndPlaintextWithout
 	require.Empty(t, repo.values)
 }
 
+func TestContentModerationDeepSeekConfigDoesNotReuseKeyAcrossProviders(t *testing.T) {
+	svc := &ContentModerationService{}
+	old := ContentModerationDeepSeekChannel{
+		ID: "reviewer", Name: "Reviewer", Provider: ContentModerationRemoteProviderDeepSeek,
+		BaseURL: DefaultContentModerationDeepSeekBaseURL, Model: DefaultContentModerationDeepSeekModel,
+		Enabled: true, Order: 0, TimeoutMS: 1000, APIKey: "deepseek-secret",
+		APIKeyEnvelope: &ContentModerationCredentialEnvelope{KeyID: "k1", Nonce: []byte("nonce"), Ciphertext: []byte("ciphertext")},
+	}
+	inputs := []ContentModerationDeepSeekChannelInput{{
+		ID: "reviewer", Name: "Qwen reviewer", Provider: ContentModerationRemoteProviderQwen,
+		BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Model: "qwen3.7-flash",
+		Enabled: true, Order: 0, TimeoutMS: 1000,
+	}}
+	merged, err := svc.mergeContentModerationDeepSeekChannelInputs([]ContentModerationDeepSeekChannel{old}, inputs)
+	require.NoError(t, err)
+	require.Len(t, merged, 1)
+	require.Equal(t, ContentModerationRemoteProviderQwen, merged[0].Provider)
+	require.Empty(t, merged[0].APIKey)
+	require.Nil(t, merged[0].APIKeyEnvelope)
+
+	legacyInputs := inputs
+	legacyInputs[0].Provider = ""
+	legacyInputs[0].BaseURL = DefaultContentModerationDeepSeekBaseURL
+	legacyInputs[0].Model = DefaultContentModerationDeepSeekModel
+	merged, err = svc.mergeContentModerationDeepSeekChannelInputs([]ContentModerationDeepSeekChannel{old}, legacyInputs)
+	require.NoError(t, err)
+	require.Equal(t, ContentModerationRemoteProviderDeepSeek, merged[0].Provider)
+	require.Equal(t, "deepseek-secret", merged[0].APIKey)
+	require.Equal(t, old.APIKeyEnvelope, merged[0].APIKeyEnvelope)
+}
+
 func TestParseContentModerationConfigIgnoresRetiredModerationSecrets(t *testing.T) {
 	cfg, err := parseContentModerationConfig(`{
 		"base_url":"https://legacy.invalid","model":"legacy-model","api_key":"legacy-plaintext",

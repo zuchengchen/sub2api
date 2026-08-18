@@ -195,7 +195,12 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		SecondLayerStage  string                             `json:"second_layer_stage"`
 		Endpoints         []ContentModerationEndpoint        `json:"endpoints"`
 		DeepSeekEnabled   bool                               `json:"deepseek_enabled"`
+		RemoteReviewersOn bool                               `json:"remote_reviewers_on"`
+		RemoteConsensus   int                                `json:"remote_consensus_required"`
+		RemoteUnavailable string                             `json:"remote_unavailable_policy"`
+		RemoteVersion     int                                `json:"remote_reviewers_version"`
 		YuFengEnabled     bool                               `json:"yufeng_enabled"`
+		YuFengMode        string                             `json:"yufeng_mode"`
 		DeepSeekTimeout   int                                `json:"deepseek_total_timeout_ms"`
 		DeepSeekThreshold float64                            `json:"deepseek_threshold"`
 		DeepSeekChannels  []ContentModerationDeepSeekChannel `json:"deepseek_channels"`
@@ -225,7 +230,12 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		SecondLayerStage:  normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage),
 		Endpoints:         normalizeContentModerationEndpoints(cfg.SecondLayerEndpoints),
 		DeepSeekEnabled:   cfg.DeepSeekEnabled,
+		RemoteReviewersOn: cfg.RemoteReviewersEnabled,
+		RemoteConsensus:   cfg.RemoteConsensusRequired,
+		RemoteUnavailable: strings.TrimSpace(cfg.RemoteUnavailablePolicy),
+		RemoteVersion:     cfg.RemoteReviewersVersion,
 		YuFengEnabled:     cfg.YuFengEnabled,
+		YuFengMode:        strings.TrimSpace(cfg.YuFengMode),
 		DeepSeekTimeout:   cfg.DeepSeekTotalTimeoutMS,
 		DeepSeekThreshold: cfg.DeepSeekThreshold,
 		DeepSeekChannels:  normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels),
