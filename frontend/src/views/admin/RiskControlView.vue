@@ -154,6 +154,55 @@
           </div>
         </section>
 
+        <section aria-labelledby="managed-providers-heading" data-test="managed-provider-catalog">
+          <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 id="managed-providers-heading" class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t('admin.riskControl.managedProvidersTitle') }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t('admin.riskControl.managedProvidersSummary') }}
+              </p>
+            </div>
+            <span class="rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300">
+              {{ t('admin.riskControl.managedProvidersNonThinking') }}
+            </span>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <article
+              v-for="provider in managedProviderRows"
+              :key="provider.id"
+              class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800"
+              :data-test="`managed-provider-${provider.id}`"
+            >
+              <div class="flex min-w-0 items-start gap-3">
+                <span
+                  class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300"
+                >
+                  <Icon name="server" size="sm" />
+                </span>
+                <div class="min-w-0">
+                  <h3 class="truncate font-semibold text-gray-900 dark:text-white">{{ provider.label }}</h3>
+                  <p class="mt-1 truncate font-mono text-xs text-gray-500 dark:text-gray-400">{{ provider.id }}</p>
+                </div>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-1.5">
+                <span
+                  v-for="model in provider.models"
+                  :key="model"
+                  class="rounded-md bg-gray-100 px-2 py-1 font-mono text-xs text-gray-700 dark:bg-dark-700 dark:text-gray-300"
+                >
+                  {{ model }}
+                </span>
+              </div>
+              <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.riskControl.managedProviderModelsCount', { count: provider.models.length }) }}
+              </p>
+            </article>
+          </div>
+        </section>
+
         <section aria-labelledby="stages-heading">
           <div class="mb-4">
             <h2 id="stages-heading" class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -553,7 +602,7 @@
               </label>
               <label>
                 <span class="input-label">{{ t('admin.riskControl.modelFilter') }}</span>
-                <select v-model="configForm.model_filter_type" class="input">
+                <select v-model="configForm.model_filter_type" class="input" data-test="model-filter-type">
                   <option value="all">{{ t('admin.riskControl.modelFilterAll') }}</option>
                   <option value="include">{{ t('admin.riskControl.modelFilterInclude') }}</option>
                   <option value="exclude">{{ t('admin.riskControl.modelFilterExclude') }}</option>
@@ -564,7 +613,34 @@
                 v-model="configForm.model_filter_models_text"
                 class="input min-h-20 resize-y font-mono text-sm"
                 :placeholder="t('admin.riskControl.modelFilterModels')"
+                data-test="model-filter-models"
               ></textarea>
+              <div v-if="configForm.model_filter_type !== 'all'" class="space-y-2" data-test="managed-model-filter-presets">
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.riskControl.managedProviderFilterHint') }}
+                </p>
+                <div v-for="provider in managedProviderRows" :key="provider.id" class="space-y-1.5">
+                  <p class="text-xs font-medium text-gray-600 dark:text-gray-300">{{ provider.label }}</p>
+                  <div class="flex flex-wrap gap-1.5">
+                    <button
+                      v-for="model in provider.models"
+                      :key="model"
+                      type="button"
+                      class="inline-flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-xs transition-colors"
+                      :class="
+                        isModelFilterSelected(model)
+                          ? 'border-primary-300 bg-primary-50 text-primary-700 dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
+                          : 'border-gray-200 text-gray-600 hover:border-primary-300 hover:text-primary-700 dark:border-dark-600 dark:text-gray-300 dark:hover:border-primary-700 dark:hover:text-primary-300'
+                      "
+                      :data-test="`managed-model-filter-${model.replace(/[^a-z0-9]+/gi, '-')}`"
+                      @click="toggleModelFilterModel(model)"
+                    >
+                      <Icon :name="isModelFilterSelected(model) ? 'check' : 'plus'" size="xs" />
+                      {{ model }}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div class="space-y-4">
@@ -882,6 +958,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import { OPENAI_COMPATIBLE_PROVIDER_PRESETS } from '@/components/account/openAICompatibleProviderPresets'
 import { adminAPI } from '@/api/admin'
 import type {
   ContentModerationConfig,
@@ -1026,6 +1103,13 @@ const layerRows = computed(() => [
     stage: configForm.second_layer_stage,
   },
 ])
+
+const managedProviderRows = computed(() =>
+  OPENAI_COMPATIBLE_PROVIDER_PRESETS.map((provider) => ({
+    ...provider,
+    label: t(`admin.riskControl.managedProviders.${provider.labelKey}`),
+  }))
+)
 
 const enabledChannelCount = computed(() => configForm.deepseek_channels.filter((channel) => channel.enabled).length)
 const reachableChannelCount = computed(
@@ -1369,6 +1453,18 @@ function normalizeChannelOrder() {
   configForm.deepseek_channels.forEach((channel, index) => {
     channel.order = index
   })
+}
+
+function isModelFilterSelected(model: string): boolean {
+  return parseLineList(configForm.model_filter_models_text).includes(model)
+}
+
+function toggleModelFilterModel(model: string) {
+  const models = parseLineList(configForm.model_filter_models_text)
+  const index = models.indexOf(model)
+  if (index >= 0) models.splice(index, 1)
+  else models.push(model)
+  configForm.model_filter_models_text = models.join('\n')
 }
 
 function toggleClearChannelKey(channel: EditableDeepSeekChannel) {

@@ -256,6 +256,22 @@ describe('admin RiskControlView', () => {
     wrapper.unmount()
   })
 
+  it('shows the managed gateway providers and offers their models in the risk scope', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const catalog = wrapper.get('[data-test="managed-provider-catalog"]')
+    expect(catalog.text()).toContain('mimo-v2.5')
+    expect(catalog.text()).toContain('glm-4.7-flashx')
+    expect(catalog.text()).toContain('qwen3.7-flash')
+
+    await wrapper.get('[data-test="model-filter-type"]').setValue('include')
+    await wrapper.get('[data-test="managed-model-filter-mimo-v2-5"]').trigger('click')
+
+    expect(wrapper.get('[data-test="model-filter-models"]').element).toHaveProperty('value', 'mimo-v2.5')
+    wrapper.unmount()
+  })
+
   it('shows production Layer 2 dedup cache counters in the overview', async () => {
     const wrapper = mountView()
     await flushPromises()
