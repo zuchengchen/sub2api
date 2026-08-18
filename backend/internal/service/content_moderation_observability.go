@@ -31,7 +31,11 @@ type contentModerationReviewFailureSummary struct {
 func summarizeContentModerationReviewFailure(reviewErr error, attempts []ContentModerationReviewAttempt) contentModerationReviewFailureSummary {
 	var summary contentModerationReviewFailureSummary
 	for _, attempt := range attempts {
-		if !strings.EqualFold(strings.TrimSpace(attempt.Reviewer), "deepseek") {
+		provider := strings.TrimSpace(attempt.Provider)
+		if provider == "" {
+			provider = strings.TrimSpace(attempt.Reviewer)
+		}
+		if !isSupportedContentModerationRemoteProvider(provider) {
 			continue
 		}
 		errorClass := strings.ToLower(strings.TrimSpace(attempt.Error))

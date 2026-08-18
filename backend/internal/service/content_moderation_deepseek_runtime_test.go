@@ -70,6 +70,7 @@ func TestContentModerationDeepSeekRuntimeStrictResponseParsing(t *testing.T) {
 		finishReason string
 		wantBlocked  bool
 		wantCategory string
+		wantReason   string
 		wantError    string
 	}{
 		{
@@ -79,6 +80,11 @@ func TestContentModerationDeepSeekRuntimeStrictResponseParsing(t *testing.T) {
 		{
 			name: "point eighty is risky", content: `{"confidence":0.80,"category":"cyber_abuse","reason":"未授权攻击"}`,
 			wantBlocked: true, wantCategory: "cyber_abuse",
+		},
+		{
+			name: "overlong reason is bounded", content: `{"confidence":0.80,"category":"cyber_abuse","reason":"一二三四五六七八九十一二三四五六七八九十超"}`,
+			wantBlocked: true, wantCategory: "cyber_abuse",
+			wantReason: "一二三四五六七八九十一二三四五六七八九十",
 		},
 		{
 			name: "missing confidence", content: `{"category":"safe","reason":""}`,
@@ -133,8 +139,41 @@ func TestContentModerationDeepSeekRuntimeStrictResponseParsing(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tt.wantBlocked, result.Blocked)
 			require.Equal(t, tt.wantCategory, result.Category)
+			if tt.wantReason != "" {
+				require.Equal(t, tt.wantReason, result.Reason)
+				require.Len(t, []rune(result.Reason), 20)
+			}
 		})
 	}
+}
+
+func TestContentModerationDeepSeekRuntimeCompatibilityPathAcceptsOverlongReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t,
+			w,
+			`{"confidence":0.91,"category":"cyber_abuse","reason":"一二三四五六七八九十一二三四五六七八九十超"}`,
+			"stop",
+		)
+	}))
+	defer server.Close()
+
+	channel := contentModerationDeepSeekRuntimeTestChannel("compatibility", server.URL, 0)
+	cfg := contentModerationDeepSeekRuntimeTestConfig(channel)
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
+
+	result, attempted, err := svc.scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationDeepSeekRuntimeTestInput(t, "审核候选文本"),
+	)
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.True(t, result.Blocked)
+	require.Equal(t, "single_violation", result.ConsensusStatus)
+	require.Equal(t, "一二三四五六七八九十一二三四五六七八九十", result.Reason)
+	require.Len(t, result.ReviewAttempts, 1)
+	require.Equal(t, http.StatusOK, result.ReviewAttempts[0].HTTPStatus)
+	require.Equal(t, "success", result.ReviewAttempts[0].Outcome)
+	require.Empty(t, result.ReviewAttempts[0].Error)
 }
 
 func TestContentModerationDeepSeekRuntimeFailsOverSequentially(t *testing.T) {

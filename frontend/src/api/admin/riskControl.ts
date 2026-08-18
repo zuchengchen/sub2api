@@ -5,6 +5,7 @@ export type ContentModerationLayerStage = 'enforce' | 'shadow'
 export type ContentModerationFirstLayerStage = ContentModerationLayerStage
 export type ContentModerationSecondLayerStage = ContentModerationLayerStage
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
+export type ContentModerationRemoteProvider = 'deepseek' | 'alibaba_qwen' | 'zhipu_glm' | 'mimo'
 export type DeepSeekBreakerState =
   | 'closed'
   | 'cooldown'
@@ -22,6 +23,7 @@ export interface ContentModerationModelFilter {
 export interface DeepSeekModerationChannel {
   id: string
   name: string
+  provider?: ContentModerationRemoteProvider | string
   base_url: string
   model: string
   enabled: boolean
@@ -40,6 +42,7 @@ export interface DeepSeekModerationChannel {
 export interface UpdateDeepSeekModerationChannel {
   id: string
   name: string
+  provider?: ContentModerationRemoteProvider | string
   base_url: string
   model: string
   enabled: boolean
@@ -77,11 +80,16 @@ export interface ContentModerationConfig {
   enabled: boolean
   mode: ModerationMode
   deepseek_enabled?: boolean
+  remote_reviewers_enabled?: boolean
+  remote_consensus_required?: number
+  remote_unavailable_policy?: string
   yufeng_enabled?: boolean
+  yufeng_mode?: 'shadow' | string
   deepseek_total_timeout_ms?: number
   deepseek_threshold?: number
   policy_version?: string
   deepseek_channels?: DeepSeekModerationChannel[]
+  remote_reviewers?: DeepSeekModerationChannel[]
   all_groups?: boolean
   group_ids?: number[]
   user_email_whitelist?: string[]
@@ -116,10 +124,15 @@ export interface UpdateContentModerationConfig {
   enabled?: boolean
   mode?: ModerationMode
   deepseek_enabled?: boolean
+  remote_reviewers_enabled?: boolean
+  remote_consensus_required?: number
+  remote_unavailable_policy?: string
   yufeng_enabled?: boolean
+  yufeng_mode?: 'shadow' | string
   deepseek_total_timeout_ms?: number
   deepseek_threshold?: number
   deepseek_channels?: UpdateDeepSeekModerationChannel[]
+  remote_reviewers?: UpdateDeepSeekModerationChannel[]
   all_groups?: boolean
   group_ids?: number[]
   user_email_whitelist?: string[]
@@ -173,6 +186,9 @@ export interface ContentModerationRuntimeStatus {
   deepseek_selected_count?: number
   deepseek_failover_count?: number
   deepseek_unavailable_count?: number
+  remote_selected_count?: number
+  remote_failover_count?: number
+  remote_unavailable_count?: number
   deepseek_response_read_timeout_count?: number
   deepseek_breaker_skip_count?: number
   deepseek_cooldown_skip_count?: number
@@ -206,10 +222,14 @@ export interface ContentModerationEvidenceWindow {
 
 export interface DeepSeekReviewAttempt {
   reviewer?: string
+  provider?: string
   channel_id?: string
   channel_name?: string
   model?: string
   outcome?: string
+  verdict?: string
+  role?: string
+  confidence?: number
   http_status?: number
   latency_ms?: number
   error?: string

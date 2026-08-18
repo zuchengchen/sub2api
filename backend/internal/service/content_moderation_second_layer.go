@@ -40,6 +40,8 @@ type contentModerationSecondLayerResult struct {
 	KeywordRuleID     string
 	ReviewAttempts    []ContentModerationReviewAttempt
 	ReviewerMismatch  bool
+	ConsensusStatus   string
+	RemoteVotes       int
 }
 
 func (s *ContentModerationService) scanUnifiedSecondLayer(ctx context.Context, cfg *ContentModerationConfig, text string) (contentModerationSecondLayerResult, bool, error) {
@@ -55,7 +57,7 @@ func (s *ContentModerationService) scanUnifiedSecondLayerFragment(ctx context.Co
 }
 
 func (s *ContentModerationService) scanUnifiedSecondLayerFragmentWithTier(ctx context.Context, cfg *ContentModerationConfig, fragment ContentModerationFragment, keywordTier, keywordRuleID string) (contentModerationSecondLayerResult, bool, error) {
-	if cfg == nil || !cfg.SecondLayerEnabled || (!cfg.DeepSeekEnabled && !cfg.YuFengEnabled) {
+	if cfg == nil || !cfg.SecondLayerEnabled || (!contentModerationRemoteReviewersEnabled(cfg) && !cfg.YuFengEnabled) {
 		return contentModerationSecondLayerResult{}, false, nil
 	}
 	limit := contentModerationEvidenceWindowBudgetRunes
@@ -75,29 +77,83 @@ func (s *ContentModerationService) scanUnifiedSecondLayerPrepared(ctx context.Co
 	if cfg == nil || !cfg.SecondLayerEnabled || strings.TrimSpace(input.Evidence.Text) == "" {
 		return contentModerationSecondLayerResult{}, false, nil
 	}
-	if !cfg.DeepSeekEnabled && !cfg.YuFengEnabled {
+	if !contentModerationRemoteReviewersEnabled(cfg) && !cfg.YuFengEnabled {
 		return contentModerationSecondLayerResult{}, false, nil
 	}
 
-	deepSeekResult, deepSeekAttempted, deepSeekErr := s.scanContentModerationDeepSeek(ctx, cfg, input)
-	if cfg.DeepSeekEnabled {
-		if deepSeekErr != nil {
-			return deepSeekResult, deepSeekAttempted, deepSeekErr
-		}
-		if !deepSeekAttempted {
-			return deepSeekResult, false, errors.New("DeepSeek review was not attempted")
-		}
-		if !deepSeekResult.Blocked || !cfg.YuFengEnabled {
-			return deepSeekResult, true, nil
-		}
+	remoteEnabled := contentModerationRemoteReviewersEnabled(cfg)
+	var remoteResult contentModerationSecondLayerResult
+	var remoteAttempted bool
+	var remoteErr error
+	if remoteEnabled {
+		remoteResult, remoteAttempted, remoteErr = s.scanContentModerationDeepSeek(ctx, cfg, input)
 	}
 
+	// YuFeng is deliberately independent from the remote consensus. Run it
+	// whenever enabled so the local model remains observable even if every
+	// paid endpoint is unavailable, but never let its verdict create a block.
+	if cfg.YuFengEnabled {
+		yuFengResult, yuFengAttempt, yuFengErr := s.scanContentModerationYuFengShadow(ctx, cfg, input)
+		if remoteEnabled {
+			remoteResult.ReviewAttempts = append(remoteResult.ReviewAttempts, yuFengAttempt)
+			if remoteErr == nil && remoteAttempted {
+				return remoteResult, true, nil
+			}
+			// Preserve the remote error for the caller's fail-closed handling;
+			// a successful local shadow does not substitute for two remote votes.
+			if remoteErr != nil {
+				return remoteResult, remoteAttempted, remoteErr
+			}
+			return remoteResult, false, errors.New("remote review was not attempted")
+		}
+		if yuFengErr != nil {
+			yuFengResult.ReviewAttempts = []ContentModerationReviewAttempt{yuFengAttempt}
+			if cfg.RemoteReviewersVersion >= 1 {
+				// YuFeng is an observational local shadow in the versioned
+				// configuration. Its outage must not become a user-facing block or
+				// an Enforce availability gate when no paid pool is enabled.
+				yuFengResult.Blocked = false
+				yuFengResult.ConsensusStatus = "local_shadow"
+				return yuFengResult, true, nil
+			}
+			return yuFengResult, false, yuFengErr
+		}
+		if cfg.RemoteReviewersVersion == 0 {
+			// Direct legacy callers used YuFeng as the only second-layer reviewer.
+			// Persisted configs are versioned during parsing and therefore always
+			// use the local-shadow contract requested by the reviewer pool policy.
+			yuFengAttempt.Role = "legacy_primary"
+			yuFengResult.ReviewAttempts = []ContentModerationReviewAttempt{yuFengAttempt}
+			return yuFengResult, true, nil
+		}
+		yuFengResult.Blocked = false
+		yuFengResult.ConsensusStatus = "local_shadow"
+		yuFengResult.ReviewAttempts = []ContentModerationReviewAttempt{yuFengAttempt}
+		return yuFengResult, true, nil
+	}
+
+	if remoteEnabled {
+		if remoteErr != nil {
+			return remoteResult, remoteAttempted, remoteErr
+		}
+		if !remoteAttempted {
+			return remoteResult, false, errors.New("remote review was not attempted")
+		}
+		return remoteResult, true, nil
+	}
+	return contentModerationSecondLayerResult{}, false, nil
+}
+
+func (s *ContentModerationService) scanContentModerationYuFengShadow(
+	ctx context.Context,
+	cfg *ContentModerationConfig,
+	input contentModerationSecondLayerInput,
+) (contentModerationSecondLayerResult, ContentModerationReviewAttempt, error) {
 	endpoints := cfg.enabledYuFengSecondLayerEndpoints()
 	if len(endpoints) == 0 {
-		if cfg.YuFengEnabled {
-			return deepSeekResult, deepSeekAttempted, errors.New("YuFeng review endpoint is unavailable")
-		}
-		return deepSeekResult, deepSeekAttempted, nil
+		return contentModerationSecondLayerResult{}, ContentModerationReviewAttempt{
+			Reviewer: "yufeng", Provider: "yufeng", Role: "local_shadow", Outcome: "skipped", Error: "endpoint_unavailable",
+		}, errors.New("YuFeng review endpoint is unavailable")
 	}
 	scanners := normalizeContentModerationScannerIDs(cfg.SecondLayerScanners)
 	if len(scanners) == 0 {
@@ -106,7 +162,7 @@ func (s *ContentModerationService) scanUnifiedSecondLayerPrepared(ctx context.Co
 	yuFengStarted := time.Now()
 	result, err := s.scanContentModerationSecondLayerInput(ctx, endpoints, input, scanners)
 	yuFengAttempt := ContentModerationReviewAttempt{
-		Reviewer: "yufeng", LatencyMS: int(time.Since(yuFengStarted).Milliseconds()),
+		Reviewer: "yufeng", Provider: "yufeng", Role: "local_shadow", LatencyMS: int(time.Since(yuFengStarted).Milliseconds()),
 	}
 	if result.EndpointID != "" {
 		yuFengAttempt.ChannelID = result.EndpointID
@@ -120,26 +176,16 @@ func (s *ContentModerationService) scanUnifiedSecondLayerPrepared(ctx context.Co
 	if err != nil {
 		yuFengAttempt.Outcome = "error"
 		yuFengAttempt.Error = "review_failed"
-		deepSeekResult.ReviewAttempts = append(deepSeekResult.ReviewAttempts, yuFengAttempt)
-		return deepSeekResult, true, err
+		return contentModerationSecondLayerResult{}, yuFengAttempt, err
 	}
 	yuFengAttempt.Outcome = "success"
-	result.ReviewAttempts = append(deepSeekResult.ReviewAttempts, yuFengAttempt)
-	if cfg.DeepSeekEnabled {
-		if !result.Blocked {
-			deepSeekResult.Blocked = false
-			deepSeekResult.ReviewerMismatch = true
-			deepSeekResult.ReviewAttempts = result.ReviewAttempts
-			return deepSeekResult, true, nil
-		}
-		deepSeekResult.Profile = "deepseek_v4_flash+yufeng_xguard"
-		deepSeekResult.ReviewAttempts = result.ReviewAttempts
-		return deepSeekResult, true, nil
-	}
 	if result.Blocked {
-		result.Confidence = 1
+		yuFengAttempt.Verdict = "violation"
+		yuFengAttempt.Confidence = 1
+	} else {
+		yuFengAttempt.Verdict = "safe"
 	}
-	return result, true, nil
+	return result, yuFengAttempt, nil
 }
 
 type contentModerationSecondLayerInput struct {

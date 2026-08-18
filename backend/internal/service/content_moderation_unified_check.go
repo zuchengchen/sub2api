@@ -1326,7 +1326,7 @@ type contentModerationCandidateReviewOutcome struct {
 }
 
 const (
-	contentModerationSecondLayerReviewCacheVersion = 2
+	contentModerationSecondLayerReviewCacheVersion = 3
 	contentModerationAuditPersistenceTimeout       = 10 * time.Second
 )
 
@@ -1347,7 +1347,7 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundle(
 			parserStatus: "not_attempted", err: errors.New("layer 2 candidate evidence is empty"),
 		}
 	}
-	if !cfg.DeepSeekEnabled && (!cfg.YuFengEnabled || len(cfg.enabledYuFengSecondLayerEndpoints()) == 0) {
+	if !contentModerationRemoteReviewersEnabled(cfg) && (!cfg.YuFengEnabled || len(cfg.enabledYuFengSecondLayerEndpoints()) == 0) {
 		return contentModerationCandidateReviewOutcome{
 			parserStatus: "not_attempted", err: errors.New("layer 2 reviewer is unavailable"),
 		}
@@ -1404,7 +1404,7 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 	}
 	reviewCtx := ctx
 	cancelReview := func() {}
-	if work.requireHealthyReviewer && cfg != nil && cfg.DeepSeekEnabled {
+	if work.requireHealthyReviewer && contentModerationRemoteReviewersEnabled(cfg) {
 		totalTimeout := cfg.DeepSeekTotalTimeoutMS
 		if totalTimeout <= 0 {
 			totalTimeout = DefaultContentModerationDeepSeekTotalTimeoutMS
@@ -1420,7 +1420,7 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 		}
 	}
 	reviewCfg := cfg
-	if work.requireHealthyReviewer && cfg != nil && cfg.DeepSeekEnabled {
+	if work.requireHealthyReviewer && contentModerationRemoteReviewersEnabled(cfg) {
 		reviewCfg = s.contentModerationConfigWithReachableDeepSeekFirst(cfg, time.Now())
 	}
 	result, attempted, err := s.scanUnifiedSecondLayerPrepared(reviewCtx, reviewCfg, contentModerationSecondLayerInput{
@@ -1550,8 +1550,14 @@ func (s *ContentModerationService) putUnifiedCandidateReviewCache(
 	}
 	reviewOutcome := "safe"
 	switch {
+	case result.ConsensusStatus == "confirmed_violation":
+		reviewOutcome = "confirmed_violation"
+	case result.ConsensusStatus == "consensus_unavailable":
+		reviewOutcome = "unavailable"
 	case result.ReviewerMismatch:
 		reviewOutcome = "disagreement"
+	case result.ConsensusStatus == "local_shadow":
+		reviewOutcome = "local_shadow"
 	case result.Blocked:
 		reviewOutcome = "risky"
 	case result.Confidence >= 0.50:
@@ -1566,6 +1572,7 @@ func (s *ContentModerationService) putUnifiedCandidateReviewCache(
 		DispositionApplied: dispositionApplied,
 		Confidence:         result.Confidence, Reason: result.Reason, Label: result.Label, EndpointID: result.EndpointID,
 		ReviewOutcome: reviewOutcome, ReviewerDisagreement: result.ReviewerMismatch,
+		ConsensusStatus: result.ConsensusStatus, RemoteVotes: result.RemoteVotes,
 		ReviewAttempts: append([]ContentModerationReviewAttempt(nil), result.ReviewAttempts...),
 	}
 	estimatedBytes := int64(len(evidenceHash) + len(cacheResult) + len(namespace) + entryEstimatedBytes(entry) + 64)
@@ -1592,6 +1599,7 @@ func resultFromUnifiedCandidateReviewCache(entry ContentModerationFragmentCacheE
 		EndpointID: entry.EndpointID, KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID,
 		ReviewAttempts:   append([]ContentModerationReviewAttempt(nil), entry.ReviewAttempts...),
 		ReviewerMismatch: entry.ReviewerDisagreement,
+		ConsensusStatus:  entry.ConsensusStatus, RemoteVotes: entry.RemoteVotes,
 	}
 }
 
@@ -1691,10 +1699,17 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 		EvidenceText: bundle.Evidence.Text, EvidenceWindows: bundle.Windows, InputHash: bundle.CacheHash,
 		DeepSeekConfidence: result.Confidence, DeepSeekCategory: result.Category, DeepSeekReason: result.Reason,
 		ReviewerDisagreement: result.ReviewerMismatch, ReviewAttempts: reviewAttempts,
+		ConsensusStatus: result.ConsensusStatus, RemoteVotes: result.RemoteVotes,
 	}
 	switch {
+	case result.ConsensusStatus == "confirmed_violation":
+		audit.ReviewOutcome = "confirmed_violation"
+	case result.ConsensusStatus == "consensus_unavailable":
+		audit.ReviewOutcome = "unavailable"
 	case result.ReviewerMismatch:
 		audit.ReviewOutcome = "disagreement"
+	case result.ConsensusStatus == "local_shadow":
+		audit.ReviewOutcome = "local_shadow"
 	case result.Blocked:
 		audit.ReviewOutcome = "risky"
 	case result.Confidence >= 0.50:
@@ -1809,6 +1824,8 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 		audit.DeepSeekCategory = result.Category
 		audit.DeepSeekReason = result.Reason
 		audit.ReviewerDisagreement = result.ReviewerMismatch
+		audit.ConsensusStatus = result.ConsensusStatus
+		audit.RemoteVotes = result.RemoteVotes
 		audit.ReviewAttempts = append([]ContentModerationReviewAttempt(nil), result.ReviewAttempts...)
 	}
 	if reviewErr != nil {
@@ -1989,6 +2006,8 @@ type unifiedModerationAudit struct {
 	DeepSeekReason       string
 	ReviewOutcome        string
 	ReviewerDisagreement bool
+	ConsensusStatus      string
+	RemoteVotes          int
 	ReviewAttempts       []ContentModerationReviewAttempt
 }
 
@@ -2104,7 +2123,7 @@ func contentModerationLogIDPtr(log *ContentModerationLog) *int64 {
 func entryEstimatedBytes(entry ContentModerationFragmentCacheEntry) int {
 	return len(entry.ReplayOfInputHash) + len(entry.DecisionSource) + len(entry.Category) + len(entry.MatchedKeyword) +
 		len(entry.ModelProfile) + len(entry.PromptVersion) + len(entry.EvidenceMode) + len(entry.ParserStatus) +
-		len(entry.Reason) + len(entry.Label) + len(entry.EndpointID) + len(entry.ReviewOutcome) +
+		len(entry.Reason) + len(entry.Label) + len(entry.EndpointID) + len(entry.ReviewOutcome) + len(entry.ConsensusStatus) +
 		len(entry.ReviewAttempts)*128 + 128
 }
 

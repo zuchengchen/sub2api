@@ -93,17 +93,24 @@
                     <Icon name="cloud" size="md" />
                   </span>
                   <div class="min-w-0">
-                    <h3 class="font-semibold text-gray-900 dark:text-white">DeepSeek V4 Flash</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">
+                      {{ t('admin.riskControl.onlineReviewersTitle') }}
+                    </h3>
                     <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                       {{
-                        t('admin.riskControl.deepseekReviewerMeta', {
+                        t('admin.riskControl.onlineReviewersMeta', {
                           threshold: percent(configForm.deepseek_threshold),
                         })
                       }}
                     </p>
                   </div>
                 </div>
-                <Toggle v-model="configForm.deepseek_enabled" data-test="deepseek-enabled" />
+                <Toggle
+                  v-model="configForm.remote_reviewers_enabled"
+                  data-test="deepseek-enabled"
+                  data-reviewer-pool-toggle="true"
+                  @update:model-value="configForm.deepseek_enabled = configForm.remote_reviewers_enabled"
+                />
               </div>
               <div class="mt-4 flex flex-wrap gap-2 text-xs">
                 <span class="rounded-md bg-gray-100 px-2 py-1 text-gray-600 dark:bg-dark-700 dark:text-gray-300">
@@ -117,9 +124,10 @@
                   :class="reachableChannelCount > 0 ? statusClasses.healthy : statusClasses.unknown"
                 >
                   {{
-                    t('admin.riskControl.channelHealthSummary', {
+                    t('admin.riskControl.remoteProviderHealthSummary', {
                       reachable: reachableChannelCount,
                       enabled: enabledChannelCount,
+                      providers: reachableProviderCount,
                     })
                   }}
                 </span>
@@ -146,8 +154,8 @@
               <div class="mt-4 text-xs text-gray-500 dark:text-gray-400">
                 {{
                   configForm.yufeng_enabled
-                    ? t('admin.riskControl.reviewerEnabled')
-                    : t('admin.riskControl.reviewerDisabled')
+                    ? t('admin.riskControl.localShadowEnabled')
+                    : t('admin.riskControl.localShadowDisabled')
                 }}
               </div>
             </article>
@@ -265,10 +273,10 @@
           <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 id="channels-heading" class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t('admin.riskControl.deepseekChannelsTitle') }}
+                {{ t('admin.riskControl.remoteReviewersChannelsTitle') }}
               </h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t('admin.riskControl.deepseekChannelsSummary') }}
+                {{ t('admin.riskControl.remoteReviewersChannelsSummary') }}
               </p>
             </div>
             <button
@@ -286,7 +294,7 @@
             v-if="configForm.deepseek_channels.length === 0"
             class="border-y border-gray-200 py-8 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-gray-400"
           >
-            {{ t('admin.riskControl.noChannels') }}
+            {{ t('admin.riskControl.noRemoteReviewers') }}
           </p>
 
           <div v-else class="space-y-3">
@@ -307,7 +315,9 @@
                     <p class="truncate font-medium text-gray-900 dark:text-white">
                       {{ channel.name || t('admin.riskControl.unnamedChannel') }}
                     </p>
-                    <p class="truncate text-xs text-gray-500 dark:text-gray-400">{{ channel.id }}</p>
+                    <p class="truncate text-xs text-gray-500 dark:text-gray-400">
+                      {{ reviewerProviderLabel(channel.provider) }} · {{ channel.id }}
+                    </p>
                   </div>
                   <span class="rounded-md px-2 py-1 text-xs font-medium" :class="channelStatusClass(channel)">
                     {{ channelStatusLabel(channel) }}
@@ -350,6 +360,19 @@
               </div>
 
               <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
+                <label class="xl:col-span-2">
+                  <span class="input-label">{{ t('admin.riskControl.channelProvider') }}</span>
+                  <select
+                    :value="normalizeReviewerProvider(channel.provider)"
+                    class="input"
+                    :data-test="`remote-reviewer-provider-${index}`"
+                    @change="setReviewerProvider(channel, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="provider in reviewerProviderOptions" :key="provider.value" :value="provider.value">
+                      {{ provider.label }}
+                    </option>
+                  </select>
+                </label>
                 <label class="xl:col-span-3">
                   <span class="input-label">{{ t('admin.riskControl.channelName') }}</span>
                   <input
@@ -365,7 +388,7 @@
                     v-model.trim="channel.base_url"
                     class="input"
                     type="url"
-                    placeholder="https://api.deepseek.com"
+                    :placeholder="reviewerProviderPreset(channel.provider).baseURL"
                     :data-test="`deepseek-channel-url-${index}`"
                   />
                 </label>
@@ -375,7 +398,7 @@
                     v-model.trim="channel.model"
                     class="input"
                     type="text"
-                    placeholder="deepseek-v4-flash"
+                    :placeholder="reviewerProviderPreset(channel.provider).model"
                     :data-test="`deepseek-channel-model-${index}`"
                   />
                 </label>
@@ -895,11 +918,11 @@
                 class="grid grid-cols-1 gap-1 px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_120px_100px]"
               >
                 <span class="truncate text-gray-900 dark:text-white">{{
-                  attempt.channel_name || attempt.channel_id || attempt.reviewer || '-'
+                  `${attempt.provider || attempt.reviewer || '-'} · ${attempt.channel_name || attempt.channel_id || '-'}`
                 }}</span>
-                <span class="text-gray-500 dark:text-gray-400">{{
-                  attempt.outcome || (attempt.http_status ? `HTTP ${attempt.http_status}` : '-')
-                }}</span>
+                <span class="text-gray-500 dark:text-gray-400">
+                  {{ attempt.verdict || attempt.outcome || (attempt.http_status ? `HTTP ${attempt.http_status}` : '-') }}
+                </span>
                 <span class="text-gray-500 dark:text-gray-400">{{ latencyText(attempt.latency_ms) }}</span>
                 <span v-if="attempt.error" class="text-xs text-amber-700 dark:text-amber-300 sm:col-span-3">{{
                   attempt.error
@@ -1024,7 +1047,11 @@ const configForm = reactive({
   enabled: true,
   mode: 'pre_block' as const,
   deepseek_enabled: true,
+  remote_reviewers_enabled: true,
+  remote_consensus_required: 2,
+  remote_unavailable_policy: 'fail_closed',
   yufeng_enabled: false,
+  yufeng_mode: 'shadow',
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
   policy_version: '',
@@ -1115,14 +1142,21 @@ const enabledChannelCount = computed(() => configForm.deepseek_channels.filter((
 const reachableChannelCount = computed(
   () => configForm.deepseek_channels.filter((channel) => channel.enabled && isChannelReachable(channel)).length
 )
+const reachableProviderCount = computed(
+  () =>
+    new Set(
+      configForm.deepseek_channels
+        .filter((channel) => channel.enabled && isChannelReachable(channel))
+        .map((channel) => normalizeReviewerProvider(channel.provider))
+    ).size
+)
 
 const secondLayerEnforceReady = computed(() => {
   if (status.value?.second_layer_enforce_ready !== undefined) {
     return status.value.second_layer_enforce_ready
   }
-  if (!configForm.deepseek_enabled && !configForm.yufeng_enabled) return false
-  if (configForm.yufeng_enabled) return false
-  return configForm.deepseek_enabled && reachableChannelCount.value > 0
+  if (!configForm.remote_reviewers_enabled) return false
+  return configForm.remote_reviewers_enabled && reachableProviderCount.value >= 2
 })
 
 const enforceGateText = computed(() => {
@@ -1145,9 +1179,9 @@ const overviewItems = computed<OverviewItem[]>(() => [
       : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-gray-400',
   },
   {
-    key: 'deepseek',
-    label: 'DeepSeek',
-    value: configForm.deepseek_enabled
+    key: 'remote-reviewers',
+    label: t('admin.riskControl.onlineReviewersTitle'),
+    value: configForm.remote_reviewers_enabled
       ? t('admin.riskControl.overview.enabled')
       : t('admin.riskControl.overview.disabled'),
     meta: t('admin.riskControl.channelHealthSummary', {
@@ -1160,8 +1194,10 @@ const overviewItems = computed<OverviewItem[]>(() => [
   {
     key: 'failover',
     label: t('admin.riskControl.overview.failover'),
-    value: String(status.value?.deepseek_failover_count ?? 0),
-    meta: t('admin.riskControl.overview.unavailable', { count: status.value?.deepseek_unavailable_count ?? 0 }),
+    value: String(status.value?.remote_failover_count ?? status.value?.deepseek_failover_count ?? 0),
+    meta: t('admin.riskControl.overview.unavailable', {
+      count: status.value?.remote_unavailable_count ?? status.value?.deepseek_unavailable_count ?? 0,
+    }),
     icon: 'swap',
     iconClass: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300',
   },
@@ -1212,14 +1248,50 @@ const selectedLogMeta = computed(() => {
   ]
 })
 
-function defaultChannel(): EditableDeepSeekChannel {
+const reviewerProviderOptions = [
+  { value: 'deepseek', label: 'DeepSeek', model: 'deepseek-v4-flash', baseURL: 'https://api.deepseek.com' },
+  {
+    value: 'alibaba_qwen',
+    label: 'Qwen',
+    model: 'qwen3.7-flash',
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  },
+  {
+    value: 'zhipu_glm',
+    label: 'GLM',
+    model: 'glm-4.7-flashx',
+    baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+  },
+  { value: 'mimo', label: 'MiMo', model: 'mimo-v2.5', baseURL: 'https://api.xiaomimimo.com/v1' },
+] as const
+
+function normalizeReviewerProvider(provider?: string): string {
+  const raw = (provider || '').trim().toLowerCase()
+  if (raw === 'qwen' || raw === 'alibaba-qwen') return 'alibaba_qwen'
+  if (raw === 'glm' || raw === 'zhipu-glm') return 'zhipu_glm'
+  if (raw === 'mi-mo') return 'mimo'
+  return raw || 'deepseek'
+}
+
+function reviewerProviderLabel(provider?: string): string {
+  const normalized = normalizeReviewerProvider(provider)
+  return reviewerProviderOptions.find((option) => option.value === normalized)?.label || normalized
+}
+
+function reviewerProviderPreset(provider?: string) {
+  return reviewerProviderOptions.find((option) => option.value === normalizeReviewerProvider(provider)) || reviewerProviderOptions[0]
+}
+
+function defaultChannel(provider = 'deepseek', index = 0): EditableDeepSeekChannel {
+  const preset = reviewerProviderPreset(provider)
   return {
-    id: 'deepseek-official',
-    name: t('admin.riskControl.officialChannelName'),
-    base_url: 'https://api.deepseek.com',
-    model: 'deepseek-v4-flash',
+    id: `${provider}-primary`,
+    name: preset.label,
+    provider: preset.value,
+    base_url: preset.baseURL,
+    model: preset.model,
     enabled: true,
-    order: 0,
+    order: index,
     timeout_ms: 3000,
     api_key_configured: false,
     api_key_masked: '',
@@ -1231,10 +1303,14 @@ function defaultChannel(): EditableDeepSeekChannel {
 }
 
 function editableChannel(channel: DeepSeekModerationChannel, index: number): EditableDeepSeekChannel {
+  const provider = normalizeReviewerProvider(channel.provider)
+  const preset = reviewerProviderPreset(provider)
   return {
     ...channel,
+    provider,
     order: Number.isFinite(channel.order) ? channel.order : index,
-    model: channel.model || 'deepseek-v4-flash',
+    model: channel.model || preset.model,
+    base_url: channel.base_url || preset.baseURL,
     timeout_ms: channel.timeout_ms || 3000,
     api_key_configured: Boolean(channel.api_key_configured),
     api_key_masked: channel.api_key_masked || '',
@@ -1245,12 +1321,16 @@ function editableChannel(channel: DeepSeekModerationChannel, index: number): Edi
 
 function applyConfig(config: ContentModerationConfig) {
   configForm.enabled = config.enabled ?? true
-  configForm.deepseek_enabled = config.deepseek_enabled ?? true
+  configForm.remote_reviewers_enabled = config.remote_reviewers_enabled ?? config.deepseek_enabled ?? true
+  configForm.deepseek_enabled = config.deepseek_enabled ?? configForm.remote_reviewers_enabled
+  configForm.remote_consensus_required = config.remote_consensus_required ?? 2
+  configForm.remote_unavailable_policy = config.remote_unavailable_policy || 'fail_closed'
   configForm.yufeng_enabled = config.yufeng_enabled ?? false
+  configForm.yufeng_mode = config.yufeng_mode || 'shadow'
   configForm.deepseek_total_timeout_ms = config.deepseek_total_timeout_ms ?? 10000
   configForm.deepseek_threshold = config.deepseek_threshold ?? 0.8
   configForm.policy_version = config.policy_version || config.keyword_policy_version || ''
-  const channels = config.deepseek_channels === undefined ? [defaultChannel()] : config.deepseek_channels
+  const channels = config.remote_reviewers ?? config.deepseek_channels ?? reviewerProviderOptions.map((provider, index) => defaultChannel(provider.value, index))
   configForm.deepseek_channels = [...channels]
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
     .map(editableChannel)
@@ -1349,14 +1429,31 @@ async function saveConfig() {
       enabled: configForm.enabled,
       mode: 'pre_block',
       deepseek_enabled: configForm.deepseek_enabled,
+      remote_reviewers_enabled: configForm.remote_reviewers_enabled,
+      remote_consensus_required: 2,
+      remote_unavailable_policy: 'fail_closed',
       yufeng_enabled: configForm.yufeng_enabled,
+      yufeng_mode: 'shadow',
       deepseek_total_timeout_ms: clampInteger(configForm.deepseek_total_timeout_ms, 100, 120000, 10000),
       deepseek_threshold: 0.8,
       deepseek_channels: configForm.deepseek_channels.map((channel, index) => ({
         id: channel.id.trim(),
         name: channel.name.trim(),
+        provider: normalizeReviewerProvider(channel.provider),
         base_url: channel.base_url.trim().replace(/\/$/, ''),
-        model: channel.model.trim() || 'deepseek-v4-flash',
+        model: channel.model.trim() || reviewerProviderPreset(channel.provider).model,
+        enabled: channel.enabled,
+        order: index,
+        timeout_ms: clampInteger(channel.timeout_ms, 100, 30000, 3000),
+        api_key: channel.api_key.trim() || undefined,
+        clear_api_key: channel.clear_api_key || undefined,
+      })),
+      remote_reviewers: configForm.deepseek_channels.map((channel, index) => ({
+        id: channel.id.trim(),
+        name: channel.name.trim(),
+        provider: normalizeReviewerProvider(channel.provider),
+        base_url: channel.base_url.trim().replace(/\/$/, ''),
+        model: channel.model.trim() || reviewerProviderPreset(channel.provider).model,
         enabled: channel.enabled,
         order: index,
         timeout_ms: clampInteger(channel.timeout_ms, 100, 30000, 3000),
@@ -1364,7 +1461,7 @@ async function saveConfig() {
         clear_api_key: channel.clear_api_key || undefined,
       })),
       first_layer_stage: configForm.first_layer_stage,
-      second_layer_enabled: configForm.deepseek_enabled || configForm.yufeng_enabled,
+      second_layer_enabled: configForm.remote_reviewers_enabled || configForm.yufeng_enabled,
       second_layer_stage: configForm.second_layer_stage,
       layer1_keywords: layer1Keywords.value,
       layer2_keywords: layer2Keywords.value,
@@ -1398,7 +1495,7 @@ async function saveConfig() {
 }
 
 function validateConfig(): boolean {
-  if (configForm.deepseek_enabled && enabledChannelCount.value === 0) {
+  if (configForm.remote_reviewers_enabled && enabledChannelCount.value === 0) {
     appStore.showError(t('admin.riskControl.enabledChannelRequired'))
     return false
   }
@@ -1425,12 +1522,20 @@ function validateConfig(): boolean {
 function addChannel() {
   const index = configForm.deepseek_channels.length
   configForm.deepseek_channels.push({
-    ...defaultChannel(),
-    id: `deepseek-channel-${Date.now()}`,
+    ...defaultChannel('deepseek', index),
+    id: `reviewer-channel-${Date.now()}`,
     name: t('admin.riskControl.newChannelName', { number: index + 1 }),
     order: index,
     enabled: false,
   })
+}
+
+function setReviewerProvider(channel: EditableDeepSeekChannel, provider: string) {
+  const normalized = normalizeReviewerProvider(provider)
+  const preset = reviewerProviderPreset(normalized)
+  channel.provider = normalized
+  channel.base_url = preset.baseURL
+  channel.model = preset.model
 }
 
 function removeChannel(index: number) {
