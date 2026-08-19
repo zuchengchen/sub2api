@@ -297,7 +297,10 @@ func TestContentModerationSecurityTestPayloadIsRestrictedWithoutViolationAndRepl
 	var payload struct {
 		Messages []map[string]string `json:"messages"`
 	}
-	require.NoError(t, json.Unmarshal(reviewedPayload.Load().([]byte), &payload))
+	reviewedPayloadBytes, ok := reviewedPayload.Load().([]byte)
+	require.True(t, ok)
+	unmarshalErr := json.Unmarshal(reviewedPayloadBytes, &payload)
+	require.NoError(t, unmarshalErr)
 	require.Len(t, payload.Messages, 2)
 	wrappedRaw := contentModerationDeepSeekRuntimeTaggedValue(t, payload.Messages[1]["content"], "user_input")
 	var wrapped map[string]string
