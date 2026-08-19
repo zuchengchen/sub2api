@@ -19,7 +19,7 @@ import (
 )
 
 func TestRuntimeCustomizationsAcceptance(t *testing.T) {
-	t.Run("unified GPT scope and fragment policy", func(t *testing.T) {
+	t.Run("unified all-group scope and fragment policy", func(t *testing.T) {
 		groupID := int64(17)
 		scope := NewContentModerationScopeSnapshot(&groupID, "\u3000 gPt-production \t")
 		require.True(t, scope.InScope)
@@ -29,7 +29,7 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		// but the request-scoped decision remains the original value snapshot.
 		groupID = 29
 		fallback := NewContentModerationScopeSnapshot(&groupID, "Claude")
-		require.False(t, fallback.InScope)
+		require.True(t, fallback.InScope)
 		require.True(t, scope.InScope)
 		require.Equal(t, int64(17), *scope.GroupID)
 
@@ -81,19 +81,19 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
 		require.Len(t, repo.snapshotLogs(), 1)
 
-		nonGPTInput := input
-		nonGPTInput.Scope = &fallback
-		decision = svc.checkUnifiedFragments(context.Background(), nonGPTInput, runtime)
-		require.True(t, decision.Allowed)
-		require.False(t, decision.Flagged)
-		require.Len(t, repo.snapshotLogs(), 1, "non-GPT traffic must have no local risk-control side effects")
+		otherGroupInput := input
+		otherGroupInput.Scope = &fallback
+		decision = svc.checkUnifiedFragments(context.Background(), otherGroupInput, runtime)
+		require.True(t, decision.Blocked, "non-GPT groups must use the configured all-group scope")
+		require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+		require.Len(t, repo.snapshotLogs(), 2)
 
 		riskControlOff := *runtime
 		riskControlOff.riskControlEnabled = false
 		decision = svc.checkUnifiedFragments(context.Background(), input, &riskControlOff)
 		require.True(t, decision.Allowed)
 		require.False(t, decision.Flagged)
-		require.Len(t, repo.snapshotLogs(), 1)
+		require.Len(t, repo.snapshotLogs(), 2)
 	})
 
 	t.Run("second layer block and failure continue contract", func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		require.Equal(t, "unavailable", repo.snapshotLogs()[1].ReviewOutcome)
 	})
 
-	t.Run("GPT cyber disposition and non GPT passthrough", func(t *testing.T) {
+	t.Run("all-group cyber disposition", func(t *testing.T) {
 		regularRepo := &cyberDispositionTestRepo{userActive: true}
 		regularInvalidator := &contentModerationTestAuthCacheInvalidator{}
 		regularService := NewContentModerationService(
@@ -201,10 +201,10 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		nonGPTScope := NewContentModerationScopeSnapshot(nil, "Claude production")
 		nonGPTService.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
 			UserID: 303, UserRole: RoleUser, Scope: &nonGPTScope,
-			Model: "gpt-5.6", Endpoint: "/v1/responses", UpstreamMessage: "cyber policy",
+			Model: "claude-opus-5", Endpoint: "/v1/responses", UpstreamMessage: "cyber policy",
 		})
-		require.Empty(t, nonGPTRepo.snapshotLogs())
-		require.Zero(t, nonGPTRepo.disableUserCalls)
+		require.Len(t, nonGPTRepo.snapshotLogs(), 1)
+		require.Equal(t, 1, nonGPTRepo.disableUserCalls)
 	})
 
 	t.Run("raw HTTP SSE and WebSocket archives are exact", func(t *testing.T) {
