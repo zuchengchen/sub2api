@@ -71,21 +71,22 @@ type JWTClaims struct {
 
 // AuthService 认证服务
 type AuthService struct {
-	entClient             *dbent.Client
-	userRepo              UserRepository
-	redeemRepo            RedeemCodeRepository
-	refreshTokenCache     RefreshTokenCache
-	cfg                   *config.Config
-	settingService        *SettingService
-	emailService          *EmailService
-	turnstileService      *TurnstileService
-	tencentCaptchaService *TencentCaptchaService
-	aliyunCaptchaService  *AliyunCaptchaService
-	emailQueueService     *EmailQueueService
-	promoService          *PromoService
-	affiliateService      *AffiliateService
-	defaultSubAssigner    DefaultSubscriptionAssigner
-	userPlatformQuotaRepo UserPlatformQuotaRepository
+	entClient               *dbent.Client
+	userRepo                UserRepository
+	redeemRepo              RedeemCodeRepository
+	refreshTokenCache       RefreshTokenCache
+	cfg                     *config.Config
+	settingService          *SettingService
+	emailService            *EmailService
+	turnstileService        *TurnstileService
+	tencentCaptchaService   *TencentCaptchaService
+	aliyunCaptchaService    *AliyunCaptchaService
+	emailQueueService       *EmailQueueService
+	promoService            *PromoService
+	affiliateService        *AffiliateService
+	defaultSubAssigner      DefaultSubscriptionAssigner
+	signupAPIKeyProvisioner SignupAPIKeyProvisioner
+	userPlatformQuotaRepo   UserPlatformQuotaRepository
 }
 
 type CaptchaProof struct {
@@ -97,6 +98,13 @@ type CaptchaProof struct {
 
 type DefaultSubscriptionAssigner interface {
 	AssignOrExtendSubscription(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, bool, error)
+}
+
+// SignupAPIKeyProvisioner creates the API key that every newly registered
+// user receives. It is optional so authentication tests and non-HTTP
+// consumers do not need to construct the API key service.
+type SignupAPIKeyProvisioner interface {
+	ProvisionDefaultSignupAPIKey(ctx context.Context, userID int64) error
 }
 
 type signupGrantPlan struct {
@@ -152,6 +160,14 @@ func (s *AuthService) SetTencentCaptchaService(tencentCaptchaService *TencentCap
 
 func (s *AuthService) SetAliyunCaptchaService(aliyunCaptchaService *AliyunCaptchaService) {
 	s.aliyunCaptchaService = aliyunCaptchaService
+}
+
+// SetSignupAPIKeyProvisioner wires the optional default-key bootstrapper.
+func (s *AuthService) SetSignupAPIKeyProvisioner(provisioner SignupAPIKeyProvisioner) {
+	if s == nil {
+		return
+	}
+	s.signupAPIKeyProvisioner = provisioner
 }
 
 // Register 用户注册，返回token和用户
@@ -980,6 +996,19 @@ func (s *AuthService) postAuthUserBootstrap(ctx context.Context, user *User, sig
 
 	if touchLogin {
 		s.touchUserLogin(ctx, user.ID)
+	}
+
+	s.provisionDefaultSignupAPIKey(ctx, user.ID)
+}
+
+func (s *AuthService) provisionDefaultSignupAPIKey(ctx context.Context, userID int64) {
+	if s == nil || userID <= 0 || s.signupAPIKeyProvisioner == nil {
+		return
+	}
+	if err := s.signupAPIKeyProvisioner.ProvisionDefaultSignupAPIKey(ctx, userID); err != nil {
+		// The user row is already committed, so a provisioning failure must
+		// not make registration appear failed or invalidate the new session.
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to provision default signup API key: user_id=%d err=%v", userID, err)
 	}
 }
 

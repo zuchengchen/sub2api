@@ -7765,7 +7765,7 @@
                       "
                       type="number"
                       step="0.01"
-                      min="0"
+                      min="10"
                       class="input"
                       :placeholder="t('admin.settings.payment.noLimit')"
                     />
@@ -9522,7 +9522,7 @@ const form = reactive<SettingsForm>({
   risk_control_enabled: false,
   cyber_session_block_enabled: false,
   cyber_session_block_ttl_seconds: 3600,
-  payment_min_amount: 1,
+  payment_min_amount: 10,
   payment_max_amount: 10000,
   payment_daily_limit: 50000,
   payment_max_pending_orders: 3,

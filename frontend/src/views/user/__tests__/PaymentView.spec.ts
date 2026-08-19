@@ -3,6 +3,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
 import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
+import AmountInput from '@/components/payment/AmountInput.vue'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
 
@@ -276,6 +277,43 @@ async function mountSubscriptionPlanList(planCount: number) {
   await flushPromises()
   return wrapper
 }
+
+describe('PaymentView balance recharge floor', () => {
+  it('uses the six recharge tiers and blocks amounts below the configured floor', async () => {
+    routeState.path = '/purchase'
+    routeState.query = {}
+    createOrder.mockReset()
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({ global_min: 10 }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: {
+            template: '<div><slot /></div>',
+          },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const amountInput = wrapper.findComponent(AmountInput)
+    expect(amountInput.props('amounts')).toEqual([10, 20, 30, 50, 100, 200])
+    expect(amountInput.props('min')).toBe(10)
+
+    amountInput.vm.$emit('update:modelValue', 5)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.amountTooLow')
+    const submit = wrapper.findAll('button').find(button => button.text().includes('payment.createOrder'))
+    expect(submit).toBeDefined()
+    expect(submit?.attributes('disabled')).toBeDefined()
+    await submit?.trigger('click')
+    expect(createOrder).not.toHaveBeenCalled()
+  })
+})
 
 describe('PaymentView subscription plan grid', () => {
   it.each([3, 4, 6])('keeps %i plans on the existing mobile/tablet/desktop grid', async (planCount) => {
