@@ -322,6 +322,13 @@
                   <span class="rounded-md px-2 py-1 text-xs font-medium" :class="channelStatusClass(channel)">
                     {{ channelStatusLabel(channel) }}
                   </span>
+                  <span
+                    class="rounded-md px-2 py-1 text-xs font-medium"
+                    :class="heartbeatStatusClass(channel)"
+                    :data-test="`deepseek-channel-heartbeat-status-${index}`"
+                  >
+                    {{ t('admin.riskControl.heartbeatLabel') }}: {{ heartbeatStatusLabel(channel) }}
+                  </span>
                 </div>
                 <div class="flex items-center gap-1">
                   <Toggle v-model="channel.enabled" :data-test="`deepseek-channel-enabled-${index}`" />
@@ -459,14 +466,14 @@
                   type="button"
                   class="btn btn-secondary inline-flex min-w-32 items-center justify-center gap-2"
                   :disabled="!canTestChannel(channel) || testingChannelID !== null"
-                  :data-test="`test-deepseek-channel-${index}`"
+                  :data-test="`test-api-availability-${index}`"
                   @click="testChannel(channel)"
                 >
                   <Icon name="beaker" size="sm" :class="testingChannelID === channel.id ? 'animate-pulse' : ''" />
                   {{
                     testingChannelID === channel.id
-                      ? t('admin.riskControl.testingChannel')
-                      : t('admin.riskControl.testChannel')
+                      ? t('admin.riskControl.testingAPIAvailability')
+                      : t('admin.riskControl.testAPIAvailability')
                   }}
                 </button>
               </div>
@@ -478,9 +485,23 @@
                   >{{ t('admin.riskControl.channelHealthChecked') }}:
                   {{ dateOrDash(channel.last_health_checked_at) }}</span
                 >
+                <span
+                  :data-test="`deepseek-channel-heartbeat-${index}`"
+                  :title="heartbeatError(channel) || undefined"
+                >
+                  {{ t('admin.riskControl.heartbeatChecked') }}:
+                  {{ dateOrDash(heartbeatCheckedAt(channel)) }}
+                  <template v-if="heartbeatLatency(channel) !== undefined">
+                    · {{ latencyText(heartbeatLatency(channel)) }}
+                  </template>
+                  <template v-if="heartbeatHTTPStatus(channel)"> · HTTP {{ heartbeatHTTPStatus(channel) }}</template>
+                </span>
                 <span v-if="channel.last_error" class="text-amber-700 dark:text-amber-300">{{
                   channel.last_error
                 }}</span>
+                <span v-if="heartbeatError(channel)" class="text-amber-700 dark:text-amber-300">
+                  {{ heartbeatError(channel) }}
+                </span>
               </div>
 
               <div
@@ -991,6 +1012,7 @@ import type {
   ContentModerationLogView,
   ContentModerationModelFilterType,
   ContentModerationRuntimeStatus,
+  ContentModerationChannelHeartbeat,
   DeepSeekModerationChannel,
   TestDeepSeekChannelResponse,
   UpdateContentModerationConfig,
@@ -1040,6 +1062,11 @@ const selectedLog = ref<ContentModerationLog | null>(null)
 const channelTestResults = reactive<Record<string, TestDeepSeekChannelResponse | undefined>>({})
 const savedChannelDigests = reactive<Record<string, string | undefined>>({})
 let refreshTimer: number | null = null
+
+const heartbeatByChannelID = computed(() => {
+  const entries = status.value?.remote_heartbeats ?? []
+  return new Map(entries.map((heartbeat) => [heartbeat.channel_id, heartbeat]))
+})
 
 const defaultBlockMessage = () => t('admin.riskControl.defaultBlockMessage')
 
@@ -1585,7 +1612,7 @@ async function testChannel(channel: EditableDeepSeekChannel) {
   if (!canTestChannel(channel) || testingChannelID.value !== null) return
   testingChannelID.value = channel.id
   try {
-    channelTestResults[channel.id] = await adminAPI.riskControl.testDeepSeekChannel(channel.id)
+    channelTestResults[channel.id] = await adminAPI.riskControl.testAPIAvailability(channel.id)
     const config = await adminAPI.riskControl.getConfig()
     applyConfig(config)
     await loadStatus(true)
@@ -1657,6 +1684,59 @@ function channelStatusClass(channel: EditableDeepSeekChannel): string {
   return statusClasses.warning
 }
 
+function channelHeartbeat(channel: EditableDeepSeekChannel): ContentModerationChannelHeartbeat | undefined {
+  const live = heartbeatByChannelID.value.get(channel.id)
+  if (live) return live
+  if (!channel.heartbeat_status && !channel.last_heartbeat_at && !channel.heartbeat_error) return undefined
+  return {
+    channel_id: channel.id,
+    provider: normalizeReviewerProvider(channel.provider),
+    status: channel.heartbeat_status || 'untested',
+    checked_at: channel.last_heartbeat_at,
+    latency_ms: channel.heartbeat_latency_ms,
+    http_status: channel.heartbeat_http_status,
+    error: channel.heartbeat_error,
+  }
+}
+
+function heartbeatStatus(channel: EditableDeepSeekChannel): string {
+  return channelHeartbeat(channel)?.status || 'untested'
+}
+
+function heartbeatStatusLabel(channel: EditableDeepSeekChannel): string {
+  const status = heartbeatStatus(channel)
+  if (status === 'reachable') return t('admin.riskControl.heartbeatReachable')
+  if (status === 'unreachable') return t('admin.riskControl.heartbeatUnreachable')
+  if (status === 'disabled') return t('admin.riskControl.heartbeatDisabled')
+  return t('admin.riskControl.heartbeatUntested')
+}
+
+function heartbeatStatusClass(channel: EditableDeepSeekChannel): string {
+  const status = heartbeatStatus(channel)
+  if (status === 'reachable') return statusClasses.healthy
+  if (status === 'unreachable') return statusClasses.warning
+  if (status === 'disabled') return statusClasses.unknown
+  return statusClasses.unknown
+}
+
+function heartbeatCheckedAt(channel: EditableDeepSeekChannel): string | undefined {
+  return channelHeartbeat(channel)?.checked_at
+}
+
+function heartbeatLatency(channel: EditableDeepSeekChannel): number | undefined {
+  const value = channelHeartbeat(channel)?.latency_ms
+  return value === undefined || value === null || value <= 0 ? undefined : value
+}
+
+function heartbeatHTTPStatus(channel: EditableDeepSeekChannel): number | undefined {
+  const value = channelHeartbeat(channel)?.http_status
+  return value === undefined || value === null || value <= 0 ? undefined : value
+}
+
+function heartbeatError(channel: EditableDeepSeekChannel): string | undefined {
+  return channelHeartbeat(channel)?.error || undefined
+}
+
 function channelDigest(channel: EditableDeepSeekChannel): string {
   return JSON.stringify({
     id: channel.id.trim(),
@@ -1685,9 +1765,19 @@ function breakerLabel(channel: EditableDeepSeekChannel): string {
 }
 
 function channelTestResultText(result: TestDeepSeekChannelResponse): string {
-  return t(result.reachable ? 'admin.riskControl.channelTestReachable' : 'admin.riskControl.channelTestUnreachable', {
+  const verdict = result.verdict
+    ? result.verdict === 'violation'
+      ? t('admin.riskControl.apiTestVerdictViolation')
+      : t('admin.riskControl.apiTestVerdictSafe')
+    : '-'
+  return t(result.reachable ? 'admin.riskControl.apiTestReachable' : 'admin.riskControl.apiTestUnreachable', {
     latency: result.latency_ms,
     status: result.http_status || '-',
+    provider: result.provider || '-',
+    model: result.model || '-',
+    verdict,
+    category: result.category || '-',
+    error: result.error || '-',
   })
 }
 
@@ -1782,7 +1872,7 @@ onMounted(() => {
   void loadInitial()
   refreshTimer = window.setInterval(() => {
     void loadStatus(true)
-  }, 15000)
+  }, 60000)
 })
 
 onUnmounted(() => {

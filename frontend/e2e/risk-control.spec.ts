@@ -150,20 +150,47 @@ async function mockAPIs(page: Page) {
         deepseek_failover_count: 7,
         deepseek_unavailable_count: 1,
         second_layer_enforce_ready: false,
-        second_layer_enforce_reason: '请先完成渠道连通性检查',
+        second_layer_enforce_reason: '请先完成启动首次测试或点击测试 API',
+        startup_api_usability_tested: true,
+        startup_api_usability_checked_at: '2026-08-17T00:00:10Z',
+        startup_api_usability_configured: 2,
+        startup_api_usability_succeeded: 2,
+        remote_heartbeats: [
+          {
+            channel_id: 'deepseek-official',
+            provider: 'deepseek',
+            status: 'reachable',
+            checked_at: '2026-08-17T00:01:00Z',
+            latency_ms: 18,
+            http_status: 404,
+          },
+          {
+            channel_id: 'deepseek-backup',
+            provider: 'deepseek',
+            status: 'unreachable',
+            checked_at: '2026-08-17T00:01:00Z',
+            latency_ms: 3000,
+            error: 'timeout',
+          },
+        ],
       })
     }
     if (path.endsWith('/admin/risk-control/logs')) {
       return json(route, { items: [riskLog], total: 1, page: 1, page_size: 20, pages: 1 })
     }
     if (path.endsWith('/admin/groups/all')) return json(route, [])
-    if (path.includes('/admin/risk-control/deepseek/channels/') && path.endsWith('/test')) {
+    if (path.includes('/admin/risk-control/deepseek/channels/') && path.endsWith('/test-api')) {
       return json(route, {
         channel_id: 'deepseek-official',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        test_type: 'api_usability',
         reachable: true,
         health_valid: true,
-        latency_ms: 18,
-        http_status: 404,
+        latency_ms: 218,
+        http_status: 200,
+        verdict: 'safe',
+        category: 'safe',
         checked_at: '2026-08-17T00:01:00Z',
       })
     }
@@ -185,10 +212,12 @@ test('风控中心在桌面与移动视口完整呈现', async ({ page }, testIn
   await expect(page.locator('[data-test="deepseek-channel-key-0"]')).toHaveAttribute('type', 'password')
   await expect(page.locator('[data-test="deepseek-channel-key-0"]')).toHaveAttribute('placeholder', 'sk-...a123')
   await expect(page.locator('[data-test="deepseek-channel-key-0"]')).toHaveValue('')
+  await expect(page.locator('[data-test="deepseek-channel-heartbeat-status-0"]')).toContainText('网络可达')
+  await expect(page.locator('[data-test="test-api-availability-0"]')).toContainText('测试 API 可用性')
   await expect(page.locator('[data-test="layer1-stage-shadow"]')).toBeVisible()
   await expect(page.locator('[data-test="layer2-stage-shadow"]')).toBeVisible()
   await expect(page.locator('[data-test="layer2-stage-enforce"]')).toBeEnabled()
-  await expect(page.locator('[data-test="enforce-health-gate"]')).toContainText('请先完成渠道连通性检查')
+  await expect(page.locator('[data-test="enforce-health-gate"]')).toContainText('请先完成启动首次测试或点击测试 API')
   await expect(page.locator('[data-test="audit-log-table"]')).toContainText('cyber_abuse')
 
   await page.locator('[data-test="deepseek-channel-move-up-1"]').click()

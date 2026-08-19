@@ -648,13 +648,30 @@ type ContentModerationRuntimeStatus struct {
 	RemoteUnavailableCount     int64                                 `json:"remote_unavailable_count"`
 	ArchiveRuntime             ContentModerationArchiveRuntimeStatus `json:"archive_runtime"`
 
-	DeepSeekResponseReadTimeoutCount int64      `json:"deepseek_response_read_timeout_count"`
-	DeepSeekBreakerSkipCount         int64      `json:"deepseek_breaker_skip_count"`
-	DeepSeekCooldownSkipCount        int64      `json:"deepseek_cooldown_skip_count"`
-	DeepSeekHalfOpenBusySkipCount    int64      `json:"deepseek_half_open_busy_skip_count"`
-	ReviewUnavailableCount           int64      `json:"review_unavailable_count"`
-	ReviewUnavailableEnforcedCount   int64      `json:"review_unavailable_enforced_count"`
-	LastReviewUnavailableAt          *time.Time `json:"last_review_unavailable_at,omitempty"`
+	DeepSeekResponseReadTimeoutCount int64                                   `json:"deepseek_response_read_timeout_count"`
+	DeepSeekBreakerSkipCount         int64                                   `json:"deepseek_breaker_skip_count"`
+	DeepSeekCooldownSkipCount        int64                                   `json:"deepseek_cooldown_skip_count"`
+	DeepSeekHalfOpenBusySkipCount    int64                                   `json:"deepseek_half_open_busy_skip_count"`
+	ReviewUnavailableCount           int64                                   `json:"review_unavailable_count"`
+	ReviewUnavailableEnforcedCount   int64                                   `json:"review_unavailable_enforced_count"`
+	LastReviewUnavailableAt          *time.Time                              `json:"last_review_unavailable_at,omitempty"`
+	StartupAPIUsabilityTested        bool                                    `json:"startup_api_usability_tested"`
+	StartupAPIUsabilityCheckedAt     *time.Time                              `json:"startup_api_usability_checked_at,omitempty"`
+	StartupAPIUsabilityConfigured    int                                     `json:"startup_api_usability_configured"`
+	StartupAPIUsabilitySucceeded     int                                     `json:"startup_api_usability_succeeded"`
+	RemoteHeartbeats                 []ContentModerationChannelHeartbeatView `json:"remote_heartbeats"`
+}
+
+// ContentModerationChannelHeartbeatView is the last cheap transport check for
+// one configured remote reviewer. It deliberately contains no credentials.
+type ContentModerationChannelHeartbeatView struct {
+	ChannelID  string     `json:"channel_id"`
+	Provider   string     `json:"provider"`
+	Status     string     `json:"status"`
+	CheckedAt  *time.Time `json:"checked_at,omitempty"`
+	LatencyMS  int        `json:"latency_ms"`
+	HTTPStatus int        `json:"http_status,omitempty"`
+	Error      string     `json:"error,omitempty"`
 }
 
 type ContentModerationSecondLayerMetric struct {
@@ -770,63 +787,71 @@ type ContentModerationFragmentAliasCache interface {
 }
 
 type ContentModerationService struct {
-	settingRepo                SettingRepository
-	repo                       ContentModerationRepository
-	hashCache                  ContentModerationHashCache
-	groupRepo                  GroupRepository
-	userRepo                   UserRepository
-	authCacheInvalidator       APIKeyAuthCacheInvalidator
-	emailService               *EmailService
-	apiKeyRepo                 APIKeyRepository
-	archiveRuntime             *contentModerationArchiveRuntime
-	credentialCipher           *ContentModerationCredentialCipher
-	deepSeekChannelStates      sync.Map
-	deepSeekHTTPClients        sync.Map
-	deepSeekProbeFlights       singleflight.Group
-	deepSeekSelectedCount      atomic.Int64
-	deepSeekFailoverCount      atomic.Int64
-	deepSeekUnavailableCount   atomic.Int64
-	reviewObservability        contentModerationReviewObservability
-	dispositionRepo            ContentModerationDispositionRepository
-	preBlockActive             atomic.Int64
-	preBlockChecked            atomic.Int64
-	preBlockAllowed            atomic.Int64
-	preBlockBlocked            atomic.Int64
-	preBlockErrors             atomic.Int64
-	preBlockLatencyTotalMS     atomic.Int64
-	lastCleanupUnix            atomic.Int64
-	lastCleanupDeletedHit      atomic.Int64
-	lastCleanupDeletedNonHit   atomic.Int64
-	runtimeSnapshot            atomic.Pointer[contentModerationRuntimeSnapshot]
-	runtimeRefreshMu           sync.Mutex
-	runtimeCacheTTL            time.Duration
-	runtimeRefreshRetryAt      atomic.Int64
-	pendingBodyBudget          *ContentModerationPendingBodyBudget
-	pendingBodyBudgetOnce      sync.Once
-	pendingBodyBudgetBytes     atomic.Int64
-	observedRequestBodyMax     atomic.Int64
-	requestBodyBuckets         [6]atomic.Int64
-	fragmentCacheHits          atomic.Int64
-	fragmentCacheMisses        atomic.Int64
-	fragmentCacheExpired       atomic.Int64
-	fragmentCacheReplays       atomic.Int64
-	fragmentCacheErrors        atomic.Int64
-	fragmentCacheWrites        atomic.Int64
-	fragmentCacheWriteErrors   atomic.Int64
-	secondLayerCacheHits       atomic.Int64
-	secondLayerCacheMisses     atomic.Int64
-	secondLayerCacheWrites     atomic.Int64
-	secondLayerCacheErrors     atomic.Int64
-	fragmentDecisionMu         sync.Mutex
-	fragmentDecisionLocks      map[string]*contentModerationFragmentDecisionLock
-	secondLayerReviewMu        sync.Mutex
-	secondLayerReviewFlights   map[string]*contentModerationCandidateReviewFlight
-	secondLayerClients         sync.Map
-	secondLayerMetrics         sync.Map
-	yuFengEndpointStates       sync.Map
-	secondLayerShadowSubmitted atomic.Int64
-	secondLayerShadowCompleted atomic.Int64
-	secondLayerShadowInFlight  atomic.Int64
+	settingRepo                   SettingRepository
+	repo                          ContentModerationRepository
+	hashCache                     ContentModerationHashCache
+	groupRepo                     GroupRepository
+	userRepo                      UserRepository
+	authCacheInvalidator          APIKeyAuthCacheInvalidator
+	emailService                  *EmailService
+	apiKeyRepo                    APIKeyRepository
+	archiveRuntime                *contentModerationArchiveRuntime
+	credentialCipher              *ContentModerationCredentialCipher
+	deepSeekChannelStates         sync.Map
+	deepSeekHTTPClients           sync.Map
+	deepSeekProbeFlights          singleflight.Group
+	deepSeekSelectedCount         atomic.Int64
+	deepSeekFailoverCount         atomic.Int64
+	deepSeekUnavailableCount      atomic.Int64
+	reviewObservability           contentModerationReviewObservability
+	dispositionRepo               ContentModerationDispositionRepository
+	preBlockActive                atomic.Int64
+	preBlockChecked               atomic.Int64
+	preBlockAllowed               atomic.Int64
+	preBlockBlocked               atomic.Int64
+	preBlockErrors                atomic.Int64
+	preBlockLatencyTotalMS        atomic.Int64
+	lastCleanupUnix               atomic.Int64
+	lastCleanupDeletedHit         atomic.Int64
+	lastCleanupDeletedNonHit      atomic.Int64
+	runtimeSnapshot               atomic.Pointer[contentModerationRuntimeSnapshot]
+	runtimeRefreshMu              sync.Mutex
+	runtimeCacheTTL               time.Duration
+	runtimeRefreshRetryAt         atomic.Int64
+	pendingBodyBudget             *ContentModerationPendingBodyBudget
+	pendingBodyBudgetOnce         sync.Once
+	pendingBodyBudgetBytes        atomic.Int64
+	observedRequestBodyMax        atomic.Int64
+	requestBodyBuckets            [6]atomic.Int64
+	fragmentCacheHits             atomic.Int64
+	fragmentCacheMisses           atomic.Int64
+	fragmentCacheExpired          atomic.Int64
+	fragmentCacheReplays          atomic.Int64
+	fragmentCacheErrors           atomic.Int64
+	fragmentCacheWrites           atomic.Int64
+	fragmentCacheWriteErrors      atomic.Int64
+	secondLayerCacheHits          atomic.Int64
+	secondLayerCacheMisses        atomic.Int64
+	secondLayerCacheWrites        atomic.Int64
+	secondLayerCacheErrors        atomic.Int64
+	fragmentDecisionMu            sync.Mutex
+	fragmentDecisionLocks         map[string]*contentModerationFragmentDecisionLock
+	secondLayerReviewMu           sync.Mutex
+	secondLayerReviewFlights      map[string]*contentModerationCandidateReviewFlight
+	secondLayerClients            sync.Map
+	secondLayerMetrics            sync.Map
+	yuFengEndpointStates          sync.Map
+	secondLayerShadowSubmitted    atomic.Int64
+	secondLayerShadowCompleted    atomic.Int64
+	secondLayerShadowInFlight     atomic.Int64
+	backgroundStartOnce           sync.Once
+	backgroundStopOnce            sync.Once
+	backgroundCancel              context.CancelFunc
+	backgroundDone                sync.WaitGroup
+	startupAPIUsabilityTested     atomic.Bool
+	startupAPIUsabilityAt         atomic.Int64
+	startupAPIUsabilityConfigured atomic.Int64
+	startupAPIUsabilitySucceeded  atomic.Int64
 }
 
 type contentModerationSecondLayerMetricCounter struct {
@@ -889,6 +914,42 @@ func NewContentModerationService(
 		go svc.cleanupWorker()
 	}
 	return svc
+}
+
+// Start launches the non-blocking moderation health workers. The startup
+// worker performs one real review request per configured remote provider; the
+// heartbeat worker only performs cheap HTTP transport checks once per minute.
+// Keeping both workers outside the constructor avoids delaying application
+// startup and keeps unit-test constructors side-effect free.
+func (s *ContentModerationService) Start() {
+	if s == nil || s.settingRepo == nil {
+		return
+	}
+	s.backgroundStartOnce.Do(func() {
+		workerCtx, cancel := context.WithCancel(context.Background())
+		s.backgroundCancel = cancel
+		s.backgroundDone.Add(2)
+		go func() {
+			defer s.backgroundDone.Done()
+			s.runStartupAPIUsabilityTests(workerCtx)
+		}()
+		go func() {
+			defer s.backgroundDone.Done()
+			s.remoteHeartbeatWorker(workerCtx)
+		}()
+	})
+}
+
+func (s *ContentModerationService) stopBackgroundHealthWorkers() {
+	if s == nil {
+		return
+	}
+	s.backgroundStopOnce.Do(func() {
+		if s.backgroundCancel != nil {
+			s.backgroundCancel()
+		}
+		s.backgroundDone.Wait()
+	})
 }
 
 func (s *ContentModerationService) GetConfig(ctx context.Context) (*ContentModerationConfigView, error) {
@@ -1093,6 +1154,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if err := s.validateConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
+	// Enforce configuration writes are intentionally non-probing. The startup
+	// worker and explicit admin test are the only automatic/manual paid probes;
+	// saving a configuration must never unexpectedly call a provider.
 	if normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage) == ContentModerationSecondLayerStageEnforce {
 		ready, reason := s.ensureContentModerationSecondLayerEnforceReadiness(ctx, cfg, time.Now())
 		if !ready {
@@ -1598,6 +1662,11 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		ReviewUnavailableCount:           s.reviewObservability.reviewUnavailableCount.Load(),
 		ReviewUnavailableEnforcedCount:   s.reviewObservability.reviewUnavailableEnforcedCount.Load(),
 		LastReviewUnavailableAt:          lastReviewUnavailableAt,
+		StartupAPIUsabilityTested:        s.startupAPIUsabilityTested.Load(),
+		StartupAPIUsabilityCheckedAt:     contentModerationUnixNanoTime(s.startupAPIUsabilityAt.Load()),
+		StartupAPIUsabilityConfigured:    int(s.startupAPIUsabilityConfigured.Load()),
+		StartupAPIUsabilitySucceeded:     int(s.startupAPIUsabilitySucceeded.Load()),
+		RemoteHeartbeats:                 s.remoteHeartbeatViews(cfg),
 	}, nil
 }
 

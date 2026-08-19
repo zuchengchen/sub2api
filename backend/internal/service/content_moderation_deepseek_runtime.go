@@ -63,8 +63,18 @@ type contentModerationDeepSeekChannelState struct {
 	halfOpenProbe       bool
 	healthCheckedAt     time.Time
 	healthyUntil        time.Time
+	// reviewUsable records that at least one real moderation POST succeeded
+	// for the current channel configuration. Unlike healthyUntil, this is not
+	// a 15-minute lease: subsequent availability is governed by the normal
+	// breaker and by real user reviews.
+	reviewUsable        bool
 	lastLatencyMS       int
 	lastError           string
+	heartbeatStatus     string
+	heartbeatCheckedAt  time.Time
+	heartbeatLatencyMS  int
+	heartbeatHTTPStatus int
+	heartbeatError      string
 }
 
 type contentModerationDeepSeekHTTPError struct {
@@ -103,8 +113,14 @@ func (s *ContentModerationService) deepSeekChannelState(channel ContentModeratio
 		state.halfOpenProbe = false
 		state.healthCheckedAt = time.Time{}
 		state.healthyUntil = time.Time{}
+		state.reviewUsable = false
 		state.lastLatencyMS = 0
 		state.lastError = ""
+		state.heartbeatStatus = ""
+		state.heartbeatCheckedAt = time.Time{}
+		state.heartbeatLatencyMS = 0
+		state.heartbeatHTTPStatus = 0
+		state.heartbeatError = ""
 	}
 	state.mu.Unlock()
 	return state
@@ -187,6 +203,7 @@ func (state *contentModerationDeepSeekChannelState) finish(
 		switch httpErr.status {
 		case http.StatusUnauthorized, http.StatusForbidden:
 			state.authDisabled = true
+			state.reviewUsable = false
 			state.cooldownUntil = time.Time{}
 			return
 		case http.StatusTooManyRequests, 529:
@@ -215,13 +232,58 @@ func (state *contentModerationDeepSeekChannelState) markReviewHealthy(
 	}
 	state.healthCheckedAt = now
 	state.healthyUntil = now.Add(contentModerationDeepSeekHealthTTL)
+	state.reviewUsable = true
+	state.lastError = ""
 	return true
+}
+
+func (state *contentModerationDeepSeekChannelState) recordHeartbeat(
+	now time.Time,
+	status string,
+	latency int,
+	httpStatus int,
+	errText string,
+) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.heartbeatStatus = status
+	state.heartbeatCheckedAt = now
+	state.heartbeatLatencyMS = latency
+	state.heartbeatHTTPStatus = httpStatus
+	state.heartbeatError = trimRunes(redactContentModerationSecrets(errText), 240)
+}
+
+func (state *contentModerationDeepSeekChannelState) reviewIsUsable(now time.Time) (bool, string) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.authDisabled {
+		return false, "auth_disabled"
+	}
+	if !state.reviewUsable {
+		return false, "unreviewed"
+	}
+	if !state.cooldownUntil.IsZero() && now.Before(state.cooldownUntil) {
+		return false, "cooldown"
+	}
+	return true, ""
+}
+
+func (state *contentModerationDeepSeekChannelState) heartbeatSnapshot() (status string, checkedAt *time.Time, latency, httpStatus int, lastError string) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	status = state.heartbeatStatus
+	if !state.heartbeatCheckedAt.IsZero() {
+		checked := state.heartbeatCheckedAt
+		checkedAt = &checked
+	}
+	return status, checkedAt, state.heartbeatLatencyMS, state.heartbeatHTTPStatus, state.heartbeatError
 }
 
 func (state *contentModerationDeepSeekChannelState) markCredentialUnavailable(now time.Time, credentialErr error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.authDisabled = true
+	state.reviewUsable = false
 	state.cooldownUntil = time.Time{}
 	state.halfOpenProbe = false
 	state.healthCheckedAt = now
@@ -240,7 +302,11 @@ func (state *contentModerationDeepSeekChannelState) snapshot(now time.Time) (hea
 	if !state.healthCheckedAt.IsZero() {
 		checked := state.healthCheckedAt
 		checkedAt = &checked
-		if now.Before(state.healthyUntil) {
+		// `reviewUsable` is the durable startup/API-test gate. The short
+		// `healthyUntil` window still describes ordinary request health so
+		// existing operational status remains useful without granting Enforce
+		// readiness to an untested channel.
+		if state.lastError == "" && (state.reviewUsable || now.Before(state.healthyUntil)) {
 			health = "reachable"
 		} else {
 			health = "unreachable"
@@ -807,12 +873,26 @@ func (s *ContentModerationService) contentModerationDeepSeekChannelView(channel 
 	view.CooldownUntil = cooldownUntil
 	view.LastLatencyMS = latency
 	view.LastError = lastError
+	heartbeatStatus, heartbeatAt, heartbeatLatency, heartbeatHTTPStatus, heartbeatError := state.heartbeatSnapshot()
+	if heartbeatStatus == "" {
+		heartbeatStatus = "untested"
+	}
+	view.HeartbeatStatus = heartbeatStatus
+	view.LastHeartbeatAt = heartbeatAt
+	view.HeartbeatLatencyMS = heartbeatLatency
+	view.HeartbeatHTTPStatus = heartbeatHTTPStatus
+	view.HeartbeatError = heartbeatError
 	return view
 }
 
 func (s *ContentModerationService) deepSeekChannelReviewReady(channel ContentModerationDeepSeekChannel, now time.Time) bool {
-	health, breaker, _, _, _, _, _ := s.deepSeekChannelState(channel).snapshot(now)
-	return health == "reachable" && breaker == "closed"
+	state := s.deepSeekChannelState(channel)
+	usable, _ := state.reviewIsUsable(now)
+	if !usable {
+		return false
+	}
+	_, breaker, _, _, _, _, _ := state.snapshot(now)
+	return breaker == "closed"
 }
 
 func (s *ContentModerationService) hasReachableDeepSeekChannel(cfg *ContentModerationConfig, now time.Time) bool {
@@ -870,10 +950,6 @@ func (s *ContentModerationService) contentModerationConfigWithReachableDeepSeekF
 	return clone
 }
 
-type contentModerationDeepSeekReviewProbeResult struct {
-	healthy bool
-}
-
 func contentModerationDeepSeekReviewProbeInput() contentModerationSecondLayerInput {
 	const text = "Sub2API content moderation reviewer health check."
 	fragment, _ := newContentModerationFragment("user", "text", "health_check", text)
@@ -900,80 +976,46 @@ func (s *ContentModerationService) probeDeepSeekChannelReview(
 	if probeTimeout <= 0 {
 		return false
 	}
-	flightKey := "review\x00" + strconv.FormatBool(retry) + "\x00" + contentModerationDeepSeekChannelDigest(channel)
-	resultCh := s.deepSeekProbeFlights.DoChan(flightKey, func() (any, error) {
-		probeCtx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-		defer cancel()
-		var attempts []ContentModerationReviewAttempt
-		var err error
-		callOnce := func(callCtx context.Context) (contentModerationSecondLayerResult, ContentModerationReviewAttempt, error) {
-			if contentModerationRemoteProvider(channel) == ContentModerationRemoteProviderDeepSeek {
-				return s.callContentModerationDeepSeekChannel(callCtx, channel, contentModerationDeepSeekReviewProbeInput(), false)
-			}
-			return s.callContentModerationRemoteChannel(callCtx, channel, contentModerationDeepSeekReviewProbeInput(), false)
-		}
-		if retry && contentModerationRemoteProvider(channel) == ContentModerationRemoteProviderDeepSeek {
-			_, attempts, err = s.callContentModerationDeepSeekChannelWithRetry(
-				probeCtx, channel, contentModerationDeepSeekReviewProbeInput(),
+	// Startup is the only automatic caller. Keep the provider request attached
+	// to the worker context so CloseContentModerationRuntime cancels the actual
+	// network call, not merely the goroutine waiting for it.
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	var attempts []ContentModerationReviewAttempt
+	var err error
+	if retry && contentModerationRemoteProvider(channel) == ContentModerationRemoteProviderDeepSeek {
+		_, attempts, err = s.callContentModerationDeepSeekChannelWithRetry(
+			probeCtx, channel, contentModerationDeepSeekReviewProbeInput(),
+		)
+	} else {
+		var attempt ContentModerationReviewAttempt
+		if contentModerationRemoteProvider(channel) == ContentModerationRemoteProviderDeepSeek {
+			_, attempt, err = s.callContentModerationDeepSeekChannel(
+				probeCtx, channel, contentModerationDeepSeekReviewProbeInput(), false,
 			)
 		} else {
-			_, attempt, callErr := callOnce(probeCtx)
-			attempts = []ContentModerationReviewAttempt{attempt}
-			err = callErr
+			_, attempt, err = s.callContentModerationRemoteChannel(
+				probeCtx, channel, contentModerationDeepSeekReviewProbeInput(), false,
+			)
 		}
-		s.recordContentModerationReviewAttempts(attempts, err)
-		return contentModerationDeepSeekReviewProbeResult{healthy: err == nil}, nil
-	})
-	select {
-	case <-ctx.Done():
-		return false
-	case shared := <-resultCh:
-		if shared.Err != nil {
-			return false
-		}
-		result, ok := shared.Val.(contentModerationDeepSeekReviewProbeResult)
-		return ok && result.healthy
+		attempts = []ContentModerationReviewAttempt{attempt}
 	}
+	s.recordContentModerationReviewAttempts(attempts, err)
+	if err != nil {
+		return false
+	}
+	// Only the dedicated startup/API-usability probe may establish the Enforce
+	// readiness gate. Normal user reviews do not silently enable a new channel.
+	s.deepSeekChannelState(channel).markReviewHealthy(time.Now(), contentModerationDeepSeekChannelDigest(channel))
+	return true
 }
 
 func (s *ContentModerationService) ensureContentModerationSecondLayerEnforceReadiness(
-	ctx context.Context,
+	_ context.Context,
 	cfg *ContentModerationConfig,
 	now time.Time,
 ) (bool, string) {
-	requiredVotes := contentModerationRemoteConsensusVotesRequired(cfg)
-	if ready, reason := s.contentModerationSecondLayerEnforceReadiness(cfg, now); ready || cfg == nil ||
-		!contentModerationRemoteReviewersEnabled(cfg) ||
-		s.countReachableContentModerationRemoteProviders(cfg, now) >= requiredVotes {
-		return ready, reason
-	}
-	totalTimeout := cfg.DeepSeekTotalTimeoutMS
-	if totalTimeout <= 0 {
-		totalTimeout = DefaultContentModerationDeepSeekTotalTimeoutMS
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(totalTimeout)*time.Millisecond)
-	defer cancel()
-	channels := normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels)
-	eligible := make([]ContentModerationDeepSeekChannel, 0, len(channels))
-	for _, channel := range channels {
-		if !channel.Enabled || strings.TrimSpace(channel.APIKey) == "" {
-			continue
-		}
-		_, breaker, _, _, _, _, _ := s.deepSeekChannelState(channel).snapshot(time.Now())
-		if breaker == "cooldown" || breaker == "auth_disabled" {
-			continue
-		}
-		eligible = append(eligible, channel)
-	}
-	for _, channel := range eligible {
-		if s.probeDeepSeekChannelReview(probeCtx, channel, len(eligible) == 1) {
-			if s.countReachableContentModerationRemoteProviders(cfg, time.Now()) >= requiredVotes {
-				break
-			}
-		}
-		if probeCtx.Err() != nil {
-			break
-		}
-	}
-	return s.contentModerationSecondLayerEnforceReadiness(cfg, time.Now())
+	// This path is intentionally observational. Paid review probes are allowed
+	// only in the process-start worker and the explicit admin /test-api action.
+	return s.contentModerationSecondLayerEnforceReadiness(cfg, now)
 }

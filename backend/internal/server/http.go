@@ -46,6 +46,9 @@ func ProvideRouter(
 	if cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
+	if handlers != nil && handlers.Admin != nil && handlers.Admin.ContentModeration != nil {
+		handlers.Admin.ContentModeration.StartHealthWorkers()
+	}
 
 	r := gin.New()
 	r.Use(middleware2.Recovery())
