@@ -130,6 +130,12 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	if !cfg.Enabled || cfg.Mode == ContentModerationModeOff {
 		return allow
 	}
+	// Group and model scope is configuration-driven. The request snapshot keeps
+	// the original API-key group stable across account/fallback routing, while
+	// avoiding any provider- or name-based eligibility shortcut.
+	if !cfg.includesGroup(input.Scope.GroupID) || !cfg.includesModel(input.Model) {
+		return allow
+	}
 	whitelistShadow := cfg.includesUserEmail(input.UserEmail)
 
 	fragments := SelectContentModerationReviewFragments(ExtractContentModerationFragments(input.Protocol, input.Body))
