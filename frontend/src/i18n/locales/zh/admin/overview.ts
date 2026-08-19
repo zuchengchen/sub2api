@@ -490,6 +490,7 @@ export default {
       enterUsername: '请输入用户名（选填）',
       enterNotes: '请输入备注（仅管理员可见）',
       notesHint: '此备注仅对管理员可见',
+      usernameManagedByUser: '用户名由用户本人维护，管理员只能查看',
       enterNewPassword: '请输入新密码（选填）',
       leaveEmptyToKeep: '留空则保持原密码不变',
       generatePassword: '生成随机密码',

@@ -73,8 +73,10 @@ type CreateUserRequest struct {
 // UpdateUserRequest represents admin update user request
 // 使用指针类型来区分"未提供"和"设置为0"
 type UpdateUserRequest struct {
-	Email         string   `json:"email" binding:"omitempty,email"`
-	Password      string   `json:"password" binding:"omitempty,min=6"`
+	Email    string `json:"email" binding:"omitempty,email"`
+	Password string `json:"password" binding:"omitempty,min=6"`
+	// Username is retained for old admin clients. Admin writes are converted
+	// to Notes so an administrator cannot overwrite a user's self-managed name.
 	Username      *string  `json:"username"`
 	Notes         *string  `json:"notes"`
 	Role          string   `json:"role" binding:"omitempty,oneof=admin user"`
@@ -86,6 +88,32 @@ type UpdateUserRequest struct {
 	// GroupRates 用户专属分组倍率配置
 	// map[groupID]*rate，nil 表示删除该分组的专属倍率
 	GroupRates map[int64]*float64 `json:"group_rates"`
+}
+
+// adminNotesForCreate keeps the old admin payload compatible while making the
+// value entered in the former username field administrator-only metadata.
+// An explicit notes value wins when both fields are sent.
+func adminNotesForCreate(username, notes string) string {
+	if strings.TrimSpace(notes) != "" {
+		return notes
+	}
+	return username
+}
+
+// adminNotesForUpdate maps legacy admin username updates to notes. A non-empty
+// notes value wins; an empty notes value from an old client falls back to a
+// non-empty username. The username field is never forwarded to the user model.
+func adminNotesForUpdate(username, notes *string) *string {
+	if notes != nil && strings.TrimSpace(*notes) != "" {
+		return notes
+	}
+	if username != nil && strings.TrimSpace(*username) != "" {
+		return username
+	}
+	if notes != nil {
+		return notes
+	}
+	return username
 }
 
 // UpdateBalanceRequest represents balance update request
@@ -286,8 +314,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 	user, err := h.adminService.CreateUser(c.Request.Context(), &service.CreateUserInput{
 		Email:         req.Email,
 		Password:      req.Password,
-		Username:      req.Username,
-		Notes:         req.Notes,
+		Notes:         adminNotesForCreate(req.Username, req.Notes),
 		Role:          req.Role,
 		Balance:       req.Balance,
 		Concurrency:   req.Concurrency,
@@ -342,10 +369,11 @@ func (h *UserHandler) Update(c *gin.Context) {
 
 	// 使用指针类型直接传递，nil 表示未提供该字段
 	user, err := h.adminService.UpdateUser(c.Request.Context(), userID, &service.UpdateUserInput{
-		Email:         req.Email,
-		Password:      req.Password,
-		Username:      req.Username,
-		Notes:         req.Notes,
+		Email:    req.Email,
+		Password: req.Password,
+		// Usernames are user-owned. Legacy admin clients that only send
+		// username are treated as entering an administrator note.
+		Notes:         adminNotesForUpdate(req.Username, req.Notes),
 		Role:          req.Role,
 		Balance:       req.Balance,
 		Concurrency:   req.Concurrency,

@@ -22,8 +22,9 @@
         </div>
       </div>
       <div>
-        <label class="input-label">{{ t('admin.users.username') }}</label>
-        <input v-model="form.username" type="text" class="input" :placeholder="t('admin.users.enterUsername')" />
+        <label class="input-label">{{ t('admin.users.notes') }}</label>
+        <textarea data-test="admin-notes" v-model="form.notes" rows="3" class="input" :placeholder="t('admin.users.enterNotes')"></textarea>
+        <p class="input-hint">{{ t('admin.users.notesHint') }}</p>
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.form.roleLabel') }}</label>
@@ -82,7 +83,7 @@ const props = defineProps<{ show: boolean }>()
 const emit = defineEmits(['close', 'success']); const { t } = useI18n()
 const appStore = useAppStore()
 
-const form = reactive({ email: '', password: '', username: '', notes: '', role: 'user' as 'user' | 'admin', balance: '', concurrency: 1, rpm_limit: 0 })
+const form = reactive({ email: '', password: '', notes: '', role: 'user' as 'user' | 'admin', balance: '', concurrency: 1, rpm_limit: 0 })
 
 const stepUp = useStepUp()
 const loading = ref(false)
@@ -116,7 +117,7 @@ const submit = async () => {
   } finally { loading.value = false }
 }
 
-watch(() => props.show, (v) => { if(v) Object.assign(form, { email: '', password: '', username: '', notes: '', role: 'user', balance: '', concurrency: 1, rpm_limit: 0 }) })
+watch(() => props.show, (v) => { if(v) Object.assign(form, { email: '', password: '', notes: '', role: 'user', balance: '', concurrency: 1, rpm_limit: 0 }) })
 
 const generateRandomPassword = () => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%^&*'
