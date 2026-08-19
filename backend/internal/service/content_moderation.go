@@ -1205,6 +1205,22 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 	return s.checkUnifiedFragments(ctx, input, runtimeSnapshot), nil
 }
 
+// IsContentModerationRequestInScope resolves the persisted feature, group, and
+// model policy before the handler reserves moderation body capacity. Runtime
+// failures remain fail-open and are handled consistently by Check.
+func (s *ContentModerationService) IsContentModerationRequestInScope(ctx context.Context, scope *ContentModerationScopeSnapshot, model string) bool {
+	if s == nil || scope == nil || !scope.InScope {
+		return false
+	}
+	runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx)
+	if err != nil || runtimeSnapshot == nil || !runtimeSnapshot.riskControlEnabled || runtimeSnapshot.config == nil {
+		return false
+	}
+	cfg := runtimeSnapshot.config
+	return cfg.Enabled && cfg.Mode != ContentModerationModeOff &&
+		cfg.includesGroup(scope.GroupID) && cfg.includesModel(model)
+}
+
 func (s *ContentModerationService) recordPreBlockSyncMetric(latencyMS int, action string) {
 	if s == nil {
 		return
@@ -2678,6 +2694,52 @@ func (cfg *ContentModerationConfig) includesUserEmail(email string) bool {
 	}
 	for _, allowed := range cfg.UserEmailWhitelist {
 		if email == strings.ToLower(strings.TrimSpace(allowed)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg *ContentModerationConfig) includesGroup(groupID *int64) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.AllGroups {
+		return true
+	}
+	if groupID == nil {
+		return false
+	}
+	for _, configuredID := range cfg.GroupIDs {
+		if configuredID == *groupID {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg *ContentModerationConfig) includesModel(model string) bool {
+	if cfg == nil {
+		return true
+	}
+	filter := normalizeContentModerationModelFilter(cfg.ModelFilter)
+	switch filter.Type {
+	case ContentModerationModelFilterInclude:
+		return contentModerationModelListContains(filter.Models, model)
+	case ContentModerationModelFilterExclude:
+		return !contentModerationModelListContains(filter.Models, model)
+	default:
+		return true
+	}
+}
+
+func contentModerationModelListContains(models []string, model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" {
+		return false
+	}
+	for _, candidate := range models {
+		if strings.ToLower(strings.TrimSpace(candidate)) == model {
 			return true
 		}
 	}
