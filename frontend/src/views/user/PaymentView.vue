@@ -48,7 +48,7 @@
             <div class="card p-6">
               <AmountInput
                 v-model="amount"
-                :amounts="[50, 100, 150, 200]"
+                :amounts="[10, 20, 30, 50, 100, 200]"
                 :min="globalMinAmount"
                 :max="globalMaxAmount"
               />
@@ -546,9 +546,10 @@ function amountFitsMethod(amt: number, methodType: string): boolean {
 // Visible methods decide the amount range shown to users.
 const globalMinAmount = computed(() => {
   const limits = Object.values(visibleMethods.value)
-  if (limits.length === 0) return 0
-  if (limits.some(limit => limit.single_min <= 0)) return 0
-  return Math.min(...limits.map(limit => limit.single_min))
+  const configuredMin = checkout.value.global_min > 0 ? checkout.value.global_min : 0
+  if (limits.length === 0) return configuredMin
+  if (limits.some(limit => limit.single_min <= 0)) return configuredMin
+  return Math.max(configuredMin, Math.min(...limits.map(limit => limit.single_min)))
 })
 const globalMaxAmount = computed(() => {
   const limits = Object.values(visibleMethods.value)
@@ -632,6 +633,9 @@ const totalAmount = computed(() =>
 
 const amountError = computed(() => {
   if (validAmount.value <= 0) return ''
+  if (globalMinAmount.value > 0 && validAmount.value < globalMinAmount.value) {
+    return t('payment.amountTooLow', { min: formatSelectedPaymentAmount(globalMinAmount.value) })
+  }
   // No method can handle this amount
   if (!enabledMethods.value.some((m) => amountFitsMethod(validAmount.value, m))) {
     return t('payment.amountNoMethod')
@@ -647,6 +651,7 @@ const amountError = computed(() => {
 
 const canSubmit = computed(() =>
   validAmount.value > 0
+    && (globalMinAmount.value <= 0 || validAmount.value >= globalMinAmount.value)
     && amountFitsMethod(validAmount.value, selectedMethod.value)
     && selectedLimit.value?.available !== false
 )

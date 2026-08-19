@@ -56,7 +56,7 @@ export interface MethodLimit {
 /** Response from /payment/limits API */
 export interface MethodLimitsResponse {
   methods: Record<string, MethodLimit>
-  global_min: number  // widest min across all methods; 0 = no minimum
+  global_min: number  // effective recharge floor across app and method limits; 0 = no minimum
   global_max: number  // widest max across all methods; 0 = no maximum
 }
 

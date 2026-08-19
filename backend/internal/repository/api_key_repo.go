@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/ent/user"
+	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 
@@ -43,7 +44,8 @@ func (r *apiKeyRepository) activeQuery() *dbent.APIKeyQuery {
 }
 
 func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) error {
-	builder := r.client.APIKey.Create().
+	client := clientFromContext(ctx, r.client)
+	builder := client.APIKey.Create().
 		SetUserID(key.UserID).
 		SetKey(key.Key).
 		SetName(key.Name).
@@ -72,6 +74,42 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		key.UpdatedAt = created.UpdatedAt
 	}
 	return translatePersistenceError(err, nil, service.ErrAPIKeyExists)
+}
+
+// CreateSignupAPIKey atomically grants access to an exclusive standard group
+// and creates the default signup key. Public and subscription groups do not
+// need an allowed-group row and use Create directly.
+func (r *apiKeyRepository) CreateSignupAPIKey(ctx context.Context, key *service.APIKey, grantExclusiveGroup bool) error {
+	if !grantExclusiveGroup {
+		return r.Create(ctx, key)
+	}
+	if r == nil || r.client == nil || key == nil || key.GroupID == nil {
+		return fmt.Errorf("invalid default signup API key transaction")
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin default signup API key transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+
+	err = tx.Client().UserAllowedGroup.Create().
+		SetUserID(key.UserID).
+		SetGroupID(*key.GroupID).
+		OnConflictColumns(userallowedgroup.FieldUserID, userallowedgroup.FieldGroupID).
+		DoNothing().
+		Exec(txCtx)
+	if err != nil && !isSQLNoRowsError(err) {
+		return fmt.Errorf("grant default signup group: %w", err)
+	}
+	if err := r.Create(txCtx, key); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit default signup API key transaction: %w", err)
+	}
+	return nil
 }
 
 func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {

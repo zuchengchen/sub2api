@@ -44,8 +44,9 @@ const (
 
 // Default values for payment configuration settings.
 const (
-	defaultOrderTimeoutMin  = 30
-	defaultMaxPendingOrders = 3
+	defaultOrderTimeoutMin   = 30
+	defaultMaxPendingOrders  = 3
+	defaultMinRechargeAmount = 10
 )
 
 // PaymentConfig holds the payment system configuration.
@@ -239,9 +240,15 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 }
 
 func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *PaymentConfig {
+	minAmount := pcParseFloat(vals[SettingMinRechargeAmount], defaultMinRechargeAmount)
+	// Recharge amounts below 10 CNY are no longer supported. Keep this floor
+	// effective for installations that still have the legacy setting persisted.
+	if math.IsNaN(minAmount) || math.IsInf(minAmount, 0) || minAmount < defaultMinRechargeAmount {
+		minAmount = defaultMinRechargeAmount
+	}
 	cfg := &PaymentConfig{
 		Enabled:                   vals[SettingPaymentEnabled] == "true",
-		MinAmount:                 pcParseFloat(vals[SettingMinRechargeAmount], 1),
+		MinAmount:                 minAmount,
 		MaxAmount:                 pcParseFloat(vals[SettingMaxRechargeAmount], 0),
 		DailyLimit:                pcParseFloat(vals[SettingDailyRechargeLimit], 0),
 		OrderTimeoutMin:           pcParseInt(vals[SettingOrderTimeoutMinutes], defaultOrderTimeoutMin),
@@ -348,7 +355,11 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 		m[SettingPaymentEnabled] = formatBoolOrEmpty(req.Enabled)
 	}
 	if req.MinAmount != nil {
-		m[SettingMinRechargeAmount] = formatPositiveFloat(req.MinAmount)
+		minAmount := *req.MinAmount
+		if math.IsNaN(minAmount) || math.IsInf(minAmount, 0) || minAmount < defaultMinRechargeAmount {
+			minAmount = defaultMinRechargeAmount
+		}
+		m[SettingMinRechargeAmount] = strconv.FormatFloat(minAmount, 'f', 2, 64)
 	}
 	if req.MaxAmount != nil {
 		m[SettingMaxRechargeAmount] = formatPositiveFloat(req.MaxAmount)

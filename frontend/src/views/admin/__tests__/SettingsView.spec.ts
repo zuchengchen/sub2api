@@ -476,7 +476,7 @@ const baseSettingsResponse = {
   antigravity_user_agent_version: "",
   openai_codex_user_agent: "",
   payment_enabled: true,
-  payment_min_amount: 1,
+  payment_min_amount: 10,
   payment_max_amount: 10000,
   payment_daily_limit: 50000,
   payment_order_timeout_minutes: 30,

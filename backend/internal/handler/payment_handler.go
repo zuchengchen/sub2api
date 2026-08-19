@@ -109,6 +109,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	applyConfiguredRechargeFloor(limitsResp, cfg)
 	alipayMobilePrecreateDeepLink := false
 	if cfg.AlipayMobilePrecreateDeepLink {
 		alipayMobilePrecreateDeepLink, err = h.configService.UsesOfficialAlipayVisibleMethod(ctx)
@@ -223,7 +224,19 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	cfg, err := h.configService.GetPaymentConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	applyConfiguredRechargeFloor(resp, cfg)
 	response.Success(c, resp)
+}
+
+func applyConfiguredRechargeFloor(limits *service.MethodLimitsResponse, cfg *service.PaymentConfig) {
+	if limits != nil && cfg != nil && cfg.MinAmount > limits.GlobalMin {
+		limits.GlobalMin = cfg.MinAmount
+	}
 }
 
 // CreateOrderRequest is the request body for creating a payment order.
