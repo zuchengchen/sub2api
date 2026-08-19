@@ -49,7 +49,8 @@ func runContentModerationStage(c *gin.Context, reqLog *zap.Logger, svc *service.
 		return nil
 	}
 	input := buildContentModerationInputForStage(c, apiKey, subject, protocol, model, body, stage)
-	if input.Scope != nil && input.Scope.InScope {
+	inModerationScope := svc.IsContentModerationRequestInScope(c.Request.Context(), input.Scope, input.Model)
+	if inModerationScope {
 		reservation, ok := contentModerationReservation(c)
 		if !ok {
 			reservation, ok = svc.ReservePendingRequestBody(int64(len(body)))

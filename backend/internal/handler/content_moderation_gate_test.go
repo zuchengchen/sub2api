@@ -262,3 +262,46 @@ func TestRunContentModerationStage_UserEmailWhitelistRemainsInScopeAndUsesBodyBu
 	require.Equal(t, int64(0), svc.PendingRequestBodyBytes())
 	require.True(t, contentModerationScopeSnapshot(c, apiKey).InScope)
 }
+
+func TestRunContentModerationStage_ConfiguredOutOfScopeSkipsBodyBudget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rawCfg, err := json.Marshal(map[string]any{
+		"enabled":    true,
+		"mode":       "pre_block",
+		"all_groups": false,
+		"group_ids":  []int64{99},
+		"model_filter": map[string]any{
+			"type":   "all",
+			"models": []string{},
+		},
+	})
+	require.NoError(t, err)
+	svc := service.NewContentModerationService(
+		&contentModerationWhitelistSettingRepo{values: map[string]string{
+			service.SettingKeyRiskControlEnabled:      "true",
+			service.SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		nil, nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetPendingRequestBodyBudgetForTest(1)
+	groupID := int64(7)
+	apiKey := &service.APIKey{
+		ID: 12, Name: "out-of-scope-key", GroupID: &groupID,
+		Group: &service.Group{ID: groupID, Name: "Claude production"},
+		User:  &service.User{ID: 43, Email: "user@example.com"},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	decision := runContentModerationStage(
+		c, zap.NewNop(), svc, apiKey, middleware2.AuthSubject{UserID: 43},
+		service.ContentModerationProtocolAnthropicMessages, "claude-opus-5",
+		[]byte(`{"messages":[{"role":"user","content":"larger than budget"}]}`), "http",
+	)
+
+	require.NotNil(t, decision)
+	require.True(t, decision.Allowed)
+	require.NotEqual(t, service.ContentModerationActionBudgetRejected, decision.Action)
+	require.Equal(t, int64(0), svc.PendingRequestBodyBytes())
+}

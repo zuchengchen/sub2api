@@ -183,7 +183,7 @@ func TestRecordCyberPolicyEvent_RiskControlOffStillForcesUserDisposition(t *test
 	require.Equal(t, []int64{1}, invalidator.userIDs)
 }
 
-func TestRecordCyberPolicyEvent_NonGPTSkipsAllSideEffects(t *testing.T) {
+func TestRecordCyberPolicyEvent_NonGPTGroupReceivesSideEffects(t *testing.T) {
 	repo := &cyberDispositionTestRepo{userActive: true}
 	svc := NewContentModerationService(
 		&contentModerationTestSettingRepo{values: map[string]string{
@@ -202,7 +202,7 @@ func TestRecordCyberPolicyEvent_NonGPTSkipsAllSideEffects(t *testing.T) {
 	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
 		UserID:          1,
 		UserEmail:       "u@x.com",
-		Model:           "gpt-5",
+		Model:           "claude-opus-5",
 		Endpoint:        "/v1/responses",
 		UpstreamMessage: "flagged",
 		UpstreamBody:    `{"error":{"code":"cyber_policy"}}`,
@@ -210,8 +210,8 @@ func TestRecordCyberPolicyEvent_NonGPTSkipsAllSideEffects(t *testing.T) {
 		Scope:           &scope,
 		UserRole:        RoleUser,
 	})
-	require.Empty(t, repo.snapshotLogs())
-	require.Equal(t, 0, repo.disableUserCalls)
+	require.Len(t, repo.snapshotLogs(), 1)
+	require.Equal(t, 1, repo.disableUserCalls)
 }
 
 func TestRecordCyberPolicyEvent_UserEmailWhitelistStillForcesDisposition(t *testing.T) {

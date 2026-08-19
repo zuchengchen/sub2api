@@ -87,12 +87,61 @@ func (*contentModerationMetricCache) CountFragmentResults(context.Context, strin
 	return 0, nil
 }
 
-func TestIsGPTContentModerationGroup(t *testing.T) {
-	for _, name := range []string{"GPT", "gpt-prod", "\u3000 GpT Team \t", "GPTanything"} {
-		require.True(t, IsGPTContentModerationGroup(name), name)
+func TestContentModerationScopeSnapshotDoesNotUseGroupName(t *testing.T) {
+	for _, name := range []string{"GPT", "gpt-prod", "\u3000 GpT Team \t", "Claude production", "grok", "", "ChatGPT"} {
+		scope := NewContentModerationScopeSnapshot(nil, name)
+		require.True(t, scope.InScope, name)
 	}
-	for _, name := range []string{"", "GP", "xGPT", "\u0262PT", "ChatGPT"} {
-		require.False(t, IsGPTContentModerationGroup(name), name)
+}
+
+func TestContentModerationConfiguredScope(t *testing.T) {
+	groupID := int64(41)
+	scope := NewContentModerationScopeSnapshot(&groupID, "Claude production")
+	baseConfig := defaultContentModerationConfig()
+
+	tests := []struct {
+		name        string
+		allGroups   bool
+		groupIDs    []int64
+		modelFilter ContentModerationModelFilter
+		model       string
+		want        bool
+	}{
+		{
+			name: "all groups and models", allGroups: true,
+			modelFilter: ContentModerationModelFilter{Type: ContentModerationModelFilterAll},
+			model:       "claude-opus-5", want: true,
+		},
+		{
+			name: "selected non GPT group", groupIDs: []int64{41},
+			modelFilter: ContentModerationModelFilter{Type: ContentModerationModelFilterAll},
+			model:       "claude-opus-5", want: true,
+		},
+		{
+			name: "unselected group", groupIDs: []int64{99},
+			modelFilter: ContentModerationModelFilter{Type: ContentModerationModelFilterAll},
+			model:       "claude-opus-5", want: false,
+		},
+		{
+			name: "included model", allGroups: true,
+			modelFilter: ContentModerationModelFilter{Type: ContentModerationModelFilterInclude, Models: []string{"Claude-Opus-5"}},
+			model:       "claude-opus-5", want: true,
+		},
+		{
+			name: "excluded model", allGroups: true,
+			modelFilter: ContentModerationModelFilter{Type: ContentModerationModelFilterExclude, Models: []string{"claude-opus-5"}},
+			model:       "CLAUDE-OPUS-5", want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := cloneContentModerationConfig(baseConfig)
+			cfg.AllGroups = tt.allGroups
+			cfg.GroupIDs = tt.groupIDs
+			cfg.ModelFilter = tt.modelFilter
+			require.Equal(t, tt.want, cfg.includesGroup(scope.GroupID) && cfg.includesModel(tt.model))
+		})
 	}
 }
 
