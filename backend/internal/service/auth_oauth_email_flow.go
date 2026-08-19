@@ -151,12 +151,12 @@ func (s *AuthService) RegisterOAuthEmailAccount(
 			return nil, nil, ErrServiceUnavailable
 		}
 	}
-
 	tokenPair, err := s.GenerateTokenPair(ctx, user, "")
 	if err != nil {
 		_ = s.RollbackOAuthEmailAccountCreation(ctx, user.ID, "")
 		return nil, nil, fmt.Errorf("generate token pair: %w", err)
 	}
+	s.provisionDefaultSignupAPIKey(ctx, user.ID)
 	return tokenPair, user, nil
 }
 
@@ -237,12 +237,12 @@ func (s *AuthService) RegisterVerifiedOAuthEmailAccount(
 			return nil, nil, ErrServiceUnavailable
 		}
 	}
-
 	tokenPair, err := s.GenerateTokenPair(ctx, user, "")
 	if err != nil {
 		_ = s.RollbackOAuthEmailAccountCreation(ctx, user.ID, "")
 		return nil, nil, fmt.Errorf("generate token pair: %w", err)
 	}
+	s.provisionDefaultSignupAPIKey(ctx, user.ID)
 	return tokenPair, user, nil
 }
 

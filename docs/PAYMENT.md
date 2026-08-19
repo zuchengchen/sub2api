@@ -58,7 +58,7 @@ Configure the following in Admin Dashboard **Settings → Payment Settings**:
 | **Enable Payment** | Enable or disable the payment system | Off |
 | **Product Name Prefix** | Prefix shown on payment page | - |
 | **Product Name Suffix** | Suffix (e.g., "Credits") | - |
-| **Minimum Amount** | Minimum single top-up amount | 1 |
+| **Minimum Amount** | Minimum single top-up amount | 10 |
 | **Maximum Amount** | Maximum single top-up amount (empty = unlimited) | - |
 | **Daily Limit** | Per-user daily cumulative limit (empty = unlimited) | - |
 | **Order Timeout** | Order timeout in minutes (minimum 1) | 30 |

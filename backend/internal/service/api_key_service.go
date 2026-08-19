@@ -52,6 +52,8 @@ const (
 	apiKeySortCurrentConcurrency = "current_concurrency"
 	// DB 写失败后的短退避，避免请求路径持续同步重试造成写风暴与高延迟。
 	apiKeyLastUsedFailBackoff = 5 * time.Second
+	defaultSignupAPIKeyName   = "GPT"
+	defaultSignupGroupName    = "GPT-PRO"
 )
 
 // APIKeyUpdateFields 声明 APIKeyRepository.Update 允许写回的列。
@@ -123,6 +125,12 @@ type APIKeyRepository interface {
 
 type apiKeyAllByUserIDLister interface {
 	ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error)
+}
+
+// signupAPIKeyCreator is implemented by the production repository so an
+// exclusive-group grant and the default key can be committed atomically.
+type signupAPIKeyCreator interface {
+	CreateSignupAPIKey(ctx context.Context, key *APIKey, grantExclusiveGroup bool) error
 }
 
 // APIKeyRateLimitData holds rate limit usage and window state for an API key.
@@ -386,13 +394,74 @@ func (s *APIKeyService) GenerateKey() (string, error) {
 	}
 
 	// 转换为十六进制字符串并添加前缀
-	prefix := s.cfg.Default.APIKeyPrefix
-	if prefix == "" {
-		prefix = "sk-"
+	prefix := "sk-"
+	if s.cfg != nil && s.cfg.Default.APIKeyPrefix != "" {
+		prefix = s.cfg.Default.APIKeyPrefix
 	}
 
 	key := prefix + hex.EncodeToString(bytes)
 	return key, nil
+}
+
+// ProvisionDefaultSignupAPIKey creates the built-in key for a newly
+// registered user. The group is resolved by its stable display name instead
+// of a deployment-specific numeric ID. This path intentionally bypasses the
+// normal user-selected group permission check: the administrator explicitly
+// configured GPT-PRO as the signup destination.
+func (s *APIKeyService) ProvisionDefaultSignupAPIKey(ctx context.Context, userID int64) error {
+	if s == nil || userID <= 0 {
+		return fmt.Errorf("invalid signup user ID")
+	}
+	if s.apiKeyRepo == nil {
+		return fmt.Errorf("api key repository is not configured")
+	}
+	if s.groupRepo == nil {
+		return fmt.Errorf("group repository is not configured")
+	}
+
+	groups, err := s.groupRepo.ListActive(ctx)
+	if err != nil {
+		return fmt.Errorf("list active groups: %w", err)
+	}
+	var target *Group
+	for i := range groups {
+		if strings.EqualFold(strings.TrimSpace(groups[i].Name), defaultSignupGroupName) {
+			target = &groups[i]
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("signup group %q not found", defaultSignupGroupName)
+	}
+
+	key, err := s.GenerateKey()
+	if err != nil {
+		return fmt.Errorf("generate signup API key: %w", err)
+	}
+	apiKey := &APIKey{
+		UserID:  userID,
+		Key:     key,
+		Name:    html.EscapeString(defaultSignupAPIKeyName),
+		GroupID: &target.ID,
+		Status:  StatusActive,
+	}
+	grantExclusiveGroup := target.IsExclusive && !target.IsSubscriptionType()
+	if grantExclusiveGroup {
+		creator, ok := s.apiKeyRepo.(signupAPIKeyCreator)
+		if !ok {
+			return fmt.Errorf("api key repository does not support atomic signup group grants")
+		}
+		err = creator.CreateSignupAPIKey(ctx, apiKey, true)
+	} else {
+		err = s.apiKeyRepo.Create(ctx, apiKey)
+	}
+	if err != nil {
+		return fmt.Errorf("create signup API key: %w", err)
+	}
+
+	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+	s.compileAPIKeyIPRules(apiKey)
+	return nil
 }
 
 // ValidateCustomKey 验证自定义API Key格式

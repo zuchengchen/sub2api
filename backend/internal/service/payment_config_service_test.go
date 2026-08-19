@@ -98,8 +98,8 @@ func TestParsePaymentConfig(t *testing.T) {
 		if cfg.Enabled {
 			t.Fatal("expected Enabled=false by default")
 		}
-		if cfg.MinAmount != 1 {
-			t.Fatalf("expected MinAmount=1, got %v", cfg.MinAmount)
+		if cfg.MinAmount != 10 {
+			t.Fatalf("expected MinAmount=10, got %v", cfg.MinAmount)
 		}
 		if cfg.MaxAmount != 0 {
 			t.Fatalf("expected MaxAmount=0 (no limit), got %v", cfg.MaxAmount)
@@ -142,8 +142,8 @@ func TestParsePaymentConfig(t *testing.T) {
 		if !cfg.Enabled {
 			t.Fatal("expected Enabled=true")
 		}
-		if cfg.MinAmount != 5 {
-			t.Fatalf("MinAmount = %v, want 5", cfg.MinAmount)
+		if cfg.MinAmount != 10 {
+			t.Fatalf("MinAmount = %v, want 10", cfg.MinAmount)
 		}
 		if cfg.MaxAmount != 1000 {
 			t.Fatalf("MaxAmount = %v, want 1000", cfg.MaxAmount)
@@ -472,6 +472,24 @@ func TestUpdatePaymentConfig_PersistsVisibleMethodRouting(t *testing.T) {
 	}
 	if repo.values[SettingPaymentVisibleMethodWxpaySource] != VisibleMethodSourceOfficialWechat {
 		t.Fatalf("wxpay source = %q, want %q", repo.values[SettingPaymentVisibleMethodWxpaySource], VisibleMethodSourceOfficialWechat)
+	}
+}
+
+func TestUpdatePaymentConfigEnforcesMinimumRechargeAmount(t *testing.T) {
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo}
+	requested := 1.0
+
+	if err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{MinAmount: &requested}); err != nil {
+		t.Fatalf("UpdatePaymentConfig returned error: %v", err)
+	}
+	if got := repo.values[SettingMinRechargeAmount]; got != "10.00" {
+		t.Fatalf("stored minimum recharge amount = %q, want 10.00", got)
+	}
+
+	cfg := svc.parsePaymentConfig(map[string]string{SettingMinRechargeAmount: "1.00"})
+	if cfg.MinAmount != defaultMinRechargeAmount {
+		t.Fatalf("parsed minimum recharge amount = %v, want %v", cfg.MinAmount, defaultMinRechargeAmount)
 	}
 }
 

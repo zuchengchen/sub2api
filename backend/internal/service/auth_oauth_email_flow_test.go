@@ -340,6 +340,69 @@ func TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(t *tes
 	require.Equal(t, "oidc", userRepo.created[0].SignupSource)
 }
 
+func TestRegisterOAuthEmailAccountProvisionsDefaultSignupAPIKey(t *testing.T) {
+	userRepo := &userRepoStub{nextID: 42}
+	emailCache := &emailCacheStub{
+		data: &VerificationCodeData{
+			Code:      "246810",
+			CreatedAt: time.Now().UTC(),
+			ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
+		},
+	}
+	authService := newOAuthEmailFlowAuthService(
+		userRepo,
+		&redeemCodeRepoStub{},
+		&refreshTokenCacheStub{},
+		map[string]string{
+			SettingKeyRegistrationEnabled: "true",
+			SettingKeyEmailVerifyEnabled:  "true",
+		},
+		emailCache,
+		nil,
+	)
+	provisioner := &signupAPIKeyProvisionerSpy{}
+	authService.SetSignupAPIKeyProvisioner(provisioner)
+
+	_, user, err := authService.RegisterOAuthEmailAccount(
+		context.Background(),
+		"fresh@example.com",
+		"secret-123",
+		"246810",
+		"",
+		"oidc",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Equal(t, []int64{user.ID}, provisioner.userIDs)
+}
+
+func TestRegisterVerifiedOAuthEmailAccountProvisionsDefaultSignupAPIKey(t *testing.T) {
+	userRepo := &userRepoStub{nextID: 43}
+	authService := newOAuthEmailFlowAuthService(
+		userRepo,
+		&redeemCodeRepoStub{},
+		&refreshTokenCacheStub{},
+		map[string]string{SettingKeyRegistrationEnabled: "true"},
+		&emailCacheStub{},
+		nil,
+	)
+	provisioner := &signupAPIKeyProvisionerSpy{}
+	authService.SetSignupAPIKeyProvisioner(provisioner)
+
+	_, user, err := authService.RegisterVerifiedOAuthEmailAccount(
+		context.Background(),
+		"verified@example.com",
+		"secret-123",
+		"",
+		"github",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Equal(t, []int64{user.ID}, provisioner.userIDs)
+}
+
 func TestRegisterOAuthEmailAccountKeepsGitHubAndGoogleSignupSource(t *testing.T) {
 	tests := []struct {
 		name         string

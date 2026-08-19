@@ -9,6 +9,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
+	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
@@ -248,4 +249,45 @@ func TestAPIKeyRepository_CreateDuplicateKey(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, first))
 	err := repo.Create(ctx, second)
 	require.ErrorIs(t, err, service.ErrAPIKeyExists)
+}
+
+func TestAPIKeyRepositoryCreateSignupAPIKeyRollsBackExclusiveGrantOnKeyConflict(t *testing.T) {
+	repo, client := newAPIKeyRepoSQLite(t)
+	ctx := context.Background()
+	owner := mustCreateAPIKeyRepoUser(t, ctx, client, "signup-key-owner@test.com")
+	newUser := mustCreateAPIKeyRepoUser(t, ctx, client, "signup-key-new@test.com")
+	group, err := client.Group.Create().
+		SetName("GPT-PRO").
+		SetPlatform(service.PlatformOpenAI).
+		SetIsExclusive(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	existing := &service.APIKey{
+		UserID: owner.ID,
+		Key:    "sk-signup-conflict",
+		Name:   "existing",
+		Status: service.StatusActive,
+	}
+	require.NoError(t, repo.Create(ctx, existing))
+
+	groupID := group.ID
+	candidate := &service.APIKey{
+		UserID:  newUser.ID,
+		Key:     existing.Key,
+		Name:    "GPT",
+		GroupID: &groupID,
+		Status:  service.StatusActive,
+	}
+	err = repo.CreateSignupAPIKey(ctx, candidate, true)
+	require.ErrorIs(t, err, service.ErrAPIKeyExists)
+
+	granted, err := client.UserAllowedGroup.Query().
+		Where(
+			userallowedgroup.UserIDEQ(newUser.ID),
+			userallowedgroup.GroupIDEQ(group.ID),
+		).
+		Exist(ctx)
+	require.NoError(t, err)
+	require.False(t, granted, "exclusive group grant must roll back with the failed key insert")
 }
