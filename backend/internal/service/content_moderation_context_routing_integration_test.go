@@ -1015,108 +1015,54 @@ func TestContentModerationTruncatedContextualReviewNeverAllowsOrCachesSafeResult
 	}
 }
 
-func TestContentModerationBoundedSafeReviewRequiresCoveredRemoteConsensus(t *testing.T) {
-	cfg := defaultContentModerationConfig()
-	cfg.RemoteReviewersEnabled = true
-	cfg.RemoteReviewersVersion = 1
-	cfg.RemoteConsensusRequired = 1
-	bundle := contentModerationEvidenceBundle{ContextIncomplete: true}
-	result := contentModerationSecondLayerResult{
-		Disposition: ContentModerationReviewDispositionAllow,
-		RemoteVotes: 1, ConsensusStatus: "primary_safe",
-	}
-
-	require.True(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, result))
-
-	coverageMissing := bundle
-	coverageMissing.CoverageIncomplete = true
-	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, coverageMissing, result))
-
-	insufficientVotes := result
-	insufficientVotes.RemoteVotes = 0
-	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, insufficientVotes))
-
-	disagreement := result
-	disagreement.ReviewerMismatch = true
-	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, disagreement))
-
-	blocked := result
-	blocked.Blocked = true
-	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, blocked))
-
-	complete := bundle
-	complete.ContextIncomplete = false
-	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, complete, result))
-}
-
-func TestContentModerationBoundedSafeRemoteConsensusAllowsWithoutCaching(t *testing.T) {
+func TestContentModerationIncompleteContextCannotReplayCompleteAllowCache(t *testing.T) {
 	var reviewCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		reviewCalls.Add(1)
-		contentModerationRemotePoolWriteResult(t, w, 0.05, "safe", "")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
 	}))
 	defer server.Close()
 
-	cfg := defaultContentModerationConfig()
-	cfg.Enabled = true
-	cfg.SecondLayerEnabled = true
-	cfg.SecondLayerStage = ContentModerationSecondLayerStageEnforce
-	cfg.DeepSeekEnabled = true
-	cfg.RemoteReviewersEnabled = true
-	cfg.RemoteReviewersVersion = 1
-	cfg.RemoteConsensusRequired = 1
-	cfg.DeepSeekTotalTimeoutMS = 3000
-	cfg.DeepSeekChannels = []ContentModerationDeepSeekChannel{
-		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "bounded-safe-deepseek", server.URL, 0),
-	}
-	cfg.normalize()
-
-	text := "Explain malicious macro behavior. " + strings.Repeat("benign software context ", 300)
+	cfg := contextualRoutingTestConfig(server.URL)
+	text := "恶意宏是什么？"
 	fragment, ok := newContentModerationFragment("user", "text", "input.4", text)
 	require.True(t, ok)
 	fragment.ContextClass = ContentModerationContextUser
-	matches := newContentModerationKeywordMatcher([]string{"malicious macro"}).MatchAll(text)
+	matches := newContentModerationKeywordMatcher([]string{"恶意宏"}).MatchAll(text)
 	bundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
 		Fragment: fragment, Matches: matches, Tier: contentModerationKeywordTierContextualReview, WholeFragment: true,
 	}}, contentModerationEvidenceWindowBudgetRunes, cfg)
-	require.True(t, bundle.ContextIncomplete)
+	require.False(t, bundle.ContextIncomplete)
 	require.False(t, bundle.CoverageIncomplete)
 
 	repo := &contentModerationReplayRepo{}
 	cache := &contentModerationReplayCache{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
-	for _, channel := range cfg.DeepSeekChannels {
-		svc.deepSeekChannelState(channel).markReviewHealthy(time.Now(), contentModerationDeepSeekChannelDigest(channel))
-	}
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
 	work := contentModerationCandidateReviewWork{
 		bundle: bundle, primary: fragment, reviewRequired: true, requireHealthyReviewer: true,
 	}
 	input := contextualRoutingTestInput("placeholder", "")
 
-	for attempt := 0; attempt < 2; attempt++ {
-		input.RequestID = "bounded-safe-consensus-" + strconv.Itoa(attempt)
-		outcome := svc.reviewUnifiedCandidateEvidenceBundle(context.Background(), cfg, cfg.fragmentCacheNamespace(), work)
-		require.NoError(t, outcome.err)
-		require.True(t, outcome.boundedSafe)
-		require.Equal(t, "primary_safe", outcome.result.ConsensusStatus)
-		decision := svc.applyUnifiedCandidateReviewResult(
-			context.Background(), input, cfg, cfg.fragmentCacheNamespace(), work, outcome, false, false,
-		)
-		require.True(t, decision.Allowed)
-		require.False(t, decision.Blocked)
-	}
+	completeOutcome := svc.reviewUnifiedCandidateEvidenceBundle(context.Background(), cfg, cfg.fragmentCacheNamespace(), work)
+	require.NoError(t, completeOutcome.err)
+	require.False(t, completeOutcome.cacheHit)
+	completeDecision := svc.applyUnifiedCandidateReviewResult(
+		context.Background(), input, cfg, cfg.fragmentCacheNamespace(), work, completeOutcome, false, false,
+	)
+	require.True(t, completeDecision.Allowed)
+	require.Equal(t, 1, contextualRoutingCacheEntryCount(cache))
 
-	require.Equal(t, int64(2), reviewCalls.Load(), "bounded safe evidence must be reviewed again instead of replaying an allow cache")
-	require.Zero(t, contextualRoutingCacheEntryCount(cache))
-	logs := repo.snapshotLogs()
-	require.Len(t, logs, 2)
-	for _, log := range logs {
-		require.Equal(t, "model_bounded_safe", log.DecisionSource)
-		require.True(t, log.EvidenceTruncated)
-		require.Len(t, log.ReviewAttempts, 1)
-		require.Equal(t, "primary", log.ReviewAttempts[0].Role)
-		require.False(t, log.Flagged)
-	}
+	incompleteWork := work
+	incompleteWork.bundle.ContextIncomplete = true
+	incompleteWork.bundle.Evidence.Truncated = true
+	input.RequestID = "incomplete-must-not-replay-complete"
+	incompleteOutcome := svc.reviewUnifiedCandidateEvidenceBundle(context.Background(), cfg, cfg.fragmentCacheNamespace(), incompleteWork)
+	require.Error(t, incompleteOutcome.err)
+	require.Equal(t, "evidence_truncated", incompleteOutcome.parserStatus)
+	require.False(t, incompleteOutcome.cacheHit)
+	require.Equal(t, int64(2), reviewCalls.Load(), "incomplete evidence must be reviewed instead of replaying a complete allow cache")
 }
 
 func TestContentModerationContextualAndOrdinaryCandidatesAreInterleaved(t *testing.T) {
