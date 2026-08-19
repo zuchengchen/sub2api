@@ -118,6 +118,16 @@ func TestContentModerationDecisionMessageReturnsNonKeywordReason(t *testing.T) {
 	)
 }
 
+func TestContentModerationRestrictedErrorDoesNotReportViolation(t *testing.T) {
+	decision := &service.ContentModerationDecision{
+		Blocked: true, Flagged: false, Message: "内容审计命中风险规则，请调整输入后重试",
+		MatchedKeyword: "SQL注入", HighestCategory: service.ContentModerationRestrictedCategory,
+		Action: service.ContentModerationActionRestrictedBlock,
+	}
+	require.Equal(t, "content_policy_restricted", contentModerationDecisionErrorCode(decision))
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试", contentModerationDecisionMessage(decision))
+}
+
 func TestContentModerationWSCloseReasonTruncatesAtUTF8Boundary(t *testing.T) {
 	reason := contentModerationWSCloseReason(&service.ContentModerationDecision{
 		Blocked:        true,
@@ -261,4 +271,47 @@ func TestRunContentModerationStage_UserEmailWhitelistRemainsInScopeAndUsesBodyBu
 	require.Equal(t, service.ContentModerationActionBudgetRejected, decision.Action)
 	require.Equal(t, int64(0), svc.PendingRequestBodyBytes())
 	require.True(t, contentModerationScopeSnapshot(c, apiKey).InScope)
+}
+
+func TestRunContentModerationStage_ConfiguredOutOfScopeSkipsBodyBudget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rawCfg, err := json.Marshal(map[string]any{
+		"enabled":    true,
+		"mode":       "pre_block",
+		"all_groups": false,
+		"group_ids":  []int64{99},
+		"model_filter": map[string]any{
+			"type":   "all",
+			"models": []string{},
+		},
+	})
+	require.NoError(t, err)
+	svc := service.NewContentModerationService(
+		&contentModerationWhitelistSettingRepo{values: map[string]string{
+			service.SettingKeyRiskControlEnabled:      "true",
+			service.SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		nil, nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetPendingRequestBodyBudgetForTest(1)
+	groupID := int64(7)
+	apiKey := &service.APIKey{
+		ID: 12, Name: "out-of-scope-key", GroupID: &groupID,
+		Group: &service.Group{ID: groupID, Name: "Claude production"},
+		User:  &service.User{ID: 43, Email: "user@example.com"},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	decision := runContentModerationStage(
+		c, zap.NewNop(), svc, apiKey, middleware2.AuthSubject{UserID: 43},
+		service.ContentModerationProtocolAnthropicMessages, "claude-opus-5",
+		[]byte(`{"messages":[{"role":"user","content":"larger than budget"}]}`), "http",
+	)
+
+	require.NotNil(t, decision)
+	require.True(t, decision.Allowed)
+	require.NotEqual(t, service.ContentModerationActionBudgetRejected, decision.Action)
+	require.Equal(t, int64(0), svc.PendingRequestBodyBytes())
 }

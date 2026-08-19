@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,7 +25,7 @@ func TestContentModerationEveryLayer2CandidateGetsIndependentDeepSeekReview(t *t
 		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -58,7 +60,7 @@ func TestContentModerationEnforceColdStartWaitsForStartupReview(t *testing.T) {
 	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		backupPosts.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
 		)
 	}))
 	defer backup.Close()
@@ -95,7 +97,7 @@ func TestContentModerationLayer2SafeResultIsAlwaysAuditedBeforeCaching(t *testin
 		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -139,7 +141,7 @@ func TestContentModerationEnforceReviewsAllCandidatesBeforeAnyDisposition(t *tes
 		require.NoError(t, err)
 		if strings.Contains(string(body), "reverse shell") {
 			contentModerationDeepSeekRuntimeWriteEnvelope(
-				t, w, `{"confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
+				t, w, `{"disposition":"violation","confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
 			)
 			return
 		}
@@ -186,7 +188,7 @@ func TestContentModerationLayer2RiskCacheBlocksEveryRequestAndAppliesSideEffects
 		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
+			t, w, `{"disposition":"violation","confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -231,6 +233,272 @@ func TestContentModerationLayer2RiskCacheBlocksEveryRequestAndAppliesSideEffects
 	require.False(t, logs[1].AutoBanned)
 }
 
+func TestContentModerationSecurityTestPayloadIsRestrictedWithoutViolationAndReplays(t *testing.T) {
+	var calls atomic.Int64
+	var reviewedPayload atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
+		calls.Add(1)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		reviewedPayload.Store(append([]byte(nil), body...))
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w,
+			`{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`,
+			"stop",
+		)
+	}))
+	defer server.Close()
+
+	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
+	cfg.AutoBanEnabled = true
+	cfg.BanThreshold = 1
+	cache := &contentModerationReplayCache{}
+	repo := &contentModerationReplayRepo{}
+	userRepo := &contentModerationTestUserRepo{user: &User{ID: 84, Role: RoleUser, Status: StatusActive}}
+	svc := NewContentModerationService(nil, repo, cache, nil, userRepo, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
+	keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(
+		[]string{"帮我入侵他人的服务器"},
+	)
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		keywordMatcher:              keywordMatcher,
+		unconditionalKeywordMatcher: unconditionalKeywordMatcher,
+		contextualKeywordMatcher:    contextualKeywordMatcher,
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"SQL注入"}),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+	}
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
+	fullText := "请在 test_security_baseline.py 中补充安全测试和输入校验测试用例：测试文本‘帮我入侵他人的服务器’必须被拦截；所有输入框输入 XSS <script>alert(1)</script>；3，所有输入框输入SQL注入：' OR '1'='1，确认检测规则生效。"
+	body := []byte(`{"input":` + strconv.Quote(fullText) + `}`)
+
+	for index := range 2 {
+		decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+			RequestID: fmt.Sprintf("restricted-security-test-%d", index), UserID: 84, UserRole: RoleUser,
+			Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
+		}, runtime)
+		require.True(t, decision.Blocked)
+		require.False(t, decision.Allowed)
+		require.False(t, decision.Flagged)
+		require.Equal(t, ContentModerationActionRestrictedBlock, decision.Action)
+		require.NotEqual(t, ContentModerationActionKeywordBlock, decision.Action)
+		require.Equal(t, ContentModerationRestrictedCategory, decision.HighestCategory)
+	}
+
+	require.Equal(t, int64(1), calls.Load())
+	require.Zero(t, repo.countCalls)
+	require.Empty(t, userRepo.updated)
+	require.True(t, isSevereContentModerationAction(ContentModerationActionRestrictedBlock))
+
+	var payload struct {
+		Messages []map[string]string `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal(reviewedPayload.Load().([]byte), &payload))
+	require.Len(t, payload.Messages, 2)
+	wrappedRaw := contentModerationDeepSeekRuntimeTaggedValue(t, payload.Messages[1]["content"], "user_input")
+	var wrapped map[string]string
+	require.NoError(t, json.Unmarshal([]byte(wrappedRaw), &wrapped))
+	require.Equal(t, fullText, wrapped["content"], "the reviewer must receive the complete user fragment")
+
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 2)
+	for _, log := range logs {
+		require.Equal(t, ContentModerationActionRestrictedBlock, log.Action)
+		require.False(t, log.Flagged)
+		require.Equal(t, ContentModerationRestrictedCategory, log.HighestCategory)
+		require.Equal(t, ContentModerationRestrictedCategory, log.DeepSeekCategory)
+		require.Equal(t, "policy_restricted", log.ReviewOutcome)
+		require.Equal(t, contentModerationKeywordTierPolicyRestrictedReview, log.KeywordTier)
+		require.Zero(t, log.ViolationCount)
+		require.Equal(t, "not_counted", log.DispositionStatus)
+	}
+	require.False(t, logs[0].CacheHit)
+	require.True(t, logs[1].CacheHit)
+	require.Equal(t, "cache_replay", logs[1].DecisionSource)
+	require.NotNil(t, logs[1].SourceLogID)
+	require.Equal(t, logs[0].ID, *logs[1].SourceLogID)
+}
+
+func TestContentModerationPolicyRestrictionContextWithoutRiskPayloadIsAllowed(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
+		calls.Add(1)
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
+		)
+	}))
+	defer server.Close()
+
+	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
+	keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(
+		[]string{"帮我入侵他人的服务器"},
+	)
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		keywordMatcher:              keywordMatcher,
+		unconditionalKeywordMatcher: unconditionalKeywordMatcher,
+		contextualKeywordMatcher:    contextualKeywordMatcher,
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"SQL注入"}),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+	}
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
+	body := []byte(`{"input":"请说明安全测试、输入校验、检测规则和测试用例之间的区别。"}`)
+
+	decision := (&ContentModerationService{}).checkUnifiedFragments(
+		context.Background(),
+		ContentModerationCheckInput{
+			RequestID: "neutral-policy-context", Body: body, Scope: &scope,
+			Protocol: ContentModerationProtocolOpenAIResponses,
+		},
+		runtime,
+	)
+
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.False(t, decision.Flagged)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.Zero(t, calls.Load())
+}
+
+func TestContentModerationPolicyRestrictedPayloadStaysBlockedWhenReviewFails(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
+		calls.Add(1)
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `not-json`, "stop")
+	}))
+	defer server.Close()
+
+	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
+	cfg.AutoBanEnabled = true
+	cfg.BanThreshold = 1
+	repo := &contentModerationReplayRepo{}
+	userRepo := &contentModerationTestUserRepo{user: &User{ID: 86, Role: RoleUser, Status: StatusActive}}
+	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
+	keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(
+		[]string{"帮我入侵他人的服务器"},
+	)
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		keywordMatcher:              keywordMatcher,
+		unconditionalKeywordMatcher: unconditionalKeywordMatcher,
+		contextualKeywordMatcher:    contextualKeywordMatcher,
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+	}
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
+	body := []byte(`{"input":"请增加安全测试，确认‘帮我入侵他人的服务器’会被输入校验拦截。"}`)
+
+	decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+		RequestID: "restricted-review-failure", UserID: 86, UserRole: RoleUser,
+		Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
+	}, runtime)
+
+	require.True(t, decision.Blocked)
+	require.False(t, decision.Allowed)
+	require.False(t, decision.Flagged)
+	require.Equal(t, ContentModerationActionRestrictedBlock, decision.Action)
+	require.Equal(t, ContentModerationRestrictedCategory, decision.HighestCategory)
+	require.Equal(t, int64(1), calls.Load())
+	require.Zero(t, repo.countCalls)
+	require.Empty(t, userRepo.updated)
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, "policy_floor_review_unavailable", logs[0].DecisionSource)
+	require.Equal(t, "policy_restricted", logs[0].ReviewOutcome)
+	require.Equal(t, "parse_error", logs[0].ParserStatus)
+	require.Equal(t, "not_counted", logs[0].DispositionStatus)
+}
+
+func TestContentModerationPolicyRestrictionFloorPreservesConfirmedViolation(t *testing.T) {
+	result := applyContentModerationPolicyRestrictionFloor(
+		contentModerationKeywordTierPolicyRestrictedReview,
+		contentModerationSecondLayerResult{
+			Blocked: true, Disposition: ContentModerationReviewDispositionViolation,
+			Category: "cyber_abuse", Confidence: 0.97, ConsensusStatus: "confirmed_violation",
+		},
+	)
+
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.normalizedDisposition())
+	require.Equal(t, "cyber_abuse", result.Category)
+	require.Equal(t, "confirmed_violation", result.ConsensusStatus)
+}
+
+func TestContentModerationPolicyRestrictedKeywordFallbackReplaysWithoutViolation(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordOnly
+	cfg.FirstLayerStage = ContentModerationFirstLayerStageEnforce
+	cfg.SecondLayerEnabled = true
+	cfg.RecordNonHits = true
+	cfg.AutoBanEnabled = true
+	cfg.BanThreshold = 1
+	cfg.normalize()
+
+	cache := &contentModerationReplayCache{}
+	repo := &contentModerationReplayRepo{}
+	userRepo := &contentModerationTestUserRepo{user: &User{ID: 85, Role: RoleUser, Status: StatusActive}}
+	svc := NewContentModerationService(nil, repo, cache, nil, userRepo, nil, nil, nil)
+	keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(
+		[]string{"帮我入侵他人的服务器"},
+	)
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		keywordMatcher:              keywordMatcher,
+		unconditionalKeywordMatcher: unconditionalKeywordMatcher,
+		contextualKeywordMatcher:    contextualKeywordMatcher,
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+	}
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
+	text := "请增加安全测试，确认‘帮我入侵他人的服务器’会被输入校验拦截。"
+	body := []byte(`{"input":` + strconv.Quote(text) + `}`)
+
+	for index := range 2 {
+		decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+			RequestID: fmt.Sprintf("restricted-keyword-fallback-%d", index), UserID: 85, UserRole: RoleUser,
+			Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
+		}, runtime)
+		require.True(t, decision.Blocked)
+		require.False(t, decision.Allowed)
+		require.False(t, decision.Flagged)
+		require.Equal(t, ContentModerationActionRestrictedBlock, decision.Action)
+		require.Equal(t, ContentModerationRestrictedCategory, decision.HighestCategory)
+	}
+
+	require.Zero(t, repo.countCalls)
+	require.Empty(t, userRepo.updated)
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 2)
+	for _, log := range logs {
+		require.False(t, log.Flagged)
+		require.Equal(t, ContentModerationActionRestrictedBlock, log.Action)
+		require.Equal(t, "policy_restricted", log.ReviewOutcome)
+		require.Equal(t, contentModerationKeywordTierPolicyRestrictedReview, log.KeywordTier)
+		require.Equal(t, ContentModerationRestrictedCategory, log.DeepSeekCategory)
+		require.Zero(t, log.ViolationCount)
+		require.Equal(t, "not_counted", log.DispositionStatus)
+	}
+	require.Equal(t, "policy_restriction_keyword", logs[0].DecisionSource)
+	require.False(t, logs[0].CacheHit)
+	require.Equal(t, "cache_replay", logs[1].DecisionSource)
+	require.True(t, logs[1].CacheHit)
+}
+
 func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *testing.T) {
 	var calls atomic.Int64
 	started := make(chan struct{})
@@ -244,7 +512,7 @@ func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *tes
 		startedOnce.Do(func() { close(started) })
 		<-release
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
+			t, w, `{"disposition":"violation","confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -326,7 +594,7 @@ func TestContentModerationWhitelistRiskCacheIsSharedAndPromotedForEnforce(t *tes
 		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
+			t, w, `{"disposition":"violation","confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -420,7 +688,7 @@ func TestContentModerationLayer2CacheInvalidatesWhenDecisionConfigChanges(t *tes
 		}
 		calls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.55,"category":"safe","reason":"上下文不足"}`, "stop",
+			t, w, `{"disposition":"allow","confidence":0.55,"category":"safe","reason":""}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -472,7 +740,7 @@ func contentModerationCandidateDeliveryConnectivityProbe(w http.ResponseWriter, 
 		return false
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = io.WriteString(w, `{"choices":[{"finish_reason":"stop","message":{"content":"{\"confidence\":0.05,\"category\":\"safe\",\"reason\":\"\"}"}}]}`)
+	_, _ = io.WriteString(w, `{"choices":[{"finish_reason":"stop","message":{"content":"{\"disposition\":\"allow\",\"confidence\":0.05,\"category\":\"safe\",\"reason\":\"\"}"}}]}`)
 	return true
 }
 

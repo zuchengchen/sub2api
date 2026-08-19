@@ -105,7 +105,7 @@ const baseConfig = (): ContentModerationConfig => ({
   yufeng_enabled: false,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
-  policy_version: 'deepseek-v4-flash-audit-v1',
+  policy_version: 'deepseek-v4-flash-audit-v2',
   deepseek_channels: [officialChannel(), backupChannel()],
   all_groups: true,
   group_ids: [],
@@ -289,7 +289,7 @@ describe('admin RiskControlView', () => {
     expect(wrapper.get('[data-test="deepseek-enabled"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.get('[data-test="yufeng-enabled"]').attributes('aria-checked')).toBe('false')
     expect(wrapper.get('[data-test="deepseek-threshold"]').element).toHaveProperty('value', '80%')
-    expect(wrapper.text()).toContain('deepseek-v4-flash-audit-v1')
+    expect(wrapper.text()).toContain('deepseek-v4-flash-audit-v2')
     expect(wrapper.text()).toContain('admin.riskControl.nonThinking')
     expect(wrapper.find('input[type="file"]').exists()).toBe(false)
 
@@ -377,6 +377,18 @@ describe('admin RiskControlView', () => {
   })
 
   it('runs a real API availability test for a saved channel', async () => {
+    testAPIAvailability.mockResolvedValueOnce({
+      channel_id: 'deepseek-official',
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      test_type: 'api_usability',
+      reachable: true,
+      health_valid: true,
+      latency_ms: 218,
+      http_status: 200,
+      verdict: 'restricted',
+      category: 'restricted_security_content',
+    })
     const wrapper = mountView()
     await flushPromises()
 
@@ -427,6 +439,19 @@ describe('admin RiskControlView', () => {
     await detailButton!.trigger('click')
     expect(wrapper.get('[data-test="review-attempts"]').text()).toContain('Backup')
     expect(wrapper.get('[data-test="evidence-window"]').text()).toContain('credentials')
+    wrapper.unmount()
+  })
+
+  it('loads policy-restricted non-violation records as a separate view', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const restrictedTab = wrapper.get('[data-test="record-tab-restricted"]')
+    expect(restrictedTab.text()).toContain('admin.riskControl.recordTabs.restricted')
+    await restrictedTab.trigger('click')
+    await flushPromises()
+
+    expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'restricted' }))
     wrapper.unmount()
   })
 

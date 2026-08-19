@@ -34,6 +34,10 @@ var contentModerationDeepSeekCategories = map[string]struct{}{
 	"safe": {}, "cyber_abuse": {}, "cracking": {}, "security_bypass": {},
 	"account_abuse": {}, "sexual_deepfake": {}, "doxxing": {},
 	"violent_threat": {}, "self_harm": {}, "weapons": {}, "sexual_content": {},
+	"fraud_financial_crime": {}, "controlled_substances": {}, "human_exploitation": {},
+	"terrorism_extremism": {}, "illegal_gambling": {}, "forgery_counterfeit": {},
+	"corruption_tax_evasion": {}, "hate_harassment": {},
+	ContentModerationRestrictedCategory: {},
 }
 
 type ContentModerationReviewAttempt struct {
@@ -426,7 +430,7 @@ func contentModerationDeepSeekChatURL(baseURL string) (string, error) {
 }
 
 func contentModerationDeepSeekPrompt() (string, error) {
-	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV1)
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
 	if err != nil {
 		return "", err
 	}
@@ -464,7 +468,7 @@ func buildContentModerationDeepSeekPayload(channel ContentModerationDeepSeekChan
 		"thinking":        map[string]string{"type": "disabled"},
 		"response_format": map[string]string{"type": "json_object"},
 		"temperature":     0,
-		"max_tokens":      64,
+		"max_tokens":      96,
 		"stream":          false,
 	}, nil
 }
@@ -555,7 +559,7 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	if err != nil {
 		attempt.Outcome = "error"
 		attempt.Error = "invalid_json"
-		return contentModerationSecondLayerResult{}, attempt, err
+		return contentModerationSecondLayerResult{}, attempt, fmt.Errorf("%w: %v", errContentModerationSecondLayerParse, err)
 	}
 	result.Profile = "deepseek_v4_flash"
 	result.PromptVersion = ContentModerationDeepSeekPromptVersion
@@ -567,9 +571,12 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	result.KeywordRuleID = input.KeywordRuleID
 	attempt.Outcome = "success"
 	attempt.Confidence = result.Confidence
-	if result.Blocked {
+	switch result.normalizedDisposition() {
+	case ContentModerationReviewDispositionViolation:
 		attempt.Verdict = "violation"
-	} else {
+	case ContentModerationReviewDispositionRestricted:
+		attempt.Verdict = "restricted"
+	default:
 		attempt.Verdict = "safe"
 	}
 	return result, attempt, nil
@@ -693,9 +700,10 @@ func parseContentModerationDeepSeekResponse(body []byte) (contentModerationSecon
 		return contentModerationSecondLayerResult{}, errors.New("empty DeepSeek response content")
 	}
 	var decision struct {
-		Confidence *float64 `json:"confidence"`
-		Category   *string  `json:"category"`
-		Reason     *string  `json:"reason"`
+		Disposition *string  `json:"disposition"`
+		Confidence  *float64 `json:"confidence"`
+		Category    *string  `json:"category"`
+		Reason      *string  `json:"reason"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
@@ -705,7 +713,7 @@ func parseContentModerationDeepSeekResponse(body []byte) (contentModerationSecon
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return contentModerationSecondLayerResult{}, errors.New("DeepSeek decision contains trailing data")
 	}
-	if decision.Confidence == nil || decision.Category == nil || decision.Reason == nil {
+	if decision.Disposition == nil || decision.Confidence == nil || decision.Category == nil || decision.Reason == nil {
 		return contentModerationSecondLayerResult{}, errors.New("DeepSeek decision is missing required fields")
 	}
 	confidence := *decision.Confidence
@@ -717,19 +725,31 @@ func parseContentModerationDeepSeekResponse(body []byte) (contentModerationSecon
 	if _, ok := contentModerationDeepSeekCategories[category]; !ok {
 		return contentModerationSecondLayerResult{}, errors.New("DeepSeek category is unknown")
 	}
+	disposition := strings.ToLower(strings.TrimSpace(*decision.Disposition))
+	switch disposition {
+	case ContentModerationReviewDispositionAllow:
+		if category != "safe" || confidence >= DefaultContentModerationDeepSeekThreshold {
+			return contentModerationSecondLayerResult{}, errors.New("allow decision has an invalid category or confidence")
+		}
+	case ContentModerationReviewDispositionRestricted:
+		if category != ContentModerationRestrictedCategory || confidence < DefaultContentModerationDeepSeekThreshold {
+			return contentModerationSecondLayerResult{}, errors.New("restricted decision has an invalid category or confidence")
+		}
+	case ContentModerationReviewDispositionViolation:
+		if category == "safe" || category == ContentModerationRestrictedCategory || confidence < DefaultContentModerationDeepSeekThreshold {
+			return contentModerationSecondLayerResult{}, errors.New("violation decision has an invalid category or confidence")
+		}
+	default:
+		return contentModerationSecondLayerResult{}, errors.New("DeepSeek disposition is unknown")
+	}
 	// The prompt requires a short reason, but a provider can still return a
 	// longer valid JSON response. Keep the verdict and bound the audit field
 	// after redaction instead of turning this nonessential field into a parse
 	// failure.
 	reason = redactContentModerationAuditReason(reason)
-	if confidence < DefaultContentModerationDeepSeekThreshold && category != "safe" {
-		return contentModerationSecondLayerResult{}, errors.New("DeepSeek safe decision has a risk category")
-	}
-	if confidence >= DefaultContentModerationDeepSeekThreshold && category == "safe" {
-		return contentModerationSecondLayerResult{}, errors.New("DeepSeek risk decision has a safe category")
-	}
+	blocked := disposition != ContentModerationReviewDispositionAllow
 	return contentModerationSecondLayerResult{
-		Blocked:  confidence >= DefaultContentModerationDeepSeekThreshold,
+		Blocked: blocked, Disposition: disposition,
 		Category: category, Confidence: confidence, Reason: reason,
 	}, nil
 }
@@ -739,7 +759,11 @@ func (s *ContentModerationService) scanContentModerationDeepSeek(
 	cfg *ContentModerationConfig,
 	input contentModerationSecondLayerInput,
 ) (contentModerationSecondLayerResult, bool, error) {
-	return s.scanContentModerationRemotePool(ctx, cfg, input)
+	result, attempted, err := s.scanContentModerationRemotePool(ctx, cfg, input)
+	if err == nil && attempted {
+		result = applyContentModerationPolicyRestrictionFloor(input.KeywordTier, result)
+	}
+	return result, attempted, err
 }
 
 func (s *ContentModerationService) testDeepSeekChannelConnectivity(ctx context.Context, channelID string) (*TestContentModerationDeepSeekChannelResult, error) {

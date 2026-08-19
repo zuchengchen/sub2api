@@ -135,7 +135,7 @@ func TestContentModerationManualAPIUsabilityTestUsesRealReviewAndReturnsSafeMeta
 		require.Equal(t, http.MethodPost, r.Method)
 		postCalls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -190,7 +190,7 @@ func TestContentModerationStartRunsAPIUsabilityOnce(t *testing.T) {
 		require.Equal(t, http.MethodPost, r.Method)
 		postCalls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -247,9 +247,9 @@ func TestContentModerationStartupAPIUsabilityTestsProvidersConcurrently(t *testi
 			_, _ = w.Write([]byte(response))
 		}))
 	}
-	deepSeek := serverFor(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"confidence\":0.05,\"category\":\"safe\",\"reason\":\"\"}"}}]}`)
+	deepSeek := serverFor(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"disposition\":\"allow\",\"confidence\":0.05,\"category\":\"safe\",\"reason\":\"\"}"}}]}`)
 	defer deepSeek.Close()
-	qwen := serverFor(`{"status":"completed","output_text":"{\"confidence\":0.05,\"category\":\"safe\",\"reason\":\"\"}"}`)
+	qwen := serverFor(`{"status":"completed","output_text":"{\"disposition\":\"allow\",\"confidence\":0.05,\"category\":\"safe\",\"reason\":\"\"}"}`)
 	defer qwen.Close()
 
 	path := filepath.Join(t.TempDir(), "parallel-keyring.json")

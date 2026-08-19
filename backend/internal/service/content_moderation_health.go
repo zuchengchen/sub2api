@@ -182,9 +182,12 @@ func (s *ContentModerationService) testDeepSeekChannelReview(ctx context.Context
 	out.HealthValid = true
 	out.Category = result.Category
 	out.Confidence = result.Confidence
-	if result.Blocked {
+	switch result.normalizedDisposition() {
+	case ContentModerationReviewDispositionViolation:
 		out.Verdict = "violation"
-	} else {
+	case ContentModerationReviewDispositionRestricted:
+		out.Verdict = "restricted"
+	default:
 		out.Verdict = "safe"
 	}
 	// The explicit admin test is the second allowed way to establish

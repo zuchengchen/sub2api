@@ -130,6 +130,12 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	if !cfg.Enabled || cfg.Mode == ContentModerationModeOff {
 		return allow
 	}
+	// Group and model scope is configuration-driven. The request snapshot keeps
+	// the original API-key group stable across account/fallback routing, while
+	// avoiding any provider- or name-based eligibility shortcut.
+	if !cfg.includesGroup(input.Scope.GroupID) || !cfg.includesModel(input.Model) {
+		return allow
+	}
 	whitelistShadow := cfg.includesUserEmail(input.UserEmail)
 
 	fragments := SelectContentModerationReviewFragments(ExtractContentModerationFragments(input.Protocol, input.Body))
@@ -189,11 +195,14 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				case ContentModerationFragmentAllow:
 					releaseDecisionLock()
 					continue
-				case ContentModerationFragmentBlock:
+				case ContentModerationFragmentBlock, ContentModerationFragmentRestricted:
 					s.fragmentCacheReplays.Add(1)
+					restrictedReplay := entry.Result == ContentModerationFragmentRestricted
 					category := entry.Category
 					keyword := entry.MatchedKeyword
-					if category == "" && cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
+					if category == "" && restrictedReplay {
+						category = ContentModerationRestrictedCategory
+					} else if category == "" && cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
 						if matched, hit := runtime.keywordMatcher.Match(fragment.Text); hit {
 							category = contentModerationKeywordCategory
 							keyword = matched
@@ -205,7 +214,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						cachedEvidence = buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
 							Fragment: fragment,
 							Matches:  contentModerationHardMatchesForKeyword(fragment.Text, keyword),
-							Tier:     "high_confidence",
+							Tier:     defaultContentModerationString(entry.KeywordTier, "high_confidence"),
 						}}, contentModerationEvidenceWindowBudgetRunes, cfg)
 					}
 					evidenceMode := entry.EvidenceMode
@@ -213,27 +222,31 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						evidenceMode = cachedEvidence.Evidence.Mode
 					}
 					evidenceTruncated := entry.EvidenceTruncated || cachedEvidence.Evidence.Truncated
-					if whitelistShadow {
-						shadowRiskObserved = true
-						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, category, keyword, unifiedModerationAudit{
-							CacheHit: true, DecisionSource: "cache_replay_whitelist_shadow", SourceLogID: entry.SourceLogID,
-							ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, fragment.Hash), CacheNamespace: fragmentNamespace,
-							ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion, EvidenceMode: evidenceMode,
-							EvidenceTruncated: evidenceTruncated, ParserStatus: entry.ParserStatus,
-							KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID,
-							EvidenceText: cachedEvidence.Evidence.Text, EvidenceWindows: cachedEvidence.Windows,
-						})
-						releaseDecisionLock()
-						continue
-					}
-					decision, _, _ := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, category, keyword, unifiedModerationAudit{
+					cachedAudit := unifiedModerationAudit{
 						CacheHit: true, DecisionSource: "cache_replay", SourceLogID: entry.SourceLogID,
 						ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, fragment.Hash), CacheNamespace: fragmentNamespace,
 						ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion, EvidenceMode: evidenceMode,
 						EvidenceTruncated: evidenceTruncated, ParserStatus: entry.ParserStatus,
 						KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID,
 						EvidenceText: cachedEvidence.Evidence.Text, EvidenceWindows: cachedEvidence.Windows,
-					})
+					}
+					if restrictedReplay {
+						cachedAudit.ReviewOutcome = "policy_restricted"
+						cachedAudit.DeepSeekCategory = ContentModerationRestrictedCategory
+					}
+					if whitelistShadow {
+						shadowRiskObserved = true
+						cachedAudit.DecisionSource = "cache_replay_whitelist_shadow"
+						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, category, keyword, cachedAudit)
+						releaseDecisionLock()
+						continue
+					}
+					var decision *ContentModerationDecision
+					if restrictedReplay {
+						decision, _, _ = s.unifiedRestrictedDecisionWithAudit(ctx, input, cfg, fragment, category, keyword, cachedAudit)
+					} else {
+						decision, _, _ = s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, category, keyword, cachedAudit)
+					}
 					releaseDecisionLock()
 					return decision
 				}
@@ -242,6 +255,8 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 
 		var contextualMatches []contentModerationKeywordMatch
 		if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
+			policyRestrictionContext := hasContentModerationPolicyRestrictionContext(fragment.Text)
+			policyRestrictionDirect := false
 			keyword, hardMatches, reviewMatches := classifyUnifiedHardKeywordMatches(fragment, runtime)
 			if keyword == "" && len(reviewMatches) == 0 && checkFragment.WholeFragmentTruncated && runtime.contextualKeywordMatcher != nil {
 				reviewMatches = runtime.contextualKeywordMatcher.MatchAll(fragment.Text)
@@ -251,33 +266,57 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				keyword = reviewMatches[0].Keyword
 				hardMatches = reviewMatches
 				reviewMatches = nil
+				policyRestrictionDirect = policyRestrictionContext
 			}
 			contextualMatches = reviewMatches
 			if keyword != "" {
+				keywordTier := "high_confidence"
+				keywordCategory := contentModerationKeywordCategory
+				if policyRestrictionDirect {
+					keywordTier = contentModerationKeywordTierPolicyRestrictedReview
+					keywordCategory = ContentModerationRestrictedCategory
+				}
 				hardEvidence := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
-					Fragment: fragment, Matches: hardMatches, Tier: "high_confidence",
+					Fragment: fragment, Matches: hardMatches, Tier: keywordTier,
 				}}, contentModerationEvidenceWindowBudgetRunes, cfg)
 				audit := unifiedModerationAudit{
-					DecisionSource: "keyword_high_confidence", CacheNamespace: fragmentNamespace, KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
+					DecisionSource: "keyword_high_confidence", CacheNamespace: fragmentNamespace, KeywordTier: keywordTier, KeywordRuleID: contentModerationKeywordRuleID(keyword),
 					EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
 					EvidenceText: hardEvidence.Evidence.Text, EvidenceWindows: hardEvidence.Windows,
+				}
+				if policyRestrictionDirect {
+					audit.DecisionSource = "policy_restriction_keyword"
+					audit.ReviewOutcome = "policy_restricted"
+					audit.DeepSeekCategory = ContentModerationRestrictedCategory
+					audit.DeepSeekConfidence = 1
 				}
 				if whitelistShadow {
 					shadowRiskObserved = true
 					audit.DecisionSource = "keyword_high_confidence_whitelist_shadow"
-					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, contentModerationKeywordCategory, keyword, audit)
+					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, keywordCategory, keyword, audit)
 				} else if cfg.FirstLayerStage == ContentModerationFirstLayerStageShadow {
 					shadowRiskObserved = true
 					audit.DecisionSource = "keyword_high_confidence_shadow"
 					audit.KeywordTier = "first_layer_shadow"
-					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionFirstLayerShadow, contentModerationKeywordCategory, keyword, audit)
+					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionFirstLayerShadow, keywordCategory, keyword, audit)
 				} else {
-					decision, log, persisted := s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, contentModerationKeywordCategory, keyword, audit)
+					var decision *ContentModerationDecision
+					var log *ContentModerationLog
+					var persisted bool
+					if policyRestrictionDirect {
+						decision, log, persisted = s.unifiedRestrictedDecisionWithAudit(ctx, input, cfg, fragment, keywordCategory, keyword, audit)
+					} else {
+						decision, log, persisted = s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, keywordCategory, keyword, audit)
+					}
 					if persisted && fragmentCacheEligible {
+						cacheResult := ContentModerationFragmentBlock
+						if policyRestrictionDirect {
+							cacheResult = ContentModerationFragmentRestricted
+						}
 						s.putUnifiedFragmentCacheEntry(ctx, cache, fragmentNamespace, cfg, fragment, ContentModerationFragmentCacheEntry{
-							Result: ContentModerationFragmentBlock, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
-							DecisionSource: "keyword_high_confidence", Category: contentModerationKeywordCategory, MatchedKeyword: keyword,
-							KeywordTier: "high_confidence", KeywordRuleID: contentModerationKeywordRuleID(keyword),
+							Result: cacheResult, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
+							DecisionSource: "keyword_high_confidence", Category: keywordCategory, MatchedKeyword: keyword,
+							KeywordTier: keywordTier, KeywordRuleID: contentModerationKeywordRuleID(keyword),
 							EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
 						})
 					}
@@ -290,8 +329,12 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			// Contextual hard-keyword decisions retain the complete logical
 			// fragment when it fits the reviewer budget. The builder distinguishes
 			// harmless metadata bounds from omitted context that must fail closed.
+			tier := contentModerationKeywordTierContextualReview
+			if hasContentModerationPolicyRestrictionContext(fragment.Text) {
+				tier = contentModerationKeywordTierPolicyRestrictedReview
+			}
 			candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
-				Fragment: fragment, Matches: contextualMatches, Tier: "contextual_review",
+				Fragment: fragment, Matches: contextualMatches, Tier: tier,
 				WholeFragment: true, WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
 			})
 		}
@@ -311,11 +354,15 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			if len(candidateMatches) > 0 {
 				tier := "candidate"
 				if checkFragment.WholeFragmentTruncated {
-					tier = "contextual_review"
+					tier = contentModerationKeywordTierContextualReview
+				}
+				if hasContentModerationPolicyRestrictionContext(fragment.Text) {
+					tier = contentModerationKeywordTierPolicyRestrictedReview
 				}
 				candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
 					Fragment: fragment, Matches: candidateMatches, Tier: tier,
-					WholeFragment: checkFragment.WholeFragment, WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
+					WholeFragment:          checkFragment.WholeFragment || contentModerationPreserveWholeUserFragment(fragment),
+					WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
 				})
 				releaseDecisionLock()
 				continue
@@ -346,6 +393,11 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	return allow
 }
 
+func contentModerationPreserveWholeUserFragment(fragment ContentModerationFragment) bool {
+	return fragment.ContextClass == ContentModerationContextUser &&
+		utf8.RuneCountInString(fragment.Text) <= contentModerationEvidenceWindowBudgetRunes
+}
+
 func classifyUnifiedHardKeywordMatches(
 	fragment ContentModerationFragment,
 	runtime *contentModerationRuntimeSnapshot,
@@ -356,6 +408,9 @@ func classifyUnifiedHardKeywordMatches(
 	firstKeyword, hit := runtime.keywordMatcher.Match(fragment.Text)
 	if !hit {
 		return "", nil, nil
+	}
+	if hasContentModerationPolicyRestrictionContext(fragment.Text) {
+		return "", nil, runtime.keywordMatcher.MatchAll(fragment.Text)
 	}
 	unconditional := runtime.unconditionalKeywordMatcher
 	contextual := runtime.contextualKeywordMatcher
@@ -1218,7 +1273,8 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 		primary := candidate.Fragment
 		primary.Text = bundle.Evidence.Text
 		works = append(works, contentModerationCandidateReviewWork{
-			bundle: bundle, primary: primary, reviewRequired: candidate.Tier == "contextual_review",
+			bundle: bundle, primary: primary,
+			reviewRequired:         isContentModerationContextualReviewTier(candidate.Tier) || candidate.WholeFragment,
 			requireHealthyReviewer: !whitelistShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce,
 		})
 	}
@@ -1275,7 +1331,21 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	}
 	var unavailableDecision *ContentModerationDecision
 	var blockDecision *ContentModerationDecision
-	formalRiskRecorded := false
+	formalBlockIndex := -1
+	for index, outcome := range outcomes {
+		if outcome.err == nil && outcome.result.normalizedDisposition() == ContentModerationReviewDispositionViolation {
+			formalBlockIndex = index
+			break
+		}
+	}
+	if formalBlockIndex < 0 {
+		for index, outcome := range outcomes {
+			if outcome.err == nil && outcome.result.Blocked {
+				formalBlockIndex = index
+				break
+			}
+		}
+	}
 	for index, outcome := range outcomes {
 		work := works[index]
 		if outcome.err != nil {
@@ -1288,12 +1358,11 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 			}
 			continue
 		}
-		forceShadow := hasFailure || (outcome.result.Blocked && formalRiskRecorded)
+		forceShadow := hasFailure || (outcome.result.Blocked && index != formalBlockIndex)
 		decision := s.applyUnifiedCandidateReviewResult(
 			ctx, input, cfg, namespace, work, outcome, whitelistShadow, forceShadow,
 		)
 		if outcome.result.Blocked && !forceShadow {
-			formalRiskRecorded = true
 			blockDecision = decision
 		}
 	}
@@ -1326,7 +1395,7 @@ type contentModerationCandidateReviewOutcome struct {
 }
 
 const (
-	contentModerationSecondLayerReviewCacheVersion = 3
+	contentModerationSecondLayerReviewCacheVersion = 4
 	contentModerationAuditPersistenceTimeout       = 10 * time.Second
 )
 
@@ -1444,6 +1513,7 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 			result: result, parserStatus: "not_attempted", err: errors.New("layer 2 review was not attempted"),
 		}
 	}
+	result = applyContentModerationPolicyRestrictionFloor(work.bundle.PrimaryTier, result)
 	if work.reviewRequired && !result.Blocked && (work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) {
 		return contentModerationCandidateReviewOutcome{
 			result: result, parserStatus: "evidence_truncated", err: errors.New("contextual review evidence coverage was incomplete"),
@@ -1516,7 +1586,8 @@ func (s *ContentModerationService) getUnifiedCandidateReviewCacheForApply(
 	}
 	if entry.ReviewCacheVersion != contentModerationSecondLayerReviewCacheVersion ||
 		entry.DecisionSource != "model" || entry.ParserStatus != "parsed" ||
-		(entry.Result != ContentModerationFragmentAllow && entry.Result != ContentModerationFragmentBlock) {
+		(entry.Result != ContentModerationFragmentAllow && entry.Result != ContentModerationFragmentBlock &&
+			entry.Result != ContentModerationFragmentRestricted) {
 		if recordMiss {
 			s.fragmentCacheMisses.Add(1)
 			s.secondLayerCacheMisses.Add(1)
@@ -1545,19 +1616,28 @@ func (s *ContentModerationService) putUnifiedCandidateReviewCache(
 		return
 	}
 	cacheResult := ContentModerationFragmentAllow
-	if result.Blocked {
+	switch result.normalizedDisposition() {
+	case ContentModerationReviewDispositionViolation:
 		cacheResult = ContentModerationFragmentBlock
+	case ContentModerationReviewDispositionRestricted:
+		cacheResult = ContentModerationFragmentRestricted
 	}
 	reviewOutcome := "safe"
 	switch {
 	case result.ConsensusStatus == "confirmed_violation":
 		reviewOutcome = "confirmed_violation"
+	case result.ConsensusStatus == "confirmed_restricted":
+		reviewOutcome = "policy_restricted"
+	case result.ConsensusStatus == "disagreement_restricted":
+		reviewOutcome = "disagreement_restricted"
 	case result.ConsensusStatus == "consensus_unavailable":
 		reviewOutcome = "unavailable"
 	case result.ReviewerMismatch:
 		reviewOutcome = "disagreement"
 	case result.ConsensusStatus == "local_shadow":
 		reviewOutcome = "local_shadow"
+	case result.normalizedDisposition() == ContentModerationReviewDispositionRestricted:
+		reviewOutcome = "policy_restricted"
 	case result.Blocked:
 		reviewOutcome = "risky"
 	case result.Confidence >= 0.50:
@@ -1591,8 +1671,8 @@ func (s *ContentModerationService) putUnifiedCandidateReviewCache(
 }
 
 func resultFromUnifiedCandidateReviewCache(entry ContentModerationFragmentCacheEntry) contentModerationSecondLayerResult {
-	return contentModerationSecondLayerResult{
-		Blocked: entry.Result == ContentModerationFragmentBlock, Category: entry.Category,
+	result := contentModerationSecondLayerResult{
+		Blocked: entry.Result != ContentModerationFragmentAllow, Category: entry.Category,
 		Confidence: entry.Confidence, Reason: entry.Reason, Label: entry.Label,
 		Profile: entry.ModelProfile, PromptVersion: entry.PromptVersion, ParserStatus: entry.ParserStatus,
 		EvidenceMode: entry.EvidenceMode, EvidenceTruncated: entry.EvidenceTruncated,
@@ -1601,6 +1681,15 @@ func resultFromUnifiedCandidateReviewCache(entry ContentModerationFragmentCacheE
 		ReviewerMismatch: entry.ReviewerDisagreement,
 		ConsensusStatus:  entry.ConsensusStatus, RemoteVotes: entry.RemoteVotes,
 	}
+	switch entry.Result {
+	case ContentModerationFragmentRestricted:
+		result.setDisposition(ContentModerationReviewDispositionRestricted)
+	case ContentModerationFragmentBlock:
+		result.setDisposition(ContentModerationReviewDispositionViolation)
+	default:
+		result.setDisposition(ContentModerationReviewDispositionAllow)
+	}
+	return applyContentModerationPolicyRestrictionFloor(entry.KeywordTier, result)
 }
 
 func outcomeFromUnifiedCandidateReviewCache(entry ContentModerationFragmentCacheEntry, evidenceHash string) contentModerationCandidateReviewOutcome {
@@ -1704,12 +1793,18 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	switch {
 	case result.ConsensusStatus == "confirmed_violation":
 		audit.ReviewOutcome = "confirmed_violation"
+	case result.ConsensusStatus == "confirmed_restricted":
+		audit.ReviewOutcome = "policy_restricted"
+	case result.ConsensusStatus == "disagreement_restricted":
+		audit.ReviewOutcome = "disagreement_restricted"
 	case result.ConsensusStatus == "consensus_unavailable":
 		audit.ReviewOutcome = "unavailable"
 	case result.ReviewerMismatch:
 		audit.ReviewOutcome = "disagreement"
 	case result.ConsensusStatus == "local_shadow":
 		audit.ReviewOutcome = "local_shadow"
+	case result.normalizedDisposition() == ContentModerationReviewDispositionRestricted:
+		audit.ReviewOutcome = "policy_restricted"
 	case result.Blocked:
 		audit.ReviewOutcome = "risky"
 	case result.Confidence >= 0.50:
@@ -1731,7 +1826,19 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 			publishCache(log, persisted)
 			return allow
 		}
-		decision, log, persisted := s.unifiedBlockDecisionWithAudit(persistCtx, input, cfg, primary, ContentModerationActionSecondLayerBlock, result.Category, bundle.PrimaryKeyword, audit)
+		var decision *ContentModerationDecision
+		var log *ContentModerationLog
+		var persisted bool
+		if result.normalizedDisposition() == ContentModerationReviewDispositionRestricted {
+			decision, log, persisted = s.unifiedRestrictedDecisionWithAudit(
+				persistCtx, input, cfg, primary, result.Category, bundle.PrimaryKeyword, audit,
+			)
+		} else {
+			decision, log, persisted = s.unifiedBlockDecisionWithAudit(
+				persistCtx, input, cfg, primary, ContentModerationActionSecondLayerBlock,
+				result.Category, bundle.PrimaryKeyword, audit,
+			)
+		}
 		publishCache(log, persisted)
 		return decision
 	}
@@ -1756,7 +1863,7 @@ func interleaveContextualReviewCandidates(candidates []contentModerationCandidat
 	contextual := make([]contentModerationCandidateFragment, 0, len(candidates))
 	ordinary := make([]contentModerationCandidateFragment, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.Tier == "contextual_review" {
+		if isContentModerationContextualReviewTier(candidate.Tier) {
 			contextual = append(contextual, candidate)
 		} else {
 			ordinary = append(ordinary, candidate)
@@ -1841,6 +1948,15 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 		audit.DecisionSource = "review_unavailable_shadow"
 	}
 	s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
+	if bundle.PrimaryTier == contentModerationKeywordTierPolicyRestrictedReview &&
+		!whitelistShadow && cfg.SecondLayerStage != ContentModerationSecondLayerStageShadow {
+		audit.DecisionSource = "policy_floor_review_unavailable"
+		audit.ReviewOutcome = "policy_restricted"
+		decision, _, _ := s.unifiedRestrictedDecisionWithAudit(
+			persistCtx, input, cfg, primary, ContentModerationRestrictedCategory, bundle.PrimaryKeyword, audit,
+		)
+		return decision
+	}
 	s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionReviewUnavailable, "", bundle.PrimaryKeyword, audit)
 
 	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
@@ -2012,8 +2128,22 @@ type unifiedModerationAudit struct {
 }
 
 func (s *ContentModerationService) unifiedBlockDecisionWithAudit(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, fragment ContentModerationFragment, action, category, keyword string, audit unifiedModerationAudit) (*ContentModerationDecision, *ContentModerationLog, bool) {
+	return s.unifiedBlockingDecisionWithAudit(ctx, input, cfg, fragment, action, category, keyword, audit, true)
+}
+
+func (s *ContentModerationService) unifiedRestrictedDecisionWithAudit(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, fragment ContentModerationFragment, category, keyword string, audit unifiedModerationAudit) (*ContentModerationDecision, *ContentModerationLog, bool) {
+	return s.unifiedBlockingDecisionWithAudit(
+		ctx, input, cfg, fragment, ContentModerationActionRestrictedBlock, category, keyword, audit, false,
+	)
+}
+
+func (s *ContentModerationService) unifiedBlockingDecisionWithAudit(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, fragment ContentModerationFragment, action, category, keyword string, audit unifiedModerationAudit, flagged bool) (*ContentModerationDecision, *ContentModerationLog, bool) {
 	if category == "" {
-		category = "content_policy"
+		if flagged {
+			category = "content_policy"
+		} else {
+			category = ContentModerationRestrictedCategory
+		}
 	}
 	score := audit.DeepSeekConfidence
 	if score <= 0 {
@@ -2024,10 +2154,14 @@ func (s *ContentModerationService) unifiedBlockDecisionWithAudit(ctx context.Con
 	if strings.TrimSpace(audit.EvidenceText) != "" {
 		logInput = audit.EvidenceText
 	}
-	log := s.buildLog(input, cfg, action, true, category, score, scores, logInput, nil, nil, "")
+	log := s.buildLog(input, cfg, action, flagged, category, score, scores, logInput, nil, nil, "")
 	log.MatchedKeyword = keyword
 	applyUnifiedModerationAudit(log, fragment, cfg, audit)
-	applySideEffects := !audit.CacheHit && action != ContentModerationActionCacheBlock
+	if !flagged {
+		log.ViolationCount = 0
+		log.DispositionStatus = "not_counted"
+	}
+	applySideEffects := flagged && !audit.CacheHit && action != ContentModerationActionCacheBlock
 	inputHash := fragment.Hash
 	if strings.TrimSpace(audit.InputHash) != "" {
 		inputHash = audit.InputHash
@@ -2044,7 +2178,7 @@ func (s *ContentModerationService) unifiedBlockDecisionWithAudit(ctx context.Con
 	return &ContentModerationDecision{
 		Allowed:         !blocked,
 		Blocked:         blocked,
-		Flagged:         true,
+		Flagged:         flagged,
 		Message:         message,
 		StatusCode:      cfg.BlockStatus,
 		InputHash:       inputHash,

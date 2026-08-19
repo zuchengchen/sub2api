@@ -19,7 +19,7 @@ func TestBuildContentModerationLogWhere_BlockedIncludesAllBlockActions(t *testin
 
 	require.Empty(t, args)
 	sql := strings.Join(where, " AND ")
-	require.Contains(t, sql, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block', 'cyber_policy')")
+	require.Contains(t, sql, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'restricted_block', 'cache_block', 'cyber_policy')")
 	require.NotContains(t, sql, "l.action = 'block'")
 }
 
@@ -38,8 +38,13 @@ func TestBuildContentModerationLogWhere_AuditRecordViews(t *testing.T) {
 		{
 			name:       "content blocked",
 			result:     service.ContentModerationLogResultContentBlocked,
-			contains:   "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block')",
+			contains:   "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'restricted_block', 'cache_block')",
 			notContain: "'cyber_policy'",
+		},
+		{
+			name:     "restricted",
+			result:   service.ContentModerationLogResultRestricted,
+			contains: "l.action = 'restricted_block'",
 		},
 		{
 			name:     "risky shadow",

@@ -1,0 +1,49 @@
+{
+  "id": "deepseek-v4-flash-audit-v2",
+  "base_asset": "deepseek-v4-flash-audit-v1",
+  "enabled_by_default": true,
+  "source_commit": "da879713d3bc85779e98326b067de722988ea268",
+  "policy_version": "deepseek-v4-flash-audit-v2",
+  "default_model": "deepseek-v4-flash",
+  "thinking_type": "disabled",
+  "response_format": "json_object",
+  "confidence_threshold": 0.8,
+  "reason_max_runes": 20,
+  "risk_categories": [
+    "cyber_abuse",
+    "cracking",
+    "security_bypass",
+    "account_abuse",
+    "sexual_deepfake",
+    "doxxing",
+    "violent_threat",
+    "self_harm",
+    "weapons",
+    "sexual_content",
+    "fraud_financial_crime",
+    "controlled_substances",
+    "human_exploitation",
+    "terrorism_extremism",
+    "illegal_gambling",
+    "forgery_counterfeit",
+    "corruption_tax_evasion",
+    "hate_harassment",
+    "restricted_security_content"
+  ],
+  "system_prompt": {
+    "file": "system-prompt.txt",
+    "sha256": "5ecc9c2e03d9fd7d2191e4a618ab25e272f1f5cf4fc0cead9a023b3da308c35b"
+  },
+  "layer1": {
+    "file": "layer1-high-confidence-keywords.json",
+    "entries": 114,
+    "source_sha256": "bbacfed1994fcc70f24bbd9d9171f11d8fbe700e650bc61e32001a7e1d7413a8",
+    "embedded_sha256": "bbacfed1994fcc70f24bbd9d9171f11d8fbe700e650bc61e32001a7e1d7413a8"
+  },
+  "layer2": {
+    "file": "layer2-candidate-keywords.json",
+    "entries": 457,
+    "source_sha256": "ed9adfbd8b00dc3dcc7b440a8d770f729c683da3994605e4673ddc4fd34c07c6",
+    "embedded_sha256": "ed9adfbd8b00dc3dcc7b440a8d770f729c683da3994605e4673ddc4fd34c07c6"
+  }
+}

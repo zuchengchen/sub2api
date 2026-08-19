@@ -27,6 +27,7 @@ func TestContentModerationServiceListLogs_AllowsOnlyAuditRecordViews(t *testing.
 		{name: "defaults to combined blocked view", result: "pass", expected: ContentModerationLogResultBlocked},
 		{name: "cyber policy", result: ContentModerationLogResultCyberPolicy, expected: ContentModerationLogResultCyberPolicy},
 		{name: "content blocked", result: ContentModerationLogResultContentBlocked, expected: ContentModerationLogResultContentBlocked},
+		{name: "restricted", result: ContentModerationLogResultRestricted, expected: ContentModerationLogResultRestricted},
 		{name: "normalizes risky shadow", result: " RISKY_SHADOW ", expected: ContentModerationLogResultRiskyShadow},
 		{name: "review unavailable", result: ContentModerationLogResultReviewFailure, expected: ContentModerationLogResultReviewFailure},
 	}

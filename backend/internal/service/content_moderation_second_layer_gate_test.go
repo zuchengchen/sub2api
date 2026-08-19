@@ -396,7 +396,7 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
-	require.Len(t, keywords, 306)
+	require.Len(t, keywords, 457)
 	matcher := newContentModerationPrefilterMatcher(keywords)
 	_, ok := matcher.Match("REVERSE---SHELL")
 	require.True(t, ok)

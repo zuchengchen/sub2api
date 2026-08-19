@@ -12,7 +12,9 @@ import (
 )
 
 // ContentModerationScopeSnapshot is captured once from the API key's group at
-// request entry. Account failover and fallback-group routing must not change it.
+// request entry. Account failover and fallback-group routing must not change
+// the group used for configured scope checks. Group names are metadata only;
+// moderation eligibility is controlled by the persisted group/model filters.
 type ContentModerationScopeSnapshot struct {
 	GroupID   *int64 `json:"group_id,omitempty"`
 	GroupName string `json:"group_name"`
@@ -23,25 +25,8 @@ func NewContentModerationScopeSnapshot(groupID *int64, groupName string) Content
 	return ContentModerationScopeSnapshot{
 		GroupID:   cloneInt64Ptr(groupID),
 		GroupName: groupName,
-		InScope:   IsGPTContentModerationGroup(groupName),
+		InScope:   true,
 	}
-}
-
-// IsGPTContentModerationGroup trims Unicode whitespace and then performs an
-// ASCII-only, case-insensitive GPT prefix comparison.
-func IsGPTContentModerationGroup(name string) bool {
-	name = strings.TrimFunc(name, unicode.IsSpace)
-	if len(name) < 3 {
-		return false
-	}
-	return asciiLower(name[0]) == 'g' && asciiLower(name[1]) == 'p' && asciiLower(name[2]) == 't'
-}
-
-func asciiLower(value byte) byte {
-	if value >= 'A' && value <= 'Z' {
-		return value + ('a' - 'A')
-	}
-	return value
 }
 
 type ContentModerationFragment struct {
