@@ -539,6 +539,22 @@ func TestContentModerationDeepSeekKeywordPolicyIncludesCustomLayers(t *testing.T
 	require.Equal(t, "custom candidate review", keyword)
 }
 
+func TestContentModerationCandidatePolicyRetiresGenericPersistenceTerm(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.CandidateKeywords = []string{"持久化", "custom-candidate-review"}
+	cfg.normalize()
+
+	require.NotContains(t, cfg.CandidateKeywords, "持久化")
+	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
+	require.NoError(t, err)
+	matcher := newContentModerationPrefilterMatcher(keywords)
+	_, hit := matcher.Match("为数据库增加持久化和文件锁测试")
+	require.False(t, hit)
+	keyword, hit := matcher.Match("contains custom-candidate-review example")
+	require.True(t, hit)
+	require.Equal(t, "custom candidate review", keyword)
+}
+
 func TestContentModerationDeepSeekPolicyMetadata(t *testing.T) {
 	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{}}
 	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil, nil)
@@ -546,10 +562,10 @@ func TestContentModerationDeepSeekPolicyMetadata(t *testing.T) {
 	view, err := svc.GetConfig(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, 114, view.CandidateLayer1Count)
-	require.Equal(t, 457, view.CandidateLayer2Count)
+	require.Equal(t, 456, view.CandidateLayer2Count)
 	require.NotEmpty(t, view.CandidateSourceCommit)
 	require.Len(t, view.Layer1Keywords, 114)
-	require.Len(t, view.Layer2Keywords, 457)
+	require.Len(t, view.Layer2Keywords, 456)
 	require.True(t, view.CandidateSystemReady)
 	require.Empty(t, view.CandidateSystemError)
 }
@@ -573,7 +589,7 @@ func TestContentModerationUpdateConfigUsesCanonicalKeywordLayers(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, view.Layer1Keywords, 115)
 	require.Contains(t, view.Layer1Keywords, "direct-block")
-	require.Len(t, view.Layer2Keywords, 458)
+	require.Len(t, view.Layer2Keywords, 457)
 	require.Contains(t, view.Layer2Keywords, "candidate-review")
 	require.True(t, view.CandidateSystemReady)
 	require.Empty(t, view.CandidateSystemError)

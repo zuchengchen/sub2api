@@ -1385,6 +1385,7 @@ type contentModerationCandidateReviewWork struct {
 type contentModerationCandidateReviewOutcome struct {
 	result             contentModerationSecondLayerResult
 	parserStatus       string
+	boundedSafe        bool
 	cacheHit           bool
 	cachePromotion     bool
 	dispositionApplied bool
@@ -1514,12 +1515,37 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 		}
 	}
 	result = applyContentModerationPolicyRestrictionFloor(work.bundle.PrimaryTier, result)
-	if work.reviewRequired && !result.Blocked && (work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) {
+	if work.reviewRequired && !result.Blocked && (work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) &&
+		!contentModerationCanAcceptBoundedSafeReview(cfg, work.bundle, result) {
 		return contentModerationCandidateReviewOutcome{
 			result: result, parserStatus: "evidence_truncated", err: errors.New("contextual review evidence coverage was incomplete"),
 		}
 	}
-	return contentModerationCandidateReviewOutcome{result: result}
+	return contentModerationCandidateReviewOutcome{
+		result:      result,
+		boundedSafe: work.reviewRequired && work.bundle.ContextIncomplete && !work.bundle.CoverageIncomplete,
+	}
+}
+
+func contentModerationCanAcceptBoundedSafeReview(
+	cfg *ContentModerationConfig,
+	bundle contentModerationEvidenceBundle,
+	result contentModerationSecondLayerResult,
+) bool {
+	if cfg == nil || bundle.CoverageIncomplete || !bundle.ContextIncomplete ||
+		result.Blocked || result.ReviewerMismatch ||
+		result.normalizedDisposition() != ContentModerationReviewDispositionAllow ||
+		!contentModerationRemoteReviewersEnabled(cfg) {
+		return false
+	}
+	requiredVotes := contentModerationRemoteConsensusVotesRequired(cfg)
+	if result.RemoteVotes < requiredVotes {
+		return false
+	}
+	if requiredVotes <= 1 {
+		return result.ConsensusStatus == "primary_safe" || result.ConsensusStatus == "confirmed_safe"
+	}
+	return result.ConsensusStatus == "confirmed_safe"
 }
 
 func (s *ContentModerationService) beginContentModerationCandidateReviewFlight(key string) (*contentModerationCandidateReviewFlight, bool) {
@@ -1769,7 +1795,7 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	primary := work.primary
 	result := outcome.result
 	publishCache := func(log *ContentModerationLog, persisted bool) {
-		if outcome.cacheHit || !persisted || log == nil {
+		if outcome.cacheHit || outcome.boundedSafe || !persisted || log == nil {
 			return
 		}
 		dispositionApplied := !result.Blocked ||
@@ -1779,7 +1805,9 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 		)
 	}
 	decisionSource := "model"
-	if outcome.cachePromotion {
+	if outcome.boundedSafe {
+		decisionSource = "model_bounded_safe"
+	} else if outcome.cachePromotion {
 		decisionSource = "cache_promotion"
 	} else if outcome.coalesced {
 		decisionSource = "model_coalesced"

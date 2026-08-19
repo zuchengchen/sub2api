@@ -2676,9 +2676,9 @@ func (cfg *ContentModerationConfig) normalize() {
 	cfg.SecondLayerStage = normalizeContentModerationSecondLayerStage(cfg.SecondLayerStage)
 	cfg.SecondLayerScanners = normalizeContentModerationScannerIDs(cfg.SecondLayerScanners)
 	cfg.HardBlockPatterns = normalizeBlockedKeywords(cfg.HardBlockPatterns)
-	cfg.CandidateKeywords = normalizeBlockedKeywords(cfg.CandidateKeywords)
+	cfg.CandidateKeywords = normalizeContentModerationCandidateKeywords(cfg.CandidateKeywords)
 	cfg.KeywordAllowlist = normalizeBlockedKeywords(cfg.KeywordAllowlist)
-	if keywordPolicyVersion := strings.TrimSpace(cfg.KeywordPolicyVersion); keywordPolicyVersion == "" || keywordPolicyVersion == contentModerationOlderKeywordPolicyVersion || keywordPolicyVersion == contentModerationPreviousKeywordPolicyVersion {
+	if keywordPolicyVersion := strings.TrimSpace(cfg.KeywordPolicyVersion); keywordPolicyVersion == "" || keywordPolicyVersion == contentModerationOlderKeywordPolicyVersion || keywordPolicyVersion == contentModerationPreviousKeywordPolicyVersion || keywordPolicyVersion == contentModerationPriorKeywordPolicyVersion {
 		cfg.KeywordPolicyVersion = ContentModerationKeywordPolicyVersion
 	}
 	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion || contextPolicyVersion == contentModerationPriorContextPolicyVersion {
@@ -2864,7 +2864,29 @@ func contentModerationSecondLayerKeywordValues(cfg *ContentModerationConfig) ([]
 	}
 	keywords := append([]string(nil), asset.Layer2...)
 	keywords = append(keywords, cfg.CandidateKeywords...)
-	return normalizeBlockedKeywords(keywords), nil
+	return normalizeContentModerationCandidateKeywords(keywords), nil
+}
+
+// Generic persistence terminology is common in benign software engineering
+// discussions and is not a useful standalone signal for remote review.
+var retiredContentModerationCandidateKeywords = map[string]struct{}{
+	"持久化": {},
+}
+
+func normalizeContentModerationCandidateKeywords(keywords []string) []string {
+	normalized := normalizeBlockedKeywords(keywords)
+	if len(normalized) == 0 {
+		return normalized
+	}
+	filtered := make([]string, 0, len(normalized))
+	for _, keyword := range normalized {
+		key := strings.ToLower(strings.TrimSpace(keyword))
+		if _, retired := retiredContentModerationCandidateKeywords[key]; retired {
+			continue
+		}
+		filtered = append(filtered, keyword)
+	}
+	return filtered
 }
 
 func normalizeInt64IDs(ids []int64) []int64 {

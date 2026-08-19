@@ -1015,6 +1015,109 @@ func TestContentModerationTruncatedContextualReviewNeverAllowsOrCachesSafeResult
 	}
 }
 
+func TestContentModerationBoundedSafeReviewRequiresCoveredRemoteConsensus(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.RemoteReviewersEnabled = true
+	cfg.RemoteReviewersVersion = 1
+	cfg.RemoteConsensusRequired = 2
+	bundle := contentModerationEvidenceBundle{ContextIncomplete: true}
+	result := contentModerationSecondLayerResult{
+		Disposition: ContentModerationReviewDispositionAllow,
+		RemoteVotes: 2, ConsensusStatus: "confirmed_safe",
+	}
+
+	require.True(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, result))
+
+	coverageMissing := bundle
+	coverageMissing.CoverageIncomplete = true
+	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, coverageMissing, result))
+
+	insufficientVotes := result
+	insufficientVotes.RemoteVotes = 1
+	insufficientVotes.ConsensusStatus = "primary_safe"
+	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, insufficientVotes))
+
+	disagreement := result
+	disagreement.ReviewerMismatch = true
+	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, disagreement))
+
+	complete := bundle
+	complete.ContextIncomplete = false
+	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, complete, result))
+}
+
+func TestContentModerationBoundedSafeRemoteConsensusAllowsWithoutCaching(t *testing.T) {
+	var reviewCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reviewCalls.Add(1)
+		contentModerationRemotePoolWriteResult(t, w, 0.05, "safe", "")
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.SecondLayerEnabled = true
+	cfg.SecondLayerStage = ContentModerationSecondLayerStageEnforce
+	cfg.DeepSeekEnabled = true
+	cfg.RemoteReviewersEnabled = true
+	cfg.RemoteReviewersVersion = 1
+	cfg.RemoteConsensusRequired = 2
+	cfg.DeepSeekTotalTimeoutMS = 3000
+	cfg.DeepSeekChannels = []ContentModerationDeepSeekChannel{
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "bounded-safe-deepseek", server.URL, 0),
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderGLM, "bounded-safe-glm", server.URL, 1),
+	}
+	cfg.normalize()
+
+	text := "Explain malicious macro behavior. " + strings.Repeat("benign software context ", 300)
+	fragment, ok := newContentModerationFragment("user", "text", "input.4", text)
+	require.True(t, ok)
+	fragment.ContextClass = ContentModerationContextUser
+	matches := newContentModerationKeywordMatcher([]string{"malicious macro"}).MatchAll(text)
+	bundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{{
+		Fragment: fragment, Matches: matches, Tier: contentModerationKeywordTierContextualReview, WholeFragment: true,
+	}}, contentModerationEvidenceWindowBudgetRunes, cfg)
+	require.True(t, bundle.ContextIncomplete)
+	require.False(t, bundle.CoverageIncomplete)
+
+	repo := &contentModerationReplayRepo{}
+	cache := &contentModerationReplayCache{}
+	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	for _, channel := range cfg.DeepSeekChannels {
+		svc.deepSeekChannelState(channel).markReviewHealthy(time.Now(), contentModerationDeepSeekChannelDigest(channel))
+	}
+	work := contentModerationCandidateReviewWork{
+		bundle: bundle, primary: fragment, reviewRequired: true, requireHealthyReviewer: true,
+	}
+	input := contextualRoutingTestInput("placeholder", "")
+
+	for attempt := 0; attempt < 2; attempt++ {
+		input.RequestID = "bounded-safe-consensus-" + strconv.Itoa(attempt)
+		outcome := svc.reviewUnifiedCandidateEvidenceBundle(context.Background(), cfg, cfg.fragmentCacheNamespace(), work)
+		require.NoError(t, outcome.err)
+		require.True(t, outcome.boundedSafe)
+		require.Equal(t, "confirmed_safe", outcome.result.ConsensusStatus)
+		decision := svc.applyUnifiedCandidateReviewResult(
+			context.Background(), input, cfg, cfg.fragmentCacheNamespace(), work, outcome, false, false,
+		)
+		require.True(t, decision.Allowed)
+		require.False(t, decision.Blocked)
+	}
+
+	require.Equal(t, int64(4), reviewCalls.Load(), "bounded safe evidence must be reviewed again instead of replaying an allow cache")
+	require.Zero(t, contextualRoutingCacheEntryCount(cache))
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 2)
+	for _, log := range logs {
+		require.Equal(t, "model_bounded_safe", log.DecisionSource)
+		require.True(t, log.EvidenceTruncated)
+		require.Len(t, log.ReviewAttempts, 2)
+		require.Equal(t, "primary", log.ReviewAttempts[0].Role)
+		require.Equal(t, "confirmation", log.ReviewAttempts[1].Role)
+		require.False(t, log.Flagged)
+	}
+}
+
 func TestContentModerationContextualAndOrdinaryCandidatesAreInterleaved(t *testing.T) {
 	candidates := []contentModerationCandidateFragment{
 		{Tier: "candidate", Fragment: ContentModerationFragment{Text: "ordinary-1"}},

@@ -641,7 +641,7 @@ func TestContentModerationBuiltInCandidatePolicyCannotBeEmpty(t *testing.T) {
 	cfg.CandidateKeywords = nil
 	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
-	require.Len(t, keywords, 457)
+	require.Len(t, keywords, 456)
 	require.NotNil(t, newContentModerationPrefilterMatcher(keywords))
 }
 

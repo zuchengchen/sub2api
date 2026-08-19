@@ -209,7 +209,7 @@ func TestContentModerationTTLConfigBoundariesAndNamespaceIsolation(t *testing.T)
 	changes := []func(*ContentModerationConfig){
 		func(value *ContentModerationConfig) { value.ContextPolicyVersion = "context-v5" },
 		func(value *ContentModerationConfig) { value.EvidencePolicyVersion = "evidence-v2" },
-		func(value *ContentModerationConfig) { value.KeywordPolicyVersion = "keyword-v5" },
+		func(value *ContentModerationConfig) { value.KeywordPolicyVersion = "keyword-v6" },
 		func(value *ContentModerationConfig) { value.FirstLayerStage = ContentModerationFirstLayerStageEnforce },
 		func(value *ContentModerationConfig) {
 			value.SecondLayerStage = ContentModerationSecondLayerStageEnforce
@@ -257,6 +257,7 @@ func TestContentModerationOlderKeywordPolicyMigration(t *testing.T) {
 	for _, version := range []string{
 		contentModerationOlderKeywordPolicyVersion,
 		contentModerationPreviousKeywordPolicyVersion,
+		contentModerationPriorKeywordPolicyVersion,
 	} {
 		cfg := defaultContentModerationConfig()
 		cfg.KeywordPolicyVersion = version
