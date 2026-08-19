@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1017,10 +1018,15 @@ func TestContentModerationTruncatedContextualReviewNeverAllowsOrCachesSafeResult
 
 func TestContentModerationIncompleteContextCannotReplayCompleteAllowCache(t *testing.T) {
 	var reviewCalls atomic.Int64
+	var blockReview atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		reviewCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
+		label := "sec"
+		if blockReview.Load() {
+			label = "mc"
+		}
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, label)
 	}))
 	defer server.Close()
 
@@ -1058,11 +1064,19 @@ func TestContentModerationIncompleteContextCannotReplayCompleteAllowCache(t *tes
 	incompleteWork.bundle.ContextIncomplete = true
 	incompleteWork.bundle.Evidence.Truncated = true
 	input.RequestID = "incomplete-must-not-replay-complete"
+	blockReview.Store(true)
 	incompleteOutcome := svc.reviewUnifiedCandidateEvidenceBundle(context.Background(), cfg, cfg.fragmentCacheNamespace(), incompleteWork)
-	require.Error(t, incompleteOutcome.err)
-	require.Equal(t, "evidence_truncated", incompleteOutcome.parserStatus)
+	require.NoError(t, incompleteOutcome.err)
 	require.False(t, incompleteOutcome.cacheHit)
+	require.True(t, incompleteOutcome.result.Blocked)
+	incompleteDecision := svc.applyUnifiedCandidateReviewResult(
+		context.Background(), input, cfg, cfg.fragmentCacheNamespace(), incompleteWork, incompleteOutcome, false, false,
+	)
+	require.True(t, incompleteDecision.Blocked)
+	require.False(t, incompleteDecision.Allowed)
+	require.Equal(t, ContentModerationActionSecondLayerBlock, incompleteDecision.Action)
 	require.Equal(t, int64(2), reviewCalls.Load(), "incomplete evidence must be reviewed instead of replaying a complete allow cache")
+	require.Equal(t, 1, contextualRoutingCacheEntryCount(cache), "incomplete evidence must not replace or add a cache entry")
 }
 
 func TestContentModerationContextualAndOrdinaryCandidatesAreInterleaved(t *testing.T) {

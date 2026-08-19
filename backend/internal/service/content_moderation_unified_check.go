@@ -1745,9 +1745,10 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), contentModerationAuditPersistenceTimeout)
 	defer cancelPersist()
 
+	cacheEligible := !work.bundle.ContextIncomplete && !work.bundle.CoverageIncomplete
 	var releaseCommit func()
 	needsDisposition := contentModerationCandidateNeedsDisposition(outcome, cfg, whitelistShadow, forceShadow)
-	if !outcome.cacheHit || needsDisposition {
+	if cacheEligible && (!outcome.cacheHit || needsDisposition) {
 		startedFromCache := outcome.cacheHit
 		releaseCommit = s.acquireContentModerationFragmentDecisionLock(namespace + "\x00layer2-review-commit\x00" + work.bundle.CacheHash)
 		if entry, found := s.getUnifiedCandidateReviewCacheForApply(
@@ -1778,7 +1779,7 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	primary := work.primary
 	result := outcome.result
 	publishCache := func(log *ContentModerationLog, persisted bool) {
-		if outcome.cacheHit || bundle.ContextIncomplete || bundle.CoverageIncomplete || !persisted || log == nil {
+		if outcome.cacheHit || !cacheEligible || !persisted || log == nil {
 			return
 		}
 		dispositionApplied := !result.Blocked ||
