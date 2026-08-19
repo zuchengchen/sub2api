@@ -17,6 +17,7 @@ import (
 const (
 	riskControlCapacityErrorCode          = "risk_control_capacity_exhausted"
 	riskControlReviewUnavailableErrorCode = "risk_control_review_unavailable"
+	contentPolicyRestrictedErrorCode      = "content_policy_restricted"
 )
 
 func contentModerationDecisionErrorCode(decision *service.ContentModerationDecision) string {
@@ -26,6 +27,8 @@ func contentModerationDecisionErrorCode(decision *service.ContentModerationDecis
 			return riskControlCapacityErrorCode
 		case service.ContentModerationActionReviewUnavailable:
 			return riskControlReviewUnavailableErrorCode
+		case service.ContentModerationActionRestrictedBlock:
+			return contentPolicyRestrictedErrorCode
 		}
 	}
 	return "content_policy_violation"
@@ -37,6 +40,9 @@ func contentModerationDecisionMessage(decision *service.ContentModerationDecisio
 		message = strings.TrimSpace(decision.Message)
 	}
 	if decision == nil || !decision.Blocked {
+		return message
+	}
+	if decision.Action == service.ContentModerationActionRestrictedBlock {
 		return message
 	}
 	if keyword := strings.TrimSpace(decision.MatchedKeyword); keyword != "" {

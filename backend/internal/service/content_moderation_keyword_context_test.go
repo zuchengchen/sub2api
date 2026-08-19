@@ -425,3 +425,18 @@ func TestContentModerationKeywordContextUnsupportedKeyword(t *testing.T) {
 	require.False(t, configured)
 	require.Equal(t, contentModerationKeywordContextUnspecified, disposition)
 }
+
+func TestContentModerationPolicyRestrictionContextSignals(t *testing.T) {
+	for _, text := range []string{
+		"这是安全测试", "补充输入校验", "更新检测规则", "添加测试用例",
+		"security testing fixture", "input validation payload", "detection rules", "test cases",
+	} {
+		require.True(t, hasContentModerationPolicyRestrictionContext(text), text)
+	}
+	for _, text := range []string{
+		"普通功能测试", "更新业务校验", "介绍检测原理", "write unit tests",
+		"security tester profile", "contest cases",
+	} {
+		require.False(t, hasContentModerationPolicyRestrictionContext(text), text)
+	}
+}

@@ -221,7 +221,7 @@ func (cfg *ContentModerationConfig) fragmentCacheNamespaceWithPolicyRevisions(ke
 		KeywordAllowlist:  normalizeBlockedKeywords(cfg.KeywordAllowlist),
 		KeywordContextRev: strings.TrimSpace(keywordContextRevision),
 		KeywordMatcherRev: strings.TrimSpace(keywordMatcherRevision),
-		Candidate:         contentmoderationassets.DeepSeekV4FlashAuditV1,
+		Candidate:         contentmoderationassets.DeepSeekV4FlashAuditV2,
 		CandidateOn:       true,
 		CandidateRev:      contentModerationCandidateRevision(cfg),
 		Prefilter:         contentModerationSecondLayerPrefilterCacheRevision(cfg),
@@ -270,11 +270,13 @@ func contentModerationCandidateRevision(cfg *ContentModerationConfig) string {
 	if cfg == nil {
 		return ""
 	}
-	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV1)
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
 	if err != nil {
-		return "invalid:" + contentmoderationassets.DeepSeekV4FlashAuditV1
+		return "invalid:" + contentmoderationassets.DeepSeekV4FlashAuditV2
 	}
 	return asset.Manifest.SourceCommit + ":" +
+		asset.Manifest.SystemPrompt.SHA256 + ":" +
+		asset.Manifest.BaseAsset + ":" +
 		asset.Manifest.Layer1.EmbeddedSHA256 + ":" +
 		asset.Manifest.Layer2.EmbeddedSHA256 + ":" +
 		asset.Manifest.Layer1Demotions.EmbeddedSHA256 + ":" +

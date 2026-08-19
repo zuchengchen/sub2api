@@ -33,9 +33,9 @@ func TestRunHistoryDeduplicatesCallsAndMapsEveryRecord(t *testing.T) {
 		mutex.Unlock()
 		encoded, err := json.Marshal(payload)
 		require.NoError(t, err)
-		decision := `{"confidence":0.11,"category":"safe","reason":""}`
+		decision := `{"disposition":"allow","confidence":0.11,"category":"safe","reason":""}`
 		if strings.Contains(string(encoded), "attack other system") {
-			decision = `{"confidence":0.93,"category":"cyber_abuse","reason":"attack other system"}`
+			decision = `{"disposition":"violation","confidence":0.93,"category":"cyber_abuse","reason":"明确攻击意图"}`
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(writer).Encode(map[string]any{
@@ -88,7 +88,7 @@ func TestRunHistoryDeduplicatesCallsAndMapsEveryRecord(t *testing.T) {
 		require.Equal(t, map[string]any{"type": "json_object"}, payload["response_format"])
 		require.NotContains(t, payload, "reasoning_effort")
 		require.Equal(t, float64(0), payload["temperature"])
-		require.Equal(t, float64(64), payload["max_tokens"])
+		require.Equal(t, float64(96), payload["max_tokens"])
 	}
 	capturedJSON, err := json.Marshal(captured)
 	require.NoError(t, err)

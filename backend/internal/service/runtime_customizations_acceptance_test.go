@@ -170,7 +170,7 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		)
 		regularService.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
 			UserID: 101, UserEmail: "acceptance@example.invalid", UserRole: RoleUser,
-			Scope: gptCyberScope(), Model: "gpt-5.6", Endpoint: "/v1/responses",
+			Scope: cyberPolicyScope(), Model: "gpt-5.6", Endpoint: "/v1/responses",
 			UpstreamMessage: "cyber policy", UpstreamStatus: http.StatusBadRequest,
 		})
 		regularLogs := regularRepo.snapshotLogs()
@@ -186,7 +186,7 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 			adminRepo, nil, nil, nil, nil, adminInvalidator, nil,
 		)
 		adminService.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
-			UserID: 1, APIKeyID: 202, UserRole: RoleAdmin, Scope: gptCyberScope(),
+			UserID: 1, APIKeyID: 202, UserRole: RoleAdmin, Scope: cyberPolicyScope(),
 			Model: "gpt-5.6", Endpoint: "/v1/responses", UpstreamMessage: "cyber policy",
 		})
 		adminLogs := adminRepo.snapshotLogs()

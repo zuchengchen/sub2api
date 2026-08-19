@@ -30,12 +30,16 @@ const (
 	ContentModerationModePreBlock      = "pre_block"
 	legacyContentModerationModeObserve = "observe"
 
-	ContentModerationActionAllow             = "allow"
-	ContentModerationActionBlock             = "block"
-	ContentModerationActionHashBlock         = "hash_block"
-	ContentModerationActionKeywordBlock      = "keyword_block"
-	ContentModerationActionFirstLayerShadow  = "first_layer_shadow"
-	ContentModerationActionSecondLayerBlock  = "second_layer_block"
+	ContentModerationActionAllow            = "allow"
+	ContentModerationActionBlock            = "block"
+	ContentModerationActionHashBlock        = "hash_block"
+	ContentModerationActionKeywordBlock     = "keyword_block"
+	ContentModerationActionFirstLayerShadow = "first_layer_shadow"
+	ContentModerationActionSecondLayerBlock = "second_layer_block"
+	// RestrictedBlock stops a policy-restricted request without treating it as
+	// an abuse violation. It must never enter the flagged-account disposition
+	// path.
+	ContentModerationActionRestrictedBlock   = "restricted_block"
 	ContentModerationActionSecondLayerShadow = "second_layer_shadow"
 	ContentModerationActionWhitelistShadow   = "whitelist_shadow"
 	ContentModerationActionCacheBlock        = "cache_block"
@@ -47,6 +51,7 @@ const (
 	ContentModerationLogResultBlocked        = "blocked"
 	ContentModerationLogResultCyberPolicy    = "cyber_policy"
 	ContentModerationLogResultContentBlocked = "content_blocked"
+	ContentModerationLogResultRestricted     = "restricted"
 	ContentModerationLogResultRiskyShadow    = "risky_shadow"
 	ContentModerationLogResultReviewFailure  = "review_unavailable"
 
@@ -730,8 +735,9 @@ type ContentModerationHashCache interface {
 }
 
 const (
-	ContentModerationFragmentAllow = "allow"
-	ContentModerationFragmentBlock = "block"
+	ContentModerationFragmentAllow      = "allow"
+	ContentModerationFragmentBlock      = "block"
+	ContentModerationFragmentRestricted = "restricted"
 )
 
 type ContentModerationFragmentCache interface {
@@ -1231,7 +1237,8 @@ func (s *ContentModerationService) recordPreBlockSyncMetric(latencyMS int, actio
 	}
 	s.preBlockLatencyTotalMS.Add(int64(latencyMS))
 	switch action {
-	case ContentModerationActionBlock, ContentModerationActionHashBlock, ContentModerationActionKeywordBlock:
+	case ContentModerationActionBlock, ContentModerationActionHashBlock, ContentModerationActionKeywordBlock,
+		ContentModerationActionSecondLayerBlock, ContentModerationActionRestrictedBlock, ContentModerationActionCacheBlock:
 		s.preBlockBlocked.Add(1)
 	case ContentModerationActionError:
 		s.preBlockErrors.Add(1)
@@ -1246,6 +1253,7 @@ func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentM
 	switch result := strings.ToLower(strings.TrimSpace(filter.Result)); result {
 	case ContentModerationLogResultCyberPolicy,
 		ContentModerationLogResultContentBlocked,
+		ContentModerationLogResultRestricted,
 		ContentModerationLogResultRiskyShadow,
 		ContentModerationLogResultReviewFailure:
 		filter.Result = result
@@ -2068,7 +2076,7 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 	if err := validateContentModerationDeepSeekChannels(cfg.DeepSeekChannels); err != nil {
 		return infraerrors.BadRequest("INVALID_DEEPSEEK_CHANNELS", err.Error())
 	}
-	if _, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV1); err != nil {
+	if _, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2); err != nil {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_POLICY", err.Error())
 	}
 	if _, err := effectiveContentModerationKeywords(cfg); err != nil {
@@ -2673,10 +2681,10 @@ func (cfg *ContentModerationConfig) normalize() {
 	if keywordPolicyVersion := strings.TrimSpace(cfg.KeywordPolicyVersion); keywordPolicyVersion == "" || keywordPolicyVersion == contentModerationOlderKeywordPolicyVersion || keywordPolicyVersion == contentModerationPreviousKeywordPolicyVersion {
 		cfg.KeywordPolicyVersion = ContentModerationKeywordPolicyVersion
 	}
-	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion {
+	if contextPolicyVersion := strings.TrimSpace(cfg.ContextPolicyVersion); contextPolicyVersion == "" || contextPolicyVersion == contentModerationLegacyContextPolicyVersion || contextPolicyVersion == contentModerationPreviousContextPolicyVersion || contextPolicyVersion == contentModerationPriorContextPolicyVersion {
 		cfg.ContextPolicyVersion = ContentModerationContextPolicyVersion
 	}
-	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationLegacyEvidencePolicyVersion || evidencePolicyVersion == contentModerationOlderEvidencePolicyVersion || evidencePolicyVersion == contentModerationEarlierEvidencePolicyVersion || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion || evidencePolicyVersion == contentModerationPriorEvidencePolicyVersion {
+	if evidencePolicyVersion := strings.TrimSpace(cfg.EvidencePolicyVersion); evidencePolicyVersion == "" || evidencePolicyVersion == contentModerationLegacyEvidencePolicyVersion || evidencePolicyVersion == contentModerationOlderEvidencePolicyVersion || evidencePolicyVersion == contentModerationEarlierEvidencePolicyVersion || evidencePolicyVersion == contentModerationPreviousEvidencePolicyVersion || evidencePolicyVersion == contentModerationPriorEvidencePolicyVersion || evidencePolicyVersion == contentModerationLastEvidencePolicyVersion {
 		cfg.EvidencePolicyVersion = ContentModerationEvidencePolicyVersion
 	}
 	cfg.KeywordPolicyVersion = normalizeContentModerationCacheVersion(cfg.KeywordPolicyVersion)
@@ -2747,7 +2755,7 @@ func contentModerationModelListContains(models []string, model string) bool {
 }
 
 func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *ContentModerationConfigView {
-	asset, assetErr := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV1)
+	asset, assetErr := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
 	layer1Keywords, layer1Err := effectiveContentModerationKeywords(cfg)
 	layer2Keywords, layer2Err := contentModerationSecondLayerKeywordValues(cfg)
 	effectiveLayer2Keywords := canonicalContentModerationPrefilterKeywords(layer2Keywords)
@@ -2825,7 +2833,7 @@ func effectiveContentModerationKeywords(cfg *ContentModerationConfig) ([]string,
 	if cfg == nil {
 		return nil, nil
 	}
-	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV1)
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
 	if err != nil {
 		return nil, err
 	}
@@ -2850,7 +2858,7 @@ func contentModerationSecondLayerKeywordValues(cfg *ContentModerationConfig) ([]
 	if cfg == nil {
 		return nil, nil
 	}
-	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV1)
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
 	if err != nil {
 		return nil, err
 	}
@@ -3083,7 +3091,7 @@ type CyberPolicyRecordInput struct {
 
 // RecordCyberPolicyEvent 对一次 cyber_policy 硬阻断立即执行账户处置，随后写入风控归档
 // 并按配置发送通知。账户处置不受本地累计违规阈值约束。
-// 仅受请求时的 GPT 分组 scope 快照约束；不受 risk_control_enabled 总开关和内容审核
+// 使用请求快照中的审计元数据；不受 risk_control_enabled 总开关和内容审核
 // Enabled/Mode/group/model/sample 约束，确保严重违规始终留痕并处置。
 func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, in CyberPolicyRecordInput) {
 	if s == nil || s.repo == nil {

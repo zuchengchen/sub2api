@@ -21,7 +21,7 @@ func TestContentModerationDeepSeekEvaluatorReusesProductionContract(t *testing.T
 		require.NotContains(t, payload, "reasoning_effort")
 		require.Equal(t, "Bearer sk-evaluation-fixture", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"confidence\":0.91,\"category\":\"cyber_abuse\",\"reason\":\"明确攻击意图\"}"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"disposition\":\"violation\",\"confidence\":0.91,\"category\":\"cyber_abuse\",\"reason\":\"明确攻击意图\"}"}}]}`))
 	}))
 	defer server.Close()
 
@@ -36,7 +36,9 @@ func TestContentModerationDeepSeekEvaluatorReusesProductionContract(t *testing.T
 		Text: "明确请求攻击未授权目标", ContextClass: ContentModerationContextUser, Role: "user", Kind: "text",
 	})
 	require.NoError(t, err)
+	require.True(t, result.Blocked)
 	require.True(t, result.Flagged)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.Disposition)
 	require.Equal(t, 0.91, result.Confidence)
 	require.Equal(t, "cyber_abuse", result.Category)
 	digest := sha256.Sum256([]byte("明确攻击意图"))
@@ -47,6 +49,31 @@ func TestContentModerationDeepSeekEvaluatorReusesProductionContract(t *testing.T
 	require.Equal(t, ContentModerationDeepSeekPromptVersion, result.PromptVersion)
 	require.Len(t, result.Attempts, 1)
 	require.Equal(t, "success", result.Attempts[0].Outcome)
+}
+
+func TestContentModerationDeepSeekEvaluatorReportsRestrictedAsBlockedNotFlagged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"disposition\":\"restricted\",\"confidence\":0.93,\"category\":\"restricted_security_content\",\"reason\":\"含安全测试载荷\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	evaluator, err := NewContentModerationDeepSeekEvaluator([]ContentModerationDeepSeekChannel{{
+		ID: "restricted-evaluation", Name: "restricted evaluation", BaseURL: server.URL,
+		Model: DefaultContentModerationDeepSeekModel, Enabled: true, TimeoutMS: 1000,
+		APIKey: "sk-restricted-evaluation-fixture",
+	}}, 2000)
+	require.NoError(t, err)
+
+	result, err := evaluator.Evaluate(context.Background(), ContentModerationDeepSeekEvaluationInput{
+		Text: "为输入校验测试用例生成 SQL 注入载荷", ContextClass: ContentModerationContextUser,
+		Role: "user", Kind: "text",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Blocked)
+	require.False(t, result.Flagged)
+	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
+	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
 }
 
 func TestContentModerationDeepSeekEvaluatorReturnsParentCancellation(t *testing.T) {

@@ -591,6 +591,7 @@ WHERE flagged = TRUE
 	nonHitExec, err := r.db.ExecContext(ctx, `
 DELETE FROM content_moderation_logs
 WHERE flagged = FALSE AND created_at < $1
+  AND action <> 'restricted_block'
 `, nonHitBefore)
 	if err != nil {
 		return nil, fmt.Errorf("delete expired non-hit content moderation logs: %w", err)
@@ -823,17 +824,19 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 	case "hit", "flagged":
 		where = append(where, "l.flagged = TRUE")
 	case "blocked", "block":
-		where = append(where, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block', 'cyber_policy')")
+		where = append(where, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'restricted_block', 'cache_block', 'cyber_policy')")
+	case service.ContentModerationLogResultRestricted:
+		where = append(where, "l.action = 'restricted_block'")
 	case service.ContentModerationLogResultCyberPolicy:
 		where = append(where, "l.action = 'cyber_policy'")
 	case service.ContentModerationLogResultContentBlocked:
-		where = append(where, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block')")
+		where = append(where, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'restricted_block', 'cache_block')")
 	case service.ContentModerationLogResultRiskyShadow:
 		where = append(where, "l.action IN ('first_layer_shadow', 'second_layer_shadow', 'whitelist_shadow') AND COALESCE(BTRIM(l.highest_category), '') <> ''")
 	case service.ContentModerationLogResultReviewFailure:
 		where = append(where, "l.action = 'review_unavailable'")
 	case "pass", "allow":
-		where = append(where, "l.flagged = FALSE AND l.error = ''")
+		where = append(where, "l.flagged = FALSE AND l.error = '' AND l.action <> 'restricted_block'")
 	case "error":
 		where = append(where, "l.error <> ''")
 	}

@@ -13,9 +13,12 @@ import (
 	"unicode"
 )
 
-const DeepSeekV4FlashAuditV1 = "deepseek-v4-flash-audit-v1"
+const (
+	DeepSeekV4FlashAuditV1 = "deepseek-v4-flash-audit-v1"
+	DeepSeekV4FlashAuditV2 = "deepseek-v4-flash-audit-v2"
+)
 
-//go:embed deepseek-v4-flash-audit-v1/*
+//go:embed deepseek-v4-flash-audit-v1/* deepseek-v4-flash-audit-v2/*
 var files embed.FS
 
 type FileManifest struct {
@@ -32,6 +35,7 @@ type TextFileManifest struct {
 
 type Manifest struct {
 	ID                  string           `json:"id"`
+	BaseAsset           string           `json:"base_asset,omitempty"`
 	EnabledByDefault    bool             `json:"enabled_by_default"`
 	SourceCommit        string           `json:"source_commit"`
 	PolicyVersion       string           `json:"policy_version"`
@@ -58,21 +62,32 @@ type Asset struct {
 }
 
 var (
-	deepSeekOnce  sync.Once
-	deepSeekAsset Asset
-	deepSeekErr   error
+	deepSeekV1Once  sync.Once
+	deepSeekV1Asset Asset
+	deepSeekV1Err   error
+	deepSeekV2Once  sync.Once
+	deepSeekV2Asset Asset
+	deepSeekV2Err   error
 )
 
 func Load(id string) (Asset, error) {
 	switch strings.TrimSpace(id) {
 	case DeepSeekV4FlashAuditV1:
-		deepSeekOnce.Do(func() {
-			deepSeekAsset, deepSeekErr = loadAsset(DeepSeekV4FlashAuditV1)
+		deepSeekV1Once.Do(func() {
+			deepSeekV1Asset, deepSeekV1Err = loadAsset(DeepSeekV4FlashAuditV1)
 		})
-		if deepSeekErr != nil {
-			return Asset{}, deepSeekErr
+		if deepSeekV1Err != nil {
+			return Asset{}, deepSeekV1Err
 		}
-		return cloneAsset(deepSeekAsset), nil
+		return cloneAsset(deepSeekV1Asset), nil
+	case DeepSeekV4FlashAuditV2:
+		deepSeekV2Once.Do(func() {
+			deepSeekV2Asset, deepSeekV2Err = loadAsset(DeepSeekV4FlashAuditV2)
+		})
+		if deepSeekV2Err != nil {
+			return Asset{}, deepSeekV2Err
+		}
+		return cloneAsset(deepSeekV2Asset), nil
 	default:
 		return Asset{}, fmt.Errorf("unknown content moderation candidate asset %q", id)
 	}
@@ -90,8 +105,15 @@ func loadAsset(id string) (Asset, error) {
 	if manifest.ID != id {
 		return Asset{}, errors.New("candidate manifest identity is invalid")
 	}
-	if err := validateManifest(manifest); err != nil {
+	if err := validateManifest(id, manifest); err != nil {
 		return Asset{}, err
+	}
+	var base Asset
+	if strings.TrimSpace(manifest.BaseAsset) != "" {
+		base, err = loadAsset(strings.TrimSpace(manifest.BaseAsset))
+		if err != nil {
+			return Asset{}, fmt.Errorf("load base candidate asset: %w", err)
+		}
 	}
 	var systemPrompt string
 	if manifest.SystemPrompt.File != "" {
@@ -100,27 +122,41 @@ func loadAsset(id string) (Asset, error) {
 			return Asset{}, fmt.Errorf("load system prompt: %w", err)
 		}
 	}
-	layer1, err := loadTerms(id, manifest.Layer1)
-	if err != nil {
-		return Asset{}, fmt.Errorf("load candidate layer 1: %w", err)
+	layer1 := append([]string(nil), base.Layer1...)
+	if manifest.Layer1.File != "" {
+		layer1, err = loadTerms(id, manifest.Layer1)
+		if err != nil {
+			return Asset{}, fmt.Errorf("load candidate layer 1: %w", err)
+		}
+	} else if len(layer1) > 0 {
+		manifest.Layer1 = base.Manifest.Layer1
 	}
-	layer2, err := loadTerms(id, manifest.Layer2)
-	if err != nil {
-		return Asset{}, fmt.Errorf("load candidate layer 2: %w", err)
+	layer2 := append([]string(nil), base.Layer2...)
+	if manifest.Layer2.File != "" {
+		layer2, err = loadTerms(id, manifest.Layer2)
+		if err != nil {
+			return Asset{}, fmt.Errorf("load candidate layer 2: %w", err)
+		}
+	} else if len(layer2) > 0 {
+		manifest.Layer2 = base.Manifest.Layer2
 	}
-	var demotions []string
+	demotions := append([]string(nil), base.Layer1Demotions...)
 	if manifest.Layer1Demotions.File != "" {
 		demotions, err = loadTerms(id, manifest.Layer1Demotions)
 		if err != nil {
 			return Asset{}, fmt.Errorf("load candidate layer 1 demotions: %w", err)
 		}
+	} else if len(demotions) > 0 {
+		manifest.Layer1Demotions = base.Manifest.Layer1Demotions
 	}
-	var suppressions []string
+	suppressions := append([]string(nil), base.Layer1Suppressions...)
 	if manifest.Layer1Suppressions.File != "" {
 		suppressions, err = loadTerms(id, manifest.Layer1Suppressions)
 		if err != nil {
 			return Asset{}, fmt.Errorf("load candidate layer 1 suppressions: %w", err)
 		}
+	} else if len(suppressions) > 0 {
+		manifest.Layer1Suppressions = base.Manifest.Layer1Suppressions
 	}
 	layer1, layer2, err = applyLayer1Overrides(layer1, layer2, demotions, suppressions)
 	if err != nil {
@@ -132,38 +168,48 @@ func loadAsset(id string) (Asset, error) {
 	}, nil
 }
 
-func validateManifest(manifest Manifest) error {
-	switch manifest.ID {
-	case DeepSeekV4FlashAuditV1:
-		if !manifest.EnabledByDefault || manifest.PolicyVersion != DeepSeekV4FlashAuditV1 {
-			return errors.New("DeepSeek policy identity or default state is invalid")
+func validateManifest(id string, manifest Manifest) error {
+	if !manifest.EnabledByDefault || manifest.PolicyVersion != id {
+		return errors.New("DeepSeek policy identity or default state is invalid")
+	}
+	if manifest.DefaultModel != "deepseek-v4-flash" || manifest.ThinkingType != "disabled" || manifest.ResponseFormat != "json_object" {
+		return errors.New("DeepSeek runtime contract is invalid")
+	}
+	if manifest.ConfidenceThreshold != 0.8 || manifest.ReasonMaxRunes != 20 {
+		return errors.New("DeepSeek decision contract is invalid")
+	}
+	if manifest.SystemPrompt.File == "" || manifest.SystemPrompt.SHA256 == "" {
+		return errors.New("DeepSeek system prompt manifest is missing")
+	}
+	expectedCategories := []string{
+		"cyber_abuse", "cracking", "security_bypass", "account_abuse",
+		"sexual_deepfake", "doxxing", "violent_threat", "self_harm",
+		"weapons", "sexual_content",
+	}
+	if id == DeepSeekV4FlashAuditV2 {
+		if manifest.BaseAsset != DeepSeekV4FlashAuditV1 {
+			return errors.New("DeepSeek v2 base asset is invalid")
 		}
-		if manifest.DefaultModel != "deepseek-v4-flash" || manifest.ThinkingType != "disabled" || manifest.ResponseFormat != "json_object" {
-			return errors.New("DeepSeek runtime contract is invalid")
-		}
-		if manifest.ConfidenceThreshold != 0.8 || manifest.ReasonMaxRunes != 20 {
-			return errors.New("DeepSeek decision contract is invalid")
-		}
-		if manifest.SystemPrompt.File == "" || manifest.SystemPrompt.SHA256 == "" {
-			return errors.New("DeepSeek system prompt manifest is missing")
-		}
-		expectedCategories := []string{
-			"cyber_abuse", "cracking", "security_bypass", "account_abuse",
-			"sexual_deepfake", "doxxing", "violent_threat", "self_harm",
-			"weapons", "sexual_content",
-		}
-		if len(manifest.RiskCategories) != len(expectedCategories) {
-			return errors.New("DeepSeek risk category contract is invalid")
-		}
-		for i := range expectedCategories {
-			if manifest.RiskCategories[i] != expectedCategories[i] {
-				return errors.New("DeepSeek risk category contract is invalid")
-			}
-		}
-		return nil
-	default:
+		expectedCategories = append(expectedCategories,
+			"fraud_financial_crime", "controlled_substances", "human_exploitation",
+			"terrorism_extremism", "illegal_gambling", "forgery_counterfeit",
+			"corruption_tax_evasion", "hate_harassment", "restricted_security_content",
+		)
+	} else if id != DeepSeekV4FlashAuditV1 || manifest.BaseAsset != "" {
 		return errors.New("unsupported candidate manifest")
 	}
+	if len(manifest.RiskCategories) != len(expectedCategories) {
+		return errors.New("DeepSeek risk category contract is invalid")
+	}
+	for i := range expectedCategories {
+		if manifest.RiskCategories[i] != expectedCategories[i] {
+			return errors.New("DeepSeek risk category contract is invalid")
+		}
+	}
+	if manifest.BaseAsset == "" && (manifest.Layer1.File == "" || manifest.Layer2.File == "") {
+		return errors.New("DeepSeek candidate files are missing")
+	}
+	return nil
 }
 
 func loadText(id string, manifest TextFileManifest) (string, error) {

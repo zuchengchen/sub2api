@@ -20,7 +20,9 @@ type ContentModerationDeepSeekEvaluationInput struct {
 }
 
 type ContentModerationDeepSeekEvaluationResult struct {
+	Blocked       bool                             `json:"blocked"`
 	Flagged       bool                             `json:"flagged"`
+	Disposition   string                           `json:"disposition"`
 	Confidence    float64                          `json:"confidence"`
 	Category      string                           `json:"category"`
 	ReasonHash    string                           `json:"reason_hash,omitempty"`
@@ -92,8 +94,10 @@ func (e *ContentModerationDeepSeekEvaluator) Evaluate(
 		Evidence:    moderationEvidence{Text: text, Mode: "release_evaluation"},
 		KeywordTier: "release_evaluation",
 	})
+	disposition := result.normalizedDisposition()
 	evaluation := ContentModerationDeepSeekEvaluationResult{
-		Flagged: result.Blocked, Confidence: result.Confidence, Category: result.Category,
+		Blocked: result.Blocked, Flagged: disposition == ContentModerationReviewDispositionViolation,
+		Disposition: disposition, Confidence: result.Confidence, Category: result.Category,
 		Profile: result.Profile, PromptVersion: result.PromptVersion,
 		LatencyMS: int(time.Since(started).Milliseconds()),
 		Attempts:  append([]ContentModerationReviewAttempt(nil), result.ReviewAttempts...),

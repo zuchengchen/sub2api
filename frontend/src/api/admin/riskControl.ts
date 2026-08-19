@@ -69,7 +69,7 @@ export interface TestDeepSeekChannelResponse {
   health_valid: boolean
   latency_ms: number
   http_status?: number
-  verdict?: 'safe' | 'violation' | string
+  verdict?: 'safe' | 'restricted' | 'violation' | string
   category?: string
   confidence?: number
   error?: string
@@ -318,10 +318,11 @@ export type ContentModerationLogResult =
   | 'error'
   | 'cyber_policy'
   | 'content_blocked'
+  | 'restricted'
   | 'risky_shadow'
   | 'review_unavailable'
 
-export type ContentModerationLogView = 'cyber_policy' | 'content_blocked' | 'risky_shadow' | 'review_unavailable'
+export type ContentModerationLogView = 'cyber_policy' | 'content_blocked' | 'restricted' | 'risky_shadow' | 'review_unavailable'
 
 export interface ListContentModerationLogsParams {
   page?: number

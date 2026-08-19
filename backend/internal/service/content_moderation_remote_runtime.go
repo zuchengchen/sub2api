@@ -17,6 +17,40 @@ import (
 
 const contentModerationRemoteConsensusVotes = 2
 
+func normalizeContentModerationRemoteResult(result contentModerationSecondLayerResult, threshold float64) contentModerationSecondLayerResult {
+	disposition := result.normalizedDisposition()
+	if disposition == ContentModerationReviewDispositionViolation && result.Confidence < threshold {
+		// A configured threshold can be stricter than the prompt default. A
+		// below-threshold violation is safe. Restricted content remains blocked
+		// independently because it is an enforcement decision, not an abuse
+		// confidence threshold.
+		result.setDisposition(ContentModerationReviewDispositionAllow)
+		result.Category = "safe"
+		result.Reason = ""
+		return result
+	}
+	result.setDisposition(disposition)
+	return result
+}
+
+func contentModerationConsensusDisposition(primary, confirmation contentModerationSecondLayerResult) string {
+	first := primary.normalizedDisposition()
+	second := confirmation.normalizedDisposition()
+	if first == ContentModerationReviewDispositionViolation && second == ContentModerationReviewDispositionViolation {
+		return ContentModerationReviewDispositionViolation
+	}
+	if first == ContentModerationReviewDispositionRestricted && second == ContentModerationReviewDispositionRestricted {
+		return ContentModerationReviewDispositionRestricted
+	}
+	// Any disagreement involving a blocked verdict remains blocked, but is
+	// deliberately non-violating until an independent reviewer confirms both
+	// votes as violation.
+	if first != ContentModerationReviewDispositionAllow || second != ContentModerationReviewDispositionAllow {
+		return ContentModerationReviewDispositionRestricted
+	}
+	return ContentModerationReviewDispositionAllow
+}
+
 type contentModerationRemoteProviderGroup struct {
 	provider string
 	channels []ContentModerationDeepSeekChannel
@@ -120,7 +154,7 @@ func buildContentModerationRemotePayload(channel ContentModerationDeepSeekChanne
 		"instructions":      messages[0]["content"],
 		"input":             messages[1]["content"],
 		"stream":            false,
-		"max_output_tokens": 64,
+		"max_output_tokens": 96,
 		"reasoning":         map[string]string{"effort": "none"},
 		"text":              map[string]any{"format": map[string]string{"type": "json_object"}},
 	}, nil
@@ -275,7 +309,7 @@ func (s *ContentModerationService) callContentModerationRemoteChannel(
 		if err != nil {
 			attempt.Outcome = "error"
 			attempt.Error = "invalid_json"
-			return contentModerationSecondLayerResult{}, attempt, err
+			return contentModerationSecondLayerResult{}, attempt, fmt.Errorf("%w: %v", errContentModerationSecondLayerParse, err)
 		}
 		return contentModerationRemoteSuccess(result, attempt, channel, input)
 	}
@@ -284,7 +318,7 @@ func (s *ContentModerationService) callContentModerationRemoteChannel(
 	if err != nil {
 		attempt.Outcome = "error"
 		attempt.Error = "invalid_json"
-		return contentModerationSecondLayerResult{}, attempt, err
+		return contentModerationSecondLayerResult{}, attempt, fmt.Errorf("%w: %v", errContentModerationSecondLayerParse, err)
 	}
 	return contentModerationRemoteSuccess(result, attempt, channel, input)
 }
@@ -306,9 +340,12 @@ func contentModerationRemoteSuccess(
 	result.KeywordRuleID = input.KeywordRuleID
 	attempt.Outcome = "success"
 	attempt.Confidence = result.Confidence
-	if result.Blocked {
+	switch result.normalizedDisposition() {
+	case ContentModerationReviewDispositionViolation:
 		attempt.Verdict = "violation"
-	} else {
+	case ContentModerationReviewDispositionRestricted:
+		attempt.Verdict = "restricted"
+	default:
 		attempt.Verdict = "safe"
 	}
 	return result, attempt, nil
@@ -427,14 +464,17 @@ func (s *ContentModerationService) scanContentModerationRemotePool(
 			}
 			continue
 		}
-		result.Blocked = result.Confidence >= threshold
+		result = normalizeContentModerationRemoteResult(result, threshold)
 		if len(attempts) > 0 {
 			for index := range attempts {
 				if attempts[index].Outcome == "success" {
 					attempts[index].Confidence = result.Confidence
-					if result.Blocked {
+					switch result.normalizedDisposition() {
+					case ContentModerationReviewDispositionViolation:
 						attempts[index].Verdict = "violation"
-					} else {
+					case ContentModerationReviewDispositionRestricted:
+						attempts[index].Verdict = "restricted"
+					default:
 						attempts[index].Verdict = "safe"
 					}
 				}
@@ -445,10 +485,13 @@ func (s *ContentModerationService) scanContentModerationRemotePool(
 			allAttempts = append(allAttempts, attempts...)
 			result.ReviewAttempts = allAttempts
 			result.RemoteVotes = 1
-			if !result.Blocked || requiredVotes <= 1 {
-				if result.Blocked {
+			if requiredVotes <= 1 {
+				switch result.normalizedDisposition() {
+				case ContentModerationReviewDispositionViolation:
 					result.ConsensusStatus = "single_violation"
-				} else {
+				case ContentModerationReviewDispositionRestricted:
+					result.ConsensusStatus = "single_restricted"
+				default:
 					result.ConsensusStatus = "primary_safe"
 				}
 				s.deepSeekSelectedCount.Add(1)
@@ -467,18 +510,38 @@ func (s *ContentModerationService) scanContentModerationRemotePool(
 		allAttempts = append(allAttempts, attempts...)
 		primary.ReviewAttempts = allAttempts
 		primary.RemoteVotes = 2
-		if result.Blocked {
-			primary.Blocked = true
-			primary.ConsensusStatus = "confirmed_violation"
-			primary.Profile = "remote_consensus:" + primaryProvider + "+" + group.provider
-			if result.Confidence < primary.Confidence {
+		primaryDisposition := primary.normalizedDisposition()
+		confirmationDisposition := result.normalizedDisposition()
+		consensus := contentModerationConsensusDisposition(*primary, result)
+		if consensus == ContentModerationReviewDispositionRestricted {
+			switch {
+			case primaryDisposition == ContentModerationReviewDispositionAllow &&
+				confirmationDisposition != ContentModerationReviewDispositionAllow:
+				primary.Confidence = result.Confidence
+				primary.Reason = result.Reason
+				primary.Label = result.Label
+			case confirmationDisposition != ContentModerationReviewDispositionAllow && result.Confidence < primary.Confidence:
 				primary.Confidence = result.Confidence
 			}
-		} else {
-			primary.Blocked = false
-			primary.ReviewerMismatch = true
-			primary.ConsensusStatus = "disagreement"
+		} else if result.Confidence < primary.Confidence {
+			primary.Confidence = result.Confidence
 		}
+		primary.setDisposition(consensus)
+		if consensus == ContentModerationReviewDispositionViolation {
+			primary.ConsensusStatus = "confirmed_violation"
+		} else if primaryDisposition == ContentModerationReviewDispositionRestricted &&
+			confirmationDisposition == ContentModerationReviewDispositionRestricted {
+			primary.ConsensusStatus = "confirmed_restricted"
+		} else if consensus == ContentModerationReviewDispositionRestricted {
+			primary.ReviewerMismatch = true
+			primary.ConsensusStatus = "disagreement_restricted"
+		} else {
+			primary.ConsensusStatus = "confirmed_safe"
+		}
+		if consensus == ContentModerationReviewDispositionRestricted {
+			primary.Category = ContentModerationRestrictedCategory
+		}
+		primary.Profile = "remote_consensus:" + primaryProvider + "+" + group.provider
 		s.deepSeekSelectedCount.Add(1)
 		if failoverUsed {
 			s.deepSeekFailoverCount.Add(1)
@@ -486,7 +549,18 @@ func (s *ContentModerationService) scanContentModerationRemotePool(
 		return *primary, true, nil
 	}
 	if primary != nil {
-		primary.Blocked = false
+		if primary.normalizedDisposition() == ContentModerationReviewDispositionAllow {
+			primary.ConsensusStatus = "primary_safe"
+			primary.ReviewAttempts = allAttempts
+			primary.RemoteVotes = 1
+			s.deepSeekSelectedCount.Add(1)
+			if failoverUsed {
+				s.deepSeekFailoverCount.Add(1)
+			}
+			return *primary, true, nil
+		}
+		primary.setDisposition(ContentModerationReviewDispositionAllow)
+		primary.Category = "safe"
 		primary.ConsensusStatus = "consensus_unavailable"
 		primary.ReviewAttempts = allAttempts
 		primary.RemoteVotes = 1

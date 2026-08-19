@@ -592,8 +592,8 @@ func TestContentModerationEvidenceCacheHashTracksPolicyRulesContextAndModel(t *t
 	}}, 4096, cfg)
 	require.NotEqual(t, bundle.CacheHash, changedTextBundle.CacheHash)
 
-	require.Equal(t, "keyword-windows-v6", ContentModerationEvidencePolicyVersion)
-	require.Equal(t, "sub2api/content-moderation/evidence-window/v6\x00", contentModerationEvidenceHashDomain)
+	require.Equal(t, "keyword-windows-v7", ContentModerationEvidencePolicyVersion)
+	require.Equal(t, "sub2api/content-moderation/evidence-window/v7\x00", contentModerationEvidenceHashDomain)
 	require.Equal(t, ContentModerationEvidencePolicyVersion, defaultContentModerationConfig().EvidencePolicyVersion)
 }
 
@@ -605,6 +605,7 @@ func TestContentModerationEvidencePolicyMigrationNormalizesKnownVersions(t *test
 		contentModerationEarlierEvidencePolicyVersion,
 		contentModerationPreviousEvidencePolicyVersion,
 		contentModerationPriorEvidencePolicyVersion,
+		contentModerationLastEvidencePolicyVersion,
 	} {
 		cfg := defaultContentModerationConfig()
 		cfg.EvidencePolicyVersion = version
@@ -640,7 +641,7 @@ func TestContentModerationBuiltInCandidatePolicyCannotBeEmpty(t *testing.T) {
 	cfg.CandidateKeywords = nil
 	keywords, err := effectiveContentModerationSecondLayerKeywords(cfg)
 	require.NoError(t, err)
-	require.Len(t, keywords, 306)
+	require.Len(t, keywords, 457)
 	require.NotNil(t, newContentModerationPrefilterMatcher(keywords))
 }
 

@@ -56,7 +56,15 @@ func contentModerationRemotePoolWriteResult(t *testing.T, w http.ResponseWriter,
 
 func mustMarshalContentModerationRemoteDecision(t *testing.T, confidence float64, category, reason string) string {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"confidence": confidence, "category": category, "reason": reason})
+	disposition := ContentModerationReviewDispositionViolation
+	if category == "safe" {
+		disposition = ContentModerationReviewDispositionAllow
+	} else if category == ContentModerationRestrictedCategory {
+		disposition = ContentModerationReviewDispositionRestricted
+	}
+	raw, err := json.Marshal(map[string]any{
+		"disposition": disposition, "confidence": confidence, "category": category, "reason": reason,
+	})
 	require.NoError(t, err)
 	return string(raw)
 }
@@ -105,7 +113,38 @@ func TestContentModerationRemotePoolRequiresTwoViolationVotes(t *testing.T) {
 	require.Equal(t, int32(1), qwenHits.Load())
 }
 
-func TestContentModerationRemotePoolDisagreementAllows(t *testing.T) {
+func TestContentModerationRemotePoolConfirmsRestrictedWithoutViolation(t *testing.T) {
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResult(t, w, 0.95, ContentModerationRestrictedCategory, "restricted")
+	}))
+	defer deepSeek.Close()
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResponsesResult(t, w, 0.92, ContentModerationRestrictedCategory, "restricted")
+	}))
+	defer qwen.Close()
+
+	cfg := contentModerationRemotePoolTestConfig(
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0),
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1),
+	)
+	cfg.DeepSeekThreshold = 0.99
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationRemotePoolTestInput(t),
+	)
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
+	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
+	require.InDelta(t, 0.92, result.Confidence, 0.0001)
+	require.Equal(t, "confirmed_restricted", result.ConsensusStatus)
+	require.False(t, result.ReviewerMismatch)
+	require.Len(t, result.ReviewAttempts, 2)
+	require.Equal(t, "restricted", result.ReviewAttempts[0].Verdict)
+	require.Equal(t, "restricted", result.ReviewAttempts[1].Verdict)
+}
+
+func TestContentModerationRemotePoolDisagreementBlocksWithoutViolation(t *testing.T) {
 	var qwenHits atomic.Int32
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		contentModerationRemotePoolWriteResult(t, w, 0.92, "weapons", "risk")
@@ -124,11 +163,41 @@ func TestContentModerationRemotePoolDisagreementAllows(t *testing.T) {
 	result, attempted, err := svc.scanContentModerationDeepSeek(context.Background(), cfg, contentModerationRemotePoolTestInput(t))
 	require.NoError(t, err)
 	require.True(t, attempted)
-	require.False(t, result.Blocked)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
+	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
+	require.InDelta(t, 0.92, result.Confidence, 0.0001)
 	require.True(t, result.ReviewerMismatch)
-	require.Equal(t, "disagreement", result.ConsensusStatus)
+	require.Equal(t, "disagreement_restricted", result.ConsensusStatus)
 	require.Equal(t, 2, result.RemoteVotes)
 	require.Equal(t, int32(1), qwenHits.Load())
+}
+
+func TestContentModerationRemotePoolSafeThenRestrictedStillBlocksWithoutViolation(t *testing.T) {
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResult(t, w, 0.05, "safe", "")
+	}))
+	defer deepSeek.Close()
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResponsesResult(t, w, 0.94, ContentModerationRestrictedCategory, "restricted")
+	}))
+	defer qwen.Close()
+
+	cfg := contentModerationRemotePoolTestConfig(
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0),
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1),
+	)
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationRemotePoolTestInput(t),
+	)
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
+	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
+	require.InDelta(t, 0.94, result.Confidence, 0.0001)
+	require.True(t, result.ReviewerMismatch)
+	require.Equal(t, "disagreement_restricted", result.ConsensusStatus)
 }
 
 func TestContentModerationRemotePoolFailsOverWhenFirstProviderUnavailable(t *testing.T) {
@@ -222,6 +291,7 @@ func TestContentModerationRemotePayloadDisablesReasoningForResponsesProviders(t 
 	require.NoError(t, err)
 	require.Equal(t, "mimo-v2.5", payload["model"])
 	require.Equal(t, false, payload["stream"])
+	require.Equal(t, 96, payload["max_output_tokens"])
 	require.Equal(t, map[string]string{"effort": "none"}, payload["reasoning"])
 	require.NotContains(t, payload, "thinking")
 	require.NotContains(t, payload, "reasoning_effort")

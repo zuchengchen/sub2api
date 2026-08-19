@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	contentmoderationassets "github.com/Wei-Shaw/sub2api/resources/content-moderation"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +30,7 @@ func TestContentModerationDeepSeekRuntimePayloadUsesNonThinkingJSONContract(t *t
 	require.Equal(t, map[string]string{"type": "disabled"}, payload["thinking"])
 	require.Equal(t, map[string]string{"type": "json_object"}, payload["response_format"])
 	require.Equal(t, 0, payload["temperature"])
-	require.Equal(t, 64, payload["max_tokens"])
+	require.Equal(t, 96, payload["max_tokens"])
 	require.Equal(t, false, payload["stream"])
 	require.NotContains(t, payload, "reasoning_effort")
 
@@ -74,57 +75,69 @@ func TestContentModerationDeepSeekRuntimeStrictResponseParsing(t *testing.T) {
 		wantError    string
 	}{
 		{
-			name: "point seventy nine is safe", content: `{"confidence":0.79,"category":"safe","reason":""}`,
+			name: "point seventy nine is safe", content: `{"disposition":"allow","confidence":0.79,"category":"safe","reason":""}`,
 			wantCategory: "safe",
 		},
 		{
-			name: "point eighty is risky", content: `{"confidence":0.80,"category":"cyber_abuse","reason":"未授权攻击"}`,
+			name: "point eighty is risky", content: `{"disposition":"violation","confidence":0.80,"category":"cyber_abuse","reason":"未授权攻击"}`,
 			wantBlocked: true, wantCategory: "cyber_abuse",
 		},
 		{
-			name: "overlong reason is bounded", content: `{"confidence":0.80,"category":"cyber_abuse","reason":"一二三四五六七八九十一二三四五六七八九十超"}`,
+			name: "overlong reason is bounded", content: `{"disposition":"violation","confidence":0.80,"category":"cyber_abuse","reason":"一二三四五六七八九十一二三四五六七八九十超"}`,
 			wantBlocked: true, wantCategory: "cyber_abuse",
 			wantReason: "一二三四五六七八九十一二三四五六七八九十",
 		},
 		{
-			name: "missing confidence", content: `{"category":"safe","reason":""}`,
+			name: "missing confidence", content: `{"disposition":"allow","category":"safe","reason":""}`,
 			wantError: "missing required fields",
 		},
 		{
-			name: "missing category", content: `{"confidence":0.10,"reason":""}`,
+			name: "missing category", content: `{"disposition":"allow","confidence":0.10,"reason":""}`,
 			wantError: "missing required fields",
 		},
 		{
-			name: "missing reason", content: `{"confidence":0.10,"category":"safe"}`,
+			name: "missing reason", content: `{"disposition":"allow","confidence":0.10,"category":"safe"}`,
 			wantError: "missing required fields",
 		},
 		{
-			name: "extra field", content: `{"confidence":0.10,"category":"safe","reason":"","flagged":false}`,
+			name: "extra field", content: `{"disposition":"allow","confidence":0.10,"category":"safe","reason":"","flagged":false}`,
 			wantError: "unknown field",
 		},
 		{
-			name: "truncated decision JSON", content: `{"confidence":0.80,"category":"cyber_abuse"`,
+			name: "truncated decision JSON", content: `{"disposition":"violation","confidence":0.80,"category":"cyber_abuse"`,
 			wantError: "invalid DeepSeek decision JSON",
 		},
 		{
-			name: "provider reports truncation", content: `{"confidence":0.80,"category":"cyber_abuse","reason":"未授权攻击"}`,
+			name: "provider reports truncation", content: `{"disposition":"violation","confidence":0.80,"category":"cyber_abuse","reason":"未授权攻击"}`,
 			finishReason: "length", wantError: "truncated",
 		},
 		{
-			name: "reasoning content", content: `{"confidence":0.10,"category":"safe","reason":""}`,
+			name: "reasoning content", content: `{"disposition":"allow","confidence":0.10,"category":"safe","reason":""}`,
 			hasReasoning: true, reasoning: "hidden chain", wantError: "reasoning_content",
 		},
 		{
-			name: "empty reasoning content is accepted", content: `{"confidence":0.10,"category":"safe","reason":""}`,
+			name: "empty reasoning content is accepted", content: `{"disposition":"allow","confidence":0.10,"category":"safe","reason":""}`,
 			hasReasoning: true, reasoning: "", wantCategory: "safe",
 		},
 		{
-			name: "risk category below threshold", content: `{"confidence":0.79,"category":"weapons","reason":""}`,
-			wantError: "safe decision has a risk category",
+			name: "risk category below threshold", content: `{"disposition":"violation","confidence":0.79,"category":"weapons","reason":""}`,
+			wantError: "violation decision has an invalid category or confidence",
 		},
 		{
-			name: "safe category at threshold", content: `{"confidence":0.80,"category":"safe","reason":""}`,
-			wantError: "risk decision has a safe category",
+			name: "safe category at threshold", content: `{"disposition":"allow","confidence":0.80,"category":"safe","reason":""}`,
+			wantError: "allow decision has an invalid category or confidence",
+		},
+		{
+			name: "restricted security test", content: `{"disposition":"restricted","confidence":0.95,"category":"restricted_security_content","reason":"含可操作测试载荷"}`,
+			wantBlocked: true, wantCategory: ContentModerationRestrictedCategory,
+		},
+		{
+			name: "unknown expanded category", content: `{"disposition":"violation","confidence":0.95,"category":"other_crime","reason":"未知类别"}`,
+			wantError: "category is unknown",
+		},
+		{
+			name: "missing disposition", content: `{"confidence":0.10,"category":"safe","reason":""}`,
+			wantError: "missing required fields",
 		},
 	}
 
@@ -147,12 +160,48 @@ func TestContentModerationDeepSeekRuntimeStrictResponseParsing(t *testing.T) {
 	}
 }
 
+func TestContentModerationDeepSeekRuntimeAcceptsExpandedViolationCategories(t *testing.T) {
+	for _, category := range []string{
+		"fraud_financial_crime", "controlled_substances", "human_exploitation",
+		"terrorism_extremism", "illegal_gambling", "forgery_counterfeit",
+		"corruption_tax_evasion", "hate_harassment",
+	} {
+		t.Run(category, func(t *testing.T) {
+			decision, err := json.Marshal(map[string]any{
+				"disposition": ContentModerationReviewDispositionViolation,
+				"confidence":  0.91,
+				"category":    category,
+				"reason":      "明确现实滥用",
+			})
+			require.NoError(t, err)
+
+			body := contentModerationDeepSeekRuntimeEnvelope(t, string(decision), "stop", false, nil)
+			result, err := parseContentModerationDeepSeekResponse(body)
+			require.NoError(t, err)
+			require.True(t, result.Blocked)
+			require.Equal(t, ContentModerationReviewDispositionViolation, result.Disposition)
+			require.Equal(t, category, result.Category)
+		})
+	}
+}
+
+func TestContentModerationDeepSeekRuntimeCategoryWhitelistMatchesV2Manifest(t *testing.T) {
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
+	require.NoError(t, err)
+
+	expected := map[string]struct{}{"safe": {}}
+	for _, category := range asset.Manifest.RiskCategories {
+		expected[category] = struct{}{}
+	}
+	require.Equal(t, expected, contentModerationDeepSeekCategories)
+}
+
 func TestContentModerationDeepSeekRuntimeCompatibilityPathAcceptsOverlongReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		contentModerationDeepSeekRuntimeWriteEnvelope(
 			t,
 			w,
-			`{"confidence":0.91,"category":"cyber_abuse","reason":"一二三四五六七八九十一二三四五六七八九十超"}`,
+			`{"disposition":"violation","confidence":0.91,"category":"cyber_abuse","reason":"一二三四五六七八九十一二三四五六七八九十超"}`,
 			"stop",
 		)
 	}))
@@ -214,7 +263,7 @@ func TestContentModerationDeepSeekRuntimeFailsOverSequentially(t *testing.T) {
 		mu.Lock()
 		sequence = append(sequence, "backup")
 		mu.Unlock()
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer backup.Close()
 
@@ -292,7 +341,7 @@ func TestContentModerationDeepSeekRuntimeStaleAuthFailureCannotDisableRotatedKey
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer server.Close()
 
@@ -438,7 +487,7 @@ func TestContentModerationDeepSeekRuntimeSlowResponseBodyRetriesOnceAndRecordsFu
 			<-r.Context().Done()
 			return
 		}
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer server.Close()
 
@@ -474,7 +523,7 @@ func TestContentModerationDeepSeekRuntimeRequestTimeoutRetriesOnce(t *testing.T)
 			w.WriteHeader(http.StatusRequestTimeout)
 			return
 		}
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer server.Close()
 
@@ -611,7 +660,7 @@ func TestContentModerationDeepSeekRuntimeHalfOpenAllowsSingleConcurrentProbe(t *
 		hits.Add(1)
 		close(started)
 		<-release
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer server.Close()
 
@@ -667,7 +716,7 @@ func TestContentModerationDeepSeekRuntimeTotalBudgetStopsFailover(t *testing.T) 
 	}()
 	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		backupHits.Add(1)
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer backup.Close()
 
@@ -736,7 +785,7 @@ func TestContentModerationDeepSeekRuntimeEnforceReadinessDoesNotProbeOnRequestCo
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		postCalls.Add(1)
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer server.Close()
 
@@ -759,7 +808,7 @@ func TestContentModerationDeepSeekRuntimeBreakerBlocksReadinessUntilHalfOpenRevi
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer server.Close()
 
@@ -956,7 +1005,7 @@ func TestContentModerationDeepSeekRuntimeColdStartDoesNotProbeBackup(t *testing.
 	var backupPosts atomic.Int32
 	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		backupPosts.Add(1)
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer backup.Close()
 
@@ -1046,7 +1095,7 @@ func TestContentModerationDeepSeekRuntimeTripsAfterThreeFailuresAndRecoversHalfO
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer server.Close()
 
@@ -1190,6 +1239,22 @@ func contentModerationDeepSeekRuntimeEnvelope(
 func contentModerationDeepSeekRuntimeWriteEnvelope(t *testing.T, w http.ResponseWriter, content, finishReason string) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
+	var decision map[string]any
+	if json.Unmarshal([]byte(content), &decision) == nil {
+		if _, exists := decision["disposition"]; !exists {
+			category, _ := decision["category"].(string)
+			disposition := ContentModerationReviewDispositionViolation
+			if category == "safe" {
+				disposition = ContentModerationReviewDispositionAllow
+			} else if category == ContentModerationRestrictedCategory {
+				disposition = ContentModerationReviewDispositionRestricted
+			}
+			decision["disposition"] = disposition
+			if raw, err := json.Marshal(decision); err == nil {
+				content = string(raw)
+			}
+		}
+	}
 	body := contentModerationDeepSeekRuntimeEnvelope(t, content, finishReason, false, nil)
 	if _, err := w.Write(body); err != nil {
 		t.Errorf("write DeepSeek test response: %v", err)

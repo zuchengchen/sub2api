@@ -80,7 +80,7 @@ func TestContentModerationShadowIdenticalCandidatesShareReviewAndKeepEveryAudit(
 		modelCalls.Add(1)
 		<-release
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
 		)
 	}))
 	defer server.Close()

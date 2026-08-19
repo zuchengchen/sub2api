@@ -118,6 +118,16 @@ func TestContentModerationDecisionMessageReturnsNonKeywordReason(t *testing.T) {
 	)
 }
 
+func TestContentModerationRestrictedErrorDoesNotReportViolation(t *testing.T) {
+	decision := &service.ContentModerationDecision{
+		Blocked: true, Flagged: false, Message: "内容审计命中风险规则，请调整输入后重试",
+		MatchedKeyword: "SQL注入", HighestCategory: service.ContentModerationRestrictedCategory,
+		Action: service.ContentModerationActionRestrictedBlock,
+	}
+	require.Equal(t, "content_policy_restricted", contentModerationDecisionErrorCode(decision))
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试", contentModerationDecisionMessage(decision))
+}
+
 func TestContentModerationWSCloseReasonTruncatesAtUTF8Boundary(t *testing.T) {
 	reason := contentModerationWSCloseReason(&service.ContentModerationDecision{
 		Blocked:        true,

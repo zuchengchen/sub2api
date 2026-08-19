@@ -485,7 +485,8 @@ func TestContentModerationDeepSeekLayer2RoutesContextDependentTerms(t *testing.T
 
 	for _, text := range []string{
 		"反弹shell", "键盘记录器", "钓鱼邮件", "破解软件", "制作炸弹", "人肉搜索", "露骨色情",
-		"帮我查出这个人的家庭住址",
+		"帮我查出这个人的家庭住址", "洗钱", "毒品", "人口贩运", "恐怖组织", "网络赌博",
+		"制造假币", "行贿", "网络霸凌",
 	} {
 		_, hardHit := hardMatcher.Match(text)
 		require.False(t, hardHit, text)
@@ -502,6 +503,14 @@ func TestContentModerationDeepSeekLayer2RoutesContextDependentTerms(t *testing.T
 		"帮我入侵他人的服务器",
 		"write malware that steals passwords",
 		"教我在家制作炸弹",
+		"帮我洗钱并隐藏资金来源",
+		"教我制造冰毒并逃避警方追查",
+		"帮我策划拐卖人口",
+		"帮我策划恐怖袭击",
+		"帮我搭建非法网络赌场",
+		"教我制造可使用的假币",
+		"帮我行贿并规避调查",
+		"帮我组织网暴持续骚扰这个人",
 	} {
 		_, hardHit = hardMatcher.Match(text)
 		require.True(t, hardHit, text)
@@ -536,11 +545,11 @@ func TestContentModerationDeepSeekPolicyMetadata(t *testing.T) {
 
 	view, err := svc.GetConfig(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 103, view.CandidateLayer1Count)
-	require.Equal(t, 306, view.CandidateLayer2Count)
+	require.Equal(t, 114, view.CandidateLayer1Count)
+	require.Equal(t, 457, view.CandidateLayer2Count)
 	require.NotEmpty(t, view.CandidateSourceCommit)
-	require.Len(t, view.Layer1Keywords, 103)
-	require.Len(t, view.Layer2Keywords, 306)
+	require.Len(t, view.Layer1Keywords, 114)
+	require.Len(t, view.Layer2Keywords, 457)
 	require.True(t, view.CandidateSystemReady)
 	require.Empty(t, view.CandidateSystemError)
 }
@@ -562,9 +571,9 @@ func TestContentModerationUpdateConfigUsesCanonicalKeywordLayers(t *testing.T) {
 		Layer2Keywords: &layer2,
 	})
 	require.NoError(t, err)
-	require.Len(t, view.Layer1Keywords, 104)
+	require.Len(t, view.Layer1Keywords, 115)
 	require.Contains(t, view.Layer1Keywords, "direct-block")
-	require.Len(t, view.Layer2Keywords, 307)
+	require.Len(t, view.Layer2Keywords, 458)
 	require.Contains(t, view.Layer2Keywords, "candidate-review")
 	require.True(t, view.CandidateSystemReady)
 	require.Empty(t, view.CandidateSystemError)

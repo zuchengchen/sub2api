@@ -141,8 +141,8 @@ func (r *cyberDispositionTestRepo) DisableAPIKeyIfActive(context.Context, int64)
 	return r.keyCredential, true, nil
 }
 
-func gptCyberScope() *ContentModerationScopeSnapshot {
-	scope := NewContentModerationScopeSnapshot(nil, "  gPt-production")
+func cyberPolicyScope() *ContentModerationScopeSnapshot {
+	scope := NewContentModerationScopeSnapshot(nil, "production")
 	return &scope
 }
 
@@ -170,7 +170,7 @@ func TestRecordCyberPolicyEvent_RiskControlOffStillForcesUserDisposition(t *test
 		UpstreamMessage: "flagged",
 		UpstreamBody:    `{"error":{"code":"cyber_policy"}}`,
 		UpstreamStatus:  400,
-		Scope:           gptCyberScope(),
+		Scope:           cyberPolicyScope(),
 		UserRole:        RoleUser,
 	})
 
@@ -236,7 +236,7 @@ func TestRecordCyberPolicyEvent_UserEmailWhitelistStillForcesDisposition(t *test
 		UpstreamMessage: "flagged",
 		UpstreamBody:    `{"error":{"code":"cyber_policy"}}`,
 		UpstreamStatus:  400,
-		Scope:           gptCyberScope(),
+		Scope:           cyberPolicyScope(),
 		UserRole:        RoleUser,
 	})
 
@@ -308,7 +308,7 @@ func TestRecordCyberPolicyEvent_WritesLogAndDisablesUserOnce(t *testing.T) {
 	input := CyberPolicyRecordInput{
 		UserID: 1, UserEmail: "u@x.com", Model: "gpt-5", Endpoint: "/v1/responses",
 		UpstreamMessage: "flagged", UpstreamBody: `{"error":{"code":"cyber_policy"}}`,
-		UpstreamStatus: 400, Scope: gptCyberScope(), UserRole: RoleUser,
+		UpstreamStatus: 400, Scope: cyberPolicyScope(), UserRole: RoleUser,
 	}
 	svc.RecordCyberPolicyEvent(context.Background(), input)
 	svc.RecordCyberPolicyEvent(context.Background(), input)
@@ -362,7 +362,7 @@ func TestRecordCyberPolicyEvent_AdminDisablesOnlyTriggeringAPIKey(t *testing.T) 
 		repo, nil, nil, nil, nil, invalidator, nil,
 	)
 	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
-		UserID: 7, APIKeyID: 42, UserRole: RoleAdmin, Scope: gptCyberScope(),
+		UserID: 7, APIKeyID: 42, UserRole: RoleAdmin, Scope: cyberPolicyScope(),
 		Model: "gpt-5", Endpoint: "/v1/responses", UpstreamMessage: "blocked",
 	})
 
@@ -459,7 +459,7 @@ func TestRecordCyberPolicyEvent_DisablesBeforeLogAndEmail(t *testing.T) {
 		UserEmail:       "u@example.com",
 		Model:           "gpt-5",
 		UpstreamMessage: "blocked",
-		Scope:           gptCyberScope(),
+		Scope:           cyberPolicyScope(),
 		UserRole:        RoleUser,
 	})
 
@@ -493,7 +493,7 @@ func TestRecordCyberPolicyEvent_DisablesBeforeArchive(t *testing.T) {
 
 	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
 		RequestID: "req-archive-order", UserID: 7, UserRole: RoleUser,
-		Model: "gpt-5", Scope: gptCyberScope(),
+		Model: "gpt-5", Scope: cyberPolicyScope(),
 		RawRequest: ContentModerationRawRequest{Body: []byte(`{"input":"blocked"}`)},
 	})
 
@@ -561,7 +561,7 @@ func TestRecordCyberPolicyEvent_AutoBanAndCountConfigDoNotControlCyberDispositio
 		Endpoint:        "/v1/responses",
 		UpstreamMessage: "flagged",
 		UpstreamStatus:  400,
-		Scope:           gptCyberScope(),
+		Scope:           cyberPolicyScope(),
 		UserRole:        RoleUser,
 	})
 

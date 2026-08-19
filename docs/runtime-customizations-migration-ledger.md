@@ -27,7 +27,7 @@ copied here.
 | `backend/internal/securityaudit/prompt_worker.go` | excluded | Independent worker lifecycle is removed. |
 | `backend/internal/service/account.go` | adapted | Preserve account metadata needed by the Anthropic cache-control rewrite. |
 | `backend/internal/service/billing_service.go` | already equivalent | GPT-5.6 Luna already has the exact 20% pricing in the target baseline. |
-| `backend/internal/service/content_moderation.go` | adapted | Single source of truth for GPT-scoped two-layer moderation, cache, archive, and disposition. |
+| `backend/internal/service/content_moderation.go` | adapted | Single source of truth for configuration-scoped two-layer moderation, cache, archive, and disposition. |
 | `backend/internal/service/content_moderation_cyber_test.go` | adapted | Extend unified cyber-policy behavior and administrator handling. |
 | `backend/internal/service/gateway_claude_oauth_body.go` | adapted | Preserve account/client metadata during cache-control rewriting. |
 | `backend/internal/service/gateway_forward.go` | adapted | Attach complete request snapshots to unified moderation. |
@@ -57,7 +57,7 @@ copied here.
 
 | File | Disposition | Reason |
 | --- | --- | --- |
-| `backend/internal/securityaudit/prompt_claude_scope_test.go` | excluded | The old `all_groups` Prompt Audit contract is intentionally removed; GPT-prefix scope and non-GPT bypass are covered by unified moderation scope tests and `TestRuntimeCustomizationsAcceptance`. |
+| `backend/internal/securityaudit/prompt_claude_scope_test.go` | excluded | Group/model eligibility is covered by unified moderation scope tests and `TestRuntimeCustomizationsAcceptance`. |
 | `backend/internal/securityaudit/prompt_first_chunk_test.go` | excluded | “First chunk only” conflicts with the approved all-client-controlled-fragment policy; unified extraction tests cover every supported role and reference. |
 | `backend/internal/securityaudit/prompt_hard_block_test.go` | adapted | Immediate keyword blocking, no-model behavior, persistence, and history/role extraction are covered by unified Content Moderation tests. |
 | `backend/internal/securityaudit/prompt_keyword_only_test.go` | adapted | Keyword-only, API-only, and second-layer failure-to-allow behavior are covered by unified configuration and acceptance tests. |

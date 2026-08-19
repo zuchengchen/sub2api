@@ -212,8 +212,8 @@ the whole database.
 ## Rehearsal evidence
 
 Before production authorization, repeat this runbook against isolated
-PostgreSQL/Redis and a stub upstream. Verify GPT, whitespace/mixed-case GPT,
-non-GPT, first-layer hit, second-layer block/failure, upstream cyber, ordinary
+PostgreSQL/Redis and a stub upstream. Verify configured all-group and
+selected-group scope, first-layer hit, second-layer block/failure, upstream cyber, ordinary
 user/admin-Key disposition, HTTP/SSE/WS capture, preview truncation, download,
 delete audit, immediate connection termination, maintenance headers, final
 health gates, rollback restore, and old binary compatibility. Missing, skipped,
@@ -234,6 +234,6 @@ window, forced HTTP/SSE/WebSocket termination, all health gates, restored old
 tables/configuration, preserved unified archive columns/rows, and a healthy
 old binary after rollback. The migration transaction failure path is injected
 and verified separately by `TestUnifiedRiskMigrationAcceptance`; functional
-GPT scope, two-layer stub behavior, cyber disposition, raw HTTP/SSE/WebSocket
+configured group/model scope, two-layer stub behavior, cyber disposition, raw HTTP/SSE/WebSocket
 archives, sensitive-surface isolation, preview/download/delete, and the body
 budget are verified by `TestRuntimeCustomizationsAcceptance`.
