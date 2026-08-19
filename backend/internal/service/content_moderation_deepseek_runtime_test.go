@@ -1244,9 +1244,10 @@ func contentModerationDeepSeekRuntimeWriteEnvelope(t *testing.T, w http.Response
 		if _, exists := decision["disposition"]; !exists {
 			category, _ := decision["category"].(string)
 			disposition := ContentModerationReviewDispositionViolation
-			if category == "safe" {
+			switch category {
+			case "safe":
 				disposition = ContentModerationReviewDispositionAllow
-			} else if category == ContentModerationRestrictedCategory {
+			case ContentModerationRestrictedCategory:
 				disposition = ContentModerationReviewDispositionRestricted
 			}
 			decision["disposition"] = disposition

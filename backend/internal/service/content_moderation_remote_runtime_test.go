@@ -57,9 +57,10 @@ func contentModerationRemotePoolWriteResult(t *testing.T, w http.ResponseWriter,
 func mustMarshalContentModerationRemoteDecision(t *testing.T, confidence float64, category, reason string) string {
 	t.Helper()
 	disposition := ContentModerationReviewDispositionViolation
-	if category == "safe" {
+	switch category {
+	case "safe":
 		disposition = ContentModerationReviewDispositionAllow
-	} else if category == ContentModerationRestrictedCategory {
+	case ContentModerationRestrictedCategory:
 		disposition = ContentModerationReviewDispositionRestricted
 	}
 	raw, err := json.Marshal(map[string]any{
