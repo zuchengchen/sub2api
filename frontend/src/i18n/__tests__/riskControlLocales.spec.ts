@@ -25,6 +25,17 @@ describe('risk control locale copy', () => {
     expect(en.admin.riskControl.channelKeyWillReplace).toContain('never echoed')
   })
 
+  it('separates the paid API availability test from the automatic heartbeat', () => {
+    expect(zh.admin.riskControl.testAPIAvailability).toContain('测试 API')
+    expect(en.admin.riskControl.testAPIAvailability).toContain('Test API')
+    expect(zh.admin.riskControl.heartbeatLabel).toContain('后台心跳')
+    expect(en.admin.riskControl.heartbeatLabel).toContain('Background heartbeat')
+    expect(zh.admin.riskControl.testChannel).not.toContain('Ping')
+    expect(en.admin.riskControl.testChannel).not.toContain('Ping')
+    expect(zh.admin.riskControl.enforceGateBlocked).toContain('等待启动首次测试或点击测试 API')
+    expect(en.admin.riskControl.enforceGateBlocked).toContain('startup test')
+  })
+
   it('covers every expanded risk category in both locales', () => {
     const expected = ['cyber', 'accountAbuse', 'deepfakeDoxThreat', 'selfHarm', 'weapons', 'sexualContent']
     expect(Object.keys(zh.admin.riskControl.policyCategories)).toEqual(expected)

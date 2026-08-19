@@ -10,7 +10,7 @@ vi.mock('../client', () => ({
   apiClient: { get, put, post, delete: vi.fn() },
 }))
 
-import { getConfig, testDeepSeekChannel, updateConfig } from '@/api/admin/riskControl'
+import { getConfig, testAPIAvailability, updateConfig } from '@/api/admin/riskControl'
 
 describe('admin risk-control DeepSeek API', () => {
   beforeEach(() => {
@@ -54,19 +54,25 @@ describe('admin risk-control DeepSeek API', () => {
     expect(payload).not.toHaveProperty('api_keys')
   })
 
-  it('runs the saved channel connectivity test with an empty request body', async () => {
+  it('runs the saved channel API availability test with an empty request body', async () => {
     post.mockResolvedValue({
       data: {
         channel_id: 'official/channel',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        test_type: 'api_usability',
         reachable: true,
         health_valid: true,
-        latency_ms: 18,
-        http_status: 404,
+        latency_ms: 218,
+        http_status: 200,
+        verdict: 'safe',
+        category: 'safe',
       },
     })
 
-    await testDeepSeekChannel('official/channel')
+    const result = await testAPIAvailability('official/channel')
 
-    expect(post).toHaveBeenCalledWith('/admin/risk-control/deepseek/channels/official%2Fchannel/test')
+    expect(post).toHaveBeenCalledWith('/admin/risk-control/deepseek/channels/official%2Fchannel/test-api')
+    expect(result.test_type).toBe('api_usability')
   })
 })

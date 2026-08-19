@@ -37,6 +37,12 @@ export interface DeepSeekModerationChannel {
   cooldown_until?: string
   last_latency_ms?: number
   last_error?: string
+  /** Last cheap transport-only heartbeat performed by the backend. */
+  heartbeat_status?: 'reachable' | 'unreachable' | 'untested' | 'disabled' | string
+  last_heartbeat_at?: string
+  heartbeat_latency_ms?: number
+  heartbeat_http_status?: number
+  heartbeat_error?: string
 }
 
 export interface UpdateDeepSeekModerationChannel {
@@ -54,13 +60,30 @@ export interface UpdateDeepSeekModerationChannel {
 
 export interface TestDeepSeekChannelResponse {
   channel_id: string
+  provider?: ContentModerationRemoteProvider | string
+  model?: string
+  /** `api_usability` for the explicit real review test. */
+  test_type?: 'api_usability' | string
   reachable: boolean
   /** @deprecated Compatibility alias for reachable. */
   health_valid: boolean
   latency_ms: number
   http_status?: number
+  verdict?: 'safe' | 'violation' | string
+  category?: string
+  confidence?: number
   error?: string
   checked_at?: string
+}
+
+export interface ContentModerationChannelHeartbeat {
+  channel_id: string
+  provider: ContentModerationRemoteProvider | string
+  status: 'reachable' | 'unreachable' | 'untested' | 'disabled' | string
+  checked_at?: string
+  latency_ms?: number
+  http_status?: number
+  error?: string
 }
 
 export interface ContentModerationEndpoint {
@@ -196,6 +219,11 @@ export interface ContentModerationRuntimeStatus {
   review_unavailable_count?: number
   review_unavailable_enforced_count?: number
   last_review_unavailable_at?: string
+  startup_api_usability_tested?: boolean
+  startup_api_usability_checked_at?: string
+  startup_api_usability_configured?: number
+  startup_api_usability_succeeded?: number
+  remote_heartbeats?: ContentModerationChannelHeartbeat[]
   second_layer_cache_hits?: number
   second_layer_cache_misses?: number
   second_layer_cache_writes?: number
@@ -368,6 +396,14 @@ export async function testDeepSeekChannel(channelID: string): Promise<TestDeepSe
   return data
 }
 
+/** Explicit real moderation request used by the admin "test API" action. */
+export async function testAPIAvailability(channelID: string): Promise<TestDeepSeekChannelResponse> {
+  const { data } = await apiClient.post<TestDeepSeekChannelResponse>(
+    `/admin/risk-control/deepseek/channels/${encodeURIComponent(channelID)}/test-api`
+  )
+  return data
+}
+
 export async function listLogs(params: ListContentModerationLogsParams = {}): Promise<ContentModerationLogsResponse> {
   const { data } = await apiClient.get<ContentModerationLogsResponse>('/admin/risk-control/logs', {
     params,
@@ -418,6 +454,7 @@ export const riskControlAPI = {
   updateConfig,
   getStatus,
   testDeepSeekChannel,
+  testAPIAvailability,
   listLogs,
   previewArchive,
   downloadArchive,

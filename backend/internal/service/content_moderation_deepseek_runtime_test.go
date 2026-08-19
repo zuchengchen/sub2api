@@ -731,11 +731,11 @@ func TestContentModerationDeepSeekRuntimeConnectivityProbeUsesOneHeadRequest(t *
 	require.False(t, svc.hasReachableDeepSeekChannel(loaded, time.Now()), "HEAD reachability must not establish review health")
 }
 
-func TestContentModerationDeepSeekRuntimeEnforceReadinessCompletesOneReviewOnColdStart(t *testing.T) {
-	var hits atomic.Int32
+func TestContentModerationDeepSeekRuntimeEnforceReadinessDoesNotProbeOnRequestColdStart(t *testing.T) {
+	var postCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
-		hits.Add(1)
+		postCalls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
 	}))
 	defer server.Close()
@@ -746,14 +746,13 @@ func TestContentModerationDeepSeekRuntimeEnforceReadinessCompletesOneReviewOnCol
 	)
 
 	ready, reason := svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
-	require.True(t, ready)
-	require.Empty(t, reason)
-	require.Equal(t, int32(1), hits.Load())
+	require.False(t, ready)
+	require.Contains(t, reason, "首次真实审核")
+	require.Zero(t, postCalls.Load(), "request readiness must not create a paid probe")
 
-	ready, reason = svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
-	require.True(t, ready)
-	require.Empty(t, reason)
-	require.Equal(t, int32(1), hits.Load())
+	ready, _ = svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
+	require.False(t, ready)
+	require.Zero(t, postCalls.Load())
 }
 
 func TestContentModerationDeepSeekRuntimeBreakerBlocksReadinessUntilHalfOpenReviewSucceeds(t *testing.T) {
@@ -788,61 +787,42 @@ func TestContentModerationDeepSeekRuntimeBreakerBlocksReadinessUntilHalfOpenRevi
 	_, breaker, _, _, _, _, _ := state.snapshot(time.Now())
 	require.Equal(t, "half_open", breaker)
 	ready, reason = svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
-	require.True(t, ready)
-	require.Empty(t, reason)
-	require.Equal(t, int32(1), hits.Load())
-	health, breaker, _, _, _, _, _ := state.snapshot(time.Now())
-	require.Equal(t, "reachable", health)
-	require.Equal(t, "closed", breaker)
+	require.False(t, ready)
+	require.Contains(t, reason, "熔断器可用")
+	require.Zero(t, hits.Load(), "request readiness must not create a paid probe")
+	_, breaker, _, _, _, _, _ = state.snapshot(time.Now())
+	require.Equal(t, "half_open", breaker)
 }
 
-func TestContentModerationDeepSeekRuntimeReviewProbeCoalescesConcurrentReadiness(t *testing.T) {
-	var hits atomic.Int32
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var startedOnce sync.Once
-	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	defer unblock()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		startedOnce.Do(func() { close(started) })
-		<-release
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop")
+func TestContentModerationDeepSeekRuntimeConcurrentReadinessDoesNotProbe(t *testing.T) {
+	var postCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
 	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 	cfg := contentModerationDeepSeekRuntimeTestConfig(
-		contentModerationDeepSeekRuntimeTestChannel("coalesced-review", server.URL, 0),
+		contentModerationDeepSeekRuntimeTestChannel("no-cold-probe", server.URL, 0),
 	)
 	const callers = 12
-	begin := make(chan struct{})
 	results := make(chan bool, callers)
-	var callersReady sync.WaitGroup
-	callersReady.Add(callers)
+	var wg sync.WaitGroup
+	wg.Add(callers)
 	for range callers {
 		go func() {
-			callersReady.Done()
-			<-begin
+			defer wg.Done()
 			ready, _ := svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
 			results <- ready
 		}()
 	}
-	callersReady.Wait()
-	close(begin)
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("review health probe did not start")
+	wg.Wait()
+	close(results)
+	for ready := range results {
+		require.False(t, ready)
 	}
-	time.Sleep(25 * time.Millisecond)
-	require.Equal(t, int32(1), hits.Load())
-	unblock()
-	for range callers {
-		require.True(t, <-results)
-	}
-	require.Equal(t, int32(1), hits.Load())
+	require.Zero(t, postCalls.Load(), "concurrent request checks must not create paid probes")
 }
 
 func TestContentModerationDeepSeekRuntimeConnectivityProbeCoalescesConcurrentCallers(t *testing.T) {
@@ -962,7 +942,7 @@ func TestContentModerationDeepSeekRuntimeConnectivityProbeStopsAtLeaderBudget(t 
 	require.Equal(t, before, hits.Load(), "an already-cancelled caller must not start a probe")
 }
 
-func TestContentModerationDeepSeekRuntimeColdStartUsesReviewHealthyBackupWithinTotalBudget(t *testing.T) {
+func TestContentModerationDeepSeekRuntimeColdStartDoesNotProbeBackup(t *testing.T) {
 	var primaryPosts atomic.Int32
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		primaryPosts.Add(1)
@@ -992,19 +972,10 @@ func TestContentModerationDeepSeekRuntimeColdStartUsesReviewHealthyBackupWithinT
 	startedAt := time.Now()
 
 	readyForEnforce, reason := svc.ensureContentModerationSecondLayerEnforceReadiness(reviewCtx, cfg, time.Now())
-	require.True(t, readyForEnforce)
-	require.Empty(t, reason)
-	reviewCfg := svc.contentModerationConfigWithReachableDeepSeekFirst(cfg, time.Now())
-	require.Equal(t, "reachable-backup", reviewCfg.DeepSeekChannels[0].ID)
-	require.Equal(t, "slow-primary", cfg.DeepSeekChannels[0].ID, "runtime preference must not mutate persisted order")
-	result, attempted, err := svc.scanContentModerationDeepSeek(
-		reviewCtx, reviewCfg, contentModerationDeepSeekRuntimeTestInput(t, "审核文本"),
-	)
-	require.NoError(t, err)
-	require.True(t, attempted)
-	require.False(t, result.Blocked)
-	require.Equal(t, int32(1), primaryPosts.Load())
-	require.Equal(t, int32(2), backupPosts.Load())
+	require.False(t, readyForEnforce)
+	require.Contains(t, reason, "首次真实审核")
+	require.Equal(t, int32(0), primaryPosts.Load(), "cold-start request must not probe the primary")
+	require.Equal(t, int32(0), backupPosts.Load(), "cold-start request must not probe the backup")
 	require.Less(t, time.Since(startedAt), 300*time.Millisecond)
 }
 
