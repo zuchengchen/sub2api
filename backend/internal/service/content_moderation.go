@@ -2823,7 +2823,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 	}
 	if assetErr == nil {
 		view.CandidateLayer1Count = len(asset.Layer1)
-		view.CandidateLayer2Count = len(asset.Layer2)
+		view.CandidateLayer2Count = len(normalizeContentModerationCandidateKeywords(asset.Layer2))
 		view.CandidateSourceCommit = asset.Manifest.SourceCommit
 	}
 	return view

@@ -24,7 +24,7 @@ func TestDeepSeekV4FlashAuditAssetContract(t *testing.T) {
 		"weapons", "sexual_content",
 	}, asset.Manifest.RiskCategories)
 	require.Len(t, asset.Layer1, 103)
-	require.Len(t, asset.Layer2, 305)
+	require.Len(t, asset.Layer2, 306)
 	require.Empty(t, asset.Layer1Demotions)
 	require.Empty(t, asset.Layer1Suppressions)
 	require.NotEmpty(t, asset.SystemPrompt)
@@ -58,7 +58,7 @@ func TestDeepSeekV4FlashAuditV2ThreeStateContract(t *testing.T) {
 		"corruption_tax_evasion", "hate_harassment", "restricted_security_content",
 	}, asset.Manifest.RiskCategories)
 	require.Greater(t, len(asset.Layer1), 103)
-	require.Greater(t, len(asset.Layer2), 305)
+	require.Greater(t, len(asset.Layer2), 306)
 	for _, fragment := range []string{
 		"disposition、confidence、category、reason",
 		`{"disposition":"allow","confidence":0.00,"category":"safe","reason":""}`,
@@ -103,7 +103,7 @@ func TestDeepSeekV4FlashAuditV2ExpandedLayerAssignments(t *testing.T) {
 	asset, err := Load(DeepSeekV4FlashAuditV2)
 	require.NoError(t, err)
 	require.Len(t, asset.Layer1, 114)
-	require.Len(t, asset.Layer2, 456)
+	require.Len(t, asset.Layer2, 457)
 
 	layer1ByKey := keyedTerms(asset.Layer1)
 	layer2ByKey := keyedTerms(asset.Layer2)

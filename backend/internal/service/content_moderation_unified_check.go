@@ -1515,15 +1515,15 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 		}
 	}
 	result = applyContentModerationPolicyRestrictionFloor(work.bundle.PrimaryTier, result)
-	if work.reviewRequired && !result.Blocked && (work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) &&
-		!contentModerationCanAcceptBoundedSafeReview(cfg, work.bundle, result) {
+	boundedSafe := work.reviewRequired && contentModerationCanAcceptBoundedSafeReview(cfg, work.bundle, result)
+	if work.reviewRequired && !result.Blocked && (work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) && !boundedSafe {
 		return contentModerationCandidateReviewOutcome{
 			result: result, parserStatus: "evidence_truncated", err: errors.New("contextual review evidence coverage was incomplete"),
 		}
 	}
 	return contentModerationCandidateReviewOutcome{
 		result:      result,
-		boundedSafe: work.reviewRequired && work.bundle.ContextIncomplete && !work.bundle.CoverageIncomplete,
+		boundedSafe: boundedSafe,
 	}
 }
 

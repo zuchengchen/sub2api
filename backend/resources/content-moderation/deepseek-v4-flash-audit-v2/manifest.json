@@ -42,8 +42,8 @@
   },
   "layer2": {
     "file": "layer2-candidate-keywords.json",
-    "entries": 456,
-    "source_sha256": "7c65842a02cb2c944c4bb569e81e96cbf812c06730081d9fdaf5ee04c53793cd",
-    "embedded_sha256": "7c65842a02cb2c944c4bb569e81e96cbf812c06730081d9fdaf5ee04c53793cd"
+    "entries": 457,
+    "source_sha256": "ed9adfbd8b00dc3dcc7b440a8d770f729c683da3994605e4673ddc4fd34c07c6",
+    "embedded_sha256": "ed9adfbd8b00dc3dcc7b440a8d770f729c683da3994605e4673ddc4fd34c07c6"
   }
 }

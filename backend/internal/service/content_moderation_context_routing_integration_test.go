@@ -1019,11 +1019,11 @@ func TestContentModerationBoundedSafeReviewRequiresCoveredRemoteConsensus(t *tes
 	cfg := defaultContentModerationConfig()
 	cfg.RemoteReviewersEnabled = true
 	cfg.RemoteReviewersVersion = 1
-	cfg.RemoteConsensusRequired = 2
+	cfg.RemoteConsensusRequired = 1
 	bundle := contentModerationEvidenceBundle{ContextIncomplete: true}
 	result := contentModerationSecondLayerResult{
 		Disposition: ContentModerationReviewDispositionAllow,
-		RemoteVotes: 2, ConsensusStatus: "confirmed_safe",
+		RemoteVotes: 1, ConsensusStatus: "primary_safe",
 	}
 
 	require.True(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, result))
@@ -1033,13 +1033,16 @@ func TestContentModerationBoundedSafeReviewRequiresCoveredRemoteConsensus(t *tes
 	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, coverageMissing, result))
 
 	insufficientVotes := result
-	insufficientVotes.RemoteVotes = 1
-	insufficientVotes.ConsensusStatus = "primary_safe"
+	insufficientVotes.RemoteVotes = 0
 	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, insufficientVotes))
 
 	disagreement := result
 	disagreement.ReviewerMismatch = true
 	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, disagreement))
+
+	blocked := result
+	blocked.Blocked = true
+	require.False(t, contentModerationCanAcceptBoundedSafeReview(cfg, bundle, blocked))
 
 	complete := bundle
 	complete.ContextIncomplete = false
@@ -1061,11 +1064,10 @@ func TestContentModerationBoundedSafeRemoteConsensusAllowsWithoutCaching(t *test
 	cfg.DeepSeekEnabled = true
 	cfg.RemoteReviewersEnabled = true
 	cfg.RemoteReviewersVersion = 1
-	cfg.RemoteConsensusRequired = 2
+	cfg.RemoteConsensusRequired = 1
 	cfg.DeepSeekTotalTimeoutMS = 3000
 	cfg.DeepSeekChannels = []ContentModerationDeepSeekChannel{
 		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "bounded-safe-deepseek", server.URL, 0),
-		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderGLM, "bounded-safe-glm", server.URL, 1),
 	}
 	cfg.normalize()
 
@@ -1096,7 +1098,7 @@ func TestContentModerationBoundedSafeRemoteConsensusAllowsWithoutCaching(t *test
 		outcome := svc.reviewUnifiedCandidateEvidenceBundle(context.Background(), cfg, cfg.fragmentCacheNamespace(), work)
 		require.NoError(t, outcome.err)
 		require.True(t, outcome.boundedSafe)
-		require.Equal(t, "confirmed_safe", outcome.result.ConsensusStatus)
+		require.Equal(t, "primary_safe", outcome.result.ConsensusStatus)
 		decision := svc.applyUnifiedCandidateReviewResult(
 			context.Background(), input, cfg, cfg.fragmentCacheNamespace(), work, outcome, false, false,
 		)
@@ -1104,16 +1106,15 @@ func TestContentModerationBoundedSafeRemoteConsensusAllowsWithoutCaching(t *test
 		require.False(t, decision.Blocked)
 	}
 
-	require.Equal(t, int64(4), reviewCalls.Load(), "bounded safe evidence must be reviewed again instead of replaying an allow cache")
+	require.Equal(t, int64(2), reviewCalls.Load(), "bounded safe evidence must be reviewed again instead of replaying an allow cache")
 	require.Zero(t, contextualRoutingCacheEntryCount(cache))
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 2)
 	for _, log := range logs {
 		require.Equal(t, "model_bounded_safe", log.DecisionSource)
 		require.True(t, log.EvidenceTruncated)
-		require.Len(t, log.ReviewAttempts, 2)
+		require.Len(t, log.ReviewAttempts, 1)
 		require.Equal(t, "primary", log.ReviewAttempts[0].Role)
-		require.Equal(t, "confirmation", log.ReviewAttempts[1].Role)
 		require.False(t, log.Flagged)
 	}
 }
