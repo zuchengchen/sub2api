@@ -27,7 +27,10 @@
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.username') }}</label>
-        <input v-model="form.username" type="text" class="input" />
+        <div data-test="username-display" class="input bg-gray-50 text-gray-500 dark:bg-dark-700 dark:text-gray-400">
+          {{ form.username || '-' }}
+        </div>
+        <p class="input-hint">{{ t('admin.users.usernameManagedByUser') }}</p>
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.form.roleLabel') }}</label>
@@ -38,7 +41,7 @@
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.notes') }}</label>
-        <textarea v-model="form.notes" rows="3" class="input"></textarea>
+        <textarea data-test="admin-notes" v-model="form.notes" rows="3" class="input"></textarea>
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.columns.concurrency') }}</label>
@@ -124,7 +127,7 @@ const handleUpdateUser = async () => {
   const userId = props.user.id
   submitting.value = true
   try {
-    const data: any = { email: form.email, username: form.username, notes: form.notes, role: form.role, concurrency: form.concurrency, rpm_limit: form.rpm_limit }
+    const data: any = { email: form.email, notes: form.notes, role: form.role, concurrency: form.concurrency, rpm_limit: form.rpm_limit }
     if (form.password.trim()) data.password = form.password.trim()
     // 提升为管理员属敏感操作：后端返回 STEP_UP_REQUIRED 时弹 TOTP 验证并重试
     await stepUp.run(() => adminAPI.users.update(userId, data))

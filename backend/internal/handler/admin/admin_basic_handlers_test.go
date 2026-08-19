@@ -138,6 +138,85 @@ func TestUserHandlerEndpoints(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestAdminUserCreateMapsLegacyUsernameToPrivateNotes(t *testing.T) {
+	router, adminSvc := setupAdminRouter()
+
+	body, err := json.Marshal(map[string]any{
+		"email":    "admin-created@example.com",
+		"password": "pass123",
+		"username": "operator-label",
+	})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, adminSvc.createdUserInput)
+	require.Empty(t, adminSvc.createdUserInput.Username)
+	require.Equal(t, "operator-label", adminSvc.createdUserInput.Notes)
+}
+
+func TestAdminUserUpdateLeavesUsernameUserOwned(t *testing.T) {
+	router, adminSvc := setupAdminRouter()
+
+	body, err := json.Marshal(map[string]any{
+		"username": "operator-label",
+	})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/users/1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, adminSvc.updatedUserInput)
+	require.Nil(t, adminSvc.updatedUserInput.Username)
+	require.NotNil(t, adminSvc.updatedUserInput.Notes)
+	require.Equal(t, "operator-label", *adminSvc.updatedUserInput.Notes)
+}
+
+func TestAdminUserUpdatePrefersExplicitNotes(t *testing.T) {
+	router, adminSvc := setupAdminRouter()
+
+	body, err := json.Marshal(map[string]any{
+		"username": "legacy-label",
+		"notes":    "explicit-admin-note",
+	})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/users/1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, adminSvc.updatedUserInput)
+	require.Nil(t, adminSvc.updatedUserInput.Username)
+	require.NotNil(t, adminSvc.updatedUserInput.Notes)
+	require.Equal(t, "explicit-admin-note", *adminSvc.updatedUserInput.Notes)
+}
+
+func TestAdminUserUpdateMapsLegacyUsernameWhenNotesIsEmpty(t *testing.T) {
+	router, adminSvc := setupAdminRouter()
+
+	body, err := json.Marshal(map[string]any{
+		"username": "legacy-label",
+		"notes":    "",
+	})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/users/1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, adminSvc.updatedUserInput)
+	require.Nil(t, adminSvc.updatedUserInput.Username)
+	require.NotNil(t, adminSvc.updatedUserInput.Notes)
+	require.Equal(t, "legacy-label", *adminSvc.updatedUserInput.Notes)
+}
+
 func TestUserHandlerBindAuthIdentityMapsRequest(t *testing.T) {
 	router, adminSvc := setupAdminRouter()
 

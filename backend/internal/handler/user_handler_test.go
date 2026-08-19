@@ -194,6 +194,35 @@ func TestUserHandlerUpdateProfileReturnsAvatarURL(t *testing.T) {
 	require.Equal(t, "handler-avatar", resp.Data.Username)
 }
 
+func TestUserHandlerUpdateProfileKeepsUserUsernameSelfManaged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	repo := &userHandlerRepoStub{
+		user: &service.User{
+			ID:       12,
+			Email:    "self-managed@example.com",
+			Username: "before",
+			Notes:    "admin-only note",
+			Role:     service.RoleUser,
+			Status:   service.StatusActive,
+		},
+	}
+	handler := NewUserHandler(service.NewUserService(repo, nil, nil, nil), nil, nil, nil, nil, nil)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/user", bytes.NewBufferString(`{"username":"after"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 12})
+
+	handler.UpdateProfile(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "after", repo.user.Username)
+	require.Equal(t, "admin-only note", repo.user.Notes)
+	require.NotContains(t, recorder.Body.String(), `"notes"`)
+}
+
 func TestUserHandlerGetProfileReturnsIdentitySummaries(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

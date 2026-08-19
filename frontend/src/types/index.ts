@@ -1953,6 +1953,7 @@ export interface ApiKeyUsageTrendPoint {
 export interface UpdateUserRequest {
   email?: string
   password?: string
+  /** @deprecated Admin username writes are converted to notes by the backend. */
   username?: string
   notes?: string
   role?: 'admin' | 'user'
