@@ -107,7 +107,7 @@ const baseConfig = (): ContentModerationConfig => ({
   yufeng_enabled: false,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
-  policy_version: 'deepseek-v4-flash-audit-v2',
+  policy_version: 'deepseek-v4-flash-audit-v3',
   deepseek_channels: [officialChannel(), backupChannel()],
   all_groups: true,
   group_ids: [],
@@ -291,7 +291,7 @@ describe('admin RiskControlView', () => {
     expect(wrapper.get('[data-test="deepseek-enabled"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.get('[data-test="yufeng-enabled"]').attributes('aria-checked')).toBe('false')
     expect(wrapper.get('[data-test="deepseek-threshold"]').element).toHaveProperty('value', '80%')
-    expect(wrapper.text()).toContain('deepseek-v4-flash-audit-v2')
+    expect(wrapper.text()).toContain('deepseek-v4-flash-audit-v3')
     expect(wrapper.text()).toContain('admin.riskControl.nonThinking')
     expect(wrapper.find('input[type="file"]').exists()).toBe(false)
 

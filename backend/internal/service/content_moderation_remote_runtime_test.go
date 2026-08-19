@@ -78,6 +78,45 @@ func contentModerationRemotePoolWriteResponsesResult(t *testing.T, w http.Respon
 	})
 }
 
+func TestContentModerationRemoteReviewersNormalizeHighConfidenceAllow(t *testing.T) {
+	tests := []struct {
+		name      string
+		provider  string
+		responses bool
+	}{
+		{name: "qwen responses", provider: ContentModerationRemoteProviderQwen, responses: true},
+		{name: "glm chat completions", provider: ContentModerationRemoteProviderGLM},
+		{name: "mimo responses", provider: ContentModerationRemoteProviderMiMo, responses: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tt.responses {
+					contentModerationRemotePoolWriteResponsesResult(t, w, 0.95, "safe", "")
+					return
+				}
+				contentModerationRemotePoolWriteResult(t, w, 0.95, "safe", "")
+			}))
+			defer server.Close()
+
+			channel := contentModerationRemotePoolTestChannel(tt.provider, tt.provider, server.URL+"/v1", 0)
+			result, attempt, err := (&ContentModerationService{}).callContentModerationRemoteChannel(
+				context.Background(), channel, contentModerationRemotePoolTestInput(t), true,
+			)
+			require.NoError(t, err)
+			require.False(t, result.Blocked)
+			require.Equal(t, ContentModerationReviewDispositionAllow, result.Disposition)
+			require.Equal(t, "safe", result.Category)
+			require.InDelta(t, 0.05, result.Confidence, 0.0001)
+			require.Equal(t, contentModerationParserStatusNormalizedAllowConfidence, result.ParserStatus)
+			require.Equal(t, "success", attempt.Outcome)
+			require.Equal(t, "safe", attempt.Verdict)
+			require.InDelta(t, 0.05, attempt.Confidence, 0.0001)
+			require.Equal(t, http.StatusOK, attempt.HTTPStatus)
+		})
+	}
+}
+
 func TestContentModerationRemotePoolReturnsFirstViolationWithoutConfirmation(t *testing.T) {
 	var deepSeekHits, qwenHits atomic.Int32
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

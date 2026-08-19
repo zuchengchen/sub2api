@@ -1585,7 +1585,7 @@ func (s *ContentModerationService) getUnifiedCandidateReviewCacheForApply(
 		return ContentModerationFragmentCacheEntry{}, false
 	}
 	if entry.ReviewCacheVersion != contentModerationSecondLayerReviewCacheVersion ||
-		entry.DecisionSource != "model" || entry.ParserStatus != "parsed" ||
+		entry.DecisionSource != "model" || !contentModerationParserStatusCacheable(entry.ParserStatus) ||
 		(entry.Result != ContentModerationFragmentAllow && entry.Result != ContentModerationFragmentBlock &&
 			entry.Result != ContentModerationFragmentRestricted) {
 		if recordMiss {
@@ -1600,6 +1600,15 @@ func (s *ContentModerationService) getUnifiedCandidateReviewCacheForApply(
 		s.secondLayerCacheHits.Add(1)
 	}
 	return entry, true
+}
+
+func contentModerationParserStatusCacheable(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "parsed", contentModerationParserStatusNormalizedAllowConfidence:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *ContentModerationService) putUnifiedCandidateReviewCache(

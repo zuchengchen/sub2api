@@ -135,7 +135,7 @@ func TestContentModerationManualAPIUsabilityTestUsesRealReviewAndReturnsSafeMeta
 		require.Equal(t, http.MethodPost, r.Method)
 		postCalls.Add(1)
 		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
+			t, w, `{"disposition":"allow","confidence":0.95,"category":"safe","reason":""}`, "stop",
 		)
 	}))
 	defer server.Close()
@@ -168,6 +168,7 @@ func TestContentModerationManualAPIUsabilityTestUsesRealReviewAndReturnsSafeMeta
 	require.Equal(t, ContentModerationRemoteProviderDeepSeek, result.Provider)
 	require.Equal(t, "safe", result.Verdict)
 	require.Equal(t, "safe", result.Category)
+	require.InDelta(t, 0.05, result.Confidence, 0.0001)
 	require.Equal(t, http.StatusOK, result.HTTPStatus)
 	require.Zero(t, headCalls.Load())
 	require.Equal(t, int32(1), postCalls.Load())
