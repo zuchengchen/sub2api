@@ -73,8 +73,11 @@ func (s *ContentModerationService) persistContentModerationArchive(ctx context.C
 }
 
 func (s *ContentModerationService) CloseContentModerationRuntime() {
-	if s == nil || s.archiveRuntime == nil {
+	if s == nil {
 		return
 	}
-	s.archiveRuntime.Close()
+	s.stopBackgroundHealthWorkers()
+	if s.archiveRuntime != nil {
+		s.archiveRuntime.Close()
+	}
 }

@@ -31,6 +31,7 @@ func TestContentModerationEveryLayer2CandidateGetsIndependentDeepSeekReview(t *t
 	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
 	repo := &contentModerationReplayRepo{}
 	svc := NewContentModerationService(nil, repo, nil, nil, nil, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	decision := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "independent-candidates"},
 		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t), false,
@@ -42,7 +43,7 @@ func TestContentModerationEveryLayer2CandidateGetsIndependentDeepSeekReview(t *t
 	require.Len(t, repo.snapshotLogs(), 2)
 }
 
-func TestContentModerationEnforceColdStartUsesReviewHealthyBackupWithinTotalBudget(t *testing.T) {
+func TestContentModerationEnforceColdStartWaitsForStartupReview(t *testing.T) {
 	var primaryPosts atomic.Int64
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		primaryPosts.Add(1)
@@ -78,11 +79,11 @@ func TestContentModerationEnforceColdStartUsesReviewHealthyBackupWithinTotalBudg
 		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t)[:1], false,
 	)
 
-	require.True(t, decision.Allowed)
-	require.False(t, decision.Blocked)
+	require.False(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
 	require.Less(t, time.Since(started), 300*time.Millisecond)
-	require.Equal(t, int64(1), primaryPosts.Load())
-	require.Equal(t, int64(2), backupPosts.Load())
+	require.Equal(t, int64(0), primaryPosts.Load())
+	require.Equal(t, int64(0), backupPosts.Load())
 	require.Len(t, repo.snapshotLogs(), 1)
 }
 
@@ -104,6 +105,7 @@ func TestContentModerationLayer2SafeResultIsAlwaysAuditedBeforeCaching(t *testin
 	cache := &contentModerationReplayCache{}
 	repo := &contentModerationReplayRepo{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	candidate := contentModerationCandidateDeliveryFixtures(t)[:1]
 
 	for index := range 2 {
@@ -151,6 +153,7 @@ func TestContentModerationEnforceReviewsAllCandidatesBeforeAnyDisposition(t *tes
 	repo := &contentModerationReplayRepo{}
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: 81, Role: RoleUser, Status: StatusActive}}
 	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	decision := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "enforce-two-phase", UserID: 81, UserRole: RoleUser},
 		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t), false,
@@ -195,6 +198,7 @@ func TestContentModerationLayer2RiskCacheBlocksEveryRequestAndAppliesSideEffects
 	repo := &contentModerationReplayRepo{}
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: 82, Role: RoleUser, Status: StatusActive}}
 	svc := NewContentModerationService(nil, repo, cache, nil, userRepo, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	candidate := contentModerationCandidateDeliveryFixtures(t)[:1]
 
 	for index := range 2 {
@@ -252,6 +256,7 @@ func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *tes
 	repo := &contentModerationCancelAwareRepo{}
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: 83, Role: RoleUser, Status: StatusActive}}
 	svc := NewContentModerationService(nil, repo, cache, nil, userRepo, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	candidate := contentModerationCandidateDeliveryFixtures(t)[:1]
 
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
@@ -330,6 +335,7 @@ func TestContentModerationWhitelistRiskCacheIsSharedAndPromotedForEnforce(t *tes
 	cache := &contentModerationReplayCache{}
 	repo := &contentModerationReplayRepo{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	candidate := contentModerationCandidateDeliveryFixtures(t)[:1]
 
 	shadow := svc.checkUnifiedCandidateEvidence(
@@ -385,6 +391,7 @@ func TestContentModerationLayer2FailuresAreNeverCached(t *testing.T) {
 	cache := &contentModerationReplayCache{}
 	repo := &contentModerationReplayRepo{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	candidate := contentModerationCandidateDeliveryFixtures(t)[:1]
 
 	for index := range 2 {
@@ -427,6 +434,8 @@ func TestContentModerationLayer2CacheInvalidatesWhenDecisionConfigChanges(t *tes
 	cache := &contentModerationReplayCache{}
 	repo := &contentModerationReplayRepo{}
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg80)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg90)
 	candidate := contentModerationCandidateDeliveryFixtures(t)[:1]
 	configs := []*ContentModerationConfig{cfg80, cfg90, cfg90}
 	for index, cfg := range configs {
@@ -465,6 +474,21 @@ func contentModerationCandidateDeliveryConnectivityProbe(w http.ResponseWriter, 
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, `{"choices":[{"finish_reason":"stop","message":{"content":"{\"confidence\":0.05,\"category\":\"safe\",\"reason\":\"\"}"}}]}`)
 	return true
+}
+
+// Candidate delivery tests model a process that has already completed its
+// startup/API-usability check. Request-path readiness must never perform that
+// paid check itself.
+func contentModerationCandidateDeliveryMarkReviewReady(svc *ContentModerationService, cfg *ContentModerationConfig) {
+	if svc == nil || cfg == nil {
+		return
+	}
+	now := time.Now()
+	for _, channel := range cfg.DeepSeekChannels {
+		if channel.Enabled && strings.TrimSpace(channel.APIKey) != "" {
+			svc.deepSeekChannelState(channel).markReviewHealthy(now, contentModerationDeepSeekChannelDigest(channel))
+		}
+	}
 }
 
 func contentModerationCandidateDeliveryConfig(baseURL, stage string) *ContentModerationConfig {

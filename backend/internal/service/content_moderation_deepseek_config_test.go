@@ -172,7 +172,7 @@ func TestValidateContentModerationDeepSeekBaseURL(t *testing.T) {
 	}
 }
 
-func TestContentModerationSecondLayerEnforceReadinessRequiresRecentSuccessfulReview(t *testing.T) {
+func TestContentModerationSecondLayerEnforceReadinessRetainsStartupReviewUsability(t *testing.T) {
 	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 	cfg := defaultContentModerationConfig()
 	cfg.DeepSeekChannels[0].APIKey = "sk-unit-test-health"
@@ -197,11 +197,13 @@ func TestContentModerationSecondLayerEnforceReadinessRequiresRecentSuccessfulRev
 	view := svc.configView(cfg)
 	require.Equal(t, "untested", view.DeepSeekChannels[0].HealthStatus)
 	require.Equal(t, "reachable", view.DeepSeekChannels[1].HealthStatus)
+	// A successful startup/API test is a usability gate, not a 15-minute lease.
+	// Cheap transport heartbeats report current reachability separately.
 	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(
 		cfg, now.Add(contentModerationDeepSeekHealthTTL+time.Second),
 	)
-	require.False(t, ready)
-	require.Contains(t, reason, "真实审核")
+	require.True(t, ready)
+	require.Empty(t, reason)
 
 	changed := cloneContentModerationConfig(cfg)
 	changed.DeepSeekChannels[1].Model = "different-model"
@@ -221,7 +223,7 @@ func TestContentModerationSecondLayerEnforceReadinessRequiresRecentSuccessfulRev
 	require.Contains(t, reason, "真实审核")
 }
 
-func TestContentModerationUpdateConfigEnforceRequiresSuccessfulReviewAndDoesNotPersistFailure(t *testing.T) {
+func TestContentModerationUpdateConfigEnforceDoesNotProbeProvider(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keyring.json")
 	writeModerationArchiveTestKeyRing(t, path, "k1", map[string][]byte{
 		"k1": []byte("0123456789abcdef0123456789abcdef"),
@@ -244,33 +246,7 @@ func TestContentModerationUpdateConfigEnforceRequiresSuccessfulReviewAndDoesNotP
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "CONTENT_MODERATION_ENFORCE_NOT_READY")
-	_, persisted := repo.values[SettingKeyContentModerationConfig]
-	require.False(t, persisted, "failed Enforce readiness must not persist configuration")
-
-	method := make(chan string, 1)
-	reachable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		method <- r.Method
-		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"confidence":0.05,"category":"safe","reason":""}`, "stop",
-		)
-	}))
-	defer reachable.Close()
-	channels[0].BaseURL = reachable.URL
-	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-		DeepSeekChannels: &channels,
-		SecondLayerStage: &stage,
-	})
-	require.NoError(t, err)
-	require.Equal(t, http.MethodPost, <-method)
-	require.Equal(t, ContentModerationSecondLayerStageEnforce, view.SecondLayerStage)
-
-	stored := repo.values[SettingKeyContentModerationConfig]
-	require.NotContains(t, stored, channels[0].APIKey)
-	var saved ContentModerationConfig
-	require.NoError(t, json.Unmarshal([]byte(stored), &saved))
-	require.Equal(t, ContentModerationSecondLayerStageEnforce, saved.SecondLayerStage)
-	require.Len(t, saved.DeepSeekChannels, 1)
-	require.NotNil(t, saved.DeepSeekChannels[0].APIKeyEnvelope)
+	require.NotContains(t, repo.values, SettingKeyContentModerationConfig)
 }
 
 func TestContentModerationSecondLayerEnforceReadinessRequiresRecentYuFengSuccess(t *testing.T) {

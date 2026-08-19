@@ -102,14 +102,25 @@ type ContentModerationDeepSeekChannelView struct {
 	CooldownUntil       *time.Time `json:"cooldown_until,omitempty"`
 	LastLatencyMS       int        `json:"last_latency_ms"`
 	LastError           string     `json:"last_error,omitempty"`
+	HeartbeatStatus     string     `json:"heartbeat_status"`
+	LastHeartbeatAt     *time.Time `json:"last_heartbeat_at,omitempty"`
+	HeartbeatLatencyMS  int        `json:"heartbeat_latency_ms"`
+	HeartbeatHTTPStatus int        `json:"heartbeat_http_status,omitempty"`
+	HeartbeatError      string     `json:"heartbeat_error,omitempty"`
 }
 
 type TestContentModerationDeepSeekChannelResult struct {
 	ChannelID   string     `json:"channel_id"`
+	Provider    string     `json:"provider,omitempty"`
+	Model       string     `json:"model,omitempty"`
+	TestType    string     `json:"test_type,omitempty"`
 	Reachable   bool       `json:"reachable"`
 	HealthValid bool       `json:"health_valid"`
 	LatencyMS   int        `json:"latency_ms"`
 	HTTPStatus  int        `json:"http_status,omitempty"`
+	Verdict     string     `json:"verdict,omitempty"`
+	Category    string     `json:"category,omitempty"`
+	Confidence  float64    `json:"confidence,omitempty"`
 	Error       string     `json:"error,omitempty"`
 	CheckedAt   *time.Time `json:"checked_at,omitempty"`
 }
@@ -517,9 +528,11 @@ func contentModerationDeepSeekChannelViews(channels []ContentModerationDeepSeekC
 	for _, channel := range channels {
 		health := "untested"
 		breaker := "closed"
+		heartbeat := "untested"
 		if !channel.Enabled {
 			health = "disabled"
 			breaker = "disabled"
+			heartbeat = "disabled"
 		}
 		masked := maskSecretTail(channel.APIKey)
 		if channel.APIKeyEnvelope != nil && masked == "" {
@@ -538,6 +551,7 @@ func contentModerationDeepSeekChannelViews(channels []ContentModerationDeepSeekC
 			APIKeyMasked:     masked,
 			HealthStatus:     health,
 			BreakerStatus:    breaker,
+			HeartbeatStatus:  heartbeat,
 		})
 	}
 	return out
@@ -557,6 +571,13 @@ func (s *ContentModerationService) contentModerationDeepSeekChannelViews(channel
 // connectivity transport implementation.
 func (s *ContentModerationService) TestDeepSeekChannel(ctx context.Context, channelID string) (*TestContentModerationDeepSeekChannelResult, error) {
 	return s.testDeepSeekChannelConnectivity(ctx, strings.TrimSpace(channelID))
+}
+
+// TestContentModerationChannelAPI sends one explicit real moderation request.
+// It is intentionally separate from the legacy HEAD connectivity test because
+// this action may consume provider quota.
+func (s *ContentModerationService) TestContentModerationChannelAPI(ctx context.Context, channelID string) (*TestContentModerationDeepSeekChannelResult, error) {
+	return s.testDeepSeekChannelReview(ctx, strings.TrimSpace(channelID))
 }
 
 func (s *ContentModerationService) contentModerationSecondLayerEnforceReadiness(cfg *ContentModerationConfig, now time.Time) (bool, string) {
@@ -592,9 +613,9 @@ func (s *ContentModerationService) contentModerationSecondLayerEnforceReadiness(
 	reachable := s.countReachableContentModerationRemoteProviders(cfg, now)
 	if reachable < requiredVotes {
 		if requiredVotes <= 1 {
-			return false, "线上审核渠道没有成功完成真实审核；熔断器可用状态缺失"
+			return false, "线上审核渠道尚未完成首次真实审核；熔断器可用状态缺失，请等待启动检查或点击测试"
 		}
-		return false, "线上审核池至少需要两个不同供应商在最近 15 分钟内完成真实审核且熔断器可用"
+		return false, "线上审核池至少需要两个不同供应商完成首次真实审核且熔断器可用"
 	}
 	return true, ""
 }

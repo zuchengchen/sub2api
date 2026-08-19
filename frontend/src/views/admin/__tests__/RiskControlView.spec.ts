@@ -9,12 +9,23 @@ import type {
   UpdateContentModerationConfig,
 } from '@/api/admin/riskControl'
 
-const { getConfig, updateConfig, getStatus, listLogs, testDeepSeekChannel, getGroups, showError, showSuccess } =
+const {
+  getConfig,
+  updateConfig,
+  getStatus,
+  listLogs,
+  testAPIAvailability,
+  testDeepSeekChannel,
+  getGroups,
+  showError,
+  showSuccess,
+} =
   vi.hoisted(() => ({
     getConfig: vi.fn(),
     updateConfig: vi.fn(),
     getStatus: vi.fn(),
     listLogs: vi.fn(),
+    testAPIAvailability: vi.fn(),
     testDeepSeekChannel: vi.fn(),
     getGroups: vi.fn(),
     showError: vi.fn(),
@@ -28,6 +39,7 @@ vi.mock('@/api/admin', () => ({
       updateConfig,
       getStatus,
       listLogs,
+      testAPIAvailability,
       testDeepSeekChannel,
     },
     groups: { getAll: getGroups },
@@ -129,6 +141,28 @@ const runtimeStatus = (enforceReady = true) => ({
   second_layer_cache_errors: 1,
   second_layer_enforce_ready: enforceReady,
   second_layer_enforce_reason: enforceReady ? '' : 'connectivity check required',
+  startup_api_usability_tested: true,
+  startup_api_usability_checked_at: '2026-08-17T00:59:00Z',
+  startup_api_usability_configured: 2,
+  startup_api_usability_succeeded: 2,
+  remote_heartbeats: [
+    {
+      channel_id: 'deepseek-official',
+      provider: 'deepseek',
+      status: 'reachable',
+      checked_at: '2026-08-17T01:00:30Z',
+      latency_ms: 15,
+      http_status: 404,
+    },
+    {
+      channel_id: 'deepseek-backup',
+      provider: 'deepseek',
+      status: 'unreachable',
+      checked_at: '2026-08-17T01:00:30Z',
+      latency_ms: 2800,
+      error: 'timeout',
+    },
+  ],
 })
 
 const auditLog = (): ContentModerationLog => ({
@@ -222,6 +256,7 @@ describe('admin RiskControlView', () => {
     updateConfig.mockReset()
     getStatus.mockReset()
     listLogs.mockReset()
+    testAPIAvailability.mockReset()
     testDeepSeekChannel.mockReset()
     getGroups.mockReset()
     showError.mockReset()
@@ -231,12 +266,17 @@ describe('admin RiskControlView', () => {
     updateConfig.mockImplementation(async (payload: UpdateContentModerationConfig) => configFromUpdate(payload))
     getStatus.mockResolvedValue(runtimeStatus())
     listLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
-    testDeepSeekChannel.mockResolvedValue({
+    testAPIAvailability.mockResolvedValue({
       channel_id: 'deepseek-official',
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      test_type: 'api_usability',
       reachable: true,
       health_valid: true,
-      latency_ms: 18,
-      http_status: 404,
+      latency_ms: 218,
+      http_status: 200,
+      verdict: 'safe',
+      category: 'safe',
       checked_at: '2026-08-17T01:02:00Z',
     })
     getGroups.mockResolvedValue([])
@@ -336,18 +376,37 @@ describe('admin RiskControlView', () => {
     blockedWrapper.unmount()
   })
 
-  it('runs the saved connectivity test for a channel', async () => {
+  it('runs a real API availability test for a saved channel', async () => {
     const wrapper = mountView()
     await flushPromises()
 
-    await wrapper.get('[data-test="test-deepseek-channel-0"]').trigger('click')
+    expect(wrapper.get('[data-test="test-api-availability-0"]').text()).toContain(
+      'admin.riskControl.testAPIAvailability'
+    )
+    await wrapper.get('[data-test="test-api-availability-0"]').trigger('click')
     await flushPromises()
 
-    expect(testDeepSeekChannel).toHaveBeenCalledWith('deepseek-official')
+    expect(testAPIAvailability).toHaveBeenCalledWith('deepseek-official')
+    expect(testDeepSeekChannel).not.toHaveBeenCalled()
     expect(wrapper.get('[data-test="deepseek-channel-test-result-0"]').text()).toContain(
-      'admin.riskControl.channelTestReachable'
+      'admin.riskControl.apiTestReachable'
     )
     expect(showSuccess).toHaveBeenCalledWith('admin.riskControl.channelTestComplete')
+    wrapper.unmount()
+  })
+
+  it('displays the backend heartbeat result without a manual ping action', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="deepseek-channel-heartbeat-status-0"]').text()).toContain(
+      'admin.riskControl.heartbeatReachable'
+    )
+    const heartbeat = wrapper.get('[data-test="deepseek-channel-heartbeat-0"]')
+    expect(heartbeat.text()).toContain('15 ms')
+    expect(heartbeat.text()).toContain('HTTP 404')
+    expect(wrapper.find('[data-test^="ping-"]').exists()).toBe(false)
+
     wrapper.unmount()
   })
 

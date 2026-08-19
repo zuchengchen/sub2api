@@ -24,6 +24,15 @@ func NewContentModerationHandler(svc *service.ContentModerationService) *Content
 	return &ContentModerationHandler{service: svc}
 }
 
+// StartHealthWorkers is called by router construction, after all Wire
+// providers that can fail have initialized. The workers themselves are
+// asynchronous and do not delay HTTP serving.
+func (h *ContentModerationHandler) StartHealthWorkers() {
+	if h != nil && h.service != nil {
+		h.service.Start()
+	}
+}
+
 type contentModerationConfigRequest struct {
 	Enabled                 *bool                                            `json:"enabled"`
 	Mode                    *string                                          `json:"mode"`
@@ -149,6 +158,15 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 
 func (h *ContentModerationHandler) TestDeepSeekChannel(c *gin.Context) {
 	result, err := h.service.TestDeepSeekChannel(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *ContentModerationHandler) TestContentModerationChannelAPI(c *gin.Context) {
+	result, err := h.service.TestContentModerationChannelAPI(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
