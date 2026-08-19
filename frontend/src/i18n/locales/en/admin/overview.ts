@@ -490,6 +490,7 @@ export default {
       enterUsername: 'Enter username (optional)',
       enterNotes: 'Enter notes (admin only)',
       notesHint: 'This note is only visible to administrators',
+      usernameManagedByUser: 'The user manages this username; administrators can only view it',
       enterNewPassword: 'Enter new password (optional)',
       leaveEmptyToKeep: 'Leave empty to keep current password',
       generatePassword: 'Generate random password',
