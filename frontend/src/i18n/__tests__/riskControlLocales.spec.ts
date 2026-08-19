@@ -37,7 +37,22 @@ describe('risk control locale copy', () => {
   })
 
   it('covers every expanded risk category in both locales', () => {
-    const expected = ['cyber', 'accountAbuse', 'deepfakeDoxThreat', 'selfHarm', 'weapons', 'sexualContent']
+    const expected = [
+      'cyber',
+      'accountAbuse',
+      'deepfakeDoxThreat',
+      'selfHarm',
+      'weapons',
+      'sexualContent',
+      'fraudFinancialCrime',
+      'controlledSubstances',
+      'humanExploitation',
+      'terrorismExtremism',
+      'illegalGambling',
+      'forgeryCounterfeit',
+      'corruptionTaxEvasion',
+      'hateHarassment',
+    ]
     expect(Object.keys(zh.admin.riskControl.policyCategories)).toEqual(expected)
     expect(Object.keys(en.admin.riskControl.policyCategories)).toEqual(expected)
   })
@@ -51,5 +66,12 @@ describe('risk control locale copy', () => {
       expect(zh.admin.riskControl.overview.cacheActivity).toContain(token)
       expect(en.admin.riskControl.overview.cacheActivity).toContain(token)
     }
+  })
+
+  it('labels restricted blocks as non-violations in both locales', () => {
+    expect(zh.admin.riskControl.recordTabs.restricted).toContain('非违规')
+    expect(en.admin.riskControl.recordTabs.restricted).toContain('non-violation')
+    expect(zh.admin.riskControl.result.restricted).toContain('非违规')
+    expect(en.admin.riskControl.result.restricted).toContain('non-violation')
   })
 })

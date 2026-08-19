@@ -14,7 +14,7 @@ const (
 	contentModerationEvidenceExpandedMatchRunes = 1024
 	contentModerationEvidenceMaxWindows         = 16
 	contentModerationEvidenceMaxMatches         = 64
-	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v6\x00"
+	contentModerationEvidenceHashDomain         = "sub2api/content-moderation/evidence-window/v7\x00"
 )
 
 // ContentModerationEvidenceMatch offsets are Unicode rune indexes relative to

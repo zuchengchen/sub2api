@@ -1,6 +1,6 @@
 # Runtime Risk Control consolidation
 
-This release consolidates GPT-prefix request auditing into Content Moderation
+This release consolidates configured group/model request auditing into Content Moderation
 and removes the independent Prompt Audit subsystem.
 
 ## Breaking changes

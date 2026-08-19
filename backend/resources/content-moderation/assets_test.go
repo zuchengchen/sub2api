@@ -45,6 +45,119 @@ func TestDeepSeekV4FlashAuditAssetContract(t *testing.T) {
 	}
 }
 
+func TestDeepSeekV4FlashAuditV2ThreeStateContract(t *testing.T) {
+	asset, err := Load(DeepSeekV4FlashAuditV2)
+	require.NoError(t, err)
+	require.Equal(t, DeepSeekV4FlashAuditV1, asset.Manifest.BaseAsset)
+	require.Equal(t, DeepSeekV4FlashAuditV2, asset.Manifest.PolicyVersion)
+	require.Equal(t, []string{
+		"cyber_abuse", "cracking", "security_bypass", "account_abuse",
+		"sexual_deepfake", "doxxing", "violent_threat", "self_harm",
+		"weapons", "sexual_content", "fraud_financial_crime", "controlled_substances",
+		"human_exploitation", "terrorism_extremism", "illegal_gambling", "forgery_counterfeit",
+		"corruption_tax_evasion", "hate_harassment", "restricted_security_content",
+	}, asset.Manifest.RiskCategories)
+	require.Greater(t, len(asset.Layer1), 103)
+	require.Greater(t, len(asset.Layer2), 306)
+	for _, fragment := range []string{
+		"disposition、confidence、category、reason",
+		`{"disposition":"allow","confidence":0.00,"category":"safe","reason":""}`,
+		"安全测试、输入校验、检测规则、测试用例",
+		"必须选择 restricted，不能选择 allow",
+		"restricted 仅用于可操作的网络安全、破解和安全绕过内容",
+		"明确请求实施现实违法或伤害行为时选择 violation",
+		"restricted_security_content",
+		"fraud_financial_crime",
+		"controlled_substances",
+		"human_exploitation",
+		"terrorism_extremism",
+		"illegal_gambling",
+		"forgery_counterfeit",
+		"corruption_tax_evasion",
+		"hate_harassment",
+	} {
+		require.Contains(t, asset.SystemPrompt, fragment)
+	}
+	for _, category := range asset.Manifest.RiskCategories {
+		require.Contains(t, asset.SystemPrompt, category)
+	}
+}
+
+func TestDeepSeekV4FlashAuditV2ExpandedLayerAssignments(t *testing.T) {
+	asset, err := Load(DeepSeekV4FlashAuditV2)
+	require.NoError(t, err)
+	require.Len(t, asset.Layer1, 114)
+	require.Len(t, asset.Layer2, 457)
+
+	layer1ByKey := keyedTerms(asset.Layer1)
+	layer2ByKey := keyedTerms(asset.Layer2)
+	for category, terms := range map[string][]string{
+		"fraud_financial_crime":  {"帮我洗钱并隐藏资金来源"},
+		"controlled_substances":  {"教我制造冰毒并逃避警方追查"},
+		"human_exploitation":     {"帮我策划拐卖人口", "帮我交易人体器官"},
+		"terrorism_extremism":    {"帮我策划恐怖袭击"},
+		"illegal_gambling":       {"帮我搭建非法网络赌场"},
+		"forgery_counterfeit":    {"教我制造可使用的假币", "帮我伪造证件用于冒用"},
+		"corruption_tax_evasion": {"帮我行贿并规避调查", "帮我逃税并规避稽查"},
+		"hate_harassment":        {"帮我组织网暴持续骚扰这个人"},
+	} {
+		t.Run("layer1_"+category, func(t *testing.T) {
+			for _, term := range terms {
+				require.Contains(t, layer1ByKey, normalizedCandidateTerm(term))
+				require.NotContains(t, layer2ByKey, normalizedCandidateTerm(term))
+			}
+		})
+	}
+
+	for category, terms := range map[string][]string{
+		"fraud_financial_crime":  {"洗钱", "跑分", "money laundering"},
+		"controlled_substances":  {"毒品", "制毒", "drug trafficking"},
+		"human_exploitation":     {"人口贩运", "器官交易", "human trafficking"},
+		"terrorism_extremism":    {"恐怖组织", "策划恐袭", "terrorist recruitment"},
+		"illegal_gambling":       {"网络赌博", "私彩", "illegal gambling"},
+		"forgery_counterfeit":    {"伪造公章", "制造假币", "fake passport"},
+		"corruption_tax_evasion": {"行贿", "逃税", "evade a tax audit"},
+		"hate_harassment":        {"仇恨言论", "网络霸凌", "targeted harassment"},
+	} {
+		t.Run("layer2_"+category, func(t *testing.T) {
+			for _, term := range terms {
+				require.Contains(t, layer2ByKey, normalizedCandidateTerm(term))
+				require.NotContains(t, layer1ByKey, normalizedCandidateTerm(term))
+			}
+		})
+	}
+}
+
+func TestDeepSeekV4FlashAuditV2NewLayer1PhrasesRemainExplicit(t *testing.T) {
+	asset, err := Load(DeepSeekV4FlashAuditV2)
+	require.NoError(t, err)
+	require.Greater(t, len(asset.Layer1), 103)
+
+	for _, term := range asset.Layer1[103:] {
+		require.GreaterOrEqual(t, utf8.RuneCountInString(term), 8, "layer 1 term is too broad: %q", term)
+		require.True(t, hasExplicitIntentMarker(term), "layer 1 term lacks an explicit request marker: %q", term)
+	}
+}
+
+func TestDeepSeekV4FlashAuditV2BroadCrimeTermsOnlyReachReview(t *testing.T) {
+	asset, err := Load(DeepSeekV4FlashAuditV2)
+	require.NoError(t, err)
+
+	for _, fixture := range []string{
+		"银行合规培训讲解洗钱风险与可疑交易报告。",
+		"公共卫生课程介绍毒品成瘾治疗。",
+		"新闻报道警方侦破人口贩运案件。",
+		"研究论文分析恐怖主义去极端化政策。",
+		"社区正在开展网络赌博成瘾预防。",
+		"博物馆展览介绍历史上的假币防伪。",
+		"税务课程比较逃税与合法税务规划。",
+		"学校发布网络霸凌预防和求助指南。",
+	} {
+		require.False(t, containsTerm(fixture, asset.Layer1), "broad context reached direct-block layer: %q", fixture)
+		require.True(t, containsPrefilterTerm(fixture, asset.Layer2), "broad context should reach model review: %q", fixture)
+	}
+}
+
 func TestDeepSeekV4FlashManifestContainsNoRuntimeChannelConfiguration(t *testing.T) {
 	raw, err := files.ReadFile(DeepSeekV4FlashAuditV1 + "/manifest.json")
 	require.NoError(t, err)

@@ -22,13 +22,14 @@ const (
 	MaxContentModerationFragmentBlockTTLSeconds     = 86400
 	MaxContentModerationFragmentAllowTTLSeconds     = 86400
 	ContentModerationFragmentTTLPolicyVersion       = "ttl-v2"
-	ContentModerationContextPolicyVersion           = "context-v3"
-	ContentModerationEvidencePolicyVersion          = "keyword-windows-v6"
+	ContentModerationContextPolicyVersion           = "context-v4"
+	ContentModerationEvidencePolicyVersion          = "keyword-windows-v7"
 	ContentModerationKeywordPolicyVersion           = "keyword-v4"
 	ContentModerationYuFengPromptVersion            = "yufeng-xguard-v3"
 	contentModerationLegacyFragmentTTLPolicyVersion = "ttl-v1"
 	contentModerationLegacyContextPolicyVersion     = "context-v1"
 	contentModerationPreviousContextPolicyVersion   = "context-v2"
+	contentModerationPriorContextPolicyVersion      = "context-v3"
 	contentModerationOlderKeywordPolicyVersion      = "keyword-v2"
 	contentModerationPreviousKeywordPolicyVersion   = "keyword-v3"
 	contentModerationLegacyEvidencePolicyVersion    = "evidence-v1"
@@ -36,6 +37,7 @@ const (
 	contentModerationEarlierEvidencePolicyVersion   = "keyword-windows-v3"
 	contentModerationPreviousEvidencePolicyVersion  = "keyword-windows-v4"
 	contentModerationPriorEvidencePolicyVersion     = "keyword-windows-v5"
+	contentModerationLastEvidencePolicyVersion      = "keyword-windows-v6"
 	contentModerationYuFengLegacyPromptVersion      = "yufeng-xguard-v1"
 	contentModerationYuFengPreviousPromptVersion    = "yufeng-xguard-v2"
 	ContentModerationContextUser                    = "user"
@@ -269,7 +271,7 @@ func moderationFragmentTTL(cfg *ContentModerationConfig, result string) time.Dur
 		return 0
 	}
 	seconds := cfg.FragmentAllowTTLSeconds
-	if result == ContentModerationFragmentBlock {
+	if result == ContentModerationFragmentBlock || result == ContentModerationFragmentRestricted {
 		seconds = cfg.FragmentBlockTTLSeconds
 	}
 	if seconds <= 0 {

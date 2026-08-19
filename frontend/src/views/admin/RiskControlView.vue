@@ -792,7 +792,7 @@
             </div>
 
             <nav
-              class="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-900 sm:grid-cols-4"
+              class="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-900 sm:grid-cols-3 lg:grid-cols-5"
               role="tablist"
               :aria-label="t('admin.riskControl.records')"
             >
@@ -1119,13 +1119,29 @@ const statusClasses = {
   unknown: 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300',
 }
 
-const policyCategories = ['cyber', 'accountAbuse', 'deepfakeDoxThreat', 'selfHarm', 'weapons', 'sexualContent']
+const policyCategories = [
+  'cyber',
+  'accountAbuse',
+  'deepfakeDoxThreat',
+  'selfHarm',
+  'weapons',
+  'sexualContent',
+  'fraudFinancialCrime',
+  'controlledSubstances',
+  'humanExploitation',
+  'terrorismExtremism',
+  'illegalGambling',
+  'forgeryCounterfeit',
+  'corruptionTaxEvasion',
+  'hateHarassment',
+]
 
 const logColumns = ['time', 'user', 'request', 'decision', 'modelResult', 'channelAttempts', 'latency', 'input']
 
 const recordTabs = computed<Array<{ value: ContentModerationLogView; label: string }>>(() => [
   { value: 'risky_shadow', label: t('admin.riskControl.recordTabs.riskyShadow') },
   { value: 'content_blocked', label: t('admin.riskControl.recordTabs.blocked') },
+  { value: 'restricted', label: t('admin.riskControl.recordTabs.restricted') },
   { value: 'review_unavailable', label: t('admin.riskControl.recordTabs.reviewUnavailable') },
   { value: 'cyber_policy', label: t('admin.riskControl.recordTabs.cyberPolicy') },
 ])
@@ -1768,7 +1784,9 @@ function channelTestResultText(result: TestDeepSeekChannelResponse): string {
   const verdict = result.verdict
     ? result.verdict === 'violation'
       ? t('admin.riskControl.apiTestVerdictViolation')
-      : t('admin.riskControl.apiTestVerdictSafe')
+      : result.verdict === 'restricted'
+        ? t('admin.riskControl.apiTestVerdictRestricted')
+        : t('admin.riskControl.apiTestVerdictSafe')
     : '-'
   return t(result.reachable ? 'admin.riskControl.apiTestReachable' : 'admin.riskControl.apiTestUnreachable', {
     latency: result.latency_ms,
@@ -1782,6 +1800,7 @@ function channelTestResultText(result: TestDeepSeekChannelResponse): string {
 }
 
 function resultLabel(row: ContentModerationLog): string {
+  if (row.action === 'restricted_block') return t('admin.riskControl.result.restricted')
   if (row.review_outcome) return row.review_outcome
   if (row.action === 'review_unavailable' || row.error) return t('admin.riskControl.result.unavailable')
   if (row.action?.includes('shadow')) return t('admin.riskControl.result.shadow')
@@ -1790,6 +1809,7 @@ function resultLabel(row: ContentModerationLog): string {
 }
 
 function resultClass(row: ContentModerationLog): string {
+  if (row.action === 'restricted_block') return statusClasses.warning
   if (row.action === 'review_unavailable' || row.error) return statusClasses.warning
   if (row.action?.includes('shadow')) return statusClasses.warning
   if (row.action?.includes('block') || row.flagged) return statusClasses.danger

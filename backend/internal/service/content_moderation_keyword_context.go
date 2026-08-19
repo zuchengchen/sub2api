@@ -9,7 +9,7 @@ const (
 	powerShellEncodedCommand                      = "powershell -encodedcommand"
 	powerShellShortEncodedCommand                 = "powershell -enc"
 	maxDocumentationCommandPlaceholderBytes       = 128
-	contentModerationKeywordContextPolicyRevision = "keyword-context-v4"
+	contentModerationKeywordContextPolicyRevision = "keyword-context-v5"
 	maliciousMacroContextWindowRunes              = 192
 	maliciousMacroIntentDistanceRunes             = 32
 )
@@ -24,6 +24,13 @@ const (
 )
 
 var (
+	policyRestrictionChineseContextSignals = [...]string{
+		"安全测试", "输入校验", "检测规则", "测试用例",
+	}
+	policyRestrictionEnglishContextSignals = [...]string{
+		"security test", "security tests", "security testing", "input validation",
+		"detection rule", "detection rules", "test case", "test cases",
+	}
 	maliciousMacroContextKeywords = map[string]struct{}{
 		"恶意宏":              {},
 		"malicious macro":  {},
@@ -105,6 +112,12 @@ var (
 		"example", "quote", "quoted", "original text", "mentions", "mentioned", "explain", "analyze", "analyse", "describe", "discuss", "attacker", "attackers", "defender", "defenders",
 	}
 )
+
+func hasContentModerationPolicyRestrictionContext(text string) bool {
+	text = strings.ToLower(text)
+	return containsAnyString(text, policyRestrictionChineseContextSignals[:]) ||
+		containsAnyASCIIWordStem(text, policyRestrictionEnglishContextSignals[:])
+}
 
 // classifyContentModerationKeywordContext applies a narrowly scoped policy to
 // selected ambiguous layer-one terms. It uses fragment metadata for window
