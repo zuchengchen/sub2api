@@ -83,6 +83,22 @@ func TestDeepSeekV4FlashAuditV2ThreeStateContract(t *testing.T) {
 	}
 }
 
+func TestDeepSeekV4FlashAuditV3RiskScoreContract(t *testing.T) {
+	asset, err := Load(DeepSeekV4FlashAuditV3)
+	require.NoError(t, err)
+	require.Equal(t, DeepSeekV4FlashAuditV2, asset.Manifest.BaseAsset)
+	require.Equal(t, DeepSeekV4FlashAuditV3, asset.Manifest.PolicyVersion)
+	require.Len(t, asset.Layer1, 114)
+	require.Len(t, asset.Layer2, 457)
+	for _, fragment := range []string{
+		"confidence 是待审核内容需要被 restricted 或 violation 阻断的风险分数",
+		"不是你对 allow 或 safe 结论的确信程度",
+		"不能用高分表示“非常确定安全”",
+	} {
+		require.Contains(t, asset.SystemPrompt, fragment)
+	}
+}
+
 func TestDeepSeekV4FlashAuditV2ExpandedLayerAssignments(t *testing.T) {
 	asset, err := Load(DeepSeekV4FlashAuditV2)
 	require.NoError(t, err)

@@ -1,0 +1,37 @@
+{
+  "id": "deepseek-v4-flash-audit-v3",
+  "base_asset": "deepseek-v4-flash-audit-v2",
+  "enabled_by_default": true,
+  "source_commit": "95e43150885a71f44b5549a9408c31d0032dca61",
+  "policy_version": "deepseek-v4-flash-audit-v3",
+  "default_model": "deepseek-v4-flash",
+  "thinking_type": "disabled",
+  "response_format": "json_object",
+  "confidence_threshold": 0.8,
+  "reason_max_runes": 20,
+  "risk_categories": [
+    "cyber_abuse",
+    "cracking",
+    "security_bypass",
+    "account_abuse",
+    "sexual_deepfake",
+    "doxxing",
+    "violent_threat",
+    "self_harm",
+    "weapons",
+    "sexual_content",
+    "fraud_financial_crime",
+    "controlled_substances",
+    "human_exploitation",
+    "terrorism_extremism",
+    "illegal_gambling",
+    "forgery_counterfeit",
+    "corruption_tax_evasion",
+    "hate_harassment",
+    "restricted_security_content"
+  ],
+  "system_prompt": {
+    "file": "system-prompt.txt",
+    "sha256": "8d307713d65ea33685f4b8092033cc6a27f4e7c1808ff34b14f3b2bff5135675"
+  }
+}

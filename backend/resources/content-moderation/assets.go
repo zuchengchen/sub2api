@@ -16,9 +16,10 @@ import (
 const (
 	DeepSeekV4FlashAuditV1 = "deepseek-v4-flash-audit-v1"
 	DeepSeekV4FlashAuditV2 = "deepseek-v4-flash-audit-v2"
+	DeepSeekV4FlashAuditV3 = "deepseek-v4-flash-audit-v3"
 )
 
-//go:embed deepseek-v4-flash-audit-v1/* deepseek-v4-flash-audit-v2/*
+//go:embed deepseek-v4-flash-audit-v1/* deepseek-v4-flash-audit-v2/* deepseek-v4-flash-audit-v3/*
 var files embed.FS
 
 type FileManifest struct {
@@ -68,6 +69,9 @@ var (
 	deepSeekV2Once  sync.Once
 	deepSeekV2Asset Asset
 	deepSeekV2Err   error
+	deepSeekV3Once  sync.Once
+	deepSeekV3Asset Asset
+	deepSeekV3Err   error
 )
 
 func Load(id string) (Asset, error) {
@@ -88,6 +92,14 @@ func Load(id string) (Asset, error) {
 			return Asset{}, deepSeekV2Err
 		}
 		return cloneAsset(deepSeekV2Asset), nil
+	case DeepSeekV4FlashAuditV3:
+		deepSeekV3Once.Do(func() {
+			deepSeekV3Asset, deepSeekV3Err = loadAsset(DeepSeekV4FlashAuditV3)
+		})
+		if deepSeekV3Err != nil {
+			return Asset{}, deepSeekV3Err
+		}
+		return cloneAsset(deepSeekV3Asset), nil
 	default:
 		return Asset{}, fmt.Errorf("unknown content moderation candidate asset %q", id)
 	}
@@ -186,7 +198,12 @@ func validateManifest(id string, manifest Manifest) error {
 		"sexual_deepfake", "doxxing", "violent_threat", "self_harm",
 		"weapons", "sexual_content",
 	}
-	if id == DeepSeekV4FlashAuditV2 {
+	switch id {
+	case DeepSeekV4FlashAuditV1:
+		if manifest.BaseAsset != "" {
+			return errors.New("DeepSeek v1 base asset is invalid")
+		}
+	case DeepSeekV4FlashAuditV2:
 		if manifest.BaseAsset != DeepSeekV4FlashAuditV1 {
 			return errors.New("DeepSeek v2 base asset is invalid")
 		}
@@ -195,7 +212,16 @@ func validateManifest(id string, manifest Manifest) error {
 			"terrorism_extremism", "illegal_gambling", "forgery_counterfeit",
 			"corruption_tax_evasion", "hate_harassment", "restricted_security_content",
 		)
-	} else if id != DeepSeekV4FlashAuditV1 || manifest.BaseAsset != "" {
+	case DeepSeekV4FlashAuditV3:
+		if manifest.BaseAsset != DeepSeekV4FlashAuditV2 {
+			return errors.New("DeepSeek v3 base asset is invalid")
+		}
+		expectedCategories = append(expectedCategories,
+			"fraud_financial_crime", "controlled_substances", "human_exploitation",
+			"terrorism_extremism", "illegal_gambling", "forgery_counterfeit",
+			"corruption_tax_evasion", "hate_harassment", "restricted_security_content",
+		)
+	default:
 		return errors.New("unsupported candidate manifest")
 	}
 	if len(manifest.RiskCategories) != len(expectedCategories) {
