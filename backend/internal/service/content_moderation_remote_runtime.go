@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const contentModerationRemoteConsensusVotes = 2
+const contentModerationRemoteConsensusVotes = 1
 
 func normalizeContentModerationRemoteResult(result contentModerationSecondLayerResult, threshold float64) contentModerationSecondLayerResult {
 	disposition := result.normalizedDisposition()

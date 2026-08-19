@@ -102,6 +102,8 @@ const baseConfig = (): ContentModerationConfig => ({
   enabled: true,
   mode: 'pre_block',
   deepseek_enabled: true,
+  remote_reviewers_enabled: true,
+  remote_consensus_required: 2,
   yufeng_enabled: false,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
@@ -345,6 +347,8 @@ describe('admin RiskControlView', () => {
     expect(updateConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         deepseek_enabled: true,
+        remote_reviewers_enabled: true,
+        remote_consensus_required: 1,
         yufeng_enabled: true,
         cyber_policy_exclude_from_ban_count: true,
         deepseek_threshold: 0.8,
@@ -358,6 +362,21 @@ describe('admin RiskControlView', () => {
       })
     )
 
+    wrapper.unmount()
+  })
+
+  it('treats one reachable remote provider as ready when the backend omits readiness', async () => {
+    const statusWithoutReadiness = {
+      ...runtimeStatus(),
+      second_layer_enforce_ready: undefined,
+      second_layer_enforce_reason: undefined,
+    }
+    getStatus.mockResolvedValue(statusWithoutReadiness)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="enforce-health-gate"]').text()).toContain('admin.riskControl.enforceGateReady')
     wrapper.unmount()
   })
 

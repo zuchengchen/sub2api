@@ -21,9 +21,11 @@ func TestContentModerationDeepSeekConfigDefaultsAndLegacyFieldsAreNotExposed(t *
 	require.Equal(t, ContentModerationFirstLayerStageShadow, cfg.FirstLayerStage)
 	require.Equal(t, ContentModerationSecondLayerStageShadow, cfg.SecondLayerStage)
 	require.Equal(t, defaultContentModerationDeepSeekChannels(), cfg.DeepSeekChannels)
+	require.Equal(t, 1, cfg.RemoteConsensusRequired)
 
 	view := (&ContentModerationService{}).configView(cfg)
 	require.Equal(t, ContentModerationDeepSeekPromptVersion, view.PolicyVersion)
+	require.Equal(t, 1, view.RemoteConsensusRequired)
 	require.Len(t, view.DeepSeekChannels, 1)
 	require.Equal(t, "deepseek-official", view.DeepSeekChannels[0].ID)
 	require.False(t, view.DeepSeekChannels[0].APIKeyConfigured)
@@ -163,6 +165,18 @@ func TestParseContentModerationConfigIgnoresRetiredModerationSecrets(t *testing.
 	require.Empty(t, cfg.SecondLayerEndpoints)
 }
 
+func TestParseContentModerationConfigMigratesTwoVotePoolToSingleReviewer(t *testing.T) {
+	cfg, err := parseContentModerationConfig(`{
+		"deepseek_enabled":true,
+		"remote_reviewers_enabled":true,
+		"remote_reviewers_version":1,
+		"remote_consensus_required":2
+	}`)
+	require.NoError(t, err)
+	require.Equal(t, 1, cfg.RemoteConsensusRequired)
+	require.Equal(t, 1, contentModerationRemoteConsensusVotesRequired(cfg))
+}
+
 func TestValidateContentModerationDeepSeekBaseURL(t *testing.T) {
 	for _, valid := range []string{"https://api.deepseek.com", "https://example.com/api/v1", "http://127.0.0.1:8080", "http://[::1]:8080"} {
 		require.NoError(t, validateContentModerationDeepSeekBaseURL(valid), valid)
@@ -183,6 +197,13 @@ func TestContentModerationSecondLayerEnforceReadinessRetainsStartupReviewUsabili
 	backup.Order = 1
 	backup.APIKey = "sk-unit-test-backup"
 	cfg.DeepSeekChannels = append(cfg.DeepSeekChannels, backup)
+	cfg.RemoteReviewersEnabled = true
+	cfg.RemoteReviewersVersion = 1
+	// Persisted two-vote configurations are migrated to the one-reviewer
+	// availability policy during normalization.
+	cfg.RemoteConsensusRequired = 2
+	cfg.normalize()
+	require.Equal(t, 1, cfg.RemoteConsensusRequired)
 	now := time.Now()
 
 	ready, reason := svc.contentModerationSecondLayerEnforceReadiness(cfg, now)

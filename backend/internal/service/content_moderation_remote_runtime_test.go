@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -36,7 +35,7 @@ func contentModerationRemotePoolTestChannel(provider, id, baseURL string, order 
 func contentModerationRemotePoolTestConfig(channels ...ContentModerationDeepSeekChannel) *ContentModerationConfig {
 	return &ContentModerationConfig{
 		DeepSeekEnabled: true, RemoteReviewersEnabled: true, RemoteReviewersVersion: 1,
-		RemoteConsensusRequired: 2, DeepSeekThreshold: DefaultContentModerationDeepSeekThreshold,
+		RemoteConsensusRequired: 1, DeepSeekThreshold: DefaultContentModerationDeepSeekThreshold,
 		DeepSeekTotalTimeoutMS: 3000, DeepSeekChannels: channels,
 	}
 }
@@ -79,7 +78,7 @@ func contentModerationRemotePoolWriteResponsesResult(t *testing.T, w http.Respon
 	})
 }
 
-func TestContentModerationRemotePoolRequiresTwoViolationVotes(t *testing.T) {
+func TestContentModerationRemotePoolReturnsFirstViolationWithoutConfirmation(t *testing.T) {
 	var deepSeekHits, qwenHits atomic.Int32
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deepSeekHits.Add(1)
@@ -103,23 +102,23 @@ func TestContentModerationRemotePoolRequiresTwoViolationVotes(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, attempted)
 	require.True(t, result.Blocked)
-	require.Equal(t, "confirmed_violation", result.ConsensusStatus)
-	require.Equal(t, 2, result.RemoteVotes)
-	require.Len(t, result.ReviewAttempts, 2)
+	require.Equal(t, "single_violation", result.ConsensusStatus)
+	require.Equal(t, 1, result.RemoteVotes)
+	require.Len(t, result.ReviewAttempts, 1)
 	require.Equal(t, "deepseek", result.ReviewAttempts[0].Provider)
 	require.Equal(t, "primary", result.ReviewAttempts[0].Role)
-	require.Equal(t, "alibaba_qwen", result.ReviewAttempts[1].Provider)
-	require.Equal(t, "confirmation", result.ReviewAttempts[1].Role)
 	require.Equal(t, int32(1), deepSeekHits.Load())
-	require.Equal(t, int32(1), qwenHits.Load())
+	require.Equal(t, int32(0), qwenHits.Load())
 }
 
-func TestContentModerationRemotePoolConfirmsRestrictedWithoutViolation(t *testing.T) {
+func TestContentModerationRemotePoolReturnsFirstRestrictedWithoutConfirmation(t *testing.T) {
+	var qwenHits atomic.Int32
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		contentModerationRemotePoolWriteResult(t, w, 0.95, ContentModerationRestrictedCategory, "restricted")
 	}))
 	defer deepSeek.Close()
 	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		qwenHits.Add(1)
 		contentModerationRemotePoolWriteResponsesResult(t, w, 0.92, ContentModerationRestrictedCategory, "restricted")
 	}))
 	defer qwen.Close()
@@ -137,15 +136,15 @@ func TestContentModerationRemotePoolConfirmsRestrictedWithoutViolation(t *testin
 	require.True(t, result.Blocked)
 	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
 	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
-	require.InDelta(t, 0.92, result.Confidence, 0.0001)
-	require.Equal(t, "confirmed_restricted", result.ConsensusStatus)
+	require.InDelta(t, 0.95, result.Confidence, 0.0001)
+	require.Equal(t, "single_restricted", result.ConsensusStatus)
 	require.False(t, result.ReviewerMismatch)
-	require.Len(t, result.ReviewAttempts, 2)
+	require.Len(t, result.ReviewAttempts, 1)
 	require.Equal(t, "restricted", result.ReviewAttempts[0].Verdict)
-	require.Equal(t, "restricted", result.ReviewAttempts[1].Verdict)
+	require.Equal(t, int32(0), qwenHits.Load())
 }
 
-func TestContentModerationRemotePoolDisagreementBlocksWithoutViolation(t *testing.T) {
+func TestContentModerationRemotePoolDoesNotRequestConfirmationForViolation(t *testing.T) {
 	var qwenHits atomic.Int32
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		contentModerationRemotePoolWriteResult(t, w, 0.92, "weapons", "risk")
@@ -165,21 +164,23 @@ func TestContentModerationRemotePoolDisagreementBlocksWithoutViolation(t *testin
 	require.NoError(t, err)
 	require.True(t, attempted)
 	require.True(t, result.Blocked)
-	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
-	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.Disposition)
+	require.Equal(t, "weapons", result.Category)
 	require.InDelta(t, 0.92, result.Confidence, 0.0001)
-	require.True(t, result.ReviewerMismatch)
-	require.Equal(t, "disagreement_restricted", result.ConsensusStatus)
-	require.Equal(t, 2, result.RemoteVotes)
-	require.Equal(t, int32(1), qwenHits.Load())
+	require.False(t, result.ReviewerMismatch)
+	require.Equal(t, "single_violation", result.ConsensusStatus)
+	require.Equal(t, 1, result.RemoteVotes)
+	require.Equal(t, int32(0), qwenHits.Load())
 }
 
-func TestContentModerationRemotePoolSafeThenRestrictedStillBlocksWithoutViolation(t *testing.T) {
+func TestContentModerationRemotePoolReturnsFirstAllowWithoutConfirmation(t *testing.T) {
+	var qwenHits atomic.Int32
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		contentModerationRemotePoolWriteResult(t, w, 0.05, "safe", "")
 	}))
 	defer deepSeek.Close()
 	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		qwenHits.Add(1)
 		contentModerationRemotePoolWriteResponsesResult(t, w, 0.94, ContentModerationRestrictedCategory, "restricted")
 	}))
 	defer qwen.Close()
@@ -193,12 +194,14 @@ func TestContentModerationRemotePoolSafeThenRestrictedStillBlocksWithoutViolatio
 	)
 	require.NoError(t, err)
 	require.True(t, attempted)
-	require.True(t, result.Blocked)
-	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
-	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
-	require.InDelta(t, 0.94, result.Confidence, 0.0001)
-	require.True(t, result.ReviewerMismatch)
-	require.Equal(t, "disagreement_restricted", result.ConsensusStatus)
+	require.False(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionAllow, result.Disposition)
+	require.Equal(t, "safe", result.Category)
+	require.InDelta(t, 0.05, result.Confidence, 0.0001)
+	require.False(t, result.ReviewerMismatch)
+	require.Equal(t, "primary_safe", result.ConsensusStatus)
+	require.Equal(t, 1, result.RemoteVotes)
+	require.Equal(t, int32(0), qwenHits.Load())
 }
 
 func TestContentModerationRemotePoolFailsOverWhenFirstProviderUnavailable(t *testing.T) {
@@ -228,7 +231,8 @@ func TestContentModerationRemotePoolFailsOverWhenFirstProviderUnavailable(t *tes
 	require.Equal(t, int32(1), qwenHits.Load())
 }
 
-func TestContentModerationRemotePoolContinuesAfterUnavailableProviderForConsensus(t *testing.T) {
+func TestContentModerationRemotePoolReturnsFirstSuccessfulViolationAfterFailover(t *testing.T) {
+	var glmHits atomic.Int32
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -237,8 +241,8 @@ func TestContentModerationRemotePoolContinuesAfterUnavailableProviderForConsensu
 		contentModerationRemotePoolWriteResponsesResult(t, w, 0.94, "weapons", "risk")
 	}))
 	defer qwen.Close()
-	glm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.True(t, strings.HasSuffix(r.URL.Path, "/chat/completions"))
+	glm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		glmHits.Add(1)
 		contentModerationRemotePoolWriteResult(t, w, 0.95, "weapons", "risk")
 	}))
 	defer glm.Close()
@@ -252,36 +256,33 @@ func TestContentModerationRemotePoolContinuesAfterUnavailableProviderForConsensu
 	require.NoError(t, err)
 	require.True(t, attempted)
 	require.True(t, result.Blocked)
-	require.Equal(t, "confirmed_violation", result.ConsensusStatus)
-	require.Equal(t, 2, result.RemoteVotes)
-	successProviders := make([]string, 0, 2)
+	require.Equal(t, "single_violation", result.ConsensusStatus)
+	require.Equal(t, 1, result.RemoteVotes)
+	successProviders := make([]string, 0, 1)
 	for _, attempt := range result.ReviewAttempts {
 		if attempt.Outcome == "success" {
 			successProviders = append(successProviders, attempt.Provider)
 		}
 	}
-	require.Equal(t, []string{"alibaba_qwen", "zhipu_glm"}, successProviders)
+	require.Equal(t, []string{"alibaba_qwen"}, successProviders)
+	require.Equal(t, int32(0), glmHits.Load())
 }
 
-func TestContentModerationRemotePoolDoesNotBlockOnSingleViolation(t *testing.T) {
+func TestContentModerationRemotePoolBlocksOnSingleViolation(t *testing.T) {
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		contentModerationRemotePoolWriteResult(t, w, 0.96, "cyber_abuse", "risk")
 	}))
 	defer deepSeek.Close()
-	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-	}))
-	defer qwen.Close()
 	cfg := contentModerationRemotePoolTestConfig(
 		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0),
-		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1),
 	)
 	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 	result, attempted, err := svc.scanContentModerationDeepSeek(context.Background(), cfg, contentModerationRemotePoolTestInput(t))
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.True(t, attempted)
-	require.False(t, result.Blocked)
-	require.Equal(t, "consensus_unavailable", result.ConsensusStatus)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.Disposition)
+	require.Equal(t, "single_violation", result.ConsensusStatus)
 	require.Equal(t, 1, result.RemoteVotes)
 }
 
@@ -306,7 +307,7 @@ func TestContentModerationRemoteReviewerDefaultsAndLegacyMigration(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, cfg.RemoteReviewersEnabled)
 	require.Equal(t, 1, cfg.RemoteReviewersVersion)
-	require.Equal(t, 2, cfg.RemoteConsensusRequired)
+	require.Equal(t, 1, cfg.RemoteConsensusRequired)
 	require.Len(t, cfg.DeepSeekChannels, 4)
 	providers := make([]string, 0, len(cfg.DeepSeekChannels))
 	for _, channel := range cfg.DeepSeekChannels {

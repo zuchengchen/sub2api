@@ -42,7 +42,7 @@ func (s *ContentModerationService) runStartupAPIUsabilityTests(ctx context.Conte
 	}
 
 	// Providers are independent. Probe them concurrently so a slow or broken
-	// provider cannot delay readiness for the remaining consensus pool.
+	// provider cannot delay readiness for the remaining failover pool.
 	results := make(chan bool, len(channels))
 	for _, channel := range channels {
 		go func(channel ContentModerationDeepSeekChannel) {

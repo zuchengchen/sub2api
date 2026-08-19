@@ -2575,10 +2575,10 @@ func (cfg *ContentModerationConfig) normalize() {
 		// present. Keep the legacy alias synchronized for older API consumers,
 		// including the explicit disabled state.
 		cfg.DeepSeekEnabled = cfg.RemoteReviewersEnabled
-		cfg.RemoteConsensusRequired = contentModerationRemoteConsensusVotes
-	} else if cfg.RemoteConsensusRequired <= 0 {
-		cfg.RemoteConsensusRequired = 1
 	}
+	// One healthy remote reviewer is enough; additional providers remain
+	// available for failover instead of forming a mandatory quorum.
+	cfg.RemoteConsensusRequired = contentModerationRemoteConsensusVotesRequired(cfg)
 	if cfg.RemoteUnavailablePolicy == "" {
 		cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableFailClosed
 	}
