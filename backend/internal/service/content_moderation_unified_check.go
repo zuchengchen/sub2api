@@ -1422,6 +1422,13 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundle(
 		}
 	}
 	flightKey := namespace + "\x00layer2-review\x00" + work.bundle.CacheHash
+	if work.bundle.ContextIncomplete || work.bundle.CoverageIncomplete {
+		// An incomplete request can share the same bounded evidence hash with a
+		// complete request. Keep their in-flight reviews separate so a complete
+		// allow verdict cannot bypass the fail-closed evidence gate below.
+		flightKey += "\x00incomplete\x00" + strconv.FormatBool(work.bundle.ContextIncomplete) +
+			"\x00" + strconv.FormatBool(work.bundle.CoverageIncomplete) + "\x00" + work.primary.Hash
+	}
 	flight, leader := s.beginContentModerationCandidateReviewFlight(flightKey)
 	if leader {
 		reviewCfg := cloneContentModerationConfig(cfg)
@@ -1462,13 +1469,15 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 	namespace string,
 	work contentModerationCandidateReviewWork,
 ) contentModerationCandidateReviewOutcome {
-	if entry, found := s.getUnifiedCandidateReviewCache(ctx, namespace, work.bundle.CacheHash); found {
-		return contentModerationCandidateReviewOutcome{
-			result:             resultFromUnifiedCandidateReviewCache(entry),
-			cacheHit:           true,
-			dispositionApplied: entry.DispositionApplied,
-			sourceLogID:        entry.SourceLogID,
-			replayHash:         defaultContentModerationString(entry.ReplayOfInputHash, work.bundle.CacheHash),
+	if !work.bundle.ContextIncomplete && !work.bundle.CoverageIncomplete {
+		if entry, found := s.getUnifiedCandidateReviewCache(ctx, namespace, work.bundle.CacheHash); found {
+			return contentModerationCandidateReviewOutcome{
+				result:             resultFromUnifiedCandidateReviewCache(entry),
+				cacheHit:           true,
+				dispositionApplied: entry.DispositionApplied,
+				sourceLogID:        entry.SourceLogID,
+				replayHash:         defaultContentModerationString(entry.ReplayOfInputHash, work.bundle.CacheHash),
+			}
 		}
 	}
 	reviewCtx := ctx
@@ -1736,9 +1745,10 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), contentModerationAuditPersistenceTimeout)
 	defer cancelPersist()
 
+	cacheEligible := !work.bundle.ContextIncomplete && !work.bundle.CoverageIncomplete
 	var releaseCommit func()
 	needsDisposition := contentModerationCandidateNeedsDisposition(outcome, cfg, whitelistShadow, forceShadow)
-	if !outcome.cacheHit || needsDisposition {
+	if cacheEligible && (!outcome.cacheHit || needsDisposition) {
 		startedFromCache := outcome.cacheHit
 		releaseCommit = s.acquireContentModerationFragmentDecisionLock(namespace + "\x00layer2-review-commit\x00" + work.bundle.CacheHash)
 		if entry, found := s.getUnifiedCandidateReviewCacheForApply(
@@ -1769,7 +1779,7 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	primary := work.primary
 	result := outcome.result
 	publishCache := func(log *ContentModerationLog, persisted bool) {
-		if outcome.cacheHit || !persisted || log == nil {
+		if outcome.cacheHit || !cacheEligible || !persisted || log == nil {
 			return
 		}
 		dispositionApplied := !result.Blocked ||
