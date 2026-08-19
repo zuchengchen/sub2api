@@ -37,12 +37,9 @@ func contentModerationRemoteReviewersEnabled(cfg *ContentModerationConfig) bool 
 	return cfg.RemoteReviewersEnabled || (cfg.RemoteReviewersVersion == 0 && cfg.DeepSeekEnabled)
 }
 
-func contentModerationRemoteConsensusVotesRequired(cfg *ContentModerationConfig) int {
-	if cfg != nil && cfg.RemoteReviewersVersion == 0 {
-		// Compatibility for direct callers that predate the provider pool. All
-		// persisted pool configurations use version 1 and require two votes.
-		return 1
-	}
+func contentModerationRemoteConsensusVotesRequired(_ *ContentModerationConfig) int {
+	// One usable reviewer is sufficient. The remaining configured providers are
+	// failover options and no longer form a quorum gate.
 	return contentModerationRemoteConsensusVotes
 }
 
@@ -605,17 +602,11 @@ func (s *ContentModerationService) contentModerationSecondLayerEnforceReadiness(
 	requiredVotes := contentModerationRemoteConsensusVotesRequired(cfg)
 	configured := countConfiguredContentModerationRemoteProviders(cfg)
 	if configured < requiredVotes {
-		if requiredVotes <= 1 {
-			return false, "线上审核渠道尚未配置密钥"
-		}
-		return false, "线上审核池至少需要两个不同且已配置密钥的供应商才能启用 Enforce"
+		return false, "线上审核渠道尚未配置密钥"
 	}
 	reachable := s.countReachableContentModerationRemoteProviders(cfg, now)
 	if reachable < requiredVotes {
-		if requiredVotes <= 1 {
-			return false, "线上审核渠道尚未完成首次真实审核；熔断器可用状态缺失，请等待启动检查或点击测试"
-		}
-		return false, "线上审核池至少需要两个不同供应商完成首次真实审核且熔断器可用"
+		return false, "线上审核渠道尚未完成首次真实审核；熔断器可用状态缺失，请等待启动检查或点击测试"
 	}
 	return true, ""
 }

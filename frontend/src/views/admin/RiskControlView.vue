@@ -1047,6 +1047,8 @@ interface OverviewItem {
   cacheMetrics?: OverviewCacheMetrics
 }
 
+const remoteConsensusRequired = 1
+
 const { t } = useI18n()
 const appStore = useAppStore()
 
@@ -1075,7 +1077,7 @@ const configForm = reactive({
   mode: 'pre_block' as const,
   deepseek_enabled: true,
   remote_reviewers_enabled: true,
-  remote_consensus_required: 2,
+  remote_consensus_required: remoteConsensusRequired,
   remote_unavailable_policy: 'fail_closed',
   yufeng_enabled: false,
   yufeng_mode: 'shadow',
@@ -1199,7 +1201,7 @@ const secondLayerEnforceReady = computed(() => {
     return status.value.second_layer_enforce_ready
   }
   if (!configForm.remote_reviewers_enabled) return false
-  return configForm.remote_reviewers_enabled && reachableProviderCount.value >= 2
+  return configForm.remote_reviewers_enabled && reachableProviderCount.value >= remoteConsensusRequired
 })
 
 const enforceGateText = computed(() => {
@@ -1366,7 +1368,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.enabled = config.enabled ?? true
   configForm.remote_reviewers_enabled = config.remote_reviewers_enabled ?? config.deepseek_enabled ?? true
   configForm.deepseek_enabled = config.deepseek_enabled ?? configForm.remote_reviewers_enabled
-  configForm.remote_consensus_required = config.remote_consensus_required ?? 2
+  configForm.remote_consensus_required = remoteConsensusRequired
   configForm.remote_unavailable_policy = config.remote_unavailable_policy || 'fail_closed'
   configForm.yufeng_enabled = config.yufeng_enabled ?? false
   configForm.yufeng_mode = config.yufeng_mode || 'shadow'
@@ -1473,7 +1475,7 @@ async function saveConfig() {
       mode: 'pre_block',
       deepseek_enabled: configForm.deepseek_enabled,
       remote_reviewers_enabled: configForm.remote_reviewers_enabled,
-      remote_consensus_required: 2,
+      remote_consensus_required: remoteConsensusRequired,
       remote_unavailable_policy: 'fail_closed',
       yufeng_enabled: configForm.yufeng_enabled,
       yufeng_mode: 'shadow',

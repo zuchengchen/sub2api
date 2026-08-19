@@ -18,6 +18,13 @@ describe('risk control locale copy', () => {
     expect(en.admin.riskControl.layerStagesSummary).toContain('Shadow')
   })
 
+  it('states that one usable online reviewer is sufficient', () => {
+    expect(zh.admin.riskControl.reviewersSummary).toContain('任一可用供应商')
+    expect(zh.admin.riskControl.onlineReviewersMeta).toContain('首个成功返回')
+    expect(en.admin.riskControl.reviewersSummary).toContain('any one usable provider')
+    expect(en.admin.riskControl.onlineReviewersMeta).toContain('first successful provider verdict')
+  })
+
   it('labels API keys as encrypted and never echoed', () => {
     expect(zh.admin.riskControl.channelKeyStored).toContain('已加密保存')
     expect(zh.admin.riskControl.channelKeyWillReplace).toContain('不会回显明文')
