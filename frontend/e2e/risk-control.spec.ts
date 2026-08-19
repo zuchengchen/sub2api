@@ -25,7 +25,7 @@ const riskConfig = {
   yufeng_enabled: false,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
-  policy_version: 'deepseek-v4-flash-audit-v2',
+  policy_version: 'deepseek-v4-flash-audit-v3',
   deepseek_channels: [
     {
       id: 'deepseek-official',

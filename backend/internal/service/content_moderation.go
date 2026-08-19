@@ -2076,7 +2076,7 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 	if err := validateContentModerationDeepSeekChannels(cfg.DeepSeekChannels); err != nil {
 		return infraerrors.BadRequest("INVALID_DEEPSEEK_CHANNELS", err.Error())
 	}
-	if _, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2); err != nil {
+	if _, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV3); err != nil {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_POLICY", err.Error())
 	}
 	if _, err := effectiveContentModerationKeywords(cfg); err != nil {
@@ -2755,7 +2755,7 @@ func contentModerationModelListContains(models []string, model string) bool {
 }
 
 func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *ContentModerationConfigView {
-	asset, assetErr := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
+	asset, assetErr := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV3)
 	layer1Keywords, layer1Err := effectiveContentModerationKeywords(cfg)
 	layer2Keywords, layer2Err := contentModerationSecondLayerKeywordValues(cfg)
 	effectiveLayer2Keywords := canonicalContentModerationPrefilterKeywords(layer2Keywords)
@@ -2833,7 +2833,7 @@ func effectiveContentModerationKeywords(cfg *ContentModerationConfig) ([]string,
 	if cfg == nil {
 		return nil, nil
 	}
-	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV3)
 	if err != nil {
 		return nil, err
 	}
@@ -2858,7 +2858,7 @@ func contentModerationSecondLayerKeywordValues(cfg *ContentModerationConfig) ([]
 	if cfg == nil {
 		return nil, nil
 	}
-	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV3)
 	if err != nil {
 		return nil, err
 	}

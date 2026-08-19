@@ -124,7 +124,11 @@ func TestContentModerationDeepSeekRuntimeStrictResponseParsing(t *testing.T) {
 			wantError: "violation decision has an invalid category or confidence",
 		},
 		{
-			name: "safe category at threshold", content: `{"disposition":"allow","confidence":0.80,"category":"safe","reason":""}`,
+			name: "safe category at threshold is normalized", content: `{"disposition":"allow","confidence":0.80,"category":"safe","reason":""}`,
+			wantCategory: "safe",
+		},
+		{
+			name: "allow with risk category remains invalid", content: `{"disposition":"allow","confidence":0.95,"category":"weapons","reason":""}`,
 			wantError: "allow decision has an invalid category or confidence",
 		},
 		{
@@ -160,6 +164,39 @@ func TestContentModerationDeepSeekRuntimeStrictResponseParsing(t *testing.T) {
 	}
 }
 
+func TestContentModerationDeepSeekRuntimeNormalizesHighConfidenceAllowToRiskScore(t *testing.T) {
+	tests := []struct {
+		name       string
+		confidence float64
+		wantRisk   float64
+	}{
+		{name: "threshold", confidence: 0.80, wantRisk: 0.20},
+		{name: "typical decision confidence", confidence: 0.95, wantRisk: 0.05},
+		{name: "certain allow", confidence: 1.00, wantRisk: 0.00},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := json.Marshal(map[string]any{
+				"disposition": ContentModerationReviewDispositionAllow,
+				"confidence":  tt.confidence,
+				"category":    "safe",
+				"reason":      "",
+			})
+			require.NoError(t, err)
+
+			body := contentModerationDeepSeekRuntimeEnvelope(t, string(decision), "stop", false, nil)
+			result, err := parseContentModerationDeepSeekResponse(body)
+			require.NoError(t, err)
+			require.False(t, result.Blocked)
+			require.Equal(t, ContentModerationReviewDispositionAllow, result.Disposition)
+			require.Equal(t, "safe", result.Category)
+			require.InDelta(t, tt.wantRisk, result.Confidence, 0.0001)
+			require.Equal(t, contentModerationParserStatusNormalizedAllowConfidence, result.ParserStatus)
+			require.True(t, contentModerationParserStatusCacheable(result.ParserStatus))
+		})
+	}
+}
+
 func TestContentModerationDeepSeekRuntimeAcceptsExpandedViolationCategories(t *testing.T) {
 	for _, category := range []string{
 		"fraud_financial_crime", "controlled_substances", "human_exploitation",
@@ -185,8 +222,8 @@ func TestContentModerationDeepSeekRuntimeAcceptsExpandedViolationCategories(t *t
 	}
 }
 
-func TestContentModerationDeepSeekRuntimeCategoryWhitelistMatchesV2Manifest(t *testing.T) {
-	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
+func TestContentModerationDeepSeekRuntimeCategoryWhitelistMatchesV3Manifest(t *testing.T) {
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV3)
 	require.NoError(t, err)
 
 	expected := map[string]struct{}{"safe": {}}

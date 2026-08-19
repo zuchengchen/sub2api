@@ -40,6 +40,8 @@ var contentModerationDeepSeekCategories = map[string]struct{}{
 	ContentModerationRestrictedCategory: {},
 }
 
+const contentModerationParserStatusNormalizedAllowConfidence = "normalized_allow_confidence"
+
 type ContentModerationReviewAttempt struct {
 	Reviewer    string  `json:"reviewer"`
 	Provider    string  `json:"provider,omitempty"`
@@ -430,7 +432,7 @@ func contentModerationDeepSeekChatURL(baseURL string) (string, error) {
 }
 
 func contentModerationDeepSeekPrompt() (string, error) {
-	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV2)
+	asset, err := contentmoderationassets.Load(contentmoderationassets.DeepSeekV4FlashAuditV3)
 	if err != nil {
 		return "", err
 	}
@@ -563,7 +565,9 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	}
 	result.Profile = "deepseek_v4_flash"
 	result.PromptVersion = ContentModerationDeepSeekPromptVersion
-	result.ParserStatus = "parsed"
+	if result.ParserStatus == "" {
+		result.ParserStatus = "parsed"
+	}
 	result.EvidenceMode = input.Evidence.Mode
 	result.EvidenceTruncated = input.Evidence.Truncated
 	result.EndpointID = channel.ID
@@ -726,10 +730,20 @@ func parseContentModerationDeepSeekResponse(body []byte) (contentModerationSecon
 		return contentModerationSecondLayerResult{}, errors.New("DeepSeek category is unknown")
 	}
 	disposition := strings.ToLower(strings.TrimSpace(*decision.Disposition))
+	parserStatus := ""
 	switch disposition {
 	case ContentModerationReviewDispositionAllow:
-		if category != "safe" || confidence >= DefaultContentModerationDeepSeekThreshold {
+		if category != "safe" {
 			return contentModerationSecondLayerResult{}, errors.New("allow decision has an invalid category or confidence")
+		}
+		if confidence >= DefaultContentModerationDeepSeekThreshold {
+			// Some compatible reviewers use confidence as certainty in the
+			// selected allow verdict. The disposition and category still agree on
+			// safe, so convert that value into the risk-score convention used by
+			// the rest of the moderation pipeline. Risk-bearing mismatches remain
+			// fail-closed below.
+			confidence = 1 - confidence
+			parserStatus = contentModerationParserStatusNormalizedAllowConfidence
 		}
 	case ContentModerationReviewDispositionRestricted:
 		if category != ContentModerationRestrictedCategory || confidence < DefaultContentModerationDeepSeekThreshold {
@@ -750,7 +764,7 @@ func parseContentModerationDeepSeekResponse(body []byte) (contentModerationSecon
 	blocked := disposition != ContentModerationReviewDispositionAllow
 	return contentModerationSecondLayerResult{
 		Blocked: blocked, Disposition: disposition,
-		Category: category, Confidence: confidence, Reason: reason,
+		Category: category, Confidence: confidence, Reason: reason, ParserStatus: parserStatus,
 	}, nil
 }
 

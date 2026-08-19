@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	ContentModerationDeepSeekPromptVersion           = "deepseek-v4-flash-audit-v2"
+	ContentModerationDeepSeekPromptVersion           = "deepseek-v4-flash-audit-v3"
 	DefaultContentModerationDeepSeekModel            = "deepseek-v4-flash"
 	DefaultContentModerationDeepSeekBaseURL          = "https://api.deepseek.com"
 	DefaultContentModerationDeepSeekChannelTimeoutMS = 3000

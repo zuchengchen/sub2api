@@ -332,7 +332,9 @@ func contentModerationRemoteSuccess(
 	provider := contentModerationRemoteProvider(channel)
 	result.Profile = provider + ":" + channel.Model
 	result.PromptVersion = ContentModerationDeepSeekPromptVersion
-	result.ParserStatus = "parsed"
+	if result.ParserStatus == "" {
+		result.ParserStatus = "parsed"
+	}
 	result.EvidenceMode = input.Evidence.Mode
 	result.EvidenceTruncated = input.Evidence.Truncated
 	result.EndpointID = channel.ID
