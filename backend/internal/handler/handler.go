@@ -19,7 +19,6 @@ type AdminHandlers struct {
 	CNProvider             *admin.CNProviderHandler
 	Proxy                  *admin.ProxyHandler
 	Redeem                 *admin.RedeemHandler
-	Promo                  *admin.PromoHandler
 	Setting                *admin.SettingHandler
 	Ops                    *admin.OpsHandler
 	System                 *admin.SystemHandler

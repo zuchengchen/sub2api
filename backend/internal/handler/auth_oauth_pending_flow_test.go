@@ -8,7 +8,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -1136,11 +1135,10 @@ func TestCreateOIDCOAuthAccountCreatesUserBindsIdentityAndConsumesSession(t *tes
 	require.NotNil(t, storedSession.ConsumedAt)
 }
 
-func TestCreateOIDCOAuthAccountAppliesPromoCodeFromPendingSession(t *testing.T) {
-	promoRepo := newOAuthPendingFlowPromoRepoStub("WELCOME2024", 25)
+func TestCreateOIDCOAuthAccountIgnoresLegacyPromoState(t *testing.T) {
 	emailCache := &oauthPendingFlowEmailCacheStub{
 		verificationCodes: map[string]*service.VerificationCodeData{
-			"promo@example.com": {
+			"legacy-promo@example.com": {
 				Code:      "246810",
 				CreatedAt: time.Now().UTC(),
 				ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
@@ -1150,27 +1148,23 @@ func TestCreateOIDCOAuthAccountAppliesPromoCodeFromPendingSession(t *testing.T) 
 	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
 		emailVerifyEnabled: true,
 		emailCache:         emailCache,
-		promoRepo:          promoRepo,
-		settingValues: map[string]string{
-			service.SettingKeyPromoCodeEnabled: "true",
-		},
 	})
 	ctx := context.Background()
 
 	session, err := client.PendingAuthSession.Create().
-		SetSessionToken("promo-create-account-session-token").
+		SetSessionToken("legacy-promo-create-account-session-token").
 		SetIntent(oauthIntentLogin).
 		SetProviderType("oidc").
 		SetProviderKey("https://issuer.example").
 		SetProviderSubject("oidc-promo-123").
-		SetBrowserSessionKey("promo-create-account-browser-key").
-		SetUpstreamIdentityClaims(map[string]any{"username": "promo_user"}).
-		SetLocalFlowState(map[string]any{oauthPromoCodeStateKey: "WELCOME2024"}).
+		SetBrowserSessionKey("legacy-promo-create-account-browser-key").
+		SetUpstreamIdentityClaims(map[string]any{"username": "legacy_promo_user"}).
+		SetLocalFlowState(map[string]any{"promo_code": "WELCOME2024"}).
 		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
 		Save(ctx)
 	require.NoError(t, err)
 
-	body := bytes.NewBufferString(`{"email":"promo@example.com","verify_code":"246810","password":"secret-123"}`)
+	body := bytes.NewBufferString(`{"email":"legacy-promo@example.com","verify_code":"246810","password":"secret-123"}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -1182,153 +1176,9 @@ func TestCreateOIDCOAuthAccountAppliesPromoCodeFromPendingSession(t *testing.T) 
 	handler.CreateOIDCOAuthAccount(ginCtx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Equal(t, []string{"WELCOME2024"}, promoRepo.applyCalls)
-	createdUser, err := client.User.Query().Where(dbuser.EmailEQ("promo@example.com")).Only(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 25.0, createdUser.Balance)
-	require.Len(t, promoRepo.usages, 1)
-	require.Equal(t, createdUser.ID, promoRepo.usages[0].UserID)
-}
-
-func TestCreateOIDCOAuthAccountWithoutPromoCodeDoesNotApplyPromo(t *testing.T) {
-	promoRepo := newOAuthPendingFlowPromoRepoStub("WELCOME2024", 25)
-	emailCache := &oauthPendingFlowEmailCacheStub{
-		verificationCodes: map[string]*service.VerificationCodeData{
-			"no-promo@example.com": {
-				Code:      "246810",
-				CreatedAt: time.Now().UTC(),
-				ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
-			},
-		},
-	}
-	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
-		emailVerifyEnabled: true,
-		emailCache:         emailCache,
-		promoRepo:          promoRepo,
-		settingValues: map[string]string{
-			service.SettingKeyPromoCodeEnabled: "true",
-		},
-	})
-	ctx := context.Background()
-
-	session, err := client.PendingAuthSession.Create().
-		SetSessionToken("no-promo-create-account-session-token").
-		SetIntent(oauthIntentLogin).
-		SetProviderType("oidc").
-		SetProviderKey("https://issuer.example").
-		SetProviderSubject("oidc-no-promo-123").
-		SetBrowserSessionKey("no-promo-create-account-browser-key").
-		SetUpstreamIdentityClaims(map[string]any{"username": "no_promo_user"}).
-		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
-		Save(ctx)
-	require.NoError(t, err)
-
-	body := bytes.NewBufferString(`{"email":"no-promo@example.com","verify_code":"246810","password":"secret-123"}`)
-	recorder := httptest.NewRecorder()
-	ginCtx, _ := gin.CreateTestContext(recorder)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
-	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue(session.BrowserSessionKey)})
-	ginCtx.Request = req
-
-	handler.CreateOIDCOAuthAccount(ginCtx)
-
-	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Empty(t, promoRepo.applyCalls)
-	createdUser, err := client.User.Query().Where(dbuser.EmailEQ("no-promo@example.com")).Only(ctx)
+	createdUser, err := client.User.Query().Where(dbuser.EmailEQ("legacy-promo@example.com")).Only(ctx)
 	require.NoError(t, err)
 	require.Zero(t, createdUser.Balance)
-}
-
-func TestCreateOIDCOAuthAccountDoesNotApplyPromoWhenDisabled(t *testing.T) {
-	promoRepo := newOAuthPendingFlowPromoRepoStub("WELCOME2024", 25)
-	emailCache := &oauthPendingFlowEmailCacheStub{
-		verificationCodes: map[string]*service.VerificationCodeData{
-			"promo-disabled@example.com": {
-				Code:      "246810",
-				CreatedAt: time.Now().UTC(),
-				ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
-			},
-		},
-	}
-	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
-		emailVerifyEnabled: true,
-		emailCache:         emailCache,
-		promoRepo:          promoRepo,
-		settingValues: map[string]string{
-			service.SettingKeyPromoCodeEnabled: "false",
-		},
-	})
-	ctx := context.Background()
-
-	session, err := client.PendingAuthSession.Create().
-		SetSessionToken("promo-disabled-session-token").
-		SetIntent(oauthIntentLogin).
-		SetProviderType("oidc").
-		SetProviderKey("https://issuer.example").
-		SetProviderSubject("oidc-promo-disabled-123").
-		SetBrowserSessionKey("promo-disabled-browser-key").
-		SetUpstreamIdentityClaims(map[string]any{"username": "promo_disabled_user"}).
-		SetLocalFlowState(map[string]any{oauthPromoCodeStateKey: "WELCOME2024"}).
-		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
-		Save(ctx)
-	require.NoError(t, err)
-
-	body := bytes.NewBufferString(`{"email":"promo-disabled@example.com","verify_code":"246810","password":"secret-123"}`)
-	recorder := httptest.NewRecorder()
-	ginCtx, _ := gin.CreateTestContext(recorder)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
-	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue(session.BrowserSessionKey)})
-	ginCtx.Request = req
-
-	handler.CreateOIDCOAuthAccount(ginCtx)
-
-	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Empty(t, promoRepo.applyCalls)
-	createdUser, err := client.User.Query().Where(dbuser.EmailEQ("promo-disabled@example.com")).Only(ctx)
-	require.NoError(t, err)
-	require.Zero(t, createdUser.Balance)
-}
-
-func TestOAuthExistingUserLoginDoesNotApplyPromoCode(t *testing.T) {
-	promoRepo := newOAuthPendingFlowPromoRepoStub("WELCOME2024", 25)
-	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
-		promoRepo: promoRepo,
-		settingValues: map[string]string{
-			service.SettingKeyPromoCodeEnabled: "true",
-		},
-	})
-	ctx := context.Background()
-
-	existingUser, err := client.User.Create().
-		SetEmail("existing-promo@example.com").
-		SetUsername("existing").
-		SetPasswordHash("hash").
-		SetRole(service.RoleUser).
-		SetStatus(service.StatusActive).
-		SetBalance(7).
-		Save(ctx)
-	require.NoError(t, err)
-
-	_, loggedInUser, err := handler.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(
-		ctx,
-		existingUser.Email,
-		existingUser.Username,
-		"",
-		"",
-		"WELCOME2024",
-		"oidc",
-	)
-
-	require.NoError(t, err)
-	require.Equal(t, existingUser.ID, loggedInUser.ID)
-	require.Empty(t, promoRepo.applyCalls)
-	reloadedUser, err := client.User.Get(ctx, existingUser.ID)
-	require.NoError(t, err)
-	require.Equal(t, 7.0, reloadedUser.Balance)
 }
 
 func TestCreateOIDCOAuthAccountExistingEmailReturnsChoicePendingSessionState(t *testing.T) {
@@ -2517,7 +2367,6 @@ type oauthPendingFlowTestHandlerOptions struct {
 	emailVerifyEnabled bool
 	emailCache         service.EmailCache
 	settingValues      map[string]string
-	promoRepo          service.PromoCodeRepository
 	defaultSubAssigner service.DefaultSubscriptionAssigner
 	affiliateService   *service.AffiliateService
 	affiliateFactory   func(*dbent.Client, *service.SettingService) *service.AffiliateService
@@ -2610,10 +2459,6 @@ CREATE TABLE IF NOT EXISTS user_affiliates (
 		options: options.userRepoOptions,
 	}
 	redeemRepo := &oauthPendingFlowRedeemCodeRepo{client: client}
-	var promoService *service.PromoService
-	if options.promoRepo != nil {
-		promoService = service.NewPromoService(options.promoRepo, userRepo, nil, client, nil)
-	}
 	var emailService *service.EmailService
 	if options.emailCache != nil {
 		emailService = service.NewEmailService(&oauthPendingFlowSettingRepoStub{
@@ -2632,7 +2477,6 @@ CREATE TABLE IF NOT EXISTS user_affiliates (
 		emailService,
 		nil,
 		nil,
-		promoService,
 		options.defaultSubAssigner,
 		affiliateService,
 		nil,
@@ -2652,11 +2496,10 @@ CREATE TABLE IF NOT EXISTS user_affiliates (
 	}
 
 	return &AuthHandler{
-		authService:  authSvc,
-		userService:  userSvc,
-		settingSvc:   settingSvc,
-		promoService: promoService,
-		totpService:  totpSvc,
+		authService: authSvc,
+		userService: userSvc,
+		settingSvc:  settingSvc,
+		totpService: totpSvc,
 	}, client
 }
 
@@ -2673,84 +2516,6 @@ func boolPtr(v bool) *bool {
 
 type oauthPendingFlowSettingRepoStub struct {
 	values map[string]string
-}
-
-type oauthPendingFlowPromoRepoStub struct {
-	promo      *service.PromoCode
-	applyCalls []string
-	usages     []service.PromoCodeUsage
-}
-
-func newOAuthPendingFlowPromoRepoStub(code string, bonusAmount float64) *oauthPendingFlowPromoRepoStub {
-	return &oauthPendingFlowPromoRepoStub{
-		promo: &service.PromoCode{
-			ID:          1,
-			Code:        code,
-			BonusAmount: bonusAmount,
-			Status:      service.PromoCodeStatusActive,
-		},
-	}
-}
-
-func (r *oauthPendingFlowPromoRepoStub) Create(context.Context, *service.PromoCode) error {
-	panic("unexpected Create call")
-}
-
-func (r *oauthPendingFlowPromoRepoStub) GetByID(context.Context, int64) (*service.PromoCode, error) {
-	panic("unexpected GetByID call")
-}
-
-func (r *oauthPendingFlowPromoRepoStub) GetByCode(_ context.Context, code string) (*service.PromoCode, error) {
-	if r.promo == nil || !strings.EqualFold(strings.TrimSpace(code), r.promo.Code) {
-		return nil, service.ErrPromoCodeNotFound
-	}
-	clone := *r.promo
-	return &clone, nil
-}
-
-func (r *oauthPendingFlowPromoRepoStub) GetByCodeForUpdate(ctx context.Context, code string) (*service.PromoCode, error) {
-	promoCode, err := r.GetByCode(ctx, code)
-	if err != nil {
-		return nil, err
-	}
-	r.applyCalls = append(r.applyCalls, strings.TrimSpace(code))
-	return promoCode, nil
-}
-
-func (r *oauthPendingFlowPromoRepoStub) Update(context.Context, *service.PromoCode) error {
-	panic("unexpected Update call")
-}
-
-func (r *oauthPendingFlowPromoRepoStub) Delete(context.Context, int64) error {
-	panic("unexpected Delete call")
-}
-
-func (r *oauthPendingFlowPromoRepoStub) List(context.Context, pagination.PaginationParams) ([]service.PromoCode, *pagination.PaginationResult, error) {
-	panic("unexpected List call")
-}
-
-func (r *oauthPendingFlowPromoRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string) ([]service.PromoCode, *pagination.PaginationResult, error) {
-	panic("unexpected ListWithFilters call")
-}
-
-func (r *oauthPendingFlowPromoRepoStub) CreateUsage(_ context.Context, usage *service.PromoCodeUsage) error {
-	r.usages = append(r.usages, *usage)
-	return nil
-}
-
-func (r *oauthPendingFlowPromoRepoStub) GetUsageByPromoCodeAndUser(context.Context, int64, int64) (*service.PromoCodeUsage, error) {
-	return nil, nil
-}
-
-func (r *oauthPendingFlowPromoRepoStub) ListUsagesByPromoCode(context.Context, int64, pagination.PaginationParams) ([]service.PromoCodeUsage, *pagination.PaginationResult, error) {
-	panic("unexpected ListUsagesByPromoCode call")
-}
-
-func (r *oauthPendingFlowPromoRepoStub) IncrementUsedCount(context.Context, int64) error {
-	if r.promo != nil {
-		r.promo.UsedCount++
-	}
-	return nil
 }
 
 func (s *oauthPendingFlowSettingRepoStub) Get(context.Context, string) (*service.Setting, error) {

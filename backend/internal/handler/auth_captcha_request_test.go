@@ -91,3 +91,16 @@ func TestAuthRequestsBindTencentCaptchaProof(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisterRequestIgnoresLegacyPromoCodeField(t *testing.T) {
+	const payload = `{"email":"user@example.com","password":"secret-123","promo_code":"LEGACY"}`
+
+	var req RegisterRequest
+	require.NoError(t, json.Unmarshal([]byte(payload), &req))
+	require.Equal(t, "user@example.com", req.Email)
+	require.Equal(t, "secret-123", req.Password)
+
+	encoded, err := json.Marshal(req)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "promo_code")
+}

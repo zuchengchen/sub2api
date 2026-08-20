@@ -16,7 +16,6 @@ type SystemSettings struct {
 	EmailVerifyEnabled                  bool
 	RegistrationEmailSuffixWhitelist    []string
 	RegistrationEmailDomainQuotaEnabled bool // 白名单非空时放行非白名单域名限量注册（默认关闭）
-	PromoCodeEnabled                    bool
 	PasswordResetEnabled                bool
 	FrontendURL                         string
 	InvitationCodeEnabled               bool
@@ -319,7 +318,6 @@ type PublicSettings struct {
 	ForceEmailOnThirdPartySignup        bool
 	RegistrationEmailSuffixWhitelist    []string
 	RegistrationEmailDomainQuotaEnabled bool
-	PromoCodeEnabled                    bool
 	PasswordResetEnabled                bool
 	InvitationCodeEnabled               bool
 	TotpEnabled                         bool // TOTP 双因素认证

@@ -72,7 +72,7 @@ func newOAuthCaptchaTestHandler(enabled bool) (*AuthHandler, *oauthCaptchaVerifi
 	cfg := &config.Config{}
 	settings := service.NewSettingService(&oauthCaptchaSettingRepo{values: values}, cfg)
 	verifier := &oauthCaptchaVerifier{}
-	authService := service.NewAuthService(nil, nil, nil, nil, cfg, settings, nil, nil, nil, nil, nil, nil, nil)
+	authService := service.NewAuthService(nil, nil, nil, nil, cfg, settings, nil, nil, nil, nil, nil, nil)
 	authService.SetTencentCaptchaService(service.NewTencentCaptchaService(settings, verifier))
 	return &AuthHandler{authService: authService, settingSvc: settings, cfg: cfg}, verifier
 }

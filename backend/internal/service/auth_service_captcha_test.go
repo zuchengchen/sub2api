@@ -19,7 +19,7 @@ func newAuthServiceForCaptchaRepoTest(repo *settingRepoStub, required bool, turn
 	settingService := NewSettingService(repo, cfg)
 	turnstileService := NewTurnstileService(settingService, turnstileVerifier)
 	tencentService := NewTencentCaptchaService(settingService, tencentVerifier)
-	svc := NewAuthService(nil, &userRepoStub{}, nil, nil, cfg, settingService, nil, turnstileService, nil, nil, nil, nil, nil)
+	svc := NewAuthService(nil, &userRepoStub{}, nil, nil, cfg, settingService, nil, turnstileService, nil, nil, nil, nil)
 	svc.SetTencentCaptchaService(tencentService)
 	return svc
 }
@@ -34,7 +34,7 @@ func newAuthServiceForCaptchaTest(settings map[string]string, required bool, tur
 	if turnstileVerifier != nil {
 		turnstileService = NewTurnstileService(settingService, turnstileVerifier)
 	}
-	svc := NewAuthService(nil, &userRepoStub{}, nil, nil, cfg, settingService, nil, turnstileService, nil, nil, nil, nil, nil)
+	svc := NewAuthService(nil, &userRepoStub{}, nil, nil, cfg, settingService, nil, turnstileService, nil, nil, nil, nil)
 	if tencentVerifier != nil {
 		svc.SetTencentCaptchaService(NewTencentCaptchaService(settingService, tencentVerifier))
 	}

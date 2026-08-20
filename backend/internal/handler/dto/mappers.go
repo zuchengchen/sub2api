@@ -842,35 +842,3 @@ func BulkAssignResultFromService(r *service.BulkAssignResult) *BulkAssignResult 
 		Statuses:      statuses,
 	}
 }
-
-func PromoCodeFromService(pc *service.PromoCode) *PromoCode {
-	if pc == nil {
-		return nil
-	}
-	return &PromoCode{
-		ID:          pc.ID,
-		Code:        pc.Code,
-		BonusAmount: pc.BonusAmount,
-		MaxUses:     pc.MaxUses,
-		UsedCount:   pc.UsedCount,
-		Status:      pc.Status,
-		ExpiresAt:   pc.ExpiresAt,
-		Notes:       pc.Notes,
-		CreatedAt:   pc.CreatedAt,
-		UpdatedAt:   pc.UpdatedAt,
-	}
-}
-
-func PromoCodeUsageFromService(u *service.PromoCodeUsage) *PromoCodeUsage {
-	if u == nil {
-		return nil
-	}
-	return &PromoCodeUsage{
-		ID:          u.ID,
-		PromoCodeID: u.PromoCodeID,
-		UserID:      u.UserID,
-		BonusAmount: u.BonusAmount,
-		UsedAt:      u.UsedAt,
-		User:        UserFromServiceShallow(u.User),
-	}
-}

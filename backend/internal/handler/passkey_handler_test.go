@@ -133,7 +133,7 @@ func newTencentProtectedPasskeyHandler(t *testing.T) (*PasskeyHandler, *passkeyC
 	}
 	settings := service.NewSettingService(repo, cfg)
 	verifier := &passkeyCaptchaVerifierStub{}
-	authService := service.NewAuthService(nil, nil, nil, nil, cfg, settings, nil, nil, nil, nil, nil, nil, nil)
+	authService := service.NewAuthService(nil, nil, nil, nil, cfg, settings, nil, nil, nil, nil, nil, nil)
 	authService.SetTencentCaptchaService(service.NewTencentCaptchaService(settings, verifier))
 	sessions := &passkeyBeginSessionStoreStub{}
 	passkeys, err := service.NewPasskeyService(cfg, nil, sessions, nil)
