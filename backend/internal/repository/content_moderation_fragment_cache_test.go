@@ -37,7 +37,7 @@ func TestContentModerationFragmentCacheTTLAndProvenance(t *testing.T) {
 			Reviewer: "deepseek", ChannelID: "deepseek-official", Outcome: "risk", LatencyMS: 87,
 		}},
 	}
-	require.NoError(t, cache.PutFragmentCacheEntry(ctx, "v:test", "hash", entry, 256, 100, 1<<20, 20*time.Millisecond))
+	require.NoError(t, cache.PutFragmentCacheEntry(ctx, "v:test", "hash", entry, 256, 100, 1<<20, time.Minute))
 
 	got, found, err := cache.GetFragmentCacheEntry(ctx, "v:test", "hash")
 	require.NoError(t, err)
@@ -64,13 +64,13 @@ func TestContentModerationFragmentCacheTTLAndProvenance(t *testing.T) {
 	require.Equal(t, entry.ReviewAttempts, got.ReviewAttempts)
 	require.False(t, got.ExpiresAt.IsZero())
 
-	time.Sleep(30 * time.Millisecond)
+	keys, ok := contentModerationFragmentKeys("v:test")
+	require.True(t, ok)
+	require.NoError(t, cache.rdb.HSet(ctx, keys[4], "hash", time.Now().Add(-time.Millisecond).UnixMilli()).Err())
 	expired, found, err := cache.GetFragmentCacheEntry(ctx, "v:test", "hash")
 	require.NoError(t, err)
 	require.False(t, found)
 	require.True(t, expired.Expired)
-	keys, ok := contentModerationFragmentKeys("v:test")
-	require.True(t, ok)
 	for _, key := range []string{keys[0], keys[2], keys[4], keys[5]} {
 		require.False(t, cache.rdb.HExists(ctx, key, "hash").Val())
 	}
