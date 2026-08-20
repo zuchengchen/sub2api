@@ -153,6 +153,7 @@ func registerContentModerationRoutes(admin *gin.RouterGroup, h *handler.Handlers
 		risk.POST("/deepseek/channels/:id/test-api", h.Admin.ContentModeration.TestContentModerationChannelAPI)
 		risk.GET("/status", h.Admin.ContentModeration.GetStatus)
 		risk.GET("/logs", h.Admin.ContentModeration.ListLogs)
+		risk.GET("/logs/:id", h.Admin.ContentModeration.GetLog)
 		risk.GET("/logs/:id/archive/preview", h.Admin.ContentModeration.PreviewArchive)
 		risk.GET("/logs/:id/archive/download", h.Admin.ContentModeration.DownloadArchive)
 		risk.DELETE("/logs/:id/archive", h.Admin.ContentModeration.DeleteArchive)

@@ -241,6 +241,19 @@ func (h *ContentModerationHandler) ListLogs(c *gin.Context) {
 	response.Paginated(c, items, pageResult.Total, pageResult.Page, pageResult.PageSize)
 }
 
+func (h *ContentModerationHandler) GetLog(c *gin.Context) {
+	logID, ok := parseContentModerationLogID(c)
+	if !ok {
+		return
+	}
+	item, err := h.service.GetLog(c.Request.Context(), logID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, item)
+}
+
 func (h *ContentModerationHandler) UnbanUser(c *gin.Context) {
 	userID, err := strconv.ParseInt(strings.TrimSpace(c.Param("user_id")), 10, 64)
 	if err != nil || userID <= 0 {

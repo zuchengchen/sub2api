@@ -1275,6 +1275,29 @@ func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentM
 	return s.repo.ListLogs(ctx, filter)
 }
 
+// GetLog returns one redacted moderation record for the admin evidence view.
+// It deliberately reuses the list repository contract so the response has the
+// same field filtering and redaction guarantees as the audit table.
+func (s *ContentModerationService) GetLog(ctx context.Context, logID int64) (*ContentModerationLog, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_REPOSITORY_UNAVAILABLE", "风控日志仓储不可用")
+	}
+	if logID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_LOG_ID", "风控日志 ID 无效")
+	}
+	items, _, err := s.repo.ListLogs(ctx, ContentModerationLogFilter{
+		Pagination: pagination.PaginationParams{Page: 1, PageSize: 1, SortOrder: pagination.SortOrderDesc},
+		LogID:      &logID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, infraerrors.NotFound("CONTENT_MODERATION_LOG_NOT_FOUND", "风控日志不存在")
+	}
+	return &items[0], nil
+}
+
 func (s *ContentModerationService) UnbanUser(ctx context.Context, userID int64) (*ContentModerationUnbanUserResult, error) {
 	if s == nil || s.userRepo == nil {
 		return nil, infraerrors.InternalServer("CONTENT_MODERATION_USER_REPOSITORY_UNAVAILABLE", "用户仓储不可用")

@@ -412,6 +412,11 @@ export async function listLogs(params: ListContentModerationLogsParams = {}): Pr
   return data
 }
 
+export async function getLog(logID: number): Promise<ContentModerationLog> {
+  const { data } = await apiClient.get<ContentModerationLog>(`/admin/risk-control/logs/${logID}`)
+  return data
+}
+
 export async function previewArchive(logID: number): Promise<ContentModerationArchivePreview> {
   const { data } = await apiClient.get<ContentModerationArchivePreview>(
     `/admin/risk-control/logs/${logID}/archive/preview`
@@ -457,6 +462,7 @@ export const riskControlAPI = {
   testDeepSeekChannel,
   testAPIAvailability,
   listLogs,
+  getLog,
   previewArchive,
   downloadArchive,
   deleteArchive,
