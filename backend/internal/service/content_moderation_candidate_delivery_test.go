@@ -233,7 +233,7 @@ func TestContentModerationLayer2RiskCacheBlocksEveryRequestAndAppliesSideEffects
 	require.False(t, logs[1].AutoBanned)
 }
 
-func TestContentModerationSecurityTestPayloadIsRestrictedWithoutViolationAndReplays(t *testing.T) {
+func TestContentModerationSecurityTestPayloadUsesReviewerRestrictedVerdictAndReplays(t *testing.T) {
 	var calls atomic.Int64
 	var reviewedPayload atomic.Value
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +246,7 @@ func TestContentModerationSecurityTestPayloadIsRestrictedWithoutViolationAndRepl
 		reviewedPayload.Store(append([]byte(nil), body...))
 		contentModerationDeepSeekRuntimeWriteEnvelope(
 			t, w,
-			`{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`,
+			`{"disposition":"restricted","confidence":0.95,"category":"restricted_security_content","reason":"含可操作测试载荷"}`,
 			"stop",
 		)
 	}))
@@ -324,6 +324,100 @@ func TestContentModerationSecurityTestPayloadIsRestrictedWithoutViolationAndRepl
 	require.Equal(t, "cache_replay", logs[1].DecisionSource)
 	require.NotNil(t, logs[1].SourceLogID)
 	require.Equal(t, logs[0].ID, *logs[1].SourceLogID)
+}
+
+func TestContentModerationPolicyRestrictedSafeVerdictIsAllowedAndReplays(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
+			return
+		}
+		calls.Add(1)
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
+		)
+	}))
+	defer server.Close()
+
+	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
+	cache := &contentModerationReplayCache{}
+	repo := &contentModerationReplayRepo{}
+	userRepo := &contentModerationTestUserRepo{user: &User{ID: 87, Role: RoleUser, Status: StatusActive}}
+	svc := NewContentModerationService(nil, repo, cache, nil, userRepo, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"伪造"}),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+	}
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
+	text := "请为删除接口补充输入校验测试用例：状态不得伪造为删除成功。"
+	body := []byte(`{"input":` + strconv.Quote(text) + `}`)
+
+	for index := range 2 {
+		decision := svc.checkUnifiedFragments(context.Background(), ContentModerationCheckInput{
+			RequestID: fmt.Sprintf("safe-policy-context-%d", index), UserID: 87, UserRole: RoleUser,
+			Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
+		}, runtime)
+		require.True(t, decision.Allowed)
+		require.False(t, decision.Blocked)
+		require.False(t, decision.Flagged)
+		require.Equal(t, ContentModerationActionAllow, decision.Action)
+	}
+
+	require.Equal(t, int64(1), calls.Load())
+	require.Zero(t, repo.countCalls)
+	require.Empty(t, userRepo.updated)
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 2)
+	for _, log := range logs {
+		require.Equal(t, ContentModerationActionAllow, log.Action)
+		require.False(t, log.Flagged)
+		require.Equal(t, "safe", log.DeepSeekCategory)
+		require.Equal(t, 0.05, log.DeepSeekConfidence)
+		require.Empty(t, log.DeepSeekReason)
+		require.Equal(t, "safe", log.ReviewOutcome)
+		require.Equal(t, contentModerationKeywordTierPolicyRestrictedReview, log.KeywordTier)
+		require.Zero(t, log.ViolationCount)
+	}
+	require.False(t, logs[0].CacheHit)
+	require.Equal(t, "model", logs[0].DecisionSource)
+	require.Len(t, logs[0].ReviewAttempts, 1)
+	require.Equal(t, "safe", logs[0].ReviewAttempts[0].Verdict)
+	require.True(t, logs[1].CacheHit)
+	require.Equal(t, "cache_replay", logs[1].DecisionSource)
+	require.NotNil(t, logs[1].SourceLogID)
+	require.Equal(t, logs[0].ID, *logs[1].SourceLogID)
+}
+
+func TestContentModerationLegacyPolicyFloorCacheIsRejected(t *testing.T) {
+	cache := &contentModerationReplayCache{}
+	svc := NewContentModerationService(nil, nil, cache, nil, nil, nil, nil, nil)
+	entry := ContentModerationFragmentCacheEntry{
+		Result:             ContentModerationFragmentRestricted,
+		DecisionSource:     "model",
+		ParserStatus:       "parsed",
+		ReviewCacheVersion: contentModerationSecondLayerReviewCacheVersion - 1,
+		KeywordTier:        contentModerationKeywordTierPolicyRestrictedReview,
+		Category:           ContentModerationRestrictedCategory,
+		Confidence:         DefaultContentModerationDeepSeekThreshold,
+		Reason:             "policy restriction",
+	}
+	require.NoError(t, cache.PutFragmentCacheEntry(
+		context.Background(), "policy-v6", "legacy-restricted", entry, 1, 10, 1024, time.Hour,
+	))
+
+	_, found := svc.getUnifiedCandidateReviewCache(context.Background(), "policy-v6", "legacy-restricted")
+	require.False(t, found, "a cached decision created by the removed policy floor must be reviewed again")
+
+	entry.ReviewCacheVersion = contentModerationSecondLayerReviewCacheVersion
+	require.NoError(t, cache.PutFragmentCacheEntry(
+		context.Background(), "policy-v6", "current-restricted", entry, 1, 10, 1024, time.Hour,
+	))
+	result, found := svc.getUnifiedCandidateReviewCache(context.Background(), "policy-v6", "current-restricted")
+	require.True(t, found)
+	require.Equal(t, ContentModerationReviewDispositionRestricted, resultFromUnifiedCandidateReviewCache(result).normalizedDisposition())
 }
 
 func TestContentModerationPolicyRestrictionContextWithoutRiskPayloadIsAllowed(t *testing.T) {
@@ -423,21 +517,6 @@ func TestContentModerationPolicyRestrictedPayloadStaysBlockedWhenReviewFails(t *
 	require.Equal(t, "policy_restricted", logs[0].ReviewOutcome)
 	require.Equal(t, "parse_error", logs[0].ParserStatus)
 	require.Equal(t, "not_counted", logs[0].DispositionStatus)
-}
-
-func TestContentModerationPolicyRestrictionFloorPreservesConfirmedViolation(t *testing.T) {
-	result := applyContentModerationPolicyRestrictionFloor(
-		contentModerationKeywordTierPolicyRestrictedReview,
-		contentModerationSecondLayerResult{
-			Blocked: true, Disposition: ContentModerationReviewDispositionViolation,
-			Category: "cyber_abuse", Confidence: 0.97, ConsensusStatus: "confirmed_violation",
-		},
-	)
-
-	require.True(t, result.Blocked)
-	require.Equal(t, ContentModerationReviewDispositionViolation, result.normalizedDisposition())
-	require.Equal(t, "cyber_abuse", result.Category)
-	require.Equal(t, "confirmed_violation", result.ConsensusStatus)
 }
 
 func TestContentModerationPolicyRestrictedKeywordFallbackReplaysWithoutViolation(t *testing.T) {

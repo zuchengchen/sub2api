@@ -773,11 +773,7 @@ func (s *ContentModerationService) scanContentModerationDeepSeek(
 	cfg *ContentModerationConfig,
 	input contentModerationSecondLayerInput,
 ) (contentModerationSecondLayerResult, bool, error) {
-	result, attempted, err := s.scanContentModerationRemotePool(ctx, cfg, input)
-	if err == nil && attempted {
-		result = applyContentModerationPolicyRestrictionFloor(input.KeywordTier, result)
-	}
-	return result, attempted, err
+	return s.scanContentModerationRemotePool(ctx, cfg, input)
 }
 
 func (s *ContentModerationService) testDeepSeekChannelConnectivity(ctx context.Context, channelID string) (*TestContentModerationDeepSeekChannelResult, error) {

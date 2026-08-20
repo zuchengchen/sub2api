@@ -255,9 +255,9 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 
 		var contextualMatches []contentModerationKeywordMatch
 		if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && runtime.keywordMatcher != nil {
-			policyRestrictionContext := hasContentModerationPolicyRestrictionContext(fragment.Text)
 			policyRestrictionDirect := false
 			keyword, hardMatches, reviewMatches := classifyUnifiedHardKeywordMatches(fragment, runtime)
+			policyRestrictionContext := hasContentModerationPolicyRestrictionContextForMatches(fragment, reviewMatches)
 			if keyword == "" && len(reviewMatches) == 0 && checkFragment.WholeFragmentTruncated && runtime.contextualKeywordMatcher != nil {
 				reviewMatches = runtime.contextualKeywordMatcher.MatchAll(fragment.Text)
 			}
@@ -330,7 +330,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			// fragment when it fits the reviewer budget. The builder distinguishes
 			// harmless metadata bounds from omitted context that must fail closed.
 			tier := contentModerationKeywordTierContextualReview
-			if hasContentModerationPolicyRestrictionContext(fragment.Text) {
+			if hasContentModerationPolicyRestrictionContextForMatches(fragment, contextualMatches) {
 				tier = contentModerationKeywordTierPolicyRestrictedReview
 			}
 			candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
@@ -356,7 +356,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				if checkFragment.WholeFragmentTruncated {
 					tier = contentModerationKeywordTierContextualReview
 				}
-				if hasContentModerationPolicyRestrictionContext(fragment.Text) {
+				if hasContentModerationPolicyRestrictionContextForMatches(fragment, candidateMatches) {
 					tier = contentModerationKeywordTierPolicyRestrictedReview
 				}
 				candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
@@ -409,8 +409,9 @@ func classifyUnifiedHardKeywordMatches(
 	if !hit {
 		return "", nil, nil
 	}
-	if hasContentModerationPolicyRestrictionContext(fragment.Text) {
-		return "", nil, runtime.keywordMatcher.MatchAll(fragment.Text)
+	allMatches := runtime.keywordMatcher.MatchAll(fragment.Text)
+	if hasContentModerationPolicyRestrictionContextForMatches(fragment, allMatches) {
+		return "", nil, allMatches
 	}
 	unconditional := runtime.unconditionalKeywordMatcher
 	contextual := runtime.contextualKeywordMatcher
@@ -1395,7 +1396,7 @@ type contentModerationCandidateReviewOutcome struct {
 }
 
 const (
-	contentModerationSecondLayerReviewCacheVersion = 4
+	contentModerationSecondLayerReviewCacheVersion = 5
 	contentModerationAuditPersistenceTimeout       = 10 * time.Second
 )
 
@@ -1522,7 +1523,6 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 			result: result, parserStatus: "not_attempted", err: errors.New("layer 2 review was not attempted"),
 		}
 	}
-	result = applyContentModerationPolicyRestrictionFloor(work.bundle.PrimaryTier, result)
 	if work.reviewRequired && !result.Blocked && (work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) {
 		return contentModerationCandidateReviewOutcome{
 			result: result, parserStatus: "evidence_truncated", err: errors.New("contextual review evidence coverage was incomplete"),
@@ -1707,7 +1707,7 @@ func resultFromUnifiedCandidateReviewCache(entry ContentModerationFragmentCacheE
 	default:
 		result.setDisposition(ContentModerationReviewDispositionAllow)
 	}
-	return applyContentModerationPolicyRestrictionFloor(entry.KeywordTier, result)
+	return result
 }
 
 func outcomeFromUnifiedCandidateReviewCache(entry ContentModerationFragmentCacheEntry, evidenceHash string) contentModerationCandidateReviewOutcome {
