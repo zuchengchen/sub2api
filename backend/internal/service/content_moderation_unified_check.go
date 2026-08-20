@@ -152,6 +152,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	}
 	fragmentScopes := buildContentModerationFragmentScopes(
 		fragments, scopeKeywordMatcher, scopeCandidateMatcher, cfg.KeywordAllowlist,
+		contentModerationReviewInputLimit(cfg),
 	)
 	checkFragments := buildContentModerationCheckFragments(fragments, fragmentScopes)
 	boundaryFragments := buildContentModerationCrossMessageBoundaryFragments(
@@ -458,6 +459,7 @@ func buildContentModerationFragmentScopes(
 	keywordMatcher *contentModerationKeywordMatcher,
 	candidateMatcher *contentModerationPrefilterMatcher,
 	keywordAllowlist []string,
+	reviewInputLimit int,
 ) []contentModerationFragmentScope {
 	scopes := make([]contentModerationFragmentScope, len(fragments))
 	if keywordMatcher == nil && candidateMatcher == nil {
@@ -509,6 +511,24 @@ func buildContentModerationFragmentScopes(
 		}
 		text, matches, ok := contentModerationFragmentScopeText(groupFragments, keywordMatcher, candidateMatcher, keywordAllowlist)
 		if !ok {
+			continue
+		}
+		if reviewInputLimit < 1 {
+			reviewInputLimit = contentModerationEvidenceWindowBudgetRunes
+		}
+		if utf8.RuneCountInString(text) > reviewInputLimit {
+			scopeFragments := buildLargeContentModerationScopeFragments(
+				group.role, group.path, groupFragments, keywordMatcher, candidateMatcher, keywordAllowlist,
+			)
+			if len(scopeFragments) == 0 {
+				continue
+			}
+			owner := group.members[0]
+			for _, index := range group.members {
+				scopes[index] = contentModerationFragmentScope{
+					Fragments: scopeFragments, Owner: owner, Active: true, Truncated: true,
+				}
+			}
 			continue
 		}
 		scopeFragments, truncated := newContentModerationScopeFragments(group.role, group.path, text, matches)
@@ -670,12 +690,7 @@ func contentModerationCrossMessageBoundaryTexts(
 	rightContext := runePrefix(right.Text, rightBudget)
 	addIfTriggered := func(boundary, reviewText string, leftRunes, separatorRunes int) {
 		matches := contentModerationScopeTriggerMatches(boundary, keywordMatcher, candidateMatcher, keywordAllowlist)
-		crossingMatches := matches[:0]
-		for _, match := range matches {
-			if match.Start < leftRunes && match.End > leftRunes+separatorRunes {
-				crossingMatches = append(crossingMatches, match)
-			}
-		}
+		crossingMatches := contentModerationCrossBoundaryMatches(matches, leftRunes, separatorRunes)
 		if len(crossingMatches) == 0 {
 			return
 		}
@@ -720,6 +735,20 @@ func contentModerationCrossMessageBoundaryTexts(
 		addIfTriggered(leftText+rightText, leftContext+rightContext, leftTextRunes, 0)
 	}
 	return texts
+}
+
+func contentModerationCrossBoundaryMatches(
+	matches []contentModerationKeywordMatch,
+	leftRunes int,
+	separatorRunes int,
+) []contentModerationKeywordMatch {
+	crossing := make([]contentModerationKeywordMatch, 0, len(matches))
+	for _, match := range matches {
+		if match.Start < leftRunes && match.End > leftRunes+separatorRunes {
+			crossing = append(crossing, match)
+		}
+	}
+	return crossing
 }
 
 func contentModerationFragmentGroupBytes(fragments []ContentModerationFragment) int {
@@ -819,7 +848,10 @@ func buildLargeContentModerationScopeFragments(
 			separators := [3]string{rawSeparator, " ", ""}
 			for variant := range tails {
 				boundary := tails[variant] + separators[variant] + prefix
-				if len(candidateMatcher.MatchAllExcluding(boundary, keywordAllowlist)) > 0 && !addWindow(boundary) {
+				matches := candidateMatcher.MatchAllExcluding(boundary, keywordAllowlist)
+				if len(contentModerationCrossBoundaryMatches(
+					matches, utf8.RuneCountInString(tails[variant]), utf8.RuneCountInString(separators[variant]),
+				)) > 0 && !addWindow(boundary) {
 					break
 				}
 			}
@@ -1249,6 +1281,19 @@ func contentModerationHardMatchesForKeyword(text, keyword string) []contentModer
 	return matcher.MatchAll(text)
 }
 
+func contentModerationReviewInputLimit(cfg *ContentModerationConfig) int {
+	limit := contentModerationEvidenceWindowBudgetRunes
+	if cfg == nil {
+		return limit
+	}
+	for _, endpoint := range cfg.enabledYuFengSecondLayerEndpoints() {
+		if endpoint.InputLimit > 0 && endpoint.InputLimit < limit {
+			limit = endpoint.InputLimit
+		}
+	}
+	return limit
+}
+
 func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	ctx context.Context,
 	input ContentModerationCheckInput,
@@ -1258,16 +1303,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	whitelistShadow bool,
 ) *ContentModerationDecision {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
-	endpoints := cfg.enabledYuFengSecondLayerEndpoints()
-	limit := contentModerationEvidenceWindowBudgetRunes
-	if len(endpoints) > 0 {
-		limit = endpoints[0].InputLimit
-		for _, endpoint := range endpoints[1:] {
-			if endpoint.InputLimit < limit {
-				limit = endpoint.InputLimit
-			}
-		}
-	}
+	limit := contentModerationReviewInputLimit(cfg)
 	works := make([]contentModerationCandidateReviewWork, 0, len(candidates))
 	for _, candidate := range candidates {
 		bundle := buildContentModerationCandidateEvidence([]contentModerationCandidateFragment{candidate}, limit, cfg)
