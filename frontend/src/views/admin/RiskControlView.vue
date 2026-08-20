@@ -916,7 +916,7 @@
         :show="selectedLog !== null"
         :title="t('admin.riskControl.inputDetailTitle')"
         width="extra-wide"
-        @close="selectedLog = null"
+        @close="closeLogDetail"
       >
         <div v-if="selectedLog" class="space-y-5" data-test="audit-log-detail">
           <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -925,6 +925,30 @@
               <dd class="mt-1 break-words text-sm text-gray-900 dark:text-white">{{ item.value }}</dd>
             </div>
           </dl>
+
+          <div
+            v-if="selectedLog.source_log_id && selectedLog.source_log_id !== selectedLog.id"
+            class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 dark:border-sky-900/50 dark:bg-sky-900/10"
+            data-test="replay-source"
+          >
+            <div class="min-w-0 text-sm text-sky-900 dark:text-sky-100">
+              <span class="font-medium">{{ t('admin.riskControl.auditReplaySource') }}</span>
+              <span class="ml-2 font-mono">#{{ selectedLog.source_log_id }}</span>
+            </div>
+            <button
+              type="button"
+              class="btn btn-secondary inline-flex items-center gap-1.5"
+              :disabled="sourceLogLoading"
+              data-test="open-replay-source"
+              @click="openReplaySource"
+            >
+              <Icon name="arrowRight" size="sm" />
+              {{ sourceLogLoading ? t('common.loading') : t('admin.riskControl.viewOriginalEvidence') }}
+            </button>
+            <p v-if="sourceLogError" class="basis-full text-xs text-amber-700 dark:text-amber-300">
+              {{ t('admin.riskControl.replaySourceUnavailable') }}
+            </p>
+          </div>
 
           <div v-if="selectedLog.review_attempts?.length" data-test="review-attempts">
             <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
@@ -952,12 +976,16 @@
             </div>
           </div>
 
-          <div v-if="selectedLog.evidence_windows?.length" class="space-y-3" data-test="evidence-windows">
+          <div v-if="evidenceWindows.length" class="space-y-3" data-test="evidence-windows">
             <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
-              {{ t('admin.riskControl.inputDetailContent') }}
+              {{
+                originalLog
+                  ? `${t('admin.riskControl.inputDetailContent')} · ${t('admin.riskControl.auditReplaySource')}`
+                  : t('admin.riskControl.inputDetailContent')
+              }}
             </h3>
             <div
-              v-for="(window, index) in selectedLog.evidence_windows"
+              v-for="(window, index) in evidenceWindows"
               :key="`${window.path}-${index}`"
               class="rounded-lg border border-gray-200 p-3 dark:border-dark-700"
               data-test="evidence-window"
@@ -966,10 +994,22 @@
                 <span>{{ window.context_class }}</span>
                 <span class="font-mono">{{ window.path }}</span>
               </div>
-              <pre
-                class="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-md bg-gray-50 p-3 text-xs text-gray-700 dark:bg-dark-900/50 dark:text-gray-300"
-                >{{ window.text }}</pre
+              <div
+                class="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-md bg-gray-50 p-3 font-mono text-xs text-gray-700 dark:bg-dark-900/50 dark:text-gray-300"
+                data-test="evidence-text"
               >
+                <span
+                  v-for="(segment, segmentIndex) in evidenceSegments(window)"
+                  :key="`${segmentIndex}-${segment.text}`"
+                  :class="
+                    segment.matched
+                      ? 'rounded bg-amber-200 px-0.5 text-amber-950 ring-1 ring-amber-400/70 dark:bg-amber-700/70 dark:text-amber-50 dark:ring-amber-300/60'
+                      : undefined
+                  "
+                  :data-test="segment.matched ? 'evidence-match' : undefined"
+                  :title="segment.matched ? evidenceMatchTitle(segment.matches) : undefined"
+                >{{ segment.text }}</span>
+              </div>
               <div v-if="window.matches?.length" class="mt-2 flex flex-wrap gap-1">
                 <span
                   v-for="match in window.matches"
@@ -983,11 +1023,11 @@
           </div>
 
           <div v-else class="rounded-lg bg-gray-50 p-4 text-sm text-gray-700 dark:bg-dark-900/40 dark:text-gray-300">
-            {{ selectedLog.input_excerpt || selectedLog.error || '-' }}
+            {{ evidenceLog?.input_excerpt || evidenceLog?.error || '-' }}
           </div>
         </div>
         <template #footer>
-          <button type="button" class="btn btn-secondary" @click="selectedLog = null">{{ t('common.close') }}</button>
+          <button type="button" class="btn btn-secondary" @click="closeLogDetail">{{ t('common.close') }}</button>
         </template>
       </BaseDialog>
     </div>
@@ -1006,6 +1046,8 @@ import { OPENAI_COMPATIBLE_PROVIDER_PRESETS } from '@/components/account/openAIC
 import { adminAPI } from '@/api/admin'
 import type {
   ContentModerationConfig,
+  ContentModerationEvidenceMatch,
+  ContentModerationEvidenceWindow,
   ContentModerationFirstLayerStage,
   ContentModerationLayerStage,
   ContentModerationLog,
@@ -1047,6 +1089,12 @@ interface OverviewItem {
   cacheMetrics?: OverviewCacheMetrics
 }
 
+interface EvidenceTextSegment {
+  text: string
+  matched: boolean
+  matches: ContentModerationEvidenceMatch[]
+}
+
 const remoteConsensusRequired = 1
 
 const { t } = useI18n()
@@ -1056,11 +1104,14 @@ const loading = ref(true)
 const refreshing = ref(false)
 const saving = ref(false)
 const logsLoading = ref(false)
+const sourceLogLoading = ref(false)
+const sourceLogError = ref(false)
 const testingChannelID = ref<string | null>(null)
 const status = ref<ContentModerationRuntimeStatus | null>(null)
 const groups = ref<AdminGroup[]>([])
 const logs = ref<ContentModerationLog[]>([])
 const selectedLog = ref<ContentModerationLog | null>(null)
+const originalLog = ref<ContentModerationLog | null>(null)
 const channelTestResults = reactive<Record<string, TestDeepSeekChannelResponse | undefined>>({})
 const savedChannelDigests = reactive<Record<string, string | undefined>>({})
 let refreshTimer: number | null = null
@@ -1069,6 +1120,9 @@ const heartbeatByChannelID = computed(() => {
   const entries = status.value?.remote_heartbeats ?? []
   return new Map(entries.map((heartbeat) => [heartbeat.channel_id, heartbeat]))
 })
+
+const evidenceLog = computed(() => originalLog.value || selectedLog.value)
+const evidenceWindows = computed(() => evidenceLog.value?.evidence_windows ?? [])
 
 const defaultBlockMessage = () => t('admin.riskControl.defaultBlockMessage')
 
@@ -1671,6 +1725,87 @@ function changePageSize(pageSize: number) {
 
 function openLog(row: ContentModerationLog) {
   selectedLog.value = row
+  originalLog.value = null
+  sourceLogLoading.value = false
+  sourceLogError.value = false
+}
+
+function closeLogDetail() {
+  selectedLog.value = null
+  originalLog.value = null
+  sourceLogLoading.value = false
+  sourceLogError.value = false
+}
+
+async function openReplaySource() {
+  const replay = selectedLog.value
+  const sourceID = replay?.source_log_id
+  if (!replay || !sourceID || sourceID === replay.id || sourceLogLoading.value) return
+
+  sourceLogError.value = false
+  const inPage = logs.value.find((item) => item.id === sourceID)
+  if (inPage) {
+    originalLog.value = inPage
+    return
+  }
+
+  sourceLogLoading.value = true
+  try {
+    const original = await adminAPI.riskControl.getLog(sourceID)
+    // Do not replace a newer selection if the request completed after the
+    // administrator opened another record.
+    if (selectedLog.value?.id === replay.id) originalLog.value = original
+  } catch (error: unknown) {
+    if (selectedLog.value?.id === replay.id) {
+      sourceLogError.value = true
+      appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.replaySourceUnavailable')))
+    }
+  } finally {
+    sourceLogLoading.value = false
+  }
+}
+
+function evidenceSegments(window: ContentModerationEvidenceWindow): EvidenceTextSegment[] {
+  const characters = Array.from(window.text || '')
+  if (characters.length === 0) return []
+
+  const spans = (window.matches || [])
+    .map((match) => ({
+      match,
+      start: Number.isFinite(match.start) ? Math.trunc(match.start) : -1,
+      end: Number.isFinite(match.end) ? Math.trunc(match.end) : -1,
+    }))
+    .filter((span) => span.start >= 0 && span.start < characters.length && span.end > span.start)
+    .sort((left, right) => left.start - right.start || right.end - left.end)
+
+  const segments: EvidenceTextSegment[] = []
+  let cursor = 0
+  for (const span of spans) {
+    const start = Math.max(cursor, Math.min(characters.length, span.start))
+    const end = Math.max(start, Math.min(characters.length, span.end))
+    if (start > cursor) {
+      segments.push({ text: characters.slice(cursor, start).join(''), matched: false, matches: [] })
+    }
+    if (end <= cursor) continue
+    segments.push({
+      text: characters.slice(start, end).join(''),
+      matched: true,
+      matches: [span.match],
+    })
+    cursor = end
+  }
+  if (cursor < characters.length) {
+    segments.push({ text: characters.slice(cursor).join(''), matched: false, matches: [] })
+  }
+  return segments.length > 0
+    ? segments
+    : [{ text: characters.join(''), matched: false, matches: [] }]
+}
+
+function evidenceMatchTitle(matches: ContentModerationEvidenceMatch[]): string {
+  return matches
+    .map((match) => `${match.keyword} · ${match.tier}${match.rule_id ? ` · ${match.rule_id}` : ''}`)
+    .join('\n')
 }
 
 function channelKeyStatus(channel: EditableDeepSeekChannel): string {

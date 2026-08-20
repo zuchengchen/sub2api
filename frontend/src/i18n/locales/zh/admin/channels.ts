@@ -440,6 +440,7 @@ export default {
       replayNotCounted: '重试命中，不计次',
       replayNoSideEffects: '不封禁、不发信、不归档、不写入 hash',
       replaySource: '原始判断 #{id}',
+      viewOriginalEvidence: '查看原始证据',
       replayCount: '本页有 {count} 次重试命中',
       replaySourceUnavailable: '原始审核判断已不可用',
       banThreshold: '封禁触发次数',

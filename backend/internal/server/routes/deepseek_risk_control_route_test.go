@@ -30,6 +30,8 @@ func TestDeepSeekRiskControlAdminRouteReplacesLegacyAPIKeyTest(t *testing.T) {
 	require.True(t, exists)
 	_, exists = routes["POST /api/v1/admin/risk-control/deepseek/channels/:id/test-api"]
 	require.True(t, exists)
+	_, exists = routes["GET /api/v1/admin/risk-control/logs/:id"]
+	require.True(t, exists)
 	_, exists = routes["POST /api/v1/admin/risk-control/api-keys/test"]
 	require.False(t, exists)
 }

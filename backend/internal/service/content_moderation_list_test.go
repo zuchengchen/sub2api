@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -11,11 +13,39 @@ import (
 type contentModerationListFilterRepo struct {
 	contentModerationTestRepo
 	filter ContentModerationLogFilter
+	items  []ContentModerationLog
 }
 
 func (r *contentModerationListFilterRepo) ListLogs(_ context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error) {
 	r.filter = filter
-	return nil, &pagination.PaginationResult{}, nil
+	return r.items, &pagination.PaginationResult{Total: int64(len(r.items)), Page: 1, PageSize: filter.Pagination.PageSize}, nil
+}
+
+func TestContentModerationServiceGetLog_ReturnsAnyActionByID(t *testing.T) {
+	repo := &contentModerationListFilterRepo{
+		items: []ContentModerationLog{{ID: 41, Action: ContentModerationActionAllow}},
+	}
+	svc := &ContentModerationService{repo: repo}
+
+	item, err := svc.GetLog(context.Background(), 41)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(41), item.ID)
+	require.NotNil(t, repo.filter.LogID)
+	require.Equal(t, int64(41), *repo.filter.LogID)
+	require.Empty(t, repo.filter.Result)
+	require.Equal(t, 1, repo.filter.Pagination.PageSize)
+}
+
+func TestContentModerationServiceGetLog_NotFound(t *testing.T) {
+	svc := &ContentModerationService{repo: &contentModerationListFilterRepo{}}
+
+	item, err := svc.GetLog(context.Background(), 404)
+
+	require.Nil(t, item)
+	require.Error(t, err)
+	require.Equal(t, http.StatusNotFound, infraerrors.Code(err))
+	require.Equal(t, "CONTENT_MODERATION_LOG_NOT_FOUND", infraerrors.Reason(err))
 }
 
 func TestContentModerationServiceListLogs_AllowsOnlyAuditRecordViews(t *testing.T) {
