@@ -28,7 +28,6 @@ const (
 
 	contentModerationKeywordTierContextualReview       = "contextual_review"
 	contentModerationKeywordTierPolicyRestrictedReview = "policy_restricted_review"
-	contentModerationPolicyFloorConsensusStatus        = "policy_floor_restricted"
 )
 
 var (
@@ -97,25 +96,6 @@ func isContentModerationContextualReviewTier(tier string) bool {
 	default:
 		return false
 	}
-}
-
-func applyContentModerationPolicyRestrictionFloor(
-	keywordTier string,
-	result contentModerationSecondLayerResult,
-) contentModerationSecondLayerResult {
-	if strings.TrimSpace(keywordTier) != contentModerationKeywordTierPolicyRestrictedReview {
-		return result
-	}
-	if result.normalizedDisposition() != ContentModerationReviewDispositionAllow {
-		return result
-	}
-	result.setDisposition(ContentModerationReviewDispositionRestricted)
-	if result.Confidence < DefaultContentModerationDeepSeekThreshold {
-		result.Confidence = DefaultContentModerationDeepSeekThreshold
-	}
-	result.Reason = "policy restriction"
-	result.ConsensusStatus = contentModerationPolicyFloorConsensusStatus
-	return result
 }
 
 func (s *ContentModerationService) scanUnifiedSecondLayer(ctx context.Context, cfg *ContentModerationConfig, text string) (contentModerationSecondLayerResult, bool, error) {
@@ -188,7 +168,7 @@ func (s *ContentModerationService) scanUnifiedSecondLayerPrepared(ctx context.Co
 				// an Enforce availability gate when no paid pool is enabled.
 				yuFengResult.Blocked = false
 				yuFengResult.ConsensusStatus = "local_shadow"
-				return applyContentModerationPolicyRestrictionFloor(input.KeywordTier, yuFengResult), true, nil
+				return yuFengResult, true, nil
 			}
 			return yuFengResult, false, yuFengErr
 		}
@@ -198,12 +178,12 @@ func (s *ContentModerationService) scanUnifiedSecondLayerPrepared(ctx context.Co
 			// use the local-shadow contract requested by the reviewer pool policy.
 			yuFengAttempt.Role = "legacy_primary"
 			yuFengResult.ReviewAttempts = []ContentModerationReviewAttempt{yuFengAttempt}
-			return applyContentModerationPolicyRestrictionFloor(input.KeywordTier, yuFengResult), true, nil
+			return yuFengResult, true, nil
 		}
 		yuFengResult.Blocked = false
 		yuFengResult.ConsensusStatus = "local_shadow"
 		yuFengResult.ReviewAttempts = []ContentModerationReviewAttempt{yuFengAttempt}
-		return applyContentModerationPolicyRestrictionFloor(input.KeywordTier, yuFengResult), true, nil
+		return yuFengResult, true, nil
 	}
 
 	if remoteEnabled {
