@@ -14,6 +14,7 @@ const {
   updateConfig,
   getStatus,
   listLogs,
+  getLog,
   testAPIAvailability,
   testDeepSeekChannel,
   getGroups,
@@ -25,6 +26,7 @@ const {
     updateConfig: vi.fn(),
     getStatus: vi.fn(),
     listLogs: vi.fn(),
+    getLog: vi.fn(),
     testAPIAvailability: vi.fn(),
     testDeepSeekChannel: vi.fn(),
     getGroups: vi.fn(),
@@ -39,6 +41,7 @@ vi.mock('@/api/admin', () => ({
       updateConfig,
       getStatus,
       listLogs,
+      getLog,
       testAPIAvailability,
       testDeepSeekChannel,
     },
@@ -195,8 +198,8 @@ const auditLog = (): ContentModerationLog => ({
     {
       path: 'messages[0].content',
       context_class: 'user',
-      text: 'redacted text',
-      matches: [{ keyword: 'credentials', rule_id: 'layer2-1', tier: 'layer2', start: 0, end: 11 }],
+      text: '前文🔐 credentials 后文',
+      matches: [{ keyword: 'credentials', rule_id: 'layer2-1', tier: 'layer2', start: 4, end: 15 }],
     },
   ],
 })
@@ -258,6 +261,7 @@ describe('admin RiskControlView', () => {
     updateConfig.mockReset()
     getStatus.mockReset()
     listLogs.mockReset()
+    getLog.mockReset()
     testAPIAvailability.mockReset()
     testDeepSeekChannel.mockReset()
     getGroups.mockReset()
@@ -268,6 +272,7 @@ describe('admin RiskControlView', () => {
     updateConfig.mockImplementation(async (payload: UpdateContentModerationConfig) => configFromUpdate(payload))
     getStatus.mockResolvedValue(runtimeStatus())
     listLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
+    getLog.mockResolvedValue(auditLog())
     testAPIAvailability.mockResolvedValue({
       channel_id: 'deepseek-official',
       provider: 'deepseek',
@@ -458,6 +463,47 @@ describe('admin RiskControlView', () => {
     await detailButton!.trigger('click')
     expect(wrapper.get('[data-test="review-attempts"]').text()).toContain('Backup')
     expect(wrapper.get('[data-test="evidence-window"]').text()).toContain('credentials')
+    expect(wrapper.get('[data-test="evidence-match"]').text()).toBe('credentials')
+    wrapper.unmount()
+  })
+
+  it('links a cache replay to the original evidence and keeps keyword highlighting', async () => {
+    const replay = {
+      ...auditLog(),
+      id: 20,
+      request_id: 'req-20',
+      action: 'cache_block',
+      cache_hit: true,
+      decision_source: 'cache_replay',
+      source_log_id: 19,
+      input_excerpt: '[cached evidence]',
+      evidence_windows: [
+        {
+          path: 'messages[0].content',
+          context_class: 'user',
+          text: '缓存 credentials 命中',
+          matches: [{ keyword: 'credentials', rule_id: 'layer2-1', tier: 'layer2', start: 3, end: 14 }],
+        },
+      ],
+    } satisfies ContentModerationLog
+    listLogs.mockResolvedValue({ items: [replay], total: 1, page: 1, page_size: 20, pages: 1 })
+
+    const wrapper = mountView()
+    await flushPromises()
+    const detailButton = wrapper.findAll('button').find((button) => button.text().includes('[cached evidence]'))
+    expect(detailButton).toBeDefined()
+    await detailButton!.trigger('click')
+
+    expect(wrapper.get('[data-test="replay-source"]').text()).toContain('#19')
+    expect(wrapper.get('[data-test="evidence-match"]').text()).toBe('credentials')
+
+    await wrapper.get('[data-test="open-replay-source"]').trigger('click')
+    await flushPromises()
+
+    expect(getLog).toHaveBeenCalledWith(19)
+    expect(wrapper.get('[data-test="replay-source"]').text()).toContain('#19')
+    expect(wrapper.get('[data-test="evidence-match"]').text()).toBe('credentials')
+    expect(wrapper.get('[data-test="evidence-text"]').text()).toContain('前文🔐 credentials 后文')
     wrapper.unmount()
   })
 

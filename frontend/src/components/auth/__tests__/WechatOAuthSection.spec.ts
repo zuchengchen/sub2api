@@ -57,7 +57,6 @@ function buildPublicSettings(overrides: Partial<WeChatPublicSettings> = {}): WeC
     email_verify_enabled: false,
     force_email_on_third_party_signup: false,
     registration_email_suffix_whitelist: [],
-    promo_code_enabled: true,
     password_reset_enabled: false,
     invitation_code_enabled: false,
     turnstile_enabled: false,

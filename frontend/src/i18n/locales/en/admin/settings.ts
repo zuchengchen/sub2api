@@ -137,8 +137,6 @@ export default {
         emailDomainQuota: 'Non-allowlist Domain Quota',
         emailDomainQuotaHint:
           'When enabled and the allowlist is not empty, every other registrable domain can register one account. When disabled, non-allowlist domains are rejected. Has no effect while the allowlist is empty',
-        promoCode: 'Promo Code',
-        promoCodeHint: 'Allow users to use promo codes during registration',
         invitationCode: 'Invitation Code Registration',
         invitationCodeHint: 'When enabled, registration requires a valid one-time invitation code, or a valid referral code while affiliates are enabled',
         passwordReset: 'Password Reset',

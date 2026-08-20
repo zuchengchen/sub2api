@@ -67,9 +67,6 @@ func RegisterAdminRoutes(
 		// 卡密管理
 		registerRedeemCodeRoutes(admin, h)
 
-		// 优惠码管理
-		registerPromoCodeRoutes(admin, h)
-
 		// 系统设置
 		registerSettingsRoutes(admin, h)
 
@@ -153,6 +150,7 @@ func registerContentModerationRoutes(admin *gin.RouterGroup, h *handler.Handlers
 		risk.POST("/deepseek/channels/:id/test-api", h.Admin.ContentModeration.TestContentModerationChannelAPI)
 		risk.GET("/status", h.Admin.ContentModeration.GetStatus)
 		risk.GET("/logs", h.Admin.ContentModeration.ListLogs)
+		risk.GET("/logs/:id", h.Admin.ContentModeration.GetLog)
 		risk.GET("/logs/:id/archive/preview", h.Admin.ContentModeration.PreviewArchive)
 		risk.GET("/logs/:id/archive/download", h.Admin.ContentModeration.DownloadArchive)
 		risk.DELETE("/logs/:id/archive", h.Admin.ContentModeration.DeleteArchive)
@@ -517,18 +515,6 @@ func registerRedeemCodeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		codes.POST("/batch-delete", h.Admin.Redeem.BatchDelete)
 		codes.POST("/batch-update", h.Admin.Redeem.BatchUpdate)
 		codes.POST("/:id/expire", h.Admin.Redeem.Expire)
-	}
-}
-
-func registerPromoCodeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	promoCodes := admin.Group("/promo-codes")
-	{
-		promoCodes.GET("", h.Admin.Promo.List)
-		promoCodes.GET("/:id", h.Admin.Promo.GetByID)
-		promoCodes.POST("", h.Admin.Promo.Create)
-		promoCodes.PUT("/:id", h.Admin.Promo.Update)
-		promoCodes.DELETE("/:id", h.Admin.Promo.Delete)
-		promoCodes.GET("/:id/usages", h.Admin.Promo.GetUsages)
 	}
 }
 

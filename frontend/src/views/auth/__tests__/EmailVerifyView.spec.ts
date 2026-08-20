@@ -806,7 +806,6 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'normal@example.com',
         password: 'secret-456',
-        promo_code: 'PROMO',
         invitation_code: 'INVITE',
       })
     )
@@ -835,7 +834,6 @@ describe('EmailVerifyView', () => {
       turnstile_token: undefined,
       tencent_captcha_ticket: undefined,
       tencent_captcha_randstr: undefined,
-      promo_code: 'PROMO',
       invitation_code: 'INVITE',
     })
     expect(apiClientPostMock).not.toHaveBeenCalled()

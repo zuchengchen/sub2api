@@ -449,6 +449,7 @@ export default {
       replayNotCounted: 'Replay, not counted',
       replayNoSideEffects: 'No ban, email, archive, or hash side effect',
       replaySource: 'Original decision #{id}',
+      viewOriginalEvidence: 'View original evidence',
       replayCount: '{count} replay hits on this page',
       replaySourceUnavailable: 'The original moderation decision is no longer available',
       banThreshold: 'Ban Threshold',

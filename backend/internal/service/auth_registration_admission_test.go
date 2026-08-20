@@ -136,7 +136,6 @@ func TestRegisterWithAffiliateAdmissionBindsAdmissionCodeOwner(t *testing.T) {
 		"new@example.com",
 		"password",
 		"",
-		"",
 		"FGDZC7AJ7ZKZ",
 		"OTHER-CODE",
 	)

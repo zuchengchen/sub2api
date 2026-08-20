@@ -447,65 +447,6 @@ export default {
       deleteConfirm: 'Are you sure you want to delete this announcement? This action cannot be undone.'
     },
 
-    // Promo Codes
-    promo: {
-      title: 'Promo Code Management',
-      description: 'Create and manage registration promo codes',
-      createCode: 'Create Promo Code',
-      editCode: 'Edit Promo Code',
-      deleteCode: 'Delete Promo Code',
-      searchCodes: 'Search codes...',
-      allStatus: 'All Status',
-      columns: {
-        code: 'Code',
-        bonusAmount: 'Bonus Amount',
-        maxUses: 'Max Uses',
-        usedCount: 'Used',
-        usage: 'Usage',
-        status: 'Status',
-        expiresAt: 'Expires At',
-        createdAt: 'Created At',
-        actions: 'Actions'
-      },
-      // Form labels (flat structure for template usage)
-      code: 'Promo Code',
-      autoGenerate: 'auto-generate if empty',
-      codePlaceholder: 'Enter promo code or leave empty',
-      bonusAmount: 'Bonus Amount ($)',
-      maxUses: 'Max Uses',
-      zeroUnlimited: '0 = unlimited',
-      expiresAt: 'Expires At',
-      notes: 'Notes',
-      notesPlaceholder: 'Optional notes for this code',
-      status: 'Status',
-      neverExpires: 'Never expires',
-      // Status labels
-      statusActive: 'Active',
-      statusDisabled: 'Disabled',
-      statusExpired: 'Expired',
-      statusMaxUsed: 'Used Up',
-      // Usage records
-      usageRecords: 'Usage Records',
-      viewUsages: 'View Usages',
-      noUsages: 'No usage records yet',
-      userPrefix: 'User #{id}',
-      copied: 'Copied!',
-      // Messages
-      noCodesYet: 'No promo codes yet',
-      createFirstCode: 'Create your first promo code to offer registration bonuses.',
-      codeCreated: 'Promo code created successfully',
-      codeUpdated: 'Promo code updated successfully',
-      codeDeleted: 'Promo code deleted successfully',
-      deleteCodeConfirm: 'Are you sure you want to delete this promo code? This action cannot be undone.',
-      copyRegisterLink: 'Copy register link',
-      registerLinkCopied: 'Register link copied to clipboard',
-      failedToLoad: 'Failed to load promo codes',
-      failedToCreate: 'Failed to create promo code',
-      failedToUpdate: 'Failed to update promo code',
-      failedToDelete: 'Failed to delete promo code',
-      failedToLoadUsages: 'Failed to load usage records'
-    },
-
     // Usage Records
     usage: {
       title: 'Usage Records',
