@@ -25,6 +25,7 @@ func TestContentModerationGatePrecedesAccountBillingAndUpstreamSideEffects(t *te
 		{file: "gateway_handler_responses.go", function: "Responses", auditToken: "checkContentModeration"},
 		{file: "gemini_v1beta_handler.go", function: "GeminiV1BetaModels", auditToken: "checkContentModeration"},
 		{file: "openai_gateway_handler.go", function: "Responses", auditToken: "checkContentModeration"},
+		{file: "openai_gateway_count_tokens.go", function: "ResponsesInputTokens", auditToken: "checkContentModeration"},
 		{file: "openai_gateway_handler.go", function: "Messages", auditToken: "checkContentModeration"},
 		{file: "openai_chat_completions.go", function: "ChatCompletions", auditToken: "checkContentModeration"},
 		{file: "openai_images.go", function: "Images", auditToken: "checkContentModeration"},
