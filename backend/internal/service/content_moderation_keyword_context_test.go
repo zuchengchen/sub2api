@@ -440,3 +440,42 @@ func TestContentModerationPolicyRestrictionContextSignals(t *testing.T) {
 		require.False(t, hasContentModerationPolicyRestrictionContext(text), text)
 	}
 }
+
+func TestContentModerationPolicyRestrictionContextIsScopedToKeywordMatch(t *testing.T) {
+	tests := []struct {
+		name string
+		role string
+		text string
+		want bool
+	}{
+		{
+			name: "same sentence",
+			role: "user",
+			text: "输入校验测试用例不得伪造删除成功状态。",
+			want: true,
+		},
+		{
+			name: "different sentence",
+			role: "user",
+			text: "不得伪造删除成功状态。后续章节介绍输入校验测试用例。",
+			want: false,
+		},
+		{
+			name: "different tool line",
+			role: "tool",
+			text: "不得伪造删除成功状态\n输入校验测试用例",
+			want: false,
+		},
+	}
+
+	matcher := newContentModerationPrefilterMatcher([]string{"伪造"})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fragment, ok := newContentModerationFragment(tt.role, "text", "messages.0.content", tt.text)
+			require.True(t, ok)
+			matches := matcher.MatchAll(fragment.Text)
+			require.NotEmpty(t, matches)
+			require.Equal(t, tt.want, hasContentModerationPolicyRestrictionContextForMatches(fragment, matches))
+		})
+	}
+}

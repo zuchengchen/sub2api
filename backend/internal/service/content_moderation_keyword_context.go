@@ -9,7 +9,7 @@ const (
 	powerShellEncodedCommand                      = "powershell -encodedcommand"
 	powerShellShortEncodedCommand                 = "powershell -enc"
 	maxDocumentationCommandPlaceholderBytes       = 128
-	contentModerationKeywordContextPolicyRevision = "keyword-context-v5"
+	contentModerationKeywordContextPolicyRevision = "keyword-context-v6"
 	maliciousMacroContextWindowRunes              = 192
 	maliciousMacroIntentDistanceRunes             = 32
 )
@@ -117,6 +117,23 @@ func hasContentModerationPolicyRestrictionContext(text string) bool {
 	text = strings.ToLower(text)
 	return containsAnyString(text, policyRestrictionChineseContextSignals[:]) ||
 		containsAnyASCIIWordStem(text, policyRestrictionEnglishContextSignals[:])
+}
+
+func hasContentModerationPolicyRestrictionContextForMatches(
+	fragment ContentModerationFragment,
+	matches []contentModerationKeywordMatch,
+) bool {
+	text := []rune(fragment.Text)
+	for _, match := range matches {
+		if match.Start < 0 || match.End <= match.Start || match.End > len(text) {
+			continue
+		}
+		span := maliciousMacroKeywordContextSpan(fragment, text, match)
+		if hasContentModerationPolicyRestrictionContext(string(text[span.start:span.end])) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyContentModerationKeywordContext applies a narrowly scoped policy to
