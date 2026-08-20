@@ -137,8 +137,6 @@ export default {
         emailDomainQuota: '非白名单域名限量注册',
         emailDomainQuotaHint:
           '开启后，白名单非空时，其他可注册主域名各限注册一个账户；关闭时非白名单域名直接拒绝注册。白名单为空时本开关无效果',
-        promoCode: '优惠码',
-        promoCodeHint: '允许用户在注册时使用优惠码',
         invitationCode: '邀请码注册',
         invitationCodeHint: '开启后，用户注册时需要填写有效的一次性邀请码；邀请返利开启时，也可使用有效推广码准入',
         passwordReset: '忘记密码',

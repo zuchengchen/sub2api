@@ -642,7 +642,6 @@ func TestAPIContracts(t *testing.T) {
 					service.SettingKeyRegistrationEnabled:              "true",
 					service.SettingKeyEmailVerifyEnabled:               "false",
 					service.SettingKeyRegistrationEmailSuffixWhitelist: "[]",
-					service.SettingKeyPromoCodeEnabled:                 "true",
 
 					service.SettingKeySMTPHost:     "smtp.example.com",
 					service.SettingKeySMTPPort:     "587",
@@ -716,7 +715,6 @@ func TestAPIContracts(t *testing.T) {
 					"email_verify_enabled": false,
 					"registration_email_suffix_whitelist": [],
 					"registration_email_domain_quota_enabled": false,
-					"promo_code_enabled": true,
 					"password_reset_enabled": false,
 						"frontend_url": "",
 						"totp_enabled": false,
@@ -1063,7 +1061,6 @@ func TestAPIContracts(t *testing.T) {
 					"email_verify_enabled": false,
 					"registration_email_suffix_whitelist": [],
 					"registration_email_domain_quota_enabled": false,
-					"promo_code_enabled": true,
 					"password_reset_enabled": false,
 					"frontend_url": "",
 						"invitation_code_enabled": false,
@@ -1471,7 +1468,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingService := service.NewSettingService(settingRepo, cfg)
 
 	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
+	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil)

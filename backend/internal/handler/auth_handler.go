@@ -23,7 +23,6 @@ type AuthHandler struct {
 	authService          *service.AuthService
 	userService          *service.UserService
 	settingSvc           *service.SettingService
-	promoService         *service.PromoService
 	redeemService        *service.RedeemService
 	totpService          *service.TotpService
 	userAttributeService *service.UserAttributeService
@@ -33,13 +32,12 @@ type AuthHandler struct {
 }
 
 // NewAuthHandler creates a new AuthHandler
-func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userService *service.UserService, settingService *service.SettingService, promoService *service.PromoService, redeemService *service.RedeemService, totpService *service.TotpService, userAttributeService *service.UserAttributeService) *AuthHandler {
+func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userService *service.UserService, settingService *service.SettingService, redeemService *service.RedeemService, totpService *service.TotpService, userAttributeService *service.UserAttributeService) *AuthHandler {
 	return &AuthHandler{
 		cfg:                  cfg,
 		authService:          authService,
 		userService:          userService,
 		settingSvc:           settingService,
-		promoService:         promoService,
 		redeemService:        redeemService,
 		totpService:          totpService,
 		userAttributeService: userAttributeService,
@@ -54,7 +52,6 @@ type RegisterRequest struct {
 	TurnstileToken        string `json:"turnstile_token"`
 	TencentCaptchaTicket  string `json:"tencent_captcha_ticket"`
 	TencentCaptchaRandstr string `json:"tencent_captcha_randstr"`
-	PromoCode             string `json:"promo_code"`      // 注册优惠码
 	InvitationCode        string `json:"invitation_code"` // 注册准入码（邀请码或推广码）
 	AffCode               string `json:"aff_code"`        // 邀请返利码
 }
@@ -195,7 +192,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		req.Email,
 		req.Password,
 		req.VerifyCode,
-		req.PromoCode,
 		req.InvitationCode,
 		req.AffCode,
 	)
@@ -453,75 +449,6 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 	response.Success(c, UserResponse{
 		userProfileResponse: userProfileResponseFromService(user, identities),
 		RunMode:             runMode,
-	})
-}
-
-// ValidatePromoCodeRequest 验证优惠码请求
-type ValidatePromoCodeRequest struct {
-	Code string `json:"code" binding:"required"`
-}
-
-// ValidatePromoCodeResponse 验证优惠码响应
-type ValidatePromoCodeResponse struct {
-	Valid       bool    `json:"valid"`
-	BonusAmount float64 `json:"bonus_amount,omitempty"`
-	ErrorCode   string  `json:"error_code,omitempty"`
-	Message     string  `json:"message,omitempty"`
-}
-
-// ValidatePromoCode 验证优惠码（公开接口，注册前调用）
-// POST /api/v1/auth/validate-promo-code
-func (h *AuthHandler) ValidatePromoCode(c *gin.Context) {
-	// 检查优惠码功能是否启用
-	if h.settingSvc != nil && !h.settingSvc.IsPromoCodeEnabled(c.Request.Context()) {
-		response.Success(c, ValidatePromoCodeResponse{
-			Valid:     false,
-			ErrorCode: "PROMO_CODE_DISABLED",
-		})
-		return
-	}
-
-	var req ValidatePromoCodeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-
-	promoCode, err := h.promoService.ValidatePromoCode(c.Request.Context(), req.Code)
-	if err != nil {
-		// 根据错误类型返回对应的错误码
-		errorCode := "PROMO_CODE_INVALID"
-		switch err {
-		case service.ErrPromoCodeNotFound:
-			errorCode = "PROMO_CODE_NOT_FOUND"
-		case service.ErrPromoCodeExpired:
-			errorCode = "PROMO_CODE_EXPIRED"
-		case service.ErrPromoCodeDisabled:
-			errorCode = "PROMO_CODE_DISABLED"
-		case service.ErrPromoCodeMaxUsed:
-			errorCode = "PROMO_CODE_MAX_USED"
-		case service.ErrPromoCodeAlreadyUsed:
-			errorCode = "PROMO_CODE_ALREADY_USED"
-		}
-
-		response.Success(c, ValidatePromoCodeResponse{
-			Valid:     false,
-			ErrorCode: errorCode,
-		})
-		return
-	}
-
-	if promoCode == nil {
-		response.Success(c, ValidatePromoCodeResponse{
-			Valid:     false,
-			ErrorCode: "PROMO_CODE_INVALID",
-		})
-		return
-	}
-
-	response.Success(c, ValidatePromoCodeResponse{
-		Valid:       true,
-		BonusAmount: promoCode.BonusAmount,
 	})
 }
 

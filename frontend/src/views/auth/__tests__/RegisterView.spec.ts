@@ -13,7 +13,6 @@ const { getPublicSettingsMock, registerMock, showErrorMock, validateInvitationCo
 const publicSettings = {
   registration_enabled: true,
   email_verify_enabled: false,
-  promo_code_enabled: false,
   invitation_code_enabled: false,
   affiliate_enabled: true,
   turnstile_enabled: true,
