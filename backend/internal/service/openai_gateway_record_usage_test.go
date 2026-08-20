@@ -1362,7 +1362,7 @@ func TestOpenAIGatewayServiceRecordUsage_SparkShadowUsesCurrentParentBillingSett
 					Model:     "gpt-5.4-2026-03-05",
 					Duration:  time.Second,
 				},
-				APIKey: openAIRecordUsageAPIKeyWithGroup(svc, 1016, false),
+				APIKey: openAIRecordUsageAPIKeyWithGroup(svc, 1016, true),
 				User:   &User{ID: 2016},
 				Account: &Account{
 					ID:              3016,
