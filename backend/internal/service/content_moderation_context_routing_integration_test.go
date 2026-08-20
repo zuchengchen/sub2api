@@ -195,6 +195,78 @@ func TestContentModerationSingleFragmentWithinBudgetContextualReviewAllowsAndCac
 	}
 }
 
+func TestContentModerationOverBudgetMultipartScopeReviewsContainedCandidateOnce(t *testing.T) {
+	tests := []struct {
+		name        string
+		label       string
+		wantBlocked bool
+	}{
+		{name: "safe context is allowed", label: "sec"},
+		{name: "risky context is blocked", label: "mc", wantBlocked: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var modelCalls atomic.Int64
+			var reviewedPayload atomic.Value
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				modelCalls.Add(1)
+				body, _ := io.ReadAll(r.Body)
+				reviewedPayload.Store(string(body))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, tc.label)
+			}))
+			defer server.Close()
+
+			cfg := contextualRoutingTestConfig(server.URL)
+			cfg.CandidateKeywords = []string{"伪造"}
+			cfg.normalize()
+			repo := &contentModerationReplayRepo{}
+			cache := &contentModerationReplayCache{}
+			svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+			svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
+
+			const target = "外部云服务未配置凭据时应明确报错，不能伪造成功。"
+			background := strings.Repeat("a", contentModerationEvidenceWindowBudgetRunes+100)
+			body, err := json.Marshal(map[string]any{"input": []any{map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": background},
+					map[string]any{"type": "input_text", "text": target},
+				},
+			}}})
+			require.NoError(t, err)
+			input := contextualRoutingTestInput("placeholder", "")
+			input.Body = body
+
+			decision := svc.checkUnifiedFragments(
+				context.Background(), input, contextualRoutingTestRuntime(cfg, []string{"伪造"}),
+			)
+
+			require.Equal(t, tc.wantBlocked, decision.Blocked)
+			require.Equal(t, !tc.wantBlocked, decision.Allowed)
+			require.Equal(t, int64(1), modelCalls.Load(), "the complete child fragment should be the only review candidate")
+			payload, ok := reviewedPayload.Load().(string)
+			require.True(t, ok)
+			require.Contains(t, payload, target)
+			require.NotContains(t, payload, strings.Repeat("a", 256), "the oversized parent scope must not be submitted")
+
+			logs := repo.snapshotLogs()
+			require.Len(t, logs, 1)
+			require.Equal(t, "伪造", logs[0].MatchedKeyword)
+			require.NotEqual(t, ContentModerationActionReviewUnavailable, logs[0].Action)
+			if tc.wantBlocked {
+				require.Equal(t, ContentModerationActionSecondLayerBlock, decision.Action)
+				require.True(t, logs[0].Flagged)
+			} else {
+				require.Equal(t, ContentModerationActionAllow, decision.Action)
+				require.Equal(t, "safe", logs[0].ReviewOutcome)
+				require.False(t, logs[0].Flagged)
+			}
+		})
+	}
+}
+
 func TestContentModerationContextualKeywordSplitAcrossMessagePartsIsReviewed(t *testing.T) {
 	var modelCalls atomic.Int64
 	var reviewedPayload atomic.Value
