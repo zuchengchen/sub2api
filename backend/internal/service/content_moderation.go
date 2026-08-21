@@ -318,6 +318,8 @@ type ContentModerationCheckInput struct {
 	RawRequest  ContentModerationRawRequest
 	UserRole    string
 	Reservation *ContentModerationPendingReservation
+
+	lineageFragments []ContentModerationFragment
 }
 
 type ContentModerationInput struct {
@@ -785,6 +787,12 @@ type ContentModerationFragmentCacheEntry struct {
 type ContentModerationFragmentTTLCache interface {
 	GetFragmentCacheEntry(ctx context.Context, namespace, fragmentHash string) (ContentModerationFragmentCacheEntry, bool, error)
 	PutFragmentCacheEntry(ctx context.Context, namespace, fragmentHash string, entry ContentModerationFragmentCacheEntry, estimatedBytes int64, maxEntries int, maxBytes int64, ttl time.Duration) error
+}
+
+// ContentModerationFragmentBatchCache avoids one Redis round trip per
+// historical fragment when enforcing conversation-lineage rejections.
+type ContentModerationFragmentBatchCache interface {
+	GetFirstFragmentCacheEntry(ctx context.Context, namespace string, fragmentHashes []string) (string, ContentModerationFragmentCacheEntry, bool, error)
 }
 
 type ContentModerationFragmentAliasCache interface {

@@ -27,7 +27,10 @@ var contentModerationBodySizeUpperBounds = [...]int64{
 	-1,
 }
 
-const contentModerationWhitelistShadowCacheSuffix = ":whitelist-shadow-v1"
+const (
+	contentModerationWhitelistShadowCacheSuffix = ":whitelist-shadow-v1"
+	contentModerationLineageCacheSuffix         = ":lineage-rejection-v1"
+)
 
 const (
 	contentModerationContextScopeMaxRunes   = 4096
@@ -138,7 +141,24 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	}
 	whitelistShadow := cfg.includesUserEmail(input.UserEmail)
 
-	fragments := SelectContentModerationReviewFragments(ExtractContentModerationFragments(input.Protocol, input.Body))
+	allFragments := ExtractContentModerationFragments(input.Protocol, input.Body)
+	fragments, historicalFragments := partitionContentModerationReviewFragments(allFragments)
+	input.lineageFragments = fragments
+	lineageFragments := append(append([]ContentModerationFragment(nil), historicalFragments...), fragments...)
+	cache, _ := s.hashCache.(ContentModerationFragmentCache)
+	// Model-review entries are shared across whitelist and ordinary traffic so
+	// a later Enforce request can promote an already reviewed risk. Whole-
+	// fragment decisions keep the whitelist suffix because their disposition
+	// semantics differ; the hash domains also prevent cross-entry collisions.
+	reviewNamespace := runtime.fragmentCacheNamespace
+	if reviewNamespace == "" {
+		reviewNamespace = cfg.fragmentCacheNamespace()
+	}
+	if !whitelistShadow {
+		if lineageDecision := s.replayUnifiedLineageRejection(ctx, input, cfg, reviewNamespace, cache, lineageFragments); lineageDecision != nil {
+			return lineageDecision
+		}
+	}
 	if len(fragments) == 0 {
 		return allow
 	}
@@ -160,15 +180,6 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	)
 	if len(boundaryFragments) > 0 {
 		checkFragments = append(boundaryFragments, checkFragments...)
-	}
-	cache, _ := s.hashCache.(ContentModerationFragmentCache)
-	// Model-review entries are shared across whitelist and ordinary traffic so
-	// a later Enforce request can promote an already reviewed risk. Whole-
-	// fragment decisions keep the whitelist suffix because their disposition
-	// semantics differ; the hash domains also prevent cross-entry collisions.
-	reviewNamespace := runtime.fragmentCacheNamespace
-	if reviewNamespace == "" {
-		reviewNamespace = cfg.fragmentCacheNamespace()
 	}
 	fragmentNamespace := reviewNamespace
 	if whitelistShadow {
@@ -243,10 +254,19 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						continue
 					}
 					var decision *ContentModerationDecision
+					var log *ContentModerationLog
 					if restrictedReplay {
-						decision, _, _ = s.unifiedRestrictedDecisionWithAudit(ctx, input, cfg, fragment, category, keyword, cachedAudit)
+						decision, log, _ = s.unifiedRestrictedDecisionWithAudit(ctx, input, cfg, fragment, category, keyword, cachedAudit)
 					} else {
-						decision, _, _ = s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, category, keyword, cachedAudit)
+						decision, log, _ = s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionCacheBlock, category, keyword, cachedAudit)
+					}
+					if decision.Blocked {
+						lineageEntry := entry
+						lineageEntry.DispositionApplied = true
+						if lineageEntry.SourceLogID == nil {
+							lineageEntry.SourceLogID = contentModerationLogIDPtr(log)
+						}
+						s.putUnifiedLineageRejection(ctx, input, cfg, reviewNamespace, cache, fragment, lineageEntry)
 					}
 					releaseDecisionLock()
 					return decision
@@ -309,17 +329,22 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					} else {
 						decision, log, persisted = s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, ContentModerationActionKeywordBlock, keywordCategory, keyword, audit)
 					}
-					if persisted && fragmentCacheEligible {
+					if persisted && decision.Blocked {
 						cacheResult := ContentModerationFragmentBlock
 						if policyRestrictionDirect {
 							cacheResult = ContentModerationFragmentRestricted
 						}
-						s.putUnifiedFragmentCacheEntry(ctx, cache, fragmentNamespace, cfg, fragment, ContentModerationFragmentCacheEntry{
+						cacheEntry := ContentModerationFragmentCacheEntry{
 							Result: cacheResult, SourceLogID: contentModerationLogIDPtr(log), ReplayOfInputHash: fragment.Hash,
 							DecisionSource: "keyword_high_confidence", Category: keywordCategory, MatchedKeyword: keyword,
 							KeywordTier: keywordTier, KeywordRuleID: contentModerationKeywordRuleID(keyword),
 							EvidenceMode: hardEvidence.Evidence.Mode, EvidenceTruncated: hardEvidence.Evidence.Truncated,
-						})
+							DispositionApplied: true,
+						}
+						if fragmentCacheEligible {
+							s.putUnifiedFragmentCacheEntry(ctx, cache, fragmentNamespace, cfg, fragment, cacheEntry)
+						}
+						s.putUnifiedLineageRejection(ctx, input, cfg, reviewNamespace, cache, fragment, cacheEntry)
 					}
 					releaseDecisionLock()
 					return decision
@@ -392,6 +417,132 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		return s.checkUnifiedCandidateEvidence(ctx, input, cfg, reviewNamespace, candidates, whitelistShadow)
 	}
 	return allow
+}
+
+func (s *ContentModerationService) replayUnifiedLineageRejection(
+	ctx context.Context,
+	input ContentModerationCheckInput,
+	cfg *ContentModerationConfig,
+	namespace string,
+	cache ContentModerationFragmentCache,
+	fragments []ContentModerationFragment,
+) *ContentModerationDecision {
+	if cache == nil || cfg == nil || cfg.Mode != ContentModerationModePreBlock || len(fragments) == 0 {
+		return nil
+	}
+	hashes, representatives := contentModerationLineageUnitHashes(input, fragments)
+	if len(hashes) == 0 {
+		return nil
+	}
+	lineageNamespace := namespace + contentModerationLineageCacheSuffix
+	var (
+		hitHash string
+		entry   ContentModerationFragmentCacheEntry
+		found   bool
+		err     error
+	)
+	if batchCache, ok := cache.(ContentModerationFragmentBatchCache); ok {
+		const batchSize = 256
+		for start := 0; start < len(hashes) && !found && err == nil; start += batchSize {
+			end := start + batchSize
+			if end > len(hashes) {
+				end = len(hashes)
+			}
+			remaining := hashes[start:end]
+			for len(remaining) > 0 {
+				hitHash, entry, found, err = batchCache.GetFirstFragmentCacheEntry(ctx, lineageNamespace, remaining)
+				valid := entry.Result == ContentModerationFragmentBlock || entry.Result == ContentModerationFragmentRestricted
+				if err != nil || !found || valid {
+					break
+				}
+				index := 0
+				for index < len(remaining) && remaining[index] != hitHash {
+					index++
+				}
+				if index >= len(remaining)-1 {
+					found = false
+					break
+				}
+				remaining = remaining[index+1:]
+			}
+		}
+	} else {
+		for _, hash := range hashes {
+			entry, found, err = s.getUnifiedFragmentCache(ctx, cache, lineageNamespace, hash)
+			if err != nil || (found &&
+				(entry.Result == ContentModerationFragmentBlock || entry.Result == ContentModerationFragmentRestricted)) {
+				hitHash = hash
+				break
+			}
+			found = false
+		}
+	}
+	if err != nil {
+		s.fragmentCacheErrors.Add(1)
+		slog.Warn("content_moderation.lineage_cache_get_failed", "request_id", input.RequestID, "error", err)
+		return &ContentModerationDecision{
+			Allowed: false, Blocked: false, Flagged: false,
+			Message:    "Risk-control history check is temporarily unavailable; retry later",
+			StatusCode: http.StatusServiceUnavailable, Action: ContentModerationActionReviewUnavailable, RetryAfter: 1,
+		}
+	}
+	if !found ||
+		(entry.Result != ContentModerationFragmentBlock && entry.Result != ContentModerationFragmentRestricted) {
+		return nil
+	}
+	s.fragmentCacheHits.Add(1)
+	s.fragmentCacheReplays.Add(1)
+	fragment := representatives[hitHash]
+	audit := unifiedModerationAudit{
+		CacheHit: true, DecisionSource: "lineage_cache_replay", SourceLogID: entry.SourceLogID,
+		ReplayOfInputHash: defaultContentModerationString(entry.ReplayOfInputHash, hitHash), CacheNamespace: lineageNamespace,
+		ModelProfile: entry.ModelProfile, PromptVersion: entry.PromptVersion, EvidenceMode: entry.EvidenceMode,
+		EvidenceTruncated: entry.EvidenceTruncated, ParserStatus: entry.ParserStatus,
+		KeywordTier: entry.KeywordTier, KeywordRuleID: entry.KeywordRuleID, InputHash: hitHash,
+		DeepSeekConfidence: entry.Confidence, DeepSeekCategory: entry.Category, DeepSeekReason: entry.Reason,
+		ReviewOutcome: entry.ReviewOutcome, ReviewerDisagreement: entry.ReviewerDisagreement,
+		ConsensusStatus: entry.ConsensusStatus, RemoteVotes: entry.RemoteVotes,
+	}
+	var decision *ContentModerationDecision
+	if entry.Result == ContentModerationFragmentRestricted {
+		audit.ReviewOutcome = defaultContentModerationString(audit.ReviewOutcome, "policy_restricted")
+		audit.DeepSeekCategory = defaultContentModerationString(audit.DeepSeekCategory, ContentModerationRestrictedCategory)
+		decision, _, _ = s.unifiedRestrictedDecisionWithAudit(ctx, input, cfg, fragment, entry.Category, entry.MatchedKeyword, audit)
+	} else {
+		action := ContentModerationActionCacheBlock
+		if entry.ReviewCacheVersion == contentModerationSecondLayerReviewCacheVersion {
+			action = ContentModerationActionSecondLayerBlock
+		}
+		decision, _, _ = s.unifiedBlockDecisionWithAudit(ctx, input, cfg, fragment, action, entry.Category, entry.MatchedKeyword, audit)
+	}
+	// Active descendants renew the rejection marker so an actively used branch
+	// remains blocked for the configured block TTL.
+	fragment.Hash = hitHash
+	s.putUnifiedFragmentCacheEntry(ctx, cache, lineageNamespace, cfg, fragment, entry)
+	return decision
+}
+
+func (s *ContentModerationService) putUnifiedLineageRejection(
+	ctx context.Context,
+	input ContentModerationCheckInput,
+	cfg *ContentModerationConfig,
+	namespace string,
+	cache ContentModerationFragmentCache,
+	source ContentModerationFragment,
+	entry ContentModerationFragmentCacheEntry,
+) {
+	if cache == nil || cfg == nil || !entry.DispositionApplied ||
+		(entry.Result != ContentModerationFragmentBlock && entry.Result != ContentModerationFragmentRestricted) {
+		return
+	}
+	hash, representative := contentModerationLineageUnitForFragment(input, source, input.lineageFragments)
+	if hash == "" {
+		return
+	}
+	representative.Hash = hash
+	entry.ExpiresAt = time.Time{}
+	entry.Expired = false
+	s.putUnifiedFragmentCacheEntry(ctx, cache, namespace+contentModerationLineageCacheSuffix, cfg, representative, entry)
 }
 
 func contentModerationPreserveWholeUserFragment(fragment ContentModerationFragment) bool {
@@ -1310,7 +1461,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 		primary := candidate.Fragment
 		primary.Text = bundle.Evidence.Text
 		works = append(works, contentModerationCandidateReviewWork{
-			bundle: bundle, primary: primary,
+			bundle: bundle, primary: primary, source: candidate.Fragment,
 			reviewRequired:         isContentModerationContextualReviewTier(candidate.Tier) || candidate.WholeFragment,
 			requireHealthyReviewer: !whitelistShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce,
 		})
@@ -1324,6 +1475,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 		asyncInput.RawRequest.Body = nil
 		asyncInput.RawRequest.Headers = nil
 		asyncInput.Reservation = nil
+		asyncInput.lineageFragments = nil
 		asyncCfg := cloneContentModerationConfig(cfg)
 		for index := range works {
 			work := works[index]
@@ -1415,6 +1567,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 type contentModerationCandidateReviewWork struct {
 	bundle                 contentModerationEvidenceBundle
 	primary                ContentModerationFragment
+	source                 ContentModerationFragment
 	reviewRequired         bool
 	requireHealthyReviewer bool
 }
@@ -1656,19 +1809,12 @@ func contentModerationParserStatusCacheable(status string) bool {
 	}
 }
 
-func (s *ContentModerationService) putUnifiedCandidateReviewCache(
-	ctx context.Context,
-	namespace string,
-	cfg *ContentModerationConfig,
+func contentModerationCandidateReviewCacheEntry(
 	evidenceHash string,
 	result contentModerationSecondLayerResult,
 	sourceLogID *int64,
 	dispositionApplied bool,
-) {
-	cache, ok := s.hashCache.(ContentModerationFragmentTTLCache)
-	if !ok {
-		return
-	}
+) ContentModerationFragmentCacheEntry {
 	cacheResult := ContentModerationFragmentAllow
 	switch result.normalizedDisposition() {
 	case ContentModerationReviewDispositionViolation:
@@ -1697,7 +1843,7 @@ func (s *ContentModerationService) putUnifiedCandidateReviewCache(
 	case result.Confidence >= 0.50:
 		reviewOutcome = "uncertain"
 	}
-	entry := ContentModerationFragmentCacheEntry{
+	return ContentModerationFragmentCacheEntry{
 		Result: cacheResult, SourceLogID: sourceLogID, ReplayOfInputHash: evidenceHash, DecisionSource: "model",
 		Category: result.Category, ModelProfile: result.Profile, PromptVersion: result.PromptVersion,
 		KeywordTier: result.KeywordTier, KeywordRuleID: result.KeywordRuleID,
@@ -1709,6 +1855,23 @@ func (s *ContentModerationService) putUnifiedCandidateReviewCache(
 		ConsensusStatus: result.ConsensusStatus, RemoteVotes: result.RemoteVotes,
 		ReviewAttempts: append([]ContentModerationReviewAttempt(nil), result.ReviewAttempts...),
 	}
+}
+
+func (s *ContentModerationService) putUnifiedCandidateReviewCache(
+	ctx context.Context,
+	namespace string,
+	cfg *ContentModerationConfig,
+	evidenceHash string,
+	result contentModerationSecondLayerResult,
+	sourceLogID *int64,
+	dispositionApplied bool,
+) {
+	cache, ok := s.hashCache.(ContentModerationFragmentTTLCache)
+	if !ok {
+		return
+	}
+	entry := contentModerationCandidateReviewCacheEntry(evidenceHash, result, sourceLogID, dispositionApplied)
+	cacheResult := entry.Result
 	estimatedBytes := int64(len(evidenceHash) + len(cacheResult) + len(namespace) + entryEstimatedBytes(entry) + 64)
 	err := cache.PutFragmentCacheEntry(
 		ctx, namespace, evidenceHash, entry, estimatedBytes, cfg.CacheMaxEntries, cfg.CacheMaxBytes,
@@ -1895,6 +2058,15 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 			)
 		}
 		publishCache(log, persisted)
+		if decision.Blocked && (persisted || outcome.cacheHit) {
+			sourceLogID := contentModerationLogIDPtr(log)
+			if outcome.sourceLogID != nil {
+				sourceLogID = outcome.sourceLogID
+			}
+			entry := contentModerationCandidateReviewCacheEntry(bundle.CacheHash, result, sourceLogID, true)
+			cache, _ := s.hashCache.(ContentModerationFragmentCache)
+			s.putUnifiedLineageRejection(persistCtx, input, cfg, namespace, cache, work.source, entry)
+		}
 		return decision
 	}
 
