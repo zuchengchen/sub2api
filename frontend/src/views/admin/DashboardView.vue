@@ -363,6 +363,12 @@ import Select from '@/components/common/Select.vue'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
 import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
+import {
+  buildUsageRangeQuery,
+  createLast24HoursRange,
+  LAST_24_HOURS_PRESET,
+  type ExactUsageTimeRange
+} from '@/utils/usageTimeRange'
 
 import {
   Chart as ChartJS,
@@ -410,25 +416,29 @@ let usersTrendLoadSeq = 0
 let rankingLoadSeq = 0
 const rankingLimit = 12
 
-// Helper function to format date in local timezone
-const formatLocalDate = (date: Date): string => {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-const getLast24HoursRangeDates = (): { start: string; end: string } => {
-  const end = new Date()
-  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
-  return {
-    start: formatLocalDate(start),
-    end: formatLocalDate(end)
-  }
-}
-
 // Date range
 const granularity = ref<'day' | 'hour'>('hour')
-const defaultRange = getLast24HoursRangeDates()
+const defaultRange = createLast24HoursRange()
 const startDate = ref(defaultRange.start)
 const endDate = ref(defaultRange.end)
+const activeDatePreset = ref<string | null>(LAST_24_HOURS_PRESET)
+const exactTimeRange = ref<ExactUsageTimeRange | null>({
+  start_time: defaultRange.start_time,
+  end_time: defaultRange.end_time
+})
+const refreshRollingRange = () => {
+  if (activeDatePreset.value !== LAST_24_HOURS_PRESET) return
+  const range = createLast24HoursRange()
+  startDate.value = range.start
+  endDate.value = range.end
+  exactTimeRange.value = {
+    start_time: range.start_time,
+    end_time: range.end_time
+  }
+}
+const dashboardRangeQuery = computed(() =>
+  buildUsageRangeQuery(startDate.value, endDate.value, exactTimeRange.value)
+)
 
 // Granularity options for Select component
 const granularityOptions = computed(() => [
@@ -616,8 +626,12 @@ const goToUserUsage = (item: UserSpendingRankingItem) => {
     path: '/admin/usage',
     query: {
       user_id: String(item.user_id),
-      start_date: startDate.value,
-      end_date: endDate.value
+      ...(exactTimeRange.value
+        ? {}
+        : {
+            start_date: startDate.value,
+            end_date: endDate.value
+          })
     }
   })
 }
@@ -628,6 +642,13 @@ const onDateRangeChange = (range: {
   endDate: string
   preset: string | null
 }) => {
+  activeDatePreset.value = range.preset
+  startDate.value = range.startDate
+  endDate.value = range.endDate
+  if (range.preset !== LAST_24_HOURS_PRESET) {
+    exactTimeRange.value = null
+  }
+
   // Auto-select granularity based on date range
   const start = new Date(range.startDate)
   const end = new Date(range.endDate)
@@ -652,8 +673,7 @@ const loadDashboardSnapshot = async (includeStats: boolean) => {
   chartsLoading.value = true
   try {
     const response = await adminAPI.dashboard.getSnapshotV2({
-      start_date: startDate.value,
-      end_date: endDate.value,
+      ...dashboardRangeQuery.value,
       granularity: granularity.value,
       include_stats: includeStats,
       include_trend: true,
@@ -684,8 +704,7 @@ const loadUsersTrend = async () => {
   userTrendLoading.value = true
   try {
     const response = await adminAPI.dashboard.getUserUsageTrend({
-      start_date: startDate.value,
-      end_date: endDate.value,
+      ...dashboardRangeQuery.value,
       granularity: granularity.value,
       limit: 12
     })
@@ -708,8 +727,7 @@ const loadUserSpendingRanking = async () => {
   rankingError.value = false
   try {
     const response = await adminAPI.dashboard.getUserSpendingRanking({
-      start_date: startDate.value,
-      end_date: endDate.value,
+      ...dashboardRangeQuery.value,
       limit: rankingLimit
     })
     if (currentSeq !== rankingLoadSeq) return
@@ -733,6 +751,7 @@ const loadUserSpendingRanking = async () => {
 }
 
 const loadDashboardStats = async () => {
+  refreshRollingRange()
   await Promise.all([
     loadDashboardSnapshot(true),
     loadUsersTrend(),
@@ -741,6 +760,7 @@ const loadDashboardStats = async () => {
 }
 
 const loadChartData = async () => {
+  refreshRollingRange()
   await Promise.all([
     loadDashboardSnapshot(false),
     loadUsersTrend(),
