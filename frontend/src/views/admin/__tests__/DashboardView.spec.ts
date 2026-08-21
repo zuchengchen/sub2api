@@ -1,14 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 import type { DashboardStats } from '@/types'
 import DashboardView from '../DashboardView.vue'
 
-const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(() => ({
+const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking, routerPush } = vi.hoisted(() => ({
   getSnapshotV2: vi.fn(),
   getUserUsageTrend: vi.fn(),
-  getUserSpendingRanking: vi.fn()
+  getUserSpendingRanking: vi.fn(),
+  routerPush: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -29,7 +30,7 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('vue-router', () => ({
   useRouter: () => ({
-    push: vi.fn()
+    push: routerPush
   })
 }))
 
@@ -42,13 +43,6 @@ vi.mock('vue-i18n', async () => {
     })
   }
 })
-
-const formatLocalDate = (date: Date): string => {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
 
 const createDashboardStats = (): DashboardStats => ({
   total_users: 0,
@@ -93,6 +87,7 @@ describe('admin DashboardView', () => {
     getSnapshotV2.mockReset()
     getUserUsageTrend.mockReset()
     getUserSpendingRanking.mockReset()
+    routerPush.mockReset()
 
     getSnapshotV2.mockResolvedValue({
       stats: createDashboardStats(),
@@ -115,32 +110,109 @@ describe('admin DashboardView', () => {
     })
   })
 
-  it('uses last 24 hours as default dashboard range', async () => {
-    mount(DashboardView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          LoadingSpinner: true,
-          Icon: true,
-          DateRangePicker: true,
-          Select: true,
-          ModelDistributionChart: true,
-          TokenUsageTrend: true,
-          Line: true
-        }
-      }
-    })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
+  const mountDashboard = () => mount(DashboardView, {
+    global: {
+      stubs: {
+        AppLayout: { template: '<div><slot /></div>' },
+        LoadingSpinner: true,
+        Icon: true,
+        DateRangePicker: true,
+        Select: true,
+        ModelDistributionChart: true,
+        TokenUsageTrend: true,
+        Line: true
+      }
+    }
+  })
+
+  it('uses one exact rolling 24-hour range for every default dashboard request', async () => {
+    vi.useFakeTimers()
+    const now = new Date('2026-08-20T14:45:25.123Z')
+    vi.setSystemTime(now)
+
+    const wrapper = mountDashboard()
     await flushPromises()
 
-    const now = new Date()
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const expectedRange = {
+      start_time: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+      end_time: now.toISOString()
+    }
+    const requests = [
+      getSnapshotV2.mock.calls[0][0],
+      getUserUsageTrend.mock.calls[0][0],
+      getUserSpendingRanking.mock.calls[0][0]
+    ]
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
+    expect(getUserUsageTrend).toHaveBeenCalledTimes(1)
+    expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
+    for (const request of requests) {
+      expect(request).toEqual(expect.objectContaining(expectedRange))
+      expect(request.start_date).toBeUndefined()
+      expect(request.end_date).toBeUndefined()
+    }
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
-      start_date: formatLocalDate(yesterday),
-      end_date: formatLocalDate(now),
       granularity: 'hour'
     }))
+
+    wrapper.findComponent({ name: 'ModelDistributionChart' }).vm.$emit('ranking-click', {
+      user_id: 42
+    })
+    expect(routerPush).toHaveBeenCalledWith({
+      path: '/admin/usage',
+      query: { user_id: '42' }
+    })
+  })
+
+  it('keeps calendar-day semantics for non-rolling dashboard ranges', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T14:45:25.123Z'))
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+    getSnapshotV2.mockClear()
+    getUserUsageTrend.mockClear()
+    getUserSpendingRanking.mockClear()
+
+    wrapper.findComponent({ name: 'DateRangePicker' }).vm.$emit('change', {
+      startDate: '2026-08-01',
+      endDate: '2026-08-07',
+      preset: '7days'
+    })
+    await flushPromises()
+
+    const expectedRange = {
+      start_date: '2026-08-01',
+      end_date: '2026-08-07'
+    }
+    const requests = [
+      getSnapshotV2.mock.calls[0][0],
+      getUserUsageTrend.mock.calls[0][0],
+      getUserSpendingRanking.mock.calls[0][0]
+    ]
+    for (const request of requests) {
+      expect(request).toEqual(expect.objectContaining(expectedRange))
+      expect(request.start_time).toBeUndefined()
+      expect(request.end_time).toBeUndefined()
+    }
+    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
+      granularity: 'day'
+    }))
+
+    wrapper.findComponent({ name: 'ModelDistributionChart' }).vm.$emit('ranking-click', {
+      user_id: 42
+    })
+    expect(routerPush).toHaveBeenCalledWith({
+      path: '/admin/usage',
+      query: {
+        user_id: '42',
+        start_date: '2026-08-01',
+        end_date: '2026-08-07'
+      }
+    })
   })
 })
