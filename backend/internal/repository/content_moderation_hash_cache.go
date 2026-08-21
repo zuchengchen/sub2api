@@ -154,7 +154,9 @@ func (c *contentModerationHashCache) GetFragmentResult(ctx context.Context, name
 
 func (c *contentModerationHashCache) PutFragmentResult(ctx context.Context, namespace, fragmentHash, result string, estimatedBytes int64, maxEntries int, maxBytes int64) error {
 	ttl := time.Duration(service.DefaultContentModerationFragmentAllowTTLSeconds) * time.Second
-	if strings.EqualFold(strings.TrimSpace(result), service.ContentModerationFragmentBlock) {
+	normalizedResult := strings.ToLower(strings.TrimSpace(result))
+	if normalizedResult == service.ContentModerationFragmentBlock ||
+		normalizedResult == service.ContentModerationFragmentRestricted {
 		ttl = time.Duration(service.DefaultContentModerationFragmentBlockTTLSeconds) * time.Second
 	}
 	return c.PutFragmentCacheEntry(ctx, namespace, fragmentHash, service.ContentModerationFragmentCacheEntry{Result: result}, estimatedBytes, maxEntries, maxBytes, ttl)
@@ -204,7 +206,9 @@ func (c *contentModerationHashCache) PutFragmentCacheEntry(ctx context.Context, 
 	if c == nil || c.rdb == nil || !ok || fragmentHash == "" {
 		return nil
 	}
-	if entry.Result != service.ContentModerationFragmentAllow && entry.Result != service.ContentModerationFragmentBlock {
+	if entry.Result != service.ContentModerationFragmentAllow &&
+		entry.Result != service.ContentModerationFragmentBlock &&
+		entry.Result != service.ContentModerationFragmentRestricted {
 		return fmt.Errorf("invalid content moderation fragment result")
 	}
 	if ttl <= 0 {

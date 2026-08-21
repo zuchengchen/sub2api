@@ -78,6 +78,45 @@ func TestContentModerationFragmentCacheTTLAndProvenance(t *testing.T) {
 	require.Equal(t, "0", cache.rdb.Get(ctx, keys[3]).Val())
 }
 
+func TestContentModerationFragmentCacheSupportedResults(t *testing.T) {
+	cache, _ := newContentModerationFragmentCacheTest(t)
+	ctx := context.Background()
+	for _, result := range []string{
+		service.ContentModerationFragmentAllow,
+		service.ContentModerationFragmentBlock,
+		service.ContentModerationFragmentRestricted,
+	} {
+		t.Run(result, func(t *testing.T) {
+			require.NoError(t, cache.PutFragmentCacheEntry(
+				ctx, "supported-results", result,
+				service.ContentModerationFragmentCacheEntry{Result: result},
+				128, 100, 1<<20, time.Minute,
+			))
+
+			entry, found, err := cache.GetFragmentCacheEntry(ctx, "supported-results", result)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, result, entry.Result)
+		})
+	}
+
+	err := cache.PutFragmentCacheEntry(
+		ctx, "supported-results", "invalid",
+		service.ContentModerationFragmentCacheEntry{Result: "invalid"},
+		128, 100, 1<<20, time.Minute,
+	)
+	require.EqualError(t, err, "invalid content moderation fragment result")
+
+	require.NoError(t, cache.PutFragmentResult(
+		ctx, "supported-results", "normalized-restricted", " ReStRiCtEd ",
+		128, 100, 1<<20,
+	))
+	entry, found, err := cache.GetFragmentCacheEntry(ctx, "supported-results", "normalized-restricted")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, service.ContentModerationFragmentRestricted, entry.Result)
+}
+
 func TestContentModerationFragmentCacheLegacyEntryWithoutExpiryIsRemoved(t *testing.T) {
 	cache, _ := newContentModerationFragmentCacheTest(t)
 	ctx := context.Background()
