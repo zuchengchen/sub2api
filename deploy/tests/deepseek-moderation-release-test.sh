@@ -175,6 +175,34 @@ api_request() {
   fi
 }
 
+api_request_expect_status() {
+  local method=$1
+  local path=$2
+  local input=$3
+  local output=$4
+  local expected_status=$5
+  local curl_status
+  local http_status
+  set +e
+  http_status=$(curl --silent --show-error --max-time 30 \
+    --request "$method" \
+    --header @"$work_dir/admin-auth.header" \
+    --header 'Content-Type: application/json' \
+    --data-binary @"$input" \
+    --output "$output" \
+    --write-out '%{http_code}' \
+    "http://127.0.0.1:$app_port$path")
+  curl_status=$?
+  set -e
+  api_call_count=$((api_call_count + 1))
+  if [ "$curl_status" -ne 0 ]; then
+    fail "admin API request failed: $method $path (curl exit $curl_status)"
+  fi
+  if [ "$http_status" != "$expected_status" ]; then
+    fail "admin API request returned HTTP $http_status: $method $path (expected $expected_status)"
+  fi
+}
+
 validate_release_report() {
   local file=$1
   jq -e '
@@ -408,21 +436,24 @@ jq -n \
   '{
     enabled: true,
     deepseek_enabled: true,
+    remote_reviewers_enabled: true,
+    remote_consensus_required: 1,
+    remote_unavailable_policy: "fail_closed",
     yufeng_enabled: false,
     deepseek_total_timeout_ms: 10000,
     deepseek_threshold: 0.80,
     first_layer_stage: "shadow",
     second_layer_enabled: true,
     second_layer_stage: "shadow",
-    deepseek_channels: [
+    remote_reviewers: [
       {
         id: "primary", name: "Primary", base_url: ($stub_url + "/primary"),
-        model: "deepseek-v4-flash", enabled: true, order: 0, timeout_ms: 3000,
+        provider: "deepseek", model: "deepseek-v4-flash", enabled: true, order: 0, timeout_ms: 3000,
         api_key: ($api_key | rtrimstr("\n"))
       },
       {
         id: "backup", name: "Backup", base_url: ($stub_url + "/backup"),
-        model: "deepseek-v4-flash", enabled: true, order: 1, timeout_ms: 3000,
+        provider: "deepseek", model: "deepseek-v4-flash", enabled: true, order: 1, timeout_ms: 3000,
         api_key: ($api_key | rtrimstr("\n"))
       }
     ]
@@ -432,9 +463,13 @@ api_request PUT /api/v1/admin/risk-control/config "$work_dir/config-update.json"
 jq -e '
   .code == 0 and
   .data.deepseek_enabled == true and .data.yufeng_enabled == false and
+  .data.remote_reviewers_enabled == true and .data.remote_consensus_required == 1 and
+  .data.remote_unavailable_policy == "fail_closed" and
   .data.first_layer_stage == "shadow" and .data.second_layer_stage == "shadow" and
   (.data.deepseek_channels | length == 2) and
   .data.deepseek_channels[0].id == "primary" and .data.deepseek_channels[1].id == "backup" and
+  (.data.remote_reviewers | length == 2) and
+  all(.data.remote_reviewers[]; .provider == "deepseek") and
   all(.data.deepseek_channels[]; .api_key_configured == true and (.api_key_masked | type == "string" and length > 0)) and
   ([.data | paths as $path | select(($path[-1] | tostring) == "api_key" or ($path[-1] | tostring) == "api_key_envelope")] | length == 0) and
   (.data | has("base_url") | not) and (.data | has("model") | not) and
@@ -445,6 +480,8 @@ jq -e '
   -h 127.0.0.1 -p "$postgres_port" -U postgres -d sub2api_release \
   -c "SELECT value FROM settings WHERE key = 'content_moderation_config'" >"$work_dir/stored-config.json"
 jq -e --rawfile secret "$work_dir/channel-key" '
+  .remote_reviewers_version == 1 and .remote_reviewers_enabled == true and
+  .remote_unavailable_policy == "fail_closed" and
   (.deepseek_channels | length == 2) and
   all(.deepseek_channels[];
     (.api_key_envelope.domain == "sub2api/content-moderation/deepseek-channel-key") and
@@ -519,6 +556,16 @@ jq -e '
   (.data | has("safe_case") | not) and (.data | has("risk_case") | not)
 ' "$work_dir/channel-test-response.json" >/dev/null
 
+api_request POST /api/v1/admin/risk-control/deepseek/channels/primary/test-api '' \
+  "$work_dir/channel-api-test-response.json"
+jq -e '
+  .code == 0 and .data.channel_id == "primary" and
+  .data.provider == "deepseek" and .data.test_type == "api_usability" and
+  .data.reachable == true and .data.health_valid == true and
+  .data.verdict == "safe" and .data.category == "safe" and
+  (.data.latency_ms | type == "number" and . >= 0)
+' "$work_dir/channel-api-test-response.json" >/dev/null
+
 jq -n '{first_layer_stage:"enforce"}' >"$work_dir/layer1-enforce.json"
 api_request PUT /api/v1/admin/risk-control/config "$work_dir/layer1-enforce.json" "$work_dir/layer1-enforce-response.json"
 jq -e '.code == 0 and .data.first_layer_stage == "enforce"' "$work_dir/layer1-enforce-response.json" >/dev/null
@@ -530,39 +577,64 @@ jq -e '.code == 0 and .data.first_layer_stage == "shadow" and .data.second_layer
 
 jq '{
   second_layer_stage: "shadow",
-  deepseek_channels: [.data.deepseek_channels[] | {
-    id, name,
+  remote_reviewers: [.data.remote_reviewers[] | {
+    id, name, provider,
     base_url: (if .id == "primary" then (.base_url + "/connectivity-mutated") else .base_url end),
     model,
     enabled, order, timeout_ms
   }]
 }' "$work_dir/layer2-enforce-response.json" >"$work_dir/endpoint-change.json"
 api_request PUT /api/v1/admin/risk-control/config "$work_dir/endpoint-change.json" "$work_dir/endpoint-change-response.json"
-jq -e '.code == 0 and .data.second_layer_stage == "shadow" and .data.deepseek_channels[0].health_status == "untested"' \
+jq -e '.code == 0 and .data.second_layer_stage == "shadow" and .data.remote_reviewers[0].health_status == "untested"' \
   "$work_dir/endpoint-change-response.json" >/dev/null
 
-api_request PUT /api/v1/admin/risk-control/config "$work_dir/layer2-enforce.json" \
-  "$work_dir/enforce-after-endpoint-change-response.json"
+api_request_expect_status PUT /api/v1/admin/risk-control/config "$work_dir/layer2-enforce.json" \
+  "$work_dir/enforce-after-endpoint-change-response.json" 400
 jq -e '
-  .code == 0 and .data.second_layer_stage == "enforce" and
-  any(.data.deepseek_channels[];
-    .api_key_configured == true and
-    .health_status == "reachable" and
-    .breaker_status == "closed")
+  .code == 400 and .reason == "CONTENT_MODERATION_ENFORCE_NOT_READY"
 ' "$work_dir/enforce-after-endpoint-change-response.json" >/dev/null
 
 jq '{
   first_layer_stage: "shadow",
   second_layer_stage: "shadow",
-  deepseek_channels: [.data.deepseek_channels[] | {
-    id, name, base_url, model: "deepseek-v4-flash", enabled, order, timeout_ms
+  remote_reviewers: [.data.remote_reviewers[] | {
+    id, name, provider, base_url, model, enabled, order, timeout_ms
   }]
-}' "$work_dir/layer2-enforce-response.json" >"$work_dir/final-shadow.json"
+}' "$work_dir/layer2-enforce-response.json" >"$work_dir/restored-shadow.json"
+api_request PUT /api/v1/admin/risk-control/config "$work_dir/restored-shadow.json" \
+  "$work_dir/restored-shadow-response.json"
+jq -e '
+  .code == 0 and .data.remote_reviewers_enabled == true and
+  .data.remote_unavailable_policy == "fail_closed" and
+  .data.first_layer_stage == "shadow" and .data.second_layer_stage == "shadow"
+' "$work_dir/restored-shadow-response.json" >/dev/null
+
+api_request POST /api/v1/admin/risk-control/deepseek/channels/primary/test-api '' \
+  "$work_dir/restored-channel-api-test-response.json"
+jq -e '
+  .code == 0 and .data.channel_id == "primary" and
+  .data.test_type == "api_usability" and .data.health_valid == true and
+  .data.verdict == "safe"
+' "$work_dir/restored-channel-api-test-response.json" >/dev/null
+
+api_request PUT /api/v1/admin/risk-control/config "$work_dir/layer2-enforce.json" \
+  "$work_dir/enforce-after-endpoint-change-response.json"
+jq -e '
+  .code == 0 and .data.remote_reviewers_enabled == true and .data.second_layer_stage == "enforce" and
+  any(.data.remote_reviewers[];
+    .api_key_configured == true and
+    .health_status == "reachable" and
+    .breaker_status == "closed")
+' "$work_dir/enforce-after-endpoint-change-response.json" >/dev/null
+
+jq -n '{first_layer_stage:"shadow",second_layer_stage:"shadow"}' >"$work_dir/final-shadow.json"
 api_request PUT /api/v1/admin/risk-control/config "$work_dir/final-shadow.json" "$work_dir/final-shadow-response.json"
 jq -e '
   .code == 0 and .data.deepseek_enabled == true and .data.yufeng_enabled == false and
+  .data.remote_reviewers_enabled == true and
+  .data.remote_unavailable_policy == "fail_closed" and
   .data.first_layer_stage == "shadow" and .data.second_layer_stage == "shadow" and
-  all(.data.deepseek_channels[]; .api_key_configured == true)
+  all(.data.remote_reviewers[]; .api_key_configured == true)
 ' "$work_dir/final-shadow-response.json" >/dev/null
 
 api_request GET /api/v1/admin/risk-control/config '' "$work_dir/final-config-response.json"
