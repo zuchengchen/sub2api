@@ -1225,5 +1225,11 @@ func contextualRoutingTestInput(text, email string) ContentModerationCheckInput 
 func contextualRoutingCacheEntryCount(cache *contentModerationReplayCache) int {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	return len(cache.entries)
+	count := 0
+	for key := range cache.entries {
+		if !strings.Contains(key, contentModerationLineageCacheSuffix+":") {
+			count++
+		}
+	}
+	return count
 }

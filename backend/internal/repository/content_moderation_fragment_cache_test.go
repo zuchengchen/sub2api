@@ -117,6 +117,39 @@ func TestContentModerationFragmentCacheSupportedResults(t *testing.T) {
 	require.Equal(t, service.ContentModerationFragmentRestricted, entry.Result)
 }
 
+func TestContentModerationFragmentCacheGetsFirstLiveEntryInOneBatch(t *testing.T) {
+	cache, _ := newContentModerationFragmentCacheTest(t)
+	ctx := context.Background()
+	for _, fixture := range []struct {
+		hash   string
+		result string
+	}{
+		{hash: "expired", result: service.ContentModerationFragmentBlock},
+		{hash: "allow", result: service.ContentModerationFragmentAllow},
+		{hash: "restricted", result: service.ContentModerationFragmentRestricted},
+		{hash: "later", result: service.ContentModerationFragmentBlock},
+	} {
+		require.NoError(t, cache.PutFragmentCacheEntry(
+			ctx, "batch", fixture.hash,
+			service.ContentModerationFragmentCacheEntry{Result: fixture.result, DecisionSource: "lineage_cache"},
+			128, 100, 1<<20, time.Minute,
+		))
+	}
+	keys, ok := contentModerationFragmentKeys("batch")
+	require.True(t, ok)
+	require.NoError(t, cache.rdb.HSet(ctx, keys[4], "expired", time.Now().Add(-time.Millisecond).UnixMilli()).Err())
+
+	hash, entry, found, err := cache.GetFirstFragmentCacheEntry(
+		ctx, "batch", []string{"missing", "expired", "allow", "restricted", "later"},
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "restricted", hash)
+	require.Equal(t, service.ContentModerationFragmentRestricted, entry.Result)
+	require.Equal(t, "lineage_cache", entry.DecisionSource)
+	require.False(t, cache.rdb.HExists(ctx, keys[0], "expired").Val())
+}
+
 func TestContentModerationFragmentCacheLegacyEntryWithoutExpiryIsRemoved(t *testing.T) {
 	cache, _ := newContentModerationFragmentCacheTest(t)
 	ctx := context.Background()
@@ -140,24 +173,44 @@ func TestContentModerationFragmentCacheDeleteAliasesAndClearMetadata(t *testing.
 	for _, namespace := range []string{"old:v1", "new:v2"} {
 		require.NoError(t, cache.PutFragmentCacheEntry(ctx, namespace, "same", service.ContentModerationFragmentCacheEntry{Result: service.ContentModerationFragmentBlock}, 128, 100, 1<<20, time.Minute))
 	}
+	require.NoError(t, cache.PutFragmentCacheEntry(
+		ctx, "new:v2:lineage-rejection-v1", "lineage-hash",
+		service.ContentModerationFragmentCacheEntry{
+			Result: service.ContentModerationFragmentRestricted, ReplayOfInputHash: "same", DispositionApplied: true,
+		},
+		128, 100, 1<<20, time.Minute,
+	))
 	deleted, err := cache.DeleteFragmentResultAliases(ctx, "same")
 	require.NoError(t, err)
-	require.Equal(t, int64(2), deleted)
+	require.Equal(t, int64(3), deleted)
 	for _, namespace := range []string{"old:v1", "new:v2"} {
 		_, found, getErr := cache.GetFragmentCacheEntry(ctx, namespace, "same")
 		require.NoError(t, getErr)
 		require.False(t, found)
 	}
+	_, found, err := cache.GetFragmentCacheEntry(ctx, "new:v2:lineage-rejection-v1", "lineage-hash")
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Zero(t, cache.rdb.Exists(ctx, contentModerationFragmentAliasPrefix+"same").Val())
 
 	require.NoError(t, cache.PutFragmentCacheEntry(ctx, "old:v1", "a", service.ContentModerationFragmentCacheEntry{Result: service.ContentModerationFragmentAllow}, 128, 100, 1<<20, time.Minute))
 	require.NoError(t, cache.PutFragmentCacheEntry(ctx, "new:v2", "b", service.ContentModerationFragmentCacheEntry{Result: service.ContentModerationFragmentAllow}, 128, 100, 1<<20, time.Minute))
+	require.NoError(t, cache.PutFragmentCacheEntry(
+		ctx, "new:v2:lineage-rejection-v1", "lineage-clear",
+		service.ContentModerationFragmentCacheEntry{
+			Result: service.ContentModerationFragmentBlock, ReplayOfInputHash: "source-clear", DispositionApplied: true,
+		},
+		128, 100, 1<<20, time.Minute,
+	))
 	clearedNamespace, err := cache.ClearFragmentResults(ctx, "old:v1")
 	require.NoError(t, err)
 	require.Equal(t, int64(1), clearedNamespace)
 	require.False(t, cache.rdb.SIsMember(ctx, contentModerationFragmentNamespacesSetKey, "old:v1").Val())
 	cleared, err := cache.ClearAllFragmentResults(ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), cleared)
+	require.Equal(t, int64(2), cleared)
+	require.Zero(t, cache.rdb.Exists(ctx, contentModerationFragmentAliasPrefix+"source-clear").Val())
+	require.Zero(t, cache.rdb.Exists(ctx, contentModerationFragmentAliasSourcesKey).Val())
 }
 
 func TestContentModerationFragmentCacheConcurrentGetPutAndUnavailable(t *testing.T) {
