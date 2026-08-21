@@ -318,11 +318,17 @@ export type ContentModerationLogResult =
   | 'error'
   | 'cyber_policy'
   | 'content_blocked'
+  | 'violation_blocked'
   | 'restricted'
   | 'risky_shadow'
   | 'review_unavailable'
 
-export type ContentModerationLogView = 'cyber_policy' | 'content_blocked' | 'restricted' | 'risky_shadow' | 'review_unavailable'
+export type ContentModerationLogView =
+  | 'cyber_policy'
+  | 'violation_blocked'
+  | 'restricted'
+  | 'risky_shadow'
+  | 'review_unavailable'
 
 export interface ListContentModerationLogsParams {
   page?: number

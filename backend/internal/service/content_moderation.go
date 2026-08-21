@@ -48,12 +48,13 @@ const (
 	ContentModerationActionError             = "error"
 	ContentModerationActionCyberPolicy       = "cyber_policy" // cyber_policy 硬阻断的风控日志 action（封号计数排除按此值过滤）
 
-	ContentModerationLogResultBlocked        = "blocked"
-	ContentModerationLogResultCyberPolicy    = "cyber_policy"
-	ContentModerationLogResultContentBlocked = "content_blocked"
-	ContentModerationLogResultRestricted     = "restricted"
-	ContentModerationLogResultRiskyShadow    = "risky_shadow"
-	ContentModerationLogResultReviewFailure  = "review_unavailable"
+	ContentModerationLogResultBlocked          = "blocked"         // legacy alias for violation_blocked
+	ContentModerationLogResultContentBlocked   = "content_blocked" // legacy alias for violation_blocked
+	ContentModerationLogResultViolationBlocked = "violation_blocked"
+	ContentModerationLogResultCyberPolicy      = "cyber_policy"
+	ContentModerationLogResultRestricted       = "restricted"
+	ContentModerationLogResultRiskyShadow      = "risky_shadow"
+	ContentModerationLogResultReviewFailure    = "review_unavailable"
 
 	contentModerationKeywordCategory = "keyword"
 
@@ -1256,17 +1257,19 @@ func (s *ContentModerationService) recordPreBlockSyncMetric(latencyMS int, actio
 }
 
 func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error) {
-	// Keep the audit endpoint fail-closed to incident views. Unknown and legacy
-	// values retain the original combined blocked view.
+	// Keep the audit endpoint fail-closed to incident views. Legacy combined
+	// block filters now normalize to the mutually exclusive violation view.
 	switch result := strings.ToLower(strings.TrimSpace(filter.Result)); result {
+	case ContentModerationLogResultBlocked, ContentModerationLogResultContentBlocked:
+		filter.Result = ContentModerationLogResultViolationBlocked
 	case ContentModerationLogResultCyberPolicy,
-		ContentModerationLogResultContentBlocked,
+		ContentModerationLogResultViolationBlocked,
 		ContentModerationLogResultRestricted,
 		ContentModerationLogResultRiskyShadow,
 		ContentModerationLogResultReviewFailure:
 		filter.Result = result
 	default:
-		filter.Result = ContentModerationLogResultBlocked
+		filter.Result = ContentModerationLogResultViolationBlocked
 	}
 	if filter.Pagination.Page <= 0 {
 		filter.Pagination.Page = 1
