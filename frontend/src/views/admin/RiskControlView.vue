@@ -1196,7 +1196,7 @@ const logColumns = ['time', 'user', 'request', 'decision', 'modelResult', 'chann
 
 const recordTabs = computed<Array<{ value: ContentModerationLogView; label: string }>>(() => [
   { value: 'risky_shadow', label: t('admin.riskControl.recordTabs.riskyShadow') },
-  { value: 'content_blocked', label: t('admin.riskControl.recordTabs.blocked') },
+  { value: 'violation_blocked', label: t('admin.riskControl.recordTabs.violationBlocked') },
   { value: 'restricted', label: t('admin.riskControl.recordTabs.restricted') },
   { value: 'review_unavailable', label: t('admin.riskControl.recordTabs.reviewUnavailable') },
   { value: 'cyber_policy', label: t('admin.riskControl.recordTabs.cyberPolicy') },

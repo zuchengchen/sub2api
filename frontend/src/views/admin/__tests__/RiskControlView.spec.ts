@@ -520,6 +520,20 @@ describe('admin RiskControlView', () => {
     wrapper.unmount()
   })
 
+  it('loads violation blocks without exposing the combined content-blocked view', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const violationTab = wrapper.get('[data-test="record-tab-violation_blocked"]')
+    expect(violationTab.text()).toContain('admin.riskControl.recordTabs.violationBlocked')
+    expect(wrapper.find('[data-test="record-tab-content_blocked"]').exists()).toBe(false)
+    await violationTab.trigger('click')
+    await flushPromises()
+
+    expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'violation_blocked' }))
+    wrapper.unmount()
+  })
+
   it('falls back to the historical score when DeepSeek confidence is null', async () => {
     listLogs.mockResolvedValue({
       items: [{ ...auditLog(), deepseek_confidence: null, highest_score: 0.73 }],
