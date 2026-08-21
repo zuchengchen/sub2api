@@ -15,6 +15,8 @@ import (
 const (
 	contentModerationFlaggedHashSetKey        = "content_moderation:flagged_hashes"
 	contentModerationFragmentNamespacesSetKey = "content_moderation:fragment:namespaces"
+	contentModerationFragmentAliasSourcesKey  = "content_moderation:fragment:alias_sources"
+	contentModerationFragmentAliasPrefix      = "content_moderation:fragment:aliases:"
 )
 
 var contentModerationFragmentPutScript = redis.NewScript(`
@@ -25,6 +27,12 @@ redis.call('ZADD', KEYS[2], ARGV[6], ARGV[1])
 redis.call('HSET', KEYS[5], ARGV[1], ARGV[7])
 redis.call('HSET', KEYS[6], ARGV[1], ARGV[8])
 redis.call('SADD', KEYS[7], ARGV[9])
+if ARGV[10] ~= '' then
+  redis.call('SADD', KEYS[8], ARGV[10])
+  redis.call('PEXPIREAT', KEYS[8], ARGV[7])
+  redis.call('ZREMRANGEBYSCORE', KEYS[9], '-inf', ARGV[6])
+  redis.call('ZADD', KEYS[9], ARGV[7], KEYS[8])
+end
 local total = tonumber(redis.call('GET', KEYS[4]) or '0') - old_size + tonumber(ARGV[3])
 local count = redis.call('HLEN', KEYS[1])
 while count > tonumber(ARGV[4]) or total > tonumber(ARGV[5]) do
@@ -63,6 +71,32 @@ end
 redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])
 local metadata = redis.call('HGET', KEYS[6], ARGV[1]) or ''
 return {value, metadata, tostring(expires)}
+`)
+
+var contentModerationFragmentGetFirstScript = redis.NewScript(`
+for index = 2, #ARGV do
+  local fragment_hash = ARGV[index]
+  local value = redis.call('HGET', KEYS[1], fragment_hash)
+  if value then
+    local expires = tonumber(redis.call('HGET', KEYS[5], fragment_hash) or '0')
+    if expires <= 0 or expires <= tonumber(ARGV[1]) then
+      local size = tonumber(redis.call('HGET', KEYS[3], fragment_hash) or '0')
+      redis.call('HDEL', KEYS[1], fragment_hash)
+      redis.call('HDEL', KEYS[3], fragment_hash)
+      redis.call('HDEL', KEYS[5], fragment_hash)
+      redis.call('HDEL', KEYS[6], fragment_hash)
+      redis.call('ZREM', KEYS[2], fragment_hash)
+      local total = tonumber(redis.call('GET', KEYS[4]) or '0') - size
+      if total < 0 then total = 0 end
+      redis.call('SET', KEYS[4], total)
+    elseif value == 'block' or value == 'restricted' then
+      redis.call('ZADD', KEYS[2], ARGV[1], fragment_hash)
+      local metadata = redis.call('HGET', KEYS[6], fragment_hash) or ''
+      return {fragment_hash, value, metadata, tostring(expires)}
+    end
+  end
+end
+return {}
 `)
 
 var contentModerationFragmentDeleteScript = redis.NewScript(`
@@ -154,7 +188,9 @@ func (c *contentModerationHashCache) GetFragmentResult(ctx context.Context, name
 
 func (c *contentModerationHashCache) PutFragmentResult(ctx context.Context, namespace, fragmentHash, result string, estimatedBytes int64, maxEntries int, maxBytes int64) error {
 	ttl := time.Duration(service.DefaultContentModerationFragmentAllowTTLSeconds) * time.Second
-	if strings.EqualFold(strings.TrimSpace(result), service.ContentModerationFragmentBlock) {
+	normalizedResult := strings.ToLower(strings.TrimSpace(result))
+	if normalizedResult == service.ContentModerationFragmentBlock ||
+		normalizedResult == service.ContentModerationFragmentRestricted {
 		ttl = time.Duration(service.DefaultContentModerationFragmentBlockTTLSeconds) * time.Second
 	}
 	return c.PutFragmentCacheEntry(ctx, namespace, fragmentHash, service.ContentModerationFragmentCacheEntry{Result: result}, estimatedBytes, maxEntries, maxBytes, ttl)
@@ -197,6 +233,50 @@ func (c *contentModerationHashCache) GetFragmentCacheEntry(ctx context.Context, 
 	return entry, true, nil
 }
 
+func (c *contentModerationHashCache) GetFirstFragmentCacheEntry(ctx context.Context, namespace string, fragmentHashes []string) (string, service.ContentModerationFragmentCacheEntry, bool, error) {
+	keys, ok := contentModerationFragmentKeys(namespace)
+	if c == nil || c.rdb == nil || !ok || len(fragmentHashes) == 0 {
+		return "", service.ContentModerationFragmentCacheEntry{}, false, nil
+	}
+	args := make([]any, 1, len(fragmentHashes)+1)
+	args[0] = time.Now().UnixMilli()
+	for _, fragmentHash := range fragmentHashes {
+		if fragmentHash = strings.TrimSpace(fragmentHash); fragmentHash != "" {
+			args = append(args, fragmentHash)
+		}
+	}
+	if len(args) == 1 {
+		return "", service.ContentModerationFragmentCacheEntry{}, false, nil
+	}
+	raw, err := contentModerationFragmentGetFirstScript.Run(ctx, c.rdb, keys, args...).Slice()
+	if err == redis.Nil || (err == nil && len(raw) == 0) {
+		return "", service.ContentModerationFragmentCacheEntry{}, false, nil
+	}
+	if err != nil {
+		return "", service.ContentModerationFragmentCacheEntry{}, false, err
+	}
+	if len(raw) < 2 {
+		return "", service.ContentModerationFragmentCacheEntry{}, false, nil
+	}
+	fragmentHash := redisFragmentValueString(raw[0])
+	entry := service.ContentModerationFragmentCacheEntry{Result: redisFragmentValueString(raw[1])}
+	if len(raw) > 2 {
+		metadata := redisFragmentValueString(raw[2])
+		if metadata != "" {
+			if err := json.Unmarshal([]byte(metadata), &entry); err != nil {
+				return "", service.ContentModerationFragmentCacheEntry{}, false, fmt.Errorf("decode content moderation fragment metadata: %w", err)
+			}
+		}
+	}
+	if len(raw) > 3 {
+		expiresMS, _ := strconv.ParseInt(redisFragmentValueString(raw[3]), 10, 64)
+		if expiresMS > 0 {
+			entry.ExpiresAt = time.UnixMilli(expiresMS)
+		}
+	}
+	return fragmentHash, entry, true, nil
+}
+
 func (c *contentModerationHashCache) PutFragmentCacheEntry(ctx context.Context, namespace, fragmentHash string, entry service.ContentModerationFragmentCacheEntry, estimatedBytes int64, maxEntries int, maxBytes int64, ttl time.Duration) error {
 	keys, ok := contentModerationFragmentKeys(namespace)
 	fragmentHash = strings.TrimSpace(fragmentHash)
@@ -204,7 +284,9 @@ func (c *contentModerationHashCache) PutFragmentCacheEntry(ctx context.Context, 
 	if c == nil || c.rdb == nil || !ok || fragmentHash == "" {
 		return nil
 	}
-	if entry.Result != service.ContentModerationFragmentAllow && entry.Result != service.ContentModerationFragmentBlock {
+	if entry.Result != service.ContentModerationFragmentAllow &&
+		entry.Result != service.ContentModerationFragmentBlock &&
+		entry.Result != service.ContentModerationFragmentRestricted {
 		return fmt.Errorf("invalid content moderation fragment result")
 	}
 	if ttl <= 0 {
@@ -222,9 +304,17 @@ func (c *contentModerationHashCache) PutFragmentCacheEntry(ctx context.Context, 
 	if maxEntries <= 0 || maxBytes <= 0 {
 		return fmt.Errorf("invalid content moderation fragment cache limits")
 	}
-	scriptKeys := append(append([]string(nil), keys...), contentModerationFragmentNamespacesSetKey)
+	aliasKey := contentModerationFragmentAliasPrefix + "none"
+	aliasRef := ""
+	aliasSource := strings.TrimSpace(entry.ReplayOfInputHash)
+	if aliasSource != "" && aliasSource != fragmentHash {
+		aliasKey = contentModerationFragmentAliasPrefix + aliasSource
+		aliasRef = namespace + "\x00" + fragmentHash
+	}
+	scriptKeys := append(append([]string(nil), keys...),
+		contentModerationFragmentNamespacesSetKey, aliasKey, contentModerationFragmentAliasSourcesKey)
 	_, err = contentModerationFragmentPutScript.Run(ctx, c.rdb, scriptKeys,
-		fragmentHash, entry.Result, estimatedBytes, maxEntries, maxBytes, time.Now().UnixMilli(), expiresAt.UnixMilli(), string(metadata), namespace).Result()
+		fragmentHash, entry.Result, estimatedBytes, maxEntries, maxBytes, time.Now().UnixMilli(), expiresAt.UnixMilli(), string(metadata), namespace, aliasRef).Result()
 	return err
 }
 
@@ -287,6 +377,32 @@ func (c *contentModerationHashCache) DeleteFragmentResultAliases(ctx context.Con
 		}
 		deleted += count
 	}
+	aliasKey := contentModerationFragmentAliasPrefix + fragmentHash
+	aliasRefs, err := c.rdb.SMembers(ctx, aliasKey).Result()
+	if err != nil {
+		return deleted, err
+	}
+	for _, aliasRef := range aliasRefs {
+		parts := strings.SplitN(aliasRef, "\x00", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		keys, ok := contentModerationFragmentKeys(parts[0])
+		if !ok || strings.TrimSpace(parts[1]) == "" {
+			continue
+		}
+		count, deleteErr := contentModerationFragmentDeleteScript.Run(ctx, c.rdb, keys, parts[1]).Int64()
+		if deleteErr != nil {
+			return deleted, deleteErr
+		}
+		deleted += count
+	}
+	if err := c.rdb.Del(ctx, aliasKey).Err(); err != nil {
+		return deleted, err
+	}
+	if err := c.rdb.ZRem(ctx, contentModerationFragmentAliasSourcesKey, aliasKey).Err(); err != nil {
+		return deleted, err
+	}
 	return deleted, nil
 }
 
@@ -312,6 +428,18 @@ func (c *contentModerationHashCache) ClearAllFragmentResults(ctx context.Context
 			return deleted, err
 		}
 		deleted += count
+	}
+	aliasKeys, err := c.rdb.ZRange(ctx, contentModerationFragmentAliasSourcesKey, 0, -1).Result()
+	if err != nil {
+		return deleted, err
+	}
+	if len(aliasKeys) > 0 {
+		if err := c.rdb.Del(ctx, aliasKeys...).Err(); err != nil {
+			return deleted, err
+		}
+	}
+	if err := c.rdb.Del(ctx, contentModerationFragmentAliasSourcesKey).Err(); err != nil {
+		return deleted, err
 	}
 	if err := c.rdb.Del(ctx, contentModerationFragmentNamespacesSetKey).Err(); err != nil {
 		return deleted, err

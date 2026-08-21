@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"net/http"
 	"strconv"
@@ -40,7 +41,10 @@ type ContentModerationFragment struct {
 	trailingSpace bool
 }
 
-const contentModerationFragmentHashDomain = "sub2api/content-moderation/fragment/v3\x00"
+const (
+	contentModerationFragmentHashDomain = "sub2api/content-moderation/fragment/v3\x00"
+	contentModerationLineageHashDomain  = "sub2api/content-moderation/lineage/v1\x00"
+)
 
 func newContentModerationFragment(role, kind, path, text string) (ContentModerationFragment, bool) {
 	rawText := text
@@ -70,6 +74,100 @@ func updateContentModerationFragmentHash(fragment *ContentModerationFragment) {
 	}
 	digest := sha256.Sum256([]byte(contentModerationFragmentHashDomain + fragment.Role + "\x00" + fragment.Kind + "\x00" + fragment.ContextClass + "\x00" + fragment.Path + "\x00" + fragment.Text))
 	fragment.Hash = hex.EncodeToString(digest[:])
+}
+
+type contentModerationLineageMessageUnit struct {
+	root  string
+	index int
+	key   string
+	ok    bool
+}
+
+func contentModerationLineageMessageUnitForFragment(fragment ContentModerationFragment) contentModerationLineageMessageUnit {
+	parts := strings.Split(strings.TrimSpace(fragment.Path), ".")
+	if len(parts) >= 2 {
+		root := strings.ToLower(parts[0])
+		if root == "messages" || root == "input" || root == "contents" {
+			index, err := strconv.Atoi(parts[1])
+			if err == nil && index >= 0 {
+				return contentModerationLineageMessageUnit{root: root, index: index, key: root + "." + parts[1], ok: true}
+			}
+		}
+	}
+	return contentModerationLineageMessageUnit{root: "top", key: "top", ok: true}
+}
+
+func contentModerationLineageUnitHashes(input ContentModerationCheckInput, fragments []ContentModerationFragment) ([]string, map[string]ContentModerationFragment) {
+	principal := ""
+	switch {
+	case input.UserID > 0:
+		principal = "user:" + strconv.FormatInt(input.UserID, 10)
+	case input.APIKeyID > 0:
+		principal = "api_key:" + strconv.FormatInt(input.APIKeyID, 10)
+	default:
+		return nil, nil
+	}
+	type lineageUnit struct {
+		key       string
+		fragment  ContentModerationFragment
+		fragments []ContentModerationFragment
+	}
+	units := make([]lineageUnit, 0, len(fragments))
+	unitIndexes := make(map[string]int, len(fragments))
+	for _, fragment := range fragments {
+		unit := contentModerationLineageMessageUnitForFragment(fragment)
+		unitKey := unit.key + "\x00" + fragment.Role
+		index, found := unitIndexes[unitKey]
+		if !found {
+			index = len(units)
+			unitIndexes[unitKey] = index
+			units = append(units, lineageUnit{key: unitKey, fragment: fragment})
+		}
+		units[index].fragments = append(units[index].fragments, fragment)
+	}
+	hashes := make([]string, 0, len(units))
+	representatives := make(map[string]ContentModerationFragment, len(units))
+	for _, unit := range units {
+		hasher := sha256.New()
+		writeField := func(value string) {
+			var size [8]byte
+			binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+			_, _ = hasher.Write(size[:])
+			_, _ = hasher.Write([]byte(value))
+		}
+		writeField(contentModerationLineageHashDomain)
+		writeField(principal)
+		for _, fragment := range unit.fragments {
+			writeField(fragment.Role)
+			writeField(fragment.Kind)
+			writeField(fragment.ContextClass)
+			writeField(fragment.Text)
+			writeField(strconv.FormatBool(fragment.leadingSpace))
+			writeField(strconv.FormatBool(fragment.trailingSpace))
+		}
+		hash := hex.EncodeToString(hasher.Sum(nil))
+		hashes = append(hashes, hash)
+		representatives[hash] = unit.fragment
+	}
+	return hashes, representatives
+}
+
+func contentModerationLineageUnitForFragment(input ContentModerationCheckInput, source ContentModerationFragment, fragments []ContentModerationFragment) (string, ContentModerationFragment) {
+	sourceUnit := contentModerationLineageMessageUnitForFragment(source)
+	unitFragments := make([]ContentModerationFragment, 0, len(fragments))
+	for _, fragment := range fragments {
+		if contentModerationLineageMessageUnitForFragment(fragment).key == sourceUnit.key && fragment.Role == source.Role {
+			unitFragments = append(unitFragments, fragment)
+		}
+	}
+	if len(unitFragments) == 0 {
+		unitFragments = append(unitFragments, source)
+	}
+	hashes, representatives := contentModerationLineageUnitHashes(input, unitFragments)
+	if len(hashes) == 0 {
+		return "", ContentModerationFragment{}
+	}
+	return hashes[0], representatives[hashes[0]]
 }
 
 // ExtractContentModerationFragments extracts every directly parseable,
@@ -120,46 +218,34 @@ func ExtractContentModerationFragments(protocol string, body []byte) []ContentMo
 // actual tool calls/results that belong to it. Prompt history and tool schemas
 // are useful model context, but they are not authored content for this gate.
 func SelectContentModerationReviewFragments(fragments []ContentModerationFragment) []ContentModerationFragment {
-	type messageUnit struct {
-		root  string
-		index int
-		key   string
-		ok    bool
-	}
-	unitFor := func(fragment ContentModerationFragment) messageUnit {
-		parts := strings.Split(strings.TrimSpace(fragment.Path), ".")
-		if len(parts) >= 2 {
-			root := strings.ToLower(parts[0])
-			if root == "messages" || root == "input" || root == "contents" {
-				index, err := strconv.Atoi(parts[1])
-				if err == nil && index >= 0 {
-					return messageUnit{root: root, index: index, key: root + "." + parts[1], ok: true}
-				}
-			}
-		}
-		return messageUnit{root: "top", key: "top", ok: true}
-	}
+	current, _ := partitionContentModerationReviewFragments(fragments)
+	return current
+}
 
-	latestUser := messageUnit{}
+func partitionContentModerationReviewFragments(fragments []ContentModerationFragment) ([]ContentModerationFragment, []ContentModerationFragment) {
+	latestUser := contentModerationLineageMessageUnit{}
 	hasUser := false
 	for _, fragment := range fragments {
 		if fragment.Role != "user" || fragment.Kind == "url" {
 			continue
 		}
-		latestUser = unitFor(fragment)
+		latestUser = contentModerationLineageMessageUnitForFragment(fragment)
 		hasUser = true
 	}
 
-	out := make([]ContentModerationFragment, 0, len(fragments))
+	current := make([]ContentModerationFragment, 0, len(fragments))
+	history := make([]ContentModerationFragment, 0, len(fragments))
 	for _, fragment := range fragments {
 		if fragment.Kind == "url" || fragment.Role == "system" || fragment.Role == "developer" || fragment.Role == "assistant" {
 			continue
 		}
-		unit := unitFor(fragment)
+		unit := contentModerationLineageMessageUnitForFragment(fragment)
 		switch fragment.Role {
 		case "user":
 			if hasUser && unit.key == latestUser.key {
-				out = append(out, fragment)
+				current = append(current, fragment)
+			} else {
+				history = append(history, fragment)
 			}
 		case "tool":
 			root := strings.ToLower(strings.SplitN(strings.TrimSpace(fragment.Path), ".", 2)[0])
@@ -167,11 +253,13 @@ func SelectContentModerationReviewFragments(fragments []ContentModerationFragmen
 				continue
 			}
 			if !hasUser || (unit.root == latestUser.root && unit.index >= latestUser.index) || latestUser.root == "top" {
-				out = append(out, fragment)
+				current = append(current, fragment)
+			} else {
+				history = append(history, fragment)
 			}
 		}
 	}
-	return out
+	return current, history
 }
 
 func collectUnifiedModerationMessages(messages gjson.Result, path string, out *[]ContentModerationFragment) {
