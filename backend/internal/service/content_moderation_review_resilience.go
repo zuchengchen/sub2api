@@ -306,7 +306,13 @@ func (s *ContentModerationService) contentModerationReviewCanDegrade(
 ) bool {
 	if cfg == nil || cfg.RemoteUnavailablePolicy != ContentModerationRemoteUnavailableRiskTiered ||
 		cfg.SecondLayerStage != ContentModerationSecondLayerStageEnforce || work.bundle.PrimaryTier != "candidate" ||
-		!work.sourceComplete || work.bundle.ContextIncomplete || work.bundle.CoverageIncomplete || outcome.result.Blocked {
+		!work.sourceComplete || work.bundle.CoverageIncomplete || outcome.result.Blocked {
+		return false
+	}
+	if outcome.parserStatus == "evidence_truncated" {
+		return work.bundle.ContextIncomplete && contentModerationReviewResultIsConclusiveSafe(outcome.result)
+	}
+	if work.bundle.ContextIncomplete {
 		return false
 	}
 	if _, complete := contentModerationFullReviewInputs(work, contentModerationReviewInputLimit(cfg)); !complete {
@@ -328,6 +334,18 @@ func (s *ContentModerationService) contentModerationReviewCanDegrade(
 		return false
 	}
 	return len(outcome.result.ReviewAttempts) > 0
+}
+
+func contentModerationReviewResultIsConclusiveSafe(result contentModerationSecondLayerResult) bool {
+	if result.Blocked || result.normalizedDisposition() != ContentModerationReviewDispositionAllow {
+		return false
+	}
+	for _, attempt := range result.ReviewAttempts {
+		if attempt.Outcome == "success" && attempt.Verdict == "safe" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ContentModerationService) contentModerationReviewRetryAfter(cfg *ContentModerationConfig, now time.Time) int {
