@@ -49,6 +49,7 @@ const (
 	ContentModerationRemoteProviderGLM           = "zhipu_glm"
 	ContentModerationRemoteProviderMiMo          = "mimo"
 	ContentModerationRemoteUnavailableFailClosed = "fail_closed"
+	ContentModerationRemoteUnavailableRiskTiered = "risk_tiered"
 	ContentModerationYuFengModeShadow            = "shadow"
 )
 

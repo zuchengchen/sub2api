@@ -18,11 +18,13 @@ describe('risk control locale copy', () => {
     expect(en.admin.riskControl.layerStagesSummary).toContain('Shadow')
   })
 
-  it('states that one usable online reviewer is sufficient', () => {
-    expect(zh.admin.riskControl.reviewersSummary).toContain('任一可用供应商')
-    expect(zh.admin.riskControl.onlineReviewersMeta).toContain('首个成功返回')
-    expect(en.admin.riskControl.reviewersSummary).toContain('any one usable provider')
-    expect(en.admin.riskControl.onlineReviewersMeta).toContain('first successful provider verdict')
+  it('describes delayed hedging and the bounded outage policy', () => {
+    expect(zh.admin.riskControl.reviewersSummary).toContain('风险结论立即生效')
+    expect(zh.admin.riskControl.onlineReviewersMeta).toContain('1.5 秒')
+    expect(zh.admin.riskControl.remoteUnavailableRiskTieredHint).toContain('最近 2 分钟')
+    expect(en.admin.riskControl.reviewersSummary).toContain('risk verdicts win immediately')
+    expect(en.admin.riskControl.onlineReviewersMeta).toContain('1.5 seconds')
+    expect(en.admin.riskControl.remoteUnavailableRiskTieredHint).toContain('last two minutes')
   })
 
   it('labels API keys as encrypted and never echoed', () => {
@@ -72,6 +74,13 @@ describe('risk control locale copy', () => {
     for (const token of ['{misses}', '{writes}', '{errors}']) {
       expect(zh.admin.riskControl.overview.cacheActivity).toContain(token)
       expect(en.admin.riskControl.overview.cacheActivity).toContain(token)
+    }
+  })
+
+  it('shows enforced and degraded review outage counters', () => {
+    for (const token of ['{enforced}', '{degraded}']) {
+      expect(zh.admin.riskControl.overview.unavailable).toContain(token)
+      expect(en.admin.riskControl.overview.unavailable).toContain(token)
     }
   })
 

@@ -132,6 +132,50 @@
                   }}
                 </span>
               </div>
+              <div class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700">
+                <p class="text-xs font-medium text-gray-600 dark:text-gray-300">
+                  {{ t('admin.riskControl.remoteUnavailablePolicy') }}
+                </p>
+                <div
+                  class="mt-2 inline-flex rounded-lg bg-gray-100 p-1 dark:bg-dark-900"
+                  role="group"
+                  :aria-label="t('admin.riskControl.remoteUnavailablePolicy')"
+                >
+                  <button
+                    type="button"
+                    class="min-h-9 rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+                    :class="
+                      configForm.remote_unavailable_policy === 'risk_tiered'
+                        ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
+                        : 'text-gray-500 dark:text-gray-400'
+                    "
+                    data-test="remote-unavailable-risk-tiered"
+                    @click="configForm.remote_unavailable_policy = 'risk_tiered'"
+                  >
+                    {{ t('admin.riskControl.remoteUnavailableRiskTiered') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="min-h-9 rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+                    :class="
+                      configForm.remote_unavailable_policy === 'fail_closed'
+                        ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
+                        : 'text-gray-500 dark:text-gray-400'
+                    "
+                    data-test="remote-unavailable-fail-closed"
+                    @click="configForm.remote_unavailable_policy = 'fail_closed'"
+                  >
+                    {{ t('admin.riskControl.remoteUnavailableFailClosed') }}
+                  </button>
+                </div>
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {{
+                    configForm.remote_unavailable_policy === 'risk_tiered'
+                      ? t('admin.riskControl.remoteUnavailableRiskTieredHint')
+                      : t('admin.riskControl.remoteUnavailableFailClosedHint')
+                  }}
+                </p>
+              </div>
             </article>
 
             <article class="rounded-lg border border-gray-200 bg-white p-5 dark:border-dark-700 dark:bg-dark-800">
@@ -1053,6 +1097,7 @@ import type {
   ContentModerationLog,
   ContentModerationLogView,
   ContentModerationModelFilterType,
+  ContentModerationRemoteUnavailablePolicy,
   ContentModerationRuntimeStatus,
   ContentModerationChannelHeartbeat,
   DeepSeekModerationChannel,
@@ -1132,7 +1177,7 @@ const configForm = reactive({
   deepseek_enabled: true,
   remote_reviewers_enabled: true,
   remote_consensus_required: remoteConsensusRequired,
-  remote_unavailable_policy: 'fail_closed',
+  remote_unavailable_policy: 'fail_closed' as ContentModerationRemoteUnavailablePolicy,
   yufeng_enabled: false,
   yufeng_mode: 'shadow',
   deepseek_total_timeout_ms: 10000,
@@ -1296,6 +1341,8 @@ const overviewItems = computed<OverviewItem[]>(() => [
     value: String(status.value?.remote_failover_count ?? status.value?.deepseek_failover_count ?? 0),
     meta: t('admin.riskControl.overview.unavailable', {
       count: status.value?.remote_unavailable_count ?? status.value?.deepseek_unavailable_count ?? 0,
+      enforced: status.value?.review_unavailable_enforced_count ?? 0,
+      degraded: status.value?.review_unavailable_degraded_count ?? 0,
     }),
     icon: 'swap',
     iconClass: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300',
@@ -1423,7 +1470,8 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.remote_reviewers_enabled = config.remote_reviewers_enabled ?? config.deepseek_enabled ?? true
   configForm.deepseek_enabled = config.deepseek_enabled ?? configForm.remote_reviewers_enabled
   configForm.remote_consensus_required = remoteConsensusRequired
-  configForm.remote_unavailable_policy = config.remote_unavailable_policy || 'fail_closed'
+  configForm.remote_unavailable_policy =
+    config.remote_unavailable_policy === 'risk_tiered' ? 'risk_tiered' : 'fail_closed'
   configForm.yufeng_enabled = config.yufeng_enabled ?? false
   configForm.yufeng_mode = config.yufeng_mode || 'shadow'
   configForm.deepseek_total_timeout_ms = config.deepseek_total_timeout_ms ?? 10000
@@ -1530,7 +1578,7 @@ async function saveConfig() {
       deepseek_enabled: configForm.deepseek_enabled,
       remote_reviewers_enabled: configForm.remote_reviewers_enabled,
       remote_consensus_required: remoteConsensusRequired,
-      remote_unavailable_policy: 'fail_closed',
+      remote_unavailable_policy: configForm.remote_unavailable_policy,
       yufeng_enabled: configForm.yufeng_enabled,
       yufeng_mode: 'shadow',
       deepseek_total_timeout_ms: clampInteger(configForm.deepseek_total_timeout_ms, 100, 120000, 10000),
@@ -1938,6 +1986,7 @@ function channelTestResultText(result: TestDeepSeekChannelResponse): string {
 
 function resultLabel(row: ContentModerationLog): string {
   if (row.action === 'restricted_block') return t('admin.riskControl.result.restricted')
+  if (row.action === 'degraded_allow') return t('admin.riskControl.result.degradedAllow')
   if (row.review_outcome) return row.review_outcome
   if (row.action === 'review_unavailable' || row.error) return t('admin.riskControl.result.unavailable')
   if (row.action?.includes('shadow')) return t('admin.riskControl.result.shadow')
@@ -1947,6 +1996,7 @@ function resultLabel(row: ContentModerationLog): string {
 
 function resultClass(row: ContentModerationLog): string {
   if (row.action === 'restricted_block') return statusClasses.warning
+  if (row.action === 'degraded_allow') return statusClasses.warning
   if (row.action === 'review_unavailable' || row.error) return statusClasses.warning
   if (row.action?.includes('shadow')) return statusClasses.warning
   if (row.action?.includes('block') || row.flagged) return statusClasses.danger

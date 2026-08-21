@@ -107,6 +107,7 @@ const baseConfig = (): ContentModerationConfig => ({
   deepseek_enabled: true,
   remote_reviewers_enabled: true,
   remote_consensus_required: 2,
+  remote_unavailable_policy: 'fail_closed',
   yufeng_enabled: false,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
@@ -354,6 +355,7 @@ describe('admin RiskControlView', () => {
         deepseek_enabled: true,
         remote_reviewers_enabled: true,
         remote_consensus_required: 1,
+        remote_unavailable_policy: 'fail_closed',
         yufeng_enabled: true,
         cyber_policy_exclude_from_ban_count: true,
         deepseek_threshold: 0.8,
@@ -365,6 +367,27 @@ describe('admin RiskControlView', () => {
           expect.objectContaining({ id: 'deepseek-official', order: 1, api_key: undefined }),
         ],
       })
+    )
+
+    wrapper.unmount()
+  })
+
+  it('persists both review outage policies instead of forcing fail-closed', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-test="remote-unavailable-risk-tiered"]').trigger('click')
+    await wrapper.get('[data-test="save-risk-control"]').trigger('click')
+    await flushPromises()
+    expect(updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ remote_unavailable_policy: 'risk_tiered' })
+    )
+
+    await wrapper.get('[data-test="remote-unavailable-fail-closed"]').trigger('click')
+    await wrapper.get('[data-test="save-risk-control"]').trigger('click')
+    await flushPromises()
+    expect(updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ remote_unavailable_policy: 'fail_closed' })
     )
 
     wrapper.unmount()

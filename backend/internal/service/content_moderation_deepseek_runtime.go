@@ -74,6 +74,7 @@ type contentModerationDeepSeekChannelState struct {
 	// a 15-minute lease: subsequent availability is governed by the normal
 	// breaker and by real user reviews.
 	reviewUsable        bool
+	lastReviewSuccessAt time.Time
 	lastLatencyMS       int
 	lastError           string
 	heartbeatStatus     string
@@ -120,6 +121,7 @@ func (s *ContentModerationService) deepSeekChannelState(channel ContentModeratio
 		state.healthCheckedAt = time.Time{}
 		state.healthyUntil = time.Time{}
 		state.reviewUsable = false
+		state.lastReviewSuccessAt = time.Time{}
 		state.lastLatencyMS = 0
 		state.lastError = ""
 		state.heartbeatStatus = ""
@@ -195,13 +197,14 @@ func (state *contentModerationDeepSeekChannelState) finish(
 		state.cooldownUntil = time.Time{}
 		state.healthCheckedAt = now
 		state.healthyUntil = now.Add(contentModerationDeepSeekHealthTTL)
+		state.lastReviewSuccessAt = now
 		state.lastError = ""
 		return
 	}
-	state.lastError = trimRunes(redactContentModerationSecrets(callErr.Error()), 240)
 	if errors.Is(callErr, context.Canceled) {
 		return
 	}
+	state.lastError = trimRunes(redactContentModerationSecrets(callErr.Error()), 240)
 	state.healthCheckedAt = now
 	state.healthyUntil = time.Time{}
 	var httpErr *contentModerationDeepSeekHTTPError
@@ -210,6 +213,7 @@ func (state *contentModerationDeepSeekChannelState) finish(
 		case http.StatusUnauthorized, http.StatusForbidden:
 			state.authDisabled = true
 			state.reviewUsable = false
+			state.lastReviewSuccessAt = time.Time{}
 			state.cooldownUntil = time.Time{}
 			return
 		case http.StatusTooManyRequests, 529:
@@ -239,6 +243,7 @@ func (state *contentModerationDeepSeekChannelState) markReviewHealthy(
 	state.healthCheckedAt = now
 	state.healthyUntil = now.Add(contentModerationDeepSeekHealthTTL)
 	state.reviewUsable = true
+	state.lastReviewSuccessAt = now
 	state.lastError = ""
 	return true
 }
@@ -274,6 +279,12 @@ func (state *contentModerationDeepSeekChannelState) reviewIsUsable(now time.Time
 	return true, ""
 }
 
+func (state *contentModerationDeepSeekChannelState) lastReviewSuccess() time.Time {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.lastReviewSuccessAt
+}
+
 func (state *contentModerationDeepSeekChannelState) heartbeatSnapshot() (status string, checkedAt *time.Time, latency, httpStatus int, lastError string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -290,6 +301,7 @@ func (state *contentModerationDeepSeekChannelState) markCredentialUnavailable(no
 	defer state.mu.Unlock()
 	state.authDisabled = true
 	state.reviewUsable = false
+	state.lastReviewSuccessAt = time.Time{}
 	state.cooldownUntil = time.Time{}
 	state.halfOpenProbe = false
 	state.healthCheckedAt = now
@@ -448,7 +460,14 @@ func buildContentModerationDeepSeekPayload(channel ContentModerationDeepSeekChan
 	if err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(map[string]string{"content": input.Evidence.Text})
+	dataFields := map[string]any{"content": input.Evidence.Text}
+	if len(input.MatchedIndicators) > 0 {
+		dataFields["matched_risk_indicators"] = append([]string(nil), input.MatchedIndicators...)
+	}
+	if input.ChunkCount > 1 {
+		dataFields["chunk"] = map[string]int{"index": input.ChunkIndex + 1, "total": input.ChunkCount}
+	}
+	data, err := json.Marshal(dataFields)
 	if err != nil {
 		return nil, err
 	}
@@ -926,7 +945,7 @@ func (s *ContentModerationService) deepSeekChannelReviewReady(channel ContentMod
 		return false
 	}
 	_, breaker, _, _, _, _, _ := state.snapshot(now)
-	return breaker == "closed"
+	return breaker == "closed" || breaker == "half_open"
 }
 
 func (s *ContentModerationService) hasReachableDeepSeekChannel(cfg *ContentModerationConfig, now time.Time) bool {

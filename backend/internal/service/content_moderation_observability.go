@@ -18,6 +18,7 @@ type contentModerationReviewObservability struct {
 	deepSeekHalfOpenBusySkipCount    atomic.Int64
 	reviewUnavailableCount           atomic.Int64
 	reviewUnavailableEnforcedCount   atomic.Int64
+	reviewUnavailableDegradedCount   atomic.Int64
 	lastReviewUnavailableUnixMilli   atomic.Int64
 }
 
@@ -105,8 +106,12 @@ func (s *ContentModerationService) recordContentModerationReviewUnavailable(
 	}
 	s.reviewObservability.reviewUnavailableCount.Add(1)
 	enforced := strings.TrimSpace(decisionSource) == "review_unavailable"
+	degraded := strings.TrimSpace(decisionSource) == "review_unavailable_degraded_allow"
 	if enforced {
 		s.reviewObservability.reviewUnavailableEnforcedCount.Add(1)
+	}
+	if degraded {
+		s.reviewObservability.reviewUnavailableDegradedCount.Add(1)
 	}
 	s.reviewObservability.lastReviewUnavailableUnixMilli.Store(time.Now().UnixMilli())
 
@@ -122,6 +127,7 @@ func (s *ContentModerationService) recordContentModerationReviewUnavailable(
 		zap.String("decision_source", strings.TrimSpace(decisionSource)),
 		zap.String("second_layer_stage", strings.TrimSpace(stage)),
 		zap.Bool("enforced", enforced),
+		zap.Bool("degraded_allow", degraded),
 		zap.Int("review_attempt_count", len(attempts)),
 		zap.Int("response_read_timeout_count", summary.responseReadTimeouts),
 		zap.Int("breaker_skip_count", summary.breakerSkips),
