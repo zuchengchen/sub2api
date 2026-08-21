@@ -364,7 +364,7 @@ export default {
       recordsHint: '按类别查看 Cyber Policy、风控拦截、影子模型风险和复审异常记录。',
       recordTabs: {
         cyberPolicy: 'Cyber Policy',
-        blocked: '已拦截',
+        violationBlocked: '违规拦截',
         restricted: '策略阻断（非违规）',
         riskyShadow: 'Shadow 风险',
         reviewUnavailable: '复审异常',
@@ -649,7 +649,7 @@ export default {
       result: {
         all: '全部结果',
         hit: '命中',
-        blocked: '已拦截',
+        blocked: '违规拦截',
         restricted: '策略阻断（非违规）',
         pass: '未命中',
         error: '异常',

@@ -823,14 +823,12 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 	switch strings.ToLower(strings.TrimSpace(filter.Result)) {
 	case "hit", "flagged":
 		where = append(where, "l.flagged = TRUE")
-	case "blocked", "block":
-		where = append(where, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'restricted_block', 'cache_block', 'cyber_policy')")
+	case "blocked", "block", service.ContentModerationLogResultContentBlocked, service.ContentModerationLogResultViolationBlocked:
+		where = append(where, "l.flagged = TRUE AND l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block')")
 	case service.ContentModerationLogResultRestricted:
 		where = append(where, "l.action = 'restricted_block'")
 	case service.ContentModerationLogResultCyberPolicy:
 		where = append(where, "l.action = 'cyber_policy'")
-	case service.ContentModerationLogResultContentBlocked:
-		where = append(where, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'restricted_block', 'cache_block')")
 	case service.ContentModerationLogResultRiskyShadow:
 		where = append(where, "l.action IN ('first_layer_shadow', 'second_layer_shadow', 'whitelist_shadow') AND COALESCE(BTRIM(l.highest_category), '') <> ''")
 	case service.ContentModerationLogResultReviewFailure:

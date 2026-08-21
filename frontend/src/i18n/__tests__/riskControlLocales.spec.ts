@@ -76,6 +76,10 @@ describe('risk control locale copy', () => {
   })
 
   it('labels restricted blocks as non-violations in both locales', () => {
+    expect(zh.admin.riskControl.recordTabs.violationBlocked).toBe('违规拦截')
+    expect(en.admin.riskControl.recordTabs.violationBlocked).toBe('Violation blocks')
+    expect(zh.admin.riskControl.result.blocked).toBe('违规拦截')
+    expect(en.admin.riskControl.result.blocked).toBe('Blocked as violation')
     expect(zh.admin.riskControl.recordTabs.restricted).toContain('非违规')
     expect(en.admin.riskControl.recordTabs.restricted).toContain('non-violation')
     expect(zh.admin.riskControl.result.restricted).toContain('非违规')

@@ -14,13 +14,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildContentModerationLogWhere_BlockedIncludesAllBlockActions(t *testing.T) {
+func TestBuildContentModerationLogWhere_LegacyBlockedNormalizesToViolationBlocks(t *testing.T) {
 	where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: "blocked"})
 
 	require.Empty(t, args)
 	sql := strings.Join(where, " AND ")
-	require.Contains(t, sql, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'restricted_block', 'cache_block', 'cyber_policy')")
-	require.NotContains(t, sql, "l.action = 'block'")
+	require.Contains(t, sql, "l.flagged = TRUE")
+	require.Contains(t, sql, "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block')")
+	require.NotContains(t, sql, "restricted_block")
+	require.NotContains(t, sql, "cyber_policy")
 }
 
 func TestBuildContentModerationLogWhere_AuditRecordViews(t *testing.T) {
@@ -36,10 +38,10 @@ func TestBuildContentModerationLogWhere_AuditRecordViews(t *testing.T) {
 			contains: "l.action = 'cyber_policy'",
 		},
 		{
-			name:       "content blocked",
-			result:     service.ContentModerationLogResultContentBlocked,
-			contains:   "l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'restricted_block', 'cache_block')",
-			notContain: "'cyber_policy'",
+			name:       "violation blocked",
+			result:     service.ContentModerationLogResultViolationBlocked,
+			contains:   "l.flagged = TRUE AND l.action IN ('block', 'keyword_block', 'hash_block', 'second_layer_block', 'cache_block')",
+			notContain: "restricted_block",
 		},
 		{
 			name:     "restricted",
