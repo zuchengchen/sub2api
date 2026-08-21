@@ -67,6 +67,7 @@ github.com/Wei-Shaw/sub2api/internal/service|TestContentModerationRiskTieredTrun
 github.com/Wei-Shaw/sub2api/internal/service|TestContentModerationRiskTieredMixedFailuresNeverHideHardFailure
 github.com/Wei-Shaw/sub2api/internal/service|TestContentModerationRiskTieredPolicyFloorWinsOverDegradedCandidateInAnyOrder
 github.com/Wei-Shaw/sub2api/internal/service|TestContentModerationReviewRetryAfterTracksEarliestCooldown
+github.com/Wei-Shaw/sub2api/internal/service|TestContentModerationCandidateScanUsesReviewableRedactedText
 github.com/Wei-Shaw/sub2api/resources/content-moderation|TestDeepSeekV4FlashAuditAssetContract
 github.com/Wei-Shaw/sub2api/resources/content-moderation|TestDeepSeekV4FlashLayerAssignments
 github.com/Wei-Shaw/sub2api/resources/content-moderation|TestDeepSeekV4FlashLayer1UsesExplicitCombinationPhrases

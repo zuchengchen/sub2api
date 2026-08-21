@@ -55,6 +55,53 @@ func TestContentModerationContextRoutingKeepsLocalDecisionsFastAndSafe(t *testin
 	require.Zero(t, modelCalls.Load(), "locally decisive contexts must not consume YuFeng capacity")
 }
 
+func TestContentModerationCandidateScanUsesReviewableRedactedText(t *testing.T) {
+	var modelCalls atomic.Int64
+	var reviewedPayload atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		reviewedPayload.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"sec"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := contextualRoutingTestConfig(server.URL)
+	repo := &contentModerationReplayRepo{}
+	cache := &contentModerationReplayCache{}
+	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	svc.markYuFengEndpointHealthy(cfg.SecondLayerEndpoints[0], time.Now())
+	runtime := contextualRoutingTestRuntime(cfg, []string{"2fa"})
+
+	opaqueValue := strings.Repeat("A", 40) + "2fa" + strings.Repeat("B", 40)
+	require.NotContains(t, redactContentModerationEvidenceText(opaqueValue), "2fa")
+	body, err := json.Marshal(map[string]any{"input": []any{map[string]any{
+		"role": "tool", "content": "ordinary image metadata " + opaqueValue,
+	}}})
+	require.NoError(t, err)
+	input := contextualRoutingTestInput("placeholder", "")
+	input.Body = body
+
+	decision := svc.checkUnifiedFragments(context.Background(), input, runtime)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.Zero(t, modelCalls.Load(), "opaque values removed from review evidence must not create candidates")
+	require.Empty(t, repo.snapshotLogs())
+
+	input.RequestID = "candidate-visible-after-redaction"
+	input.Body = []byte(`{"input":[{"role":"tool","content":"ordinary 2fa migration documentation"}]}`)
+	decision = svc.checkUnifiedFragments(context.Background(), input, runtime)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, int64(1), modelCalls.Load(), "visible candidate terms must still be reviewed")
+	payload, ok := reviewedPayload.Load().(string)
+	require.True(t, ok)
+	require.Contains(t, strings.ToLower(payload), "2fa")
+	require.Len(t, repo.snapshotLogs(), 1)
+}
+
 func TestContentModerationReviewedRecord6128AllowsWithProductionKeywordAsset(t *testing.T) {
 	cfg := contextualRoutingTestConfig("")
 	cfg.BlockedKeywords = nil
