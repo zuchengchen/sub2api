@@ -243,11 +243,14 @@ func (s *ContentModerationService) scanContentModerationYuFengShadow(
 }
 
 type contentModerationSecondLayerInput struct {
-	Fragment      ContentModerationFragment
-	Evidence      moderationEvidence
-	KeywordTier   string
-	KeywordRuleID string
-	Background    bool
+	Fragment          ContentModerationFragment
+	Evidence          moderationEvidence
+	KeywordTier       string
+	KeywordRuleID     string
+	MatchedIndicators []string
+	ChunkIndex        int
+	ChunkCount        int
+	Background        bool
 }
 
 // boundedContentModerationFallbackEvidence is retained only for the local
@@ -382,18 +385,19 @@ func buildContentModerationSecondLayerPayload(endpoint ContentModerationEndpoint
 		}
 	}
 	envelope := struct {
-		Schema            string `json:"schema"`
-		Role              string `json:"role"`
-		Kind              string `json:"kind"`
-		ContextClass      string `json:"context_class"`
-		OriginPath        string `json:"origin_path"`
-		EvidenceMode      string `json:"evidence_mode"`
-		EvidenceTruncated bool   `json:"evidence_truncated"`
-		QuotedData        string `json:"quoted_data,omitempty"`
+		Schema            string   `json:"schema"`
+		Role              string   `json:"role"`
+		Kind              string   `json:"kind"`
+		ContextClass      string   `json:"context_class"`
+		OriginPath        string   `json:"origin_path"`
+		EvidenceMode      string   `json:"evidence_mode"`
+		EvidenceTruncated bool     `json:"evidence_truncated"`
+		MatchedIndicators []string `json:"matched_risk_indicators,omitempty"`
+		QuotedData        string   `json:"quoted_data,omitempty"`
 	}{
 		Schema: "sub2api-moderation-envelope-v1", Role: input.Fragment.Role, Kind: input.Fragment.Kind, ContextClass: input.Fragment.ContextClass,
 		OriginPath: redactContentModerationPath(input.Fragment.Path), EvidenceMode: input.Evidence.Mode,
-		EvidenceTruncated: input.Evidence.Truncated, QuotedData: input.Evidence.Text,
+		EvidenceTruncated: input.Evidence.Truncated, MatchedIndicators: input.MatchedIndicators, QuotedData: input.Evidence.Text,
 	}
 	messageContent := ""
 	if input.Fragment.ContextClass == ContentModerationContextUser {

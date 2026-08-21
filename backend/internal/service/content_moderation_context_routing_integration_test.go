@@ -887,7 +887,7 @@ func TestContentModerationContextualReviewFailureIsRetryableWithoutSideEffects(t
 	require.False(t, decision.Flagged)
 	require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
 	require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
-	require.Equal(t, 1, decision.RetryAfter)
+	require.Equal(t, 2, decision.RetryAfter)
 	require.Equal(t, int64(1), modelCalls.Load())
 	require.Empty(t, cache.snapshotRecorded())
 	require.Zero(t, contextualRoutingCacheEntryCount(cache))
@@ -1042,7 +1042,7 @@ func TestContentModerationContextualReviewPreservesKeywordOnlyContract(t *testin
 	require.Zero(t, modelCalls.Load(), "keyword-only paths must not call YuFeng")
 }
 
-func TestContentModerationTruncatedContextualReviewNeverAllowsOrCachesSafeResult(t *testing.T) {
+func TestContentModerationCompleteLongContextReviewsAllChunksWithoutCaching(t *testing.T) {
 	var modelCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		modelCalls.Add(1)
@@ -1069,19 +1069,19 @@ func TestContentModerationTruncatedContextualReviewNeverAllowsOrCachesSafeResult
 	runtime := contextualRoutingTestRuntime(cfg, nil)
 
 	for attempt := 0; attempt < 2; attempt++ {
-		input.RequestID = "contextual-truncated-" + strconv.Itoa(attempt)
+		input.RequestID = "contextual-complete-long-" + strconv.Itoa(attempt)
 		decision := svc.checkUnifiedFragments(context.Background(), input, runtime)
-		require.False(t, decision.Allowed)
+		require.True(t, decision.Allowed)
 		require.False(t, decision.Blocked)
-		require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
-		require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
+		require.Equal(t, ContentModerationActionAllow, decision.Action)
 	}
-	require.Equal(t, int64(2), modelCalls.Load(), "truncated safe reviews must never reuse an allow cache")
+	require.Equal(t, int64(8), modelCalls.Load(), "every complete source chunk must be reviewed again without a bounded allow cache")
 	require.Zero(t, contextualRoutingCacheEntryCount(cache))
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 2)
 	for _, log := range logs {
-		require.Equal(t, "evidence_truncated", log.ParserStatus)
+		require.Equal(t, "parsed", log.ParserStatus)
+		require.Equal(t, "full_context_chunks", log.EvidenceMode)
 		require.True(t, log.EvidenceTruncated)
 		require.False(t, log.Flagged)
 		require.Zero(t, log.ViolationCount)

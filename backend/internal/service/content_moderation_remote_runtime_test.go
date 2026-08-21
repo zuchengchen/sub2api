@@ -1,12 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -241,6 +245,184 @@ func TestContentModerationRemotePoolReturnsFirstAllowWithoutConfirmation(t *test
 	require.Equal(t, "primary_safe", result.ConsensusStatus)
 	require.Equal(t, 1, result.RemoteVotes)
 	require.Equal(t, int32(0), qwenHits.Load())
+}
+
+func TestContentModerationRemotePoolHedgeKeepsHigherPriorityRiskOverFastBackupSafe(t *testing.T) {
+	var backupHits atomic.Int32
+	backupResponded := make(chan struct{})
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case <-backupResponded:
+		case <-time.After(3 * time.Second):
+			t.Error("backup reviewer did not start")
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		contentModerationRemotePoolWriteResult(t, w, 0.96, "cyber_abuse", "risk")
+	}))
+	defer deepSeek.Close()
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupHits.Add(1)
+		contentModerationRemotePoolWriteResponsesResult(t, w, 0.04, "safe", "")
+		close(backupResponded)
+	}))
+	defer qwen.Close()
+
+	primary := contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0)
+	primary.TimeoutMS = 2500
+	backup := contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1)
+	backup.TimeoutMS = 2500
+	cfg := contentModerationRemotePoolTestConfig(primary, backup)
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationRemotePoolTestInput(t),
+	)
+
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.normalizedDisposition())
+	require.Equal(t, int32(1), backupHits.Load(), "the slow primary should start one delayed hedge")
+	require.Len(t, result.ReviewAttempts, 2)
+	require.Equal(t, ContentModerationRemoteProviderDeepSeek, result.ReviewAttempts[0].Provider)
+	require.Equal(t, "primary", result.ReviewAttempts[0].Role)
+}
+
+func TestContentModerationRemotePoolHedgeUpgradesPrimarySafeToBackupRiskWithinGrace(t *testing.T) {
+	backupStarted := make(chan struct{})
+	primaryResponded := make(chan struct{})
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case <-backupStarted:
+		case <-time.After(3 * time.Second):
+			t.Error("backup reviewer did not start")
+			return
+		}
+		contentModerationRemotePoolWriteResult(t, w, 0.04, "safe", "")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		close(primaryResponded)
+	}))
+	defer deepSeek.Close()
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(backupStarted)
+		select {
+		case <-primaryResponded:
+		case <-time.After(time.Second):
+			t.Error("primary reviewer did not respond")
+			return
+		}
+		time.Sleep(contentModerationRemoteRiskGrace / 4)
+		contentModerationRemotePoolWriteResponsesResult(t, w, 0.97, "weapons", "risk")
+	}))
+	defer qwen.Close()
+
+	primary := contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0)
+	primary.TimeoutMS = 2500
+	backup := contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1)
+	backup.TimeoutMS = 2500
+	cfg := contentModerationRemotePoolTestConfig(primary, backup)
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationRemotePoolTestInput(t),
+	)
+
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.normalizedDisposition())
+	require.Len(t, result.ReviewAttempts, 2)
+	require.Equal(t, ContentModerationRemoteProviderDeepSeek, result.ReviewAttempts[0].Provider)
+	require.Equal(t, ContentModerationRemoteProviderQwen, result.ReviewAttempts[1].Provider)
+}
+
+func TestContentModerationRemotePoolHedgeLetsFastBackupRiskCancelSlowPrimary(t *testing.T) {
+	primaryCanceled := make(chan struct{})
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+		close(primaryCanceled)
+	}))
+	defer deepSeek.Close()
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResponsesResult(t, w, 0.97, "weapons", "risk")
+	}))
+	defer qwen.Close()
+
+	primary := contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0)
+	primary.TimeoutMS = 2500
+	backup := contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1)
+	backup.TimeoutMS = 2500
+	cfg := contentModerationRemotePoolTestConfig(primary, backup)
+	started := time.Now()
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationRemotePoolTestInput(t),
+	)
+
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.normalizedDisposition())
+	require.Less(t, time.Since(started), 2400*time.Millisecond)
+	select {
+	case <-primaryCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("slow primary was not canceled after the backup risk verdict")
+	}
+	require.NotEmpty(t, result.ReviewAttempts)
+	require.Equal(t, ContentModerationRemoteProviderQwen, result.ReviewAttempts[len(result.ReviewAttempts)-1].Provider)
+}
+
+type contentModerationCancelingBody struct {
+	reader *bytes.Reader
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (body *contentModerationCancelingBody) Read(buffer []byte) (int, error) {
+	read, err := body.reader.Read(buffer)
+	if read > 0 {
+		body.once.Do(body.cancel)
+	}
+	return read, err
+}
+
+func (*contentModerationCancelingBody) Close() error { return nil }
+
+func TestContentModerationRemotePoolDeadlineDrainsQueuedRisk(t *testing.T) {
+	decision := mustMarshalContentModerationRemoteDecision(t, 0.97, "weapons", "risk")
+	payload, err := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message":       map[string]any{"content": decision},
+		}},
+	})
+	require.NoError(t, err)
+
+	for iteration := 0; iteration < 25; iteration++ {
+		channel := contentModerationRemotePoolTestChannel(
+			ContentModerationRemoteProviderDeepSeek, "deadline-risk", "https://deadline-risk.example", 0,
+		)
+		cfg := contentModerationRemotePoolTestConfig(channel)
+		svc := &ContentModerationService{}
+		ctx, cancel := context.WithCancel(context.Background())
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       &contentModerationCancelingBody{reader: bytes.NewReader(payload), cancel: cancel},
+			}, nil
+		})}
+		svc.deepSeekHTTPClients.Store(channel.BaseURL+"\x00"+"1000", client)
+
+		result, attempted, reviewErr := svc.scanContentModerationDeepSeek(
+			ctx, cfg, contentModerationRemotePoolTestInput(t),
+		)
+		cancel()
+		require.NoError(t, reviewErr, "iteration %d", iteration)
+		require.True(t, attempted, "iteration %d", iteration)
+		require.True(t, result.Blocked, "iteration %d", iteration)
+		require.Equal(t, ContentModerationReviewDispositionViolation, result.normalizedDisposition())
+	}
 }
 
 func TestContentModerationRemotePoolFailsOverWhenFirstProviderUnavailable(t *testing.T) {

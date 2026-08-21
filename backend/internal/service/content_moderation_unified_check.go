@@ -1462,6 +1462,9 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 		primary.Text = bundle.Evidence.Text
 		works = append(works, contentModerationCandidateReviewWork{
 			bundle: bundle, primary: primary, source: candidate.Fragment,
+			matches:                append([]contentModerationKeywordMatch(nil), candidate.Matches...),
+			sourceComplete:         !candidate.WholeFragmentTruncated,
+			background:             whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,
 			reviewRequired:         isContentModerationContextualReviewTier(candidate.Tier) || candidate.WholeFragment,
 			requireHealthyReviewer: !whitelistShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce,
 		})
@@ -1487,7 +1490,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 				if outcome.err != nil {
 					_ = s.handleContextualReviewUnavailable(
 						shadowCtx, asyncInput, asyncCfg, namespace, work.bundle, work.primary, whitelistShadow,
-						outcome.parserStatus, outcome.err, outcome.result,
+						false, outcome.parserStatus, outcome.err, outcome.result,
 					)
 					return
 				}
@@ -1511,13 +1514,6 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	}
 	wait.Wait()
 
-	hasFailure := false
-	for _, outcome := range outcomes {
-		if outcome.err != nil {
-			hasFailure = true
-			break
-		}
-	}
 	var unavailableDecision *ContentModerationDecision
 	var blockDecision *ContentModerationDecision
 	formalBlockIndex := -1
@@ -1535,19 +1531,38 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 			}
 		}
 	}
+	degradeFailures := formalBlockIndex < 0
+	hasFailure := false
+	degradeEligibility := make([]bool, len(outcomes))
+	decisionTime := time.Now()
+	for index, outcome := range outcomes {
+		if outcome.err == nil {
+			continue
+		}
+		hasFailure = true
+		degradeEligibility[index] = s.contentModerationReviewCanDegrade(cfg, works[index], outcome, decisionTime)
+		if !degradeEligibility[index] {
+			degradeFailures = false
+		}
+	}
+	degradeFailures = degradeFailures && hasFailure
 	for index, outcome := range outcomes {
 		work := works[index]
 		if outcome.err != nil {
 			decision := s.handleContextualReviewUnavailable(
 				ctx, input, cfg, namespace, work.bundle, work.primary, whitelistShadow,
-				outcome.parserStatus, outcome.err, outcome.result,
+				degradeFailures && degradeEligibility[index], outcome.parserStatus, outcome.err, outcome.result,
 			)
-			if unavailableDecision == nil {
+			if decision.Blocked {
+				if blockDecision == nil {
+					blockDecision = decision
+				}
+			} else if !decision.Allowed || unavailableDecision == nil || unavailableDecision.Allowed {
 				unavailableDecision = decision
 			}
 			continue
 		}
-		forceShadow := hasFailure || (outcome.result.Blocked && index != formalBlockIndex)
+		forceShadow := outcome.result.Blocked && index != formalBlockIndex
 		decision := s.applyUnifiedCandidateReviewResult(
 			ctx, input, cfg, namespace, work, outcome, whitelistShadow, forceShadow,
 		)
@@ -1555,11 +1570,11 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 			blockDecision = decision
 		}
 	}
-	if unavailableDecision != nil {
-		return unavailableDecision
-	}
 	if blockDecision != nil {
 		return blockDecision
+	}
+	if unavailableDecision != nil {
+		return unavailableDecision
 	}
 	return allow
 }
@@ -1568,6 +1583,9 @@ type contentModerationCandidateReviewWork struct {
 	bundle                 contentModerationEvidenceBundle
 	primary                ContentModerationFragment
 	source                 ContentModerationFragment
+	matches                []contentModerationKeywordMatch
+	sourceComplete         bool
+	background             bool
 	reviewRequired         bool
 	requireHealthyReviewer bool
 }
@@ -1691,11 +1709,23 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 	if work.requireHealthyReviewer && contentModerationRemoteReviewersEnabled(cfg) {
 		reviewCfg = s.contentModerationConfigWithReachableDeepSeekFirst(cfg, time.Now())
 	}
-	result, attempted, err := s.scanUnifiedSecondLayerPrepared(reviewCtx, reviewCfg, contentModerationSecondLayerInput{
-		Fragment: work.bundle.Fragment, Evidence: work.bundle.Evidence,
-		KeywordTier: defaultContentModerationString(work.bundle.PrimaryTier, "candidate"), KeywordRuleID: work.bundle.PrimaryRuleID,
-		Background: cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,
-	})
+	var result contentModerationSecondLayerResult
+	var attempted bool
+	var err error
+	fullCoverageReviewed := false
+	if work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete {
+		if inputs, complete := contentModerationFullReviewInputs(work, contentModerationReviewInputLimit(reviewCfg)); complete {
+			result, attempted, err = s.scanContentModerationFullReviewChunks(reviewCtx, reviewCfg, inputs)
+			fullCoverageReviewed = err == nil
+		}
+	}
+	if !fullCoverageReviewed && err == nil && !attempted {
+		result, attempted, err = s.scanUnifiedSecondLayerPrepared(reviewCtx, reviewCfg, contentModerationSecondLayerInput{
+			Fragment: work.bundle.Fragment, Evidence: work.bundle.Evidence,
+			KeywordTier: defaultContentModerationString(work.bundle.PrimaryTier, "candidate"), KeywordRuleID: work.bundle.PrimaryRuleID,
+			Background: work.background,
+		})
+	}
 	s.recordContentModerationReviewAttempts(result.ReviewAttempts, err)
 	if err != nil {
 		logger.FromContext(reviewCtx).Warn("content_moderation.second_layer_failed",
@@ -1712,7 +1742,8 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 			result: result, parserStatus: "not_attempted", err: errors.New("layer 2 review was not attempted"),
 		}
 	}
-	if work.reviewRequired && !result.Blocked && (work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) {
+	if !result.Blocked && !fullCoverageReviewed &&
+		(work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) {
 		return contentModerationCandidateReviewOutcome{
 			result: result, parserStatus: "evidence_truncated", err: errors.New("contextual review evidence coverage was incomplete"),
 		}
@@ -2130,6 +2161,7 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 	bundle contentModerationEvidenceBundle,
 	primary ContentModerationFragment,
 	whitelistShadow bool,
+	degradeEligible bool,
 	parserStatus string,
 	reviewErr error,
 	reviewResults ...contentModerationSecondLayerResult,
@@ -2174,16 +2206,27 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 	} else if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
 		audit.DecisionSource = "review_unavailable_shadow"
 	}
-	s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
 	if bundle.PrimaryTier == contentModerationKeywordTierPolicyRestrictedReview &&
 		!whitelistShadow && cfg.SecondLayerStage != ContentModerationSecondLayerStageShadow {
 		audit.DecisionSource = "policy_floor_review_unavailable"
 		audit.ReviewOutcome = "policy_restricted"
+		s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
 		decision, _, _ := s.unifiedRestrictedDecisionWithAudit(
 			persistCtx, input, cfg, primary, ContentModerationRestrictedCategory, bundle.PrimaryKeyword, audit,
 		)
 		return decision
 	}
+	if degradeEligible && !whitelistShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce {
+		audit.DecisionSource = "review_unavailable_degraded_allow"
+		audit.ReviewOutcome = "degraded_allow"
+		s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
+		s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionDegradedAllow, "", bundle.PrimaryKeyword, audit)
+		return &ContentModerationDecision{
+			Allowed: true, Action: ContentModerationActionDegradedAllow,
+			InputHash: bundle.CacheHash, MatchedKeyword: bundle.PrimaryKeyword,
+		}
+	}
+	s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
 	s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionReviewUnavailable, "", bundle.PrimaryKeyword, audit)
 
 	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
@@ -2199,7 +2242,7 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 		InputHash:      bundle.CacheHash,
 		MatchedKeyword: bundle.PrimaryKeyword,
 		Action:         ContentModerationActionReviewUnavailable,
-		RetryAfter:     1,
+		RetryAfter:     s.contentModerationReviewRetryAfter(cfg, time.Now()),
 	}
 }
 

@@ -6,6 +6,7 @@ export type ContentModerationFirstLayerStage = ContentModerationLayerStage
 export type ContentModerationSecondLayerStage = ContentModerationLayerStage
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
 export type ContentModerationRemoteProvider = 'deepseek' | 'alibaba_qwen' | 'zhipu_glm' | 'mimo'
+export type ContentModerationRemoteUnavailablePolicy = 'fail_closed' | 'risk_tiered'
 export type DeepSeekBreakerState =
   | 'closed'
   | 'cooldown'
@@ -105,7 +106,7 @@ export interface ContentModerationConfig {
   deepseek_enabled?: boolean
   remote_reviewers_enabled?: boolean
   remote_consensus_required?: number
-  remote_unavailable_policy?: string
+  remote_unavailable_policy?: ContentModerationRemoteUnavailablePolicy
   yufeng_enabled?: boolean
   yufeng_mode?: 'shadow' | string
   deepseek_total_timeout_ms?: number
@@ -149,7 +150,7 @@ export interface UpdateContentModerationConfig {
   deepseek_enabled?: boolean
   remote_reviewers_enabled?: boolean
   remote_consensus_required?: number
-  remote_unavailable_policy?: string
+  remote_unavailable_policy?: ContentModerationRemoteUnavailablePolicy
   yufeng_enabled?: boolean
   yufeng_mode?: 'shadow' | string
   deepseek_total_timeout_ms?: number
@@ -218,6 +219,7 @@ export interface ContentModerationRuntimeStatus {
   deepseek_half_open_busy_skip_count?: number
   review_unavailable_count?: number
   review_unavailable_enforced_count?: number
+  review_unavailable_degraded_count?: number
   last_review_unavailable_at?: string
   startup_api_usability_tested?: boolean
   startup_api_usability_checked_at?: string

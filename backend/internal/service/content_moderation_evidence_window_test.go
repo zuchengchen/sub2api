@@ -426,7 +426,7 @@ func TestContentModerationCandidateEvidenceReviewsEachFragmentIndependently(t *t
 	bodiesMu.Unlock()
 }
 
-func TestContentModerationCandidateEvidenceLongRepeatedMatchesIsBoundedAndSingleCall(t *testing.T) {
+func TestContentModerationCandidateEvidenceLongRepeatedMatchesReviewsAllChunksWithoutCaching(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -442,7 +442,8 @@ func TestContentModerationCandidateEvidenceLongRepeatedMatchesIsBoundedAndSingle
 		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"reverse shell"}),
 	}
 	repo := &contentModerationTestRepo{}
-	svc := &ContentModerationService{repo: repo}
+	cache := &contentModerationReplayCache{}
+	svc := &ContentModerationService{repo: repo, hashCache: cache}
 	svc.markYuFengEndpointHealthy(cfg.enabledYuFengSecondLayerEndpoints()[0], time.Now())
 	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
 	longText := strings.Repeat("line reverse shell diagnostic\n", 1000)
@@ -453,9 +454,11 @@ func TestContentModerationCandidateEvidenceLongRepeatedMatchesIsBoundedAndSingle
 	}, runtime)
 	require.True(t, decision.Allowed)
 	require.False(t, decision.Blocked)
-	require.Equal(t, int64(1), calls.Load(), "truncation must not trigger first/last fallback calls")
+	require.Equal(t, int64(8), calls.Load(), "a complete long source must review every chunk")
+	require.Zero(t, contextualRoutingCacheEntryCount(cache))
 	require.Len(t, repo.logs, 1)
 	require.Equal(t, "parsed", repo.logs[0].ParserStatus)
+	require.Equal(t, "full_context_chunks", repo.logs[0].EvidenceMode)
 	require.True(t, repo.logs[0].EvidenceTruncated)
 }
 

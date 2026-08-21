@@ -22,6 +22,7 @@ func TestContentModerationDeepSeekConfigDefaultsAndLegacyFieldsAreNotExposed(t *
 	require.Equal(t, ContentModerationSecondLayerStageShadow, cfg.SecondLayerStage)
 	require.Equal(t, defaultContentModerationDeepSeekChannels(), cfg.DeepSeekChannels)
 	require.Equal(t, 1, cfg.RemoteConsensusRequired)
+	require.Equal(t, ContentModerationRemoteUnavailableFailClosed, cfg.RemoteUnavailablePolicy)
 
 	view := (&ContentModerationService{}).configView(cfg)
 	require.Equal(t, ContentModerationDeepSeekPromptVersion, view.PolicyVersion)
@@ -42,6 +43,27 @@ func TestContentModerationDeepSeekConfigDefaultsAndLegacyFieldsAreNotExposed(t *
 		_, exists := fields[legacy]
 		require.Falsef(t, exists, "legacy field %s must not be exposed", legacy)
 	}
+}
+
+func TestContentModerationRemoteUnavailableRiskTieredPolicyPersists(t *testing.T) {
+	repo := &contentModerationTestSettingRepo{values: map[string]string{}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
+	policy := ContentModerationRemoteUnavailableRiskTiered
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		RemoteUnavailablePolicy: &policy,
+	})
+	require.NoError(t, err)
+	require.Equal(t, policy, view.RemoteUnavailablePolicy)
+
+	stored, err := parseContentModerationConfig(repo.values[SettingKeyContentModerationConfig])
+	require.NoError(t, err)
+	require.Equal(t, policy, stored.RemoteUnavailablePolicy)
+
+	reloaded := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
+	view, err = reloaded.GetConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, policy, view.RemoteUnavailablePolicy)
 }
 
 func TestContentModerationDeepSeekConfigEncryptsPreservesAndClearsAPIKey(t *testing.T) {
