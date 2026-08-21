@@ -841,7 +841,7 @@ func TestContentModerationDeepSeekRuntimeEnforceReadinessDoesNotProbeOnRequestCo
 	require.Zero(t, postCalls.Load())
 }
 
-func TestContentModerationDeepSeekRuntimeBreakerBlocksReadinessUntilHalfOpenReviewSucceeds(t *testing.T) {
+func TestContentModerationDeepSeekRuntimeEnforceReadinessAllowsHalfOpenRecovery(t *testing.T) {
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
@@ -869,15 +869,23 @@ func TestContentModerationDeepSeekRuntimeBreakerBlocksReadinessUntilHalfOpenRevi
 	state.cooldownUntil = time.Now().Add(-time.Second)
 	state.mu.Unlock()
 	ready, _ = svc.contentModerationSecondLayerEnforceReadiness(cfg, time.Now())
-	require.False(t, ready)
+	require.True(t, ready)
 	_, breaker, _, _, _, _, _ := state.snapshot(time.Now())
 	require.Equal(t, "half_open", breaker)
 	ready, reason = svc.ensureContentModerationSecondLayerEnforceReadiness(context.Background(), cfg, time.Now())
-	require.False(t, ready)
-	require.Contains(t, reason, "熔断器可用")
+	require.True(t, ready)
+	require.Empty(t, reason)
 	require.Zero(t, hits.Load(), "request readiness must not create a paid probe")
+
+	result, attempted, err := svc.scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationDeepSeekReviewProbeInput(),
+	)
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.False(t, result.Blocked)
+	require.Equal(t, int32(1), hits.Load())
 	_, breaker, _, _, _, _, _ = state.snapshot(time.Now())
-	require.Equal(t, "half_open", breaker)
+	require.Equal(t, "closed", breaker)
 }
 
 func TestContentModerationDeepSeekRuntimeConcurrentReadinessDoesNotProbe(t *testing.T) {

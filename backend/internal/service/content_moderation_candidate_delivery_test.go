@@ -145,11 +145,13 @@ func TestContentModerationEnforceReviewsAllCandidatesBeforeAnyDisposition(t *tes
 			)
 			return
 		}
-		contentModerationDeepSeekRuntimeWriteEnvelope(t, w, `not-json`, "stop")
+		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
 
 	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
+	cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableRiskTiered
+	cfg.normalize()
 	cfg.AutoBanEnabled = true
 	cfg.BanThreshold = 1
 	repo := &contentModerationReplayRepo{}
@@ -162,21 +164,21 @@ func TestContentModerationEnforceReviewsAllCandidatesBeforeAnyDisposition(t *tes
 	)
 
 	require.False(t, decision.Allowed)
-	require.False(t, decision.Blocked)
-	require.False(t, decision.Flagged)
-	require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
-	require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
-	require.Equal(t, int64(2), calls.Load())
-	require.Zero(t, repo.countCalls, "an incomplete Enforce batch must not count a violation")
-	require.Empty(t, userRepo.updated, "an incomplete Enforce batch must not ban or mutate the user")
+	require.True(t, decision.Blocked)
+	require.True(t, decision.Flagged)
+	require.Equal(t, ContentModerationActionSecondLayerBlock, decision.Action)
+	require.Equal(t, int64(3), calls.Load())
+	require.Equal(t, 1, repo.countCalls, "an explicit violation must win over another candidate's review failure")
+	require.Len(t, userRepo.updated, 1)
 
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 2)
-	require.Equal(t, "model_enforce_suppressed", logs[0].DecisionSource)
+	require.Equal(t, "model", logs[0].DecisionSource)
 	require.Equal(t, "risky", logs[0].ReviewOutcome)
-	require.Zero(t, logs[0].ViolationCount)
+	require.Equal(t, 1, logs[0].ViolationCount)
 	require.Equal(t, "review_unavailable", logs[1].DecisionSource)
 	require.Equal(t, "unavailable", logs[1].ReviewOutcome)
+	require.NotEqual(t, ContentModerationActionDegradedAllow, logs[1].Action)
 	require.Zero(t, logs[1].ViolationCount)
 }
 

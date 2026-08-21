@@ -71,6 +71,15 @@ func TestContentModerationReviewObservabilityStatusAndStructuredAlert(t *testing
 		errors.New("must-not-log sk-sensitive-api-key or private evidence"),
 		attempts,
 	)
+	svc.recordContentModerationReviewUnavailable(
+		context.Background(),
+		"request-observability-degraded-test",
+		&ContentModerationConfig{SecondLayerStage: ContentModerationSecondLayerStageEnforce},
+		"review_unavailable_degraded_allow",
+		"timeout",
+		errors.New("temporary network failure"),
+		attempts,
+	)
 
 	status, err := svc.GetStatus(context.Background())
 	require.NoError(t, err)
@@ -78,8 +87,9 @@ func TestContentModerationReviewObservabilityStatusAndStructuredAlert(t *testing
 	require.Equal(t, int64(2), status.DeepSeekBreakerSkipCount)
 	require.Equal(t, int64(1), status.DeepSeekCooldownSkipCount)
 	require.Equal(t, int64(1), status.DeepSeekHalfOpenBusySkipCount)
-	require.Equal(t, int64(1), status.ReviewUnavailableCount)
+	require.Equal(t, int64(2), status.ReviewUnavailableCount)
 	require.Equal(t, int64(1), status.ReviewUnavailableEnforcedCount)
+	require.Equal(t, int64(1), status.ReviewUnavailableDegradedCount)
 	require.NotNil(t, status.LastReviewUnavailableAt)
 
 	sink.mu.Lock()

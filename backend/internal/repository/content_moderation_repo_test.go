@@ -56,7 +56,7 @@ func TestBuildContentModerationLogWhere_AuditRecordViews(t *testing.T) {
 		{
 			name:     "review unavailable",
 			result:   service.ContentModerationLogResultReviewFailure,
-			contains: "l.action = 'review_unavailable'",
+			contains: "l.action IN ('review_unavailable', 'degraded_allow')",
 		},
 	}
 

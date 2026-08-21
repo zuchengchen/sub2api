@@ -45,6 +45,7 @@ const (
 	ContentModerationActionCacheBlock        = "cache_block"
 	ContentModerationActionBudgetRejected    = "budget_rejected"
 	ContentModerationActionReviewUnavailable = "review_unavailable"
+	ContentModerationActionDegradedAllow     = "degraded_allow"
 	ContentModerationActionError             = "error"
 	ContentModerationActionCyberPolicy       = "cyber_policy" // cyber_policy 硬阻断的风控日志 action（封号计数排除按此值过滤）
 
@@ -662,6 +663,7 @@ type ContentModerationRuntimeStatus struct {
 	DeepSeekHalfOpenBusySkipCount    int64                                   `json:"deepseek_half_open_busy_skip_count"`
 	ReviewUnavailableCount           int64                                   `json:"review_unavailable_count"`
 	ReviewUnavailableEnforcedCount   int64                                   `json:"review_unavailable_enforced_count"`
+	ReviewUnavailableDegradedCount   int64                                   `json:"review_unavailable_degraded_count"`
 	LastReviewUnavailableAt          *time.Time                              `json:"last_review_unavailable_at,omitempty"`
 	StartupAPIUsabilityTested        bool                                    `json:"startup_api_usability_tested"`
 	StartupAPIUsabilityCheckedAt     *time.Time                              `json:"startup_api_usability_checked_at,omitempty"`
@@ -853,6 +855,8 @@ type ContentModerationService struct {
 	fragmentDecisionLocks         map[string]*contentModerationFragmentDecisionLock
 	secondLayerReviewMu           sync.Mutex
 	secondLayerReviewFlights      map[string]*contentModerationCandidateReviewFlight
+	fullReviewSlotsOnce           sync.Once
+	fullReviewSlots               chan struct{}
 	secondLayerClients            sync.Map
 	secondLayerMetrics            sync.Map
 	yuFengEndpointStates          sync.Map
@@ -1719,6 +1723,7 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		DeepSeekHalfOpenBusySkipCount:    s.reviewObservability.deepSeekHalfOpenBusySkipCount.Load(),
 		ReviewUnavailableCount:           s.reviewObservability.reviewUnavailableCount.Load(),
 		ReviewUnavailableEnforcedCount:   s.reviewObservability.reviewUnavailableEnforcedCount.Load(),
+		ReviewUnavailableDegradedCount:   s.reviewObservability.reviewUnavailableDegradedCount.Load(),
 		LastReviewUnavailableAt:          lastReviewUnavailableAt,
 		StartupAPIUsabilityTested:        s.startupAPIUsabilityTested.Load(),
 		StartupAPIUsabilityCheckedAt:     contentModerationUnixNanoTime(s.startupAPIUsabilityAt.Load()),
@@ -2616,7 +2621,8 @@ func (cfg *ContentModerationConfig) normalize() {
 	if cfg.RemoteUnavailablePolicy == "" {
 		cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableFailClosed
 	}
-	if cfg.RemoteUnavailablePolicy != ContentModerationRemoteUnavailableFailClosed {
+	if cfg.RemoteUnavailablePolicy != ContentModerationRemoteUnavailableFailClosed &&
+		cfg.RemoteUnavailablePolicy != ContentModerationRemoteUnavailableRiskTiered {
 		cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableFailClosed
 	}
 	if cfg.YuFengMode == "" {
