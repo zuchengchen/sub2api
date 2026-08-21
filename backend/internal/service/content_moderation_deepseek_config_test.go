@@ -124,6 +124,42 @@ func TestContentModerationDeepSeekConfigEncryptsPreservesAndClearsAPIKey(t *test
 	require.Nil(t, disk.Channels[0].APIKeyEnvelope)
 }
 
+func TestContentModerationUpdateChannelsCanEnterShadowBeforeFirstReview(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keyring.json")
+	writeModerationArchiveTestKeyRing(t, path, "k1", map[string][]byte{
+		"k1": []byte("0123456789abcdef0123456789abcdef"),
+	})
+	repo := &contentModerationTestSettingRepo{values: map[string]string{}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
+	svc.ConfigureContentModerationCredentialKeyRing(path)
+	enabled := true
+	yuFengEnabled := false
+	secondLayerEnabled := true
+	consensusRequired := 1
+	unavailablePolicy := ContentModerationRemoteUnavailableFailClosed
+	firstStage := ContentModerationFirstLayerStageShadow
+	secondStage := ContentModerationSecondLayerStageShadow
+	channels := []ContentModerationDeepSeekChannelInput{
+		{
+			ID: "primary", Name: "Primary", BaseURL: "http://127.0.0.1:28081/primary",
+			Model: DefaultContentModerationDeepSeekModel, Enabled: true, Order: 0, TimeoutMS: 3000, APIKey: "release-primary",
+		},
+		{
+			ID: "backup", Name: "Backup", BaseURL: "http://127.0.0.1:28081/backup",
+			Model: DefaultContentModerationDeepSeekModel, Enabled: true, Order: 1, TimeoutMS: 3000, APIKey: "release-backup",
+		},
+	}
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		Enabled: &enabled, DeepSeekEnabled: &enabled, RemoteReviewersEnabled: &enabled,
+		RemoteConsensusRequired: &consensusRequired, RemoteUnavailablePolicy: &unavailablePolicy,
+		YuFengEnabled: &yuFengEnabled, RemoteReviewers: &channels, FirstLayerStage: &firstStage,
+		SecondLayerEnabled: &secondLayerEnabled, SecondLayerStage: &secondStage,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ContentModerationSecondLayerStageShadow, view.SecondLayerStage)
+}
+
 func TestContentModerationDeepSeekConfigRejectsInvalidChannelAndPlaintextWithoutKeyRing(t *testing.T) {
 	repo := &contentModerationTestSettingRepo{values: map[string]string{}}
 	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)

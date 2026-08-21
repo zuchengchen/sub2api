@@ -108,10 +108,9 @@ func TestReleaseDeepSeekStubUsesThreeSecondSerialFailover(t *testing.T) {
 	stats := releaseDeepSeekStubStats(t, stubURL)
 	require.Equal(t, int64(1), stats.CallsByChannel["primary"])
 	require.Equal(t, int64(1), stats.CallsByChannel["backup"])
-	// The client attempts are serial, as proven by the elapsed timeout window.
-	// The server can briefly observe the cancelled handler and its successor at
-	// once while the HTTP cancellation signal is being scheduled.
-	require.LessOrEqual(t, stats.MaxActive, 2, "failover requests must not fan out")
+	// Channels from the same provider remain serial. Cross-provider hedging is
+	// covered by the remote-pool release contract tests.
+	require.LessOrEqual(t, stats.MaxActive, 2, "same-provider failover must not fan out")
 	require.Zero(t, stats.ContractViolations)
 }
 
@@ -143,11 +142,11 @@ func TestReleaseDeepSeekStubEnforcesTenSecondTotalBudget(t *testing.T) {
 	stats := releaseDeepSeekStubStats(t, stubURL)
 	require.GreaterOrEqual(t, stats.Requests, int64(3))
 	require.LessOrEqual(t, stats.Requests, int64(4))
-	require.LessOrEqual(t, stats.MaxActive, 2, "budget exhaustion must not fan out attempts")
+	require.LessOrEqual(t, stats.MaxActive, 2, "same-provider budget exhaustion must not fan out attempts")
 	require.Zero(t, stats.ContractViolations)
 }
 
-func TestReleaseDeepSeekStubYuFengDisagreementAllowsAndRecords(t *testing.T) {
+func TestReleaseDeepSeekStubYuFengShadowCannotOverrideRemoteViolation(t *testing.T) {
 	stubURL := releaseDeepSeekStubURL(t)
 	releaseDeepSeekStubReset(t, stubURL)
 	releaseDeepSeekStubConfigure(t, stubURL, map[string]any{"channel": "deepseek", "mode": "risk"})
@@ -171,8 +170,9 @@ func TestReleaseDeepSeekStubYuFengDisagreementAllowsAndRecords(t *testing.T) {
 		scanUnifiedSecondLayerPrepared(context.Background(), cfg, releaseDeepSeekInput(t, "明确风险请求"))
 	require.NoError(t, err)
 	require.True(t, attempted)
-	require.False(t, result.Blocked)
-	require.True(t, result.ReviewerMismatch)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.Disposition)
+	require.False(t, result.ReviewerMismatch)
 	require.Len(t, result.ReviewAttempts, 2)
 	require.Equal(t, "deepseek", result.ReviewAttempts[0].Reviewer)
 	require.Equal(t, "yufeng", result.ReviewAttempts[1].Reviewer)
