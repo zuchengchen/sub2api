@@ -224,12 +224,12 @@ func (s *moderationStub) handleCompletion(w http.ResponseWriter, r *http.Request
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[`))
 	case "reasoning":
-		writeDeepSeekEnvelope(w, `{"confidence":0.05,"category":"safe","reason":""}`, "internal reasoning")
+		writeDeepSeekEnvelope(w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "internal reasoning")
 	case "truncated":
 		writeJSON(w, http.StatusOK, map[string]any{
 			"choices": []any{map[string]any{
 				"finish_reason": "length",
-				"message":       map[string]any{"content": `{"confidence":0.90,"category":"cyber_abuse","reason":"风险"}`},
+				"message":       map[string]any{"content": `{"disposition":"violation","confidence":0.90,"category":"cyber_abuse","reason":"风险"}`},
 			}},
 		})
 	case "yufeng_safe":
@@ -241,10 +241,10 @@ func (s *moderationStub) handleCompletion(w http.ResponseWriter, r *http.Request
 			"choices": []any{map[string]any{"message": map[string]any{"content": "pc"}}},
 		})
 	case "risk":
-		writeDeepSeekEnvelope(w, `{"confidence":0.90,"category":"cyber_abuse","reason":"明确风险"}`, "")
+		writeDeepSeekEnvelope(w, `{"disposition":"violation","confidence":0.90,"category":"cyber_abuse","reason":"明确风险"}`, "")
 	case "category":
 		content, marshalErr := json.Marshal(map[string]any{
-			"confidence": 0.90, "category": behavior.Category, "reason": "明确风险",
+			"disposition": "violation", "confidence": 0.90, "category": behavior.Category, "reason": "明确风险",
 		})
 		if marshalErr != nil {
 			status = http.StatusInternalServerError
@@ -253,13 +253,13 @@ func (s *moderationStub) handleCompletion(w http.ResponseWriter, r *http.Request
 		}
 		writeDeepSeekEnvelope(w, string(content), "")
 	case "safe":
-		writeDeepSeekEnvelope(w, `{"confidence":0.05,"category":"safe","reason":""}`, "")
+		writeDeepSeekEnvelope(w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "")
 	case "contract":
 		if strings.Contains(text, "未授权入侵他人服务器") {
-			writeDeepSeekEnvelope(w, `{"confidence":0.95,"category":"cyber_abuse","reason":"未授权攻击"}`, "")
+			writeDeepSeekEnvelope(w, `{"disposition":"violation","confidence":0.95,"category":"cyber_abuse","reason":"未授权攻击"}`, "")
 			return
 		}
-		writeDeepSeekEnvelope(w, `{"confidence":0.03,"category":"safe","reason":""}`, "")
+		writeDeepSeekEnvelope(w, `{"disposition":"allow","confidence":0.03,"category":"safe","reason":""}`, "")
 	default:
 		status = http.StatusInternalServerError
 		writeJSON(w, status, map[string]any{"error": "unhandled behavior"})
@@ -287,7 +287,7 @@ func validateDeepSeekRequest(r *http.Request) (string, error) {
 	}
 	if strings.TrimSpace(payload.Model) == "" || payload.Thinking["type"] != "disabled" ||
 		payload.ResponseFormat["type"] != "json_object" || payload.Temperature != 0 ||
-		payload.MaxTokens != 64 || payload.Stream || len(payload.Messages) != 2 {
+		payload.MaxTokens != 96 || payload.Stream || len(payload.Messages) != 2 {
 		return "", errors.New("invalid non-thinking JSON contract")
 	}
 	if payload.Messages[0]["role"] != "system" || payload.Messages[1]["role"] != "user" ||
