@@ -376,18 +376,22 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				releaseDecisionLock()
 				continue
 			}
-			candidateMatches := runtime.secondLayerPrefilterMatcher.MatchAllExcluding(fragment.Text, cfg.KeywordAllowlist)
+			candidateFragment, candidateTextAvailable := contentModerationCandidateReviewFragment(fragment)
+			var candidateMatches []contentModerationKeywordMatch
+			if candidateTextAvailable {
+				candidateMatches = runtime.secondLayerPrefilterMatcher.MatchAllExcluding(candidateFragment.Text, cfg.KeywordAllowlist)
+			}
 			if len(candidateMatches) > 0 {
 				tier := "candidate"
 				if checkFragment.WholeFragmentTruncated {
 					tier = contentModerationKeywordTierContextualReview
 				}
-				if hasContentModerationPolicyRestrictionContextForMatches(fragment, candidateMatches) {
+				if hasContentModerationPolicyRestrictionContextForMatches(candidateFragment, candidateMatches) {
 					tier = contentModerationKeywordTierPolicyRestrictedReview
 				}
 				candidates = appendOrMergeContentModerationCandidate(candidates, contentModerationCandidateFragment{
-					Fragment: fragment, Matches: candidateMatches, Tier: tier,
-					WholeFragment:          checkFragment.WholeFragment || contentModerationPreserveWholeUserFragment(fragment),
+					Fragment: candidateFragment, Matches: candidateMatches, Tier: tier,
+					WholeFragment:          checkFragment.WholeFragment || contentModerationPreserveWholeUserFragment(candidateFragment),
 					WholeFragmentTruncated: checkFragment.WholeFragmentTruncated,
 				})
 				releaseDecisionLock()
@@ -548,6 +552,16 @@ func (s *ContentModerationService) putUnifiedLineageRejection(
 func contentModerationPreserveWholeUserFragment(fragment ContentModerationFragment) bool {
 	return fragment.ContextClass == ContentModerationContextUser &&
 		utf8.RuneCountInString(fragment.Text) <= contentModerationEvidenceWindowBudgetRunes
+}
+
+func contentModerationCandidateReviewFragment(fragment ContentModerationFragment) (ContentModerationFragment, bool) {
+	text := redactContentModerationEvidenceText(fragment.Text)
+	if strings.TrimSpace(text) == "" {
+		return ContentModerationFragment{}, false
+	}
+	fragment.Text = text
+	updateContentModerationFragmentHash(&fragment)
+	return fragment, true
 }
 
 func classifyUnifiedHardKeywordMatches(
