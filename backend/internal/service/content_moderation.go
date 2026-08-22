@@ -39,23 +39,25 @@ const (
 	// RestrictedBlock stops a policy-restricted request without treating it as
 	// an abuse violation. It must never enter the flagged-account disposition
 	// path.
-	ContentModerationActionRestrictedBlock   = "restricted_block"
-	ContentModerationActionSecondLayerShadow = "second_layer_shadow"
-	ContentModerationActionWhitelistShadow   = "whitelist_shadow"
-	ContentModerationActionCacheBlock        = "cache_block"
-	ContentModerationActionBudgetRejected    = "budget_rejected"
-	ContentModerationActionReviewUnavailable = "review_unavailable"
-	ContentModerationActionDegradedAllow     = "degraded_allow"
-	ContentModerationActionError             = "error"
-	ContentModerationActionCyberPolicy       = "cyber_policy" // cyber_policy 硬阻断的风控日志 action（封号计数排除按此值过滤）
+	ContentModerationActionRestrictedBlock          = "restricted_block"
+	ContentModerationActionSecondLayerShadow        = "second_layer_shadow"
+	ContentModerationActionWhitelistShadow          = "whitelist_shadow"
+	ContentModerationActionCacheBlock               = "cache_block"
+	ContentModerationActionBudgetRejected           = "budget_rejected"
+	ContentModerationActionReviewUnavailable        = "review_unavailable"
+	ContentModerationActionEvidenceCapacityExceeded = "evidence_capacity_exceeded"
+	ContentModerationActionDegradedAllow            = "degraded_allow"
+	ContentModerationActionError                    = "error"
+	ContentModerationActionCyberPolicy              = "cyber_policy" // cyber_policy 硬阻断的风控日志 action（封号计数排除按此值过滤）
 
-	ContentModerationLogResultBlocked          = "blocked"         // legacy alias for violation_blocked
-	ContentModerationLogResultContentBlocked   = "content_blocked" // legacy alias for violation_blocked
-	ContentModerationLogResultViolationBlocked = "violation_blocked"
-	ContentModerationLogResultCyberPolicy      = "cyber_policy"
-	ContentModerationLogResultRestricted       = "restricted"
-	ContentModerationLogResultRiskyShadow      = "risky_shadow"
-	ContentModerationLogResultReviewFailure    = "review_unavailable"
+	ContentModerationLogResultBlocked                  = "blocked"         // legacy alias for violation_blocked
+	ContentModerationLogResultContentBlocked           = "content_blocked" // legacy alias for violation_blocked
+	ContentModerationLogResultViolationBlocked         = "violation_blocked"
+	ContentModerationLogResultCyberPolicy              = "cyber_policy"
+	ContentModerationLogResultRestricted               = "restricted"
+	ContentModerationLogResultRiskyShadow              = "risky_shadow"
+	ContentModerationLogResultReviewFailure            = "review_unavailable"
+	ContentModerationLogResultEvidenceCapacityExceeded = "evidence_capacity_exceeded"
 
 	contentModerationKeywordCategory = "keyword"
 
@@ -607,9 +609,10 @@ type ContentModerationLogFilter struct {
 }
 
 type ContentModerationCleanupResult struct {
-	DeletedHit    int64     `json:"deleted_hit"`
-	DeletedNonHit int64     `json:"deleted_non_hit"`
-	FinishedAt    time.Time `json:"finished_at"`
+	DeletedHit      int64     `json:"deleted_hit"`
+	DeletedNonHit   int64     `json:"deleted_non_hit"`
+	DeletedArchives int64     `json:"deleted_archives"`
+	FinishedAt      time.Time `json:"finished_at"`
 }
 
 type ContentModerationRuntimeStatus struct {
@@ -626,6 +629,7 @@ type ContentModerationRuntimeStatus struct {
 	LastCleanupAt              *time.Time                            `json:"last_cleanup_at,omitempty"`
 	LastCleanupDeletedHit      int64                                 `json:"last_cleanup_deleted_hit"`
 	LastCleanupDeletedNonHit   int64                                 `json:"last_cleanup_deleted_non_hit"`
+	LastCleanupDeletedArchives int64                                 `json:"last_cleanup_deleted_archives"`
 	PendingBodyBytes           int64                                 `json:"pending_body_bytes"`
 	PendingBodyMaxSeen         int64                                 `json:"pending_body_max_seen"`
 	PendingBodyBudgetBytes     int64                                 `json:"pending_body_budget_bytes"`
@@ -831,6 +835,7 @@ type ContentModerationService struct {
 	lastCleanupUnix               atomic.Int64
 	lastCleanupDeletedHit         atomic.Int64
 	lastCleanupDeletedNonHit      atomic.Int64
+	lastCleanupDeletedArchives    atomic.Int64
 	runtimeSnapshot               atomic.Pointer[contentModerationRuntimeSnapshot]
 	runtimeRefreshMu              sync.Mutex
 	runtimeCacheTTL               time.Duration
@@ -1270,7 +1275,8 @@ func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentM
 		ContentModerationLogResultViolationBlocked,
 		ContentModerationLogResultRestricted,
 		ContentModerationLogResultRiskyShadow,
-		ContentModerationLogResultReviewFailure:
+		ContentModerationLogResultReviewFailure,
+		ContentModerationLogResultEvidenceCapacityExceeded:
 		filter.Result = result
 	default:
 		filter.Result = ContentModerationLogResultViolationBlocked
@@ -1686,6 +1692,7 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		LastCleanupAt:              lastCleanupAt,
 		LastCleanupDeletedHit:      s.lastCleanupDeletedHit.Load(),
 		LastCleanupDeletedNonHit:   s.lastCleanupDeletedNonHit.Load(),
+		LastCleanupDeletedArchives: s.lastCleanupDeletedArchives.Load(),
 		PendingBodyBytes:           s.pendingBodyBudget.InUse(),
 		PendingBodyMaxSeen:         s.pendingBodyBudget.MaxSeen(),
 		PendingBodyBudgetBytes:     pendingBodyBudgetBytes,
@@ -1768,6 +1775,7 @@ func (s *ContentModerationService) runCleanupOnce() {
 	s.lastCleanupUnix.Store(result.FinishedAt.Unix())
 	s.lastCleanupDeletedHit.Store(result.DeletedHit)
 	s.lastCleanupDeletedNonHit.Store(result.DeletedNonHit)
+	s.lastCleanupDeletedArchives.Store(result.DeletedArchives)
 }
 
 func (s *ContentModerationService) loadConfig(ctx context.Context) (*ContentModerationConfig, error) {

@@ -128,6 +128,16 @@ func TestContentModerationRestrictedErrorDoesNotReportViolation(t *testing.T) {
 	require.Equal(t, "内容审计命中风险规则，请调整输入后重试", contentModerationDecisionMessage(decision))
 }
 
+func TestContentModerationEvidenceCapacityErrorIsNotReportedAsReviewerOutage(t *testing.T) {
+	decision := &service.ContentModerationDecision{
+		Allowed: false, Blocked: false, StatusCode: http.StatusRequestEntityTooLarge,
+		Message: "Risk-control evidence exceeds the review capacity; shorten the input and retry",
+		Action:  service.ContentModerationActionEvidenceCapacityExceeded,
+	}
+	require.Equal(t, "risk_control_evidence_capacity_exceeded", contentModerationDecisionErrorCode(decision))
+	require.Equal(t, decision.Message, contentModerationDecisionMessage(decision))
+}
+
 func TestContentModerationWSCloseReasonTruncatesAtUTF8Boundary(t *testing.T) {
 	reason := contentModerationWSCloseReason(&service.ContentModerationDecision{
 		Blocked:        true,

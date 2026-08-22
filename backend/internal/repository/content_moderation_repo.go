@@ -575,6 +575,51 @@ func (r *contentModerationRepository) CleanupExpiredLogs(ctx context.Context, hi
 	if r == nil || r.db == nil {
 		return result, nil
 	}
+	for {
+		var deleted int64
+		// Archive summaries remain available for audit and access-history purposes.
+		// Cache replay payloads follow the short non-hit retention period; all other
+		// archived payloads follow the configured hit retention period.
+		err := r.db.QueryRowContext(ctx, `
+WITH candidates AS (
+    SELECT id
+    FROM content_moderation_logs
+    WHERE archive_status = 'available'
+      AND archive_deleted_at IS NULL
+      AND (
+          (action = 'cache_block' AND created_at < $1)
+          OR (action <> 'cache_block' AND created_at < $2)
+      )
+    ORDER BY created_at ASC, id ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT 50
+), expired AS (
+    UPDATE content_moderation_logs AS logs
+    SET archive_status = 'deleted', archive_deleted_at = NOW()
+    FROM candidates
+    WHERE logs.id = candidates.id
+    RETURNING logs.id, logs.archive_id
+), deleted_chunks AS (
+    DELETE FROM content_moderation_log_chunks AS chunks
+    USING expired
+    WHERE chunks.log_id = expired.id
+), audit AS (
+    INSERT INTO content_moderation_archive_access_audits (
+        log_id, archive_id, actor_user_id, action, request_id, result, bytes_served, detail
+    )
+    SELECT id, archive_id, NULL, 'retention_delete', 'retention-cleanup', 'deleted', 0,
+           'archive payload expired; moderation summary retained'
+    FROM expired
+)
+SELECT COUNT(*) FROM expired`, nonHitBefore, hitBefore).Scan(&deleted)
+		if err != nil {
+			return nil, fmt.Errorf("delete expired content moderation archives: %w", err)
+		}
+		result.DeletedArchives += deleted
+		if deleted == 0 {
+			break
+		}
+	}
 	hitExec, err := r.db.ExecContext(ctx, `
 DELETE FROM content_moderation_logs
 WHERE flagged = TRUE
@@ -833,6 +878,8 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 		where = append(where, "l.action IN ('first_layer_shadow', 'second_layer_shadow', 'whitelist_shadow') AND COALESCE(BTRIM(l.highest_category), '') <> ''")
 	case service.ContentModerationLogResultReviewFailure:
 		where = append(where, "l.action IN ('review_unavailable', 'degraded_allow')")
+	case service.ContentModerationLogResultEvidenceCapacityExceeded:
+		where = append(where, "l.action = 'evidence_capacity_exceeded'")
 	case "pass", "allow":
 		where = append(where, "l.flagged = FALSE AND l.error = '' AND l.action <> 'restricted_block'")
 	case "error":
