@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-const contentModerationRemoteHeartbeatInterval = time.Minute
+const (
+	contentModerationRemoteHeartbeatInterval          = time.Minute
+	contentModerationRemoteReadinessRetryInitialDelay = 2 * time.Minute
+	contentModerationRemoteReadinessRetryInterval     = 15 * time.Minute
+)
 
 func contentModerationUnixNanoTime(value int64) *time.Time {
 	if value <= 0 {
@@ -18,7 +22,7 @@ func contentModerationUnixNanoTime(value int64) *time.Time {
 	return &t
 }
 
-// runStartupAPIUsabilityTests performs the one paid/real review check made by
+// runStartupAPIUsabilityTests performs the initial paid/real review check for
 // a process lifetime. Providers are de-duplicated so adding multiple channels
 // for one provider cannot multiply startup charges.
 func (s *ContentModerationService) runStartupAPIUsabilityTests(ctx context.Context) {
@@ -85,6 +89,113 @@ func (s *ContentModerationService) remoteHeartbeatWorker(ctx context.Context) {
 			s.runRemoteHeartbeat(ctx)
 		}
 	}
+}
+
+// remoteReadinessRecoveryWorker repairs a missing Enforce readiness marker
+// without turning an upstream outage into a burst of paid API calls. It waits
+// for the startup probes to settle, then tests at most one eligible provider
+// per interval until the configured reviewer pool is ready.
+func (s *ContentModerationService) remoteReadinessRecoveryWorker(ctx context.Context) {
+	initialDelay := s.remoteReadinessRetryInitial
+	if initialDelay <= 0 {
+		initialDelay = contentModerationRemoteReadinessRetryInitialDelay
+	}
+	interval := s.remoteReadinessRetryInterval
+	if interval <= 0 {
+		interval = contentModerationRemoteReadinessRetryInterval
+	}
+
+	timer := time.NewTimer(initialDelay)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			// A configured channel may have a long request timeout. Do not
+			// overlap a recovery request with the one-time startup probes.
+			if s.startupAPIUsabilityTested.Load() {
+				s.runRemoteReadinessRecovery(ctx)
+			}
+			timer.Reset(interval)
+		}
+	}
+}
+
+// runRemoteReadinessRecovery performs one bounded real-review probe when the
+// remote reviewer pool has not yet satisfied the Enforce readiness gate.
+func (s *ContentModerationService) runRemoteReadinessRecovery(ctx context.Context) {
+	if s == nil || ctx == nil || ctx.Err() != nil {
+		return
+	}
+	cfg, err := s.loadConfig(ctx)
+	if err != nil {
+		slog.Warn("content_moderation.remote_readiness_config_failed", "error", err)
+		return
+	}
+	if cfg == nil || !contentModerationRemoteReviewersEnabled(cfg) {
+		return
+	}
+	now := time.Now()
+	if s.countReachableContentModerationRemoteProviders(cfg, now) >= contentModerationRemoteConsensusVotesRequired(cfg) {
+		return
+	}
+	channel, ok := s.nextRemoteReadinessRecoveryChannel(cfg, now)
+	if !ok {
+		return
+	}
+
+	probeTimeout := 2 * time.Duration(channel.TimeoutMS) * time.Millisecond
+	if probeTimeout < time.Second {
+		probeTimeout = time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	succeeded := s.probeDeepSeekChannelReview(probeCtx, channel, false)
+	cancel()
+	if succeeded {
+		slog.Info("content_moderation.remote_readiness_recovered",
+			"channel_id", channel.ID,
+			"provider", contentModerationRemoteProvider(channel),
+		)
+	}
+}
+
+// nextRemoteReadinessRecoveryChannel selects one provider in stable policy
+// order with round-robin rotation between retries. Auth-disabled and cooling
+// down channels are skipped because retrying them cannot repair readiness.
+func (s *ContentModerationService) nextRemoteReadinessRecoveryChannel(
+	cfg *ContentModerationConfig,
+	now time.Time,
+) (ContentModerationDeepSeekChannel, bool) {
+	if s == nil || cfg == nil {
+		return ContentModerationDeepSeekChannel{}, false
+	}
+	providers := make(map[string]struct{})
+	candidates := make([]ContentModerationDeepSeekChannel, 0, len(cfg.DeepSeekChannels))
+	for _, channel := range normalizeContentModerationDeepSeekChannels(cfg.DeepSeekChannels) {
+		if !channel.Enabled || strings.TrimSpace(channel.APIKey) == "" ||
+			!isSupportedContentModerationRemoteProvider(channel.Provider) {
+			continue
+		}
+		provider := contentModerationRemoteProvider(channel)
+		if _, seen := providers[provider]; seen {
+			continue
+		}
+		providers[provider] = struct{}{}
+		if s.deepSeekChannelReviewReady(channel, now) {
+			continue
+		}
+		_, breaker, _, _, _, _, _ := s.deepSeekChannelState(channel).snapshot(now)
+		if breaker == "auth_disabled" || breaker == "cooldown" {
+			continue
+		}
+		candidates = append(candidates, channel)
+	}
+	if len(candidates) == 0 {
+		return ContentModerationDeepSeekChannel{}, false
+	}
+	index := int(s.remoteReadinessProbeCursor.Add(1)-1) % len(candidates)
+	return candidates[index], true
 }
 
 // runRemoteHeartbeat is transport-only. It never sends a model inference

@@ -607,7 +607,7 @@ func (s *ContentModerationService) contentModerationSecondLayerEnforceReadiness(
 	}
 	reachable := s.countReachableContentModerationRemoteProviders(cfg, now)
 	if reachable < requiredVotes {
-		return false, "线上审核渠道尚未完成首次真实审核；熔断器可用状态缺失，请等待启动检查或点击测试"
+		return false, "线上审核渠道尚未完成首次真实审核；熔断器可用状态缺失，后台将自动限频复检，也可点击测试"
 	}
 	return true, ""
 }
