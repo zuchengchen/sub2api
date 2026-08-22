@@ -658,7 +658,7 @@ func TestContentModerationLargeCandidateBoundaryPreservesNormalizedPunctuation(t
 	require.Equal(t, int64(2), modelCalls.Load(), "each boundary candidate must receive an independent review")
 }
 
-func TestContentModerationTruncatedCandidateScopeSafeResultIsRetryableAndNotCached(t *testing.T) {
+func TestContentModerationTruncatedCandidateScopeSafeResultReturnsCapacityErrorAndIsNotCached(t *testing.T) {
 	var modelCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		modelCalls.Add(1)
@@ -691,8 +691,8 @@ func TestContentModerationTruncatedCandidateScopeSafeResultIsRetryableAndNotCach
 		decision := svc.checkUnifiedFragments(context.Background(), input, runtime)
 		require.False(t, decision.Allowed)
 		require.False(t, decision.Blocked)
-		require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
-		require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
+		require.Equal(t, http.StatusRequestEntityTooLarge, decision.StatusCode)
+		require.Equal(t, ContentModerationActionEvidenceCapacityExceeded, decision.Action)
 	}
 	require.Equal(t, int64(2), modelCalls.Load())
 	require.Zero(t, contextualRoutingCacheEntryCount(cache))

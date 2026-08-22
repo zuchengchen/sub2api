@@ -5,6 +5,22 @@
         <div class="h-8 w-8 animate-spin rounded-full border-b-2 border-primary-600"></div>
       </div>
 
+      <div
+        v-else-if="configLoadError"
+        class="flex min-h-64 flex-col items-center justify-center gap-4 text-center"
+        data-test="risk-config-load-error"
+      >
+        <Icon name="exclamationTriangle" size="lg" class="text-amber-500" />
+        <div>
+          <p class="font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.configUnavailable') }}</p>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.configUnavailableHint') }}</p>
+        </div>
+        <button type="button" class="btn btn-secondary inline-flex items-center gap-2" @click="loadInitial">
+          <Icon name="refresh" size="sm" />
+          {{ t('admin.riskControl.retryLoad') }}
+        </button>
+      </div>
+
       <template v-else>
         <header class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
@@ -19,7 +35,7 @@
             <button
               type="button"
               class="btn btn-secondary inline-flex items-center gap-2"
-              :disabled="refreshing"
+              :disabled="refreshing || !configLoaded"
               :title="t('admin.riskControl.refresh')"
               @click="refreshAll"
             >
@@ -29,7 +45,7 @@
             <button
               type="button"
               class="btn btn-primary inline-flex items-center gap-2"
-              :disabled="saving"
+              :disabled="saving || !configLoaded"
               data-test="save-risk-control"
               @click="saveConfig"
             >
@@ -38,6 +54,24 @@
             </button>
           </div>
         </header>
+
+        <div
+          v-if="statusLoadError"
+          class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-100"
+          role="alert"
+          data-test="risk-status-error"
+        >
+          <span>{{ t('admin.riskControl.statusUnavailable') }}</span>
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm inline-flex items-center gap-1.5"
+            :disabled="statusLoading"
+            @click="loadStatus(false)"
+          >
+            <Icon name="refresh" size="xs" :class="statusLoading ? 'animate-spin' : ''" />
+            {{ t('admin.riskControl.retryStatus') }}
+          </button>
+        </div>
 
         <div
           class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[repeat(11,minmax(0,1fr))]"
@@ -784,6 +818,14 @@
                 <span class="input-label">{{ t('admin.riskControl.nonHitRetentionDays') }}</span>
                 <input v-model.number="configForm.non_hit_retention_days" class="input" type="number" min="1" max="3" />
               </label>
+              <p v-if="status?.last_cleanup_at" class="text-xs text-gray-500 dark:text-gray-400">
+                {{
+                  t('admin.riskControl.archiveRetentionStatus', {
+                    count: status.last_cleanup_deleted_archives ?? 0,
+                    at: formatDateTime(status.last_cleanup_at),
+                  })
+                }}
+              </p>
               <label>
                 <span class="input-label">{{ t('admin.riskControl.violationWindowHours') }}</span>
                 <input
@@ -794,6 +836,47 @@
                   max="8760"
                 />
               </label>
+            </div>
+          </div>
+
+          <div class="mt-6 rounded-lg border border-gray-200 p-4 dark:border-dark-700" data-test="flagged-hash-controls">
+            <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div>
+                <p class="text-sm font-medium text-gray-900 dark:text-white">
+                  {{ t('admin.riskControl.flaggedHashCount', { count: status?.flagged_hash_count ?? 0 }) }}
+                </p>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.flaggedHashHint') }}</p>
+              </div>
+              <button
+                type="button"
+                class="btn btn-secondary inline-flex items-center justify-center gap-2 text-red-600 hover:text-red-700 dark:text-red-300"
+                :disabled="hashActionLoading || !status || (status.flagged_hash_count ?? 0) === 0"
+                data-test="clear-flagged-hashes"
+                @click="requestClearFlaggedHashes"
+              >
+                <Icon name="trash" size="sm" :class="hashActionLoading ? 'animate-pulse' : ''" />
+                {{ t('admin.riskControl.clearFlaggedHashes') }}
+              </button>
+            </div>
+            <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                v-model.trim="flaggedHashInput"
+                type="text"
+                class="input font-mono text-sm"
+                :placeholder="t('admin.riskControl.flaggedHashPlaceholder')"
+                data-test="flagged-hash-input"
+                @keyup.enter="requestDeleteFlaggedHash"
+              />
+              <button
+                type="button"
+                class="btn btn-secondary inline-flex items-center justify-center gap-2"
+                :disabled="hashActionLoading || !isFlaggedHashInputValid"
+                data-test="delete-flagged-hash"
+                @click="requestDeleteFlaggedHash"
+              >
+                <Icon name="trash" size="sm" />
+                {{ t('admin.riskControl.deleteFlaggedHash') }}
+              </button>
             </div>
           </div>
         </details>
@@ -835,8 +918,40 @@
               </div>
             </div>
 
+            <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5" data-test="audit-log-filters">
+              <select v-model="filters.group_id" class="input" :title="t('admin.riskControl.filters.allGroups')" @change="reloadLogs">
+                <option :value="0">{{ t('admin.riskControl.filters.allGroups') }}</option>
+                <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+              </select>
+              <input
+                v-model.trim="filters.endpoint"
+                class="input"
+                type="text"
+                :placeholder="t('admin.riskControl.filters.allEndpoints')"
+                @keyup.enter="reloadLogs"
+              />
+              <select v-model="filters.context_class" class="input" @change="reloadLogs">
+                <option value="">{{ t('admin.riskControl.filters.allContexts') }}</option>
+                <option v-for="context in contextFilterOptions" :key="context" :value="context">{{ contextLabel(context) }}</option>
+              </select>
+              <input
+                v-model.trim="filters.model_profile"
+                class="input"
+                type="text"
+                :placeholder="t('admin.riskControl.filters.allProfiles')"
+                @keyup.enter="reloadLogs"
+              />
+              <input
+                v-model.trim="filters.decision_source"
+                class="input"
+                type="text"
+                :placeholder="t('admin.riskControl.filters.allDecisionSources')"
+                @keyup.enter="reloadLogs"
+              />
+            </div>
+
             <nav
-              class="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-900 sm:grid-cols-3 lg:grid-cols-5"
+              class="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-900 sm:grid-cols-3 lg:grid-cols-6"
               role="tablist"
               :aria-label="t('admin.riskControl.records')"
             >
@@ -1069,6 +1184,78 @@
           <div v-else class="rounded-lg bg-gray-50 p-4 text-sm text-gray-700 dark:bg-dark-900/40 dark:text-gray-300">
             {{ evidenceLog?.input_excerpt || evidenceLog?.error || '-' }}
           </div>
+
+          <section
+            v-if="selectedLog.archive_id"
+            class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-700"
+            data-test="archive-controls"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div class="min-w-0">
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.archiveTitle') }}</h3>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t(`admin.riskControl.archiveStatus.${selectedLog.archive_status || 'none'}`) }}
+                  <span v-if="selectedLog.archive_bytes"> · {{ selectedLog.archive_bytes }} bytes</span>
+                </p>
+              </div>
+              <div v-if="selectedLog.archive_status === 'available'" class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="btn btn-secondary inline-flex items-center gap-1.5"
+                  :disabled="archiveActionLoading"
+                  @click="previewSelectedArchive"
+                >
+                  <Icon name="eye" size="sm" />
+                  {{ t('admin.riskControl.archivePreview') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary inline-flex items-center gap-1.5"
+                  :disabled="archiveActionLoading"
+                  @click="downloadSelectedArchive"
+                >
+                  <Icon name="download" size="sm" />
+                  {{ t('admin.riskControl.archiveDownload') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary inline-flex items-center gap-1.5 text-red-600 dark:text-red-300"
+                  :disabled="archiveActionLoading"
+                  @click="deleteSelectedArchive"
+                >
+                  <Icon name="trash" size="sm" />
+                  {{ t('admin.riskControl.archiveDelete') }}
+                </button>
+              </div>
+            </div>
+            <div v-if="archivePreview" class="rounded-md bg-gray-50 p-3 dark:bg-dark-900/50" data-test="archive-preview">
+              <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.riskControl.archivePreviewBytes', { returned: archivePreview.returned_bytes, total: archivePreview.total_bytes }) }}
+                <span v-if="archivePreview.truncated"> · {{ t('admin.riskControl.archivePreviewTruncated') }}</span>
+              </div>
+              <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-gray-700 dark:text-gray-300">{{ archivePreview.content }}</pre>
+            </div>
+            <p v-if="selectedLog.archive_incomplete" class="text-xs text-amber-700 dark:text-amber-300">
+              {{ t('admin.riskControl.archiveIncomplete') }}
+            </p>
+          </section>
+
+          <div
+            v-if="selectedLog.user_id && selectedLog.user_status === 'disabled'"
+            class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-900/10"
+            data-test="unban-control"
+          >
+            <span class="text-sm text-amber-900 dark:text-amber-100">{{ t('admin.riskControl.autoBanned') }}</span>
+            <button
+              type="button"
+              class="btn btn-secondary inline-flex items-center gap-1.5"
+              :disabled="unbanActionLoading"
+              @click="requestUnbanSelectedUser"
+            >
+              <Icon name="check" size="sm" />
+              {{ t('admin.riskControl.unbanUser') }}
+            </button>
+          </div>
         </div>
         <template #footer>
           <button type="button" class="btn btn-secondary" @click="closeLogDetail">{{ t('common.close') }}</button>
@@ -1100,6 +1287,7 @@ import type {
   ContentModerationRemoteUnavailablePolicy,
   ContentModerationRuntimeStatus,
   ContentModerationChannelHeartbeat,
+  ContentModerationArchivePreview,
   DeepSeekModerationChannel,
   TestDeepSeekChannelResponse,
   UpdateContentModerationConfig,
@@ -1146,11 +1334,20 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const loading = ref(true)
+const configLoaded = ref(false)
+const configLoadError = ref(false)
 const refreshing = ref(false)
 const saving = ref(false)
 const logsLoading = ref(false)
 const sourceLogLoading = ref(false)
 const sourceLogError = ref(false)
+const statusLoading = ref(false)
+const statusLoadError = ref(false)
+const hashActionLoading = ref(false)
+const flaggedHashInput = ref('')
+const archivePreview = ref<ContentModerationArchivePreview | null>(null)
+const archiveActionLoading = ref(false)
+const unbanActionLoading = ref(false)
 const testingChannelID = ref<string | null>(null)
 const status = ref<ContentModerationRuntimeStatus | null>(null)
 const groups = ref<AdminGroup[]>([])
@@ -1160,6 +1357,12 @@ const originalLog = ref<ContentModerationLog | null>(null)
 const channelTestResults = reactive<Record<string, TestDeepSeekChannelResponse | undefined>>({})
 const savedChannelDigests = reactive<Record<string, string | undefined>>({})
 let refreshTimer: number | null = null
+let logRequestSequence = 0
+
+const isFlaggedHashInputValid = computed(() => /^[a-f0-9]{64}$/i.test(flaggedHashInput.value))
+const contextFilterOptions = computed(() =>
+  [...new Set(logs.value.map((row) => row.context_class).filter((value): value is string => Boolean(value)))].sort()
+)
 
 const heartbeatByChannelID = computed(() => {
   const entries = status.value?.remote_heartbeats ?? []
@@ -1211,6 +1414,11 @@ const filters = reactive({
   search: '',
   from: '',
   to: '',
+  group_id: 0,
+  endpoint: '',
+  context_class: '',
+  model_profile: '',
+  decision_source: '',
 })
 
 const statusClasses = {
@@ -1244,6 +1452,7 @@ const recordTabs = computed<Array<{ value: ContentModerationLogView; label: stri
   { value: 'violation_blocked', label: t('admin.riskControl.recordTabs.violationBlocked') },
   { value: 'restricted', label: t('admin.riskControl.recordTabs.restricted') },
   { value: 'review_unavailable', label: t('admin.riskControl.recordTabs.reviewUnavailable') },
+  { value: 'evidence_capacity_exceeded', label: t('admin.riskControl.recordTabs.evidenceCapacityExceeded') },
   { value: 'cyber_policy', label: t('admin.riskControl.recordTabs.cyberPolicy') },
 ])
 
@@ -1390,7 +1599,7 @@ const selectedLogMeta = computed(() => {
       label: t('admin.riskControl.table.modelResult'),
       value: `${row.deepseek_category || row.highest_category || '-'} / ${confidenceText(row)}`,
     },
-    { label: t('admin.riskControl.reviewOutcome'), value: row.review_outcome || row.action || '-' },
+    { label: t('admin.riskControl.reviewOutcome'), value: resultLabel(row) },
   ]
 })
 
@@ -1508,15 +1717,19 @@ function applyConfig(config: ContentModerationConfig) {
 
 async function loadInitial() {
   loading.value = true
+  configLoadError.value = false
+  configLoaded.value = false
   try {
     const [config, availableGroups] = await Promise.all([
       adminAPI.riskControl.getConfig(),
       adminAPI.groups.getAll().catch(() => [] as AdminGroup[]),
     ])
     applyConfig(config)
+    configLoaded.value = true
     groups.value = availableGroups
     await Promise.all([loadStatus(true), loadLogs()])
   } catch (error: unknown) {
+    configLoadError.value = true
     appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.loadFailed')))
   } finally {
     loading.value = false
@@ -1524,7 +1737,7 @@ async function loadInitial() {
 }
 
 async function refreshAll() {
-  if (refreshing.value) return
+  if (refreshing.value || !configLoaded.value) return
   refreshing.value = true
   try {
     const config = await adminAPI.riskControl.getConfig()
@@ -1538,15 +1751,24 @@ async function refreshAll() {
 }
 
 async function loadStatus(silent: boolean) {
+  if (statusLoading.value) return
+  statusLoading.value = true
   try {
     status.value = await adminAPI.riskControl.getStatus()
+    statusLoadError.value = false
   } catch (error: unknown) {
+    statusLoadError.value = true
+    status.value = null
     if (!silent) appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.statusFailed')))
+  } finally {
+    statusLoading.value = false
   }
 }
 
 async function loadLogs() {
+  const requestID = ++logRequestSequence
   logsLoading.value = true
+  logs.value = []
   try {
     const result = await adminAPI.riskControl.listLogs({
       page: pagination.page,
@@ -1555,16 +1777,25 @@ async function loadLogs() {
       search: filters.search || undefined,
       from: normalizeLocalDateTime(filters.from),
       to: normalizeLocalDateTime(filters.to),
+      group_id: filters.group_id > 0 ? filters.group_id : undefined,
+      endpoint: filters.endpoint || undefined,
+      context_class: filters.context_class || undefined,
+      model_profile: filters.model_profile || undefined,
+      decision_source: filters.decision_source || undefined,
     })
+    if (requestID !== logRequestSequence) return
     logs.value = result.items
     pagination.total = result.total
     pagination.page = result.page
     pagination.page_size = result.page_size
     pagination.pages = result.pages
   } catch (error: unknown) {
-    appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.logsFailed')))
+    if (requestID === logRequestSequence) {
+      pagination.total = 0
+      appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.logsFailed')))
+    }
   } finally {
-    logsLoading.value = false
+    if (requestID === logRequestSequence) logsLoading.value = false
   }
 }
 
@@ -1733,8 +1964,6 @@ async function testChannel(channel: EditableDeepSeekChannel) {
   testingChannelID.value = channel.id
   try {
     channelTestResults[channel.id] = await adminAPI.riskControl.testAPIAvailability(channel.id)
-    const config = await adminAPI.riskControl.getConfig()
-    applyConfig(config)
     await loadStatus(true)
     appStore.showSuccess(t('admin.riskControl.channelTestComplete'))
   } catch (error: unknown) {
@@ -1781,8 +2010,113 @@ function openLog(row: ContentModerationLog) {
 function closeLogDetail() {
   selectedLog.value = null
   originalLog.value = null
+  archivePreview.value = null
+  archiveActionLoading.value = false
+  unbanActionLoading.value = false
   sourceLogLoading.value = false
   sourceLogError.value = false
+}
+
+async function requestDeleteFlaggedHash() {
+  const inputHash = flaggedHashInput.value.trim().toLowerCase()
+  if (!/^[a-f0-9]{64}$/.test(inputHash) || hashActionLoading.value) return
+  hashActionLoading.value = true
+  try {
+    const result = await adminAPI.riskControl.deleteFlaggedHash(inputHash)
+    flaggedHashInput.value = ''
+    appStore.showSuccess(
+      result.deleted ? t('admin.riskControl.flaggedHashDeleted') : t('admin.riskControl.flaggedHashNotFound')
+    )
+    await loadStatus(true)
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.flaggedHashDeleteFailed')))
+  } finally {
+    hashActionLoading.value = false
+  }
+}
+
+async function requestClearFlaggedHashes() {
+  if (hashActionLoading.value || !window.confirm(t('admin.riskControl.clearFlaggedHashesConfirm'))) return
+  hashActionLoading.value = true
+  try {
+    const result = await adminAPI.riskControl.clearFlaggedHashes()
+    appStore.showSuccess(t('admin.riskControl.flaggedHashesCleared', { count: result.deleted }))
+    await loadStatus(true)
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.flaggedHashesClearFailed')))
+  } finally {
+    hashActionLoading.value = false
+  }
+}
+
+async function previewSelectedArchive() {
+  const log = selectedLog.value
+  if (!log || archiveActionLoading.value) return
+  archiveActionLoading.value = true
+  try {
+    archivePreview.value = await adminAPI.riskControl.previewArchive(log.id)
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.archivePreviewFailed')))
+  } finally {
+    archiveActionLoading.value = false
+  }
+}
+
+async function downloadSelectedArchive() {
+  const log = selectedLog.value
+  if (!log || archiveActionLoading.value) return
+  archiveActionLoading.value = true
+  try {
+    const blob = await adminAPI.riskControl.downloadArchive(log.id)
+    const href = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = `content-moderation-${log.id}.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(href)
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.archiveDownloadFailed')))
+  } finally {
+    archiveActionLoading.value = false
+  }
+}
+
+async function deleteSelectedArchive() {
+  const log = selectedLog.value
+  if (!log || archiveActionLoading.value || !window.confirm(t('admin.riskControl.archiveDeleteConfirm'))) return
+  archiveActionLoading.value = true
+  try {
+    const result = await adminAPI.riskControl.deleteArchive(log.id)
+    if (result.deleted) {
+      log.archive_status = 'deleted'
+      log.archive_deleted_at = new Date().toISOString()
+      archivePreview.value = null
+      appStore.showSuccess(t('admin.riskControl.archiveDeleted'))
+      await loadLogs()
+    }
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.archiveDeleteFailed')))
+  } finally {
+    archiveActionLoading.value = false
+  }
+}
+
+async function requestUnbanSelectedUser() {
+  const log = selectedLog.value
+  if (!log?.user_id || unbanActionLoading.value) return
+  unbanActionLoading.value = true
+  try {
+    await adminAPI.riskControl.unbanUser(log.user_id)
+    log.user_status = 'active'
+    appStore.showSuccess(t('admin.riskControl.unbanSuccess'))
+    await loadLogs()
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.unbanFailed')))
+  } finally {
+    unbanActionLoading.value = false
+  }
 }
 
 async function openReplaySource() {
@@ -1987,7 +2321,15 @@ function channelTestResultText(result: TestDeepSeekChannelResponse): string {
 function resultLabel(row: ContentModerationLog): string {
   if (row.action === 'restricted_block') return t('admin.riskControl.result.restricted')
   if (row.action === 'degraded_allow') return t('admin.riskControl.result.degradedAllow')
-  if (row.review_outcome) return row.review_outcome
+  if (row.action === 'evidence_capacity_exceeded' || row.review_outcome === 'evidence_capacity_exceeded') {
+    return t('admin.riskControl.result.evidenceCapacityExceeded')
+  }
+  if (row.review_outcome === 'safe') return t('admin.riskControl.result.pass')
+  if (row.review_outcome === 'risky' || row.review_outcome === 'policy_restricted') {
+    return t('admin.riskControl.result.blocked')
+  }
+  if (row.review_outcome === 'unavailable') return t('admin.riskControl.result.unavailable')
+  if (row.review_outcome === 'disagreement') return t('admin.riskControl.reviewerDisagreement')
   if (row.action === 'review_unavailable' || row.error) return t('admin.riskControl.result.unavailable')
   if (row.action?.includes('shadow')) return t('admin.riskControl.result.shadow')
   if (row.action?.includes('block') || row.flagged) return t('admin.riskControl.result.blocked')
@@ -1997,10 +2339,17 @@ function resultLabel(row: ContentModerationLog): string {
 function resultClass(row: ContentModerationLog): string {
   if (row.action === 'restricted_block') return statusClasses.warning
   if (row.action === 'degraded_allow') return statusClasses.warning
+  if (row.action === 'evidence_capacity_exceeded') return statusClasses.warning
   if (row.action === 'review_unavailable' || row.error) return statusClasses.warning
   if (row.action?.includes('shadow')) return statusClasses.warning
   if (row.action?.includes('block') || row.flagged) return statusClasses.danger
   return statusClasses.healthy
+}
+
+function contextLabel(value: string): string {
+  const key = `admin.riskControl.context.${value}`
+  const translated = t(key)
+  return translated === key ? value : translated
 }
 
 function confidenceText(row: ContentModerationLog): string {

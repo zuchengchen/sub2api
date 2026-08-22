@@ -1502,6 +1502,13 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 				defer cancel()
 				outcome := s.reviewUnifiedCandidateEvidenceBundle(shadowCtx, asyncCfg, namespace, work)
 				if outcome.err != nil {
+					if outcome.parserStatus == "evidence_capacity_exceeded" {
+						_ = s.handleContextualEvidenceCapacityExceeded(
+							shadowCtx, asyncInput, asyncCfg, namespace, work.bundle, work.primary, whitelistShadow,
+							outcome.parserStatus, outcome.err, outcome.result,
+						)
+						return
+					}
 					_ = s.handleContextualReviewUnavailable(
 						shadowCtx, asyncInput, asyncCfg, namespace, work.bundle, work.primary, whitelistShadow,
 						false, outcome.parserStatus, outcome.err, outcome.result,
@@ -1563,6 +1570,20 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	for index, outcome := range outcomes {
 		work := works[index]
 		if outcome.err != nil {
+			if outcome.parserStatus == "evidence_capacity_exceeded" {
+				decision := s.handleContextualEvidenceCapacityExceeded(
+					ctx, input, cfg, namespace, work.bundle, work.primary, whitelistShadow,
+					outcome.parserStatus, outcome.err, outcome.result,
+				)
+				if decision.Blocked {
+					if blockDecision == nil {
+						blockDecision = decision
+					}
+				} else if !decision.Allowed || unavailableDecision == nil || unavailableDecision.Allowed {
+					unavailableDecision = decision
+				}
+				continue
+			}
 			decision := s.handleContextualReviewUnavailable(
 				ctx, input, cfg, namespace, work.bundle, work.primary, whitelistShadow,
 				degradeFailures && degradeEligibility[index], outcome.parserStatus, outcome.err, outcome.result,
@@ -1727,10 +1748,13 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 	var attempted bool
 	var err error
 	fullCoverageReviewed := false
+	evidenceCapacityExceeded := false
 	if work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete {
 		if inputs, complete := contentModerationFullReviewInputs(work, contentModerationReviewInputLimit(reviewCfg)); complete {
 			result, attempted, err = s.scanContentModerationFullReviewChunks(reviewCtx, reviewCfg, inputs)
 			fullCoverageReviewed = err == nil
+		} else {
+			evidenceCapacityExceeded = true
 		}
 	}
 	if !fullCoverageReviewed && err == nil && !attempted {
@@ -1758,8 +1782,12 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 	}
 	if !result.Blocked && !fullCoverageReviewed &&
 		(work.bundle.CoverageIncomplete || work.bundle.ContextIncomplete) {
+		parserStatus := "evidence_truncated"
+		if evidenceCapacityExceeded {
+			parserStatus = "evidence_capacity_exceeded"
+		}
 		return contentModerationCandidateReviewOutcome{
-			result: result, parserStatus: "evidence_truncated", err: errors.New("contextual review evidence coverage was incomplete"),
+			result: result, parserStatus: parserStatus, err: errors.New("contextual review evidence exceeds the configured review capacity"),
 		}
 	}
 	return contentModerationCandidateReviewOutcome{result: result}
@@ -2164,6 +2192,71 @@ func contentModerationContextualReviewFailureStatus(err error, attempted bool) s
 		return "timeout"
 	default:
 		return "error"
+	}
+}
+
+func (s *ContentModerationService) handleContextualEvidenceCapacityExceeded(
+	ctx context.Context,
+	input ContentModerationCheckInput,
+	cfg *ContentModerationConfig,
+	namespace string,
+	bundle contentModerationEvidenceBundle,
+	primary ContentModerationFragment,
+	whitelistShadow bool,
+	parserStatus string,
+	reviewErr error,
+	reviewResults ...contentModerationSecondLayerResult,
+) *ContentModerationDecision {
+	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), contentModerationAuditPersistenceTimeout)
+	defer cancelPersist()
+
+	audit := unifiedModerationAudit{
+		DecisionSource:    ContentModerationActionEvidenceCapacityExceeded,
+		CacheNamespace:    namespace,
+		EvidenceMode:      bundle.Evidence.Mode,
+		EvidenceTruncated: bundle.Evidence.Truncated,
+		ParserStatus:      parserStatus,
+		KeywordTier:       defaultContentModerationString(bundle.PrimaryTier, "candidate"),
+		KeywordRuleID:     bundle.PrimaryRuleID,
+		EvidenceText:      bundle.Evidence.Text,
+		EvidenceWindows:   bundle.Windows,
+		InputHash:         bundle.CacheHash,
+		ReviewOutcome:     ContentModerationLogResultEvidenceCapacityExceeded,
+	}
+	if len(reviewResults) > 0 {
+		result := reviewResults[0]
+		audit.ModelProfile = result.Profile
+		audit.PromptVersion = result.PromptVersion
+		audit.DeepSeekConfidence = result.Confidence
+		audit.DeepSeekCategory = result.Category
+		audit.DeepSeekReason = result.Reason
+		audit.ReviewerDisagreement = result.ReviewerMismatch
+		audit.ConsensusStatus = result.ConsensusStatus
+		audit.RemoteVotes = result.RemoteVotes
+		audit.ReviewAttempts = append([]ContentModerationReviewAttempt(nil), result.ReviewAttempts...)
+	}
+	if reviewErr != nil {
+		audit.Error = trimRunes(redactContentModerationSecrets(reviewErr.Error()), maxModerationExcerptRunes)
+	}
+	if endpoints := cfg.enabledSecondLayerEndpoints(); len(endpoints) > 0 {
+		audit.ModelProfile = endpoints[0].Profile
+		audit.PromptVersion = endpoints[0].PromptVersion
+	}
+	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+		audit.DecisionSource += "_shadow"
+		s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionEvidenceCapacityExceeded, "", bundle.PrimaryKeyword, audit)
+		return &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow, InputHash: bundle.CacheHash}
+	}
+	s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionEvidenceCapacityExceeded, "", bundle.PrimaryKeyword, audit)
+	return &ContentModerationDecision{
+		Allowed:        false,
+		Blocked:        false,
+		Flagged:        false,
+		Message:        "Risk-control evidence exceeds the review capacity; shorten the input and retry",
+		StatusCode:     http.StatusRequestEntityTooLarge,
+		InputHash:      bundle.CacheHash,
+		MatchedKeyword: bundle.PrimaryKeyword,
+		Action:         ContentModerationActionEvidenceCapacityExceeded,
 	}
 }
 

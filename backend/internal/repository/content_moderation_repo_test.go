@@ -58,6 +58,11 @@ func TestBuildContentModerationLogWhere_AuditRecordViews(t *testing.T) {
 			result:   service.ContentModerationLogResultReviewFailure,
 			contains: "l.action IN ('review_unavailable', 'degraded_allow')",
 		},
+		{
+			name:     "evidence capacity exceeded",
+			result:   service.ContentModerationLogResultEvidenceCapacityExceeded,
+			contains: "l.action = 'evidence_capacity_exceeded'",
+		},
 	}
 
 	for _, tt := range tests {
@@ -89,6 +94,43 @@ func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesReplayBlocks
 
 	require.NoError(t, err)
 	require.Equal(t, 2, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContentModerationRepositoryCleanupExpiredLogs_ExpiresArchivePayloadsButRetainsSummaries(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	repo := NewContentModerationRepository(db)
+	hitBefore := time.Now().Add(-180 * 24 * time.Hour)
+	nonHitBefore := time.Now().Add(-3 * 24 * time.Hour)
+	mock.ExpectQuery(`(?s)WITH candidates AS .*archive_status = 'available'.*action = 'cache_block'.*SELECT COUNT\(\*\) FROM expired`).
+		WithArgs(nonHitBefore, hitBefore).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+	mock.ExpectQuery(`(?s)WITH candidates AS .*archive_status = 'available'.*action = 'cache_block'.*SELECT COUNT\(\*\) FROM expired`).
+		WithArgs(nonHitBefore, hitBefore).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectExec(regexp.QuoteMeta(`
+DELETE FROM content_moderation_logs
+WHERE flagged = TRUE
+  AND created_at < $1
+  AND archive_status = 'none'
+  AND archive_incomplete = FALSE
+  AND action NOT IN ('block', 'keyword_block', 'second_layer_block', 'cache_block', 'cyber_policy')
+`)).WithArgs(hitBefore).WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectExec(regexp.QuoteMeta(`
+DELETE FROM content_moderation_logs
+WHERE flagged = FALSE AND created_at < $1
+  AND action <> 'restricted_block'
+`)).WithArgs(nonHitBefore).WillReturnResult(sqlmock.NewResult(0, 4))
+
+	result, err := repo.CleanupExpiredLogs(context.Background(), hitBefore, nonHitBefore)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), result.DeletedArchives)
+	require.Equal(t, int64(3), result.DeletedHit)
+	require.Equal(t, int64(4), result.DeletedNonHit)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -62,6 +62,7 @@ func TestContentModerationServiceListLogs_AllowsOnlyAuditRecordViews(t *testing.
 		{name: "restricted", result: ContentModerationLogResultRestricted, expected: ContentModerationLogResultRestricted},
 		{name: "normalizes risky shadow", result: " RISKY_SHADOW ", expected: ContentModerationLogResultRiskyShadow},
 		{name: "review unavailable", result: ContentModerationLogResultReviewFailure, expected: ContentModerationLogResultReviewFailure},
+		{name: "evidence capacity", result: ContentModerationLogResultEvidenceCapacityExceeded, expected: ContentModerationLogResultEvidenceCapacityExceeded},
 	}
 
 	for _, tt := range tests {
