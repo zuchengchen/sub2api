@@ -150,7 +150,7 @@ func TestContentModerationRiskTieredTransientOutageAllowsAndAuditsWithoutCaching
 	require.False(t, logs[0].Flagged)
 }
 
-func TestContentModerationRiskTieredSafeReviewAllowsOversizedCompleteCandidateContextWithoutCaching(t *testing.T) {
+func TestContentModerationOversizedCandidateContextReturnsCapacityErrorWithoutReviewUnavailableMetric(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -176,20 +176,22 @@ func TestContentModerationRiskTieredSafeReviewAllowsOversizedCompleteCandidateCo
 			context.Background(), ContentModerationCheckInput{RequestID: "oversized-safe-" + strconv.Itoa(attempt)},
 			cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{candidate}, false,
 		)
-		require.True(t, decision.Allowed)
+		require.False(t, decision.Allowed)
 		require.False(t, decision.Blocked)
-		require.Equal(t, ContentModerationActionDegradedAllow, decision.Action)
+		require.Equal(t, http.StatusRequestEntityTooLarge, decision.StatusCode)
+		require.Equal(t, ContentModerationActionEvidenceCapacityExceeded, decision.Action)
 	}
 	require.Equal(t, int64(2), calls.Load(), "oversized evidence must be reviewed again instead of cached")
 	require.Zero(t, contextualRoutingCacheEntryCount(cache))
+	require.Zero(t, svc.reviewObservability.reviewUnavailableCount.Load())
 
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 2)
 	for _, log := range logs {
-		require.Equal(t, ContentModerationActionDegradedAllow, log.Action)
-		require.Equal(t, "review_unavailable_degraded_allow", log.DecisionSource)
-		require.Equal(t, "degraded_allow", log.ReviewOutcome)
-		require.Equal(t, "evidence_truncated", log.ParserStatus)
+		require.Equal(t, ContentModerationActionEvidenceCapacityExceeded, log.Action)
+		require.Equal(t, ContentModerationActionEvidenceCapacityExceeded, log.DecisionSource)
+		require.Equal(t, ContentModerationLogResultEvidenceCapacityExceeded, log.ReviewOutcome)
+		require.Equal(t, "evidence_capacity_exceeded", log.ParserStatus)
 		require.True(t, log.EvidenceTruncated)
 		require.Len(t, log.ReviewAttempts, 1)
 		require.Equal(t, "success", log.ReviewAttempts[0].Outcome)

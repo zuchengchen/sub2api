@@ -207,6 +207,7 @@ export interface ContentModerationRuntimeStatus {
   last_cleanup_at?: string
   last_cleanup_deleted_hit?: number
   last_cleanup_deleted_non_hit?: number
+  last_cleanup_deleted_archives?: number
   deepseek_selected_count?: number
   deepseek_failover_count?: number
   deepseek_unavailable_count?: number
@@ -285,6 +286,7 @@ export interface ContentModerationLog {
   source_log_id?: number | null
   replay_of_input_hash?: string
   context_class?: string
+  model_profile?: string
   policy_version?: string
   evidence_policy_version?: string
   keyword_tier?: string
@@ -305,6 +307,12 @@ export interface ContentModerationLog {
   user_status?: string
   queue_delay_ms?: number | null
   input_hash?: string
+  archive_id?: string
+  archive_bytes?: number
+  archive_status?: string
+  archive_incomplete?: boolean
+  archive_content_lost?: boolean
+  archive_deleted_at?: string
   deepseek_confidence?: number | null
   deepseek_category?: string
   deepseek_reason?: string
@@ -324,6 +332,7 @@ export type ContentModerationLogResult =
   | 'restricted'
   | 'risky_shadow'
   | 'review_unavailable'
+  | 'evidence_capacity_exceeded'
 
 export type ContentModerationLogView =
   | 'cyber_policy'
@@ -331,6 +340,7 @@ export type ContentModerationLogView =
   | 'restricted'
   | 'risky_shadow'
   | 'review_unavailable'
+  | 'evidence_capacity_exceeded'
 
 export interface ListContentModerationLogsParams {
   page?: number
@@ -340,6 +350,7 @@ export interface ListContentModerationLogsParams {
   group_id?: number
   endpoint?: string
   context_class?: string
+  model_profile?: string
   decision_source?: string
   search?: string
   from?: string

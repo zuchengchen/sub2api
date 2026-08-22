@@ -17,6 +17,7 @@ import (
 const (
 	riskControlCapacityErrorCode          = "risk_control_capacity_exhausted"
 	riskControlReviewUnavailableErrorCode = "risk_control_review_unavailable"
+	riskControlEvidenceCapacityErrorCode  = "risk_control_evidence_capacity_exceeded"
 	contentPolicyRestrictedErrorCode      = "content_policy_restricted"
 )
 
@@ -27,6 +28,8 @@ func contentModerationDecisionErrorCode(decision *service.ContentModerationDecis
 			return riskControlCapacityErrorCode
 		case service.ContentModerationActionReviewUnavailable:
 			return riskControlReviewUnavailableErrorCode
+		case service.ContentModerationActionEvidenceCapacityExceeded:
+			return riskControlEvidenceCapacityErrorCode
 		case service.ContentModerationActionRestrictedBlock:
 			return contentPolicyRestrictedErrorCode
 		}
@@ -43,6 +46,9 @@ func contentModerationDecisionMessage(decision *service.ContentModerationDecisio
 		return message
 	}
 	if decision.Action == service.ContentModerationActionRestrictedBlock {
+		return message
+	}
+	if decision.Action == service.ContentModerationActionEvidenceCapacityExceeded {
 		return message
 	}
 	if keyword := strings.TrimSpace(decision.MatchedKeyword); keyword != "" {
