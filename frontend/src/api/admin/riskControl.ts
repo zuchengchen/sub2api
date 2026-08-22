@@ -87,19 +87,6 @@ export interface ContentModerationChannelHeartbeat {
   error?: string
 }
 
-export interface ContentModerationEndpoint {
-  id: string
-  name: string
-  base_url: string
-  model: string
-  profile: 'yufeng_xguard'
-  enabled: boolean
-  timeout_ms: number
-  input_limit: number
-  token_configured: boolean
-  token_masked: string
-}
-
 export interface ContentModerationConfig {
   enabled: boolean
   mode: ModerationMode
@@ -107,8 +94,6 @@ export interface ContentModerationConfig {
   remote_reviewers_enabled?: boolean
   remote_consensus_required?: number
   remote_unavailable_policy?: ContentModerationRemoteUnavailablePolicy
-  yufeng_enabled?: boolean
-  yufeng_mode?: 'shadow' | string
   deepseek_total_timeout_ms?: number
   deepseek_threshold?: number
   policy_version?: string
@@ -131,7 +116,6 @@ export interface ContentModerationConfig {
   first_layer_stage?: ContentModerationFirstLayerStage
   second_layer_enabled?: boolean
   second_layer_stage?: ContentModerationSecondLayerStage
-  second_layer_endpoints?: ContentModerationEndpoint[]
   layer1_keywords?: string[]
   layer2_keywords?: string[]
   keyword_allowlist?: string[]
@@ -151,8 +135,6 @@ export interface UpdateContentModerationConfig {
   remote_reviewers_enabled?: boolean
   remote_consensus_required?: number
   remote_unavailable_policy?: ContentModerationRemoteUnavailablePolicy
-  yufeng_enabled?: boolean
-  yufeng_mode?: 'shadow' | string
   deepseek_total_timeout_ms?: number
   deepseek_threshold?: number
   deepseek_channels?: UpdateDeepSeekModerationChannel[]
