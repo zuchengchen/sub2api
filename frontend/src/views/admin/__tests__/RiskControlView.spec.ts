@@ -390,7 +390,7 @@ describe('admin RiskControlView', () => {
     wrapper.unmount()
   })
 
-  it('treats one reachable remote provider as ready when the backend omits readiness', async () => {
+  it('keeps the review pool ready but marks strategy restriction confirmation unavailable with one provider', async () => {
     const statusWithoutReadiness = {
       ...runtimeStatus(),
       second_layer_enforce_ready: undefined,
@@ -402,6 +402,9 @@ describe('admin RiskControlView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="enforce-health-gate"]').text()).toContain('admin.riskControl.enforceGateReady')
+    expect(wrapper.get('[data-test="restriction-consensus-gate"]').text()).toContain(
+      'admin.riskControl.restrictionConsensusUnavailable'
+    )
     wrapper.unmount()
   })
 
@@ -474,7 +477,7 @@ describe('admin RiskControlView', () => {
     expect(listLogs).toHaveBeenCalledWith(expect.objectContaining({ result: 'risky_shadow' }))
     expect(wrapper.text()).toContain('cyber_abuse')
     expect(wrapper.text()).toContain('91%')
-    expect(wrapper.text()).toContain('admin.riskControl.reviewerDisagreement')
+    expect(wrapper.text()).toContain('admin.riskControl.result.disagreementUndetermined')
     expect(wrapper.text()).toContain('DeepSeek Official')
     expect(wrapper.text()).toContain('admin.riskControl.attemptCount')
 
@@ -484,6 +487,184 @@ describe('admin RiskControlView', () => {
     expect(wrapper.get('[data-test="review-attempts"]').text()).toContain('Backup')
     expect(wrapper.get('[data-test="evidence-window"]').text()).toContain('credentials')
     expect(wrapper.get('[data-test="evidence-match"]').text()).toBe('credentials')
+    wrapper.unmount()
+  })
+
+  it('distinguishes confirmed restrictions from undetermined review outcomes', async () => {
+    const restrictedAttempts = [
+      {
+        provider: 'deepseek',
+        channel_id: 'deepseek-official',
+        outcome: 'success',
+        verdict: 'restricted',
+        chunk_index: 0,
+        chunk_count: 1,
+      },
+      {
+        provider: 'alibaba_qwen',
+        channel_id: 'qwen-official',
+        outcome: 'success',
+        verdict: 'restricted',
+        chunk_index: 0,
+        chunk_count: 1,
+      },
+    ]
+    const records = [
+      {
+        ...auditLog(),
+        id: 101,
+        action: 'restricted_block',
+        review_outcome: 'policy_restricted',
+        reviewer_disagreement: false,
+        evidence_truncated: false,
+        consensus_status: 'confirmed_restricted',
+        remote_votes: 2,
+        review_attempts: restrictedAttempts,
+        input_excerpt: 'confirmed restriction',
+      },
+      {
+        ...auditLog(),
+        id: 102,
+        action: 'restricted_block',
+        review_outcome: 'disagreement_restricted',
+        reviewer_disagreement: true,
+        evidence_truncated: false,
+        consensus_status: 'disagreement_restricted',
+        remote_votes: 2,
+        input_excerpt: 'review disagreement',
+      },
+      {
+        ...auditLog(),
+        id: 103,
+        action: 'review_unavailable',
+        review_outcome: 'unavailable',
+        reviewer_disagreement: false,
+        evidence_truncated: false,
+        consensus_status: 'consensus_unavailable',
+        remote_votes: 1,
+        input_excerpt: 'review unavailable',
+      },
+      {
+        ...auditLog(),
+        id: 104,
+        action: 'restricted_block',
+        review_outcome: 'policy_restricted',
+        reviewer_disagreement: false,
+        evidence_truncated: true,
+        consensus_status: 'confirmed_restricted',
+        remote_votes: 2,
+        review_attempts: restrictedAttempts,
+        input_excerpt: 'truncated evidence',
+      },
+      {
+        ...auditLog(),
+        id: 105,
+        action: 'restricted_block',
+        review_outcome: 'policy_restricted',
+        reviewer_disagreement: false,
+        evidence_truncated: false,
+        consensus_status: 'single_restricted',
+        remote_votes: 1,
+        review_attempts: [restrictedAttempts[0]],
+        input_excerpt: 'single vote',
+      },
+      {
+        ...auditLog(),
+        id: 106,
+        action: 'restricted_block',
+        review_outcome: 'policy_restricted',
+        reviewer_disagreement: false,
+        evidence_truncated: false,
+        consensus_status: undefined,
+        remote_votes: undefined,
+        review_attempts: [],
+        input_excerpt: 'legacy restriction',
+      },
+      {
+        ...auditLog(),
+        id: 107,
+        action: 'evidence_capacity_exceeded',
+        review_outcome: 'evidence_capacity_exceeded',
+        reviewer_disagreement: false,
+        evidence_truncated: true,
+        consensus_status: 'consensus_unavailable',
+        remote_votes: 1,
+        input_excerpt: 'capacity exceeded',
+      },
+    ] satisfies ContentModerationLog[]
+    listLogs.mockResolvedValue({ items: records, total: records.length, page: 1, page_size: 20, pages: 1 })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="audit-decision-label"]').map((label) => label.text())).toEqual([
+      'admin.riskControl.result.restrictedConfirmed',
+      'admin.riskControl.result.disagreementUndetermined',
+      'admin.riskControl.result.unavailableUndetermined',
+      'admin.riskControl.result.evidenceTruncatedUndetermined',
+      'admin.riskControl.result.singleVoteUndetermined',
+      'admin.riskControl.result.restrictedUnconfirmed',
+      'admin.riskControl.result.evidenceCapacityUndetermined',
+    ])
+    expect(wrapper.findAll('[data-test="audit-decision-meta"]').map((meta) => meta.text())).toEqual([
+      'admin.riskControl.confirmedVoteCount',
+      'admin.riskControl.undeterminedNonViolation',
+      'admin.riskControl.undeterminedNonViolation',
+      'admin.riskControl.undeterminedNonViolation',
+      'admin.riskControl.singleVoteDetail',
+      'admin.riskControl.consensusUnknownDetail',
+      'admin.riskControl.undeterminedNonViolation',
+    ])
+
+    const detailButton = wrapper.findAll('button').find((button) => button.text().includes('confirmed restriction'))
+    expect(detailButton).toBeDefined()
+    await detailButton!.trigger('click')
+    expect(wrapper.get('[data-test="audit-log-detail"]').text()).toContain('admin.riskControl.reviewConsensus')
+    expect(wrapper.get('[data-test="audit-log-detail"]').text()).toContain('admin.riskControl.confirmedVoteCount')
+    wrapper.unmount()
+  })
+
+  it('derives disagreement only when independent safe and restricted votes refer to the same chunk', async () => {
+    listLogs.mockResolvedValue({
+      items: [
+        {
+          ...auditLog(),
+          id: 108,
+          action: 'restricted_block',
+          review_outcome: 'policy_restricted',
+          reviewer_disagreement: false,
+          evidence_truncated: false,
+          review_attempts: [
+            { provider: 'deepseek', outcome: 'success', verdict: 'safe', chunk_index: 0, chunk_count: 2 },
+            { provider: 'alibaba_qwen', outcome: 'success', verdict: 'restricted', chunk_index: 1, chunk_count: 2 },
+          ],
+        },
+        {
+          ...auditLog(),
+          id: 109,
+          action: 'restricted_block',
+          review_outcome: 'policy_restricted',
+          reviewer_disagreement: false,
+          evidence_truncated: false,
+          review_attempts: [
+            { provider: 'deepseek', outcome: 'success', verdict: 'safe', chunk_index: 0, chunk_count: 1 },
+            { provider: 'alibaba_qwen', outcome: 'success', verdict: 'restricted', chunk_index: 0, chunk_count: 1 },
+          ],
+        },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="audit-decision-label"]').map((label) => label.text())).toEqual([
+      'admin.riskControl.result.singleVoteUndetermined',
+      'admin.riskControl.result.disagreementUndetermined',
+    ])
     wrapper.unmount()
   })
 

@@ -6,12 +6,15 @@ import (
 	"unicode/utf8"
 )
 
-const contentModerationSecondLayerPrefilterPolicyVersion = "layer2-candidate-keywords-v3-offsets"
+const contentModerationSecondLayerPrefilterPolicyVersion = "layer2-candidate-keywords-v4-ascii-boundaries-controlled-suffixes-offsets"
+
+var contentModerationPrefilterAllowedSuffixes = [...]string{"s", "es", "ed", "ing"}
 
 // contentModerationPrefilterMatcher admits suspicious-looking fragments to the
 // expensive second-layer model without making a moderation decision itself.
 type contentModerationPrefilterMatcher struct {
-	matcher *contentModerationKeywordMatcher
+	matcher           *contentModerationKeywordMatcher
+	canonicalKeywords []string
 }
 
 func newContentModerationPrefilterMatcher(values []string) *contentModerationPrefilterMatcher {
@@ -19,7 +22,11 @@ func newContentModerationPrefilterMatcher(values []string) *contentModerationPre
 	if len(keywords) == 0 {
 		return nil
 	}
-	return &contentModerationPrefilterMatcher{matcher: newContentModerationSubstringMatcher(keywords)}
+	patterns, canonicalKeywords := contentModerationPrefilterPatterns(keywords)
+	return &contentModerationPrefilterMatcher{
+		matcher:           newContentModerationKeywordMatcher(patterns),
+		canonicalKeywords: canonicalKeywords,
+	}
 }
 
 func (m *contentModerationPrefilterMatcher) Match(text string) (string, bool) {
@@ -27,10 +34,10 @@ func (m *contentModerationPrefilterMatcher) Match(text string) (string, bool) {
 		return "", false
 	}
 	scanner := m.scan(text, false)
-	if scanner.bestKeyword < 0 || int(scanner.bestKeyword) >= len(m.matcher.keywords) {
+	if scanner.bestKeyword < 0 || int(scanner.bestKeyword) >= len(m.canonicalKeywords) {
 		return "", false
 	}
-	return m.matcher.keywords[scanner.bestKeyword], true
+	return m.canonicalKeywords[scanner.bestKeyword], true
 }
 
 func (m *contentModerationPrefilterMatcher) MatchAll(text string) []contentModerationKeywordMatch {
@@ -38,7 +45,7 @@ func (m *contentModerationPrefilterMatcher) MatchAll(text string) []contentModer
 		return nil
 	}
 	scanner := m.scan(text, true)
-	return sortAndDeduplicateContentModerationKeywordMatches(scanner.matches)
+	return m.canonicalizeMatches(sortAndDeduplicateContentModerationKeywordMatches(scanner.matches))
 }
 
 // MatchAllExcluding applies the output cap after allowlist suppression. The
@@ -148,7 +155,17 @@ func (m *contentModerationPrefilterMatcher) MatchAllExcluding(text string, allow
 		excludeScanner.finish()
 		_ = flush(candidateScanner.position, true)
 	}
-	return sortAndDeduplicateContentModerationKeywordMatches(out)
+	return m.canonicalizeMatches(sortAndDeduplicateContentModerationKeywordMatches(out))
+}
+
+func (m *contentModerationPrefilterMatcher) canonicalizeMatches(matches []contentModerationKeywordMatch) []contentModerationKeywordMatch {
+	for index := range matches {
+		keywordIndex := matches[index].keywordIndex
+		if keywordIndex >= 0 && keywordIndex < len(m.canonicalKeywords) {
+			matches[index].Keyword = m.canonicalKeywords[keywordIndex]
+		}
+	}
+	return matches
 }
 
 func (m *contentModerationPrefilterMatcher) scan(text string, collect bool) *contentModerationKeywordScanner {
@@ -191,6 +208,51 @@ func canonicalContentModerationPrefilterKeywords(values []string) []string {
 		keywords = append(keywords, value)
 	}
 	return keywords
+}
+
+// contentModerationPrefilterPatterns keeps configured terms authoritative and
+// adds only a small set of direct final-token suffixes. Generated patterns map
+// back to the configured term so audit rule identities remain stable.
+func contentModerationPrefilterPatterns(keywords []string) ([]string, []string) {
+	patterns := make([]string, 0, len(keywords)*2)
+	canonicalKeywords := make([]string, 0, len(keywords)*2)
+	seen := make(map[string]struct{}, len(keywords)*2)
+	for _, keyword := range keywords {
+		seen[keyword] = struct{}{}
+		patterns = append(patterns, keyword)
+		canonicalKeywords = append(canonicalKeywords, keyword)
+	}
+	for _, keyword := range keywords {
+		if !contentModerationPrefilterAllowsSuffixes(keyword) {
+			continue
+		}
+		for _, suffix := range contentModerationPrefilterAllowedSuffixes {
+			pattern := keyword + suffix
+			if _, exists := seen[pattern]; exists {
+				continue
+			}
+			seen[pattern] = struct{}{}
+			patterns = append(patterns, pattern)
+			canonicalKeywords = append(canonicalKeywords, keyword)
+		}
+	}
+	return patterns, canonicalKeywords
+}
+
+func contentModerationPrefilterAllowsSuffixes(keyword string) bool {
+	finalToken := keyword
+	if separator := strings.LastIndexByte(keyword, ' '); separator >= 0 {
+		finalToken = keyword[separator+1:]
+	}
+	if len(finalToken) < 3 {
+		return false
+	}
+	for index := range len(finalToken) {
+		if finalToken[index] < 'a' || finalToken[index] > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeContentModerationPrefilterText(value string) string {

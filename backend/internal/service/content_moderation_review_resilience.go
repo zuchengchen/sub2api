@@ -190,18 +190,31 @@ func (s *ContentModerationService) scanContentModerationFullReviewChunks(
 	var failures []error
 	attempted := false
 	var risky *contentModerationSecondLayerResult
+	var undetermined *contentModerationSecondLayerResult
 	var safe *contentModerationSecondLayerResult
 	for range inputs {
 		outcome := <-results
 		outcomes[outcome.index] = outcome
 		attempted = attempted || outcome.attempted
+		if contentModerationRestrictedReviewUndetermined(outcome.result) {
+			candidate := outcome.result
+			if undetermined == nil || candidate.ReviewerMismatch {
+				undetermined = &candidate
+			}
+			if outcome.err != nil {
+				failures = append(failures, outcome.err)
+			}
+			continue
+		}
 		if outcome.result.Blocked {
 			candidate := outcome.result
 			if risky == nil || (candidate.normalizedDisposition() == ContentModerationReviewDispositionViolation &&
 				risky.normalizedDisposition() != ContentModerationReviewDispositionViolation) {
 				risky = &candidate
 			}
-			cancel()
+			if candidate.normalizedDisposition() == ContentModerationReviewDispositionViolation {
+				cancel()
+			}
 			continue
 		}
 		if outcome.err != nil {
@@ -222,6 +235,12 @@ func (s *ContentModerationService) scanContentModerationFullReviewChunks(
 		risky.EvidenceMode = "full_context_chunks"
 		risky.EvidenceTruncated = len(inputs) > 1
 		return *risky, true, nil
+	}
+	if undetermined != nil {
+		undetermined.ReviewAttempts = allAttempts
+		undetermined.EvidenceMode = "full_context_chunks"
+		undetermined.EvidenceTruncated = len(inputs) > 1
+		return *undetermined, attempted, nil
 	}
 	if len(failures) > 0 {
 		return contentModerationSecondLayerResult{
@@ -309,8 +328,10 @@ func (s *ContentModerationService) contentModerationReviewCanDegrade(
 		!work.sourceComplete || work.bundle.CoverageIncomplete || outcome.result.Blocked {
 		return false
 	}
+	// Incomplete evidence is a capacity failure, not a transient reviewer
+	// outage. Keep it ineligible for degraded allow even if routing changes.
 	if outcome.parserStatus == "evidence_truncated" {
-		return work.bundle.ContextIncomplete && contentModerationReviewResultIsConclusiveSafe(outcome.result)
+		return false
 	}
 	if work.bundle.ContextIncomplete {
 		return false
@@ -334,18 +355,6 @@ func (s *ContentModerationService) contentModerationReviewCanDegrade(
 		return false
 	}
 	return len(outcome.result.ReviewAttempts) > 0
-}
-
-func contentModerationReviewResultIsConclusiveSafe(result contentModerationSecondLayerResult) bool {
-	if result.Blocked || result.normalizedDisposition() != ContentModerationReviewDispositionAllow {
-		return false
-	}
-	for _, attempt := range result.ReviewAttempts {
-		if attempt.Outcome == "success" && attempt.Verdict == "safe" {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *ContentModerationService) contentModerationReviewRetryAfter(cfg *ContentModerationConfig, now time.Time) int {

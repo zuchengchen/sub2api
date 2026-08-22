@@ -95,8 +95,16 @@ func (e *ContentModerationDeepSeekEvaluator) Evaluate(
 		KeywordTier: "release_evaluation",
 	})
 	disposition := result.normalizedDisposition()
+	unconfirmedRestriction := errors.Is(err, errContentModerationRestrictedConfirmationUnavailable)
+	if unconfirmedRestriction {
+		// The evaluator reports a single reviewer's calibration verdict without
+		// turning it into an enforceable production decision.
+		disposition = ContentModerationReviewDispositionRestricted
+		err = nil
+	}
 	evaluation := ContentModerationDeepSeekEvaluationResult{
-		Blocked: result.Blocked, Flagged: disposition == ContentModerationReviewDispositionViolation,
+		Blocked:     result.Blocked && !unconfirmedRestriction,
+		Flagged:     disposition == ContentModerationReviewDispositionViolation,
 		Disposition: disposition, Confidence: result.Confidence, Category: result.Category,
 		Profile: result.Profile, PromptVersion: result.PromptVersion,
 		LatencyMS: int(time.Since(started).Milliseconds()),

@@ -253,8 +253,19 @@ func TestContentModerationSecurityTestPayloadUsesReviewerRestrictedVerdictAndRep
 		)
 	}))
 	defer server.Close()
+	confirmation := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		contentModerationRemotePoolWriteResponsesResult(
+			t, w, 0.94, ContentModerationRestrictedCategory, "含可操作测试载荷",
+		)
+	}))
+	defer confirmation.Close()
 
 	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
+	cfg.DeepSeekChannels = append(cfg.DeepSeekChannels,
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "candidate-confirmation", confirmation.URL+"/v1", 1),
+	)
+	cfg.normalize()
 	cfg.AutoBanEnabled = true
 	cfg.BanThreshold = 1
 	cache := &contentModerationReplayCache{}
@@ -291,7 +302,7 @@ func TestContentModerationSecurityTestPayloadUsesReviewerRestrictedVerdictAndRep
 		require.Equal(t, ContentModerationRestrictedCategory, decision.HighestCategory)
 	}
 
-	require.Equal(t, int64(1), calls.Load())
+	require.Equal(t, int64(2), calls.Load())
 	require.Zero(t, repo.countCalls)
 	require.Empty(t, userRepo.updated)
 	require.True(t, isSevereContentModerationAction(ContentModerationActionRestrictedBlock))
@@ -417,9 +428,64 @@ func TestContentModerationLegacyPolicyFloorCacheIsRejected(t *testing.T) {
 	require.NoError(t, cache.PutFragmentCacheEntry(
 		context.Background(), "policy-v6", "current-restricted", entry, 1, 10, 1024, time.Hour,
 	))
-	result, found := svc.getUnifiedCandidateReviewCache(context.Background(), "policy-v6", "current-restricted")
+	_, found = svc.getUnifiedCandidateReviewCache(context.Background(), "policy-v6", "current-restricted")
+	require.False(t, found, "a single-vote restricted result must never be replayed")
+
+	entry.ConsensusStatus = "confirmed_restricted"
+	entry.RemoteVotes = 2
+	require.NoError(t, cache.PutFragmentCacheEntry(
+		context.Background(), "policy-v6", "confirmed-restricted", entry, 1, 10, 1024, time.Hour,
+	))
+	result, found := svc.getUnifiedCandidateReviewCache(context.Background(), "policy-v6", "confirmed-restricted")
 	require.True(t, found)
 	require.Equal(t, ContentModerationReviewDispositionRestricted, resultFromUnifiedCandidateReviewCache(result).normalizedDisposition())
+}
+
+func TestContentModerationRestrictedReviewerDisagreementIsUndeterminedAndNotCached(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.SecondLayerEnabled = true
+	cfg.SecondLayerStage = ContentModerationSecondLayerStageEnforce
+	cfg.normalize()
+	candidate := contentModerationResilienceCandidate(
+		t, "review this standalone CVE reference", "CVE", contentModerationKeywordTierPolicyRestrictedReview, true,
+	)
+	bundle := buildContentModerationCandidateEvidence(
+		[]contentModerationCandidateFragment{candidate}, contentModerationEvidenceWindowBudgetRunes, cfg,
+	)
+	work := contentModerationCandidateReviewWork{
+		bundle: bundle, primary: candidate.Fragment, source: candidate.Fragment,
+		matches: candidate.Matches, sourceComplete: true, reviewRequired: true,
+	}
+	result := contentModerationSecondLayerResult{
+		Disposition: ContentModerationReviewDispositionAllow,
+		Category:    ContentModerationRestrictedCategory, Confidence: 0.85,
+		ReviewerMismatch: true, ConsensusStatus: "disagreement_restricted", RemoteVotes: 2,
+		ReviewAttempts: []ContentModerationReviewAttempt{
+			{Provider: ContentModerationRemoteProviderDeepSeek, Outcome: "success", Verdict: "restricted"},
+			{Provider: ContentModerationRemoteProviderQwen, Outcome: "success", Verdict: "safe"},
+		},
+	}
+	cache := &contentModerationReplayCache{}
+	repo := &contentModerationReplayRepo{}
+	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	decision := svc.applyUnifiedCandidateReviewResult(
+		context.Background(), ContentModerationCheckInput{RequestID: "restricted-disagreement"},
+		cfg, cfg.fragmentCacheNamespace(), work, contentModerationCandidateReviewOutcome{result: result}, false, false,
+	)
+
+	require.False(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
+	require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
+	require.Zero(t, contextualRoutingCacheEntryCount(cache))
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, "review_disagreement", logs[0].DecisionSource)
+	require.Equal(t, "disagreement_restricted", logs[0].ReviewOutcome)
+	require.True(t, logs[0].ReviewerDisagreement)
+	require.Len(t, logs[0].ReviewAttempts, 2)
 }
 
 func TestContentModerationPolicyRestrictionContextWithoutRiskPayloadIsAllowed(t *testing.T) {
@@ -468,7 +534,7 @@ func TestContentModerationPolicyRestrictionContextWithoutRiskPayloadIsAllowed(t 
 	require.Zero(t, calls.Load())
 }
 
-func TestContentModerationPolicyRestrictedPayloadStaysBlockedWhenReviewFails(t *testing.T) {
+func TestContentModerationPolicyRestrictedPayloadIsUndeterminedWhenReviewFails(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
@@ -505,18 +571,18 @@ func TestContentModerationPolicyRestrictedPayloadStaysBlockedWhenReviewFails(t *
 		Body: body, Scope: &scope, Protocol: ContentModerationProtocolOpenAIResponses,
 	}, runtime)
 
-	require.True(t, decision.Blocked)
+	require.False(t, decision.Blocked)
 	require.False(t, decision.Allowed)
 	require.False(t, decision.Flagged)
-	require.Equal(t, ContentModerationActionRestrictedBlock, decision.Action)
-	require.Equal(t, ContentModerationRestrictedCategory, decision.HighestCategory)
+	require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
+	require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
 	require.Equal(t, int64(1), calls.Load())
 	require.Zero(t, repo.countCalls)
 	require.Empty(t, userRepo.updated)
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 1)
-	require.Equal(t, "policy_floor_review_unavailable", logs[0].DecisionSource)
-	require.Equal(t, "policy_restricted", logs[0].ReviewOutcome)
+	require.Equal(t, "policy_review_unavailable", logs[0].DecisionSource)
+	require.Equal(t, "unavailable", logs[0].ReviewOutcome)
 	require.Equal(t, "parse_error", logs[0].ParserStatus)
 	require.Equal(t, "not_counted", logs[0].DispositionStatus)
 }
