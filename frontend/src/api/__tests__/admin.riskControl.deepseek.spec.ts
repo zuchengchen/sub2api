@@ -30,7 +30,6 @@ describe('admin risk-control DeepSeek API', () => {
   it('sends ordered channels without retired top-level reviewer fields', async () => {
     const payload = {
       deepseek_enabled: true,
-      yufeng_enabled: false,
       deepseek_channels: [
         {
           id: 'deepseek-official',
