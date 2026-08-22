@@ -45,6 +45,28 @@ func TestContentModerationDeepSeekConfigDefaultsAndLegacyFieldsAreNotExposed(t *
 	}
 }
 
+func TestContentModerationLocalReviewerIsRetiredFromPersistedConfig(t *testing.T) {
+	parsed, err := parseContentModerationConfig(`{"yufeng_enabled":true,"second_layer_endpoints":[{"id":"local","base_url":"http://127.0.0.1:8088","profile":"yufeng_xguard","enabled":true}]}`)
+	require.NoError(t, err)
+	require.False(t, parsed.YuFengEnabled)
+	require.Empty(t, parsed.SecondLayerEndpoints)
+
+	repo := &contentModerationTestSettingRepo{values: map[string]string{}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
+	enabled := true
+	endpoints := []ContentModerationEndpoint{{ID: "local", BaseURL: "http://127.0.0.1:8088", Profile: ContentModerationModelProfileYuFengXGuard, Enabled: true}}
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		YuFengEnabled: &enabled, SecondLayerEndpoints: &endpoints,
+	})
+	require.NoError(t, err)
+	require.False(t, view.YuFengEnabled)
+	require.Empty(t, view.SecondLayerEndpoints)
+	stored, err := parseContentModerationConfig(repo.values[SettingKeyContentModerationConfig])
+	require.NoError(t, err)
+	require.False(t, stored.YuFengEnabled)
+	require.Empty(t, stored.SecondLayerEndpoints)
+}
+
 func TestContentModerationRemoteUnavailableRiskTieredPolicyPersists(t *testing.T) {
 	repo := &contentModerationTestSettingRepo{values: map[string]string{}}
 	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)

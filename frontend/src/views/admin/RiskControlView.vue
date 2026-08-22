@@ -212,31 +212,6 @@
               </div>
             </article>
 
-            <article class="rounded-lg border border-gray-200 bg-white p-5 dark:border-dark-700 dark:bg-dark-800">
-              <div class="flex items-start justify-between gap-4">
-                <div class="flex min-w-0 items-start gap-3">
-                  <span
-                    class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300"
-                  >
-                    <Icon name="server" size="md" />
-                  </span>
-                  <div class="min-w-0">
-                    <h3 class="font-semibold text-gray-900 dark:text-white">YuFeng XGuard</h3>
-                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                      {{ t('admin.riskControl.yufengReviewerMeta') }}
-                    </p>
-                  </div>
-                </div>
-                <Toggle v-model="configForm.yufeng_enabled" data-test="yufeng-enabled" />
-              </div>
-              <div class="mt-4 text-xs text-gray-500 dark:text-gray-400">
-                {{
-                  configForm.yufeng_enabled
-                    ? t('admin.riskControl.localShadowEnabled')
-                    : t('admin.riskControl.localShadowDisabled')
-                }}
-              </div>
-            </article>
           </div>
         </section>
 
@@ -1381,8 +1356,6 @@ const configForm = reactive({
   remote_reviewers_enabled: true,
   remote_consensus_required: remoteConsensusRequired,
   remote_unavailable_policy: 'fail_closed' as ContentModerationRemoteUnavailablePolicy,
-  yufeng_enabled: false,
-  yufeng_mode: 'shadow',
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
   policy_version: '',
@@ -1681,8 +1654,6 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.remote_consensus_required = remoteConsensusRequired
   configForm.remote_unavailable_policy =
     config.remote_unavailable_policy === 'risk_tiered' ? 'risk_tiered' : 'fail_closed'
-  configForm.yufeng_enabled = config.yufeng_enabled ?? false
-  configForm.yufeng_mode = config.yufeng_mode || 'shadow'
   configForm.deepseek_total_timeout_ms = config.deepseek_total_timeout_ms ?? 10000
   configForm.deepseek_threshold = config.deepseek_threshold ?? 0.8
   configForm.policy_version = config.policy_version || config.keyword_policy_version || ''
@@ -1810,8 +1781,6 @@ async function saveConfig() {
       remote_reviewers_enabled: configForm.remote_reviewers_enabled,
       remote_consensus_required: remoteConsensusRequired,
       remote_unavailable_policy: configForm.remote_unavailable_policy,
-      yufeng_enabled: configForm.yufeng_enabled,
-      yufeng_mode: 'shadow',
       deepseek_total_timeout_ms: clampInteger(configForm.deepseek_total_timeout_ms, 100, 120000, 10000),
       deepseek_threshold: 0.8,
       deepseek_channels: configForm.deepseek_channels.map((channel, index) => ({
@@ -1839,7 +1808,7 @@ async function saveConfig() {
         clear_api_key: channel.clear_api_key || undefined,
       })),
       first_layer_stage: configForm.first_layer_stage,
-      second_layer_enabled: configForm.remote_reviewers_enabled || configForm.yufeng_enabled,
+      second_layer_enabled: configForm.remote_reviewers_enabled,
       second_layer_stage: configForm.second_layer_stage,
       layer1_keywords: layer1Keywords.value,
       layer2_keywords: layer2Keywords.value,

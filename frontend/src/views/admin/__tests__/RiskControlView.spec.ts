@@ -108,7 +108,6 @@ const baseConfig = (): ContentModerationConfig => ({
   remote_reviewers_enabled: true,
   remote_consensus_required: 2,
   remote_unavailable_policy: 'fail_closed',
-  yufeng_enabled: false,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
   policy_version: 'deepseek-v4-flash-audit-v3',
@@ -295,7 +294,7 @@ describe('admin RiskControlView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="deepseek-enabled"]').attributes('aria-checked')).toBe('true')
-    expect(wrapper.get('[data-test="yufeng-enabled"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.find('[data-test="yufeng-enabled"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="deepseek-threshold"]').element).toHaveProperty('value', '80%')
     expect(wrapper.text()).toContain('deepseek-v4-flash-audit-v3')
     expect(wrapper.text()).toContain('admin.riskControl.nonThinking')
@@ -339,7 +338,6 @@ describe('admin RiskControlView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    await wrapper.get('[data-test="yufeng-enabled"]').trigger('click')
     await wrapper.get('[data-test="cyber-policy-exclude-ban"]').trigger('click')
     await wrapper.get('[data-test="layer1-stage-enforce"]').trigger('click')
     const moveDown = wrapper.get(
@@ -356,7 +354,6 @@ describe('admin RiskControlView', () => {
         remote_reviewers_enabled: true,
         remote_consensus_required: 1,
         remote_unavailable_policy: 'fail_closed',
-        yufeng_enabled: true,
         cyber_policy_exclude_from_ban_count: true,
         deepseek_threshold: 0.8,
         deepseek_total_timeout_ms: 10000,

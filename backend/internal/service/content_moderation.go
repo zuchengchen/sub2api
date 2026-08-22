@@ -1186,6 +1186,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if input.CyberPolicyExcludeFromBanCount != nil {
 		cfg.CyberPolicyExcludeFromBanCount = *input.CyberPolicyExcludeFromBanCount
 	}
+	// YuFeng/local second-layer endpoints are retired. Apply the retirement
+	// after merging request fields so an old admin client cannot restore one.
+	disableContentModerationLocalReviewer(cfg)
 	if err := s.validateConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
@@ -1813,6 +1816,7 @@ func parseContentModerationConfig(raw string) (*ContentModerationConfig, error) 
 	if trimmed == "" {
 		upgradeContentModerationRemoteReviewerConfig(cfg)
 		cfg.normalize()
+		disableContentModerationLocalReviewer(cfg)
 		return cfg, nil
 	}
 	if err := json.Unmarshal([]byte(trimmed), cfg); err != nil {
@@ -1829,7 +1833,20 @@ func parseContentModerationConfig(raw string) (*ContentModerationConfig, error) 
 		cfg.Mode = ContentModerationModePreBlock
 	}
 	cfg.normalize()
+	disableContentModerationLocalReviewer(cfg)
 	return cfg, nil
+}
+
+// Local model review was retired in favor of the remote reviewer pool. Keep
+// the legacy fields readable for old clients, but never allow persisted or
+// API-provided configuration to re-enable a local endpoint.
+func disableContentModerationLocalReviewer(cfg *ContentModerationConfig) {
+	if cfg == nil {
+		return
+	}
+	cfg.YuFengEnabled = false
+	cfg.YuFengMode = ContentModerationYuFengModeShadow
+	cfg.SecondLayerEndpoints = nil
 }
 
 // upgradeContentModerationRemoteReviewerConfig moves the effective default or

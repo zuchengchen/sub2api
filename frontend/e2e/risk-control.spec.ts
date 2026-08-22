@@ -22,7 +22,6 @@ const riskConfig = {
   enabled: true,
   mode: 'pre_block',
   deepseek_enabled: true,
-  yufeng_enabled: false,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
   policy_version: 'deepseek-v4-flash-audit-v3',
@@ -206,7 +205,7 @@ test('风控中心在桌面与移动视口完整呈现', async ({ page }, testIn
   await expect(page.locator('[data-test="risk-control-view"]')).toBeVisible()
   await expect(page.locator('[data-test="risk-overview"]')).not.toContainText('admin.riskControl.')
   await expect(page.locator('[data-test="deepseek-enabled"]')).toHaveAttribute('aria-checked', 'true')
-  await expect(page.locator('[data-test="yufeng-enabled"]')).toHaveAttribute('aria-checked', 'false')
+  await expect(page.locator('[data-test="yufeng-enabled"]')).toHaveCount(0)
   await expect(page.locator('[data-test="deepseek-channel-0"]')).toContainText('DeepSeek 官方')
   await expect(page.locator('[data-test="deepseek-channel-1"]')).toContainText('熔断中')
   await expect(page.locator('[data-test="deepseek-channel-key-0"]')).toHaveAttribute('type', 'password')
