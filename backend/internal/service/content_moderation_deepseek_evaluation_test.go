@@ -51,7 +51,7 @@ func TestContentModerationDeepSeekEvaluatorReusesProductionContract(t *testing.T
 	require.Equal(t, "success", result.Attempts[0].Outcome)
 }
 
-func TestContentModerationDeepSeekEvaluatorReportsRestrictedAsBlockedNotFlagged(t *testing.T) {
+func TestContentModerationDeepSeekEvaluatorReportsSingleRestrictedAsUnconfirmedNotFlagged(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"disposition\":\"restricted\",\"confidence\":0.93,\"category\":\"restricted_security_content\",\"reason\":\"含安全测试载荷\"}"}}]}`))
@@ -70,7 +70,7 @@ func TestContentModerationDeepSeekEvaluatorReportsRestrictedAsBlockedNotFlagged(
 		Role: "user", Kind: "text",
 	})
 	require.NoError(t, err)
-	require.True(t, result.Blocked)
+	require.False(t, result.Blocked)
 	require.False(t, result.Flagged)
 	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
 	require.Equal(t, ContentModerationRestrictedCategory, result.Category)

@@ -1502,7 +1502,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 				defer cancel()
 				outcome := s.reviewUnifiedCandidateEvidenceBundle(shadowCtx, asyncCfg, namespace, work)
 				if outcome.err != nil {
-					if outcome.parserStatus == "evidence_capacity_exceeded" {
+					if contentModerationEvidenceCapacityFailure(outcome.parserStatus) {
 						_ = s.handleContextualEvidenceCapacityExceeded(
 							shadowCtx, asyncInput, asyncCfg, namespace, work.bundle, work.primary, whitelistShadow,
 							outcome.parserStatus, outcome.err, outcome.result,
@@ -1570,7 +1570,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	for index, outcome := range outcomes {
 		work := works[index]
 		if outcome.err != nil {
-			if outcome.parserStatus == "evidence_capacity_exceeded" {
+			if contentModerationEvidenceCapacityFailure(outcome.parserStatus) {
 				decision := s.handleContextualEvidenceCapacityExceeded(
 					ctx, input, cfg, namespace, work.bundle, work.primary, whitelistShadow,
 					outcome.parserStatus, outcome.err, outcome.result,
@@ -1638,7 +1638,7 @@ type contentModerationCandidateReviewOutcome struct {
 }
 
 const (
-	contentModerationSecondLayerReviewCacheVersion = 5
+	contentModerationSecondLayerReviewCacheVersion = 6
 	contentModerationAuditPersistenceTimeout       = 10 * time.Second
 )
 
@@ -1857,6 +1857,10 @@ func (s *ContentModerationService) getUnifiedCandidateReviewCacheForApply(
 	}
 	if entry.ReviewCacheVersion != contentModerationSecondLayerReviewCacheVersion ||
 		entry.DecisionSource != "model" || !contentModerationParserStatusCacheable(entry.ParserStatus) ||
+		entry.ReviewerDisagreement || entry.ConsensusStatus == "disagreement_restricted" ||
+		entry.ConsensusStatus == "consensus_unavailable" ||
+		(entry.Result == ContentModerationFragmentRestricted &&
+			(entry.ConsensusStatus != "confirmed_restricted" || entry.RemoteVotes < 2)) ||
 		(entry.Result != ContentModerationFragmentAllow && entry.Result != ContentModerationFragmentBlock &&
 			entry.Result != ContentModerationFragmentRestricted) {
 		if recordMiss {
@@ -1939,6 +1943,9 @@ func (s *ContentModerationService) putUnifiedCandidateReviewCache(
 	sourceLogID *int64,
 	dispositionApplied bool,
 ) {
+	if !contentModerationCandidateReviewResultCacheable(result) {
+		return
+	}
 	cache, ok := s.hashCache.(ContentModerationFragmentTTLCache)
 	if !ok {
 		return
@@ -1958,6 +1965,20 @@ func (s *ContentModerationService) putUnifiedCandidateReviewCache(
 	}
 	s.fragmentCacheWrites.Add(1)
 	s.secondLayerCacheWrites.Add(1)
+}
+
+func contentModerationCandidateReviewResultCacheable(result contentModerationSecondLayerResult) bool {
+	if result.ReviewerMismatch {
+		return false
+	}
+	switch strings.TrimSpace(result.ConsensusStatus) {
+	case "disagreement_restricted", "consensus_unavailable", "unavailable", "single_restricted":
+		return false
+	}
+	if result.normalizedDisposition() == ContentModerationReviewDispositionRestricted {
+		return result.ConsensusStatus == "confirmed_restricted" && result.RemoteVotes >= 2
+	}
+	return true
 }
 
 func resultFromUnifiedCandidateReviewCache(entry ContentModerationFragmentCacheEntry) contentModerationSecondLayerResult {
@@ -2050,6 +2071,18 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	bundle := work.bundle
 	primary := work.primary
 	result := outcome.result
+	if contentModerationRestrictedReviewUndetermined(result) {
+		parserStatus := "review_confirmation_unavailable"
+		reviewErr := errors.New("strategy restriction requires confirmation from a second independent reviewer")
+		if result.ReviewerMismatch || result.ConsensusStatus == "disagreement_restricted" {
+			parserStatus = "reviewer_disagreement"
+			reviewErr = errors.New("independent reviewers disagreed on the strategy restriction")
+		}
+		return s.handleContextualReviewUnavailable(
+			ctx, input, cfg, namespace, bundle, primary, whitelistShadow, false,
+			parserStatus, reviewErr, result,
+		)
+	}
 	publishCache := func(log *ContentModerationLog, persisted bool) {
 		if outcome.cacheHit || !cacheEligible || !persisted || log == nil {
 			return
@@ -2159,6 +2192,15 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	return allow
 }
 
+func contentModerationRestrictedReviewUndetermined(result contentModerationSecondLayerResult) bool {
+	switch strings.TrimSpace(result.ConsensusStatus) {
+	case "single_restricted", "disagreement_restricted", "consensus_unavailable":
+		return true
+	}
+	return result.normalizedDisposition() == ContentModerationReviewDispositionRestricted &&
+		(result.ReviewerMismatch || result.RemoteVotes < 2 || result.ConsensusStatus != "confirmed_restricted")
+}
+
 func interleaveContextualReviewCandidates(candidates []contentModerationCandidateFragment) []contentModerationCandidateFragment {
 	contextual := make([]contentModerationCandidateFragment, 0, len(candidates))
 	ordinary := make([]contentModerationCandidateFragment, 0, len(candidates))
@@ -2195,6 +2237,15 @@ func contentModerationContextualReviewFailureStatus(err error, attempted bool) s
 	}
 }
 
+func contentModerationEvidenceCapacityFailure(parserStatus string) bool {
+	switch strings.TrimSpace(parserStatus) {
+	case "evidence_truncated", "evidence_capacity_exceeded":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *ContentModerationService) handleContextualEvidenceCapacityExceeded(
 	ctx context.Context,
 	input ContentModerationCheckInput,
@@ -2212,6 +2263,7 @@ func (s *ContentModerationService) handleContextualEvidenceCapacityExceeded(
 
 	audit := unifiedModerationAudit{
 		DecisionSource:    ContentModerationActionEvidenceCapacityExceeded,
+		DispositionStatus: "not_counted",
 		CacheNamespace:    namespace,
 		EvidenceMode:      bundle.Evidence.Mode,
 		EvidenceTruncated: bundle.Evidence.Truncated,
@@ -2278,6 +2330,7 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 
 	audit := unifiedModerationAudit{
 		DecisionSource:    "review_unavailable",
+		DispositionStatus: "not_counted",
 		CacheNamespace:    namespace,
 		EvidenceMode:      bundle.Evidence.Mode,
 		EvidenceTruncated: bundle.Evidence.Truncated,
@@ -2300,6 +2353,14 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 		audit.ConsensusStatus = result.ConsensusStatus
 		audit.RemoteVotes = result.RemoteVotes
 		audit.ReviewAttempts = append([]ContentModerationReviewAttempt(nil), result.ReviewAttempts...)
+		switch {
+		case result.ReviewerMismatch || result.ConsensusStatus == "disagreement_restricted":
+			audit.DecisionSource = "review_disagreement"
+			audit.ReviewOutcome = "disagreement_restricted"
+		case result.ConsensusStatus == "single_restricted", result.ConsensusStatus == "consensus_unavailable":
+			audit.DecisionSource = "review_confirmation_unavailable"
+			audit.ReviewOutcome = "unavailable"
+		}
 	}
 	if reviewErr != nil {
 		audit.Error = trimRunes(redactContentModerationSecrets(reviewErr.Error()), maxModerationExcerptRunes)
@@ -2308,20 +2369,13 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 		audit.ModelProfile = endpoints[0].Profile
 		audit.PromptVersion = endpoints[0].PromptVersion
 	}
-	if whitelistShadow {
-		audit.DecisionSource = "review_unavailable_whitelist_shadow"
-	} else if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
-		audit.DecisionSource = "review_unavailable_shadow"
+	if bundle.PrimaryTier == contentModerationKeywordTierPolicyRestrictedReview && audit.DecisionSource == "review_unavailable" {
+		audit.DecisionSource = "policy_review_unavailable"
 	}
-	if bundle.PrimaryTier == contentModerationKeywordTierPolicyRestrictedReview &&
-		!whitelistShadow && cfg.SecondLayerStage != ContentModerationSecondLayerStageShadow {
-		audit.DecisionSource = "policy_floor_review_unavailable"
-		audit.ReviewOutcome = "policy_restricted"
-		s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
-		decision, _, _ := s.unifiedRestrictedDecisionWithAudit(
-			persistCtx, input, cfg, primary, ContentModerationRestrictedCategory, bundle.PrimaryKeyword, audit,
-		)
-		return decision
+	if whitelistShadow {
+		audit.DecisionSource += "_whitelist_shadow"
+	} else if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+		audit.DecisionSource += "_shadow"
 	}
 	if degradeEligible && !whitelistShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce {
 		audit.DecisionSource = "review_unavailable_degraded_allow"
@@ -2340,11 +2394,17 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 		return &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
 	}
 
+	message := "Risk-control review is temporarily unavailable; retry later"
+	if audit.ReviewOutcome == "disagreement_restricted" {
+		message = "Independent risk-control reviewers disagreed; retry later"
+	} else if parserStatus == "review_confirmation_unavailable" {
+		message = "Strategy restriction could not be independently confirmed; retry later"
+	}
 	return &ContentModerationDecision{
 		Allowed:        false,
 		Blocked:        false,
 		Flagged:        false,
-		Message:        "Risk-control review is temporarily unavailable; retry later",
+		Message:        message,
 		StatusCode:     http.StatusServiceUnavailable,
 		InputHash:      bundle.CacheHash,
 		MatchedKeyword: bundle.PrimaryKeyword,
@@ -2480,6 +2540,7 @@ func (s *ContentModerationService) persistUnifiedShadowAudit(ctx context.Context
 type unifiedModerationAudit struct {
 	CacheHit             bool
 	DecisionSource       string
+	DispositionStatus    string
 	SourceLogID          *int64
 	ReplayOfInputHash    string
 	CacheNamespace       string
@@ -2595,6 +2656,9 @@ func applyUnifiedModerationAudit(log *ContentModerationLog, fragment ContentMode
 	log.ReviewOutcome = audit.ReviewOutcome
 	log.ReviewerDisagreement = audit.ReviewerDisagreement
 	log.ReviewAttempts = append([]ContentModerationReviewAttempt(nil), audit.ReviewAttempts...)
+	if audit.DispositionStatus != "" {
+		log.DispositionStatus = audit.DispositionStatus
+	}
 	if len(audit.ReviewAttempts) > 0 {
 		latencyMS := 0
 		for _, attempt := range audit.ReviewAttempts {

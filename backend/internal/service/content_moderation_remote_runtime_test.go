@@ -154,7 +154,7 @@ func TestContentModerationRemotePoolReturnsFirstViolationWithoutConfirmation(t *
 	require.Equal(t, int32(0), qwenHits.Load())
 }
 
-func TestContentModerationRemotePoolReturnsFirstRestrictedWithoutConfirmation(t *testing.T) {
+func TestContentModerationRemotePoolRequiresIndependentRestrictedConfirmation(t *testing.T) {
 	var qwenHits atomic.Int32
 	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		contentModerationRemotePoolWriteResult(t, w, 0.95, ContentModerationRestrictedCategory, "restricted")
@@ -171,20 +171,93 @@ func TestContentModerationRemotePoolReturnsFirstRestrictedWithoutConfirmation(t 
 		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1),
 	)
 	cfg.DeepSeekThreshold = 0.99
+	input := contentModerationRemotePoolTestInput(t)
+	input.ChunkIndex = 1
+	input.ChunkCount = 3
 	result, attempted, err := (&ContentModerationService{}).scanContentModerationDeepSeek(
-		context.Background(), cfg, contentModerationRemotePoolTestInput(t),
+		context.Background(), cfg, input,
 	)
 	require.NoError(t, err)
 	require.True(t, attempted)
 	require.True(t, result.Blocked)
 	require.Equal(t, ContentModerationReviewDispositionRestricted, result.Disposition)
 	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
-	require.InDelta(t, 0.95, result.Confidence, 0.0001)
-	require.Equal(t, "single_restricted", result.ConsensusStatus)
+	require.InDelta(t, 0.92, result.Confidence, 0.0001)
+	require.Equal(t, "confirmed_restricted", result.ConsensusStatus)
 	require.False(t, result.ReviewerMismatch)
-	require.Len(t, result.ReviewAttempts, 1)
+	require.Equal(t, 2, result.RemoteVotes)
+	require.Len(t, result.ReviewAttempts, 2)
 	require.Equal(t, "restricted", result.ReviewAttempts[0].Verdict)
-	require.Equal(t, int32(0), qwenHits.Load())
+	require.Equal(t, "primary", result.ReviewAttempts[0].Role)
+	require.Equal(t, "confirmation", result.ReviewAttempts[1].Role)
+	for _, attempt := range result.ReviewAttempts {
+		require.Equal(t, 2, attempt.ChunkIndex)
+		require.Equal(t, 3, attempt.ChunkCount)
+	}
+	require.Equal(t, int32(1), qwenHits.Load())
+}
+
+func TestContentModerationRemotePoolReturnsRestrictedSafeDisagreementAsNonBlocking(t *testing.T) {
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResult(t, w, 0.95, ContentModerationRestrictedCategory, "restricted")
+	}))
+	defer deepSeek.Close()
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResponsesResult(t, w, 0.05, "safe", "")
+	}))
+	defer qwen.Close()
+
+	cfg := contentModerationRemotePoolTestConfig(
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0),
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1),
+	)
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationRemotePoolTestInput(t),
+	)
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.False(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionAllow, result.Disposition)
+	require.Equal(t, ContentModerationRestrictedCategory, result.Category)
+	require.True(t, result.ReviewerMismatch)
+	require.Equal(t, "disagreement_restricted", result.ConsensusStatus)
+	require.Equal(t, 2, result.RemoteVotes)
+	require.Len(t, result.ReviewAttempts, 2)
+	require.Equal(t, "restricted", result.ReviewAttempts[0].Verdict)
+	require.Equal(t, "safe", result.ReviewAttempts[1].Verdict)
+	for _, attempt := range result.ReviewAttempts {
+		require.Equal(t, 1, attempt.ChunkIndex)
+		require.Equal(t, 1, attempt.ChunkCount)
+	}
+}
+
+func TestContentModerationRemotePoolReturnsUnavailableWhenRestrictedCannotBeConfirmed(t *testing.T) {
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResult(t, w, 0.95, ContentModerationRestrictedCategory, "restricted")
+	}))
+	defer deepSeek.Close()
+	qwen := contentModerationRemotePoolTestChannel(
+		ContentModerationRemoteProviderQwen, "qwen", "https://unused.example/v1", 1,
+	)
+	qwen.APIKey = ""
+	cfg := contentModerationRemotePoolTestConfig(
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0),
+		qwen,
+	)
+
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationDeepSeek(
+		context.Background(), cfg, contentModerationRemotePoolTestInput(t),
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "second distinct remote reviewer verdict is required")
+	require.True(t, attempted)
+	require.False(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionAllow, result.Disposition)
+	require.Equal(t, "consensus_unavailable", result.ConsensusStatus)
+	require.Equal(t, 1, result.RemoteVotes)
+	require.Len(t, result.ReviewAttempts, 2)
+	require.Equal(t, "restricted", result.ReviewAttempts[0].Verdict)
+	require.Equal(t, "key_unavailable", result.ReviewAttempts[1].Error)
 }
 
 func TestContentModerationRemotePoolDoesNotRequestConfirmationForViolation(t *testing.T) {

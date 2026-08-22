@@ -165,6 +165,23 @@
                     })
                   }}
                 </span>
+                <span
+                  class="rounded-md px-2 py-1"
+                  :class="restrictionConsensusReady ? statusClasses.healthy : statusClasses.warning"
+                  data-test="restriction-consensus-gate"
+                >
+                  {{
+                    t(
+                      restrictionConsensusReady
+                        ? 'admin.riskControl.restrictionConsensusReady'
+                        : 'admin.riskControl.restrictionConsensusUnavailable',
+                      {
+                        reachable: reachableProviderCount,
+                        required: restrictedConsensusRequired,
+                      }
+                    )
+                  }}
+                </span>
               </div>
               <div class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700">
                 <p class="text-xs font-medium text-gray-600 dark:text-gray-300">
@@ -993,15 +1010,20 @@
                     <div class="text-xs text-gray-400">{{ row.keyword_tier || row.context_class || '-' }}</div>
                   </td>
                   <td class="px-4 py-3">
-                    <span class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="resultClass(row)">{{
+                    <span
+                      class="inline-flex rounded-md px-2 py-1 text-xs font-medium"
+                      :class="resultClass(row)"
+                      data-test="audit-decision-label"
+                    >{{
                       resultLabel(row)
                     }}</span>
-                    <span
-                      v-if="row.reviewer_disagreement"
-                      class="ml-1 inline-flex rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+                    <div
+                      v-if="decisionMeta(row)"
+                      class="mt-1 max-w-48 text-xs text-gray-500 dark:text-gray-400"
+                      data-test="audit-decision-meta"
                     >
-                      {{ t('admin.riskControl.reviewerDisagreement') }}
-                    </span>
+                      {{ decisionMeta(row) }}
+                    </div>
                   </td>
                   <td class="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
                     <div>{{ row.deepseek_category || row.highest_category || '-' }}</div>
@@ -1278,6 +1300,15 @@ type EditableDeepSeekChannel = DeepSeekModerationChannel & {
 }
 
 type LayerID = 'layer1' | 'layer2'
+type AuditDecisionState =
+  | 'default'
+  | 'evidence_capacity'
+  | 'evidence_truncated'
+  | 'review_disagreement'
+  | 'review_unavailable'
+  | 'restricted_confirmed'
+  | 'restricted_single_vote'
+  | 'restricted_unconfirmed'
 type OverviewIcon = 'shield' | 'cloud' | 'swap' | 'document' | 'database'
 
 interface OverviewCacheMetrics {
@@ -1303,7 +1334,8 @@ interface EvidenceTextSegment {
   matches: ContentModerationEvidenceMatch[]
 }
 
-const remoteConsensusRequired = 1
+const remotePoolMinimumProviders = 1
+const restrictedConsensusRequired = 2
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -1354,7 +1386,7 @@ const configForm = reactive({
   mode: 'pre_block' as const,
   deepseek_enabled: true,
   remote_reviewers_enabled: true,
-  remote_consensus_required: remoteConsensusRequired,
+  remote_consensus_required: remotePoolMinimumProviders,
   remote_unavailable_policy: 'fail_closed' as ContentModerationRemoteUnavailablePolicy,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
@@ -1476,13 +1508,16 @@ const reachableProviderCount = computed(
         .map((channel) => normalizeReviewerProvider(channel.provider))
     ).size
 )
+const restrictionConsensusReady = computed(
+  () => configForm.remote_reviewers_enabled && reachableProviderCount.value >= restrictedConsensusRequired
+)
 
 const secondLayerEnforceReady = computed(() => {
   if (status.value?.second_layer_enforce_ready !== undefined) {
     return status.value.second_layer_enforce_ready
   }
   if (!configForm.remote_reviewers_enabled) return false
-  return configForm.remote_reviewers_enabled && reachableProviderCount.value >= remoteConsensusRequired
+  return configForm.remote_reviewers_enabled && reachableProviderCount.value >= remotePoolMinimumProviders
 })
 
 const enforceGateText = computed(() => {
@@ -1573,6 +1608,7 @@ const selectedLogMeta = computed(() => {
       value: `${row.deepseek_category || row.highest_category || '-'} / ${confidenceText(row)}`,
     },
     { label: t('admin.riskControl.reviewOutcome'), value: resultLabel(row) },
+    { label: t('admin.riskControl.reviewConsensus'), value: decisionMeta(row) || '-' },
   ]
 })
 
@@ -1651,7 +1687,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.enabled = config.enabled ?? true
   configForm.remote_reviewers_enabled = config.remote_reviewers_enabled ?? config.deepseek_enabled ?? true
   configForm.deepseek_enabled = config.deepseek_enabled ?? configForm.remote_reviewers_enabled
-  configForm.remote_consensus_required = remoteConsensusRequired
+  configForm.remote_consensus_required = remotePoolMinimumProviders
   configForm.remote_unavailable_policy =
     config.remote_unavailable_policy === 'risk_tiered' ? 'risk_tiered' : 'fail_closed'
   configForm.deepseek_total_timeout_ms = config.deepseek_total_timeout_ms ?? 10000
@@ -1779,7 +1815,7 @@ async function saveConfig() {
       mode: 'pre_block',
       deepseek_enabled: configForm.deepseek_enabled,
       remote_reviewers_enabled: configForm.remote_reviewers_enabled,
-      remote_consensus_required: remoteConsensusRequired,
+      remote_consensus_required: remotePoolMinimumProviders,
       remote_unavailable_policy: configForm.remote_unavailable_policy,
       deepseek_total_timeout_ms: clampInteger(configForm.deepseek_total_timeout_ms, 100, 120000, 10000),
       deepseek_threshold: 0.8,
@@ -2287,32 +2323,172 @@ function channelTestResultText(result: TestDeepSeekChannelResponse): string {
   })
 }
 
-function resultLabel(row: ContentModerationLog): string {
-  if (row.action === 'restricted_block') return t('admin.riskControl.result.restricted')
-  if (row.action === 'degraded_allow') return t('admin.riskControl.result.degradedAllow')
-  if (row.action === 'evidence_capacity_exceeded' || row.review_outcome === 'evidence_capacity_exceeded') {
-    return t('admin.riskControl.result.evidenceCapacityExceeded')
+function normalizedAuditValue(value?: string): string {
+  return (value || '').trim().toLowerCase()
+}
+
+function successfulAttemptVerdict(attempt: NonNullable<ContentModerationLog['review_attempts']>[number]): string {
+  const verdict = normalizedAuditValue(attempt.verdict)
+  return verdict === 'safe' || verdict === 'restricted' || verdict === 'violation' ? verdict : ''
+}
+
+function attemptProviderID(attempt: NonNullable<ContentModerationLog['review_attempts']>[number]): string {
+  return normalizedAuditValue(attempt.provider || attempt.reviewer)
+}
+
+function restrictedVoteStats(row: ContentModerationLog) {
+  const allProviders = new Set<string>()
+  const providersByChunk = new Map<number, Set<string>>()
+
+  for (const attempt of row.review_attempts ?? []) {
+    if (successfulAttemptVerdict(attempt) !== 'restricted') continue
+    const provider = attemptProviderID(attempt)
+    if (!provider) continue
+    allProviders.add(provider)
+    if (!Number.isInteger(attempt.chunk_index)) continue
+    const chunkIndex = attempt.chunk_index as number
+    const providers = providersByChunk.get(chunkIndex) ?? new Set<string>()
+    providers.add(provider)
+    providersByChunk.set(chunkIndex, providers)
   }
+
+  const maxChunkVotes = Math.max(0, ...[...providersByChunk.values()].map((providers) => providers.size))
+  const explicitVotes = Number.isInteger(row.remote_votes) && (row.remote_votes ?? 0) >= 0 ? row.remote_votes : undefined
+  return { explicitVotes, maxChunkVotes, observedProviders: allProviders.size }
+}
+
+function hasChunkReviewDisagreement(row: ContentModerationLog): boolean {
+  const votes = (row.review_attempts ?? [])
+    .map((attempt) => ({
+      chunkIndex: attempt.chunk_index,
+      provider: attemptProviderID(attempt),
+      verdict: successfulAttemptVerdict(attempt),
+    }))
+    .filter(
+      (vote): vote is { chunkIndex: number; provider: string; verdict: string } =>
+        Number.isInteger(vote.chunkIndex) && Boolean(vote.provider) && Boolean(vote.verdict)
+    )
+
+  return votes.some((vote, index) =>
+    votes.slice(index + 1).some(
+      (candidate) =>
+        candidate.chunkIndex === vote.chunkIndex &&
+        candidate.provider !== vote.provider &&
+        ((candidate.verdict === 'safe' && vote.verdict === 'restricted') ||
+          (candidate.verdict === 'restricted' && vote.verdict === 'safe'))
+    )
+  )
+}
+
+function hasReviewDisagreement(row: ContentModerationLog): boolean {
+  const outcome = normalizedAuditValue(row.review_outcome)
+  const consensus = normalizedAuditValue(row.consensus_status)
+  return (
+    Boolean(row.reviewer_disagreement) ||
+    outcome === 'disagreement' ||
+    outcome === 'disagreement_restricted' ||
+    consensus.includes('disagreement') ||
+    consensus.includes('mismatch') ||
+    hasChunkReviewDisagreement(row)
+  )
+}
+
+function isRestrictionRecord(row: ContentModerationLog): boolean {
+  const outcome = normalizedAuditValue(row.review_outcome)
+  return row.action === 'restricted_block' || outcome === 'policy_restricted'
+}
+
+function auditDecisionState(row: ContentModerationLog): AuditDecisionState {
+  const outcome = normalizedAuditValue(row.review_outcome)
+  const consensus = normalizedAuditValue(row.consensus_status)
+
+  if (row.action === 'evidence_capacity_exceeded' || outcome === 'evidence_capacity_exceeded') {
+    return 'evidence_capacity'
+  }
+  if (hasReviewDisagreement(row)) return 'review_disagreement'
+  if (
+    row.action === 'review_unavailable' ||
+    outcome === 'unavailable' ||
+    consensus === 'unavailable' ||
+    consensus === 'consensus_unavailable' ||
+    Boolean(row.error)
+  ) {
+    return 'review_unavailable'
+  }
+  if (row.evidence_truncated) return 'evidence_truncated'
+  if (!isRestrictionRecord(row)) return 'default'
+
+  const votes = restrictedVoteStats(row)
+  const confirmationVotes = votes.explicitVotes ?? votes.maxChunkVotes
+  const explicitlyConfirmed = consensus === 'confirmed_restricted'
+  const confirmationStatusAllows = explicitlyConfirmed || (!consensus && outcome === 'policy_restricted')
+  if (confirmationVotes >= restrictedConsensusRequired && confirmationStatusAllows) {
+    return 'restricted_confirmed'
+  }
+  if (
+    consensus === 'single_restricted' ||
+    votes.explicitVotes === 1 ||
+    (votes.explicitVotes === undefined && votes.observedProviders === 1)
+  ) {
+    return 'restricted_single_vote'
+  }
+  return 'restricted_unconfirmed'
+}
+
+function resultLabel(row: ContentModerationLog): string {
+  switch (auditDecisionState(row)) {
+    case 'evidence_capacity':
+      return t('admin.riskControl.result.evidenceCapacityUndetermined')
+    case 'evidence_truncated':
+      return t('admin.riskControl.result.evidenceTruncatedUndetermined')
+    case 'review_disagreement':
+      return t('admin.riskControl.result.disagreementUndetermined')
+    case 'review_unavailable':
+      return t('admin.riskControl.result.unavailableUndetermined')
+    case 'restricted_confirmed':
+      return t('admin.riskControl.result.restrictedConfirmed')
+    case 'restricted_single_vote':
+      return t('admin.riskControl.result.singleVoteUndetermined')
+    case 'restricted_unconfirmed':
+      return t('admin.riskControl.result.restrictedUnconfirmed')
+  }
+  if (row.action === 'degraded_allow') return t('admin.riskControl.result.degradedAllow')
   if (row.review_outcome === 'safe') return t('admin.riskControl.result.pass')
-  if (row.review_outcome === 'risky' || row.review_outcome === 'policy_restricted') {
+  if (row.review_outcome === 'risky' || row.review_outcome === 'confirmed_violation') {
     return t('admin.riskControl.result.blocked')
   }
-  if (row.review_outcome === 'unavailable') return t('admin.riskControl.result.unavailable')
-  if (row.review_outcome === 'disagreement') return t('admin.riskControl.reviewerDisagreement')
-  if (row.action === 'review_unavailable' || row.error) return t('admin.riskControl.result.unavailable')
   if (row.action?.includes('shadow')) return t('admin.riskControl.result.shadow')
   if (row.action?.includes('block') || row.flagged) return t('admin.riskControl.result.blocked')
   return t('admin.riskControl.result.pass')
 }
 
 function resultClass(row: ContentModerationLog): string {
-  if (row.action === 'restricted_block') return statusClasses.warning
+  if (auditDecisionState(row) !== 'default') return statusClasses.warning
   if (row.action === 'degraded_allow') return statusClasses.warning
-  if (row.action === 'evidence_capacity_exceeded') return statusClasses.warning
-  if (row.action === 'review_unavailable' || row.error) return statusClasses.warning
   if (row.action?.includes('shadow')) return statusClasses.warning
   if (row.action?.includes('block') || row.flagged) return statusClasses.danger
   return statusClasses.healthy
+}
+
+function decisionMeta(row: ContentModerationLog): string {
+  const state = auditDecisionState(row)
+  if (state === 'restricted_confirmed') {
+    const votes = restrictedVoteStats(row)
+    return t('admin.riskControl.confirmedVoteCount', {
+      count: votes.explicitVotes ?? votes.maxChunkVotes,
+    })
+  }
+  if (state === 'restricted_single_vote') return t('admin.riskControl.singleVoteDetail')
+  if (state === 'restricted_unconfirmed') return t('admin.riskControl.consensusUnknownDetail')
+  if (
+    state === 'evidence_capacity' ||
+    state === 'evidence_truncated' ||
+    state === 'review_disagreement' ||
+    state === 'review_unavailable'
+  ) {
+    return t('admin.riskControl.undeterminedNonViolation')
+  }
+  return ''
 }
 
 function contextLabel(value: string): string {

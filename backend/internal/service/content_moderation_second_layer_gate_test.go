@@ -410,11 +410,121 @@ func TestContentModerationSecondLayerPrefilterUsesAssetKeywords(t *testing.T) {
 		{text: "deepfake porn request", keyword: "deepfake porn"},
 		{text: "talking about self-harm prevention", keyword: "self harm"},
 		{text: "explicit sexual content", keyword: "explicit sexual content"},
+		{text: "solve CAPTCHAs", keyword: "solve captcha"},
+		{text: "buffer overflow exploits", keyword: "exploit"},
+		{text: "RCE payloads", keyword: "rce payload"},
 	} {
 		keyword, ok := matcher.Match(test.text)
 		require.True(t, ok, test.text)
 		require.Equal(t, test.keyword, keyword, test.text)
 	}
+}
+
+func TestContentModerationSecondLayerPrefilterRejectsEmbeddedASCIIKeywords(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    string
+		keyword string
+	}{
+		{name: "cve in geometry identifier", text: "const genericVertices = vertexLines(neutralText)", keyword: "cve"},
+		{name: "cve in another geometry identifier", text: "const identityVertices = vertexLines(sourceText)", keyword: "cve"},
+		{name: "ssti in title identifier", text: "const processTitle = quote.title", keyword: "ssti"},
+		{name: "sqli in SQLite", text: "open the SQLite database read-only", keyword: "sqli"},
+		{name: "sqli in sqlite3", text: "sqlite3 content.db .schema", keyword: "sqli"},
+		{name: "2fa in hexadecimal identifier", text: "request_id=7b9a52fa", keyword: "2fa"},
+		{name: "rce payload across identifier boundary", text: "SharedResource(payload)", keyword: "rce payload"},
+		{name: "phrase prefix is not an inflection", text: "opposite model behavior", keyword: "opposite mode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := newContentModerationPrefilterMatcher([]string{tt.keyword})
+			matched, hit := matcher.Match(tt.text)
+			require.False(t, hit)
+			require.Empty(t, matched)
+			require.Empty(t, matcher.MatchAll(tt.text))
+		})
+	}
+}
+
+func TestContentModerationSecondLayerPrefilterAllowsOnlyControlledFinalTokenSuffixes(t *testing.T) {
+	matcher := newContentModerationPrefilterMatcher([]string{
+		"solve captcha", "bypass content filter", "reverse engineer", "opposite mode",
+	})
+	for _, tt := range []struct {
+		text        string
+		wantKeyword string
+	}{
+		{text: "solve CAPTCHAs", wantKeyword: "solve captcha"},
+		{text: "bypass content filters", wantKeyword: "bypass content filter"},
+		{text: "bypass content filteres", wantKeyword: "bypass content filter"},
+		{text: "bypass content filtered", wantKeyword: "bypass content filter"},
+		{text: "bypass content filtering", wantKeyword: "bypass content filter"},
+		{text: "reverse engineers", wantKeyword: "reverse engineer"},
+		{text: "reverse engineered", wantKeyword: "reverse engineer"},
+		{text: "reverse engineering", wantKeyword: "reverse engineer"},
+		{text: "opposite modes", wantKeyword: "opposite mode"},
+	} {
+		keyword, hit := matcher.Match(tt.text)
+		require.True(t, hit, tt.text)
+		require.Equal(t, tt.wantKeyword, keyword, tt.text)
+	}
+
+	for _, text := range []string{
+		"solve CAPTCHAful", "bypass content filterable", "reverse engineerly", "opposite model behavior",
+	} {
+		keyword, hit := matcher.Match(text)
+		require.False(t, hit, text)
+		require.Empty(t, keyword, text)
+	}
+
+	text := "please bypass content filtering now"
+	matches := matcher.MatchAll(text)
+	require.Len(t, matches, 1)
+	require.Equal(t, "bypass content filter", matches[0].Keyword)
+	require.Equal(t, "bypass content filtering", string([]rune(text)[matches[0].Start:matches[0].End]))
+
+	filtered := matcher.MatchAllExcluding(text, []string{"content filtering"})
+	require.Empty(t, filtered, "an overlapping allowlist inflection must suppress the canonical candidate")
+}
+
+func TestContentModerationSecondLayerPrefilterKeepsLexicalAndChineseMatches(t *testing.T) {
+	matcher := newContentModerationPrefilterMatcher([]string{
+		"cve", "ssti", "sqli", "2fa", "rce payload", "bypass content filter", "bypass content filtering", "漏洞利用",
+	})
+	tests := []struct {
+		name        string
+		text        string
+		wantKeyword string
+	}{
+		{name: "cve punctuation", text: "Patch CVE-2026-1234 now", wantKeyword: "cve"},
+		{name: "ssti lexical", text: "test this SSTI payload", wantKeyword: "ssti"},
+		{name: "sqli lexical", text: "detect SQLi before release", wantKeyword: "sqli"},
+		{name: "2fa lexical", text: "do not bypass 2FA", wantKeyword: "2fa"},
+		{name: "multiword lexical", text: "an RCE---payload was detected", wantKeyword: "rce payload"},
+		{name: "explicit inflection", text: "bypass content filtering", wantKeyword: "bypass content filtering"},
+		{name: "Chinese remains substring based", text: "这是漏洞利用链的防御分析", wantKeyword: "漏洞利用"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyword, hit := matcher.Match(tt.text)
+			require.True(t, hit)
+			require.Equal(t, tt.wantKeyword, keyword)
+			require.NotEmpty(t, matcher.MatchAll(tt.text))
+		})
+	}
+}
+
+func TestContentModerationSecondLayerPrefilterMatchAllSkipsEmbeddedProductionSamples(t *testing.T) {
+	text := "genericVertices processTitle SQLite 7b9a52fa SharedResource(payload); detected CVE-2026-1234 and an RCE payload"
+	matcher := newContentModerationPrefilterMatcher([]string{"cve", "ssti", "sqli", "2fa", "rce payload"})
+
+	matches := matcher.MatchAll(text)
+	require.Len(t, matches, 2)
+	require.Equal(t, []string{"cve", "rce payload"}, []string{matches[0].Keyword, matches[1].Keyword})
+	require.Equal(t, "CVE", string([]rune(text)[matches[0].Start:matches[0].End]))
+	require.Equal(t, "RCE payload", string([]rune(text)[matches[1].Start:matches[1].End]))
 }
 
 func TestContentModerationFragmentCacheNamespaceTracksPrefilterPolicy(t *testing.T) {
@@ -432,6 +542,7 @@ func TestContentModerationFragmentCacheNamespaceTracksPrefilterPolicy(t *testing
 	require.NotEqual(t, previousKeywordContext, builtInPolicy)
 	require.NotEqual(t, previousKeywordMatcher, builtInPolicy)
 	require.NotEqual(t, builtInPolicy, withCustomPolicy)
+	require.NotEqual(t, "layer2-candidate-keywords-v3-offsets", contentModerationSecondLayerPrefilterCacheRevision(cfg))
 	require.Equal(t, contentModerationSecondLayerPrefilterPolicyVersion, contentModerationSecondLayerPrefilterCacheRevision(cfg))
 }
 

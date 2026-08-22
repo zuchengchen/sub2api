@@ -17,6 +17,7 @@ func TestContentModerationRejectedTurnBlocksConversationDescendants(t *testing.T
 		name               string
 		userID             int64
 		firstVerdict       string
+		confirmation       bool
 		wantAction         string
 		wantFlagged        bool
 		wantDispositionCnt int
@@ -29,6 +30,7 @@ func TestContentModerationRejectedTurnBlocksConversationDescendants(t *testing.T
 		{
 			name: "restricted", userID: 902,
 			firstVerdict: `{"disposition":"restricted","confidence":0.95,"category":"restricted_security_content","reason":"actionable security payload"}`,
+			confirmation: true,
 			wantAction:   ContentModerationActionRestrictedBlock, wantFlagged: false, wantDispositionCnt: 0,
 		},
 	}
@@ -51,6 +53,19 @@ func TestContentModerationRejectedTurnBlocksConversationDescendants(t *testing.T
 			defer server.Close()
 
 			cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
+			var confirmation *httptest.Server
+			if tc.confirmation {
+				confirmation = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					contentModerationRemotePoolWriteResponsesResult(
+						t, w, 0.94, ContentModerationRestrictedCategory, "actionable security payload",
+					)
+				}))
+				defer confirmation.Close()
+				cfg.DeepSeekChannels = append(cfg.DeepSeekChannels,
+					contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "lineage-confirmation", confirmation.URL+"/v1", 1),
+				)
+				cfg.normalize()
+			}
 			cfg.AutoBanEnabled = true
 			cfg.BanThreshold = 100
 			cache := &contentModerationReplayCache{}
