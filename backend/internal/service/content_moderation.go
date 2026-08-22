@@ -872,6 +872,9 @@ type ContentModerationService struct {
 	backgroundStopOnce            sync.Once
 	backgroundCancel              context.CancelFunc
 	backgroundDone                sync.WaitGroup
+	remoteReadinessProbeCursor    atomic.Uint64
+	remoteReadinessRetryInitial   time.Duration
+	remoteReadinessRetryInterval  time.Duration
 	startupAPIUsabilityTested     atomic.Bool
 	startupAPIUsabilityAt         atomic.Int64
 	startupAPIUsabilityConfigured atomic.Int64
@@ -921,14 +924,16 @@ func NewContentModerationService(
 	emailService *EmailService,
 ) *ContentModerationService {
 	svc := &ContentModerationService{
-		settingRepo:          settingRepo,
-		repo:                 repo,
-		hashCache:            hashCache,
-		groupRepo:            groupRepo,
-		userRepo:             userRepo,
-		authCacheInvalidator: authCacheInvalidator,
-		emailService:         emailService,
-		pendingBodyBudget:    NewContentModerationPendingBodyBudget(),
+		settingRepo:                  settingRepo,
+		repo:                         repo,
+		hashCache:                    hashCache,
+		groupRepo:                    groupRepo,
+		userRepo:                     userRepo,
+		authCacheInvalidator:         authCacheInvalidator,
+		emailService:                 emailService,
+		pendingBodyBudget:            NewContentModerationPendingBodyBudget(),
+		remoteReadinessRetryInitial:  contentModerationRemoteReadinessRetryInitialDelay,
+		remoteReadinessRetryInterval: contentModerationRemoteReadinessRetryInterval,
 	}
 	svc.pendingBodyBudgetBytes.Store(DefaultContentModerationPendingBodyBudgetBytes)
 	if dispositionRepo, ok := repo.(ContentModerationDispositionRepository); ok {
@@ -942,9 +947,11 @@ func NewContentModerationService(
 
 // Start launches the non-blocking moderation health workers. The startup
 // worker performs one real review request per configured remote provider; the
-// heartbeat worker only performs cheap HTTP transport checks once per minute.
-// Keeping both workers outside the constructor avoids delaying application
-// startup and keeps unit-test constructors side-effect free.
+// readiness worker makes bounded, serialized recovery probes only while the
+// Enforce gate is not ready; the heartbeat worker only performs cheap HTTP
+// transport checks once per minute. Keeping these workers outside the
+// constructor avoids delaying application startup and keeps unit-test
+// constructors side-effect free.
 func (s *ContentModerationService) Start() {
 	if s == nil || s.settingRepo == nil {
 		return
@@ -952,10 +959,14 @@ func (s *ContentModerationService) Start() {
 	s.backgroundStartOnce.Do(func() {
 		workerCtx, cancel := context.WithCancel(context.Background())
 		s.backgroundCancel = cancel
-		s.backgroundDone.Add(2)
+		s.backgroundDone.Add(3)
 		go func() {
 			defer s.backgroundDone.Done()
 			s.runStartupAPIUsabilityTests(workerCtx)
+		}()
+		go func() {
+			defer s.backgroundDone.Done()
+			s.remoteReadinessRecoveryWorker(workerCtx)
 		}()
 		go func() {
 			defer s.backgroundDone.Done()

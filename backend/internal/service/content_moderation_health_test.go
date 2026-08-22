@@ -233,6 +233,114 @@ func TestContentModerationStartRunsAPIUsabilityOnce(t *testing.T) {
 	require.NotNil(t, status.StartupAPIUsabilityCheckedAt)
 }
 
+func TestContentModerationReadinessRecoveryRetriesOneChannelAndStopsWhenReady(t *testing.T) {
+	var postCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		require.Equal(t, http.MethodPost, r.Method)
+		if postCalls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
+		)
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "recovery-keyring.json")
+	writeModerationArchiveTestKeyRing(t, path, "k1", map[string][]byte{
+		"k1": []byte("0123456789abcdef0123456789abcdef"),
+	})
+	cipher := NewContentModerationCredentialCipher(NewContentModerationArchiveKeyRingFile(path))
+	channel := contentModerationDeepSeekRuntimeTestChannel("readiness-recovery", server.URL, 0)
+	envelope, err := cipher.EncryptDeepSeekAPIKey(channel.ID, channel.APIKey)
+	require.NoError(t, err)
+	channel.APIKey = ""
+	channel.APIKeyEnvelope = envelope
+	raw, err := json.Marshal(contentModerationHealthTestConfig(channel))
+	require.NoError(t, err)
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(raw),
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
+	svc.setContentModerationCredentialCipherForTest(cipher)
+
+	svc.runRemoteReadinessRecovery(context.Background())
+	require.Equal(t, int32(1), postCalls.Load())
+	loaded, err := svc.loadConfig(context.Background())
+	require.NoError(t, err)
+	ready, reason := svc.contentModerationSecondLayerEnforceReadiness(loaded, time.Now())
+	require.False(t, ready)
+	require.NotEmpty(t, reason)
+
+	svc.runRemoteReadinessRecovery(context.Background())
+	require.Equal(t, int32(2), postCalls.Load())
+	loaded, err = svc.loadConfig(context.Background())
+	require.NoError(t, err)
+	ready, reason = svc.contentModerationSecondLayerEnforceReadiness(loaded, time.Now())
+	require.True(t, ready, reason)
+
+	svc.runRemoteReadinessRecovery(context.Background())
+	require.Equal(t, int32(2), postCalls.Load(), "ready pools must not receive periodic paid probes")
+}
+
+func TestContentModerationStartAutomaticallyRecoversReadiness(t *testing.T) {
+	var postCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		require.Equal(t, http.MethodPost, r.Method)
+		if postCalls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w, `{"disposition":"allow","confidence":0.05,"category":"safe","reason":""}`, "stop",
+		)
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "recovery-worker-keyring.json")
+	writeModerationArchiveTestKeyRing(t, path, "k1", map[string][]byte{
+		"k1": []byte("0123456789abcdef0123456789abcdef"),
+	})
+	cipher := NewContentModerationCredentialCipher(NewContentModerationArchiveKeyRingFile(path))
+	channel := contentModerationDeepSeekRuntimeTestChannel("recovery-worker", server.URL, 0)
+	envelope, err := cipher.EncryptDeepSeekAPIKey(channel.ID, channel.APIKey)
+	require.NoError(t, err)
+	channel.APIKey = ""
+	channel.APIKeyEnvelope = envelope
+	raw, err := json.Marshal(contentModerationHealthTestConfig(channel))
+	require.NoError(t, err)
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(raw),
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
+	svc.setContentModerationCredentialCipherForTest(cipher)
+	svc.remoteReadinessRetryInitial = 10 * time.Millisecond
+	svc.remoteReadinessRetryInterval = 10 * time.Millisecond
+	t.Cleanup(svc.CloseContentModerationRuntime)
+
+	svc.Start()
+	require.Eventually(t, func() bool {
+		loaded, err := svc.loadConfig(context.Background())
+		if err != nil {
+			return false
+		}
+		ready, _ := svc.contentModerationSecondLayerEnforceReadiness(loaded, time.Now())
+		return ready
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(2), postCalls.Load())
+	time.Sleep(30 * time.Millisecond)
+	require.Equal(t, int32(2), postCalls.Load(), "automatic recovery must stop paid probes once ready")
+}
+
 func TestContentModerationStartupAPIUsabilityTestsProvidersConcurrently(t *testing.T) {
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
