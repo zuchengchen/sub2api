@@ -628,8 +628,7 @@ func (s *ContentModerationService) scanContentModerationRemotePoolHedged(
 		}
 		return result, true, nil
 	}
-	var finishRestrictedUnavailable func(*contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error)
-	finishRestrictedUnavailable = func(primary *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
+	finishRestrictedUnavailable := func(primary *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
 		cancelAndDrain()
 		if violation := completedViolation(); violation != nil {
 			return finishSingleAfterDrain(violation)
@@ -667,8 +666,7 @@ func (s *ContentModerationService) scanContentModerationRemotePoolHedged(
 		}
 		return restricted
 	}
-	var confirmRestricted func(*contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error)
-	confirmRestricted = func(primary *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
+	confirmRestricted := func(primary *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
 		disableTimer()
 		for {
 			var safeConfirmation *contentModerationRemoteProviderOutcome
