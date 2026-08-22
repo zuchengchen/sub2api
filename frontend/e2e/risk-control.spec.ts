@@ -22,6 +22,7 @@ const riskConfig = {
   enabled: true,
   mode: 'pre_block',
   deepseek_enabled: true,
+  remote_reviewers_enabled: true,
   deepseek_total_timeout_ms: 10000,
   deepseek_threshold: 0.8,
   policy_version: 'deepseek-v4-flash-audit-v3',
@@ -29,6 +30,7 @@ const riskConfig = {
     {
       id: 'deepseek-official',
       name: 'DeepSeek 官方',
+      provider: 'deepseek',
       base_url: 'https://api.deepseek.com',
       model: 'deepseek-v4-flash',
       enabled: true,
@@ -44,6 +46,7 @@ const riskConfig = {
     {
       id: 'deepseek-backup',
       name: '备用渠道',
+      provider: 'alibaba_qwen',
       base_url: 'https://backup.example.test/v1',
       model: 'deepseek-v4-flash',
       enabled: true,
@@ -213,6 +216,7 @@ test('风控中心在桌面与移动视口完整呈现', async ({ page }, testIn
   await expect(page.locator('[data-test="deepseek-channel-key-0"]')).toHaveValue('')
   await expect(page.locator('[data-test="deepseek-channel-heartbeat-status-0"]')).toContainText('网络可达')
   await expect(page.locator('[data-test="test-api-availability-0"]')).toContainText('测试 API 可用性')
+  await expect(page.locator('[data-test="restriction-consensus-gate"]')).toContainText('策略阻断确认需要 2 家独立供应商')
   await expect(page.locator('[data-test="layer1-stage-shadow"]')).toBeVisible()
   await expect(page.locator('[data-test="layer2-stage-shadow"]')).toBeVisible()
   await expect(page.locator('[data-test="layer2-stage-enforce"]')).toBeEnabled()

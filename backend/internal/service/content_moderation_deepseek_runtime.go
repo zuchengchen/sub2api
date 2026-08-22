@@ -48,6 +48,8 @@ type ContentModerationReviewAttempt struct {
 	ChannelID   string  `json:"channel_id"`
 	ChannelName string  `json:"channel_name,omitempty"`
 	Model       string  `json:"model,omitempty"`
+	ChunkIndex  int     `json:"chunk_index,omitempty"`
+	ChunkCount  int     `json:"chunk_count,omitempty"`
 	Outcome     string  `json:"outcome"`
 	Verdict     string  `json:"verdict,omitempty"`
 	Role        string  `json:"role,omitempty"`
@@ -55,6 +57,19 @@ type ContentModerationReviewAttempt struct {
 	LatencyMS   int     `json:"latency_ms"`
 	HTTPStatus  int     `json:"http_status,omitempty"`
 	Error       string  `json:"error,omitempty"`
+}
+
+func stampContentModerationReviewAttemptChunk(attempt *ContentModerationReviewAttempt, input contentModerationSecondLayerInput) {
+	if attempt == nil {
+		return
+	}
+	attempt.ChunkIndex = 1
+	attempt.ChunkCount = 1
+	if input.ChunkCount <= 0 {
+		return
+	}
+	attempt.ChunkIndex = input.ChunkIndex + 1
+	attempt.ChunkCount = input.ChunkCount
 }
 
 type contentModerationDeepSeekChannelState struct {
@@ -501,6 +516,7 @@ func (s *ContentModerationService) callContentModerationDeepSeekChannel(
 	bypassBreaker bool,
 ) (contentModerationSecondLayerResult, ContentModerationReviewAttempt, error) {
 	attempt := ContentModerationReviewAttempt{Reviewer: "deepseek", Provider: ContentModerationRemoteProviderDeepSeek, ChannelID: channel.ID, ChannelName: channel.Name, Model: channel.Model}
+	stampContentModerationReviewAttemptChunk(&attempt, input)
 	state := s.deepSeekChannelState(channel)
 	configDigest := contentModerationDeepSeekChannelDigest(channel)
 	if allowed, reason := state.begin(time.Now(), bypassBreaker); !allowed {

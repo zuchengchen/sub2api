@@ -23,13 +23,15 @@ const (
 	contentModerationRemoteHedgeDrain     = 100 * time.Millisecond
 )
 
+var errContentModerationRestrictedConfirmationUnavailable = errors.New("a second distinct remote reviewer verdict is required for policy restriction")
+
 func normalizeContentModerationRemoteResult(result contentModerationSecondLayerResult, threshold float64) contentModerationSecondLayerResult {
 	disposition := result.normalizedDisposition()
 	if disposition == ContentModerationReviewDispositionViolation && result.Confidence < threshold {
 		// A configured threshold can be stricter than the prompt default. A
-		// below-threshold violation is safe. Restricted content remains blocked
-		// independently because it is an enforcement decision, not an abuse
-		// confidence threshold.
+		// below-threshold violation is safe. A restricted verdict remains outside
+		// the abuse-confidence threshold and is enforced only after independent
+		// provider confirmation.
 		result.setDisposition(ContentModerationReviewDispositionAllow)
 		result.Category = "safe"
 		result.Reason = ""
@@ -48,9 +50,12 @@ func contentModerationConsensusDisposition(primary, confirmation contentModerati
 	if first == ContentModerationReviewDispositionRestricted && second == ContentModerationReviewDispositionRestricted {
 		return ContentModerationReviewDispositionRestricted
 	}
-	// Any disagreement involving a blocked verdict remains blocked, but is
-	// deliberately non-violating until an independent reviewer confirms both
-	// votes as violation.
+	if (first == ContentModerationReviewDispositionRestricted && second == ContentModerationReviewDispositionAllow) ||
+		(first == ContentModerationReviewDispositionAllow && second == ContentModerationReviewDispositionRestricted) {
+		return ContentModerationReviewDispositionAllow
+	}
+	// Disagreement involving a formal violation remains conservatively blocked
+	// but non-violating until another reviewer confirms the violation.
 	if first != ContentModerationReviewDispositionAllow || second != ContentModerationReviewDispositionAllow {
 		return ContentModerationReviewDispositionRestricted
 	}
@@ -227,6 +232,7 @@ func (s *ContentModerationService) callContentModerationRemoteChannel(
 	attempt := ContentModerationReviewAttempt{
 		Reviewer: provider, Provider: provider, ChannelID: channel.ID, ChannelName: channel.Name, Model: channel.Model,
 	}
+	stampContentModerationReviewAttemptChunk(&attempt, input)
 	state := s.deepSeekChannelState(channel)
 	configDigest := contentModerationDeepSeekChannelDigest(channel)
 	if allowed, reason := state.begin(time.Now(), bypassBreaker); !allowed {
@@ -370,10 +376,12 @@ func (s *ContentModerationService) reviewContentModerationRemoteProvider(
 	attempted := false
 	for _, channel := range group.channels {
 		if strings.TrimSpace(channel.APIKey) == "" {
-			attempts = append(attempts, ContentModerationReviewAttempt{
+			attempt := ContentModerationReviewAttempt{
 				Reviewer: group.provider, Provider: group.provider, ChannelID: channel.ID,
 				ChannelName: channel.Name, Model: channel.Model, Outcome: "skipped", Error: "key_unavailable",
-			})
+			}
+			stampContentModerationReviewAttemptChunk(&attempt, input)
+			attempts = append(attempts, attempt)
 			failures = append(failures, fmt.Errorf("remote reviewer %s API key is unavailable", channel.ID))
 			continue
 		}
@@ -516,61 +524,28 @@ func (s *ContentModerationService) scanContentModerationRemotePoolHedged(
 		outcomes[outcome.index] = &outcomeCopy
 		return outcomes[outcome.index]
 	}
-	preferBlocked := func(current, candidate *contentModerationRemoteProviderOutcome) bool {
-		if candidate == nil || candidate.err != nil || !candidate.result.Blocked {
-			return false
+	var failures []error
+	attempted := false
+	collectAttempts := func() []ContentModerationReviewAttempt {
+		allAttempts := make([]ContentModerationReviewAttempt, 0, len(groups)*2)
+		for _, completed := range outcomes {
+			if completed != nil {
+				allAttempts = append(allAttempts, completed.attempts...)
+			}
 		}
-		if current == nil || current.err != nil || !current.result.Blocked {
-			return true
-		}
-		return candidate.result.normalizedDisposition() == ContentModerationReviewDispositionViolation &&
-			current.result.normalizedDisposition() != ContentModerationReviewDispositionViolation
+		return allAttempts
 	}
-	bestBlocked := func() *contentModerationRemoteProviderOutcome {
-		var selected *contentModerationRemoteProviderOutcome
-		for _, outcome := range outcomes {
-			if preferBlocked(selected, outcome) {
-				selected = outcome
-			}
-		}
-		return selected
-	}
-	finalize := func(winner *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
-		selected := winner
-		if !winner.result.Blocked && active > 0 && ctx.Err() == nil {
-			graceTimer := time.NewTimer(contentModerationRemoteRiskGrace)
-		graceLoop:
-			for active > 0 {
-				select {
-				case outcome := <-results:
-					active--
-					completed := recordOutcome(outcome)
-					if preferBlocked(selected, completed) {
-						selected = completed
-						break graceLoop
-					}
-				case <-graceTimer.C:
-					break graceLoop
-				case <-ctx.Done():
-					break graceLoop
-				}
-			}
-			if !graceTimer.Stop() {
-				select {
-				case <-graceTimer.C:
-				default:
-				}
-			}
-		}
+	cancelAndDrain := func() {
 		cancel()
 		cancelDrainTimer := time.NewTimer(contentModerationRemoteHedgeDrain)
 		for active > 0 {
 			select {
 			case outcome := <-results:
 				active--
-				completed := recordOutcome(outcome)
-				if preferBlocked(selected, completed) {
-					selected = completed
+				recordOutcome(outcome)
+				attempted = attempted || outcome.attempted
+				if outcome.err != nil {
+					failures = append(failures, outcome.err)
 				}
 			case <-cancelDrainTimer.C:
 				active = 0
@@ -582,22 +557,15 @@ func (s *ContentModerationService) scanContentModerationRemotePoolHedged(
 			default:
 			}
 		}
-		winner = selected
+	}
+	finishSingleAfterDrain := func(winner *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
 		markContentModerationSuccessfulAttempt(winner.attempts, "primary")
-		allAttempts := make([]ContentModerationReviewAttempt, 0, len(groups)*2)
-		for _, completed := range outcomes {
-			if completed != nil {
-				allAttempts = append(allAttempts, completed.attempts...)
-			}
-		}
 		result := winner.result
-		result.ReviewAttempts = allAttempts
+		result.ReviewAttempts = collectAttempts()
 		result.RemoteVotes = 1
 		switch result.normalizedDisposition() {
 		case ContentModerationReviewDispositionViolation:
 			result.ConsensusStatus = "single_violation"
-		case ContentModerationReviewDispositionRestricted:
-			result.ConsensusStatus = "single_restricted"
 		default:
 			result.ConsensusStatus = "primary_safe"
 		}
@@ -606,6 +574,209 @@ func (s *ContentModerationService) scanContentModerationRemotePoolHedged(
 			s.deepSeekFailoverCount.Add(1)
 		}
 		return result, true, nil
+	}
+	finishSingle := func(winner *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
+		cancelAndDrain()
+		return finishSingleAfterDrain(winner)
+	}
+	completedViolation := func() *contentModerationRemoteProviderOutcome {
+		for _, completed := range outcomes {
+			if completed != nil && completed.err == nil &&
+				completed.result.normalizedDisposition() == ContentModerationReviewDispositionViolation {
+				return completed
+			}
+		}
+		return nil
+	}
+	finishRestrictedPair := func(
+		primary *contentModerationRemoteProviderOutcome,
+		confirmation *contentModerationRemoteProviderOutcome,
+	) (contentModerationSecondLayerResult, bool, error) {
+		cancelAndDrain()
+		if violation := completedViolation(); violation != nil {
+			return finishSingleAfterDrain(violation)
+		}
+		markContentModerationSuccessfulAttempt(primary.attempts, "primary")
+		markContentModerationSuccessfulAttempt(confirmation.attempts, "confirmation")
+		primaryDisposition := primary.result.normalizedDisposition()
+		confirmationDisposition := confirmation.result.normalizedDisposition()
+		result := primary.result
+		if primaryDisposition == ContentModerationReviewDispositionRestricted &&
+			confirmationDisposition == ContentModerationReviewDispositionRestricted {
+			if confirmation.result.Confidence < result.Confidence {
+				result.Confidence = confirmation.result.Confidence
+			}
+			result.setDisposition(ContentModerationReviewDispositionRestricted)
+			result.ConsensusStatus = "confirmed_restricted"
+		} else {
+			// Both outcomes were produced for this exact prepared input by
+			// distinct provider groups. Preserve the risk explanation for audit,
+			// but do not enforce a disputed policy restriction.
+			if confirmationDisposition == ContentModerationReviewDispositionRestricted {
+				result = confirmation.result
+			}
+			result.setDisposition(ContentModerationReviewDispositionAllow)
+			result.ReviewerMismatch = true
+			result.ConsensusStatus = "disagreement_restricted"
+		}
+		result.Profile = "remote_consensus:" + groups[primary.index].provider + "+" + groups[confirmation.index].provider
+		result.ReviewAttempts = collectAttempts()
+		result.RemoteVotes = 2
+		s.deepSeekSelectedCount.Add(1)
+		if primary.index > 0 {
+			s.deepSeekFailoverCount.Add(1)
+		}
+		return result, true, nil
+	}
+	var finishRestrictedUnavailable func(*contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error)
+	finishRestrictedUnavailable = func(primary *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
+		cancelAndDrain()
+		if violation := completedViolation(); violation != nil {
+			return finishSingleAfterDrain(violation)
+		}
+		for _, completed := range outcomes {
+			if completed != nil && completed.index != primary.index && completed.err == nil {
+				return finishRestrictedPair(primary, completed)
+			}
+		}
+		markContentModerationSuccessfulAttempt(primary.attempts, "primary")
+		result := primary.result
+		result.setDisposition(ContentModerationReviewDispositionAllow)
+		result.ConsensusStatus = "consensus_unavailable"
+		result.ReviewAttempts = collectAttempts()
+		result.RemoteVotes = 1
+		s.deepSeekUnavailableCount.Add(1)
+		consensusFailures := append([]error(nil), failures...)
+		consensusFailures = append(consensusFailures, errContentModerationRestrictedConfirmationUnavailable)
+		return result, true, errors.Join(consensusFailures...)
+	}
+	bestCompletedRisk := func(excludeIndex int) *contentModerationRemoteProviderOutcome {
+		var restricted *contentModerationRemoteProviderOutcome
+		for _, completed := range outcomes {
+			if completed == nil || completed.index == excludeIndex || completed.err != nil {
+				continue
+			}
+			switch completed.result.normalizedDisposition() {
+			case ContentModerationReviewDispositionViolation:
+				return completed
+			case ContentModerationReviewDispositionRestricted:
+				if restricted == nil {
+					restricted = completed
+				}
+			}
+		}
+		return restricted
+	}
+	var confirmRestricted func(*contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error)
+	confirmRestricted = func(primary *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
+		disableTimer()
+		for {
+			var safeConfirmation *contentModerationRemoteProviderOutcome
+			for _, completed := range outcomes {
+				if completed == nil || completed.index == primary.index || completed.err != nil {
+					continue
+				}
+				switch completed.result.normalizedDisposition() {
+				case ContentModerationReviewDispositionViolation:
+					return finishSingle(completed)
+				case ContentModerationReviewDispositionRestricted:
+					return finishRestrictedPair(primary, completed)
+				default:
+					if safeConfirmation == nil {
+						safeConfirmation = completed
+					}
+				}
+			}
+			if safeConfirmation != nil {
+				return finishRestrictedPair(primary, safeConfirmation)
+			}
+			if active == 0 {
+				if launched >= len(groups) {
+					return finishRestrictedUnavailable(primary)
+				}
+				launch(launched)
+			}
+			if launched < len(groups) {
+				resetTimer(contentModerationRemoteHedgeStep)
+			} else {
+				disableTimer()
+			}
+			select {
+			case outcome := <-results:
+				active--
+				recordOutcome(outcome)
+				attempted = attempted || outcome.attempted
+				if outcome.err != nil {
+					failures = append(failures, outcome.err)
+				}
+			case <-timerC:
+				if launched < len(groups) {
+					launch(launched)
+				}
+				disableTimer()
+			case <-ctx.Done():
+				failures = append(failures, ctx.Err())
+				return finishRestrictedUnavailable(primary)
+			}
+		}
+	}
+	finalize := func(winner *contentModerationRemoteProviderOutcome) (contentModerationSecondLayerResult, bool, error) {
+		switch winner.result.normalizedDisposition() {
+		case ContentModerationReviewDispositionViolation:
+			return finishSingle(winner)
+		case ContentModerationReviewDispositionRestricted:
+			return confirmRestricted(winner)
+		}
+		if completed := bestCompletedRisk(winner.index); completed != nil {
+			if completed.result.normalizedDisposition() == ContentModerationReviewDispositionViolation {
+				return finishSingle(completed)
+			}
+			return finishRestrictedPair(winner, completed)
+		}
+		if active > 0 && ctx.Err() == nil {
+			graceTimer := time.NewTimer(contentModerationRemoteRiskGrace)
+			for active > 0 {
+				select {
+				case outcome := <-results:
+					active--
+					completed := recordOutcome(outcome)
+					attempted = attempted || outcome.attempted
+					if outcome.err != nil {
+						failures = append(failures, outcome.err)
+						continue
+					}
+					switch completed.result.normalizedDisposition() {
+					case ContentModerationReviewDispositionViolation:
+						if !graceTimer.Stop() {
+							select {
+							case <-graceTimer.C:
+							default:
+							}
+						}
+						return finishSingle(completed)
+					case ContentModerationReviewDispositionRestricted:
+						if !graceTimer.Stop() {
+							select {
+							case <-graceTimer.C:
+							default:
+							}
+						}
+						return finishRestrictedPair(winner, completed)
+					}
+				case <-graceTimer.C:
+					return finishSingle(winner)
+				case <-ctx.Done():
+					return finishSingle(winner)
+				}
+			}
+			if !graceTimer.Stop() {
+				select {
+				case <-graceTimer.C:
+				default:
+				}
+			}
+		}
+		return finishSingle(winner)
 	}
 	safeWinner := func(requirePriorCompletion bool) *contentModerationRemoteProviderOutcome {
 		for _, outcome := range outcomes {
@@ -622,8 +793,6 @@ func (s *ContentModerationService) scanContentModerationRemotePoolHedged(
 		return nil
 	}
 
-	var failures []error
-	attempted := false
 	for active > 0 || launched < len(groups) {
 		select {
 		case outcome := <-results:
@@ -664,31 +833,8 @@ func (s *ContentModerationService) scanContentModerationRemotePoolHedged(
 				disableTimer()
 			}
 		case <-ctx.Done():
-			cancel()
-			cancelDrainTimer := time.NewTimer(contentModerationRemoteHedgeDrain)
-			for active > 0 {
-				select {
-				case outcome := <-results:
-					active--
-					recordOutcome(outcome)
-					attempted = attempted || outcome.attempted
-					if outcome.err != nil {
-						failures = append(failures, outcome.err)
-					}
-				case <-cancelDrainTimer.C:
-					active = 0
-				}
-			}
-			if !cancelDrainTimer.Stop() {
-				select {
-				case <-cancelDrainTimer.C:
-				default:
-				}
-			}
-			if winner := bestBlocked(); winner != nil {
-				return finalize(winner)
-			}
 			failures = append(failures, ctx.Err())
+			cancelAndDrain()
 			launched = len(groups)
 		}
 	}
@@ -696,17 +842,11 @@ func (s *ContentModerationService) scanContentModerationRemotePoolHedged(
 		return finalize(winner)
 	}
 
-	allAttempts := make([]ContentModerationReviewAttempt, 0, len(groups)*2)
-	for _, completed := range outcomes {
-		if completed != nil {
-			allAttempts = append(allAttempts, completed.attempts...)
-		}
-	}
 	if len(failures) == 0 {
 		failures = append(failures, errors.New("no enabled remote reviewer"))
 	}
 	s.deepSeekUnavailableCount.Add(1)
-	return contentModerationSecondLayerResult{ReviewAttempts: allAttempts, ConsensusStatus: "unavailable"}, attempted, errors.Join(failures...)
+	return contentModerationSecondLayerResult{ReviewAttempts: collectAttempts(), ConsensusStatus: "unavailable"}, attempted, errors.Join(failures...)
 }
 
 func (s *ContentModerationService) scanContentModerationRemotePool(
@@ -757,21 +897,6 @@ func (s *ContentModerationService) scanContentModerationRemotePool(
 			allAttempts = append(allAttempts, attempts...)
 			result.ReviewAttempts = allAttempts
 			result.RemoteVotes = 1
-			if requiredVotes <= 1 {
-				switch result.normalizedDisposition() {
-				case ContentModerationReviewDispositionViolation:
-					result.ConsensusStatus = "single_violation"
-				case ContentModerationReviewDispositionRestricted:
-					result.ConsensusStatus = "single_restricted"
-				default:
-					result.ConsensusStatus = "primary_safe"
-				}
-				s.deepSeekSelectedCount.Add(1)
-				if failoverUsed {
-					s.deepSeekFailoverCount.Add(1)
-				}
-				return result, true, nil
-			}
 			copyResult := result
 			primary = &copyResult
 			primaryProvider = group.provider
@@ -784,8 +909,20 @@ func (s *ContentModerationService) scanContentModerationRemotePool(
 		primary.RemoteVotes = 2
 		primaryDisposition := primary.normalizedDisposition()
 		confirmationDisposition := result.normalizedDisposition()
+		restrictedDisagreement := (primaryDisposition == ContentModerationReviewDispositionRestricted &&
+			confirmationDisposition == ContentModerationReviewDispositionAllow) ||
+			(primaryDisposition == ContentModerationReviewDispositionAllow &&
+				confirmationDisposition == ContentModerationReviewDispositionRestricted)
 		consensus := contentModerationConsensusDisposition(*primary, result)
-		if consensus == ContentModerationReviewDispositionRestricted {
+		if restrictedDisagreement {
+			if confirmationDisposition == ContentModerationReviewDispositionRestricted {
+				primary.Confidence = result.Confidence
+				primary.Category = result.Category
+				primary.Reason = result.Reason
+				primary.Label = result.Label
+				primary.EndpointID = result.EndpointID
+			}
+		} else if consensus == ContentModerationReviewDispositionRestricted {
 			switch {
 			case primaryDisposition == ContentModerationReviewDispositionAllow &&
 				confirmationDisposition != ContentModerationReviewDispositionAllow:
@@ -804,6 +941,9 @@ func (s *ContentModerationService) scanContentModerationRemotePool(
 		} else if primaryDisposition == ContentModerationReviewDispositionRestricted &&
 			confirmationDisposition == ContentModerationReviewDispositionRestricted {
 			primary.ConsensusStatus = "confirmed_restricted"
+		} else if restrictedDisagreement {
+			primary.ReviewerMismatch = true
+			primary.ConsensusStatus = "disagreement_restricted"
 		} else if consensus == ContentModerationReviewDispositionRestricted {
 			primary.ReviewerMismatch = true
 			primary.ConsensusStatus = "disagreement_restricted"
@@ -832,12 +972,11 @@ func (s *ContentModerationService) scanContentModerationRemotePool(
 			return *primary, true, nil
 		}
 		primary.setDisposition(ContentModerationReviewDispositionAllow)
-		primary.Category = "safe"
 		primary.ConsensusStatus = "consensus_unavailable"
 		primary.ReviewAttempts = allAttempts
 		primary.RemoteVotes = 1
 		s.deepSeekUnavailableCount.Add(1)
-		failures = append(failures, errors.New("a second distinct remote reviewer verdict is required"))
+		failures = append(failures, errContentModerationRestrictedConfirmationUnavailable)
 		return *primary, true, errors.Join(failures...)
 	}
 	if len(failures) == 0 {

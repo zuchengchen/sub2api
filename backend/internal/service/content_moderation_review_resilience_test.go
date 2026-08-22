@@ -30,7 +30,11 @@ func TestContentModerationFullContextChunksReviewTailRiskAndNeverCachePartialEvi
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if err != nil {
+			// A formal violation cancels sibling chunk requests after their
+			// handlers may have started reading the request body.
+			return
+		}
 		calls.Add(1)
 		if strings.Contains(string(body), "TAIL_RISK") {
 			contentModerationDeepSeekRuntimeWriteEnvelope(
@@ -113,6 +117,99 @@ func TestContentModerationFullContextChunksFailClosedWhenAnyChunkIsUnavailable(t
 	require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
 	require.GreaterOrEqual(t, calls.Load(), int64(3))
 	require.Zero(t, contextualRoutingCacheEntryCount(cache))
+}
+
+func TestContentModerationFullContextChunksPreserveRestrictedDisagreement(t *testing.T) {
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		if strings.Contains(string(body), "DISPUTED_POLICY") {
+			contentModerationRemotePoolWriteResult(t, w, 0.93, ContentModerationRestrictedCategory, "restricted")
+			return
+		}
+		contentModerationRemotePoolWriteResult(t, w, 0.04, "safe", "")
+	}))
+	defer deepSeek.Close()
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationRemotePoolWriteResponsesResult(t, w, 0.03, "safe", "")
+	}))
+	defer qwen.Close()
+
+	cfg := contentModerationRemotePoolTestConfig(
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0),
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1),
+	)
+	cfg.SecondLayerEnabled = true
+	inputs := []contentModerationSecondLayerInput{
+		contentModerationDeepSeekRuntimeTestInput(t, "DISPUTED_POLICY"),
+		contentModerationDeepSeekRuntimeTestInput(t, "ordinary safe context"),
+	}
+	for index := range inputs {
+		inputs[index].ChunkIndex = index
+		inputs[index].ChunkCount = len(inputs)
+	}
+
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationFullReviewChunks(
+		context.Background(), cfg, inputs,
+	)
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.False(t, result.Blocked)
+	require.True(t, result.ReviewerMismatch)
+	require.Equal(t, "disagreement_restricted", result.ConsensusStatus)
+	require.Equal(t, ContentModerationReviewDispositionAllow, result.normalizedDisposition())
+	require.GreaterOrEqual(t, len(result.ReviewAttempts), 3)
+}
+
+func TestContentModerationFullContextChunksViolationWinsAfterConfirmedRestriction(t *testing.T) {
+	restrictionConfirmed := make(chan struct{}, 1)
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		if strings.Contains(string(body), "LATE_VIOLATION") {
+			select {
+			case <-restrictionConfirmed:
+			case <-time.After(750 * time.Millisecond):
+				t.Fatal("restricted chunk was not confirmed in time")
+			}
+			time.Sleep(100 * time.Millisecond)
+			contentModerationRemotePoolWriteResult(t, w, 0.98, "cyber_abuse", "violation")
+			return
+		}
+		contentModerationRemotePoolWriteResult(t, w, 0.94, ContentModerationRestrictedCategory, "restricted")
+	}))
+	defer deepSeek.Close()
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case restrictionConfirmed <- struct{}{}:
+		default:
+		}
+		contentModerationRemotePoolWriteResponsesResult(t, w, 0.92, ContentModerationRestrictedCategory, "restricted")
+	}))
+	defer qwen.Close()
+
+	cfg := contentModerationRemotePoolTestConfig(
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderDeepSeek, "ds", deepSeek.URL, 0),
+		contentModerationRemotePoolTestChannel(ContentModerationRemoteProviderQwen, "qwen", qwen.URL+"/v1", 1),
+	)
+	cfg.SecondLayerEnabled = true
+	inputs := []contentModerationSecondLayerInput{
+		contentModerationDeepSeekRuntimeTestInput(t, "POLICY_RESTRICTION"),
+		contentModerationDeepSeekRuntimeTestInput(t, "LATE_VIOLATION"),
+	}
+	for index := range inputs {
+		inputs[index].ChunkIndex = index
+		inputs[index].ChunkCount = len(inputs)
+	}
+
+	result, attempted, err := (&ContentModerationService{}).scanContentModerationFullReviewChunks(
+		context.Background(), cfg, inputs,
+	)
+	require.NoError(t, err)
+	require.True(t, attempted)
+	require.True(t, result.Blocked)
+	require.Equal(t, ContentModerationReviewDispositionViolation, result.normalizedDisposition())
+	require.Equal(t, "single_violation", result.ConsensusStatus)
 }
 
 func TestContentModerationRiskTieredTransientOutageAllowsAndAuditsWithoutCaching(t *testing.T) {
@@ -287,7 +384,7 @@ func TestContentModerationRiskTieredEligibilityMatrix(t *testing.T) {
 	}
 }
 
-func TestContentModerationRiskTieredTruncatedSafeReviewEligibilityKeepsSecurityFloor(t *testing.T) {
+func TestContentModerationRiskTieredTruncatedSafeReviewNeverDegrades(t *testing.T) {
 	cfg := contentModerationCandidateDeliveryConfig("https://review.example", ContentModerationSecondLayerStageEnforce)
 	cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableRiskTiered
 	cfg.normalize()
@@ -312,7 +409,8 @@ func TestContentModerationRiskTieredTruncatedSafeReviewEligibilityKeepsSecurityF
 	}
 	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 
-	require.True(t, svc.contentModerationReviewCanDegrade(cfg, work, safeOutcome, time.Now()))
+	require.False(t, svc.contentModerationReviewCanDegrade(cfg, work, safeOutcome, time.Now()))
+	require.True(t, contentModerationEvidenceCapacityFailure(safeOutcome.parserStatus))
 
 	coverageMissing := work
 	coverageMissing.bundle.CoverageIncomplete = true
@@ -371,7 +469,7 @@ func TestContentModerationRiskTieredMixedFailuresNeverHideHardFailure(t *testing
 	}
 }
 
-func TestContentModerationRiskTieredPolicyFloorWinsOverDegradedCandidateInAnyOrder(t *testing.T) {
+func TestContentModerationRiskTieredPolicyReviewFailureRemainsUndeterminedInAnyOrder(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -393,11 +491,14 @@ func TestContentModerationRiskTieredPolicyFloorWinsOverDegradedCandidateInAnyOrd
 			context.Background(), ContentModerationCheckInput{RequestID: "policy-floor-mixed"},
 			cfg, cfg.fragmentCacheNamespace(), candidates, false,
 		)
-		require.True(t, decision.Blocked)
+		require.False(t, decision.Blocked)
+		require.False(t, decision.Allowed)
 		require.False(t, decision.Flagged)
-		require.Equal(t, ContentModerationActionRestrictedBlock, decision.Action)
+		require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
+		require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
 		for _, log := range repo.snapshotLogs() {
 			require.NotEqual(t, ContentModerationActionDegradedAllow, log.Action)
+			require.NotEqual(t, ContentModerationActionRestrictedBlock, log.Action)
 		}
 	}
 }

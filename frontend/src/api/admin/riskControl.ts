@@ -246,6 +246,8 @@ export interface DeepSeekReviewAttempt {
   http_status?: number
   latency_ms?: number
   error?: string
+  chunk_index?: number
+  chunk_count?: number
 }
 
 export interface ContentModerationLog {
@@ -300,6 +302,8 @@ export interface ContentModerationLog {
   deepseek_reason?: string
   review_outcome?: string
   reviewer_disagreement?: boolean
+  consensus_status?: string
+  remote_votes?: number
   review_attempts?: DeepSeekReviewAttempt[]
 }
 
