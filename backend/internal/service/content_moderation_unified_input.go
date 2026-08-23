@@ -214,14 +214,20 @@ func ExtractContentModerationFragments(protocol string, body []byte) []ContentMo
 	return fragments
 }
 
-// SelectContentModerationReviewFragments keeps the current user turn and the
-// actual tool calls/results that belong to it. Prompt history and tool schemas
-// are useful model context, but they are not authored content for this gate.
+// SelectContentModerationReviewFragments keeps every user-authored turn plus
+// the tool calls/results that belong to the latest one.
 func SelectContentModerationReviewFragments(fragments []ContentModerationFragment) []ContentModerationFragment {
 	current, _ := partitionContentModerationReviewFragments(fragments)
 	return current
 }
 
+// partitionContentModerationReviewFragments splits client-controlled fragments
+// into the reviewable set and the lineage-only set. Every user-authored text
+// turn is reviewable regardless of position: a single request can smuggle an
+// attack script as an earlier message and end on a benign final turn, so only
+// tool results follow the latest-turn rule. system/developer/assistant text is
+// dropped from direct review; history keeps lineage replay coverage and the
+// hard-pattern history scan.
 func partitionContentModerationReviewFragments(fragments []ContentModerationFragment) ([]ContentModerationFragment, []ContentModerationFragment) {
 	latestUser := contentModerationLineageMessageUnit{}
 	hasUser := false
@@ -242,11 +248,7 @@ func partitionContentModerationReviewFragments(fragments []ContentModerationFrag
 		unit := contentModerationLineageMessageUnitForFragment(fragment)
 		switch fragment.Role {
 		case "user":
-			if hasUser && unit.key == latestUser.key {
-				current = append(current, fragment)
-			} else {
-				history = append(history, fragment)
-			}
+			current = append(current, fragment)
 		case "tool":
 			root := strings.ToLower(strings.SplitN(strings.TrimSpace(fragment.Path), ".", 2)[0])
 			if root == "tools" || root == "tool_choice" {
