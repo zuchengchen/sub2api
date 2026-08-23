@@ -189,6 +189,8 @@ func RegisterGatewayRoutes(
 	gateway.Use(opsErrorLogger)
 	gateway.Use(endpointNorm)
 	gateway.Use(gin.HandlerFunc(apiKeyAuth))
+	// cyber 处置终止在途对话的登记点：鉴权后按用户登记请求取消函数。
+	gateway.Use(middleware.GatewayConversationTracker())
 	gateway.GET("/sub2api/billing", h.Gateway.KeyBillingInfo)
 	gateway.Use(compositeTarget)
 	gateway.Use(requireGroupAnthropic)
