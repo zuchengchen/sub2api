@@ -826,6 +826,7 @@ type ContentModerationService struct {
 	deepSeekUnavailableCount      atomic.Int64
 	reviewObservability           contentModerationReviewObservability
 	dispositionRepo               ContentModerationDispositionRepository
+	conversationTerminator        CyberConversationTerminator
 	preBlockActive                atomic.Int64
 	preBlockChecked               atomic.Int64
 	preBlockAllowed               atomic.Int64
@@ -939,6 +940,7 @@ func NewContentModerationService(
 	if dispositionRepo, ok := repo.(ContentModerationDispositionRepository); ok {
 		svc.dispositionRepo = dispositionRepo
 	}
+	svc.conversationTerminator = DefaultGatewayKillSwitchRegistry()
 	if settingRepo != nil && repo != nil {
 		go svc.cleanupWorker()
 	}
@@ -3474,13 +3476,71 @@ func (s *ContentModerationService) applyCyberPolicyDisposition(ctx context.Conte
 	log.AutoBanned = transitioned
 	if transitioned {
 		log.DispositionStatus = "disabled"
-		if s.authCacheInvalidator != nil {
-			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, in.UserID)
-		}
 	} else {
 		log.DispositionStatus = "already_disabled"
 	}
+	// 账号已停用，立即终止全部在途对话，再吊销所有活跃 Key 并逐 Key
+	// 失效认证缓存。顺序不能反：先掐断流，再封新请求入口。
+	s.terminateCyberPolicyUserConversations(ctx, in.UserID)
+	s.revokeCyberPolicyUserAPIKeys(ctx, in.UserID)
+	if transitioned && s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, in.UserID)
+	}
 	return transitioned, nil
+}
+
+// terminateCyberPolicyUserConversations 取消该用户当前全部在途网关请求
+// （SSE/WebSocket/长生成），失败仅记录日志，不影响处置结果。
+func (s *ContentModerationService) terminateCyberPolicyUserConversations(ctx context.Context, userID int64) {
+	if s == nil || s.conversationTerminator == nil || userID <= 0 {
+		return
+	}
+	killed := s.conversationTerminator.CancelAllForUser(userID)
+	if killed > 0 {
+		slog.Info("content_moderation.cyber_conversations_terminated",
+			"user_id", userID, "cancelled_requests", killed)
+	}
+}
+
+// revokeCyberPolicyUserAPIKeys 吊销该用户全部活跃 API Key 并按凭据失效
+// 认证缓存。仅依赖用户级缓存失效时，L1 缓存 TTL 内其他 Key 仍可通过
+// 认证（生产观测约一个 TTL 窗口的尾巴）；逐 Key 吊销消除该窗口。
+func (s *ContentModerationService) revokeCyberPolicyUserAPIKeys(ctx context.Context, userID int64) {
+	if s == nil || userID <= 0 {
+		return
+	}
+	lister, ok := s.apiKeyRepo.(interface {
+		ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error)
+	})
+	if !ok {
+		return
+	}
+	keys, err := lister.ListAllByUserID(ctx, userID, APIKeyListFilters{Status: StatusActive})
+	if err != nil {
+		slog.Warn("content_moderation.cyber_api_key_revoke_list_failed",
+			"user_id", userID, "error", err)
+		return
+	}
+	revoked := 0
+	for _, key := range keys {
+		credential, transitioned, err := s.disableCyberPolicyAPIKey(ctx, key.ID)
+		if err != nil {
+			slog.Warn("content_moderation.cyber_api_key_revoke_failed",
+				"user_id", userID, "api_key_id", key.ID, "error", err)
+			continue
+		}
+		if !transitioned {
+			continue
+		}
+		revoked++
+		if s.authCacheInvalidator != nil && credential != "" {
+			s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, credential)
+		}
+	}
+	if revoked > 0 {
+		slog.Info("content_moderation.cyber_api_keys_revoked",
+			"user_id", userID, "revoked_keys", revoked)
+	}
 }
 
 func (s *ContentModerationService) disableCyberPolicyUser(ctx context.Context, userID int64) (bool, error) {
