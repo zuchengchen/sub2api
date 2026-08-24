@@ -18,12 +18,12 @@ describe('risk control locale copy', () => {
     expect(en.admin.riskControl.layerStagesSummary).toContain('Shadow')
   })
 
-  it('describes delayed hedging and the bounded outage policy', () => {
-    expect(zh.admin.riskControl.reviewersSummary).toContain('风险结论立即生效')
-    expect(zh.admin.riskControl.onlineReviewersMeta).toContain('1.5 秒')
+  it('describes delayed hedging and the consensus policy', () => {
+    expect(zh.admin.riskControl.reviewersSummary).toContain('明确违规优先生效')
+    expect(zh.admin.riskControl.onlineReviewersMeta).toContain('两家独立供应商确认')
     expect(zh.admin.riskControl.remoteUnavailableRiskTieredHint).toContain('最近 2 分钟')
-    expect(en.admin.riskControl.reviewersSummary).toContain('risk verdicts win immediately')
-    expect(en.admin.riskControl.onlineReviewersMeta).toContain('1.5 seconds')
+    expect(en.admin.riskControl.reviewersSummary).toContain('formal violations take priority')
+    expect(en.admin.riskControl.onlineReviewersMeta).toContain('two independent providers')
     expect(en.admin.riskControl.remoteUnavailableRiskTieredHint).toContain('last two minutes')
   })
 
