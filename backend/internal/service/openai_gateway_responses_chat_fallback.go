@@ -41,7 +41,6 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 
 	clientStream := responsesReq.Stream
-	serviceTier := extractOpenAIServiceTierFromBody(body)
 	reasoningCacheScope := responsesReasoningCacheScope(ctx)
 	// custom 工具（如 codex 的 exec）降级为 function 工具转发，回程需按名字还原为
 	// custom_tool_call 项，先记下名字集合；tool_search 工具同理，回程还原为
@@ -53,6 +52,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return nil, fmt.Errorf("resolve responses tools: %w", err)
 	}
 	customTools := apicompat.CustomToolNames(effectiveTools)
+	functionTools := apicompat.FunctionToolNames(effectiveTools)
 	toolSearch := apicompat.HasToolSearchTool(effectiveTools)
 	namespaceTools := apicompat.NamespaceToolNames(effectiveTools)
 
@@ -99,9 +99,10 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		}
 		return nil, err
 	}
-	if serviceTier == nil {
-		serviceTier = extractOpenAIServiceTierFromBody(chatBody)
-	}
+	// 计费兜底 tier = 最终出站 body（policy filter/force 后）里的 tier；最终值由
+	// resolvedOpenAIUpstreamServiceTier 决定（上游回显优先）。filter 删掉字段后
+	// 这里取到 nil，不再按原请求 Fast 计费。
+	serviceTier := extractOpenAIServiceTierFromBody(chatBody)
 
 	logger.L().Debug("openai responses: forwarding via raw chat completions",
 		zap.Int64("account_id", account.ID),
@@ -110,6 +111,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		zap.String("upstream_model", upstreamModel),
 		zap.Bool("stream", clientStream),
 	)
+	SetOpsUpstreamModel(c, upstreamModel)
 
 	// Build and send upstream request via the shared CC pipeline
 	apiKey, targetURL, err := s.resolveCCFallbackTarget(account)
@@ -131,9 +133,9 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 
 	if clientStream {
-		return s.streamChatCompletionsAsResponses(c, resp, reasoningCacheScope, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		return s.streamChatCompletionsAsResponses(c, resp, reasoningCacheScope, originalModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return s.bufferChatCompletionsAsResponses(c, resp, reasoningCacheScope, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	return s.bufferChatCompletionsAsResponses(c, resp, reasoningCacheScope, originalModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
@@ -142,6 +144,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	reasoningCacheScope string,
 	originalModel string,
 	customTools map[string]bool,
+	functionTools map[string]bool,
 	toolSearch bool,
 	namespaceTools map[string]apicompat.NamespacedToolName,
 	billingModel string,
@@ -155,7 +158,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	if err != nil {
 		return nil, err
 	}
-	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, customTools, toolSearch, namespaceTools)
+	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, customTools, functionTools, toolSearch, namespaceTools)
 	s.cacheReasoningItemsFromOutput(reasoningCacheScope, responsesResp.Output)
 
 	if s.responseHeaderFilter != nil {
@@ -170,7 +173,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 		BillingModel:    billingModel,
 		UpstreamModel:   upstreamModel,
 		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
+		ServiceTier:     resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:          false,
 		Duration:        time.Since(startTime),
 	}, nil
@@ -182,6 +185,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	reasoningCacheScope string,
 	originalModel string,
 	customTools map[string]bool,
+	functionTools map[string]bool,
 	toolSearch bool,
 	namespaceTools map[string]apicompat.NamespacedToolName,
 	billingModel string,
@@ -195,6 +199,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 
 	state := apicompat.NewChatCompletionsToResponsesStreamState(originalModel)
 	state.CustomTools = customTools
+	state.FunctionTools = functionTools
 	state.ToolSearchDeclared = toolSearch
 	state.NamespaceTools = namespaceTools
 	clientDisconnected := false
@@ -225,7 +230,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		c.Writer.Flush()
 	}
 
-	scan := s.scanCCStream(resp, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) {
+	scan := s.scanCCStream(c, resp, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) {
 		events := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
 		s.cacheReasoningItemsFromEvents(reasoningCacheScope, events)
 		writeEvents(events)
@@ -239,11 +244,25 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			BillingModel:    billingModel,
 			UpstreamModel:   upstreamModel,
 			ReasoningEffort: reasoningEffort,
-			ServiceTier:     serviceTier,
+			ServiceTier:     resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 			Stream:          true,
 			Duration:        time.Since(startTime),
 			FirstTokenMs:    scan.FirstTokenMs,
 		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
+	}
+	if err := state.ValidateToolCallArguments(); err != nil {
+		return &OpenAIForwardResult{
+			RequestID:       requestID,
+			Usage:           scan.Usage,
+			Model:           originalModel,
+			BillingModel:    billingModel,
+			UpstreamModel:   upstreamModel,
+			ReasoningEffort: reasoningEffort,
+			ServiceTier:     resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+			Stream:          true,
+			Duration:        time.Since(startTime),
+			FirstTokenMs:    scan.FirstTokenMs,
+		}, fmt.Errorf("invalid tool call arguments from upstream: %w", err)
 	}
 
 	finalEvents := apicompat.FinalizeChatCompletionsResponsesStream(state)
@@ -269,7 +288,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		BillingModel:    billingModel,
 		UpstreamModel:   upstreamModel,
 		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
+		ServiceTier:     resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:          true,
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    scan.FirstTokenMs,

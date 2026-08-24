@@ -24,8 +24,9 @@ import (
 )
 
 type Application struct {
-	Server  *http.Server
-	Cleanup func()
+	Server        *http.Server
+	PluginManager *service.PluginManager
+	Cleanup       func()
 }
 
 func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
@@ -48,12 +49,13 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 
 		// BuildInfo provider
 		provideServiceBuildInfo,
+		providePluginHostInfo,
 
 		// Cleanup function provider
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "Cleanup"),
+		wire.Struct(new(Application), "Server", "PluginManager", "Cleanup"),
 	)
 	return nil, nil
 }
@@ -68,6 +70,13 @@ func provideServiceBuildInfo(buildInfo handler.BuildInfo) service.BuildInfo {
 		Commit:     buildInfo.Commit,
 		BuildType:  buildInfo.BuildType,
 		ReleaseURL: buildInfo.ReleaseURL,
+	}
+}
+
+func providePluginHostInfo(buildInfo handler.BuildInfo) service.PluginHostInfo {
+	return service.PluginHostInfo{
+		Version:   buildInfo.Version,
+		BuildType: buildInfo.BuildType,
 	}
 }
 
@@ -116,6 +125,8 @@ func provideCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 	contentModeration *service.ContentModerationService,
+	openAIAutoReset *service.OpenAIQuotaAutoResetService,
+	pluginManager *service.PluginManager,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -128,6 +139,18 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"PluginManager", func() error {
+				if pluginManager != nil {
+					pluginManager.Stop()
+				}
+				return nil
+			}},
+			{"OpenAIQuotaAutoResetService", func() error {
+				if openAIAutoReset != nil {
+					openAIAutoReset.Stop()
+				}
+				return nil
+			}},
 			{"OpsIngressRejectAggregator", func() error {
 				if opsIngressReject != nil {
 					opsIngressReject.Stop()
