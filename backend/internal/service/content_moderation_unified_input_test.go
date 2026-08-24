@@ -178,7 +178,7 @@ func TestExtractContentModerationFragments_AllClientControlledRolesAndReferences
 	require.Equal(t, "url", texts["https://files.example/brief.txt"].Kind)
 }
 
-func TestSelectContentModerationReviewFragments_LatestUserAndRelatedToolsOnly(t *testing.T) {
+func TestSelectContentModerationReviewFragments_AllUserTurnsAndLatestTools(t *testing.T) {
 	body := []byte(`{
 		"system":"system policy",
 		"messages":[
@@ -197,15 +197,18 @@ func TestSelectContentModerationReviewFragments_LatestUserAndRelatedToolsOnly(t 
 	for _, fragment := range fragments {
 		texts[fragment.Text] = fragment
 	}
-	for _, expected := range []string{"latest user text", "photo.png", "new_call", "related tool arguments", "related tool output"} {
+	// Every user-authored turn is reviewable: earlier turns are client
+	// content too and must not become a smuggling channel.
+	for _, expected := range []string{"old user text", "latest user text", "photo.png", "new_call", "related tool arguments", "related tool output"} {
 		require.Contains(t, texts, expected)
 	}
 	for _, excluded := range []string{
-		"system policy", "old user text", "old_call", "old tool arguments", "old tool output",
+		"system policy", "old_call", "old tool arguments", "old tool output",
 		"assistant prose", "https://media.example/photo.png", "schema_only", "tool schema description",
 	} {
 		require.NotContains(t, texts, excluded)
 	}
+	require.Equal(t, "user", texts["old user text"].Role)
 	require.Equal(t, "tool", texts["related tool arguments"].Role)
 }
 
