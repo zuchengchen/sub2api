@@ -105,7 +105,7 @@ func TestRecordCyberPolicyIfMarked_WaitsForDispositionAndAuditPersistence(t *tes
 	}
 	returned := make(chan struct{})
 	go func() {
-		h.recordCyberPolicyIfMarked(c, apiKey, nil, nil, "gpt-5", false, "", service.ChannelUsageFields{}, "")
+		h.recordCyberPolicyIfMarked(c, apiKey, nil, nil, "gpt-5", false, nil, service.ChannelUsageFields{}, "")
 		close(returned)
 	}()
 
