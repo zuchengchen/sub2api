@@ -861,6 +861,51 @@ func (r *userRepository) ApplyRedeemBalanceAdjustment(ctx context.Context, id in
 	return nil
 }
 
+// SetVIPIfNotSet 原子地将用户标记为 VIP（仅当当前未标记时生效），返回是否实际写入。
+func (r *userRepository) SetVIPIfNotSet(ctx context.Context, id int64) (bool, error) {
+	const updateSQL = `
+		UPDATE users
+		SET vip = true, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL AND vip = false
+	`
+	client := clientFromContext(ctx, r.client)
+	result, err := client.ExecContext(ctx, updateSQL, id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
+// UpgradeUsersAboveBalanceThreshold 将总余额超过 threshold 的非 VIP 用户批量升级为
+// VIP，返回完成升级的用户 ID 列表。VIP 永久生效，无降级路径。
+func (r *userRepository) UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error) {
+	const updateSQL = `
+		UPDATE users
+		SET vip = true, updated_at = NOW()
+		WHERE deleted_at IS NULL AND vip = false AND balance > $1
+		RETURNING id
+	`
+	client := clientFromContext(ctx, r.client)
+	rows, err := client.QueryContext(ctx, updateSQL, threshold)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var userIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		userIDs = append(userIDs, id)
+	}
+	return userIDs, rows.Err()
+}
+
 // DeductBalance 扣除用户余额
 // 透支策略：允许余额变为负数，确保当前请求能够完成
 // 中间件会阻止余额 <= 0 的用户发起后续请求

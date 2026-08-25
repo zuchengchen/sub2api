@@ -198,6 +198,14 @@ func (s *stubUserRepo) DeductBalance(ctx context.Context, id int64, amount float
 	panic("unexpected DeductBalance call")
 }
 
+func (s *stubUserRepo) SetVIPIfNotSet(ctx context.Context, id int64) (bool, error) {
+	return false, nil
+}
+
+func (s *stubUserRepo) UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error) {
+	return nil, nil
+}
+
 func (s *stubUserRepo) AdjustBalance(ctx context.Context, id int64, delta float64) (service.BalanceChange, error) {
 	panic("unexpected AdjustBalance call")
 }

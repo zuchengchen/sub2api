@@ -170,6 +170,11 @@ func TotalRecharged(v float64) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldTotalRecharged, v))
 }
 
+// Vip applies equality check predicate on the "vip" field. It's identical to VipEQ.
+func Vip(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldVip, v))
+}
+
 // RpmLimit applies equality check predicate on the "rpm_limit" field. It's identical to RpmLimitEQ.
 func RpmLimit(v int) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldRpmLimit, v))
@@ -1343,6 +1348,16 @@ func TotalRechargedLT(v float64) predicate.User {
 // TotalRechargedLTE applies the LTE predicate on the "total_recharged" field.
 func TotalRechargedLTE(v float64) predicate.User {
 	return predicate.User(sql.FieldLTE(FieldTotalRecharged, v))
+}
+
+// VipEQ applies the EQ predicate on the "vip" field.
+func VipEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldVip, v))
+}
+
+// VipNEQ applies the NEQ predicate on the "vip" field.
+func VipNEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldVip, v))
 }
 
 // RpmLimitEQ applies the EQ predicate on the "rpm_limit" field.

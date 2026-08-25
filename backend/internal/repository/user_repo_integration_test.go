@@ -437,6 +437,52 @@ func (s *UserRepoSuite) TestUpdateBalance() {
 	s.Require().InDelta(12.5, got.Balance, 1e-6)
 }
 
+func (s *UserRepoSuite) TestSetVIPIfNotSet() {
+	user := s.mustCreateUser(&service.User{Email: "vip-first@test.com", Balance: 150})
+
+	upgraded, err := s.repo.SetVIPIfNotSet(s.ctx, user.ID)
+	s.Require().NoError(err)
+	s.Require().True(upgraded, "first call must flip the flag")
+
+	upgradedAgain, err := s.repo.SetVIPIfNotSet(s.ctx, user.ID)
+	s.Require().NoError(err)
+	s.Require().False(upgradedAgain, "second call must be a no-op")
+
+	got, err := s.repo.GetByID(s.ctx, user.ID)
+	s.Require().NoError(err)
+	s.Require().True(got.IsVIP)
+
+	missing, err := s.repo.SetVIPIfNotSet(s.ctx, user.ID+99999)
+	s.Require().NoError(err)
+	s.Require().False(missing, "missing user must not report an upgrade")
+}
+
+func (s *UserRepoSuite) TestUpgradeUsersAboveBalanceThreshold() {
+	over := s.mustCreateUser(&service.User{Email: "vip-sweep-over@test.com", Balance: 120})
+	exact := s.mustCreateUser(&service.User{Email: "vip-sweep-exact@test.com", Balance: 100})
+	vipAlready := s.mustCreateUser(&service.User{Email: "vip-sweep-vip@test.com", Balance: 300})
+	_, err := s.repo.SetVIPIfNotSet(s.ctx, vipAlready.ID)
+	s.Require().NoError(err)
+
+	upgraded, err := s.repo.UpgradeUsersAboveBalanceThreshold(s.ctx, service.VipBalanceThreshold)
+	s.Require().NoError(err)
+	s.Require().Contains(upgraded, over.ID)
+	s.Require().NotContains(upgraded, exact.ID, "balance equal to the threshold must not upgrade")
+	s.Require().NotContains(upgraded, vipAlready.ID, "existing vip users must stay untouched")
+
+	gotOver, err := s.repo.GetByID(s.ctx, over.ID)
+	s.Require().NoError(err)
+	s.Require().True(gotOver.IsVIP)
+
+	gotVip, err := s.repo.GetByID(s.ctx, vipAlready.ID)
+	s.Require().NoError(err)
+	s.Require().True(gotVip.IsVIP)
+
+	gotExact, err := s.repo.GetByID(s.ctx, exact.ID)
+	s.Require().NoError(err)
+	s.Require().False(gotExact.IsVIP)
+}
+
 func (s *UserRepoSuite) TestUpdateBalance_Negative() {
 	user := s.mustCreateUser(&service.User{Email: "balneg@test.com", Balance: 10})
 

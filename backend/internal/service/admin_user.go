@@ -537,6 +537,9 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 	if s.authCacheInvalidator != nil && balanceDiff != 0 {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
+	if change.New > VipBalanceThreshold {
+		s.vipUpgradeExecutor().EnsureUpgrade(ctx, userID)
+	}
 	s.tryAccrueAffiliateRebateForAdminRecharge(ctx, userID, operation, balance)
 
 	if s.billingCacheService != nil {
@@ -591,6 +594,11 @@ func (s *adminServiceImpl) tryAccrueAffiliateRebateForAdminRecharge(ctx context.
 	if rebate > 0 {
 		logger.LegacyPrintf("service.admin", "affiliate rebate accrued for admin recharge: user_id=%d amount=%.8f rebate=%.8f", userID, amount, rebate)
 	}
+}
+
+// vipUpgradeExecutor 惰性构造 VIP 升级执行器（依赖服务已有的仓储与缓存失效器）。
+func (s *adminServiceImpl) vipUpgradeExecutor() *vipUpgradeExecutor {
+	return NewVipUpgradeExecutor(s.userRepo, s.authCacheInvalidator)
 }
 
 func (s *adminServiceImpl) GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error) {

@@ -1634,6 +1634,14 @@ func (r *stubUserRepo) DeductBalance(ctx context.Context, id int64, amount float
 	return errors.New("not implemented")
 }
 
+func (r *stubUserRepo) SetVIPIfNotSet(ctx context.Context, id int64) (bool, error) {
+	return false, nil
+}
+
+func (r *stubUserRepo) UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error) {
+	return nil, nil
+}
+
 func (r *stubUserRepo) AdjustBalance(ctx context.Context, id int64, delta float64) (service.BalanceChange, error) {
 	return service.BalanceChange{}, errors.New("not implemented")
 }

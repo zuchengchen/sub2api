@@ -227,6 +227,14 @@ func (r *contentModerationTestUserRepo) DeductBalance(ctx context.Context, id in
 	panic("unexpected DeductBalance call")
 }
 
+func (r *contentModerationTestUserRepo) SetVIPIfNotSet(ctx context.Context, id int64) (bool, error) {
+	return false, nil
+}
+
+func (r *contentModerationTestUserRepo) UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error) {
+	return nil, nil
+}
+
 func (r *contentModerationTestUserRepo) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
 	panic("unexpected AdjustBalance call")
 }

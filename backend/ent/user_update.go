@@ -411,6 +411,20 @@ func (_u *UserUpdate) AddTotalRecharged(v float64) *UserUpdate {
 	return _u
 }
 
+// SetVip sets the "vip" field.
+func (_u *UserUpdate) SetVip(v bool) *UserUpdate {
+	_u.mutation.SetVip(v)
+	return _u
+}
+
+// SetNillableVip sets the "vip" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableVip(v *bool) *UserUpdate {
+	if v != nil {
+		_u.SetVip(*v)
+	}
+	return _u
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_u *UserUpdate) SetRpmLimit(v int) *UserUpdate {
 	_u.mutation.ResetRpmLimit()
@@ -1092,6 +1106,9 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedTotalRecharged(); ok {
 		_spec.AddField(user.FieldTotalRecharged, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.Vip(); ok {
+		_spec.SetField(user.FieldVip, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.RpmLimit(); ok {
 		_spec.SetField(user.FieldRpmLimit, field.TypeInt, value)
@@ -2087,6 +2104,20 @@ func (_u *UserUpdateOne) AddTotalRecharged(v float64) *UserUpdateOne {
 	return _u
 }
 
+// SetVip sets the "vip" field.
+func (_u *UserUpdateOne) SetVip(v bool) *UserUpdateOne {
+	_u.mutation.SetVip(v)
+	return _u
+}
+
+// SetNillableVip sets the "vip" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableVip(v *bool) *UserUpdateOne {
+	if v != nil {
+		_u.SetVip(*v)
+	}
+	return _u
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_u *UserUpdateOne) SetRpmLimit(v int) *UserUpdateOne {
 	_u.mutation.ResetRpmLimit()
@@ -2798,6 +2829,9 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if value, ok := _u.mutation.AddedTotalRecharged(); ok {
 		_spec.AddField(user.FieldTotalRecharged, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.Vip(); ok {
+		_spec.SetField(user.FieldVip, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.RpmLimit(); ok {
 		_spec.SetField(user.FieldRpmLimit, field.TypeInt, value)

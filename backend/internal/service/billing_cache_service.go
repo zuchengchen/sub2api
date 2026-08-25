@@ -113,6 +113,7 @@ type BillingCacheService struct {
 	cfg                   *config.Config
 	circuitBreaker        *billingCircuitBreaker
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	vipUpgrade            vipUpgradeExecutorProvider
 
 	cacheWriteChan     chan cacheWriteTask
 	cacheWriteWg       sync.WaitGroup
@@ -152,6 +153,11 @@ func NewBillingCacheService(
 	svc.circuitBreaker = newBillingCircuitBreaker(cfg.Billing.CircuitBreaker)
 	svc.startCacheWriteWorkers()
 	return svc
+}
+
+// SetVipUpgradeExecutor 注入 VIP 惰性升级执行器（可 nil，nil 时跳过升级触发）。
+func (s *BillingCacheService) SetVipUpgradeExecutor(executor vipUpgradeExecutorProvider) {
+	s.vipUpgrade = executor
 }
 
 // Stop 关闭缓存写入工作池
@@ -749,7 +755,7 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 			return err
 		}
 	} else {
-		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
+		if err := s.checkBalanceEligibility(ctx, user); err != nil {
 			return err
 		}
 	}
@@ -875,25 +881,48 @@ func (s *BillingCacheService) balanceBelowEligibilityThreshold(balance float64) 
 	return minimumReserve > 0 && balance < minimumReserve
 }
 
-// checkBalanceEligibility 检查余额模式资格
-func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userID int64) error {
-	balance, err := s.GetUserBalance(ctx, userID)
+// vipUpgradeExecutorProvider 提供余额模式下的 VIP 惰性升级触发能力（可 nil）。
+type vipUpgradeExecutorProvider interface {
+	EnsureUpgrade(ctx context.Context, userID int64) bool
+}
+
+// checkBalanceEligibility 检查余额模式资格。
+// VIP 用户的冻结金额不参与消费：可用余额 = 总余额 - VipFrozenReserve；
+// 同时惰性触发 VIP 升级检查，兜底覆盖充值/兑换等所有加余额路径。
+func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user *User) error {
+	balance, err := s.GetUserBalance(ctx, user.ID)
 	if err != nil {
 		if s.circuitBreaker != nil {
 			s.circuitBreaker.OnFailure(err)
 		}
-		logger.LegacyPrintf("service.billing_cache", "ALERT: billing balance check failed for user %d: %v", userID, err)
+		logger.LegacyPrintf("service.billing_cache", "ALERT: billing balance check failed for user %d: %v", user.ID, err)
 		return ErrBillingServiceUnavailable.WithCause(err)
 	}
 	if s.circuitBreaker != nil {
 		s.circuitBreaker.OnSuccess()
 	}
 
-	if s.balanceBelowEligibilityThreshold(balance) {
+	effectiveBalance := balance
+	if user.IsVIP {
+		effectiveBalance -= VipFrozenReserve
+	} else if balance > VipBalanceThreshold && s.vipUpgrade != nil {
+		s.triggerVipUpgrade(user.ID)
+	}
+
+	if s.balanceBelowEligibilityThreshold(effectiveBalance) {
 		return ErrInsufficientBalance
 	}
 
 	return nil
+}
+
+// triggerVipUpgrade 异步执行 VIP 升级，失败由后续请求的再次触发兜底。
+func (s *BillingCacheService) triggerVipUpgrade(userID int64) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		s.vipUpgrade.EnsureUpgrade(ctx, userID)
+	}()
 }
 
 // checkSubscriptionEligibility 检查订阅模式资格

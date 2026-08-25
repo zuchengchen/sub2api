@@ -31,6 +31,9 @@ type User struct {
 	BalanceNotifyExtraEmails   []NotifyEmailEntry `json:"balance_notify_extra_emails"`
 	TotalRecharged             float64            `json:"total_recharged"`
 
+	// IsVIP VIP 用户标记（余额超过阈值自动升级，永久生效）
+	IsVIP bool `json:"is_vip"`
+
 	// RPMLimit 用户级每分钟请求数上限（0 = 不限制），仅在所用分组未设置 rpm_limit 时作为兜底生效。
 	RPMLimit int `json:"rpm_limit"`
 

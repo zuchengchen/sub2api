@@ -140,6 +140,11 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		return allow
 	}
 	whitelistShadow := cfg.includesUserEmail(input.UserEmail)
+	// VIP 用户只执行第一层关键词拦截：不收集第二层候选，上下文级关键词按
+	// keyword_only 语义直接拦截。第一层保持 Enforce 模式，不做 shadow 降级。
+	secondLayerActive := cfg.SecondLayerEnabled &&
+		cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly &&
+		!input.UserIsVIP
 
 	allFragments := ExtractContentModerationFragments(input.Protocol, input.Body)
 	fragments, historicalFragments := partitionContentModerationReviewFragments(allFragments)
@@ -172,7 +177,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		scopeKeywordMatcher = runtime.keywordMatcher
 	}
 	var scopeCandidateMatcher *contentModerationPrefilterMatcher
-	if cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly {
+	if secondLayerActive {
 		scopeCandidateMatcher = runtime.secondLayerPrefilterMatcher
 	}
 	fragmentScopes := buildContentModerationFragmentScopes(
@@ -288,7 +293,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				reviewMatches = runtime.contextualKeywordMatcher.MatchAll(fragment.Text)
 			}
 			if keyword == "" && len(reviewMatches) > 0 &&
-				(!cfg.SecondLayerEnabled || cfg.KeywordBlockingMode == ContentModerationKeywordModeKeywordOnly) {
+				!secondLayerActive {
 				keyword = reviewMatches[0].Keyword
 				hardMatches = reviewMatches
 				reviewMatches = nil
@@ -370,7 +375,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			})
 		}
 
-		if cfg.SecondLayerEnabled && cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly {
+		if secondLayerActive {
 			if len(contextualMatches) > 0 && runtime.secondLayerPrefilterMatcher == nil {
 				releaseDecisionLock()
 				continue

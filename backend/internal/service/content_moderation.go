@@ -321,6 +321,7 @@ type ContentModerationCheckInput struct {
 	Scope       *ContentModerationScopeSnapshot
 	RawRequest  ContentModerationRawRequest
 	UserRole    string
+	UserIsVIP   bool
 	Reservation *ContentModerationPendingReservation
 
 	lineageFragments []ContentModerationFragment

@@ -46,6 +46,10 @@ type APIKeyAuthUserSnapshot struct {
 	BalanceNotifyExtraEmails   []NotifyEmailEntry `json:"balance_notify_extra_emails,omitempty"`
 	TotalRecharged             float64            `json:"total_recharged"`
 
+	// IsVIP VIP 用户标记：风控跳过第二层审核、gpt-pro 分组倍率减免、冻结余额。
+	// 升级时通过认证缓存失效广播，快照随下次请求重建。
+	IsVIP bool `json:"is_vip"`
+
 	// RPMLimit 用户级每分钟请求数上限（0 = 不限制）；用于 billing_cache_service.checkRPM 兜底判断。
 	RPMLimit int `json:"rpm_limit"`
 

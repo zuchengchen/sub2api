@@ -154,6 +154,14 @@ func (s *openAIRecordUsageUserRepoStub) DeductBalance(ctx context.Context, id in
 	return s.deductErr
 }
 
+func (s *openAIRecordUsageUserRepoStub) SetVIPIfNotSet(ctx context.Context, id int64) (bool, error) {
+	return false, nil
+}
+
+func (s *openAIRecordUsageUserRepoStub) UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error) {
+	return nil, nil
+}
+
 func (s *openAIRecordUsageUserRepoStub) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
 	panic("unexpected AdjustBalance call")
 }

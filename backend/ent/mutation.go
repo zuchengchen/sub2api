@@ -48429,6 +48429,7 @@ type UserMutation struct {
 	balance_notify_extra_emails   *string
 	total_recharged               *float64
 	addtotal_recharged            *float64
+	vip                           *bool
 	rpm_limit                     *int
 	addrpm_limit                  *int
 	clearedFields                 map[string]struct{}
@@ -49581,6 +49582,42 @@ func (m *UserMutation) ResetTotalRecharged() {
 	m.addtotal_recharged = nil
 }
 
+// SetVip sets the "vip" field.
+func (m *UserMutation) SetVip(b bool) {
+	m.vip = &b
+}
+
+// Vip returns the value of the "vip" field in the mutation.
+func (m *UserMutation) Vip() (r bool, exists bool) {
+	v := m.vip
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVip returns the old "vip" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldVip(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVip is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVip requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVip: %w", err)
+	}
+	return oldValue.Vip, nil
+}
+
+// ResetVip resets all changes to the "vip" field.
+func (m *UserMutation) ResetVip() {
+	m.vip = nil
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (m *UserMutation) SetRpmLimit(i int) {
 	m.rpm_limit = &i
@@ -50373,7 +50410,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 25)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -50443,6 +50480,9 @@ func (m *UserMutation) Fields() []string {
 	if m.total_recharged != nil {
 		fields = append(fields, user.FieldTotalRecharged)
 	}
+	if m.vip != nil {
+		fields = append(fields, user.FieldVip)
+	}
 	if m.rpm_limit != nil {
 		fields = append(fields, user.FieldRpmLimit)
 	}
@@ -50500,6 +50540,8 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.BalanceNotifyExtraEmails()
 	case user.FieldTotalRecharged:
 		return m.TotalRecharged()
+	case user.FieldVip:
+		return m.Vip()
 	case user.FieldRpmLimit:
 		return m.RpmLimit()
 	}
@@ -50557,6 +50599,8 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldBalanceNotifyExtraEmails(ctx)
 	case user.FieldTotalRecharged:
 		return m.OldTotalRecharged(ctx)
+	case user.FieldVip:
+		return m.OldVip(ctx)
 	case user.FieldRpmLimit:
 		return m.OldRpmLimit(ctx)
 	}
@@ -50728,6 +50772,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetTotalRecharged(v)
+		return nil
+	case user.FieldVip:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVip(v)
 		return nil
 	case user.FieldRpmLimit:
 		v, ok := value.(int)
@@ -50967,6 +51018,9 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldTotalRecharged:
 		m.ResetTotalRecharged()
+		return nil
+	case user.FieldVip:
+		m.ResetVip()
 		return nil
 	case user.FieldRpmLimit:
 		m.ResetRpmLimit()

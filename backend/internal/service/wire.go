@@ -816,6 +816,11 @@ func ProvideAPIKeyService(
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
 	svc.SetConcurrencyService(concurrencyService)
+	// VIP 升级执行器：apiKeyService 本身即 APIKeyAuthCacheInvalidator，
+	// 在此完成接线以避免 BillingCacheService → invalidator 的 wire 依赖环。
+	vipExecutor := NewVipUpgradeExecutor(userRepo, svc)
+	billingCacheService.SetVipUpgradeExecutor(vipExecutor)
+	vipExecutor.StartSweep()
 	return svc
 }
 

@@ -153,6 +153,12 @@ type UserRepository interface {
 
 	UpdateBalance(ctx context.Context, id int64, amount float64) error
 	DeductBalance(ctx context.Context, id int64, amount float64) error
+	// SetVIPIfNotSet 原子地将用户标记为 VIP（仅当当前未标记时生效）。
+	// 返回本次调用是否实际写入。VIP 升级永久生效，无降级路径。
+	SetVIPIfNotSet(ctx context.Context, id int64) (bool, error)
+	// UpgradeUsersAboveBalanceThreshold 将总余额超过 threshold 的非 VIP 用户
+	// 批量升级为 VIP，返回完成升级的用户 ID 列表。用于启动扫描兜底。
+	UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error)
 	// AdjustBalance 原子地把 delta 累加到余额上，并返回变更前后的值。结果为负时
 	// 拒绝写入并返回 ErrBalanceNegative。管理员的加/扣款必须走这里而不是
 	// "读余额→算新值→整行写回"，否则并发的计费扣款会被旧快照抹掉。

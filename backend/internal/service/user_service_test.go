@@ -212,6 +212,14 @@ func (m *mockUserRepo) DeductAvailableBalance(ctx context.Context, id int64, amo
 	return amount, nil
 }
 
+func (m *mockUserRepo) SetVIPIfNotSet(ctx context.Context, id int64) (bool, error) {
+	return false, nil
+}
+
+func (m *mockUserRepo) UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error) {
+	return nil, nil
+}
+
 func (m *mockUserRepo) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
 	panic("unexpected AdjustBalance call")
 }

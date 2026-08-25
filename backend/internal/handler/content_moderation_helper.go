@@ -167,6 +167,7 @@ func buildContentModerationInputForStage(c *gin.Context, apiKey *service.APIKey,
 		if apiKey.User != nil {
 			input.UserEmail = apiKey.User.Email
 			input.UserRole = apiKey.User.Role
+			input.UserIsVIP = apiKey.User.IsVIP
 		}
 		if apiKey.GroupID != nil {
 			groupID := *apiKey.GroupID

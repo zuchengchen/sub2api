@@ -340,6 +340,20 @@ func (_c *UserCreate) SetNillableTotalRecharged(v *float64) *UserCreate {
 	return _c
 }
 
+// SetVip sets the "vip" field.
+func (_c *UserCreate) SetVip(v bool) *UserCreate {
+	_c.mutation.SetVip(v)
+	return _c
+}
+
+// SetNillableVip sets the "vip" field if the given value is not nil.
+func (_c *UserCreate) SetNillableVip(v *bool) *UserCreate {
+	if v != nil {
+		_c.SetVip(*v)
+	}
+	return _c
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_c *UserCreate) SetRpmLimit(v int) *UserCreate {
 	_c.mutation.SetRpmLimit(v)
@@ -652,6 +666,10 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultTotalRecharged
 		_c.mutation.SetTotalRecharged(v)
 	}
+	if _, ok := _c.mutation.Vip(); !ok {
+		v := user.DefaultVip
+		_c.mutation.SetVip(v)
+	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		v := user.DefaultRpmLimit
 		_c.mutation.SetRpmLimit(v)
@@ -741,6 +759,9 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.TotalRecharged(); !ok {
 		return &ValidationError{Name: "total_recharged", err: errors.New(`ent: missing required field "User.total_recharged"`)}
+	}
+	if _, ok := _c.mutation.Vip(); !ok {
+		return &ValidationError{Name: "vip", err: errors.New(`ent: missing required field "User.vip"`)}
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		return &ValidationError{Name: "rpm_limit", err: errors.New(`ent: missing required field "User.rpm_limit"`)}
@@ -863,6 +884,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.TotalRecharged(); ok {
 		_spec.SetField(user.FieldTotalRecharged, field.TypeFloat64, value)
 		_node.TotalRecharged = value
+	}
+	if value, ok := _c.mutation.Vip(); ok {
+		_spec.SetField(user.FieldVip, field.TypeBool, value)
+		_node.Vip = value
 	}
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(user.FieldRpmLimit, field.TypeInt, value)
@@ -1462,6 +1487,18 @@ func (u *UserUpsert) AddTotalRecharged(v float64) *UserUpsert {
 	return u
 }
 
+// SetVip sets the "vip" field.
+func (u *UserUpsert) SetVip(v bool) *UserUpsert {
+	u.Set(user.FieldVip, v)
+	return u
+}
+
+// UpdateVip sets the "vip" field to the value that was provided on create.
+func (u *UserUpsert) UpdateVip() *UserUpsert {
+	u.SetExcluded(user.FieldVip)
+	return u
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (u *UserUpsert) SetRpmLimit(v int) *UserUpsert {
 	u.Set(user.FieldRpmLimit, v)
@@ -1907,6 +1944,20 @@ func (u *UserUpsertOne) AddTotalRecharged(v float64) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateTotalRecharged() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateTotalRecharged()
+	})
+}
+
+// SetVip sets the "vip" field.
+func (u *UserUpsertOne) SetVip(v bool) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetVip(v)
+	})
+}
+
+// UpdateVip sets the "vip" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateVip() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateVip()
 	})
 }
 
@@ -2524,6 +2575,20 @@ func (u *UserUpsertBulk) AddTotalRecharged(v float64) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateTotalRecharged() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateTotalRecharged()
+	})
+}
+
+// SetVip sets the "vip" field.
+func (u *UserUpsertBulk) SetVip(v bool) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetVip(v)
+	})
+}
+
+// UpdateVip sets the "vip" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateVip() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateVip()
 	})
 }
 

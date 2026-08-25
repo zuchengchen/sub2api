@@ -804,6 +804,8 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		groupDefault := apiKey.Group.RateMultiplier
 		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, groupDefault)
 	}
+	// VIP 分组倍率减免：对解析后的基础倍率直接减固定额度，高峰因子仍按比例叠加。
+	multiplier = applyVipGroupRateDiscount(user, apiKey.Group, multiplier)
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。高峰因子按请求时刻现算，
 	// 不并入上面的 getUserGroupRateMultiplier，以免污染 user:group 倍率缓存。
 	pricingAt := input.PricingAt

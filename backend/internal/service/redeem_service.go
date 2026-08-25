@@ -142,6 +142,7 @@ type RedeemService struct {
 	entClient            *dbent.Client
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	affiliateService     *AffiliateService
+	vipUpgrade           *vipUpgradeExecutor
 }
 
 // NewRedeemService 创建兑换码服务实例
@@ -166,6 +167,7 @@ func NewRedeemService(
 		entClient:            entClient,
 		authCacheInvalidator: authCacheInvalidator,
 		affiliateService:     affiliateService,
+		vipUpgrade:           NewVipUpgradeExecutor(userRepo, authCacheInvalidator),
 	}
 }
 
@@ -519,6 +521,7 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 	// 余额类正数兑换码触发邀请返利（best-effort，失败不影响兑换结果）
 	if redeemCode.Type == RedeemTypeBalance && redeemCode.Value > 0 {
 		s.tryAccrueAffiliateRebateForRedeem(ctx, userID, redeemCode.Value)
+		s.vipUpgrade.EnsureUpgrade(ctx, userID)
 	}
 
 	// 重新获取更新后的兑换码

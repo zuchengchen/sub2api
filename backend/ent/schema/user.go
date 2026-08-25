@@ -112,6 +112,12 @@ func (User) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Default(0),
 
+		// VIP 用户标记：总余额超过阈值时自动升级，永久生效。
+		// VIP 用户冻结 VipFrozenReserve 金额、跳过内容风控第二层审核，
+		// 并在指定分组享受倍率减免。
+		field.Bool("vip").
+			Default(false),
+
 		// 用户级每分钟请求数上限（0 = 不限制）。仅当所在分组未设置 rpm_limit 时作为兜底生效。
 		field.Int("rpm_limit").
 			Default(0),

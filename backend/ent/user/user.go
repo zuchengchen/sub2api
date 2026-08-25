@@ -61,6 +61,8 @@ const (
 	FieldBalanceNotifyExtraEmails = "balance_notify_extra_emails"
 	// FieldTotalRecharged holds the string denoting the total_recharged field in the database.
 	FieldTotalRecharged = "total_recharged"
+	// FieldVip holds the string denoting the vip field in the database.
+	FieldVip = "vip"
 	// FieldRpmLimit holds the string denoting the rpm_limit field in the database.
 	FieldRpmLimit = "rpm_limit"
 	// EdgeAPIKeys holds the string denoting the api_keys edge name in mutations.
@@ -217,6 +219,7 @@ var Columns = []string{
 	FieldBalanceNotifyThreshold,
 	FieldBalanceNotifyExtraEmails,
 	FieldTotalRecharged,
+	FieldVip,
 	FieldRpmLimit,
 }
 
@@ -288,6 +291,8 @@ var (
 	DefaultBalanceNotifyExtraEmails string
 	// DefaultTotalRecharged holds the default value on creation for the "total_recharged" field.
 	DefaultTotalRecharged float64
+	// DefaultVip holds the default value on creation for the "vip" field.
+	DefaultVip bool
 	// DefaultRpmLimit holds the default value on creation for the "rpm_limit" field.
 	DefaultRpmLimit int
 )
@@ -413,6 +418,11 @@ func ByBalanceNotifyExtraEmails(opts ...sql.OrderTermOption) OrderOption {
 // ByTotalRecharged orders the results by the total_recharged field.
 func ByTotalRecharged(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTotalRecharged, opts...).ToFunc()
+}
+
+// ByVip orders the results by the vip field.
+func ByVip(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVip, opts...).ToFunc()
 }
 
 // ByRpmLimit orders the results by the rpm_limit field.
