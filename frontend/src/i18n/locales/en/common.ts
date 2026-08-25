@@ -55,7 +55,7 @@ export default {
 	    frozenBalance: 'Frozen balance',
 	    totalBalance: 'Total balance',
 	    available: 'Available',
-    vipBadge: 'SUPER VIP',
+    vipBadge: 'SVIP',
     vipBadgeTitle: 'Super VIP member: granted automatically when the balance threshold is met, with exclusive rate discount and moderation privileges',
     copiedToClipboard: 'Copied to clipboard',
     copied: 'Copied',

@@ -55,7 +55,7 @@ export default {
 	    frozenBalance: '冻结金额',
 	    totalBalance: '总余额',
 	    available: '可用',
-    vipBadge: '超级VIP',
+    vipBadge: 'SVIP',
     vipBadgeTitle: '超级 VIP 会员：余额达标自动授予，享专属倍率优惠与风控特权',
     copiedToClipboard: '已复制到剪贴板',
     copied: '已复制',
