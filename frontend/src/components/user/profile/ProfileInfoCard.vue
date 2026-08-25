@@ -27,6 +27,7 @@
                 <span :class="['badge', user?.role === 'admin' ? 'badge-primary' : 'badge-gray']">
                   {{ user?.role === 'admin' ? t('profile.administrator') : t('profile.user') }}
                 </span>
+                <VipBadge v-if="user?.is_vip" size="md" />
                 <span
                   :class="['badge', user?.status === 'active' ? 'badge-success' : 'badge-danger']"
                 >
@@ -183,6 +184,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import VipBadge from '@/components/common/VipBadge.vue'
 import ProfileAvatarCard from '@/components/user/profile/ProfileAvatarCard.vue'
 import ProfileEditForm from '@/components/user/profile/ProfileEditForm.vue'
 import ProfileIdentityBindingsSection from '@/components/user/profile/ProfileIdentityBindingsSection.vue'

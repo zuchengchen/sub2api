@@ -118,8 +118,11 @@
               <span v-else>{{ userInitials }}</span>
             </div>
             <div class="hidden text-left md:block">
-              <div class="text-sm font-medium text-gray-900 dark:text-white">
-                {{ displayName }}
+              <div class="flex items-center gap-1.5">
+                <span class="text-sm font-medium text-gray-900 dark:text-white">
+                  {{ displayName }}
+                </span>
+                <VipBadge v-if="user.is_vip" size="xs" />
               </div>
               <div class="text-xs text-gray-500 dark:text-dark-400">
                 {{ t('admin.users.roles.' + user.role) }}
@@ -133,8 +136,9 @@
             <div v-if="dropdownOpen" class="dropdown right-0 mt-2 w-56">
               <!-- User Info -->
               <div class="border-b border-gray-100 px-4 py-3 dark:border-dark-700">
-                <div class="text-sm font-medium text-gray-900 dark:text-white">
+                <div class="flex items-center gap-1.5 text-sm font-medium text-gray-900 dark:text-white">
                   {{ displayName }}
+                  <VipBadge v-if="user.is_vip" size="xs" />
                 </div>
                 <div class="text-xs text-gray-500 dark:text-dark-400">{{ user.email }}</div>
               </div>
@@ -258,6 +262,7 @@ import { useAdminSettingsStore } from '@/stores/adminSettings'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMini.vue'
 import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
+import VipBadge from '@/components/common/VipBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'

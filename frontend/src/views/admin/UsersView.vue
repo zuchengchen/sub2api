@@ -292,8 +292,11 @@
             </div>
           </template>
 
-          <template #cell-username="{ value }">
-            <span class="text-sm text-gray-700 dark:text-gray-300">{{ value || '-' }}</span>
+          <template #cell-username="{ row }">
+            <span class="inline-flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-300">
+              {{ row.username || '-' }}
+              <VipBadge v-if="row.is_vip" size="xs" />
+            </span>
           </template>
 
           <template #cell-notes="{ value }">
@@ -794,6 +797,7 @@ import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
+import VipBadge from '@/components/common/VipBadge.vue'
 import Select from '@/components/common/Select.vue'
 import { buildApiKeyGroupFilterOptions } from './apiKeyGroupFilterOptions'
 import UserAttributesConfigModal from '@/components/user/UserAttributesConfigModal.vue'

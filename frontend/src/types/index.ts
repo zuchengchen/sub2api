@@ -87,6 +87,7 @@ export interface User {
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
   frozen_balance?: number // Balance currently held by async batch jobs
+  is_vip?: boolean // Super VIP flag (auto-granted when total balance crosses the threshold; permanent)
   concurrency: number // Allowed concurrent requests
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
   status: 'active' | 'disabled' // Account status
