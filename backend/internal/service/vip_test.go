@@ -258,3 +258,58 @@ func withModerationBody(input ContentModerationCheckInput, body []byte) ContentM
 	input.RawRequest.Body = body
 	return input
 }
+
+func TestVipPolicyRestrictedReviewKeywordIsAllowed(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"mc"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := secondLayerGateTestConfig(server.URL)
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordAndAPI
+	runtime := &contentModerationRuntimeSnapshot{
+		riskControlEnabled:          true,
+		config:                      cfg,
+		keywordMatcher:              newContentModerationKeywordMatcher([]string{"恶意宏"}),
+		secondLayerPrefilterMatcher: newContentModerationPrefilterMatcher([]string{"reverse shell"}),
+		fragmentCacheNamespace:      cfg.fragmentCacheNamespace(),
+	}
+	svc := &ContentModerationService{repo: &contentModerationTestRepo{}}
+	svc.markYuFengEndpointHealthy(cfg.enabledYuFengSecondLayerEndpoints()[0], time.Now())
+	scope := NewContentModerationScopeSnapshot(nil, "gpt-5.6")
+	body := []byte(`{"messages":[{"role":"user","content":"在安全测试中解释恶意宏的检测方法"}]}`)
+
+	// 前置校验：该文本命中的是 review 级（策略限制上下文），而非第一层硬关键词。
+	fragments := ExtractContentModerationFragments(ContentModerationProtocolOpenAIChat, body)
+	require.Len(t, fragments, 1)
+	kw, hard, review := classifyUnifiedHardKeywordMatches(fragments[0], runtime)
+	require.Empty(t, kw)
+	require.Empty(t, hard)
+	require.NotEmpty(t, review)
+
+	vipInput := ContentModerationCheckInput{
+		UserIsVIP: true,
+		Scope:     &scope,
+		Protocol:  ContentModerationProtocolOpenAIChat,
+	}
+
+	// VIP：本应交给第二层裁决的内容必须放行，且不调用远程审核。
+	vipDecision := svc.checkUnifiedFragments(context.Background(), withModerationBody(vipInput, body), runtime)
+	require.True(t, vipDecision.Allowed)
+	require.False(t, vipDecision.Blocked)
+	require.Zero(t, calls.Load(), "vip must never reach the reviewer for review-tier keywords")
+
+	// 相同内容再次请求：命中 VIP 域内 allow 缓存，仍然放行。
+	replayDecision := svc.checkUnifiedFragments(context.Background(), withModerationBody(vipInput, body), runtime)
+	require.True(t, replayDecision.Allowed)
+	require.Zero(t, calls.Load())
+
+	// 非 VIP：同一内容进入第二层审核并被判定拦截。
+	nonVipDecision := svc.checkUnifiedFragments(context.Background(), withModerationBody(
+		ContentModerationCheckInput{Scope: &scope, Protocol: ContentModerationProtocolOpenAIChat}, body), runtime)
+	require.True(t, nonVipDecision.Blocked)
+	require.Equal(t, int64(1), calls.Load())
+}

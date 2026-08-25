@@ -29,7 +29,11 @@ var contentModerationBodySizeUpperBounds = [...]int64{
 
 const (
 	contentModerationWhitelistShadowCacheSuffix = ":whitelist-shadow-v1"
-	contentModerationLineageCacheSuffix         = ":lineage-rejection-v1"
+	// contentModerationVipCacheSuffix VIP 请求的独立缓存域后缀。
+	// 升级前共享域内的第二层 restricted/block 判定不得对 VIP 重放；
+	// VIP 域内只积累其自身的第一层硬拦截记录。
+	contentModerationVipCacheSuffix     = ":vip-v1"
+	contentModerationLineageCacheSuffix = ":lineage-rejection-v1"
 )
 
 const (
@@ -140,8 +144,11 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		return allow
 	}
 	whitelistShadow := cfg.includesUserEmail(input.UserEmail)
-	// VIP 用户只执行第一层关键词拦截：不收集第二层候选，上下文级关键词按
-	// keyword_only 语义直接拦截。第一层保持 Enforce 模式，不做 shadow 降级。
+	// VIP 用户只执行第一层关键词拦截：
+	//   - 不收集第二层候选，也不调用远程审核；
+	//   - 上下文级/策略限制级关键词（本应交由第二层裁决）对 VIP 一律放行，
+	//     否则没有第二层兜底时会把"待审核"内容直接判死，比普通用户更严；
+	//   - 第一层高置信硬关键词保持 Enforce 拦截，不做 shadow 降级。
 	secondLayerActive := cfg.SecondLayerEnabled &&
 		cfg.KeywordBlockingMode != ContentModerationKeywordModeKeywordOnly &&
 		!input.UserIsVIP
@@ -159,13 +166,24 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	if reviewNamespace == "" {
 		reviewNamespace = cfg.fragmentCacheNamespace()
 	}
+	// 片段缓存 / 谱系拒绝 / 历史硬关键词统一使用该命名空间：
+	//   - whitelist shadow 流量走影子域（其判定不回写主域）；
+	//   - VIP 走独立域：升级前共享域里的 restricted/block 判定（含第二层结论）
+	//     不得对 VIP 重放；VIP 域内只积累其自身的第一层硬拦截记录。
+	fragmentNamespace := reviewNamespace
+	if whitelistShadow {
+		fragmentNamespace += contentModerationWhitelistShadowCacheSuffix
+	}
+	if input.UserIsVIP {
+		fragmentNamespace += contentModerationVipCacheSuffix
+	}
 	if !whitelistShadow {
-		if lineageDecision := s.replayUnifiedLineageRejection(ctx, input, cfg, reviewNamespace, cache, lineageFragments); lineageDecision != nil {
+		if lineageDecision := s.replayUnifiedLineageRejection(ctx, input, cfg, fragmentNamespace, cache, lineageFragments); lineageDecision != nil {
 			return lineageDecision
 		}
 	}
 	if !whitelistShadow {
-		if historyDecision := s.checkUnifiedHistoryHardKeywords(ctx, input, cfg, runtime, reviewNamespace, cache, historicalFragments); historyDecision != nil {
+		if historyDecision := s.checkUnifiedHistoryHardKeywords(ctx, input, cfg, runtime, fragmentNamespace, cache, historicalFragments); historyDecision != nil {
 			return historyDecision
 		}
 	}
@@ -190,10 +208,6 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	)
 	if len(boundaryFragments) > 0 {
 		checkFragments = append(boundaryFragments, checkFragments...)
-	}
-	fragmentNamespace := reviewNamespace
-	if whitelistShadow {
-		fragmentNamespace += contentModerationWhitelistShadowCacheSuffix
 	}
 	candidates := make([]contentModerationCandidateFragment, 0, len(checkFragments))
 	for _, checkFragment := range checkFragments {
@@ -276,7 +290,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						if lineageEntry.SourceLogID == nil {
 							lineageEntry.SourceLogID = contentModerationLogIDPtr(log)
 						}
-						s.putUnifiedLineageRejection(ctx, input, cfg, reviewNamespace, cache, fragment, lineageEntry)
+						s.putUnifiedLineageRejection(ctx, input, cfg, fragmentNamespace, cache, fragment, lineageEntry)
 					}
 					releaseDecisionLock()
 					return decision
@@ -292,8 +306,10 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			if keyword == "" && len(reviewMatches) == 0 && checkFragment.WholeFragmentTruncated && runtime.contextualKeywordMatcher != nil {
 				reviewMatches = runtime.contextualKeywordMatcher.MatchAll(fragment.Text)
 			}
-			if keyword == "" && len(reviewMatches) > 0 &&
-				!secondLayerActive {
+			// review 级关键词本应交由第二层裁决；仅当配置本身无第二层
+			// （keyword_only/停用）时才按 keyword-only 语义升级为直接拦截。
+			// VIP 永不升级：没有第二层兜底时放行，避免比普通用户更严。
+			if keyword == "" && len(reviewMatches) > 0 && !secondLayerActive && !input.UserIsVIP {
 				keyword = reviewMatches[0].Keyword
 				hardMatches = reviewMatches
 				reviewMatches = nil
@@ -354,14 +370,16 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						if fragmentCacheEligible {
 							s.putUnifiedFragmentCacheEntry(ctx, cache, fragmentNamespace, cfg, fragment, cacheEntry)
 						}
-						s.putUnifiedLineageRejection(ctx, input, cfg, reviewNamespace, cache, fragment, cacheEntry)
+						s.putUnifiedLineageRejection(ctx, input, cfg, fragmentNamespace, cache, fragment, cacheEntry)
 					}
 					releaseDecisionLock()
 					return decision
 				}
 			}
 		}
-		if len(contextualMatches) > 0 {
+		// review 级候选只服务于第二层审核；VIP 无第二层，直接放行并写 allow
+		// 缓存，避免重复评估，也防止旧 restricted 判定残留。
+		if len(contextualMatches) > 0 && !input.UserIsVIP {
 			// Contextual hard-keyword decisions retain the complete logical
 			// fragment when it fits the reviewer budget. The builder distinguishes
 			// harmless metadata bounds from omitted context that must fail closed.
@@ -417,7 +435,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 			releaseDecisionLock()
 			continue
 		}
-		if len(contextualMatches) > 0 {
+		if len(contextualMatches) > 0 && !input.UserIsVIP {
 			releaseDecisionLock()
 			continue
 		}
@@ -1604,6 +1622,10 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	whitelistShadow bool,
 ) *ContentModerationDecision {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
+	// 兜底守卫：VIP 不进入任何第二层审核路径（正常流程已在候选收集阶段排除）。
+	if input.UserIsVIP {
+		return allow
+	}
 	limit := contentModerationReviewInputLimit(cfg)
 	works := make([]contentModerationCandidateReviewWork, 0, len(candidates))
 	for _, candidate := range candidates {
