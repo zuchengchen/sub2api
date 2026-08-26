@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -29,13 +30,14 @@ func VipDiscountedGroup(groupName string) bool {
 	return strings.EqualFold(strings.TrimSpace(groupName), VipDiscountedGroupName)
 }
 
-// ApplyVipRateDiscount 对已解析的基础倍率应用 VIP 减免，结果不为负。
+// ApplyVipRateDiscount 对已解析的基础倍率应用 VIP 减免，结果不为负，
+// 并消除浮点减法噪声（如 0.17-0.02=0.15000000000000002）。
 func ApplyVipRateDiscount(multiplier float64) float64 {
 	discounted := multiplier - VipRateDiscount
 	if discounted < 0 {
 		return 0
 	}
-	return discounted
+	return math.Round(discounted*1e6) / 1e6
 }
 
 // applyVipGroupRateDiscount 仅当 VIP 用户命中减免分组时应用倍率减免。

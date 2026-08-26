@@ -42,3 +42,19 @@ describe('GroupOptionItem description layout', () => {
     expect(wrapper.find('[title]').attributes('title')).toBe(description)
   })
 })
+
+describe('GroupOptionItem rate formatting', () => {
+  it('renders the custom rate without floating point noise', () => {
+    const wrapper = mount(GroupOptionItem, {
+      props: {
+        name: 'GPT-PRO',
+        platform: 'openai',
+        rateMultiplier: 0.17,
+        userRateMultiplier: 0.15000000000000002,
+      },
+    })
+
+    const text = wrapper.find('span.font-bold').text()
+    expect(text).toBe('0.15x')
+  })
+})

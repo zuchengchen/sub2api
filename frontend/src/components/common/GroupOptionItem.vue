@@ -28,11 +28,11 @@
         <!-- Rate pill (platform color) -->
         <span v-if="rateMultiplier !== undefined" :class="['inline-flex items-center whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold', ratePillClass]">
           <template v-if="hasCustomRate">
-            <span class="mr-1 line-through opacity-50">{{ rateMultiplier }}x</span>
-            <span class="font-bold">{{ userRateMultiplier }}x</span>
+            <span class="mr-1 line-through opacity-50">{{ formatRate(rateMultiplier) }}x</span>
+            <span class="font-bold">{{ formatRate(userRateMultiplier) }}x</span>
           </template>
           <template v-else>
-            {{ rateMultiplier }}x {{ t('admin.groups.rateLabel') }}
+            {{ formatRate(rateMultiplier) }}x {{ t('admin.groups.rateLabel') }}
           </template>
         </span>
         <span
@@ -106,6 +106,14 @@ const appStore = useAppStore()
 const hasPeakRate = computed(() => {
   return Boolean(props.peakRateEnabled && props.peakStart && props.peakEnd)
 })
+
+// formatRate 去除浮点噪声（如 0.15000000000000002 → "0.15"）。
+function formatRate(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  return Number(value.toFixed(6)).toString()
+}
 
 const peakRateText = computed(() => {
   return formatPeakRateWindow(
