@@ -44,9 +44,9 @@ const { t } = useI18n()
 const displayLabel = computed(() => props.label || t('common.vipBadge'))
 
 const sizeClasses = {
-  xs: 'gap-0.5 rounded-md px-1.5 py-0 text-[10px]',
-  sm: 'gap-1 rounded-lg px-2 py-[3px] text-[11px]',
-  md: 'gap-1 rounded-xl px-2.5 py-1 text-xs'
+  xs: 'gap-1 rounded-md px-2 py-[3px] text-[10px]',
+  sm: 'gap-1 rounded-lg px-3 py-1 text-[11px]',
+  md: 'gap-1.5 rounded-xl px-4 py-1.5 text-xs'
 }
 
 const iconClasses = {
@@ -84,7 +84,8 @@ const iconClasses = {
 }
 
 .vip-badge-label {
-  line-height: 1;
+  line-height: 1.25;
+  padding-right: 0.09em;
 }
 
 .vip-badge-shine {
