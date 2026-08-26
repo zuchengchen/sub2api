@@ -1169,6 +1169,18 @@ func (s *APIKeyService) GetUserGroupRates(ctx context.Context, userID int64) (ma
 	return rates, nil
 }
 
+// IsUserVIP 查询用户是否为 VIP（供展示层折算实际倍率等用途）。
+func (s *APIKeyService) IsUserVIP(ctx context.Context, userID int64) (bool, error) {
+	if s.userRepo == nil || userID <= 0 {
+		return false, nil
+	}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	return user.IsVIP, nil
+}
+
 // CheckAPIKeyQuotaAndExpiry checks if the API key is valid for use (not expired, quota not exhausted)
 // Returns nil if valid, error if invalid
 func (s *APIKeyService) CheckAPIKeyQuotaAndExpiry(apiKey *APIKey) error {

@@ -81,7 +81,7 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 	}
 
 	// 有专属倍率:user_rate_multiplier 序列化输出
-	dto := toModelPlazaGroupDTO(&g, map[int64]float64{2: 0.5})
+	dto := toModelPlazaGroupDTO(&g, map[int64]float64{2: 0.5}, false)
 	raw, err := json.Marshal(dto)
 	require.NoError(t, err)
 	var decoded map[string]any
@@ -117,7 +117,7 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 	require.False(t, hasTimePricing, "无分时时不输出 time_pricing")
 
 	// 无专属倍率:user_rate_multiplier 整个字段省略
-	dtoNoRate := toModelPlazaGroupDTO(&g, nil)
+	dtoNoRate := toModelPlazaGroupDTO(&g, nil, false)
 	rawNoRate, err := json.Marshal(dtoNoRate)
 	require.NoError(t, err)
 	var decodedNoRate map[string]any
@@ -157,7 +157,7 @@ func TestToModelPlazaGroupDTO_LongContextTiersAndBasis(t *testing.T) {
 		}},
 	}
 
-	raw, err := json.Marshal(toModelPlazaGroupDTO(&g, nil))
+	raw, err := json.Marshal(toModelPlazaGroupDTO(&g, nil, false))
 	require.NoError(t, err)
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
@@ -201,7 +201,7 @@ func TestToModelPlazaGroupDTO_TimePricing(t *testing.T) {
 			}},
 		}},
 	}
-	raw, err := json.Marshal(toModelPlazaGroupDTO(&g, nil))
+	raw, err := json.Marshal(toModelPlazaGroupDTO(&g, nil, false))
 	require.NoError(t, err)
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
@@ -220,4 +220,35 @@ func TestToModelPlazaGroupDTO_TimePricing(t *testing.T) {
 	weekdaysModel := decoded["models"].([]any)[1].(map[string]any)
 	weekdaysTP := weekdaysModel["time_pricing"].(map[string]any)
 	require.Equal(t, true, weekdaysTP["weekdays_only"])
+}
+
+func TestToModelPlazaGroupDTOVipDiscount(t *testing.T) {
+	g := service.PlazaGroup{
+		ID:               37,
+		Name:             "GPT-PRO",
+		Platform:         "openai",
+		RateMultiplier:   0.15,
+		IsExclusive:      false,
+		SubscriptionType: "standard",
+	}
+
+	// VIP 命中减免分组：无管理员覆盖时按分组默认折算，并以专属倍率字段展示。
+	dto := toModelPlazaGroupDTO(&g, nil, true)
+	require.NotNil(t, dto.UserRateMultiplier)
+	require.InDelta(t, 0.13, *dto.UserRateMultiplier, 1e-9)
+
+	// VIP + 管理员专属覆盖：在覆盖值基础上折算（与计费同源）。
+	dtoOverride := toModelPlazaGroupDTO(&g, map[int64]float64{37: 0.20}, true)
+	require.NotNil(t, dtoOverride.UserRateMultiplier)
+	require.InDelta(t, 0.18, *dtoOverride.UserRateMultiplier, 1e-9)
+
+	// 非 VIP：不产生 user_rate_multiplier。
+	dtoPlain := toModelPlazaGroupDTO(&g, nil, false)
+	require.Nil(t, dtoPlain.UserRateMultiplier)
+
+	// VIP 但非减免分组：不折算。
+	other := g
+	other.Name = "claude-code"
+	dtoOther := toModelPlazaGroupDTO(&other, nil, true)
+	require.Nil(t, dtoOther.UserRateMultiplier)
 }

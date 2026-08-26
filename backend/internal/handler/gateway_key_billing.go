@@ -63,18 +63,24 @@ func (h *GatewayHandler) KeyBillingInfo(c *gin.Context) {
 
 func (h *GatewayHandler) resolveKeyBillingRate(c *gin.Context, apiKey *service.APIKey) (float64, bool) {
 	groupRate := apiKey.Group.RateMultiplier
+	var resolved float64
 	switch apiKey.Group.Platform {
 	case service.PlatformOpenAI, service.PlatformGrok:
 		if h.openAIGatewayService == nil {
 			return 0, false
 		}
-		return h.openAIGatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), apiKey.UserID, *apiKey.GroupID, groupRate), true
+		resolved = h.openAIGatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), apiKey.UserID, *apiKey.GroupID, groupRate)
 	default:
 		if h.gatewayService == nil {
 			return 0, false
 		}
-		return h.gatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), apiKey.UserID, *apiKey.GroupID, groupRate), true
+		resolved = h.gatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), apiKey.UserID, *apiKey.GroupID, groupRate)
 	}
+	// 与计费同源：VIP 减免在用户覆盖/分组默认解析后叠加（高峰因子在外层相乘）。
+	if isVip := apiKey.User != nil && apiKey.User.IsVIP; isVip {
+		resolved = service.ApplyVipRateDiscount(resolved)
+	}
+	return resolved, true
 }
 
 func buildKeyBillingInfo(apiKey *service.APIKey, resolvedRate float64, now time.Time) keyBillingInfoResponse {

@@ -130,6 +130,7 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	// allowedExclusive == nil 表示匿名；登录用户恒为非 nil（可能为空集合）。
 	var allowedExclusive map[int64]struct{}
 	var userRates map[int64]float64
+	var userIsVIP bool
 	if authed {
 		allowedExclusive, err = h.apiKeyService.GetUserAllowedGroupIDSet(c.Request.Context(), subject.UserID)
 		if err != nil {
@@ -143,13 +144,18 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 			slog.Warn("model_plaza_user_rates_failed", "error", err, "user_id", subject.UserID)
 			userRates = nil
 		}
+		if userIsVIP, err = h.apiKeyService.IsUserVIP(c.Request.Context(), subject.UserID); err != nil {
+			// VIP 折算同样只是展示增强，失败按非 VIP 展示。
+			slog.Warn("model_plaza_user_vip_failed", "error", err, "user_id", subject.UserID)
+			userIsVIP = false
+		}
 	}
 
 	visible := filterPlazaVisibleGroups(groups, allowedExclusive)
 
 	out := make([]modelPlazaGroup, 0, len(visible))
 	for i := range visible {
-		out = append(out, toModelPlazaGroupDTO(&visible[i], userRates))
+		out = append(out, toModelPlazaGroupDTO(&visible[i], userRates, userIsVIP))
 	}
 	response.Success(c, modelPlazaResponse{
 		Description: rt.Description,
@@ -179,7 +185,7 @@ func filterPlazaVisibleGroups(
 }
 
 // toModelPlazaGroupDTO 将 service 层广场分组映射为白名单 DTO,并合并用户专属倍率。
-func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) modelPlazaGroup {
+func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64, userIsVIP bool) modelPlazaGroup {
 	models := make([]modelPlazaModel, 0, len(g.Models))
 	for i := range g.Models {
 		m := &g.Models[i]
@@ -208,6 +214,17 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 		ImageRateMultiplier:       g.ImageRateMultiplier,
 		LongContextPricingEnabled: g.LongContextPricingEnabled,
 		Models:                    models,
+	}
+	// 展示倍率与计费同源：管理员专属覆盖 ?? 分组默认；VIP 命中减免分组时
+	// 再叠加 -0.02，前端按专属倍率样式展示真实计费口径。
+	if userIsVIP && service.VipDiscountedGroup(g.Name) {
+		base := g.RateMultiplier
+		if rate, ok := userRates[g.ID]; ok {
+			base = rate
+		}
+		effective := service.ApplyVipRateDiscount(base)
+		dto.UserRateMultiplier = &effective
+		return dto
 	}
 	if rate, ok := userRates[g.ID]; ok {
 		dto.UserRateMultiplier = &rate
