@@ -1169,6 +1169,38 @@ func (s *APIKeyService) GetUserGroupRates(ctx context.Context, userID int64) (ma
 	return rates, nil
 }
 
+// GetDisplayUserGroupRates 返回展示口径的专属倍率表：管理员覆盖 ?? 分组默认，
+// VIP 命中减免分组时叠加 -0.02，与实际计费同源。供前端以专属倍率样式展示。
+func (s *APIKeyService) GetDisplayUserGroupRates(ctx context.Context, userID int64) (map[int64]float64, error) {
+	rates, err := s.GetUserGroupRates(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if s.userRepo == nil || s.groupRepo == nil || userID <= 0 {
+		return rates, nil
+	}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil || !user.IsVIP {
+		return rates, nil
+	}
+	groups, err := s.groupRepo.ListActive(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list active groups: %w", err)
+	}
+	for i := range groups {
+		group := &groups[i]
+		if !VipDiscountedGroup(group.Name) {
+			continue
+		}
+		base, hasOverride := rates[group.ID]
+		if !hasOverride {
+			base = group.RateMultiplier
+		}
+		rates[group.ID] = ApplyVipRateDiscount(base)
+	}
+	return rates, nil
+}
+
 // IsUserVIP 查询用户是否为 VIP（供展示层折算实际倍率等用途）。
 func (s *APIKeyService) IsUserVIP(ctx context.Context, userID int64) (bool, error) {
 	if s.userRepo == nil || userID <= 0 {

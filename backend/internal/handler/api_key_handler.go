@@ -348,7 +348,7 @@ func (h *APIKeyHandler) GetUserGroupRates(c *gin.Context) {
 		return
 	}
 
-	rates, err := h.apiKeyService.GetUserGroupRates(c.Request.Context(), subject.UserID)
+	rates, err := h.apiKeyService.GetDisplayUserGroupRates(c.Request.Context(), subject.UserID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
