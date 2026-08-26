@@ -265,6 +265,7 @@ import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
 import VipBadge from '@/components/common/VipBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { sanitizeUrl } from '@/utils/url'
+import { displayAvailableBalance, displayFrozenBalance } from '@/utils/vip-balance'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 
 const router = useRouter()
@@ -282,8 +283,8 @@ const contactInfo = computed(() => appStore.contactInfo)
 const docUrl = computed(() => sanitizeUrl(appStore.docUrl))
 const modelPlazaEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.modelPlaza))
 const avatarUrl = computed(() => user.value?.avatar_url?.trim() || '')
-const availableBalance = computed(() => Number(user.value?.balance || 0))
-const frozenBalance = computed(() => Number(user.value?.frozen_balance || 0))
+const availableBalance = computed(() => displayAvailableBalance(user.value))
+const frozenBalance = computed(() => displayFrozenBalance(user.value))
 const totalBalance = computed(() => availableBalance.value + frozenBalance.value)
 const balanceAvailableText = computed(() => t('common.availableBalance') === 'common.availableBalance' ? '可用余额' : t('common.availableBalance'))
 const balanceFrozenText = computed(() => t('common.frozenBalance') === 'common.frozenBalance' ? '冻结金额' : t('common.frozenBalance'))
