@@ -17,8 +17,8 @@ const (
 	// VipFrozenReserve VIP 冻结金额：可用余额 = balance - VipFrozenReserve。
 	// 逻辑冻结，不占用 users.frozen_balance（该列被批量图片余额暂扣使用）。
 	VipFrozenReserve = 100.0
-	// VipRateDiscount VIP 在指定分组的计费倍率减免额（显示倍率 - 0.02）。
-	VipRateDiscount = 0.02
+	// VipRateDiscount VIP 在指定分组的计费倍率减免额（显示倍率 - 0.05）。
+	VipRateDiscount = 0.05
 	// VipDiscountedGroupName 享受倍率减免的分组名（大小写不敏感）。
 	VipDiscountedGroupName = "gpt-pro"
 	// vipSweepTimeout 启动扫描的超时上限。
@@ -31,7 +31,7 @@ func VipDiscountedGroup(groupName string) bool {
 }
 
 // ApplyVipRateDiscount 对已解析的基础倍率应用 VIP 减免，结果不为负，
-// 并消除浮点减法噪声（如 0.17-0.02=0.15000000000000002）。
+// 并消除浮点减法噪声（如 0.17-0.05=0.12000000000000001）。
 func ApplyVipRateDiscount(multiplier float64) float64 {
 	discounted := multiplier - VipRateDiscount
 	if discounted < 0 {

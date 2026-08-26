@@ -13,8 +13,8 @@ import (
 )
 
 func TestApplyVipRateDiscount(t *testing.T) {
-	require.InDelta(t, 0.13, ApplyVipRateDiscount(0.15), 1e-9)
-	require.InDelta(t, 0.05, ApplyVipRateDiscount(0.07), 1e-9)
+	require.InDelta(t, 0.10, ApplyVipRateDiscount(0.15), 1e-9)
+	require.InDelta(t, 0.02, ApplyVipRateDiscount(0.07), 1e-9)
 	require.InDelta(t, 0.0, ApplyVipRateDiscount(0.02), 1e-9)
 	require.InDelta(t, 0.0, ApplyVipRateDiscount(0.01), 1e-9)
 }
@@ -34,7 +34,7 @@ func TestApplyVipGroupRateDiscount(t *testing.T) {
 	group := &Group{Name: "gpt-pro"}
 	other := &Group{Name: "claude-code"}
 
-	require.InDelta(t, 0.13, applyVipGroupRateDiscount(vip, group, 0.15), 1e-9)
+	require.InDelta(t, 0.10, applyVipGroupRateDiscount(vip, group, 0.15), 1e-9)
 	require.InDelta(t, 0.15, applyVipGroupRateDiscount(normal, group, 0.15), 1e-9)
 	require.InDelta(t, 0.15, applyVipGroupRateDiscount(vip, other, 0.15), 1e-9)
 	require.InDelta(t, 0.15, applyVipGroupRateDiscount(vip, nil, 0.15), 1e-9)

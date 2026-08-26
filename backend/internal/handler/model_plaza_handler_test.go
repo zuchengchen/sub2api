@@ -235,12 +235,12 @@ func TestToModelPlazaGroupDTOVipDiscount(t *testing.T) {
 	// VIP 命中减免分组：无管理员覆盖时按分组默认折算，并以专属倍率字段展示。
 	dto := toModelPlazaGroupDTO(&g, nil, true)
 	require.NotNil(t, dto.UserRateMultiplier)
-	require.InDelta(t, 0.13, *dto.UserRateMultiplier, 1e-9)
+	require.InDelta(t, 0.10, *dto.UserRateMultiplier, 1e-9)
 
 	// VIP + 管理员专属覆盖：在覆盖值基础上折算（与计费同源）。
 	dtoOverride := toModelPlazaGroupDTO(&g, map[int64]float64{37: 0.20}, true)
 	require.NotNil(t, dtoOverride.UserRateMultiplier)
-	require.InDelta(t, 0.18, *dtoOverride.UserRateMultiplier, 1e-9)
+	require.InDelta(t, 0.15, *dtoOverride.UserRateMultiplier, 1e-9)
 
 	// 非 VIP：不产生 user_rate_multiplier。
 	dtoPlain := toModelPlazaGroupDTO(&g, nil, false)
