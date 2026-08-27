@@ -276,6 +276,10 @@ func TestForwardAsChatCompletions_OAuthDoesNotInjectDefaultInstructions(t *testi
 }
 
 func forwardOAuthChatCompletionsForUpstreamBody(t *testing.T, body []byte) []byte {
+	return forwardOAuthChatCompletionsForUpstreamBodyWithModel(t, body, "gpt-5.4")
+}
+
+func forwardOAuthChatCompletionsForUpstreamBodyWithModel(t *testing.T, body []byte, mappedModel string) []byte {
 	t.Helper()
 
 	rec := httptest.NewRecorder()
@@ -301,11 +305,94 @@ func forwardOAuthChatCompletionsForUpstreamBody(t *testing.T, body []byte) []byt
 		},
 	}
 
-	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.4")
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", mappedModel)
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.NotEmpty(t, upstream.lastBody)
 	return upstream.lastBody
+}
+
+func TestForwardAsChatCompletions_OAuthGPT56AddsReusablePrefixBreakpoint(t *testing.T) {
+	const systemPrompt = "Shared instructions that remain identical across requests."
+	firstBody := []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"system","content":"` + systemPrompt + `"},{"role":"user","content":"question A"}],"stream":false}`)
+	secondBody := []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"system","content":"` + systemPrompt + `"},{"role":"user","content":"question B"}],"stream":false}`)
+
+	firstUpstreamBody := forwardOAuthChatCompletionsForUpstreamBodyWithModel(t, firstBody, "gpt-5.6-luna")
+	secondUpstreamBody := forwardOAuthChatCompletionsForUpstreamBodyWithModel(t, secondBody, "gpt-5.6-luna")
+
+	require.Equal(t, "implicit", gjson.GetBytes(firstUpstreamBody, "prompt_cache_options.mode").String())
+	require.Equal(t, "30m", gjson.GetBytes(firstUpstreamBody, "prompt_cache_options.ttl").String())
+	require.Equal(t, "developer", gjson.GetBytes(firstUpstreamBody, "input.0.role").String())
+	require.Equal(t, systemPrompt, gjson.GetBytes(firstUpstreamBody, "input.0.content.0.text").String())
+	require.Equal(t, "explicit", gjson.GetBytes(firstUpstreamBody, "input.0.content.0.prompt_cache_breakpoint.mode").String())
+	require.Equal(t, "user", gjson.GetBytes(firstUpstreamBody, "input.1.role").String())
+	require.Equal(t, 1, strings.Count(string(firstUpstreamBody), systemPrompt))
+	require.NotEmpty(t, gjson.GetBytes(firstUpstreamBody, "prompt_cache_key").String())
+	require.Equal(t,
+		gjson.GetBytes(firstUpstreamBody, "prompt_cache_key").String(),
+		gjson.GetBytes(secondUpstreamBody, "prompt_cache_key").String(),
+	)
+}
+
+func TestForwardAsChatCompletions_OAuthGPT56KeepsSystemAndInstructionsOrderWithoutDuplication(t *testing.T) {
+	const systemPrompt = "System-level guidance."
+	const instructions = "Top-level guidance."
+	body := []byte(`{"model":"gpt-5.6-luna","instructions":"` + instructions + `","messages":[{"role":"system","content":"` + systemPrompt + `"},{"role":"user","content":"question"}],"stream":false}`)
+
+	upstreamBody := forwardOAuthChatCompletionsForUpstreamBodyWithModel(t, body, "gpt-5.6-luna")
+
+	require.Equal(t, "", gjson.GetBytes(upstreamBody, "instructions").String())
+	require.Equal(t, "developer", gjson.GetBytes(upstreamBody, "input.0.role").String())
+	require.Equal(t, systemPrompt+"\n\n"+instructions, gjson.GetBytes(upstreamBody, "input.0.content.0.text").String())
+	require.Equal(t, "explicit", gjson.GetBytes(upstreamBody, "input.0.content.0.prompt_cache_breakpoint.mode").String())
+	require.Equal(t, 1, strings.Count(string(upstreamBody), systemPrompt))
+	require.Equal(t, 1, strings.Count(string(upstreamBody), instructions))
+}
+
+func TestForwardAsChatCompletions_OAuthGPT56DropsUnknownPromptCacheOption(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-luna","prompt_cache_options":{"mode":"explicit","scope":"shared"},"messages":[{"role":"developer","content":"shared instructions"},{"role":"user","content":"question"}],"stream":false}`)
+
+	upstreamBody := forwardOAuthChatCompletionsForUpstreamBodyWithModel(t, body, "gpt-5.6-luna")
+
+	require.False(t, gjson.GetBytes(upstreamBody, "prompt_cache_options").Exists())
+	require.False(t, gjson.GetBytes(upstreamBody, "input.0.content.0.prompt_cache_breakpoint").Exists())
+}
+
+func TestForwardAsChatCompletions_OAuthGPT56RetriesWithoutRejectedPromptCacheFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"system","content":"shared instructions"},{"role":"user","content":"question"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: prompt_cache_options.mode","param":"prompt_cache_options.mode"}}`),
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"invalid_request_error","message":"stop after compatibility retry"}}`),
+	}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          5,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.6-luna")
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Len(t, upstream.bodies, 2)
+	require.Equal(t, "implicit", gjson.GetBytes(upstream.bodies[0], "prompt_cache_options.mode").String())
+	require.Equal(t, "explicit", gjson.GetBytes(upstream.bodies[0], "input.0.content.0.prompt_cache_breakpoint.mode").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[1], "prompt_cache_options").Exists())
+	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.0.content.0.prompt_cache_breakpoint").Exists())
+	require.Equal(t, "shared instructions", gjson.GetBytes(upstream.bodies[1], "input.0.content.0.text").String())
 }
 
 func TestForwardAsChatCompletions_OAuthPromotesSystemMessageWithoutDuplication(t *testing.T) {
