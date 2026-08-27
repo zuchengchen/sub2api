@@ -46,6 +46,12 @@ func (s *userHandlerRepoStub) Update(_ context.Context, user *service.User, _ se
 	s.user = &cloned
 	return nil
 }
+func (s *userHandlerRepoStub) SetVIPIfNotSet(context.Context, int64) (bool, error) {
+	return false, nil
+}
+func (s *userHandlerRepoStub) UpgradeUsersAboveBalanceThreshold(context.Context, float64) ([]int64, error) {
+	return nil, nil
+}
 func (s *userHandlerRepoStub) Delete(context.Context, int64) error { return nil }
 func (s *userHandlerRepoStub) GetUserAvatar(context.Context, int64) (*service.UserAvatar, error) {
 	if s.user == nil || s.user.AvatarURL == "" {
