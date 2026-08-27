@@ -9,6 +9,7 @@ overrides:
   form-data@<4.0.6: '>=4.0.6'
   nanoid@<3.3.18: 3.3.18
   postcss@<8.5.18: '>=8.5.18'
+  dompurify@<3.4.14: '>=3.4.14'
 
 importers:
 
