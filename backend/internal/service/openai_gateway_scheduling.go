@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
@@ -180,6 +181,40 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	currentHash, legacyHash := deriveOpenAISessionHashes(sessionID)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
 	return currentHash
+}
+
+// GenerateChatCompletionsSessionHash keeps requests with the same reusable
+// Chat Completions prefix on the same upstream account. Account selection runs
+// before ForwardAsChatCompletions derives prompt_cache_key, so using the same
+// seed here prevents identical prefixes with different user questions from
+// being fragmented across an OAuth account pool.
+func (s *OpenAIGatewayService) GenerateChatCompletionsSessionHash(c *gin.Context, body []byte, mappedModel string) string {
+	if c == nil {
+		return ""
+	}
+
+	// Client-provided conversation identity always has priority. Grok also has
+	// provider-specific affinity rules that must stay on the generic path.
+	if explicitOpenAIRequestSessionID(c, body) != "" || isGrokRequestContext(c) {
+		return s.GenerateSessionHash(c, body)
+	}
+
+	model := strings.TrimSpace(mappedModel)
+	if model == "" {
+		model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	}
+	if shouldAutoInjectPromptCacheKeyForCompat(model) {
+		var request apicompat.ChatCompletionsRequest
+		if err := json.Unmarshal(body, &request); err == nil {
+			if seed := deriveCompatPromptCacheKey(&request, model); seed != "" {
+				currentHash, legacyHash := deriveOpenAISessionHashes(seed)
+				attachOpenAILegacySessionHashToGin(c, legacyHash)
+				return currentHash
+			}
+		}
+	}
+
+	return s.GenerateSessionHash(c, body)
 }
 
 // grokStickyAffinitySeed scopes sticky routing by model without changing the

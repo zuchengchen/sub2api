@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,71 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
+
+func shouldForwardOpenAIResponsesPromptCacheOptions(account *Account, model string, options gjson.Result) bool {
+	if account == nil || !account.IsOpenAI() || !isOpenAIGPT56OrLaterModel(model) || !options.IsObject() {
+		return false
+	}
+
+	fields := options.Map()
+	if mode, ok := fields["mode"]; ok {
+		if mode.Type != gjson.String || (mode.String() != "implicit" && mode.String() != "explicit") {
+			return false
+		}
+	}
+	for name := range fields {
+		if name != "mode" && name != "ttl" {
+			return false
+		}
+	}
+	if ttl, ok := fields["ttl"]; ok && (ttl.Type != gjson.String || ttl.String() != "30m") {
+		return false
+	}
+	return true
+}
+
+func filterOpenAIResponsesPromptCacheConfiguration(account *Account, model string, body []byte) ([]byte, bool, error) {
+	if !strings.Contains(string(body), "prompt_cache_") {
+		return body, false, nil
+	}
+	options := gjson.GetBytes(body, "prompt_cache_options")
+	modelSupportsPromptCache := account != nil && account.IsOpenAI() && isOpenAIGPT56OrLaterModel(model)
+	if modelSupportsPromptCache && (!options.Exists() || shouldForwardOpenAIResponsesPromptCacheOptions(account, model, options)) {
+		return body, false, nil
+	}
+	filtered, changed, err := removeOpenAIPromptCacheConfiguration(body)
+	if err != nil {
+		return nil, false, fmt.Errorf("filter prompt cache configuration: %w", err)
+	}
+	return filtered, changed, nil
+}
+
+func isOpenAIGPT56OrLaterModel(model string) bool {
+	normalized := canonicalizeOpenAIModelAliasSpelling(model)
+	if !strings.HasPrefix(normalized, "gpt-") {
+		return false
+	}
+	version := strings.TrimPrefix(normalized, "gpt-")
+	if suffixIndex := strings.IndexByte(version, '-'); suffixIndex >= 0 {
+		version = version[:suffixIndex]
+	}
+	parts := strings.Split(version, ".")
+	if len(parts) == 0 || len(parts) > 2 {
+		return false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil || major < 5 {
+		return false
+	}
+	if major > 5 {
+		return true
+	}
+	if len(parts) != 2 {
+		return false
+	}
+	minor, err := strconv.Atoi(parts[1])
+	return err == nil && minor >= 6
+}
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
@@ -247,6 +313,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
 		mappedModel := account.GetMappedModel(reqModel)
+		promptCacheModel := resolveOpenAIAccountUpstreamModelForRequest(account, reqModel, compactPath)
+		filteredBody, filtered, filterErr := filterOpenAIResponsesPromptCacheConfiguration(account, promptCacheModel, originalBody)
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		if filtered {
+			originalBody = filteredBody
+		}
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel)
 		// 国产模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
 		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
@@ -578,7 +652,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if gjson.GetBytes(body, "max_completion_tokens").Exists() && (account.Type == AccountTypeAPIKey || account.Platform != PlatformOpenAI) {
 			markPatchDelete("max_completion_tokens")
 		}
-		for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier", "prompt_cache_options"} {
+		for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier"} {
 			if gjson.GetBytes(body, unsupportedField).Exists() {
 				markPatchDelete(unsupportedField)
 			}
@@ -675,6 +749,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, fmt.Errorf("normalize compaction trigger order: %w", normalizeErr)
 	} else if changed {
 		body = normalizedBody
+		requestView = newOpenAIRequestView(body)
+		reqBody = nil
+	}
+	if filteredBody, changed, filterErr := filterOpenAIResponsesPromptCacheConfiguration(account, upstreamModel, body); filterErr != nil {
+		return nil, filterErr
+	} else if changed {
+		body = filteredBody
 		requestView = newOpenAIRequestView(body)
 		reqBody = nil
 	}
