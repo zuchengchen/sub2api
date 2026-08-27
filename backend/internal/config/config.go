@@ -1160,11 +1160,11 @@ type GatewayLiveConfig struct {
 }
 
 // GatewayOpenAIHTTP2Config OpenAI HTTP 上游协议配置。
-// 默认启用 HTTP/2；在部分代理不兼容时按策略回退 HTTP/1.1。
+// 默认启用 HTTP/2；在直连或部分代理出现协议兼容错误时按策略回退 HTTP/1.1。
 type GatewayOpenAIHTTP2Config struct {
 	// Enabled: 是否启用 OpenAI HTTP/2 优先策略
 	Enabled bool `mapstructure:"enabled"`
-	// AllowProxyFallbackToHTTP1: HTTP/HTTPS 代理出现明确 H2 兼容错误时，临时回退 HTTP/1.1
+	// AllowProxyFallbackToHTTP1: 兼容旧配置名；直连或 HTTP/HTTPS 代理出现明确 H2 错误时临时回退 HTTP/1.1
 	AllowProxyFallbackToHTTP1 bool `mapstructure:"allow_proxy_fallback_to_http1"`
 	// FallbackErrorThreshold: 回退窗口内累计多少次兼容错误后触发回退
 	FallbackErrorThreshold int `mapstructure:"fallback_error_threshold"`

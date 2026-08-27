@@ -665,9 +665,11 @@ GATEWAY_OPENAI_WS_FORCE_HTTP=true
 This selects HTTP/SSE for OpenAI upstream Responses traffic that would
 otherwise use WebSocket. It does not change the client-facing protocol or force
 HTTP/1.1; configure `gateway.openai_http2.enabled` (or
-`GATEWAY_OPENAI_HTTP2_ENABLED=false`) separately when a proxy is incompatible
-with HTTP/2. Unlike the account-level `http_bridge` mode, this global fallback
-takes effect without enabling `mode_router_v2_enabled`. Keep the setting in the
+`GATEWAY_OPENAI_HTTP2_ENABLED=false`) separately when an upstream route is
+incompatible with HTTP/2. The same fallback also applies to direct OpenAI
+routes when the upstream peer resets an HTTP/2 stream. Unlike the account-level
+`http_bridge` mode, this global fallback takes effect without enabling
+`mode_router_v2_enabled`. Keep the setting in the
 deployment's persisted `.env` or `config.yaml`, rather than inside a running
 container, so it is read again after an image update or container recreation.
 
