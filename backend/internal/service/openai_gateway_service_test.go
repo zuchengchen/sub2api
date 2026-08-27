@@ -380,6 +380,52 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 	}
 }
 
+func TestOpenAIGatewayService_GenerateChatCompletionsSessionHash_UsesReusablePrefix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newContext := func() *gin.Context {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		return c
+	}
+
+	svc := &OpenAIGatewayService{}
+	first := []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"system","content":"shared prefix"},{"role":"user","content":"question A"}]}`)
+	second := []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"system","content":"shared prefix"},{"role":"user","content":"question B"}]}`)
+
+	require.Equal(t,
+		svc.GenerateChatCompletionsSessionHash(newContext(), first, "gpt-5.6-luna"),
+		svc.GenerateChatCompletionsSessionHash(newContext(), second, "gpt-5.6-luna"),
+	)
+}
+
+func TestOpenAIGatewayService_GenerateChatCompletionsSessionHash_PreservesExplicitPriorityAndUserFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newContext := func() *gin.Context {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		return c
+	}
+
+	svc := &OpenAIGatewayService{}
+	toolsOnlyA := []byte(`{"model":"gpt-5.6-luna","tools":[{"type":"function","function":{"name":"lookup"}}],"messages":[{"role":"user","content":"question A"}]}`)
+	toolsOnlyB := []byte(`{"model":"gpt-5.6-luna","tools":[{"type":"function","function":{"name":"lookup"}}],"messages":[{"role":"user","content":"question B"}]}`)
+	require.NotEqual(t,
+		svc.GenerateChatCompletionsSessionHash(newContext(), toolsOnlyA, "gpt-5.6-luna"),
+		svc.GenerateChatCompletionsSessionHash(newContext(), toolsOnlyB, "gpt-5.6-luna"),
+	)
+
+	firstContext := newContext()
+	firstContext.Request.Header.Set("session_id", "client-session")
+	secondContext := newContext()
+	secondContext.Request.Header.Set("session_id", "client-session")
+	require.Equal(t,
+		svc.GenerateChatCompletionsSessionHash(firstContext, toolsOnlyA, "gpt-5.6-luna"),
+		svc.GenerateChatCompletionsSessionHash(secondContext, toolsOnlyB, "gpt-5.6-luna"),
+	)
+}
+
 func TestOpenAIGatewayService_ClientSessionHeaderPriority(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

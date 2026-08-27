@@ -224,6 +224,15 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		if err != nil {
 			return nil, fmt.Errorf("marshal responses request: %w", err)
 		}
+		// Preserve the raw options object through the typed conversion so unknown
+		// client fields reach the strict validator below instead of being silently
+		// discarded by json.Unmarshal.
+		if rawOptions := gjson.GetBytes(body, "prompt_cache_options"); rawOptions.Exists() {
+			responsesBody, err = sjson.SetRawBytes(responsesBody, "prompt_cache_options", []byte(rawOptions.Raw))
+			if err != nil {
+				return nil, fmt.Errorf("preserve prompt_cache_options for validation: %w", err)
+			}
+		}
 	}
 	responsesBody, managedNonReasoning, err := enforceOpenAICompatibleNonReasoning(account, upstreamModel, responsesBody, openAICompatibleWireResponses)
 	if err != nil {
@@ -231,6 +240,19 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	if managedNonReasoning {
 		responsesReq.Reasoning = nil
+	}
+	promptCachePreparation := openAIPromptCachePreparation{}
+	if account.IsOpenAI() && isOpenAIGPT56OrLaterModel(upstreamModel) {
+		responsesBody, promptCachePreparation, err = prepareOpenAIGPT56PromptCaching(
+			responsesBody,
+			upstreamModel,
+			!isResponsesShape,
+		)
+	} else {
+		responsesBody, _, err = removeOpenAIPromptCacheConfiguration(responsesBody)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("prepare GPT-5.6 prompt caching: %w", err)
 	}
 
 	logFields := []zap.Field{
@@ -246,6 +268,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			zap.Bool("compat_prompt_cache_key_injected", true),
 			zap.String("compat_prompt_cache_key_sha256", hashSensitiveValueForLog(promptCacheKey)),
 		)
+	}
+	if promptCachePreparation.AutoConfigured {
+		logFields = append(logFields, zap.Bool("compat_prompt_cache_explicit_prefix_enabled", true))
 	}
 	logger.L().Debug("openai chat_completions: model mapping applied", logFields...)
 
@@ -300,6 +325,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			}
 		}
 	}
+	if promptCachePreparation.EnsureBreakpoint {
+		responsesBody, _, err = ensureOpenAIExplicitPromptCacheBreakpoint(responsesBody)
+		if err != nil {
+			return nil, fmt.Errorf("add GPT-5.6 prompt cache breakpoint: %w", err)
+		}
+	}
 
 	// 4b. Apply OpenAI fast policy (may filter service_tier or block the request).
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, responsesBody)
@@ -319,40 +350,63 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
-	// 6. Build upstream request
-	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
-	releaseUpstreamCtx()
-	if err != nil {
-		return nil, fmt.Errorf("build upstream request: %w", err)
-	}
-
-	if promptCacheKey != "" {
-		apiKeyID := getAPIKeyIDFromContext(c)
-		upstreamReq.Header.Set("session_id", generateSessionUUID(isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), promptCacheKey)))
-	}
-
-	// 7. Send request
 	proxyURL := ""
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
-	if err != nil {
-		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
-	}
-	defer func() { _ = resp.Body.Close() }()
 
-	// 8. Handle error response with failover
-	if resp.StatusCode >= 400 {
+	// 6-8. Build and send the upstream request. Compatibility retries are
+	// bounded per inbound request and only remove fields explicitly rejected by
+	// the upstream.
+	var resp *http.Response
+	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, responsesBody)
+	for {
+		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+		upstreamReq, buildErr := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
+		releaseUpstreamCtx()
+		if buildErr != nil {
+			return nil, fmt.Errorf("build upstream request: %w", buildErr)
+		}
+
+		if promptCacheKey != "" {
+			apiKeyID := getAPIKeyIDFromContext(c)
+			upstreamReq.Header.Set("session_id", generateSessionUUID(isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), promptCacheKey)))
+		}
+
+		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		if err != nil {
+			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		}
+		if resp.StatusCode < 400 {
+			break
+		}
+
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			_ = resp.Body.Close()
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
 			}
-			return s.ForwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel)
+			recoveryPromptCacheKey := promptCacheKey
+			if compatPromptCacheInjected {
+				// Re-derive an automatically generated key from the original body so
+				// GPT-5.6 cache options and the stable breakpoint are prepared again.
+				recoveryPromptCacheKey = ""
+			}
+			return s.ForwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, recoveryPromptCacheKey, defaultMappedModel)
 		}
+		if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, responsesBody, respBody); retryErr != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
+		} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+			_ = resp.Body.Close()
+			responsesBody = retryBody
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying chat_completions compatibility request after %s (account: %s)", reason, account.Name)
+			continue
+		}
+
+		defer func() { _ = resp.Body.Close() }()
 		if account.Type == AccountTypeAPIKey &&
 			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
 			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {
@@ -368,6 +422,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		}
 		return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	// 9. Handle normal response
 	var result *OpenAIForwardResult

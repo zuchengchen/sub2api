@@ -35,38 +35,166 @@ func deriveCompatPromptCacheKey(req *apicompat.ChatCompletionsRequest, mappedMod
 		normalizedModel = strings.TrimSpace(req.Model)
 	}
 
-	seedParts := []string{"model=" + normalizedModel}
-	if req.ReasoningEffort != "" {
-		seedParts = append(seedParts, "reasoning_effort="+strings.TrimSpace(req.ReasoningEffort))
+	seedParts := make([]string, 0, 12)
+	appendCompatPromptCacheSeedPart(&seedParts, "model", normalizedModel)
+
+	// These settings affect the rendered prompt or the upstream cache-routing
+	// pool. Keep them in the key so requests with incompatible cache prefixes do
+	// not compete for the same routing identity.
+	if effort := strings.TrimSpace(req.ReasoningEffort); effort != "" {
+		appendCompatPromptCacheSeedPart(&seedParts, "reasoning_effort", effort)
 	}
 	if len(req.ToolChoice) > 0 {
-		seedParts = append(seedParts, "tool_choice="+normalizeCompatSeedJSON(req.ToolChoice))
+		appendCompatPromptCacheSeedPart(&seedParts, "tool_choice", normalizeCompatSeedJSON(req.ToolChoice))
+	} else if len(req.FunctionCall) > 0 {
+		// Legacy function_call is converted to tool_choice only when an explicit
+		// tool_choice is absent.
+		appendCompatPromptCacheSeedPart(&seedParts, "function_call", normalizeCompatSeedJSON(req.FunctionCall))
 	}
+	if len(req.ResponseFormat) > 0 {
+		appendCompatPromptCacheSeedPart(&seedParts, "response_format", normalizeCompatSeedJSON(req.ResponseFormat))
+	}
+	if req.ParallelToolCalls != nil {
+		appendCompatPromptCacheSeedPart(&seedParts, "parallel_tool_calls", fmt.Sprintf("%t", *req.ParallelToolCalls))
+	}
+	if serviceTier := normalizedOpenAIServiceTierValue(req.ServiceTier); serviceTier != "" {
+		appendCompatPromptCacheSeedPart(&seedParts, "service_tier", serviceTier)
+	}
+
+	hasStablePrefix := false
 	if len(req.Tools) > 0 {
 		if raw, err := json.Marshal(req.Tools); err == nil {
-			seedParts = append(seedParts, "tools="+normalizeCompatSeedJSON(raw))
+			appendCompatPromptCacheSeedPart(&seedParts, "tools", normalizeCompatSeedJSON(raw))
 		}
 	}
 	if len(req.Functions) > 0 {
 		if raw, err := json.Marshal(req.Functions); err == nil {
-			seedParts = append(seedParts, "functions="+normalizeCompatSeedJSON(raw))
+			appendCompatPromptCacheSeedPart(&seedParts, "functions", normalizeCompatSeedJSON(raw))
+		}
+	}
+	if strings.TrimSpace(req.Instructions) != "" {
+		appendCompatPromptCacheSeedPart(&seedParts, "instructions", req.Instructions)
+	}
+
+	// Only leading system/developer messages form a reusable prompt prefix.
+	// System-like messages appended after a user/assistant turn are conversation
+	// history and must not make the routing key change on later turns.
+	prefixOpen := true
+	firstUserCaptured := false
+	firstUserContent := ""
+	firstUserMeaningful := false
+	for _, msg := range req.Messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		if prefixOpen {
+			switch role {
+			case "system", "developer":
+				cacheable := hasMeaningfulCompatPromptCacheContent(msg.Content)
+				if role == "system" {
+					cacheable = hasLosslessCompatPromptCacheSystemText(msg.Content)
+				}
+				if cacheable {
+					content := normalizeCompatSeedJSON(msg.Content)
+					appendCompatPromptCacheSeedPart(&seedParts, role, content)
+					hasStablePrefix = true
+				}
+				continue
+			default:
+				prefixOpen = false
+			}
+		}
+
+		if role == "user" && !firstUserCaptured {
+			firstUserContent = normalizeCompatSeedJSON(msg.Content)
+			firstUserMeaningful = hasMeaningfulCompatPromptCacheContent(msg.Content)
+			firstUserCaptured = true
 		}
 	}
 
-	firstUserCaptured := false
-	for _, msg := range req.Messages {
-		switch strings.TrimSpace(msg.Role) {
-		case "system":
-			seedParts = append(seedParts, "system="+normalizeCompatSeedJSON(msg.Content))
-		case "user":
-			if !firstUserCaptured {
-				seedParts = append(seedParts, "first_user="+normalizeCompatSeedJSON(msg.Content))
-				firstUserCaptured = true
-			}
+	if !hasStablePrefix {
+		// Without a reusable static prefix, retain the first user message as a
+		// narrow session anchor. Returning no key for an unanchored request is
+		// safer than grouping every request by model alone.
+		if !firstUserCaptured || !firstUserMeaningful {
+			return ""
 		}
+		appendCompatPromptCacheSeedPart(&seedParts, "first_user", firstUserContent)
 	}
 
 	return compatPromptCacheKeyPrefix + hashSensitiveValueForLog(strings.Join(seedParts, "|"))
+}
+
+func appendCompatPromptCacheSeedPart(parts *[]string, label, value string) {
+	// Length-prefix values so prompt text containing separators cannot create an
+	// ambiguous seed before it is hashed.
+	*parts = append(*parts, fmt.Sprintf("%s=%d:%s", label, len(value), value))
+}
+
+func hasMeaningfulCompatPromptCacheContent(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return strings.TrimSpace(string(raw)) != ""
+	}
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []any:
+		for _, rawPart := range typed {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				continue
+			}
+			typeName, _ := part["type"].(string)
+			text, _ := part["text"].(string)
+			typeName = strings.ToLower(strings.TrimSpace(typeName))
+			if (typeName == "text" || typeName == "input_text") && strings.TrimSpace(text) != "" {
+				return true
+			}
+		}
+		return false
+	case map[string]any:
+		return false
+	default:
+		return true
+	}
+}
+
+func hasLosslessCompatPromptCacheSystemText(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []any:
+		hasText := false
+		for _, rawPart := range typed {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				return false
+			}
+			typeName, _ := part["type"].(string)
+			typeName = strings.ToLower(strings.TrimSpace(typeName))
+			if typeName != "text" && typeName != "input_text" {
+				return false
+			}
+			text, _ := part["text"].(string)
+			if strings.TrimSpace(text) != "" {
+				hasText = true
+			}
+		}
+		return hasText
+	default:
+		return false
+	}
 }
 
 func deriveAnthropicCompatPromptCacheKey(req *apicompat.AnthropicRequest, mappedModel string) string {
