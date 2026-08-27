@@ -58,6 +58,7 @@ func TestAPIContracts(t *testing.T) {
 						"concurrency": 5,
 					"rpm_limit": 0,
 					"status": "active",
+					"is_vip": false,
 					"allowed_groups": null,
 					"created_at": "2025-01-02T03:04:05Z",
 					"updated_at": "2025-01-02T03:04:05Z",

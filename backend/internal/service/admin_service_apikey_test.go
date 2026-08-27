@@ -70,6 +70,12 @@ func (s *userRepoStubForGroupUpdate) UpdateBalance(context.Context, int64, float
 func (s *userRepoStubForGroupUpdate) DeductBalance(context.Context, int64, float64) error {
 	panic("unexpected")
 }
+func (s *userRepoStubForGroupUpdate) SetVIPIfNotSet(context.Context, int64) (bool, error) {
+	return false, nil
+}
+func (s *userRepoStubForGroupUpdate) UpgradeUsersAboveBalanceThreshold(context.Context, float64) ([]int64, error) {
+	return nil, nil
+}
 
 func (s *userRepoStubForGroupUpdate) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
 	panic("unexpected AdjustBalance call")

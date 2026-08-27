@@ -109,6 +109,14 @@ func (s *emailSyncRepoStub) UpdateBalance(context.Context, int64, float64) error
 
 func (s *emailSyncRepoStub) DeductBalance(context.Context, int64, float64) error { return nil }
 
+func (s *emailSyncRepoStub) SetVIPIfNotSet(context.Context, int64) (bool, error) {
+	return false, nil
+}
+
+func (s *emailSyncRepoStub) UpgradeUsersAboveBalanceThreshold(context.Context, float64) ([]int64, error) {
+	return nil, nil
+}
+
 func (s *emailSyncRepoStub) UpdateConcurrency(context.Context, int64, int) error { return nil }
 
 func (s *emailSyncRepoStub) ExistsByEmail(context.Context, string) (bool, error) { return false, nil }
