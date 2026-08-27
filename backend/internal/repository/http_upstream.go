@@ -72,7 +72,7 @@ const (
 	defaultMaxUpstreamClients = 5000
 	// defaultClientIdleTTLSeconds: 默认客户端空闲回收阈值（15分钟）
 	defaultClientIdleTTLSeconds = 900
-	// OpenAI HTTP/2 代理回退策略默认值
+	// OpenAI HTTP/2 路由回退策略默认值
 	defaultOpenAIHTTP2FallbackErrorThreshold = 2
 	defaultOpenAIHTTP2FallbackWindow         = 60 * time.Second
 	defaultOpenAIHTTP2FallbackTTL            = 10 * time.Minute
@@ -115,17 +115,18 @@ type poolSettings struct {
 }
 
 type openAIHTTP2Settings struct {
-	enabled                   bool
-	allowProxyFallbackToHTTP1 bool
-	fallbackErrorThreshold    int
-	fallbackWindow            time.Duration
-	fallbackTTL               time.Duration
+	enabled                bool
+	allowFallbackToHTTP1   bool
+	fallbackErrorThreshold int
+	fallbackWindow         time.Duration
+	fallbackTTL            time.Duration
 }
 
 // upstreamClientEntry 上游客户端缓存条目
 // 记录客户端实例及其元数据，用于连接池管理和淘汰策略
 type upstreamClientEntry struct {
 	client       *http.Client // HTTP 客户端实例
+	cacheKey     string       // clients map 中的键，用于错误后精确淘汰当前实例
 	proxyKey     string       // 代理标识（用于检测代理变更）
 	poolKey      string       // 连接池配置标识（用于检测配置变更）
 	protocolMode string       // 协议模式（default/openai_h1/openai_h2/openai_h1_fallback）
@@ -161,7 +162,7 @@ type httpUpstreamService struct {
 	cfg     *config.Config                  // 全局配置
 	mu      sync.RWMutex                    // 保护 clients map 的读写锁
 	clients map[string]*upstreamClientEntry // 客户端缓存池，key 由隔离策略决定
-	// OpenAI 走 HTTP/HTTPS 代理时的 H2->H1 回退状态（key=标准化 proxyKey）
+	// OpenAI 直连或走 HTTP/HTTPS 代理时的 H2->H1 回退状态（key=标准化 proxyKey）
 	openAIHTTP2Fallbacks sync.Map
 }
 
@@ -217,22 +218,22 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	client = httpClientWithGrokAccessDeniedFallback(client)
 	resp, err := servertiming.Do(client, req)
 	if err != nil {
-		s.recordOpenAIHTTP2Failure(profile, entry.protocolMode, entry.proxyKey, err)
+		s.handleOpenAIHTTP2Failure(profile, entry, err)
 		// 请求失败，立即减少计数
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
 		return nil, err
 	}
-	s.recordOpenAIHTTP2Success(profile, entry.protocolMode, entry.proxyKey)
-
 	// 如果上游返回了压缩内容，解压后再交给业务层
 	decompressResponseBody(resp)
 
 	// 包装响应体，在关闭时自动减少计数并更新时间戳
 	// 这确保了流式响应（如 SSE）在完全读取前不会被淘汰
-	resp.Body = wrapTrackedBody(resp.Body, func() {
+	resp.Body = wrapTrackedBodyWithReadError(resp.Body, func() {
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
+	}, func(err error) {
+		s.handleOpenAIHTTP2Failure(profile, entry, err)
 	})
 
 	return resp, nil
@@ -562,6 +563,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 
 	entry := &upstreamClientEntry{
 		client:   client,
+		cacheKey: cacheKey,
 		proxyKey: proxyKey,
 		poolKey:  poolKey,
 	}
@@ -713,6 +715,7 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 	}
 	entry := &upstreamClientEntry{
 		client:       client,
+		cacheKey:     cacheKey,
 		proxyKey:     proxyKey,
 		poolKey:      poolKey,
 		protocolMode: protocolMode,
@@ -967,18 +970,18 @@ func buildCacheKey(isolation, proxyKey string, accountID int64, protocolMode str
 
 func (s *httpUpstreamService) resolveOpenAIHTTP2Settings() openAIHTTP2Settings {
 	settings := openAIHTTP2Settings{
-		enabled:                   false,
-		allowProxyFallbackToHTTP1: true,
-		fallbackErrorThreshold:    defaultOpenAIHTTP2FallbackErrorThreshold,
-		fallbackWindow:            defaultOpenAIHTTP2FallbackWindow,
-		fallbackTTL:               defaultOpenAIHTTP2FallbackTTL,
+		enabled:                false,
+		allowFallbackToHTTP1:   true,
+		fallbackErrorThreshold: defaultOpenAIHTTP2FallbackErrorThreshold,
+		fallbackWindow:         defaultOpenAIHTTP2FallbackWindow,
+		fallbackTTL:            defaultOpenAIHTTP2FallbackTTL,
 	}
 	if s == nil || s.cfg == nil {
 		return settings
 	}
 	cfg := s.cfg.Gateway.OpenAIHTTP2
 	settings.enabled = cfg.Enabled
-	settings.allowProxyFallbackToHTTP1 = cfg.AllowProxyFallbackToHTTP1
+	settings.allowFallbackToHTTP1 = cfg.AllowProxyFallbackToHTTP1
 	if cfg.FallbackErrorThreshold > 0 {
 		settings.fallbackErrorThreshold = cfg.FallbackErrorThreshold
 	}
@@ -1002,14 +1005,8 @@ func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamPr
 	if !settings.enabled {
 		return upstreamProtocolModeOpenAIH1
 	}
-	if parsedProxy == nil {
-		return upstreamProtocolModeOpenAIH2
-	}
-	scheme := strings.ToLower(parsedProxy.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return upstreamProtocolModeOpenAIH2
-	}
-	if settings.allowProxyFallbackToHTTP1 && s.isOpenAIHTTP2FallbackActive(proxyKey) {
+	if isOpenAIHTTP2FallbackRoute(proxyKey, parsedProxy) &&
+		settings.allowFallbackToHTTP1 && s.isOpenAIHTTP2FallbackActive(proxyKey) {
 		return upstreamProtocolModeOpenAIH1Fallback
 	}
 	return upstreamProtocolModeOpenAIH2
@@ -1039,6 +1036,13 @@ func (s *httpUpstreamService) getOrCreateOpenAIHTTP2FallbackState(proxyKey strin
 
 func isHTTPProxyKey(proxyKey string) bool {
 	return strings.HasPrefix(proxyKey, "http://") || strings.HasPrefix(proxyKey, "https://")
+}
+
+func isOpenAIHTTP2FallbackRoute(proxyKey string, parsedProxy *url.URL) bool {
+	if parsedProxy == nil {
+		return proxyKey == directProxyKey
+	}
+	return isHTTPProxyKey(proxyKey)
 }
 
 func isOpenAIHTTP2CompatibilityError(err error) bool {
@@ -1104,37 +1108,51 @@ func (s *httpUpstreamService) recordOpenAIHTTP2Failure(profile service.HTTPUpstr
 		return
 	}
 	settings := s.resolveOpenAIHTTP2Settings()
-	if !settings.enabled || !settings.allowProxyFallbackToHTTP1 {
+	if !settings.enabled || !settings.allowFallbackToHTTP1 {
 		return
 	}
-	if !isHTTPProxyKey(proxyKey) || !isOpenAIHTTP2CompatibilityError(err) {
+	if proxyKey != directProxyKey && !isHTTPProxyKey(proxyKey) {
+		return
+	}
+	if !isOpenAIHTTP2CompatibilityError(err) {
 		return
 	}
 	state := s.getOrCreateOpenAIHTTP2FallbackState(proxyKey)
 	activated, until := state.recordFailure(time.Now(), settings.fallbackErrorThreshold, settings.fallbackWindow, settings.fallbackTTL)
 	if activated {
-		slog.Warn("openai_http2_proxy_fallback_activated",
-			"proxy", proxyKey,
-			"fallback_until", until.Format(time.RFC3339))
+		if proxyKey == directProxyKey {
+			slog.Warn("openai_http2_direct_fallback_activated",
+				"fallback_until", until.Format(time.RFC3339))
+		} else {
+			slog.Warn("openai_http2_proxy_fallback_activated",
+				"proxy", proxyKey,
+				"fallback_until", until.Format(time.RFC3339))
+		}
 	}
 }
 
-func (s *httpUpstreamService) recordOpenAIHTTP2Success(profile service.HTTPUpstreamProfile, protocolMode, proxyKey string) {
-	if profile != service.HTTPUpstreamProfileOpenAI || protocolMode != upstreamProtocolModeOpenAIH2 {
+func (s *httpUpstreamService) handleOpenAIHTTP2Failure(profile service.HTTPUpstreamProfile, entry *upstreamClientEntry, err error) {
+	if entry == nil || profile != service.HTTPUpstreamProfileOpenAI ||
+		entry.protocolMode != upstreamProtocolModeOpenAIH2 || !isOpenAIHTTP2CompatibilityError(err) {
 		return
 	}
-	if !isHTTPProxyKey(proxyKey) {
+
+	// Count the failure before retiring the client so a racing request observes
+	// an activated H1 fallback instead of creating another H2 client.
+	s.recordOpenAIHTTP2Failure(profile, entry.protocolMode, entry.proxyKey, err)
+	s.retireOpenAIHTTP2Client(entry)
+}
+
+func (s *httpUpstreamService) retireOpenAIHTTP2Client(entry *upstreamClientEntry) {
+	if entry == nil || entry.cacheKey == "" {
 		return
 	}
-	raw, ok := s.openAIHTTP2Fallbacks.Load(proxyKey)
-	if !ok {
-		return
+
+	s.mu.Lock()
+	if current, ok := s.clients[entry.cacheKey]; ok && current == entry {
+		s.removeClientLocked(entry.cacheKey, entry)
 	}
-	state, ok := raw.(*openAIHTTP2FallbackState)
-	if !ok || state == nil {
-		return
-	}
-	state.resetErrorWindow()
+	s.mu.Unlock()
 }
 
 func (s *openAIHTTP2FallbackState) isFallbackActive(now time.Time) bool {
@@ -1148,13 +1166,6 @@ func (s *openAIHTTP2FallbackState) isFallbackActive(now time.Time) bool {
 	}
 	s.fallbackUntil = time.Time{}
 	return false
-}
-
-func (s *openAIHTTP2FallbackState) resetErrorWindow() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.windowStart = time.Time{}
-	s.errorCount = 0
 }
 
 func (s *openAIHTTP2FallbackState) recordFailure(now time.Time, threshold int, window, ttl time.Duration) (bool, time.Time) {
@@ -1171,6 +1182,8 @@ func (s *openAIHTTP2FallbackState) recordFailure(now time.Time, threshold int, w
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// HTTP/2 streams complete out of order. Resetting this window on an
+	// interleaved success would hide repeated compatibility failures under load.
 	if !s.fallbackUntil.IsZero() && now.Before(s.fallbackUntil) {
 		return false, s.fallbackUntil
 	}
@@ -1416,26 +1429,44 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 	return transport, nil
 }
 
-// trackedBody 带跟踪功能的响应体包装器
-// 在 Close 时执行回调，用于更新请求计数
+// trackedBody 带跟踪功能的响应体包装器。
+// 它在 Close 时更新请求计数，并可观察首个非 EOF 读取错误。
 type trackedBody struct {
 	io.ReadCloser // 原始响应体
-	once          sync.Once
-	onClose       func() // 关闭时的回调函数
+	closeOnce     sync.Once
+	readErrorOnce sync.Once
+	onClose       func()
+	onReadError   func(error)
+}
+
+func (b *trackedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.observeReadError(err)
+	return n, err
+}
+
+func (b *trackedBody) observeReadError(err error) {
+	if err == nil || errors.Is(err, io.EOF) || b.onReadError == nil {
+		return
+	}
+	b.readErrorOnce.Do(func() {
+		b.onReadError(err)
+	})
 }
 
 // Close 关闭响应体并执行回调
 // 使用 sync.Once 确保回调只执行一次
 func (b *trackedBody) Close() error {
 	err := b.ReadCloser.Close()
+	b.observeReadError(err)
 	if b.onClose != nil {
-		b.once.Do(b.onClose)
+		b.closeOnce.Do(b.onClose)
 	}
 	return err
 }
 
-// wrapTrackedBody 包装响应体以跟踪关闭事件
-// 用于在响应体关闭时更新 inFlight 计数
+// wrapTrackedBody 包装响应体以跟踪关闭事件。
+// wrapTrackedBodyWithReadError 还会对首个非 EOF 读取/关闭错误执行回调。
 //
 // 参数:
 //   - body: 原始响应体
@@ -1444,10 +1475,14 @@ func (b *trackedBody) Close() error {
 // 返回:
 //   - io.ReadCloser: 包装后的响应体
 func wrapTrackedBody(body io.ReadCloser, onClose func()) io.ReadCloser {
+	return wrapTrackedBodyWithReadError(body, onClose, nil)
+}
+
+func wrapTrackedBodyWithReadError(body io.ReadCloser, onClose func(), onReadError func(error)) io.ReadCloser {
 	if body == nil {
 		return body
 	}
-	return &trackedBody{ReadCloser: body, onClose: onClose}
+	return &trackedBody{ReadCloser: body, onClose: onClose, onReadError: onReadError}
 }
 
 // decompressResponseBody 根据 Content-Encoding 解压响应体。

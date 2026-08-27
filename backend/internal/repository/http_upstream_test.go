@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -729,6 +730,155 @@ func (s *HTTPUpstreamSuite) TestOpenAIHTTP2ProxyCompatibilityErrorActivatesFallb
 	require.False(s.T(), transport.ForceAttemptHTTP2)
 	require.NotNil(s.T(), transport.TLSNextProto)
 	require.Equal(s.T(), upstreamProtocolModeOpenAIH1Fallback, entry.protocolMode)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2DirectBodyReadErrorRetiresClientAndActivatesFallback() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                   true,
+			AllowProxyFallbackToHTTP1: true,
+			FallbackErrorThreshold:    1,
+			FallbackWindowSeconds:     60,
+			FallbackTTLSeconds:        600,
+		},
+	}
+	svc := s.newService()
+	const accountID int64 = 23066
+	const partial = "data: partial\n\n"
+	streamErr := errors.New("stream error: stream ID 15179; INTERNAL_ERROR; received from peer")
+
+	isolation := svc.getIsolationMode()
+	profile := service.HTTPUpstreamProfileOpenAI
+	protocolMode := svc.resolveProtocolMode(profile, directProxyKey, nil)
+	settings := svc.applyProfilePoolSettings(svc.resolvePoolSettings(isolation, 1), profile)
+	cacheKey := buildCacheKey(isolation, directProxyKey, accountID, protocolMode)
+	entry := &upstreamClientEntry{
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(io.MultiReader(
+					strings.NewReader(partial),
+					iotest.ErrReader(streamErr),
+				)),
+				Request: req,
+			}, nil
+		})},
+		cacheKey:     cacheKey,
+		proxyKey:     directProxyKey,
+		poolKey:      buildPoolKey(settings, protocolMode),
+		protocolMode: protocolMode,
+	}
+	svc.clients[cacheKey] = entry
+
+	ctx := service.WithHTTPUpstreamProfile(s.T().Context(), profile)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	require.NoError(s.T(), err)
+	resp, err := svc.Do(req, "", accountID, 1)
+	require.NoError(s.T(), err, "response headers must still be successful")
+	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(directProxyKey), "fallback must wait for the body read error")
+	require.Equal(s.T(), int64(1), atomic.LoadInt64(&entry.inFlight))
+
+	body, readErr := io.ReadAll(resp.Body)
+	require.Equal(s.T(), partial, string(body))
+	require.ErrorIs(s.T(), readErr, streamErr)
+	require.True(s.T(), svc.isOpenAIHTTP2FallbackActive(directProxyKey))
+	require.False(s.T(), hasEntry(svc, entry), "the failed H2 client must leave the cache")
+	require.NoError(s.T(), resp.Body.Close())
+	require.Zero(s.T(), atomic.LoadInt64(&entry.inFlight))
+
+	fallbackEntry, err := svc.getClientEntry("", accountID, 1, profile, false, false)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH1Fallback, fallbackEntry.protocolMode)
+	transport, ok := fallbackEntry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok)
+	require.False(s.T(), transport.ForceAttemptHTTP2)
+	require.NotNil(s.T(), transport.TLSNextProto)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2DirectFallbackAccumulatesErrorsWithinWindow() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                   true,
+			AllowProxyFallbackToHTTP1: true,
+			FallbackErrorThreshold:    2,
+			FallbackWindowSeconds:     60,
+			FallbackTTLSeconds:        600,
+		},
+	}
+	svc := s.newService()
+	streamErr := errors.New("stream error: stream ID 7; INTERNAL_ERROR; received from peer")
+
+	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, directProxyKey, streamErr)
+	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(directProxyKey))
+	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, directProxyKey, streamErr)
+	require.True(s.T(), svc.isOpenAIHTTP2FallbackActive(directProxyKey))
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2CompatibilityErrorRetiresClientBeforeFallbackThreshold() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                   true,
+			AllowProxyFallbackToHTTP1: true,
+			FallbackErrorThreshold:    2,
+			FallbackWindowSeconds:     60,
+			FallbackTTLSeconds:        600,
+		},
+	}
+	svc := s.newService()
+	const cacheKey = "proxy:direct|proto:openai_h2"
+	entry := &upstreamClientEntry{
+		cacheKey:     cacheKey,
+		proxyKey:     directProxyKey,
+		protocolMode: upstreamProtocolModeOpenAIH2,
+	}
+	svc.clients[cacheKey] = entry
+
+	svc.handleOpenAIHTTP2Failure(
+		service.HTTPUpstreamProfileOpenAI,
+		entry,
+		errors.New("stream error: stream ID 11; INTERNAL_ERROR; received from peer"),
+	)
+
+	require.False(s.T(), hasEntry(svc, entry), "the suspect H2 client must be replaced after the first protocol error")
+	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(directProxyKey), "one error must not bypass the configured threshold")
+}
+
+func (s *HTTPUpstreamSuite) TestRetireOpenAIHTTP2ClientDoesNotRemoveReplacement() {
+	svc := s.newService()
+	const cacheKey = "proxy:direct|proto:openai_h2"
+	stale := &upstreamClientEntry{cacheKey: cacheKey}
+	replacement := &upstreamClientEntry{cacheKey: cacheKey}
+	svc.clients[cacheKey] = replacement
+
+	svc.retireOpenAIHTTP2Client(stale)
+
+	require.Same(s.T(), replacement, svc.clients[cacheKey])
+}
+
+func TestTrackedBodyReadErrorObserverIgnoresEOFAndRunsOnce(t *testing.T) {
+	streamErr := errors.New("stream error: stream ID 9; INTERNAL_ERROR; received from peer")
+	var observed atomic.Int64
+	body := wrapTrackedBodyWithReadError(
+		io.NopCloser(iotest.ErrReader(streamErr)),
+		nil,
+		func(error) { observed.Add(1) },
+	)
+
+	_, err := body.Read(make([]byte, 1))
+	require.ErrorIs(t, err, streamErr)
+	_, err = body.Read(make([]byte, 1))
+	require.ErrorIs(t, err, streamErr)
+	require.NoError(t, body.Close())
+	require.Equal(t, int64(1), observed.Load())
+
+	observed.Store(0)
+	body = wrapTrackedBodyWithReadError(io.NopCloser(strings.NewReader("ok")), nil, func(error) { observed.Add(1) })
+	data, err := io.ReadAll(body)
+	require.NoError(t, err)
+	require.Equal(t, "ok", string(data))
+	require.NoError(t, body.Close())
+	require.Zero(t, observed.Load())
 }
 
 // TestNormalizeProxyURL_Canonicalizes 测试代理 URL 规范化
