@@ -28,6 +28,37 @@ func TestVipDiscountedGroup(t *testing.T) {
 	require.False(t, VipDiscountedGroup(""))
 }
 
+func TestIsVIPOnlyModel(t *testing.T) {
+	require.True(t, IsVIPOnlyModel("gpt-5.6-luna"))
+	require.True(t, IsVIPOnlyModel(" GPT-5.6-LUNA "))
+	require.True(t, IsVIPOnlyModel("gpt-5.6-luna-2026-07-09"))
+	require.True(t, IsVIPOnlyModel("gpt5.6luna"))
+	require.True(t, IsVIPOnlyModel("gpt-5.6luna-2026-07-09"))
+	require.True(t, IsVIPOnlyModel("openai/gpt_5.6_luna"))
+	require.False(t, IsVIPOnlyModel("gpt-5.6-lunatic"))
+	require.False(t, IsVIPOnlyModel("gpt5.6lunatic"))
+	require.False(t, IsVIPOnlyModel("gpt-5.6-terra"))
+	require.False(t, IsVIPOnlyModel(""))
+}
+
+func TestUserCanAccessModel(t *testing.T) {
+	require.True(t, UserCanAccessModel(&User{IsVIP: true}, "gpt-5.6-luna"))
+	require.False(t, UserCanAccessModel(&User{}, "gpt-5.6-luna"))
+	require.False(t, UserCanAccessModel(nil, "gpt-5.6-luna-2026-07-09"))
+	require.True(t, UserCanAccessModel(&User{}, "gpt-5.6-sol"))
+}
+
+func TestFilterUserAccessibleModels(t *testing.T) {
+	models := []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-luna-2026-07-09", "gpt-5.6-terra"}
+
+	require.Equal(t,
+		[]string{"gpt-5.6-sol", "gpt-5.6-terra"},
+		FilterUserAccessibleModels(&User{}, models),
+	)
+	require.Equal(t, models, FilterUserAccessibleModels(&User{IsVIP: true}, models))
+	require.Equal(t, models, []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-luna-2026-07-09", "gpt-5.6-terra"}, "input must not be modified")
+}
+
 func TestApplyVipGroupRateDiscount(t *testing.T) {
 	vip := &User{IsVIP: true}
 	normal := &User{}

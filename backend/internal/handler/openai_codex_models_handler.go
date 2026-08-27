@@ -39,6 +39,14 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	switchCount := 0
 	var lastUpstreamErr error
+	clientIfNoneMatch := c.GetHeader("If-None-Match")
+	upstreamIfNoneMatch := clientIfNoneMatch
+	if apiKey.User == nil || !apiKey.User.IsVIP {
+		// Non-VIP clients receive a user-specific filtered representation with
+		// a derived ETag; their ETag must never trigger an upstream 304 before
+		// the cached manifest has been filtered locally.
+		upstreamIfNoneMatch = ""
+	}
 
 	for {
 		account, err := h.gatewayService.SelectAccountForModelWithExclusions(c.Request.Context(), apiKey.GroupID, "", "", failedAccountIDs)
@@ -56,7 +64,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 		// 让 ops 错误日志携带实际选中的上游账号，便于定位失效账号（#4544）。
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), c.GetHeader("If-None-Match"))
+		manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), upstreamIfNoneMatch)
 		if err != nil {
 			if c.Request.Context().Err() != nil {
 				return
@@ -71,6 +79,11 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			return
 		}
 		if c.Request.Context().Err() != nil {
+			return
+		}
+		manifest, err = service.FilterCodexModelsManifestForUser(manifest, apiKey.User, clientIfNoneMatch)
+		if err != nil {
+			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Codex models manifest could not be filtered")
 			return
 		}
 
