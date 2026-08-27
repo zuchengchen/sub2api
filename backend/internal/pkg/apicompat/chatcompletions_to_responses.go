@@ -215,27 +215,6 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 	return items, nil
 }
 
-// parseAssistantContent returns assistant content as plain text.
-//
-// Supported formats:
-// - JSON string
-// - JSON array of typed parts (e.g. [{"type":"text","text":"..."}])
-//
-// For structured thinking/reasoning parts, it preserves semantics by wrapping
-// the text in explicit tags so downstream can still distinguish it from normal text.
-func parseAssistantContent(raw json.RawMessage) (string, error) {
-	parts, err := parseAssistantContentParts(raw)
-	if err != nil {
-		return "", err
-	}
-
-	var b strings.Builder
-	for _, part := range parts {
-		_, _ = b.WriteString(part.Text)
-	}
-	return b.String(), nil
-}
-
 // parseAssistantContentParts renders assistant content using the legacy text
 // concatenation rules, but splits output_text parts at explicit cache
 // breakpoints so each client-provided boundary survives the Chat -> Responses

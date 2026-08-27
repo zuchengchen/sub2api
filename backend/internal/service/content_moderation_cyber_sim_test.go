@@ -175,10 +175,10 @@ func TestCyberInterceptionReplay(t *testing.T) {
 			// to the most intent-bearing candidates: user goal messages first,
 			// then assistant narration, then tool traffic by indicator count.
 			priority := func(h hit) int {
-				switch {
-				case h.frag.Role == "user":
+				switch h.frag.Role {
+				case "user":
 					return 0
-				case h.frag.Role == "assistant":
+				case "assistant":
 					return 1
 				default:
 					return 2
