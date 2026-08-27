@@ -64,6 +64,9 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
 		return
 	}
+	if !requireUserModelAccess(c, apiKey, h.errorResponse, reqModel) {
+		return
+	}
 
 	setOpsRequestContext(c, reqModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(false, false)))
@@ -84,6 +87,9 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	if !requireUserModelAccess(c, apiKey, h.errorResponse, channelMapping.MappedModel) {
+		return
+	}
 	routingModel := reqModel
 	forwardBody := body
 	if channelMapping.Mapped {
@@ -120,6 +126,9 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 			markOpsRoutingCapacityLimited(c)
 		}
 		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
+		return
+	}
+	if !requireUserAccountModelAccess(c, apiKey, account, h.errorResponse, false, routingModel) {
 		return
 	}
 
@@ -238,14 +247,23 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
 		return
 	}
+	if !requireUserModelAccess(c, apiKey, h.anthropicErrorResponse, reqModel) {
+		return
+	}
 	routingModel := service.NormalizeOpenAICompatRequestedModel(reqModel)
 	preferredMappedModel := resolveOpenAIMessagesDispatchMappedModel(c, apiKey, reqModel)
+	if !requireUserModelAccess(c, apiKey, h.anthropicErrorResponse, preferredMappedModel) {
+		return
+	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", parsedReq.Stream))
 
 	setOpsRequestContext(c, reqModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(false, false)))
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	if !requireUserModelAccess(c, apiKey, h.anthropicErrorResponse, channelMapping.MappedModel) {
+		return
+	}
 	mappedBodyForMessages := newOpenAIModelMappedBodyCache(body, h.gatewayService.ReplaceModelInBody)
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
@@ -293,6 +311,13 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 			markOpsRoutingCapacityLimited(c)
 		}
 		h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
+		return
+	}
+	accountInputModel := routingModel
+	if channelMapping.Mapped && strings.TrimSpace(channelMapping.MappedModel) != "" {
+		accountInputModel = strings.TrimSpace(channelMapping.MappedModel)
+	}
+	if !requireUserAccountModelAccess(c, apiKey, account, h.anthropicErrorResponse, false, accountInputModel) {
 		return
 	}
 

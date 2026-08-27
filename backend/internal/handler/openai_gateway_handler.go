@@ -462,6 +462,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	if !requireUserModelAccess(c, apiKey, h.errorResponse, reqModel, channelMapping.MappedModel) {
+		return
+	}
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	seedOpenAIForwardImageIntentHint(c, channelMapping.Mapped, imageIntent)
 	forwardModel := reqModel
@@ -658,6 +661,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			continue
 		}
 		if slotResult != openAISlotAcquireOK {
+			return
+		}
+		account = selection.Account
+		if !requireUserAccountModelAccess(c, apiKey, account, h.errorResponse, requireCompact, forwardModel) {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
 			return
 		}
 
@@ -1098,6 +1108,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMappingMsg, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	if !requireUserModelAccess(c, apiKey, h.anthropicErrorResponse, reqModel, preferredMappedModel, channelMappingMsg.MappedModel) {
+		return
+	}
 	mappedBodyForMessages := newOpenAIModelMappedBodyCache(body, h.gatewayService.ReplaceModelInBody)
 
 	// 绑定错误透传服务，允许 service 层在非 failover 错误场景复用规则。
@@ -1224,6 +1237,17 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			continue
 		}
 		if slotResult != openAISlotAcquireOK {
+			return
+		}
+		account = selection.Account
+		accountInputModel := routingModel
+		if channelMappingMsg.Mapped && strings.TrimSpace(channelMappingMsg.MappedModel) != "" {
+			accountInputModel = strings.TrimSpace(channelMappingMsg.MappedModel)
+		}
+		if !requireUserAccountModelAccess(c, apiKey, account, h.anthropicErrorResponse, false, accountInputModel) {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
 			return
 		}
 
@@ -1885,6 +1909,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return
 		}
 	}
+	if !apiKeyCanAccessModels(c, apiKey, reqModel) {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.VipExclusiveModelAccessMessage)
+		return
+	}
 	previousResponseID := strings.TrimSpace(gjson.GetBytes(firstMessage, "previous_response_id").String())
 	previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 	if previousResponseID != "" && previousResponseIDKind == service.OpenAIPreviousResponseIDKindMessageID {
@@ -1940,6 +1969,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMappingWS, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, reqModel)
+	if !apiKeyCanAccessModels(c, apiKey, channelMappingWS.MappedModel) {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.VipExclusiveModelAccessMessage)
+		return
+	}
 	wsForwardModel := reqModel
 	if channelMappingWS.Mapped && strings.TrimSpace(channelMappingWS.MappedModel) != "" {
 		wsForwardModel = strings.TrimSpace(channelMappingWS.MappedModel)
@@ -2201,6 +2235,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			selection.Account = latest
 			accountReleaseFunc = fastReleaseFunc
 		}
+		if !apiKeyCanAccessAccountModels(c, apiKey, account, false, wsForwardModel) {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.VipExclusiveModelAccessMessage)
+			return
+		}
 		// 准入完成：门并入连接 ctx，turn 级复核与 failover 重选共用。
 		ctx = admissionCtx
 		// Account selection starts a fresh upstream attempt. Clear any model
@@ -2298,6 +2340,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				setOpsRequestContext(c, model, true)
 				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, model)
+				forwardModel := model
+				if mapping.Mapped && strings.TrimSpace(mapping.MappedModel) != "" {
+					forwardModel = strings.TrimSpace(mapping.MappedModel)
+				}
+				if !apiKeyCanAccessModels(c, apiKey, model, mapping.MappedModel) ||
+					!apiKeyCanAccessAccountModels(c, apiKey, account, false, forwardModel) {
+					service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
+					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, service.VipExclusiveModelAccessMessage, nil)
+				}
 				mappedModelUnchanged := false
 				if previous := turnChannelMapping.Load(); previous != nil && previous.turn < turn {
 					mappedModelUnchanged = strings.TrimSpace(previous.mapping.MappedModel) == strings.TrimSpace(mapping.MappedModel)

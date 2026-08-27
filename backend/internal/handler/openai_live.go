@@ -48,6 +48,9 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Live only supports OpenAI models for Composite groups")
 		return
 	}
+	if !requireUserModelAccess(c, apiKey, h.errorResponse, model) {
+		return
+	}
 	if upstreamModel, ok := service.ResolvedUpstreamModelFromContext(c.Request.Context()); ok && upstreamModel != model {
 		rewrittenSession, rewriteErr := sjson.SetBytes(request.Session, "model", upstreamModel)
 		if rewriteErr != nil {

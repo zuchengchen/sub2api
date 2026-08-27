@@ -206,6 +206,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by composite groups")
 		return
 	}
+	if !requireUserModelAccess(c, apiKey, h.errorResponse, reqModel, channelMapping.MappedModel) {
+		return
+	}
 
 	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && !decision.Allowed {
 		h.anthropicContentModerationError(c, decision)
@@ -441,6 +444,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			account = latest
 			selection.Account = latest
+			if !requireUserAccountModelAccess(c, apiKey, account, h.errorResponse, false, reqModel, channelMapping.MappedModel) {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				return
+			}
 			// 等待路径保持既有 eager 绑定（无门时 helper 直接绑定）；调度器已
 			// 抢槽的直达路径无门时由选号内部绑定，这里只在门下补准入后绑定。
 			if selection.ProfitGateActive() || !selection.Acquired {
@@ -764,6 +773,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			account = latest
 			selection.Account = latest
+			forwardModel := reqModel
+			if channelMapping.Mapped && strings.TrimSpace(channelMapping.MappedModel) != "" {
+				forwardModel = strings.TrimSpace(channelMapping.MappedModel)
+			}
+			if !requireUserAccountModelAccess(c, currentAPIKey, account, h.errorResponse, false, forwardModel) {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				return
+			}
 			// 等待路径保持既有 eager 绑定（无门时 helper 直接绑定）；调度器已
 			// 抢槽的直达路径无门时由选号内部绑定，这里只在门下补准入后绑定。
 			if selection.ProfitGateActive() || !selection.Acquired {
@@ -1071,6 +1090,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 // Falls back to default models if no whitelist is configured
 func (h *GatewayHandler) Models(c *gin.Context) {
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
+	var user *service.User
+	if apiKey != nil {
+		user = apiKey.User
+	}
+	filterAccessible := func(models []string) []string {
+		return service.FilterUserAccessibleModels(user, models)
+	}
 
 	var groupID *int64
 	var platform string
@@ -1084,9 +1110,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	if platform == service.PlatformComposite {
-		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID)
+		availableModels := filterAccessible(h.compositeAvailableModels(c.Request.Context(), groupID))
 		if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
-			availableModels = filterModelsByCustomList(availableModels, defaultModelIDsForPlatform(service.PlatformComposite), apiKey.Group.ModelsListConfig.Models)
+			fallbackModels := filterAccessible(defaultModelIDsForPlatform(service.PlatformComposite))
+			availableModels = filterAccessible(filterModelsByCustomList(availableModels, fallbackModels, apiKey.Group.ModelsListConfig.Models))
 			writeCustomModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
@@ -1094,15 +1121,15 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 			writeModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
-		writeModelsList(c, service.PlatformComposite, defaultModelIDsForPlatform(service.PlatformComposite))
+		writeModelsList(c, service.PlatformComposite, filterAccessible(defaultModelIDsForPlatform(service.PlatformComposite)))
 		return
 	}
 
 	// Get available models from account configurations for the selected group platform.
-	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
+	availableModels := filterAccessible(h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform))
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
-		fallbackModels := defaultModelIDsForPlatform(platform)
-		availableModels = filterModelsByCustomList(customModelsListSource(platform, availableModels, fallbackModels), fallbackModels, apiKey.Group.ModelsListConfig.Models)
+		fallbackModels := filterAccessible(defaultModelIDsForPlatform(platform))
+		availableModels = filterAccessible(filterModelsByCustomList(customModelsListSource(platform, availableModels, fallbackModels), fallbackModels, apiKey.Group.ModelsListConfig.Models))
 		writeCustomModelsList(c, platform, availableModels)
 		return
 	}
@@ -1114,10 +1141,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 	// Fallback to default models
 	if platform == service.PlatformOpenAI {
-		c.JSON(http.StatusOK, gin.H{
-			"object": "list",
-			"data":   openai.DefaultModels,
-		})
+		writeOpenAIModelsList(c, filterAccessible(openai.DefaultModelIDs()))
 		return
 	}
 
@@ -2029,6 +2053,9 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by composite groups")
 		return
 	}
+	if !requireUserModelAccess(c, apiKey, h.errorResponse, parsedReq.Model) {
+		return
+	}
 
 	setOpsRequestContext(c, parsedReq.Model, parsedReq.Stream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsedReq.Stream, false)))
@@ -2065,6 +2092,9 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 		}
 		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
+		return
+	}
+	if !requireUserAccountModelAccess(c, apiKey, account, h.errorResponse, false, parsedReq.Model) {
 		return
 	}
 	setOpsSelectedAccount(c, account.ID, account.Platform)
