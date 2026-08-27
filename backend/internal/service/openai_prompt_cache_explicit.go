@@ -223,7 +223,8 @@ func canonicalizeOpenAIPromptCacheSystemMessages(request map[string]any, input [
 			}
 			continue
 		}
-		if prefixOpen && role != "developer" && !(role == "" && strings.EqualFold(strings.TrimSpace(firstNonEmptyString(item["type"])), "additional_tools")) {
+		isAdditionalTools := role == "" && strings.EqualFold(strings.TrimSpace(firstNonEmptyString(item["type"])), "additional_tools")
+		if prefixOpen && role != "developer" && !isAdditionalTools {
 			prefixOpen = false
 		}
 		remaining = append(remaining, rawItem)
