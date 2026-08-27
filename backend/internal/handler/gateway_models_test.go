@@ -407,6 +407,36 @@ func TestGatewayModels_CompositeUnmappedAccountsFallbackToLinkedPlatformsOnly(t 
 	require.NotContains(t, ids, "gemini-2.5-flash")
 }
 
+func TestGatewayModels_FiltersVIPOnlyModelsByUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(3401)
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{
+		byGroup: map[int64][]service.Account{
+			groupID: {{ID: 1, Platform: service.PlatformOpenAI}},
+		},
+	})
+
+	modelIDs := func(isVIP bool) []string {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+			User:  &service.User{IsVIP: isVIP},
+			Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI},
+		})
+
+		h.Models(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var got gatewayModelsResponseForTest
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+		return modelIDsForTest(got.Data)
+	}
+
+	require.NotContains(t, modelIDs(false), service.VipExclusiveModelName)
+	require.Contains(t, modelIDs(true), service.VipExclusiveModelName)
+}
+
 // CN 供应商没有静态默认模型列表：composite 下无映射的可调度 CN 账号不得把
 // defaultModelIDsForPlatform default 分支的 Claude 列表挂到 CN 平台名下。
 func TestGatewayModels_CompositeUnmappedCNAccountsContributeNoDefaults(t *testing.T) {

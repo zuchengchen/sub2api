@@ -533,6 +533,26 @@ func TestAdjustAPIKeyCodexModelsManifest(t *testing.T) {
 	}
 }
 
+func TestFilterCodexModelsManifestForUser(t *testing.T) {
+	body := []byte(`{"models":[{"slug":"gpt-5.6-sol","extra":true},{"slug":"gpt-5.6-luna"},{"slug":"gpt-5.6-luna-2026-07-09"},"gpt-5.6-luna",null],"extra":{"keep":true}}`)
+	manifest := &CodexModelsManifest{Body: body, ETag: `"upstream"`}
+
+	plain, err := FilterCodexModelsManifestForUser(manifest, &User{}, "")
+	require.NoError(t, err)
+	require.NotEqual(t, manifest.ETag, plain.ETag)
+	require.JSONEq(t, `{"models":[{"slug":"gpt-5.6-sol","extra":true},null],"extra":{"keep":true}}`, string(plain.Body))
+	require.Equal(t, body, manifest.Body, "shared manifest must not be mutated")
+
+	notModified, err := FilterCodexModelsManifestForUser(manifest, &User{}, plain.ETag)
+	require.NoError(t, err)
+	require.True(t, notModified.NotModified)
+	require.Equal(t, plain.ETag, notModified.ETag)
+
+	vip, err := FilterCodexModelsManifestForUser(manifest, &User{IsVIP: true}, "")
+	require.NoError(t, err)
+	require.Same(t, manifest, vip)
+}
+
 func TestFetchCodexModelsManifestAPIKeyDisablesResponsesLiteForAffectedModels(t *testing.T) {
 	const upstreamBody = `{"models":[{"slug":"gpt-5.6-sol","use_responses_lite":true},{"slug":"gpt-5.6-codex","use_responses_lite":true}],"metadata":{"version":1}}`
 	upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {

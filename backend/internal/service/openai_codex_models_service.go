@@ -573,6 +573,68 @@ func codexModelsManifestBodyETag(body []byte) string {
 	return fmt.Sprintf(`"%x"`, sum)
 }
 
+// FilterCodexModelsManifestForUser removes VIP-only models from a shared
+// upstream manifest without mutating the cached representation. A filtered
+// representation receives its own ETag so VIP and non-VIP clients cannot
+// reuse each other's cached model catalog.
+func FilterCodexModelsManifestForUser(manifest *CodexModelsManifest, user *User, ifNoneMatch string) (*CodexModelsManifest, error) {
+	if manifest == nil || (user != nil && user.IsVIP) || manifest.NotModified {
+		return manifest, nil
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(manifest.Body, &envelope); err != nil {
+		return nil, fmt.Errorf("decode codex models manifest: %w", err)
+	}
+	var models []json.RawMessage
+	if err := json.Unmarshal(envelope["models"], &models); err != nil {
+		return nil, fmt.Errorf("decode codex models array: %w", err)
+	}
+
+	filtered := make([]json.RawMessage, 0, len(models))
+	changed := false
+	for _, rawModel := range models {
+		if IsVIPOnlyModel(codexManifestModelID(rawModel)) {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, rawModel)
+	}
+	if !changed {
+		return codexModelsManifestForClient(manifest, ifNoneMatch), nil
+	}
+
+	filteredModels, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, fmt.Errorf("encode filtered codex models array: %w", err)
+	}
+	envelope["models"] = filteredModels
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("encode filtered codex models manifest: %w", err)
+	}
+	result := &CodexModelsManifest{
+		Body:         body,
+		ETag:         codexModelsManifestBodyETag(body),
+		upstreamETag: manifest.ETag,
+	}
+	return codexModelsManifestForClient(result, ifNoneMatch), nil
+}
+
+func codexManifestModelID(rawModel json.RawMessage) string {
+	var object struct {
+		Slug string `json:"slug"`
+	}
+	if err := json.Unmarshal(rawModel, &object); err == nil && strings.TrimSpace(object.Slug) != "" {
+		return object.Slug
+	}
+	var modelID string
+	if err := json.Unmarshal(rawModel, &modelID); err == nil {
+		return modelID
+	}
+	return ""
+}
+
 var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
 	"gpt-5.6-sol":   {},
 	"gpt-5.6-terra": {},
