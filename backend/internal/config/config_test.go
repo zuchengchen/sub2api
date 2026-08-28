@@ -2588,8 +2588,8 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	if cfg.Gateway.ImageStreamKeepaliveInterval != 10 {
 		t.Fatalf("image_stream_keepalive_interval = %d, want 10", cfg.Gateway.ImageStreamKeepaliveInterval)
 	}
-	if cfg.Gateway.ImageNonstreamKeepaliveInterval != 0 {
-		t.Fatalf("image_nonstream_keepalive_interval = %d, want 0", cfg.Gateway.ImageNonstreamKeepaliveInterval)
+	if cfg.Gateway.ImageNonstreamKeepaliveInterval != 10 {
+		t.Fatalf("image_nonstream_keepalive_interval = %d, want 10", cfg.Gateway.ImageNonstreamKeepaliveInterval)
 	}
 	if cfg.Gateway.ImageConcurrency.Enabled {
 		t.Fatalf("image_concurrency.enabled = true, want false")
