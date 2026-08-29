@@ -164,6 +164,7 @@ export default {
     apiKeys: 'API Keys',
     batchImage: 'Batch Images',
     usage: 'Usage',
+    buyRedeemCode: 'Buy Redeem Codes',
     redeem: 'Redeem',
     affiliate: 'Affiliate Rebates',
     affiliateManagement: 'Affiliate Rebates',
