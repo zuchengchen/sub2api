@@ -53,3 +53,13 @@ describe('AppSidebar header styles', () => {
     expect(sidebarBrandBlockMatch?.[0]).not.toContain('overflow: hidden;')
   })
 })
+
+describe('AppSidebar redeem code store entry', () => {
+  it('places the redeem code store next to the redeem action', () => {
+    const storeIndex = componentSource.indexOf("{ path: '/redeem-store', label: t('nav.buyRedeemCode')")
+    const redeemIndex = componentSource.indexOf("{ path: '/redeem', label: t('nav.redeem')")
+
+    expect(storeIndex).toBeGreaterThan(-1)
+    expect(redeemIndex).toBeGreaterThan(storeIndex)
+  })
+})

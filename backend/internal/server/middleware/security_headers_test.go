@@ -380,6 +380,12 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "worker-src", TencentCaptchaWorkerSource))
 	})
 
+	t.Run("allows_redeem_code_store_frames_for_old_custom_policies", func(t *testing.T) {
+		enhanced := enhanceCSPPolicy("default-src 'self'; frame-src 'self'")
+
+		assert.Equal(t, 1, countDirectiveValue(enhanced, "frame-src", RedeemCodeStoreDomain))
+	})
+
 	t.Run("default_policy_already_carries_tencent_captcha_domains", func(t *testing.T) {
 		// 默认策略与中间件强制注入表必须同形，否则 config.example.yaml 会误导自建用户
 		for _, required := range requiredCSPDirectiveValues {
