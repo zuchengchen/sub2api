@@ -13,6 +13,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:e2e:guide": "playwright test e2e/guide.spec.ts",
     "test:e2e:risk-control": "playwright test e2e/risk-control.spec.ts"
   },
   "dependencies": {

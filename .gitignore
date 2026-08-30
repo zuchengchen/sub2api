@@ -136,6 +136,7 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/guide.zh.md
 !docs/content-moderation-yufeng-design.md
 !docs/runbooks/
 !docs/runbooks/content-moderation-yufeng.md
