@@ -39,10 +39,10 @@ describe('GuideView', () => {
       },
     })
 
-    expect(wrapper.get('[data-test="guide-view"]').text()).toContain('从充值到调用，一步完成配置')
-    expect(wrapper.get('#recharge').text()).toBe('充值：购买并兑换余额')
-    expect(wrapper.get('#goal-workflow').text()).toBe('使用 goal-workflow skill')
-    expect(wrapper.get('#svip').text()).toBe('SVIP 权利与义务')
+    expect(wrapper.get('[data-test="guide-view"]').text()).toContain('从充值到第一次使用，照着做就可以')
+    expect(wrapper.get('#recharge').text()).toBe('充值：先买兑换码，再兑换余额')
+    expect(wrapper.get('#goal-workflow').text()).toBe('使用 goal-workflow 小助手')
+    expect(wrapper.get('#svip').text()).toBe('SVIP 能得到什么、需要注意什么')
     expect(wrapper.get('[data-test="guide-download"]').attributes('href')).toBe(
       '/downloads/select-fastest-codex-base-url.bat'
     )
@@ -59,7 +59,7 @@ describe('GuideView', () => {
       '安装 skill https://github.com/zuchengchen/goal-workflow/tree/master/skills/goal-workflow',
       '命令已复制'
     )
-    expect(wrapper.get('[aria-live="polite"]').text()).toBe('安装 goal-workflow已复制')
+    expect(wrapper.get('[aria-live="polite"]').text()).toBe('安装 goal-workflow 已复制')
   })
 
   it('sanitizes Markdown HTML and secures external links', () => {
@@ -79,7 +79,10 @@ describe('GuideView', () => {
     expect(guideMarkdown).toContain('[兑换余额](/redeem)')
     expect(guideMarkdown).toContain('$goal-workflow 清理内存')
     expect(guideMarkdown).toContain('必须**严格大于 100 元**')
-    expect(guideMarkdown).toContain('只替换当前 provider 的 `base_url` 主机名')
+    expect(guideMarkdown).toContain('只会更换当前 Codex 配置中的网址域名')
+    expect(guideMarkdown).toContain('可以把它理解为“软件专用密码”')
+    expect(guideMarkdown).toContain('可以把 hosts 理解成电脑自己的“网址通讯录”')
+    expect(guideMarkdown).toContain('SHA-256（可以理解为文件的“指纹”）')
     expect(guideMarkdown).not.toMatch(/A.{0,20}B.{0,80}(?:支付|订单)/s)
     expect(guideMarkdown).not.toContain('并发支付竞态')
     expect(guideMarkdown).not.toContain('没有支付但是到账')

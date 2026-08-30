@@ -16,10 +16,10 @@
             :href="downloadUrl"
             download
             class="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-gray-300 px-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-dark-600 dark:text-dark-200 dark:hover:bg-dark-800 sm:px-3"
-            title="下载自动测速脚本"
+            title="下载自动测速工具"
           >
             <Icon name="download" size="sm" />
-            <span class="hidden sm:inline">下载脚本</span>
+            <span class="hidden sm:inline">下载测速工具</span>
           </a>
           <button
             type="button"
@@ -62,20 +62,20 @@
 
       <main class="min-w-0">
         <div class="border-b border-gray-200 pb-7 dark:border-dark-800">
-          <p class="text-sm font-semibold text-primary-700 dark:text-primary-300">本站使用手册</p>
-          <h1 class="mt-2 text-3xl font-bold text-gray-950 dark:text-white sm:text-4xl">从充值到调用，一步完成配置</h1>
+          <p class="text-sm font-semibold text-primary-700 dark:text-primary-300">新手使用教程</p>
+          <h1 class="mt-2 text-3xl font-bold text-gray-950 dark:text-white sm:text-4xl">从充值到第一次使用，照着做就可以</h1>
           <p class="mt-4 max-w-3xl text-base leading-7 text-gray-600 dark:text-dark-300">
-            面向本站用户的完整操作说明，涵盖兑换余额、API Key、Codex、自动测速脚本与 SVIP 规则。
+            不熟悉 API Key 或 Codex 也没关系。本教程会告诉你点哪里、填什么，以及出错后怎么办。
           </p>
           <div class="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-gray-500 dark:text-dark-400">
             <span>教程版本 {{ guideVersion }}</span>
             <span>更新日期 {{ updatedAt }}</span>
-            <span>适用于当前 Sub2API 站点</span>
+            <span>适合第一次使用本站的用户</span>
           </div>
         </div>
 
         <div class="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-          自动测速脚本需要管理员权限并会修改 Windows <code>hosts</code> 与当前 Codex provider 的 <code>base_url</code> 域名。运行前请先关闭 Codex，并阅读脚本章节的备份与恢复说明。
+          Windows 测速工具会修改电脑自己保存的“网址通讯录”（<code>hosts</code>）和 Codex 使用的网址（<code>base_url</code>）。看不懂这两个名称也没关系：运行前先关闭 Codex，并保留工具自动生成的备份。
         </div>
 
         <section class="border-b border-gray-200 py-5 dark:border-dark-800 lg:hidden" aria-label="移动端教程目录">
@@ -106,7 +106,7 @@
         <section v-if="quickCommands.length" class="border-b border-gray-200 py-7 dark:border-dark-800" aria-labelledby="quick-commands-title">
           <div class="mb-4 flex items-center gap-2">
             <Icon name="terminal" size="sm" class="text-primary-600 dark:text-primary-300" />
-            <h2 id="quick-commands-title" class="text-lg font-semibold">常用命令</h2>
+            <h2 id="quick-commands-title" class="text-lg font-semibold">可以直接复制的命令</h2>
           </div>
           <div class="divide-y divide-gray-200 border-y border-gray-200 dark:divide-dark-700 dark:border-dark-700">
             <div v-for="command in quickCommands" :key="command.id" class="grid min-w-0 gap-2 py-3 sm:grid-cols-[9rem_minmax(0,1fr)_2.5rem] sm:items-center">
@@ -130,7 +130,7 @@
         <article data-test="guide-content" class="guide-content py-8" v-html="renderedHtml"></article>
 
         <footer class="mt-4 flex flex-col gap-3 border-t border-gray-200 py-6 text-sm text-gray-500 dark:border-dark-800 dark:text-dark-400 sm:flex-row sm:items-center sm:justify-between">
-          <span>教程内容以本站当前页面和实际可用功能为准。</span>
+          <span>看不懂或操作不成功时，请带上错误提示联系管理员。</span>
           <RouterLink to="/home" class="inline-flex items-center gap-1.5 font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200">
             <Icon name="home" size="sm" />返回首页
           </RouterLink>
@@ -155,7 +155,7 @@ import {
 import guideMarkdown from '../../../../docs/guide.zh.md?raw'
 
 const downloadUrl = '/downloads/select-fastest-codex-base-url.bat'
-const guideVersion = '1.0'
+const guideVersion = '1.1'
 const updatedAt = '2026-08-30'
 const commandLabels: Record<string, string> = {
   'skill-install': '安装 goal-workflow',
@@ -204,7 +204,7 @@ function selectSection(sectionId: string) {
 
 async function copyCommand(command: GuideCommand) {
   const success = await copyToClipboard(command.content, '命令已复制')
-  copyAnnouncement.value = success ? `${commandLabels[command.id]}已复制` : '复制失败'
+  copyAnnouncement.value = success ? `${commandLabels[command.id]} 已复制` : '复制失败'
   lastCopiedCommand.value = success ? command.id : ''
 
   if (copyTimer !== undefined) window.clearTimeout(copyTimer)
