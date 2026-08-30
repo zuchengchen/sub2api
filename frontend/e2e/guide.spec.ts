@@ -73,6 +73,16 @@ async function preparePublicGuide(page: Page) {
     message: 'ok',
     data: { needs_setup: false, step: 'complete' },
   }))
+  await page.route('**/api/v1/settings/guide**', (route) => json(route, {
+    code: 0,
+    message: 'ok',
+    data: {
+      content: '',
+      version: 0,
+      updated_at: '',
+      has_custom_content: false,
+    },
+  }))
 }
 
 test('public guide workflow', async ({ context, page }, testInfo) => {
@@ -82,10 +92,10 @@ test('public guide workflow', async ({ context, page }, testInfo) => {
 
   await expect(page).toHaveURL(/\/guide$/)
   await expect(page.locator('[data-test="guide-view"]')).toBeVisible()
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('从充值到调用')
-  await expect(page.locator('#recharge')).toHaveText('充值：购买并兑换余额')
-  await expect(page.locator('#goal-workflow')).toHaveText('使用 goal-workflow skill')
-  await expect(page.locator('#svip')).toHaveText('SVIP 权利与义务')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('从充值到第一次使用')
+  await expect(page.locator('#recharge')).toHaveText('充值：先买兑换码，再兑换余额')
+  await expect(page.locator('#goal-workflow')).toHaveText('使用 goal-workflow 小助手')
+  await expect(page.locator('#svip')).toHaveText('SVIP 能得到什么、需要注意什么')
 
   const sameHostPaths = ['/redeem-store', '/redeem', '/downloads/select-fastest-codex-base-url.bat']
   for (const path of sameHostPaths) {
@@ -102,7 +112,7 @@ test('public guide workflow', async ({ context, page }, testInfo) => {
   const copyButton = page.locator('[data-test="copy-goal-example"]')
   await copyButton.click()
   await expect(page.locator('[data-test="guide-view"] p[aria-live="polite"]'))
-    .toContainText('使用 goal-workflow已复制')
+    .toContainText('使用 goal-workflow 已复制')
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
     .toBe('$goal-workflow 清理内存')
   const closeToastButton = page.getByRole('button', { name: 'Close notification' })
