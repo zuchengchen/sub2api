@@ -152,6 +152,7 @@ type SystemSettings struct {
 	SiteLogo                    string
 	SiteSubtitle                string
 	APIBaseURL                  string
+	APIBaseURLFollowHost        bool
 	ContactInfo                 string
 	DocURL                      string
 	HomeContent                 string
@@ -341,6 +342,7 @@ type PublicSettings struct {
 	SiteLogo                            string
 	SiteSubtitle                        string
 	APIBaseURL                          string
+	APIBaseURLFollowHost                bool
 	ContactInfo                         string
 	DocURL                              string
 	HomeContent                         string

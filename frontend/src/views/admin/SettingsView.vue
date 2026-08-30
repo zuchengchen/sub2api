@@ -6288,6 +6288,19 @@
                 <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                   {{ t("admin.settings.site.apiBaseUrlHint") }}
                 </p>
+                <div class="mt-3 flex items-start justify-between gap-4">
+                  <div>
+                    <p
+                      class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.site.apiBaseUrlFollowHost") }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.site.apiBaseUrlFollowHostHint") }}
+                    </p>
+                  </div>
+                  <Toggle v-model="form.api_base_url_follow_host" />
+                </div>
               </div>
 
               <!-- Global Table Preferences -->
@@ -9528,6 +9541,7 @@ const form = reactive<SettingsForm>({
   site_logo: "",
   site_subtitle: "Subscription to API Conversion Platform",
   api_base_url: "",
+  api_base_url_follow_host: false,
   contact_info: "",
   doc_url: "",
   home_content: "",
@@ -11158,6 +11172,7 @@ async function saveSettings() {
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle,
       api_base_url: form.api_base_url,
+      api_base_url_follow_host: form.api_base_url_follow_host,
       contact_info: form.contact_info,
       doc_url: form.doc_url,
       home_content: form.home_content,

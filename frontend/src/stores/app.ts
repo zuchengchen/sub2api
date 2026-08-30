@@ -13,6 +13,7 @@ import {
   type ReleaseInfo
 } from '@/api/admin/system'
 import { getPublicSettings as fetchPublicSettingsAPI } from '@/api/auth'
+import { resolveApiEndpoint } from '@/utils/apiEndpoint'
 
 export const useAppStore = defineStore('app', () => {
   // ==================== State ====================
@@ -31,6 +32,7 @@ export const useAppStore = defineStore('app', () => {
   const siteVersion = ref<string>('')
   const contactInfo = ref<string>('')
   const apiBaseUrl = ref<string>('')
+  const apiBaseUrlFollowHost = ref<boolean>(false)
   const docUrl = ref<string>('')
   const cachedPublicSettings = ref<PublicSettings | null>(null)
   let publicSettingsRequest: Promise<PublicSettings | null> | null = null
@@ -52,6 +54,17 @@ export const useAppStore = defineStore('app', () => {
 
   const hasActiveToasts = computed(() => toasts.value.length > 0)
   const backendModeEnabled = computed(() => cachedPublicSettings.value?.backend_mode_enabled ?? false)
+  /**
+   * API endpoint to show users. Follows the current browser origin when the
+   * admin enabled `api_base_url_follow_host` (multi-domain deployments), so a
+   * single `api_base_url` no longer pins every domain to one host.
+   */
+  const displayApiEndpoint = computed(() =>
+    resolveApiEndpoint({
+      configured: apiBaseUrl.value,
+      followHost: apiBaseUrlFollowHost.value,
+    }),
+  )
 
   const loadingCount = ref<number>(0)
 
@@ -302,6 +315,7 @@ export const useAppStore = defineStore('app', () => {
     siteVersion.value = config.version || ''
     contactInfo.value = config.contact_info || ''
     apiBaseUrl.value = config.api_base_url || ''
+    apiBaseUrlFollowHost.value = config.api_base_url_follow_host === true
     docUrl.value = config.doc_url || ''
     publicSettingsLoaded.value = true
   }
@@ -345,6 +359,7 @@ export const useAppStore = defineStore('app', () => {
         site_logo: siteLogo.value,
         site_subtitle: '',
         api_base_url: apiBaseUrl.value,
+        api_base_url_follow_host: apiBaseUrlFollowHost.value,
         contact_info: contactInfo.value,
         doc_url: docUrl.value,
         home_content: '',
@@ -451,6 +466,8 @@ export const useAppStore = defineStore('app', () => {
     siteVersion,
     contactInfo,
     apiBaseUrl,
+    apiBaseUrlFollowHost,
+    displayApiEndpoint,
     docUrl,
     cachedPublicSettings,
 

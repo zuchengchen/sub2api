@@ -24,8 +24,8 @@
             />
           </div>
           <EndpointPopover
-            v-if="publicSettings?.api_base_url || (publicSettings?.custom_endpoints?.length ?? 0) > 0"
-            :api-base-url="publicSettings?.api_base_url || ''"
+            v-if="showDefaultEndpoint || (publicSettings?.custom_endpoints?.length ?? 0) > 0"
+            :api-base-url="displayApiEndpoint"
             :custom-endpoints="publicSettings?.custom_endpoints || []"
           />
         </div>
@@ -992,7 +992,7 @@
     <UseKeyModal
       :show="showUseKeyModal"
       :api-key="selectedKey?.key || ''"
-      :base-url="publicSettings?.api_base_url || ''"
+      :base-url="displayApiEndpoint"
       :platform="selectedKey?.group?.platform || null"
       :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch || false"
       @close="closeUseKeyModal"
@@ -1123,6 +1123,7 @@
 	import { useOnboardingStore } from '@/stores/onboarding'
 	import { useClipboard } from '@/composables/useClipboard'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { resolveApiEndpointFromSettings } from '@/utils/apiEndpoint'
 
 const { t } = useI18n()
 import { keysAPI, authAPI, usageAPI, userGroupsAPI } from '@/api'
@@ -1307,6 +1308,16 @@ const selectedKey = ref<ApiKey | null>(null)
 const copiedKeyId = ref<number | null>(null)
 const groupSelectorKeyId = ref<number | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
+// Follows the current domain when the admin enabled api_base_url_follow_host.
+const displayApiEndpoint = computed(() => resolveApiEndpointFromSettings(publicSettings.value))
+// Show the chip when an endpoint was configured, or when the admin explicitly
+// opted into following the current domain. Deployments that left api_base_url
+// empty without opting in keep hiding it, as before.
+const showDefaultEndpoint = computed(
+  () =>
+    Boolean(publicSettings.value?.api_base_url) ||
+    (publicSettings.value?.api_base_url_follow_host === true && Boolean(displayApiEndpoint.value)),
+)
 const dropdownRef = ref<HTMLElement | null>(null)
 const columnDropdownRef = ref<HTMLElement | null>(null)
 const dropdownPosition = ref<{ top?: number; bottom?: number; left: number } | null>(null)
@@ -1884,7 +1895,7 @@ const importToCcswitch = (row: ApiKey) => {
 }
 
 const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
-  const baseUrl = publicSettings.value?.api_base_url || window.location.origin
+  const baseUrl = displayApiEndpoint.value || window.location.origin
   const platform = row.group?.platform || 'anthropic'
 
   const usageScript = `({
