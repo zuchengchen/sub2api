@@ -16,6 +16,8 @@ docs/
 # Docker build context even though docs/ is otherwise excluded.
 !docs/legal/
 !docs/legal/*.md
+# GuideView and the admin editor import the bundled beginner guide at build time.
+!docs/guide.zh.md
 
 # IDE
 .idea/
