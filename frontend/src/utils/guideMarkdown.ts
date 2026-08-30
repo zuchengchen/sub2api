@@ -28,6 +28,7 @@ const sectionIds: Record<string, string> = {
   '使用 goal-workflow 小助手': 'goal-workflow',
   'SVIP 能得到什么、需要注意什么': 'svip',
   '查看余额和使用记录': 'usage',
+  '错误码含义与处理方案': 'error-codes',
   '遇到问题先看这里': 'faq',
   '保护账户和密钥': 'security',
   '联系管理员时要准备什么': 'support',
