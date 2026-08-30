@@ -1028,8 +1028,9 @@ const currentDisplayJob = computed(() => {
 })
 
 const endpointBase = computed(() => {
-  const configured = appStore.apiBaseUrl?.trim()
-  if (configured) return configured.replace(/\/+$/, '')
+  // Follows the current domain when the admin enabled api_base_url_follow_host.
+  const resolved = appStore.displayApiEndpoint?.trim()
+  if (resolved) return resolved.replace(/\/+$/, '')
   if (typeof window !== 'undefined') return window.location.origin.replace(/\/+$/, '')
   return '<你的 Sub2API API 端点>'
 })

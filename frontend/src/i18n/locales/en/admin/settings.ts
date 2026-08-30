@@ -640,6 +640,9 @@ export default {
         apiBaseUrlPlaceholder: 'https://api.example.com',
         apiBaseUrlHint:
           'Used for "Use Key", "Import to CC Switch", and callback URL suggestions. Leave empty to use current site URL.',
+        apiBaseUrlFollowHost: 'Follow current domain',
+        apiBaseUrlFollowHostHint:
+          'Enable for multi-domain deployments: the API endpoint shown to users follows the domain they are browsing, keeping the path configured above (e.g. /v1). When off, the configured URL is always shown.',
         tablePreferencesTitle: 'Global Table Preferences',
         tablePreferencesDescription: 'Configure default pagination behavior for shared table components',
         tableDefaultPageSize: 'Default Rows Per Page',
