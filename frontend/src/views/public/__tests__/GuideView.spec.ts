@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import GuideView from '@/views/public/GuideView.vue'
@@ -6,6 +6,9 @@ import { buildGuideDocument, extractGuideCommands } from '@/utils/guideMarkdown'
 import guideMarkdown from '../../../../../docs/guide.zh.md?raw'
 
 const copyToClipboard = vi.hoisted(() => vi.fn().mockResolvedValue(true))
+const getPublicGuide = vi.hoisted(() => vi.fn())
+
+vi.mock('@/api/guide', () => ({ getPublicGuide }))
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({ isAuthenticated: false, isAdmin: false }),
@@ -19,12 +22,43 @@ describe('GuideView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     copyToClipboard.mockClear()
+    getPublicGuide.mockReset()
+    getPublicGuide.mockResolvedValue({
+      content: '',
+      version: 0,
+      updated_at: '',
+      has_custom_content: false,
+    })
     window.history.replaceState({}, '', '/guide')
     window.__APP_CONFIG__ = {
       site_name: '测试站点',
       site_logo: '',
       doc_url: '',
     } as typeof window.__APP_CONFIG__
+  })
+
+  it('replaces the bundled guide with a published database version', async () => {
+    getPublicGuide.mockResolvedValue({
+      content: '## 管理员发布的教程\n\n这是数据库中的内容。',
+      version: 7,
+      updated_at: '2026-08-30T12:00:00Z',
+      has_custom_content: true,
+    })
+
+    const wrapper = mount(GuideView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="guide-content"]').text()).toContain('这是数据库中的内容。')
+    expect(wrapper.text()).toContain('教程版本 在线第 7 版')
   })
 
   it('renders the approved guide, stable table of contents, commands, and download', async () => {

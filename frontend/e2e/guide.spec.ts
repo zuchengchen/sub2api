@@ -73,6 +73,16 @@ async function preparePublicGuide(page: Page) {
     message: 'ok',
     data: { needs_setup: false, step: 'complete' },
   }))
+  await page.route('**/api/v1/settings/guide**', (route) => json(route, {
+    code: 0,
+    message: 'ok',
+    data: {
+      content: '',
+      version: 0,
+      updated_at: '',
+      has_custom_content: false,
+    },
+  }))
 }
 
 test('public guide workflow', async ({ context, page }, testInfo) => {

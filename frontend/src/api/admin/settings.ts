@@ -16,6 +16,20 @@ export interface DefaultSubscriptionSetting {
   validity_days: number;
 }
 
+export interface GuideRevision {
+  version: number;
+  content: string;
+  updated_at: string;
+}
+
+export interface GuideSettings {
+  content: string;
+  version: number;
+  updated_at: string;
+  has_custom_content: boolean;
+  revisions: GuideRevision[];
+}
+
 // ── 平台限额类型 ──────────────────────────────────────────────────
 export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "grok"
 export type QuotaWindowType = "daily" | "weekly" | "monthly"
@@ -1060,6 +1074,43 @@ export async function updateSettings(
   return data;
 }
 
+export async function getGuideSettings(): Promise<GuideSettings> {
+  const { data } = await apiClient.get<GuideSettings>("/admin/settings/guide");
+  return data;
+}
+
+export async function updateGuideSettings(payload: {
+  content: string;
+  expected_version: number;
+}): Promise<GuideSettings> {
+  const { data } = await apiClient.put<GuideSettings>(
+    "/admin/settings/guide",
+    payload,
+  );
+  return data;
+}
+
+export async function restoreGuideSettings(payload: {
+  revision_version: number;
+  expected_version: number;
+}): Promise<GuideSettings> {
+  const { data } = await apiClient.post<GuideSettings>(
+    "/admin/settings/guide/restore",
+    payload,
+  );
+  return data;
+}
+
+export async function resetGuideSettings(payload: {
+  expected_version: number;
+}): Promise<GuideSettings> {
+  const { data } = await apiClient.post<GuideSettings>(
+    "/admin/settings/guide/reset",
+    payload,
+  );
+  return data;
+}
+
 /**
  * Test SMTP connection request
  */
@@ -1553,6 +1604,10 @@ export async function resetWebSearchUsage(payload: {
 export const settingsAPI = {
   getSettings,
   updateSettings,
+  getGuideSettings,
+  updateGuideSettings,
+  restoreGuideSettings,
+  resetGuideSettings,
   testSmtpConnection,
   sendTestEmail,
   getEmailTemplates,

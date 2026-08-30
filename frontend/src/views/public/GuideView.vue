@@ -142,6 +142,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { getPublicGuide } from '@/api/guide'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { useAppStore } from '@/stores/app'
@@ -155,31 +156,34 @@ import {
 import guideMarkdown from '../../../../docs/guide.zh.md?raw'
 
 const downloadUrl = '/downloads/select-fastest-codex-base-url.bat'
-const guideVersion = '1.1'
-const updatedAt = '2026-08-30'
+const bundledGuideVersion = '1.1'
+const bundledGuideUpdatedAt = '2026-08-30'
 const commandLabels: Record<string, string> = {
   'skill-install': '安装 goal-workflow',
   'skill-update': '更新 goal-workflow',
   'goal-example': '使用 goal-workflow',
 }
 
-const guideDocument = buildGuideDocument(guideMarkdown)
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const { copyToClipboard } = useClipboard()
+const guideSource = ref(guideMarkdown)
+const guideVersion = ref(bundledGuideVersion)
+const updatedAt = ref(bundledGuideUpdatedAt)
+const guideDocument = computed(() => buildGuideDocument(guideSource.value))
 const isDark = ref(document.documentElement.classList.contains('dark'))
 const mobileTocOpen = ref(false)
-const activeSection = ref(guideDocument.sections[0]?.id || '')
+const activeSection = ref(guideDocument.value.sections[0]?.id || '')
 const lastCopiedCommand = ref('')
 const copyAnnouncement = ref('')
 let sectionObserver: IntersectionObserver | null = null
 let copyTimer: number | undefined
 
-const renderedHtml = guideDocument.html
-const sections = guideDocument.sections
-const quickCommands = extractGuideCommands(guideMarkdown)
+const renderedHtml = computed(() => guideDocument.value.html)
+const sections = computed(() => guideDocument.value.sections)
+const quickCommands = computed(() => extractGuideCommands(guideSource.value)
   .filter((command) => commandLabels[command.id])
-  .map((command) => ({ ...command, label: commandLabels[command.id] }))
+  .map((command) => ({ ...command, label: commandLabels[command.id] })))
 const settings = computed(() => appStore.cachedPublicSettings)
 const siteName = computed(() => settings.value?.site_name || appStore.siteName || 'Sub2API')
 const siteLogo = computed(() => sanitizeUrl(
@@ -202,6 +206,50 @@ function selectSection(sectionId: string) {
   mobileTocOpen.value = false
 }
 
+function observeGuideSections() {
+  sectionObserver?.disconnect()
+  sectionObserver = new IntersectionObserver((entries) => {
+    const visible = entries.find((entry) => entry.isIntersecting)
+    if (visible?.target.id) activeSection.value = visible.target.id
+  }, { rootMargin: '-80px 0px -70% 0px' })
+
+  sections.value.forEach((section) => {
+    const heading = document.getElementById(section.id)
+    if (heading) sectionObserver?.observe(heading)
+  })
+}
+
+function restoreHashPosition() {
+  if (!window.location.hash) return
+
+  try {
+    const sectionId = decodeURIComponent(window.location.hash.slice(1))
+    if (sections.value.some((section) => section.id === sectionId)) {
+      activeSection.value = sectionId
+      window.requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView())
+    }
+  } catch {
+    // Ignore malformed hashes and keep the first section active.
+  }
+}
+
+async function loadPublishedGuide() {
+  try {
+    const published = await getPublicGuide()
+    if (!published.has_custom_content || !published.content.trim()) return
+
+    guideSource.value = published.content
+    guideVersion.value = `在线第 ${published.version} 版`
+    updatedAt.value = published.updated_at.slice(0, 10) || bundledGuideUpdatedAt
+    activeSection.value = guideDocument.value.sections[0]?.id || ''
+    await nextTick()
+    observeGuideSections()
+    restoreHashPosition()
+  } catch {
+    // The bundled guide remains available when the database API is unavailable.
+  }
+}
+
 async function copyCommand(command: GuideCommand) {
   const success = await copyToClipboard(command.content, '命令已复制')
   copyAnnouncement.value = success ? `${commandLabels[command.id]} 已复制` : '复制失败'
@@ -220,27 +268,9 @@ onMounted(async () => {
   }
 
   await nextTick()
-  sectionObserver = new IntersectionObserver((entries) => {
-    const visible = entries.find((entry) => entry.isIntersecting)
-    if (visible?.target.id) activeSection.value = visible.target.id
-  }, { rootMargin: '-80px 0px -70% 0px' })
-
-  sections.forEach((section) => {
-    const heading = document.getElementById(section.id)
-    if (heading) sectionObserver?.observe(heading)
-  })
-
-  if (window.location.hash) {
-    try {
-      const sectionId = decodeURIComponent(window.location.hash.slice(1))
-      if (sections.some((section) => section.id === sectionId)) {
-        activeSection.value = sectionId
-        window.requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView())
-      }
-    } catch {
-      // Ignore malformed hashes and keep the first section active.
-    }
-  }
+  observeGuideSections()
+  restoreHashPosition()
+  void loadPublishedGuide()
 })
 
 onBeforeUnmount(() => {
