@@ -10,27 +10,22 @@ const homeViewSource = readFileSync(resolve(dir, '../../../views/HomeView.vue'),
 const keyUsageViewSource = readFileSync(resolve(dir, '../../../views/KeyUsageView.vue'), 'utf8')
 
 describe('doc_url sanitization', () => {
-  it('AppHeader imports sanitizeUrl', () => {
-    expect(headerSource).toContain("import { sanitizeUrl } from '@/utils/url'")
+  it('AppHeader uses the shared documentation URL resolver', () => {
+    expect(headerSource).toContain("import { resolveDocumentationUrl } from '@/utils/docUrl'")
+    expect(headerSource).toContain('resolveDocumentationUrl(appStore.docUrl)')
   })
 
-  it('AppHeader applies sanitizeUrl to docUrl', () => {
-    expect(headerSource).toContain('sanitizeUrl(appStore.docUrl)')
+  it('HomeView uses the shared documentation URL resolver', () => {
+    expect(homeViewSource).toContain("import { resolveDocumentationUrl } from '@/utils/docUrl'")
+    expect(homeViewSource).toContain(
+      'resolveDocumentationUrl(appStore.cachedPublicSettings?.doc_url ?? appStore.docUrl)'
+    )
   })
 
-  it('HomeView imports sanitizeUrl', () => {
-    expect(homeViewSource).toContain("import { sanitizeUrl } from '@/utils/url'")
-  })
-
-  it('HomeView applies sanitizeUrl to docUrl', () => {
-    expect(homeViewSource).toContain('sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl')
-  })
-
-  it('KeyUsageView imports sanitizeUrl', () => {
-    expect(keyUsageViewSource).toContain("import { sanitizeUrl } from '@/utils/url'")
-  })
-
-  it('KeyUsageView applies sanitizeUrl to docUrl', () => {
-    expect(keyUsageViewSource).toContain('sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl')
+  it('KeyUsageView uses the shared documentation URL resolver', () => {
+    expect(keyUsageViewSource).toContain("import { resolveDocumentationUrl } from '@/utils/docUrl'")
+    expect(keyUsageViewSource).toContain(
+      'resolveDocumentationUrl(appStore.cachedPublicSettings?.doc_url ?? appStore.docUrl)'
+    )
   })
 })
