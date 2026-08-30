@@ -156,7 +156,7 @@ import {
 import guideMarkdown from '../../../../docs/guide.zh.md?raw'
 
 const downloadUrl = '/downloads/select-fastest-codex-base-url.bat'
-const bundledGuideVersion = '1.1'
+const bundledGuideVersion = '1.2'
 const bundledGuideUpdatedAt = '2026-08-30'
 const commandLabels: Record<string, string> = {
   'skill-install': '安装 goal-workflow',

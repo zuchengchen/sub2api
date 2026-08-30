@@ -9,11 +9,13 @@ const dir = dirname(fileURLToPath(import.meta.url))
 const batPath = resolve(dir, '../../../public/downloads/select-fastest-codex-base-url.bat')
 const checksumPath = `${batPath}.sha256`
 const guidePath = resolve(dir, '../../../../docs/guide.zh.md')
+const guideViewPath = resolve(dir, '../../views/public/GuideView.vue')
 const vipPath = resolve(dir, '../../../../backend/internal/service/vip.go')
 const batBytes = readFileSync(batPath)
 const bat = batBytes.toString('ascii')
 const checksum = readFileSync(checksumPath, 'utf8').trim()
 const guide = readFileSync(guidePath, 'utf8')
+const guideViewSource = readFileSync(guideViewPath, 'utf8')
 const vipSource = readFileSync(vipPath, 'utf8')
 
 describe('guide BAT asset', () => {
@@ -49,6 +51,16 @@ describe('guide BAT asset', () => {
     expect(checksum).toBe(`${digest}  select-fastest-codex-base-url.bat`)
     expect(guide.match(new RegExp(digest, 'g'))).toHaveLength(2)
     expect([...bat].every((character) => character.charCodeAt(0) <= 0x7f)).toBe(true)
+  })
+
+  it('keeps the bundled guide version in sync between the document and the view', () => {
+    const documentVersion = guide.match(/^- 教程版本：`([^`]+)`$/m)?.[1]
+    const viewVersion = guideViewSource.match(/^const bundledGuideVersion = '([^']+)'$/m)?.[1]
+
+    // Both patterns must actually match; an absent version is a failure, not a passing match.
+    expect(documentVersion).toBe('1.2')
+    expect(viewVersion).toBe('1.2')
+    expect(documentVersion).toBe(viewVersion)
   })
 
   it('keeps the published SVIP rules synchronized with backend constants', () => {

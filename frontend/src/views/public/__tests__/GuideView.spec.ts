@@ -108,6 +108,47 @@ describe('GuideView', () => {
     expect(document.sections).toEqual([{ id: 'section-1', label: '标题' }])
   })
 
+  it('gives the error-code reference a stable anchor and covers all three code layers', () => {
+    const { sections } = buildGuideDocument(guideMarkdown)
+
+    expect(sections).toEqual(
+      expect.arrayContaining([{ id: 'error-codes', label: '错误码含义与处理方案' }])
+    )
+    expect(sections.map((section) => section.id)).not.toContain('section-13')
+
+    // HTTP status codes, business reason codes, and error.type names must all be explained.
+    for (const code of ['`400`', '`401`', '`403`', '`404`', '`409`', '`413`', '`429`', '`499`', '`502`', '`503`', '`504`']) {
+      expect(guideMarkdown).toContain(code)
+    }
+    for (const reason of [
+      'INSUFFICIENT_BALANCE',
+      'API_KEY_EXPIRED',
+      'API_KEY_RATE_5H_EXCEEDED',
+      'USER_RPM_EXCEEDED',
+      'GROUP_RPM_EXCEEDED',
+      'USER_PLATFORM_DAILY_QUOTA_EXHAUSTED',
+      'SUBSCRIPTION_INVALID',
+      'BILLING_SERVICE_ERROR',
+    ]) {
+      expect(guideMarkdown).toContain(reason)
+    }
+    for (const type of [
+      'authentication_error',
+      'permission_error',
+      'billing_error',
+      'invalid_request_error',
+      'rate_limit_exceeded',
+      'rate_limit_error',
+      'upstream_error',
+    ]) {
+      expect(guideMarkdown).toContain(type)
+    }
+    expect(guideMarkdown).toContain('Retry-After')
+
+    // The FAQ must defer to the reference instead of re-explaining status codes.
+    expect(guideMarkdown).toContain('[错误码含义与处理方案](#error-codes)')
+  })
+
   it('contains the requested workflows without disclosing the payment race', () => {
     expect(guideMarkdown).toContain('购买兑换码')
     expect(guideMarkdown).toContain('[兑换余额](/redeem)')
