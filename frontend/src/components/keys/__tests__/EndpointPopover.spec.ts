@@ -51,6 +51,20 @@ describe('EndpointPopover', () => {
     expect(wrapper.find('[title="自定义说明"]').exists()).toBe(false)
   })
 
+  it('展示调用方解析后的端点（多域名下跟随当前域名）', () => {
+    const wrapper = mount(EndpointPopover, {
+      props: {
+        // KeysView resolves api_base_url + api_base_url_follow_host before
+        // passing it down, so the chip shows the browsed domain.
+        apiBaseUrl: 'https://key66.cc.cd/v1',
+        customEndpoints: [],
+      },
+    })
+
+    expect(wrapper.text()).toContain('https://key66.cc.cd/v1')
+    expect(wrapper.text()).not.toContain('key66.vip')
+  })
+
   it('点击 URL 后会复制并切换为已复制提示', async () => {
     const wrapper = mount(EndpointPopover, {
       props: {

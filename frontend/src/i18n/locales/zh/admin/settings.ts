@@ -632,6 +632,9 @@ export default {
         apiBaseUrl: 'API 端点地址',
         apiBaseUrlHint: '用于"使用密钥"、"导入到 CC Switch"和回调地址建议，留空则使用当前站点地址',
         apiBaseUrlPlaceholder: 'https://api.example.com',
+        apiBaseUrlFollowHost: '跟随当前访问域名',
+        apiBaseUrlFollowHostHint:
+          '多域名部署时开启：展示给用户的 API 端点会自动使用当前访问的域名，并保留上面配置的路径（如 /v1）。关闭则始终展示上面配置的地址。',
         tablePreferencesTitle: '通用表格设置',
         tablePreferencesDescription: '设置后台与用户侧表格组件的默认分页行为',
         tableDefaultPageSize: '默认每页条数',
