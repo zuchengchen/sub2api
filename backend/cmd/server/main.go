@@ -36,9 +36,9 @@ var (
 	Date      = "unknown"
 	BuildType = "source" // "source" for manual builds, "release" for CI builds (set by ldflags)
 	// ReleaseURL identifies the repository release page for this custom build.
-	// Release builds can override it with ldflags when a new custom tag is
-	// created; the current customized release tag is the safe default for this branch.
-	ReleaseURL = "https://github.com/zuchengchen/sub2api/releases/tag/czc-v2026.08.22.5"
+	// Tagged release builds set it with ldflags; source builds leave it empty so
+	// they never claim to represent an older immutable release.
+	ReleaseURL = ""
 )
 
 func init() {
