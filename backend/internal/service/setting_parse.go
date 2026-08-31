@@ -71,6 +71,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAPIBaseURLFollowHost:                      "false",
 		SettingKeyGuideContent:                              "",
 		SettingKeyGuideChapters:                             "[]",
+		SettingKeyGuideAssets:                               "[]",
 		SettingKeyGuideVersion:                              "0",
 		SettingKeyGuideUpdatedAt:                            "",
 		SettingKeyGuideRevisions:                            "[]",

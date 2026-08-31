@@ -380,6 +380,10 @@ onBeforeUnmount(() => {
   @apply border border-gray-300 px-3 py-2 align-top text-gray-700 dark:border-dark-600 dark:text-dark-200;
 }
 
+.guide-content :deep(img) {
+  @apply my-5 h-auto max-w-full rounded-lg border border-gray-200 dark:border-dark-700;
+}
+
 .guide-content :deep(hr) {
   @apply my-8 border-gray-200 dark:border-dark-700;
 }

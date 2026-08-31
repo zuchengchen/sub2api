@@ -157,15 +157,97 @@
             </div>
             <textarea
               id="guide-markdown"
+              ref="markdownTextarea"
               v-model="activeChapterContent"
               class="input min-h-[36rem] resize-y whitespace-pre-wrap font-mono text-sm leading-6"
               :placeholder="t('admin.settings.guideEditor.placeholder')"
               spellcheck="false"
               data-test="guide-markdown"
+              @paste="handlePaste"
+              @dragover.prevent
+              @drop.prevent="handleDrop"
             ></textarea>
             <p v-if="activeChapter" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.settings.guideEditor.anchorHint', { slug: activeChapter.slug }) }}
             </p>
+
+            <section class="mt-4 border-t border-gray-200 pt-4 dark:border-dark-700" aria-labelledby="guide-assets-label">
+              <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h3 id="guide-assets-label" class="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                  {{ t('admin.settings.guideEditor.assets') }}
+                </h3>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.guideEditor.assetQuota', { used: formattedAssetUsage }) }}
+                </span>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-2">
+                <input
+                  ref="assetInput"
+                  type="file"
+                  multiple
+                  class="hidden"
+                  data-test="guide-asset-input"
+                  @change="handleAssetInput"
+                />
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  :disabled="uploading || !activeChapter"
+                  data-test="guide-asset-upload"
+                  @click="assetInput?.click()"
+                >
+                  <span v-if="uploading" class="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary-600"></span>
+                  <Icon v-else name="upload" size="sm" />
+                  {{ uploading ? t('admin.settings.guideEditor.assetUploading') : t('admin.settings.guideEditor.assetUpload') }}
+                </button>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.guideEditor.assetHint') }}
+                </span>
+              </div>
+
+              <ul
+                v-if="assets.length"
+                class="mt-3 divide-y divide-gray-200 border-y border-gray-200 dark:divide-dark-700 dark:border-dark-700"
+                data-test="guide-asset-list"
+              >
+                <li v-for="asset in assets" :key="asset.id" class="flex items-center gap-2 py-2">
+                  <Icon name="document" size="sm" class="shrink-0 text-gray-400" />
+                  <span class="min-w-0 flex-1 truncate text-sm text-gray-700 dark:text-dark-200" :title="asset.name">
+                    {{ asset.name }}
+                  </span>
+                  <span class="shrink-0 text-xs text-gray-500 dark:text-dark-400">{{ formatBytes(asset.size) }}</span>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded px-2 py-1 text-xs font-medium text-primary-700 transition hover:bg-primary-50 dark:text-primary-300 dark:hover:bg-primary-500/10"
+                    :disabled="!activeChapter"
+                    :data-test="`guide-asset-insert-${asset.id}`"
+                    @click="insertAssetReference(asset)"
+                  >
+                    {{ t('admin.settings.guideEditor.assetInsert') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-dark-800 dark:hover:text-white"
+                    :data-test="`guide-asset-copy-${asset.id}`"
+                    @click="copyAssetUrl(asset)"
+                  >
+                    {{ t('admin.settings.guideEditor.assetCopy') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded px-2 py-1 text-xs text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
+                    :data-test="`guide-asset-delete-${asset.id}`"
+                    @click="pendingDeleteAsset = asset"
+                  >
+                    {{ t('admin.settings.guideEditor.assetDelete') }}
+                  </button>
+                </li>
+              </ul>
+              <p v-else class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.settings.guideEditor.assetEmpty') }}
+              </p>
+            </section>
           </section>
 
         </div>
@@ -297,16 +379,25 @@
       @confirm="deleteActiveChapter"
       @cancel="pendingDeleteSlug = ''"
     />
+    <ConfirmDialog
+      :show="pendingDeleteAsset !== null"
+      :title="t('admin.settings.guideEditor.assetDeleteTitle')"
+      :message="t('admin.settings.guideEditor.assetDeleteMessage', { name: pendingDeleteAsset?.name ?? '' })"
+      :confirm-text="t('admin.settings.guideEditor.assetDelete')"
+      @confirm="deletePendingAsset"
+      @cancel="pendingDeleteAsset = null"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api'
-import type { GuideChapterPayload, GuideRevision, GuideSettings } from '@/api/admin/settings'
+import type { GuideAsset, GuideChapterPayload, GuideRevision, GuideSettings } from '@/api/admin/settings'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { useClipboard } from '@/composables/useClipboard'
 import { useAppStore } from '@/stores'
 import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
 import {
@@ -321,6 +412,7 @@ const maxContentBytes = 256 * 1024
 const maxChapterBytes = 64 * 1024
 const { t, locale } = useI18n()
 const appStore = useAppStore()
+const { copyToClipboard } = useClipboard()
 const loading = ref(true)
 const saving = ref(false)
 const chapters = ref<GuideChapterPayload[]>([])
@@ -335,6 +427,12 @@ const hasCustomContent = ref(false)
 const revisions = ref<GuideRevision[]>([])
 const confirmReset = ref(false)
 const pendingRevision = ref<GuideRevision | null>(null)
+
+const assets = ref<GuideAsset[]>([])
+const assetInput = ref<HTMLInputElement | null>(null)
+const markdownTextarea = ref<HTMLTextAreaElement | null>(null)
+const uploading = ref(false)
+const pendingDeleteAsset = ref<GuideAsset | null>(null)
 
 const activeChapter = computed(() => chapters.value.find((chapter) => chapter.slug === activeSlug.value) || null)
 const activeChapterContent = computed({
@@ -363,6 +461,136 @@ const missingBundledChapters = computed(() => {
   const present = new Set(chapters.value.map((chapter) => chapter.slug))
   return getBundledGuideChapters().filter((chapter) => !present.has(chapter.slug))
 })
+const assetUsedBytes = computed(() => assets.value.reduce((sum, asset) => sum + asset.size, 0))
+const formattedAssetUsage = computed(() => `${formatBytes(assetUsedBytes.value)} / 2 GiB`)
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GiB`
+}
+
+/**
+ * Builds the Markdown for an asset: an image renders inline, anything else
+ * becomes a download link. The alt/link text uses the original file name.
+ */
+function assetMarkdown(asset: GuideAsset): string {
+  const label = asset.name.replace(/[[\]]/g, '')
+  return asset.inline ? `![${label}](${asset.url})` : `[${label}](${asset.url})`
+}
+
+/** Inserts text at the cursor, or appends when the textarea is not focused. */
+function insertAtCursor(snippet: string) {
+  const chapter = activeChapter.value
+  if (!chapter) return
+
+  const textarea = markdownTextarea.value
+  const content = chapter.content
+  if (!textarea) {
+    activeChapterContent.value = `${content.replace(/\s*$/, '')}\n\n${snippet}\n`
+    return
+  }
+
+  const start = textarea.selectionStart ?? content.length
+  const end = textarea.selectionEnd ?? start
+  activeChapterContent.value = content.slice(0, start) + snippet + content.slice(end)
+
+  // Restore the caret after the inserted text once Vue has re-rendered.
+  const caret = start + snippet.length
+  void nextTick(() => {
+    textarea.focus()
+    textarea.setSelectionRange(caret, caret)
+  })
+}
+
+function insertAssetReference(asset: GuideAsset) {
+  insertAtCursor(assetMarkdown(asset))
+}
+
+async function copyAssetUrl(asset: GuideAsset) {
+  const absolute = new URL(asset.url, window.location.origin).toString()
+  const ok = await copyToClipboard(absolute, t('admin.settings.guideEditor.assetCopied'))
+  if (!ok) appStore.showError(t('admin.settings.guideEditor.assetCopyFailed'))
+}
+
+async function loadAssets() {
+  try {
+    assets.value = await adminAPI.settings.listGuideAssets()
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.settings.guideEditor.assetLoadFailed')))
+  }
+}
+
+/**
+ * Uploads files and inserts a reference for each. Uploads run sequentially so
+ * the quota check on the server sees each file's real remaining budget.
+ */
+async function uploadFiles(files: File[]) {
+  if (!files.length) return
+  if (!activeChapter.value) {
+    appStore.showError(t('admin.settings.guideEditor.assetNeedChapter'))
+    return
+  }
+
+  uploading.value = true
+  try {
+    for (const file of files) {
+      try {
+        const asset = await adminAPI.settings.uploadGuideAsset(file)
+        assets.value = [asset, ...assets.value]
+        insertAtCursor(assetMarkdown(asset))
+      } catch (error) {
+        appStore.showError(extractApiErrorMessage(
+          error,
+          t('admin.settings.guideEditor.assetUploadFailed', { name: file.name }),
+        ))
+      }
+    }
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function handleAssetInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  // Reset so selecting the same file again still fires a change event.
+  input.value = ''
+  await uploadFiles(files)
+}
+
+async function handleDrop(event: DragEvent) {
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (files.length) await uploadFiles(files)
+}
+
+async function handlePaste(event: ClipboardEvent) {
+  const files = Array.from(event.clipboardData?.items || [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null)
+
+  // Only intercept the paste when it actually carries files, so pasting text
+  // keeps its normal behaviour.
+  if (!files.length) return
+  event.preventDefault()
+  await uploadFiles(files)
+}
+
+async function deletePendingAsset() {
+  const asset = pendingDeleteAsset.value
+  pendingDeleteAsset.value = null
+  if (!asset) return
+
+  try {
+    await adminAPI.settings.deleteGuideAsset(asset.id)
+    assets.value = assets.value.filter((item) => item.id !== asset.id)
+    appStore.showSuccess(t('admin.settings.guideEditor.assetDeleted'))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.settings.guideEditor.assetDeleteFailed')))
+  }
+}
 
 /**
  * Resolves the chapter list to edit: the published chapters when present, a
@@ -526,7 +754,10 @@ async function restoreRevision() {
   )
 }
 
-onMounted(loadGuide)
+onMounted(async () => {
+  await loadGuide()
+  await loadAssets()
+})
 </script>
 
 <style scoped>
@@ -586,6 +817,10 @@ onMounted(loadGuide)
 
 .guide-preview :deep(pre code) {
   @apply whitespace-pre bg-transparent p-0 text-inherit;
+}
+
+.guide-preview :deep(img) {
+  @apply my-3 h-auto max-w-full rounded border border-gray-200 dark:border-dark-700;
 }
 
 .guide-preview :deep(table) {

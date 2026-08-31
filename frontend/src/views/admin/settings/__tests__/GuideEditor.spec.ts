@@ -2,9 +2,23 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import GuideEditor from '@/views/admin/settings/GuideEditor.vue'
 
-const { getGuideSettings, updateGuideSettings, showError, showSuccess, showWarning } = vi.hoisted(() => ({
+const {
+  getGuideSettings,
+  updateGuideSettings,
+  listGuideAssets,
+  uploadGuideAsset,
+  deleteGuideAsset,
+  copyToClipboard,
+  showError,
+  showSuccess,
+  showWarning,
+} = vi.hoisted(() => ({
   getGuideSettings: vi.fn(),
   updateGuideSettings: vi.fn(),
+  listGuideAssets: vi.fn(),
+  uploadGuideAsset: vi.fn(),
+  deleteGuideAsset: vi.fn(),
+  copyToClipboard: vi.fn().mockResolvedValue(true),
   showError: vi.fn(),
   showSuccess: vi.fn(),
   showWarning: vi.fn(),
@@ -17,12 +31,19 @@ vi.mock('@/api', () => ({
       updateGuideSettings,
       restoreGuideSettings: vi.fn(),
       resetGuideSettings: vi.fn(),
+      listGuideAssets,
+      uploadGuideAsset,
+      deleteGuideAsset,
     },
   },
 }))
 
 vi.mock('@/stores', () => ({
   useAppStore: () => ({ showError, showSuccess, showWarning }),
+}))
+
+vi.mock('@/composables/useClipboard', () => ({
+  useClipboard: () => ({ copyToClipboard, copied: { value: false } }),
 }))
 
 vi.mock('vue-i18n', async (importOriginal) => {
@@ -43,6 +64,9 @@ vi.mock('vue-i18n', async (importOriginal) => {
 describe('GuideEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    copyToClipboard.mockResolvedValue(true)
+    listGuideAssets.mockResolvedValue([])
+    deleteGuideAsset.mockResolvedValue(undefined)
     getGuideSettings.mockResolvedValue({
       content: '## 第一章\n\n旧内容\n\n## 第二章\n\n第二章内容',
       chapters: [
@@ -163,6 +187,104 @@ describe('GuideEditor', () => {
     expect(historyRows).toHaveLength(2)
     expect(historyRows[0].text()).toContain('databaseContent')
     expect(historyRows[1].text()).toContain('bundledContent')
+  })
+
+  it('uploads a file and inserts the right Markdown for images and other types', async () => {
+    listGuideAssets.mockResolvedValue([])
+    uploadGuideAsset
+      .mockResolvedValueOnce({
+        id: 'aaaa.png',
+        name: 'shot.png',
+        size: 2048,
+        inline: true,
+        url: '/api/v1/guide/assets/aaaa.png',
+        uploaded_at: '2026-08-31T10:00:00Z',
+      })
+      .mockResolvedValueOnce({
+        id: 'bbbb.pdf',
+        name: 'manual.pdf',
+        size: 4096,
+        inline: false,
+        url: '/api/v1/guide/assets/bbbb.pdf',
+        uploaded_at: '2026-08-31T10:01:00Z',
+      })
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const input = wrapper.get('[data-test="guide-asset-input"]')
+    const png = new File(['x'], 'shot.png', { type: 'image/png' })
+    Object.defineProperty(input.element, 'files', { value: [png], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(uploadGuideAsset).toHaveBeenCalledWith(png)
+    // An image is embedded so it renders in the guide.
+    expect(wrapper.get<HTMLTextAreaElement>('[data-test="guide-markdown"]').element.value)
+      .toContain('![shot.png](/api/v1/guide/assets/aaaa.png)')
+
+    const pdf = new File(['y'], 'manual.pdf', { type: 'application/pdf' })
+    Object.defineProperty(input.element, 'files', { value: [pdf], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    // A non-image becomes a plain link, never an <img>.
+    const value = wrapper.get<HTMLTextAreaElement>('[data-test="guide-markdown"]').element.value
+    expect(value).toContain('[manual.pdf](/api/v1/guide/assets/bbbb.pdf)')
+    expect(value).not.toContain('![manual.pdf]')
+
+    // Both uploads appear in the managed list.
+    expect(wrapper.findAll('[data-test="guide-asset-list"] li')).toHaveLength(2)
+  })
+
+  it('lists existing attachments and deletes one on confirmation', async () => {
+    listGuideAssets.mockResolvedValue([{
+      id: 'cccc.zip',
+      name: 'bundle.zip',
+      size: 1024,
+      inline: false,
+      url: '/api/v1/guide/assets/cccc.zip',
+      uploaded_at: '2026-08-31T09:00:00Z',
+    }])
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="guide-asset-list"] li')).toHaveLength(1)
+    expect(wrapper.get('[data-test="guide-asset-list"]').text()).toContain('bundle.zip')
+
+    // Inserting an existing attachment must not re-upload it.
+    await wrapper.get('[data-test="guide-asset-insert-cccc.zip"]').trigger('click')
+    expect(uploadGuideAsset).not.toHaveBeenCalled()
+    expect(wrapper.get<HTMLTextAreaElement>('[data-test="guide-markdown"]').element.value)
+      .toContain('[bundle.zip](/api/v1/guide/assets/cccc.zip)')
+
+    await wrapper.get('[data-test="guide-asset-delete-cccc.zip"]').trigger('click')
+    await (wrapper.vm as unknown as { deletePendingAsset: () => Promise<void> }).deletePendingAsset()
+    await flushPromises()
+
+    expect(deleteGuideAsset).toHaveBeenCalledWith('cccc.zip')
+    expect(wrapper.findAll('[data-test="guide-asset-list"] li')).toHaveLength(0)
+  })
+
+  it('reports a failed upload without inserting a reference', async () => {
+    uploadGuideAsset.mockRejectedValue(new Error('too large'))
+
+    const wrapper = mountEditor()
+    await flushPromises()
+    const before = wrapper.get<HTMLTextAreaElement>('[data-test="guide-markdown"]').element.value
+
+    const input = wrapper.get('[data-test="guide-asset-input"]')
+    Object.defineProperty(input.element, 'files', {
+      value: [new File(['x'], 'big.bin')],
+      configurable: true,
+    })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalled()
+    expect(wrapper.get<HTMLTextAreaElement>('[data-test="guide-markdown"]').element.value).toBe(before)
+    expect(wrapper.findAll('[data-test="guide-asset-list"] li')).toHaveLength(0)
   })
 
   it('marks the guide dirty only after an actual edit', async () => {

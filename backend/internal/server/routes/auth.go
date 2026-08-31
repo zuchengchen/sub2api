@@ -244,6 +244,15 @@ func RegisterAuthRoutes(
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
 	}
 
+	// Guide attachments are public because /guide itself is public: an image
+	// must render for anonymous visitors. Non-image types are forced to
+	// download by the handler, so this does not expose active content.
+	guideAssets := v1.Group("/guide")
+	guideAssets.Use(panelRateLimiter.PublicIP())
+	{
+		guideAssets.GET("/assets/:id", h.Setting.GetGuideAsset)
+	}
+
 	// 需要认证的当前用户信息
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
