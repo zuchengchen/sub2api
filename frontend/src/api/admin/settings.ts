@@ -16,6 +16,19 @@ export interface DefaultSubscriptionSetting {
   validity_days: number;
 }
 
+/**
+ * One file uploaded for the guide. `inline` is true only for whitelisted image
+ * types; everything else is served as a download.
+ */
+export interface GuideAsset {
+  id: string;
+  name: string;
+  size: number;
+  inline: boolean;
+  url: string;
+  uploaded_at: string;
+}
+
 /** One independently editable chapter. `slug` is the permanent anchor id. */
 export interface GuideChapterPayload {
   slug: string;
@@ -1092,6 +1105,29 @@ export async function getGuideSettings(): Promise<GuideSettings> {
   return data;
 }
 
+export async function listGuideAssets(): Promise<GuideAsset[]> {
+  const { data } = await apiClient.get<GuideAsset[]>(
+    "/admin/settings/guide/assets",
+  );
+  return data ?? [];
+}
+
+export async function uploadGuideAsset(file: File): Promise<GuideAsset> {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await apiClient.post<GuideAsset>(
+    "/admin/settings/guide/assets",
+    form,
+  );
+  return data;
+}
+
+export async function deleteGuideAsset(id: string): Promise<void> {
+  await apiClient.delete(
+    `/admin/settings/guide/assets/${encodeURIComponent(id)}`,
+  );
+}
+
 export async function updateGuideSettings(payload: {
   chapters: GuideChapterPayload[];
   expected_version: number;
@@ -1621,6 +1657,9 @@ export const settingsAPI = {
   updateGuideSettings,
   restoreGuideSettings,
   resetGuideSettings,
+  listGuideAssets,
+  uploadGuideAsset,
+  deleteGuideAsset,
   testSmtpConnection,
   sendTestEmail,
   getEmailTemplates,

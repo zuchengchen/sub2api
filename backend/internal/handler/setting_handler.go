@@ -17,7 +17,14 @@ import (
 type SettingHandler struct {
 	settingService           *service.SettingService
 	notificationEmailService *service.NotificationEmailService
+	guideAssets              *service.GuideAssetStore
 	version                  string
+}
+
+// SetGuideAssetStore attaches the guide attachment store without changing the
+// constructor signature used by existing unit tests.
+func (h *SettingHandler) SetGuideAssetStore(store *service.GuideAssetStore) {
+	h.guideAssets = store
 }
 
 // NewSettingHandler 创建公开设置处理器
