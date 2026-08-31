@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RegisterView from '@/views/auth/RegisterView.vue'
@@ -235,5 +238,19 @@ describe('RegisterView invitation layout', () => {
       expect.objectContaining({ email: 'user@allowed.com' })
     )
     expect(showErrorMock).not.toHaveBeenCalled()
+  })
+
+  // Promo code was removed from this deployment (commit 300134935) and a
+  // backend guard keeps its routes unregistered. An upstream sync re-added the
+  // feature and left two template bindings pointing at a field we no longer
+  // declare, which only vue-tsc caught. This asserts the source stays clean so
+  // the next sync fails here instead of at type-check time.
+  it('keeps promo code out of the registration view', () => {
+    const source = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../RegisterView.vue'),
+      'utf8',
+    )
+
+    expect(source).not.toMatch(/promo[-_]?code/i)
   })
 })
