@@ -31,7 +31,6 @@ SELECT
   cooldown_minutes,
   COALESCE(notify_email, true),
   filters,
-  last_triggered_at,
   created_at,
   updated_at
 FROM ops_alert_rules
@@ -47,7 +46,6 @@ ORDER BY id DESC`
 	for rows.Next() {
 		var rule service.OpsAlertRule
 		var filtersRaw []byte
-		var lastTriggeredAt sql.NullTime
 		if err := rows.Scan(
 			&rule.ID,
 			&rule.Name,
@@ -62,15 +60,10 @@ ORDER BY id DESC`
 			&rule.CooldownMinutes,
 			&rule.NotifyEmail,
 			&filtersRaw,
-			&lastTriggeredAt,
 			&rule.CreatedAt,
 			&rule.UpdatedAt,
 		); err != nil {
 			return nil, err
-		}
-		if lastTriggeredAt.Valid {
-			v := lastTriggeredAt.Time
-			rule.LastTriggeredAt = &v
 		}
 		if len(filtersRaw) > 0 && string(filtersRaw) != "null" {
 			var decoded map[string]any
@@ -132,13 +125,11 @@ RETURNING
   cooldown_minutes,
   COALESCE(notify_email, true),
   filters,
-  last_triggered_at,
   created_at,
   updated_at`
 
 	var out service.OpsAlertRule
 	var filtersRaw []byte
-	var lastTriggeredAt sql.NullTime
 
 	if err := r.db.QueryRowContext(
 		ctx,
@@ -169,15 +160,10 @@ RETURNING
 		&out.CooldownMinutes,
 		&out.NotifyEmail,
 		&filtersRaw,
-		&lastTriggeredAt,
 		&out.CreatedAt,
 		&out.UpdatedAt,
 	); err != nil {
 		return nil, err
-	}
-	if lastTriggeredAt.Valid {
-		v := lastTriggeredAt.Time
-		out.LastTriggeredAt = &v
 	}
 	if len(filtersRaw) > 0 && string(filtersRaw) != "null" {
 		var decoded map[string]any
@@ -236,13 +222,11 @@ RETURNING
   cooldown_minutes,
   COALESCE(notify_email, true),
   filters,
-  last_triggered_at,
   created_at,
   updated_at`
 
 	var out service.OpsAlertRule
 	var filtersRaw []byte
-	var lastTriggeredAt sql.NullTime
 
 	if err := r.db.QueryRowContext(
 		ctx,
@@ -274,17 +258,12 @@ RETURNING
 		&out.CooldownMinutes,
 		&out.NotifyEmail,
 		&filtersRaw,
-		&lastTriggeredAt,
 		&out.CreatedAt,
 		&out.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
 
-	if lastTriggeredAt.Valid {
-		v := lastTriggeredAt.Time
-		out.LastTriggeredAt = &v
-	}
 	if len(filtersRaw) > 0 && string(filtersRaw) != "null" {
 		var decoded map[string]any
 		if err := json.Unmarshal(filtersRaw, &decoded); err == nil {

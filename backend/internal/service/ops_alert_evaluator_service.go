@@ -22,6 +22,11 @@ const (
 	opsAlertEvaluatorLeaderLockKey   = "ops:alert:evaluator:leader"
 	opsAlertEvaluatorLeaderLockTTL   = 90 * time.Second
 	opsAlertEvaluatorSkipLogInterval = 1 * time.Minute
+
+	// opsSystemMetricsStaleAfter 是系统指标样本的可用期限。
+	// 取采集器最小间隔的 3 倍：60s 节拍下留出抖动余量，避免正常样本被误判为陈旧
+	// 而反复清零持续计数；同时保证采集器停摆能在 3 分钟内被识别。
+	opsSystemMetricsStaleAfter = 3 * opsMetricsCollectorMinInterval
 )
 
 var opsAlertEvaluatorReleaseScript = redis.NewScript(`
@@ -207,6 +212,9 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 	}
 
 	systemMetrics, _ := s.opsRepo.GetLatestSystemMetrics(ctx, 1)
+	if isOpsSystemMetricsStale(systemMetrics, now) {
+		systemMetrics = nil
+	}
 
 	// Cleanup stale state for removed rules.
 	s.pruneRuleStates(rules)
@@ -616,6 +624,19 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 	default:
 		return 0, false
 	}
+}
+
+// isOpsSystemMetricsStale 判定系统指标样本是否已过期而不可用。
+//
+// 采集器停摆时 GetLatestSystemMetrics 会永久返回同一行冻结数据；若不加判定，
+// CPU/内存/队列深度规则会基于几小时前的值反复越限并触发告警。
+// 返回 true 时调用方应把快照视为不存在（而非视为 0）——
+// computeRuleMetric 对 nil 返回 ok=false，评估器随后清零持续计数。
+func isOpsSystemMetricsStale(snapshot *OpsSystemMetricsSnapshot, now time.Time) bool {
+	if snapshot == nil {
+		return false
+	}
+	return now.Sub(snapshot.CreatedAt) > opsSystemMetricsStaleAfter
 }
 
 func compareMetric(value float64, operator string, threshold float64) bool {

@@ -2,121 +2,82 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-type opsMetricsProjectionRepo struct {
-	AccountRepository
-	accounts        []Account
-	accountLoads    []AccountWithConcurrency
-	listCalls       int
-	projectionCalls int
-}
-
-func (r *opsMetricsProjectionRepo) ListSchedulable(context.Context) ([]Account, error) {
-	r.listCalls++
-	return r.accounts, nil
-}
-
-func (r *opsMetricsProjectionRepo) ListSchedulableAccountLoads(context.Context) ([]AccountWithConcurrency, error) {
-	r.projectionCalls++
-	return r.accountLoads, nil
-}
-
-type opsMetricsFallbackRepo struct {
-	AccountRepository
-	accounts  []Account
-	listCalls int
-}
-
-func (r *opsMetricsFallbackRepo) ListSchedulable(context.Context) ([]Account, error) {
-	r.listCalls++
-	return r.accounts, nil
-}
-
-type opsMetricsLoadCache struct {
+// opsMetricsWaitSumCache 只实现采集队列深度所需的那一个方法。
+// 其余方法留给嵌入的 nil 接口：一旦采集路径回退到遍历账号的老实现，
+// 就会 panic 而非静默退化，从而暴露回归。
+type opsMetricsWaitSumCache struct {
 	ConcurrencyCache
-	loads map[int64]*AccountLoadInfo
-	got   []AccountWithConcurrency
+	sum   int
+	err   error
+	calls int
 }
 
-func (c *opsMetricsLoadCache) GetAccountsLoadBatch(_ context.Context, accounts []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error) {
-	c.got = accounts
-	return c.loads, nil
+func (c *opsMetricsWaitSumCache) SumActiveAccountWaitingCounts(context.Context) (int, error) {
+	c.calls++
+	if c.err != nil {
+		return 0, c.err
+	}
+	return c.sum, nil
 }
 
-func TestCollectConcurrencyQueueDepthUsesProjectionAndPreservesFallbackResult(t *testing.T) {
-	loadFactor := 7
-	accounts := []Account{
-		{ID: 11, Concurrency: 2, LoadFactor: &loadFactor},
-		{ID: 12, Concurrency: 3},
-		{ID: 13},
-	}
-	accountLoads := []AccountWithConcurrency{
-		{ID: 11, MaxConcurrency: 7},
-		{ID: 12, MaxConcurrency: 3},
-		{ID: 13, MaxConcurrency: 1},
-	}
-	loads := map[int64]*AccountLoadInfo{
-		11: {AccountID: 11, WaitingCount: 2},
-		12: {AccountID: 12, WaitingCount: 3},
-		13: {AccountID: 13, WaitingCount: 0},
-	}
+func newWaitSumCollector(cache ConcurrencyCache) *OpsMetricsCollector {
+	concurrency := NewConcurrencyService(cache)
+	return &OpsMetricsCollector{concurrencyService: concurrency}
+}
 
-	projectionRepo := &opsMetricsProjectionRepo{accounts: accounts, accountLoads: accountLoads}
-	projectionCache := &opsMetricsLoadCache{loads: loads}
-	projectionConcurrency := NewConcurrencyService(projectionCache)
-	projectionConcurrency.SetAccountLoadBatchCacheTTL(0)
-	projectionCollector := &OpsMetricsCollector{
-		accountRepo:        projectionRepo,
-		concurrencyService: projectionConcurrency,
-	}
+// 队列深度改走活跃索引汇总：采集器只发一次调用，直接采用其结果。
+// 旧实现遍历全部可调度账号（每账号 5 条命令，约 2.2 万条），在预算内必然超时，
+// 使该指标长期为 NULL、依赖它的告警规则永不触发。
+func TestCollectConcurrencyQueueDepthUsesActiveIndexSum(t *testing.T) {
+	cache := &opsMetricsWaitSumCache{sum: 5}
+	collector := newWaitSumCollector(cache)
 
-	fallbackRepo := &opsMetricsFallbackRepo{accounts: accounts}
-	fallbackCache := &opsMetricsLoadCache{loads: loads}
-	fallbackConcurrency := NewConcurrencyService(fallbackCache)
-	fallbackConcurrency.SetAccountLoadBatchCacheTTL(0)
-	fallbackCollector := &OpsMetricsCollector{
-		accountRepo:        fallbackRepo,
-		concurrencyService: fallbackConcurrency,
-	}
+	depth := collector.collectConcurrencyQueueDepth(context.Background())
 
-	projectionDepth := projectionCollector.collectConcurrencyQueueDepth(context.Background())
-	fallbackDepth := fallbackCollector.collectConcurrencyQueueDepth(context.Background())
+	require.NotNil(t, depth)
+	require.Equal(t, 5, *depth)
+	require.Equal(t, 1, cache.calls, "每次采集只应调用一次汇总")
+}
 
-	require.NotNil(t, projectionDepth)
-	require.NotNil(t, fallbackDepth)
-	require.Equal(t, 5, *projectionDepth)
-	require.Equal(t, *fallbackDepth, *projectionDepth)
-	require.Equal(t, 1, projectionRepo.projectionCalls)
-	require.Zero(t, projectionRepo.listCalls)
-	require.Equal(t, 1, fallbackRepo.listCalls)
-	require.Equal(t, accountLoads, projectionCache.got)
-	require.Equal(t, fallbackCache.got, projectionCache.got)
+// 0 与采集失败必须区分：
+//   - 无积压 → &0，指标写 0（有效观测）
+//   - 采集失败 → nil，指标写 NULL（无数据）
+//
+// 把失败写成 0 会让"无数据"伪装成"健康"，这正是此前该指标长期为 NULL
+// 却无人察觉的反面：两种状态一旦混淆，指标就失去意义。
+func TestCollectConcurrencyQueueDepthDistinguishesZeroFromFailure(t *testing.T) {
+	t.Run("无积压返回 0 而非 nil", func(t *testing.T) {
+		cache := &opsMetricsWaitSumCache{sum: 0}
+		depth := newWaitSumCollector(cache).collectConcurrencyQueueDepth(context.Background())
+
+		require.NotNil(t, depth, "无积压是有效观测，必须写 0 而非 NULL")
+		require.Equal(t, 0, *depth)
+	})
+
+	t.Run("采集失败返回 nil", func(t *testing.T) {
+		cache := &opsMetricsWaitSumCache{err: errors.New("redis unavailable")}
+		depth := newWaitSumCollector(cache).collectConcurrencyQueueDepth(context.Background())
+
+		require.Nil(t, depth, "采集失败必须写 NULL，不得伪装成 0")
+		require.Equal(t, 1, cache.calls)
+	})
+}
+
+// 并发服务缺失时不得 panic，只返回 nil（该指标不可用），
+// 采集器的其他指标照常写入。
+func TestCollectConcurrencyQueueDepthWithoutConcurrencyService(t *testing.T) {
+	collector := &OpsMetricsCollector{}
+	require.Nil(t, collector.collectConcurrencyQueueDepth(context.Background()))
 }
 
 func BenchmarkOpsMetricsCollectorCollectConcurrencyQueueDepth(b *testing.B) {
-	const accountCount = 1000
-	loadFactor := 8
-	accounts := make([]Account, accountCount)
-	accountLoads := make([]AccountWithConcurrency, accountCount)
-	for i := range accountCount {
-		id := int64(i + 1)
-		accounts[i] = Account{
-			ID:          id,
-			Concurrency: 4,
-			LoadFactor:  &loadFactor,
-		}
-		accountLoads[i] = AccountWithConcurrency{ID: id, MaxConcurrency: loadFactor}
-	}
-
-	repo := &opsMetricsProjectionRepo{accounts: accounts, accountLoads: accountLoads}
-	cache := &opsMetricsLoadCache{loads: map[int64]*AccountLoadInfo{}}
-	concurrency := NewConcurrencyService(cache)
-	concurrency.SetAccountLoadBatchCacheTTL(0)
-	collector := &OpsMetricsCollector{accountRepo: repo, concurrencyService: concurrency}
+	collector := newWaitSumCollector(&opsMetricsWaitSumCache{sum: 0})
 
 	b.ReportAllocs()
 	b.ResetTimer()

@@ -946,6 +946,69 @@ func (c *concurrencyCache) GetAccountWaitingCount(ctx context.Context, accountID
 	return val, nil
 }
 
+// SumActiveAccountWaitingCounts 汇总当前所有账号的等待队列深度，供运维指标采集使用。
+//
+// 只读：不做任何过期清理写操作，避免指标采集路径产生副作用。
+//
+// 走活跃索引而非遍历全部可调度账号：任何账号一旦有等待者或占用槽位，
+// IncrementAccountWaitCount 都会通过 touchActiveIndexAt 将其写入索引，
+// 因此不在索引中的账号等待数必然为 0，对求和无贡献。
+// 命令量因此从 O(可调度账号数) 降到 1 + O(活跃账号数)。
+//
+// score 已过期的成员一并跳过：其等待计数键已随 TTL 失效，读到的必然是 0。
+func (c *concurrencyCache) SumActiveAccountWaitingCounts(ctx context.Context) (int, error) {
+	if c == nil || c.rdb == nil {
+		return 0, errors.New("concurrency cache unavailable")
+	}
+
+	now, err := c.redisUnixSeconds(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	members, err := c.rdb.ZRangeByScore(ctx, accountActiveIndexKey, &redis.ZRangeBy{
+		Min: strconv.FormatInt(now, 10),
+		Max: "+inf",
+	}).Result()
+	if err != nil {
+		return 0, fmt.Errorf("read active index %s: %w", accountActiveIndexKey, err)
+	}
+	if len(members) == 0 {
+		return 0, nil
+	}
+
+	total := 0
+	for start := 0; start < len(members); start += activeIndexPipelineChunkSize {
+		end := start + activeIndexPipelineChunkSize
+		if end > len(members) {
+			end = len(members)
+		}
+
+		pipe := c.rdb.Pipeline()
+		cmds := make([]*redis.StringCmd, 0, end-start)
+		for _, member := range members[start:end] {
+			id, parseErr := strconv.ParseInt(member, 10, 64)
+			if parseErr != nil || id <= 0 {
+				continue
+			}
+			cmds = append(cmds, pipe.Get(ctx, accountWaitKey(id)))
+		}
+		if len(cmds) == 0 {
+			continue
+		}
+		if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+			return 0, fmt.Errorf("pipeline exec: %w", err)
+		}
+		for _, cmd := range cmds {
+			// redis.Nil（键已过期）与解析失败都视为 0，不影响求和。
+			if v, err := cmd.Int(); err == nil && v > 0 {
+				total += v
+			}
+		}
+	}
+	return total, nil
+}
+
 func (c *concurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []service.AccountWithConcurrency) (map[int64]*service.AccountLoadInfo, error) {
 	if len(accounts) == 0 {
 		return map[int64]*service.AccountLoadInfo{}, nil
