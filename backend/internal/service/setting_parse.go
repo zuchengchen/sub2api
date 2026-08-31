@@ -70,6 +70,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeySiteLogo:                                  "",
 		SettingKeyAPIBaseURLFollowHost:                      "false",
 		SettingKeyGuideContent:                              "",
+		SettingKeyGuideChapters:                             "[]",
 		SettingKeyGuideVersion:                              "0",
 		SettingKeyGuideUpdatedAt:                            "",
 		SettingKeyGuideRevisions:                            "[]",

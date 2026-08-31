@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,12 +17,14 @@ func (h *SettingHandler) GetPublicGuide(c *gin.Context) {
 	}
 
 	response.Success(c, struct {
-		Content          string `json:"content"`
-		Version          int    `json:"version"`
-		UpdatedAt        string `json:"updated_at"`
-		HasCustomContent bool   `json:"has_custom_content"`
+		Content          string                 `json:"content"`
+		Chapters         []service.GuideChapter `json:"chapters"`
+		Version          int                    `json:"version"`
+		UpdatedAt        string                 `json:"updated_at"`
+		HasCustomContent bool                   `json:"has_custom_content"`
 	}{
 		Content:          settings.Content,
+		Chapters:         settings.Chapters,
 		Version:          settings.Version,
 		UpdatedAt:        settings.UpdatedAt,
 		HasCustomContent: settings.HasCustomContent,

@@ -142,22 +142,26 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { getPublicGuide } from '@/api/guide'
+import { getPublicGuide, type PublicGuide } from '@/api/guide'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { sanitizeUrl } from '@/utils/url'
 import {
-  buildGuideDocument,
+  buildGuideDocumentFromChapters,
   extractGuideCommands,
+  joinGuideChapters,
+  readChapterTitle,
+  splitGuideIntoChapters,
+  type GuideChapter,
   type GuideCommand,
 } from '@/utils/guideMarkdown'
-import guideMarkdown from '../../../../docs/guide.zh.md?raw'
+import { getBundledGuideChapters } from '@/utils/guideSections'
 
 const downloadUrl = '/downloads/select-fastest-codex-base-url.bat'
-const bundledGuideVersion = '1.2'
-const bundledGuideUpdatedAt = '2026-08-30'
+const bundledGuideVersion = '1.3'
+const bundledGuideUpdatedAt = '2026-08-31'
 const commandLabels: Record<string, string> = {
   'skill-install': '安装 goal-workflow',
   'skill-update': '更新 goal-workflow',
@@ -167,10 +171,11 @@ const commandLabels: Record<string, string> = {
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const { copyToClipboard } = useClipboard()
-const guideSource = ref(guideMarkdown)
+const guideChapters = ref<GuideChapter[]>(getBundledGuideChapters())
 const guideVersion = ref(bundledGuideVersion)
 const updatedAt = ref(bundledGuideUpdatedAt)
-const guideDocument = computed(() => buildGuideDocument(guideSource.value))
+const guideSource = computed(() => joinGuideChapters(guideChapters.value))
+const guideDocument = computed(() => buildGuideDocumentFromChapters(guideChapters.value))
 const isDark = ref(document.documentElement.classList.contains('dark'))
 const mobileTocOpen = ref(false)
 const activeSection = ref(guideDocument.value.sections[0]?.id || '')
@@ -233,12 +238,34 @@ function restoreHashPosition() {
   }
 }
 
+/**
+ * Accepts either the chapter list published by the current admin editor or the
+ * single `content` document published before chapters existed. An empty result
+ * means nothing was published and the bundled guide stays visible.
+ */
+function resolvePublishedChapters(published: PublicGuide): GuideChapter[] {
+  if (!published.has_custom_content) return []
+
+  if (published.chapters?.length) {
+    return published.chapters
+      .filter((chapter) => chapter.slug && chapter.content.trim() !== '')
+      .map((chapter) => ({
+        slug: chapter.slug,
+        title: chapter.title || readChapterTitle(chapter.content),
+        content: chapter.content,
+      }))
+  }
+
+  return published.content?.trim() ? splitGuideIntoChapters(published.content) : []
+}
+
 async function loadPublishedGuide() {
   try {
     const published = await getPublicGuide()
-    if (!published.has_custom_content || !published.content.trim()) return
+    const publishedChapters = resolvePublishedChapters(published)
+    if (!publishedChapters.length) return
 
-    guideSource.value = published.content
+    guideChapters.value = publishedChapters
     guideVersion.value = `在线第 ${published.version} 版`
     updatedAt.value = published.updated_at.slice(0, 10) || bundledGuideUpdatedAt
     activeSection.value = guideDocument.value.sections[0]?.id || ''
