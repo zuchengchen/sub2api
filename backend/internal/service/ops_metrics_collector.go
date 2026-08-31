@@ -39,10 +39,6 @@ const (
 
 var opsMetricsCollectorAdvisoryLockID = hashAdvisoryLockID(opsMetricsCollectorLeaderLockKey)
 
-type opsSchedulableAccountLoadRepository interface {
-	ListSchedulableAccountLoads(ctx context.Context) ([]AccountWithConcurrency, error)
-}
-
 type OpsMetricsCollector struct {
 	opsRepo     OpsRepository
 	settingRepo SettingRepository
@@ -367,8 +363,16 @@ func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context) error {
 	return c.opsRepo.InsertSystemMetrics(ctx, input)
 }
 
+// collectConcurrencyQueueDepth 采集账号等待队列总深度。
+//
+// 走活跃索引汇总（1 + O(活跃账号数) 条 Redis 命令），不再遍历全部可调度账号。
+// 旧实现对每个可调度账号发 5 条命令（约 2.2 万条），在 2s 预算内必然超时，
+// 导致该指标长期为 NULL、依赖它的告警规则永不触发。
+//
+// 返回 nil 表示采集失败（指标写 NULL）；返回 &0 表示确实无积压。
+// 两者语义必须区分：把失败写成 0 会让“无数据”伪装成“健康”。
 func (c *OpsMetricsCollector) collectConcurrencyQueueDepth(parentCtx context.Context) *int {
-	if c == nil || c.accountRepo == nil || c.concurrencyService == nil {
+	if c == nil || c.concurrencyService == nil {
 		return nil
 	}
 	if parentCtx == nil {
@@ -376,62 +380,20 @@ func (c *OpsMetricsCollector) collectConcurrencyQueueDepth(parentCtx context.Con
 	}
 
 	// Best-effort: never let concurrency sampling break the metrics collector.
-	ctx, cancel := context.WithTimeout(parentCtx, 2*time.Second)
+	// 预算需大于底层 Redis 取数超时（accountLoadBatchFetchTimeout=3s），否则内层超时永远不可能生效。
+	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
 
-	accountLoads, err := c.listSchedulableAccountLoads(ctx)
+	total, err := c.concurrencyService.SumActiveAccountWaitingCounts(ctx)
 	if err != nil {
+		// 静默失败曾使该指标长期缺失而无人察觉，这里必须留下可观测记录。
+		log.Printf("[OpsMetricsCollector] concurrency queue depth sampling failed: %v", err)
 		return nil
-	}
-	if len(accountLoads) == 0 {
-		zero := 0
-		return &zero
-	}
-
-	loadMap, err := c.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
-	if err != nil {
-		return nil
-	}
-
-	var total int64
-	for _, info := range loadMap {
-		if info == nil || info.WaitingCount <= 0 {
-			continue
-		}
-		total += int64(info.WaitingCount)
 	}
 	if total < 0 {
 		total = 0
 	}
-
-	maxInt := int64(^uint(0) >> 1)
-	if total > maxInt {
-		total = maxInt
-	}
-	v := int(total)
-	return &v
-}
-
-func (c *OpsMetricsCollector) listSchedulableAccountLoads(ctx context.Context) ([]AccountWithConcurrency, error) {
-	if repo, ok := c.accountRepo.(opsSchedulableAccountLoadRepository); ok {
-		return repo.ListSchedulableAccountLoads(ctx)
-	}
-
-	accounts, err := c.accountRepo.ListSchedulable(ctx)
-	if err != nil {
-		return nil, err
-	}
-	loads := make([]AccountWithConcurrency, 0, len(accounts))
-	for _, account := range accounts {
-		if account.ID <= 0 {
-			continue
-		}
-		loads = append(loads, AccountWithConcurrency{
-			ID:             account.ID,
-			MaxConcurrency: account.EffectiveLoadFactor(),
-		})
-	}
-	return loads, nil
+	return &total
 }
 
 type opsCollectedPercentiles struct {

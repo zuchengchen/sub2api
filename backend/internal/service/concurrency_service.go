@@ -47,6 +47,9 @@ type ConcurrencyCache interface {
 	GetAccountsLoadBatch(ctx context.Context, accounts []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error)
 	GetUsersLoadBatch(ctx context.Context, users []UserWithConcurrency) (map[int64]*UserLoadInfo, error)
 
+	// 活跃账号等待队列深度汇总（只读，供运维指标采集）
+	SumActiveAccountWaitingCounts(ctx context.Context) (int, error)
+
 	// 清理过期槽位（后台任务）
 	CleanupExpiredAccountSlots(ctx context.Context, accountID int64) error
 	CleanupExpiredAccountSlotKeys(ctx context.Context) error
@@ -576,6 +579,15 @@ func (s *ConcurrencyService) GetAccountsLoadBatch(ctx context.Context, accounts 
 // GetAccountsLoadBatchFresh 绕过极短 TTL 缓存，用于抢槽失败后的实时刷新兜底。
 func (s *ConcurrencyService) GetAccountsLoadBatchFresh(ctx context.Context, accounts []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error) {
 	return s.getAccountsLoadBatch(ctx, accounts, false)
+}
+
+// SumActiveAccountWaitingCounts 汇总活跃账号的等待队列深度。
+// 不经缓存：运维指标每次都要当前值，且底层只有 1 + O(活跃账号数) 条命令。
+func (s *ConcurrencyService) SumActiveAccountWaitingCounts(ctx context.Context) (int, error) {
+	if s == nil || s.cache == nil {
+		return 0, errors.New("concurrency cache unavailable")
+	}
+	return s.cache.SumActiveAccountWaitingCounts(ctx)
 }
 
 func (s *ConcurrencyService) getAccountsLoadBatch(ctx context.Context, accounts []AccountWithConcurrency, allowCache bool) (map[int64]*AccountLoadInfo, error) {

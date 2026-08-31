@@ -706,7 +706,6 @@ export interface AlertRule {
   filters?: Record<string, any>
   created_at?: string
   updated_at?: string
-  last_triggered_at?: string | null
 }
 
 export interface AlertEvent {
@@ -787,7 +786,6 @@ export interface OpsOpenAIAccountQuotaAutoPauseSettings {
 
 export interface OpsAdvancedSettings {
   data_retention: OpsDataRetentionSettings
-  aggregation: OpsAggregationSettings
   openai_account_quota_auto_pause: OpsOpenAIAccountQuotaAutoPauseSettings
   ignore_count_tokens_errors: boolean
   ignore_context_canceled: boolean
@@ -806,10 +804,6 @@ export interface OpsDataRetentionSettings {
   error_log_retention_days: number
   minute_metrics_retention_days: number
   hourly_metrics_retention_days: number
-}
-
-export interface OpsAggregationSettings {
-  aggregation_enabled: boolean
 }
 
 export interface OpsRuntimeLogConfig {

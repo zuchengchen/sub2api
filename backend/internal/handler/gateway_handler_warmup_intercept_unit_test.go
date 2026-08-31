@@ -142,6 +142,9 @@ func (f *fakeConcurrencyCache) DecrementWaitCount(context.Context, int64) error 
 func (f *fakeConcurrencyCache) GetAccountsLoadBatch(context.Context, []service.AccountWithConcurrency) (map[int64]*service.AccountLoadInfo, error) {
 	return map[int64]*service.AccountLoadInfo{}, nil
 }
+func (f *fakeConcurrencyCache) SumActiveAccountWaitingCounts(context.Context) (int, error) {
+	return 0, nil
+}
 func (f *fakeConcurrencyCache) GetUsersLoadBatch(context.Context, []service.UserWithConcurrency) (map[int64]*service.UserLoadInfo, error) {
 	return map[int64]*service.UserLoadInfo{}, nil
 }
