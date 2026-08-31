@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -8,13 +8,21 @@ import { validateGuideBat } from '@/utils/guideBatValidation'
 const dir = dirname(fileURLToPath(import.meta.url))
 const batPath = resolve(dir, '../../../public/downloads/select-fastest-codex-base-url.bat')
 const checksumPath = `${batPath}.sha256`
-const guidePath = resolve(dir, '../../../../docs/guide.zh.md')
+const guideDir = resolve(dir, '../../../../docs/guide')
 const guideViewPath = resolve(dir, '../../views/public/GuideView.vue')
 const vipPath = resolve(dir, '../../../../backend/internal/service/vip.go')
 const batBytes = readFileSync(batPath)
 const bat = batBytes.toString('ascii')
 const checksum = readFileSync(checksumPath, 'utf8').trim()
-const guide = readFileSync(guidePath, 'utf8')
+
+// The guide is one file per chapter; join them in filename order so the
+// assertions below still inspect the whole published document.
+const guideChapterFiles = readdirSync(guideDir)
+  .filter((name) => /^\d{3}-[a-z0-9-]+\.md$/.test(name))
+  .sort()
+const guide = guideChapterFiles
+  .map((name) => readFileSync(resolve(guideDir, name), 'utf8').replace(/\s+$/, ''))
+  .join('\n\n')
 const guideViewSource = readFileSync(guideViewPath, 'utf8')
 const vipSource = readFileSync(vipPath, 'utf8')
 
@@ -58,9 +66,21 @@ describe('guide BAT asset', () => {
     const viewVersion = guideViewSource.match(/^const bundledGuideVersion = '([^']+)'$/m)?.[1]
 
     // Both patterns must actually match; an absent version is a failure, not a passing match.
-    expect(documentVersion).toBe('1.2')
-    expect(viewVersion).toBe('1.2')
+    expect(documentVersion).toBe('1.3')
+    expect(viewVersion).toBe('1.3')
     expect(documentVersion).toBe(viewVersion)
+  })
+
+  it('ships the guide as one file per chapter, each starting with its heading', () => {
+    expect(guideChapterFiles).toHaveLength(16)
+
+    for (const name of guideChapterFiles) {
+      const content = readFileSync(resolve(guideDir, name), 'utf8')
+      expect(content.startsWith('## '), `${name} must start with a ## heading`).toBe(true)
+    }
+
+    // The single-file guide must be gone so no build path can read a stale copy.
+    expect(existsSync(resolve(guideDir, '../guide.zh.md'))).toBe(false)
   })
 
   it('keeps the published SVIP rules synchronized with backend constants', () => {

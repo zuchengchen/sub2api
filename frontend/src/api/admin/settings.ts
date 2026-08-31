@@ -16,14 +16,25 @@ export interface DefaultSubscriptionSetting {
   validity_days: number;
 }
 
+/** One independently editable chapter. `slug` is the permanent anchor id. */
+export interface GuideChapterPayload {
+  slug: string;
+  title: string;
+  content: string;
+}
+
 export interface GuideRevision {
   version: number;
-  content: string;
+  /** Absent on revisions published by the chapter editor. */
+  content?: string;
+  chapters?: GuideChapterPayload[];
   updated_at: string;
 }
 
 export interface GuideSettings {
-  content: string;
+  /** Whole-document form, kept for guides published before chapters existed. */
+  content?: string;
+  chapters?: GuideChapterPayload[];
   version: number;
   updated_at: string;
   has_custom_content: boolean;
@@ -1082,7 +1093,7 @@ export async function getGuideSettings(): Promise<GuideSettings> {
 }
 
 export async function updateGuideSettings(payload: {
-  content: string;
+  chapters: GuideChapterPayload[];
   expected_version: number;
 }): Promise<GuideSettings> {
   const { data } = await apiClient.put<GuideSettings>(

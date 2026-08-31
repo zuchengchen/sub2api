@@ -78,6 +78,7 @@ async function preparePublicGuide(page: Page) {
     message: 'ok',
     data: {
       content: '',
+      chapters: [],
       version: 0,
       updated_at: '',
       has_custom_content: false,
