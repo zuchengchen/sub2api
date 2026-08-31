@@ -18,20 +18,32 @@ const adminUser = {
   updated_at: '2026-08-30T00:00:00Z',
 }
 
+const originalChapters = [
+  { slug: 'current', title: '当前教程', content: '## 当前教程\n\n这是管理员之前发布的内容。' },
+  { slug: 'faq', title: '常见问题', content: '## 常见问题\n\n这一章不应被改动。' },
+]
+
 const originalGuide = {
-  content: '## 当前教程\n\n这是管理员之前发布的内容。',
+  content: originalChapters.map((chapter) => chapter.content).join('\n\n'),
+  chapters: originalChapters,
   version: 3,
   updated_at: '2026-08-30T10:00:00Z',
   has_custom_content: true,
   revisions: [{
-    content: '## 当前教程\n\n这是管理员之前发布的内容。',
+    chapters: originalChapters,
     version: 3,
     updated_at: '2026-08-30T10:00:00Z',
   }],
 }
 
-function json(route: Route, body: unknown) {
-  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+// The API client unwraps a {code, message, data} envelope, so mocks must send
+// one; a bare object leaves the response body unusable.
+function json(route: Route, data: unknown) {
+  return route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ code: 0, message: 'ok', data }),
+  })
 }
 
 async function prepareAdminGuide(page: Page) {
@@ -66,17 +78,24 @@ async function prepareAdminGuide(page: Page) {
     if (path.endsWith('/setup/status')) return json(route, { needs_setup: false })
     if (path.endsWith('/admin/settings/guide')) {
       if (request.method() === 'PUT') {
-        const payload = request.postDataJSON() as { content: string; expected_version: number }
+        const payload = request.postDataJSON() as {
+          chapters: Array<{ slug: string; title: string; content: string }>
+          expected_version: number
+        }
         expect(payload.expected_version).toBe(3)
+        // Editing one chapter must still publish the untouched one verbatim.
+        expect(payload.chapters.map((chapter) => chapter.slug)).toEqual(['current', 'faq'])
+        expect(payload.chapters[1].content).toBe(originalChapters[1].content)
         return json(route, {
           ...originalGuide,
-          content: payload.content,
+          content: payload.chapters.map((chapter) => chapter.content).join('\n\n'),
+          chapters: payload.chapters,
           version: 4,
           updated_at: '2026-08-30T11:00:00Z',
           revisions: [
             ...originalGuide.revisions,
             {
-              content: payload.content,
+              chapters: payload.chapters,
               version: 4,
               updated_at: '2026-08-30T11:00:00Z',
             },
@@ -142,11 +161,22 @@ test('管理员可以预览并发布使用教程', async ({ page }, testInfo) =>
   await expect(closeNotifications).toHaveCount(0)
   await page.locator('#settings-tab-guide').click()
   await expect(page.locator('[data-test="guide-editor"]')).toBeVisible()
-  await expect(page.locator('[data-test="guide-markdown"]')).toHaveValue(/管理员之前发布的内容/)
 
-  const updatedContent = '## 新手教程\n\n照着下面的步骤操作即可。\n\n<script>alert(1)</script>'
+  // The chapter list drives the editor: the first chapter opens by default and
+  // the textarea holds only that chapter's body.
+  await expect(page.locator('[data-test="guide-chapter-list"] li')).toHaveCount(2)
+  await expect(page.locator('[data-test="guide-markdown"]')).toHaveValue(/管理员之前发布的内容/)
+  await expect(page.locator('[data-test="guide-markdown"]')).not.toHaveValue(/这一章不应被改动/)
+
+  await page.locator('[data-test="guide-chapter-faq"]').click()
+  await expect(page.locator('[data-test="guide-markdown"]')).toHaveValue(/这一章不应被改动/)
+  await page.locator('[data-test="guide-chapter-current"]').click()
+
+  const updatedContent = '## 当前教程\n\n照着下面的步骤操作即可。\n\n<script>alert(1)</script>'
   await page.locator('[data-test="guide-markdown"]').fill(updatedContent)
   await expect(page.locator('[data-test="guide-preview"]')).toContainText('照着下面的步骤操作即可。')
+  // The preview covers every chapter, not just the edited one.
+  await expect(page.locator('[data-test="guide-preview"]')).toContainText('这一章不应被改动。')
   await expect(page.locator('[data-test="guide-preview"] script')).toHaveCount(0)
 
   await page.locator('[data-test="guide-save"]').click()

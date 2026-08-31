@@ -2,8 +2,20 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import GuideView from '@/views/public/GuideView.vue'
-import { buildGuideDocument, extractGuideCommands } from '@/utils/guideMarkdown'
-import guideMarkdown from '../../../../../docs/guide.zh.md?raw'
+import {
+  buildGuideDocument,
+  buildGuideDocumentFromChapters,
+  deriveChapterSlug,
+  extractGuideCommands,
+  joinGuideChapters,
+  splitGuideIntoChapters,
+} from '@/utils/guideMarkdown'
+import { getBundledGuideChapters } from '@/utils/guideSections'
+
+// The guide now ships as one file per chapter under docs/guide/; the joined
+// document is what the page renders and what these assertions inspect.
+const guideChapters = getBundledGuideChapters()
+const guideMarkdown = joinGuideChapters(guideChapters)
 
 const copyToClipboard = vi.hoisted(() => vi.fn().mockResolvedValue(true))
 const getPublicGuide = vi.hoisted(() => vi.fn())
@@ -37,9 +49,14 @@ describe('GuideView', () => {
     } as typeof window.__APP_CONFIG__
   })
 
-  it('replaces the bundled guide with a published database version', async () => {
+  it('replaces the bundled guide with published database chapters', async () => {
     getPublicGuide.mockResolvedValue({
-      content: '## 管理员发布的教程\n\n这是数据库中的内容。',
+      content: '',
+      chapters: [{
+        slug: 'admin-chapter',
+        title: '管理员发布的教程',
+        content: '## 管理员发布的教程\n\n这是数据库中的内容。',
+      }],
       version: 7,
       updated_at: '2026-08-30T12:00:00Z',
       has_custom_content: true,
@@ -59,6 +76,133 @@ describe('GuideView', () => {
 
     expect(wrapper.get('[data-test="guide-content"]').text()).toContain('这是数据库中的内容。')
     expect(wrapper.text()).toContain('教程版本 在线第 7 版')
+    // The published chapter slug becomes the anchor id.
+    expect(wrapper.get('#admin-chapter').text()).toBe('管理员发布的教程')
+  })
+
+  it('splits a guide published before chapters existed and keeps its anchors', async () => {
+    getPublicGuide.mockResolvedValue({
+      content: '## 充值：先买兑换码，再兑换余额\n\n旧的整篇内容。\n\n## 遇到问题先看这里\n\n旧的 FAQ。',
+      version: 4,
+      updated_at: '2026-08-30T12:00:00Z',
+      has_custom_content: true,
+    })
+
+    const wrapper = mount(GuideView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('#recharge').text()).toBe('充值：先买兑换码，再兑换余额')
+    expect(wrapper.get('#faq').text()).toBe('遇到问题先看这里')
+    expect(wrapper.get('[data-test="guide-content"]').text()).toContain('旧的整篇内容。')
+  })
+
+  it('ships one file per chapter with stable slugs and ordering', () => {
+    expect(guideChapters).toHaveLength(16)
+    expect(guideChapters.map((chapter) => chapter.slug)).toEqual([
+      'quick-start',
+      'account',
+      'recharge',
+      'api-key',
+      'first-request',
+      'domains',
+      'codex',
+      'speed-script',
+      'goal-workflow',
+      'svip',
+      'usage',
+      'error-codes',
+      'faq',
+      'security',
+      'support',
+      'version',
+    ])
+
+    // Every chapter must start with its own `##` heading and carry its title.
+    for (const chapter of guideChapters) {
+      expect(chapter.content.startsWith('## ')).toBe(true)
+      expect(chapter.title).not.toBe('')
+    }
+
+    const { sections } = buildGuideDocumentFromChapters(guideChapters)
+    expect(sections.map((section) => section.id)).toEqual(guideChapters.map((chapter) => chapter.slug))
+  })
+
+  it('anchors every chapter to its own slug even when one has no heading', () => {
+    // Splitting a legacy guide yields a `preface` chapter with no `##` heading.
+    // Mapping anchors by heading position shifted every later anchor by one, so
+    // #recharge landed on the wrong section and the last slug vanished.
+    const { html, sections } = buildGuideDocumentFromChapters([
+      { slug: 'preface', title: '前言', content: '开头前言一段。' },
+      { slug: 'recharge', title: '充值', content: '## 充值\n\n充值正文。' },
+      { slug: 'faq', title: '常见问题', content: '## 常见问题\n\nFAQ 正文。' },
+    ])
+
+    // Headings map to their own chapter's slug, never a neighbour's.
+    expect(html).toContain('<h2 id="recharge">充值</h2>')
+    expect(html).toContain('<h2 id="faq">常见问题</h2>')
+    // The headingless chapter still exposes a resolvable anchor.
+    expect(html).toContain('id="preface"')
+    expect(html).toContain('开头前言一段。')
+
+    // Only chapters with headings appear in the table of contents.
+    expect(sections).toEqual([
+      { id: 'recharge', label: '充值' },
+      { id: 'faq', label: '常见问题' },
+    ])
+  })
+
+  it('keeps external links safe when rendering from chapters', () => {
+    const { html } = buildGuideDocumentFromChapters([
+      {
+        slug: 'links',
+        title: '链接',
+        content: '## 链接\n\n<script>alert(1)</script>\n\n[外部](https://example.test/x)\n\n[危险](javascript:alert(2))',
+      },
+    ])
+
+    expect(html).not.toContain('<script')
+    expect(html).not.toContain('javascript:')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noopener noreferrer"')
+  })
+
+  it('round-trips a single document through split and join', () => {
+    const document = '前言段落。\n\n## 第一章\n\n正文一。\n\n## 第二章\n\n正文二。'
+    const chapters = splitGuideIntoChapters(document)
+
+    expect(chapters).toHaveLength(3)
+    expect(chapters[0].slug).toBe('preface')
+    expect(chapters[0].content).toContain('前言段落。')
+    expect(chapters.map((chapter) => chapter.title)).toEqual(['前言', '第一章', '第二章'])
+    // Chinese-only headings fall back to deterministic digest slugs.
+    expect(chapters[1].slug).toMatch(/^section-[a-z0-9]+$/)
+    expect(chapters[2].slug).not.toBe(chapters[1].slug)
+
+    const rejoined = joinGuideChapters(chapters)
+    for (const fragment of ['前言段落。', '正文一。', '正文二。']) {
+      expect(rejoined).toContain(fragment)
+    }
+  })
+
+  it('derives deterministic, collision-free slugs for new chapters', () => {
+    expect(deriveChapterSlug('SVIP 说明')).toBe('svip')
+    expect(deriveChapterSlug('Billing & Quota')).toBe('billing-quota')
+    expect(deriveChapterSlug('SVIP 说明', ['svip'])).toBe('svip-2')
+
+    // A title without ASCII words still yields a stable, repeatable slug.
+    const chineseOnly = deriveChapterSlug('全新章节')
+    expect(chineseOnly).toMatch(/^section-[a-z0-9]+$/)
+    expect(deriveChapterSlug('全新章节')).toBe(chineseOnly)
+    expect(deriveChapterSlug('另一章节')).not.toBe(chineseOnly)
   })
 
   it('renders the approved guide, stable table of contents, commands, and download', async () => {

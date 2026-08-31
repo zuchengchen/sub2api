@@ -4,13 +4,14 @@ import (
 	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type updateGuideRequest struct {
-	Content         string `json:"content"`
-	ExpectedVersion *int   `json:"expected_version"`
+	Chapters        []service.GuideChapter `json:"chapters"`
+	ExpectedVersion *int                   `json:"expected_version"`
 }
 
 type restoreGuideRequest struct {
@@ -44,7 +45,7 @@ func (h *SettingHandler) UpdateGuide(c *gin.Context) {
 		return
 	}
 
-	settings, err := h.settingService.SaveGuideSettings(c.Request.Context(), req.Content, *req.ExpectedVersion)
+	settings, err := h.settingService.SaveGuideSettings(c.Request.Context(), req.Chapters, *req.ExpectedVersion)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

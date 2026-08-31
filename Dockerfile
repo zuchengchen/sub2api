@@ -39,7 +39,7 @@ RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/stor
 # /app/docs. Copy only those files to keep the build dependency minimal.
 COPY frontend/ ./
 COPY docs/legal/ /app/docs/legal/
-COPY docs/guide.zh.md /app/docs/guide.zh.md
+COPY docs/guide/ /app/docs/guide/
 RUN pnpm run build
 
 # -----------------------------------------------------------------------------
