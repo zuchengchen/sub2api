@@ -491,19 +491,6 @@ async function saveAllSettings() {
             <p class="text-xs text-gray-500">{{ t('admin.ops.settings.retentionDaysHint') }}</p>
           </div>
 
-          <!-- 预聚合任务 -->
-          <div class="space-y-3">
-            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.aggregation') }}</h5>
-
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.enableAggregation') }}</label>
-                <p class="mt-1 text-xs text-gray-500">{{ t('admin.ops.settings.aggregationHint') }}</p>
-              </div>
-              <Toggle v-model="advancedSettings.aggregation.aggregation_enabled" />
-            </div>
-          </div>
-
           <!-- OpenAI 账号配额自动暂停（全局默认阈值） -->
           <div class="space-y-3">
             <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.openaiQuotaAutoPause') }}</h5>

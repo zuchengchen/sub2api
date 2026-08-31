@@ -141,10 +141,14 @@ INSERT INTO ops_system_metrics (
 
 		opsNullInt(input.DBConnActive),
 		opsNullInt(input.DBConnIdle),
-		opsNullInt(input.DBConnWaiting),
+		// 等待数与队列深度是量表型指标：0 是"确实没有积压"的有效观测，
+		// 不是"没有数据"。用 opsNullInt 会把 0 折叠成 NULL，
+		// 使这两列长期不可见（db_conn_waiting 曾 1154 行全为 NULL，
+		// concurrency_queue_depth 仅在非零的 7 次出现过值）。
+		opsNullableIntPointer(input.DBConnWaiting),
 
 		opsNullInt(input.GoroutineCount),
-		opsNullInt(input.ConcurrencyQueueDepth),
+		opsNullableIntPointer(input.ConcurrencyQueueDepth),
 	)
 	return err
 }

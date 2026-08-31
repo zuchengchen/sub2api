@@ -84,6 +84,10 @@ func (m *concurrencyCacheMock) GetAccountsLoadBatch(ctx context.Context, account
 	return map[int64]*service.AccountLoadInfo{}, nil
 }
 
+func (m *concurrencyCacheMock) SumActiveAccountWaitingCounts(ctx context.Context) (int, error) {
+	return 0, nil
+}
+
 func (m *concurrencyCacheMock) GetUsersLoadBatch(ctx context.Context, users []service.UserWithConcurrency) (map[int64]*service.UserLoadInfo, error) {
 	return map[int64]*service.UserLoadInfo{}, nil
 }

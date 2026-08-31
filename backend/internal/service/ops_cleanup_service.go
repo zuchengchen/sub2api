@@ -324,6 +324,15 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 		*t.counter = n
 	}
 
+	// 邮件去重标记：保留期固定 30 天，不随 ops 保留期设置变化。
+	// 见 opsNotificationDeliveryRetentionDays 的说明——沿用 ops 的 3 天会导致重复发信。
+	markerCutoff := now.AddDate(0, 0, -opsNotificationDeliveryRetentionDays)
+	markers, err := deleteExpiredNotificationDeliveryMarkers(ctx, s.db, markerCutoff, opsCleanupBatchSize)
+	if err != nil {
+		return out, err
+	}
+	out.deliveryMarkers = markers
+
 	// Channel monitor 每日维护（聚合昨日明细 + 软删过期明细/聚合）。
 	// 失败只记日志，不影响 ops 清理的成功状态（与 ops 各步骤风格一致）；
 	// 维护本身已经把每步错误打到 slog，heartbeat result 不再分项记录。

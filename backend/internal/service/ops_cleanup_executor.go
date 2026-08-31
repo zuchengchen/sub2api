@@ -14,6 +14,13 @@ const (
 	opsCleanupCronStopTimeout  = 3 * time.Second
 	opsCleanupRunTimeout       = 30 * time.Minute
 	opsCleanupHeartbeatTimeout = 2 * time.Second
+
+	// opsNotificationDeliveryRetentionDays 是邮件去重标记的保留天数。
+	//
+	// 必须独立于 ops 数据的保留期：最长去重窗口是订阅到期提醒的 7 天
+	// （提醒键为 7d/3d/1d，不含日期），若沿用 ops 现行的 3 天，
+	// 会在去重窗口内删掉标记而导致重复发信。30 天留 4 倍余量。
+	opsNotificationDeliveryRetentionDays = 30
 )
 
 type opsCleanupTarget struct {
@@ -25,19 +32,20 @@ type opsCleanupTarget struct {
 }
 
 type opsCleanupDeletedCounts struct {
-	errorLogs      int64
-	ingressRejects int64
-	alertEvents    int64
-	systemLogs     int64
-	logAudits      int64
-	systemMetrics  int64
-	hourlyPreagg   int64
-	dailyPreagg    int64
+	errorLogs       int64
+	ingressRejects  int64
+	alertEvents     int64
+	systemLogs      int64
+	logAudits       int64
+	systemMetrics   int64
+	hourlyPreagg    int64
+	dailyPreagg     int64
+	deliveryMarkers int64
 }
 
 func (c opsCleanupDeletedCounts) String() string {
 	return fmt.Sprintf(
-		"error_logs=%d ingress_rejects=%d alert_events=%d system_logs=%d log_audits=%d system_metrics=%d hourly_preagg=%d daily_preagg=%d",
+		"error_logs=%d ingress_rejects=%d alert_events=%d system_logs=%d log_audits=%d system_metrics=%d hourly_preagg=%d daily_preagg=%d delivery_markers=%d",
 		c.errorLogs,
 		c.ingressRejects,
 		c.alertEvents,
@@ -46,6 +54,7 @@ func (c opsCleanupDeletedCounts) String() string {
 		c.systemMetrics,
 		c.hourlyPreagg,
 		c.dailyPreagg,
+		c.deliveryMarkers,
 	)
 }
 
@@ -113,6 +122,57 @@ WHERE id IN (SELECT id FROM batch)
 	var total int64
 	for {
 		res, err := db.ExecContext(ctx, q, cutoff, batchSize)
+		if err != nil {
+			if isMissingRelationError(err) {
+				return total, nil
+			}
+			return total, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += affected
+		if affected == 0 {
+			break
+		}
+	}
+	return total, nil
+}
+
+// deleteExpiredNotificationDeliveryMarkers 清理过期的邮件去重标记。
+//
+// 这些标记写在 settings 表里且此前无任何清理逻辑，会随发信量无界增长。
+// 不能用 deleteOldRowsByID：那会按时间列删除整表，把真正的配置项一并清掉。
+// 因此这里按 key 前缀过滤，并用 updated_at（真实 timestamptz）而非
+// value 里的 RFC3339 文本判断年龄——文本比较依赖格式恒定，不够稳。
+func deleteExpiredNotificationDeliveryMarkers(
+	ctx context.Context,
+	db *sql.DB,
+	cutoff time.Time,
+	batchSize int,
+) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	if batchSize <= 0 {
+		batchSize = opsCleanupBatchSize
+	}
+
+	const q = `
+WITH batch AS (
+  SELECT id FROM settings
+  WHERE key LIKE $1 AND updated_at < $2
+  ORDER BY id
+  LIMIT $3
+)
+DELETE FROM settings
+WHERE id IN (SELECT id FROM batch)
+`
+
+	var total int64
+	for {
+		res, err := db.ExecContext(ctx, q, notificationEmailDeliveryKeyPrefix+"%", cutoff, batchSize)
 		if err != nil {
 			if isMissingRelationError(err) {
 				return total, nil
