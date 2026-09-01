@@ -211,7 +211,7 @@ describe('admin AccountsView usage windows hint', () => {
       items: [{
         id: 7,
         name: 'precision-account',
-        platform: 'gemini',
+        platform: 'openai',
         type: 'apikey',
         status: 'active',
         schedulable: true,

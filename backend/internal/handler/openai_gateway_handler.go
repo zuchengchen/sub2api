@@ -3314,9 +3314,6 @@ func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError
 		}
 		return status, failoverErr.ClientMessage
 	}
-	if failoverErr != nil && failoverErr.Reason == service.AntigravityCredentialRejectedReason {
-		return http.StatusBadGateway, service.AntigravityCredentialRejectedClientMessage
-	}
 	return http.StatusServiceUnavailable, service.GrokCredentialUnavailableClientMessage
 }
 

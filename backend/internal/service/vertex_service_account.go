@@ -282,47 +282,6 @@ func exchangeVertexServiceAccountToken(ctx context.Context, key *vertexServiceAc
 	}
 	return parsed.AccessToken, ttl, nil
 }
-
-func buildVertexGeminiURL(projectID, location, model, action string, stream bool) (string, error) {
-	projectID = strings.TrimSpace(projectID)
-	location = strings.TrimSpace(location)
-	model = strings.TrimSpace(model)
-	action = strings.TrimSpace(action)
-	if projectID == "" {
-		return "", errors.New("vertex project_id is required")
-	}
-	if location == "" {
-		location = vertexDefaultLocation
-	}
-	if !vertexLocationPattern.MatchString(location) {
-		return "", fmt.Errorf("invalid vertex location: %s", location)
-	}
-	if model == "" {
-		return "", errors.New("vertex model is required")
-	}
-	switch action {
-	case "generateContent", "streamGenerateContent", "countTokens":
-	default:
-		return "", fmt.Errorf("unsupported vertex gemini action: %s", action)
-	}
-	host := fmt.Sprintf("%s-aiplatform.googleapis.com", location)
-	if location == "global" {
-		host = "aiplatform.googleapis.com"
-	}
-	u := fmt.Sprintf(
-		"https://%s/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
-		host,
-		url.PathEscape(projectID),
-		url.PathEscape(location),
-		url.PathEscape(model),
-		action,
-	)
-	if stream {
-		u += "?alt=sse"
-	}
-	return u, nil
-}
-
 func buildVertexAnthropicURL(projectID, location, model string, stream bool) (string, error) {
 	projectID = strings.TrimSpace(projectID)
 	location = strings.TrimSpace(location)

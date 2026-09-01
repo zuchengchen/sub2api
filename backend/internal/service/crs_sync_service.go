@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,7 +23,6 @@ type CRSSyncService struct {
 	proxyRepo          ProxyRepository
 	oauthService       *OAuthService
 	openaiOAuthService *OpenAIOAuthService
-	geminiOAuthService *GeminiOAuthService
 	cfg                *config.Config
 }
 
@@ -33,7 +31,6 @@ func NewCRSSyncService(
 	proxyRepo ProxyRepository,
 	oauthService *OAuthService,
 	openaiOAuthService *OpenAIOAuthService,
-	geminiOAuthService *GeminiOAuthService,
 	cfg *config.Config,
 ) *CRSSyncService {
 	return &CRSSyncService{
@@ -41,7 +38,6 @@ func NewCRSSyncService(
 		proxyRepo:          proxyRepo,
 		oauthService:       oauthService,
 		openaiOAuthService: openaiOAuthService,
-		geminiOAuthService: geminiOAuthService,
 		cfg:                cfg,
 	}
 }
@@ -49,7 +45,7 @@ func NewCRSSyncService(
 // guardCRSShadowParentInvariant 守住「有 spark 影子的母账号」不变量(与 AdminService.UpdateAccount 一致):
 // 影子读透母账号凭据,母账号必须**始终是 OpenAI OAuth**。CRS 同步按全局 crs_account_id 匹配既有账号
 // (GetByCRSAccountID 已排除影子、但能命中母账号),各平台分支会重写 Platform/Type;若 CRS ID 跨 kind/平台
-// 碰撞,非 OpenAI 分支会把母账号改成 Anthropic/Gemini 或 api_key→影子 resolveCredentialAccount 必崩(外审第9轮,
+// 碰撞,非 OpenAI 分支会把母账号改成 Anthropic 或 api_key→影子 resolveCredentialAccount 必崩(外审第9轮,
 // 收紧第8轮仅查 Type 的版本:Claude OAuth 把 Type 保持 OAuth 但 Platform 改成 Anthropic 能绕过旧守卫)。
 // 故任何会把母账号目标结果改离 OpenAI OAuth 的 CRS 更新,在其有影子时一律拒绝(须先删影子);返回非 nil
 // 表示该账号更新应被跳过(调用方标记 failed)。
@@ -113,8 +109,6 @@ type crsExportResponse struct {
 		ClaudeConsoleAccounts   []crsConsoleAccount         `json:"claudeConsoleAccounts"`
 		OpenAIOAuthAccounts     []crsOpenAIOAuthAccount     `json:"openaiOAuthAccounts"`
 		OpenAIResponsesAccounts []crsOpenAIResponsesAccount `json:"openaiResponsesAccounts"`
-		GeminiOAuthAccounts     []crsGeminiOAuthAccount     `json:"geminiOAuthAccounts"`
-		GeminiAPIKeyAccounts    []crsGeminiAPIKeyAccount    `json:"geminiApiKeyAccounts"`
 	} `json:"data"`
 }
 
@@ -188,37 +182,6 @@ type crsOpenAIOAuthAccount struct {
 	Extra       map[string]any `json:"extra"`
 }
 
-type crsGeminiOAuthAccount struct {
-	Kind        string         `json:"kind"`
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Platform    string         `json:"platform"`
-	AuthType    string         `json:"authType"` // oauth
-	IsActive    bool           `json:"isActive"`
-	Schedulable bool           `json:"schedulable"`
-	Priority    int            `json:"priority"`
-	Status      string         `json:"status"`
-	Proxy       *crsProxy      `json:"proxy"`
-	Credentials map[string]any `json:"credentials"`
-	Extra       map[string]any `json:"extra"`
-}
-
-type crsGeminiAPIKeyAccount struct {
-	Kind        string         `json:"kind"`
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Platform    string         `json:"platform"`
-	IsActive    bool           `json:"isActive"`
-	Schedulable bool           `json:"schedulable"`
-	Priority    int            `json:"priority"`
-	Status      string         `json:"status"`
-	Proxy       *crsProxy      `json:"proxy"`
-	Credentials map[string]any `json:"credentials"`
-	Extra       map[string]any `json:"extra"`
-}
-
 // fetchCRSExport validates the connection parameters, authenticates with CRS,
 // and returns the exported accounts. Shared by SyncFromCRS and PreviewFromCRS.
 func (s *CRSSyncService) fetchCRSExport(ctx context.Context, baseURL, username, password string) (*crsExportResponse, error) {
@@ -272,7 +235,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		Items: make(
 			[]SyncFromCRSItemResult,
 			0,
-			len(exported.Data.ClaudeAccounts)+len(exported.Data.ClaudeConsoleAccounts)+len(exported.Data.OpenAIOAuthAccounts)+len(exported.Data.OpenAIResponsesAccounts)+len(exported.Data.GeminiOAuthAccounts)+len(exported.Data.GeminiAPIKeyAccounts),
+			len(exported.Data.ClaudeAccounts)+len(exported.Data.ClaudeConsoleAccounts)+len(exported.Data.OpenAIOAuthAccounts)+len(exported.Data.OpenAIResponsesAccounts),
 		),
 	}
 
@@ -881,265 +844,6 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		result.Items = append(result.Items, item)
 	}
 
-	// Gemini OAuth -> sub2api gemini oauth
-	for _, src := range exported.Data.GeminiOAuthAccounts {
-		item := SyncFromCRSItemResult{
-			CRSAccountID: src.ID,
-			Kind:         src.Kind,
-			Name:         src.Name,
-		}
-
-		refreshToken, _ := src.Credentials["refresh_token"].(string)
-		if strings.TrimSpace(refreshToken) == "" {
-			item.Action = "failed"
-			item.Error = "missing refresh_token"
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		proxyID, err := s.mapOrCreateProxy(ctx, input.SyncProxies, &proxies, src.Proxy, fmt.Sprintf("crs-%s", src.Name))
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		credentials := sanitizeCredentialsMap(src.Credentials)
-		if v, ok := credentials["token_type"].(string); !ok || strings.TrimSpace(v) == "" {
-			credentials["token_type"] = "Bearer"
-		}
-		// Convert expires_at from RFC3339 to Unix seconds string (recommended to keep consistent with GetCredential())
-		if expiresAtStr, ok := credentials["expires_at"].(string); ok && strings.TrimSpace(expiresAtStr) != "" {
-			if t, err := time.Parse(time.RFC3339, expiresAtStr); err == nil {
-				credentials["expires_at"] = strconv.FormatInt(t.Unix(), 10)
-			}
-		}
-
-		extra := make(map[string]any)
-		if src.Extra != nil {
-			for k, v := range src.Extra {
-				extra[k] = v
-			}
-		}
-		extra["crs_account_id"] = src.ID
-		extra["crs_kind"] = src.Kind
-		extra["crs_synced_at"] = now
-
-		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-		if existing != nil {
-			extra = mergeMap(existing.Extra, extra)
-			credentials = mergeMap(existing.Credentials, credentials)
-		}
-		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformGemini, AccountTypeOAuth, credentials, extra)
-
-		if existing == nil {
-			if !shouldCreateAccount(src.ID, selectedSet) {
-				item.Action = "skipped"
-				item.Error = "not selected"
-				result.Skipped++
-				result.Items = append(result.Items, item)
-				continue
-			}
-			account := &Account{
-				Name:        defaultName(src.Name, src.ID),
-				Platform:    PlatformGemini,
-				Type:        AccountTypeOAuth,
-				Credentials: credentials,
-				Extra:       extra,
-				ProxyID:     proxyID,
-				Concurrency: 3,
-				Priority:    clampPriority(src.Priority),
-				Status:      mapCRSStatus(src.IsActive, src.Status),
-				Schedulable: src.Schedulable,
-			}
-			if err := s.accountRepo.Create(ctx, account); err != nil {
-				item.Action = "failed"
-				item.Error = "create failed: " + err.Error()
-				result.Failed++
-				result.Items = append(result.Items, item)
-				continue
-			}
-			if refreshedCreds := s.refreshOAuthToken(ctx, account); refreshedCreds != nil {
-				_ = persistAccountCredentials(ctx, s.accountRepo, account, refreshedCreds)
-			}
-			item.Action = "created"
-			result.Created++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		// 母账号守卫(外审第9轮):CRS ID 跨平台碰撞时,本(Gemini OAuth)分支不得改坏有 spark 影子的 OpenAI 母账号。
-		if gerr := guardCRSShadowParentInvariant(ctx, s.accountRepo, existing, PlatformGemini, AccountTypeOAuth); gerr != nil {
-			item.Action = "failed"
-			item.Error = gerr.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		existing.Extra = extra
-		existing.Name = defaultName(src.Name, src.ID)
-		existing.Platform = PlatformGemini
-		existing.Type = AccountTypeOAuth
-		existing.Credentials = credentials
-		if proxyID != nil {
-			existing.ProxyID = proxyID
-		}
-		existing.Concurrency = 3
-		existing.Priority = clampPriority(src.Priority)
-		existing.Status = mapCRSStatus(src.IsActive, src.Status)
-		existing.Schedulable = src.Schedulable
-
-		if err := s.accountRepo.Update(ctx, existing); err != nil {
-			item.Action = "failed"
-			item.Error = "update failed: " + err.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		if refreshedCreds := s.refreshOAuthToken(ctx, existing); refreshedCreds != nil {
-			_ = persistAccountCredentials(ctx, s.accountRepo, existing, refreshedCreds)
-		}
-
-		item.Action = "updated"
-		result.Updated++
-		result.Items = append(result.Items, item)
-	}
-
-	// Gemini API Key -> sub2api gemini apikey
-	for _, src := range exported.Data.GeminiAPIKeyAccounts {
-		item := SyncFromCRSItemResult{
-			CRSAccountID: src.ID,
-			Kind:         src.Kind,
-			Name:         src.Name,
-		}
-
-		apiKey, _ := src.Credentials["api_key"].(string)
-		if strings.TrimSpace(apiKey) == "" {
-			item.Action = "failed"
-			item.Error = "missing api_key"
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		proxyID, err := s.mapOrCreateProxy(ctx, input.SyncProxies, &proxies, src.Proxy, fmt.Sprintf("crs-%s", src.Name))
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		credentials := sanitizeCredentialsMap(src.Credentials)
-		if baseURL, ok := credentials["base_url"].(string); !ok || strings.TrimSpace(baseURL) == "" {
-			credentials["base_url"] = "https://generativelanguage.googleapis.com"
-		}
-
-		extra := make(map[string]any)
-		if src.Extra != nil {
-			for k, v := range src.Extra {
-				extra[k] = v
-			}
-		}
-		extra["crs_account_id"] = src.ID
-		extra["crs_kind"] = src.Kind
-		extra["crs_synced_at"] = now
-
-		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-		if existing != nil {
-			extra = mergeMap(existing.Extra, extra)
-			credentials = mergeMap(existing.Credentials, credentials)
-		}
-		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformGemini, AccountTypeAPIKey, credentials, extra)
-
-		if existing == nil {
-			if !shouldCreateAccount(src.ID, selectedSet) {
-				item.Action = "skipped"
-				item.Error = "not selected"
-				result.Skipped++
-				result.Items = append(result.Items, item)
-				continue
-			}
-			account := &Account{
-				Name:        defaultName(src.Name, src.ID),
-				Platform:    PlatformGemini,
-				Type:        AccountTypeAPIKey,
-				Credentials: credentials,
-				Extra:       extra,
-				ProxyID:     proxyID,
-				Concurrency: 3,
-				Priority:    clampPriority(src.Priority),
-				Status:      mapCRSStatus(src.IsActive, src.Status),
-				Schedulable: src.Schedulable,
-			}
-			if err := s.accountRepo.Create(ctx, account); err != nil {
-				item.Action = "failed"
-				item.Error = "create failed: " + err.Error()
-				result.Failed++
-				result.Items = append(result.Items, item)
-				continue
-			}
-			item.Action = "created"
-			result.Created++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		// 母账号守卫(外审第9轮):CRS ID 跨平台碰撞时,本(Gemini APIKey)分支不得改坏有 spark 影子的 OpenAI 母账号。
-		if gerr := guardCRSShadowParentInvariant(ctx, s.accountRepo, existing, PlatformGemini, AccountTypeAPIKey); gerr != nil {
-			item.Action = "failed"
-			item.Error = gerr.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		existing.Extra = extra
-		existing.Name = defaultName(src.Name, src.ID)
-		existing.Platform = PlatformGemini
-		existing.Type = AccountTypeAPIKey
-		existing.Credentials = credentials
-		if proxyID != nil {
-			existing.ProxyID = proxyID
-		}
-		existing.Concurrency = 3
-		existing.Priority = clampPriority(src.Priority)
-		existing.Status = mapCRSStatus(src.IsActive, src.Status)
-		existing.Schedulable = src.Schedulable
-
-		if err := s.accountRepo.Update(ctx, existing); err != nil {
-			item.Action = "failed"
-			item.Error = "update failed: " + err.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		item.Action = "updated"
-		result.Updated++
-		result.Items = append(result.Items, item)
-	}
-
 	return result, nil
 }
 
@@ -1461,21 +1165,6 @@ func (s *CRSSyncService) refreshOAuthToken(ctx context.Context, account *Account
 			}
 			newCredentials = NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
 		}
-	case PlatformGemini:
-		if s.geminiOAuthService == nil {
-			return nil
-		}
-		tokenInfo, refreshErr := s.geminiOAuthService.RefreshAccountToken(ctx, account)
-		if refreshErr != nil {
-			err = refreshErr
-		} else {
-			newCredentials = s.geminiOAuthService.BuildAccountCredentials(tokenInfo)
-			for k, v := range account.Credentials {
-				if _, exists := newCredentials[k]; !exists {
-					newCredentials[k] = v
-				}
-			}
-		}
 	default:
 		return nil
 	}
@@ -1576,12 +1265,6 @@ func (s *CRSSyncService) PreviewFromCRS(ctx context.Context, input SyncFromCRSIn
 	}
 	for _, src := range exported.Data.OpenAIResponsesAccounts {
 		classify(src.ID, src.Kind, src.Name, PlatformOpenAI, AccountTypeAPIKey)
-	}
-	for _, src := range exported.Data.GeminiOAuthAccounts {
-		classify(src.ID, src.Kind, src.Name, PlatformGemini, AccountTypeOAuth)
-	}
-	for _, src := range exported.Data.GeminiAPIKeyAccounts {
-		classify(src.ID, src.Kind, src.Name, PlatformGemini, AccountTypeAPIKey)
 	}
 
 	return result, nil

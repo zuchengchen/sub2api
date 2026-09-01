@@ -15,7 +15,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
@@ -252,21 +251,12 @@ func (a *Account) IsOAuth() bool {
 
 // IsPrivacySet 检查账号的 privacy 是否已成功设置。
 // OpenAI: privacy_mode == "training_off"
-// Antigravity: privacy_mode == "privacy_set"
 // 其他平台: 无 privacy 概念，始终返回 true
 func (a *Account) IsPrivacySet() bool {
-	switch a.Platform {
-	case PlatformOpenAI:
+	if a.Platform == PlatformOpenAI {
 		return a.getExtraString("privacy_mode") == PrivacyModeTrainingOff
-	case PlatformAntigravity:
-		return a.getExtraString("privacy_mode") == AntigravityPrivacySet
-	default:
-		return true
 	}
-}
-
-func (a *Account) IsGemini() bool {
-	return a.Platform == PlatformGemini
+	return true
 }
 
 func (a *Account) IsGrok() bool {
@@ -301,39 +291,6 @@ func (a *Account) IsCNProvider() bool {
 func (a *Account) IsOpenAICompatible() bool {
 	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok ||
 		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek)
-}
-
-func (a *Account) GeminiOAuthType() string {
-	if a.Platform != PlatformGemini || a.Type != AccountTypeOAuth {
-		return ""
-	}
-	oauthType := strings.TrimSpace(a.GetCredential("oauth_type"))
-	if oauthType == "" && strings.TrimSpace(a.GetCredential("project_id")) != "" {
-		return "code_assist"
-	}
-	return oauthType
-}
-
-func (a *Account) GeminiTierID() string {
-	tierID := strings.TrimSpace(a.GetCredential("tier_id"))
-	return tierID
-}
-
-func (a *Account) IsGeminiCodeAssist() bool {
-	if a.Platform != PlatformGemini || a.Type != AccountTypeOAuth {
-		return false
-	}
-	oauthType := a.GeminiOAuthType()
-	if oauthType == "" {
-		return strings.TrimSpace(a.GetCredential("project_id")) != ""
-	}
-	return oauthType == "code_assist"
-}
-
-// IsGeminiGoogleOne reports whether this account uses the legacy consumer
-// Gemini CLI / Code Assist OAuth channel.
-func (a *Account) IsGeminiGoogleOne() bool {
-	return a.Platform == PlatformGemini && a.Type == AccountTypeOAuth && a.GeminiOAuthType() == "google_one"
 }
 
 func (a *Account) CanGetUsage() bool {
@@ -626,10 +583,6 @@ func (a *Account) GetModelMapping() map[string]string {
 
 func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]string {
 	if a.Credentials == nil {
-		// Antigravity 平台使用默认映射
-		if a.Platform == domain.PlatformAntigravity {
-			return domain.DefaultAntigravityModelMapping
-		}
 		if a.Platform == domain.PlatformGrok {
 			return xai.DefaultModelMapping()
 		}
@@ -637,13 +590,6 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return nil
 	}
 	if len(rawMapping) == 0 {
-		if a.IsGeminiGoogleOne() {
-			return geminicli.GoogleOneModelMapping()
-		}
-		// Antigravity 平台使用默认映射
-		if a.Platform == domain.PlatformAntigravity {
-			return domain.DefaultAntigravityModelMapping
-		}
 		if a.Platform == domain.PlatformGrok {
 			return xai.DefaultModelMapping()
 		}
@@ -657,29 +603,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		}
 	}
 	if len(result) > 0 {
-		if a.Platform == domain.PlatformAntigravity {
-			ensureAntigravityDefaultPassthroughs(result, []string{
-				"gemini-3-flash",
-				"gemini-3.1-pro-high",
-				"gemini-3.1-pro-low",
-				"gemini-3.6-flash",
-				"gemini-3.6-flash-high",
-				"gemini-3.6-flash-low",
-				"gemini-3.6-flash-medium",
-				"gemini-3.6-flash-tiered",
-			})
-			applyAntigravityGemini31ProAliases(result)
-		}
 		return result
 	}
 
-	// Antigravity 平台使用默认映射
-	if a.IsGeminiGoogleOne() {
-		return geminicli.GoogleOneModelMapping()
-	}
-	if a.Platform == domain.PlatformAntigravity {
-		return domain.DefaultAntigravityModelMapping
-	}
 	if a.Platform == domain.PlatformGrok {
 		return xai.DefaultModelMapping()
 	}
@@ -715,96 +641,6 @@ func modelMappingSignature(rawMapping map[string]any) uint64 {
 		_, _ = h.Write([]byte{0xff})
 	}
 	return h.Sum64()
-}
-
-func ensureAntigravityDefaultPassthrough(mapping map[string]string, model string) {
-	if mapping == nil || model == "" {
-		return
-	}
-	if _, exists := mapping[model]; exists {
-		return
-	}
-	for pattern := range mapping {
-		if matchWildcard(pattern, model) {
-			return
-		}
-	}
-	mapping[model] = model
-}
-
-func ensureAntigravityDefaultPassthroughs(mapping map[string]string, models []string) {
-	for _, model := range models {
-		ensureAntigravityDefaultPassthrough(mapping, model)
-	}
-}
-
-func applyAntigravityGemini31ProAliases(mapping map[string]string) {
-	target := strings.TrimSpace(mapping[domain.AntigravityGemini31ProAgentModel])
-	if target == "" {
-		return
-	}
-
-	aliases := []struct {
-		model         string
-		legacyTargets map[string]struct{}
-	}{
-		{
-			model: "gemini-3.1-pro",
-			legacyTargets: map[string]struct{}{
-				"gemini-3.1-pro": {},
-			},
-		},
-		{
-			model: "gemini-3.1-pro-high",
-			legacyTargets: map[string]struct{}{
-				"gemini-3.1-pro-high": {},
-			},
-		},
-		{
-			model: "gemini-3.1-pro-preview",
-			legacyTargets: map[string]struct{}{
-				"gemini-3.1-pro-preview": {},
-				"gemini-3.1-pro-high":    {},
-			},
-		},
-	}
-
-	for _, alias := range aliases {
-		current, exists := mapping[alias.model]
-		if exists {
-			if _, legacy := alias.legacyTargets[current]; legacy {
-				mapping[alias.model] = target
-			}
-			continue
-		}
-		if mappingHasWildcardForModel(mapping, alias.model) {
-			continue
-		}
-		mapping[alias.model] = target
-	}
-}
-
-func mappingHasWildcardForModel(mapping map[string]string, model string) bool {
-	for pattern := range mapping {
-		if matchWildcard(pattern, model) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeRequestedModelForLookup(platform, requestedModel string) string {
-	trimmed := strings.TrimSpace(requestedModel)
-	if trimmed == "" {
-		return ""
-	}
-	if platform != PlatformGemini && platform != PlatformAntigravity {
-		return trimmed
-	}
-	if trimmed == "gemini-3.1-pro-preview-customtools" {
-		return "gemini-3.1-pro-preview"
-	}
-	return trimmed
 }
 
 func mappingSupportsRequestedModel(mapping map[string]string, requestedModel string) bool {
@@ -855,11 +691,7 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 		}
 		return true // 无映射 = 允许所有
 	}
-	if mappingSupportsRequestedModel(mapping, requestedModel) {
-		return true
-	}
-	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
-	return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized)
+	return mappingSupportsRequestedModel(mapping, requestedModel)
 }
 
 // GetMappedModel 获取映射后的模型名（支持通配符，最长优先匹配）
@@ -878,12 +710,6 @@ func (a *Account) ResolveMappedModel(requestedModel string) (mappedModel string,
 	}
 	if mappedModel, matched := resolveRequestedModelInMapping(mapping, requestedModel); matched {
 		return mappedModel, true
-	}
-	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
-	if normalized != requestedModel {
-		if mappedModel, matched := resolveRequestedModelInMapping(mapping, normalized); matched {
-			return mappedModel, true
-		}
 	}
 	return requestedModel, false
 }
@@ -967,22 +793,6 @@ func (a *Account) GetBaseURL() string {
 	if baseURL == "" {
 		return "https://api.anthropic.com"
 	}
-	if a.Platform == PlatformAntigravity {
-		return strings.TrimRight(baseURL, "/") + "/antigravity"
-	}
-	return baseURL
-}
-
-// GetGeminiBaseURL 返回 Gemini 兼容端点的 base URL。
-// Antigravity 平台的 APIKey 账号自动拼接 /antigravity。
-func (a *Account) GetGeminiBaseURL(defaultBaseURL string) string {
-	baseURL := strings.TrimSpace(a.GetCredential("base_url"))
-	if baseURL == "" {
-		return defaultBaseURL
-	}
-	if a.Platform == PlatformAntigravity && a.Type == AccountTypeAPIKey {
-		return strings.TrimRight(baseURL, "/") + "/antigravity"
-	}
 	return baseURL
 }
 
@@ -1014,20 +824,14 @@ func (a *Account) GetClaudeUserID() string {
 	return ""
 }
 
-// matchAntigravityWildcard 通配符匹配（仅支持末尾 *）
+// matchWildcard 通用通配符匹配（仅支持末尾 *）
 // 用于 model_mapping 的通配符匹配
-func matchAntigravityWildcard(pattern, str string) bool {
+func matchWildcard(pattern, str string) bool {
 	if strings.HasSuffix(pattern, "*") {
 		prefix := pattern[:len(pattern)-1]
 		return strings.HasPrefix(str, prefix)
 	}
 	return pattern == str
-}
-
-// matchWildcard 通用通配符匹配（仅支持末尾 *）
-// 复用 Antigravity 的通配符逻辑，供其他平台使用
-func matchWildcard(pattern, str string) bool {
-	return matchAntigravityWildcard(pattern, str)
 }
 
 func matchWildcardMappingResult(mapping map[string]string, requestedModel string) (string, bool) {
@@ -1994,39 +1798,6 @@ func (a *Account) IsOpenAITokenExpired() bool {
 		return false
 	}
 	return time.Now().Add(60 * time.Second).After(*expiresAt)
-}
-
-// IsMixedSchedulingEnabled 检查 antigravity 账户是否启用混合调度
-// 启用后可参与 anthropic/gemini 分组的账户调度
-func (a *Account) IsMixedSchedulingEnabled() bool {
-	if a.Platform != PlatformAntigravity {
-		return false
-	}
-	if a.Extra == nil {
-		return false
-	}
-	if v, ok := a.Extra["mixed_scheduling"]; ok {
-		if enabled, ok := v.(bool); ok {
-			return enabled
-		}
-	}
-	return false
-}
-
-// IsOveragesEnabled 检查 Antigravity 账号是否启用 AI Credits 超量请求。
-func (a *Account) IsOveragesEnabled() bool {
-	if a.Platform != PlatformAntigravity {
-		return false
-	}
-	if a.Extra == nil {
-		return false
-	}
-	if v, ok := a.Extra["allow_overages"]; ok {
-		if enabled, ok := v.(bool); ok {
-			return enabled
-		}
-	}
-	return false
 }
 
 // IsOpenAIPassthroughEnabled 返回 OpenAI 账号是否启用"自动透传（仅替换认证）"。

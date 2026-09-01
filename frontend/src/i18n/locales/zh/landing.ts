@@ -1,8 +1,4 @@
 export default {
-  batchImageGuide: {
-    title: '图片批量生成',
-    description: '一次提交多条提示词，任务完成后可统一下载图片结果'
-  },
   // Home Page
   home: {
     viewOnGithub: '在 GitHub 上查看',
@@ -16,7 +12,7 @@ export default {
     goToDashboard: '进入控制台',
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
-    heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',
+    heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT 等主流 AI 服务',
     tags: {
       subscriptionToApi: '订阅转 API',
       stickySession: '会话保持',
@@ -99,8 +95,6 @@ export default {
       supported: '已支持',
       soon: '即将推出',
       claude: 'Claude',
-      gemini: 'Gemini',
-      antigravity: 'Antigravity',
       more: '更多'
     },
     // CTA 区块

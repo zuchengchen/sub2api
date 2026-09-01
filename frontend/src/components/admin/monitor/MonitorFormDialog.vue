@@ -21,8 +21,7 @@
             type="button"
             :data-testid="`monitor-check-mode-${opt.value}`"
             :aria-pressed="form.check_mode === opt.value"
-            :disabled="opt.disabled"
-            class="rounded-lg border-2 px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            class="rounded-lg border-2 px-3 py-2 text-left transition-colors"
             :class="checkModeButtonClass(opt.value)"
             @click="selectCheckMode(opt.value)"
           >
@@ -263,9 +262,7 @@ import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
 import {
   PROVIDER_OPENAI,
   PROVIDER_ANTHROPIC,
-  PROVIDER_GEMINI,
   PROVIDER_GROK,
-  PROVIDER_ANTIGRAVITY,
   PROVIDER_KIMI,
   PROVIDER_ZHIPU,
   PROVIDER_DEEPSEEK,
@@ -467,9 +464,7 @@ interface ProviderOption {
 const providerOptions = computed<ProviderOption[]>(() => [
   { value: PROVIDER_ANTHROPIC, label: t('monitorCommon.providers.anthropic') },
   { value: PROVIDER_OPENAI, label: t('monitorCommon.providers.openai') },
-  { value: PROVIDER_GEMINI, label: t('monitorCommon.providers.gemini') },
   { value: PROVIDER_GROK, label: t('monitorCommon.providers.grok') },
-  { value: PROVIDER_ANTIGRAVITY, label: t('monitorCommon.providers.antigravity') },
   { value: PROVIDER_KIMI, label: t('monitorCommon.providers.kimi') },
   { value: PROVIDER_ZHIPU, label: t('monitorCommon.providers.zhipu') },
   { value: PROVIDER_DEEPSEEK, label: t('monitorCommon.providers.deepseek') },
@@ -486,7 +481,6 @@ interface CheckModeOption {
   value: CheckMode
   label: string
   hint: string
-  disabled: boolean
 }
 
 const checkModeOptions = computed<CheckModeOption[]>(() => [
@@ -494,21 +488,16 @@ const checkModeOptions = computed<CheckModeOption[]>(() => [
     value: CHECK_MODE_PROBE,
     label: t('admin.channelMonitor.form.checkModeProbe'),
     hint: t('admin.channelMonitor.form.checkModeProbeHint'),
-    // antigravity 无探活 adapter，仅配额模式。
-    disabled: form.provider === PROVIDER_ANTIGRAVITY,
   },
   {
     value: CHECK_MODE_QUOTA,
     label: t('admin.channelMonitor.form.checkModeQuota'),
     hint: t('admin.channelMonitor.form.checkModeQuotaHint'),
-    disabled: false,
   },
   {
     value: CHECK_MODE_QUOTA_PROBE,
     label: t('admin.channelMonitor.form.checkModeQuotaProbe'),
     hint: t('admin.channelMonitor.form.checkModeQuotaProbeHint'),
-    // antigravity 无探活 adapter，只支持配额模式。
-    disabled: form.provider === PROVIDER_ANTIGRAVITY,
   },
 ])
 
@@ -521,7 +510,6 @@ function checkModeButtonClass(mode: CheckMode): string {
 }
 
 function selectCheckMode(mode: CheckMode) {
-  if (checkModeOptions.value.find((opt) => opt.value === mode)?.disabled) return
   form.check_mode = mode
   if (!usesQuotaMode.value) form.account_id = null
 }
@@ -671,18 +659,6 @@ function selectProvider(provider: Provider) {
   form.account_id = null
   pinnedAccount.value = null
   accountHydrationFailed.value = false
-  // antigravity 仅配额模式：切到它时强制 quota（checkModeOptions 同步禁用其余项）。
-  if (provider === PROVIDER_ANTIGRAVITY && form.check_mode !== CHECK_MODE_QUOTA) {
-    form.check_mode = CHECK_MODE_QUOTA
-  }
-  // 对称还原：从 antigravity 切走时撤掉强制 quota，否则编辑存量 antigravity
-  // 监控换平台后仍停留在 quota（目标平台未必支持），update 会携带残留配置。
-  // 同步清掉 quota 占位模型（loadFromMonitor 回填的 'quota'），否则切回
-  // probe 后拿 'quota' 当探活模型（与离开 grok 清 DEFAULT_GROK_MODEL 同理）。
-  if (previousProvider === PROVIDER_ANTIGRAVITY && form.check_mode === CHECK_MODE_QUOTA) {
-    form.check_mode = CHECK_MODE_PROBE
-    if (form.primary_model.trim() === 'quota') form.primary_model = ''
-  }
   if (provider === PROVIDER_GROK) {
     if (!form.endpoint.trim()) form.endpoint = DEFAULT_GROK_ENDPOINT
     if (!form.primary_model.trim()) form.primary_model = DEFAULT_GROK_MODEL

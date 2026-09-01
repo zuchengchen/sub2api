@@ -41,7 +41,6 @@ func TestEveryGatewayPOSTRouteIsClassifiedForContentModerationCoverage(t *testin
 		"/images/edits":             {"openai_images.go", "grok_media.go"},
 		"/images/generations/async": {"image_task_handler.go"},
 		"/images/edits/async":       {"image_task_handler.go"},
-		"/images/batches":           {"batch_image_handler.go"},
 		"/videos":                   {"grok_media.go"},
 		"/videos/generations":       {"grok_media.go"},
 		"/videos/edits":             {"grok_media.go"},

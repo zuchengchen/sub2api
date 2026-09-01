@@ -377,18 +377,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.FallbackModelOpenAI != after.FallbackModelOpenAI {
 		changed = append(changed, "fallback_model_openai")
 	}
-	if before.FallbackModelGemini != after.FallbackModelGemini {
-		changed = append(changed, "fallback_model_gemini")
-	}
-	if before.FallbackModelAntigravity != after.FallbackModelAntigravity {
-		changed = append(changed, "fallback_model_antigravity")
-	}
-	if before.EnableIdentityPatch != after.EnableIdentityPatch {
-		changed = append(changed, "enable_identity_patch")
-	}
-	if before.IdentityPatchPrompt != after.IdentityPatchPrompt {
-		changed = append(changed, "identity_patch_prompt")
-	}
 	if before.OpsMonitoringEnabled != after.OpsMonitoringEnabled {
 		changed = append(changed, "ops_monitoring_enabled")
 	}
@@ -478,9 +466,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.EnableClientDatelineNormalization != after.EnableClientDatelineNormalization {
 		changed = append(changed, "enable_client_dateline_normalization")
-	}
-	if before.AntigravityUserAgentVersion != after.AntigravityUserAgentVersion {
-		changed = append(changed, "antigravity_user_agent_version")
 	}
 	if before.OpenAICodexUserAgent != after.OpenAICodexUserAgent {
 		changed = append(changed, "openai_codex_user_agent")

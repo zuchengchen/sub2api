@@ -20,13 +20,13 @@ import "time"
 //   - "7d-sonnet"  Claude 7 天 Sonnet 独立额度
 //   - "7d-fable"   Claude 7 天 Fable 独立额度
 //   - "weekly"     周窗口（Kimi/Zhipu coding plan）
-//   - "daily"      日窗口（Gemini 日配额 / Grok 日请求）
+//   - "daily"      日窗口（Grok 日请求）
 //   - "30d"        30 天窗口（Grok 月度）
-//   - "total"      无窗口语义的总量额度（Antigravity per-model 等）
+//   - "total"      无窗口语义的总量额度
 //
-// 同一 Window 可能出现多条（Gemini 多档日配额、Antigravity per-model、
-// Grok requests/tokens），用 Label 区分：Label 是机器 token（requests/tokens/
-// shared/pro/flash 或模型名），前端已知 token 走 i18n，未知原样展示。
+// 同一 Window 可能出现多条（如 Grok requests/tokens），用 Label 区分：
+// Label 是机器 token（requests/tokens/shared 或模型名），
+// 前端已知 token 走 i18n，未知原样展示。
 type MonitorQuotaTier struct {
 	Window      string  `json:"window"`
 	Label       string  `json:"label,omitempty"`

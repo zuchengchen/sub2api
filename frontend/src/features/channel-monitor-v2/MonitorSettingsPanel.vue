@@ -385,8 +385,6 @@ function platformLabel(value: string) {
       openai: 'OpenAI',
       grok: 'Grok',
       kiro: 'Kiro',
-      gemini: 'Gemini',
-      antigravity: 'Antigravity',
       composite: 'Composite',
     } as Record<string, string>
   )[value] || value

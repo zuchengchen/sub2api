@@ -531,7 +531,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'composite'
 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -567,11 +567,8 @@ export interface Group {
   long_context_pricing_enabled: boolean
   // 图片生成计费配置
   allow_image_generation: boolean
-  allow_batch_image_generation: boolean
   image_rate_independent: boolean
   image_rate_multiplier: number
-  batch_image_discount_multiplier: number
-  batch_image_hold_multiplier: number
   image_price_1k: number | null
   image_price_2k: number | null
   image_price_4k: number | null
@@ -612,7 +609,7 @@ export interface Group {
 
 export interface AdminGroup extends Group {
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
-  // 分组利润控制（openai/anthropic/gemini/grok/antigravity 分组可启用；margin/buffer 为小数存储）。
+  // 分组利润控制（openai/anthropic/grok 分组可启用；margin/buffer 为小数存储）。
   // 仅管理员可见：与 rate_multiplier 相乘即可反推上游成本上限，不得下放到 Group。
   profit_control_enabled: boolean
   profit_min_margin: number
@@ -621,12 +618,6 @@ export interface AdminGroup extends Group {
   // 模型路由配置（仅管理员可见，内部信息）
   model_routing: Record<string, number[]> | null
   model_routing_enabled: boolean
-
-  // MCP XML 协议注入（仅 antigravity 平台使用）
-  mcp_xml_inject: boolean
-
-  // 支持的模型系列（仅 antigravity 平台使用）
-  supported_model_scopes?: string[]
 
   // 分组下账号数量（仅管理员可见）
   account_count?: number
@@ -657,7 +648,6 @@ export type CompositeRouteEndpoint =
   | 'chat_completions'
   | 'embeddings'
   | 'images'
-  | 'gemini'
 
 export type CompositeRouteSource = 'route' | 'detector' | string
 
@@ -777,11 +767,8 @@ export interface CreateGroupRequest {
   long_context_pricing_enabled?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
-  allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
-  batch_image_discount_multiplier?: number
-  batch_image_hold_multiplier?: number
   image_price_1k?: number | null
   image_price_2k?: number | null
   image_price_4k?: number | null
@@ -807,8 +794,6 @@ export interface CreateGroupRequest {
   claude_code_only?: boolean
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
-  mcp_xml_inject?: boolean
-  supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   allow_messages_dispatch?: boolean
   allow_live?: boolean
@@ -839,11 +824,8 @@ export interface UpdateGroupRequest {
   long_context_pricing_enabled?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
-  allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
-  batch_image_discount_multiplier?: number
-  batch_image_hold_multiplier?: number
   image_price_1k?: number | null
   image_price_2k?: number | null
   image_price_4k?: number | null
@@ -869,8 +851,6 @@ export interface UpdateGroupRequest {
   claude_code_only?: boolean
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
-  mcp_xml_inject?: boolean
-  supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   allow_messages_dispatch?: boolean
   allow_live?: boolean
@@ -888,7 +868,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek'
+export type AccountPlatform = 'anthropic' | 'openai' | 'grok' | 'kimi' | 'zhipu' | 'deepseek'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -964,34 +944,6 @@ export interface ProxyQualityCheckResult {
   challenge_count: number
   checked_at: number
   items: ProxyQualityCheckItem[]
-}
-
-// Gemini credentials structure for OAuth and API Key authentication
-export interface GeminiCredentials {
-  // API Key authentication
-  api_key?: string
-
-  // OAuth authentication
-  access_token?: string
-  refresh_token?: string
-  oauth_type?: 'code_assist' | 'google_one' | 'ai_studio' | string
-  tier_id?:
-    | 'google_one_free'
-    | 'google_ai_pro'
-    | 'google_ai_ultra'
-    | 'gcp_standard'
-    | 'gcp_enterprise'
-    | 'aistudio_free'
-    | 'aistudio_paid'
-    | 'LEGACY'
-    | 'PRO'
-    | 'ULTRA'
-    | string
-  project_id?: string
-  token_type?: string
-  scope?: string
-  expires_at?: string
-  model_mapping?: Record<string, string>
 }
 
 export interface TempUnschedulableRule {
@@ -1141,7 +1093,6 @@ export interface Account {
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
-    antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
     upstream_billing_probe_enabled?: boolean
     upstream_billing_rate_sync_enabled?: boolean
     upstream_billing_probe?: UpstreamBillingProbeSnapshot
@@ -1292,12 +1243,6 @@ export interface UsageProgress {
   limit_requests?: number
 }
 
-// Antigravity 单个模型的配额信息
-export interface AntigravityModelQuota {
-  utilization: number // 使用率 0-100
-  reset_time: string  // 重置时间 ISO8601
-}
-
 export interface GrokQuotaWindow {
   limit?: number | null
   remaining?: number | null
@@ -1349,13 +1294,6 @@ export interface AccountUsageInfo {
   seven_day_sonnet: UsageProgress | null
   seven_day_fable?: UsageProgress | null
   thirty_day?: UsageProgress | null
-  gemini_shared_daily?: UsageProgress | null
-  gemini_pro_daily?: UsageProgress | null
-  gemini_flash_daily?: UsageProgress | null
-  gemini_shared_minute?: UsageProgress | null
-  gemini_pro_minute?: UsageProgress | null
-  gemini_flash_minute?: UsageProgress | null
-  antigravity_quota?: Record<string, AntigravityModelQuota> | null
   grok_request_quota?: GrokQuotaWindow | null
   grok_token_quota?: GrokQuotaWindow | null
   grok_retry_after_seconds?: number | null
@@ -1377,7 +1315,7 @@ export interface AccountUsageInfo {
     amount?: number
     minimum_balance?: number
   }> | null
-  // Antigravity 403 forbidden 状态
+  // 403 forbidden 状态
   is_forbidden?: boolean
   forbidden_reason?: string
   forbidden_type?: string   // "validation" | "violation" | "forbidden"

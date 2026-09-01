@@ -101,8 +101,6 @@ export default {
         anthropic: 'Anthropic',
         claude: 'Claude',
         openai: 'OpenAI',
-        gemini: 'Gemini',
-        antigravity: 'Antigravity',
         grok: 'Grok',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
@@ -158,18 +156,10 @@ export default {
         oauth: 'OAuth',
         chatgptOauth: 'ChatGPT OAuth',
         responsesApi: 'Responses API',
-        googleOauth: 'Google OAuth',
-        codeAssist: 'Code Assist',
-        antigravityOauth: 'Antigravity OAuth',
         grokOauth: 'Grok OAuth',
-        antigravityApikey: 'Connect via Base URL + API Key',
         upstream: 'Upstream',
         upstreamDesc: 'Connect via Base URL + API Key'
       },
-      antigravityProjectIdLabel: 'GCP Project ID (optional)',
-      antigravityProjectIdPlaceholder: 'your-gcp-project-id',
-      antigravityProjectIdHint:
-        'Antigravity standard-tier accounts that do not receive an automatic project_id need a user-owned GCP project.',
       accountSchedulingThresholdOverride: 'Account Auto-Pause Threshold Override',
       accountSchedulingThresholdOverrideHint:
         'Override the platform auto-pause threshold for this account only. Disable to use platform settings.',
@@ -321,8 +311,6 @@ export default {
       privacyTrainingOff: 'Training data sharing disabled',
       privacyCfBlocked: 'Blocked by Cloudflare, training may still be on',
       privacyFailed: 'Failed to disable training',
-      privacyAntigravitySet: 'Telemetry and marketing emails disabled',
-      privacyAntigravityFailed: 'Privacy setting failed',
       setPrivacy: 'Set Privacy',
       subscriptionAbnormal: 'Abnormal',
       subscriptionExpires: 'Expires',
@@ -534,7 +522,6 @@ export default {
       vertexLabel: 'Vertex',
       vertexDesc: 'Service Account',
       vertexAnthropicHint: 'Use a Google Cloud Service Account JSON to call Anthropic Claude via Vertex AI. It is recommended to configure model mapping to map client Claude model names to Vertex model IDs.',
-      vertexGeminiHint: 'Use a Google Cloud Service Account JSON to access Vertex AI Gemini. It is recommended to place Vertex accounts in a separate group to avoid mixing with AI Studio/Gemini OAuth on the same models.',
       vertexSaJsonLabel: 'Service Account JSON',
       vertexSaJsonLoaded: 'Service Account JSON loaded',
       vertexSaJsonDrop: 'Drop Service Account JSON here',
@@ -953,10 +940,6 @@ export default {
       expiresAtHint: 'Leave empty for no expiration',
       expiresAtTimezoneHint: 'Input is interpreted in your browser time zone ({timezone}).',
       higherPriorityFirst: 'Lower value means higher priority',
-      mixedScheduling: 'Use in /v1/messages',
-      mixedSchedulingHint: 'Enable to participate in Anthropic/Gemini group scheduling',
-      mixedSchedulingTooltip:
-        '!! WARNING !! Antigravity Claude and Anthropic Claude cannot be used in the same context. If you have both Anthropic and Antigravity accounts, enabling this option will cause frequent 400 errors. When enabled, please use the group feature to isolate Antigravity accounts from Anthropic accounts. Make sure you understand this before enabling!!',
       aiCreditsBalance: 'AI Credits',
       allowOverages: 'Allow Overages (AI Credits)',
       allowOveragesTooltip:
@@ -997,7 +980,7 @@ export default {
       // Upstream type
       upstream: {
         baseUrl: 'Upstream Base URL',
-        baseUrlHint: 'The address of the upstream Antigravity service, e.g., https://cloudcode-pa.googleapis.com',
+        baseUrlHint: 'The address of the upstream service, e.g., https://api.example.com',
         apiKey: 'Upstream API Key',
         apiKeyHint: 'API Key for the upstream service',
         pleaseEnterBaseUrl: 'Please enter upstream Base URL',
@@ -1185,237 +1168,12 @@ export default {
               'The selected proxy could not be found. Choose an available proxy and retry.'
           },
           oauthOnlyHint: 'Initial Grok support is OAuth subscription-backed Responses API text and reasoning traffic only.'
-        },
-        // Gemini specific
-	        gemini: {
-	          title: 'Gemini Account Authorization',
-	          followSteps: 'Follow these steps to authorize your Gemini account:',
-	          step1GenerateUrl: 'Generate the authorization URL',
-	          generateAuthUrl: 'Generate Auth URL',
-	          projectIdLabel: 'Project ID (optional)',
-	          projectIdPlaceholder: 'e.g. my-gcp-project or cloud-ai-companion-xxxxx',
-	          projectIdHint:
-	            'Leave empty to auto-detect after code exchange. If auto-detection fails, fill it in and re-generate the auth URL to try again.',
-	          howToGetProjectId: 'How to get',
-	          step2OpenUrl: 'Open the URL in your browser and complete authorization',
-	          openUrlDesc:
-	            'Open the authorization URL in a new tab, log in to your Google account and authorize.',
-	          step3EnterCode: 'Enter Authorization URL or Code',
-	          authCodeDesc:
-	            'After authorization, copy the callback URL (recommended) or just the code and paste it below.',
-	          authCode: 'Callback URL or Code',
-	          authCodePlaceholder:
-	            'Option 1 (recommended): Paste the callback URL\nOption 2: Paste only the code value',
-	          authCodeHint: 'The system will auto-extract code/state from the URL.',
-          redirectUri: 'Redirect URI',
-          redirectUriHint:
-            'This must be configured in your Google OAuth client and must match exactly.',
-          confirmRedirectUri:
-            'I have configured this Redirect URI in the Google OAuth client (must match exactly)',
-	          invalidRedirectUri: 'Redirect URI must be a valid http(s) URL',
-	          redirectUriNotConfirmed: 'Please confirm the Redirect URI is configured correctly',
-	          missingRedirectUri: 'Missing redirect URI',
-	          failedToGenerateUrl: 'Failed to generate Gemini auth URL',
-	          missingExchangeParams: 'Missing auth code, session ID, or state',
-	          failedToExchangeCode: 'Failed to exchange Gemini auth code',
-	          missingProjectId: 'GCP Project ID retrieval failed: Your Google account is not linked to an active GCP project. Please activate GCP and bind a credit card in Google Cloud Console, or manually enter the Project ID during authorization.',
-	          modelPassthrough: 'Gemini Model Passthrough',
-	          modelPassthroughDesc:
-	            'All model requests are forwarded directly to the Gemini API without model restrictions or mappings.',
-	          stateWarningTitle: 'Note',
-	          stateWarningDesc: 'Recommended: paste the full callback URL (includes code & state).',
-	          oauthTypeLabel: 'OAuth Type',
-          needsProjectId: 'Built-in OAuth (Code Assist)',
-          needsProjectIdDesc: 'Requires GCP project and Project ID',
-          noProjectIdNeeded: 'Custom OAuth (AI Studio)',
-          noProjectIdNeededDesc: 'Requires admin-configured OAuth client',
-	          aiStudioNotConfiguredShort: 'Not configured',
-	          aiStudioNotConfiguredTip:
-	            'AI Studio OAuth is not configured: set GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET and add Redirect URI: http://localhost:1455/auth/callback (Consent screen scopes must include https://www.googleapis.com/auth/generative-language.retriever)',
-	          aiStudioNotConfigured:
-	            'AI Studio OAuth is not configured: set GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET and add Redirect URI: http://localhost:1455/auth/callback'
-	        },
-        // Antigravity specific
-        antigravity: {
-          title: 'Antigravity Account Authorization',
-          followSteps: 'Follow these steps to authorize your Antigravity account:',
-          step1GenerateUrl: 'Generate the authorization URL',
-          generateAuthUrl: 'Generate Auth URL',
-          step2OpenUrl: 'Open the URL in your browser and complete authorization',
-          openUrlDesc: 'Open the authorization URL in a new tab, log in to your Google account and authorize.',
-          importantNotice:
-            'Important: The page may take a while to load after authorization. Please wait patiently. When the browser address bar shows http://localhost..., authorization is complete.',
-          step3EnterCode: 'Enter Authorization URL or Code',
-          authCodeDesc:
-            'After authorization, when the page URL becomes http://localhost:xxx/auth/callback?code=...:',
-          authCode: 'Authorization URL or Code',
-          authCodePlaceholder:
-            'Option 1: Copy the complete URL\n(http://localhost:xxx/auth/callback?code=...)\nOption 2: Copy only the code parameter value',
-                    authCodeHint: 'You can copy the entire URL or just the code parameter value, the system will auto-detect',
-                    failedToGenerateUrl: 'Failed to generate Antigravity auth URL',
-                    missingExchangeParams: 'Missing code, session ID, or state',
-                    failedToExchangeCode: 'Failed to exchange Antigravity auth code',
-                    // Refresh Token auth
-                    refreshTokenAuth: 'Manual RT',
-                    refreshTokenDesc: 'Enter your existing Antigravity Refresh Token. Supports batch input (one per line). The system will automatically validate and create accounts.',
-                    refreshTokenPlaceholder: 'Paste your Antigravity Refresh Token...\nSupports multiple tokens, one per line',
-                    validating: 'Validating...',
-                    validateAndCreate: 'Validate & Create',
-                    pleaseEnterRefreshToken: 'Please enter Refresh Token',
-                    failedToValidateRT: 'Failed to validate Refresh Token'
-                  }
-                },      // Gemini specific (platform-wide)
-      gemini: {
-        helpButton: 'Help',
-        helpDialog: {
-          title: 'Gemini Usage Guide',
-          apiKeySection: 'API Key Links'
-        },
-        modelPassthrough: 'Gemini Model Passthrough',
-        modelPassthroughDesc:
-          'All model requests are forwarded directly to the Gemini API without model restrictions or mappings.',
-        baseUrlHint: 'Leave default for official Gemini API',
-        apiKeyHint: 'Your Gemini API Key (starts with AIza)',
-        tier: {
-          label: 'Account Tier',
-          hint: 'Tip: The system will try to auto-detect the tier first; if auto-detection is unavailable or fails, your selected tier is used as a fallback (simulated quota).',
-          aiStudioHint:
-            'AI Studio quotas are per-model (Pro/Flash are limited independently). If billing is enabled, choose Pay-as-you-go.',
-          googleOne: {
-            free: 'Google One Free',
-            pro: 'Google One Pro',
-            ultra: 'Google One Ultra'
-          },
-          gcp: {
-            standard: 'GCP Standard',
-            enterprise: 'GCP Enterprise'
-          },
-          aiStudio: {
-            free: 'Google AI Free',
-            paid: 'Google AI Pay-as-you-go'
-          }
-        },
-        accountType: {
-          oauthTitle: 'OAuth (Gemini)',
-          oauthDesc: 'Authorize with your Google account and choose an OAuth type.',
-          apiKeyTitle: 'API Key (AI Studio)',
-          apiKeyDesc: 'Fastest setup. Use an AIza API key.',
-          apiKeyNote:
-            'Best for light testing. Free tier has strict rate limits and data may be used for training.',
-          apiKeyLink: 'Get API Key',
-          quotaLink: 'Quota guide'
-        },
-        oauthType: {
-          builtInTitle: 'Built-in OAuth (Gemini CLI / Code Assist)',
-          builtInDesc: 'Uses Google built-in client ID. No admin configuration required.',
-          builtInRequirement: 'Requires a GCP project and Project ID.',
-          googleOneDesc: 'Personal account with Google One subscription quota',
-          codeAssistDesc: 'Enterprise-grade, requires a GCP project',
-          codeAssistRequirement: 'Requires an active GCP project with billing enabled',
-          showAdvanced: 'Show advanced options (custom OAuth Client)',
-          hideAdvanced: 'Hide advanced options (custom OAuth Client)',
-          gcpProjectLink: 'Create project',
-          customTitle: 'Custom OAuth (AI Studio OAuth)',
-          customDesc: 'Uses admin-configured OAuth client for org management.',
-          customRequirement: 'Admin must configure Client ID and add you as a test user.',
-          badges: {
-            recommended: 'Recommended',
-            highConcurrency: 'High concurrency',
-            individuals: 'Recommended for individuals',
-            noGcp: 'No GCP required',
-            enterprise: 'Enterprise users',
-            noAdmin: 'No admin setup',
-            orgManaged: 'Org managed',
-            adminRequired: 'Admin required'
-          }
-        },
-        setupGuide: {
-          title: 'Gemini Setup Checklist',
-          checklistTitle: 'Checklist',
-          checklistItems: {
-            usIp: 'Use a US IP and ensure your account country is set to US.',
-            age: 'Account must be 18+.'
-          },
-          activationTitle: 'One-click Activation',
-          activationItems: {
-            geminiWeb: 'Activate Gemini Web to avoid User not initialized.',
-            gcpProject: 'Activate a GCP project and get the Project ID for Code Assist.'
-          },
-          links: {
-            countryCheck: 'Check country association',
-            countryChange: 'Change country association',
-            geminiWebActivation: 'Activate Gemini Web',
-            gcpProject: 'Open GCP Console'
-          }
-        },
-        quotaPolicy: {
-          title: 'Gemini Quota & Limit Policy (Reference)',
-          note: 'Note: Gemini does not provide an official quota inquiry API. The "Daily Quota" shown here is an estimate simulated by the system based on account tiers for scheduling reference only. Please refer to official Google errors for actual limits.',
-          columns: {
-            channel: 'Auth Channel',
-            account: 'Account Status',
-            limits: 'Limit Policy',
-            docs: 'Official Docs'
-          },
-          docs: {
-            codeAssist: 'Code Assist Quotas',
-            aiStudio: 'AI Studio Pricing',
-            vertex: 'Vertex AI Quotas'
-          },
-          simulatedNote: 'Simulated quota, for reference only',
-          rows: {
-            googleOne: {
-              channel: 'Google One OAuth (Individuals / Code Assist for Individuals)',
-              limitsFree: 'Shared pool: 1000 RPD / 60 RPM',
-              limitsPro: 'Shared pool: 1500 RPD / 120 RPM',
-              limitsUltra: 'Shared pool: 2000 RPD / 120 RPM'
-            },
-            gcp: {
-              channel: 'GCP Code Assist OAuth (Enterprise)',
-              limitsStandard: 'Shared pool: 1500 RPD / 120 RPM',
-              limitsEnterprise: 'Shared pool: 2000 RPD / 120 RPM'
-            },
-            cli: {
-              channel: 'Gemini CLI (Official Google Login / Code Assist)',
-              free: 'Free Google Account',
-              premium: 'Google One AI Premium',
-              limitsFree: 'RPD ~1000; RPM ~60 (soft)',
-              limitsPremium: 'RPD ~1500+; RPM ~60+ (priority queue)'
-            },
-            gcloud: {
-              channel: 'GCP Code Assist (gcloud auth)',
-              account: 'No Code Assist subscription',
-              limits: 'RPD ~1000; RPM ~60 (preview)'
-            },
-            aiStudio: {
-              channel: 'AI Studio API Key / OAuth',
-              free: 'No billing (free tier)',
-              paid: 'Billing enabled (pay-as-you-go)',
-              limitsFree: 'RPD 50; RPM 2 (Pro) / 15 (Flash)',
-              limitsPaid: 'RPD unlimited; RPM 1000 (Pro) / 2000 (Flash) (per model)'
-            },
-            customOAuth: {
-              channel: 'Custom OAuth Client (GCP)',
-              free: 'Project not billed',
-              paid: 'Project billed',
-              limitsFree: 'RPD 50; RPM 2 (project quota)',
-              limitsPaid: 'RPD unlimited; RPM 1000+ (project quota)'
-            }
-          }
-        },
-        rateLimit: {
-          ok: 'Not rate limited',
-          unlimited: 'Unlimited',
-          limited: 'Rate limited {time}',
-          now: 'now'
         }
       },
       // Re-Auth Modal
       reAuthorizeAccount: 'Re-Authorize Account',
       claudeCodeAccount: 'Claude Code Account',
       openaiAccount: 'OpenAI Account',
-      geminiAccount: 'Gemini Account',
-      antigravityAccount: 'Antigravity Account',
       grokAccount: 'Grok Account',
       inputMethod: 'Input Method',
       reAuthorizedSuccess: 'Account re-authorized successfully',
@@ -1500,11 +1258,6 @@ export default {
       usageWindow: {
         statsTitle: '5-Hour Window Usage Statistics',
         statsTitleDaily: 'Daily Usage Statistics',
-        geminiProDaily: 'Pro',
-        geminiFlashDaily: 'Flash',
-        gemini3Pro: 'G3P',
-        gemini3Flash: 'G3F',
-        gemini3Image: 'G31FI',
         claude: 'Claude',
         grokRequests: 'Req',
         grokTokens: 'Tok',
@@ -1570,8 +1323,6 @@ export default {
         personal: 'Personal',
         unlimited: 'Unlimited'
       },
-      ineligibleWarning:
-        'This account is not eligible for Antigravity, but API forwarding still works. Use at your own risk.',
       forbidden: 'Forbidden',
       forbiddenValidation: 'Verification Required',
       forbiddenViolation: 'Violation Ban',

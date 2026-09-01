@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -277,6 +278,17 @@ func sanitizeStreamError(err error) string {
 		}
 	}
 	return "upstream connection error"
+}
+
+// sensitiveQueryParamRegex 用于脱敏上游错误消息中的敏感 query 参数
+var sensitiveQueryParamRegex = regexp.MustCompile(`(?i)([?&](?:key|client_secret|access_token|refresh_token)=)[^&"\s]+`)
+
+// sanitizeUpstreamErrorMessage 脱敏上游错误消息中的凭据信息
+func sanitizeUpstreamErrorMessage(msg string) string {
+	if msg == "" {
+		return msg
+	}
+	return sensitiveQueryParamRegex.ReplaceAllString(msg, `$1***`)
 }
 
 // ExtractUpstreamErrorMessage 从上游响应体中提取错误消息

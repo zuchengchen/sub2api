@@ -123,8 +123,6 @@ const createGroup = (overrides: Partial<AdminGroup> = {}): AdminGroup => ({
   updated_at: '2026-07-01T00:00:00Z',
   model_routing: null,
   model_routing_enabled: false,
-  mcp_xml_inject: true,
-  supported_model_scopes: [],
   account_count: 3,
   active_account_count: 2,
   rate_limited_account_count: 1,

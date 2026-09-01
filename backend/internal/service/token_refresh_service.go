@@ -90,8 +90,6 @@ func NewTokenRefreshService(
 	accountRepo AccountRepository,
 	oauthService *OAuthService,
 	openaiOAuthService *OpenAIOAuthService,
-	geminiOAuthService *GeminiOAuthService,
-	antigravityOAuthService *AntigravityOAuthService,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
@@ -121,8 +119,6 @@ func NewTokenRefreshService(
 	openAIRefresher := NewOpenAITokenRefresher(openaiOAuthService, accountRepo)
 
 	claudeRefresher := NewClaudeTokenRefresher(oauthService)
-	geminiRefresher := NewGeminiTokenRefresher(geminiOAuthService)
-	agRefresher := NewAntigravityTokenRefresher(antigravityOAuthService)
 	var grokOAuthService *GrokOAuthService
 	if len(grokOAuthServices) > 0 {
 		grokOAuthService = grokOAuthServices[0]
@@ -134,8 +130,6 @@ func NewTokenRefreshService(
 	s.registrations = []tokenRefreshRegistration{
 		{platform: PlatformAnthropic, refresher: claudeRefresher, executor: claudeRefresher},
 		{platform: PlatformOpenAI, refresher: openAIRefresher, executor: openAIRefresher},
-		{platform: PlatformGemini, refresher: geminiRefresher, executor: geminiRefresher},
-		{platform: PlatformAntigravity, refresher: agRefresher, executor: agRefresher},
 		{platform: PlatformGrok, refresher: grokRefresher, executor: grokRefresher},
 	}
 
@@ -989,7 +983,6 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			if !isGrokOAuth {
 				s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			}
-			s.clearAntigravityForceTokenRefresh(ctx, account, "non_retryable")
 			persistentlyBlocked := false
 			var setErr error
 			if isGrokOAuth {
@@ -1158,22 +1151,6 @@ func (s *TokenRefreshService) retryBackoff(accountID int64, attempt int) time.Du
 
 // postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）
 func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *Account) {
-	s.clearAntigravityForceTokenRefresh(ctx, account, "success")
-
-	// Antigravity 账户：如果之前是因为缺少 project_id 而标记为 error，现在成功获取到了，清除错误状态
-	if account.Platform == PlatformAntigravity &&
-		account.Status == StatusError &&
-		strings.Contains(account.ErrorMessage, "missing_project_id:") {
-		if clearErr := s.accountRepo.ClearError(ctx, account.ID); clearErr != nil {
-			slog.Warn("token_refresh.clear_account_error_failed",
-				"account_id", account.ID,
-				"error", clearErr,
-			)
-		} else {
-			slog.Info("token_refresh.cleared_missing_project_id_error", "account_id", account.ID)
-			s.notifyAccountSchedulingBlockCleared(account.ID)
-		}
-	}
 	// 刷新成功后清除临时不可调度状态（处理 OAuth 401 恢复场景）
 	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
 		if clearErr := s.accountRepo.ClearTempUnschedulable(ctx, account.ID); clearErr != nil {
@@ -1198,8 +1175,6 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 	s.postRefreshStateSync(ctx, account)
 	// OpenAI OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则尝试关闭训练数据共享
 	s.ensureOpenAIPrivacy(ctx, account)
-	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
-	s.ensureAntigravityPrivacy(ctx, account)
 	// Grok: clear soft reauth flag after a successful credential refresh.
 	if account != nil && account.Platform == PlatformGrok && accountGrokNeedsReauth(account) {
 		clearGrokNeedsReauthExtra(ctx, s.accountRepo, account.ID)
@@ -1239,30 +1214,6 @@ func (s *TokenRefreshService) postRefreshStateSync(ctx context.Context, account 
 			slog.Debug("token_refresh.scheduler_cache_synced", "account_id", account.ID)
 		}
 	}
-}
-
-func (s *TokenRefreshService) clearAntigravityForceTokenRefresh(ctx context.Context, account *Account, outcome string) {
-	if s == nil || account == nil || !accountNeedsAntigravityForceTokenRefresh(account) {
-		return
-	}
-	updates := clearAntigravityForceTokenRefreshExtra()
-	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
-		slog.Warn("token_refresh.clear_antigravity_force_refresh_failed",
-			"account_id", account.ID,
-			"outcome", outcome,
-			"error", err,
-		)
-		return
-	}
-	if account.Extra != nil {
-		for k, v := range updates {
-			account.Extra[k] = v
-		}
-	}
-	slog.Info("token_refresh.cleared_antigravity_force_refresh",
-		"account_id", account.ID,
-		"outcome", outcome,
-	)
 }
 
 // errRefreshSkipped 表示刷新被跳过（锁竞争或已被其他路径刷新），不计入 failed 或 refreshed
@@ -1475,52 +1426,6 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 		)
 	} else {
 		slog.Info("token_refresh.privacy_mode_set",
-			"account_id", account.ID,
-			"privacy_mode", mode,
-		)
-	}
-}
-
-// ensureAntigravityPrivacy 后台刷新中检查 Antigravity OAuth 账号隐私状态。
-// 仅当 privacy_mode 已成功设置（"privacy_set"）时跳过；
-// 未设置或之前失败（"privacy_set_failed"）均会重试。
-func (s *TokenRefreshService) ensureAntigravityPrivacy(ctx context.Context, account *Account) {
-	if account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
-		return
-	}
-	if account.Extra != nil {
-		if mode, ok := account.Extra["privacy_mode"].(string); ok && mode == AntigravityPrivacySet {
-			return
-		}
-	}
-
-	token, _ := account.Credentials["access_token"].(string)
-	if token == "" {
-		return
-	}
-
-	projectID, _ := account.Credentials["project_id"].(string)
-
-	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
-	}
-
-	mode := setAntigravityPrivacy(ctx, token, projectID, proxyURL)
-	if mode == "" {
-		return
-	}
-
-	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
-		slog.Warn("token_refresh.update_antigravity_privacy_mode_failed",
-			"account_id", account.ID,
-			"error", err,
-		)
-	} else {
-		applyAntigravityPrivacyMode(account, mode)
-		slog.Info("token_refresh.antigravity_privacy_mode_set",
 			"account_id", account.ID,
 			"privacy_mode", mode,
 		)

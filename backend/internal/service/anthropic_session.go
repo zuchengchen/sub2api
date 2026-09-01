@@ -2,11 +2,20 @@ package service
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/tidwall/gjson"
 )
+
+// shortHash 使用 XXHash64 + Base36 生成短 hash
+// XXHash64 比 SHA256 快约 10 倍，Base36 比 Hex 短约 20%
+func shortHash(data []byte) string {
+	h := xxhash.Sum64(data)
+	return strconv.FormatUint(h, 36)
+}
 
 // Anthropic 会话 Fallback 相关常量
 const (

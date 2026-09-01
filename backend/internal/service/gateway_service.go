@@ -685,7 +685,7 @@ type UpstreamFailoverError struct {
 	StatusCode               int
 	ResponseBody             []byte        // 上游响应体，用于错误透传规则匹配
 	ResponseHeaders          http.Header   // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling        bool          // Antigravity 粘性会话切换时设为 true
+	ForceCacheBilling        bool          // 粘性会话切换时设为 true
 	RetryableOnSameAccount   bool          // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
 	SameAccountRetryDelay    time.Duration // 同账号重试的最小间隔；零值使用 handler 默认值
 	SameAccountRetryDeadline time.Time     // 同账号重试截止时间；零值表示仅受 retryLimit 限制
@@ -748,11 +748,23 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 		return
 	}
 	// 根据状态码选择封禁策略
-	switch failoverErr.StatusCode {
-	case http.StatusBadRequest:
-		tempUnscheduleGoogleConfigError(ctx, s.accountRepo, accountID, "[handler]")
-	case http.StatusBadGateway:
+	if failoverErr.StatusCode == http.StatusBadGateway {
 		tempUnscheduleEmptyResponse(ctx, s.accountRepo, accountID, "[handler]")
+	}
+}
+
+// emptyResponseCooldown 空流式响应的临时封禁时长
+const emptyResponseCooldown = 1 * time.Minute
+
+// tempUnscheduleEmptyResponse 对空流式响应触发临时封禁，
+// 避免短时间内反复调度到同一个返回空响应的账号。
+func tempUnscheduleEmptyResponse(ctx context.Context, repo AccountRepository, accountID int64, logPrefix string) {
+	until := time.Now().Add(emptyResponseCooldown)
+	reason := "empty stream response (auto temp-unschedule 1m)"
+	if err := repo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
+		slog.Warn("temp_unschedule_failed", "prefix", logPrefix, "account_id", accountID, "error", err)
+	} else {
+		slog.Info("temp_unscheduled", "prefix", logPrefix, "account_id", accountID, "until", until.Format("15:04:05"), "reason", reason)
 	}
 }
 
@@ -1014,24 +1026,6 @@ func (s *GatewayService) GetCachedSessionAccountID(ctx context.Context, groupID 
 		return 0, err
 	}
 	return accountID, nil
-}
-
-// FindGeminiSession 查找 Gemini 会话（基于内容摘要链的 Fallback 匹配）
-// 返回最长匹配的会话信息（uuid, accountID）
-func (s *GatewayService) FindGeminiSession(_ context.Context, groupID int64, prefixHash, digestChain string) (uuid string, accountID int64, matchedChain string, found bool) {
-	if digestChain == "" || s.digestStore == nil {
-		return "", 0, "", false
-	}
-	return s.digestStore.Find(groupID, prefixHash, digestChain)
-}
-
-// SaveGeminiSession 保存 Gemini 会话。oldDigestChain 为 Find 返回的 matchedChain，用于删旧 key。
-func (s *GatewayService) SaveGeminiSession(_ context.Context, groupID int64, prefixHash, digestChain, uuid string, accountID int64, oldDigestChain string) error {
-	if digestChain == "" || s.digestStore == nil {
-		return nil
-	}
-	s.digestStore.Save(groupID, prefixHash, digestChain, uuid, accountID, oldDigestChain)
-	return nil
 }
 
 // FindAnthropicSession 查找 Anthropic 会话（基于内容摘要链的 Fallback 匹配）
@@ -1299,7 +1293,7 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 		return accessToken, "oauth", nil
 	}
 
-	// 其他情况（Gemini 有自己的 TokenProvider，setup-token 类型等）直接从账号读取
+	// 其他情况（setup-token 类型等）直接从账号读取
 	accessToken := account.GetCredential("access_token")
 	if accessToken == "" {
 		return "", "", errors.New("access_token not found in credentials")

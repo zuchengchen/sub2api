@@ -51,8 +51,6 @@ export default {
     quickActions: 'Quick Actions',
     createApiKey: 'Create API Key',
     generateNewKey: 'Generate a new API key',
-    batchImageAgent: 'Batch Image Assistant',
-    batchImageAgentDesc: 'Copy instructions for an agent',
     viewUsage: 'View Usage',
     checkDetailedLogs: 'Check detailed usage logs',
     redeemCode: 'Redeem Code',
@@ -150,23 +148,10 @@ export default {
       },
       cliTabs: {
         claudeCode: 'Claude Code',
-        geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
         opencode: 'OpenCode',
-      },
-      antigravity: {
-        description: 'Configure API access for Antigravity group. Select the configuration method based on your client.',
-        claudeCode: 'Claude Code',
-        geminiCli: 'Gemini CLI',
-        claudeNote: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
-        geminiNote: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
-      },
-      gemini: {
-        description: 'Add the following environment variables to your terminal profile or run directly in terminal to configure Gemini CLI access.',
-        modelComment: 'If you have Gemini 3 access, you can use: gemini-3-pro-preview',
-        note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
       },
       grok: {
         description:
@@ -240,8 +225,6 @@ export default {
       description: 'Please select the client type to import to CC-Switch:',
       claudeCode: 'Claude Code',
       claudeCodeDesc: 'Import as Claude Code configuration',
-      geminiCli: 'Gemini CLI',
-      geminiCliDesc: 'Import as Gemini CLI configuration',
     },
     // Quota and expiration
     quotaLimit: 'Quota Limit',
@@ -460,9 +443,7 @@ export default {
     providers: {
       openai: 'OpenAI',
       anthropic: 'Anthropic',
-      gemini: 'Gemini',
       grok: 'Grok',
-      antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: 'Zhipu GLM',
       deepseek: 'DeepSeek'

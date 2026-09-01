@@ -95,7 +95,7 @@ func PlatformFromAPIKey(apiKey *APIKey) string {
 }
 
 // QuotaPlatform 返回 user×platform 配额计量使用的平台标识。
-// 强制平台路由（如 /antigravity）优先按 ctx 中的 ForcePlatform 计量，否则回退到
+// 强制平台路由优先按 ctx 中的 ForcePlatform 计量，否则回退到
 // APIKey 关联 Group 的平台。
 //
 // 注意：必须用带 ForcePlatform 的请求 context 调用（如 handler 的 c.Request.Context()）。

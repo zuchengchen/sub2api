@@ -55,7 +55,7 @@ export interface GuideSettings {
 }
 
 // ── 平台限额类型 ──────────────────────────────────────────────────
-export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "grok"
+export type PlatformType = "anthropic" | "openai" | "grok"
 export type QuotaWindowType = "daily" | "weekly" | "monthly"
 
 /** 单平台三档限额；null = 不限制，undefined = 未填（等价 null） */
@@ -68,7 +68,7 @@ export interface PlatformQuotaLimits {
 /** 全平台默认限额 map（key = PlatformType） */
 export type DefaultPlatformQuotasMap = Partial<Record<PlatformType, PlatformQuotaLimits>>
 
-const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "grok"]
+const PLATFORMS: PlatformType[] = ["anthropic", "openai", "grok"]
 
 export type SchedulingThresholdPlatformType =
   | "openai"
@@ -631,8 +631,6 @@ export interface SystemSettings {
   enable_model_fallback: boolean;
   fallback_model_anthropic: string;
   fallback_model_openai: string;
-  fallback_model_gemini: string;
-  fallback_model_antigravity: string;
   grok_default_text_model: string;
   grok_cross_client_model_map_enabled: boolean;
   grok_default_base_url_mode: string;
@@ -640,7 +638,7 @@ export interface SystemSettings {
   // Per-platform account auto-pause thresholds (100 = disabled)
   account_scheduling_thresholds: AccountSchedulingThresholdsMap;
 
-  // Identity patch configuration (Claude -> Gemini)
+  // Identity patch configuration
   enable_identity_patch: boolean;
   identity_patch_prompt: string;
 
@@ -668,7 +666,6 @@ export interface SystemSettings {
   enable_anthropic_cache_ttl_1h_injection: boolean;
   rewrite_message_cache_control: boolean;
   enable_client_dateline_normalization: boolean;
-  antigravity_user_agent_version: string;
   openai_codex_user_agent: string;
   openai_codex_client_version: string;
   openai_codex_client_version_synced: string;
@@ -959,8 +956,6 @@ export interface UpdateSettingsRequest {
   enable_model_fallback?: boolean;
   fallback_model_anthropic?: string;
   fallback_model_openai?: string;
-  fallback_model_gemini?: string;
-  fallback_model_antigravity?: string;
   grok_default_text_model?: string;
   grok_cross_client_model_map_enabled?: boolean;
   grok_default_base_url_mode?: string;
@@ -984,7 +979,6 @@ export interface UpdateSettingsRequest {
   enable_anthropic_cache_ttl_1h_injection?: boolean;
   rewrite_message_cache_control?: boolean;
   enable_client_dateline_normalization?: boolean;
-  antigravity_user_agent_version?: string;
   openai_codex_user_agent?: string;
   openai_codex_client_version?: string;
   openai_codex_version_auto_sync_enabled?: boolean;

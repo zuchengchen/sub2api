@@ -21,7 +21,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// RegisterGatewayRoutes 注册 API 网关路由（Claude/OpenAI/Gemini 兼容）
+// RegisterGatewayRoutes 注册 API 网关路由（Claude/OpenAI 兼容）
 func RegisterGatewayRoutes(
 	r *gin.Engine,
 	h *handler.Handlers,
@@ -43,11 +43,9 @@ func RegisterGatewayRoutes(
 	opsErrorLogger := handler.OpsErrorLoggerMiddleware(opsService)
 	endpointNorm := handler.InboundEndpointMiddleware()
 	compositeTarget := compositeTargetPlatformMiddleware(compositeResolver)
-	compositeGeminiTarget := compositeGeminiTargetPlatformMiddleware(compositeResolver)
 
 	// 未分组 Key 拦截中间件（按协议格式区分错误响应）
 	requireGroupAnthropic := middleware.RequireGroupAssignment(settingService, middleware.AnthropicErrorWriter)
-	requireGroupGoogle := middleware.RequireGroupAssignment(settingService, middleware.GoogleErrorWriter)
 
 	isOpenAIResponsesCompatibleGatewayPlatform := func(c *gin.Context) bool {
 		switch getGroupPlatform(c) {
@@ -261,16 +259,6 @@ func RegisterGatewayRoutes(
 		gateway.POST("/images/generations/async", h.AsyncImage.Submit)
 		gateway.POST("/images/edits/async", h.AsyncImage.Submit)
 		gateway.GET("/images/tasks/:task_id", h.AsyncImage.Get)
-		gateway.POST("/images/batches", h.BatchImage.Submit)
-		gateway.GET("/images/batches", h.BatchImage.List)
-		gateway.GET("/images/batches/models", h.BatchImage.Models)
-		gateway.GET("/images/batches/:id", h.BatchImage.Get)
-		gateway.GET("/images/batches/:id/items", h.BatchImage.Items)
-		gateway.GET("/images/batches/:id/items/:custom_id/content", h.BatchImage.ItemContent)
-		gateway.GET("/images/batches/:id/download", h.BatchImage.Download)
-		gateway.POST("/images/batches/:id/cancel", h.BatchImage.Cancel)
-		gateway.DELETE("/images/batches/:id", h.BatchImage.DeleteRecord)
-		gateway.DELETE("/images/batches/:id/outputs", h.BatchImage.DeleteOutputs)
 		// OpenAI-compatible clients may create through /videos; xAI receives the
 		// canonical /videos/generations route inside the Grok media forwarder.
 		gateway.POST("/videos", videoGenerationHandler)
@@ -338,22 +326,6 @@ func RegisterGatewayRoutes(
 			}
 			h.Gateway.XSearch(c)
 		})
-	}
-
-	// Gemini 原生 API 兼容层（Gemini SDK/CLI 直连）
-	gemini := r.Group("/v1beta")
-	gemini.Use(bodyLimit)
-	gemini.Use(clientRequestID)
-	gemini.Use(opsErrorLogger)
-	gemini.Use(endpointNorm)
-	gemini.Use(middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg))
-	gemini.Use(compositeGeminiTarget)
-	gemini.Use(requireGroupGoogle)
-	{
-		gemini.GET("/models", h.Gateway.GeminiV1BetaListModels)
-		gemini.GET("/models/:model", h.Gateway.GeminiV1BetaGetModel)
-		// Gin treats ":" as a param marker, but Gemini uses "{model}:{action}" in the same segment.
-		gemini.POST("/models/*modelAction", h.Gateway.GeminiV1BetaModels)
 	}
 
 	// OpenAI Responses API（不带v1前缀的别名）— auto-route based on group platform
@@ -474,39 +446,6 @@ func RegisterGatewayRoutes(
 		}
 		h.Gateway.XSearch(c)
 	})
-
-	// Antigravity 模型列表
-	r.GET("/antigravity/models", gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.Gateway.AntigravityModels)
-
-	// Antigravity 专用路由（仅使用 antigravity 账户，不混合调度）
-	antigravityV1 := r.Group("/antigravity/v1")
-	antigravityV1.Use(bodyLimit)
-	antigravityV1.Use(clientRequestID)
-	antigravityV1.Use(opsErrorLogger)
-	antigravityV1.Use(endpointNorm)
-	antigravityV1.Use(middleware.ForcePlatform(service.PlatformAntigravity))
-	antigravityV1.Use(gin.HandlerFunc(apiKeyAuth))
-	antigravityV1.Use(requireGroupAnthropic)
-	{
-		antigravityV1.POST("/messages", h.Gateway.Messages)
-		antigravityV1.POST("/messages/count_tokens", h.Gateway.CountTokens)
-		antigravityV1.GET("/models", h.Gateway.AntigravityModels)
-		antigravityV1.GET("/usage", h.Gateway.Usage)
-	}
-
-	antigravityV1Beta := r.Group("/antigravity/v1beta")
-	antigravityV1Beta.Use(bodyLimit)
-	antigravityV1Beta.Use(clientRequestID)
-	antigravityV1Beta.Use(opsErrorLogger)
-	antigravityV1Beta.Use(endpointNorm)
-	antigravityV1Beta.Use(middleware.ForcePlatform(service.PlatformAntigravity))
-	antigravityV1Beta.Use(middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg))
-	antigravityV1Beta.Use(requireGroupGoogle)
-	{
-		antigravityV1Beta.GET("/models", h.Gateway.GeminiV1BetaListModels)
-		antigravityV1Beta.GET("/models/:model", h.Gateway.GeminiV1BetaGetModel)
-		antigravityV1Beta.POST("/models/*modelAction", h.Gateway.GeminiV1BetaModels)
-	}
 
 }
 
@@ -642,33 +581,6 @@ func compositeMultipartModelFromBody(contentType string, body []byte) string {
 	}
 }
 
-func compositeGeminiTargetPlatformMiddleware(resolver *service.CompositeRouteResolver) gin.HandlerFunc {
-	if resolver == nil {
-		resolver = service.NewCompositeRouteResolver(nil)
-	}
-	return func(c *gin.Context) {
-		apiKey, ok := middleware.GetAPIKeyFromContext(c)
-		if ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
-			model := compositeGeminiModelFromParams(c)
-			if model != "" {
-				decision, err := resolver.Resolve(c.Request.Context(), apiKey.Group.ID, model, service.CompositeRouteEndpointGemini)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "server_error", "message": "Failed to resolve composite model route"}})
-					c.Abort()
-					return
-				}
-				if decision.Matched {
-					c.Request = c.Request.WithContext(service.WithCompositeRouteDecision(c.Request.Context(), decision))
-				}
-			}
-			if _, resolved := service.ResolvedTargetPlatformFromContext(c.Request.Context()); !resolved {
-				c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), service.PlatformGemini))
-			}
-		}
-		c.Next()
-	}
-}
-
 // grokCustomVoiceEndpoint derives the upstream Voice endpoint for the
 // /custom-voices/:voice_id[/audio] routes.
 //
@@ -684,24 +596,6 @@ func grokCustomVoiceEndpoint(c *gin.Context) string {
 	}
 	return endpoint
 }
-
-func compositeGeminiModelFromParams(c *gin.Context) string {
-	if c == nil {
-		return ""
-	}
-	if model := strings.TrimSpace(c.Param("model")); model != "" {
-		return model
-	}
-	modelAction := strings.TrimPrefix(strings.TrimSpace(c.Param("modelAction")), "/")
-	if modelAction == "" {
-		return ""
-	}
-	if idx := strings.LastIndex(modelAction, ":"); idx >= 0 {
-		return strings.TrimSpace(modelAction[:idx])
-	}
-	return modelAction
-}
-
 func resetRequestBody(c *gin.Context, body []byte) {
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	c.Request.ContentLength = int64(len(body))
@@ -725,8 +619,6 @@ func compositeRouteEndpointForPath(path string) string {
 		return service.CompositeRouteEndpointEmbeddings
 	case strings.Contains(path, "/images/"):
 		return service.CompositeRouteEndpointImages
-	case strings.Contains(path, "/v1beta/"):
-		return service.CompositeRouteEndpointGemini
 	default:
 		return service.CompositeRouteEndpointAny
 	}

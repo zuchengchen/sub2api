@@ -56,8 +56,6 @@ const (
 	FieldDefaultValidityDays = "default_validity_days"
 	// FieldAllowImageGeneration holds the string denoting the allow_image_generation field in the database.
 	FieldAllowImageGeneration = "allow_image_generation"
-	// FieldAllowBatchImageGeneration holds the string denoting the allow_batch_image_generation field in the database.
-	FieldAllowBatchImageGeneration = "allow_batch_image_generation"
 	// FieldImageRateIndependent holds the string denoting the image_rate_independent field in the database.
 	FieldImageRateIndependent = "image_rate_independent"
 	// FieldImageRateMultiplier holds the string denoting the image_rate_multiplier field in the database.
@@ -68,10 +66,6 @@ const (
 	FieldImagePrice2k = "image_price_2k"
 	// FieldImagePrice4k holds the string denoting the image_price_4k field in the database.
 	FieldImagePrice4k = "image_price_4k"
-	// FieldBatchImageDiscountMultiplier holds the string denoting the batch_image_discount_multiplier field in the database.
-	FieldBatchImageDiscountMultiplier = "batch_image_discount_multiplier"
-	// FieldBatchImageHoldMultiplier holds the string denoting the batch_image_hold_multiplier field in the database.
-	FieldBatchImageHoldMultiplier = "batch_image_hold_multiplier"
 	// FieldVideoRateIndependent holds the string denoting the video_rate_independent field in the database.
 	FieldVideoRateIndependent = "video_rate_independent"
 	// FieldVideoRateMultiplier holds the string denoting the video_rate_multiplier field in the database.
@@ -235,14 +229,11 @@ var Columns = []string{
 	FieldMonthlyLimitUsd,
 	FieldDefaultValidityDays,
 	FieldAllowImageGeneration,
-	FieldAllowBatchImageGeneration,
 	FieldImageRateIndependent,
 	FieldImageRateMultiplier,
 	FieldImagePrice1k,
 	FieldImagePrice2k,
 	FieldImagePrice4k,
-	FieldBatchImageDiscountMultiplier,
-	FieldBatchImageHoldMultiplier,
 	FieldVideoRateIndependent,
 	FieldVideoRateMultiplier,
 	FieldVideoPrice480p,
@@ -348,16 +339,10 @@ var (
 	DefaultDefaultValidityDays int
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.
 	DefaultAllowImageGeneration bool
-	// DefaultAllowBatchImageGeneration holds the default value on creation for the "allow_batch_image_generation" field.
-	DefaultAllowBatchImageGeneration bool
 	// DefaultImageRateIndependent holds the default value on creation for the "image_rate_independent" field.
 	DefaultImageRateIndependent bool
 	// DefaultImageRateMultiplier holds the default value on creation for the "image_rate_multiplier" field.
 	DefaultImageRateMultiplier float64
-	// DefaultBatchImageDiscountMultiplier holds the default value on creation for the "batch_image_discount_multiplier" field.
-	DefaultBatchImageDiscountMultiplier float64
-	// DefaultBatchImageHoldMultiplier holds the default value on creation for the "batch_image_hold_multiplier" field.
-	DefaultBatchImageHoldMultiplier float64
 	// DefaultVideoRateIndependent holds the default value on creation for the "video_rate_independent" field.
 	DefaultVideoRateIndependent bool
 	// DefaultVideoRateMultiplier holds the default value on creation for the "video_rate_multiplier" field.
@@ -522,11 +507,6 @@ func ByAllowImageGeneration(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAllowImageGeneration, opts...).ToFunc()
 }
 
-// ByAllowBatchImageGeneration orders the results by the allow_batch_image_generation field.
-func ByAllowBatchImageGeneration(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldAllowBatchImageGeneration, opts...).ToFunc()
-}
-
 // ByImageRateIndependent orders the results by the image_rate_independent field.
 func ByImageRateIndependent(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImageRateIndependent, opts...).ToFunc()
@@ -550,16 +530,6 @@ func ByImagePrice2k(opts ...sql.OrderTermOption) OrderOption {
 // ByImagePrice4k orders the results by the image_price_4k field.
 func ByImagePrice4k(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImagePrice4k, opts...).ToFunc()
-}
-
-// ByBatchImageDiscountMultiplier orders the results by the batch_image_discount_multiplier field.
-func ByBatchImageDiscountMultiplier(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldBatchImageDiscountMultiplier, opts...).ToFunc()
-}
-
-// ByBatchImageHoldMultiplier orders the results by the batch_image_hold_multiplier field.
-func ByBatchImageHoldMultiplier(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldBatchImageHoldMultiplier, opts...).ToFunc()
 }
 
 // ByVideoRateIndependent orders the results by the video_rate_independent field.

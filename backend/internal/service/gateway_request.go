@@ -139,26 +139,16 @@ func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr str
 	if parsed == nil {
 		return
 	}
-	switch protocol {
-	case domain.PlatformGemini:
-		if sysParts := gjson.Get(jsonStr, "systemInstruction.parts"); sysParts.Exists() && sysParts.IsArray() {
-			parsed.systemRange = rangeFromResult(sysParts)
-		}
-		if contents := gjson.Get(jsonStr, "contents"); contents.Exists() && contents.IsArray() {
-			parsed.messagesRange = rangeFromResult(contents)
-		}
-	default:
-		if sys := gjson.Get(jsonStr, "system"); sys.Exists() {
-			parsed.HasSystem = true
-			parsed.systemRange = rangeFromResult(sys)
-		}
-		if msgs := gjson.Get(jsonStr, "messages"); msgs.Exists() && msgs.IsArray() {
-			parsed.messagesRange = rangeFromResult(msgs)
-		}
-		if protocol == "responses" {
-			if input := gjson.Get(jsonStr, "input"); input.Exists() {
-				parsed.inputRange = rangeFromResult(input)
-			}
+	if sys := gjson.Get(jsonStr, "system"); sys.Exists() {
+		parsed.HasSystem = true
+		parsed.systemRange = rangeFromResult(sys)
+	}
+	if msgs := gjson.Get(jsonStr, "messages"); msgs.Exists() && msgs.IsArray() {
+		parsed.messagesRange = rangeFromResult(msgs)
+	}
+	if protocol == "responses" {
+		if input := gjson.Get(jsonStr, "input"); input.Exists() {
+			parsed.inputRange = rangeFromResult(input)
 		}
 	}
 }
@@ -348,7 +338,7 @@ func normalizeSessionUserAgentFallback(raw string) string {
 }
 
 // ParseGatewayRequest 解析网关请求体并返回结构化结果。
-// protocol 指定请求协议格式（domain.PlatformAnthropic / domain.PlatformGemini），
+// protocol 指定请求协议格式（domain.PlatformAnthropic 等），
 // 不同协议使用不同的 system/messages 字段名。
 func ParseGatewayRequest(body *RequestBodyRef, protocol string) (*ParsedRequest, error) {
 	parsed := &ParsedRequest{Body: body}

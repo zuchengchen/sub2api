@@ -88,10 +88,6 @@ func dependencyModule(req *http.Request) string {
 		return "openai"
 	case strings.Contains(host, "anthropic"):
 		return "anthropic"
-	case strings.Contains(host, "generativelanguage") || strings.Contains(host, "gemini"):
-		return "gemini"
-	case strings.Contains(host, "cloudcode") || strings.Contains(host, "antigravity"):
-		return "antigravity"
 	case strings.Contains(host, "googleapis") || strings.Contains(host, "google"):
 		return "google"
 	case strings.Contains(host, "amazonaws") || strings.Contains(host, "cloudflarestorage") || strings.Contains(host, "s3"):

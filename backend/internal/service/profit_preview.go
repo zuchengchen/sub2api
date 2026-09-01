@@ -24,8 +24,7 @@ const (
 // ProfitPreviewGroupInput 是一个分组的预演输入。
 type ProfitPreviewGroupInput struct {
 	Group *Group
-	// Accounts 为该分组绑定且状态可调度的账号，允许 Anthropic/Gemini 分组中
-	// 参与 mixed scheduling 的 Antigravity 账号。
+	// Accounts 为该分组绑定且状态可调度的账号。
 	Accounts []*Account
 	// UserOverrides 为该分组所有用户覆盖倍率（user_id → 倍率）。
 	UserOverrides map[int64]float64

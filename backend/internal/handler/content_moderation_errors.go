@@ -212,3 +212,17 @@ func contentModerationWSCloseReason(decision *service.ContentModerationDecision)
 	}
 	return contentModerationDecisionErrorCode(decision)
 }
+
+// googleError 按 Google API 规范输出错误响应。
+//
+// 原定义在已移除的 Gemini v1beta handler 中；内容审核的 Google 风格错误
+// 输出仍需要它，故迁移到此处。
+func googleError(c *gin.Context, status int, message string) {
+	c.JSON(status, gin.H{
+		"error": gin.H{
+			"code":    status,
+			"message": message,
+			"status":  googleapi.HTTPStatusToGoogleStatus(status),
+		},
+	})
+}

@@ -234,20 +234,6 @@ const formatScopeName = (scope: string): string => {
     'claude-sonnet-4-5': 'CSon45',
     'claude-sonnet-4-5-thinking': 'CSon45T',
     'claude-sonnet-5': 'CSon5',
-    // Gemini 2.5 系列
-    'gemini-2.5-flash': 'G25F',
-    'gemini-2.5-flash-lite': 'G25FL',
-    'gemini-2.5-flash-thinking': 'G25FT',
-    'gemini-2.5-pro': 'G25P',
-    'gemini-2.5-flash-image': 'G25I',
-    // Gemini 3.5 系列
-    'gemini-3.5-flash': 'G35F',
-    // Gemini 3 系列
-    'gemini-3-flash': 'G3F',
-    'gemini-3.1-pro-high': 'G3PH',
-    'gemini-3.1-pro-low': 'G3PL',
-    'gemini-3-pro-image': 'G3PI',
-    'gemini-3.1-flash-image': 'G31FI',
     // 其他
     'gpt-oss-120b-medium': 'GPT120',
     'tab_flash_lite_preview': 'TabFL',
@@ -256,10 +242,6 @@ const formatScopeName = (scope: string): string => {
     claude_sonnet: 'CSon',
     claude_opus: 'COpus',
     claude_haiku: 'CHaiku',
-    gemini_text: 'Gemini',
-    gemini_image: 'GImg',
-    gemini_flash: 'GFlash',
-    gemini_pro: 'GPro',
   }
   return aliases[scope] || scope
 }

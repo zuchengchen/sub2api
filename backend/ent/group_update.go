@@ -353,20 +353,6 @@ func (_u *GroupUpdate) SetNillableAllowImageGeneration(v *bool) *GroupUpdate {
 	return _u
 }
 
-// SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
-func (_u *GroupUpdate) SetAllowBatchImageGeneration(v bool) *GroupUpdate {
-	_u.mutation.SetAllowBatchImageGeneration(v)
-	return _u
-}
-
-// SetNillableAllowBatchImageGeneration sets the "allow_batch_image_generation" field if the given value is not nil.
-func (_u *GroupUpdate) SetNillableAllowBatchImageGeneration(v *bool) *GroupUpdate {
-	if v != nil {
-		_u.SetAllowBatchImageGeneration(*v)
-	}
-	return _u
-}
-
 // SetImageRateIndependent sets the "image_rate_independent" field.
 func (_u *GroupUpdate) SetImageRateIndependent(v bool) *GroupUpdate {
 	_u.mutation.SetImageRateIndependent(v)
@@ -480,48 +466,6 @@ func (_u *GroupUpdate) AddImagePrice4k(v float64) *GroupUpdate {
 // ClearImagePrice4k clears the value of the "image_price_4k" field.
 func (_u *GroupUpdate) ClearImagePrice4k() *GroupUpdate {
 	_u.mutation.ClearImagePrice4k()
-	return _u
-}
-
-// SetBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field.
-func (_u *GroupUpdate) SetBatchImageDiscountMultiplier(v float64) *GroupUpdate {
-	_u.mutation.ResetBatchImageDiscountMultiplier()
-	_u.mutation.SetBatchImageDiscountMultiplier(v)
-	return _u
-}
-
-// SetNillableBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field if the given value is not nil.
-func (_u *GroupUpdate) SetNillableBatchImageDiscountMultiplier(v *float64) *GroupUpdate {
-	if v != nil {
-		_u.SetBatchImageDiscountMultiplier(*v)
-	}
-	return _u
-}
-
-// AddBatchImageDiscountMultiplier adds value to the "batch_image_discount_multiplier" field.
-func (_u *GroupUpdate) AddBatchImageDiscountMultiplier(v float64) *GroupUpdate {
-	_u.mutation.AddBatchImageDiscountMultiplier(v)
-	return _u
-}
-
-// SetBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field.
-func (_u *GroupUpdate) SetBatchImageHoldMultiplier(v float64) *GroupUpdate {
-	_u.mutation.ResetBatchImageHoldMultiplier()
-	_u.mutation.SetBatchImageHoldMultiplier(v)
-	return _u
-}
-
-// SetNillableBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field if the given value is not nil.
-func (_u *GroupUpdate) SetNillableBatchImageHoldMultiplier(v *float64) *GroupUpdate {
-	if v != nil {
-		_u.SetBatchImageHoldMultiplier(*v)
-	}
-	return _u
-}
-
-// AddBatchImageHoldMultiplier adds value to the "batch_image_hold_multiplier" field.
-func (_u *GroupUpdate) AddBatchImageHoldMultiplier(v float64) *GroupUpdate {
-	_u.mutation.AddBatchImageHoldMultiplier(v)
 	return _u
 }
 
@@ -1592,9 +1536,6 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
 	}
-	if value, ok := _u.mutation.AllowBatchImageGeneration(); ok {
-		_spec.SetField(group.FieldAllowBatchImageGeneration, field.TypeBool, value)
-	}
 	if value, ok := _u.mutation.ImageRateIndependent(); ok {
 		_spec.SetField(group.FieldImageRateIndependent, field.TypeBool, value)
 	}
@@ -1630,18 +1571,6 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ImagePrice4kCleared() {
 		_spec.ClearField(group.FieldImagePrice4k, field.TypeFloat64)
-	}
-	if value, ok := _u.mutation.BatchImageDiscountMultiplier(); ok {
-		_spec.SetField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
-	}
-	if value, ok := _u.mutation.AddedBatchImageDiscountMultiplier(); ok {
-		_spec.AddField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
-	}
-	if value, ok := _u.mutation.BatchImageHoldMultiplier(); ok {
-		_spec.SetField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
-	}
-	if value, ok := _u.mutation.AddedBatchImageHoldMultiplier(); ok {
-		_spec.AddField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.VideoRateIndependent(); ok {
 		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
@@ -2474,20 +2403,6 @@ func (_u *GroupUpdateOne) SetNillableAllowImageGeneration(v *bool) *GroupUpdateO
 	return _u
 }
 
-// SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
-func (_u *GroupUpdateOne) SetAllowBatchImageGeneration(v bool) *GroupUpdateOne {
-	_u.mutation.SetAllowBatchImageGeneration(v)
-	return _u
-}
-
-// SetNillableAllowBatchImageGeneration sets the "allow_batch_image_generation" field if the given value is not nil.
-func (_u *GroupUpdateOne) SetNillableAllowBatchImageGeneration(v *bool) *GroupUpdateOne {
-	if v != nil {
-		_u.SetAllowBatchImageGeneration(*v)
-	}
-	return _u
-}
-
 // SetImageRateIndependent sets the "image_rate_independent" field.
 func (_u *GroupUpdateOne) SetImageRateIndependent(v bool) *GroupUpdateOne {
 	_u.mutation.SetImageRateIndependent(v)
@@ -2601,48 +2516,6 @@ func (_u *GroupUpdateOne) AddImagePrice4k(v float64) *GroupUpdateOne {
 // ClearImagePrice4k clears the value of the "image_price_4k" field.
 func (_u *GroupUpdateOne) ClearImagePrice4k() *GroupUpdateOne {
 	_u.mutation.ClearImagePrice4k()
-	return _u
-}
-
-// SetBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field.
-func (_u *GroupUpdateOne) SetBatchImageDiscountMultiplier(v float64) *GroupUpdateOne {
-	_u.mutation.ResetBatchImageDiscountMultiplier()
-	_u.mutation.SetBatchImageDiscountMultiplier(v)
-	return _u
-}
-
-// SetNillableBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field if the given value is not nil.
-func (_u *GroupUpdateOne) SetNillableBatchImageDiscountMultiplier(v *float64) *GroupUpdateOne {
-	if v != nil {
-		_u.SetBatchImageDiscountMultiplier(*v)
-	}
-	return _u
-}
-
-// AddBatchImageDiscountMultiplier adds value to the "batch_image_discount_multiplier" field.
-func (_u *GroupUpdateOne) AddBatchImageDiscountMultiplier(v float64) *GroupUpdateOne {
-	_u.mutation.AddBatchImageDiscountMultiplier(v)
-	return _u
-}
-
-// SetBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field.
-func (_u *GroupUpdateOne) SetBatchImageHoldMultiplier(v float64) *GroupUpdateOne {
-	_u.mutation.ResetBatchImageHoldMultiplier()
-	_u.mutation.SetBatchImageHoldMultiplier(v)
-	return _u
-}
-
-// SetNillableBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field if the given value is not nil.
-func (_u *GroupUpdateOne) SetNillableBatchImageHoldMultiplier(v *float64) *GroupUpdateOne {
-	if v != nil {
-		_u.SetBatchImageHoldMultiplier(*v)
-	}
-	return _u
-}
-
-// AddBatchImageHoldMultiplier adds value to the "batch_image_hold_multiplier" field.
-func (_u *GroupUpdateOne) AddBatchImageHoldMultiplier(v float64) *GroupUpdateOne {
-	_u.mutation.AddBatchImageHoldMultiplier(v)
 	return _u
 }
 
@@ -3743,9 +3616,6 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if value, ok := _u.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
 	}
-	if value, ok := _u.mutation.AllowBatchImageGeneration(); ok {
-		_spec.SetField(group.FieldAllowBatchImageGeneration, field.TypeBool, value)
-	}
 	if value, ok := _u.mutation.ImageRateIndependent(); ok {
 		_spec.SetField(group.FieldImageRateIndependent, field.TypeBool, value)
 	}
@@ -3781,18 +3651,6 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.ImagePrice4kCleared() {
 		_spec.ClearField(group.FieldImagePrice4k, field.TypeFloat64)
-	}
-	if value, ok := _u.mutation.BatchImageDiscountMultiplier(); ok {
-		_spec.SetField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
-	}
-	if value, ok := _u.mutation.AddedBatchImageDiscountMultiplier(); ok {
-		_spec.AddField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
-	}
-	if value, ok := _u.mutation.BatchImageHoldMultiplier(); ok {
-		_spec.SetField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
-	}
-	if value, ok := _u.mutation.AddedBatchImageHoldMultiplier(); ok {
-		_spec.AddField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.VideoRateIndependent(); ok {
 		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)

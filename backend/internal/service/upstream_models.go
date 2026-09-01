@@ -13,9 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 )
 
 const (
@@ -517,12 +515,8 @@ func upstreamModelRegistryBaseURL(account *Account) string {
 		return account.GetOpenAIFormatBaseURL()
 	case account.IsGrok():
 		return account.GetGrokBaseURL()
-	case account.IsGemini():
-		return account.GetGeminiBaseURL(geminicli.AIStudioBaseURL)
 	case account.IsAnthropic():
 		return account.GetBaseURL()
-	case account.Platform == PlatformAntigravity:
-		return account.GetGeminiBaseURL(geminicli.AIStudioBaseURL)
 	default:
 		return strings.TrimSpace(account.GetCredential("base_url"))
 	}
@@ -571,11 +565,6 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	}
 	if account == nil {
 		return nil, nil, newUpstreamModelSyncConfigError("Account is required", nil)
-	}
-
-	if account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
-		models, err := s.fetchAntigravityOAuthUpstreamModels(ctx, account)
-		return models, nil, err
 	}
 
 	if s.httpUpstream == nil {
@@ -629,15 +618,11 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 
 func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
 	switch {
-	case account.Platform == PlatformAntigravity:
-		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
 	case account.IsGrok():
 		return s.buildGrokUpstreamModelsRequest(ctx, account)
 	case account.IsOpenAI() || account.IsCNProvider():
 		// 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）复用 OpenAI /v1/models 探测。
 		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
-	case account.IsGemini():
-		return s.buildGeminiUpstreamModelsRequest(ctx, account)
 	case account.IsAnthropic():
 		return s.buildAnthropicUpstreamModelsRequest(ctx, account)
 	default:
@@ -798,46 +783,6 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 	return req, nil
 }
 
-func (s *AccountTestService) buildAntigravityAPIKeyModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
-	if account.Type != AccountTypeAPIKey {
-		return nil, newUpstreamModelSyncUnsupportedError(
-			fmt.Sprintf("Unsupported Antigravity account type for upstream model sync: %s", account.Type), nil,
-		)
-	}
-	apiKey := strings.TrimSpace(account.GetCredential("api_key"))
-	if apiKey == "" {
-		return nil, newUpstreamModelSyncConfigError("No Antigravity API key is available", nil)
-	}
-
-	baseURL := strings.TrimRight(strings.TrimSpace(account.GetCredential("base_url")), "/")
-	if baseURL == "" {
-		return nil, newUpstreamModelSyncConfigError("Antigravity API-key base URL is required for upstream model sync", nil)
-	}
-	if !strings.HasSuffix(strings.ToLower(baseURL), "/antigravity") {
-		return nil, newUpstreamModelSyncUnsupportedError(
-			"Antigravity API-key upstream model sync requires a compatible gateway base URL ending in /antigravity; use Antigravity OAuth for official Cloud Code upstreams",
-			nil,
-		)
-	}
-	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
-	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Antigravity base URL", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildV1ModelsURL(normalizedBaseURL), nil)
-	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Antigravity model list URL", err)
-	}
-	for key, value := range claude.DefaultHeaders {
-		req.Header.Set(key, value)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
-	req.Header.Set("x-api-key", apiKey)
-	return req, nil
-}
-
 func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
 	if account.IsOpenAIOAuth() {
 		return s.buildOpenAIOAuthUpstreamModelsRequest(ctx, account)
@@ -936,92 +881,6 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 	return req, nil
 }
 
-func (s *AccountTestService) buildGeminiUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
-	baseURL := account.GetGeminiBaseURL(geminicli.AIStudioBaseURL)
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = geminicli.AIStudioBaseURL
-	}
-	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
-	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Gemini base URL", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildGeminiModelsURL(normalizedBaseURL), nil)
-	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Gemini model list URL", err)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	switch account.Type {
-	case AccountTypeAPIKey:
-		apiKey := strings.TrimSpace(account.GetCredential("api_key"))
-		if apiKey == "" {
-			return nil, newUpstreamModelSyncConfigError("No Gemini API key is available", nil)
-		}
-		req.Header.Set("x-goog-api-key", apiKey)
-	case AccountTypeOAuth:
-		if strings.TrimSpace(account.GetCredential("project_id")) != "" {
-			return nil, newUpstreamModelSyncUnsupportedError("Gemini Code Assist model listing is not supported by this sync button", nil)
-		}
-		if s.geminiTokenProvider == nil {
-			return nil, newUpstreamModelSyncConfigError("Gemini token provider is not configured", nil)
-		}
-		accessToken, tokenErr := s.geminiTokenProvider.GetAccessToken(ctx, account)
-		if tokenErr != nil {
-			return nil, newUpstreamModelSyncUpstreamError("Failed to get Gemini access token", tokenErr)
-		}
-		accessToken = strings.TrimSpace(accessToken)
-		if accessToken == "" {
-			return nil, newUpstreamModelSyncConfigError("No Gemini access token is available", nil)
-		}
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-	default:
-		return nil, newUpstreamModelSyncUnsupportedError(
-			fmt.Sprintf("Unsupported Gemini account type for upstream model sync: %s", account.Type), nil,
-		)
-	}
-
-	return req, nil
-}
-
-func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
-	if s.antigravityGatewayService == nil || s.antigravityGatewayService.GetTokenProvider() == nil {
-		return nil, newUpstreamModelSyncConfigError("Antigravity token provider is not configured", nil)
-	}
-
-	accessToken, err := s.antigravityGatewayService.GetTokenProvider().GetAccessToken(ctx, account)
-	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to get Antigravity access token", err)
-	}
-	accessToken = strings.TrimSpace(accessToken)
-	if accessToken == "" {
-		return nil, newUpstreamModelSyncConfigError("No Antigravity access token is available", nil)
-	}
-
-	client, err := antigravity.NewClient(upstreamModelsProxyURL(account))
-	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Failed to configure Antigravity client", err)
-	}
-	modelsResp, _, err := client.FetchAvailableModels(
-		ctx,
-		accessToken,
-		strings.TrimSpace(account.GetCredential("project_id")),
-		resolveModelsListReadLimit(s.cfg),
-	)
-	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to fetch Antigravity available models", err)
-	}
-	if modelsResp == nil || len(modelsResp.Models) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
-	}
-
-	models := make([]string, 0, len(modelsResp.Models))
-	for modelID := range modelsResp.Models {
-		models = append(models, strings.TrimSpace(modelID))
-	}
-	return dedupeAndSortModelIDs(models), nil
-}
-
 func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
 	if s.tlsFPProfileService == nil {
 		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
@@ -1049,17 +908,6 @@ func buildV1ModelsURL(base string) string {
 
 func buildOpenAIModelsURL(base string) string {
 	return buildOpenAIEndpointURL(base, "/v1/models")
-}
-
-func buildGeminiModelsURL(base string) string {
-	normalized := strings.TrimRight(strings.TrimSpace(base), "/")
-	if strings.HasSuffix(normalized, "/v1beta/models") {
-		return normalized
-	}
-	if strings.HasSuffix(normalized, "/v1beta") {
-		return normalized + "/models"
-	}
-	return normalized + "/v1beta/models"
 }
 
 type upstreamModelEntry struct {

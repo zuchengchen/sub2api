@@ -33,7 +33,6 @@ func TestContentModerationGatePrecedesAccountBillingAndUpstreamSideEffects(t *te
 		{file: "openai_embeddings.go", function: "Embeddings", auditToken: "checkContentModeration"},
 		{file: "openai_alpha_search.go", function: "AlphaSearch", auditToken: "checkContentModeration"},
 		{file: "image_task_handler.go", function: "Submit", auditToken: "checkContentModerationBeforeSubmit"},
-		{file: "batch_image_handler.go", function: "Submit", auditToken: "checkContentModerationBeforeSubmit"},
 	}
 	sideEffectTokens := []string{
 		"CheckBillingEligibility(", "SelectAccount", ".Forward", "acquireResponsesUserSlot(",

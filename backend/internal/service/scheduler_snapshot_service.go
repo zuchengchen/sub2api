@@ -207,29 +207,28 @@ func (s *SchedulerSnapshotService) Stop() {
 	s.wg.Wait()
 }
 
-func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
-	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
+func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, error) {
 	mode := s.resolveMode(platform, hasForcePlatform)
 	bucket := s.bucketFor(groupID, platform, mode)
 	var writeToken SchedulerBucketWriteToken
 	canPublish := false
 	if err := ctx.Err(); err != nil {
-		return nil, useMixed, err
+		return nil, err
 	}
 
 	if s.cache != nil {
 		cached, hit, err := s.cache.GetSnapshot(ctx, bucket)
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, useMixed, ctxErr
+			return nil, ctxErr
 		}
 		if err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache read failed: bucket=%s err=%v", bucket.String(), err)
 		} else if hit {
-			return derefAccounts(cached), useMixed, nil
+			return derefAccounts(cached), nil
 		}
 		token, err := s.cache.CaptureBucketWriteToken(ctx, bucket)
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, useMixed, ctxErr
+			return nil, ctxErr
 		}
 		if err != nil {
 			if errors.Is(err, ErrSchedulerBucketRetired) || errors.Is(err, ErrSchedulerBucketWriteFenced) {
@@ -244,18 +243,18 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	}
 
 	if err := s.guardFallback(ctx); err != nil {
-		return nil, useMixed, err
+		return nil, err
 	}
 
 	fallbackCtx, cancel := s.withFallbackTimeout(ctx)
 	defer cancel()
 
-	accounts, err := s.loadAccountsFromDB(fallbackCtx, bucket, useMixed)
+	accounts, err := s.loadAccountsFromDB(fallbackCtx, bucket)
 	if err != nil {
-		return nil, useMixed, err
+		return nil, err
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, useMixed, ctxErr
+		return nil, ctxErr
 	}
 
 	if s.cache != nil && canPublish {
@@ -268,7 +267,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 		}
 	}
 
-	return accounts, useMixed, nil
+	return accounts, nil
 }
 
 func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
@@ -609,13 +608,8 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 		}
 		accountGroupIDs := s.normalizeGroupIDs(account.GroupIDs)
 		switch account.Platform {
-		case PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
+		case PlatformAnthropic, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
 			addPlatformGroups(account.Platform, accountGroupIDs)
-		case PlatformAntigravity:
-			// 批量更新可能刚关闭 mixed_scheduling，仍需清理两个兼容平台的旧快照。
-			addPlatformGroups(PlatformAntigravity, accountGroupIDs)
-			addPlatformGroups(PlatformAnthropic, accountGroupIDs)
-			addPlatformGroups(PlatformGemini, accountGroupIDs)
 		default:
 			return s.rebuildByGroupIDs(ctx, rebuildGroupIDs, "account_bulk_change", seen)
 		}
@@ -817,15 +811,11 @@ func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account
 	}
 
 	buckets := s.bucketsForPlatform(account.Platform, groupIDs, seen)
-	if account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled() {
-		buckets = append(buckets, s.bucketsForPlatform(PlatformAnthropic, groupIDs, seen)...)
-		buckets = append(buckets, s.bucketsForPlatform(PlatformGemini, groupIDs, seen)...)
-	}
 	return s.rebuildBuckets(ctx, buckets, reason)
 }
 
-func schedulerSnapshotPlatforms() [8]string {
-	return [8]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek}
+func schedulerSnapshotPlatforms() [6]string {
+	return [6]string{PlatformAnthropic, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek}
 }
 
 // 生命周期辅助函数有意排除 group0；full rebuild 构造 group0 canonical 集时必须显式调用 canonical helper。
@@ -843,9 +833,6 @@ func schedulerCanonicalBuckets(groupID int64) []SchedulerBucket {
 			SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeSingle},
 			SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeForced},
 		)
-		if platform == PlatformAnthropic || platform == PlatformGemini {
-			buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeMixed})
-		}
 	}
 	return buckets
 }
@@ -881,9 +868,6 @@ func (s *SchedulerSnapshotService) bucketsForPlatform(platform string, groupIDs 
 		}
 		buckets = append(buckets, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeSingle})
 		buckets = append(buckets, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeForced})
-		if platform == PlatformAnthropic || platform == PlatformGemini {
-			buckets = append(buckets, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeMixed})
-		}
 	}
 	return buckets
 }
@@ -1454,37 +1438,13 @@ func (s *SchedulerSnapshotService) shouldLogOutboxLagWarning(active bool) bool {
 	return shouldLog
 }
 
-func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucket SchedulerBucket, useMixed bool) ([]Account, error) {
+func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucket SchedulerBucket) ([]Account, error) {
 	if s.accountRepo == nil {
 		return nil, ErrSchedulerCacheNotReady
 	}
 	groupID := bucket.GroupID
 	if s.isRunModeSimple() {
 		groupID = 0
-	}
-
-	if useMixed {
-		platforms := []string{bucket.Platform, PlatformAntigravity}
-		var accounts []Account
-		var err error
-		if groupID > 0 {
-			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, groupID, platforms)
-		} else if s.isRunModeSimple() {
-			accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
-		} else {
-			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
-		}
-		if err != nil {
-			return nil, err
-		}
-		filtered := make([]Account, 0, len(accounts))
-		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
-				continue
-			}
-			filtered = append(filtered, acc)
-		}
-		return filtered, nil
 	}
 
 	if groupID > 0 {
@@ -1503,16 +1463,16 @@ func (s *SchedulerSnapshotService) loadAccountsForRebuild(
 ) ([]Account, error) {
 	key, cacheable := schedulerAccountQueryKeyForBucket(bucket)
 	if queries == nil || !cacheable {
-		return s.loadAccountsFromDB(ctx, bucket, bucket.Mode == SchedulerModeMixed)
+		return s.loadAccountsFromDB(ctx, bucket)
 	}
 
 	if accounts, ok := queries.accounts[key]; ok {
 		return accounts, nil
 	}
 	if queries.remaining[key] <= 1 {
-		return s.loadAccountsFromDB(ctx, bucket, false)
+		return s.loadAccountsFromDB(ctx, bucket)
 	}
-	accounts, err := s.loadAccountsFromDB(ctx, bucket, false)
+	accounts, err := s.loadAccountsFromDB(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -1566,9 +1526,6 @@ func (s *SchedulerSnapshotService) normalizeGroupIDs(groupIDs []int64) []int64 {
 func (s *SchedulerSnapshotService) resolveMode(platform string, hasForcePlatform bool) string {
 	if hasForcePlatform {
 		return SchedulerModeForced
-	}
-	if platform == PlatformAnthropic || platform == PlatformGemini {
-		return SchedulerModeMixed
 	}
 	return SchedulerModeSingle
 }
