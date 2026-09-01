@@ -42,6 +42,15 @@ const (
 // 这些 token 是客户端特有的，不应透传给上游 API。
 var DroppedBetas = []string{}
 
+// DummyThoughtSignature 是一个占位的 thinking 签名值，携带它的 thinking block
+// 在转发前必须被过滤掉——该签名对 Anthropic 上游无效，透传会被拒绝。
+//
+// 历史来源：该值原本由已移除的 Antigravity 平台生成，用于跳过 Gemini 3 的
+// thought_signature 校验（曾定义在 internal/pkg/antigravity）。Gemini 协议支持
+// 移除后仍保留此常量，因为历史会话与客户端重放的请求体里可能残留带该签名的
+// thinking block，filterThinkingBlocksInternal 需要继续识别并剔除它们。
+const DummyThoughtSignature = "skip_thought_signature_validator"
+
 // DefaultBetaHeader Claude Code 客户端默认的 anthropic-beta header
 const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaFineGrainedToolStreaming
 
