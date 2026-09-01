@@ -147,7 +147,7 @@ func vertexServiceAccountCacheKey(account *Account, key *vertexServiceAccountKey
 
 // getVertexServiceAccountAccessToken obtains an access token for a Vertex service account,
 // using the shared cache and distributed lock to avoid redundant exchanges.
-func getVertexServiceAccountAccessToken(ctx context.Context, cache GeminiTokenCache, account *Account) (string, error) {
+func getVertexServiceAccountAccessToken(ctx context.Context, cache TokenCache, account *Account) (string, error) {
 	key, err := parseVertexServiceAccountKey(account)
 	if err != nil {
 		return "", err

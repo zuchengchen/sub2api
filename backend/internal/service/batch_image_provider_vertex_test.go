@@ -40,7 +40,7 @@ func TestVertexProvider_MissingServiceAccountRejected(t *testing.T) {
 }
 
 func TestVertexProvider_MissingManagedGCSBucketRejected(t *testing.T) {
-	provider := NewVertexBatchImageProvider(VertexBatchImageProviderOptions{ProjectID: "proj", Environment: "test"}, &fakeVertexBatchClient{}, &fakeVertexObjectStore{}, &fakeGeminiTokenCache{token: "token"})
+	provider := NewVertexBatchImageProvider(VertexBatchImageProviderOptions{ProjectID: "proj", Environment: "test"}, &fakeVertexBatchClient{}, &fakeVertexObjectStore{}, &fakeTokenCache{token: "token"})
 	_, err := provider.Submit(context.Background(), nil, vertexServiceAccount(), validVertexBatchInput())
 	require.Error(t, err)
 	require.Equal(t, "VERTEX_MANAGED_GCS_BUCKET_MISSING", infraerrors.Reason(err))
@@ -296,7 +296,7 @@ func newTestVertexProvider(client *fakeVertexBatchClient, store *fakeVertexObjec
 		ManagedGCSBucket: "managed-bucket",
 		ManagedGCSPrefix: "batch-image/{env}/{batch_id}",
 		Environment:      "test",
-	}, client, store, &fakeGeminiTokenCache{token: "ya29.test-token"})
+	}, client, store, &fakeTokenCache{token: "ya29.test-token"})
 }
 
 func vertexServiceAccount() *Account {
@@ -410,29 +410,29 @@ func (f *fakeVertexObjectStore) DeletePrefix(_ context.Context, _ string, uri st
 	return f.deleteErr
 }
 
-type fakeGeminiTokenCache struct {
+type fakeTokenCache struct {
 	token string
 }
 
-func (f *fakeGeminiTokenCache) GetAccessToken(context.Context, string) (string, error) {
+func (f *fakeTokenCache) GetAccessToken(context.Context, string) (string, error) {
 	if strings.TrimSpace(f.token) == "" {
 		return "", errors.New("missing token")
 	}
 	return f.token, nil
 }
 
-func (f *fakeGeminiTokenCache) SetAccessToken(context.Context, string, string, time.Duration) error {
+func (f *fakeTokenCache) SetAccessToken(context.Context, string, string, time.Duration) error {
 	return nil
 }
 
-func (f *fakeGeminiTokenCache) DeleteAccessToken(context.Context, string) error {
+func (f *fakeTokenCache) DeleteAccessToken(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeGeminiTokenCache) AcquireRefreshLock(context.Context, string, time.Duration) (bool, error) {
+func (f *fakeTokenCache) AcquireRefreshLock(context.Context, string, time.Duration) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeGeminiTokenCache) ReleaseRefreshLock(context.Context, string) error {
+func (f *fakeTokenCache) ReleaseRefreshLock(context.Context, string) error {
 	return nil
 }

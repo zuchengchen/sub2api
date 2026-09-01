@@ -11,34 +11,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type geminiTokenCacheStub struct {
+type tokenCacheStub struct {
 	deletedKeys []string
 	deleteErr   error
 }
 
-func (s *geminiTokenCacheStub) GetAccessToken(ctx context.Context, cacheKey string) (string, error) {
+func (s *tokenCacheStub) GetAccessToken(ctx context.Context, cacheKey string) (string, error) {
 	return "", nil
 }
 
-func (s *geminiTokenCacheStub) SetAccessToken(ctx context.Context, cacheKey string, token string, ttl time.Duration) error {
+func (s *tokenCacheStub) SetAccessToken(ctx context.Context, cacheKey string, token string, ttl time.Duration) error {
 	return nil
 }
 
-func (s *geminiTokenCacheStub) DeleteAccessToken(ctx context.Context, cacheKey string) error {
+func (s *tokenCacheStub) DeleteAccessToken(ctx context.Context, cacheKey string) error {
 	s.deletedKeys = append(s.deletedKeys, cacheKey)
 	return s.deleteErr
 }
 
-func (s *geminiTokenCacheStub) AcquireRefreshLock(ctx context.Context, cacheKey string, ttl time.Duration) (bool, error) {
+func (s *tokenCacheStub) AcquireRefreshLock(ctx context.Context, cacheKey string, ttl time.Duration) (bool, error) {
 	return true, nil
 }
 
-func (s *geminiTokenCacheStub) ReleaseRefreshLock(ctx context.Context, cacheKey string) error {
+func (s *tokenCacheStub) ReleaseRefreshLock(ctx context.Context, cacheKey string) error {
 	return nil
 }
 
 func TestCompositeTokenCacheInvalidator_Gemini(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 	account := &Account{
 		ID:       10,
@@ -57,7 +57,7 @@ func TestCompositeTokenCacheInvalidator_Gemini(t *testing.T) {
 }
 
 func TestCompositeTokenCacheInvalidator_GeminiWithoutProjectID(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 	account := &Account{
 		ID:       10,
@@ -75,7 +75,7 @@ func TestCompositeTokenCacheInvalidator_GeminiWithoutProjectID(t *testing.T) {
 }
 
 func TestCompositeTokenCacheInvalidator_Antigravity(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 	account := &Account{
 		ID:       99,
@@ -93,7 +93,7 @@ func TestCompositeTokenCacheInvalidator_Antigravity(t *testing.T) {
 }
 
 func TestCompositeTokenCacheInvalidator_AntigravityWithoutProjectID(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 	account := &Account{
 		ID:       99,
@@ -111,7 +111,7 @@ func TestCompositeTokenCacheInvalidator_AntigravityWithoutProjectID(t *testing.T
 }
 
 func TestCompositeTokenCacheInvalidator_OpenAI(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 	account := &Account{
 		ID:       500,
@@ -128,7 +128,7 @@ func TestCompositeTokenCacheInvalidator_OpenAI(t *testing.T) {
 }
 
 func TestCompositeTokenCacheInvalidator_Claude(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 	account := &Account{
 		ID:       600,
@@ -145,7 +145,7 @@ func TestCompositeTokenCacheInvalidator_Claude(t *testing.T) {
 }
 
 func TestCompositeTokenCacheInvalidator_SkipNonOAuth(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 
 	tests := []struct {
@@ -197,7 +197,7 @@ func TestCompositeTokenCacheInvalidator_SkipNonOAuth(t *testing.T) {
 }
 
 func TestCompositeTokenCacheInvalidator_SkipUnsupportedPlatform(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 	account := &Account{
 		ID:       100,
@@ -223,7 +223,7 @@ func TestCompositeTokenCacheInvalidator_NilCache(t *testing.T) {
 }
 
 func TestCompositeTokenCacheInvalidator_NilAccount(t *testing.T) {
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 
 	err := invalidator.InvalidateToken(context.Background(), nil)
@@ -245,7 +245,7 @@ func TestCompositeTokenCacheInvalidator_NilInvalidator(t *testing.T) {
 
 func TestCompositeTokenCacheInvalidator_DeleteError(t *testing.T) {
 	expectedErr := errors.New("redis connection failed")
-	cache := &geminiTokenCacheStub{deleteErr: expectedErr}
+	cache := &tokenCacheStub{deleteErr: expectedErr}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 
 	tests := []struct {
@@ -282,7 +282,7 @@ func TestCompositeTokenCacheInvalidator_DeleteError(t *testing.T) {
 
 func TestCompositeTokenCacheInvalidator_AllPlatformsIntegration(t *testing.T) {
 	// 测试所有平台的缓存键生成和删除
-	cache := &geminiTokenCacheStub{}
+	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 
 	accounts := []*Account{

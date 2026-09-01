@@ -147,7 +147,7 @@ func (e *refreshAPIExecutorStub) CacheKey(account *Account) string {
 	return "test:api:" + account.Platform
 }
 
-// refreshAPICacheStub implements GeminiTokenCache for OAuthRefreshAPI tests.
+// refreshAPICacheStub implements TokenCache for OAuthRefreshAPI tests.
 type refreshAPICacheStub struct {
 	lockResult    bool
 	lockErr       error

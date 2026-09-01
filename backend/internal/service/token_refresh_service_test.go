@@ -953,7 +953,7 @@ func TestIsNonRetryableRefreshError(t *testing.T) {
 
 // ========== Path A (refreshAPI) 测试用例 ==========
 
-// mockTokenCacheForRefreshAPI 用于 Path A 测试的 GeminiTokenCache mock
+// mockTokenCacheForRefreshAPI 用于 Path A 测试的 TokenCache mock
 type mockTokenCacheForRefreshAPI struct {
 	lockResult   bool
 	lockErr      error
@@ -986,7 +986,7 @@ func (m *mockTokenCacheForRefreshAPI) ReleaseRefreshLock(_ context.Context, _ st
 }
 
 // buildPathAService 构建注入了 refreshAPI 的 service（Path A 测试辅助）
-func buildPathAService(repo *tokenRefreshAccountRepo, cache GeminiTokenCache, invalidator TokenCacheInvalidator) (*TokenRefreshService, *tokenRefresherStub) {
+func buildPathAService(repo *tokenRefreshAccountRepo, cache TokenCache, invalidator TokenCacheInvalidator) (*TokenRefreshService, *tokenRefresherStub) {
 	for _, account := range repo.accountsByID {
 		if account != nil && account.Status == "" {
 			account.Status = StatusActive

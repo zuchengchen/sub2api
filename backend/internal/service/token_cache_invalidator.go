@@ -11,10 +11,10 @@ type TokenCacheInvalidator interface {
 }
 
 type CompositeTokenCacheInvalidator struct {
-	cache GeminiTokenCache // 统一使用一个缓存接口，通过缓存键前缀区分平台
+	cache TokenCache // 统一使用一个缓存接口，通过缓存键前缀区分平台
 }
 
-func NewCompositeTokenCacheInvalidator(cache GeminiTokenCache) *CompositeTokenCacheInvalidator {
+func NewCompositeTokenCacheInvalidator(cache TokenCache) *CompositeTokenCacheInvalidator {
 	return &CompositeTokenCacheInvalidator{
 		cache: cache,
 	}

@@ -119,10 +119,10 @@ type VertexBatchImageProvider struct {
 	opts        VertexBatchImageProviderOptions
 	client      VertexBatchClient
 	objectStore VertexBatchObjectStore
-	tokenCache  GeminiTokenCache
+	tokenCache  TokenCache
 }
 
-func NewVertexBatchImageProvider(opts VertexBatchImageProviderOptions, client VertexBatchClient, objectStore VertexBatchObjectStore, tokenCache GeminiTokenCache) *VertexBatchImageProvider {
+func NewVertexBatchImageProvider(opts VertexBatchImageProviderOptions, client VertexBatchClient, objectStore VertexBatchObjectStore, tokenCache TokenCache) *VertexBatchImageProvider {
 	opts = normalizeVertexBatchImageProviderOptions(opts)
 	if client == nil {
 		client = NewVertexBatchHTTPClient(opts.BatchPredictionBaseURL, nil)
@@ -138,7 +138,7 @@ func NewVertexBatchImageProvider(opts VertexBatchImageProviderOptions, client Ve
 	}
 }
 
-func NewVertexBatchImageProviderFromConfig(cfg *config.Config, client VertexBatchClient, objectStore VertexBatchObjectStore, tokenCache GeminiTokenCache) *VertexBatchImageProvider {
+func NewVertexBatchImageProviderFromConfig(cfg *config.Config, client VertexBatchClient, objectStore VertexBatchObjectStore, tokenCache TokenCache) *VertexBatchImageProvider {
 	return NewVertexBatchImageProvider(NewVertexBatchImageProviderOptionsFromConfig(cfg), client, objectStore, tokenCache)
 }
 

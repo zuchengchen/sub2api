@@ -13,17 +13,17 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-type GeminiTokenCacheSuite struct {
+type TokenCacheSuite struct {
 	IntegrationRedisSuite
-	cache service.GeminiTokenCache
+	cache service.TokenCache
 }
 
-func (s *GeminiTokenCacheSuite) SetupTest() {
+func (s *TokenCacheSuite) SetupTest() {
 	s.IntegrationRedisSuite.SetupTest()
-	s.cache = NewGeminiTokenCache(s.rdb)
+	s.cache = NewTokenCache(s.rdb)
 }
 
-func (s *GeminiTokenCacheSuite) TestDeleteAccessToken() {
+func (s *TokenCacheSuite) TestDeleteAccessToken() {
 	cacheKey := "project-123"
 	token := "token-value"
 	require.NoError(s.T(), s.cache.SetAccessToken(s.ctx, cacheKey, token, time.Minute))
@@ -38,10 +38,10 @@ func (s *GeminiTokenCacheSuite) TestDeleteAccessToken() {
 	require.True(s.T(), errors.Is(err, redis.Nil), "expected redis.Nil after delete")
 }
 
-func (s *GeminiTokenCacheSuite) TestDeleteAccessToken_MissingKey() {
+func (s *TokenCacheSuite) TestDeleteAccessToken_MissingKey() {
 	require.NoError(s.T(), s.cache.DeleteAccessToken(s.ctx, "missing-key"))
 }
 
-func TestGeminiTokenCacheSuite(t *testing.T) {
-	suite.Run(t, new(GeminiTokenCacheSuite))
+func TestTokenCacheSuite(t *testing.T) {
+	suite.Run(t, new(TokenCacheSuite))
 }

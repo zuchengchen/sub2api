@@ -18,7 +18,7 @@ const (
 // GeminiTokenProvider manages access_token for Gemini OAuth and Vertex service account accounts.
 type GeminiTokenProvider struct {
 	accountRepo        AccountRepository
-	tokenCache         GeminiTokenCache
+	tokenCache         TokenCache
 	geminiOAuthService *GeminiOAuthService
 	refreshAPI         *OAuthRefreshAPI
 	executor           OAuthRefreshExecutor
@@ -27,7 +27,7 @@ type GeminiTokenProvider struct {
 
 func NewGeminiTokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	geminiOAuthService *GeminiOAuthService,
 ) *GeminiTokenProvider {
 	return &GeminiTokenProvider{

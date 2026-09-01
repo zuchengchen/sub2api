@@ -73,7 +73,7 @@ func (m *openAITokenRuntimeMetricsStore) touchNow() {
 }
 
 // OpenAITokenCache token cache interface.
-type OpenAITokenCache = GeminiTokenCache
+type OpenAITokenCache = TokenCache
 
 // OpenAITokenProvider manages access_token for OpenAI OAuth accounts.
 type OpenAITokenProvider struct {

@@ -94,7 +94,7 @@ func ProvideAuthService(
 }
 
 // ProvideOAuthRefreshAPI creates OAuthRefreshAPI with the default lock TTL.
-func ProvideOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCache) *OAuthRefreshAPI {
+func ProvideOAuthRefreshAPI(accountRepo AccountRepository, tokenCache TokenCache) *OAuthRefreshAPI {
 	return NewOAuthRefreshAPI(accountRepo, tokenCache)
 }
 
@@ -151,7 +151,7 @@ func ProvideTokenRefreshService(
 // ProvideClaudeTokenProvider creates ClaudeTokenProvider with OAuthRefreshAPI injection
 func ProvideClaudeTokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	oauthService *OAuthService,
 	refreshAPI *OAuthRefreshAPI,
 ) *ClaudeTokenProvider {
@@ -165,7 +165,7 @@ func ProvideClaudeTokenProvider(
 // ProvideOpenAITokenProvider creates OpenAITokenProvider with OAuthRefreshAPI injection
 func ProvideOpenAITokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	openaiOAuthService *OpenAIOAuthService,
 	refreshAPI *OAuthRefreshAPI,
 ) *OpenAITokenProvider {
@@ -330,7 +330,7 @@ func ProvideCNProviderBalanceCheckService(
 // ProvideGeminiTokenProvider creates GeminiTokenProvider with OAuthRefreshAPI injection
 func ProvideGeminiTokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	geminiOAuthService *GeminiOAuthService,
 	refreshAPI *OAuthRefreshAPI,
 ) *GeminiTokenProvider {
@@ -344,7 +344,7 @@ func ProvideGeminiTokenProvider(
 // ProvideAntigravityTokenProvider creates AntigravityTokenProvider with OAuthRefreshAPI injection
 func ProvideAntigravityTokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	antigravityOAuthService *AntigravityOAuthService,
 	refreshAPI *OAuthRefreshAPI,
 	tempUnschedCache TempUnschedCache,
@@ -360,7 +360,7 @@ func ProvideAntigravityTokenProvider(
 // ProvideGrokTokenProvider creates GrokTokenProvider with OAuthRefreshAPI injection.
 func ProvideGrokTokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	grokOAuthService *GrokOAuthService,
 	refreshAPI *OAuthRefreshAPI,
 	tempUnschedCache TempUnschedCache,

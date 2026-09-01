@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGeminiTokenCache_DeleteAccessToken_RedisError(t *testing.T) {
+func TestTokenCache_DeleteAccessToken_RedisError(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         "127.0.0.1:1",
 		DialTimeout:  50 * time.Millisecond,
@@ -22,7 +22,7 @@ func TestGeminiTokenCache_DeleteAccessToken_RedisError(t *testing.T) {
 		_ = rdb.Close()
 	})
 
-	cache := NewGeminiTokenCache(rdb)
+	cache := NewTokenCache(rdb)
 	err := cache.DeleteAccessToken(context.Background(), "broken")
 	require.Error(t, err)
 }

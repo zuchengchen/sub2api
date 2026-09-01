@@ -21,7 +21,7 @@ const (
 )
 
 // AntigravityTokenCache token cache interface.
-type AntigravityTokenCache = GeminiTokenCache
+type AntigravityTokenCache = TokenCache
 
 // AntigravityTokenProvider manages access_token for antigravity accounts.
 type AntigravityTokenProvider struct {

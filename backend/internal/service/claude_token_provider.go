@@ -15,7 +15,7 @@ const (
 )
 
 // ClaudeTokenCache token cache interface.
-type ClaudeTokenCache = GeminiTokenCache
+type ClaudeTokenCache = TokenCache
 
 // ClaudeTokenProvider manages access_token for Claude OAuth and Vertex service account accounts.
 type ClaudeTokenProvider struct {

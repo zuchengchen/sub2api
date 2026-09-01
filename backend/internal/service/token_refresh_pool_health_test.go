@@ -127,7 +127,7 @@ type rejectedRefreshAttemptGate struct {
 }
 
 type poolHealthTokenCacheStub struct {
-	GeminiTokenCache
+	TokenCache
 }
 
 type tripBeforeRateAdmissionGate struct {
