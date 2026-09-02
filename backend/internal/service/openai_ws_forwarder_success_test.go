@@ -574,7 +574,7 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedIsNotSchedulingSuccess(
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
-		rateLimitService: NewRateLimitService(transientCooldownAccountRepo{}, nil, cfg, nil, nil),
+		rateLimitService: NewRateLimitService(transientCooldownAccountRepo{}, nil, cfg, nil),
 		httpUpstream:     &httpUpstreamRecorder{},
 		cache:            &stubGatewayCache{},
 		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),

@@ -214,7 +214,7 @@ func newEmptyChannelCache() *channelCache {
 }
 
 // expandPricingToCache 将渠道的模型定价展开到缓存（按分组+平台维度）。
-// 各平台严格独立：antigravity 分组只匹配 antigravity 定价，不会匹配 anthropic/gemini 的定价。
+// 各平台严格独立：分组只匹配本平台定价，不会匹配其他平台的定价。
 // 查找时通过 lookupPricingAcrossPlatforms() 在本平台内查找。
 func expandPricingToCache(cache *channelCache, ch *Channel, gid int64, platform string) {
 	for j := range ch.ModelPricing {
@@ -241,7 +241,7 @@ func expandPricingToCache(cache *channelCache, ch *Channel, gid int64, platform 
 }
 
 // expandMappingToCache 将渠道的模型映射展开到缓存（按分组+平台维度）。
-// 各平台严格独立：antigravity 分组只匹配 antigravity 映射。
+// 各平台严格独立：分组只匹配本平台映射。
 func expandMappingToCache(cache *channelCache, ch *Channel, gid int64, platform string) {
 	for _, mappingPlatform := range matchingPlatforms(platform) {
 		platformMapping, ok := ch.ModelMapping[mappingPlatform]
@@ -357,7 +357,7 @@ func isPlatformPricingMatch(groupPlatform, pricingPlatform string) bool {
 // fallback used before a request target has been resolved.
 func matchingPlatforms(groupPlatform string) []string {
 	if groupPlatform == PlatformComposite {
-		return []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek}
+		return []string{PlatformAnthropic, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek}
 	}
 	return []string{groupPlatform}
 }
@@ -565,7 +565,7 @@ func (s *ChannelService) ResolveChannelMappingAndRestrict(ctx context.Context, g
 }
 
 // resolveMapping 基于已查找的渠道信息解析模型映射。
-// antigravity 分组依次尝试所有匹配平台，确保跨平台同名映射各自独立。
+// 分组依次尝试所有匹配平台，确保跨平台同名映射各自独立。
 func resolveMapping(lk *channelLookup, groupID int64, model string) ChannelMappingResult {
 	// lk.channel 来自已装填的缓存，BillingModelSource 已在 populateChannelCache 阶段归一化，
 	// 这里无需重复兜底。

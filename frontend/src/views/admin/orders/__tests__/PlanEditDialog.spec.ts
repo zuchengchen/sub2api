@@ -108,7 +108,6 @@ const groupFixture = (overrides: Partial<AdminGroup>): AdminGroup => ({
   updated_at: '2026-07-01T00:00:00Z',
   model_routing: null,
   model_routing_enabled: false,
-  mcp_xml_inject: false,
   sort_order: 0,
   ...overrides,
 })
@@ -174,7 +173,7 @@ describe('PlanEditDialog', () => {
       groups: [
         groupFixture({
           id: 10,
-          name: 'OpenAI + Claude + Gemini + Grok',
+          name: 'OpenAI + Claude + Grok',
           platform: 'composite',
           rate_multiplier: 1.2,
           subscription_type: 'subscription',
@@ -190,7 +189,7 @@ describe('PlanEditDialog', () => {
 
     const options = wrapper.findAll('option').map(option => option.text())
 
-    expect(options).toContain('OpenAI + Claude + Gemini + Grok — composite (1.2x)')
+    expect(options).toContain('OpenAI + Claude + Grok — composite (1.2x)')
     expect(options).not.toContain('Standard OpenAI — openai (1x)')
   })
 })

@@ -69,7 +69,7 @@ func TestGatewayService_ListSchedulableAccounts_DoesNotFilterUnsupportedThreshol
 		},
 	}
 
-	rateLimitService := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	rateLimitService.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 	svc := &GatewayService{
 		accountRepo:      accountRepo,
@@ -77,10 +77,9 @@ func TestGatewayService_ListSchedulableAccounts_DoesNotFilterUnsupportedThreshol
 		rateLimitService: rateLimitService,
 	}
 
-	accounts, useMixed, err := svc.listSchedulableAccounts(context.Background(), nil, PlatformKiro, false)
+	accounts, err := svc.listSchedulableAccounts(context.Background(), nil, PlatformKiro, false)
 
 	require.NoError(t, err)
-	require.False(t, useMixed)
 	require.Len(t, accounts, 2)
 	require.Equal(t, int64(3101), accounts[0].ID)
 	require.Equal(t, int64(3102), accounts[1].ID)
@@ -119,7 +118,7 @@ func TestOpenAIGatewayService_ListSchedulableAccounts_FiltersThresholdBlockedAcc
 		},
 	}
 
-	rateLimitService := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	rateLimitService.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 	svc := &OpenAIGatewayService{
 		accountRepo:      accountRepo,

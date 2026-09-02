@@ -40,21 +40,18 @@ type Group struct {
 	MonthlyLimitUSD     *float64
 	DefaultValidityDays int
 
-	// 图片生成计费配置（antigravity 和 gemini 平台使用）
-	AllowImageGeneration         bool
-	AllowBatchImageGeneration    bool
-	ImageRateIndependent         bool
-	ImageRateMultiplier          float64
-	ImagePrice1K                 *float64
-	ImagePrice2K                 *float64
-	ImagePrice4K                 *float64
-	BatchImageDiscountMultiplier float64
-	BatchImageHoldMultiplier     float64
-	VideoRateIndependent         bool
-	VideoRateMultiplier          float64
-	VideoPrice480P               *float64
-	VideoPrice720P               *float64
-	VideoPrice1080P              *float64
+	// 图片生成计费配置
+	AllowImageGeneration bool
+	ImageRateIndependent bool
+	ImageRateMultiplier  float64
+	ImagePrice1K         *float64
+	ImagePrice2K         *float64
+	ImagePrice4K         *float64
+	VideoRateIndependent bool
+	VideoRateMultiplier  float64
+	VideoPrice480P       *float64
+	VideoPrice720P       *float64
+	VideoPrice1080P      *float64
 	// VideoModelPrices is optional per-model-family per-second pricing
 	// (groups.video_model_prices JSONB). Shape: family → resolution → USD/s.
 	// When set for a model, overrides VideoPrice* for that model only.
@@ -87,11 +84,11 @@ type Group struct {
 	ModelRouting        map[string][]int64
 	ModelRoutingEnabled bool
 
-	// MCP XML 协议注入开关（仅 antigravity 平台使用）
+	// MCP XML 协议注入开关
 	MCPXMLInject bool
 
-	// 支持的模型系列（仅 antigravity 平台使用）
-	// 可选值: claude, gemini_text, gemini_image
+	// 支持的模型系列
+	// 可选值: claude
 	SupportedModelScopes []string
 
 	// 分组排序
@@ -100,8 +97,8 @@ type Group struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       bool
 	AllowLive                   bool
-	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
-	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
+	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Anthropic/Grok）
+	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Anthropic）
 	DefaultMappedModel          string
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
 	ModelsListConfig            GroupModelsListConfig
@@ -411,7 +408,7 @@ func ValidateProfitControlConfig(platform string, enabled bool, minMargin, safet
 		return nil
 	}
 	if !profitControlPlatformSupported(platform) {
-		return errors.New("利润控制仅支持 openai、anthropic、gemini、grok、antigravity 平台分组")
+		return errors.New("利润控制仅支持 openai、anthropic、grok 平台分组")
 	}
 	if !validProfitControlRatio(minMargin) {
 		return fmt.Errorf("profit_min_margin 应为 [0,1) 的小数，got %v", minMargin)
@@ -448,7 +445,7 @@ func NormalizeProfitControlConfig(platform string, enabled bool, minMargin, safe
 
 func profitControlPlatformSupported(platform string) bool {
 	switch platform {
-	case PlatformOpenAI, PlatformAnthropic, PlatformGemini, PlatformGrok, PlatformAntigravity:
+	case PlatformOpenAI, PlatformAnthropic, PlatformGrok:
 		return true
 	default:
 		return false

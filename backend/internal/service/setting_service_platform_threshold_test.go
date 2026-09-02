@@ -37,7 +37,7 @@ func TestPlatformSchedulingThresholds_RoundTrip_DefaultsAndStoredValues(t *testi
 	require.Equal(t, 91, got.AccountSchedulingThresholds[PlatformOpenAI])
 	require.Equal(t, 100, got.AccountSchedulingThresholds[PlatformAnthropic])
 	require.Equal(t, 77, got.AccountSchedulingThresholds[PlatformGrok])
-	require.NotContains(t, got.AccountSchedulingThresholds, PlatformGemini)
+	require.NotContains(t, got.AccountSchedulingThresholds, "gemini")
 	require.NotContains(t, got.AccountSchedulingThresholds, "kiro")
 }
 
@@ -63,14 +63,14 @@ func TestValidateAndNormalizeAccountSchedulingThresholds_FillsMissingPlatforms(t
 	require.Equal(t, 91, normalized[PlatformOpenAI])
 	require.Equal(t, 100, normalized[PlatformAnthropic])
 	require.Equal(t, 100, normalized[PlatformGrok])
-	require.NotContains(t, normalized, PlatformGemini)
+	require.NotContains(t, normalized, "gemini")
 	require.NotContains(t, normalized, "kiro")
-	require.NotContains(t, normalized, PlatformAntigravity)
+	require.NotContains(t, normalized, "antigravity")
 }
 
 func TestValidateAndNormalizeAccountSchedulingThresholds_RejectsUnsupportedPlatforms(t *testing.T) {
 	_, err := validateAndNormalizeAccountSchedulingThresholds(map[string]int{
-		PlatformGemini: 85,
+		"gemini": 85,
 	})
 	require.Error(t, err)
 }

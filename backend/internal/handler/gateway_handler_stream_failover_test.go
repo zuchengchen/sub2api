@@ -69,7 +69,7 @@ func TestStreamWrittenGuard_MessagesPath_AbortFailoverOnSSEContentWritten(t *tes
 }
 
 // TestStreamWrittenGuard_GeminiPath_AbortFailoverOnSSEContentWritten 与上述测试相同，
-// 验证 Gemini 路径使用 service.PlatformGemini（而非 account.Platform）时行为一致。
+// 验证显式传入 platform（而非 account.Platform）时行为一致。
 func TestStreamWrittenGuard_GeminiPath_AbortFailoverOnSSEContentWritten(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -88,7 +88,7 @@ func TestStreamWrittenGuard_GeminiPath_AbortFailoverOnSSEContentWritten(t *testi
 	}
 
 	h := &GatewayHandler{}
-	h.handleFailoverExhausted(c, failoverErr, service.PlatformGemini, true)
+	h.handleFailoverExhausted(c, failoverErr, service.PlatformGrok, true)
 
 	body := w.Body.String()
 

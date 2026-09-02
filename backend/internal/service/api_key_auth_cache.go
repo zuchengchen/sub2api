@@ -72,7 +72,6 @@ type APIKeyAuthGroupSnapshot struct {
 	WeeklyLimitUSD                  *float64                      `json:"weekly_limit_usd,omitempty"`
 	MonthlyLimitUSD                 *float64                      `json:"monthly_limit_usd,omitempty"`
 	AllowImageGeneration            bool                          `json:"allow_image_generation"`
-	AllowBatchImageGeneration       bool                          `json:"allow_batch_image_generation"`
 	ImageRateIndependent            bool                          `json:"image_rate_independent"`
 	ImageRateMultiplier             float64                       `json:"image_rate_multiplier"`
 	ImagePrice1K                    *float64                      `json:"image_price_1k,omitempty"`
@@ -101,7 +100,7 @@ type APIKeyAuthGroupSnapshot struct {
 	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
 	MCPXMLInject        bool               `json:"mcp_xml_inject"`
 
-	// 支持的模型系列（仅 antigravity 平台使用）
+	// 支持的模型系列（历史字段：原仅 Antigravity 平台使用，该平台已下线；保留以兼容存量分组数据）
 	SupportedModelScopes []string `json:"supported_model_scopes,omitempty"`
 
 	// OpenAI Messages 调度配置（仅 openai 平台使用）

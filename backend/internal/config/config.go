@@ -98,10 +98,8 @@ type Config struct {
 	TokenRefresh             TokenRefreshConfig             `mapstructure:"token_refresh"`
 	RunMode                  string                         `mapstructure:"run_mode" yaml:"run_mode"`
 	Timezone                 string                         `mapstructure:"timezone"` // e.g. "Asia/Shanghai", "UTC"
-	Gemini                   GeminiConfig                   `mapstructure:"gemini"`
 	Update                   UpdateConfig                   `mapstructure:"update"`
 	Idempotency              IdempotencyConfig              `mapstructure:"idempotency"`
-	BatchImage               BatchImageConfig               `mapstructure:"batch_image"`
 	ImageStorage             ImageStorageConfig             `mapstructure:"image_storage"`
 	ContentModerationArchive ContentModerationArchiveConfig `mapstructure:"content_moderation_archive"`
 	Plugins                  PluginConfig                   `mapstructure:"plugins"`
@@ -162,28 +160,6 @@ type LogSamplingConfig struct {
 	Thereafter int  `mapstructure:"thereafter"`
 }
 
-type GeminiConfig struct {
-	OAuth GeminiOAuthConfig `mapstructure:"oauth"`
-	Quota GeminiQuotaConfig `mapstructure:"quota"`
-}
-
-type GeminiOAuthConfig struct {
-	ClientID     string `mapstructure:"client_id"`
-	ClientSecret string `mapstructure:"client_secret"`
-	Scopes       string `mapstructure:"scopes"`
-}
-
-type GeminiQuotaConfig struct {
-	Tiers  map[string]GeminiTierQuotaConfig `mapstructure:"tiers"`
-	Policy string                           `mapstructure:"policy"`
-}
-
-type GeminiTierQuotaConfig struct {
-	ProRPD          *int64 `mapstructure:"pro_rpd" json:"pro_rpd"`
-	FlashRPD        *int64 `mapstructure:"flash_rpd" json:"flash_rpd"`
-	CooldownMinutes *int   `mapstructure:"cooldown_minutes" json:"cooldown_minutes"`
-}
-
 type UpdateConfig struct {
 	// ProxyURL 用于访问 GitHub 的代理地址
 	// 支持 http/https/socks5/socks5h 协议
@@ -208,56 +184,6 @@ type IdempotencyConfig struct {
 	CleanupIntervalSeconds int `mapstructure:"cleanup_interval_seconds"`
 	// CleanupBatchSize 每次清理的最大记录数。
 	CleanupBatchSize int `mapstructure:"cleanup_batch_size"`
-}
-
-type BatchImageConfig struct {
-	Enabled                           bool   `mapstructure:"enabled"`
-	MaxItemsPerJobDefault             int    `mapstructure:"max_items_per_job_default"`
-	MaxItemsPerJobTrial               int    `mapstructure:"max_items_per_job_trial"`
-	MaxOutputImagesPerJob             int    `mapstructure:"max_output_images_per_job"`
-	MaxOutputImagesPerItem            int    `mapstructure:"max_output_images_per_item"`
-	MaxPromptCharsPerItem             int    `mapstructure:"max_prompt_chars_per_item"`
-	MaxReferenceImagesPerJob          int    `mapstructure:"max_reference_images_per_job"`
-	MaxReferenceInlineBytesPerJob     int    `mapstructure:"max_reference_inline_bytes_per_job"`
-	DefaultResponseMimeType           string `mapstructure:"default_response_mime_type"`
-	DefaultImageSize                  string `mapstructure:"default_image_size"`
-	MaxDownloadItemsZip               int    `mapstructure:"max_download_items_zip"`
-	MaxDownloadBytesPerRequest        int64  `mapstructure:"max_download_bytes_per_request"`
-	MaxDownloadDurationSeconds        int    `mapstructure:"max_download_duration_seconds"`
-	MaxDownloadConcurrencyPerUser     int    `mapstructure:"max_download_concurrency_per_user"`
-	InputRetentionAfterTerminalHours  int    `mapstructure:"input_retention_after_terminal_hours"`
-	OutputRetentionAfterTerminalHours int    `mapstructure:"output_retention_after_terminal_hours"`
-	OutputRetentionMaxDays            int    `mapstructure:"output_retention_max_days"`
-	CleanupIntervalMinutes            int    `mapstructure:"cleanup_interval_minutes"`
-	CleanupBatchSize                  int    `mapstructure:"cleanup_batch_size"`
-	QueueEnabled                      bool   `mapstructure:"queue_enabled"`
-	QueueReadyKey                     string `mapstructure:"queue_ready_key"`
-	QueueDelayedKey                   string `mapstructure:"queue_delayed_key"`
-	QueueActiveKey                    string `mapstructure:"queue_active_key"`
-	InflightKeyPrefix                 string `mapstructure:"inflight_key_prefix"`
-	LockKeyPrefix                     string `mapstructure:"lock_key_prefix"`
-	IdempotencyKeyPrefix              string `mapstructure:"idempotency_key_prefix"`
-	InflightTTLSeconds                int    `mapstructure:"inflight_ttl_seconds"`
-	JobLockTTLSeconds                 int    `mapstructure:"job_lock_ttl_seconds"`
-	DefaultRequeueDelaySeconds        int    `mapstructure:"default_requeue_delay_seconds"`
-	ErrorRetryDelaySeconds            int    `mapstructure:"error_retry_delay_seconds"`
-	LockConflictDelaySeconds          int    `mapstructure:"lock_conflict_delay_seconds"`
-	StaleActiveAfterSeconds           int    `mapstructure:"stale_active_after_seconds"`
-	DelayedMoverIntervalSeconds       int    `mapstructure:"delayed_mover_interval_seconds"`
-	RecoveryIntervalSeconds           int    `mapstructure:"recovery_interval_seconds"`
-	DelayedMoveLimit                  int    `mapstructure:"delayed_move_limit"`
-	RecoverLimit                      int    `mapstructure:"recover_limit"`
-	VertexEnabled                     bool   `mapstructure:"vertex_enabled"`
-	VertexProjectID                   string `mapstructure:"vertex_project_id"`
-	VertexLocation                    string `mapstructure:"vertex_location"`
-	// VertexManagedGCSBucket is a server-owned bucket for batch JSONL input/output.
-	// Disable Cloud Storage soft delete on this bucket to avoid retaining deleted batch objects.
-	VertexManagedGCSBucket       string `mapstructure:"vertex_managed_gcs_bucket"`
-	VertexManagedGCSPrefix       string `mapstructure:"vertex_managed_gcs_prefix"`
-	VertexInputRetentionHours    int    `mapstructure:"vertex_input_retention_hours"`
-	VertexOutputRetentionHours   int    `mapstructure:"vertex_output_retention_hours"`
-	VertexBatchPredictionBaseURL string `mapstructure:"vertex_batch_prediction_base_url"`
-	VertexGCSBaseURL             string `mapstructure:"vertex_gcs_base_url"`
 }
 
 // ImageStorageConfig 配置异步图片任务结果上传的 S3 兼容对象存储。
@@ -853,7 +779,7 @@ type ProxyFallbackConfig struct {
 	// 仅影响以下非 AI 账号连接的辅助服务：
 	//   - GitHub Release 更新检查
 	//   - 定价数据拉取
-	// 不影响 AI 账号网关连接（Claude/OpenAI/Gemini/Antigravity），
+	// 不影响 AI 账号网关连接（Claude/OpenAI），
 	// 这些关键路径的代理失败始终返回错误，不会回退直连。
 	// 默认 false：避免因代理配置错误导致服务器真实 IP 泄露。
 	AllowDirectOnError bool `mapstructure:"allow_direct_on_error"`
@@ -983,8 +909,6 @@ type GatewayConfig struct {
 	ModelsListReadMaxBytes int64 `mapstructure:"models_list_read_max_bytes"`
 	// 代理探测响应体读取上限（字节）
 	ProxyProbeResponseReadMaxBytes int64 `mapstructure:"proxy_probe_response_read_max_bytes"`
-	// Gemini 上游响应头调试日志开关（默认关闭，避免高频日志开销）
-	GeminiDebugResponseHeaders bool `mapstructure:"gemini_debug_response_headers"`
 	// ConnectionPoolIsolation: 上游连接池隔离策略（proxy/account/account_proxy）
 	ConnectionPoolIsolation string `mapstructure:"connection_pool_isolation"`
 	// ForceCodexCLI: 强制将 OpenAI `/v1/responses` 请求按 Codex CLI 处理。
@@ -1082,11 +1006,6 @@ type GatewayConfig struct {
 
 	// 账户切换最大次数（遇到上游错误时切换到其他账户的次数上限）
 	MaxAccountSwitches int `mapstructure:"max_account_switches"`
-	// Gemini 账户切换最大次数（Gemini 平台单独配置，因 API 限制更严格）
-	MaxAccountSwitchesGemini int `mapstructure:"max_account_switches_gemini"`
-
-	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
-	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
 
 	// Scheduling: 账号调度相关配置
 	Scheduling GatewaySchedulingConfig `mapstructure:"scheduling"`
@@ -2067,8 +1986,6 @@ func setDefaults() {
 		"api.moonshot.cn",
 		"open.bigmodel.cn",
 		"api.minimaxi.com",
-		"generativelanguage.googleapis.com",
-		"cloudcode-pa.googleapis.com",
 		"*.openai.azure.com",
 	})
 	viper.SetDefault("security.url_allowlist.pricing_hosts", []string{
@@ -2198,53 +2115,6 @@ func setDefaults() {
 	viper.SetDefault("redis.pool_size", 1024)
 	viper.SetDefault("redis.min_idle_conns", 128)
 	viper.SetDefault("redis.enable_tls", false)
-
-	// Batch Image queue
-	viper.SetDefault("batch_image.enabled", false)
-	viper.SetDefault("batch_image.max_items_per_job_default", 200)
-	viper.SetDefault("batch_image.max_items_per_job_trial", 50)
-	viper.SetDefault("batch_image.max_output_images_per_job", 200)
-	viper.SetDefault("batch_image.max_output_images_per_item", 4)
-	viper.SetDefault("batch_image.max_prompt_chars_per_item", 8000)
-	viper.SetDefault("batch_image.max_reference_images_per_job", 1000)
-	viper.SetDefault("batch_image.max_reference_inline_bytes_per_job", 134217728)
-	viper.SetDefault("batch_image.default_response_mime_type", "image/png")
-	viper.SetDefault("batch_image.default_image_size", "1K")
-	viper.SetDefault("batch_image.max_download_items_zip", 200)
-	viper.SetDefault("batch_image.max_download_bytes_per_request", 536870912)
-	viper.SetDefault("batch_image.max_download_duration_seconds", 600)
-	viper.SetDefault("batch_image.max_download_concurrency_per_user", 1)
-	viper.SetDefault("batch_image.input_retention_after_terminal_hours", 24)
-	viper.SetDefault("batch_image.output_retention_after_terminal_hours", 72)
-	viper.SetDefault("batch_image.output_retention_max_days", 7)
-	viper.SetDefault("batch_image.cleanup_interval_minutes", 30)
-	viper.SetDefault("batch_image.cleanup_batch_size", 100)
-	viper.SetDefault("batch_image.queue_enabled", false)
-	viper.SetDefault("batch_image.queue_ready_key", "batch_image:queue:ready")
-	viper.SetDefault("batch_image.queue_delayed_key", "batch_image:queue:delayed")
-	viper.SetDefault("batch_image.queue_active_key", "batch_image:queue:active")
-	viper.SetDefault("batch_image.inflight_key_prefix", "batch_image:queue:inflight:")
-	viper.SetDefault("batch_image.lock_key_prefix", "batch_image:queue:lock:")
-	viper.SetDefault("batch_image.idempotency_key_prefix", "batch_image:queue:idem:")
-	viper.SetDefault("batch_image.inflight_ttl_seconds", 604800)
-	viper.SetDefault("batch_image.job_lock_ttl_seconds", 300)
-	viper.SetDefault("batch_image.default_requeue_delay_seconds", 30)
-	viper.SetDefault("batch_image.error_retry_delay_seconds", 60)
-	viper.SetDefault("batch_image.lock_conflict_delay_seconds", 5)
-	viper.SetDefault("batch_image.stale_active_after_seconds", 600)
-	viper.SetDefault("batch_image.delayed_mover_interval_seconds", 5)
-	viper.SetDefault("batch_image.recovery_interval_seconds", 300)
-	viper.SetDefault("batch_image.delayed_move_limit", 100)
-	viper.SetDefault("batch_image.recover_limit", 100)
-	viper.SetDefault("batch_image.vertex_enabled", false)
-	viper.SetDefault("batch_image.vertex_project_id", "")
-	viper.SetDefault("batch_image.vertex_location", "global")
-	viper.SetDefault("batch_image.vertex_managed_gcs_bucket", "")
-	viper.SetDefault("batch_image.vertex_managed_gcs_prefix", "batch-image/{env}/{batch_id}")
-	viper.SetDefault("batch_image.vertex_input_retention_hours", 24)
-	viper.SetDefault("batch_image.vertex_output_retention_hours", 72)
-	viper.SetDefault("batch_image.vertex_batch_prediction_base_url", "")
-	viper.SetDefault("batch_image.vertex_gcs_base_url", "")
 
 	// Image storage (async image task result offload to S3-compatible object storage)
 	viper.SetDefault("image_storage.enabled", false)
@@ -2387,7 +2257,6 @@ func setDefaults() {
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
-	viper.SetDefault("gateway.max_account_switches_gemini", 3)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
@@ -2480,14 +2349,11 @@ func setDefaults() {
 	viper.SetDefault("gateway.image_concurrency.overflow_mode", ImageConcurrencyOverflowModeReject)
 	viper.SetDefault("gateway.image_concurrency.wait_timeout_seconds", 30)
 	viper.SetDefault("gateway.image_concurrency.max_waiting_requests", 100)
-	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
-	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
 	viper.SetDefault("gateway.text_max_body_size", int64(32*1024*1024))
 	viper.SetDefault("gateway.upstream_response_read_max_bytes", DefaultUpstreamResponseReadMaxBytes)
 	viper.SetDefault("gateway.models_list_read_max_bytes", DefaultModelsListReadMaxBytes)
 	viper.SetDefault("gateway.proxy_probe_response_read_max_bytes", int64(1024*1024))
-	viper.SetDefault("gateway.gemini_debug_response_headers", false)
 	viper.SetDefault("gateway.connection_pool_isolation", ConnectionPoolIsolationAccountProxy)
 	// HTTP 上游连接池配置（针对 5000+ 并发用户优化）
 	viper.SetDefault("gateway.max_idle_conns", 2560)          // 最大空闲连接总数（高并发场景可调大）
@@ -2566,14 +2432,6 @@ func setDefaults() {
 	viper.SetDefault("token_refresh.provider_failure_threshold", 3)
 	viper.SetDefault("token_refresh.attempt_timeout_seconds", 15)
 	viper.SetDefault("token_refresh.cycle_timeout_seconds", 240)
-
-	// Gemini OAuth - configure via environment variables or config file
-	// GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET
-	// Default: uses Gemini CLI public credentials (set via environment)
-	viper.SetDefault("gemini.oauth.client_id", "")
-	viper.SetDefault("gemini.oauth.client_secret", "")
-	viper.SetDefault("gemini.oauth.scopes", "")
-	viper.SetDefault("gemini.quota.policy", "")
 
 	// Subscription Maintenance (bounded queue + worker pool)
 	viper.SetDefault("subscription_maintenance.worker_count", 2)
@@ -2790,14 +2648,6 @@ func (c *Config) Validate() error {
 	}
 	if c.SubscriptionMaintenance.QueueSize < 0 {
 		return fmt.Errorf("subscription_maintenance.queue_size must be non-negative")
-	}
-
-	// Gemini OAuth 配置校验：client_id 与 client_secret 必须同时设置或同时留空。
-	// 留空时表示使用内置的 Gemini CLI OAuth 客户端（其 client_secret 通过环境变量注入）。
-	geminiClientID := strings.TrimSpace(c.Gemini.OAuth.ClientID)
-	geminiClientSecret := strings.TrimSpace(c.Gemini.OAuth.ClientSecret)
-	if (geminiClientID == "") != (geminiClientSecret == "") {
-		return fmt.Errorf("gemini.oauth.client_id and gemini.oauth.client_secret must be both set or both empty")
 	}
 
 	if strings.TrimSpace(c.Server.FrontendURL) != "" {
@@ -3096,61 +2946,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Redis.MinIdleConns > c.Redis.PoolSize {
 		return fmt.Errorf("redis.min_idle_conns cannot exceed redis.pool_size")
-	}
-	if c.BatchImage.QueueEnabled {
-		if strings.TrimSpace(c.BatchImage.QueueReadyKey) == "" {
-			return fmt.Errorf("batch_image.queue_ready_key must not be empty")
-		}
-		if strings.TrimSpace(c.BatchImage.QueueDelayedKey) == "" {
-			return fmt.Errorf("batch_image.queue_delayed_key must not be empty")
-		}
-		if strings.TrimSpace(c.BatchImage.QueueActiveKey) == "" {
-			return fmt.Errorf("batch_image.queue_active_key must not be empty")
-		}
-		if strings.TrimSpace(c.BatchImage.InflightKeyPrefix) == "" {
-			return fmt.Errorf("batch_image.inflight_key_prefix must not be empty")
-		}
-		if strings.TrimSpace(c.BatchImage.LockKeyPrefix) == "" {
-			return fmt.Errorf("batch_image.lock_key_prefix must not be empty")
-		}
-		if c.BatchImage.InflightTTLSeconds <= 0 {
-			return fmt.Errorf("batch_image.inflight_ttl_seconds must be positive")
-		}
-		if c.BatchImage.JobLockTTLSeconds <= 0 {
-			return fmt.Errorf("batch_image.job_lock_ttl_seconds must be positive")
-		}
-		if c.BatchImage.StaleActiveAfterSeconds <= 0 {
-			return fmt.Errorf("batch_image.stale_active_after_seconds must be positive")
-		}
-		if c.BatchImage.DelayedMoveLimit <= 0 {
-			return fmt.Errorf("batch_image.delayed_move_limit must be positive")
-		}
-		if c.BatchImage.RecoverLimit <= 0 {
-			return fmt.Errorf("batch_image.recover_limit must be positive")
-		}
-	}
-	if c.BatchImage.VertexEnabled {
-		if strings.TrimSpace(c.BatchImage.VertexManagedGCSBucket) == "" {
-			return fmt.Errorf("batch_image.vertex_managed_gcs_bucket must not be empty when vertex is enabled")
-		}
-		if strings.Contains(c.BatchImage.VertexManagedGCSBucket, "://") {
-			return fmt.Errorf("batch_image.vertex_managed_gcs_bucket must be a bucket name, not a URI")
-		}
-		if strings.TrimSpace(c.BatchImage.VertexLocation) == "" {
-			return fmt.Errorf("batch_image.vertex_location must not be empty when vertex is enabled")
-		}
-		if strings.TrimSpace(c.BatchImage.VertexManagedGCSPrefix) == "" {
-			return fmt.Errorf("batch_image.vertex_managed_gcs_prefix must not be empty when vertex is enabled")
-		}
-		if !strings.Contains(c.BatchImage.VertexManagedGCSPrefix, "{batch_id}") {
-			return fmt.Errorf("batch_image.vertex_managed_gcs_prefix must contain {batch_id}")
-		}
-		if c.BatchImage.VertexInputRetentionHours <= 0 {
-			return fmt.Errorf("batch_image.vertex_input_retention_hours must be positive")
-		}
-		if c.BatchImage.VertexOutputRetentionHours <= 0 {
-			return fmt.Errorf("batch_image.vertex_output_retention_hours must be positive")
-		}
 	}
 	if c.Dashboard.Enabled {
 		if c.Dashboard.StatsFreshTTLSeconds <= 0 {

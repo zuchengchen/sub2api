@@ -277,7 +277,7 @@ func TestValidateCreateParams_CheckModeMatrix(t *testing.T) {
 		{
 			name: "quota drops endpoint and api key requirements",
 			params: ChannelMonitorCreateParams{
-				Provider: MonitorProviderAntigravity, CheckMode: MonitorCheckModeQuota,
+				Provider: MonitorProviderKimi, CheckMode: MonitorCheckModeQuota,
 				IntervalSeconds: 60, AccountID: &accountID,
 			},
 			wantErr: nil, // primary_model 默认 "quota"
@@ -299,22 +299,12 @@ func TestValidateCreateParams_CheckModeMatrix(t *testing.T) {
 			wantErr: ErrChannelMonitorInvalidEndpoint,
 		},
 		{
-			name: "antigravity probe unsupported",
+			name: "retired provider rejected",
 			params: ChannelMonitorCreateParams{
-				Provider: MonitorProviderAntigravity, CheckMode: MonitorCheckModeProbe,
-				Endpoint: "https://example.com", APIKey: "k",
-				IntervalSeconds: 60, AccountID: &accountID, PrimaryModel: "gemini-3-pro",
+				Provider: "antigravity", CheckMode: MonitorCheckModeQuota,
+				IntervalSeconds: 60, AccountID: &accountID,
 			},
-			wantErr: ErrChannelMonitorInvalidCheckMode,
-		},
-		{
-			name: "antigravity quota_probe unsupported",
-			params: ChannelMonitorCreateParams{
-				Provider: MonitorProviderAntigravity, CheckMode: MonitorCheckModeQuotaProbe,
-				Endpoint: "https://example.com", APIKey: "k",
-				IntervalSeconds: 60, AccountID: &accountID, PrimaryModel: "gemini-3-pro",
-			},
-			wantErr: ErrChannelMonitorInvalidCheckMode,
+			wantErr: ErrChannelMonitorInvalidProvider,
 		},
 		{
 			name: "unknown mode rejected",
@@ -351,7 +341,7 @@ func TestValidateCreateParams_CheckModeMatrix(t *testing.T) {
 
 func TestNormalizeMonitorPrimaryModel_QuotaDefault(t *testing.T) {
 	require.Equal(t, "quota", normalizeMonitorPrimaryModel(MonitorProviderKimi, MonitorCheckModeQuota, ""))
-	require.Equal(t, "quota", normalizeMonitorPrimaryModel(MonitorProviderAntigravity, MonitorCheckModeQuota, "  "))
+	require.Equal(t, "quota", normalizeMonitorPrimaryModel(MonitorProviderZhipu, MonitorCheckModeQuota, "  "))
 	// quota_probe 仍要打真实探活请求：空模型返回 ""（由上层报 MissingPrimaryModel），
 	// 不再用 "quota" 占位打 model="quota" 的请求。
 	require.Equal(t, "", normalizeMonitorPrimaryModel(MonitorProviderKimi, MonitorCheckModeQuotaProbe, ""))
@@ -365,19 +355,17 @@ func TestNormalizeMonitorPrimaryModel_QuotaDefault(t *testing.T) {
 }
 
 func TestProviderProbeCapabilityMatrix(t *testing.T) {
-	require.False(t, providerSupportsProbe(MonitorProviderAntigravity))
 	for _, p := range []string{
-		MonitorProviderOpenAI, MonitorProviderAnthropic, MonitorProviderGemini,
+		MonitorProviderOpenAI, MonitorProviderAnthropic,
 		MonitorProviderGrok, MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek,
 	} {
 		require.True(t, providerSupportsProbe(p), p)
-	}
-	for _, p := range []string{
-		MonitorProviderOpenAI, MonitorProviderAnthropic, MonitorProviderGemini,
-		MonitorProviderGrok, MonitorProviderAntigravity,
-		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek,
-	} {
 		require.NoError(t, validateProvider(p), p)
+	}
+	// 已下线平台既不能探活也不能建监控。
+	for _, p := range []string{"gemini", "antigravity"} {
+		require.False(t, providerSupportsProbe(p), p)
+		require.ErrorIs(t, validateProvider(p), ErrChannelMonitorInvalidProvider, p)
 	}
 }
 
@@ -494,17 +482,13 @@ func TestMonitorAccountQuotaCapability_Matrix(t *testing.T) {
 			account: &Account{ID: 12, Platform: domain.PlatformOpenAI, Type: AccountTypeOAuth},
 		},
 		{
-			// 防过度拦截：gemini/grok/antigravity 走本地统计/值通道降级，不会永久 error。
-			name:    "gemini api key ok",
-			account: &Account{ID: 13, Platform: domain.PlatformGemini, Type: AccountTypeAPIKey},
+			// 防过度拦截：grok 走本地统计/值通道降级，不会永久 error。
+			name:    "grok api key ok",
+			account: &Account{ID: 13, Platform: domain.PlatformGrok, Type: AccountTypeAPIKey},
 		},
 		{
 			name:    "grok ok",
 			account: &Account{ID: 14, Platform: domain.PlatformGrok},
-		},
-		{
-			name:    "antigravity ok",
-			account: &Account{ID: 15, Platform: domain.PlatformAntigravity},
 		},
 	}
 	for _, tc := range cases {
@@ -554,21 +538,26 @@ func TestApplyMonitorUpdate_ProviderOnlyRevalidatesCheckMode(t *testing.T) {
 		}
 	}
 
-	provider := MonitorProviderAntigravity
-	err := applyMonitorUpdate(probeKimi(), ChannelMonitorUpdateParams{Provider: &provider})
-	require.ErrorIs(t, err, ErrChannelMonitorInvalidCheckMode)
+	// 切到已下线 provider 直接被 provider 校验拒绝。
+	retired := "antigravity"
+	err := applyMonitorUpdate(probeKimi(), ChannelMonitorUpdateParams{Provider: &retired})
+	require.ErrorIs(t, err, ErrChannelMonitorInvalidProvider)
+
+	// provider-only 切换到合法 provider 时复核 check_mode（probe 对 zhipu 合法）。
+	zhipu := MonitorProviderZhipu
+	require.NoError(t, applyMonitorUpdate(probeKimi(), ChannelMonitorUpdateParams{Provider: &zhipu}))
 
 	// 带上 check_mode/account_id 的完整切换合法。
 	accountID := int64(3)
 	err = applyMonitorUpdate(probeKimi(), ChannelMonitorUpdateParams{
-		Provider: &provider, CheckMode: strPtr(MonitorCheckModeQuota), AccountID: &accountID,
+		Provider: &zhipu, CheckMode: strPtr(MonitorCheckModeQuota), AccountID: &accountID,
 	})
 	require.NoError(t, err)
 
-	// 存量非法行（antigravity+probe）仅改名/停用不被砖化。
+	// 存量非法行（已下线 provider）仅改名/停用不被砖化。
 	legacy := &ChannelMonitor{
-		Provider: MonitorProviderAntigravity, APIMode: MonitorAPIModeChatCompletions,
-		Endpoint: "https://example.com", PrimaryModel: "gemini-3-pro",
+		Provider: retired, APIMode: MonitorAPIModeChatCompletions,
+		Endpoint: "https://example.com", PrimaryModel: "legacy-model",
 		CheckMode: MonitorCheckModeProbe,
 	}
 	newName := "renamed"

@@ -22,7 +22,7 @@ func (s *openAI403CounterResetStub) ResetOpenAI403Count(_ context.Context, accou
 
 func TestOpenAIGatewayServiceRecordUsage_ResetsOpenAI403CounterForZeroUsage(t *testing.T) {
 	counter := &openAI403CounterResetStub{}
-	rateLimitSvc := NewRateLimitService(nil, nil, nil, nil, nil)
+	rateLimitSvc := NewRateLimitService(nil, nil, nil, nil)
 	rateLimitSvc.SetOpenAI403CounterCache(counter)
 
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}

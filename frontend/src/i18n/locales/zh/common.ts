@@ -162,7 +162,6 @@ export default {
     dashboard: '仪表盘',
     announcements: '公告',
     apiKeys: 'API 密钥',
-    batchImage: '批量生图',
     usage: '使用记录',
     buyRedeemCode: '购买兑换码',
     redeem: '兑换',

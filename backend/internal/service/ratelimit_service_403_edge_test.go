@@ -27,7 +27,7 @@ func newEdge403Service(counts ...int64) (*RateLimitService, *rateLimitAccountRep
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: counts}
 	blocker := &runtimeBlockRecorder{}
-	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	svc.SetOpenAI403CounterCache(counter)
 	svc.SetAccountRuntimeBlocker(blocker)
 	return svc, repo, counter, blocker

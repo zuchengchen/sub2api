@@ -32,7 +32,7 @@ func (s *GatewayService) SelectAccountForModel(ctx context.Context, groupID *int
 
 // SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
 func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
-	// 优先检查 context 中的强制平台（/antigravity 路由）
+	// 优先检查 context 中的强制平台
 	var platform string
 	forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)
 	if hasForcePlatform && forcePlatform != "" {
@@ -75,17 +75,17 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 		return nil, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 	}
 
-	// anthropic/gemini 分组支持混合调度（包含启用了 mixed_scheduling 的 antigravity 账户）
-	// 注意：强制平台模式不走混合调度
-	if (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform {
-		account, err := s.selectAccountWithMixedScheduling(ctx, groupID, sessionHash, requestedModel, excludedIDs, platform)
+	// anthropic 分组走模型路由感知的账号选择
+	// 注意：强制平台模式不走该路径
+	if platform == PlatformAnthropic && !hasForcePlatform {
+		account, err := s.selectAccountWithModelRouting(ctx, groupID, sessionHash, requestedModel, excludedIDs, platform)
 		if err != nil {
 			return nil, err
 		}
 		return s.hydrateSelectedAccount(ctx, account)
 	}
 
-	// antigravity 分组、强制平台模式或无分组使用单平台选择
+	// 强制平台模式或无分组使用单平台选择
 	// 注意：强制平台模式也必须遵守分组限制，不再回退到全平台查询
 	account, err := s.selectAccountForModelWithPlatform(ctx, groupID, sessionHash, requestedModel, excludedIDs, platform)
 	if err != nil {
@@ -215,12 +215,11 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	if err != nil {
 		return nil, err
 	}
-	preferOAuth := platform == PlatformGemini
 	if s.debugModelRoutingEnabled() && platform == PlatformAnthropic && requestedModel != "" {
 		logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] load-aware enabled: group_id=%v model=%s session=%s platform=%s", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), platform)
 	}
 
-	accounts, useMixed, err := s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
+	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +288,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			if !s.isGatewayAccountProfitEligible(ctx, account) {
 				continue
 			}
-			if !s.isAccountAllowedForPlatform(account, platform, useMixed) {
+			if !s.isAccountAllowedForPlatform(account, platform) {
 				filteredPlatform++
 				continue
 			}
@@ -345,7 +344,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 						gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
 							s.isGatewayAccountProfitEligible(ctx, stickyAccount) &&
-							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
+							s.isAccountAllowedForPlatform(stickyAccount, platform) &&
 							(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
 							s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
 							s.isAccountSchedulableForQuota(stickyAccount) &&
@@ -528,7 +527,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				// 注意：不再检查 isAccountInGroup，因为 accountByID 已经从按分组过滤的
 				// accounts 列表构建，账号一定在分组内。而 scheduler snapshot 缓存
 				// 反序列化后 AccountGroups 字段为空，导致 isAccountInGroup 永远返回 false。
-				platformOK := s.isAccountAllowedForPlatform(account, platform, useMixed)
+				platformOK := s.isAccountAllowedForPlatform(account, platform)
 				profitOK := s.isGatewayAccountProfitEligible(ctx, account)
 				modelSupported := requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)
 				modelSchedulable := s.isAccountSchedulableForModelSelection(ctx, account, requestedModel)
@@ -650,7 +649,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		if !s.isGatewayAccountProfitEligible(ctx, acc) {
 			continue
 		}
-		if !s.isAccountAllowedForPlatform(acc, platform, useMixed) {
+		if !s.isAccountAllowedForPlatform(acc, platform) {
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -688,7 +687,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 	loadMap, err := s.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
 	if err != nil {
-		if result, ok, legacyErr := s.tryAcquireByLegacyOrder(ctx, candidates, groupID, sessionHash, preferOAuth); legacyErr != nil {
+		if result, ok, legacyErr := s.tryAcquireByLegacyOrder(ctx, candidates, groupID, sessionHash, false); legacyErr != nil {
 			return nil, legacyErr
 		} else if ok {
 			return result, nil
@@ -719,7 +718,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			// 3. 取负载率最低的集合
 			candidates = filterByMinLoadRate(candidates)
 			// 4. LRU 选择最久未用的账号
-			selected := selectByLRU(candidates, preferOAuth)
+			selected := selectByLRU(candidates, false)
 			if selected == nil {
 				break
 			}
@@ -750,7 +749,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	// ============ Layer 3: 兜底排队 ============
-	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
+	s.sortCandidatesForFallback(candidates, false, cfg.FallbackSelectionMode)
 	for _, acc := range candidates {
 		// 会话数量限制检查（等待计划也需要占用会话配额）
 		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
@@ -957,9 +956,9 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 	return PlatformAnthropic, false, nil
 }
 
-func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
+func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, error) {
 	if s.schedulerSnapshot != nil {
-		accounts, useMixed, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
+		accounts, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 		if err == nil {
 			accounts = s.filterAccountsBySchedulingThreshold(ctx, accounts)
 			if platform == PlatformGrok || strings.EqualFold(platform, PlatformGrok) {
@@ -968,7 +967,6 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 			slog.Debug("account_scheduling_list_snapshot",
 				"group_id", derefGroupID(groupID),
 				"platform", platform,
-				"use_mixed", useMixed,
 				"count", len(accounts))
 			if slog.Default().Enabled(ctx, slog.LevelDebug) {
 				for _, acc := range accounts {
@@ -982,51 +980,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 				}
 			}
 		}
-		return accounts, useMixed, err
-	}
-	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
-	if useMixed {
-		platforms := []string{platform, PlatformAntigravity}
-		var accounts []Account
-		var err error
-		if groupID != nil {
-			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, *groupID, platforms)
-		} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-			accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
-		} else {
-			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
-		}
-		if err != nil {
-			slog.Debug("account_scheduling_list_failed",
-				"group_id", derefGroupID(groupID),
-				"platform", platform,
-				"error", err)
-			return nil, useMixed, err
-		}
-		filtered := make([]Account, 0, len(accounts))
-		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
-				continue
-			}
-			filtered = append(filtered, acc)
-		}
-		slog.Debug("account_scheduling_list_mixed",
-			"group_id", derefGroupID(groupID),
-			"platform", platform,
-			"raw_count", len(accounts),
-			"filtered_count", len(filtered))
-		if slog.Default().Enabled(ctx, slog.LevelDebug) {
-			for _, acc := range filtered {
-				slog.Debug("account_scheduling_account_detail",
-					"account_id", acc.ID,
-					"name", acc.Name,
-					"platform", acc.Platform,
-					"type", acc.Type,
-					"status", acc.Status,
-					"tls_fingerprint", acc.IsTLSFingerprintEnabled())
-			}
-		}
-		return s.filterAccountsBySchedulingThreshold(ctx, filtered), useMixed, nil
+		return accounts, err
 	}
 
 	var accounts []Account
@@ -1044,7 +998,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 			"group_id", derefGroupID(groupID),
 			"platform", platform,
 			"error", err)
-		return nil, useMixed, err
+		return nil, err
 	}
 	slog.Debug("account_scheduling_list_single",
 		"group_id", derefGroupID(groupID),
@@ -1065,29 +1019,12 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	if platform == PlatformGrok || strings.EqualFold(platform, PlatformGrok) {
 		accounts = s.filterGrokFreeQuotaAccountsForGateway(ctx, accounts)
 	}
-	return accounts, useMixed, nil
+	return accounts, nil
 }
 
-// IsSingleAntigravityAccountGroup 检查指定分组是否只有一个 antigravity 平台的可调度账号。
-// 用于 Handler 层在首次请求时提前设置 SingleAccountRetry context，
-// 避免单账号分组收到 503 时错误地设置模型限流标记导致后续请求连续快速失败。
-func (s *GatewayService) IsSingleAntigravityAccountGroup(ctx context.Context, groupID *int64) bool {
-	accounts, _, err := s.listSchedulableAccounts(ctx, groupID, PlatformAntigravity, true)
-	if err != nil {
-		return false
-	}
-	return len(accounts) == 1
-}
-
-func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform string, useMixed bool) bool {
+func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform string) bool {
 	if account == nil {
 		return false
-	}
-	if useMixed {
-		if account.Platform == platform {
-			return true
-		}
-		return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
 	}
 	return account.Platform == platform
 }
@@ -1814,7 +1751,6 @@ func shuffleWithinPriority(accounts []*Account) {
 
 // selectAccountForModelWithPlatform 选择单平台账户（完全隔离）
 func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, platform string) (*Account, error) {
-	preferOAuth := platform == PlatformGemini
 	routingAccountIDs := s.routingAccountIDsForRequest(ctx, groupID, requestedModel, platform)
 
 	// require_privacy_set: 获取分组信息
@@ -1863,7 +1799,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			hasForcePlatform = false
 		}
 		var err error
-		accounts, _, err = s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
+		accounts, err = s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 		if err != nil {
 			return nil, fmt.Errorf("query accounts failed: %w", err)
 		}
@@ -1931,9 +1867,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 				case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
 					// keep selected (never used is preferred)
 				case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-					if preferOAuth && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-						selected = acc
-					}
+					// 均未使用过：保持既有选择
 				default:
 					if acc.LastUsedAt.Before(*selected.LastUsedAt) {
 						selected = acc
@@ -1983,7 +1917,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			hasForcePlatform = false
 		}
 		var err error
-		accounts, _, err = s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
+		accounts, err = s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 		if err != nil {
 			return nil, fmt.Errorf("query accounts failed: %w", err)
 		}
@@ -2048,9 +1982,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
 				// keep selected (never used is preferred)
 			case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-				if preferOAuth && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-					selected = acc
-				}
+				// 均未使用过：保持既有选择
 			default:
 				if acc.LastUsedAt.Before(*selected.LastUsedAt) {
 					selected = acc
@@ -2060,7 +1992,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	}
 
 	if selected == nil {
-		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, false)
+		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs)
 		if requestedModel != "" {
 			return nil, fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
 		}
@@ -2077,10 +2009,8 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	return selected, nil
 }
 
-// selectAccountWithMixedScheduling 选择账户（支持混合调度）
-// 查询原生平台账户 + 启用 mixed_scheduling 的 antigravity 账户
-func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, nativePlatform string) (*Account, error) {
-	preferOAuth := nativePlatform == PlatformGemini
+// selectAccountWithModelRouting 选择账户（支持混合调度）
+func (s *GatewayService) selectAccountWithModelRouting(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, nativePlatform string) (*Account, error) {
 	routingAccountIDs := s.routingAccountIDsForRequest(ctx, groupID, requestedModel, nativePlatform)
 
 	// require_privacy_set: 获取分组信息
@@ -2104,14 +2034,14 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			if err == nil && accountID > 0 && containsInt64(routingAccountIDs, accountID) {
 				if _, excluded := excludedIDs[accountID]; !excluded {
 					account, err := s.getSchedulableAccount(ctx, accountID)
-					// 检查账号分组归属和有效性：原生平台直接匹配，antigravity 需要启用混合调度
+					// 检查账号分组归属和有效性：平台需直接匹配
 					if err == nil {
 						clearSticky := shouldClearStickySession(account, requestedModel)
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
 						if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
-							if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+							if account.Platform == nativePlatform {
 								if s.debugModelRoutingEnabled() {
 									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 								}
@@ -2125,7 +2055,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 
 		// 2) Select an account from the routed candidates.
 		var err error
-		accounts, _, err = s.listSchedulableAccounts(ctx, groupID, nativePlatform, false)
+		accounts, err = s.listSchedulableAccounts(ctx, groupID, nativePlatform, false)
 		if err != nil {
 			return nil, fmt.Errorf("query accounts failed: %w", err)
 		}
@@ -2165,10 +2095,6 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 					fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
 				continue
 			}
-			// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
-				continue
-			}
 			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
 				continue
 			}
@@ -2197,9 +2123,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 				case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
 					// keep selected (never used is preferred)
 				case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-					if preferOAuth && acc.Platform == PlatformGemini && selected.Platform == PlatformGemini && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-						selected = acc
-					}
+					// 均未使用过：保持既有选择
 				default:
 					if acc.LastUsedAt.Before(*selected.LastUsedAt) {
 						selected = acc
@@ -2228,14 +2152,14 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		if err == nil && accountID > 0 {
 			if _, excluded := excludedIDs[accountID]; !excluded {
 				account, err := s.getSchedulableAccount(ctx, accountID)
-				// 检查账号分组归属和有效性：原生平台直接匹配，antigravity 需要启用混合调度
+				// 检查账号分组归属和有效性：平台需直接匹配
 				if err == nil {
 					clearSticky := shouldClearStickySession(account, requestedModel)
 					if clearSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
 					if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
-						if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+						if account.Platform == nativePlatform {
 							return account, nil
 						}
 					}
@@ -2247,7 +2171,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	// 2. 获取可调度账号列表
 	if !accountsLoaded {
 		var err error
-		accounts, _, err = s.listSchedulableAccounts(ctx, groupID, nativePlatform, false)
+		accounts, err = s.listSchedulableAccounts(ctx, groupID, nativePlatform, false)
 		if err != nil {
 			return nil, fmt.Errorf("query accounts failed: %w", err)
 		}
@@ -2278,10 +2202,6 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
 			_ = s.accountRepo.SetError(ctx, acc.ID,
 				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
-			continue
-		}
-		// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-		if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -2315,9 +2235,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
 				// keep selected (never used is preferred)
 			case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-				if preferOAuth && acc.Platform == PlatformGemini && selected.Platform == PlatformGemini && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-					selected = acc
-				}
+				// 均未使用过：保持既有选择
 			default:
 				if acc.LastUsedAt.Before(*selected.LastUsedAt) {
 					selected = acc
@@ -2327,7 +2245,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	}
 
 	if selected == nil {
-		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, nativePlatform, accounts, excludedIDs, true)
+		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, nativePlatform, accounts, excludedIDs)
 		if requestedModel != "" {
 			return nil, fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
 		}
@@ -2372,9 +2290,8 @@ func (s *GatewayService) logDetailedSelectionFailure(
 	platform string,
 	accounts []Account,
 	excludedIDs map[int64]struct{},
-	allowMixedScheduling bool,
 ) selectionFailureStats {
-	stats := s.collectSelectionFailureStats(ctx, accounts, requestedModel, platform, excludedIDs, allowMixedScheduling)
+	stats := s.collectSelectionFailureStats(ctx, accounts, requestedModel, platform, excludedIDs)
 	logger.LegacyPrintf(
 		"service.gateway",
 		"[SelectAccountDetailed] group_id=%v model=%s platform=%s session=%s total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d profit_threshold=%d profit_invalid_account_rate=%d sample_platform_filtered=%v sample_model_unsupported=%v sample_model_rate_limited=%v",
@@ -2404,7 +2321,6 @@ func (s *GatewayService) collectSelectionFailureStats(
 	requestedModel string,
 	platform string,
 	excludedIDs map[int64]struct{},
-	allowMixedScheduling bool,
 ) selectionFailureStats {
 	stats := selectionFailureStats{
 		Total: len(accounts),
@@ -2412,7 +2328,7 @@ func (s *GatewayService) collectSelectionFailureStats(
 
 	for i := range accounts {
 		acc := &accounts[i]
-		diagnosis := s.diagnoseSelectionFailure(ctx, acc, requestedModel, platform, excludedIDs, allowMixedScheduling)
+		diagnosis := s.diagnoseSelectionFailure(ctx, acc, requestedModel, platform, excludedIDs)
 		switch diagnosis.Category {
 		case "excluded":
 			stats.Excluded++
@@ -2446,7 +2362,6 @@ func (s *GatewayService) diagnoseSelectionFailure(
 	requestedModel string,
 	platform string,
 	excludedIDs map[int64]struct{},
-	allowMixedScheduling bool,
 ) selectionFailureDiagnosis {
 	if acc == nil {
 		return selectionFailureDiagnosis{Category: "unschedulable", Detail: "account_nil"}
@@ -2457,7 +2372,7 @@ func (s *GatewayService) diagnoseSelectionFailure(
 	if !s.isAccountSchedulableForSelection(acc) {
 		return selectionFailureDiagnosis{Category: "unschedulable", Detail: "generic_unschedulable"}
 	}
-	if isPlatformFilteredForSelection(acc, platform, allowMixedScheduling) {
+	if isPlatformFilteredForSelection(acc, platform) {
 		return selectionFailureDiagnosis{
 			Category: "platform_filtered",
 			Detail:   fmt.Sprintf("account_platform=%s requested_platform=%s", acc.Platform, strings.TrimSpace(platform)),
@@ -2482,15 +2397,9 @@ func (s *GatewayService) diagnoseSelectionFailure(
 	return selectionFailureDiagnosis{Category: "eligible"}
 }
 
-func isPlatformFilteredForSelection(acc *Account, platform string, allowMixedScheduling bool) bool {
+func isPlatformFilteredForSelection(acc *Account, platform string) bool {
 	if acc == nil {
 		return true
-	}
-	if allowMixedScheduling {
-		if acc.Platform == PlatformAntigravity {
-			return !acc.IsMixedSchedulingEnabled()
-		}
-		return acc.Platform != platform
 	}
 	if strings.TrimSpace(platform) == "" {
 		return false
@@ -2530,43 +2439,17 @@ func summarizeSelectionFailureStats(stats selectionFailureStats) string {
 }
 
 // isModelSupportedByAccountWithContext 根据账户平台检查模型支持（带 context）
-// 对于 Antigravity 平台，会先获取映射后的最终模型名（包括 thinking 后缀）再检查支持
 func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Context, account *Account, requestedModel string) bool {
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
 			return false
 		}
 	}
-	if account.Platform == PlatformAntigravity {
-		if strings.TrimSpace(requestedModel) == "" {
-			return true
-		}
-		// 使用与转发阶段一致的映射逻辑：自定义映射优先 → 默认映射兜底
-		mapped := mapAntigravityModel(account, requestedModel)
-		if mapped == "" {
-			return false
-		}
-		// 应用 thinking 后缀后检查最终模型是否在账号映射中
-		if enabled, ok := ThinkingEnabledFromContext(ctx); ok {
-			finalModel := applyThinkingModelSuffix(mapped, enabled)
-			if finalModel == mapped {
-				return true // thinking 后缀未改变模型名，映射已通过
-			}
-			return account.IsModelSupported(finalModel)
-		}
-		return true
-	}
 	return s.isModelSupportedByAccount(account, requestedModel)
 }
 
-// isModelSupportedByAccount 根据账户平台检查模型支持（无 context，用于非 Antigravity 平台）
+// isModelSupportedByAccount 根据账户平台检查模型支持（无 context）
 func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedModel string) bool {
-	if account.Platform == PlatformAntigravity {
-		if strings.TrimSpace(requestedModel) == "" {
-			return true
-		}
-		return mapAntigravityModel(account, requestedModel) != ""
-	}
 	if account.IsBedrock() {
 		_, ok := ResolveBedrockModelID(account, requestedModel)
 		return ok

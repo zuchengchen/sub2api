@@ -71,8 +71,6 @@ export default {
       viewUserAccounts: 'View and manage user accounts',
       manageAccounts: 'Manage Accounts',
       configureAiAccounts: 'Configure AI platform accounts',
-      batchImage: 'Batch Image',
-      batchImageDesc: 'Submit jobs and copy agent instructions',
       groupPricing: 'Group Pricing',
       groupPricingDesc: 'Configure batch discount and hold ratio',
       systemSettings: 'System Settings',
@@ -533,8 +531,6 @@ export default {
         usage: 'Usage',
         usageAnthropic: 'Usage (Claude)',
         usageOpenAI: 'Usage (OpenAI)',
-        usageGemini: 'Usage (Gemini)',
-        usageAntigravity: 'Usage (Antigravity)',
         concurrency: 'Concurrency',
         status: 'Status',
         lastActive: 'Last Active',
@@ -951,8 +947,6 @@ export default {
         all: 'All Platforms',
         anthropic: 'Anthropic',
         openai: 'OpenAI',
-        gemini: 'Gemini',
-        antigravity: 'Antigravity',
         grok: 'Grok',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
@@ -982,14 +976,8 @@ export default {
         title: 'Image Generation Pricing',
         description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
         allowImageGeneration: 'Allow image generation for this group',
-        allowBatchImageGeneration: 'Allow batch image generation for this group',
         independentMultiplier: 'Use independent image multiplier',
         imageMultiplier: 'Image multiplier',
-        batchDiscountMultiplier: 'Batch image discount',
-        batchHoldMultiplier: 'Batch hold price ratio',
-        batchSectionHint: 'Batch image settings only apply to batch jobs: settlement applies the batch discount, and the upfront hold is normal image price × batch hold price ratio. Reference images also create upstream input-token usage, so a batch image discount above 0.5 is recommended.',
-        batchDisabledHint: 'Enable image generation for this group before enabling batch image generation.',
-        batchGeminiOnlyHint: 'Batch image generation is currently available only for Gemini groups.',
         modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
         finalPricePreview: 'Final per-image price preview',
         notConfigured: 'Not configured'
@@ -1101,8 +1089,7 @@ export default {
           responses: 'Responses',
           chatCompletions: 'Chat Completions',
           embeddings: 'Embeddings',
-          images: 'Images',
-          gemini: 'Gemini Native'
+          images: 'Images'
         },
         match: {
           exact: 'Exact',
@@ -1152,11 +1139,6 @@ export default {
         unsupportedMessage: 'This Sub2API server cannot generate the required Live attestation. Live will not work even if enabled. Continue anyway?',
         enableAnyway: 'Enable anyway'
       },
-      invalidRequestFallback: {
-        title: 'Invalid Request Fallback Group',
-        hint: 'Triggered only when upstream explicitly returns prompt too long. Leave empty to disable fallback.',
-        noFallback: 'No Fallback'
-      },
       copyAccounts: {
         title: 'Copy Accounts from Groups',
         tooltip: 'Select one or more groups of the same platform. After creation, all accounts from these groups will be automatically bound to the new group (deduplicated).',
@@ -1185,12 +1167,6 @@ export default {
         searchAccountPlaceholder: 'Search accounts...',
         accountsHint: 'Select accounts to prioritize for this model pattern'
       },
-      mcpXml: {
-        title: 'MCP XML Protocol Injection',
-        tooltip: 'When enabled, if the request contains MCP tools, an XML format call protocol prompt will be injected into the system prompt. Disable this to avoid interference with certain clients.',
-        enabled: 'Enabled',
-        disabled: 'Disabled'
-      },
       claudeMaxSimulation: {
         title: 'Claude Max Usage Simulation',
         tooltip:
@@ -1203,8 +1179,6 @@ export default {
         title: 'Supported Model Families',
         tooltip: 'Select the model families this group supports. Unchecked families will not be routed to this group.',
         claude: 'Claude',
-        geminiText: 'Gemini Text',
-        geminiImage: 'Gemini Image',
         hint: 'Select at least one model family'
       }
     },

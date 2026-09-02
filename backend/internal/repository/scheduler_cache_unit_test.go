@@ -467,14 +467,14 @@ func TestBuildSchedulerMetadataAccount_KeepsQuotaStateForCachedAccounts(t *testi
 			extra: map[string]any{"quota_limit": 10.0, "quota_used": 10.0}, quotaExceeded: true,
 		},
 		{
-			name: "gemini api key rolling daily quota exhausted", platform: service.PlatformGemini, typ: service.AccountTypeAPIKey,
+			name: "grok api key rolling daily quota exhausted", platform: service.PlatformGrok, typ: service.AccountTypeAPIKey,
 			extra: map[string]any{
 				"quota_daily_limit": 20.0, "quota_daily_used": 20.0,
 				"quota_daily_start": activeStart, "quota_daily_reset_mode": "rolling",
 			}, quotaExceeded: true,
 		},
 		{
-			name: "gemini api key expired rolling daily window", platform: service.PlatformGemini, typ: service.AccountTypeAPIKey,
+			name: "grok api key expired rolling daily window", platform: service.PlatformGrok, typ: service.AccountTypeAPIKey,
 			extra: map[string]any{
 				"quota_daily_limit": 20.0, "quota_daily_used": 20.0,
 				"quota_daily_start": expiredDailyStart, "quota_daily_reset_mode": "rolling",
@@ -531,7 +531,7 @@ func TestBuildSchedulerMetadataAccount_KeepsQuotaStateForCachedAccounts(t *testi
 func TestBuildSchedulerMetadataAccount_KeepsModelRateLimits(t *testing.T) {
 	account := service.Account{
 		ID:       90,
-		Platform: service.PlatformAntigravity,
+		Platform: service.PlatformGrok,
 		Extra: map[string]any{
 			"model_rate_limits": map[string]any{
 				"gemini-3-flash": map[string]any{
@@ -686,7 +686,7 @@ func TestSchedulerCacheBucketRetirementFencesWritersAndReopen(t *testing.T) {
 func TestSchedulerCacheActivationIsFencedAfterRetire(t *testing.T) {
 	ctx := context.Background()
 	cache := newSchedulerCacheUnit(t)
-	bucket := service.SchedulerBucket{GroupID: 51, Platform: service.PlatformAnthropic, Mode: service.SchedulerModeMixed}
+	bucket := service.SchedulerBucket{GroupID: 51, Platform: service.PlatformAnthropic, Mode: service.SchedulerModeForced}
 	account := service.Account{ID: 5101, Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey}
 
 	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
@@ -757,8 +757,8 @@ func TestSchedulerCacheConcurrentReopenReturnsSameToken(t *testing.T) {
 func TestSchedulerCacheReopenExpiresPreviousActiveSnapshot(t *testing.T) {
 	ctx := context.Background()
 	cache, mr := newSchedulerCacheUnitWithRedis(t)
-	bucket := service.SchedulerBucket{GroupID: 52, Platform: service.PlatformGemini, Mode: service.SchedulerModeForced}
-	account := service.Account{ID: 5201, Platform: service.PlatformGemini, Type: service.AccountTypeAPIKey}
+	bucket := service.SchedulerBucket{GroupID: 52, Platform: service.PlatformGrok, Mode: service.SchedulerModeForced}
+	account := service.Account{ID: 5201, Platform: service.PlatformGrok, Type: service.AccountTypeAPIKey}
 
 	oldToken, err := cache.CaptureBucketWriteToken(ctx, bucket)
 	require.NoError(t, err)

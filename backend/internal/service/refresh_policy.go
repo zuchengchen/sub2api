@@ -45,22 +45,6 @@ func OpenAIProviderRefreshPolicy() ProviderRefreshPolicy {
 	}
 }
 
-func GeminiProviderRefreshPolicy() ProviderRefreshPolicy {
-	return ProviderRefreshPolicy{
-		OnRefreshError: ProviderRefreshErrorReturn,
-		OnLockHeld:     ProviderLockHeldUseExistingToken,
-		FailureTTL:     0,
-	}
-}
-
-func AntigravityProviderRefreshPolicy() ProviderRefreshPolicy {
-	return ProviderRefreshPolicy{
-		OnRefreshError: ProviderRefreshErrorReturn,
-		OnLockHeld:     ProviderLockHeldUseExistingToken,
-		FailureTTL:     0,
-	}
-}
-
 func GrokProviderRefreshPolicy() ProviderRefreshPolicy {
 	return ProviderRefreshPolicy{
 		OnRefreshError: ProviderRefreshErrorReturn,

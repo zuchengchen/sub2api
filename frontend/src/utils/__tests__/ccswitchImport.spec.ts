@@ -65,7 +65,7 @@ describe('ccswitchImport utils', () => {
 
   it.each([
     { platform: 'anthropic' as GroupPlatform, clientType: 'claude' as const, app: 'claude' },
-    { platform: 'gemini' as GroupPlatform, clientType: 'gemini' as const, app: 'gemini' }
+    { platform: 'kimi' as GroupPlatform, clientType: 'claude' as const, app: 'claude' }
   ])('does not add a model parameter for $platform imports', ({ platform, clientType, app }) => {
     const params = paramsFromDeeplink(
       buildCcSwitchImportDeeplink({
@@ -77,20 +77,6 @@ describe('ccswitchImport utils', () => {
 
     expect(params.get('app')).toBe(app)
     expect(params.get('endpoint')).toBe(baseInput.baseUrl)
-    expect(params.has('model')).toBe(false)
-  })
-
-  it('keeps Antigravity imports on the selected client endpoint without a model parameter', () => {
-    const params = paramsFromDeeplink(
-      buildCcSwitchImportDeeplink({
-        ...baseInput,
-        platform: 'antigravity',
-        clientType: 'gemini'
-      })
-    )
-
-    expect(params.get('app')).toBe('gemini')
-    expect(params.get('endpoint')).toBe(`${baseInput.baseUrl}/antigravity`)
     expect(params.has('model')).toBe(false)
   })
 })

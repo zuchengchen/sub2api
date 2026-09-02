@@ -33,7 +33,7 @@ func TestRateLimitService_HandleUpstreamError_OpenAI403FirstHitTempUnschedulable
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{1}}
 	blocker := &runtimeBlockRecorder{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	service.SetAccountRuntimeBlocker(blocker)
 	account := &Account{
@@ -64,7 +64,7 @@ func TestRateLimitService_HandleUpstreamError_OpenAI403FirstHitTempUnschedulable
 func TestRateLimitService_HandleUpstreamError_OpenAI403ThresholdDisables(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{3}}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	account := &Account{
 		ID:       302,

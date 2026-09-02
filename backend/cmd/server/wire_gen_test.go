@@ -29,15 +29,11 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 
 	oauthSvc := service.NewOAuthService(nil, nil)
 	openAIOAuthSvc := service.NewOpenAIOAuthService(nil, nil)
-	geminiOAuthSvc := service.NewGeminiOAuthService(nil, nil, nil, nil, cfg)
-	antigravityOAuthSvc := service.NewAntigravityOAuthService(nil)
 
 	tokenRefreshSvc := service.NewTokenRefreshService(
 		nil,
 		oauthSvc,
 		openAIOAuthSvc,
-		geminiOAuthSvc,
-		antigravityOAuthSvc,
 		nil,
 		nil,
 		cfg,
@@ -76,8 +72,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		subscriptionExpirySvc,
 		&service.UsageCleanupService{},
 		idempotencyCleanupSvc,
-		&service.BatchImageCleanupService{},
-		nil, // batchImageWorker
 		pricingSvc,
 		emailQueueSvc,
 		billingCacheSvc,
@@ -85,8 +79,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		&service.SubscriptionService{},
 		oauthSvc,
 		openAIOAuthSvc,
-		geminiOAuthSvc,
-		antigravityOAuthSvc,
 		nil, // grokOAuth
 		nil, // openAIGateway
 		nil, // scheduledTestRunner
@@ -98,8 +90,8 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // upstreamBillingProbe
 		nil, // ollamaCloudUsage
 		nil, // auditLog
+		nil, // contentModeration
 		nil, // openAIAutoReset
-		nil, // promptAudit
 		nil, // pluginManager
 	)
 

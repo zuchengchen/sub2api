@@ -34,7 +34,7 @@ func (r *errSettingRepo) Get(_ context.Context, _ string) (*Setting, error) {
 // ---------------------------------------------------------------------------
 
 type overloadAccountRepoStub struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	overloadCalls   int
 	errorCalls      int
 	lastOverloadID  int64
@@ -201,7 +201,7 @@ func TestHandle529_EnabledFromDB_PausesAccount(t *testing.T) {
 	settingRepo.data[SettingKeyOverloadCooldownSettings] = string(data)
 
 	settingSvc := NewSettingService(settingRepo, &config.Config{})
-	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	svc.SetSettingService(settingSvc)
 
 	account := &Account{ID: 42, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
@@ -220,7 +220,7 @@ func TestHandle529_DisabledFromDB_SkipsAccount(t *testing.T) {
 	settingRepo.data[SettingKeyOverloadCooldownSettings] = string(data)
 
 	settingSvc := NewSettingService(settingRepo, &config.Config{})
-	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	svc.SetSettingService(settingSvc)
 
 	account := &Account{ID: 42, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
@@ -233,7 +233,7 @@ func TestHandle529_NilSettingService_FallsBackToConfig(t *testing.T) {
 	accountRepo := &overloadAccountRepoStub{}
 	cfg := &config.Config{}
 	cfg.RateLimit.OverloadCooldownMinutes = 20
-	svc := NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+	svc := NewRateLimitService(accountRepo, nil, cfg, nil)
 	// NOT calling SetSettingService — remains nil
 
 	account := &Account{ID: 77, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
@@ -246,7 +246,7 @@ func TestHandle529_NilSettingService_FallsBackToConfig(t *testing.T) {
 
 func TestHandle529_NilSettingService_ZeroConfig_DefaultsTen(t *testing.T) {
 	accountRepo := &overloadAccountRepoStub{}
-	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 
 	account := &Account{ID: 88, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
 	before := time.Now()
@@ -264,7 +264,7 @@ func TestHandle529_DBReadError_FallsBackToConfig(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.RateLimit.OverloadCooldownMinutes = 7
 	settingSvc := NewSettingService(errRepo, cfg)
-	svc := NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+	svc := NewRateLimitService(accountRepo, nil, cfg, nil)
 	svc.SetSettingService(settingSvc)
 
 	account := &Account{ID: 99, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
@@ -296,7 +296,7 @@ func TestHandleUpstreamError_529RespectsAccountPolicies(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &overloadAccountRepoStub{}
-			svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			svc := NewRateLimitService(repo, nil, &config.Config{}, nil)
 			account := &Account{
 				ID:          101,
 				Platform:    PlatformOpenAI,
@@ -315,7 +315,7 @@ func TestHandleUpstreamError_529RespectsAccountPolicies(t *testing.T) {
 
 func TestHandleUpstreamError_529CustomCodeDisablesInsteadOfOverloadCooldown(t *testing.T) {
 	repo := &overloadAccountRepoStub{}
-	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := &Account{
 		ID:       102,
 		Platform: PlatformOpenAI,

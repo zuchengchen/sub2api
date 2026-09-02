@@ -11,7 +11,7 @@ import (
 )
 
 type resetAccountQuotaRepoStub struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	account             *Account
 	getByIDErr          error
 	resetErr            error

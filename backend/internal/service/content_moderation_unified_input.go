@@ -87,7 +87,7 @@ func contentModerationLineageMessageUnitForFragment(fragment ContentModerationFr
 	parts := strings.Split(strings.TrimSpace(fragment.Path), ".")
 	if len(parts) >= 2 {
 		root := strings.ToLower(parts[0])
-		if root == "messages" || root == "input" || root == "contents" {
+		if root == "messages" || root == "input" {
 			index, err := strconv.Atoi(parts[1])
 			if err == nil && index >= 0 {
 				return contentModerationLineageMessageUnit{root: root, index: index, key: root + "." + parts[1], ok: true}
@@ -203,7 +203,6 @@ func ExtractContentModerationFragments(protocol string, body []byte) []ContentMo
 
 	collectUnifiedModerationMessages(root.Get("messages"), "messages", &fragments)
 	collectUnifiedModerationResponsesInput(root.Get("input"), "input", &fragments)
-	collectUnifiedModerationGeminiContents(root.Get("contents"), "contents", &fragments)
 
 	for _, field := range []string{"tools", "tool_choice", "files", "attachments", "images", "image_url", "url"} {
 		if value := root.Get(field); value.Exists() {
@@ -317,22 +316,6 @@ func collectUnifiedModerationResponsesInput(input gjson.Result, path string, out
 		}
 		collectUnifiedModerationValue(input, role, path, "text", out)
 	}
-}
-
-func collectUnifiedModerationGeminiContents(contents gjson.Result, path string, out *[]ContentModerationFragment) {
-	if !contents.IsArray() {
-		return
-	}
-	index := 0
-	contents.ForEach(func(_, content gjson.Result) bool {
-		role := normalizeModerationRole(content.Get("role").String())
-		if role == "" {
-			role = "user"
-		}
-		collectUnifiedModerationValue(content.Get("parts"), role, path+"."+itoa(index)+".parts", "text", out)
-		index++
-		return true
-	})
 }
 
 func collectUnifiedModerationValue(value gjson.Result, role, path, kind string, out *[]ContentModerationFragment) {

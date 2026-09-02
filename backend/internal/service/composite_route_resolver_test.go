@@ -326,17 +326,6 @@ func TestCompositeRouteResolverExplicitRoutesCoverBucketTwoProviders(t *testing.
 				Enabled:        true,
 			},
 			{
-				ID:             3,
-				GroupID:        7,
-				PublicModel:    "all/gemini-pro",
-				MatchType:      CompositeRouteMatchExact,
-				TargetPlatform: PlatformGemini,
-				UpstreamModel:  "gemini-2.5-pro",
-				Endpoint:       CompositeRouteEndpointGemini,
-				Priority:       100,
-				Enabled:        true,
-			},
-			{
 				ID:             4,
 				GroupID:        7,
 				PublicModel:    "all/grok",
@@ -358,7 +347,6 @@ func TestCompositeRouteResolverExplicitRoutesCoverBucketTwoProviders(t *testing.
 	}{
 		{"all/gpt-5", CompositeRouteEndpointResponses, PlatformOpenAI, "gpt-5"},
 		{"all/claude-sonnet", CompositeRouteEndpointMessages, PlatformAnthropic, "claude-sonnet-4-6"},
-		{"all/gemini-pro", CompositeRouteEndpointGemini, PlatformGemini, "gemini-2.5-pro"},
 		{"all/grok", CompositeRouteEndpointResponses, PlatformGrok, "grok-4.3"},
 	}
 

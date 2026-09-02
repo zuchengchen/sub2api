@@ -56,7 +56,7 @@ func TestResponsesWebSocketCompositePlatformGuardKeepsOpenAIAndGrokOnly(t *testi
 	require.True(t, isResponsesWebSocketCompositePlatform(service.PlatformGrok))
 	for _, platform := range []string{
 		service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek,
-		service.PlatformAnthropic, service.PlatformGemini,
+		service.PlatformAnthropic, service.PlatformComposite,
 	} {
 		require.False(t, isResponsesWebSocketCompositePlatform(platform), "platform=%s", platform)
 	}

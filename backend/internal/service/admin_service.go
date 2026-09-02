@@ -95,12 +95,8 @@ type AdminService interface {
 	SetAccountError(ctx context.Context, id int64, errorMsg string) error
 	// EnsureOpenAIPrivacy 检查 OpenAI OAuth 账号 privacy_mode，未设置则尝试关闭训练数据共享并持久化。
 	EnsureOpenAIPrivacy(ctx context.Context, account *Account) string
-	// EnsureAntigravityPrivacy 检查 Antigravity OAuth 账号 privacy_mode，未设置则调用 setUserSettings 并持久化。
-	EnsureAntigravityPrivacy(ctx context.Context, account *Account) string
 	// ForceOpenAIPrivacy 强制重新设置 OpenAI OAuth 账号隐私，无论当前状态。
 	ForceOpenAIPrivacy(ctx context.Context, account *Account) string
-	// ForceAntigravityPrivacy 强制重新设置 Antigravity OAuth 账号隐私，无论当前状态。
-	ForceAntigravityPrivacy(ctx context.Context, account *Account) string
 	SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error)
 	BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error)
 	CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error
@@ -223,15 +219,12 @@ type CreateGroupInput struct {
 	MonthlyLimitUSD           *float64 // 月限额 (USD)
 	LongContextPricingEnabled bool
 	ModelPricing              []ChannelModelPricing
-	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration         bool
-	AllowBatchImageGeneration    bool
-	ImageRateIndependent         bool
-	ImageRateMultiplier          *float64
-	BatchImageDiscountMultiplier *float64
-	BatchImageHoldMultiplier     *float64
-	VideoRateIndependent         bool
-	VideoRateMultiplier          *float64
+	// 图片生成计费配置
+	AllowImageGeneration bool
+	ImageRateIndependent bool
+	ImageRateMultiplier  *float64
+	VideoRateIndependent bool
+	VideoRateMultiplier  *float64
 	// 高峰时段倍率配置（PeakRateMultiplier 为 nil 时按 1.0 处理）
 	PeakRateEnabled    bool
 	PeakStart          string
@@ -261,7 +254,7 @@ type CreateGroupInput struct {
 	ModelRouting        map[string][]int64
 	ModelRoutingEnabled bool // 是否启用模型路由
 	MCPXMLInject        *bool
-	// 支持的模型系列（仅 antigravity 平台使用）
+	// 支持的模型系列
 	SupportedModelScopes []string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       bool
@@ -298,15 +291,12 @@ type UpdateGroupInput struct {
 	MonthlyLimitUSD           *float64 // 月限额 (USD)
 	LongContextPricingEnabled *bool
 	ModelPricing              *[]ChannelModelPricing
-	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration         *bool
-	AllowBatchImageGeneration    *bool
-	ImageRateIndependent         *bool
-	ImageRateMultiplier          *float64
-	BatchImageDiscountMultiplier *float64
-	BatchImageHoldMultiplier     *float64
-	VideoRateIndependent         *bool
-	VideoRateMultiplier          *float64
+	// 图片生成计费配置
+	AllowImageGeneration *bool
+	ImageRateIndependent *bool
+	ImageRateMultiplier  *float64
+	VideoRateIndependent *bool
+	VideoRateMultiplier  *float64
 	// 高峰时段倍率配置（nil 表示不修改）
 	PeakRateEnabled    *bool
 	PeakStart          *string
@@ -336,7 +326,7 @@ type UpdateGroupInput struct {
 	ModelRouting        map[string][]int64
 	ModelRoutingEnabled *bool // 是否启用模型路由
 	MCPXMLInject        *bool
-	// 支持的模型系列（仅 antigravity 平台使用）
+	// 支持的模型系列
 	SupportedModelScopes *[]string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       *bool
@@ -615,14 +605,6 @@ var proxyQualityTargets = []proxyQualityTarget{
 			http.StatusMethodNotAllowed: {},
 			http.StatusNotFound:         {},
 			http.StatusBadRequest:       {},
-		},
-	},
-	{
-		Target: "gemini",
-		URL:    "https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta",
-		Method: http.MethodGet,
-		AllowedStatuses: map[int]struct{}{
-			http.StatusOK: {},
 		},
 	},
 	{

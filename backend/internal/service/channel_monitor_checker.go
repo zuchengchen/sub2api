@@ -192,23 +192,6 @@ var providerAdapters = map[string]providerAdapter{
 		},
 		extractText: extractAnthropicMonitorText,
 	},
-	MonitorProviderGemini: {
-		// Gemini 把 model 名写在 URL path 上：/v1beta/models/{model}:generateContent
-		buildPath: func(model string) string { return fmt.Sprintf(providerGeminiPathTemplate, model) },
-		buildBody: func(_, prompt string) ([]byte, error) {
-			return json.Marshal(map[string]any{
-				"contents": []map[string]any{
-					{"parts": []map[string]any{{"text": prompt}}},
-				},
-				"generationConfig": map[string]any{"maxOutputTokens": monitorChallengeMaxTokens},
-			})
-		},
-		// 使用 x-goog-api-key header 而不是 ?key= query，避免 *url.Error 把 key 回填到错误日志。
-		buildHeaders: func(apiKey string) map[string]string {
-			return map[string]string{"x-goog-api-key": apiKey}
-		},
-		textPath: "candidates.0.content.parts.0.text",
-	},
 }
 
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
@@ -453,7 +436,6 @@ var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderOpenAI + ":" + MonitorAPIModeResponses:       {"model": true, "instructions": true, "input": true, "stream": true},
 	MonitorProviderGrok:      {"model": true, "messages": true, "stream": true},
 	MonitorProviderAnthropic: {"model": true, "messages": true},
-	MonitorProviderGemini:    {"contents": true},
 	// 国产 3 家与 OpenAI Chat Completions 同构。
 	MonitorProviderKimi:     {"model": true, "messages": true, "stream": true},
 	MonitorProviderZhipu:    {"model": true, "messages": true, "stream": true},
@@ -590,7 +572,7 @@ var monitorAPIKeyPatterns = []struct {
 	{regexp.MustCompile(`sk-[A-Za-z0-9-]{20,}`), "sk-***REDACTED***"},
 	// xAI API Key：xai-xxxxxxx
 	{regexp.MustCompile(`xai-[A-Za-z0-9_-]{6,}`), "xai-***REDACTED***"},
-	// Gemini / Google API Key：固定前缀 + 35 位
+	// Google API Key：固定前缀 + 35 位（用户可能误把 Google key 填进 OpenAI 兼容端点）
 	{regexp.MustCompile(`AIza[A-Za-z0-9_-]{35}`), "AIza***REDACTED***"},
 	// JWT 三段式（Bearer 后常出现）：eyJxxx.eyJxxx.signature
 	{regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), "eyJ***REDACTED.JWT***"},
@@ -601,8 +583,7 @@ var monitorAPIKeyPatterns = []struct {
 //  1. URL query 中的 ?key= / ?api_key= 等（Go *url.Error 会回填完整 URL）
 //  2. 上游 HTTP body 文本里直接出现的 sk-* / xai-* / AIza* / JWT 等密钥碎片
 //
-// 注意：与 gemini_messages_compat_service.go 的 sanitizeUpstreamErrorMessage 关注点类似但参数集更广，
-// 监控模块独立维护，避免互相耦合。
+// 监控模块独立维护此逻辑，避免与网关侧的错误脱敏耦合。
 func sanitizeErrorMessage(msg string) string {
 	if msg == "" {
 		return msg

@@ -92,9 +92,6 @@ func schedulerBucketsForTest(groupIDs []int64, platforms ...string) []SchedulerB
 				SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeSingle},
 				SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeForced},
 			)
-			if platform == PlatformAnthropic || platform == PlatformGemini {
-				buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeMixed})
-			}
 		}
 	}
 	return buckets
@@ -181,21 +178,6 @@ func TestSchedulerBulkAccountEventUsesGroupZeroInSimpleMode(t *testing.T) {
 
 	require.NoError(t, err)
 	require.ElementsMatch(t, schedulerBucketsForTest([]int64{0}, PlatformOpenAI), cache.capturedBuckets())
-}
-
-func TestSchedulerBulkAccountEventConservativelyExpandsAntigravityPlatforms(t *testing.T) {
-	cache := newBulkEventSnapshotCache()
-	// fresh 值可能已经关闭 mixed_scheduling，兼容平台仍要重建以清理旧快照。
-	repo := newBulkEventAccountRepo(&Account{ID: 2, Platform: PlatformAntigravity, GroupIDs: []int64{22}})
-	svc := newBulkEventTestService(cache, repo)
-
-	err := svc.handleBulkAccountEvent(context.Background(), bulkEventPayload([]int64{2}, []int64{21}), make(map[batchSeenKey]struct{}))
-
-	require.NoError(t, err)
-	require.ElementsMatch(t,
-		schedulerBucketsForTest([]int64{21, 22}, PlatformAnthropic, PlatformGemini, PlatformAntigravity),
-		cache.capturedBuckets(),
-	)
 }
 
 func TestSchedulerBulkAccountEventMissingAccountFallsBackToAllPlatforms(t *testing.T) {

@@ -13,6 +13,8 @@ var (
 	ErrAccountNotFound      = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
 	ErrAccountNilInput      = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
 	ErrAccountNotInFallback = infraerrors.BadRequest("ACCOUNT_NOT_IN_FALLBACK", "account is not in proxy fallback state")
+	// ErrAccountUnsupportedPlatform 拒绝为没有转发器的平台建账号（含已下线的 gemini/antigravity）。
+	ErrAccountUnsupportedPlatform = infraerrors.BadRequest("ACCOUNT_UNSUPPORTED_PLATFORM", "account platform must be one of anthropic/openai/grok/kimi/zhipu/deepseek")
 )
 
 const AccountListGroupUngrouped int64 = -1
@@ -105,7 +107,6 @@ type AccountRepository interface {
 	SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error
 	ClearTempUnschedulable(ctx context.Context, id int64) error
 	ClearRateLimit(ctx context.Context, id int64) error
-	ClearAntigravityQuotaScopes(ctx context.Context, id int64) error
 	ClearModelRateLimits(ctx context.Context, id int64) error
 	UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error
 	// UpdateSessionWindowEnd 仅更新 5h 窗口的结束时间，不动 start / status。
@@ -261,7 +262,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 			if err != nil {
 				return nil, err
 			}
-			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini || g.Platform == PlatformGrok) {
+			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAnthropic || g.Platform == PlatformGrok) {
 				return nil, fmt.Errorf("分组 [%s] 仅允许 OAuth 账号，apikey 类型账号无法加入", g.Name)
 			}
 		}
@@ -386,7 +387,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 			if err != nil {
 				return nil, err
 			}
-			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini || g.Platform == PlatformGrok) {
+			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAnthropic || g.Platform == PlatformGrok) {
 				return nil, fmt.Errorf("分组 [%s] 仅允许 OAuth 账号，apikey 类型账号无法加入", g.Name)
 			}
 		}
@@ -508,9 +509,6 @@ func (s *AccountService) TestCredentials(ctx context.Context, id int64) error {
 		return nil
 	case PlatformOpenAI:
 		// TODO: 测试OpenAI API凭证
-		return nil
-	case PlatformGemini:
-		// TODO: 测试Gemini API凭证
 		return nil
 	case PlatformGrok:
 		// Grok OAuth credentials are validated via token exchange/refresh and request-path probes.

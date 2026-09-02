@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
@@ -176,15 +175,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeySMTPPort:                                  "587",
 		SettingKeySMTPUseTLS:                                "false",
 		// Model fallback defaults
-		SettingKeyEnableModelFallback:      "false",
-		SettingKeyFallbackModelAnthropic:   "claude-3-5-sonnet-20241022",
-		SettingKeyFallbackModelOpenAI:      "gpt-4o",
-		SettingKeyFallbackModelGemini:      "gemini-2.5-pro",
-		SettingKeyFallbackModelAntigravity: "gemini-2.5-pro",
-		// Identity patch defaults
-		SettingKeyEnableIdentityPatch: "true",
-		SettingKeyIdentityPatchPrompt: "",
-
+		SettingKeyEnableModelFallback:    "false",
+		SettingKeyFallbackModelAnthropic: "claude-3-5-sonnet-20241022",
+		SettingKeyFallbackModelOpenAI:    "gpt-4o",
 		// Ops monitoring defaults (vNext)
 		SettingKeyOpsMonitoringEnabled:         "true",
 		SettingKeyOpsRealtimeMonitoringEnabled: "true",
@@ -242,7 +235,6 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyEnableAnthropicCacheTTL1hInjection:                 "false",
 		SettingKeyRewriteMessageCacheControl:                         strconv.FormatBool(s.defaultRewriteMessageCacheControl()),
 		SettingKeyEnableClientDatelineNormalization:                  "true",
-		SettingKeyAntigravityUserAgentVersion:                        "",
 		SettingKeyOpenAICodexUserAgent:                               "",
 		SettingKeyOpenAICodexClientVersion:                           "",
 		SettingKeyOpenAICodexClientVersionSynced:                     "",
@@ -769,16 +761,6 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.EnableModelFallback = settings[SettingKeyEnableModelFallback] == "true"
 	result.FallbackModelAnthropic = s.getStringOrDefault(settings, SettingKeyFallbackModelAnthropic, "claude-3-5-sonnet-20241022")
 	result.FallbackModelOpenAI = s.getStringOrDefault(settings, SettingKeyFallbackModelOpenAI, "gpt-4o")
-	result.FallbackModelGemini = s.getStringOrDefault(settings, SettingKeyFallbackModelGemini, "gemini-2.5-pro")
-	result.FallbackModelAntigravity = s.getStringOrDefault(settings, SettingKeyFallbackModelAntigravity, "gemini-2.5-pro")
-
-	// Identity patch settings (default: enabled, to preserve existing behavior)
-	if v, ok := settings[SettingKeyEnableIdentityPatch]; ok && v != "" {
-		result.EnableIdentityPatch = v == "true"
-	} else {
-		result.EnableIdentityPatch = true
-	}
-	result.IdentityPatchPrompt = settings[SettingKeyIdentityPatchPrompt]
 
 	// Ops monitoring settings (default: enabled, fail-open)
 	result.OpsMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsMonitoringEnabled])
@@ -878,7 +860,6 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else {
 		result.EnableClientDatelineNormalization = true
 	}
-	result.AntigravityUserAgentVersion = antigravity.NormalizeUserAgentVersion(settings[SettingKeyAntigravityUserAgentVersion])
 	result.OpenAICodexUserAgent = strings.TrimSpace(settings[SettingKeyOpenAICodexUserAgent])
 	result.OpenAICodexClientVersion = NormalizeCodexClientVersion(settings[SettingKeyOpenAICodexClientVersion])
 	result.OpenAICodexClientVersionSynced = NormalizeCodexClientVersion(settings[SettingKeyOpenAICodexClientVersionSynced])

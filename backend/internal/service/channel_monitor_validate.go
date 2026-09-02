@@ -9,29 +9,25 @@ import (
 // 渠道监控参数校验与归一化辅助函数。
 // 校验失败一律返回 channel_monitor_const.go 中预定义的 Err* 错误，错误信息不含具体 IP/hostname，避免泄露内网拓扑。
 
-// monitorProviders 渠道监控支持的全部 provider（与迁移 226 的 CHECK 约束一致）。
-// 不再以 adapter 表为唯一来源：antigravity 没有探活 adapter，但支持配额模式。
+// monitorProviders 渠道监控支持的全部 provider（与迁移 233 的 CHECK 约束一致）。
+// 与 probeCapableProviders 分开维护，便于将来引入仅支持配额模式的 provider。
 //
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
 var monitorProviders = map[string]struct{}{
-	MonitorProviderOpenAI:      {},
-	MonitorProviderAnthropic:   {},
-	MonitorProviderGemini:      {},
-	MonitorProviderGrok:        {},
-	MonitorProviderAntigravity: {},
-	MonitorProviderKimi:        {},
-	MonitorProviderZhipu:       {},
-	MonitorProviderDeepseek:    {},
+	MonitorProviderOpenAI:    {},
+	MonitorProviderAnthropic: {},
+	MonitorProviderGrok:      {},
+	MonitorProviderKimi:      {},
+	MonitorProviderZhipu:     {},
+	MonitorProviderDeepseek:  {},
 }
 
 // probeCapableProviders 支持探活（probe / quota_probe）的 provider。
-// antigravity 上游无 Chat/Responses 可打（仅 IDE 代理形态），只允许配额模式。
 //
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
 var probeCapableProviders = map[string]struct{}{
 	MonitorProviderOpenAI:    {},
 	MonitorProviderAnthropic: {},
-	MonitorProviderGemini:    {},
 	MonitorProviderGrok:      {},
 	MonitorProviderKimi:      {},
 	MonitorProviderZhipu:     {},
@@ -46,7 +42,7 @@ func validateProvider(p string) error {
 	return nil
 }
 
-// providerSupportsProbe 该 provider 是否注册了探活 adapter（antigravity 为 false）。
+// providerSupportsProbe 该 provider 是否注册了探活 adapter。
 func providerSupportsProbe(p string) bool {
 	_, ok := probeCapableProviders[p]
 	return ok
@@ -65,12 +61,8 @@ func monitorCheckModeUsesQuota(checkMode string) bool {
 	return checkMode == MonitorCheckModeQuota || checkMode == MonitorCheckModeQuotaProbe
 }
 
-// validateCheckMode 校验 check_mode 与 provider 的组合矩阵：
-//
-//	provider                | probe | quota | quota_probe
-//	------------------------+-------+-------+------------
-//	openai/anthropic/...    |  Y    |  Y    |  Y
-//	antigravity（无 adapter）|  N    |  Y    |  N
+// validateCheckMode 校验 check_mode 与 provider 的组合：所有 probe 模式
+// （probe / quota_probe）都要求 provider 注册了探活 adapter；quota 模式不限。
 func validateCheckMode(provider, checkMode string) error {
 	checkMode = defaultCheckMode(checkMode)
 	switch checkMode {
@@ -216,7 +208,7 @@ func normalizeMonitorPrimaryModel(provider, checkMode, model string) string {
 //   - kimi/zhipu/deepseek payg：仅 kimi/deepseek 有公开余额端点（zhipu payg 无）
 //   - anthropic：OAuth / Setup Token（API-Key 型无 usage 通道，永久 error）
 //   - openai：OAuth（API-Key 型无 usage 通道）
-//   - gemini/grok/antigravity：本地统计/值通道降级，不会永久 error，放行
+//   - grok：本地统计/值通道降级，不会永久 error，放行
 func monitorAccountQuotaCapability(account *Account) error {
 	switch account.Platform {
 	case PlatformKimi, PlatformZhipu, PlatformDeepseek:

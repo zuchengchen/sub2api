@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 目标：严格验证“antigravity 账号通过 /v1/messages 提供 Claude 服务时”，
+// 目标：严格验证“非 Anthropic 平台账号（此处用 grok）通过 /v1/messages 提供 Claude 服务时”，
 // 当账号 credentials.intercept_warmup_requests=true 且请求为 Warmup 时，
 // 后端会在转发上游前直接拦截并返回 mock 响应（不依赖上游）。
 
@@ -208,8 +208,7 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 		billingCacheService: billingCacheSvc,
 		concurrencyHelper:   concurrencyHelper,
 		// 这些字段对本测试不敏感，保持较小即可
-		maxAccountSwitches:       1,
-		maxAccountSwitchesGemini: 1,
+		maxAccountSwitches: 1,
 	}
 
 	cleanup := func() {
@@ -218,7 +217,7 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 	return h, cleanup
 }
 
-func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_MixedSchedulingV1(t *testing.T) {
+func TestGatewayHandlerMessages_InterceptWarmup_MixedSchedulingV1(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(2001)
@@ -234,7 +233,7 @@ func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_MixedScheduli
 	account := &service.Account{
 		ID:       accountID,
 		Name:     "ag-1",
-		Platform: service.PlatformAntigravity,
+		Platform: service.PlatformGrok,
 		Type:     service.AccountTypeOAuth,
 		Credentials: map[string]any{
 			"access_token":              "tok_xxx",
@@ -286,7 +285,7 @@ func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_MixedScheduli
 
 	require.Equal(t, 200, rec.Code)
 
-	// 断言：确实选中了 antigravity 账号（不是纯函数测试，而是从 Handler 里验证调度结果）
+	// 断言：确实选中了混合调度的 grok 账号（不是纯函数测试，而是从 Handler 里验证调度结果）
 	selected, ok := c.Get(opsAccountIDKey)
 	require.True(t, ok)
 	require.Equal(t, accountID, selected)
@@ -304,7 +303,7 @@ func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_MixedScheduli
 	require.Equal(t, "New Conversation", first["text"])
 }
 
-func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_ForcePlatform(t *testing.T) {
+func TestGatewayHandlerMessages_InterceptWarmup_ForcePlatform(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(2002)
@@ -313,14 +312,14 @@ func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_ForcePlatform
 	group := &service.Group{
 		ID:       groupID,
 		Hydrated: true,
-		Platform: service.PlatformAntigravity,
+		Platform: service.PlatformGrok,
 		Status:   service.StatusActive,
 	}
 
 	account := &service.Account{
 		ID:       accountID,
 		Name:     "ag-2",
-		Platform: service.PlatformAntigravity,
+		Platform: service.PlatformGrok,
 		Type:     service.AccountTypeOAuth,
 		Credentials: map[string]any{
 			"access_token":              "tok_xxx",
@@ -344,17 +343,17 @@ func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_ForcePlatform
 		"max_tokens": 256,
 		"messages": [{"role":"user","content":[{"type":"text","text":"Warmup"}]}]
 	}`)
-	req := httptest.NewRequest("POST", "/antigravity/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	// 模拟 routes/gateway.go 里的 ForcePlatform 中间件效果：
 	// - 写入 request.Context（Service读取）
 	// - 写入 gin.Context（Handler快速读取）
 	ctx := context.WithValue(req.Context(), ctxkey.Group, group)
-	ctx = context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformAntigravity)
+	ctx = context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformGrok)
 	req = req.WithContext(ctx)
 	c.Request = req
-	c.Set(string(middleware.ContextKeyForcePlatform), service.PlatformAntigravity)
+	c.Set(string(middleware.ContextKeyForcePlatform), service.PlatformGrok)
 
 	apiKey := &service.APIKey{
 		ID:      3002,

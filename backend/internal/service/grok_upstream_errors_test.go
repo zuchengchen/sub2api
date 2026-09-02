@@ -145,7 +145,7 @@ func TestGrokNonFailoverDoesNotApplyGenericTempUnschedulablePolicy(t *testing.T)
 	repo := &grokQuotaAccountRepo{}
 	svc := &OpenAIGatewayService{
 		accountRepo:      repo,
-		rateLimitService: NewRateLimitService(repo, nil, nil, nil, nil),
+		rateLimitService: NewRateLimitService(repo, nil, nil, nil),
 	}
 	account := &Account{
 		ID:       5099,

@@ -189,7 +189,7 @@ func (s *FailoverState) allExclusionsAreProfitVetoed() bool {
 }
 
 // HandleFailoverError 处理 UpstreamFailoverError，返回下一步动作。
-// 包含：缓存计费判断、同账号重试、临时封禁、切换计数、Antigravity 延时。
+// 包含：缓存计费判断、同账号重试、临时封禁、切换计数。
 func (s *FailoverState) HandleFailoverError(
 	ctx context.Context,
 	gatewayService TempUnscheduler,
@@ -255,19 +255,11 @@ func (s *FailoverState) HandleFailoverError(
 		zap.Int("max_switches", s.MaxSwitches),
 	)
 
-	// Antigravity 平台换号线性递增延时
-	if platform == service.PlatformAntigravity {
-		delay := time.Duration(s.SwitchCount-1) * time.Second
-		if !sleepWithContext(ctx, delay) {
-			return FailoverCanceled
-		}
-	}
-
 	return FailoverContinue
 }
 
 // HandleSelectionExhausted 处理选号失败（所有候选账号都在排除列表中）时的退避重试决策。
-// 针对 Antigravity 单账号分组的 503 (MODEL_CAPACITY_EXHAUSTED) 场景：
+// 针对单账号分组的 503 (MODEL_CAPACITY_EXHAUSTED) 场景：
 // 清除排除列表、等待退避后重新选号。
 //
 // 返回 FailoverContinue 时，调用方应设置 SingleAccountRetry context 并 continue。

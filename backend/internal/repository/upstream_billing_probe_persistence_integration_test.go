@@ -91,7 +91,7 @@ func TestProbeSnapshotSyncsRateOnlyForSuccessfulEnabledAccount(t *testing.T) {
 	initialRate := 0.25
 	account := mustCreateAccount(t, tx.Client(), &service.Account{
 		Name:           "probe-rate-sync",
-		Platform:       service.PlatformGemini,
+		Platform:       service.PlatformGrok,
 		Type:           service.AccountTypeAPIKey,
 		RateMultiplier: &initialRate,
 		Credentials:    map[string]any{"api_key": "sk-test"},

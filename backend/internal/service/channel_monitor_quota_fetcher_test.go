@@ -288,7 +288,7 @@ func TestQuotaFetcher_UsageValueChannelFailureYieldsFailureSnapshot(t *testing.T
 
 	// 限流等非凭据失败 → error（而非 operational）。
 	accounts.accounts[13] = &Account{ID: 13, Platform: domain.PlatformAnthropic}
-	usage.usage = &UsageInfo{Error: "usage API error: HTTP 429", ErrorCode: errorCodeRateLimited}
+	usage.usage = &UsageInfo{Error: "usage API error: HTTP 429", ErrorCode: "rate_limited"}
 	snapshot = fetcher.Fetch(context.Background(), 13)
 	require.False(t, snapshot.Success)
 	require.False(t, snapshot.CredentialInvalid)
@@ -321,8 +321,8 @@ func TestUsageFailureInfo_ClassificationMatrix(t *testing.T) {
 		{name: "forbidden with reason", usage: &UsageInfo{IsForbidden: true, ForbiddenReason: "usage limited"}, failed: true, credentialInvalid: true, msg: "usage limited"},
 		{name: "error code unauthenticated", usage: &UsageInfo{ErrorCode: errorCodeUnauthenticated}, failed: true, credentialInvalid: true, msg: errorCodeUnauthenticated},
 		{name: "error code forbidden", usage: &UsageInfo{ErrorCode: errorCodeForbidden}, failed: true, credentialInvalid: true, msg: errorCodeForbidden},
-		{name: "error code rate limited", usage: &UsageInfo{ErrorCode: errorCodeRateLimited}, failed: true, msg: errorCodeRateLimited},
-		{name: "error code network error", usage: &UsageInfo{ErrorCode: errorCodeNetworkError}, failed: true, msg: errorCodeNetworkError},
+		{name: "error code rate limited", usage: &UsageInfo{ErrorCode: "rate_limited"}, failed: true, msg: "rate_limited"},
+		{name: "error code network error", usage: &UsageInfo{ErrorCode: "network_error"}, failed: true, msg: "network_error"},
 		{name: "grok quota unknown exempted", usage: &UsageInfo{ErrorCode: "quota_unknown", Error: "Grok quota is unknown until billing is probed"}},
 	}
 	for _, tc := range cases {
@@ -613,26 +613,19 @@ func TestUsageQuotaTiers_MapsAllWindowKinds(t *testing.T) {
 	remaining := int64(400)
 	resetUnix := int64(1777283883)
 	usage := &UsageInfo{
-		FiveHour:          &UsageProgress{Utilization: 50},
-		SevenDay:          &UsageProgress{Utilization: 60},
-		SevenDaySonnet:    &UsageProgress{Utilization: 70},
-		SevenDayFable:     &UsageProgress{Utilization: 80},
-		ThirtyDay:         &UsageProgress{Utilization: 20},
-		GeminiSharedDaily: &UsageProgress{Utilization: 11},
-		GeminiProDaily:    &UsageProgress{Utilization: 22},
-		GeminiFlashDaily:  &UsageProgress{Utilization: 33},
-		GrokRequestQuota:  &xai.QuotaWindow{Limit: &limit, Remaining: &remaining, ResetUnix: &resetUnix},
-		GrokTokenQuota:    &xai.QuotaWindow{Limit: &limit, Remaining: &remaining, ResetAt: "2026-08-19T00:00:00Z"},
-		AntigravityQuota: map[string]*AntigravityModelQuota{
-			"gemini-3-pro":   {Utilization: 45},
-			"gemini-3-flash": {Utilization: 55},
-		},
+		FiveHour:         &UsageProgress{Utilization: 50},
+		SevenDay:         &UsageProgress{Utilization: 60},
+		SevenDaySonnet:   &UsageProgress{Utilization: 70},
+		SevenDayFable:    &UsageProgress{Utilization: 80},
+		ThirtyDay:        &UsageProgress{Utilization: 20},
+		GrokRequestQuota: &xai.QuotaWindow{Limit: &limit, Remaining: &remaining, ResetUnix: &resetUnix},
+		GrokTokenQuota:   &xai.QuotaWindow{Limit: &limit, Remaining: &remaining, ResetAt: "2026-08-19T00:00:00Z"},
 	}
 
 	tiers := usageQuotaTiers(usage)
 
-	// 5h/7d/7d-sonnet/7d-fable/30d + gemini×3 + grok×2 + antigravity×2
-	require.Len(t, tiers, 12)
+	// 5h/7d/7d-sonnet/7d-fable/30d + grok×2
+	require.Len(t, tiers, 7)
 
 	byKey := make(map[string]domain.MonitorQuotaTier, len(tiers))
 	for _, tier := range tiers {
@@ -648,13 +641,8 @@ func TestUsageQuotaTiers_MapsAllWindowKinds(t *testing.T) {
 	require.Contains(t, byKey, "7d-sonnet")
 	require.Contains(t, byKey, "7d-fable")
 	require.Contains(t, byKey, "30d")
-	require.Contains(t, byKey, "daily/shared")
-	require.Contains(t, byKey, "daily/pro")
-	require.Contains(t, byKey, "daily/flash")
 	require.Contains(t, byKey, "daily/requests")
 	require.Contains(t, byKey, "daily/tokens")
-	require.Contains(t, byKey, "total/gemini-3-pro")
-	require.Contains(t, byKey, "total/gemini-3-flash")
 
 	// grok requests 窗口：used = limit - remaining，百分比 60%。
 	requests := byKey["daily/requests"]

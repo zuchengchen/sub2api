@@ -94,7 +94,7 @@ func TestOpenAIHTTPCapacityShedIsRequestScopedForOAuthAccounts(t *testing.T) {
 	(&GatewayService{accountRepo: repo}).TempUnscheduleRetryableError(context.Background(), 1, failoverErr)
 	require.Zero(t, repo.tempUnschedCalls)
 
-	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	gateway := &OpenAIGatewayService{rateLimitService: rateLimitService}
 	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	require.False(t, gateway.handleOpenAIAccountUpstreamError(

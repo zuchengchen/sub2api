@@ -30,9 +30,7 @@ func TestEnsureSimpleModeDefaultGroups_CreatesMissingDefaults(t *testing.T) {
 
 	assertGroupExists(service.PlatformAnthropic + "-default")
 	assertGroupExists(service.PlatformOpenAI + "-default")
-	assertGroupExists(service.PlatformGemini + "-default")
-	assertGroupExists(service.PlatformAntigravity + "-default-1")
-	assertGroupExists(service.PlatformAntigravity + "-default-2")
+	assertGroupExists(service.PlatformGrok + "-default")
 
 	grokDefault, err := client.Group.Query().
 		Where(group.NameEQ(service.PlatformGrok+"-default"), group.DeletedAtIsNil()).
@@ -157,22 +155,4 @@ func TestEnsureSimpleModeDefaultGroups_IgnoresSoftDeletedGroups(t *testing.T) {
 	count, err := client.Group.Query().Where(group.NameEQ(service.PlatformAnthropic+"-default"), group.DeletedAtIsNil()).Count(seedCtx)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
-}
-
-func TestEnsureSimpleModeDefaultGroups_AntigravityNeedsTwoGroupsOnlyByCount(t *testing.T) {
-	ctx := context.Background()
-	tx := testEntTx(t)
-	client := tx.Client()
-
-	seedCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	mustCreateGroup(t, client, &service.Group{Name: "ag-custom-1-" + time.Now().Format(time.RFC3339Nano), Platform: service.PlatformAntigravity})
-	mustCreateGroup(t, client, &service.Group{Name: "ag-custom-2-" + time.Now().Format(time.RFC3339Nano), Platform: service.PlatformAntigravity})
-
-	require.NoError(t, ensureSimpleModeDefaultGroups(seedCtx, client))
-
-	count, err := client.Group.Query().Where(group.PlatformEQ(service.PlatformAntigravity), group.DeletedAtIsNil()).Count(seedCtx)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, count, 2)
 }

@@ -11,11 +11,10 @@ import (
 )
 
 type accountRepoStubForClearAccountError struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	account                  *Account
 	clearErrorCalls          int
 	clearRateLimitCalls      int
-	clearAntigravityCalls    int
 	clearModelRateLimitCalls int
 	clearTempUnschedCalls    int
 }
@@ -35,11 +34,6 @@ func (r *accountRepoStubForClearAccountError) ClearRateLimit(ctx context.Context
 	r.clearRateLimitCalls++
 	r.account.RateLimitedAt = nil
 	r.account.RateLimitResetAt = nil
-	return nil
-}
-
-func (r *accountRepoStubForClearAccountError) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
-	r.clearAntigravityCalls++
 	return nil
 }
 
@@ -78,7 +72,6 @@ func TestAdminService_ClearAccountError_AlsoClearsRecoverableRuntimeState(t *tes
 	require.NotNil(t, updated)
 	require.Equal(t, 1, repo.clearErrorCalls)
 	require.Equal(t, 1, repo.clearRateLimitCalls)
-	require.Equal(t, 1, repo.clearAntigravityCalls)
 	require.Equal(t, 1, repo.clearModelRateLimitCalls)
 	require.Equal(t, 1, repo.clearTempUnschedCalls)
 	require.Nil(t, updated.RateLimitResetAt)

@@ -1,3 +1,14 @@
+/** 自定义错误码可选项（与平台无关的通用 HTTP 状态码） */
+export const commonErrorCodes = [
+  { value: 401, label: 'Unauthorized' },
+  { value: 403, label: 'Forbidden' },
+  { value: 429, label: 'Rate Limit' },
+  { value: 500, label: 'Server Error' },
+  { value: 502, label: 'Bad Gateway' },
+  { value: 503, label: 'Unavailable' },
+  { value: 529, label: 'Overloaded' }
+]
+
 export function applyInterceptWarmup(
   credentials: Record<string, unknown>,
   enabled: boolean,
@@ -7,21 +18,6 @@ export function applyInterceptWarmup(
     credentials.intercept_warmup_requests = true
   } else if (mode === 'edit') {
     delete credentials.intercept_warmup_requests
-  }
-}
-
-export const ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY = 'antigravity_project_id'
-
-export function applyAntigravityProjectID(
-  credentials: Record<string, unknown>,
-  projectId: string,
-  mode: 'create' | 'edit'
-): void {
-  const trimmed = projectId.trim()
-  if (trimmed) {
-    credentials[ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY] = trimmed
-  } else if (mode === 'edit') {
-    delete credentials[ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY]
   }
 }
 

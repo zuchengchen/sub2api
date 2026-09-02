@@ -28,12 +28,7 @@ describe("groupsReasoningEffort", () => {
       ).toEqual(expected);
       expect(supportsReasoningEffortPolicyPlatform(platform)).toBe(true);
     }
-    for (const platform of [
-      "anthropic",
-      "gemini",
-      "antigravity",
-      "grok",
-    ] as const) {
+    for (const platform of ["anthropic", "grok"] as const) {
       expect(reasoningEffortOptionsForPlatform(platform)).toEqual([]);
       expect(supportsReasoningEffortPolicyPlatform(platform)).toBe(false);
     }

@@ -399,10 +399,10 @@ func TestListGroups_TokenLadderFollowsGroupToggle(t *testing.T) {
 func TestListGroups_GeminiCatalogLadderShownWholeRequest(t *testing.T) {
 	channels := []Channel{{
 		ID: 1, Name: "ch", Status: StatusActive, GroupIDs: []int64{10},
-		ModelMapping: map[string]map[string]string{PlatformGemini: {"gemini-2.5-pro": "gemini-2.5-pro"}},
+		ModelMapping: map[string]map[string]string{geminiCatalogPlatformKey: {"gemini-2.5-pro": "gemini-2.5-pro"}},
 	}}
-	groups := []Group{{ID: 10, Name: "g", Platform: PlatformGemini, RateMultiplier: 1, LongContextPricingEnabled: true}}
-	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: PlatformGemini},
+	groups := []Group{{ID: 10, Name: "g", Platform: geminiCatalogPlatformKey, RateMultiplier: 1, LongContextPricingEnabled: true}}
+	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: geminiCatalogPlatformKey},
 		newStubPricingServiceFromJSON(t, geminiLadderCatalogJSON))
 	out, err := svc.ListGroups(context.Background())
 	require.NoError(t, err)

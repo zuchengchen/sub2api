@@ -64,8 +64,8 @@ function createStreamResponse(lines: string[]) {
 
 function mountModal(account: Record<string, unknown> = {
   id: 42,
-  name: 'Gemini Image Test',
-  platform: 'gemini',
+  name: 'OpenAI Image Test',
+  platform: 'openai',
   type: 'apikey',
   status: 'active'
 }) {
@@ -92,9 +92,8 @@ function mountModal(account: Record<string, unknown> = {
 describe('AccountTestModal', () => {
   beforeEach(() => {
     getAvailableModels.mockResolvedValue([
-      { id: 'gemini-2.0-flash', display_name: 'Gemini 2.0 Flash' },
-      { id: 'gemini-2.5-flash-image', display_name: 'Gemini 2.5 Flash Image' },
-      { id: 'gemini-3.1-flash-image', display_name: 'Gemini 3.1 Flash Image' }
+      { id: 'gpt-image-1', display_name: 'GPT Image 1' },
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' }
     ])
     copyToClipboard.mockReset()
     Object.defineProperty(globalThis, 'localStorage', {
@@ -108,7 +107,7 @@ describe('AccountTestModal', () => {
     })
     global.fetch = vi.fn().mockResolvedValue(
       createStreamResponse([
-        'data: {"type":"test_start","model":"gemini-2.5-flash-image"}\n',
+        'data: {"type":"test_start","model":"gpt-image-1"}\n',
         'data: {"type":"image","image_url":"data:image/png;base64,QUJD","mime_type":"image/png"}\n',
         'data: {"type":"test_complete","success":true}\n'
       ])
@@ -119,7 +118,7 @@ describe('AccountTestModal', () => {
     vi.restoreAllMocks()
   })
 
-  it('gemini 图片模型测试会携带提示词并渲染图片预览', async () => {
+  it('图片模型测试会携带提示词并渲染图片预览', async () => {
     const wrapper = mountModal()
     await wrapper.setProps({ show: true })
     await flushPromises()
@@ -139,8 +138,9 @@ describe('AccountTestModal', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1)
     const [, request] = (global.fetch as any).mock.calls[0]
     expect(JSON.parse(request.body)).toEqual({
-      model_id: 'gemini-3.1-flash-image',
-      prompt: 'draw a tiny orange cat astronaut'
+      model_id: 'gpt-image-1',
+      prompt: 'draw a tiny orange cat astronaut',
+      mode: 'default'
     })
 
     const preview = wrapper.find('img[alt="test-image-1"]')

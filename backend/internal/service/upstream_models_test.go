@@ -127,14 +127,6 @@ func TestBuildOpenAIModelsURL(t *testing.T) {
 	}
 }
 
-func TestBuildGeminiModelsURL(t *testing.T) {
-	t.Parallel()
-
-	require.Equal(t, "https://generativelanguage.googleapis.com/v1beta/models", buildGeminiModelsURL("https://generativelanguage.googleapis.com"))
-	require.Equal(t, "https://generativelanguage.googleapis.com/v1beta/models", buildGeminiModelsURL("https://generativelanguage.googleapis.com/v1beta"))
-	require.Equal(t, "https://generativelanguage.googleapis.com/v1beta/models", buildGeminiModelsURL("https://generativelanguage.googleapis.com/v1beta/models"))
-}
-
 func TestExtractUpstreamModelIDs(t *testing.T) {
 	t.Parallel()
 
@@ -296,30 +288,6 @@ func TestBuildUpstreamModelsRequestsForAPIKeyAccounts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://xai.example.com/v1/models", grokReq.URL.String())
 	require.Equal(t, "Bearer xai-key", grokReq.Header.Get("Authorization"))
-
-	geminiReq, err := svc.buildGeminiUpstreamModelsRequest(ctx, &Account{
-		Platform: PlatformGemini,
-		Type:     AccountTypeAPIKey,
-		Credentials: map[string]any{
-			"api_key":  "gemini-key",
-			"base_url": "https://generativelanguage.googleapis.com/v1beta",
-		},
-	})
-	require.NoError(t, err)
-	require.Equal(t, "https://generativelanguage.googleapis.com/v1beta/models", geminiReq.URL.String())
-	require.Equal(t, "gemini-key", geminiReq.Header.Get("x-goog-api-key"))
-
-	antigravityReq, err := svc.buildAntigravityAPIKeyModelsRequest(ctx, &Account{
-		Platform: PlatformAntigravity,
-		Type:     AccountTypeAPIKey,
-		Credentials: map[string]any{
-			"api_key":  "antigravity-key",
-			"base_url": "https://gateway.example.com/antigravity",
-		},
-	})
-	require.NoError(t, err)
-	require.Equal(t, "https://gateway.example.com/antigravity/v1/models", antigravityReq.URL.String())
-	require.Equal(t, "antigravity-key", antigravityReq.Header.Get("x-api-key"))
 }
 
 func TestBuildUpstreamModelsRequestSupportsGrokOAuth(t *testing.T) {
@@ -352,26 +320,6 @@ func TestBuildUpstreamModelsRequestGrokOAuthRequiresTokenProvider(t *testing.T) 
 	require.True(t, errors.As(err, &syncErr))
 	require.Equal(t, UpstreamModelSyncErrorConfiguration, syncErr.Kind)
 	require.Contains(t, syncErr.SafeMessage(), "token provider")
-}
-
-func TestBuildAntigravityAPIKeyModelsRequestRejectsOfficialCloudCodeBase(t *testing.T) {
-	t.Parallel()
-
-	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
-	_, err := svc.buildAntigravityAPIKeyModelsRequest(context.Background(), &Account{
-		Platform: PlatformAntigravity,
-		Type:     AccountTypeAPIKey,
-		Credentials: map[string]any{
-			"api_key":  "antigravity-key",
-			"base_url": "https://cloudcode-pa.googleapis.com",
-		},
-	})
-	require.Error(t, err)
-
-	var syncErr *UpstreamModelSyncError
-	require.True(t, errors.As(err, &syncErr))
-	require.Equal(t, UpstreamModelSyncErrorUnsupported, syncErr.Kind)
-	require.Contains(t, syncErr.SafeMessage(), "compatible gateway")
 }
 
 func TestBuildAnthropicUpstreamModelsRequestRejectsBedrock(t *testing.T) {

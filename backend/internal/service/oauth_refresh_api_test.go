@@ -17,7 +17,7 @@ import (
 
 // refreshAPIAccountRepo implements AccountRepository for OAuthRefreshAPI tests.
 type refreshAPIAccountRepo struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	account                 *Account // returned by GetByID
 	getByIDErr              error
 	getByIDCalls            int
@@ -147,7 +147,7 @@ func (e *refreshAPIExecutorStub) CacheKey(account *Account) string {
 	return "test:api:" + account.Platform
 }
 
-// refreshAPICacheStub implements GeminiTokenCache for OAuthRefreshAPI tests.
+// refreshAPICacheStub implements TokenCache for OAuthRefreshAPI tests.
 type refreshAPICacheStub struct {
 	lockResult    bool
 	lockErr       error
@@ -212,7 +212,7 @@ func TestRefreshIfNeeded_UpdateCredentialsPreservesRateLimitState(t *testing.T) 
 	resetAt := time.Now().Add(45 * time.Minute)
 	account := &Account{
 		ID:               11,
-		Platform:         PlatformGemini,
+		Platform:         PlatformAnthropic,
 		Type:             AccountTypeOAuth,
 		Status:           StatusActive,
 		RateLimitResetAt: &resetAt,
@@ -251,7 +251,7 @@ func TestRefreshIfNeeded_LockHeld(t *testing.T) {
 }
 
 func TestRefreshIfNeeded_LockErrorDegrades(t *testing.T) {
-	account := &Account{ID: 3, Platform: PlatformGemini, Type: AccountTypeOAuth, Status: StatusActive}
+	account := &Account{ID: 3, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive}
 	repo := &refreshAPIAccountRepo{account: account}
 	cache := &refreshAPICacheStub{lockErr: errors.New("redis down")} // lock error
 	executor := &refreshAPIExecutorStub{
@@ -270,7 +270,7 @@ func TestRefreshIfNeeded_LockErrorDegrades(t *testing.T) {
 }
 
 func TestRefreshIfNeeded_NoCacheNoLock(t *testing.T) {
-	account := &Account{ID: 4, Platform: PlatformGemini, Type: AccountTypeOAuth, Status: StatusActive}
+	account := &Account{ID: 4, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive}
 	repo := &refreshAPIAccountRepo{account: account}
 	executor := &refreshAPIExecutorStub{
 		needsRefresh: true,
@@ -324,7 +324,7 @@ func TestRefreshIfNeeded_RefreshError(t *testing.T) {
 }
 
 func TestRefreshIfNeeded_DBUpdateError(t *testing.T) {
-	account := &Account{ID: 7, Platform: PlatformGemini, Type: AccountTypeOAuth, Status: StatusActive}
+	account := &Account{ID: 7, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive}
 	repo := &refreshAPIAccountRepo{
 		account:   account,
 		updateErr: errors.New("db connection lost"),
@@ -653,7 +653,7 @@ func TestRefreshIfNeeded_LateSuccessAfterDeadlineDoesNotPersist(t *testing.T) {
 }
 
 func TestRefreshIfNeeded_NilCredentials(t *testing.T) {
-	account := &Account{ID: 9, Platform: PlatformGemini, Type: AccountTypeOAuth, Status: StatusActive}
+	account := &Account{ID: 9, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive}
 	repo := &refreshAPIAccountRepo{account: account}
 	cache := &refreshAPICacheStub{lockResult: true}
 	executor := &refreshAPIExecutorStub{
@@ -1092,18 +1092,4 @@ func TestOpenAIProviderRefreshPolicy(t *testing.T) {
 	require.Equal(t, ProviderRefreshErrorUseExistingToken, p.OnRefreshError)
 	require.Equal(t, ProviderLockHeldWaitForCache, p.OnLockHeld)
 	require.Equal(t, time.Minute, p.FailureTTL)
-}
-
-func TestGeminiProviderRefreshPolicy(t *testing.T) {
-	p := GeminiProviderRefreshPolicy()
-	require.Equal(t, ProviderRefreshErrorReturn, p.OnRefreshError)
-	require.Equal(t, ProviderLockHeldUseExistingToken, p.OnLockHeld)
-	require.Equal(t, time.Duration(0), p.FailureTTL)
-}
-
-func TestAntigravityProviderRefreshPolicy(t *testing.T) {
-	p := AntigravityProviderRefreshPolicy()
-	require.Equal(t, ProviderRefreshErrorReturn, p.OnRefreshError)
-	require.Equal(t, ProviderLockHeldUseExistingToken, p.OnLockHeld)
-	require.Equal(t, time.Duration(0), p.FailureTTL)
 }

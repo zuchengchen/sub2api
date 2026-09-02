@@ -10,7 +10,7 @@ import (
 )
 
 type updateAccountCredsRepoStub struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	account     *Account
 	updateCalls int
 }

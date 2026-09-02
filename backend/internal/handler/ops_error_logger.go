@@ -2082,10 +2082,6 @@ func resolveOpsPlatform(ctx context.Context, apiKey *service.APIKey, fallback st
 func guessPlatformFromPath(path string) string {
 	p := strings.ToLower(path)
 	switch {
-	case strings.HasPrefix(p, "/antigravity/"):
-		return service.PlatformAntigravity
-	case strings.HasPrefix(p, "/v1beta/"):
-		return service.PlatformGemini
 	case strings.Contains(p, "/responses"), strings.Contains(p, "/images/"):
 		return service.PlatformOpenAI
 	default:
@@ -2271,7 +2267,6 @@ func isOpsLocalBusinessLimitError(code string, msg string) bool {
 		strings.Contains(msg, "subscription is invalid or expired") ||
 		strings.Contains(msg, opsErrInsufficientBalance) ||
 		strings.Contains(msg, "insufficient account balance") ||
-		strings.Contains(msg, "api key group platform is not gemini") ||
 		strings.Contains(msg, "api key 额度已用完") ||
 		strings.Contains(msg, "api key 5小时限额已用完") ||
 		strings.Contains(msg, "api key 日限额已用完") ||
@@ -2341,7 +2336,6 @@ func isOpsNoAvailableAccountMessage(message string) bool {
 	msg := strings.ToLower(message)
 	return strings.Contains(msg, opsErrNoAvailableAccounts) ||
 		strings.Contains(msg, "no available account") ||
-		strings.Contains(msg, "no available gemini accounts") ||
 		strings.Contains(msg, "no available openai accounts") ||
 		strings.Contains(msg, "no available compatible accounts")
 }

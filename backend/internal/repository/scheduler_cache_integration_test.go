@@ -17,7 +17,7 @@ func TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(t *testing.T)
 	rdb := testRedis(t)
 	cache := NewSchedulerCache(rdb)
 
-	bucket := service.SchedulerBucket{GroupID: 2, Platform: service.PlatformGemini, Mode: service.SchedulerModeSingle}
+	bucket := service.SchedulerBucket{GroupID: 2, Platform: service.PlatformGrok, Mode: service.SchedulerModeSingle}
 	now := time.Now().UTC().Truncate(time.Second)
 	limitReset := now.Add(10 * time.Minute)
 	overloadUntil := now.Add(2 * time.Minute)
@@ -27,7 +27,7 @@ func TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(t *testing.T)
 	account := service.Account{
 		ID:          101,
 		Name:        "gemini-heavy",
-		Platform:    service.PlatformGemini,
+		Platform:    service.PlatformGrok,
 		Type:        service.AccountTypeOAuth,
 		Status:      service.StatusActive,
 		Schedulable: true,
@@ -109,8 +109,8 @@ func TestSchedulerCacheRetireAndReopenFencesOldEpochIntegration(t *testing.T) {
 	ctx := context.Background()
 	rdb := testRedis(t)
 	cache := NewSchedulerCache(rdb)
-	bucket := service.SchedulerBucket{GroupID: 77, Platform: service.PlatformAntigravity, Mode: service.SchedulerModeForced}
-	account := service.Account{ID: 7701, Platform: service.PlatformAntigravity, Type: service.AccountTypeOAuth}
+	bucket := service.SchedulerBucket{GroupID: 77, Platform: service.PlatformGrok, Mode: service.SchedulerModeForced}
+	account := service.Account{ID: 7701, Platform: service.PlatformGrok, Type: service.AccountTypeOAuth}
 
 	oldToken, err := cache.CaptureBucketWriteToken(ctx, bucket)
 	require.NoError(t, err)

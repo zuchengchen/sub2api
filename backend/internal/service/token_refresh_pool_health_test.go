@@ -127,7 +127,7 @@ type rejectedRefreshAttemptGate struct {
 }
 
 type poolHealthTokenCacheStub struct {
-	GeminiTokenCache
+	TokenCache
 }
 
 type tripBeforeRateAdmissionGate struct {
@@ -367,16 +367,14 @@ func newPoolHealthService(repo *poolHealthAccountRepo, refresher *poolHealthRefr
 
 func TestTokenRefreshService_RegistrationsAreCandidateEligibilitySource(t *testing.T) {
 	cfg := &config.Config{}
-	svc := NewTokenRefreshService(nil, nil, nil, nil, nil, nil, nil, cfg, nil)
+	svc := NewTokenRefreshService(nil, nil, nil, nil, nil, cfg, nil)
 
 	require.Equal(t, []string{
 		PlatformAnthropic,
 		PlatformOpenAI,
-		PlatformGemini,
-		PlatformAntigravity,
 		PlatformGrok,
 	}, svc.eligiblePlatforms())
-	require.Len(t, svc.registrations, 5)
+	require.Len(t, svc.registrations, 3)
 	for _, registration := range svc.registrations {
 		require.NotNil(t, registration.refresher)
 		require.NotNil(t, registration.executor)

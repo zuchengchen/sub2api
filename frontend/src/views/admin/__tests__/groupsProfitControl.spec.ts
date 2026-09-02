@@ -96,7 +96,7 @@ describe("validateProfitControlFormState", () => {
         formState({ platform: "anthropic", profit_min_margin_percent: 200 }),
       ),
     ).toBe("marginRangeError");
-    for (const platform of ["openai", "anthropic", "gemini", "grok", "antigravity"]) {
+    for (const platform of ["openai", "anthropic", "grok"]) {
       expect(validateProfitControlFormState(formState({ platform }))).toBeNull();
     }
     expect(

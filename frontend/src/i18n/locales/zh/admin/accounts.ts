@@ -217,8 +217,6 @@ export default {
       privacyTrainingOff: '已关闭训练数据共享',
       privacyCfBlocked: '被 Cloudflare 拦截，训练可能仍开启',
       privacyFailed: '关闭训练数据共享失败',
-      privacyAntigravitySet: '已关闭遥测和营销邮件',
-      privacyAntigravityFailed: '隐私设置失败',
       setPrivacy: '设置隐私',
       subscriptionAbnormal: '异常',
       subscriptionExpires: '到期',
@@ -304,8 +302,6 @@ export default {
         claude: 'Claude',
         openai: 'OpenAI',
         anthropic: 'Anthropic',
-        gemini: 'Gemini',
-        antigravity: 'Antigravity',
         grok: 'Grok',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
@@ -361,18 +357,10 @@ export default {
         oauth: 'OAuth',
         chatgptOauth: 'ChatGPT OAuth',
         responsesApi: 'Responses API',
-        googleOauth: 'Google OAuth',
-        codeAssist: 'Code Assist',
-        antigravityOauth: 'Antigravity OAuth',
         grokOauth: 'Grok OAuth',
-        antigravityApikey: '通过 Base URL + API Key 连接',
         upstream: '对接上游',
         upstreamDesc: '通过 Base URL + API Key 连接上游'
       },
-      antigravityProjectIdLabel: 'GCP Project ID（可选）',
-      antigravityProjectIdPlaceholder: 'your-gcp-project-id',
-      antigravityProjectIdHint:
-        'standard-tier 且未自动返回 project_id 的 Antigravity 账号需要填写用户自带 GCP project。',
       accountSchedulingThresholdOverride: '账号自动停调阈值覆盖',
       accountSchedulingThresholdOverrideHint:
         '仅对当前账号覆盖平台级自动停调阈值；关闭后使用平台设置。',
@@ -452,11 +440,6 @@ export default {
       usageWindow: {
         statsTitle: '5小时窗口用量统计',
         statsTitleDaily: '每日用量统计',
-        geminiProDaily: 'Pro',
-        geminiFlashDaily: 'Flash',
-        gemini3Pro: 'G3P',
-        gemini3Flash: 'G3F',
-        gemini3Image: 'G31FI',
         claude: 'Claude',
         grokRequests: '请求',
         grokTokens: 'Token',
@@ -522,11 +505,7 @@ export default {
         personal: '个人版',
         unlimited: '无限制'
       },
-      ineligibleWarning:
-        '该账号无 Antigravity 使用权限，但仍能进行 API 转发。继续使用请自行承担风险。',
       forbidden: '已封禁',
-      forbiddenValidation: '需要验证',
-      forbiddenViolation: '违规封禁',
       openVerification: '打开验证链接',
       copyLink: '复制链接',
       linkCopied: '链接已复制',
@@ -619,7 +598,6 @@ export default {
       vertexLabel: 'Vertex',
       vertexDesc: 'Service Account',
       vertexAnthropicHint: '使用 Google Cloud Service Account JSON 通过 Vertex AI 调用 Anthropic Claude。建议配置模型映射，将客户端 Claude 模型名映射到 Vertex 模型 ID。',
-      vertexGeminiHint: '使用 Google Cloud Service Account JSON 访问 Vertex AI Gemini。建议将 Vertex 账号放入独立分组，避免和 AI Studio/Gemini OAuth 同模型混调。',
       vertexSaJsonLabel: 'Service Account JSON',
       vertexSaJsonLoaded: '已读取 Service Account JSON',
       vertexSaJsonDrop: '拖入 Service Account JSON',
@@ -1024,10 +1002,6 @@ export default {
       expiresAtHint: '留空表示不过期',
       expiresAtTimezoneHint: '输入按浏览器本地时区（{timezone}）解释。',
       higherPriorityFirst: '数值越小优先级越高',
-      mixedScheduling: '在 /v1/messages 中使用',
-      mixedSchedulingHint: '启用后可参与 Anthropic/Gemini 分组的调度',
-      mixedSchedulingTooltip:
-        '！！注意！！ Antigravity Claude 和 Anthropic Claude 无法在同个上下文中使用，如果你同时有 Anthropic 账号和 Antigravity 账号，开启此选项会导致经常 400 报错。开启后，请用分组功能做好 Antigravity 账号和 Anthropic 账号的隔离。一定要弄明白再开启！！',
       aiCreditsBalance: 'AI Credits',
       allowOverages: '允许超量请求 (AI Credits)',
       allowOveragesTooltip:
@@ -1068,7 +1042,7 @@ export default {
       // Upstream type
       upstream: {
         baseUrl: '上游 Base URL',
-        baseUrlHint: '上游 Antigravity 服务的地址，例如：https://cloudcode-pa.googleapis.com',
+        baseUrlHint: '上游服务的地址，例如：https://api.example.com',
         apiKey: '上游 API Key',
         apiKeyHint: '上游服务的 API Key',
         pleaseEnterBaseUrl: '请输入上游 Base URL',
@@ -1249,232 +1223,12 @@ export default {
               '找不到所选代理。请选择可用代理后重试。'
           },
           oauthOnlyHint: '首版 Grok 支持仅包含 OAuth 订阅的 Responses API 文本/推理转发。'
-        },
-        // Gemini specific
-        gemini: {
-          title: 'Gemini 账户授权',
-          followSteps: '请按照以下步骤完成 Gemini 账户的授权：',
-          step1GenerateUrl: '生成授权链接',
-          generateAuthUrl: '生成授权链接',
-          projectIdLabel: 'Project ID（可选）',
-          projectIdPlaceholder: '例如：my-gcp-project 或 cloud-ai-companion-xxxxx',
-          projectIdHint:
-            '留空则在兑换授权码后自动探测；若自动探测失败，可填写后重新生成授权链接再授权。',
-          howToGetProjectId: '如何获取',
-          step2OpenUrl: '在浏览器中打开链接并完成授权',
-          openUrlDesc: '请在新标签页中打开授权链接，登录您的 Google 账户并授权。',
-          step3EnterCode: '输入回调链接或 Code',
-          authCodeDesc:
-            '授权完成后，复制浏览器跳转后的回调链接（推荐）或仅复制 code，粘贴到下方即可。',
-          authCode: '回调链接或 Code',
-          authCodePlaceholder: '方式1（推荐）：粘贴回调链接\n方式2：仅粘贴 code 参数的值',
-          authCodeHint: '系统会自动从链接中解析 code/state。',
-          redirectUri: 'Redirect URI',
-          redirectUriHint: '需要在 Google OAuth Client 中配置，且必须与此处完全一致。',
-          confirmRedirectUri: '我已在 Google OAuth Client 中配置了该 Redirect URI（必须完全一致）',
-          invalidRedirectUri: 'Redirect URI 必须是合法的 http(s) URL',
-          redirectUriNotConfirmed: '请确认 Redirect URI 已在 Google OAuth Client 中正确配置',
-          missingRedirectUri: '缺少 Redirect URI',
-          failedToGenerateUrl: '生成 Gemini 授权链接失败',
-          missingExchangeParams: '缺少 code / session_id / state',
-          failedToExchangeCode: 'Gemini 授权码兑换失败',
-          missingProjectId:
-            'GCP Project ID 获取失败：您的 Google 账号未关联有效的 GCP 项目。请前往 Google Cloud Console 激活 GCP 并绑定信用卡，或在授权时手动填写 Project ID。',
-          modelPassthrough: 'Gemini 直接转发模型',
-          modelPassthroughDesc: '所有模型请求将直接转发至 Gemini API，不进行模型限制或映射。',
-          stateWarningTitle: '提示',
-          stateWarningDesc: '建议粘贴完整回调链接（包含 code 和 state）。',
-          oauthTypeLabel: 'OAuth 类型',
-          needsProjectId: '内置授权（Code Assist）',
-          needsProjectIdDesc: '需要 GCP 项目与 Project ID',
-          noProjectIdNeeded: '自定义授权（AI Studio）',
-          noProjectIdNeededDesc: '需管理员配置 OAuth Client',
-          aiStudioNotConfiguredShort: '未配置',
-          aiStudioNotConfiguredTip:
-            'AI Studio OAuth 未配置：请先设置 GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET，并在 Google OAuth Client 添加 Redirect URI：http://localhost:1455/auth/callback（Consent Screen scopes 需包含 https://www.googleapis.com/auth/generative-language.retriever）',
-          aiStudioNotConfigured:
-            'AI Studio OAuth 未配置：请先设置 GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET，并在 Google OAuth Client 添加 Redirect URI：http://localhost:1455/auth/callback'
-        },
-        // Antigravity specific
-        antigravity: {
-          title: 'Antigravity 账户授权',
-          followSteps: '请按照以下步骤完成 Antigravity 账户的授权：',
-          step1GenerateUrl: '生成授权链接',
-          generateAuthUrl: '生成授权链接',
-          step2OpenUrl: '在浏览器中打开链接并完成授权',
-          openUrlDesc: '请在新标签页中打开授权链接，登录您的 Google 账户并授权。',
-          importantNotice:
-            '重要提示：授权后页面可能会加载较长时间，请耐心等待。当浏览器地址栏变为 http://localhost... 开头时，表示授权已完成。',
-          step3EnterCode: '输入授权链接或 Code',
-          authCodeDesc:
-            '授权完成后，当页面地址变为 http://localhost:xxx/auth/callback?code=... 时：',
-          authCode: '授权链接或 Code',
-          authCodePlaceholder:
-            '方式1：复制完整的链接\n(http://localhost:xxx/auth/callback?code=...)\n方式2：仅复制 code 参数的值',
-          authCodeHint: '您可以直接复制整个链接或仅复制 code 参数值，系统会自动识别',
-          failedToGenerateUrl: '生成 Antigravity 授权链接失败',
-          missingExchangeParams: '缺少 code / session_id / state',
-          failedToExchangeCode: 'Antigravity 授权码兑换失败',
-          // Refresh Token auth
-          refreshTokenAuth: '手动输入 RT',
-          refreshTokenDesc: '输入您已有的 Antigravity Refresh Token，支持批量输入（每行一个），系统将自动验证并创建账号。',
-          refreshTokenPlaceholder: '粘贴您的 Antigravity Refresh Token...\n支持多个，每行一个',
-          validating: '验证中...',
-          validateAndCreate: '验证并创建账号',
-          pleaseEnterRefreshToken: '请输入 Refresh Token',
-          failedToValidateRT: '验证 Refresh Token 失败'
-        }
-      },
-      // Gemini specific (platform-wide)
-      gemini: {
-        helpButton: '使用帮助',
-        helpDialog: {
-          title: 'Gemini 使用指南',
-          apiKeySection: 'API Key 相关链接'
-        },
-        modelPassthrough: 'Gemini 直接转发模型',
-        modelPassthroughDesc: '所有模型请求将直接转发至 Gemini API，不进行模型限制或映射。',
-        baseUrlHint: '留空使用官方 Gemini API',
-        apiKeyHint: '您的 Gemini API Key（以 AIza 开头）',
-        tier: {
-          label: '账号等级',
-          hint: '提示：系统会优先尝试自动识别账号等级；若自动识别不可用或失败，则使用你选择的等级作为回退（本地模拟配额）。',
-          aiStudioHint:
-            'AI Studio 的配额是按模型分别限流（Pro/Flash 独立）。若已绑卡（按量付费），请选 Pay-as-you-go。',
-          googleOne: {
-            free: 'Google One Free',
-            pro: 'Google One Pro',
-            ultra: 'Google One Ultra'
-          },
-          gcp: {
-            standard: 'GCP Standard',
-            enterprise: 'GCP Enterprise'
-          },
-          aiStudio: {
-            free: 'Google AI Free',
-            paid: 'Google AI Pay-as-you-go'
-          }
-        },
-        accountType: {
-          oauthTitle: 'OAuth 授权（Gemini）',
-          oauthDesc: '使用 Google 账号授权，并选择 OAuth 子类型。',
-          apiKeyTitle: 'API 密钥（AI Studio）',
-          apiKeyDesc: '最快接入方式，使用 AIza API Key。',
-          apiKeyNote: '适合轻量测试。免费层限流严格，数据可能用于训练。',
-          apiKeyLink: '获取 API Key',
-          quotaLink: '配额说明'
-        },
-        oauthType: {
-          builtInTitle: '内置授权（Gemini CLI / Code Assist）',
-          builtInDesc: '使用 Google 内置客户端 ID，无需管理员配置。',
-          builtInRequirement: '需要 GCP 项目并填写 Project ID。',
-          googleOneDesc: '个人账号，享受 Google One 订阅配额',
-          codeAssistDesc: '企业级，需要 GCP 项目',
-          codeAssistRequirement: '需要激活 GCP 项目并绑定信用卡',
-          showAdvanced: '显示高级选项（自建 OAuth Client）',
-          hideAdvanced: '隐藏高级选项（自建 OAuth Client）',
-          gcpProjectLink: '创建项目',
-          customTitle: '自定义授权（AI Studio OAuth）',
-          customDesc: '使用管理员预设的 OAuth 客户端，适合组织管理。',
-          customRequirement: '需管理员配置 Client ID 并加入测试用户白名单。',
-          badges: {
-            recommended: '推荐',
-            highConcurrency: '高并发',
-            individuals: '推荐个人用户',
-            noGcp: '无需 GCP',
-            enterprise: '企业用户',
-            noAdmin: '无需管理员配置',
-            orgManaged: '组织管理',
-            adminRequired: '需要管理员'
-          }
-        },
-        setupGuide: {
-          title: 'Gemini 使用准备',
-          checklistTitle: '准备工作',
-          checklistItems: {
-            usIp: '使用美国 IP，并确保账号归属地为美国。',
-            age: '账号需满 18 岁。'
-          },
-          activationTitle: '服务激活',
-          activationItems: {
-            geminiWeb: '激活 Gemini Web，避免 User not initialized。',
-            gcpProject: '激活 GCP 项目，获取 Code Assist 所需 Project ID。'
-          },
-          links: {
-            countryCheck: '检查归属地',
-            countryChange: '修改归属地',
-            geminiWebActivation: '激活 Gemini Web',
-            gcpProject: '打开 GCP 控制台'
-          }
-        },
-        quotaPolicy: {
-          title: 'Gemini 配额与限流政策（参考）',
-          note: '注意：Gemini 官方未提供用量查询接口。此处显示的“每日配额”是由系统根据账号等级模拟计算的估算值，仅供调度参考，请以 Google 官方实际报错为准。',
-          columns: {
-            channel: '授权通道',
-            account: '账号状态',
-            limits: '限流政策',
-            docs: '官方文档'
-          },
-          docs: {
-            codeAssist: 'Code Assist 配额',
-            aiStudio: 'AI Studio 定价',
-            vertex: 'Vertex AI 配额'
-          },
-          simulatedNote: '本地模拟配额，仅供参考',
-          rows: {
-            googleOne: {
-              channel: 'Google One OAuth（个人版 / Code Assist for Individuals）',
-              limitsFree: '共享池：1000 RPD / 60 RPM（不分模型）',
-              limitsPro: '共享池：1500 RPD / 120 RPM（不分模型）',
-              limitsUltra: '共享池：2000 RPD / 120 RPM（不分模型）'
-            },
-            gcp: {
-              channel: 'GCP Code Assist OAuth（企业版）',
-              limitsStandard: '共享池：1500 RPD / 120 RPM（不分模型）',
-              limitsEnterprise: '共享池：2000 RPD / 120 RPM（不分模型）'
-            },
-            cli: {
-              channel: 'Gemini CLI（官方 Google 登录 / Code Assist）',
-              free: '免费 Google 账号',
-              premium: 'Google One AI Premium',
-              limitsFree: 'RPD ~1000；RPM ~60（软限制）',
-              limitsPremium: 'RPD ~1500+；RPM ~60+（优先队列）'
-            },
-            gcloud: {
-              channel: 'GCP Code Assist（gcloud 登录）',
-              account: '未购买 Code Assist 订阅',
-              limits: 'RPD ~1000；RPM ~60（预览期）'
-            },
-            aiStudio: {
-              channel: 'AI Studio API Key / OAuth',
-              free: '未绑卡（免费层）',
-              paid: '已绑卡（按量付费）',
-              limitsFree: 'RPD 50；RPM 2（Pro）/ 15（Flash）',
-              limitsPaid: 'RPD 不限；RPM 1000（Pro）/ 2000（Flash）（按模型配额）'
-            },
-            customOAuth: {
-              channel: 'Custom OAuth Client（GCP）',
-              free: '项目未绑卡',
-              paid: '项目已绑卡',
-              limitsFree: 'RPD 50；RPM 2（项目配额）',
-              limitsPaid: 'RPD 不限；RPM 1000+（项目配额）'
-            }
-          }
-        },
-        rateLimit: {
-          ok: '未限流',
-          unlimited: '无限流',
-          limited: '限流 {time}',
-          now: '现在'
         }
       },
       // Re-Auth Modal
       reAuthorizeAccount: '重新授权账号',
       claudeCodeAccount: 'Claude Code 账号',
       openaiAccount: 'OpenAI 账号',
-      geminiAccount: 'Gemini 账号',
-      antigravityAccount: 'Antigravity 账号',
       grokAccount: 'Grok 账号',
       inputMethod: '输入方式',
       reAuthorizedSuccess: '账号重新授权成功',

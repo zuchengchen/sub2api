@@ -108,27 +108,23 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"quota_daily_reset_at":  {},
 	"quota_weekly_reset_at": {},
 	// Provider observations, capability probes, and transient scheduling state.
-	"model_rate_limits":                      {},
-	"session_window_utilization":             {},
-	"passive_usage_7d_utilization":           {},
-	"passive_usage_7d_reset":                 {},
-	"passive_usage_7d_oi_utilization":        {},
-	"passive_usage_7d_oi_reset":              {},
-	"passive_usage_sampled_at":               {},
-	"grok_usage_snapshot":                    {},
-	"grok_billing_snapshot":                  {},
-	"openai_responses_supported":             {},
-	"openai_compact_supported":               {},
-	"openai_compact_checked_at":              {},
-	"openai_compact_last_status":             {},
-	"openai_compact_last_error":              {},
-	"antigravity_credits_overages":           {},
-	"antigravity_force_token_refresh":        {},
-	"antigravity_force_token_refresh_at":     {},
-	"antigravity_force_token_refresh_reason": {},
-	"drive_storage_limit":                    {},
-	"drive_storage_usage":                    {},
-	"drive_tier_updated_at":                  {},
+	"model_rate_limits":               {},
+	"session_window_utilization":      {},
+	"passive_usage_7d_utilization":    {},
+	"passive_usage_7d_reset":          {},
+	"passive_usage_7d_oi_utilization": {},
+	"passive_usage_7d_oi_reset":       {},
+	"passive_usage_sampled_at":        {},
+	"grok_usage_snapshot":             {},
+	"grok_billing_snapshot":           {},
+	"openai_responses_supported":      {},
+	"openai_compact_supported":        {},
+	"openai_compact_checked_at":       {},
+	"openai_compact_last_status":      {},
+	"openai_compact_last_error":       {},
+	"drive_storage_limit":             {},
+	"drive_storage_usage":             {},
+	"drive_tier_updated_at":           {},
 	// Codex fingerprint convergence uses a per-account random seed, never copied from another account.
 	codexFingerprintSeedExtraKey:           {},
 	"codex_primary_used_percent":           {},
@@ -409,6 +405,10 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	// 兜住所有建号入口（含批量创建、数据导入、复制账号）：平台必须有对应转发器。
+	if !isConcreteRequestPlatform(strings.TrimSpace(input.Platform)) {
+		return nil, ErrAccountUnsupportedPlatform
+	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -552,15 +552,6 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 				}()
 				s.EnsureOpenAIPrivacy(context.Background(), account)
 			}()
-		case PlatformAntigravity:
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("create_account_antigravity_privacy_panic", "account_id", account.ID, "recover", r)
-					}
-				}()
-				s.EnsureAntigravityPrivacy(context.Background(), account)
-			}()
 		}
 	}
 
@@ -620,8 +611,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				"cannot change account type while it has a spark shadow; delete the shadow first")
 		}
 	}
-	wasOveragesEnabled := account.IsOveragesEnabled()
-
 	if input.Name != "" {
 		account.Name = input.Name
 	}
@@ -688,17 +677,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
 		account.Extra = normalizedExtra
-		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
-			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
-			// 清除 AICredits 限流 key
-			if rawLimits, ok := account.Extra[modelRateLimitsKey].(map[string]any); ok {
-				delete(rawLimits, creditsExhaustedKey)
-			}
-		}
-		if account.Platform == PlatformAntigravity && !wasOveragesEnabled && account.IsOveragesEnabled() {
-			delete(account.Extra, modelRateLimitsKey)
-			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
-		}
 		// 校验并预计算固定时间重置的下次重置时间
 		if err := ValidateQuotaResetConfig(account.Extra); err != nil {
 			return nil, err
@@ -1286,9 +1264,6 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 	if err := s.accountRepo.ClearRateLimit(ctx, id); err != nil {
 		return nil, err
 	}
-	if err := s.accountRepo.ClearAntigravityQuotaScopes(ctx, id); err != nil {
-		return nil, err
-	}
 	if err := s.accountRepo.ClearModelRateLimits(ctx, id); err != nil {
 		return nil, err
 	}
@@ -1475,13 +1450,13 @@ func propagateAccountProxyToShadows(ctx context.Context, repo AccountRepository,
 	return nil
 }
 
-// checkMixedChannelRisk 检查分组中是否存在混合渠道（Antigravity + Anthropic）
+// checkMixedChannelRisk 检查分组中是否存在混合渠道
 // 如果存在混合，返回错误提示用户确认
 func (s *adminServiceImpl) checkMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error {
 	// 判断当前账号的渠道类型（基于 platform 字段，而不是 type 字段）
 	currentPlatform := getAccountPlatform(currentAccountPlatform)
 	if currentPlatform == "" {
-		// 不是 Antigravity 或 Anthropic，无需检查
+		// 不参与混合渠道检查的平台，直接放行
 		return nil
 	}
 
@@ -1500,7 +1475,7 @@ func (s *adminServiceImpl) checkMixedChannelRisk(ctx context.Context, currentAcc
 
 			otherPlatform := getAccountPlatform(account.Platform)
 			if otherPlatform == "" {
-				continue // 不是 Antigravity 或 Anthropic，跳过
+				continue // 不参与混合渠道检查的平台，跳过
 			}
 
 			// 检测混合渠道
@@ -1561,8 +1536,6 @@ func (s *adminServiceImpl) CheckMixedChannelRisk(ctx context.Context, currentAcc
 // getAccountPlatform 根据账号 platform 判断混合渠道检查用的平台标识
 func getAccountPlatform(accountPlatform string) string {
 	switch strings.ToLower(strings.TrimSpace(accountPlatform)) {
-	case PlatformAntigravity:
-		return "Antigravity"
 	case PlatformAnthropic, "claude":
 		return "Anthropic"
 	default:
@@ -1673,78 +1646,5 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 		account.Extra = make(map[string]any)
 	}
 	account.Extra["privacy_mode"] = mode
-	return mode
-}
-
-// EnsureAntigravityPrivacy 检查 Antigravity OAuth 账号隐私状态。
-// 仅当 privacy_mode 已成功设置（"privacy_set"）时跳过；
-// 未设置或之前失败（"privacy_set_failed"）均会重试。
-func (s *adminServiceImpl) EnsureAntigravityPrivacy(ctx context.Context, account *Account) string {
-	if account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
-		return ""
-	}
-	if account.Extra != nil {
-		if existing, ok := account.Extra["privacy_mode"].(string); ok && existing == AntigravityPrivacySet {
-			return existing
-		}
-	}
-
-	token, _ := account.Credentials["access_token"].(string)
-	if token == "" {
-		return ""
-	}
-
-	projectID, _ := account.Credentials["project_id"].(string)
-
-	var proxyURL string
-	if account.ProxyID != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
-	}
-
-	mode := setAntigravityPrivacy(ctx, token, projectID, proxyURL)
-	if mode == "" {
-		return ""
-	}
-
-	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
-		logger.LegacyPrintf("service.admin", "update_antigravity_privacy_mode_failed: account_id=%d err=%v", account.ID, err)
-		return mode
-	}
-	applyAntigravityPrivacyMode(account, mode)
-	return mode
-}
-
-// ForceAntigravityPrivacy 强制重新设置 Antigravity OAuth 账号隐私，无论当前状态。
-func (s *adminServiceImpl) ForceAntigravityPrivacy(ctx context.Context, account *Account) string {
-	if account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
-		return ""
-	}
-
-	token, _ := account.Credentials["access_token"].(string)
-	if token == "" {
-		return ""
-	}
-
-	projectID, _ := account.Credentials["project_id"].(string)
-
-	var proxyURL string
-	if account.ProxyID != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
-	}
-
-	mode := setAntigravityPrivacy(ctx, token, projectID, proxyURL)
-	if mode == "" {
-		return ""
-	}
-
-	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
-		logger.LegacyPrintf("service.admin", "force_update_antigravity_privacy_mode_failed: account_id=%d err=%v", account.ID, err)
-		return mode
-	}
-	applyAntigravityPrivacyMode(account, mode)
 	return mode
 }

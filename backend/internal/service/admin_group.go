@@ -9,10 +9,8 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -232,19 +230,6 @@ func defaultModelsListCandidateIDs(platform string) []string {
 	switch platform {
 	case PlatformOpenAI:
 		return openai.DefaultModelIDs()
-	case PlatformGemini:
-		ids := make([]string, 0, len(geminicli.DefaultModels))
-		for _, model := range geminicli.DefaultModels {
-			ids = append(ids, model.ID)
-		}
-		return ids
-	case PlatformAntigravity:
-		models := antigravity.DefaultModels()
-		ids := make([]string, 0, len(models))
-		for _, model := range models {
-			ids = append(ids, model.ID)
-		}
-		return ids
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
 	case PlatformComposite:
@@ -267,7 +252,7 @@ func defaultAllowImageGenerationForPlatform(platform string) bool {
 func compositeDefaultModelsListCandidateIDs() []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
-	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
 		for _, id := range defaultModelsListCandidateIDs(platform) {
 			if _, ok := seen[id]; ok {
 				continue
@@ -288,9 +273,7 @@ func canCopyAccountsFromGroupPlatform(targetPlatform, sourcePlatform string) boo
 
 func groupSupportsOAuthOnlyFilter(platform string) bool {
 	return platform == PlatformOpenAI ||
-		platform == PlatformAntigravity ||
 		platform == PlatformAnthropic ||
-		platform == PlatformGemini ||
 		platform == PlatformGrok ||
 		platform == PlatformComposite
 }
@@ -342,25 +325,6 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 			return nil, errors.New("image_rate_multiplier must be >= 0")
 		}
 		imageRateMultiplier = *input.ImageRateMultiplier
-	}
-	batchImageDiscountMultiplier := defaultBatchImageDiscountMultiplier
-	if input.BatchImageDiscountMultiplier != nil {
-		if *input.BatchImageDiscountMultiplier < 0 {
-			return nil, errors.New("batch_image_discount_multiplier must be >= 0")
-		}
-		batchImageDiscountMultiplier = *input.BatchImageDiscountMultiplier
-	}
-	batchImageHoldMultiplier := defaultBatchImageHoldMultiplier
-	if input.BatchImageHoldMultiplier != nil {
-		if *input.BatchImageHoldMultiplier < 0 {
-			return nil, errors.New("batch_image_hold_multiplier must be >= 0")
-		}
-		batchImageHoldMultiplier = *input.BatchImageHoldMultiplier
-	}
-	// 不变式：hold 比例 >= discount 比例。否则批量任务成功率足够高时
-	// 实际成本会超过冻结额，结算永远失败、用户冻结余额无法解冻。
-	if batchImageHoldMultiplier < batchImageDiscountMultiplier {
-		return nil, errors.New("batch_image_hold_multiplier must be >= batch_image_discount_multiplier")
 	}
 	videoRateMultiplier := 1.0
 	if input.VideoRateMultiplier != nil {
@@ -418,8 +382,6 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	allowImageGeneration := input.AllowImageGeneration || defaultAllowImageGenerationForPlatform(platform)
-	allowBatchImageGeneration := input.AllowBatchImageGeneration && allowImageGeneration && platform == PlatformGemini
-
 	// 如果指定了复制账号的源分组，先获取账号 ID 列表
 	var accountIDsToCopy []int64
 	if len(input.CopyAccountsFromGroupIDs) > 0 {
@@ -466,11 +428,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		LongContextPricingEnabled:       input.LongContextPricingEnabled,
 		ModelPricing:                    modelPricing,
 		AllowImageGeneration:            allowImageGeneration,
-		AllowBatchImageGeneration:       allowBatchImageGeneration,
 		ImageRateIndependent:            input.ImageRateIndependent,
 		ImageRateMultiplier:             imageRateMultiplier,
-		BatchImageDiscountMultiplier:    batchImageDiscountMultiplier,
-		BatchImageHoldMultiplier:        batchImageHoldMultiplier,
 		VideoRateIndependent:            input.VideoRateIndependent,
 		VideoRateMultiplier:             videoRateMultiplier,
 		PeakRateEnabled:                 peakRateEnabled,
@@ -609,8 +568,8 @@ func (s *adminServiceImpl) validateFallbackGroup(ctx context.Context, currentGro
 // platform/subscriptionType: 当前分组的有效平台/订阅类型
 // fallbackGroupID: 兜底分组 ID
 func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Context, currentGroupID int64, platform, subscriptionType string, fallbackGroupID int64) error {
-	if platform != PlatformAnthropic && platform != PlatformAntigravity {
-		return fmt.Errorf("invalid request fallback only supported for anthropic or antigravity groups")
+	if platform != PlatformAnthropic {
+		return fmt.Errorf("invalid request fallback only supported for anthropic groups")
 	}
 	if subscriptionType == SubscriptionTypeSubscription {
 		return fmt.Errorf("subscription groups cannot set invalid request fallback")
@@ -694,12 +653,6 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.AllowImageGeneration != nil {
 		group.AllowImageGeneration = *input.AllowImageGeneration
 	}
-	if input.AllowBatchImageGeneration != nil {
-		group.AllowBatchImageGeneration = *input.AllowBatchImageGeneration
-	}
-	if !group.AllowImageGeneration || group.Platform != PlatformGemini {
-		group.AllowBatchImageGeneration = false
-	}
 	if input.ImageRateIndependent != nil {
 		group.ImageRateIndependent = *input.ImageRateIndependent
 	}
@@ -708,24 +661,6 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, errors.New("image_rate_multiplier must be >= 0")
 		}
 		group.ImageRateMultiplier = *input.ImageRateMultiplier
-	}
-	if input.BatchImageDiscountMultiplier != nil {
-		if *input.BatchImageDiscountMultiplier < 0 {
-			return nil, errors.New("batch_image_discount_multiplier must be >= 0")
-		}
-		group.BatchImageDiscountMultiplier = *input.BatchImageDiscountMultiplier
-	}
-	if input.BatchImageHoldMultiplier != nil {
-		if *input.BatchImageHoldMultiplier < 0 {
-			return nil, errors.New("batch_image_hold_multiplier must be >= 0")
-		}
-		group.BatchImageHoldMultiplier = *input.BatchImageHoldMultiplier
-	}
-	// 仅在本次更新显式触碰任一比例时校验合并后的不变式（hold >= discount），
-	// 避免存量脏数据阻塞其他字段的正常更新（提交侧另有钳制兜底）。
-	if (input.BatchImageDiscountMultiplier != nil || input.BatchImageHoldMultiplier != nil) &&
-		group.BatchImageHoldMultiplier < group.BatchImageDiscountMultiplier {
-		return nil, errors.New("batch_image_hold_multiplier must be >= batch_image_discount_multiplier")
 	}
 	if input.VideoRateIndependent != nil {
 		group.VideoRateIndependent = *input.VideoRateIndependent
@@ -850,7 +785,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.MCPXMLInject = *input.MCPXMLInject
 	}
 
-	// 支持的模型系列（仅 antigravity 平台使用）
+	// 支持的模型系列
 	if input.SupportedModelScopes != nil {
 		group.SupportedModelScopes = *input.SupportedModelScopes
 	}

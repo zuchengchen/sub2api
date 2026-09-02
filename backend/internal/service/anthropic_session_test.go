@@ -244,3 +244,21 @@ func TestBuildAnthropicDigestChain_ContentBlocks(t *testing.T) {
 		t.Errorf("expected prefix 'u:', got: %s", parts[0])
 	}
 }
+
+func splitChain(chain string) []string {
+	if chain == "" {
+		return nil
+	}
+	var parts []string
+	start := 0
+	for i := 0; i < len(chain); i++ {
+		if chain[i] == '-' {
+			parts = append(parts, chain[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(chain) {
+		parts = append(parts, chain[start:])
+	}
+	return parts
+}

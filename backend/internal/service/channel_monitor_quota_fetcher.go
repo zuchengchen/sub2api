@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,7 +18,7 @@ import (
 // 渠道监控「配额模式」的配额抓取器。
 //
 // 不直接对接上游，而是把账号侧现成的用量服务归一成 domain.MonitorQuotaSnapshot：
-//   - 海外 5 家（anthropic/openai/gemini/antigravity/grok）→ AccountUsageService.GetUsageForAccount
+//   - 海外 3 家（anthropic/openai/grok）→ AccountUsageService.GetUsageForAccount
 //   - 国产 coding plan（kimi/zhipu/deepseek）→ CNProviderQuotaService.QueryUsageForAccount
 //   - 国产 payg（kimi/deepseek）→ CNProviderBalanceService.QueryBalanceForAccount
 //     （zhipu payg 无公开余额端点，探测会返回该错误，原样透出）
@@ -245,7 +244,7 @@ func (f *ChannelMonitorQuotaFetcher) fetchUsage(ctx context.Context, account *Ac
 	if usage == nil {
 		return quotaErrorSnapshot("usage", "usage service returned no data", now)
 	}
-	// openai/gemini/antigravity/grok 的失败多走「值通道」（err==nil 但错误
+	// openai/grok 的失败多走「值通道」（err==nil 但错误
 	// 降级在 UsageInfo 字段里），必须显式识别，否则会被误判为 operational。
 	if failed, credInvalid, msg := usageFailureInfo(usage); failed {
 		return &domain.MonitorQuotaSnapshot{
@@ -280,26 +279,9 @@ func usageQuotaTiers(usage *UsageInfo) []domain.MonitorQuotaTier {
 	appendProgressTier(&tiers, "7d-sonnet", "", usage.SevenDaySonnet)
 	appendProgressTier(&tiers, "7d-fable", "", usage.SevenDayFable)
 	appendProgressTier(&tiers, "30d", "", usage.ThirtyDay)
-	// Gemini 多档日配额：同 Window 不同 Label。
-	appendProgressTier(&tiers, "daily", "shared", usage.GeminiSharedDaily)
-	appendProgressTier(&tiers, "daily", "pro", usage.GeminiProDaily)
-	appendProgressTier(&tiers, "daily", "flash", usage.GeminiFlashDaily)
 	// Grok requests/tokens 两个日窗口 + 月度计费窗口。
 	appendQuotaWindowTier(&tiers, "daily", "requests", usage.GrokRequestQuota)
 	appendQuotaWindowTier(&tiers, "daily", "tokens", usage.GrokTokenQuota)
-	// Antigravity per-model 总量额度，Label = 模型名（按名排序保证输出稳定）。
-	for _, model := range sortedQuotaModelNames(usage.AntigravityQuota) {
-		q := usage.AntigravityQuota[model]
-		if q == nil {
-			continue
-		}
-		tiers = append(tiers, domain.MonitorQuotaTier{
-			Window:      "total",
-			Label:       model,
-			UsedPercent: float64(q.Utilization),
-			ResetAt:     q.ResetTime,
-		})
-	}
 	if len(tiers) == 0 {
 		return nil
 	}
@@ -349,15 +331,6 @@ func appendQuotaWindowTier(tiers *[]domain.MonitorQuotaTier, window, label strin
 		tier.ResetAt = time.Unix(*q.ResetUnix, 0).UTC().Format(time.RFC3339)
 	}
 	*tiers = append(*tiers, tier)
-}
-
-func sortedQuotaModelNames(quotas map[string]*AntigravityModelQuota) []string {
-	names := make([]string, 0, len(quotas))
-	for name := range quotas {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // fetchCNQuota 国产 coding plan：CNProviderQuotaService.QueryUsageForAccount → 快照。
@@ -475,7 +448,7 @@ func isCredentialErrorMessage(msg string) bool {
 		strings.Contains(msg, "authentication")
 }
 
-// usageFailureInfo 识别 GetUsage 经「值通道」返回的失败：antigravity/grok
+// usageFailureInfo 识别 GetUsage 经「值通道」返回的失败：grok
 // 等平台 err==nil 但把错误降级在 UsageInfo 字段里（Error/ErrorCode/状态标记）。
 // 返回 failed=false 表示可用；credentialInvalid 表示凭据失效（401/403 语义，
 // 推导为 failed 状态）；msg 为失败摘要。

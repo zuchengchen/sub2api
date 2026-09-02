@@ -89,22 +89,19 @@ func newGatewayModelsHandlerForTest(repo service.AccountRepository) *GatewayHand
 	}
 }
 
-func TestDefaultModelIDsForCompositeIncludesAntigravityDefaults(t *testing.T) {
-	antigravityIDs := defaultModelIDsForPlatform(service.PlatformAntigravity)
-	require.NotEmpty(t, antigravityIDs)
+func TestDefaultModelIDsForCompositeIncludesGrokDefaults(t *testing.T) {
+	grokIDs := defaultModelIDsForPlatform(service.PlatformGrok)
+	require.NotEmpty(t, grokIDs)
 
 	compositeIDs := defaultModelIDsForPlatform(service.PlatformComposite)
-	require.Contains(t, compositeIDs, antigravityIDs[0])
+	require.Contains(t, compositeIDs, grokIDs[0])
 }
 
-// Scenario: Anthropic defaults contain only Claude while Antigravity keeps its own Gemini models.
-func TestDefaultModelIDsForAnthropicExcludeAntigravityGemini(t *testing.T) {
+// Scenario: Anthropic defaults contain only Claude models.
+func TestDefaultModelIDsForAnthropicContainClaudeOnly(t *testing.T) {
 	anthropicIDs := defaultModelIDsForPlatform(service.PlatformAnthropic)
 	require.Contains(t, anthropicIDs, "claude-opus-4-6")
 	require.NotContains(t, anthropicIDs, "gemini-2.5-flash")
-
-	antigravityIDs := defaultModelIDsForPlatform(service.PlatformAntigravity)
-	require.Contains(t, antigravityIDs, "gemini-2.5-flash")
 }
 
 // Scenario: non-OpenAI groups return a Codex manifest instead of a standard model list.
@@ -338,7 +335,7 @@ func codexReasoningEffortsForTest(levels []codexReasoningLevelForTest) []string 
 	return efforts
 }
 
-func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
+func TestGatewayModels_GrokGroupFallsBackToGrokModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(20)
@@ -346,7 +343,7 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 		&gatewayModelsAccountRepoStub{
 			byGroup: map[int64][]service.Account{
 				groupID: {
-					{ID: 1, Platform: service.PlatformGemini},
+					{ID: 1, Platform: service.PlatformGrok},
 				},
 			},
 		},
@@ -356,7 +353,7 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{ID: groupID, Platform: service.PlatformGemini},
+		Group: &service.Group{ID: groupID, Platform: service.PlatformGrok},
 	})
 
 	h.Models(c)
@@ -366,7 +363,10 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, "list", got.Object)
-	require.Contains(t, modelIDsForTest(got.Data), "gemini-2.5-flash")
+	grokIDs := defaultModelIDsForPlatform(service.PlatformGrok)
+	require.NotEmpty(t, grokIDs)
+	require.Contains(t, modelIDsForTest(got.Data), grokIDs[0])
+	require.NotContains(t, modelIDsForTest(got.Data), "gemini-2.5-flash")
 	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
 }
 
@@ -439,7 +439,7 @@ func assertGrokGatewayReasoningEfforts(t *testing.T, groupID int64, modelID stri
 	require.Equal(t, want, model.ReasoningEfforts)
 }
 
-func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
+func TestGatewayModels_GrokGroupFiltersMappedModelsByPlatform(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(21)
@@ -458,10 +458,10 @@ func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
 					},
 					{
 						ID:       2,
-						Platform: service.PlatformGemini,
+						Platform: service.PlatformGrok,
 						Credentials: map[string]any{
 							"model_mapping": map[string]any{
-								"gemini-2.5-flash": "gemini-2.5-flash",
+								"grok-custom-model": "grok-4.6",
 							},
 						},
 					},
@@ -474,7 +474,7 @@ func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{ID: groupID, Platform: service.PlatformGemini},
+		Group: &service.Group{ID: groupID, Platform: service.PlatformGrok},
 	})
 
 	h.Models(c)
@@ -483,11 +483,11 @@ func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"gemini-2.5-flash"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"grok-custom-model"}, modelIDsForTest(got.Data))
 }
 
-// Scenario: a Composite group with only Anthropic accounts must not inherit Antigravity Gemini defaults.
-func TestGatewayCodexModels_CompositeAnthropicDoesNotAdvertiseAntigravityDefaults(t *testing.T) {
+// Scenario: a Composite group with only Anthropic accounts must not inherit other platforms' defaults.
+func TestGatewayCodexModels_CompositeAnthropicDoesNotAdvertiseOtherPlatformDefaults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(64)
@@ -511,17 +511,19 @@ func TestGatewayCodexModels_CompositeAnthropicDoesNotAdvertiseAntigravityDefault
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	slugs := codexModelSlugsForTest(got.Models)
 	require.Contains(t, slugs, "claude-opus-4-6")
-	require.NotContains(t, slugs, "gemini-2.5-flash")
+	grokIDs := defaultModelIDsForPlatform(service.PlatformGrok)
+	require.NotEmpty(t, grokIDs)
+	require.NotContains(t, slugs, grokIDs[0])
 }
 
-// Scenario: Antigravity retains its own Claude and Gemini defaults inside Composite groups.
-func TestGatewayModels_CompositeAntigravityAdvertisesAntigravityDefaults(t *testing.T) {
+// Scenario: Grok accounts contribute their own defaults inside Composite groups.
+func TestGatewayModels_CompositeGrokAdvertisesGrokDefaults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(65)
 	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{
 		byGroup: map[int64][]service.Account{
-			groupID: {{ID: 1, Platform: service.PlatformAntigravity}},
+			groupID: {{ID: 1, Platform: service.PlatformGrok}},
 		},
 	})
 
@@ -538,8 +540,10 @@ func TestGatewayModels_CompositeAntigravityAdvertisesAntigravityDefaults(t *test
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	ids := modelIDsForTest(got.Data)
-	require.Contains(t, ids, "claude-opus-4-6")
-	require.Contains(t, ids, "gemini-2.5-flash")
+	grokIDs := defaultModelIDsForPlatform(service.PlatformGrok)
+	require.NotEmpty(t, grokIDs)
+	require.Contains(t, ids, grokIDs[0])
+	require.NotContains(t, ids, "gemini-2.5-flash")
 }
 
 func TestGatewayModels_CustomModelsListDisabledKeepsOriginalModels(t *testing.T) {
@@ -655,19 +659,19 @@ func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t
 					},
 					{
 						ID:       2,
-						Platform: service.PlatformGemini,
+						Platform: service.PlatformGrok,
 						Credentials: map[string]any{
 							"model_mapping": map[string]any{
-								"gemini-2.5-flash": "gemini-2.5-flash",
+								"grok-custom-a": "grok-custom-a",
 							},
 						},
 					},
 					{
 						ID:       3,
-						Platform: service.PlatformAntigravity,
+						Platform: service.PlatformGrok,
 						Credentials: map[string]any{
 							"model_mapping": map[string]any{
-								"ag-custom-model": "ag-custom-model",
+								"grok-custom-b": "grok-custom-b",
 							},
 						},
 					},
@@ -706,7 +710,7 @@ func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t
 			Platform: service.PlatformComposite,
 			ModelsListConfig: service.GroupModelsListConfig{
 				Enabled: true,
-				Models:  []string{"gemini-2.5-flash", "missing-model", "ag-custom-model", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"},
+				Models:  []string{"grok-custom-a", "missing-model", "grok-custom-b", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"},
 			},
 		},
 	})
@@ -717,7 +721,7 @@ func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"gemini-2.5-flash", "ag-custom-model", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"grok-custom-a", "grok-custom-b", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"}, modelIDsForTest(got.Data))
 }
 
 func TestGatewayModels_CompositeUnmappedAccountsFallbackToLinkedPlatformsOnly(t *testing.T) {

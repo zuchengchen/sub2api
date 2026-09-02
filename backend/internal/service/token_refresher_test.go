@@ -213,8 +213,8 @@ func TestClaudeTokenRefresher_CanRefresh(t *testing.T) {
 			want:     false,
 		},
 		{
-			name:     "gemini oauth - cannot refresh",
-			platform: PlatformGemini,
+			name:     "grok oauth - cannot refresh",
+			platform: PlatformGrok,
 			accType:  AccountTypeOAuth,
 			want:     false,
 		},

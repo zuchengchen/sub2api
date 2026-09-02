@@ -450,12 +450,8 @@ const baseSettingsResponse = {
   enable_model_fallback: false,
   fallback_model_anthropic: "",
   fallback_model_openai: "",
-  fallback_model_gemini: "",
-  fallback_model_antigravity: "",
   grok_default_text_model: "grok-4.5",
   grok_cross_client_model_map_enabled: false,
-  enable_identity_patch: false,
-  identity_patch_prompt: "",
   ops_monitoring_enabled: false,
   ops_realtime_monitoring_enabled: false,
   ops_query_mode_default: "auto",
@@ -473,7 +469,6 @@ const baseSettingsResponse = {
   enable_anthropic_cache_ttl_1h_injection: false,
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
-  antigravity_user_agent_version: "",
   openai_codex_user_agent: "",
   payment_enabled: true,
   payment_min_amount: 10,
@@ -537,8 +532,7 @@ const baseSettingsResponse = {
   default_platform_quotas: {
     anthropic:   { daily: null, weekly: null, monthly: null },
     openai:      { daily: null, weekly: 12.5, monthly: null },
-    gemini:      { daily: null, weekly: null, monthly: 200 },
-    antigravity: { daily: null, weekly: null, monthly: null },
+    grok:        { daily: null, weekly: null, monthly: 200 },
   },
 };
 
@@ -1169,26 +1163,6 @@ describe("admin SettingsView payment visible method controls", () => {
         },
       },
     ]);
-  });
-
-  it("submits Antigravity user agent version gateway setting", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      antigravity_user_agent_version: "1.23.2",
-    });
-
-    const wrapper = mountView();
-
-    await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledTimes(1);
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        antigravity_user_agent_version: "1.23.2",
-      }),
-    );
   });
 
   it("updates provider enablement immediately and reloads providers", async () => {
@@ -1855,11 +1829,10 @@ describe("admin SettingsView platform quota matrix", () => {
     // 表格行的平台字段：font-mono 渲染纯英文 platform key
     expect(html).toContain("anthropic");
     expect(html).toContain("openai");
-    expect(html).toContain("gemini");
-    expect(html).toContain("antigravity");
+    expect(html).toContain("grok");
   });
 
-  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 5 平台）", async () => {
+  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 3 平台）", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1875,7 +1848,7 @@ describe("admin SettingsView platform quota matrix", () => {
     // 应携带嵌套对象，而非扁平字段
     expect(payload).toHaveProperty("default_platform_quotas");
     const quotas = payload["default_platform_quotas"] as Record<string, unknown>;
-    const platforms = ["anthropic", "openai", "gemini", "antigravity", "grok"];
+    const platforms = ["anthropic", "openai", "grok"];
     for (const p of platforms) {
       expect(quotas).toHaveProperty(p);
       const pq = quotas[p] as Record<string, unknown>;
@@ -1889,13 +1862,13 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(payload).not.toHaveProperty("default_platform_quota_openai_weekly");
   });
 
-  it("加载后 form.default_platform_quotas 含全 5 平台，从嵌套 JSON 正确读取数值", async () => {
+  it("加载后 form.default_platform_quotas 含全 3 平台，从嵌套 JSON 正确读取数值", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       default_platform_quotas: {
         anthropic: { daily: 5, weekly: null, monthly: null },
         openai:    { daily: null, weekly: 12.5, monthly: null },
-        // gemini / antigravity 缺失 → 应被归一化为全 null
+        // grok 缺失 → 应被归一化为全 null
       },
     });
 
@@ -1912,8 +1885,7 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(quotas["anthropic"]?.["daily"]).toBe(5);
     expect(quotas["openai"]?.["weekly"]).toBe(12.5);
     // 缺失平台应补全为 null
-    expect(quotas["gemini"]).toEqual({ daily: null, weekly: null, monthly: null });
-    expect(quotas["antigravity"]).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(quotas["grok"]).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("空输入（v-model.number 产出 \"\"）在提交时清洗为 null 而非空字符串", async () => {
@@ -1923,8 +1895,7 @@ describe("admin SettingsView platform quota matrix", () => {
       default_platform_quotas: {
         anthropic: { daily: 10, weekly: null, monthly: null },
         openai:    { daily: null, weekly: null, monthly: null },
-        gemini:    { daily: null, weekly: null, monthly: null },
-        antigravity: { daily: null, weekly: null, monthly: null },
+        grok:      { daily: null, weekly: null, monthly: null },
       },
     });
 

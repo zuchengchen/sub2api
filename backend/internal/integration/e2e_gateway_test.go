@@ -17,9 +17,7 @@ import (
 
 var (
 	baseURL = getEnv("BASE_URL", "http://localhost:8080")
-	// ENDPOINT_PREFIX: 端点前缀，支持混合模式和非混合模式测试
-	// - "" (默认): 使用 /v1/messages, /v1beta/models（混合模式，可调度 antigravity 账户）
-	// - "/antigravity": 使用 /antigravity/v1/messages, /antigravity/v1beta/models（非混合模式，仅 antigravity 账户）
+	// ENDPOINT_PREFIX: optional gateway prefix in front of /v1/...
 	endpointPrefix = getEnv("ENDPOINT_PREFIX", "")
 	testInterval   = 1 * time.Second // 测试间隔，防止限流
 )
@@ -28,9 +26,7 @@ const (
 	// 注意：E2E 测试请使用环境变量注入密钥，避免任何凭证进入仓库历史。
 	// 例如：
 	//   export CLAUDE_API_KEY="sk-..."
-	//   export GEMINI_API_KEY="sk-..."
 	claudeAPIKeyEnv = "CLAUDE_API_KEY"
-	geminiAPIKeyEnv = "GEMINI_API_KEY"
 )
 
 func getEnv(key, defaultVal string) string {
@@ -51,37 +47,20 @@ var claudeModels = []string{
 	"claude-sonnet-4-5-thinking", // 直接支持
 	"claude-sonnet-4-5-20250929", // 映射到 claude-sonnet-4-5-thinking
 	"claude-3-5-sonnet-20241022", // 映射到 claude-sonnet-4-5
-	// Haiku 系列（映射到 gemini-3-flash）
+	// Haiku 系列
 	"claude-haiku-4",
 	"claude-haiku-4-5",
 	"claude-haiku-4-5-20251001",
 	"claude-3-haiku-20240307",
 }
 
-// Gemini 模型列表
-var geminiModels = []string{
-	"gemini-2.5-flash",
-	"gemini-2.5-flash-lite",
-	"gemini-3-flash",
-	"gemini-3-pro-low",
-	"gemini-3-pro-high",
-}
-
 func TestMain(m *testing.M) {
-	mode := "混合模式"
-	if endpointPrefix != "" {
-		mode = "Antigravity 模式"
-	}
 	claudeKeySet := strings.TrimSpace(os.Getenv(claudeAPIKeyEnv)) != ""
-	geminiKeySet := strings.TrimSpace(os.Getenv(geminiAPIKeyEnv)) != ""
-	fmt.Printf("\n🚀 E2E Gateway Tests - %s (prefix=%q, %s, %s=%v, %s=%v)\n\n",
+	fmt.Printf("\n🚀 E2E Gateway Tests - %s (prefix=%q, %s=%v)\n\n",
 		baseURL,
 		endpointPrefix,
-		mode,
 		claudeAPIKeyEnv,
 		claudeKeySet,
-		geminiAPIKeyEnv,
-		geminiKeySet,
 	)
 	os.Exit(m.Run())
 }
@@ -91,15 +70,6 @@ func requireClaudeAPIKey(t *testing.T) string {
 	key := strings.TrimSpace(os.Getenv(claudeAPIKeyEnv))
 	if key == "" {
 		t.Skipf("未设置 %s，跳过 Claude 相关 E2E 测试", claudeAPIKeyEnv)
-	}
-	return key
-}
-
-func requireGeminiAPIKey(t *testing.T) string {
-	t.Helper()
-	key := strings.TrimSpace(os.Getenv(geminiAPIKeyEnv))
-	if key == "" {
-		t.Skipf("未设置 %s，跳过 Gemini 相关 E2E 测试", geminiAPIKeyEnv)
 	}
 	return key
 }
@@ -138,38 +108,6 @@ func TestClaudeModelsList(t *testing.T) {
 		t.Fatal("响应缺少 data 数组")
 	}
 	t.Logf("✅ 返回 %d 个模型", len(data))
-}
-
-// TestGeminiModelsList 测试 GET /v1beta/models
-func TestGeminiModelsList(t *testing.T) {
-	geminiKey := requireGeminiAPIKey(t)
-	url := baseURL + endpointPrefix + "/v1beta/models"
-
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+geminiKey)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
-	}
-
-	models, ok := result["models"].([]any)
-	if !ok {
-		t.Fatal("响应缺少 models 数组")
-	}
-	t.Logf("✅ 返回 %d 个模型", len(models))
 }
 
 // TestClaudeMessages 测试 Claude /v1/messages 接口
@@ -249,94 +187,6 @@ func testClaudeMessage(t *testing.T, claudeKey string, model string, stream bool
 	}
 }
 
-// TestGeminiGenerateContent 测试 Gemini /v1beta/models/:model 接口
-func TestGeminiGenerateContent(t *testing.T) {
-	geminiKey := requireGeminiAPIKey(t)
-	for i, model := range geminiModels {
-		if i > 0 {
-			time.Sleep(testInterval)
-		}
-		t.Run(model+"_非流式", func(t *testing.T) {
-			testGeminiGenerate(t, geminiKey, model, false)
-		})
-		time.Sleep(testInterval)
-		t.Run(model+"_流式", func(t *testing.T) {
-			testGeminiGenerate(t, geminiKey, model, true)
-		})
-	}
-}
-
-func testGeminiGenerate(t *testing.T, geminiKey string, model string, stream bool) {
-	action := "generateContent"
-	if stream {
-		action = "streamGenerateContent"
-	}
-	url := fmt.Sprintf("%s%s/v1beta/models/%s:%s", baseURL, endpointPrefix, model, action)
-	if stream {
-		url += "?alt=sse"
-	}
-
-	payload := map[string]any{
-		"contents": []map[string]any{
-			{
-				"role": "user",
-				"parts": []map[string]string{
-					{"text": "Say 'hello' in one word."},
-				},
-			},
-		},
-		"generationConfig": map[string]int{
-			"maxOutputTokens": 50,
-		},
-	}
-	body, _ := json.Marshal(payload)
-
-	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+geminiKey)
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	if stream {
-		// 流式：读取 SSE 事件
-		scanner := bufio.NewScanner(resp.Body)
-		eventCount := 0
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "data:") {
-				eventCount++
-				if eventCount >= 3 {
-					break
-				}
-			}
-		}
-		if eventCount == 0 {
-			t.Fatal("未收到任何 SSE 事件")
-		}
-		t.Logf("✅ 收到 %d+ 个 SSE 事件", eventCount)
-	} else {
-		// 非流式：解析 JSON 响应
-		var result map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			t.Fatalf("解析响应失败: %v", err)
-		}
-		if _, ok := result["candidates"]; !ok {
-			t.Error("响应缺少 candidates 字段")
-		}
-		t.Log("✅ 收到 candidates 响应")
-	}
-}
-
 // TestClaudeMessagesWithComplexTools 测试带复杂工具 schema 的请求
 // 模拟 Claude Code 发送的请求，包含需要清理的 JSON Schema 字段
 func TestClaudeMessagesWithComplexTools(t *testing.T) {
@@ -344,7 +194,7 @@ func TestClaudeMessagesWithComplexTools(t *testing.T) {
 	// 测试模型列表（只测试几个代表性模型）
 	models := []string{
 		"claude-opus-4-5-20251101",  // Claude 模型
-		"claude-haiku-4-5-20251001", // 映射到 Gemini
+		"claude-haiku-4-5-20251001",
 	}
 
 	for i, model := range models {
@@ -557,11 +407,11 @@ func testClaudeMessageWithTools(t *testing.T, claudeKey string, model string) {
 
 // TestClaudeMessagesWithThinkingAndTools 测试 thinking 模式下带工具调用的场景
 // 验证：当历史 assistant 消息包含 tool_use 但没有 signature 时，
-// 系统应自动添加 dummy thought_signature 避免 Gemini 400 错误
+// 系统应自动添加 dummy thought_signature 避免上游 400 错误
 func TestClaudeMessagesWithThinkingAndTools(t *testing.T) {
 	claudeKey := requireClaudeAPIKey(t)
 	models := []string{
-		"claude-haiku-4-5-20251001", // gemini-3-flash
+		"claude-haiku-4-5-20251001",
 	}
 	for i, model := range models {
 		if i > 0 {
@@ -683,44 +533,11 @@ func testClaudeThinkingWithToolHistory(t *testing.T, claudeKey string, model str
 	t.Logf("✅ thinking 模式工具调用测试通过, id=%v", result["id"])
 }
 
-// TestClaudeMessagesWithGeminiModel 测试在 Claude 端点使用 Gemini 模型
-// 验证：通过 /v1/messages 端点传入 gemini 模型名的场景（含前缀映射）
-// 仅在 Antigravity 模式下运行（ENDPOINT_PREFIX="/antigravity"）
-func TestClaudeMessagesWithGeminiModel(t *testing.T) {
-	if endpointPrefix != "/antigravity" {
-		t.Skip("仅在 Antigravity 模式下运行")
-	}
-	claudeKey := requireClaudeAPIKey(t)
-
-	// 测试通过 Claude 端点调用 Gemini 模型
-	geminiViaClaude := []string{
-		"gemini-3-flash",       // 直接支持
-		"gemini-3-pro-low",     // 直接支持
-		"gemini-3-pro-high",    // 直接支持
-		"gemini-3-pro",         // 前缀映射 -> gemini-3-pro-high
-		"gemini-3-pro-preview", // 前缀映射 -> gemini-3-pro-high
-	}
-
-	for i, model := range geminiViaClaude {
-		if i > 0 {
-			time.Sleep(testInterval)
-		}
-		t.Run(model+"_通过Claude端点", func(t *testing.T) {
-			testClaudeMessage(t, claudeKey, model, false)
-		})
-		time.Sleep(testInterval)
-		t.Run(model+"_通过Claude端点_流式", func(t *testing.T) {
-			testClaudeMessage(t, claudeKey, model, true)
-		})
-	}
-}
-
 // TestClaudeMessagesWithNoSignature 测试历史 thinking block 不带 signature 的场景
-// 验证：Gemini 模型接受没有 signature 的 thinking block
 func TestClaudeMessagesWithNoSignature(t *testing.T) {
 	claudeKey := requireClaudeAPIKey(t)
 	models := []string{
-		"claude-haiku-4-5-20251001", // gemini-3-flash - 支持无 signature
+		"claude-haiku-4-5-20251001",
 	}
 	for i, model := range models {
 		if i > 0 {
@@ -812,32 +629,4 @@ func testClaudeWithNoSignature(t *testing.T, claudeKey string, model string) {
 		t.Errorf("期望 type=message, 得到 %v", result["type"])
 	}
 	t.Logf("✅ 无 signature thinking 处理测试通过, id=%v", result["id"])
-}
-
-// TestGeminiEndpointWithClaudeModel 测试通过 Gemini 端点调用 Claude 模型
-// 仅在 Antigravity 模式下运行（ENDPOINT_PREFIX="/antigravity"）
-func TestGeminiEndpointWithClaudeModel(t *testing.T) {
-	if endpointPrefix != "/antigravity" {
-		t.Skip("仅在 Antigravity 模式下运行")
-	}
-	geminiKey := requireGeminiAPIKey(t)
-
-	// 测试通过 Gemini 端点调用 Claude 模型
-	claudeViaGemini := []string{
-		"claude-sonnet-4-5",
-		"claude-opus-4-5-thinking",
-	}
-
-	for i, model := range claudeViaGemini {
-		if i > 0 {
-			time.Sleep(testInterval)
-		}
-		t.Run(model+"_通过Gemini端点", func(t *testing.T) {
-			testGeminiGenerate(t, geminiKey, model, false)
-		})
-		time.Sleep(testInterval)
-		t.Run(model+"_通过Gemini端点_流式", func(t *testing.T) {
-			testGeminiGenerate(t, geminiKey, model, true)
-		})
-	}
 }

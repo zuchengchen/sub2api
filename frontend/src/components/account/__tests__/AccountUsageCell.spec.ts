@@ -29,7 +29,7 @@ function makeAccount(overrides: Partial<Account>): Account {
   return {
     id: 1,
     name: 'account',
-    platform: 'antigravity',
+    platform: 'anthropic',
     type: 'oauth',
     proxy_id: null,
     concurrency: 1,
@@ -139,7 +139,6 @@ describe('AccountUsageCell', () => {
             template: '<button data-test="embedded-ollama" @click="$emit(\'updated\', { ...account.ollama_cloud_usage, auto_refresh_enabled: false })">{{ account.ollama_cloud_usage.snapshot.data.five_hour.used_percent }}</button>'
           },
           UsageProgressBar: true,
-          AccountQuotaInfo: true
         }
       }
     })
@@ -168,7 +167,7 @@ describe('AccountUsageCell', () => {
           })
         },
         global: {
-          stubs: { ...cnUsageCellStubs, UsageProgressBar: true, AccountQuotaInfo: true }
+          stubs: { ...cnUsageCellStubs, UsageProgressBar: true }
         }
       })
 
@@ -202,7 +201,6 @@ describe('AccountUsageCell', () => {
             template: '<button data-test="embedded-ollama" @click="$emit(\'updated\', { ...account.ollama_cloud_usage, auto_refresh_enabled: false })" />'
           },
           UsageProgressBar: true,
-          AccountQuotaInfo: true
         }
       }
     })
@@ -229,7 +227,7 @@ describe('AccountUsageCell', () => {
         })
       },
       global: {
-        stubs: { ...cnUsageCellStubs, UsageProgressBar: true, AccountQuotaInfo: true }
+        stubs: { ...cnUsageCellStubs, UsageProgressBar: true }
       }
     })
 
@@ -238,83 +236,6 @@ describe('AccountUsageCell', () => {
     expect(wrapper.find('[data-test="cn-quota-cell"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="cn-balance-cell"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="embedded-ollama"]').exists()).toBe(false)
-  })
-
-  it('Antigravity 图片用量会聚合新旧 image 模型', async () => {
-    getUsage.mockResolvedValue({
-      antigravity_quota: {
-        'gemini-2.5-flash-image': {
-          utilization: 45,
-          reset_time: '2026-03-01T11:00:00Z'
-        },
-        'gemini-3.1-flash-image': {
-          utilization: 20,
-          reset_time: '2026-03-01T10:00:00Z'
-        },
-        'gemini-3-pro-image': {
-          utilization: 70,
-          reset_time: '2026-03-01T09:00:00Z'
-        }
-      }
-    })
-
-    const wrapper = mount(AccountUsageCell, {
-      props: {
-        account: makeAccount({
-          id: 1001,
-          platform: 'antigravity',
-          type: 'oauth',
-          extra: {}
-        })
-      },
-      global: {
-        stubs: {
-          UsageProgressBar: {
-            props: ['label', 'utilization', 'resetsAt', 'color'],
-            template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
-          },
-          AccountQuotaInfo: true
-        }
-      }
-    })
-
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('admin.accounts.usageWindow.gemini3Image|70|2026-03-01T09:00:00Z')
-  })
-
-  it('Antigravity 会显示 AI Credits 余额信息', async () => {
-    getUsage.mockResolvedValue({
-      ai_credits: [
-        {
-          credit_type: 'GOOGLE_ONE_AI',
-          amount: 25,
-          minimum_balance: 5
-        }
-      ]
-    })
-
-    const wrapper = mount(AccountUsageCell, {
-      props: {
-        account: makeAccount({
-          id: 1002,
-          platform: 'antigravity',
-          type: 'oauth',
-          extra: {}
-        })
-      },
-      global: {
-        stubs: {
-          UsageProgressBar: true,
-          AccountQuotaInfo: true
-        }
-      }
-    })
-
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('admin.accounts.aiCreditsBalance')
-    expect(wrapper.text()).toContain('25')
   })
 
 
@@ -367,7 +288,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -428,7 +348,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -492,7 +411,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -554,7 +472,6 @@ describe('AccountUsageCell', () => {
 	        props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
 	        template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
 	      },
-	      AccountQuotaInfo: true
 	    }
 	  }
 	})
@@ -615,7 +532,6 @@ describe('AccountUsageCell', () => {
 	        props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
 	        template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
 	      },
-	      AccountQuotaInfo: true
 	    }
 	  }
 	})
@@ -660,7 +576,6 @@ describe('AccountUsageCell', () => {
       global: {
         stubs: {
           UsageProgressBar: true,
-          AccountQuotaInfo: true,
           OpenAIQuotaResetCell: {
             props: ['account'],
             emits: ['account-updated'],
@@ -730,7 +645,6 @@ describe('AccountUsageCell', () => {
 	        props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
 	        template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
 	      },
-	      AccountQuotaInfo: true
 	    }
 	  }
 	})
@@ -761,7 +675,6 @@ describe('AccountUsageCell', () => {
 		  global: {
 		    stubs: {
 		      UsageProgressBar: true,
-		      AccountQuotaInfo: true
 		    }
 		  }
 		})
@@ -805,7 +718,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -840,7 +752,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -879,7 +790,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'remainingCapacity'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}|{{ remainingCapacity }}</div>'
           },
-          AccountQuotaInfo: true,
         }
       }
     })
@@ -926,7 +836,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
-          AccountQuotaInfo: true,
         }
       }
     })
@@ -974,7 +883,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'title'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ title }}</div>'
           },
-          AccountQuotaInfo: true,
         }
       }
     })
@@ -1017,7 +925,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
-          AccountQuotaInfo: true,
         }
       }
     })
@@ -1058,7 +965,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -1095,7 +1001,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -1127,7 +1032,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
-          AccountQuotaInfo: true,
         }
       }
     })
@@ -1166,7 +1070,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'windowStats'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -1225,7 +1128,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'windowStats'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -1278,7 +1180,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'windowStats'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
         }
       }
     })
@@ -1308,7 +1209,6 @@ describe('AccountUsageCell', () => {
       global: {
         stubs: {
           UsageProgressBar: true,
-          AccountQuotaInfo: true
         }
       }
     })
@@ -1338,7 +1238,6 @@ describe('AccountUsageCell', () => {
       global: {
         stubs: {
           UsageProgressBar: true,
-          AccountQuotaInfo: true
         }
       }
     })
@@ -1365,7 +1264,6 @@ describe('AccountUsageCell', () => {
       global: {
         stubs: {
           UsageProgressBar: true,
-          AccountQuotaInfo: true
         }
       }
     })
@@ -1390,7 +1288,6 @@ describe('AccountUsageCell', () => {
 		  global: {
 		    stubs: {
 		      UsageProgressBar: true,
-		      AccountQuotaInfo: true
 		    }
 		  }
 		})
@@ -1417,7 +1314,6 @@ describe('AccountUsageCell', () => {
 		  global: {
 		    stubs: {
 		      UsageProgressBar: true,
-		      AccountQuotaInfo: true
 		    }
 		  }
 		})
@@ -1425,45 +1321,6 @@ describe('AccountUsageCell', () => {
 		await flushPromises()
 
 		expect(wrapper.text().trim()).toBe('-')
-  })
-
-  it('Vertex 账号会在 Gemini 用量窗口里展示 today stats 徽章', async () => {
-		const wrapper = mount(AccountUsageCell, {
-		  props: {
-		    account: makeAccount({
-		      id: 4001,
-		      platform: 'gemini',
-		      type: 'service_account',
-          credentials: {
-            tier_id: 'vertex',
-            project_id: 'vertex-proj',
-            client_email: 'svc@vertex-proj.iam.gserviceaccount.com',
-            location: 'global'
-          },
-		      extra: {}
-		    }),
-		    todayStats: {
-		      requests: 0,
-		      tokens: 0,
-		      cost: 0,
-		      standard_cost: 0,
-		      user_cost: 0
-		    }
-		  },
-		  global: {
-		    stubs: {
-		      UsageProgressBar: true,
-		      AccountQuotaInfo: true
-		    }
-		  }
-		})
-
-		await flushPromises()
-
-		expect(wrapper.text()).toContain('0 req')
-		expect(wrapper.text()).toContain('0')
-		expect(wrapper.text()).toContain('A $0.00')
-		expect(wrapper.text()).toContain('U $0.00')
   })
 
   it('Anthropic OAuth 会渲染 7d F (Fable) 进度条，且 7d S 逻辑保留', async () => {
@@ -1506,7 +1363,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
-          AccountQuotaInfo: true,
         }
       }
     })
@@ -1549,7 +1405,6 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
-          AccountQuotaInfo: true,
         }
       }
     })

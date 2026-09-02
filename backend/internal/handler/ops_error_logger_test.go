@@ -137,7 +137,7 @@ func TestEnqueueOpsErrorLog_QueueFullDrop(t *testing.T) {
 	opsErrorLogQueue = make(chan opsErrorLogJob, 1)
 	opsErrorLogMu.Unlock()
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	entry := &service.OpsInsertErrorLogInput{ErrorPhase: "upstream", ErrorType: "upstream_error"}
 
 	enqueueOpsErrorLog(ops, entry)
@@ -151,7 +151,7 @@ func TestEnqueueOpsErrorLog_QueueFullDrop(t *testing.T) {
 func TestEnqueueOpsErrorLog_EarlyReturnBranches(t *testing.T) {
 	resetOpsErrorLoggerStateForTest(t)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	entry := &service.OpsInsertErrorLogInput{ErrorPhase: "upstream", ErrorType: "upstream_error"}
 
 	// nil 入参分支
@@ -212,7 +212,7 @@ func TestOpsCaptureWriterPool_DropsLargeBuffers(t *testing.T) {
 
 func TestEnqueueOpsErrorLog_SanitizesAndBoundsBodyBeforeQueue(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 1)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	secret := strings.Repeat("s", service.OpsErrorLogQueueBodyMaxBytes)
 	entry := &service.OpsInsertErrorLogInput{
 		ErrorPhase: "request",
@@ -263,7 +263,7 @@ func TestOpsErrorLoggerMiddleware_HardSkipsIngressRejection(t *testing.T) {
 
 	settings := &ingressRejectSettingRepo{}
 	repo := &ingressRejectOpsRepo{}
-	ops := service.NewOpsService(repo, settings, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(repo, settings, nil, nil, nil, nil, nil, nil, nil)
 	// Construction may read unrelated runtime settings; only request-path reads matter here.
 	settings.getValueCalls = 0
 
@@ -288,7 +288,7 @@ func TestOpsErrorLoggerMiddleware_HardSkipsIngressRejection(t *testing.T) {
 func TestOpsErrorLoggerMiddleware_DedicatedCyberSessionBlockRecordsExactlyOnce(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 3)
 	gin.SetMode(gin.TestMode)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	h := &OpenAIGatewayHandler{opsService: ops}
 	apiKey := &service.APIKey{ID: 41, Key: "sk-dedicated-test"}
 	router := gin.New()
@@ -313,7 +313,7 @@ func TestOpsErrorLoggerMiddleware_DedicatedCyberSessionBlockRecordsExactlyOnce(t
 func TestOpsErrorLoggerMiddleware_OrdinaryPermissionStillRecords(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -336,7 +336,7 @@ func TestOpsErrorLoggerMiddleware_RecordsRecoveredUpstreamTelemetryOutsideFailur
 	gin.SetMode(gin.TestMode)
 
 	repo := &ingressRejectOpsRepo{}
-	ops := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -379,7 +379,7 @@ func TestOpsErrorLoggerMiddleware_RecoveredTelemetryFiltersSkipMonitoringAttempt
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -407,7 +407,7 @@ func TestOpsErrorLoggerMiddleware_RecoveredTelemetrySkipsAllHiddenAttempts(t *te
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -428,7 +428,7 @@ func TestOpsErrorLoggerMiddleware_RecoveredTelemetrySkipsAllHiddenAttempts(t *te
 func TestOpsErrorLoggerMiddleware_IntermediateSkipMonitoringDoesNotHideFinalVisibleFailure(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -451,7 +451,7 @@ func TestOpsErrorLoggerMiddleware_CapturesSplitResponsesFailedSSE(t *testing.T) 
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -539,7 +539,7 @@ func TestOpsErrorLoggerMiddleware_StreamFailureUsesTerminalErrorOverAttemptConte
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -569,7 +569,7 @@ func TestOpsErrorLoggerMiddleware_PrefersContextRequestID(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -610,7 +610,7 @@ func TestLogOpsStreamError_RecordsInBandConcurrencyLimit(t *testing.T) {
 	service.MarkOpsStreamError(c, "rate_limit_error",
 		"Concurrency limit exceeded for account, please retry later", http.StatusTooManyRequests)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	logOpsStreamError(c, ops, http.StatusOK)
 
 	require.Equal(t, int64(1), OpsErrorLogEnqueuedTotal())
@@ -645,7 +645,7 @@ func TestLogOpsStreamError_UpstreamFailureCountsTowardsSLA(t *testing.T) {
 		http.StatusBadGateway,
 	)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	logOpsStreamError(c, ops, http.StatusOK)
 
 	job := <-opsErrorLogQueue
@@ -667,7 +667,7 @@ func TestLogOpsStreamError_NoopWhenNotMarked(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	logOpsStreamError(c, ops, http.StatusOK)
 
 	require.Equal(t, int64(0), OpsErrorLogEnqueuedTotal())
@@ -684,7 +684,7 @@ func TestLogOpsStreamError_SkipWhenPassthroughSkipMonitoring(t *testing.T) {
 	service.MarkOpsStreamError(c, "upstream_error", "Upstream request failed", http.StatusBadGateway)
 	c.Set(service.OpsSkipPassthroughKey, true)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	logOpsStreamError(c, ops, http.StatusOK)
 
 	require.Equal(t, int64(0), OpsErrorLogEnqueuedTotal())
@@ -740,7 +740,7 @@ func TestLogOpsStreamError_RecordsOneFailurePerWebSocketTurn(t *testing.T) {
 	require.Len(t, streamErrors, 2)
 	require.Equal(t, 1, streamErrors[0].Turn)
 	require.Equal(t, 2, streamErrors[1].Turn)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	logOpsStreamError(c, ops, http.StatusSwitchingProtocols)
 
 	require.Equal(t, int64(2), OpsErrorLogQueueLength())
@@ -907,7 +907,7 @@ func TestOpsErrorLoggerMiddleware_LocalModelConfigurationFields(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 1)
 	gin.SetMode(gin.TestMode)
 
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/chat/completions", func(c *gin.Context) {
@@ -1163,15 +1163,6 @@ func TestClassifyOpsLocalBusinessLimitErrorsExcludedFromSLA(t *testing.T) {
 			wantPhase:   "request",
 		},
 		{
-			name:        "gemini group platform mismatch",
-			errType:     "api_error",
-			message:     "API key group platform is not gemini",
-			code:        "400",
-			status:      http.StatusBadRequest,
-			wantErrType: "api_error",
-			wantPhase:   "request",
-		},
-		{
 			name:        "gateway API key 5h rate limit",
 			errType:     "api_error",
 			message:     "api key 5小时限额已用完",
@@ -1262,7 +1253,7 @@ func TestClassifyOpsLocalBusinessLimitErrorsExcludedFromSLA(t *testing.T) {
 			wantPhase:   "request",
 		},
 		{
-			name:        "antigravity model whitelist feature gate",
+			name:        "model whitelist feature gate",
 			errType:     "permission_error",
 			message:     "model claude-3-5-sonnet not in whitelist",
 			code:        "",
@@ -1271,9 +1262,9 @@ func TestClassifyOpsLocalBusinessLimitErrorsExcludedFromSLA(t *testing.T) {
 			wantPhase:   "request",
 		},
 		{
-			name:        "google antigravity model whitelist feature gate",
+			name:        "model whitelist feature gate with numeric code",
 			errType:     "api_error",
-			message:     "model gemini-2.5-pro not in whitelist",
+			message:     "model grok-4.6 not in whitelist",
 			code:        "403",
 			status:      http.StatusForbidden,
 			wantErrType: "api_error",
@@ -1395,7 +1386,6 @@ func TestClassifyOpsUnsupportedModelExcludedFromSLA(t *testing.T) {
 	tests := []string{
 		"No available accounts: no available accounts supporting model: made-up-model",
 		"No available accounts: no available OpenAI accounts supporting model: made-up-model",
-		"No available Gemini accounts: no available Gemini accounts supporting model: made-up-model",
 		"No available accounts: no available accounts supporting model: made-up-model (channel pricing restriction)",
 	}
 
@@ -1457,12 +1447,6 @@ func TestClassifyOpsUpstreamAuthTextStillCountsForSLA(t *testing.T) {
 			status:  http.StatusUnauthorized,
 		},
 		{
-			name:    "gemini group platform mismatch",
-			message: "API key group platform is not gemini",
-			code:    "400",
-			status:  http.StatusBadRequest,
-		},
-		{
 			name:    "provider balance error",
 			message: "Insufficient account balance",
 			code:    "INSUFFICIENT_BALANCE",
@@ -1517,7 +1501,7 @@ func TestClassifyOpsUpstreamAuthTextStillCountsForSLA(t *testing.T) {
 			status:  http.StatusNotFound,
 		},
 		{
-			name:    "provider antigravity whitelist shaped error",
+			name:    "provider model whitelist shaped error",
 			message: "model claude-3-5-sonnet not in whitelist",
 			code:    "403",
 			status:  http.StatusForbidden,
@@ -1772,7 +1756,7 @@ func TestOpsCaptureWriter_TerminalMetadataSurvivesBodyCaptureTruncation(t *testi
 func TestOpsErrorLoggerMiddleware_LargeTerminalFrameUsesEventFallback(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
@@ -1797,7 +1781,7 @@ func TestOpsErrorLoggerMiddleware_LargeTerminalFrameUsesEventFallback(t *testing
 func TestOpsErrorLoggerMiddleware_DetectsTerminalDataAtEOFWithoutBlankLine(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {

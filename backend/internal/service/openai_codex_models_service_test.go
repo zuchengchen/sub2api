@@ -482,11 +482,6 @@ func TestBuildCodexModelsManifestOmitsDedicatedImageModels(t *testing.T) {
 		"gpt-image-1.5",
 		"gpt-image-2",
 		"openai/gpt-image-2",
-		"gemini-2.5-flash-image",
-		"gemini-3.1-flash-image-preview",
-		"gemini-3-pro-image",
-		"google/gemini-3-pro-image",
-		"google/models/gemini-2.5-flash-image-preview",
 		"grok-imagine-image",
 		"grok-imagine-video",
 		"xai/grok-imagine-image-quality",
@@ -3093,7 +3088,7 @@ func (r *codexModelsAccountStateRepo) SetTempUnschedulable(_ context.Context, _ 
 }
 
 func newCodexModels401TestService(repo AccountRepository) *OpenAIGatewayService {
-	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	s := &OpenAIGatewayService{rateLimitService: rateLimitService}
 	rateLimitService.SetAccountRuntimeBlocker(s)
 	return s
@@ -3192,7 +3187,7 @@ func TestFetchCodexModelsManifestAPIKey401KeepsNoFailoverAndNoDisable(t *testing
 
 	repo := &codexModelsAccountStateRepo{}
 	s := newCodexModelsAPIKeyTestService(upstream)
-	s.rateLimitService = NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	s.rateLimitService = NewRateLimitService(repo, nil, &config.Config{}, nil)
 
 	_, err := s.FetchCodexModelsManifest(
 		context.Background(),

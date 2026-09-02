@@ -157,7 +157,7 @@ func TestOpenAIHTTPAccessStateTrustsStructuredCode(t *testing.T) {
 func TestOpenAIHTTPAuthMessagesUseExistingStatusPolicies(t *testing.T) {
 	t.Run("oauth 401 remains recoverable", func(t *testing.T) {
 		repo := &openAIAuthPolicyAccountRepo{}
-		rateLimits := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+		rateLimits := NewRateLimitService(repo, nil, &config.Config{}, nil)
 		svc := &OpenAIGatewayService{rateLimitService: rateLimits}
 		account := &Account{ID: 931, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
 			Credentials: map[string]any{"refresh_token": "refreshable"}}
@@ -172,7 +172,7 @@ func TestOpenAIHTTPAuthMessagesUseExistingStatusPolicies(t *testing.T) {
 	t.Run("403 uses counter cooldown", func(t *testing.T) {
 		repo := &openAIAuthPolicyAccountRepo{}
 		counter := &openAIAuthPolicy403Counter{counts: []int64{1}}
-		rateLimits := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+		rateLimits := NewRateLimitService(repo, nil, &config.Config{}, nil)
 		rateLimits.openAI403CounterCache = counter
 		svc := &OpenAIGatewayService{rateLimitService: rateLimits}
 		rateLimits.SetAccountRuntimeBlocker(svc)

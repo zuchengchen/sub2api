@@ -93,7 +93,7 @@ func TestClassifyOpenAIAPIKeyHealthFailureExclusions(t *testing.T) {
 func TestOpenAIAPIKeyHealthBreakerDefaultDisabled(t *testing.T) {
 	settings := NewSettingService(&openAIAPIKeyHealthSettingRepo{}, &config.Config{})
 	cache := &openAIAPIKeyHealthCacheStub{tripped: true}
-	svc := NewRateLimitService(&openAIAPIKeyHealthAccountRepo{}, nil, &config.Config{}, nil, cache)
+	svc := NewRateLimitService(&openAIAPIKeyHealthAccountRepo{}, nil, &config.Config{}, cache)
 	svc.SetSettingService(settings)
 	svc.SetOpenAIAPIKeyHealthCache(cache)
 
@@ -108,7 +108,7 @@ func TestOpenAIAPIKeyHealthBreakerTripsPersistedAndRuntimeState(t *testing.T) {
 	cache := &openAIAPIKeyHealthCacheStub{tripped: true}
 	repo := &openAIAPIKeyHealthAccountRepo{}
 	blocker := &openAIAPIKeyHealthRuntimeBlocker{}
-	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, cache)
+	svc := NewRateLimitService(repo, nil, &config.Config{}, cache)
 	svc.SetSettingService(settings)
 	svc.SetOpenAIAPIKeyHealthCache(cache)
 	svc.SetAccountRuntimeBlocker(blocker)
@@ -129,7 +129,7 @@ func TestOpenAIAPIKeyHealthSuccessDoesNotTouchSettingsOrCache(t *testing.T) {
 	settingRepo := &openAIAPIKeyHealthSettingRepo{value: string(encoded)}
 	settings := NewSettingService(settingRepo, &config.Config{})
 	cache := &openAIAPIKeyHealthCacheStub{}
-	svc := NewRateLimitService(&openAIAPIKeyHealthAccountRepo{}, nil, &config.Config{}, nil, cache)
+	svc := NewRateLimitService(&openAIAPIKeyHealthAccountRepo{}, nil, &config.Config{}, cache)
 	svc.SetSettingService(settings)
 	svc.SetOpenAIAPIKeyHealthCache(cache)
 

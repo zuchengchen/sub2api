@@ -34,7 +34,7 @@ func adaptiveCNAccountTestAccount(id int64, platform string) *Account {
 
 func adaptiveCNAccountTestService(account *Account, responses ...*http.Response) (*AccountTestService, *httpUpstreamRecorder) {
 	repo := &openAIAccountTestRepo{
-		mockAccountRepoForGemini: mockAccountRepoForGemini{
+		mockAccountRepoForTest: mockAccountRepoForTest{
 			accountsByID: map[int64]*Account{account.ID: account},
 		},
 	}

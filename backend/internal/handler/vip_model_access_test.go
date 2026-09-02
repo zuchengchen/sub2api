@@ -58,18 +58,6 @@ func TestRequireUserModelAccess(t *testing.T) {
 	}
 }
 
-func TestRequireGoogleModelAccessUsesGoogleErrorEnvelope(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gpt-5.6-luna:generateContent", nil)
-
-	require.False(t, requireGoogleModelAccess(c, &service.APIKey{User: &service.User{}}, service.VipExclusiveModelName))
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.Contains(t, rec.Body.String(), `"code":403`)
-	require.Contains(t, rec.Body.String(), service.VipExclusiveModelAccessMessage)
-}
-
 func TestRequireUserAccountModelAccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

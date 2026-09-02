@@ -318,7 +318,7 @@ func TestAdminService_CreateGroup_WithImagePricing(t *testing.T) {
 	input := &CreateGroupInput{
 		Name:           "test-group",
 		Description:    "Test group",
-		Platform:       PlatformAntigravity,
+		Platform:       PlatformGrok,
 		RateMultiplier: 1.0,
 		ImagePrice1K:   &price1K,
 		ImagePrice2K:   &price2K,
@@ -383,7 +383,7 @@ func TestAdminService_CreateGroup_NilImagePricing(t *testing.T) {
 	input := &CreateGroupInput{
 		Name:           "test-group",
 		Description:    "Test group",
-		Platform:       PlatformAntigravity,
+		Platform:       PlatformGrok,
 		RateMultiplier: 1.0,
 		// ImagePrice 字段全部为 nil
 	}
@@ -433,52 +433,12 @@ func TestAdminService_CreateGroup_PreservesNonGrokImageGenerationDisabled(t *tes
 	require.False(t, group.AllowImageGeneration)
 }
 
-func TestAdminService_CreateGroup_DisablesBatchImageWhenImageGenerationDisabled(t *testing.T) {
-	repo := &groupRepoStubForAdmin{}
-	svc := &adminServiceImpl{groupRepo: repo}
-
-	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
-		Name:                      "gemini-no-image",
-		Description:               "Gemini group without image generation",
-		Platform:                  PlatformGemini,
-		RateMultiplier:            1.0,
-		AllowImageGeneration:      false,
-		AllowBatchImageGeneration: true,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.created)
-	require.False(t, repo.created.AllowImageGeneration)
-	require.False(t, repo.created.AllowBatchImageGeneration)
-	require.False(t, group.AllowBatchImageGeneration)
-}
-
-func TestAdminService_CreateGroup_DisablesBatchImageForNonGeminiPlatform(t *testing.T) {
-	repo := &groupRepoStubForAdmin{}
-	svc := &adminServiceImpl{groupRepo: repo}
-
-	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
-		Name:                      "openai-image",
-		Description:               "OpenAI image group",
-		Platform:                  PlatformOpenAI,
-		RateMultiplier:            1.0,
-		AllowImageGeneration:      true,
-		AllowBatchImageGeneration: true,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.created)
-	require.True(t, repo.created.AllowImageGeneration)
-	require.False(t, repo.created.AllowBatchImageGeneration)
-	require.False(t, group.AllowBatchImageGeneration)
-}
-
 // TestAdminService_UpdateGroup_WithImagePricing 测试更新分组时 ImagePrice 字段正确更新
 func TestAdminService_UpdateGroup_WithImagePricing(t *testing.T) {
 	existingGroup := &Group{
 		ID:       1,
 		Name:     "existing-group",
-		Platform: PlatformAntigravity,
+		Platform: PlatformGrok,
 		Status:   StatusActive,
 	}
 	repo := &groupRepoStubForAdmin{getByID: existingGroup}
@@ -550,7 +510,7 @@ func TestAdminService_UpdateGroup_PartialImagePricing(t *testing.T) {
 	existingGroup := &Group{
 		ID:           1,
 		Name:         "existing-group",
-		Platform:     PlatformAntigravity,
+		Platform:     PlatformGrok,
 		Status:       StatusActive,
 		ImagePrice2K: &oldPrice2K, // 已有 2K 价格
 	}
@@ -639,53 +599,6 @@ func TestAdminService_UpdateGroup_LimitFieldsPartialUpdate(t *testing.T) {
 	})
 }
 
-func TestAdminService_UpdateGroup_DisablesBatchImageWhenImageGenerationDisabled(t *testing.T) {
-	existingGroup := &Group{
-		ID:                        1,
-		Name:                      "existing-gemini",
-		Platform:                  PlatformGemini,
-		Status:                    StatusActive,
-		AllowImageGeneration:      true,
-		AllowBatchImageGeneration: true,
-	}
-	repo := &groupRepoStubForAdmin{getByID: existingGroup}
-	svc := &adminServiceImpl{groupRepo: repo}
-	disabled := false
-
-	group, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
-		AllowImageGeneration: &disabled,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.updated)
-	require.False(t, repo.updated.AllowImageGeneration)
-	require.False(t, repo.updated.AllowBatchImageGeneration)
-	require.False(t, group.AllowBatchImageGeneration)
-}
-
-func TestAdminService_UpdateGroup_DisablesBatchImageWhenPlatformChangesFromGemini(t *testing.T) {
-	existingGroup := &Group{
-		ID:                        1,
-		Name:                      "existing-gemini",
-		Platform:                  PlatformGemini,
-		Status:                    StatusActive,
-		AllowImageGeneration:      true,
-		AllowBatchImageGeneration: true,
-	}
-	repo := &groupRepoStubForAdmin{getByID: existingGroup}
-	svc := &adminServiceImpl{groupRepo: repo}
-
-	group, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
-		Platform: PlatformOpenAI,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.updated)
-	require.Equal(t, PlatformOpenAI, repo.updated.Platform)
-	require.False(t, repo.updated.AllowBatchImageGeneration)
-	require.False(t, group.AllowBatchImageGeneration)
-}
-
 func TestAdminService_UpdateGroup_ClearsDescriptionWhenEmptyString(t *testing.T) {
 	existingGroup := &Group{
 		ID:          1,
@@ -742,77 +655,6 @@ func TestAdminService_UpdateGroup_RejectsNegativeImageRateMultiplier(t *testing.
 	})
 	require.Error(t, err)
 	require.Nil(t, repo.updated)
-}
-
-func TestAdminService_CreateGroup_BatchImagePricingSettings(t *testing.T) {
-	repo := &groupRepoStubForAdmin{}
-	svc := &adminServiceImpl{groupRepo: repo}
-	discount := 0.8
-	hold := 0.9
-
-	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
-		Name:                         "batch-image-pricing",
-		Platform:                     PlatformGemini,
-		RateMultiplier:               1,
-		BatchImageDiscountMultiplier: &discount,
-		BatchImageHoldMultiplier:     &hold,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.created)
-	require.InDelta(t, 0.8, repo.created.BatchImageDiscountMultiplier, 1e-12)
-	require.InDelta(t, 0.9, repo.created.BatchImageHoldMultiplier, 1e-12)
-}
-
-func TestAdminService_CreateGroup_RejectsHoldBelowDiscount(t *testing.T) {
-	repo := &groupRepoStubForAdmin{}
-	svc := &adminServiceImpl{groupRepo: repo}
-	discount := 0.8
-	hold := 0.6
-
-	// hold < discount 时，成功率足够高的批量任务实际成本会超过冻结额，
-	// 结算永远失败，必须在配置入口拒绝。
-	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
-		Name:                         "batch-image-pricing-invalid",
-		Platform:                     PlatformGemini,
-		RateMultiplier:               1,
-		BatchImageDiscountMultiplier: &discount,
-		BatchImageHoldMultiplier:     &hold,
-	})
-	require.Error(t, err)
-	require.Nil(t, repo.created)
-}
-
-func TestAdminService_GroupBatchImagePricingValidation(t *testing.T) {
-	tests := []struct {
-		name  string
-		input *CreateGroupInput
-	}{
-		{
-			name: "negative_discount",
-			input: func() *CreateGroupInput {
-				v := -0.1
-				return &CreateGroupInput{Name: "bad-discount", RateMultiplier: 1, BatchImageDiscountMultiplier: &v}
-			}(),
-		},
-		{
-			name: "negative_hold",
-			input: func() *CreateGroupInput {
-				v := -0.1
-				return &CreateGroupInput{Name: "bad-hold", RateMultiplier: 1, BatchImageHoldMultiplier: &v}
-			}(),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := &groupRepoStubForAdmin{}
-			svc := &adminServiceImpl{groupRepo: repo}
-
-			_, err := svc.CreateGroup(context.Background(), tt.input)
-			require.Error(t, err)
-			require.Nil(t, repo.created)
-		})
-	}
 }
 
 func TestAdminService_UpdateGroup_RejectsNegativeVideoRateMultiplier(t *testing.T) {
@@ -1182,14 +1024,14 @@ func TestAdminService_ListGroups_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{groupRepo: repo}
 
-		groups, total, err := svc.ListGroups(context.Background(), 3, 50, PlatformAntigravity, StatusActive, "beta", &isExclusive, "", "")
+		groups, total, err := svc.ListGroups(context.Background(), 3, 50, PlatformGrok, StatusActive, "beta", &isExclusive, "", "")
 		require.NoError(t, err)
 		require.Equal(t, int64(42), total)
 		require.Equal(t, []Group{{ID: 2, Name: "beta"}}, groups)
 
 		require.Equal(t, 1, repo.listWithFiltersCalls)
 		require.Equal(t, pagination.PaginationParams{Page: 3, PageSize: 50}, repo.listWithFiltersParams)
-		require.Equal(t, PlatformAntigravity, repo.listWithFiltersPlatform)
+		require.Equal(t, PlatformGrok, repo.listWithFiltersPlatform)
 		require.Equal(t, StatusActive, repo.listWithFiltersStatus)
 		require.Equal(t, "beta", repo.listWithFiltersSearch)
 		require.NotNil(t, repo.listWithFiltersIsExclusive)
@@ -1382,7 +1224,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsUnsupportedPlatfo
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid request fallback only supported for anthropic or antigravity groups")
+	require.Contains(t, err.Error(), "invalid request fallback only supported for anthropic groups")
 	require.Nil(t, repo.created)
 }
 
@@ -1419,8 +1261,8 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsFallbackGroup(t *
 			wantMessage: "fallback group must be anthropic platform",
 		},
 		{
-			name:        "antigravity_target",
-			fallback:    &Group{ID: 10, Platform: PlatformAntigravity, SubscriptionType: SubscriptionTypeStandard},
+			name:        "grok_target",
+			fallback:    &Group{ID: 10, Platform: PlatformGrok, SubscriptionType: SubscriptionTypeStandard},
 			wantMessage: "fallback group must be anthropic platform",
 		},
 		{
@@ -1481,28 +1323,6 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackNotFound(t *testing.T) {
 	require.Nil(t, repo.created)
 }
 
-func TestAdminService_CreateGroup_InvalidRequestFallbackAllowsAntigravity(t *testing.T) {
-	fallbackID := int64(10)
-	repo := &groupRepoStubForInvalidRequestFallback{
-		groups: map[int64]*Group{
-			fallbackID: {ID: fallbackID, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeStandard},
-		},
-	}
-	svc := &adminServiceImpl{groupRepo: repo}
-
-	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
-		Name:                            "g1",
-		Platform:                        PlatformAntigravity,
-		RateMultiplier:                  1.0,
-		SubscriptionType:                SubscriptionTypeStandard,
-		FallbackGroupIDOnInvalidRequest: &fallbackID,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.created)
-	require.Equal(t, fallbackID, *repo.created.FallbackGroupIDOnInvalidRequest)
-}
-
 func TestAdminService_CreateGroup_InvalidRequestFallbackClearsOnZero(t *testing.T) {
 	zero := int64(0)
 	repo := &groupRepoStubForInvalidRequestFallback{}
@@ -1543,7 +1363,7 @@ func TestAdminService_UpdateGroup_InvalidRequestFallbackPlatformMismatch(t *test
 		Platform: PlatformOpenAI,
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid request fallback only supported for anthropic or antigravity groups")
+	require.Contains(t, err.Error(), "invalid request fallback only supported for anthropic groups")
 	require.Nil(t, repo.updated)
 }
 
@@ -1653,32 +1473,6 @@ func TestAdminService_UpdateGroup_InvalidRequestFallbackSetSuccess(t *testing.T)
 	require.Equal(t, fallbackID, *repo.updated.FallbackGroupIDOnInvalidRequest)
 }
 
-func TestAdminService_UpdateGroup_InvalidRequestFallbackAllowsAntigravity(t *testing.T) {
-	fallbackID := int64(10)
-	existing := &Group{
-		ID:               1,
-		Name:             "g1",
-		Platform:         PlatformAntigravity,
-		SubscriptionType: SubscriptionTypeStandard,
-		Status:           StatusActive,
-	}
-	repo := &groupRepoStubForInvalidRequestFallback{
-		groups: map[int64]*Group{
-			existing.ID: existing,
-			fallbackID:  {ID: fallbackID, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeStandard},
-		},
-	}
-	svc := &adminServiceImpl{groupRepo: repo}
-
-	group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
-		FallbackGroupIDOnInvalidRequest: &fallbackID,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.updated)
-	require.Equal(t, fallbackID, *repo.updated.FallbackGroupIDOnInvalidRequest)
-}
-
 func TestAdminService_CreateCompositeRoute_RejectsNonCompositeGroup(t *testing.T) {
 	groupRepo := &groupRepoStubForAdmin{
 		getByID: &Group{ID: 7, Platform: PlatformOpenAI},
@@ -1758,23 +1552,23 @@ func TestAdminService_UpdateAndDeleteCompositeRouteRequireRouteOwnership(t *test
 	routeRepo := &compositeRouteRepoStubForAdmin{
 		routes: []CompositeModelRoute{
 			{ID: 11, GroupID: 7, PublicModel: "router/gpt-5", TargetPlatform: PlatformOpenAI, Enabled: true},
-			{ID: 12, GroupID: 8, PublicModel: "router/other", TargetPlatform: PlatformGemini, Enabled: true},
+			{ID: 12, GroupID: 8, PublicModel: "router/other", TargetPlatform: PlatformGrok, Enabled: true},
 		},
 	}
 	svc := &adminServiceImpl{groupRepo: groupRepo, compositeRouteRepo: routeRepo}
 
 	updated, err := svc.UpdateCompositeRoute(context.Background(), 7, 11, CompositeRouteInput{
 		PublicModel:    "router/gpt-5",
-		TargetPlatform: PlatformGemini,
-		UpstreamModel:  "gemini-2.5-pro",
+		TargetPlatform: PlatformGrok,
+		UpstreamModel:  "grok-4.6",
 		Endpoint:       CompositeRouteEndpointChatCompletions,
 		Priority:       3,
 		Enabled:        true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(11), updated.ID)
-	require.Equal(t, PlatformGemini, updated.TargetPlatform)
-	require.Equal(t, "gemini-2.5-pro", updated.UpstreamModel)
+	require.Equal(t, PlatformGrok, updated.TargetPlatform)
+	require.Equal(t, "grok-4.6", updated.UpstreamModel)
 	require.Equal(t, updated, routeRepo.updated)
 
 	err = svc.DeleteCompositeRoute(context.Background(), 7, 12)
