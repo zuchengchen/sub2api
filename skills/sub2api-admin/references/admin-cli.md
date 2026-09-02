@@ -39,7 +39,6 @@ node scripts/sub2api-admin.js accounts today-stats 40
 node scripts/sub2api-admin.js accounts batch-today-stats --ids 40,39
 node scripts/sub2api-admin.js accounts models 40
 node scripts/sub2api-admin.js accounts temp-unschedulable 40
-node scripts/sub2api-admin.js accounts antigravity-default-model-mapping
 ```
 
 `accounts export` 会包含账号凭据和 token，建议写入文件，不要直接刷屏：
@@ -241,7 +240,6 @@ node scripts/sub2api-admin.js api POST /admin/accounts/bulk-update \
 - `POST /api/v1/admin/accounts/import/codex-session`
 - `POST /api/v1/admin/accounts/sync/crs/preview`
 - `POST /api/v1/admin/accounts/sync/crs`
-- `GET /api/v1/admin/accounts/antigravity/default-model-mapping`
 - `GET /api/v1/admin/groups/all`
 - `GET /api/v1/admin/proxies/all`
 - `GET /api/v1/admin/redeem-codes`

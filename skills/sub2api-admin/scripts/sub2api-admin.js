@@ -42,7 +42,6 @@ function usage() {
   sub2api-admin.js accounts crs-preview --json '{...}' | --file payload.json
   sub2api-admin.js accounts crs-sync --json '{...}' | --file payload.json
   sub2api-admin.js accounts import-codex-session --json '{...}' | --file payload.json
-  sub2api-admin.js accounts antigravity-default-model-mapping
   sub2api-admin.js accounts import-json --file <path> --template-name <name> [--skip-name <name>] [--dry-run]
   sub2api-admin.js groups all
   sub2api-admin.js proxies all
@@ -515,11 +514,6 @@ async function commandAccounts(args) {
 
   if (sub === "import-codex-session") {
     printJson(await adminRequest("POST", "/admin/accounts/import/codex-session", readJsonPayload(args.flags)));
-    return;
-  }
-
-  if (sub === "antigravity-default-model-mapping") {
-    printJson(await adminRequest("GET", "/admin/accounts/antigravity/default-model-mapping"));
     return;
   }
 
