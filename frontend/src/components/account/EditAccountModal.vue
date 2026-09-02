@@ -773,7 +773,7 @@
             v-model="editBaseUrl"
             type="text"
             class="input"
-            placeholder="https://cloudcode-pa.googleapis.com"
+            placeholder="https://api.anthropic.com"
           />
           <p class="input-hint">{{ t('admin.accounts.upstream.baseUrlHint') }}</p>
         </div>

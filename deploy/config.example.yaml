@@ -147,8 +147,6 @@ security:
       - "api.moonshot.cn"
       - "open.bigmodel.cn"
       - "api.minimaxi.com"
-      - "generativelanguage.googleapis.com"
-      - "cloudcode-pa.googleapis.com"
       - "*.openai.azure.com"
     # Allowed hosts for pricing data download
     # 允许下载定价数据的主机列表
