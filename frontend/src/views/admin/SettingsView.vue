@@ -9705,9 +9705,6 @@ const form = reactive<SettingsForm>({
   grok_default_text_model: "grok-4.5",
   grok_cross_client_model_map_enabled: false,
   grok_default_base_url_mode: "cli",
-  // Identity patch
-  enable_identity_patch: true,
-  identity_patch_prompt: "",
   // Ops monitoring (vNext)
   ops_monitoring_enabled: true,
   ops_realtime_monitoring_enabled: true,
@@ -11301,8 +11298,6 @@ async function saveSettings() {
       grok_cross_client_model_map_enabled:
         form.grok_cross_client_model_map_enabled,
       grok_default_base_url_mode: form.grok_default_base_url_mode,
-      enable_identity_patch: form.enable_identity_patch,
-      identity_patch_prompt: form.identity_patch_prompt,
       min_claude_code_version: form.min_claude_code_version,
       max_claude_code_version: form.max_claude_code_version,
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,

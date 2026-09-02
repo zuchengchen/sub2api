@@ -244,13 +244,14 @@ func TestAdminService_BulkUpdateAccounts_NilGroupRepoReturnsError(t *testing.T) 
 	require.Contains(t, err.Error(), "group repository not configured")
 }
 
-// TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingConflict verifies
-// that the global pre-check detects a conflict with existing group members and returns an
-// error before any DB write is performed.
-func TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingConflict(t *testing.T) {
+// TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckIgnoresNonParticipatingPlatforms verifies
+// that platforms outside the mixed-channel check (only Anthropic-compatible channels participate)
+// never block the bulk update: with Antigravity retired, a Grok account joining an Anthropic
+// group is not a mixed-channel conflict.
+func TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckIgnoresNonParticipatingPlatforms(t *testing.T) {
 	repo := &accountRepoStubForBulkUpdate{
 		getByIDsAccounts: []*Account{
-			{ID: 1, Platform: PlatformAntigravity},
+			{ID: 1, Platform: PlatformGrok},
 		},
 		// Group 10 already contains an Anthropic account.
 		listByGroupData: map[int64][]Account{
@@ -269,11 +270,11 @@ func TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingCon
 	}
 
 	result, err := svc.BulkUpdateAccounts(context.Background(), input)
-	require.Nil(t, result)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "mixed channel")
-	// No BindGroups should have been called since the check runs before any write.
-	require.Empty(t, repo.bindGroupsCalls)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 0, result.Failed)
+	require.Len(t, repo.bindGroupsCalls, 1)
 }
 
 func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {

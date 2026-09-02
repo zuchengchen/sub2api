@@ -11,7 +11,7 @@ describe('ReAuthAccountModal Grok re-auth paths', () => {
   it('exposes SSO cookie and refresh-token options; password auth stays hidden', () => {
     expect(source).toContain(':show-sso-option="isGrok"')
     expect(source).toContain(':show-email-password-option="false"')
-    expect(source).toContain(':show-refresh-token-option="isOpenAI || isAntigravity || isGrok"')
+    expect(source).toContain(':show-refresh-token-option="isOpenAI || isGrok"')
     expect(source).not.toContain('@authorize-password=')
   })
 

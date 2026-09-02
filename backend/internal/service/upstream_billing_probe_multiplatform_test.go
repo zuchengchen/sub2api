@@ -15,7 +15,7 @@ import (
 // 受支持平台（含国产供应商）的 API-key 账号都可开启探测；OAuth/Bedrock 无静态 Key 仍不合格。
 func TestUpstreamBillingProbeIdentityCoversAllAPIKeyPlatforms(t *testing.T) {
 	for _, platform := range []string{
-		PlatformOpenAI, PlatformGrok, PlatformAnthropic, PlatformGemini, PlatformAntigravity,
+		PlatformOpenAI, PlatformGrok, PlatformAnthropic,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek,
 	} {
 		require.True(t, IsUpstreamBillingProbeIdentity(platform, AccountTypeAPIKey), platform)
@@ -48,7 +48,7 @@ func TestBuildUpstreamBillingRateSnapshotItemsPreservesAllAPIKeyPlatforms(t *tes
 			"status": "ok",
 			"data":   map[string]any{"effective_rate_multiplier": 0.047},
 		}),
-		makeAccount(3, PlatformGemini, AccountTypeAPIKey, map[string]any{
+		makeAccount(3, PlatformGrok, AccountTypeAPIKey, map[string]any{
 			"status": "failed",
 		}),
 		makeAccount(4, PlatformOpenAI, AccountTypeOAuth, map[string]any{
@@ -150,8 +150,8 @@ func TestUpstreamBillingProbeOfficialAPIBaseURLIsUnsupportedWithoutRequest(t *te
 		{PlatformAnthropic, "https://api.anthropic.com:443"},
 		{PlatformAnthropic, "https://api.anthropic.com./"},
 		{PlatformAnthropic, "HTTPS://API.ANTHROPIC.COM/"},
-		{PlatformGemini, "https://generativelanguage.googleapis.com"},
-		{PlatformAntigravity, "https://cloudcode-pa.googleapis.com"},
+		{PlatformAnthropic, "https://generativelanguage.googleapis.com"},
+		{PlatformAnthropic, "https://cloudcode-pa.googleapis.com"},
 		{PlatformGrok, "https://api.x.ai/v1"},
 		{PlatformGrok, "https://us-east-1.api.x.ai/v1"},
 		{PlatformGrok, "https://eu-west-1.api.x.ai/v1"},

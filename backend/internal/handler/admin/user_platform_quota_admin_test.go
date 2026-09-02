@@ -99,8 +99,8 @@ func TestUpdateUserPlatformQuotas_Success(t *testing.T) {
 	body := `{"quotas":[
 		{"platform":"anthropic","daily_limit_usd":10.0,"weekly_limit_usd":null,"monthly_limit_usd":100.0},
 		{"platform":"openai","daily_limit_usd":80.0,"weekly_limit_usd":300.0,"monthly_limit_usd":null},
-		{"platform":"gemini","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
-		{"platform":"antigravity","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
+		{"platform":"kimi","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
+		{"platform":"zhipu","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
 		{"platform":"grok","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null}
 	]}`
 	c, w := putReq(t, body)
@@ -136,12 +136,14 @@ func TestUpdateUserPlatformQuotas_RejectsDuplicatePlatform(t *testing.T) {
 }
 
 func TestUpdateUserPlatformQuotas_RejectsInvalidPlatform(t *testing.T) {
-	h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
-	body := `{"quotas":[{"platform":"unknown","daily_limit_usd":1}]}`
-	c, w := putReq(t, body)
-	h.UpdateUserPlatformQuotas(c)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	for _, platform := range []string{"unknown", "gemini", "antigravity"} {
+		h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
+		body := `{"quotas":[{"platform":"` + platform + `","daily_limit_usd":1}]}`
+		c, w := putReq(t, body)
+		h.UpdateUserPlatformQuotas(c)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("platform %q: expected 400, got %d: %s", platform, w.Code, w.Body.String())
+		}
 	}
 }
 
@@ -158,7 +160,7 @@ func TestUpdateUserPlatformQuotas_RejectsNegativeLimit(t *testing.T) {
 func TestUpdateUserPlatformQuotas_RejectsTooManyEntries(t *testing.T) {
 	h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
 	body := `{"quotas":[
-		{"platform":"anthropic"},{"platform":"openai"},{"platform":"gemini"},{"platform":"antigravity"},{"platform":"grok"},{"platform":"anthropic"}
+		{"platform":"anthropic"},{"platform":"openai"},{"platform":"grok"},{"platform":"kimi"},{"platform":"zhipu"},{"platform":"deepseek"},{"platform":"anthropic"}
 	]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)

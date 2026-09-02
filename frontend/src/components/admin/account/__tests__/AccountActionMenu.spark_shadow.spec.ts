@@ -119,7 +119,7 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
   })
 
   it('非 OpenAI 账号隐藏「创建 spark 影子」按钮', () => {
-    const account = makeAccount({ platform: 'antigravity', type: 'oauth', parent_account_id: null })
+    const account = makeAccount({ platform: 'anthropic', type: 'oauth', parent_account_id: null })
     const wrapper = mount(AccountActionMenu, {
       props: { show: true, account, position },
       attachTo: document.body,

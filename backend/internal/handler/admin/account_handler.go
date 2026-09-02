@@ -105,7 +105,7 @@ func NewAccountHandler(
 type CreateAccountRequest struct {
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
-	Platform                string         `json:"platform" binding:"required"`
+	Platform                string         `json:"platform" binding:"required,oneof=anthropic openai grok kimi zhipu deepseek"`
 	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
@@ -173,7 +173,7 @@ type BulkUpdateAccountFilters struct {
 
 // CheckMixedChannelRequest represents check mixed channel risk request
 type CheckMixedChannelRequest struct {
-	Platform  string  `json:"platform" binding:"required"`
+	Platform  string  `json:"platform" binding:"required,oneof=anthropic openai grok kimi zhipu deepseek"`
 	GroupIDs  []int64 `json:"group_ids"`
 	AccountID *int64  `json:"account_id"`
 }

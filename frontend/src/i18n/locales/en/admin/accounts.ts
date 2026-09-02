@@ -1324,8 +1324,6 @@ export default {
         unlimited: 'Unlimited'
       },
       forbidden: 'Forbidden',
-      forbiddenValidation: 'Verification Required',
-      forbiddenViolation: 'Violation Ban',
       openVerification: 'Open Verification Link',
       copyLink: 'Copy Link',
       linkCopied: 'Link Copied',

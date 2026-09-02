@@ -262,7 +262,7 @@ func TestProfitControlSchedulerFiltersCandidates(t *testing.T) {
 
 func TestValidateProfitControlConfig(t *testing.T) {
 	require.NoError(t, ValidateProfitControlConfig(PlatformAnthropic, false, 0, 0))
-	for _, platform := range []string{PlatformOpenAI, PlatformAnthropic, PlatformGemini, PlatformGrok, PlatformAntigravity} {
+	for _, platform := range []string{PlatformOpenAI, PlatformAnthropic, PlatformGrok} {
 		require.NoError(t, ValidateProfitControlConfig(platform, true, 0.3, 0.05))
 		require.NoError(t, ValidateProfitControlConfig(platform, true, 0, 0))
 	}
@@ -283,7 +283,7 @@ func TestNormalizeProfitControlConfig(t *testing.T) {
 	})
 
 	t.Run("all five platforms retain configuration", func(t *testing.T) {
-		for _, platform := range []string{PlatformOpenAI, PlatformAnthropic, PlatformGemini, PlatformGrok, PlatformAntigravity} {
+		for _, platform := range []string{PlatformOpenAI, PlatformAnthropic, PlatformGrok} {
 			enabled, margin, buffer := NormalizeProfitControlConfig(platform, true, 0.3, 0.1)
 			require.True(t, enabled)
 			require.InDelta(t, 0.3, margin, 1e-12)

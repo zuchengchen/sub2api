@@ -378,7 +378,7 @@ func TestGatewayServiceRecordUsage_TimePricingUsesPricingAt(t *testing.T) {
 	require.InDelta(t, 0.8, usageRepo.lastLog.RateMultiplier, 1e-12)
 }
 func TestGatewayServiceRecordUsage_UsesExplicitPricingAtForPeakRate(t *testing.T) {
-	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformGrok, PlatformAntigravity} {
+	for _, platform := range []string{PlatformAnthropic, PlatformGrok} {
 		t.Run(platform, func(t *testing.T) {
 			groupID := int64(903)
 			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}

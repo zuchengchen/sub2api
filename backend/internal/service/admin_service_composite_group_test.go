@@ -27,7 +27,7 @@ func TestAdminService_CreateCompositeGroupCopiesAccountsFromConcreteGroups(t *te
 		createID: 99,
 		getByIDByID: map[int64]*Group{
 			10: {ID: 10, Platform: PlatformOpenAI},
-			20: {ID: 20, Platform: PlatformGemini},
+			20: {ID: 20, Platform: PlatformGrok},
 		},
 		getAccountIDsByGroupIDsFn: func(groupIDs []int64) ([]int64, error) {
 			copiedFrom = append([]int64{}, groupIDs...)
@@ -136,7 +136,7 @@ func TestAdminService_CreateAccountAllowsCompositeGroupAssignment(t *testing.T) 
 func TestAdminService_UpdateAccountAllowsCompositeGroupAssignment(t *testing.T) {
 	accountRepo := &accountRepoStubForBulkUpdate{
 		getByIDAccounts: map[int64]*Account{
-			7: {ID: 7, Platform: PlatformGemini, Type: AccountTypeAPIKey, Status: StatusActive, Extra: map[string]any{}},
+			7: {ID: 7, Platform: PlatformGrok, Type: AccountTypeAPIKey, Status: StatusActive, Extra: map[string]any{}},
 		},
 	}
 	groupRepo := &groupRepoStubForAdmin{
@@ -170,9 +170,9 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 			},
 			{
 				ID:       2,
-				Platform: PlatformGemini,
+				Platform: PlatformGrok,
 				Credentials: map[string]any{
-					"model_mapping": map[string]any{"gemini-custom": "gemini-2.5-flash"},
+					"model_mapping": map[string]any{"grok-custom": "grok-4.3"},
 				},
 			},
 			{
@@ -195,10 +195,10 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 
 	require.NoError(t, err)
 	require.Contains(t, candidates, "gpt-custom")
-	require.Contains(t, candidates, "gemini-custom")
+	require.Contains(t, candidates, "grok-custom")
 	require.Contains(t, candidates, "kimi-custom")
 	require.Contains(t, candidates, "gpt-5.5")
-	require.Contains(t, candidates, "gemini-2.5-flash")
+	require.Contains(t, candidates, "grok-4.3")
 }
 
 // 独立 CN 分组的模型列表候选沿用 default 分支的 Claude 默认列表；

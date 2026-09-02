@@ -237,7 +237,7 @@ func TestGatewayService_Forward_PreOutputSSEOverloadedErrorUsesSemantic529(t *te
 		cfg:                  cfg,
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
 		httpUpstream:         upstream,
-		rateLimitService:     NewRateLimitService(repo, nil, cfg, nil, nil),
+		rateLimitService:     NewRateLimitService(repo, nil, cfg, nil),
 		deferredService:      &DeferredService{},
 	}
 	account := newAnthropicOAuthAccountForPartialUsageTest()
@@ -286,7 +286,7 @@ func TestGatewayService_Forward_PostOutputSSEOverloadedErrorKeepsExistingStatus(
 		cfg:                  cfg,
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
 		httpUpstream:         upstream,
-		rateLimitService:     NewRateLimitService(repo, nil, cfg, nil, nil),
+		rateLimitService:     NewRateLimitService(repo, nil, cfg, nil),
 		deferredService:      &DeferredService{},
 	}
 

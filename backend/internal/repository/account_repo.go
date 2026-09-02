@@ -2408,7 +2408,6 @@ func (r *accountRepository) ClearRateLimit(ctx context.Context, id int64) error 
 	return nil
 }
 
-
 func (r *accountRepository) ClearModelRateLimits(ctx context.Context, id int64) error {
 	client := clientFromContext(ctx, r.client)
 	result, err := client.ExecContext(

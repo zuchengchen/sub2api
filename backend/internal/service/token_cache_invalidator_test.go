@@ -37,79 +37,6 @@ func (s *tokenCacheStub) ReleaseRefreshLock(ctx context.Context, cacheKey string
 	return nil
 }
 
-func TestCompositeTokenCacheInvalidator_Gemini(t *testing.T) {
-	cache := &tokenCacheStub{}
-	invalidator := NewCompositeTokenCacheInvalidator(cache)
-	account := &Account{
-		ID:       10,
-		Platform: PlatformGemini,
-		Type:     AccountTypeOAuth,
-		Credentials: map[string]any{
-			"project_id": "project-x",
-		},
-	}
-
-	err := invalidator.InvalidateToken(context.Background(), account)
-	require.NoError(t, err)
-	// 新行为：同时删除基于 project_id 和 account_id 的缓存键
-	// 这是为了处理：首次获取 token 时可能没有 project_id，之后自动检测到后会使用新 key
-	require.Equal(t, []string{"gemini:project-x", "gemini:account:10"}, cache.deletedKeys)
-}
-
-func TestCompositeTokenCacheInvalidator_GeminiWithoutProjectID(t *testing.T) {
-	cache := &tokenCacheStub{}
-	invalidator := NewCompositeTokenCacheInvalidator(cache)
-	account := &Account{
-		ID:       10,
-		Platform: PlatformGemini,
-		Type:     AccountTypeOAuth,
-		Credentials: map[string]any{
-			"access_token": "gemini-token",
-		},
-	}
-
-	err := invalidator.InvalidateToken(context.Background(), account)
-	require.NoError(t, err)
-	// 没有 project_id 时，两个 key 相同，去重后只删除一个
-	require.Equal(t, []string{"gemini:account:10"}, cache.deletedKeys)
-}
-
-func TestCompositeTokenCacheInvalidator_Antigravity(t *testing.T) {
-	cache := &tokenCacheStub{}
-	invalidator := NewCompositeTokenCacheInvalidator(cache)
-	account := &Account{
-		ID:       99,
-		Platform: PlatformAntigravity,
-		Type:     AccountTypeOAuth,
-		Credentials: map[string]any{
-			"project_id": "ag-project",
-		},
-	}
-
-	err := invalidator.InvalidateToken(context.Background(), account)
-	require.NoError(t, err)
-	// 新行为：同时删除基于 project_id 和 account_id 的缓存键
-	require.Equal(t, []string{"ag:ag-project", "ag:account:99"}, cache.deletedKeys)
-}
-
-func TestCompositeTokenCacheInvalidator_AntigravityWithoutProjectID(t *testing.T) {
-	cache := &tokenCacheStub{}
-	invalidator := NewCompositeTokenCacheInvalidator(cache)
-	account := &Account{
-		ID:       99,
-		Platform: PlatformAntigravity,
-		Type:     AccountTypeOAuth,
-		Credentials: map[string]any{
-			"access_token": "ag-token",
-		},
-	}
-
-	err := invalidator.InvalidateToken(context.Background(), account)
-	require.NoError(t, err)
-	// 没有 project_id 时，两个 key 相同，去重后只删除一个
-	require.Equal(t, []string{"ag:account:99"}, cache.deletedKeys)
-}
-
 func TestCompositeTokenCacheInvalidator_OpenAI(t *testing.T) {
 	cache := &tokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
@@ -152,14 +79,6 @@ func TestCompositeTokenCacheInvalidator_SkipNonOAuth(t *testing.T) {
 		name    string
 		account *Account
 	}{
-		{
-			name: "gemini_api_key",
-			account: &Account{
-				ID:       1,
-				Platform: PlatformGemini,
-				Type:     AccountTypeAPIKey,
-			},
-		},
 		{
 			name: "openai_api_key",
 			account: &Account{
@@ -214,7 +133,7 @@ func TestCompositeTokenCacheInvalidator_NilCache(t *testing.T) {
 	invalidator := NewCompositeTokenCacheInvalidator(nil)
 	account := &Account{
 		ID:       2,
-		Platform: PlatformGemini,
+		Platform: PlatformAnthropic,
 		Type:     AccountTypeOAuth,
 	}
 
@@ -235,7 +154,7 @@ func TestCompositeTokenCacheInvalidator_NilInvalidator(t *testing.T) {
 	var invalidator *CompositeTokenCacheInvalidator
 	account := &Account{
 		ID:       5,
-		Platform: PlatformGemini,
+		Platform: PlatformAnthropic,
 		Type:     AccountTypeOAuth,
 	}
 
@@ -286,18 +205,11 @@ func TestCompositeTokenCacheInvalidator_AllPlatformsIntegration(t *testing.T) {
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
 
 	accounts := []*Account{
-		{ID: 1, Platform: PlatformGemini, Type: AccountTypeOAuth, Credentials: map[string]any{"project_id": "gemini-proj"}},
-		{ID: 2, Platform: PlatformAntigravity, Type: AccountTypeOAuth, Credentials: map[string]any{"project_id": "ag-proj"}},
 		{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
 		{ID: 4, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
 	}
 
-	// 新行为：Gemini 和 Antigravity 会同时删除基于 project_id 和 account_id 的键
 	expectedKeys := []string{
-		"gemini:gemini-proj",
-		"gemini:account:1",
-		"ag:ag-proj",
-		"ag:account:2",
 		"openai:account:3",
 		"claude:account:4",
 	}

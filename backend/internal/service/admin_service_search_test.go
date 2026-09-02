@@ -174,14 +174,14 @@ func TestAdminService_ListAccounts_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{accountRepo: repo}
 
-		accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, PlatformGemini, AccountTypeOAuth, StatusActive, "acc", 0, "", "name", "ASC")
+		accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, PlatformGrok, AccountTypeOAuth, StatusActive, "acc", 0, "", "name", "ASC")
 		require.NoError(t, err)
 		require.Equal(t, int64(10), total)
 		require.Equal(t, []Account{{ID: 1, Name: "acc"}}, accounts)
 
 		require.Equal(t, 1, repo.listWithFiltersCalls)
 		require.Equal(t, pagination.PaginationParams{Page: 1, PageSize: 20, SortBy: "name", SortOrder: "ASC"}, repo.listWithFiltersParams)
-		require.Equal(t, PlatformGemini, repo.listWithFiltersPlatform)
+		require.Equal(t, PlatformGrok, repo.listWithFiltersPlatform)
 		require.Equal(t, AccountTypeOAuth, repo.listWithFiltersType)
 		require.Equal(t, StatusActive, repo.listWithFiltersStatus)
 		require.Equal(t, "acc", repo.listWithFiltersSearch)

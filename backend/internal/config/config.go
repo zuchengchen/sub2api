@@ -1986,8 +1986,6 @@ func setDefaults() {
 		"api.moonshot.cn",
 		"open.bigmodel.cn",
 		"api.minimaxi.com",
-		"generativelanguage.googleapis.com",
-		"cloudcode-pa.googleapis.com",
 		"*.openai.azure.com",
 	})
 	viper.SetDefault("security.url_allowlist.pricing_hosts", []string{

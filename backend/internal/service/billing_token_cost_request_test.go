@@ -62,11 +62,11 @@ func geminiLadderCatalogStub(t *testing.T) *PricingService {
 // 渠道平价之上叠加目录阶梯：与分组价卡/OpenAI 渠道价的既有语义一致，
 // 超阈值整单按渠道价 × 目录倍率。
 func TestCalculateTokenCostForRequest_ChannelFlatPriceStacksCatalogLadder(t *testing.T) {
-	bs, resolver := newTokenCostTestEnv(t, PlatformGemini, []ChannelModelPricing{{
-		Platform: PlatformGemini, Models: []string{"gemini-2.5-pro"}, BillingMode: BillingModeToken,
+	bs, resolver := newTokenCostTestEnv(t, geminiCatalogPlatformKey, []ChannelModelPricing{{
+		Platform: geminiCatalogPlatformKey, Models: []string{"gemini-2.5-pro"}, BillingMode: BillingModeToken,
 		InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(40e-6),
 	}}, geminiLadderCatalogStub(t))
-	group := &Group{ID: 100, Platform: PlatformGemini, LongContextPricingEnabled: true}
+	group := &Group{ID: 100, Platform: geminiCatalogPlatformKey, LongContextPricingEnabled: true}
 	gid := group.ID
 	resolved := resolver.Resolve(context.Background(), PricingInput{Model: "gemini-2.5-pro", GroupID: &gid, Group: group})
 	require.Equal(t, PricingSourceChannel, resolved.Source)
@@ -84,11 +84,11 @@ func TestCalculateTokenCostForRequest_ChannelFlatPriceStacksCatalogLadder(t *tes
 
 // 渠道配置了定价区间时以渠道区间为准：目录阶梯（倍率）不再叠加。
 func TestCalculateTokenCostForRequest_ChannelIntervalsOverrideCatalogLadder(t *testing.T) {
-	bs, resolver := newTokenCostTestEnv(t, PlatformGemini, []ChannelModelPricing{{
-		Platform: PlatformGemini, Models: []string{"gemini-2.5-pro"}, BillingMode: BillingModeToken,
+	bs, resolver := newTokenCostTestEnv(t, geminiCatalogPlatformKey, []ChannelModelPricing{{
+		Platform: geminiCatalogPlatformKey, Models: []string{"gemini-2.5-pro"}, BillingMode: BillingModeToken,
 		Intervals: []PricingInterval{{MinTokens: 0, InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(40e-6)}},
 	}}, geminiLadderCatalogStub(t))
-	group := &Group{ID: 100, Platform: PlatformGemini, LongContextPricingEnabled: true}
+	group := &Group{ID: 100, Platform: geminiCatalogPlatformKey, LongContextPricingEnabled: true}
 	gid := group.ID
 	resolved := resolver.Resolve(context.Background(), PricingInput{Model: "gemini-2.5-pro", GroupID: &gid, Group: group})
 	require.Equal(t, PricingSourceChannel, resolved.Source)
@@ -107,11 +107,11 @@ func TestCalculateTokenCostForRequest_ChannelIntervalsOverrideCatalogLadder(t *t
 
 // 目录阶梯跟随分组长上下文开关；开启时为整单换档（输入 ×2、输出 ×1.5）。
 func TestCalculateTokenCostForRequest_CatalogLadderFollowsGroupToggle(t *testing.T) {
-	bs, resolver := newTokenCostTestEnv(t, PlatformGemini, nil, geminiLadderCatalogStub(t))
+	bs, resolver := newTokenCostTestEnv(t, geminiCatalogPlatformKey, nil, geminiLadderCatalogStub(t))
 	tokens := UsageTokens{InputTokens: 300000, OutputTokens: 1000}
 
 	for _, enabled := range []bool{true, false} {
-		group := &Group{ID: 100, Platform: PlatformGemini, LongContextPricingEnabled: enabled}
+		group := &Group{ID: 100, Platform: geminiCatalogPlatformKey, LongContextPricingEnabled: enabled}
 		gid := group.ID
 		resolved := resolver.Resolve(context.Background(), PricingInput{Model: "gemini-2.5-pro", GroupID: &gid, Group: group})
 		require.Equal(t, PricingSourceLiteLLM, resolved.Source)
@@ -135,8 +135,8 @@ func TestCalculateTokenCostForRequest_CatalogLadderFollowsGroupToggle(t *testing
 // 目录阶梯对缓存分项同样生效：cache_read / cache_creation 随输入倍率整单换档，
 // 阈值判定计入全部输入侧 token（input + cache_creation + cache_read）。
 func TestCalculateTokenCostForRequest_GeminiLadderAppliesToCacheItems(t *testing.T) {
-	bs, resolver := newTokenCostTestEnv(t, PlatformGemini, nil, geminiLadderCatalogStub(t))
-	group := &Group{ID: 100, Platform: PlatformGemini, LongContextPricingEnabled: true}
+	bs, resolver := newTokenCostTestEnv(t, geminiCatalogPlatformKey, nil, geminiLadderCatalogStub(t))
+	group := &Group{ID: 100, Platform: geminiCatalogPlatformKey, LongContextPricingEnabled: true}
 	gid := group.ID
 	resolved := resolver.Resolve(context.Background(), PricingInput{Model: "gemini-2.5-pro", GroupID: &gid, Group: group})
 	require.Equal(t, PricingSourceLiteLLM, resolved.Source)
@@ -169,8 +169,8 @@ func TestCalculateTokenCostForRequest_GeminiLadderAppliesToCacheItems(t *testing
 
 // 目录条目没有阶梯字段时，开关开启也不产生阶梯。
 func TestCalculateTokenCostForRequest_NoLadderFieldsMeansNoLadder(t *testing.T) {
-	bs, resolver := newTokenCostTestEnv(t, PlatformGemini, nil, geminiCatalogStub())
-	group := &Group{ID: 100, Platform: PlatformGemini, LongContextPricingEnabled: true}
+	bs, resolver := newTokenCostTestEnv(t, geminiCatalogPlatformKey, nil, geminiCatalogStub())
+	group := &Group{ID: 100, Platform: geminiCatalogPlatformKey, LongContextPricingEnabled: true}
 	gid := group.ID
 	resolved := resolver.Resolve(context.Background(), PricingInput{Model: "gemini-2.5-pro", GroupID: &gid, Group: group})
 

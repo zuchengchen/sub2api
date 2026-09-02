@@ -275,7 +275,7 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 	repo := newAccountRepositoryWithSQL(nil, captureQuerySQL{db: db, captured: &capturedSQL, args: &capturedArgs}, nil)
 
 	page, err := repo.ListOAuthRefreshCandidatePage(context.Background(), service.OAuthRefreshPageOptions{
-		Platforms:            []string{service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGemini, service.PlatformAntigravity, service.PlatformGrok},
+		Platforms:            []string{service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGrok},
 		AfterID:              100,
 		Limit:                200,
 		ActiveOnly:           true,

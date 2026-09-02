@@ -35,14 +35,15 @@ func TestNormalizeInboundEndpoint(t *testing.T) {
 		{"/v1/images/tasks/imgtask_123", EndpointImageTasks},
 		{"/v1/videos/generations", EndpointVideosGenerations},
 		{"/v1/videos/req_123", EndpointVideos},
-		{"/v1beta/models", EndpointGeminiModels},
+		// Gemini 协议下线后 /v1beta/models 不再有专属 endpoint，按未知路径原样透传。
+		{"/v1beta/models", "/v1beta/models"},
 
 		// Prefixed paths (antigravity, openai) — root Responses.
 		{"/antigravity/v1/messages", EndpointMessages},
 		{"/openai/v1/responses", EndpointResponses},
 		{"/openai/v1/images/generations", EndpointImagesGenerations},
 		{"/openai/v1/images/edits", EndpointImagesEdits},
-		{"/antigravity/v1beta/models/gemini:generateContent", EndpointGeminiModels},
+		{"/antigravity/v1beta/models/gemini:generateContent", "/antigravity/v1beta/models/gemini:generateContent"},
 
 		// Prefixed paths — "/responses/compact" is its OWN distinct
 		// inbound endpoint, not folded into the root Responses endpoint.
@@ -98,9 +99,6 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 		// Anthropic.
 		{"anthropic messages", EndpointMessages, "/v1/messages", service.PlatformAnthropic, EndpointMessages},
 
-		// Gemini.
-		{"gemini models", EndpointGeminiModels, "/v1beta/models/gemini:gen", service.PlatformGemini, EndpointGeminiModels},
-
 		// OpenAI — root Responses.
 		{"openai responses root", EndpointResponses, "/v1/responses", service.PlatformOpenAI, EndpointResponses},
 		{"openai responses input tokens", EndpointResponsesInputTokens, "/v1/responses/input_tokens", service.PlatformOpenAI, EndpointResponsesInputTokens},
@@ -136,10 +134,6 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 		{"grok video generations", EndpointVideosGenerations, "/v1/videos/generations", service.PlatformGrok, EndpointVideosGenerations},
 		{"grok video status", EndpointVideos, "/videos/req_123", service.PlatformGrok, EndpointVideos},
 
-		// Antigravity — uses inbound to pick Claude vs Gemini upstream.
-		{"antigravity claude", EndpointMessages, "/antigravity/v1/messages", service.PlatformAntigravity, EndpointMessages},
-		{"antigravity gemini", EndpointGeminiModels, "/antigravity/v1beta/models", service.PlatformAntigravity, EndpointGeminiModels},
-
 		// Unknown platform — passthrough.
 		{"unknown platform", "/v1/embeddings", "/v1/embeddings", "unknown", "/v1/embeddings"},
 	}
@@ -148,40 +142,6 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 			require.Equal(t, tt.want, DeriveUpstreamEndpoint(tt.inbound, tt.rawPath, tt.platform))
 		})
 	}
-}
-
-func TestShouldUseAntigravityCompat(t *testing.T) {
-	tests := []struct {
-		name    string
-		account *service.Account
-		want    bool
-	}{
-		{"oauth", &service.Account{Platform: service.PlatformAntigravity, Type: service.AccountTypeOAuth}, true},
-		{"setup token", &service.Account{Platform: service.PlatformAntigravity, Type: service.AccountTypeSetupToken}, false},
-		{"upstream", &service.Account{Platform: service.PlatformAntigravity, Type: service.AccountTypeUpstream}, false},
-		{"api key", &service.Account{Platform: service.PlatformAntigravity, Type: service.AccountTypeAPIKey}, false},
-		{"anthropic oauth", &service.Account{Platform: service.PlatformAnthropic, Type: service.AccountTypeOAuth}, false},
-		{"nil", nil, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, shouldUseAntigravityCompat(tt.account))
-		})
-	}
-}
-
-func TestGetUpstreamEndpointPrefersRuntimeOverride(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, EndpointChatCompletions, nil)
-	c.Set(ctxKeyInboundEndpoint, EndpointChatCompletions)
-
-	setActualUpstreamEndpoint(c, EndpointAntigravityGenerateContent)
-	require.Equal(t, EndpointAntigravityGenerateContent, GetUpstreamEndpoint(c, service.PlatformAntigravity))
-
-	setActualUpstreamEndpoint(c, "")
-	require.Equal(t, EndpointMessages, GetUpstreamEndpoint(c, service.PlatformAntigravity))
 }
 
 func TestGetUpstreamEndpointUsesOpenAIRuntimeOverride(t *testing.T) {
@@ -379,29 +339,6 @@ func TestInboundEndpointMiddleware_WildcardRoutes(t *testing.T) {
 			require.Equal(t, tt.want, captured)
 		})
 	}
-}
-
-// TestInboundEndpointMiddleware_GeminiWildcardRoute verifies that a Gemini
-// wildcard route (e.g. "/v1beta/models/*modelAction", used to capture the
-// ":generateContent"-style action suffix embedded in the path) is normalized
-// to EndpointGeminiModels via InboundEndpointMiddleware, using the same real
-// Gin routing path as TestInboundEndpointMiddleware_WildcardRoutes above.
-func TestInboundEndpointMiddleware_GeminiWildcardRoute(t *testing.T) {
-	router := gin.New()
-	router.Use(InboundEndpointMiddleware())
-
-	var captured string
-	router.POST("/v1beta/models/*modelAction", func(c *gin.Context) {
-		captured = GetInboundEndpoint(c)
-		c.Status(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-pro:generateContent", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, EndpointGeminiModels, captured)
 }
 
 // TestGetInboundEndpoint_FallbackWildcardRouteWithoutMiddleware verifies

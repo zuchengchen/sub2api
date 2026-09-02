@@ -84,8 +84,7 @@ describe('isHeaderOverrideCapable', () => {
   })
 
   it('other platforms are not supported', () => {
-    expect(isHeaderOverrideCapable('gemini', 'apikey')).toBe(false)
-    expect(isHeaderOverrideCapable('antigravity', 'apikey')).toBe(false)
+    expect(isHeaderOverrideCapable('bedrock', 'apikey')).toBe(false)
     expect(isHeaderOverrideCapable('', 'apikey')).toBe(false)
   })
 })

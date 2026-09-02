@@ -1571,7 +1571,7 @@ func (s *AccountRepoSuite) TestUpdateExtra_ExhaustedCodexSnapshotSyncsSchedulerC
 func (s *AccountRepoSuite) TestUpdateExtra_SchedulerRelevantStillEnqueuesOutbox() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:     "acc-extra-mixed",
-		Platform: service.PlatformAntigravity,
+		Platform: service.PlatformGrok,
 		Extra:    map[string]any{},
 	})
 	_, err := s.repo.sql.ExecContext(s.ctx, "TRUNCATE scheduler_outbox")

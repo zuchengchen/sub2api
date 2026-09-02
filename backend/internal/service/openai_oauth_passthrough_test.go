@@ -1749,7 +1749,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailove
 			upstreamBody := `{"error":{"message":"upstream credential rejected"}}`
 			svc := &OpenAIGatewayService{
 				cfg:              &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-				rateLimitService: NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil),
+				rateLimitService: NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil),
 				httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
 					StatusCode: tt.statusCode,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},

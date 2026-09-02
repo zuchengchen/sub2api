@@ -16,6 +16,11 @@ import (
 // body 234924 through the REAL remote reviewer pool (DeepSeek official,
 // consensus=1) using the deployment key ring.
 func TestZZLiveReviewBody234924(t *testing.T) {
+	for _, path := range []string{"/tmp/opencode/cm_config_new.json", "/tmp/opencode/keyring.json"} {
+		if _, err := os.Stat(path); err != nil {
+			t.Skip("live review fixtures not present")
+		}
+	}
 	rawCfg, err := os.ReadFile("/tmp/opencode/cm_config_new.json")
 	require.NoError(t, err)
 	var cfg ContentModerationConfig

@@ -1746,26 +1746,6 @@
           </div>
         </div>
 
-        <!-- 无效请求兜底（仅 anthropic 平台，且非订阅分组） -->
-        <div
-          v-if="
-            createForm.platform === 'anthropic' &&
-            createForm.subscription_type !== 'subscription'
-          "
-          class="border-t pt-4"
-        >
-          <label class="input-label">{{
-            t("admin.groups.invalidRequestFallback.title")
-          }}</label>
-          <Select
-            v-model="createForm.fallback_group_id_on_invalid_request"
-            :options="invalidRequestFallbackOptions"
-            :placeholder="t('admin.groups.invalidRequestFallback.noFallback')"
-          />
-          <p class="input-hint">
-            {{ t("admin.groups.invalidRequestFallback.hint") }}
-          </p>
-        </div>
 
         <!-- 模型路由配置（仅 anthropic 平台） -->
         <div v-if="createForm.platform === 'anthropic'" class="border-t pt-4">
@@ -3286,26 +3266,6 @@
           </div>
         </div>
 
-        <!-- 无效请求兜底（仅 anthropic 平台，且非订阅分组） -->
-        <div
-          v-if="
-            editForm.platform === 'anthropic' &&
-            editForm.subscription_type !== 'subscription'
-          "
-          class="border-t pt-4"
-        >
-          <label class="input-label">{{
-            t("admin.groups.invalidRequestFallback.title")
-          }}</label>
-          <Select
-            v-model="editForm.fallback_group_id_on_invalid_request"
-            :options="invalidRequestFallbackOptionsForEdit"
-            :placeholder="t('admin.groups.invalidRequestFallback.noFallback')"
-          />
-          <p class="input-hint">
-            {{ t("admin.groups.invalidRequestFallback.hint") }}
-          </p>
-        </div>
 
         <!-- 模型路由配置（仅 anthropic 平台） -->
         <div v-if="editForm.platform === 'anthropic'" class="border-t pt-4">
@@ -4464,43 +4424,6 @@ const fallbackGroupOptionsForEdit = computed(() => {
   return options;
 });
 
-// 无效请求兜底分组选项（创建时）- 仅包含 anthropic 平台、非订阅且未配置兜底的分组
-const invalidRequestFallbackOptions = computed(() => {
-  const options: { value: number | null; label: string }[] = [
-    { value: null, label: t("admin.groups.invalidRequestFallback.noFallback") },
-  ];
-  const eligibleGroups = groups.value.filter(
-    (g) =>
-      g.platform === "anthropic" &&
-      g.status === "active" &&
-      g.subscription_type !== "subscription" &&
-      g.fallback_group_id_on_invalid_request === null,
-  );
-  eligibleGroups.forEach((g) => {
-    options.push({ value: g.id, label: g.name });
-  });
-  return options;
-});
-
-// 无效请求兜底分组选项（编辑时）- 排除自身
-const invalidRequestFallbackOptionsForEdit = computed(() => {
-  const options: { value: number | null; label: string }[] = [
-    { value: null, label: t("admin.groups.invalidRequestFallback.noFallback") },
-  ];
-  const currentId = editingGroup.value?.id;
-  const eligibleGroups = groups.value.filter(
-    (g) =>
-      g.platform === "anthropic" &&
-      g.status === "active" &&
-      g.subscription_type !== "subscription" &&
-      g.fallback_group_id_on_invalid_request === null &&
-      g.id !== currentId,
-  );
-  eligibleGroups.forEach((g) => {
-    options.push({ value: g.id, label: g.name });
-  });
-  return options;
-});
 
 const canCopyAccountsFromGroup = (targetPlatform: GroupPlatform, sourcePlatform: GroupPlatform) =>
   targetPlatform === "composite" || sourcePlatform === targetPlatform;
@@ -4700,7 +4623,6 @@ const createForm = reactive({
   // Claude Code 客户端限制（仅 anthropic 平台使用）
   claude_code_only: false,
   fallback_group_id: null as number | null,
-  fallback_group_id_on_invalid_request: null as number | null,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
   allow_live: false,
@@ -5034,7 +4956,6 @@ const editForm = reactive({
   // Claude Code 客户端限制（仅 anthropic 平台使用）
   claude_code_only: false,
   fallback_group_id: null as number | null,
-  fallback_group_id_on_invalid_request: null as number | null,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
   allow_live: false,
@@ -5462,7 +5383,6 @@ const closeCreateModal = () => {
   createForm.profit_safety_buffer_percent = 0;
   createForm.claude_code_only = false;
   createForm.fallback_group_id = null;
-  createForm.fallback_group_id_on_invalid_request = null;
   resetMessagesDispatchFormState(createForm);
   createForm.allow_live = false;
   createForm.require_oauth_only = false;
@@ -5695,8 +5615,6 @@ const handleEdit = async (group: AdminGroup) => {
   );
   editForm.claude_code_only = group.claude_code_only || false;
   editForm.fallback_group_id = group.fallback_group_id;
-  editForm.fallback_group_id_on_invalid_request =
-    group.fallback_group_id_on_invalid_request;
   const messagesDispatchFormState = messagesDispatchConfigToFormState(
     group.messages_dispatch_model_config,
   );
@@ -5808,10 +5726,6 @@ const handleUpdateGroup = async () => {
       ),
       fallback_group_id:
         editForm.fallback_group_id === null ? 0 : editForm.fallback_group_id,
-      fallback_group_id_on_invalid_request:
-        editForm.fallback_group_id_on_invalid_request === null
-          ? 0
-          : editForm.fallback_group_id_on_invalid_request,
       model_routing: convertRoutingRulesToApiFormat(
         editModelRoutingRules.value,
       ),
@@ -6159,7 +6073,6 @@ watch(
   (newVal) => {
     if (newVal === "subscription") {
       createForm.is_exclusive = true;
-      createForm.fallback_group_id_on_invalid_request = null;
     } else {
       createForm.peak_rate_enabled = false;
       createForm.peak_start = "";
@@ -6185,9 +6098,6 @@ watch(
 watch(
   () => createForm.platform,
   (newVal) => {
-    if (newVal !== "anthropic") {
-      createForm.fallback_group_id_on_invalid_request = null;
-    }
     if (!supportsMessagesDispatchPlatform(newVal)) {
       resetMessagesDispatchFormState(createForm);
     }
@@ -6220,9 +6130,6 @@ watch(
 watch(
   () => editForm.platform,
   (newVal) => {
-    if (newVal !== "anthropic") {
-      editForm.fallback_group_id_on_invalid_request = null;
-    }
     if (!supportsMessagesDispatchPlatform(newVal)) {
       resetMessagesDispatchFormState(editForm);
     }
@@ -6254,21 +6161,6 @@ watch(
   },
 );
 
-watch(
-  () => editForm.platform,
-  (newVal) => {
-    if (newVal !== 'anthropic') {
-      editForm.fallback_group_id_on_invalid_request = null
-    }
-    if (!supportsMessagesDispatchPlatform(newVal)) {
-      editForm.allow_messages_dispatch = false
-      editForm.default_mapped_model = ''
-    }
-    if (!supportsLivePlatform(newVal)) {
-      editForm.allow_live = false
-    }
-  }
-)
 
 // 点击外部关闭账号搜索下拉框
 const handleClickOutside = (event: MouseEvent) => {

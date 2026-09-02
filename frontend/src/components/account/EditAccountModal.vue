@@ -2746,6 +2746,7 @@ import {
   type OpenAICompatibleProviderSelection
 } from '@/components/account/openAICompatibleProviderPresets'
 import {
+  commonErrorCodes,
   applyHeaderOverride,
   applyInterceptWarmup,
   applyPlanType,
@@ -2785,10 +2786,8 @@ import {
 } from '@/utils/openaiWsMode'
 import {
   getPresetMappingsByPlatform,
-  commonErrorCodes,
   buildModelMappingObject,
-  splitModelMappingObject,
-  isValidWildcardPattern
+  splitModelMappingObject
 } from '@/composables/useModelWhitelist'
 
 interface Props {
@@ -3799,11 +3798,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     const platformDefaultUrl =
       newAccount.platform === 'openai'
         ? 'https://api.openai.com'
-        : newAccount.platform === 'gemini'
-          ? 'https://generativelanguage.googleapis.com'
-          : newAccount.platform === 'grok'
-            ? 'https://api.x.ai/v1'
-            : newAccount.platform === 'kimi' ||
+        : newAccount.platform === 'grok'
+          ? 'https://api.x.ai/v1'
+          : newAccount.platform === 'kimi' ||
                 newAccount.platform === 'zhipu' ||
                 newAccount.platform === 'deepseek'
               ? defaultCNBaseUrl(newAccount.platform, editAccountMode.value, editApiProtocol.value)
@@ -3867,7 +3864,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   } else if (newAccount.type === 'upstream' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     editBaseUrl.value = (credentials.base_url as string) || ''
-  } else if ((newAccount.platform === 'gemini' || newAccount.platform === 'anthropic') && newAccount.type === 'service_account' && newAccount.credentials) {
+  } else if (newAccount.platform === 'anthropic' && newAccount.type === 'service_account' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     editVertexProjectId.value = (credentials.project_id as string) || ''
     editVertexClientEmail.value = (credentials.client_email as string) || ''
@@ -3879,11 +3876,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     const platformDefaultUrl =
       newAccount.platform === 'openai'
         ? 'https://api.openai.com'
-        : newAccount.platform === 'gemini'
-          ? 'https://generativelanguage.googleapis.com'
-          : newAccount.platform === 'grok'
-            ? 'https://api.x.ai/v1'
-            : 'https://api.anthropic.com'
+        : newAccount.platform === 'grok'
+          ? 'https://api.x.ai/v1'
+          : 'https://api.anthropic.com'
     editBaseUrl.value = platformDefaultUrl
 
     // Load model mappings for OpenAI/Grok OAuth accounts
@@ -3945,67 +3940,12 @@ const addPresetMapping = (from: string, to: string) => {
   modelMappings.value.push({ from, to })
 }
 
-const addAntigravityModelMapping = () => {
-  antigravityModelMappings.value.push({ from: '', to: '' })
-}
-
 const addOpenAICompactModelMapping = () => {
   openAICompactModelMappings.value.push({ from: '', to: '' })
 }
 
 const removeOpenAICompactModelMapping = (index: number) => {
   openAICompactModelMappings.value.splice(index, 1)
-}
-
-const removeAntigravityModelMapping = (index: number) => {
-  antigravityModelMappings.value.splice(index, 1)
-}
-
-const addAntigravityPresetMapping = (from: string, to: string) => {
-  const exists = antigravityModelMappings.value.some((m) => m.from === from)
-  if (exists) {
-    appStore.showInfo(t('admin.accounts.mappingExists', { model: from }))
-    return
-  }
-  antigravityModelMappings.value.push({ from, to })
-}
-
-const syncAntigravityUpstreamModels = async () => {
-  if (!props.account?.id || isSyncingAntigravityUpstream.value) return
-
-  isSyncingAntigravityUpstream.value = true
-  try {
-    const result = await adminAPI.accounts.syncUpstreamModels(props.account.id)
-    const upstreamModels = result.models.map((model) => model.trim()).filter(Boolean)
-    if (upstreamModels.length === 0) {
-      appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
-      return
-    }
-
-    let addedCount = 0
-    for (const model of upstreamModels) {
-      const exists = antigravityModelMappings.value.some((mapping) => mapping.from === model)
-      if (!exists) {
-        antigravityModelMappings.value.push({ from: model, to: model })
-        addedCount += 1
-      }
-    }
-
-    if (result.warnings?.some((warning) => warning.code === 'upstream_model_metadata_incomplete')) {
-      appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataIncomplete'))
-      return
-    }
-    if (addedCount > 0) {
-      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: addedCount, total: upstreamModels.length }))
-    } else {
-      appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
-    appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
-  } finally {
-    isSyncingAntigravityUpstream.value = false
-  }
 }
 
 // Error code toggle helper
@@ -4328,7 +4268,7 @@ function toPositiveNumber(value: unknown) {
   return Math.trunc(num)
 }
 
-const needsMixedChannelCheck = () => props.account?.platform === 'antigravity' || props.account?.platform === 'anthropic'
+const needsMixedChannelCheck = () => props.account?.platform === 'anthropic'
 
 const buildMixedChannelDetails = (resp?: CheckMixedChannelResponse) => {
   const details = resp?.details
@@ -4621,7 +4561,7 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
-    } else if ((props.account.platform === 'gemini' || props.account.platform === 'anthropic') && props.account.type === 'service_account') {
+    } else if (props.account.platform === 'anthropic' && props.account.type === 'service_account') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
@@ -4812,50 +4752,6 @@ const handleSubmit = async () => {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
-    }
-
-    // Antigravity: persist model mapping to credentials (applies to all antigravity types)
-    // Antigravity 只支持映射模式
-    if (props.account.platform === 'antigravity') {
-      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
-      const newCredentials: Record<string, unknown> = { ...currentCredentials }
-      if (props.account.type === 'oauth') {
-        applyAntigravityProjectID(newCredentials, antigravityProjectId.value, 'edit')
-      }
-
-      // 移除旧字段
-      delete newCredentials.model_whitelist
-      delete newCredentials.model_mapping
-
-      // 只使用映射模式
-      const antigravityModelMapping = buildModelMappingObject(
-        'mapping',
-        [],
-        antigravityModelMappings.value
-      )
-      if (antigravityModelMapping) {
-        newCredentials.model_mapping = antigravityModelMapping
-      }
-
-      updatePayload.credentials = newCredentials
-    }
-
-    // For antigravity accounts, handle mixed_scheduling and allow_overages in extra
-    if (props.account.platform === 'antigravity') {
-      const currentExtra = (props.account.extra as Record<string, unknown>) || {}
-      const newExtra: Record<string, unknown> = { ...currentExtra }
-      if (mixedScheduling.value) {
-        newExtra.mixed_scheduling = true
-      } else {
-        delete newExtra.mixed_scheduling
-      }
-      if (allowOverages.value) {
-        newExtra.allow_overages = true
-      } else {
-        delete newExtra.allow_overages
-      }
-      updatePayload.extra = newExtra
     }
 
     // For Anthropic OAuth/SetupToken accounts, handle quota control settings in extra

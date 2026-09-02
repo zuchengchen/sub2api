@@ -108,23 +108,23 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"quota_daily_reset_at":  {},
 	"quota_weekly_reset_at": {},
 	// Provider observations, capability probes, and transient scheduling state.
-	"model_rate_limits":                      {},
-	"session_window_utilization":             {},
-	"passive_usage_7d_utilization":           {},
-	"passive_usage_7d_reset":                 {},
-	"passive_usage_7d_oi_utilization":        {},
-	"passive_usage_7d_oi_reset":              {},
-	"passive_usage_sampled_at":               {},
-	"grok_usage_snapshot":                    {},
-	"grok_billing_snapshot":                  {},
-	"openai_responses_supported":             {},
-	"openai_compact_supported":               {},
-	"openai_compact_checked_at":              {},
-	"openai_compact_last_status":             {},
-	"openai_compact_last_error":              {},
-	"drive_storage_limit":                    {},
-	"drive_storage_usage":                    {},
-	"drive_tier_updated_at":                  {},
+	"model_rate_limits":               {},
+	"session_window_utilization":      {},
+	"passive_usage_7d_utilization":    {},
+	"passive_usage_7d_reset":          {},
+	"passive_usage_7d_oi_utilization": {},
+	"passive_usage_7d_oi_reset":       {},
+	"passive_usage_sampled_at":        {},
+	"grok_usage_snapshot":             {},
+	"grok_billing_snapshot":           {},
+	"openai_responses_supported":      {},
+	"openai_compact_supported":        {},
+	"openai_compact_checked_at":       {},
+	"openai_compact_last_status":      {},
+	"openai_compact_last_error":       {},
+	"drive_storage_limit":             {},
+	"drive_storage_usage":             {},
+	"drive_tier_updated_at":           {},
 	// Codex fingerprint convergence uses a per-account random seed, never copied from another account.
 	codexFingerprintSeedExtraKey:           {},
 	"codex_primary_used_percent":           {},
@@ -405,6 +405,10 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	// 兜住所有建号入口（含批量创建、数据导入、复制账号）：平台必须有对应转发器。
+	if !isConcreteRequestPlatform(strings.TrimSpace(input.Platform)) {
+		return nil, ErrAccountUnsupportedPlatform
+	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -1644,5 +1648,3 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 	account.Extra["privacy_mode"] = mode
 	return mode
 }
-
-

@@ -506,8 +506,6 @@ export default {
         unlimited: '无限制'
       },
       forbidden: '已封禁',
-      forbiddenValidation: '需要验证',
-      forbiddenViolation: '违规封禁',
       openVerification: '打开验证链接',
       copyLink: '复制链接',
       linkCopied: '链接已复制',

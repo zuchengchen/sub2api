@@ -1137,11 +1137,6 @@ export default {
         unsupportedMessage: '当前 Sub2API 服务端无法生成 Live 所需的设备证明，即使开启也不能使用。是否仍然开启？',
         enableAnyway: '仍然开启'
       },
-      invalidRequestFallback: {
-        title: '无效请求兜底分组',
-        hint: '仅当上游明确返回 prompt too long 时才会触发，留空表示不兜底',
-        noFallback: '不兜底'
-      },
       copyAccounts: {
         title: '从分组复制账号',
         tooltip: '选择一个或多个相同平台的分组，创建后会自动将这些分组的所有账号绑定到新分组（去重）。',
@@ -1178,12 +1173,6 @@ export default {
         noRulesHint: '添加路由规则以将特定模型请求优先路由到指定账号',
         searchAccountPlaceholder: '搜索账号...',
         accountsHint: '选择此模型模式优先使用的账号'
-      },
-      mcpXml: {
-        title: 'MCP XML 协议注入',
-        tooltip: '启用后，当请求包含 MCP 工具时，会在 system prompt 中注入 XML 格式调用协议提示词。关闭此选项可避免对某些客户端造成干扰。',
-        enabled: '已启用',
-        disabled: '已禁用'
       },
       supportedScopes: {
         title: '支持的模型系列',

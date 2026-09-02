@@ -638,10 +638,6 @@ export interface SystemSettings {
   // Per-platform account auto-pause thresholds (100 = disabled)
   account_scheduling_thresholds: AccountSchedulingThresholdsMap;
 
-  // Identity patch configuration
-  enable_identity_patch: boolean;
-  identity_patch_prompt: string;
-
   // Ops Monitoring (vNext)
   ops_monitoring_enabled: boolean;
   ops_realtime_monitoring_enabled: boolean;
@@ -960,8 +956,6 @@ export interface UpdateSettingsRequest {
   grok_cross_client_model_map_enabled?: boolean;
   grok_default_base_url_mode?: string;
   account_scheduling_thresholds?: AccountSchedulingThresholdsMap;
-  enable_identity_patch?: boolean;
-  identity_patch_prompt?: string;
   ops_monitoring_enabled?: boolean;
   ops_realtime_monitoring_enabled?: boolean;
   ops_query_mode_default?: "auto" | "raw" | "preagg" | string;

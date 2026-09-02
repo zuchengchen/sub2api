@@ -385,16 +385,17 @@ func TestSchedulerRebuildBatchDoesNotReuseAccountPayloadAfterLockBusy(t *testing
 	require.Len(t, writes, 1)
 }
 
-func TestSchedulerRebuildBatchKeepsMixedAndDifferentQueriesOnFullWrites(t *testing.T) {
+func TestSchedulerRebuildBatchKeepsHistoricalAndDifferentQueriesOnFullWrites(t *testing.T) {
 	const groupID int64 = 214
 	openAISingle := SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}
 	openAIForced := SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeForced}
 	anthropicSingle := SchedulerBucket{GroupID: groupID, Platform: PlatformAnthropic, Mode: SchedulerModeSingle}
-	anthropicMixed := SchedulerBucket{GroupID: groupID, Platform: PlatformAnthropic, Mode: SchedulerModeMixed}
+	// 存量注册表里可能残留已下线的 "mixed" 桶，必须按历史模式独立处理。
+	anthropicHistorical := SchedulerBucket{GroupID: groupID, Platform: PlatformAnthropic, Mode: "mixed"}
 	cache := newBatchSnapshotAccountIDCache()
 	svc := newBatchQueryTestService(cache, newBatchAccountQueryRepo(), config.RunModeStandard)
 
-	require.NoError(t, svc.rebuildBuckets(context.Background(), []SchedulerBucket{openAISingle, openAIForced, anthropicSingle, anthropicMixed}, "scope"))
+	require.NoError(t, svc.rebuildBuckets(context.Background(), []SchedulerBucket{openAISingle, openAIForced, anthropicSingle, anthropicHistorical}, "scope"))
 	full, idOnly := cache.reuseCounts(openAISingle)
 	require.Equal(t, 1, full)
 	require.Zero(t, idOnly)
@@ -407,11 +408,11 @@ func TestSchedulerRebuildBatchKeepsMixedAndDifferentQueriesOnFullWrites(t *testi
 	_, attempts, _, writes := cache.bucketState(anthropicSingle)
 	require.Equal(t, 1, attempts)
 	require.Len(t, writes, 1)
-	full, idOnly = cache.reuseCounts(anthropicMixed)
+	full, idOnly = cache.reuseCounts(anthropicHistorical)
 	require.Zero(t, full)
 	require.Zero(t, idOnly)
-	_, attempts, _, _ = cache.bucketState(anthropicMixed)
-	require.Equal(t, 1, attempts, "mixed 桶必须继续走原 SetSnapshot")
+	_, attempts, _, _ = cache.bucketState(anthropicHistorical)
+	require.Equal(t, 1, attempts, "历史模式桶必须继续走原 SetSnapshot")
 }
 
 func TestSchedulerRebuildBatchPropagatesAccountIDOnlyWriteFailure(t *testing.T) {
@@ -481,14 +482,15 @@ func TestSchedulerAccountQueryCacheReleasesSnapshotAccountIDs(t *testing.T) {
 	require.Empty(t, queries.accounts)
 }
 
-func TestSchedulerRebuildBatchKeepsMixedAndDifferentKeysIndependent(t *testing.T) {
+func TestSchedulerRebuildBatchKeepsHistoricalAndDifferentKeysIndependent(t *testing.T) {
 	const groupID int64 = 202
 	buckets := []SchedulerBucket{
 		{GroupID: groupID, Platform: PlatformAnthropic, Mode: SchedulerModeSingle},
 		{GroupID: groupID, Platform: PlatformAnthropic, Mode: SchedulerModeForced},
-		{GroupID: groupID, Platform: PlatformAnthropic, Mode: SchedulerModeMixed},
+		// 已下线的 "mixed" 模式按历史模式处理：单独查询，不复用 single/forced 的结果。
+		{GroupID: groupID, Platform: PlatformAnthropic, Mode: "mixed"},
 		{GroupID: groupID + 1, Platform: PlatformAnthropic, Mode: SchedulerModeSingle},
-		{GroupID: groupID, Platform: PlatformGemini, Mode: SchedulerModeForced},
+		{GroupID: groupID, Platform: PlatformGrok, Mode: SchedulerModeForced},
 		{GroupID: 0, Platform: PlatformOpenAI, Mode: SchedulerModeSingle},
 		{GroupID: -1, Platform: PlatformOpenAI, Mode: SchedulerModeForced},
 	}
@@ -497,10 +499,10 @@ func TestSchedulerRebuildBatchKeepsMixedAndDifferentKeysIndependent(t *testing.T
 	svc := newBatchQueryTestService(cache, repo, config.RunModeStandard)
 
 	require.NoError(t, svc.rebuildBuckets(context.Background(), buckets, "test"))
-	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformAnthropic}))
-	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformAnthropic, mixed: true}))
+	require.Equal(t, 2, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformAnthropic}), "single/forced 共享一次查询，历史模式桶单独再查一次")
+	require.Zero(t, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformAnthropic, mixed: true}), "不再发起多平台混合查询")
 	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID + 1, platform: PlatformAnthropic}))
-	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformGemini}))
+	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformGrok}))
 	require.Equal(t, 2, repo.callCount(batchAccountQueryKey{platform: PlatformOpenAI}), "group0 and a negative historical group must not share")
 	for _, bucket := range buckets {
 		locks, attempts, version, _ := cache.bucketState(bucket)
@@ -521,16 +523,16 @@ func TestSchedulerRebuildBatchKeepsSimpleModeBucketGroupsIndependent(t *testing.
 	require.Equal(t, 2, repo.callCount(batchAccountQueryKey{platform: PlatformOpenAI}))
 }
 
-func TestSchedulerRebuildBatchDoesNotCacheMixedOrHistoricalQueries(t *testing.T) {
+func TestSchedulerRebuildBatchDoesNotCacheHistoricalQueries(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		bucket SchedulerBucket
 		key    batchAccountQueryKey
 	}{
 		{
-			name:   "mixed",
-			bucket: SchedulerBucket{GroupID: 204, Platform: PlatformAnthropic, Mode: SchedulerModeMixed},
-			key:    batchAccountQueryKey{groupID: 204, platform: PlatformAnthropic, mixed: true},
+			name:   "retired_mixed",
+			bucket: SchedulerBucket{GroupID: 204, Platform: PlatformAnthropic, Mode: "mixed"},
+			key:    batchAccountQueryKey{groupID: 204, platform: PlatformAnthropic},
 		},
 		{
 			name:   "historical",

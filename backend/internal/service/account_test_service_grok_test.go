@@ -23,7 +23,7 @@ import (
 )
 
 type grokAccountTestRateLimitRepo struct {
-	*mockAccountRepoForGemini
+	*mockAccountRepoForTest
 	rateLimitedCalls int
 	resetAt          time.Time
 }
@@ -108,7 +108,7 @@ func TestAccountTestService_TestAccountConnection_GrokUsesXAIResponses(t *testin
 			},
 		},
 	}
-	repo := &mockAccountRepoForGemini{
+	repo := &mockAccountRepoForTest{
 		accountsByID: map[int64]*Account{account.ID: account},
 	}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -163,7 +163,7 @@ func TestAccountTestService_TestAccountConnection_GrokDefaultsEmptyModelTo45(t *
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -205,8 +205,8 @@ func TestAccountTestService_Grok429PersistsRateLimitReset(t *testing.T) {
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	baseRepo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
-	repo := &grokAccountTestRateLimitRepo{mockAccountRepoForGemini: baseRepo}
+	baseRepo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &grokAccountTestRateLimitRepo{mockAccountRepoForTest: baseRepo}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusTooManyRequests,
 		Header:     http.Header{"Retry-After": []string{"45"}},
@@ -239,8 +239,8 @@ func TestAccountTestService_Grok429WithoutQuotaHeadersUsesFallback(t *testing.T)
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	baseRepo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
-	repo := &grokAccountTestRateLimitRepo{mockAccountRepoForGemini: baseRepo}
+	baseRepo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &grokAccountTestRateLimitRepo{mockAccountRepoForTest: baseRepo}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusTooManyRequests,
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"quota exhausted"}}`)),
@@ -272,7 +272,7 @@ func TestAccountTestService_GrokImageModelUsesImagesGenerations(t *testing.T) {
 			"base_url":      "https://cli-chat-proxy.grok.com/v1",
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -312,7 +312,7 @@ func TestAccountTestService_GrokWebSearchModeUsesResponsesWebSearchTool(t *testi
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Body: io.NopCloser(strings.NewReader(
@@ -351,7 +351,7 @@ func TestAccountTestService_GrokTTSIncludesLanguage(t *testing.T) {
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"audio/mpeg"}},
@@ -389,7 +389,7 @@ func TestAccountTestService_GrokImageEditUsesUploadedImage(t *testing.T) {
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -433,7 +433,7 @@ func TestAccountTestService_GrokImageEditRejectsTinySource(t *testing.T) {
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	svc := &AccountTestService{
 		accountRepo:       repo,
 		grokTokenProvider: NewGrokTokenProvider(repo, nil),
@@ -476,7 +476,7 @@ func TestAccountTestService_GrokExplicitImageModeDefaultsModel(t *testing.T) {
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -513,7 +513,7 @@ func TestAccountTestService_GrokVideoUpstreamErrorIsNotMaskedAsSuccess(t *testin
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusBadRequest,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -586,7 +586,7 @@ func TestAccountTestService_GrokRealtimeModeDialsWS(t *testing.T) {
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	dialer := &grokRealtimeTestDialer{
 		conn: &grokRealtimeTestConn{msg: []byte(`{"type":"session.created","session":{"id":"sess_1"}}`)},
 	}
@@ -622,7 +622,7 @@ func TestAccountTestService_GrokRealtimeModeDialFailure(t *testing.T) {
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		},
 	}
-	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	repo := &mockAccountRepoForTest{accountsByID: map[int64]*Account{account.ID: account}}
 	dialer := &grokRealtimeTestDialer{
 		status: 401,
 		err:    &openAIWSHandshakeError{Body: []byte(`{"error":"unauthorized"}`), Err: errors.New("websocket handshake failed")},

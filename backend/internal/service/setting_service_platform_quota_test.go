@@ -84,19 +84,25 @@ func TestGetDefaultPlatformQuotas_ReturnsAllowedPlatforms(t *testing.T) {
 	if v := got["openai"].MonthlyLimitUSD; v == nil || *v != zero {
 		t.Errorf("openai monthly want 0 (explicit disable), got %v", v)
 	}
-	// gemini 无配置 → weekly = nil
-	if v := got["gemini"].WeeklyLimitUSD; v != nil {
-		t.Errorf("gemini weekly want nil (not configured), got %v", *v)
+	// grok 无配置 → weekly = nil
+	if v := got["grok"].WeeklyLimitUSD; v != nil {
+		t.Errorf("grok weekly want nil (not configured), got %v", *v)
 	}
-	// antigravity 无配置 → daily = nil
-	if v := got["antigravity"].DailyLimitUSD; v != nil {
-		t.Errorf("antigravity daily want nil (not configured), got %v", *v)
+	// kimi 无配置 → daily = nil
+	if v := got["kimi"].DailyLimitUSD; v != nil {
+		t.Errorf("kimi daily want nil (not configured), got %v", *v)
+	}
+	// 已下线平台不得再被补齐进契约
+	for _, retired := range []string{"gemini", "antigravity"} {
+		if _, ok := got[retired]; ok {
+			t.Errorf("retired platform %q must not be present", retired)
+		}
 	}
 }
 
 func TestGetAuthSourcePlatformQuotas_OnlyConfiguredReturned(t *testing.T) {
 	source := "email"
-	// 新 JSON 格式：anthropic daily=5, monthly=100；openai weekly=0；gemini/antigravity 无配置
+	// 新 JSON 格式：anthropic daily=5, monthly=100；openai weekly=0；grok/kimi 无配置
 	svc := newSettingServiceForPlatformQuotaTest(map[string]string{
 		SettingKeyAuthSourcePlatformQuotas(source): `{"anthropic":{"daily":5,"monthly":100},"openai":{"weekly":0}}`,
 	})
@@ -126,12 +132,12 @@ func TestGetAuthSourcePlatformQuotas_OnlyConfiguredReturned(t *testing.T) {
 		t.Errorf("openai weekly want 0, got %v", oai.WeeklyLimitUSD)
 	}
 
-	// gemini / antigravity 无配置 → 不在结果中（override 语义）
-	if _, ok := got["gemini"]; ok {
-		t.Error("gemini not configured, should be absent from result")
+	// grok / kimi 无配置 → 不在结果中（override 语义）
+	if _, ok := got["grok"]; ok {
+		t.Error("grok not configured, should be absent from result")
 	}
-	if _, ok := got["antigravity"]; ok {
-		t.Error("antigravity not configured, should be absent from result")
+	if _, ok := got["kimi"]; ok {
+		t.Error("kimi not configured, should be absent from result")
 	}
 }
 

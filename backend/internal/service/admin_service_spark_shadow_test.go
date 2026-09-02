@@ -16,10 +16,10 @@ import (
 
 // sparkShadowRepoStub 是 AccountRepository 的内存测试桩，
 // 专为 CreateShadow 单元测试设计。
-// 嵌入 mockAccountRepoForGemini（由 gemini_multiplatform_test.go 提供所有 stub 方法），
+// 嵌入 mockAccountRepoForTest（由 gemini_multiplatform_test.go 提供所有 stub 方法），
 // 并覆盖测试所需的核心方法。
 type sparkShadowRepoStub struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	nextID   int64
 	accounts map[int64]*Account
 	groupsOf map[int64][]int64 // accountID → []groupIDs
@@ -30,7 +30,7 @@ func newSparkShadowRepoStub() *sparkShadowRepoStub {
 		nextID:   0,
 		accounts: make(map[int64]*Account),
 		groupsOf: make(map[int64][]int64),
-		mockAccountRepoForGemini: mockAccountRepoForGemini{
+		mockAccountRepoForTest: mockAccountRepoForTest{
 			accountsByID: make(map[int64]*Account),
 		},
 	}
@@ -41,7 +41,7 @@ func (s *sparkShadowRepoStub) Create(_ context.Context, account *Account) error 
 	account.ID = s.nextID
 	cp := *account
 	s.accounts[account.ID] = &cp
-	s.mockAccountRepoForGemini.accountsByID[account.ID] = &cp
+	s.mockAccountRepoForTest.accountsByID[account.ID] = &cp
 	return nil
 }
 
@@ -84,8 +84,8 @@ func (s *sparkShadowRepoStub) ListSchedulableByGroupID(_ context.Context, groupI
 	return result, nil
 }
 
-// ListWithFilters は mockAccountRepoForGemini にないが AccountRepository が要求する。
-// 親の mockAccountRepoForGemini の nil 実装が継承されるため、ここでは省略可。
+// ListWithFilters は mockAccountRepoForTest にないが AccountRepository が要求する。
+// 親の mockAccountRepoForTest の nil 実装が継承されるため、ここでは省略可。
 
 // ── 追加 stub（AccountRepository に必要な残りのメソッド）──────────────────
 func (s *sparkShadowRepoStub) ExistsByID(_ context.Context, id int64) (bool, error) {
@@ -98,13 +98,13 @@ func (s *sparkShadowRepoStub) Update(_ context.Context, account *Account) error 
 	}
 	cp := *account
 	s.accounts[account.ID] = &cp
-	s.mockAccountRepoForGemini.accountsByID[account.ID] = &cp
+	s.mockAccountRepoForTest.accountsByID[account.ID] = &cp
 	return nil
 }
 
 func (s *sparkShadowRepoStub) Delete(_ context.Context, id int64) error {
 	delete(s.accounts, id)
-	delete(s.mockAccountRepoForGemini.accountsByID, id)
+	delete(s.mockAccountRepoForTest.accountsByID, id)
 	return nil
 }
 func (s *sparkShadowRepoStub) BatchUpdateLastUsed(_ context.Context, _ map[int64]time.Time) error {

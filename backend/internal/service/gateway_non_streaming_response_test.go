@@ -197,7 +197,7 @@ func TestHandleNonStreamingResponse_NonJSON2xxMatchesModelScopedTempUnschedulabl
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
 	repo := &nonJSONTempUnschedAccountRepo{}
-	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	svc := &GatewayService{
 		cfg:              &config.Config{},
 		rateLimitService: rateLimitService,

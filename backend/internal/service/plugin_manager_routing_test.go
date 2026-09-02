@@ -45,7 +45,7 @@ func TestPluginManagerRoutingDoesNotTouchAPIKeyOrOtherProviders(t *testing.T) {
 	accounts := []*Account{
 		{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
 		{ID: 2, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
-		{ID: 3, Platform: PlatformGemini, Type: AccountTypeOAuth},
+		{ID: 3, Platform: PlatformGrok, Type: AccountTypeOAuth},
 	}
 	for _, account := range accounts {
 		response, handled, routeErr := manager.RoundTripOpenAIOAuth(context.Background(), request, "", account)

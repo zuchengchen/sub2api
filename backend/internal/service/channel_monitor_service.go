@@ -899,7 +899,7 @@ func applyMonitorUpdate(existing *ChannelMonitor, p ChannelMonitorUpdateParams) 
 		existing.CheckMode = defaultCheckMode(*p.CheckMode)
 	}
 	// provider 与 check_mode 任一变化后统一复核组合矩阵：provider-only 更新
-	// （如把 probe 监控的 provider 改成 antigravity）也不得落库非法组合，否则
+	// （如把 probe 监控改到一个不支持探活的 provider）也不得落库非法组合，否则
 	// 运行期恒 error。条件限定避免把存量非法行的 name/enabled-only 更新也判死
 	// （否则连改名/停用都无法操作）。
 	if p.Provider != nil || p.CheckMode != nil {

@@ -143,7 +143,7 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_CapacityShedReturnsRequestScope
 		},
 	}}
 	repo := &tempUnschedulableOpenAIAccountRepo{}
-	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	svc := &OpenAIGatewayService{
 		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
 			Enabled: false, AllowInsecureHTTP: true,
@@ -198,7 +198,7 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_CapacityShedReturnsRequestScope
 func TestFailoverOpenAIUpstreamHTTPError_NilContextSkipsTempUnschedulablePolicy(t *testing.T) {
 	repo := &tempUnschedulableOpenAIAccountRepo{}
 	svc := &OpenAIGatewayService{
-		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil),
 	}
 	account := &Account{
 		ID: 5099, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,

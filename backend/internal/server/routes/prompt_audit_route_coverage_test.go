@@ -21,7 +21,7 @@ import (
 func TestEveryGatewayPOSTRouteIsClassifiedForContentModerationCoverage(t *testing.T) {
 	routeSource, err := os.ReadFile("gateway.go")
 	require.NoError(t, err)
-	pattern := regexp.MustCompile(`(?:gateway|gemini|r|codexDirect|antigravityV1|antigravityV1Beta)\.POST\("([^"]+)"`)
+	pattern := regexp.MustCompile(`(?:gateway|r|codexDirect)\.POST\("([^"]+)"`)
 	matches := pattern.FindAllStringSubmatch(string(routeSource), -1)
 	actual := map[string]struct{}{}
 	for _, match := range matches {
@@ -45,16 +45,14 @@ func TestEveryGatewayPOSTRouteIsClassifiedForContentModerationCoverage(t *testin
 		"/videos/generations":       {"grok_media.go"},
 		"/videos/edits":             {"grok_media.go"},
 		"/videos/extensions":        {"grok_media.go"},
-		"/models/*modelAction":      {"gemini_v1beta_handler.go"},
 		"/tts":                      {"grok_audio.go"},
 		"/web_search":               {"gateway_web_search.go"},
 		"/x_search":                 {"gateway_web_search.go"},
 	}
 	excluded := map[string]string{
-		"/messages/count_tokens":     "tokenization only; it does not execute a model request",
-		"/images/batches/:id/cancel": "control-plane cancellation with no user prompt",
-		"/stt":                       "speech transcription is not a text-generation prompt",
-		"/custom-voices":             "voice profile management has no model prompt",
+		"/messages/count_tokens": "tokenization only; it does not execute a model request",
+		"/stt":                   "speech transcription is not a text-generation prompt",
+		"/custom-voices":         "voice profile management has no model prompt",
 	}
 
 	unclassified := make([]string, 0)

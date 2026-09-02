@@ -54,7 +54,7 @@ func TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 		userRepo,
 		map[string]string{
 			SettingKeyRegistrationEnabled:   "true",
-			SettingKeyDefaultPlatformQuotas: `{"gemini": {"monthly": 100.0}}`,
+			SettingKeyDefaultPlatformQuotas: `{"grok": {"monthly": 100.0}, "gemini": {"monthly": 5.0}}`,
 		},
 		quotaRepo,
 	)
@@ -74,14 +74,14 @@ func TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 	require.Len(t, quotaRepo.bulkInsertCalls, 1, "createEmailOAuthUser must snapshot platform quotas via BulkInsertInitial")
 
 	records := quotaRepo.bulkInsertCalls[0]
-	var geminiRecord *UserPlatformQuotaRecord
+	var grokRecord *UserPlatformQuotaRecord
 	for i := range records {
-		if records[i].Platform == "gemini" {
-			geminiRecord = &records[i]
-			break
+		require.NotEqual(t, "gemini", records[i].Platform, "retired platform must not be snapshotted")
+		if records[i].Platform == PlatformGrok {
+			grokRecord = &records[i]
 		}
 	}
-	require.NotNil(t, geminiRecord, "expected gemini platform record")
-	require.NotNil(t, geminiRecord.MonthlyLimitUSD)
-	require.InDelta(t, 100.0, *geminiRecord.MonthlyLimitUSD, 0.0001)
+	require.NotNil(t, grokRecord, "expected grok platform record")
+	require.NotNil(t, grokRecord.MonthlyLimitUSD)
+	require.InDelta(t, 100.0, *grokRecord.MonthlyLimitUSD, 0.0001)
 }

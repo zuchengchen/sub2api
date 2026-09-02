@@ -1139,11 +1139,6 @@ export default {
         unsupportedMessage: 'This Sub2API server cannot generate the required Live attestation. Live will not work even if enabled. Continue anyway?',
         enableAnyway: 'Enable anyway'
       },
-      invalidRequestFallback: {
-        title: 'Invalid Request Fallback Group',
-        hint: 'Triggered only when upstream explicitly returns prompt too long. Leave empty to disable fallback.',
-        noFallback: 'No Fallback'
-      },
       copyAccounts: {
         title: 'Copy Accounts from Groups',
         tooltip: 'Select one or more groups of the same platform. After creation, all accounts from these groups will be automatically bound to the new group (deduplicated).',
@@ -1171,12 +1166,6 @@ export default {
         noRulesHint: 'Add routing rules to route specific model requests to designated accounts',
         searchAccountPlaceholder: 'Search accounts...',
         accountsHint: 'Select accounts to prioritize for this model pattern'
-      },
-      mcpXml: {
-        title: 'MCP XML Protocol Injection',
-        tooltip: 'When enabled, if the request contains MCP tools, an XML format call protocol prompt will be injected into the system prompt. Disable this to avoid interference with certain clients.',
-        enabled: 'Enabled',
-        disabled: 'Disabled'
       },
       claudeMaxSimulation: {
         title: 'Claude Max Usage Simulation',

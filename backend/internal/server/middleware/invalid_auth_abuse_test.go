@@ -59,40 +59,6 @@ func TestAPIKeyAuthInvalidAbuseReturns429BeforeRepository(t *testing.T) {
 	require.Equal(t, 1, repoCalls, "rate-limited request must not reach the repository")
 }
 
-func TestGoogleAPIKeyAuthInvalidAbuseReturnsProtocol429(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	repoCalls := 0
-	repo := fakeAPIKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) {
-		repoCalls++
-		return nil, service.ErrAPIKeyNotFound
-	}}
-	cfg := invalidAuthAbuseTestConfig(2)
-	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
-	r := gin.New()
-	var reason IngressRejectReason
-	r.Use(func(c *gin.Context) { c.Next(); reason, _ = GetIngressRejectReason(c) })
-	r.Use(APIKeyAuthGoogle(svc, cfg))
-	r.POST("/v1beta/models/test:generateContent", func(c *gin.Context) { c.Status(http.StatusOK) })
-	for _, key := range []string{"random-1", "random-2"} {
-		w := httptest.NewRecorder()
-		req := httpRequest(t, "/v1beta/models/test:generateContent", "", key)
-		req.Header.Del("x-api-key")
-		req.Header.Set("x-goog-api-key", key)
-		r.ServeHTTP(w, req)
-		require.Equal(t, http.StatusUnauthorized, w.Code)
-	}
-	w := httptest.NewRecorder()
-	req := httpRequest(t, "/v1beta/models/test:generateContent", "", "random-3")
-	req.Header.Del("x-api-key")
-	req.Header.Set("x-goog-api-key", "random-3")
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusTooManyRequests, w.Code)
-	require.Equal(t, "60", w.Header().Get("Retry-After"))
-	require.Contains(t, w.Body.String(), "RESOURCE_EXHAUSTED")
-	require.Equal(t, IngressRejectInvalidAuthRateLimited, reason)
-	require.Equal(t, 2, repoCalls)
-}
-
 func TestInvalidAuthAbuseDoesNotCountValidOrOperationalFailures(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	user := &service.User{ID: 1, Status: service.StatusActive, Role: service.RoleUser, Balance: 1}

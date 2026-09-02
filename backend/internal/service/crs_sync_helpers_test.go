@@ -175,7 +175,6 @@ func TestReconcileCRSUpstreamBillingProbeExtra(t *testing.T) {
 		platform string
 	}{
 		{name: "anthropic api key", platform: PlatformAnthropic},
-		{name: "gemini api key", platform: PlatformGemini},
 	} {
 		t.Run(target.name+" keeps enabled and clears snapshot", func(t *testing.T) {
 			extra := mergeMap(existing.Extra, remote)
@@ -193,7 +192,6 @@ func TestReconcileCRSUpstreamBillingProbeExtra(t *testing.T) {
 	}{
 		{name: "anthropic oauth", platform: PlatformAnthropic, typeName: AccountTypeOAuth},
 		{name: "openai oauth", platform: PlatformOpenAI, typeName: AccountTypeOAuth},
-		{name: "gemini oauth", platform: PlatformGemini, typeName: AccountTypeOAuth},
 	} {
 		t.Run(target.name+" removes inapplicable state", func(t *testing.T) {
 			extra := mergeMap(existing.Extra, remote)

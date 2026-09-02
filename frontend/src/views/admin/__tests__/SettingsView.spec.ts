@@ -452,8 +452,6 @@ const baseSettingsResponse = {
   fallback_model_openai: "",
   grok_default_text_model: "grok-4.5",
   grok_cross_client_model_map_enabled: false,
-  enable_identity_patch: false,
-  identity_patch_prompt: "",
   ops_monitoring_enabled: false,
   ops_realtime_monitoring_enabled: false,
   ops_query_mode_default: "auto",

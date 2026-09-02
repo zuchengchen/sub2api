@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
+// 历史上还存在 "mixed" 模式（Antigravity 账号混入 Anthropic/Gemini 分组调度）。
+// 该平台已下线，不再生成 mixed 桶；注册表里的存量 mixed 桶按历史模式处理。
 const (
 	SchedulerModeSingle = "single"
-	SchedulerModeMixed  = "mixed"
 	SchedulerModeForced = "forced"
 )
 

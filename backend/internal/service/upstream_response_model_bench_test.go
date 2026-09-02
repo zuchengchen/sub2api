@@ -12,7 +12,6 @@ var (
 
 	upstreamResponseModelBenchmarkTerminal = []byte(`{"type":"response.completed","response":{"id":"resp_123","model":"gpt-5.5-2026-04-23"},"usage":{"input_tokens":128,"output_tokens":64}}`)
 	upstreamResponseModelBenchmarkDelta    = []byte(`{"type":"response.output_text.delta","delta":"hello"}`)
-	upstreamResponseModelBenchmarkWrapper  = []byte(`{"response":{"response":{"modelVersion":"gemini-3-pro","candidates":[]}}}`)
 )
 
 func BenchmarkUpstreamResponseModelOpenAI(b *testing.B) {
@@ -42,26 +41,6 @@ func BenchmarkUpstreamResponseModelOpenAI(b *testing.B) {
 	}
 }
 
-func BenchmarkUpstreamResponseModelAntigravityWrapper(b *testing.B) {
-	b.Run("legacy", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			upstreamResponseModelBenchmarkSink = benchmarkLegacyWrappedGeminiModel(upstreamResponseModelBenchmarkWrapper)
-		}
-	})
-	b.Run("optimized", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			upstreamResponseModelBenchmarkSink = firstValidTrimmedGJSONString(
-				upstreamResponseModelBenchmarkWrapper,
-				"modelVersion",
-				"response.modelVersion",
-				"response.response.modelVersion",
-			)
-		}
-	})
-}
-
 func benchmarkLegacyOpenAIModel(payload []byte) string {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return ""
@@ -69,19 +48,6 @@ func benchmarkLegacyOpenAIModel(payload []byte) string {
 	return benchmarkFirstTrimmedGJSONModel(
 		gjson.GetBytes(payload, "response.model"),
 		gjson.GetBytes(payload, "model"),
-	)
-}
-
-func benchmarkLegacyWrappedGeminiModel(payload []byte) string {
-	if inner := gjson.GetBytes(payload, "response"); inner.Exists() {
-		payload = []byte(inner.Raw)
-	}
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return ""
-	}
-	return benchmarkFirstTrimmedGJSONModel(
-		gjson.GetBytes(payload, "modelVersion"),
-		gjson.GetBytes(payload, "response.modelVersion"),
 	)
 }
 

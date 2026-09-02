@@ -179,7 +179,6 @@ type SystemSettings struct {
 	FallbackModelAnthropic string `json:"fallback_model_anthropic"`
 	FallbackModelOpenAI    string `json:"fallback_model_openai"`
 
-
 	// Ops monitoring (vNext)
 	OpsMonitoringEnabled         bool   `json:"ops_monitoring_enabled"`
 	OpsRealtimeMonitoringEnabled bool   `json:"ops_realtime_monitoring_enabled"`

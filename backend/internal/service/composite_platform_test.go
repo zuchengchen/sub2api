@@ -164,9 +164,9 @@ func TestDetectModelPlatform(t *testing.T) {
 		{name: "gpt", model: "gpt-5.1", platform: PlatformOpenAI, ok: true},
 		{name: "o series", model: "o3-mini", platform: PlatformOpenAI, ok: true},
 		{name: "embedding", model: "text-embedding-3-large", platform: PlatformOpenAI, ok: true},
-		{name: "gemini", model: "gemini-3-pro", platform: PlatformGemini, ok: true},
-		{name: "gemini models prefix", model: "models/gemini-2.5-flash", platform: PlatformGemini, ok: true},
-		{name: "learnlm", model: "learnlm-2.0-flash-experimental", platform: PlatformGemini, ok: true},
+		{name: "gemini no longer detected", model: "gemini-3-pro", ok: false},
+		{name: "gemini models prefix no longer detected", model: "models/gemini-2.5-flash", ok: false},
+		{name: "learnlm no longer detected", model: "learnlm-2.0-flash-experimental", ok: false},
 		{name: "grok", model: "grok-4", platform: PlatformGrok, ok: true},
 		{name: "xai prefix", model: "xai/grok-4", platform: PlatformGrok, ok: true},
 		{name: "kimi", model: "kimi-k2-thinking", platform: PlatformKimi, ok: true},
@@ -193,12 +193,12 @@ func TestQuotaPlatformCompositeUsesResolvedOrForceOnly(t *testing.T) {
 	apiKey := &APIKey{Group: &Group{Platform: PlatformComposite}}
 
 	require.Equal(t, "", QuotaPlatform(context.Background(), apiKey))
-	require.Equal(t, PlatformGemini, QuotaPlatform(WithResolvedTargetPlatform(context.Background(), PlatformGemini), apiKey))
-	require.Equal(t, PlatformAntigravity, QuotaPlatform(context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity), apiKey))
+	require.Equal(t, PlatformOpenAI, QuotaPlatform(WithResolvedTargetPlatform(context.Background(), PlatformOpenAI), apiKey))
+	require.Equal(t, PlatformGrok, QuotaPlatform(context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformGrok), apiKey))
 
 	ctx := WithResolvedTargetPlatform(context.Background(), PlatformAnthropic)
-	ctx = context.WithValue(ctx, ctxkey.ForcePlatform, PlatformAntigravity)
-	require.Equal(t, PlatformAntigravity, QuotaPlatform(ctx, apiKey))
+	ctx = context.WithValue(ctx, ctxkey.ForcePlatform, PlatformGrok)
+	require.Equal(t, PlatformGrok, QuotaPlatform(ctx, apiKey))
 }
 
 func TestCompositeGroupSchedulerHasAllCanonicalPlatformBuckets(t *testing.T) {
@@ -211,7 +211,7 @@ func TestCompositeGroupSchedulerHasAllCanonicalPlatformBuckets(t *testing.T) {
 		platforms = append(platforms, platform)
 	}
 	require.ElementsMatch(t,
-		[]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek},
+		[]string{PlatformAnthropic, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek},
 		platforms,
 	)
 }

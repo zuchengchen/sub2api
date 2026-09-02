@@ -117,6 +117,9 @@ func (c *stubConcurrencyCacheForTest) DecrementAccountWaitCount(_ context.Contex
 func (c *stubConcurrencyCacheForTest) GetAccountWaitingCount(_ context.Context, _ int64) (int, error) {
 	return c.waitCount, c.waitCountErr
 }
+func (c *stubConcurrencyCacheForTest) SumActiveAccountWaitingCounts(_ context.Context) (int, error) {
+	return c.waitCount, c.waitCountErr
+}
 func (c *stubConcurrencyCacheForTest) AcquireUserSlot(_ context.Context, _ int64, _ int, _ string) (bool, error) {
 	return c.acquireResult, c.acquireErr
 }

@@ -408,7 +408,7 @@ func TestUpdateAccountRateSyncControlsProbeAndManualMode(t *testing.T) {
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
 		accountID: {
 			ID:       accountID,
-			Platform: PlatformGemini,
+			Platform: PlatformGrok,
 			Type:     AccountTypeAPIKey,
 			Status:   StatusActive,
 			Extra:    map[string]any{},

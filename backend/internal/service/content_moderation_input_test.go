@@ -94,47 +94,6 @@ func TestExtractContentModerationInput_OpenAIChatMultiTurnExtractsLatestUser(t *
 	require.Equal(t, "Q2", input.Text)
 }
 
-func TestExtractContentModerationInput_GeminiAgentToolLoopSkipsAudit(t *testing.T) {
-	body := []byte(`{
-		"contents": [
-			{"role":"user","parts":[{"text":"查询天气"}]},
-			{"role":"model","parts":[{"functionCall":{"name":"weather","args":{}}}]},
-			{"role":"user","parts":[{"functionResponse":{"name":"weather","response":{"temp":25}}}]}
-		]
-	}`)
-
-	input := ExtractContentModerationInput(ContentModerationProtocolGemini, body)
-
-	require.Empty(t, input.Text)
-	require.Empty(t, input.Images)
-}
-
-func TestExtractContentModerationInput_GeminiFirstTurnExtractsUser(t *testing.T) {
-	body := []byte(`{
-		"contents": [
-			{"role":"user","parts":[{"text":"你好"}]}
-		]
-	}`)
-
-	input := ExtractContentModerationInput(ContentModerationProtocolGemini, body)
-
-	require.Equal(t, "你好", input.Text)
-}
-
-func TestExtractContentModerationInput_GeminiMultiTurnExtractsLatestUser(t *testing.T) {
-	body := []byte(`{
-		"contents": [
-			{"role":"user","parts":[{"text":"Q1"}]},
-			{"role":"model","parts":[{"text":"A1"}]},
-			{"role":"user","parts":[{"text":"Q2"}]}
-		]
-	}`)
-
-	input := ExtractContentModerationInput(ContentModerationProtocolGemini, body)
-
-	require.Equal(t, "Q2", input.Text)
-}
-
 func TestExtractContentModerationInput_ResponsesAgentToolLoopSkipsAudit(t *testing.T) {
 	body := []byte(`{
 		"input":[

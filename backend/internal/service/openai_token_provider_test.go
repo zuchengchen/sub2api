@@ -369,7 +369,7 @@ func TestOpenAITokenProvider_WrongPlatform(t *testing.T) {
 	provider := NewOpenAITokenProvider(nil, nil, nil)
 	account := &Account{
 		ID:       104,
-		Platform: PlatformGemini,
+		Platform: PlatformAnthropic,
 		Type:     AccountTypeOAuth,
 	}
 

@@ -59,9 +59,9 @@ func TestQuotaPlatform(t *testing.T) {
 	})
 
 	t.Run("force platform overrides group platform", func(t *testing.T) {
-		ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity)
-		if got := QuotaPlatform(ctx, apiKey); got != PlatformAntigravity {
-			t.Errorf("QuotaPlatform with force = %q, want %q", got, PlatformAntigravity)
+		ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformGrok)
+		if got := QuotaPlatform(ctx, apiKey); got != PlatformGrok {
+			t.Errorf("QuotaPlatform with force = %q, want %q", got, PlatformGrok)
 		}
 	})
 
@@ -73,9 +73,9 @@ func TestQuotaPlatform(t *testing.T) {
 	})
 
 	t.Run("nil api key with force platform returns force platform", func(t *testing.T) {
-		ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity)
-		if got := QuotaPlatform(ctx, nil); got != PlatformAntigravity {
-			t.Errorf("QuotaPlatform(nil) with force = %q, want %q", got, PlatformAntigravity)
+		ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformGrok)
+		if got := QuotaPlatform(ctx, nil); got != PlatformGrok {
+			t.Errorf("QuotaPlatform(nil) with force = %q, want %q", got, PlatformGrok)
 		}
 	})
 }

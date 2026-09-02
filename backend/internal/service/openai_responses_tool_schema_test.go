@@ -251,8 +251,6 @@ func TestOpenAIResponsesToolSchemaCapabilities_PlatformBoundary(t *testing.T) {
 		{PlatformZhipu, true, false},
 		{PlatformDeepseek, true, false},
 		{PlatformGrok, true, false},
-		{PlatformGemini, false, false},
-		{PlatformAntigravity, false, false},
 		{PlatformComposite, false, false},
 		{"", false, false},
 	}
@@ -288,7 +286,7 @@ func TestSanitizeOpenAIResponsesToolSchemasForPlatform_ReplayBoundary(t *testing
 	require.Equal(t, "object", gjson.GetBytes(openAI, "tools.0.parameters.type").String())
 	require.False(t, gjson.GetBytes(openAI, "tools.0.parameters.properties.query.pattern").Exists())
 
-	unsupported, changed, err := sanitizeOpenAIResponsesToolSchemasForPlatform(body, PlatformGemini)
+	unsupported, changed, err := sanitizeOpenAIResponsesToolSchemasForPlatform(body, PlatformComposite)
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.Equal(t, string(body), string(unsupported))
