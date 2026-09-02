@@ -211,8 +211,6 @@ describe('admin UsersView', () => {
         'concurrency',
         'usage_anthropic',
         'usage_openai',
-        'usage_gemini',
-        'usage_antigravity',
         'balance_platform_quota'
       ])
     )

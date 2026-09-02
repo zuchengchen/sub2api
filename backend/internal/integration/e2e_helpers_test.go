@@ -26,8 +26,7 @@ func skipIfNoRealAPI(t *testing.T) {
 		return // Mock 模式下不跳过
 	}
 	claudeKey := strings.TrimSpace(os.Getenv(claudeAPIKeyEnv))
-	geminiKey := strings.TrimSpace(os.Getenv(geminiAPIKeyEnv))
-	if claudeKey == "" && geminiKey == "" {
+	if claudeKey == "" {
 		t.Skip("未设置 API Key 且未启用 Mock 模式，跳过测试")
 	}
 }

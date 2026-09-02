@@ -404,7 +404,7 @@ func TestOllamaCloudUsageEligibilityExtendsToCNOpenAICompatPlatforms(t *testing.
 	kimi := create("ollama-cn-kimi", service.PlatformKimi, "https://ollama.com")
 	zhipu := create("ollama-cn-zhipu", service.PlatformZhipu, "HTTPS://WWW.OLLAMA.COM:443/v1")
 	deepseek := create("ollama-cn-deepseek", service.PlatformDeepseek, "https://ollama.com/v1")
-	gemini := create("ollama-cn-gemini", service.PlatformGemini, "https://ollama.com")
+	gemini := create("ollama-cn-grok", service.PlatformGrok, "https://ollama.com")
 
 	require.NoError(t, repo.SaveOllamaCloudUsageSession(ctx, kimi, "cipher:cn-shared", true))
 	for _, id := range []int64{kimi.ID, zhipu.ID, deepseek.ID} {

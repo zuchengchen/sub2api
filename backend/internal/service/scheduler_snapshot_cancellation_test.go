@@ -54,11 +54,10 @@ func TestSchedulerSnapshotListStopsAfterRequestCancellation(t *testing.T) {
 	repo := &schedulerCancellationAccountRepo{}
 	svc := NewSchedulerSnapshotService(cache, nil, repo, nil, nil)
 
-	accounts, useMixed, err := svc.ListSchedulableAccounts(ctx, nil, PlatformOpenAI, false)
+	accounts, err := svc.ListSchedulableAccounts(ctx, nil, PlatformOpenAI, false)
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, accounts)
-	require.False(t, useMixed)
 	require.Zero(t, cache.tokenCaptures, "canceled requests must not capture a cache publish token")
 	require.Zero(t, repo.listCalls, "canceled requests must not fall back to the database")
 }

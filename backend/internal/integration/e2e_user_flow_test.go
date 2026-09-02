@@ -189,7 +189,7 @@ func TestAPIKeyLifecycle(t *testing.T) {
 		return
 	}
 
-	// 步骤 2: 使用 API Key 调用网关（需要 Claude 或 Gemini 可用）
+	// 步骤 2: 使用 API Key 调用网关（需要 Claude 可用）
 	t.Run("使用API_Key调用网关", func(t *testing.T) {
 		// 尝试调用 models 列表（最轻量的 API 调用）
 		resp, err := doRequest(t, "GET", "/v1/models", nil, apiKey)

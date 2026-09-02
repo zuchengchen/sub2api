@@ -203,8 +203,6 @@ const normalizedPlatforms = computed(() => {
 const upstreamSyncPlatforms = new Set([
   'anthropic',
   'openai',
-  'gemini',
-  'antigravity',
   'grok',
   'kimi',
   'zhipu',

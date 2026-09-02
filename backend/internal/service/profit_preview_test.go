@@ -123,9 +123,7 @@ func TestPreviewProfitAdmissionSupportsFivePlatforms(t *testing.T) {
 	for i, platform := range []string{
 		PlatformOpenAI,
 		PlatformAnthropic,
-		PlatformGemini,
 		PlatformGrok,
-		PlatformAntigravity,
 	} {
 		group := profitControlTestGroup(int64(100+i), 0, 0)
 		group.Platform = platform

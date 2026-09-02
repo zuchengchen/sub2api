@@ -376,8 +376,6 @@ func TestUpstreamBillingProbeSyncsResolvedRateForAllAPIKeyPlatforms(t *testing.T
 	for _, platform := range []string{
 		PlatformOpenAI,
 		PlatformAnthropic,
-		PlatformGemini,
-		PlatformAntigravity,
 		PlatformGrok,
 	} {
 		t.Run(platform, func(t *testing.T) {

@@ -106,7 +106,7 @@ func TestResponsesStreamingFromNativeAnthropic_ClientDisconnectDrainsUsage(t *te
 func TestHandle403_CNProviderHTMLBodySkipsAccountPenalty(t *testing.T) {
 	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
 		repo := &rateLimitAccountRepoStub{}
-		service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+		service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 		account := &Account{ID: 401, Platform: platform, Type: AccountTypeAPIKey}
 
 		shouldDisable := service.HandleUpstreamError(
@@ -126,7 +126,7 @@ func TestHandle403_CNProviderHTMLBodySkipsAccountPenalty(t *testing.T) {
 func TestHandle403_CNProviderStructured403TempUnschedulableFirstHit(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{1}}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	account := &Account{ID: 402, Platform: PlatformKimi, Type: AccountTypeAPIKey}
 
@@ -171,7 +171,7 @@ func TestHandle403_OtherCNProviderWithKimiConcurrencyMessageUsesNormalPolicy(t *
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{openAI403DisableThreshold}}
 	blocker := &runtimeBlockRecorder{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	service.SetAccountRuntimeBlocker(blocker)
 	account := &Account{ID: 405, Platform: PlatformZhipu, Type: AccountTypeAPIKey}
@@ -192,7 +192,7 @@ func TestHandle403_CNProviderConcurrencyLimitAlwaysUsesTemporaryCooldown(t *test
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{openAI403DisableThreshold}}
 	blocker := &runtimeBlockRecorder{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	service.SetAccountRuntimeBlocker(blocker)
 	account := &Account{ID: 403, Platform: PlatformKimi, Type: AccountTypeAPIKey}
@@ -216,7 +216,7 @@ func TestHandle403_KimiConcurrencyLimitRepositoryFailureKeepsRuntimeBlock(t *tes
 	repo := &rateLimitAccountRepoStub{tempErr: errors.New("repository unavailable")}
 	counter := &openAI403CounterCacheStub{counts: []int64{openAI403DisableThreshold}}
 	blocker := &runtimeBlockRecorder{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	service.SetAccountRuntimeBlocker(blocker)
 	account := &Account{ID: 406, Platform: PlatformKimi, Type: AccountTypeAPIKey}
@@ -239,7 +239,7 @@ func TestHandle403_KimiConcurrencyLimitRepositoryFailureKeepsRuntimeBlock(t *tes
 func TestHandle403_CNProviderNearMatchRetainsNormalPermanentErrorPolicy(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{openAI403DisableThreshold}}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	account := &Account{ID: 404, Platform: PlatformKimi, Type: AccountTypeAPIKey}
 

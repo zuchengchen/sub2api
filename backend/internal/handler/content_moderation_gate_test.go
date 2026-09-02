@@ -183,30 +183,6 @@ func TestContentModerationReviewUnavailableResponsesAreRetryable(t *testing.T) {
 		require.Equal(t, riskControlReviewUnavailableErrorCode, contentModerationWSCloseReason(decision))
 		require.Equal(t, coderws.StatusTryAgainLater, contentModerationWSCloseStatus(decision))
 	})
-
-	t.Run("google", func(t *testing.T) {
-		recorder := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(recorder)
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/test:generateContent", nil)
-		googleContentModerationError(c, decision)
-
-		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-		require.Equal(t, "1", recorder.Header().Get("Retry-After"))
-		var payload struct {
-			Error struct {
-				Code    int    `json:"code"`
-				Status  string `json:"status"`
-				Details []struct {
-					Reason string `json:"reason"`
-				} `json:"details"`
-			} `json:"error"`
-		}
-		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
-		require.Equal(t, http.StatusServiceUnavailable, payload.Error.Code)
-		require.Equal(t, "UNAVAILABLE", payload.Error.Status)
-		require.Len(t, payload.Error.Details, 1)
-		require.Equal(t, riskControlReviewUnavailableErrorCode, payload.Error.Details[0].Reason)
-	})
 }
 
 // Ported from upstream's websocket security-audit logging fix: dedupe-cache

@@ -27,7 +27,6 @@ type reqClientOptions struct {
 // 原实现在每次 OAuth 刷新时都创建新的 req.Client：
 // 1. claude_oauth_service.go: 每次刷新创建新客户端
 // 2. openai_oauth_service.go: 每次刷新创建新客户端
-// 3. gemini_oauth_client.go: 每次刷新创建新客户端
 //
 // 新实现使用 sync.Map 缓存客户端：
 // 1. 相同配置（代理+超时+模拟设置）复用同一客户端

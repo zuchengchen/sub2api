@@ -15,7 +15,7 @@ import (
 func setupAccountMixedChannelRouter(adminSvc *stubAdminService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	accountHandler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	accountHandler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router.POST("/api/v1/admin/accounts/check-mixed-channel", accountHandler.CheckMixedChannel)
 	router.POST("/api/v1/admin/accounts", accountHandler.Create)
 	router.PUT("/api/v1/admin/accounts/:id", accountHandler.Update)
@@ -28,7 +28,7 @@ func TestAccountHandlerCheckMixedChannelNoRisk(t *testing.T) {
 	router := setupAccountMixedChannelRouter(adminSvc)
 
 	body, _ := json.Marshal(map[string]any{
-		"platform":  "antigravity",
+		"platform":  "grok",
 		"group_ids": []int64{27},
 	})
 	rec := httptest.NewRecorder()
@@ -44,8 +44,40 @@ func TestAccountHandlerCheckMixedChannelNoRisk(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, false, data["has_risk"])
 	require.Equal(t, int64(0), adminSvc.lastMixedCheck.accountID)
-	require.Equal(t, "antigravity", adminSvc.lastMixedCheck.platform)
+	require.Equal(t, "grok", adminSvc.lastMixedCheck.platform)
 	require.Equal(t, []int64{27}, adminSvc.lastMixedCheck.groupIDs)
+}
+
+func TestAccountHandlerRejectsRetiredPlatforms(t *testing.T) {
+	for _, platform := range []string{"gemini", "antigravity"} {
+		t.Run(platform, func(t *testing.T) {
+			adminSvc := newStubAdminService()
+			router := setupAccountMixedChannelRouter(adminSvc)
+
+			checkBody, _ := json.Marshal(map[string]any{
+				"platform":  platform,
+				"group_ids": []int64{27},
+			})
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/check-mixed-channel", bytes.NewReader(checkBody))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.Equal(t, "", adminSvc.lastMixedCheck.platform, "已下线平台不应到达 service 层")
+
+			createBody, _ := json.Marshal(map[string]any{
+				"name":        "legacy-account",
+				"platform":    platform,
+				"type":        "oauth",
+				"credentials": map[string]any{"refresh_token": "rt"},
+			})
+			rec = httptest.NewRecorder()
+			req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts", bytes.NewReader(createBody))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
 }
 
 func TestAccountHandlerCheckMixedChannelWithRisk(t *testing.T) {
@@ -53,13 +85,13 @@ func TestAccountHandlerCheckMixedChannelWithRisk(t *testing.T) {
 	adminSvc.checkMixedErr = &service.MixedChannelError{
 		GroupID:         27,
 		GroupName:       "claude-max",
-		CurrentPlatform: "Antigravity",
+		CurrentPlatform: "Grok",
 		OtherPlatform:   "Anthropic",
 	}
 	router := setupAccountMixedChannelRouter(adminSvc)
 
 	body, _ := json.Marshal(map[string]any{
-		"platform":   "antigravity",
+		"platform":   "grok",
 		"group_ids":  []int64{27},
 		"account_id": 99,
 	})
@@ -80,7 +112,7 @@ func TestAccountHandlerCheckMixedChannelWithRisk(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, float64(27), details["group_id"])
 	require.Equal(t, "claude-max", details["group_name"])
-	require.Equal(t, "Antigravity", details["current_platform"])
+	require.Equal(t, "Grok", details["current_platform"])
 	require.Equal(t, "Anthropic", details["other_platform"])
 	require.Equal(t, int64(99), adminSvc.lastMixedCheck.accountID)
 }
@@ -90,14 +122,14 @@ func TestAccountHandlerCreateMixedChannelConflictSimplifiedResponse(t *testing.T
 	adminSvc.createAccountErr = &service.MixedChannelError{
 		GroupID:         27,
 		GroupName:       "claude-max",
-		CurrentPlatform: "Antigravity",
+		CurrentPlatform: "Grok",
 		OtherPlatform:   "Anthropic",
 	}
 	router := setupAccountMixedChannelRouter(adminSvc)
 
 	body, _ := json.Marshal(map[string]any{
-		"name":        "ag-oauth-1",
-		"platform":    "antigravity",
+		"name":        "grok-oauth-1",
+		"platform":    "grok",
 		"type":        "oauth",
 		"credentials": map[string]any{"refresh_token": "rt"},
 		"group_ids":   []int64{27},
@@ -123,7 +155,7 @@ func TestAccountHandlerUpdateMixedChannelConflictSimplifiedResponse(t *testing.T
 	adminSvc.updateAccountErr = &service.MixedChannelError{
 		GroupID:         27,
 		GroupName:       "claude-max",
-		CurrentPlatform: "Antigravity",
+		CurrentPlatform: "Grok",
 		OtherPlatform:   "Anthropic",
 	}
 	router := setupAccountMixedChannelRouter(adminSvc)
@@ -151,7 +183,7 @@ func TestAccountHandlerUpdateMapsUpstreamBillingRateSyncSettings(t *testing.T) {
 	adminSvc := newStubAdminService()
 	router := setupAccountMixedChannelRouter(adminSvc)
 	body, _ := json.Marshal(map[string]any{
-		"name":                               "gemini-key",
+		"name":                               "grok-key",
 		"upstream_billing_probe_enabled":     true,
 		"upstream_billing_rate_sync_enabled": true,
 	})
@@ -174,7 +206,7 @@ func TestAccountHandlerBulkUpdateMixedChannelConflict(t *testing.T) {
 	adminSvc.bulkUpdateAccountErr = &service.MixedChannelError{
 		GroupID:         27,
 		GroupName:       "claude-max",
-		CurrentPlatform: "Antigravity",
+		CurrentPlatform: "Grok",
 		OtherPlatform:   "Anthropic",
 	}
 	router := setupAccountMixedChannelRouter(adminSvc)

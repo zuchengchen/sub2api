@@ -20,7 +20,7 @@ func TestRateLimitService_ApplyAccountSchedulingThreshold_SetsTempUnschedulable(
 	settingsRepo.data[SettingKeyAccountSchedulingThresholds] = `{"openai":80}`
 
 	accountRepo := &rateLimitAccountRepoStub{}
-	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	rl.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 
 	until := time.Now().UTC().Add(6 * time.Hour)
@@ -60,7 +60,7 @@ func TestRateLimitService_ApplyAccountSchedulingThreshold_UsesAccountOverrideInR
 	settingsRepo.data[SettingKeyAccountSchedulingThresholds] = `{"openai":90}`
 
 	accountRepo := &rateLimitAccountRepoStub{}
-	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	rl.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 
 	until := time.Now().UTC().Add(6 * time.Hour)
@@ -116,7 +116,7 @@ func TestRateLimitService_ApplyAccountSchedulingThreshold_FableOnlyLimitsFableMo
 	settingsRepo.data[SettingKeyAccountSchedulingThresholds] = `{"anthropic":100}`
 
 	accountRepo := &fableSchedulingThresholdRepoStub{}
-	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	rl.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 
 	until := time.Now().UTC().Add(4 * 24 * time.Hour).Truncate(time.Second)
@@ -162,7 +162,7 @@ func TestRateLimitService_ApplyAccountSchedulingThreshold_SkipsDuplicateTempUnsc
 	settingsRepo.data[SettingKeyAccountSchedulingThresholds] = `{"openai":80}`
 
 	accountRepo := &rateLimitAccountRepoStub{}
-	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	rl.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 
 	until := time.Now().UTC().Add(6 * time.Hour).Truncate(time.Second)
@@ -204,7 +204,7 @@ func TestRateLimitService_ApplyAccountSchedulingThreshold_UnsupportedPlatformDoe
 	settingsRepo.data[SettingKeyAccountSchedulingThresholds] = `{"openai":80}`
 
 	accountRepo := &rateLimitAccountRepoStub{}
-	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rl := NewRateLimitService(accountRepo, nil, &config.Config{}, nil)
 	rl.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 
 	account := &Account{

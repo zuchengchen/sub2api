@@ -31,12 +31,12 @@ func TestGatewayRoutingSuite(t *testing.T) {
 	suite.Run(t, new(GatewayRoutingSuite))
 }
 
-// TestListSchedulableByPlatforms_GeminiAndAntigravity 验证多平台账户查询
-func (s *GatewayRoutingSuite) TestListSchedulableByPlatforms_GeminiAndAntigravity() {
+// TestListSchedulableByPlatforms_GrokAndOpenAI 验证多平台账户查询
+func (s *GatewayRoutingSuite) TestListSchedulableByPlatforms_GrokAndOpenAI() {
 	// 创建各平台账户
 	geminiAcc := mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:        "gemini-oauth",
-		Platform:    service.PlatformGemini,
+		Name:        "grok-oauth",
+		Platform:    service.PlatformGrok,
 		Type:        service.AccountTypeOAuth,
 		Status:      service.StatusActive,
 		Schedulable: true,
@@ -44,8 +44,8 @@ func (s *GatewayRoutingSuite) TestListSchedulableByPlatforms_GeminiAndAntigravit
 	})
 
 	antigravityAcc := mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:        "antigravity-oauth",
-		Platform:    service.PlatformAntigravity,
+		Name:        "openai-oauth",
+		Platform:    service.PlatformOpenAI,
 		Type:        service.AccountTypeOAuth,
 		Status:      service.StatusActive,
 		Schedulable: true,
@@ -69,8 +69,8 @@ func (s *GatewayRoutingSuite) TestListSchedulableByPlatforms_GeminiAndAntigravit
 
 	// 查询 gemini + antigravity 平台
 	accounts, err := s.accountRepo.ListSchedulableByPlatforms(s.ctx, []string{
-		service.PlatformGemini,
-		service.PlatformAntigravity,
+		service.PlatformGrok,
+		service.PlatformOpenAI,
 	})
 
 	s.Require().NoError(err)
@@ -81,8 +81,8 @@ func (s *GatewayRoutingSuite) TestListSchedulableByPlatforms_GeminiAndAntigravit
 	for _, acc := range accounts {
 		platforms[acc.Platform] = true
 	}
-	s.Require().True(platforms[service.PlatformGemini], "应包含 gemini 账户")
-	s.Require().True(platforms[service.PlatformAntigravity], "应包含 antigravity 账户")
+	s.Require().True(platforms[service.PlatformGrok], "应包含 grok 账户")
+	s.Require().True(platforms[service.PlatformOpenAI], "应包含 openai 账户")
 	s.Require().False(platforms[service.PlatformAnthropic], "不应包含 anthropic 账户")
 
 	// 验证账户 ID 匹配
@@ -98,21 +98,21 @@ func (s *GatewayRoutingSuite) TestListSchedulableByPlatforms_GeminiAndAntigravit
 func (s *GatewayRoutingSuite) TestListSchedulableByGroupIDAndPlatforms_WithGroupBinding() {
 	// 创建 gemini 分组
 	group := mustCreateGroup(s.T(), s.client, &service.Group{
-		Name:     "gemini-group",
-		Platform: service.PlatformGemini,
+		Name:     "grok-group",
+		Platform: service.PlatformGrok,
 		Status:   service.StatusActive,
 	})
 
 	// 创建账户
 	boundAcc := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "bound-antigravity",
-		Platform:    service.PlatformAntigravity,
+		Platform:    service.PlatformOpenAI,
 		Status:      service.StatusActive,
 		Schedulable: true,
 	})
 	unboundAcc := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "unbound-antigravity",
-		Platform:    service.PlatformAntigravity,
+		Platform:    service.PlatformOpenAI,
 		Status:      service.StatusActive,
 		Schedulable: true,
 	})
@@ -122,8 +122,8 @@ func (s *GatewayRoutingSuite) TestListSchedulableByGroupIDAndPlatforms_WithGroup
 
 	// 查询分组内的账户
 	accounts, err := s.accountRepo.ListSchedulableByGroupIDAndPlatforms(s.ctx, group.ID, []string{
-		service.PlatformGemini,
-		service.PlatformAntigravity,
+		service.PlatformGrok,
+		service.PlatformOpenAI,
 	})
 
 	s.Require().NoError(err)
@@ -136,30 +136,30 @@ func (s *GatewayRoutingSuite) TestListSchedulableByGroupIDAndPlatforms_WithGroup
 	}
 }
 
-// TestListSchedulableByPlatform_Antigravity 验证单平台查询
-func (s *GatewayRoutingSuite) TestListSchedulableByPlatform_Antigravity() {
+// TestListSchedulableByPlatform_OpenAI 验证单平台查询
+func (s *GatewayRoutingSuite) TestListSchedulableByPlatform_OpenAI() {
 	// 创建多种平台账户
 	mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:        "gemini-1",
-		Platform:    service.PlatformGemini,
+		Name:        "grok-1",
+		Platform:    service.PlatformGrok,
 		Status:      service.StatusActive,
 		Schedulable: true,
 	})
 
 	antigravity := mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:        "antigravity-1",
-		Platform:    service.PlatformAntigravity,
+		Name:        "openai-1",
+		Platform:    service.PlatformOpenAI,
 		Status:      service.StatusActive,
 		Schedulable: true,
 	})
 
 	// 只查询 antigravity 平台
-	accounts, err := s.accountRepo.ListSchedulableByPlatform(s.ctx, service.PlatformAntigravity)
+	accounts, err := s.accountRepo.ListSchedulableByPlatform(s.ctx, service.PlatformOpenAI)
 
 	s.Require().NoError(err)
 	s.Require().Len(accounts, 1)
 	s.Require().Equal(antigravity.ID, accounts[0].ID)
-	s.Require().Equal(service.PlatformAntigravity, accounts[0].Platform)
+	s.Require().Equal(service.PlatformOpenAI, accounts[0].Platform)
 }
 
 // TestSchedulableFilter_ExcludesInactive 验证不可调度账户被过滤
@@ -167,7 +167,7 @@ func (s *GatewayRoutingSuite) TestSchedulableFilter_ExcludesInactive() {
 	// 创建可调度账户
 	activeAcc := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "active-antigravity",
-		Platform:    service.PlatformAntigravity,
+		Platform:    service.PlatformOpenAI,
 		Status:      service.StatusActive,
 		Schedulable: true,
 	})
@@ -175,7 +175,7 @@ func (s *GatewayRoutingSuite) TestSchedulableFilter_ExcludesInactive() {
 	// 创建不可调度账户（需要先创建再更新，因为 fixture 默认设置 Schedulable=true）
 	inactiveAcc := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:     "inactive-antigravity",
-		Platform: service.PlatformAntigravity,
+		Platform: service.PlatformOpenAI,
 		Status:   service.StatusActive,
 	})
 	s.Require().NoError(s.client.Account.UpdateOneID(inactiveAcc.ID).SetSchedulable(false).Exec(s.ctx))
@@ -183,68 +183,14 @@ func (s *GatewayRoutingSuite) TestSchedulableFilter_ExcludesInactive() {
 	// 创建错误状态账户
 	mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "error-antigravity",
-		Platform:    service.PlatformAntigravity,
+		Platform:    service.PlatformOpenAI,
 		Status:      service.StatusError,
 		Schedulable: true,
 	})
 
-	accounts, err := s.accountRepo.ListSchedulableByPlatform(s.ctx, service.PlatformAntigravity)
+	accounts, err := s.accountRepo.ListSchedulableByPlatform(s.ctx, service.PlatformOpenAI)
 
 	s.Require().NoError(err)
 	s.Require().Len(accounts, 1, "应只返回可调度的 active 账户")
 	s.Require().Equal(activeAcc.ID, accounts[0].ID)
-}
-
-// TestPlatformRoutingDecision 验证平台路由决策
-// 这个测试模拟 Handler 层在选择账户后的路由决策逻辑
-func (s *GatewayRoutingSuite) TestPlatformRoutingDecision() {
-	// 创建两种平台的账户
-	geminiAcc := mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:        "gemini-route-test",
-		Platform:    service.PlatformGemini,
-		Status:      service.StatusActive,
-		Schedulable: true,
-	})
-
-	antigravityAcc := mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:        "antigravity-route-test",
-		Platform:    service.PlatformAntigravity,
-		Status:      service.StatusActive,
-		Schedulable: true,
-	})
-
-	tests := []struct {
-		name            string
-		accountID       int64
-		expectedService string
-	}{
-		{
-			name:            "Gemini账户路由到ForwardNative",
-			accountID:       geminiAcc.ID,
-			expectedService: "GeminiMessagesCompatService.ForwardNative",
-		},
-		{
-			name:            "Antigravity账户路由到ForwardGemini",
-			accountID:       antigravityAcc.ID,
-			expectedService: "AntigravityGatewayService.ForwardGemini",
-		},
-	}
-
-	for _, tt := range tests {
-		s.Run(tt.name, func() {
-			// 从数据库获取账户
-			account, err := s.accountRepo.GetByID(s.ctx, tt.accountID)
-			s.Require().NoError(err)
-
-			// 模拟 Handler 层的路由决策
-			var routedService string
-			if account.Platform == service.PlatformAntigravity {
-				routedService = "AntigravityGatewayService.ForwardGemini"
-			} else {
-				routedService = "GeminiMessagesCompatService.ForwardNative"
-			}
-
-			s.Require().Equal(tt.expectedService, routedService)
-		})
-	}
 }

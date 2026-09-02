@@ -23,7 +23,6 @@ func TestContentModerationGatePrecedesAccountBillingAndUpstreamSideEffects(t *te
 		{file: "gateway_handler.go", function: "Messages", auditToken: "checkContentModeration"},
 		{file: "gateway_handler_chat_completions.go", function: "ChatCompletions", auditToken: "checkContentModeration"},
 		{file: "gateway_handler_responses.go", function: "Responses", auditToken: "checkContentModeration"},
-		{file: "gemini_v1beta_handler.go", function: "GeminiV1BetaModels", auditToken: "checkContentModeration"},
 		{file: "openai_gateway_handler.go", function: "Responses", auditToken: "checkContentModeration"},
 		{file: "openai_gateway_count_tokens.go", function: "ResponsesInputTokens", auditToken: "checkContentModeration"},
 		{file: "openai_gateway_handler.go", function: "Messages", auditToken: "checkContentModeration"},
@@ -33,7 +32,6 @@ func TestContentModerationGatePrecedesAccountBillingAndUpstreamSideEffects(t *te
 		{file: "openai_embeddings.go", function: "Embeddings", auditToken: "checkContentModeration"},
 		{file: "openai_alpha_search.go", function: "AlphaSearch", auditToken: "checkContentModeration"},
 		{file: "image_task_handler.go", function: "Submit", auditToken: "checkContentModerationBeforeSubmit"},
-		{file: "batch_image_handler.go", function: "Submit", auditToken: "checkContentModerationBeforeSubmit"},
 	}
 	sideEffectTokens := []string{
 		"CheckBillingEligibility(", "SelectAccount", ".Forward", "acquireResponsesUserSlot(",

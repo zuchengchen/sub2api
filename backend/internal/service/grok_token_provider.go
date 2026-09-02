@@ -24,7 +24,7 @@ var (
 	errGrokOAuthConfiguredProxyMiss  = errors.New("grok oauth configured proxy is missing")
 )
 
-type GrokTokenCache = GeminiTokenCache
+type GrokTokenCache = TokenCache
 
 type GrokTokenProvider struct {
 	accountRepo      AccountRepository

@@ -20,7 +20,7 @@ var ingressRejectReasons = map[string]struct{}{
 }
 
 var ingressRejectRouteFamilies = map[string]struct{}{
-	"antigravity": {}, "gemini": {}, "codex": {}, "messages": {}, "responses": {},
+	"codex": {}, "messages": {}, "responses": {},
 	"chat_completions": {}, "images": {}, "videos": {}, "embeddings": {}, "models": {}, "other": {},
 }
 

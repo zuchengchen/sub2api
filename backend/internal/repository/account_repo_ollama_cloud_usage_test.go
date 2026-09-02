@@ -330,7 +330,7 @@ func TestOllamaCloudUsagePlatformWhitelistMatchesServicePredicate(t *testing.T) 
 	for _, platform := range []string{
 		service.PlatformOpenAI, service.PlatformAnthropic,
 		service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek,
-		service.PlatformGemini, service.PlatformGrok, service.PlatformAntigravity,
+		service.PlatformGrok,
 		service.PlatformComposite, "kiro",
 	} {
 		account := ollamaCloudUsageRepositoryAccount()

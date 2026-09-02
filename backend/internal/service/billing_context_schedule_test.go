@@ -28,6 +28,10 @@ type scheduleScenario struct {
 	check         func(t *testing.T, s *ContextPricingSchedule)
 }
 
+// geminiCatalogPlatformKey 只是定价目录里的平台键；Gemini 协议已下线，
+// 但目录数据（上游 LiteLLM 价格表）仍保留 Gemini 模型价，这些用例只读目录数据。
+const geminiCatalogPlatformKey = "gemini"
+
 func enabledGroup(platform string) *Group {
 	return &Group{ID: 100, Platform: platform, LongContextPricingEnabled: true}
 }
@@ -233,8 +237,8 @@ func scheduleScenarios() []scheduleScenario {
 			},
 		},
 		{
-			name: "Gemini 目录阶梯整单换档", model: "gemini-2.5-pro", platform: PlatformGemini, groupPlatform: PlatformGemini,
-			group: enabledGroup(PlatformGemini), catalog: mustCatalogFromJSON(geminiLadderCatalogJSON), wantBasis: ContextPricingBasisWholeRequest,
+			name: "Gemini 目录阶梯整单换档", model: "gemini-2.5-pro", platform: geminiCatalogPlatformKey, groupPlatform: geminiCatalogPlatformKey,
+			group: enabledGroup(geminiCatalogPlatformKey), catalog: mustCatalogFromJSON(geminiLadderCatalogJSON), wantBasis: ContextPricingBasisWholeRequest,
 			check: func(t *testing.T, s *ContextPricingSchedule) {
 				require.Len(t, s.Tiers, 2)
 				// 缓存写入按标准输入价，与 input 一同整单换档
@@ -243,17 +247,17 @@ func scheduleScenarios() []scheduleScenario {
 			},
 		},
 		{
-			name: "Gemini 分组关闭时无阶梯", model: "gemini-2.5-pro", platform: PlatformGemini, groupPlatform: PlatformGemini,
-			group: disabledGroup(PlatformGemini), catalog: mustCatalogFromJSON(geminiLadderCatalogJSON), wantBasis: ContextPricingBasisWholeRequest,
+			name: "Gemini 分组关闭时无阶梯", model: "gemini-2.5-pro", platform: geminiCatalogPlatformKey, groupPlatform: geminiCatalogPlatformKey,
+			group: disabledGroup(geminiCatalogPlatformKey), catalog: mustCatalogFromJSON(geminiLadderCatalogJSON), wantBasis: ContextPricingBasisWholeRequest,
 			check: func(t *testing.T, s *ContextPricingSchedule) {
 				require.Len(t, s.Tiers, 1)
 			},
 		},
 		{
-			name: "Gemini 渠道平价之上叠加目录阶梯", model: "gemini-2.5-pro", platform: PlatformGemini, groupPlatform: PlatformGemini,
-			group: enabledGroup(PlatformGemini), catalog: mustCatalogFromJSON(geminiLadderCatalogJSON),
+			name: "Gemini 渠道平价之上叠加目录阶梯", model: "gemini-2.5-pro", platform: geminiCatalogPlatformKey, groupPlatform: geminiCatalogPlatformKey,
+			group: enabledGroup(geminiCatalogPlatformKey), catalog: mustCatalogFromJSON(geminiLadderCatalogJSON),
 			channel: []ChannelModelPricing{{
-				Platform: PlatformGemini, Models: []string{"gemini-2.5-pro"}, BillingMode: BillingModeToken, InputPrice: p(3e-6),
+				Platform: geminiCatalogPlatformKey, Models: []string{"gemini-2.5-pro"}, BillingMode: BillingModeToken, InputPrice: p(3e-6),
 			}},
 			wantBasis: ContextPricingBasisWholeRequest,
 			check: func(t *testing.T, s *ContextPricingSchedule) {
@@ -263,14 +267,14 @@ func scheduleScenarios() []scheduleScenario {
 			},
 		},
 		{
-			name: "Gemini 目录无阶梯字段时开关开启也无阶梯", model: "gemini-2.5-pro", platform: PlatformGemini, groupPlatform: PlatformGemini,
-			group: enabledGroup(PlatformGemini), catalog: geminiCatalogStub(), wantBasis: ContextPricingBasisWholeRequest,
+			name: "Gemini 目录无阶梯字段时开关开启也无阶梯", model: "gemini-2.5-pro", platform: geminiCatalogPlatformKey, groupPlatform: geminiCatalogPlatformKey,
+			group: enabledGroup(geminiCatalogPlatformKey), catalog: geminiCatalogStub(), wantBasis: ContextPricingBasisWholeRequest,
 			check: func(t *testing.T, s *ContextPricingSchedule) {
 				require.Len(t, s.Tiers, 1)
 			},
 		},
 		{
-			name: "Gemini 官方参考价与目录数据同源", model: "gemini-2.5-pro", platform: "", groupPlatform: PlatformGemini,
+			name: "Gemini 官方参考价与目录数据同源", model: "gemini-2.5-pro", platform: "", groupPlatform: geminiCatalogPlatformKey,
 			group: nil, catalog: mustCatalogFromJSON(geminiLadderCatalogJSON), wantBasis: ContextPricingBasisWholeRequest,
 			check: func(t *testing.T, s *ContextPricingSchedule) {
 				require.Len(t, s.Tiers, 2)

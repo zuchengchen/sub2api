@@ -191,7 +191,7 @@ func TestCalculateOpenAI429ResetTime_ReversedWindowOrder(t *testing.T) {
 }
 
 type openAI429SnapshotRepo struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	rateLimitedID      int64
 	updatedExtra       map[string]any
 	bulkUpdatedIDs     []int64
@@ -216,7 +216,7 @@ func (r *openAI429SnapshotRepo) BulkUpdate(_ context.Context, ids []int64, updat
 
 func TestHandle429_OpenAIPersistsCodexSnapshotImmediately(t *testing.T) {
 	repo := &openAI429SnapshotRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil, nil)
 	account := &Account{ID: 123, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 
 	headers := http.Header{}
@@ -245,7 +245,7 @@ func TestHandle429_OpenAIPersistsCodexSnapshotImmediately(t *testing.T) {
 
 func TestHandle429_OpenAISyncsObservedPlanType(t *testing.T) {
 	repo := &openAI429SnapshotRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil, nil)
 	account := &Account{
 		ID:          124,
 		Platform:    PlatformOpenAI,
@@ -276,7 +276,7 @@ func TestHandle429_SkipsSparkShadow(t *testing.T) {
 
 	parentID := int64(900)
 	shadowRepo := &openAI429SnapshotRepo{}
-	shadowSvc := NewRateLimitService(shadowRepo, nil, nil, nil, nil)
+	shadowSvc := NewRateLimitService(shadowRepo, nil, nil, nil)
 	shadow := &Account{
 		ID:              901,
 		Platform:        PlatformOpenAI,
@@ -292,7 +292,7 @@ func TestHandle429_SkipsSparkShadow(t *testing.T) {
 
 	// 反向对照:普通 OpenAI OAuth 账号仍按 global 429 限流。
 	normalRepo := &openAI429SnapshotRepo{}
-	normalSvc := NewRateLimitService(normalRepo, nil, nil, nil, nil)
+	normalSvc := NewRateLimitService(normalRepo, nil, nil, nil)
 	normal := &Account{ID: 902, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 
 	normalSvc.handle429(context.Background(), normal, headers, nil)
@@ -372,7 +372,7 @@ func TestNormalizedCodexLimits_OnlyPrimaryData(t *testing.T) {
 
 func TestRateLimitService_HandleUpstreamError_403PreservesOriginalUpstreamMessage(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := &Account{
 		ID:       201,
 		Platform: PlatformOpenAI,
@@ -395,7 +395,7 @@ func TestRateLimitService_HandleUpstreamError_403PreservesOriginalUpstreamMessag
 
 func TestRateLimitService_HandleUpstreamError_403FallsBackToRawBody(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := &Account{
 		ID:       202,
 		Platform: PlatformOpenAI,

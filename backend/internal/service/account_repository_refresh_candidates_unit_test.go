@@ -20,6 +20,6 @@ func (m *mockAccountRepoForPlatform) ListOAuthRefreshCandidates(context.Context)
 	panic("unexpected ListOAuthRefreshCandidates call")
 }
 
-func (m *mockAccountRepoForGemini) ListOAuthRefreshCandidates(context.Context) ([]Account, error) {
+func (m *mockAccountRepoForTest) ListOAuthRefreshCandidates(context.Context) ([]Account, error) {
 	return m.ListActive(context.Background())
 }

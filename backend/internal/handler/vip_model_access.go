@@ -41,14 +41,6 @@ func requireUserAccountModelAccess(
 	return false
 }
 
-// requireGoogleModelAccess applies the shared model policy while preserving
-// Gemini's Google-style error envelope.
-func requireGoogleModelAccess(c *gin.Context, apiKey *service.APIKey, models ...string) bool {
-	return requireUserModelAccess(c, apiKey, func(c *gin.Context, status int, _, message string) {
-		googleError(c, status, message)
-	}, models...)
-}
-
 func apiKeyCanAccessModels(c *gin.Context, apiKey *service.APIKey, models ...string) bool {
 	var user *service.User
 	if apiKey != nil {

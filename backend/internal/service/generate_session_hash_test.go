@@ -18,14 +18,6 @@ func mustParseSessionHashRequest(t *testing.T, body string, ctx *SessionContext)
 	return parsed
 }
 
-func mustParseGeminiSessionHashRequest(t *testing.T, body string, ctx *SessionContext) *ParsedRequest {
-	t.Helper()
-	parsed, err := ParseGatewayRequest(NewRequestBodyRef([]byte(body)), domain.PlatformGemini)
-	require.NoError(t, err)
-	parsed.SessionContext = ctx
-	return parsed
-}
-
 func mustParseResponsesSessionHashRequest(t *testing.T, body string, ctx *SessionContext) *ParsedRequest {
 	t.Helper()
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef([]byte(body)), "responses")
@@ -49,28 +41,8 @@ func anthropicSessionBody(system any, messages []any, metadataUserID string) str
 	return string(data)
 }
 
-func geminiSessionBody(systemParts []any, contents []any) string {
-	body := map[string]any{}
-	if systemParts != nil {
-		body["systemInstruction"] = map[string]any{"parts": systemParts}
-	}
-	if contents != nil {
-		body["contents"] = contents
-	}
-	data, _ := json.Marshal(body)
-	return string(data)
-}
-
 func msg(role string, content any) map[string]any {
 	return map[string]any{"role": role, "content": content}
-}
-
-func geminiMsg(role string, texts ...string) map[string]any {
-	parts := make([]any, 0, len(texts))
-	for _, text := range texts {
-		parts = append(parts, map[string]any{"text": text})
-	}
-	return map[string]any{"role": role, "parts": parts}
 }
 
 func TestGenerateSessionHash_NilParsedRequest(t *testing.T) {
@@ -537,132 +509,4 @@ func TestGenerateSessionHash_LongConversation(t *testing.T) {
 	parsed2 := mustParseSessionHashRequest(t, anthropicSessionBody("System prompt", moreMessages, ""), ctx)
 	h2 := svc.GenerateSessionHash(parsed2)
 	require.NotEqual(t, h, h2, "adding more messages to long conversation should change hash")
-}
-
-func TestGenerateSessionHash_GeminiContentsProducesHash(t *testing.T) {
-	svc := &GatewayService{}
-	parsed := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, []any{geminiMsg("user", "Hello from Gemini")}), &SessionContext{ClientIP: "1.2.3.4", UserAgent: "gemini-cli", APIKeyID: 1})
-
-	h := svc.GenerateSessionHash(parsed)
-	require.NotEmpty(t, h, "Gemini contents with parts should produce a non-empty hash")
-}
-
-func TestGenerateSessionHash_GeminiDifferentContentsDifferentHash(t *testing.T) {
-	svc := &GatewayService{}
-	ctx := &SessionContext{ClientIP: "1.2.3.4", UserAgent: "gemini-cli", APIKeyID: 1}
-	parsed1 := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, []any{geminiMsg("user", "Hello")}), ctx)
-	parsed2 := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, []any{geminiMsg("user", "Goodbye")}), ctx)
-
-	h1 := svc.GenerateSessionHash(parsed1)
-	h2 := svc.GenerateSessionHash(parsed2)
-	require.NotEqual(t, h1, h2, "different Gemini contents should produce different hashes")
-}
-
-func TestGenerateSessionHash_GeminiSameContentsSameHash(t *testing.T) {
-	svc := &GatewayService{}
-	ctx := &SessionContext{ClientIP: "1.2.3.4", UserAgent: "gemini-cli", APIKeyID: 1}
-	body := geminiSessionBody(nil, []any{geminiMsg("user", "Hello"), geminiMsg("model", "Hi there!")})
-	mk := func() *ParsedRequest { return mustParseGeminiSessionHashRequest(t, body, ctx) }
-
-	h1 := svc.GenerateSessionHash(mk())
-	h2 := svc.GenerateSessionHash(mk())
-	require.Equal(t, h1, h2, "same Gemini contents should produce identical hash")
-}
-
-func TestGenerateSessionHash_GeminiMultiTurnHashChanges(t *testing.T) {
-	svc := &GatewayService{}
-	ctx := &SessionContext{ClientIP: "1.2.3.4", UserAgent: "gemini-cli", APIKeyID: 1}
-	round1 := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, []any{geminiMsg("user", "hello")}), ctx)
-	round2 := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, []any{geminiMsg("user", "hello"), geminiMsg("model", "Hi!"), geminiMsg("user", "How are you?")}), ctx)
-
-	h1 := svc.GenerateSessionHash(round1)
-	h2 := svc.GenerateSessionHash(round2)
-	require.NotEmpty(t, h1)
-	require.NotEmpty(t, h2)
-	require.NotEqual(t, h1, h2, "Gemini multi-turn should produce different hashes per round")
-}
-
-func TestGenerateSessionHash_GeminiDifferentUsersSameContentDifferentHash(t *testing.T) {
-	svc := &GatewayService{}
-	body := geminiSessionBody(nil, []any{geminiMsg("user", "hello")})
-	user1 := mustParseGeminiSessionHashRequest(t, body, &SessionContext{ClientIP: "1.1.1.1", UserAgent: "gemini-cli", APIKeyID: 10})
-	user2 := mustParseGeminiSessionHashRequest(t, body, &SessionContext{ClientIP: "2.2.2.2", UserAgent: "gemini-cli", APIKeyID: 20})
-
-	h1 := svc.GenerateSessionHash(user1)
-	h2 := svc.GenerateSessionHash(user2)
-	require.NotEqual(t, h1, h2, "CRITICAL: different Gemini users with same content must get different hashes")
-}
-
-func TestGenerateSessionHash_GeminiSystemInstructionAffectsHash(t *testing.T) {
-	svc := &GatewayService{}
-	ctx := &SessionContext{ClientIP: "1.2.3.4", UserAgent: "gemini-cli", APIKeyID: 1}
-	withSys := mustParseGeminiSessionHashRequest(t, geminiSessionBody([]any{map[string]any{"text": "You are a coding assistant."}}, []any{geminiMsg("user", "hello")}), ctx)
-	withoutSys := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, []any{geminiMsg("user", "hello")}), ctx)
-
-	h1 := svc.GenerateSessionHash(withSys)
-	h2 := svc.GenerateSessionHash(withoutSys)
-	require.NotEqual(t, h1, h2, "systemInstruction should affect the hash")
-}
-
-func TestGenerateSessionHash_GeminiMultiPartMessage(t *testing.T) {
-	svc := &GatewayService{}
-	ctx := &SessionContext{ClientIP: "1.2.3.4", UserAgent: "gemini-cli", APIKeyID: 1}
-	parsed := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, []any{geminiMsg("user", "Part 1", "Part 2", "Part 3")}), ctx)
-	h := svc.GenerateSessionHash(parsed)
-	require.NotEmpty(t, h, "multi-part Gemini message should produce a hash")
-
-	parsed2 := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, []any{geminiMsg("user", "Part 1", "CHANGED", "Part 3")}), ctx)
-	h2 := svc.GenerateSessionHash(parsed2)
-	require.NotEqual(t, h, h2, "changing a part should change the hash")
-}
-
-func TestGenerateSessionHash_GeminiNonTextPartsIgnored(t *testing.T) {
-	svc := &GatewayService{}
-	ctx := &SessionContext{ClientIP: "1.2.3.4", UserAgent: "gemini-cli", APIKeyID: 1}
-	content := []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": "Describe this image"}, map[string]any{"inline_data": map[string]any{"mime_type": "image/png", "data": "base64..."}}}}}
-	parsed := mustParseGeminiSessionHashRequest(t, geminiSessionBody(nil, content), ctx)
-
-	h := svc.GenerateSessionHash(parsed)
-	require.NotEmpty(t, h, "Gemini message with mixed parts should still produce a hash from text parts")
-}
-
-func TestGenerateSessionHash_GeminiMultiTurnHashNotSticky(t *testing.T) {
-	svc := &GatewayService{}
-	ctx := &SessionContext{ClientIP: "10.0.0.1", UserAgent: "gemini-cli", APIKeyID: 42}
-	rounds := []string{
-		geminiSessionBody([]any{map[string]any{"text": "You are a coding assistant."}}, []any{geminiMsg("user", "Write a Go function")}),
-		geminiSessionBody([]any{map[string]any{"text": "You are a coding assistant."}}, []any{geminiMsg("user", "Write a Go function"), geminiMsg("model", "func hello() {}"), geminiMsg("user", "Add error handling")}),
-		geminiSessionBody([]any{map[string]any{"text": "You are a coding assistant."}}, []any{geminiMsg("user", "Write a Go function"), geminiMsg("model", "func hello() {}"), geminiMsg("user", "Add error handling"), geminiMsg("model", "func hello() error { return nil }"), geminiMsg("user", "Now add tests")}),
-	}
-
-	hashes := make([]string, len(rounds))
-	for i, body := range rounds {
-		parsed := mustParseGeminiSessionHashRequest(t, body, ctx)
-		hashes[i] = svc.GenerateSessionHash(parsed)
-		require.NotEmpty(t, hashes[i], "round %d hash should not be empty", i+1)
-	}
-	require.NotEqual(t, hashes[0], hashes[1], "round 1 vs 2 hash should differ (contents grow)")
-	require.NotEqual(t, hashes[1], hashes[2], "round 2 vs 3 hash should differ (contents grow)")
-	require.NotEqual(t, hashes[0], hashes[2], "round 1 vs 3 hash should differ")
-
-	parsedAgain := mustParseGeminiSessionHashRequest(t, rounds[1], ctx)
-	h2Again := svc.GenerateSessionHash(parsedAgain)
-	require.Equal(t, hashes[1], h2Again, "retry of same round should produce same hash")
-}
-
-func TestGenerateSessionHash_GeminiEndToEnd(t *testing.T) {
-	svc := &GatewayService{}
-	body := geminiSessionBody([]any{map[string]any{"text": "You are a coding assistant."}}, []any{geminiMsg("user", "Write a Go function"), geminiMsg("model", "Here is a function..."), geminiMsg("user", "Now add error handling")})
-	parsed := mustParseGeminiSessionHashRequest(t, body, &SessionContext{ClientIP: "10.0.0.1", UserAgent: "gemini-cli/1.0", APIKeyID: 42})
-
-	h := svc.GenerateSessionHash(parsed)
-	require.NotEmpty(t, h, "end-to-end Gemini flow should produce a hash")
-
-	parsed2 := mustParseGeminiSessionHashRequest(t, body, &SessionContext{ClientIP: "10.0.0.1", UserAgent: "gemini-cli/1.0", APIKeyID: 42})
-	h2 := svc.GenerateSessionHash(parsed2)
-	require.Equal(t, h, h2, "same request should produce same hash")
-
-	parsed3 := mustParseGeminiSessionHashRequest(t, body, &SessionContext{ClientIP: "10.0.0.2", UserAgent: "gemini-cli/1.0", APIKeyID: 99})
-	h3 := svc.GenerateSessionHash(parsed3)
-	require.NotEqual(t, h, h3, "different user with same Gemini request should get different hash")
 }

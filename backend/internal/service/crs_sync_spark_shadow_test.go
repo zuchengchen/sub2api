@@ -76,8 +76,8 @@ func TestGuardCRSShadowParentInvariant(t *testing.T) {
 	require.Error(t, guardCRSShadowParentInvariant(ctx, repo, mother, PlatformAnthropic, AccountTypeOAuth),
 		"must reject moving a shadow parent to a non-OpenAI platform even if type stays oauth")
 
-	// 改成 Gemini api_key 被拒。
-	require.Error(t, guardCRSShadowParentInvariant(ctx, repo, mother, PlatformGemini, AccountTypeAPIKey))
+	// 改成 Grok api_key 被拒。
+	require.Error(t, guardCRSShadowParentInvariant(ctx, repo, mother, PlatformGrok, AccountTypeAPIKey))
 
 	// 保持 OpenAI OAuth(重新同步母账号)放行,即便仍有影子。
 	require.NoError(t, guardCRSShadowParentInvariant(ctx, repo, mother, PlatformOpenAI, AccountTypeOAuth))

@@ -20,7 +20,7 @@ func (transientCooldownAccountRepo) SetOverloaded(context.Context, int64, time.T
 
 func TestHandleOpenAITransientError_BlocksOnlyRequestedModel(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil)
 	account := &Account{
 		ID:       5105,
 		Platform: PlatformOpenAI,
@@ -41,7 +41,7 @@ func TestHandleOpenAITransientError_TransientStatusesUseModelScope(t *testing.T)
 	for _, statusCode := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 520, 521, 522, 523, 524} {
 		t.Run(http.StatusText(statusCode), func(t *testing.T) {
 			svc := &OpenAIGatewayService{}
-			svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
+			svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil)
 			account := &Account{
 				ID:       int64(5100 + statusCode),
 				Platform: PlatformOpenAI,
@@ -65,7 +65,7 @@ func TestHandleOpenAITransientError_529RemainsOverloadOnly(t *testing.T) {
 
 func TestHandleOpenAITransientError_CanonicalModelIsNotMappedTwice(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil)
 	account := &Account{
 		ID:       5107,
 		Platform: PlatformOpenAI,
@@ -91,7 +91,7 @@ func TestHandleOpenAITransientError_CanonicalModelIsNotMappedTwice(t *testing.T)
 
 func TestHandleOpenAITransientError_DoesNotBlockParameter400(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil)
 	account := &Account{
 		ID:       5103,
 		Platform: PlatformOpenAI,

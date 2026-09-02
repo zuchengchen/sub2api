@@ -1782,8 +1782,6 @@ const qualityTargetLabel = (target: string) => {
       return 'OpenAI'
     case 'anthropic':
       return 'Anthropic'
-    case 'gemini':
-      return 'Gemini'
     case 'grok':
       return 'Grok'
     default:

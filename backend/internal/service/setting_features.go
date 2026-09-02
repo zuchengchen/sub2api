@@ -538,25 +538,6 @@ func (s *SettingService) GetTencentCaptchaConfig(ctx context.Context) TencentCap
 	return config.Tencent
 }
 
-// IsIdentityPatchEnabled 检查是否启用身份补丁（Claude -> Gemini systemInstruction 注入）
-func (s *SettingService) IsIdentityPatchEnabled(ctx context.Context) bool {
-	value, err := s.settingRepo.GetValue(ctx, SettingKeyEnableIdentityPatch)
-	if err != nil {
-		// 默认开启，保持兼容
-		return true
-	}
-	return value == "true"
-}
-
-// GetIdentityPatchPrompt 获取自定义身份补丁提示词（为空表示使用内置默认模板）
-func (s *SettingService) GetIdentityPatchPrompt(ctx context.Context) string {
-	value, err := s.settingRepo.GetValue(ctx, SettingKeyIdentityPatchPrompt)
-	if err != nil {
-		return ""
-	}
-	return value
-}
-
 // GenerateAdminAPIKey 生成新的管理员 API Key
 func (s *SettingService) GenerateAdminAPIKey(ctx context.Context) (string, error) {
 	// 生成 32 字节随机数 = 64 位十六进制字符
@@ -638,12 +619,6 @@ func (s *SettingService) GetFallbackModel(ctx context.Context, platform string) 
 	case PlatformOpenAI:
 		key = SettingKeyFallbackModelOpenAI
 		defaultModel = "gpt-4o"
-	case PlatformGemini:
-		key = SettingKeyFallbackModelGemini
-		defaultModel = "gemini-2.5-pro"
-	case PlatformAntigravity:
-		key = SettingKeyFallbackModelAntigravity
-		defaultModel = "gemini-2.5-pro"
 	default:
 		return ""
 	}

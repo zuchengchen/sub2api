@@ -69,15 +69,6 @@
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.quota') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.planCard.unlimited') }}</span>
         </div>
-        <div v-if="modelScopeLabels.length > 0" class="col-span-2 flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.models') }}</span>
-          <div class="flex flex-wrap justify-end gap-1">
-            <span v-for="scope in modelScopeLabels" :key="scope"
-              class="rounded bg-gray-200/80 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-dark-600 dark:text-gray-300">
-              {{ scope }}
-            </span>
-          </div>
-        </div>
       </div>
 
       <!-- Features list (compact) -->
@@ -161,19 +152,6 @@ const hasPeakRate = computed(() => groupHasPeakRate(props.plan))
 
 const peakRateDisplay = computed(() => {
   return formatPeakRateWindow(props.plan, serverTimezoneLabel(appStore.cachedPublicSettings?.server_utc_offset))
-})
-
-const MODEL_SCOPE_LABELS: Record<string, string> = {
-  claude: 'Claude',
-  gemini_text: 'Gemini',
-  gemini_image: 'Imagen',
-}
-
-const modelScopeLabels = computed(() => {
-  if (platform.value !== 'antigravity') return []
-  const scopes = props.plan.supported_model_scopes
-  if (!scopes || scopes.length === 0) return []
-  return scopes.map(s => MODEL_SCOPE_LABELS[s] || s)
 })
 
 const validitySuffix = computed(() => planValiditySuffix(props.plan, t))

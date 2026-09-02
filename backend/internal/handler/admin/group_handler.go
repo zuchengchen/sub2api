@@ -98,7 +98,7 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 type CreateGroupRequest struct {
 	Name                      string                        `json:"name" binding:"required"`
 	Description               string                        `json:"description"`
-	Platform                  string                        `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek composite"`
+	Platform                  string                        `json:"platform" binding:"omitempty,oneof=anthropic openai grok kimi zhipu deepseek composite"`
 	RateMultiplier            float64                       `json:"rate_multiplier"`
 	IsExclusive               bool                          `json:"is_exclusive"`
 	SubscriptionType          string                        `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
@@ -107,13 +107,10 @@ type CreateGroupRequest struct {
 	MonthlyLimitUSD           optionalLimitField            `json:"monthly_limit_usd"`
 	LongContextPricingEnabled bool                          `json:"long_context_pricing_enabled"`
 	ModelPricing              []service.ChannelModelPricing `json:"model_pricing"`
-	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
+	// 图片生成计费配置（负数表示清除配置）
 	AllowImageGeneration            bool                          `json:"allow_image_generation"`
-	AllowBatchImageGeneration       bool                          `json:"allow_batch_image_generation"`
 	ImageRateIndependent            bool                          `json:"image_rate_independent"`
 	ImageRateMultiplier             *float64                      `json:"image_rate_multiplier"`
-	BatchImageDiscountMultiplier    *float64                      `json:"batch_image_discount_multiplier"`
-	BatchImageHoldMultiplier        *float64                      `json:"batch_image_hold_multiplier"`
 	VideoRateIndependent            bool                          `json:"video_rate_independent"`
 	VideoRateMultiplier             *float64                      `json:"video_rate_multiplier"`
 	PeakRateEnabled                 bool                          `json:"peak_rate_enabled"`
@@ -142,7 +139,7 @@ type CreateGroupRequest struct {
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
 	MCPXMLInject        *bool              `json:"mcp_xml_inject"`
-	// 支持的模型系列（仅 antigravity 平台使用）
+	// 支持的模型系列
 	SupportedModelScopes []string `json:"supported_model_scopes"`
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       bool                                      `json:"allow_messages_dispatch"`
@@ -166,7 +163,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name                      string                         `json:"name"`
 	Description               *string                        `json:"description"`
-	Platform                  string                         `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek composite"`
+	Platform                  string                         `json:"platform" binding:"omitempty,oneof=anthropic openai grok kimi zhipu deepseek composite"`
 	RateMultiplier            *float64                       `json:"rate_multiplier"`
 	IsExclusive               *bool                          `json:"is_exclusive"`
 	Status                    string                         `json:"status" binding:"omitempty,oneof=active inactive"`
@@ -176,13 +173,10 @@ type UpdateGroupRequest struct {
 	MonthlyLimitUSD           optionalLimitField             `json:"monthly_limit_usd"`
 	LongContextPricingEnabled *bool                          `json:"long_context_pricing_enabled"`
 	ModelPricing              *[]service.ChannelModelPricing `json:"model_pricing"`
-	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
+	// 图片生成计费配置（负数表示清除配置）
 	AllowImageGeneration            *bool                         `json:"allow_image_generation"`
-	AllowBatchImageGeneration       *bool                         `json:"allow_batch_image_generation"`
 	ImageRateIndependent            *bool                         `json:"image_rate_independent"`
 	ImageRateMultiplier             *float64                      `json:"image_rate_multiplier"`
-	BatchImageDiscountMultiplier    *float64                      `json:"batch_image_discount_multiplier"`
-	BatchImageHoldMultiplier        *float64                      `json:"batch_image_hold_multiplier"`
 	VideoRateIndependent            *bool                         `json:"video_rate_independent"`
 	VideoRateMultiplier             *float64                      `json:"video_rate_multiplier"`
 	PeakRateEnabled                 *bool                         `json:"peak_rate_enabled"`
@@ -211,7 +205,7 @@ type UpdateGroupRequest struct {
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled *bool              `json:"model_routing_enabled"`
 	MCPXMLInject        *bool              `json:"mcp_xml_inject"`
-	// 支持的模型系列（仅 antigravity 平台使用）
+	// 支持的模型系列
 	SupportedModelScopes *[]string `json:"supported_model_scopes"`
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       *bool                                      `json:"allow_messages_dispatch"`
@@ -234,9 +228,9 @@ type UpdateGroupRequest struct {
 type CompositeRouteRequest struct {
 	PublicModel    string `json:"public_model" binding:"required"`
 	MatchType      string `json:"match_type" binding:"omitempty,oneof=exact prefix"`
-	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek"`
+	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai grok kimi zhipu deepseek"`
 	UpstreamModel  string `json:"upstream_model"`
-	Endpoint       string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
+	Endpoint       string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images"`
 	Priority       int    `json:"priority"`
 	Enabled        *bool  `json:"enabled"`
 	Notes          string `json:"notes"`
@@ -244,7 +238,7 @@ type CompositeRouteRequest struct {
 
 type CompositeRoutePreviewRequest struct {
 	Model    string `json:"model" binding:"required"`
-	Endpoint string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
+	Endpoint string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images"`
 }
 
 // List handles listing all groups with pagination
@@ -515,11 +509,8 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		LongContextPricingEnabled:       req.LongContextPricingEnabled,
 		ModelPricing:                    req.ModelPricing,
 		AllowImageGeneration:            req.AllowImageGeneration,
-		AllowBatchImageGeneration:       req.AllowBatchImageGeneration,
 		ImageRateIndependent:            req.ImageRateIndependent,
 		ImageRateMultiplier:             req.ImageRateMultiplier,
-		BatchImageDiscountMultiplier:    req.BatchImageDiscountMultiplier,
-		BatchImageHoldMultiplier:        req.BatchImageHoldMultiplier,
 		VideoRateIndependent:            req.VideoRateIndependent,
 		VideoRateMultiplier:             req.VideoRateMultiplier,
 		PeakRateEnabled:                 req.PeakRateEnabled,
@@ -644,11 +635,8 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		LongContextPricingEnabled:       req.LongContextPricingEnabled,
 		ModelPricing:                    req.ModelPricing,
 		AllowImageGeneration:            req.AllowImageGeneration,
-		AllowBatchImageGeneration:       req.AllowBatchImageGeneration,
 		ImageRateIndependent:            req.ImageRateIndependent,
 		ImageRateMultiplier:             req.ImageRateMultiplier,
-		BatchImageDiscountMultiplier:    req.BatchImageDiscountMultiplier,
-		BatchImageHoldMultiplier:        req.BatchImageHoldMultiplier,
 		VideoRateIndependent:            req.VideoRateIndependent,
 		VideoRateMultiplier:             req.VideoRateMultiplier,
 		PeakRateEnabled:                 req.PeakRateEnabled,

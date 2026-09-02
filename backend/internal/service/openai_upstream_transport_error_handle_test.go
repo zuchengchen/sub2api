@@ -17,10 +17,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type tempUnschedCall struct {
+	accountID int64
+	until     time.Time
+	reason    string
+}
+
 // openaiTransportAccountRepoStub records SetTempUnschedulable calls. It embeds the
 // (nil) AccountRepository interface so any other method call would panic — the
-// helper under test must only touch SetTempUnschedulable. tempUnschedCall is shared
-// with antigravity_internal500_penalty_test.go (same package).
+// helper under test must only touch SetTempUnschedulable.
 type openaiTransportAccountRepoStub struct {
 	AccountRepository
 	tempUnschedCalls []tempUnschedCall

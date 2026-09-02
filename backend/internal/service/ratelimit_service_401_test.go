@@ -14,7 +14,7 @@ import (
 )
 
 type rateLimitAccountRepoStub struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	setErrorCalls          int
 	tempCalls              int
 	updateCredentialsCalls int
@@ -88,14 +88,14 @@ func (r *tokenCacheInvalidatorRecorder) InvalidateToken(ctx context.Context, acc
 }
 
 func TestRateLimitService_HandleUpstreamError_OAuth401SetsTempUnschedulable(t *testing.T) {
-	t.Run("gemini", func(t *testing.T) {
+	t.Run("grok", func(t *testing.T) {
 		repo := &rateLimitAccountRepoStub{}
 		invalidator := &tokenCacheInvalidatorRecorder{}
-		service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+		service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 		service.SetTokenCacheInvalidator(invalidator)
 		account := &Account{
 			ID:       100,
-			Platform: PlatformGemini,
+			Platform: PlatformGrok,
 			Type:     AccountTypeOAuth,
 			Credentials: map[string]any{
 				"refresh_token":              "rt-100",
@@ -119,36 +119,6 @@ func TestRateLimitService_HandleUpstreamError_OAuth401SetsTempUnschedulable(t *t
 		require.Len(t, invalidator.accounts, 1)
 	})
 
-	t.Run("antigravity_401_sets_temp_unschedulable", func(t *testing.T) {
-		repo := &rateLimitAccountRepoStub{}
-		invalidator := &tokenCacheInvalidatorRecorder{}
-		service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
-		service.SetTokenCacheInvalidator(invalidator)
-		account := &Account{
-			ID:       100,
-			Platform: PlatformAntigravity,
-			Type:     AccountTypeOAuth,
-			Status:   StatusActive,
-			Credentials: map[string]any{
-				"access_token":  "expired-at",
-				"refresh_token": "rt-100",
-			},
-		}
-
-		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
-
-		require.True(t, shouldDisable)
-		require.Equal(t, 0, repo.setErrorCalls, "Antigravity OAuth 401 must keep status=active so refresh worker can recover it")
-		require.Equal(t, 1, repo.tempCalls)
-		require.Equal(t, int64(100), repo.lastTempID)
-		require.Contains(t, repo.lastTempReason, "invalid or expired credentials")
-		require.Equal(t, 1, repo.updateExtraCalls)
-		require.Equal(t, true, repo.lastExtraUpdates[antigravityForceTokenRefreshExtraKey])
-		require.Equal(t, "401_invalid", repo.lastExtraUpdates[antigravityForceTokenRefreshReasonExtraKey])
-		require.Equal(t, true, account.Extra[antigravityForceTokenRefreshExtraKey])
-		require.Len(t, invalidator.accounts, 1)
-		require.Equal(t, int64(100), invalidator.accounts[0].ID)
-	})
 }
 
 // TestRateLimitService_HandleUpstreamError_SparkShadow401RedirectsToParent 外审第9轮:影子无独立凭据,
@@ -158,7 +128,7 @@ func TestRateLimitService_HandleUpstreamError_SparkShadow401RedirectsToParent(t 
 	repo := &rateLimitAccountRepoStub{}
 	repo.accountsByID = map[int64]*Account{}
 	invalidator := &tokenCacheInvalidatorRecorder{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetTokenCacheInvalidator(invalidator)
 
 	const parentID = int64(500)
@@ -198,7 +168,7 @@ func TestRateLimitService_HandleUpstreamError_SparkShadow401RedirectsToParent(t 
 func TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	invalidator := &tokenCacheInvalidatorRecorder{err: errors.New("boom")}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetTokenCacheInvalidator(invalidator)
 	account := &Account{
 		ID:       101,
@@ -221,7 +191,7 @@ func TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError(t *testin
 func TestRateLimitService_HandleUpstreamError_NonOAuth401(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	invalidator := &tokenCacheInvalidatorRecorder{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetTokenCacheInvalidator(invalidator)
 	account := &Account{
 		ID:       102,
@@ -243,7 +213,7 @@ func TestRateLimitService_HandleUpstreamError_NonOAuth401(t *testing.T) {
 // 会把新 refresh_token 回滚为快照中的旧值,导致下一周期拿 invalid_grant 被错误 disable。
 func TestRateLimitService_HandleUpstreamError_OAuth401DoesNotOverwriteCredentials(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := &Account{
 		ID:       103,
 		Platform: PlatformOpenAI,
@@ -258,7 +228,7 @@ func TestRateLimitService_HandleUpstreamError_OAuth401DoesNotOverwriteCredential
 
 	require.True(t, shouldDisable)
 	require.Equal(t, 0, repo.updateCredentialsCalls, "401 handler must not write credentials back from the request-start snapshot")
-	require.Equal(t, 0, repo.updateExtraCalls, "OpenAI 401 must not set Antigravity force-refresh marker")
+	require.Equal(t, 0, repo.updateExtraCalls, "OpenAI 401 must not write extra markers")
 	require.Equal(t, 1, repo.tempCalls, "401 handler should still set temp-unschedulable cooldown")
 	require.Nil(t, repo.lastCredentials, "no credentials should have been persisted")
 }
@@ -269,7 +239,7 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 	t.Run("openai_no_refresh_token", func(t *testing.T) {
 		repo := &rateLimitAccountRepoStub{}
 		invalidator := &tokenCacheInvalidatorRecorder{}
-		service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+		service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 		service.SetTokenCacheInvalidator(invalidator)
 		account := &Account{
 			ID:       2881,
@@ -293,7 +263,7 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 
 	t.Run("openai_blank_refresh_token_treated_as_missing", func(t *testing.T) {
 		repo := &rateLimitAccountRepoStub{}
-		service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+		service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 		account := &Account{
 			ID:       2882,
 			Platform: PlatformOpenAI,
@@ -311,14 +281,14 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 		require.Equal(t, 0, repo.tempCalls)
 	})
 
-	t.Run("antigravity_no_refresh_token_sets_error", func(t *testing.T) {
+	t.Run("anthropic_no_refresh_token_sets_error", func(t *testing.T) {
 		repo := &rateLimitAccountRepoStub{}
 		invalidator := &tokenCacheInvalidatorRecorder{}
-		service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+		service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 		service.SetTokenCacheInvalidator(invalidator)
 		account := &Account{
 			ID:       2883,
-			Platform: PlatformAntigravity,
+			Platform: PlatformAnthropic,
 			Type:     AccountTypeOAuth,
 			Credentials: map[string]any{
 				"access_token": "expired-at",
@@ -328,7 +298,7 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 		require.True(t, shouldDisable)
-		require.Equal(t, 1, repo.setErrorCalls, "Antigravity OAuth without refresh_token cannot self-recover")
+		require.Equal(t, 1, repo.setErrorCalls, "OAuth without refresh_token cannot self-recover")
 		require.Equal(t, 0, repo.tempCalls)
 		require.Contains(t, repo.lastErrorMsg, "refresh_token missing")
 		require.Len(t, invalidator.accounts, 1)

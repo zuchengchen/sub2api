@@ -15,7 +15,7 @@ import (
 const teamLinkedDeactivatedBody = `{"detail":{"code":"deactivated_workspace","message":"This workspace has been deactivated."}}`
 
 type teamLinkedAccountRepoStub struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	teamAccounts []Account
 	listErr      error
 	listCalls    int
@@ -87,7 +87,7 @@ func newTeamLinkedFixture() []Account {
 }
 
 func newTeamLinkedTestService(repo *teamLinkedAccountRepoStub) (*RateLimitService, *runtimeBlockRecorder) {
-	rl := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	rl := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	blocker := &runtimeBlockRecorder{}
 	rl.SetAccountRuntimeBlocker(blocker)
 	return rl, blocker

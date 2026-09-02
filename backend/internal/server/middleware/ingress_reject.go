@@ -138,14 +138,8 @@ func normalizeIngressRejectIP(raw string) string {
 func ingressRejectRoute(path string) (string, string) {
 	path = strings.ToLower(strings.TrimSpace(path))
 	switch {
-	case strings.HasPrefix(path, "/antigravity/v1beta"):
-		return "antigravity", "google"
-	case strings.HasPrefix(path, "/v1beta"):
-		return "gemini", "google"
 	case strings.HasPrefix(path, "/backend-api/codex"):
 		return "codex", "openai"
-	case strings.HasPrefix(path, "/antigravity"):
-		return "antigravity", "anthropic"
 	case strings.Contains(path, "/messages"):
 		return "messages", "anthropic"
 	case strings.Contains(path, "/responses"):

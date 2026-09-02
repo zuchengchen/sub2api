@@ -43,28 +43,6 @@ func TestGatewayChatCredentialStopDoesNotSelectAnotherAccountAndReturnsSafe503(t
 	require.NotContains(t, recorder.Body.String(), "client_secret")
 }
 
-func TestGatewayChatAntigravityCredentialFailureReturnsActionableMessage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-
-	(&GatewayHandler{}).handleCCFailoverExhausted(c, &service.UpstreamFailoverError{
-		StatusCode:        http.StatusUnauthorized,
-		Stage:             service.GatewayFailureStageAccountAuth,
-		Scope:             service.GatewayFailureScopeAccount,
-		Reason:            service.AntigravityCredentialRejectedReason,
-		NextAccountAction: service.NextAccountRetry,
-		ClientStatusCode:  http.StatusBadGateway,
-		ClientMessage:     service.AntigravityCredentialRejectedClientMessage,
-		ResponseBody:      []byte(`{"error":{"message":"Invalid bearer token","refresh_token":"must-not-leak"}}`),
-	}, false)
-
-	require.Equal(t, http.StatusBadGateway, recorder.Code)
-	require.Contains(t, recorder.Body.String(), service.AntigravityCredentialRejectedClientMessage)
-	require.NotContains(t, strings.ToLower(recorder.Body.String()), "bearer")
-	require.NotContains(t, strings.ToLower(recorder.Body.String()), "refresh_token")
-}
-
 func TestOpenAIAccessStateCredentialFailureUsesTypedSafeResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -308,7 +286,7 @@ func TestOpsClassificationTreatsCredentialFailureAsAuthNotInference(t *testing.T
 func TestOpsRecoveredCredentialFailoverDoesNotCreateRequestError(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.GET("/openai/v1/responses", func(c *gin.Context) {
@@ -340,7 +318,7 @@ func TestOpsRecoveredCredentialFailoverDoesNotCreateRequestError(t *testing.T) {
 func TestOpsWebSocketCredentialFailoverSuccessDoesNotCreateRequestError(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.GET("/openai/v1/responses", func(c *gin.Context) {
@@ -371,7 +349,7 @@ func TestOpsWebSocketCredentialFailoverSuccessDoesNotCreateRequestError(t *testi
 func TestOpsWebSocketCredentialFailoverExhaustedIsRecorded(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
-	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.GET("/openai/v1/responses", func(c *gin.Context) {

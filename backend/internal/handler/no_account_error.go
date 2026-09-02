@@ -77,10 +77,8 @@ func classifySelectionFailureError(err error, fallback noAccountErrorClassificat
 // the same value for both.
 //
 // platform is the platform the request was routed to (use
-// service.PlatformOpenAI / PlatformAnthropic / PlatformGemini). It is
-// required because Anthropic/Gemini routes additionally surface
-// mixed-scheduled Antigravity accounts; passing the wrong platform would
-// flip a legitimate 503 to a misleading 404 (or vice versa).
+// service.PlatformOpenAI / PlatformAnthropic 等)。传错平台会把合法的 503
+// 翻成误导性的 404（或反之）。
 func classifyNoAccountError(
 	ctx context.Context,
 	diag service.ModelAvailabilityDiagnoser,

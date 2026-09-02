@@ -159,18 +159,6 @@ func normalizeObservedAnthropicSpeed(raw string) string {
 	}
 }
 
-func (o *upstreamResponseModelObserver) ObserveGemini(payload []byte) {
-	model := firstValidTrimmedGJSONString(
-		payload,
-		"modelVersion",
-		"response.modelVersion",
-		"response.response.modelVersion",
-	)
-	// Gemini streaming has no universal terminal event carrying modelVersion;
-	// treating each declaration as terminal retains the latest chunk.
-	o.Observe(model, true)
-}
-
 func (o *upstreamResponseModelObserver) Model() string {
 	if o == nil {
 		return ""

@@ -656,12 +656,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 		// 不需要重试（成功或不可重试的错误），跳出循环
 		// DEBUG: 输出响应 headers（用于检测 rate limit 信息）
-		if account.Platform == PlatformGemini && resp.StatusCode < 400 && s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
-			logger.LegacyPrintf("service.gateway", "[DEBUG] Gemini API Response Headers for account %d:", account.ID)
-			for k, v := range resp.Header {
-				logger.LegacyPrintf("service.gateway", "[DEBUG]   %s: %v", k, v)
-			}
-		}
 		break
 	}
 	if resp == nil || resp.Body == nil {
@@ -1012,9 +1006,6 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 
 // resolveAccountUpstreamModel 确定账号将请求模型映射为什么上游模型。
 func resolveAccountUpstreamModel(account *Account, requestedModel string) string {
-	if account.Platform == PlatformAntigravity {
-		return mapAntigravityModel(account, requestedModel)
-	}
 	return account.GetMappedModel(requestedModel)
 }
 

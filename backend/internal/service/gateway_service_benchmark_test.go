@@ -47,25 +47,6 @@ func BenchmarkParseGatewayRequest_LargeAnthropicMessages(b *testing.B) {
 	}
 }
 
-func BenchmarkParseGatewayRequest_LargeGeminiContents(b *testing.B) {
-	for _, size := range benchmarkBodySizes() {
-		b.Run(size.name, func(b *testing.B) {
-			body := buildLargeGeminiContentsBody(size.bytes)
-
-			b.SetBytes(int64(len(body)))
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformGemini)
-				if err != nil {
-					b.Fatalf("解析 Gemini 请求失败: %v", err)
-				}
-				benchmarkIntSink = len(parsed.MessagesRaw())
-			}
-		})
-	}
-}
-
 func BenchmarkGenerateSessionHash_LargeAnthropicMessages(b *testing.B) {
 	svc := &GatewayService{}
 	for _, size := range benchmarkBodySizes() {
@@ -262,23 +243,6 @@ func buildLargeAnthropicMessagesBody(targetBytes int, includeCacheControl bool) 
 			_, _ = builder.WriteString(`,"cache_control":{"type":"ephemeral"}`)
 		}
 		_, _ = builder.WriteString(`}]}`)
-	}
-	_, _ = builder.WriteString(`]}`)
-	return []byte(builder.String())
-}
-
-func buildLargeGeminiContentsBody(targetBytes int) []byte {
-	var builder strings.Builder
-	builder.Grow(targetBytes + 1024)
-	_, _ = builder.WriteString(`{"model":"gemini-2.5-pro","systemInstruction":{"parts":[{"text":"system seed"}]},"contents":[`)
-	for i := 0; builder.Len() < targetBytes; i++ {
-		if i > 0 {
-			_ = builder.WriteByte(',')
-		}
-		_, _ = builder.WriteString(`{"role":"user","parts":[{"text":"`)
-		_, _ = builder.WriteString(strings.Repeat("gemini payload ", 64))
-		_, _ = builder.WriteString(strconv.Itoa(i))
-		_, _ = builder.WriteString(`"}]}`)
 	}
 	_, _ = builder.WriteString(`]}`)
 	return []byte(builder.String())

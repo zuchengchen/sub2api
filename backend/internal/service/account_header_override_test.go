@@ -35,10 +35,9 @@ func TestIsHeaderOverrideEligible(t *testing.T) {
 		{"kimi oauth", PlatformKimi, AccountTypeOAuth, false},
 		{"zhipu oauth", PlatformZhipu, AccountTypeOAuth, false},
 		{"deepseek oauth", PlatformDeepseek, AccountTypeOAuth, false},
-		{"gemini apikey", PlatformGemini, AccountTypeAPIKey, false},
+		{"composite apikey", PlatformComposite, AccountTypeAPIKey, false},
 		{"grok apikey", PlatformGrok, AccountTypeAPIKey, true},
 		{"grok oauth", PlatformGrok, AccountTypeOAuth, true},
-		{"antigravity apikey", PlatformAntigravity, AccountTypeAPIKey, false},
 		{"anthropic bedrock", PlatformAnthropic, AccountTypeBedrock, false},
 	}
 	for _, tt := range tests {
@@ -73,7 +72,7 @@ func TestIsHeaderOverrideEnabled(t *testing.T) {
 	require.False(t, headerOverrideTestAccount(PlatformAnthropic, AccountTypeOAuth, map[string]any{
 		credKeyHeaderOverrideEnabled: true,
 	}).IsHeaderOverrideEnabled())
-	require.False(t, headerOverrideTestAccount(PlatformGemini, AccountTypeAPIKey, map[string]any{
+	require.False(t, headerOverrideTestAccount(PlatformComposite, AccountTypeAPIKey, map[string]any{
 		credKeyHeaderOverrideEnabled: true,
 	}).IsHeaderOverrideEnabled())
 }

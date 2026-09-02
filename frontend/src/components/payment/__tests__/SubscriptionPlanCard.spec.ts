@@ -43,7 +43,6 @@ const mountPlanCard = (groupPlatform: string, overrides: Partial<SubscriptionPla
         rate_multiplier: 1,
         validity_days: 30,
         validity_unit: "day",
-        supported_model_scopes: ["claude", "gemini_text", "gemini_image"],
         is_active: true,
         ...overrides,
       },
@@ -52,22 +51,6 @@ const mountPlanCard = (groupPlatform: string, overrides: Partial<SubscriptionPla
   });
 
 describe("SubscriptionPlanCard", () => {
-  it("does not show Antigravity model scopes for OpenAI plans", () => {
-    const text = mountPlanCard("openai").text();
-
-    expect(text).not.toContain("Claude");
-    expect(text).not.toContain("Gemini");
-    expect(text).not.toContain("Imagen");
-  });
-
-  it("shows model scopes for Antigravity plans", () => {
-    const text = mountPlanCard("antigravity").text();
-
-    expect(text).toContain("Claude");
-    expect(text).toContain("Gemini");
-    expect(text).toContain("Imagen");
-  });
-
   // #4607：管理端保存的单位是复数（months/weeks），此前用户侧只匹配单数
   // 'month'，「1 个月」的套餐卡片被显示成「1天」。测试环境的 vue-i18n 为
   // runtime-only 构建，t() 原样返回 key，故按 key 断言单位分支。

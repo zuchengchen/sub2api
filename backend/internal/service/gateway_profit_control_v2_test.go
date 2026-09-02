@@ -49,13 +49,11 @@ func gatewayProfitTestAccount(id int64, platform string, rate float64, groupID i
 	}
 }
 
-func TestGatewayProfitControlInstallsForFivePlatformsOnlyOnTokenRequests(t *testing.T) {
+func TestGatewayProfitControlInstallsForSupportedPlatformsOnlyOnTokenRequests(t *testing.T) {
 	for _, platform := range []string{
 		PlatformOpenAI,
 		PlatformAnthropic,
-		PlatformGemini,
 		PlatformGrok,
-		PlatformAntigravity,
 	} {
 		t.Run(platform, func(t *testing.T) {
 			group := gatewayProfitTestGroup(101, platform)
@@ -185,12 +183,11 @@ func TestGatewayProfitControlLegacyMixedAndRoutedSelection(t *testing.T) {
 		require.ErrorIs(t, err, ErrNoAvailableAccounts)
 	})
 
-	t.Run("mixed routing filters the routed account", func(t *testing.T) {
+	t.Run("model routing filters the routed account", func(t *testing.T) {
 		group := gatewayProfitTestGroup(112, PlatformAnthropic)
 		group.ModelRoutingEnabled = true
 		group.ModelRouting = map[string][]int64{"claude-test": {2, 1}}
-		cheap := gatewayProfitTestAccount(1, PlatformAntigravity, 0.2, group.ID)
-		cheap.Extra = map[string]any{"mixed_scheduling": true}
+		cheap := gatewayProfitTestAccount(1, PlatformAnthropic, 0.2, group.ID)
 		cheap.Credentials = map[string]any{"model_mapping": map[string]any{"claude-test": "claude-test"}}
 		expensive := gatewayProfitTestAccount(2, PlatformAnthropic, 0.8, group.ID)
 		repo := &mockAccountRepoForPlatform{
@@ -317,7 +314,7 @@ func (r gatewayProfitAccountRepo) GetByID(context.Context, int64) (*Account, err
 }
 
 func TestGatewayProfitControlTerminalRefreshUsesReplacementObject(t *testing.T) {
-	selected := gatewayProfitTestAccount(141, PlatformGemini, 0.2, 1)
+	selected := gatewayProfitTestAccount(141, PlatformGrok, 0.2, 1)
 	replacement := selected
 	expensiveRate := 0.8
 	replacement.RateMultiplier = &expensiveRate
@@ -331,7 +328,7 @@ func TestGatewayProfitControlTerminalRefreshUsesReplacementObject(t *testing.T) 
 	)
 	ctx := context.WithValue(context.Background(), openAIProfitControlGateCtxKey{}, &openAIProfitControlGate{
 		groupID:   1,
-		platform:  PlatformGemini,
+		platform:  PlatformGrok,
 		threshold: 0.5,
 	})
 
@@ -368,7 +365,7 @@ func TestGatewayProfitControlTerminalRefreshFallsBackFromCacheToDatabase(t *test
 }
 
 func TestGatewayProfitControlTerminalRefreshFailureFallsBackToSelectedObject(t *testing.T) {
-	selected := gatewayProfitTestAccount(151, PlatformAntigravity, 0.2, 1)
+	selected := gatewayProfitTestAccount(151, PlatformGrok, 0.2, 1)
 	snapshot := NewSchedulerSnapshotService(
 		&gatewayProfitSnapshotCache{err: errors.New("cache unavailable")},
 		nil,
@@ -378,7 +375,7 @@ func TestGatewayProfitControlTerminalRefreshFailureFallsBackToSelectedObject(t *
 	)
 	ctx := context.WithValue(context.Background(), openAIProfitControlGateCtxKey{}, &openAIProfitControlGate{
 		groupID:   1,
-		platform:  PlatformAntigravity,
+		platform:  PlatformGrok,
 		threshold: 0.5,
 	})
 

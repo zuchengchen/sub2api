@@ -126,14 +126,14 @@ func snapshotOAuthRefreshAccount(account *Account) *Account {
 // 封装分布式锁、进程内互斥锁、DB 重读、已刷新检查、竞争恢复等通用逻辑
 type OAuthRefreshAPI struct {
 	accountRepo AccountRepository
-	tokenCache  GeminiTokenCache // 可选，nil = 无分布式锁
+	tokenCache  TokenCache // 可选，nil = 无分布式锁
 	lockTTL     time.Duration
 	localLocks  sync.Map // key: cacheKey string -> value: *contextMutex
 }
 
 // NewOAuthRefreshAPI 创建统一刷新 API
 // 可选传入 lockTTL 覆盖默认的 60s 分布式锁 TTL
-func NewOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCache, lockTTL ...time.Duration) *OAuthRefreshAPI {
+func NewOAuthRefreshAPI(accountRepo AccountRepository, tokenCache TokenCache, lockTTL ...time.Duration) *OAuthRefreshAPI {
 	ttl := defaultRefreshLockTTL
 	if len(lockTTL) > 0 && lockTTL[0] > 0 {
 		ttl = lockTTL[0]

@@ -139,7 +139,7 @@
           </div>
         </div>
 
-        <!-- Refresh Token Input (OpenAI / Antigravity / Mobile RT) -->
+        <!-- Refresh Token Input (OpenAI / Mobile RT) -->
         <div v-if="inputMethod === 'refresh_token' || inputMethod === 'mobile_refresh_token'" class="space-y-4">
           <div
             class="rounded-lg border border-blue-300 bg-white/80 p-4 dark:border-blue-600 dark:bg-gray-800/80"
@@ -675,31 +675,6 @@
                 <p class="mb-2 font-medium text-blue-900 dark:text-blue-200">
                   {{ oauthStep1GenerateUrl }}
                 </p>
-                <div v-if="showProjectId && platform === 'gemini'" class="mb-3">
-                  <label class="input-label flex items-center gap-2">
-                    {{ t('admin.accounts.oauth.gemini.projectIdLabel') }}
-                    <a
-                      href="https://console.cloud.google.com/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="inline-flex items-center gap-1 text-xs font-normal text-blue-500 hover:text-blue-600 dark:text-blue-400"
-                    >
-                      <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
-                      </svg>
-                      {{ t('admin.accounts.oauth.gemini.howToGetProjectId') }}
-                    </a>
-                  </label>
-                  <input
-                    v-model="projectId"
-                    type="text"
-                    class="input w-full font-mono text-sm"
-                    :placeholder="t('admin.accounts.oauth.gemini.projectIdPlaceholder')"
-                  />
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('admin.accounts.oauth.gemini.projectIdHint') }}
-                  </p>
-                </div>
                 <button
                   v-if="!authUrl"
                   type="button"
@@ -854,25 +829,6 @@
                     <Icon name="infoCircle" size="xs" class="mr-1 inline" />
                     {{ oauthAuthCodeHint }}
                   </p>
-
-                  <!-- Gemini-specific state parameter warning -->
-                  <div
-                    v-if="platform === 'gemini'"
-                    class="mt-3 rounded-lg border-2 border-amber-400 bg-amber-50 p-3 dark:border-amber-600 dark:bg-amber-900/30"
-                  >
-                    <div class="flex items-start gap-2">
-                      <Icon
-                        name="exclamationTriangle"
-                        size="md"
-                        class="flex-shrink-0 text-amber-600 dark:text-amber-400"
-                        :stroke-width="2"
-                      />
-                      <div class="text-sm text-amber-800 dark:text-amber-300">
-                        <p class="font-semibold">{{ $t('admin.accounts.oauth.gemini.stateWarningTitle') }}</p>
-                        <p class="mt-1">{{ $t('admin.accounts.oauth.gemini.stateWarningDesc') }}</p>
-                      </div>
-                    </div>
-                  </div>
                 </div>
 
                 <!-- Error Message -->
@@ -931,7 +887,6 @@ interface Props {
    */
   initialEmailPassword?: string
   platform?: AccountPlatform // Platform type for different UI/text
-  showProjectId?: boolean // New prop to control project ID visibility
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -956,8 +911,7 @@ const props = withDefaults(defineProps<Props>(), {
   showManualOption: true,
   initialInputMethod: 'manual',
   initialEmailPassword: '',
-  platform: 'anthropic',
-  showProjectId: true
+  platform: 'anthropic'
 })
 
 const emit = defineEmits<{
@@ -986,8 +940,6 @@ const showLocalCallbackNotice = computed(() => props.platform === 'openai' || pr
 // Get translation key based on platform
 const getOAuthKey = (key: string) => {
   if (props.platform === 'openai') return `admin.accounts.oauth.openai.${key}`
-  if (props.platform === 'gemini') return `admin.accounts.oauth.gemini.${key}`
-  if (props.platform === 'antigravity') return `admin.accounts.oauth.antigravity.${key}`
   if (props.platform === 'grok') return `admin.accounts.oauth.grok.${key}`
   return `admin.accounts.oauth.${key}`
 }
@@ -1006,7 +958,6 @@ const oauthAuthCodePlaceholder = computed(() => t(getOAuthKey('authCodePlacehold
 const oauthAuthCodeHint = computed(() => t(getOAuthKey('authCodeHint')))
 const oauthImportantNotice = computed(() => {
   if (props.platform === 'openai') return t('admin.accounts.oauth.openai.importantNotice')
-  if (props.platform === 'antigravity') return t('admin.accounts.oauth.antigravity.importantNotice')
   if (props.platform === 'grok') return t('admin.accounts.oauth.grok.importantNotice')
   return ''
 })
@@ -1024,7 +975,6 @@ const ssoCookieInput = ref('')
 const emailPasswordInput = ref(props.initialEmailPassword || '')
 const showHelpDialog = ref(false)
 const oauthState = ref('')
-const projectId = ref('')
 
 watch(
   () => [props.platform, props.showEmailPasswordOption] as const,
@@ -1129,10 +1079,10 @@ watch(inputMethod, (newVal) => {
   emit('update:inputMethod', newVal)
 })
 
-// Auto-extract code from callback URL (OpenAI/Gemini/Antigravity/Grok)
+// Auto-extract code from callback URL (OpenAI/Grok)
 // e.g., http://localhost:8085/callback?code=xxx...&state=...
 watch(authCodeInput, (newVal) => {
-  if (props.platform !== 'openai' && props.platform !== 'gemini' && props.platform !== 'antigravity' && props.platform !== 'grok') return
+  if (props.platform !== 'openai' && props.platform !== 'grok') return
 
   const trimmed = newVal.trim()
   // Check if it looks like a URL with code parameter
@@ -1142,7 +1092,7 @@ watch(authCodeInput, (newVal) => {
       const url = trimmed.includes('?') ? new URL(trimmed) : new URL(`http://localhost/callback?${trimmed.replace(/^\?/, '')}`)
       const code = url.searchParams.get('code')
       const stateParam = url.searchParams.get('state')
-      if ((props.platform === 'openai' || props.platform === 'gemini' || props.platform === 'antigravity' || props.platform === 'grok') && stateParam) {
+      if (stateParam) {
         oauthState.value = stateParam
       }
       if (code && code !== trimmed) {
@@ -1153,7 +1103,7 @@ watch(authCodeInput, (newVal) => {
       // If URL parsing fails, try regex extraction
       const match = trimmed.match(/[?&]code=([^&]+)/)
       const stateMatch = trimmed.match(/[?&]state=([^&]+)/)
-      if ((props.platform === 'openai' || props.platform === 'gemini' || props.platform === 'antigravity' || props.platform === 'grok') && stateMatch && stateMatch[1]) {
+      if (stateMatch && stateMatch[1]) {
         oauthState.value = stateMatch[1]
       }
       if (match && match[1] && match[1] !== trimmed) {
@@ -1217,7 +1167,6 @@ const handleImportSSO = () => {
 defineExpose({
   authCode: authCodeInput,
   oauthState,
-  projectId,
   sessionKey: sessionKeyInput,
   refreshToken: refreshTokenInput,
   sessionToken: sessionTokenInput,
@@ -1229,7 +1178,6 @@ defineExpose({
   reset: () => {
     authCodeInput.value = ''
     oauthState.value = ''
-    projectId.value = ''
     sessionKeyInput.value = ''
     refreshTokenInput.value = ''
     sessionTokenInput.value = ''

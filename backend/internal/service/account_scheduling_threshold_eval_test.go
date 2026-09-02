@@ -358,38 +358,12 @@ func TestEvaluateAccountSchedulingThreshold_UnsupportedPlatformsDoNotPause(t *te
 		extra     map[string]any
 	}{
 		{
-			name:      "gemini",
-			platform:  PlatformGemini,
-			threshold: 80,
-			extra: map[string]any{
-				"gemini_usage_raw": map[string]any{
-					"buckets": []any{
-						map[string]any{
-							"modelId":           "gemini-2.5-pro",
-							"remainingFraction": 0.05,
-							"resetTime":         now.Add(2 * time.Hour).Format(time.RFC3339),
-						},
-					},
-				},
-			},
-		},
-		{
 			name:      "kiro",
 			platform:  PlatformKiro,
 			threshold: 90,
 			extra: map[string]any{
 				"kiro_sched_utilization": 99.0,
 				"kiro_sched_reset_at":    now.Add(24 * time.Hour).Format(time.RFC3339),
-			},
-		},
-		{
-			name:      "antigravity",
-			platform:  PlatformAntigravity,
-			threshold: 90,
-			extra: map[string]any{
-				"antigravity_sched_utilization": 92.0,
-				"antigravity_sched_reset_at":    now.Add(48 * time.Hour).Format(time.RFC3339),
-				"antigravity_sched_scope":       "gemini",
 			},
 		},
 	}

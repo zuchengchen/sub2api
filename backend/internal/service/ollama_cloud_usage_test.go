@@ -472,9 +472,7 @@ func TestIsOllamaCloudUsageAccountStrictOfficialHost(t *testing.T) {
 		{"https://www.ollama.com/v1", PlatformZhipu, true},
 		{"https://ollama.com:443", PlatformDeepseek, true},
 		// 用量窗口不随 base_url 放开到其余平台。
-		{"https://ollama.com", PlatformGemini, false},
 		{"https://ollama.com", PlatformGrok, false},
-		{"https://ollama.com", PlatformAntigravity, false},
 		{"https://ollama.com/", PlatformAnthropic, false},
 		{"https://ollama.com/v1/", PlatformOpenAI, false},
 		{"http://ollama.com", PlatformOpenAI, false},

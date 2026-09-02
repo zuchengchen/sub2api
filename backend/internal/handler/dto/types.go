@@ -108,15 +108,12 @@ type Group struct {
 	MonthlyLimitUSD           *float64 `json:"monthly_limit_usd"`
 	LongContextPricingEnabled bool     `json:"long_context_pricing_enabled"`
 
-	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration         bool    `json:"allow_image_generation"`
-	AllowBatchImageGeneration    bool    `json:"allow_batch_image_generation"`
-	ImageRateIndependent         bool    `json:"image_rate_independent"`
-	ImageRateMultiplier          float64 `json:"image_rate_multiplier"`
-	BatchImageDiscountMultiplier float64 `json:"batch_image_discount_multiplier"`
-	BatchImageHoldMultiplier     float64 `json:"batch_image_hold_multiplier"`
-	VideoRateIndependent         bool    `json:"video_rate_independent"`
-	VideoRateMultiplier          float64 `json:"video_rate_multiplier"`
+	// 图片生成计费配置
+	AllowImageGeneration bool    `json:"allow_image_generation"`
+	ImageRateIndependent bool    `json:"image_rate_independent"`
+	ImageRateMultiplier  float64 `json:"image_rate_multiplier"`
+	VideoRateIndependent bool    `json:"video_rate_independent"`
+	VideoRateMultiplier  float64 `json:"video_rate_multiplier"`
 	// 高峰时段倍率配置
 	PeakRateEnabled    bool     `json:"peak_rate_enabled"`
 	PeakStart          string   `json:"peak_start"`
@@ -148,7 +145,7 @@ type Group struct {
 	// OpenAI Live 接口开关
 	AllowLive bool `json:"allow_live"`
 
-	// 账号过滤控制（仅 OpenAI/Antigravity 平台有效）
+	// 账号过滤控制（仅 OpenAI 平台有效）
 	RequireOAuthOnly  bool `json:"require_oauth_only"`
 	RequirePrivacySet bool `json:"require_privacy_set"`
 
@@ -180,7 +177,7 @@ type AdminGroup struct {
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
 
-	// MCP XML 协议注入（仅 antigravity 平台使用）
+	// MCP XML 协议注入
 	MCPXMLInject bool `json:"mcp_xml_inject"`
 
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
@@ -188,7 +185,7 @@ type AdminGroup struct {
 	MessagesDispatchModelConfig domain.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	ModelsListConfig            domain.GroupModelsListConfig             `json:"models_list_config"`
 
-	// 支持的模型系列（仅 antigravity 平台使用）
+	// 支持的模型系列
 	SupportedModelScopes    []string       `json:"supported_model_scopes"`
 	AccountGroups           []AccountGroup `json:"account_groups,omitempty"`
 	AccountCount            int64          `json:"account_count,omitempty"`

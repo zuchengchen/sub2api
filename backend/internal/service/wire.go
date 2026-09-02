@@ -9,7 +9,6 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/google/wire"
@@ -94,18 +93,8 @@ func ProvideAuthService(
 }
 
 // ProvideOAuthRefreshAPI creates OAuthRefreshAPI with the default lock TTL.
-func ProvideOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCache) *OAuthRefreshAPI {
+func ProvideOAuthRefreshAPI(accountRepo AccountRepository, tokenCache TokenCache) *OAuthRefreshAPI {
 	return NewOAuthRefreshAPI(accountRepo, tokenCache)
-}
-
-func ProvideBatchImageModelPricingResolver(resolver *ModelPricingResolver) *BatchImageModelPricingResolver {
-	return &BatchImageModelPricingResolver{Resolver: resolver}
-}
-
-func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, cfg *config.Config) *BatchImageCleanupService {
-	svc := NewBatchImageCleanupService(repo, accountRepo, cfg)
-	svc.Start()
-	return svc
 }
 
 // ProvideOpenAIOAuthService creates OpenAIOAuthService with privacy/account enrichment support.
@@ -124,8 +113,6 @@ func ProvideTokenRefreshService(
 	accountRepo AccountRepository,
 	oauthService *OAuthService,
 	openaiOAuthService *OpenAIOAuthService,
-	geminiOAuthService *GeminiOAuthService,
-	antigravityOAuthService *AntigravityOAuthService,
 	grokOAuthService *GrokOAuthService,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
@@ -136,7 +123,7 @@ func ProvideTokenRefreshService(
 	refreshAPI *OAuthRefreshAPI,
 	runtimeBlocker AccountRuntimeBlocker,
 ) *TokenRefreshService {
-	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
+	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
 	// 注入 OpenAI privacy opt-out 依赖
 	svc.SetPrivacyDeps(privacyClientFactory, proxyRepo)
 	// 注入统一 OAuth 刷新 API（消除 TokenRefreshService 与 TokenProvider 之间的竞争条件）
@@ -148,10 +135,29 @@ func ProvideTokenRefreshService(
 	return svc
 }
 
+// ProvideCNProviderBalanceCheckService 构造并启动周期余额/额度检测任务。
+// payg 账号探余额（低余额停调）；coding plan 账号探 5h/weekly 滚动窗口
+// （落 extra 快照供调度阈值评估自动停调）。
+// 间隔取自 gateway.cn_providers.balance_check_interval_minutes；<=0 或关闭时不启动。
+func ProvideCNProviderBalanceCheckService(
+	accountRepo AccountRepository,
+	balanceService *CNProviderBalanceService,
+	quotaService *CNProviderQuotaService,
+	cfg *config.Config,
+) *CNProviderBalanceCheckService {
+	minutes := 10
+	if cfg != nil && cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes > 0 {
+		minutes = cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes
+	}
+	svc := NewCNProviderBalanceCheckService(accountRepo, balanceService, quotaService, cfg, time.Duration(minutes)*time.Minute)
+	svc.Start()
+	return svc
+}
+
 // ProvideClaudeTokenProvider creates ClaudeTokenProvider with OAuthRefreshAPI injection
 func ProvideClaudeTokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	oauthService *OAuthService,
 	refreshAPI *OAuthRefreshAPI,
 ) *ClaudeTokenProvider {
@@ -165,7 +171,7 @@ func ProvideClaudeTokenProvider(
 // ProvideOpenAITokenProvider creates OpenAITokenProvider with OAuthRefreshAPI injection
 func ProvideOpenAITokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	openaiOAuthService *OpenAIOAuthService,
 	refreshAPI *OAuthRefreshAPI,
 ) *OpenAITokenProvider {
@@ -218,8 +224,6 @@ func ProvideAccountUsageService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
 	usageFetcher ClaudeUsageFetcher,
-	geminiQuotaService *GeminiQuotaService,
-	antigravityQuotaFetcher *AntigravityQuotaFetcher,
 	grokQuotaFetcher *GrokQuotaFetcher,
 	grokQuotaService *GrokQuotaService,
 	openAIQuotaService *OpenAIQuotaService,
@@ -232,8 +236,6 @@ func ProvideAccountUsageService(
 		accountRepo,
 		usageLogRepo,
 		usageFetcher,
-		geminiQuotaService,
-		antigravityQuotaFetcher,
 		grokQuotaFetcher,
 		grokQuotaService,
 		openAIQuotaService,
@@ -247,10 +249,8 @@ func ProvideAccountUsageService(
 
 func ProvideAccountTestService(
 	accountRepo AccountRepository,
-	geminiTokenProvider *GeminiTokenProvider,
 	claudeTokenProvider *ClaudeTokenProvider,
 	grokTokenProvider *GrokTokenProvider,
-	antigravityGatewayService *AntigravityGatewayService,
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
@@ -260,10 +260,8 @@ func ProvideAccountTestService(
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
-		geminiTokenProvider,
 		claudeTokenProvider,
 		grokTokenProvider,
-		antigravityGatewayService,
 		httpUpstream,
 		cfg,
 		tlsFPProfileService,
@@ -308,59 +306,10 @@ func ProvideCNProviderBalanceService(
 	return NewCNProviderBalanceService(accountRepo, proxyRepo, httpUpstream, cfg)
 }
 
-// ProvideCNProviderBalanceCheckService 构造并启动周期余额/额度检测任务。
-// payg 账号探余额（低余额停调）；coding plan 账号探 5h/weekly 滚动窗口
-// （落 extra 快照供调度阈值评估自动停调）。
-// 间隔取自 gateway.cn_providers.balance_check_interval_minutes；<=0 或关闭时不启动。
-func ProvideCNProviderBalanceCheckService(
-	accountRepo AccountRepository,
-	balanceService *CNProviderBalanceService,
-	quotaService *CNProviderQuotaService,
-	cfg *config.Config,
-) *CNProviderBalanceCheckService {
-	minutes := 10
-	if cfg != nil && cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes > 0 {
-		minutes = cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes
-	}
-	svc := NewCNProviderBalanceCheckService(accountRepo, balanceService, quotaService, cfg, time.Duration(minutes)*time.Minute)
-	svc.Start()
-	return svc
-}
-
-// ProvideGeminiTokenProvider creates GeminiTokenProvider with OAuthRefreshAPI injection
-func ProvideGeminiTokenProvider(
-	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
-	geminiOAuthService *GeminiOAuthService,
-	refreshAPI *OAuthRefreshAPI,
-) *GeminiTokenProvider {
-	p := NewGeminiTokenProvider(accountRepo, tokenCache, geminiOAuthService)
-	executor := NewGeminiTokenRefresher(geminiOAuthService)
-	p.SetRefreshAPI(refreshAPI, executor)
-	p.SetRefreshPolicy(GeminiProviderRefreshPolicy())
-	return p
-}
-
-// ProvideAntigravityTokenProvider creates AntigravityTokenProvider with OAuthRefreshAPI injection
-func ProvideAntigravityTokenProvider(
-	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
-	antigravityOAuthService *AntigravityOAuthService,
-	refreshAPI *OAuthRefreshAPI,
-	tempUnschedCache TempUnschedCache,
-) *AntigravityTokenProvider {
-	p := NewAntigravityTokenProvider(accountRepo, tokenCache, antigravityOAuthService)
-	executor := NewAntigravityTokenRefresher(antigravityOAuthService)
-	p.SetRefreshAPI(refreshAPI, executor)
-	p.SetRefreshPolicy(AntigravityProviderRefreshPolicy())
-	p.SetTempUnschedCache(tempUnschedCache)
-	return p
-}
-
 // ProvideGrokTokenProvider creates GrokTokenProvider with OAuthRefreshAPI injection.
 func ProvideGrokTokenProvider(
 	accountRepo AccountRepository,
-	tokenCache GeminiTokenCache,
+	tokenCache TokenCache,
 	grokOAuthService *GrokOAuthService,
 	refreshAPI *OAuthRefreshAPI,
 	tempUnschedCache TempUnschedCache,
@@ -481,14 +430,13 @@ func ProvideRateLimitService(
 	accountRepo AccountRepository,
 	usageRepo UsageLogRepository,
 	cfg *config.Config,
-	geminiQuotaService *GeminiQuotaService,
 	tempUnschedCache TempUnschedCache,
 	timeoutCounterCache TimeoutCounterCache,
 	openAI403CounterCache OpenAI403CounterCache,
 	settingService *SettingService,
 	tokenCacheInvalidator TokenCacheInvalidator,
 ) *RateLimitService {
-	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
+	svc := NewRateLimitService(accountRepo, usageRepo, cfg, tempUnschedCache)
 	if healthCache, ok := tempUnschedCache.(OpenAIAPIKeyHealthCache); ok {
 		svc.SetOpenAIAPIKeyHealthCache(healthCache)
 	}
@@ -716,8 +664,6 @@ func ProvideOpsService(
 	concurrencyService *ConcurrencyService,
 	gatewayService *GatewayService,
 	openAIGatewayService *OpenAIGatewayService,
-	geminiCompatService *GeminiMessagesCompatService,
-	antigravityGatewayService *AntigravityGatewayService,
 	systemLogSink *OpsSystemLogSink,
 	settingService *SettingService,
 	authCacheInvalidationWorker *AuthCacheInvalidationWorker,
@@ -732,8 +678,6 @@ func ProvideOpsService(
 		concurrencyService,
 		gatewayService,
 		openAIGatewayService,
-		geminiCompatService,
-		antigravityGatewayService,
 		systemLogSink,
 	)
 	if settingService != nil {
@@ -778,7 +722,6 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	if err := svc.MigrateGrokDefaultTextModel(context.Background()); err != nil {
 		logger.LegacyPrintf("service.setting", "Warning: migrate Grok default text model failed: %v", err)
 	}
-	antigravity.SetUserAgentVersionResolver(svc.GetAntigravityUserAgentVersion)
 	// enforceCodexIdentityHeaders 是所有 Codex 出站路径共用的纯函数收口点，拿不到 ctx，
 	// 故注入无参解析器；解析器内部自带 60s TTL 缓存，热路径不触库。
 	SetCodexCanonicalUserAgentResolver(func() string {
@@ -891,25 +834,14 @@ var ProviderSet = wire.NewSet(
 	NewOpenAIGatewayService,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,
-	ProvideBatchImageModelPricingResolver,
-	NewBatchImagePublicService,
-	NewBatchImageDownloadService,
-	ProvideBatchImageCleanupService,
-	ProvideBatchImageWorkerRuntime,
 	wire.Bind(new(AccountRuntimeBlocker), new(*OpenAIGatewayService)),
 	NewOAuthService,
 	ProvideOpenAIOAuthService,
 	ProvideGrokOAuthService,
 	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
-	NewGeminiOAuthService,
-	NewGeminiQuotaService,
 	NewCompositeTokenCacheInvalidator,
 	wire.Bind(new(TokenCacheInvalidator), new(*CompositeTokenCacheInvalidator)),
-	NewAntigravityOAuthService,
 	ProvideOAuthRefreshAPI,
-	ProvideGeminiTokenProvider,
-	NewGeminiMessagesCompatService,
-	ProvideAntigravityTokenProvider,
 	ProvideGrokTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
@@ -919,7 +851,6 @@ var ProviderSet = wire.NewSet(
 	ProvideCNProviderBalanceService,
 	ProvideCNProviderBalanceCheckService,
 	ProvideClaudeTokenProvider,
-	NewAntigravityGatewayService,
 	ProvideRateLimitService,
 	ProvideAccountUsageService,
 	ProvideAccountTestService,
@@ -962,7 +893,6 @@ var ProviderSet = wire.NewSet(
 	ProvideDashboardAggregationService,
 	ProvideUsageCleanupService,
 	ProvideDeferredService,
-	NewAntigravityQuotaFetcher,
 	NewGrokQuotaFetcher,
 	NewUserAttributeService,
 	NewUsageCache,

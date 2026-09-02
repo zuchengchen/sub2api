@@ -19,7 +19,6 @@ const (
 	CompositeRouteEndpointChatCompletions = "chat_completions"
 	CompositeRouteEndpointEmbeddings      = "embeddings"
 	CompositeRouteEndpointImages          = "images"
-	CompositeRouteEndpointGemini          = "gemini"
 
 	CompositeRouteSourceExplicit = "route"
 	CompositeRouteSourceDetector = "detector"
@@ -105,8 +104,7 @@ func normalizeCompositeRouteEndpoint(endpoint string) string {
 		CompositeRouteEndpointResponses,
 		CompositeRouteEndpointChatCompletions,
 		CompositeRouteEndpointEmbeddings,
-		CompositeRouteEndpointImages,
-		CompositeRouteEndpointGemini:
+		CompositeRouteEndpointImages:
 		return endpoint
 	default:
 		return CompositeRouteEndpointAny
