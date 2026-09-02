@@ -59,6 +59,18 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	return s.forwardAsChatCompletions(ctx, c, account, body, promptCacheKey, defaultMappedModel, false)
+}
+
+func (s *OpenAIGatewayService) forwardAsChatCompletions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	promptCacheKey string,
+	defaultMappedModel string,
+	compatPromptCacheTenantIsolated bool,
+) (*OpenAIForwardResult, error) {
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -164,9 +176,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	compatPromptCacheInjected := false
-	if promptCacheKey == "" && account.UsesOpenAICodexProtocol() && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
+	if promptCacheKey == "" && !isResponsesShape && (account.UsesOpenAICodexProtocol() || account.IsOpenAIApiKey()) && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 		promptCacheKey = deriveCompatPromptCacheKey(&chatReq, upstreamModel)
 		compatPromptCacheInjected = promptCacheKey != ""
+		if compatPromptCacheInjected && account.IsOpenAIApiKey() {
+			promptCacheKey = isolateOpenAISessionID(getAPIKeyIDFromContext(c), promptCacheKey)
+			compatPromptCacheTenantIsolated = true
+		}
 	}
 
 	// 3. Build the upstream (Responses API) body.
@@ -347,6 +363,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	responsesReq.ServiceTier = normalizedOpenAIServiceTierValue(gjson.GetBytes(responsesBody, "service_tier").String())
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -374,7 +391,11 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 		if promptCacheKey != "" {
 			apiKeyID := getAPIKeyIDFromContext(c)
-			upstreamReq.Header.Set("session_id", generateSessionUUID(isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), promptCacheKey)))
+			sessionKey := promptCacheKey
+			if !compatPromptCacheTenantIsolated {
+				sessionKey = isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), promptCacheKey)
+			}
+			upstreamReq.Header.Set("session_id", generateSessionUUID(sessionKey))
 		}
 
 		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
@@ -393,12 +414,15 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
 			}
 			recoveryPromptCacheKey := promptCacheKey
+			recoveryTenantIsolated := compatPromptCacheTenantIsolated
 			if compatPromptCacheInjected {
 				// Re-derive an automatically generated key from the original body so
 				// GPT-5.6 cache options and the stable breakpoint are prepared again.
+				// The tenant-isolation flag is recomputed together with the key.
 				recoveryPromptCacheKey = ""
+				recoveryTenantIsolated = false
 			}
-			return s.ForwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, recoveryPromptCacheKey, defaultMappedModel)
+			return s.forwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, recoveryPromptCacheKey, defaultMappedModel, recoveryTenantIsolated)
 		}
 		if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, responsesBody, respBody); retryErr != nil {
 			_ = resp.Body.Close()
