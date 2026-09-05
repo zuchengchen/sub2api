@@ -56,6 +56,8 @@ const (
 	FieldDefaultValidityDays = "default_validity_days"
 	// FieldAllowImageGeneration holds the string denoting the allow_image_generation field in the database.
 	FieldAllowImageGeneration = "allow_image_generation"
+	// FieldAllowBatchImageGeneration holds the string denoting the allow_batch_image_generation field in the database.
+	FieldAllowBatchImageGeneration = "allow_batch_image_generation"
 	// FieldImageRateIndependent holds the string denoting the image_rate_independent field in the database.
 	FieldImageRateIndependent = "image_rate_independent"
 	// FieldImageRateMultiplier holds the string denoting the image_rate_multiplier field in the database.
@@ -66,6 +68,10 @@ const (
 	FieldImagePrice2k = "image_price_2k"
 	// FieldImagePrice4k holds the string denoting the image_price_4k field in the database.
 	FieldImagePrice4k = "image_price_4k"
+	// FieldBatchImageDiscountMultiplier holds the string denoting the batch_image_discount_multiplier field in the database.
+	FieldBatchImageDiscountMultiplier = "batch_image_discount_multiplier"
+	// FieldBatchImageHoldMultiplier holds the string denoting the batch_image_hold_multiplier field in the database.
+	FieldBatchImageHoldMultiplier = "batch_image_hold_multiplier"
 	// FieldVideoRateIndependent holds the string denoting the video_rate_independent field in the database.
 	FieldVideoRateIndependent = "video_rate_independent"
 	// FieldVideoRateMultiplier holds the string denoting the video_rate_multiplier field in the database.
@@ -126,6 +132,8 @@ const (
 	FieldMessagesDispatchModelConfig = "messages_dispatch_model_config"
 	// FieldModelsListConfig holds the string denoting the models_list_config field in the database.
 	FieldModelsListConfig = "models_list_config"
+	// FieldCodexModelsManifestConfig holds the string denoting the codex_models_manifest_config field in the database.
+	FieldCodexModelsManifestConfig = "codex_models_manifest_config"
 	// FieldRpmLimit holds the string denoting the rpm_limit field in the database.
 	FieldRpmLimit = "rpm_limit"
 	// FieldMaxReasoningEffort holds the string denoting the max_reasoning_effort field in the database.
@@ -235,11 +243,14 @@ var Columns = []string{
 	FieldMonthlyLimitUsd,
 	FieldDefaultValidityDays,
 	FieldAllowImageGeneration,
+	FieldAllowBatchImageGeneration,
 	FieldImageRateIndependent,
 	FieldImageRateMultiplier,
 	FieldImagePrice1k,
 	FieldImagePrice2k,
 	FieldImagePrice4k,
+	FieldBatchImageDiscountMultiplier,
+	FieldBatchImageHoldMultiplier,
 	FieldVideoRateIndependent,
 	FieldVideoRateMultiplier,
 	FieldVideoPrice480p,
@@ -270,6 +281,7 @@ var Columns = []string{
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
 	FieldModelsListConfig,
+	FieldCodexModelsManifestConfig,
 	FieldRpmLimit,
 	FieldMaxReasoningEffort,
 	FieldMaxReasoningEffortOverLimit,
@@ -348,10 +360,16 @@ var (
 	DefaultDefaultValidityDays int
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.
 	DefaultAllowImageGeneration bool
+	// DefaultAllowBatchImageGeneration holds the default value on creation for the "allow_batch_image_generation" field.
+	DefaultAllowBatchImageGeneration bool
 	// DefaultImageRateIndependent holds the default value on creation for the "image_rate_independent" field.
 	DefaultImageRateIndependent bool
 	// DefaultImageRateMultiplier holds the default value on creation for the "image_rate_multiplier" field.
 	DefaultImageRateMultiplier float64
+	// DefaultBatchImageDiscountMultiplier holds the default value on creation for the "batch_image_discount_multiplier" field.
+	DefaultBatchImageDiscountMultiplier float64
+	// DefaultBatchImageHoldMultiplier holds the default value on creation for the "batch_image_hold_multiplier" field.
+	DefaultBatchImageHoldMultiplier float64
 	// DefaultVideoRateIndependent holds the default value on creation for the "video_rate_independent" field.
 	DefaultVideoRateIndependent bool
 	// DefaultVideoRateMultiplier holds the default value on creation for the "video_rate_multiplier" field.
@@ -396,6 +414,8 @@ var (
 	DefaultMessagesDispatchModelConfig domain.OpenAIMessagesDispatchModelConfig
 	// DefaultModelsListConfig holds the default value on creation for the "models_list_config" field.
 	DefaultModelsListConfig domain.GroupModelsListConfig
+	// DefaultCodexModelsManifestConfig holds the default value on creation for the "codex_models_manifest_config" field.
+	DefaultCodexModelsManifestConfig domain.GroupCodexModelsManifestConfig
 	// DefaultRpmLimit holds the default value on creation for the "rpm_limit" field.
 	DefaultRpmLimit int
 	// DefaultMaxReasoningEffort holds the default value on creation for the "max_reasoning_effort" field.
@@ -524,6 +544,11 @@ func ByAllowImageGeneration(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAllowImageGeneration, opts...).ToFunc()
 }
 
+// ByAllowBatchImageGeneration orders the results by the allow_batch_image_generation field.
+func ByAllowBatchImageGeneration(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowBatchImageGeneration, opts...).ToFunc()
+}
+
 // ByImageRateIndependent orders the results by the image_rate_independent field.
 func ByImageRateIndependent(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImageRateIndependent, opts...).ToFunc()
@@ -547,6 +572,16 @@ func ByImagePrice2k(opts ...sql.OrderTermOption) OrderOption {
 // ByImagePrice4k orders the results by the image_price_4k field.
 func ByImagePrice4k(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImagePrice4k, opts...).ToFunc()
+}
+
+// ByBatchImageDiscountMultiplier orders the results by the batch_image_discount_multiplier field.
+func ByBatchImageDiscountMultiplier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBatchImageDiscountMultiplier, opts...).ToFunc()
+}
+
+// ByBatchImageHoldMultiplier orders the results by the batch_image_hold_multiplier field.
+func ByBatchImageHoldMultiplier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBatchImageHoldMultiplier, opts...).ToFunc()
 }
 
 // ByVideoRateIndependent orders the results by the video_rate_independent field.
