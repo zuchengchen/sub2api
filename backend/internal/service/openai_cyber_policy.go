@@ -112,3 +112,22 @@ func buildCyberPolicyMarkBody(payload []byte) string {
 	}
 	return truncateString(trimmed, cyberPolicyMarkBodyMaxBytes)
 }
+
+func markOpenAICyberPolicyEvent(c *gin.Context, payload []byte, upstreamStatus int, usage *OpenAIUsage) bool {
+	hit, code, message := detectOpenAICyberPolicy(payload)
+	if !hit {
+		return false
+	}
+	mark := CyberPolicyMark{
+		Code:           code,
+		Message:        message,
+		Body:           buildCyberPolicyMarkBody(payload),
+		UpstreamStatus: upstreamStatus,
+	}
+	if usage != nil {
+		mark.UpstreamInTok = usage.InputTokens
+		mark.UpstreamOutTok = usage.OutputTokens
+	}
+	MarkOpsCyberPolicy(c, mark)
+	return true
+}
