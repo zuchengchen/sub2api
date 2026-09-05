@@ -163,8 +163,9 @@ func TestCreateShadowInheritsParentEffectiveOpenAILongContextBillingValue(t *tes
 		parentExtra map[string]any
 		want        bool
 	}{
-		{name: "missing parent value defaults disabled", want: false},
+		{name: "missing parent value defaults enabled", want: true},
 		{name: "explicit parent opt-out is inherited", parentExtra: map[string]any{openAILongContextBillingEnabledKey: false}, want: false},
+		{name: "explicit parent opt-in is inherited", parentExtra: map[string]any{openAILongContextBillingEnabledKey: true}, want: true},
 	}
 
 	for _, tt := range tests {

@@ -34,11 +34,11 @@ func TestAccountIsOpenAILongContextBillingEnabled(t *testing.T) {
 }
 
 func TestNormalizeOpenAILongContextBillingExtra(t *testing.T) {
-	t.Run("OpenAI missing key persists disabled default", func(t *testing.T) {
+	t.Run("OpenAI missing key persists enabled default", func(t *testing.T) {
 		extra, err := normalizeOpenAILongContextBillingExtra(PlatformOpenAI, nil)
 
 		require.NoError(t, err)
-		require.Equal(t, false, extra["openai_long_context_billing_enabled"])
+		require.Equal(t, true, extra["openai_long_context_billing_enabled"])
 	})
 
 	t.Run("OpenAI explicit false is preserved", func(t *testing.T) {
@@ -116,7 +116,7 @@ func (r *longContextBillingRepoStub) BulkUpdate(_ context.Context, _ []int64, _ 
 	return 1, nil
 }
 
-func TestAdminServiceCreateAccountDefaultsOpenAILongContextBillingDisabled(t *testing.T) {
+func TestAdminServiceCreateAccountDefaultsOpenAILongContextBillingEnabled(t *testing.T) {
 	repo := &longContextBillingRepoStub{}
 	svc := &adminServiceImpl{accountRepo: repo}
 
@@ -130,7 +130,7 @@ func TestAdminServiceCreateAccountDefaultsOpenAILongContextBillingDisabled(t *te
 
 	require.NoError(t, err)
 	require.Same(t, account, repo.createdAccount)
-	require.Equal(t, false, account.Extra[openAILongContextBillingEnabledKey])
+	require.Equal(t, true, account.Extra[openAILongContextBillingEnabledKey])
 }
 
 func TestAdminServiceCreateAccountRejectsMalformedOpenAILongContextBillingValue(t *testing.T) {

@@ -1093,6 +1093,25 @@ func (a *Account) IsOpenAILongContextBillingEnabled() bool {
 	return ok && enabled
 }
 
+// effectiveOpenAILongContextBillingEnabled is the persist-time default for new
+// OpenAI rows (including spark shadows): missing key follows the API-sync
+// default of enabled. The request hot path still uses
+// IsOpenAILongContextBillingEnabled, which stays fail-closed until extra is written.
+func (a *Account) effectiveOpenAILongContextBillingEnabled() bool {
+	if a == nil || !a.IsOpenAI() {
+		return false
+	}
+	if a.Extra == nil {
+		return true
+	}
+	raw, exists := a.Extra[openAILongContextBillingEnabledKey]
+	if !exists {
+		return true
+	}
+	enabled, ok := raw.(bool)
+	return ok && enabled
+}
+
 func (a *Account) IsAnthropic() bool {
 	return a.Platform == PlatformAnthropic
 }
