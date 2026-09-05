@@ -5678,10 +5678,6 @@ const handleCreateGroup = async () => {
       models_list_config: buildModelsListConfig(createModelsListState),
       // 创建时固定账号 manifest 固定发送关闭状态（后端创建路径禁止开启）
       codex_models_manifest_config: createCodexManifestDefaults(),
-      supported_model_scopes: normalizeSupportedModelScopesForPlatform(
-        createForm.platform,
-        createForm.supported_model_scopes,
-      ),
       messages_dispatch_model_config:
         createForm.platform === "openai"
           ? messagesDispatchFormStateToConfig({
@@ -5987,10 +5983,6 @@ const handleUpdateGroup = async () => {
               fallback_to_scheduler: editCodexManifestConfig.fallback_to_scheduler,
             }
           : createCodexManifestDefaults(),
-      supported_model_scopes: normalizeSupportedModelScopesForPlatform(
-        editForm.platform,
-        editForm.supported_model_scopes,
-      ),
       messages_dispatch_model_config:
         editForm.platform === "openai"
           ? messagesDispatchFormStateToConfig({
