@@ -381,7 +381,7 @@ func normalizeOpenAILongContextBillingExtra(platform string, extra map[string]an
 	}
 	_, exists := normalized[openAILongContextBillingEnabledKey]
 	if !exists {
-		normalized[openAILongContextBillingEnabledKey] = false
+		normalized[openAILongContextBillingEnabledKey] = true
 	}
 	return normalized, nil
 }
@@ -1393,7 +1393,7 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 		Concurrency:     concurrency,
 		Schedulable:     true,
 		Extra: map[string]any{
-			openAILongContextBillingEnabledKey: parent.IsOpenAILongContextBillingEnabled(),
+			openAILongContextBillingEnabledKey: parent.effectiveOpenAILongContextBillingEnabled(),
 		},
 	}
 

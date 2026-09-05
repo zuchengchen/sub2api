@@ -205,10 +205,10 @@ func TestGetModelPricing_OpenAIGPT54Fallback(t *testing.T) {
 	require.InDelta(t, 2.5e-6, pricing.InputPricePerToken, 1e-12)
 	require.InDelta(t, 15e-6, pricing.OutputPricePerToken, 1e-12)
 	require.InDelta(t, 0.25e-6, pricing.CacheReadPricePerToken, 1e-12)
-	// 静态兜底价不携带长上下文阶梯：阶梯一律由目录数据（above_272k 折算）驱动。
-	require.Zero(t, pricing.LongContextInputThreshold)
-	require.Zero(t, pricing.LongContextInputMultiplier)
-	require.Zero(t, pricing.LongContextOutputMultiplier)
+	require.Equal(t, 272000, pricing.LongContextInputThreshold)
+	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
+	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+	require.False(t, pricing.LongContextThresholdInclusive)
 }
 
 func TestGetModelPricing_CatalogAboveTierFieldsDriveLongContext(t *testing.T) {
@@ -232,8 +232,8 @@ func TestGetModelPricing_OpenAICompactAliasesFallback(t *testing.T) {
 		cacheRead   float64
 		longContext int
 	}{
-		{model: "gpt5.5", inputPrice: 5e-6, outputPrice: 30e-6, cacheRead: 0.5e-6, longContext: 0},
-		{model: "openai/gpt5.4", inputPrice: 2.5e-6, outputPrice: 15e-6, cacheRead: 0.25e-6, longContext: 0},
+		{model: "gpt5.5", inputPrice: 5e-6, outputPrice: 30e-6, cacheRead: 0.5e-6, longContext: 272000},
+		{model: "openai/gpt5.4", inputPrice: 2.5e-6, outputPrice: 15e-6, cacheRead: 0.25e-6, longContext: 272000},
 		{model: "gpt5.4-mini", inputPrice: 7.5e-7, outputPrice: 4.5e-6, cacheRead: 7.5e-8, longContext: 0},
 		{model: "gpt5.3codexspark", inputPrice: 1.5e-6, outputPrice: 12e-6, cacheRead: 0.15e-6, longContext: 0},
 	}
@@ -249,6 +249,42 @@ func TestGetModelPricing_OpenAICompactAliasesFallback(t *testing.T) {
 			require.Equal(t, tt.longContext, pricing.LongContextInputThreshold)
 		})
 	}
+}
+
+func TestGetModelPricing_OpenAIGPT6AstraFallback(t *testing.T) {
+	svc := newTestBillingService()
+
+	pricing, err := svc.GetModelPricing("gpt-6-astra")
+	require.NoError(t, err)
+	require.NotNil(t, pricing)
+	require.InDelta(t, 10e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 50e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 1e-6, pricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 12.5e-6, pricing.CacheCreationPricePerToken, 1e-12)
+	require.Equal(t, 272000, pricing.LongContextInputThreshold)
+	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
+	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+	require.False(t, pricing.LongContextThresholdInclusive)
+}
+
+func TestCalculateCost_OpenAIGPT6AstraLongContextAppliesAPIMultipliers(t *testing.T) {
+	svc := newTestBillingService()
+
+	below := UsageTokens{InputTokens: 100000, OutputTokens: 1000, CacheReadTokens: 50000}
+	belowCost, err := svc.CalculateCost("gpt-6-astra", below, 1.0)
+	require.NoError(t, err)
+	require.InDelta(t, float64(below.InputTokens)*10e-6, belowCost.InputCost, 1e-10)
+	require.InDelta(t, float64(below.OutputTokens)*50e-6, belowCost.OutputCost, 1e-10)
+	require.InDelta(t, float64(below.CacheReadTokens)*1e-6, belowCost.CacheReadCost, 1e-10)
+	require.False(t, belowCost.LongContextBillingApplied)
+
+	over := UsageTokens{InputTokens: 200000, OutputTokens: 4000, CacheReadTokens: 100000}
+	overCost, err := svc.CalculateCost("gpt-6-astra", over, 1.0)
+	require.NoError(t, err)
+	require.InDelta(t, float64(over.InputTokens)*10e-6*2.0, overCost.InputCost, 1e-10)
+	require.InDelta(t, float64(over.OutputTokens)*50e-6*1.5, overCost.OutputCost, 1e-10)
+	require.InDelta(t, float64(over.CacheReadTokens)*1e-6*2.0, overCost.CacheReadCost, 1e-10)
+	require.True(t, overCost.LongContextBillingApplied)
 }
 
 func TestGetModelPricing_OpenAIGPT54MiniFallback(t *testing.T) {
