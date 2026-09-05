@@ -401,7 +401,7 @@ func (s *BillingService) initFallbackPricing() {
 	}
 
 	// OpenAI GPT-5.4（业务指定价格）
-	s.fallbackPrices["gpt-5.4"] = &ModelPricing{
+	s.fallbackPrices["gpt-5.4"] = applyOpenAIAPILongContextLadder("gpt-5.4", &ModelPricing{
 		InputPricePerToken:             2.5e-6,  // $2.5 per MTok
 		InputPricePerTokenPriority:     5e-6,    // $5 per MTok
 		OutputPricePerToken:            15e-6,   // $15 per MTok
@@ -410,29 +410,39 @@ func (s *BillingService) initFallbackPricing() {
 		CacheReadPricePerToken:         0.25e-6, // $0.25 per MTok
 		CacheReadPricePerTokenPriority: 0.5e-6,  // $0.5 per MTok
 		SupportsCacheBreakdown:         false,
-	}
+	})
 	// OpenAI GPT-5.5 官方价格；Fast 为标准价 2.5 倍。
 	// Source: https://platform.openai.com/docs/pricing
-	s.fallbackPrices["gpt-5.5"] = pricingWithPriorityMultiplier(&ModelPricing{
+	s.fallbackPrices["gpt-5.5"] = applyOpenAIAPILongContextLadder("gpt-5.5", pricingWithPriorityMultiplier(&ModelPricing{
 		InputPricePerToken:  5e-6,
 		OutputPricePerToken: 30e-6,
 		// 官方未列独立 cache-write 价；内部出现 cache creation token 时按输入价兜底。
 		CacheCreationPricePerToken: 5e-6,
 		CacheReadPricePerToken:     0.5e-6,
 		SupportsCacheBreakdown:     false,
-	}, 2.5)
+	}, 2.5))
 	// GPT-5.5 Pro 当前不提供 Fast；保留标准、Flex 和长上下文 fallback 价格。
-	s.fallbackPrices["gpt-5.5-pro"] = &ModelPricing{
+	s.fallbackPrices["gpt-5.5-pro"] = applyOpenAIAPILongContextLadder("gpt-5.5-pro", &ModelPricing{
 		InputPricePerToken:  30e-6,
 		OutputPricePerToken: 180e-6,
 		// 官方未列独立 cached-input/cache-write 价；内部出现对应 token 时按输入价兜底。
 		CacheCreationPricePerToken: 30e-6,
 		CacheReadPricePerToken:     30e-6,
 		SupportsCacheBreakdown:     false,
-	}
+	})
+
+	// OpenAI GPT-6 Astra 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
+	// Source: https://developers.openai.com/api/docs/models/gpt-6-astra
+	s.fallbackPrices["gpt-6-astra"] = applyOpenAIAPILongContextLadder("gpt-6-astra", pricingWithPriorityMultiplier(&ModelPricing{
+		InputPricePerToken:         10e-6,   // $10 per MTok
+		OutputPricePerToken:        50e-6,   // $50 per MTok
+		CacheCreationPricePerToken: 12.5e-6, // $12.50 per MTok
+		CacheReadPricePerToken:     1e-6,    // $1 per MTok
+		SupportsCacheBreakdown:     false,
+	}, 2.0))
 
 	// OpenAI GPT-5.6 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
-	s.fallbackPrices["gpt-5.6-sol"] = &ModelPricing{
+	s.fallbackPrices["gpt-5.6-sol"] = applyOpenAIAPILongContextLadder("gpt-5.6-sol", &ModelPricing{
 		InputPricePerToken:                 5e-6,
 		InputPricePerTokenPriority:         10e-6,
 		OutputPricePerToken:                30e-6,
@@ -441,8 +451,8 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreationPricePerTokenPriority: 12.5e-6,
 		CacheReadPricePerToken:             0.5e-6,
 		CacheReadPricePerTokenPriority:     1e-6,
-	}
-	s.fallbackPrices["gpt-5.6-terra"] = &ModelPricing{
+	})
+	s.fallbackPrices["gpt-5.6-terra"] = applyOpenAIAPILongContextLadder("gpt-5.6-terra", &ModelPricing{
 		InputPricePerToken:                 2e-6,
 		InputPricePerTokenPriority:         4e-6,
 		OutputPricePerToken:                12e-6,
@@ -451,8 +461,8 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreationPricePerTokenPriority: 5e-6,
 		CacheReadPricePerToken:             0.2e-6,
 		CacheReadPricePerTokenPriority:     0.4e-6,
-	}
-	s.fallbackPrices["gpt-5.6-luna"] = &ModelPricing{
+	})
+	s.fallbackPrices["gpt-5.6-luna"] = applyOpenAIAPILongContextLadder("gpt-5.6-luna", &ModelPricing{
 		InputPricePerToken:                 0.2e-6,
 		InputPricePerTokenPriority:         0.4e-6,
 		OutputPricePerToken:                1.2e-6,
@@ -461,7 +471,7 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreationPricePerTokenPriority: 0.5e-6,
 		CacheReadPricePerToken:             0.02e-6,
 		CacheReadPricePerTokenPriority:     0.04e-6,
-	}
+	})
 
 	s.fallbackPrices["gpt-5.4-mini"] = &ModelPricing{
 		InputPricePerToken:     7.5e-7,
@@ -1005,6 +1015,8 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	// OpenAI（GPT-5 / Codex 族）：仅匹配已知型号，避免未知 OpenAI 型号误计价。
 	if normalized := normalizeKnownOpenAICodexModel(modelLower); normalized != "" {
 		switch normalized {
+		case "gpt-6-astra":
+			return s.fallbackPrices["gpt-6-astra"]
 		case "gpt-5.6-sol":
 			return s.fallbackPrices["gpt-5.6-sol"]
 		case "gpt-5.6-terra":
@@ -1618,10 +1630,10 @@ func (s *BillingService) calculateCostInternalWithPolicy(
 // applyModelSpecificPricingPolicy 对目录数据做模型特定修正：DeepSeek 官方价
 // 强制覆盖；GPT-5.6 缺 cache_write 价时按官方规则补 1.25 倍输入价；Fast/priority
 // 档按业务倍率改写（本地/远程目录的 priority 价可能沿用官方旧口径）。长上下文
-// 阶梯不在此处补齐：一律由目录数据（above_XXXk 折算或显式 long_context_* 字段）
-// 驱动。默认强制 DeepSeek 官方价——该路径仅被默认价卡（GetModelPricing 内部）
-// 调用；分组/渠道自定义定价路径用带参数的 applyModelSpecificPricingPolicyEx
-// 关闭强制，保留运营者配置。
+// 阶梯以目录数据（above_XXXk 折算或显式 long_context_*）为准；OpenAI 静态兜底
+// 价卡自身带有 API 272K 阶梯，供目录不可用时使用。默认强制 DeepSeek 官方价——
+// 该路径仅被默认价卡（GetModelPricing 内部）调用；分组/渠道自定义定价路径用
+// 带参数的 applyModelSpecificPricingPolicyEx 关闭强制，保留运营者配置。
 func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *ModelPricing) *ModelPricing {
 	return s.applyModelSpecificPricingPolicyEx(model, pricing, true)
 }
@@ -1683,13 +1695,48 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 // 档的模型（如 gpt-5.5-pro、gpt-5.4-mini/nano）返回 0。
 func openAIModelFastPricingRatio(normalized string) float64 {
 	switch normalized {
-	case "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+	case "gpt-6-astra", "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return 2.0
 	case "gpt-5.5":
 		return 2.5
 	default:
 		return 0
 	}
+}
+
+const (
+	openAIAPILongContextInputTokenThreshold = 272000
+	openAIAPILongContextInputMultiplier     = 2.0
+	openAIAPILongContextOutputMultiplier    = 1.5
+)
+
+func openAIModelHasAPILongContextLadder(normalized string) bool {
+	switch normalized {
+	case "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+		"gpt-5.5", "gpt-5.5-pro", "gpt-5.4":
+		return true
+	default:
+		return false
+	}
+}
+
+// applyOpenAIAPILongContextLadder 在目录未给出长上下文阶梯时，按 OpenAI API
+// 口径补齐：prompt（input+cache）超过 272K 后整单输入/缓存 2 倍、输出 1.5 倍。
+// 目录已有阈值时不覆盖。克隆后再写，避免污染共享 fallbackPrices。
+func applyOpenAIAPILongContextLadder(model string, pricing *ModelPricing) *ModelPricing {
+	if pricing == nil || pricing.LongContextInputThreshold > 0 {
+		return pricing
+	}
+	normalized := normalizeKnownOpenAICodexModel(model)
+	if !openAIModelHasAPILongContextLadder(normalized) {
+		return pricing
+	}
+	cloned := *pricing
+	cloned.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
+	cloned.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
+	cloned.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
+	cloned.LongContextThresholdInclusive = false
+	return &cloned
 }
 
 // enforceOpenAIFastPricingRatio 把 priority 档价格改写为「标准价 × ratio」。
