@@ -468,7 +468,7 @@ export default {
       emailOnHit: '命中后发送邮件',
       emailOnHitHint: '开启后每次达到阈值都会向用户发送风控提醒邮件；自动封禁通知始终发送。',
       autoBan: '自动封禁用户',
-      autoBanHint: '命中次数达到阈值后将禁用用户账号、刷新认证缓存并发送封禁通知邮件。',
+      autoBanHint: '命中次数达到阈值后将禁用用户、刷新认证缓存并发送封禁通知邮件。',
       cyberPolicyExcludeBan: 'cyber_policy 不计入封号次数',
       cyberPolicyExcludeBanHint: '开启后，cyber_policy 拦截不再计入自动封号的违规次数：当次不判定封号，历史累计亦排除。风控日志与通知邮件照常。',
       violationNotCounted: '未计入封号',

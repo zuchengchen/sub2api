@@ -218,8 +218,8 @@ export default {
       enableTlsHint: '连接 Redis 时使用 TLS（公共 CA 证书）'
     },
     admin: {
-      title: '管理员账户',
-      description: '创建您的管理员账户',
+      title: '管理员用户',
+      description: '创建管理员用户',
       email: '邮箱',
       password: '密码',
       confirmPassword: '确认密码',
