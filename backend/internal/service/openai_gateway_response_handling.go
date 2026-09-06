@@ -345,7 +345,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	// Dedup search tool calls across SSE events (item.done + response.completed
 	// both list the same call_id — counting both would ~2× the surcharge).
 	streamSearchSeen := make(map[string]struct{})
+	var streamedBilling strings.Builder
+	estimateRequestBody := takeOpenAIUsageEstimateRequestBody(c)
 	resultWithUsage := func() *openaiStreamingResult {
+		if streamedBilling.Len() > 0 {
+			applyEstimatedOpenAIUsageIfMissing(usage, originalModel, estimateRequestBody, streamedBilling.String())
+		}
 		return &openaiStreamingResult{
 			usage:            usage,
 			firstTokenMs:     firstTokenMs,
@@ -497,6 +502,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				suppressCurrentEvent = true
 			}
 			observer.ObserveOpenAI(dataBytes, eventType)
+			appendOpenAIStreamedBillingDelta(eventType, dataBytes, &streamedBilling)
 			// 初始上游 data 的 type 只解析一次：原始值保持终止事件的精确匹配，规范化值供后续分支复用。
 			if openAIStreamEventIsTerminalWithType(data, eventType) {
 				sawTerminalEvent = true
