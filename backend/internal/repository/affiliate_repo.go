@@ -350,16 +350,19 @@ func (r *affiliateRepository) ListInvitees(ctx context.Context, inviterID int64,
 SELECT ua.user_id,
        COALESCE(u.email, ''),
        COALESCE(u.username, ''),
+       COALESCE(ic.code, ''),
        ua.created_at,
        COALESCE(SUM(ual.amount), 0)::double precision AS total_rebate
 FROM user_affiliates ua
 LEFT JOIN users u ON u.id = ua.user_id
+LEFT JOIN user_affiliate_invite_codes ic
+       ON ic.inviter_id = $1 AND ic.used_by = ua.user_id
 LEFT JOIN user_affiliate_ledger ual
        ON ual.user_id = $1
       AND ual.source_user_id = ua.user_id
       AND ual.action = 'accrue'
 WHERE ua.inviter_id = $1
-GROUP BY ua.user_id, u.email, u.username, ua.created_at
+GROUP BY ua.user_id, u.email, u.username, ic.code, ua.created_at
 ORDER BY ua.created_at DESC
 LIMIT $2`, inviterID, limit)
 	if err != nil {
@@ -371,7 +374,7 @@ LIMIT $2`, inviterID, limit)
 	for rows.Next() {
 		var item service.AffiliateInvitee
 		var createdAt time.Time
-		if err := rows.Scan(&item.UserID, &item.Email, &item.Username, &createdAt, &item.TotalRebate); err != nil {
+		if err := rows.Scan(&item.UserID, &item.Email, &item.Username, &item.AffCode, &createdAt, &item.TotalRebate); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = &createdAt
@@ -387,7 +390,7 @@ func (r *affiliateRepository) ListAffiliateInviteRecords(ctx context.Context, fi
 	client := clientFromContext(ctx, r.client)
 	where, args := buildAffiliateRecordWhere(filter, "ua.created_at", []string{
 		"inviter.email", "inviter.username", "invitee.email", "invitee.username",
-		"ua.inviter_id::text", "ua.user_id::text", "inviter_aff.aff_code",
+		"ua.inviter_id::text", "ua.user_id::text", "inviter_aff.aff_code", "used_code.code",
 	})
 
 	total, err := queryAffiliateRecordCount(ctx, client, `
@@ -396,6 +399,8 @@ FROM user_affiliates ua
 JOIN users invitee ON invitee.id = ua.user_id
 JOIN users inviter ON inviter.id = ua.inviter_id
 JOIN user_affiliates inviter_aff ON inviter_aff.user_id = ua.inviter_id
+LEFT JOIN user_affiliate_invite_codes used_code
+       ON used_code.inviter_id = ua.inviter_id AND used_code.used_by = ua.user_id
 `+where, args...)
 	if err != nil {
 		return nil, 0, err
@@ -416,19 +421,21 @@ SELECT ua.inviter_id,
        ua.user_id,
        COALESCE(invitee.email, ''),
        COALESCE(invitee.username, ''),
-       COALESCE(inviter_aff.aff_code, ''),
+       COALESCE(used_code.code, inviter_aff.aff_code, ''),
        COALESCE(SUM(ual.amount), 0)::double precision AS total_rebate,
        ua.created_at
 FROM user_affiliates ua
 JOIN users invitee ON invitee.id = ua.user_id
 JOIN users inviter ON inviter.id = ua.inviter_id
 JOIN user_affiliates inviter_aff ON inviter_aff.user_id = ua.inviter_id
+LEFT JOIN user_affiliate_invite_codes used_code
+       ON used_code.inviter_id = ua.inviter_id AND used_code.used_by = ua.user_id
 LEFT JOIN user_affiliate_ledger ual
        ON ual.user_id = ua.inviter_id
       AND ual.source_user_id = ua.user_id
       AND ual.action = 'accrue'
 `+where+`
-GROUP BY ua.inviter_id, inviter.email, inviter.username, ua.user_id, invitee.email, invitee.username, inviter_aff.aff_code, ua.created_at
+GROUP BY ua.inviter_id, inviter.email, inviter.username, ua.user_id, invitee.email, invitee.username, used_code.code, inviter_aff.aff_code, ua.created_at
 `+orderBy+`
 LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
@@ -833,59 +840,51 @@ WHERE user_id = $1`, userID)
 }
 
 func queryAffiliateByCode(ctx context.Context, client affiliateQueryExecer, code string) (*service.AffiliateSummary, error) {
-	rows, err := client.QueryContext(ctx, `
-SELECT user_id,
-       aff_code,
-       aff_code_custom,
-       aff_rebate_rate_percent,
-       inviter_id,
-       aff_count,
-       aff_quota::double precision,
-       aff_frozen_quota::double precision,
-       aff_history_quota::double precision,
-       created_at,
-       updated_at
-FROM user_affiliates
-WHERE aff_code = $1
-LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
-	if err != nil {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	summary, err := scanAffiliateByQuery(ctx, client, `
+SELECT ua.user_id,
+       ua.aff_code,
+       ua.aff_code_custom,
+       ua.aff_rebate_rate_percent,
+       ua.inviter_id,
+       ua.aff_count,
+       ua.aff_quota::double precision,
+       ua.aff_frozen_quota::double precision,
+       ua.aff_history_quota::double precision,
+       ua.created_at,
+       ua.updated_at
+FROM user_affiliate_invite_codes ic
+JOIN user_affiliates ua ON ua.user_id = ic.inviter_id
+WHERE ic.code = $1 AND ic.used_by IS NULL
+LIMIT 1`, code)
+	if err == nil {
+		return summary, nil
+	}
+	if !errors.Is(err, service.ErrAffiliateProfileNotFound) {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
+	exists, existsErr := inviteCodeRowExists(ctx, client, code)
+	if existsErr != nil {
+		return nil, existsErr
+	}
+	if exists {
 		return nil, service.ErrAffiliateProfileNotFound
 	}
+	return queryAffiliateByIdentityCode(ctx, client, code)
+}
 
-	var out service.AffiliateSummary
-	var inviterID sql.NullInt64
-	var rebateRate sql.NullFloat64
-	if err := rows.Scan(
-		&out.UserID,
-		&out.AffCode,
-		&out.AffCodeCustom,
-		&rebateRate,
-		&inviterID,
-		&out.AffCount,
-		&out.AffQuota,
-		&out.AffFrozenQuota,
-		&out.AffHistoryQuota,
-		&out.CreatedAt,
-		&out.UpdatedAt,
-	); err != nil {
-		return nil, err
+func inviteCodeRowExists(ctx context.Context, client affiliateQueryExecer, code string) (bool, error) {
+	rows, err := client.QueryContext(ctx, `
+SELECT 1 FROM user_affiliate_invite_codes WHERE code = $1 LIMIT 1`, code)
+	if err != nil {
+		return false, err
 	}
-	if inviterID.Valid {
-		out.InviterID = &inviterID.Int64
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		return true, rows.Err()
 	}
-	if rebateRate.Valid {
-		v := rebateRate.Float64
-		out.AffRebateRatePercent = &v
-	}
-	return &out, nil
+	return false, rows.Err()
 }
 
 func queryUserBalance(ctx context.Context, client affiliateQueryExecer, userID int64) (float64, error) {
@@ -1008,7 +1007,7 @@ WHERE user_id = $2`, code, userID)
 		if affected == 0 {
 			return service.ErrUserNotFound
 		}
-		return nil
+		return replaceUnusedInviteCodes(txCtx, txClient, userID, code)
 	})
 }
 
@@ -1044,7 +1043,7 @@ WHERE user_id = $2`, candidate, userID)
 				return service.ErrUserNotFound
 			}
 			newCode = candidate
-			return nil
+			return replaceUnusedInviteCodes(txCtx, txClient, userID, candidate)
 		}
 		return fmt.Errorf("reset aff_code: exhausted attempts")
 	})

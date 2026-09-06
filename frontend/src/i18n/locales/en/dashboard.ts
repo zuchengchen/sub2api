@@ -645,10 +645,15 @@ export default {
   affiliate: {
     title: 'Affiliate Rebates',
     description: 'Invite new users and convert your rebate quota into account balance',
-    yourCode: 'Your Affiliate Code',
+    yourCode: 'Current Invite Code',
     inviteLink: 'Invite Link',
+    oneTimeHint: 'One-time code: it can register exactly one user. A new code appears after it is used.',
     copyCode: 'Copy Code',
     copyLink: 'Copy Link',
+    generateNew: 'Generate new code',
+    generating: 'Generating...',
+    generated: 'New invite code generated',
+    generateFailed: 'Failed to generate a new invite code',
     codeCopied: 'Affiliate code copied',
     linkCopied: 'Invite link copied',
     loadFailed: 'Failed to load affiliate data',
@@ -676,13 +681,14 @@ export default {
       columns: {
         email: 'Email',
         username: 'Username',
+        code: 'Invite Code',
         rebate: 'Rebate',
         joinedAt: 'Joined At'
       }
     },
     tips: {
       title: 'How It Works',
-      line1: 'Share your affiliate code or invite link with new users.',
+      line1: 'Share the current invite code or link with one new user. Each code can be used once; generate a new code to invite someone else.',
       line2: 'When invitees recharge, you receive {rate} of the recharge as rebate quota.',
       line3: 'Transfer rebate quota to balance at any time.',
       line4: 'Newly earned rebates may have a waiting period before they can be transferred.'
