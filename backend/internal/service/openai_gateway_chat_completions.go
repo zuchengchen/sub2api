@@ -456,7 +456,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleChatStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body))
+		result, handleErr = s.handleChatStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, body)
 	} else {
 		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
@@ -719,7 +719,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	billingModel string,
 	upstreamModel string,
 	startTime time.Time,
-	requestBodyLen int,
+	requestBody []byte,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
@@ -731,12 +731,13 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	state.IncludeUsage = true
 
 	var usage OpenAIUsage
+	var streamedBilling strings.Builder
 	var firstTokenMs *int
 	firstChunk := true
 	clientDisconnected := false
 	clientOutputStarted := false
 	pendingSSE := make([]string, 0, 4)
-	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
+	refusalDetector := newOpenAIChatSilentRefusalDetector(len(requestBody))
 	var streamFailoverErr *UpstreamFailoverError
 	var streamNonFailoverErr error
 	terminalEventType := ""
@@ -766,6 +767,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	}
 
 	resultWithUsage := func() *OpenAIForwardResult {
+		applyEstimatedOpenAIUsageIfMissing(&usage, originalModel, requestBody, streamedBilling.String())
 		out := &OpenAIForwardResult{
 			RequestID:                     requestID,
 			UpstreamHeaders:               resp.Header,
@@ -808,6 +810,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		observer.ObserveOpenAI([]byte(payload), event.Type)
 		refusalDetector.ObservePayload([]byte(payload))
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
+		if isOpenAIStreamedBillingDelta(event.Type) && event.Delta != "" {
+			streamedBilling.WriteString(event.Delta)
+		}
 
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)
 		if isTerminalEvent {

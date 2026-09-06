@@ -74,7 +74,7 @@ func TestHandleChatStreamingResponse_ClassifiesHTTP2ReadError(t *testing.T) {
 		"gpt-5.6-sol",
 		"gpt-5.6-sol",
 		time.Now(),
-		0,
+		[]byte(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello there"}]}`),
 	)
 
 	require.Error(t, err)
@@ -86,6 +86,8 @@ func TestHandleChatStreamingResponse_ClassifiesHTTP2ReadError(t *testing.T) {
 	require.Equal(t, "Upstream HTTP/2 stream failed", message)
 	require.NotContains(t, message, "stream ID")
 	require.NotContains(t, message, "INTERNAL_ERROR")
+	require.Greater(t, result.Usage.InputTokens, 0, "interrupted stream must estimate prompt tokens")
+	require.Greater(t, result.Usage.OutputTokens, 0, "interrupted stream must estimate tokens from streamed deltas")
 }
 
 func TestNormalizeResponsesRequestServiceTier(t *testing.T) {
