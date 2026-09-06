@@ -468,29 +468,15 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown:     false,
 	})
 
-	// OpenAI GPT-6 Astra 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
+	// OpenAI GPT-6 Astra：按官方 API 价的 1.5 倍计费。缓存写入仍为输入价的 1.25 倍。
 	// Source: https://developers.openai.com/api/docs/models/gpt-6-astra
-	s.fallbackPrices["gpt-6-astra"] = applyOpenAIAPILongContextLadder("gpt-6-astra", pricingWithPriorityMultiplier(&ModelPricing{
-		InputPricePerToken:         10e-6,   // $10 per MTok
-		OutputPricePerToken:        50e-6,   // $50 per MTok
-		CacheCreationPricePerToken: 12.5e-6, // $12.50 per MTok
-		CacheReadPricePerToken:     1e-6,    // $1 per MTok
+	s.fallbackPrices["gpt-6-astra"] = pricingWithPriorityMultiplier(&ModelPricing{
+		InputPricePerToken:         gpt6AstraOfficialInputPricePerToken * gpt6AstraAPIBillingMultiplier,
+		OutputPricePerToken:        gpt6AstraOfficialOutputPricePerToken * gpt6AstraAPIBillingMultiplier,
+		CacheCreationPricePerToken: gpt6AstraOfficialCacheCreationPricePerToken * gpt6AstraAPIBillingMultiplier,
+		CacheReadPricePerToken:     gpt6AstraOfficialCacheReadPricePerToken * gpt6AstraAPIBillingMultiplier,
 		SupportsCacheBreakdown:     false,
-	}, 2.0))
-
-	s.fallbackPrices["gpt-6-astra"] = &ModelPricing{
-		InputPricePerToken:                 10e-6,
-		InputPricePerTokenPriority:         20e-6,
-		OutputPricePerToken:                50e-6,
-		OutputPricePerTokenPriority:        100e-6,
-		CacheCreationPricePerToken:         12.5e-6,
-		CacheCreationPricePerTokenPriority: 25e-6,
-		CacheReadPricePerToken:             1e-6,
-		CacheReadPricePerTokenPriority:     2e-6,
-		LongContextInputThreshold:          272_000,
-		LongContextInputMultiplier:         2,
-		LongContextOutputMultiplier:        1.5,
-	}
+	}, 2.0)
 
 	// OpenAI GPT-5.6 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
 	s.fallbackPrices["gpt-5.6-sol"] = applyOpenAIAPILongContextLadder("gpt-5.6-sol", &ModelPricing{
@@ -1346,10 +1332,7 @@ type CostInput struct {
 func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, error) {
 	if input.Resolver == nil {
 		// 无 Resolver，回退到旧路径
-		applyLongContextBilling := true
-		if input.LongContextBillingEnabled != nil {
-			applyLongContextBilling = *input.LongContextBillingEnabled
-		}
+		applyLongContextBilling := false
 		breakdown, err := s.calculateCostInternalWithPolicy(
 			input.Model,
 			input.Tokens,
@@ -1441,8 +1424,9 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 		}
 	}
 
-	// 官方长上下文阶梯仅在无区间定价时应用（区间定价已包含上下文分层）。
-	applyLongCtx := len(resolved.Intervals) == 0 && contextTierPricingEnabled
+	// 本地定制：全面取消长上下文双倍计费。官方/目录阶梯不再叠加；
+	// 渠道显式区间定价仍按分组开关选档。
+	applyLongCtx := false
 
 	breakdown := s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongCtx)
 	applyCostBreakdownMultiplier(breakdown, resolvedChannelTimeMultiplier(resolved, input.PricingAt))
@@ -1661,7 +1645,7 @@ func (s *BillingService) calculateCostWithServiceTierPolicy(
 }
 
 func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens, rateMultiplier float64, serviceTier string, channelPricing *ChannelModelPricing) (*CostBreakdown, error) {
-	return s.calculateCostInternalWithPolicy(model, tokens, rateMultiplier, serviceTier, channelPricing, true)
+	return s.calculateCostInternalWithPolicy(model, tokens, rateMultiplier, serviceTier, channelPricing, false)
 }
 
 func (s *BillingService) calculateCostInternalWithPolicy(
@@ -1727,6 +1711,11 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		return &cloned
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
+	if forceDeepSeekRates && isOpenAIGPT6AstraModel(normalized) {
+		cloned := *pricing
+		applyGPT6AstraAPIBillingRates(&cloned)
+		pricing = &cloned
+	}
 	isGPT56 := isOpenAIGPT56Model(normalized)
 	needsMaxReasoningEffortMultiplier := isClaudeFable51Model(model) && pricing.MaxReasoningEffortMultiplier == nil
 	needsCacheCreationPolicy := isGPT56 && !pricing.CacheCreationPriceExplicit && (pricing.CacheCreationPricePerToken <= 0 ||
@@ -1774,7 +1763,28 @@ const (
 	openAIAPILongContextInputTokenThreshold = 272000
 	openAIAPILongContextInputMultiplier     = 2.0
 	openAIAPILongContextOutputMultiplier    = 1.5
+
+	gpt6AstraOfficialInputPricePerToken         = 10e-6
+	gpt6AstraOfficialOutputPricePerToken        = 50e-6
+	gpt6AstraOfficialCacheCreationPricePerToken = 12.5e-6
+	gpt6AstraOfficialCacheReadPricePerToken     = 1e-6
+	gpt6AstraAPIBillingMultiplier               = 1.5
 )
+
+func applyGPT6AstraAPIBillingRates(pricing *ModelPricing) {
+	if pricing == nil {
+		return
+	}
+	m := gpt6AstraAPIBillingMultiplier
+	pricing.InputPricePerToken = gpt6AstraOfficialInputPricePerToken * m
+	pricing.OutputPricePerToken = gpt6AstraOfficialOutputPricePerToken * m
+	pricing.CacheCreationPricePerToken = gpt6AstraOfficialCacheCreationPricePerToken * m
+	pricing.CacheReadPricePerToken = gpt6AstraOfficialCacheReadPricePerToken * m
+	pricing.LongContextInputThreshold = 0
+	pricing.LongContextInputMultiplier = 0
+	pricing.LongContextOutputMultiplier = 0
+	pricing.LongContextThresholdInclusive = false
+}
 
 func openAIModelHasAPILongContextLadder(normalized string) bool {
 	switch normalized {
