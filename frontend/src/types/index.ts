@@ -149,6 +149,7 @@ export interface AffiliateInvitee {
   user_id: number
   email: string
   username: string
+  aff_code?: string
   created_at?: string
   total_rebate: number
 }

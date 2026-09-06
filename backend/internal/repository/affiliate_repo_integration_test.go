@@ -417,3 +417,66 @@ func TestAffiliateRepository_ListUsersWithCustomSettings(t *testing.T) {
 
 	require.GreaterOrEqual(t, total, int64(2), "total must include at least our 2 custom rows")
 }
+
+func TestAffiliateRepository_OneTimeInviteCodeConsumedOnce(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	repo := NewAffiliateRepository(client, integrationDB).(*affiliateRepository)
+
+	inviter := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("affiliate-onetime-inviter-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Role:         service.RoleUser,
+		Status:       service.StatusActive,
+	})
+	invitee1 := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("affiliate-onetime-a-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Role:         service.RoleUser,
+		Status:       service.StatusActive,
+	})
+	invitee2 := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("affiliate-onetime-b-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Role:         service.RoleUser,
+		Status:       service.StatusActive,
+	})
+
+	_, err := repo.EnsureUserAffiliate(txCtx, inviter.ID)
+	require.NoError(t, err)
+	code, err := repo.EnsureUnusedInviteCode(txCtx, inviter.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, code)
+
+	byCode, err := repo.GetAffiliateByCode(txCtx, code)
+	require.NoError(t, err)
+	require.Equal(t, inviter.ID, byCode.UserID)
+
+	require.NoError(t, repo.BindInviterByInviteCode(txCtx, invitee1.ID, code))
+
+	_, err = repo.GetAffiliateByCode(txCtx, code)
+	require.ErrorIs(t, err, service.ErrAffiliateProfileNotFound)
+
+	err = repo.BindInviterByInviteCode(txCtx, invitee2.ID, code)
+	require.ErrorIs(t, err, service.ErrAffiliateCodeInvalid)
+
+	next, err := repo.EnsureUnusedInviteCode(txCtx, inviter.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, next)
+	require.NotEqual(t, code, next)
+
+	require.NoError(t, repo.BindInviterByInviteCode(txCtx, invitee2.ID, next))
+
+	invitees, err := repo.ListInvitees(txCtx, inviter.ID, 10)
+	require.NoError(t, err)
+	require.Len(t, invitees, 2)
+	used := map[string]int64{}
+	for _, item := range invitees {
+		require.NotEmpty(t, item.AffCode)
+		used[item.AffCode] = item.UserID
+	}
+	require.Equal(t, invitee1.ID, used[code])
+	require.Equal(t, invitee2.ID, used[next])
+}

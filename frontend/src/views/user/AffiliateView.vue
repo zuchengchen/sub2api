@@ -71,6 +71,17 @@
               </div>
             </div>
           </div>
+          <p class="mt-3 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.oneTimeHint') }}</p>
+          <div class="mt-3">
+            <button
+              class="btn btn-secondary btn-sm"
+              :disabled="generating"
+              @click="generateNewCode"
+            >
+              <Icon v-if="generating" name="refresh" size="sm" class="animate-spin" />
+              <span>{{ generating ? t('affiliate.generating') : t('affiliate.generateNew') }}</span>
+            </button>
+          </div>
 
           <div class="mt-5 rounded-xl border border-primary-200 bg-primary-50 p-4 dark:border-primary-900/40 dark:bg-primary-900/20">
             <p class="text-sm font-medium text-primary-800 dark:text-primary-200">{{ t('affiliate.tips.title') }}</p>
@@ -115,6 +126,7 @@
                 <tr class="border-b border-gray-200 text-gray-500 dark:border-dark-700 dark:text-dark-400">
                   <th class="px-3 py-2 font-medium">{{ t('affiliate.invitees.columns.email') }}</th>
                   <th class="px-3 py-2 font-medium">{{ t('affiliate.invitees.columns.username') }}</th>
+                  <th class="px-3 py-2 font-medium">{{ t('affiliate.invitees.columns.code') }}</th>
                   <th class="px-3 py-2 font-medium text-right">{{ t('affiliate.invitees.columns.rebate') }}</th>
                   <th class="px-3 py-2 font-medium">{{ t('affiliate.invitees.columns.joinedAt') }}</th>
                 </tr>
@@ -127,6 +139,7 @@
                 >
                   <td class="px-3 py-3 text-gray-900 dark:text-white">{{ item.email || '-' }}</td>
                   <td class="px-3 py-3 text-gray-700 dark:text-gray-300">{{ item.username || '-' }}</td>
+                  <td class="px-3 py-3 font-mono text-gray-700 dark:text-gray-300">{{ item.aff_code || '-' }}</td>
                   <td class="px-3 py-3 text-right font-medium text-emerald-600 dark:text-emerald-400">{{ formatCurrency(item.total_rebate) }}</td>
                   <td class="px-3 py-3 text-gray-700 dark:text-gray-300">{{ formatDateTime(item.created_at) || '-' }}</td>
                 </tr>
@@ -159,6 +172,7 @@ const { copyToClipboard } = useClipboard()
 
 const loading = ref(true)
 const transferring = ref(false)
+const generating = ref(false)
 const detail = ref<UserAffiliateDetail | null>(null)
 
 const inviteLink = computed(() => {
@@ -202,6 +216,22 @@ async function copyCode(): Promise<void> {
 async function copyInviteLink(): Promise<void> {
   if (!inviteLink.value) return
   await copyToClipboard(inviteLink.value, t('affiliate.linkCopied'))
+}
+
+async function generateNewCode(): Promise<void> {
+  if (generating.value) return
+  generating.value = true
+  try {
+    const resp = await userAPI.rotateAffiliateInviteCode()
+    if (detail.value && resp.aff_code) {
+      detail.value = { ...detail.value, aff_code: resp.aff_code }
+    }
+    appStore.showSuccess(t('affiliate.generated'))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('affiliate.generateFailed')))
+  } finally {
+    generating.value = false
+  }
 }
 
 async function transferQuota(): Promise<void> {

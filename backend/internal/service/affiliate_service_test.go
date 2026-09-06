@@ -89,6 +89,13 @@ func TestMaskEmail(t *testing.T) {
 	require.Equal(t, "", maskEmail(""))
 }
 
+func TestRotateUnusedInviteCode_InvalidUser(t *testing.T) {
+	t.Parallel()
+	svc := &AffiliateService{}
+	_, err := svc.RotateUnusedInviteCode(context.Background(), 0)
+	require.Error(t, err)
+}
+
 func TestIsValidAffiliateCodeFormat(t *testing.T) {
 	t.Parallel()
 

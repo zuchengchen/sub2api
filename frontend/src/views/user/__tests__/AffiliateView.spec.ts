@@ -12,6 +12,7 @@ vi.mock('@/api/user', () => ({
   default: {
     getAffiliateDetail,
     transferAffiliateQuota: vi.fn(),
+    rotateAffiliateInviteCode: vi.fn(),
   },
 }))
 
