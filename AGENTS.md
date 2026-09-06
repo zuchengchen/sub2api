@@ -144,6 +144,15 @@ Before finishing, the agent must report:
 - Match the scope of testing to the affected code. Upstream syncs and releases
   require broader verification than isolated feature changes.
 
+## Chinese Copy: User vs Account
+
+- **user** (`User`) is this site's login identity. Chinese: **用户**.
+  User-facing copy uses 用户, 注册, 登录, 个人设置, 余额. Do not call a site login 账号 or 账户.
+- **account** (`Account`) is an upstream credential (GPT / Claude OAuth). Chinese: **账号**.
+  Admin copy keeps 账号管理, 上游账号, 账号池.
+- Do not use 账户 for site users. Payment-merchant IDs (Airwallex) may keep 账户.
+- Do not globally replace 账号 → 用户; that would break upstream-account wording.
+
 ## Server Builds
 
 - Compiling `./cmd/server` (local run, release binary, or `/opt/sub2api`

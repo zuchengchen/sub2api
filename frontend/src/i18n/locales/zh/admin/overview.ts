@@ -68,7 +68,7 @@ export default {
       viewAllUsage: '查看全部',
       quickActions: '快捷操作',
       manageUsers: '管理用户',
-      viewUserAccounts: '查看和管理用户账户',
+      viewUserAccounts: '查看和管理用户',
       manageAccounts: '管理账号',
       configureAiAccounts: '配置 AI 平台账号',
       groupPricing: '分组定价',
@@ -197,8 +197,8 @@ export default {
         },
         step3: {
           title: '获取 S3 端点地址',
-          desc: '在 R2 概览页面找到你的账户 ID（在 URL 或右侧面板中），端点格式为：',
-          accountId: '你的账户 ID'
+          desc: '在 R2 概览页面找到你的账号 ID（在 URL 或右侧面板中），端点格式为：',
+          accountId: '你的账号 ID'
         },
         step4: {
           title: '填写以下配置',
@@ -389,7 +389,7 @@ export default {
     affiliates: {
       invitesDescription: '查看全站邀请关系和被邀请用户累计返利',
       rebatesDescription: '查看每一笔产生返利的充值订单',
-      transfersDescription: '查看返利额度转入账户余额的提取流水',
+      transfersDescription: '查看返利额度转入余额的提取流水',
       errors: {
         loadFailed: '加载邀请返利记录失败'
       },
@@ -432,7 +432,7 @@ export default {
     // Users Management
     users: {
       title: '用户管理',
-      description: '管理用户账户和权限',
+      description: '管理用户和权限',
       createUser: '创建用户',
       bulkLimits: {
         action: '批量设置限制（{count}）',
@@ -635,7 +635,7 @@ export default {
       withdrawAmount: '退款金额',
       withdrawAll: '全部',
       depositNotesPlaceholder: '例如：新用户注册奖励、活动充值、补偿充值等',
-      withdrawNotesPlaceholder: '例如：服务问题退款、错误充值退回、账户注销退款等',
+      withdrawNotesPlaceholder: '例如：服务问题退款、错误充值退回、用户注销退款等',
       notesOptional: '备注为可选项，有助于未来查账',
       amountHint: '请输入正数金额',
       newBalance: '操作后余额',

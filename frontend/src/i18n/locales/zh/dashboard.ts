@@ -1,7 +1,7 @@
 export default {
   dashboard: {
     title: '仪表盘',
-    welcomeMessage: '欢迎回来！这是您账户的概览。',
+    welcomeMessage: '欢迎回来！这是您的概览。',
     balance: '余额',
     apiKeys: 'API 密钥',
     todayRequests: '今日请求',
@@ -645,7 +645,7 @@ export default {
 
   affiliate: {
     title: '邀请返利',
-    description: '邀请新用户注册，并将返利额度转入账户余额',
+    description: '邀请新用户注册，并将返利额度转入余额',
     yourCode: '我的邀请码',
     inviteLink: '邀请链接',
     copyCode: '复制邀请码',
@@ -665,7 +665,7 @@ export default {
     },
     transfer: {
       title: '返利额度转余额',
-      description: '将当前可用返利额度一键转入账户余额',
+      description: '将当前可用返利额度一键转入余额',
       button: '转入余额',
       transferring: '转入中...',
       empty: '当前没有可转入额度',
@@ -685,7 +685,7 @@ export default {
       title: '使用说明',
       line1: '将邀请码或邀请链接分享给新用户。',
       line2: '被邀请用户充值后，你可获得 {rate} 的返利额度。',
-      line3: '返利额度可随时转入账户余额。',
+      line3: '返利额度可随时转入余额。',
       line4: '新产生的返利需要经过冻结期后才能提现。'
     }
   },
@@ -736,14 +736,14 @@ export default {
   // Profile
   profile: {
     title: '个人设置',
-    description: '管理您的账户信息和设置',
-    accountBalance: '账户余额',
+    description: '管理资料、登录方式和安全设置',
+    accountBalance: '余额',
     concurrencyLimit: '并发限制',
     rpmLimit: 'RPM 限制',
     rpmUnlimited: '不限制',
     memberSince: '注册时间',
-    overviewTitle: '账户总览',
-    overviewDescription: '快速查看账号状态、资料来源与常用设置。',
+    overviewTitle: '用户总览',
+    overviewDescription: '快速查看用户状态、资料来源与常用设置。',
     basicsTitle: '资料与头像',
     basicsDescription: '维护公开展示信息，并保持头像与昵称风格一致。',
     linkedProfileSources: '资料来源',
@@ -777,11 +777,11 @@ export default {
     // TOTP 2FA
     totp: {
       title: '双因素认证 (2FA)',
-      description: '使用 Google Authenticator 等应用增强账户安全',
+      description: '使用 Google Authenticator 等应用增强登录安全',
       enabled: '已启用',
       enabledAt: '启用时间',
       notEnabled: '未启用',
-      notEnabledHint: '启用双因素认证可以增强账户安全性',
+      notEnabledHint: '启用双因素认证可以增强登录安全性',
       enable: '启用',
       disable: '禁用',
       featureDisabled: '功能未开放',
@@ -796,7 +796,7 @@ export default {
       verifyFailed: '验证码错误，请重试',
       enableSuccess: '双因素认证已启用',
       disableTitle: '禁用双因素认证',
-      disableWarning: '禁用后，登录时将不再需要验证码。这可能会降低您的账户安全性。',
+      disableWarning: '禁用后，登录时将不再需要验证码。这可能会降低登录安全性。',
       enterPassword: '请输入当前密码确认',
       confirmDisable: '确认禁用',
       disableSuccess: '双因素认证已禁用',
@@ -840,7 +840,7 @@ export default {
     },
     balanceNotify: {
       title: '余额不足提醒',
-      description: '当账户余额低于阈值时发送邮件提醒',
+      description: '当余额低于阈值时发送邮件提醒',
       enabled: '启用余额不足提醒',
       threshold: '自定义提醒阈值',
       thresholdHint: '留空使用系统默认值',
@@ -887,9 +887,9 @@ export default {
     },
     authBindings: {
       title: '登录方式绑定',
-      description: '查看当前绑定状态，并将更多第三方登录方式关联到这个账号。',
+      description: '查看当前绑定状态，并将更多第三方登录方式关联到这个用户。',
       bindAction: '绑定 {providerName}',
-      bindSuccess: '账号绑定成功',
+      bindSuccess: '绑定成功',
       emailPlaceholder: '输入邮箱地址',
       codePlaceholder: '输入验证码',
       passwordPlaceholder: '设置登录密码',
