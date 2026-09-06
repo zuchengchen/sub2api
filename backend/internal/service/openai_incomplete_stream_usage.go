@@ -6,8 +6,43 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
+
+const openAIUsageEstimateBodyKey = "openai_usage_estimate_request_body"
+
+func stashOpenAIUsageEstimateRequestBody(c *gin.Context, body []byte) {
+	if c == nil {
+		return
+	}
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return
+	}
+	c.Set(openAIUsageEstimateBodyKey, append([]byte(nil), body...))
+}
+
+func takeOpenAIUsageEstimateRequestBody(c *gin.Context) []byte {
+	if c == nil {
+		return nil
+	}
+	value, ok := c.Get(openAIUsageEstimateBodyKey)
+	if !ok {
+		return nil
+	}
+	body, _ := value.([]byte)
+	return body
+}
+
+func appendOpenAIStreamedBillingDelta(eventType string, data []byte, buf *strings.Builder) {
+	if buf == nil || !isOpenAIStreamedBillingDelta(eventType) {
+		return
+	}
+	if delta := gjson.GetBytes(data, "delta").String(); delta != "" {
+		buf.WriteString(delta)
+	}
+}
 
 // OpenAI Responses 流里会计入 output token 的增量事件。
 // reasoning 对 Luna/Astra 往往占输出大头，不能只数可见的 output_text。

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,4 +50,14 @@ func TestIsOpenAIStreamedBillingDelta(t *testing.T) {
 	require.True(t, isOpenAIStreamedBillingDelta("response.reasoning_text.delta"))
 	require.False(t, isOpenAIStreamedBillingDelta("response.created"))
 	require.False(t, isOpenAIStreamedBillingDelta("response.completed"))
+}
+
+func TestAppendOpenAIStreamedBillingDelta(t *testing.T) {
+	t.Parallel()
+
+	var buf strings.Builder
+	appendOpenAIStreamedBillingDelta("response.output_text.delta", []byte(`{"type":"response.output_text.delta","delta":"hel"}`), &buf)
+	appendOpenAIStreamedBillingDelta("response.created", []byte(`{"type":"response.created"}`), &buf)
+	appendOpenAIStreamedBillingDelta("response.output_text.delta", []byte(`{"type":"response.output_text.delta","delta":"lo"}`), &buf)
+	require.Equal(t, "hello", buf.String())
 }
