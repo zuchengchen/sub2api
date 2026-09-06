@@ -77,9 +77,9 @@ func TestCalculateTokenCostForRequest_ChannelFlatPriceStacksCatalogLadder(t *tes
 		Resolver: resolver, Resolved: resolved,
 	})
 	require.NoError(t, err)
-	require.InDelta(t, 300000*10e-6, got.InputCost, 1e-9)
-	require.InDelta(t, 1000*40e-6, got.OutputCost, 1e-9)
-	require.False(t, got.LongContextBillingApplied)
+	require.InDelta(t, 300000*10e-6*2, got.InputCost, 1e-9)
+	require.InDelta(t, 1000*40e-6*1.5, got.OutputCost, 1e-9)
+	require.True(t, got.LongContextBillingApplied)
 }
 
 // 渠道配置了定价区间时以渠道区间为准：目录阶梯（倍率）不再叠加。
@@ -121,8 +121,14 @@ func TestCalculateTokenCostForRequest_CatalogLadderFollowsGroupToggle(t *testing
 			Resolver: resolver, Resolved: resolved,
 		})
 		require.NoError(t, err)
-		require.InDelta(t, 0.385, got.ActualCost, 1e-9)
-		require.False(t, got.LongContextBillingApplied)
+		if enabled {
+			// 300K × 1.25e-6 × 2 = 0.75；1000 × 10e-6 × 1.5 = 0.015
+			require.InDelta(t, 0.765, got.ActualCost, 1e-9)
+			require.True(t, got.LongContextBillingApplied)
+		} else {
+			require.InDelta(t, 0.385, got.ActualCost, 1e-9)
+			require.False(t, got.LongContextBillingApplied)
+		}
 	}
 }
 
@@ -147,11 +153,11 @@ func TestCalculateTokenCostForRequest_GeminiLadderAppliesToCacheItems(t *testing
 	// 输入侧合计 90K + 100K + 20K = 210K > 200K：所有分项按高档计。
 	// 不计 cache_creation 时只有 110K，不会过阈值——用例同时守住"缓存写入 token 计入阈值"。
 	above := calc(UsageTokens{InputTokens: 90000, CacheCreationTokens: 100000, CacheReadTokens: 20000, OutputTokens: 1000})
-	require.False(t, above.LongContextBillingApplied)
-	require.InDelta(t, 90000*1.25e-6, above.InputCost, 1e-9)
-	require.InDelta(t, 100000*1.25e-6, above.CacheCreationCost, 1e-9)
-	require.InDelta(t, 20000*1.25e-7, above.CacheReadCost, 1e-9)
-	require.InDelta(t, 1000*1e-5, above.OutputCost, 1e-9)
+	require.True(t, above.LongContextBillingApplied)
+	require.InDelta(t, 90000*1.25e-6*2, above.InputCost, 1e-9)
+	require.InDelta(t, 100000*1.25e-6*2, above.CacheCreationCost, 1e-9)
+	require.InDelta(t, 20000*1.25e-7*2, above.CacheReadCost, 1e-9)
+	require.InDelta(t, 1000*1e-5*1.5, above.OutputCost, 1e-9)
 
 	// 输入侧合计 50K + 100K + 40K = 190K ≤ 200K：按基础价计
 	below := calc(UsageTokens{InputTokens: 50000, CacheCreationTokens: 100000, CacheReadTokens: 40000, OutputTokens: 1000})
@@ -196,8 +202,8 @@ func TestCalculateTokenCostForRequest_BuiltInPricingUsesUnifiedPath(t *testing.T
 	})
 	require.NoError(t, err)
 	require.Equal(t, want, got)
-	require.InDelta(t, 300000*2.5e-6, got.InputCost, 1e-9)
-	require.False(t, got.LongContextBillingApplied)
+	require.InDelta(t, 300000*2.5e-6*2, got.InputCost, 1e-9)
+	require.True(t, got.LongContextBillingApplied)
 }
 
 func TestCalculateTokenCostForRequest_NoResolverFallsBackToCatalog(t *testing.T) {
