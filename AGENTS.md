@@ -39,8 +39,9 @@ different workflow for a specific task.
 - Preserve merge ancestry for releases, upstream syncs, and hotfixes. Do not
   squash upstream synchronization commits.
 - Never force-push `main-czc`.
-- Deploy immutable `czc-*` tags when practical instead of an untagged moving
-  branch. Suggested tag format: `czc-vYYYY.MM.DD.N`.
+- Production deploys MUST use an immutable `czc-*` tag. Do not install
+  `/opt/sub2api/sub2api` from an untagged `main-czc` HEAD. Tag format:
+  `czc-vYYYY.MM.DD.N`.
 
 ### `dev-czc`
 
@@ -61,20 +62,37 @@ different workflow for a specific task.
 
 ## Releasing Customized Changes
 
+This is the only allowed production-deploy path. A user request to 部署,
+deploy, or 上线 means this full sequence, not a binary hot-copy.
+
 1. Develop and test changes on `feature/*` or `fix/*` branches.
 2. Merge them into `dev-czc` and run the appropriate integration tests.
 3. Merge the tested `dev-czc` state into `main-czc` through a pull request or an
    explicit merge commit.
-4. Before tagging, add `.github/releases/<tag>.md` with user-facing release
-   notes that describe the actual changes since the previous customized tag,
-   upgrade guidance, compatibility or migration impact, verification, and
-   rollback information. Verification must list failed and skipped checks as
-   well as successful checks. Short tag annotations are not a substitute for
-   a complete GitHub Release.
-5. Run release checks on `main-czc` and create a `czc-*` tag for production
-   releases. Verify that the matching GitHub Release was published with the
-   detailed notes.
-6. Never promote changes by rewriting branch history.
+4. Bump `backend/cmd/server/VERSION` on a short-lived branch from `dev-czc`
+   (patch +1 unless the owner specifies otherwise). The running
+   `sub2api --version` string comes from this file unless the checkout is an
+   exact `vX.Y.Z` tag.
+5. Add `.github/releases/<tag>.md` with user-facing release notes that
+   describe the actual changes since the previous customized tag, the VERSION
+   number, upgrade guidance, compatibility or migration impact, verification,
+   and rollback information. Verification must list failed and skipped checks
+   as well as successful checks. Short tag annotations are not a substitute
+   for a complete GitHub Release. Title form: `# czc-vYYYY.MM.DD.N (X.Y.Z.W)`.
+6. Merge the VERSION bump and release notes into `dev-czc`, then into
+   `main-czc`.
+7. Run release checks on `main-czc`, create the annotated `czc-*` tag on that
+   commit, push the tag, and publish the matching GitHub Release from the
+   notes file.
+8. Build the production binary **from that tag** with `-tags embed` (see
+   Server Builds). Backup `/opt/sub2api/sub2api` as
+   `sub2api.bak.<tag>-<UTC timestamp>`, install, restart, and verify
+   `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/` is `200`.
+9. Report the tag, VERSION, commit, and backup path. Never promote changes by
+   rewriting branch history.
+
+Do not skip the VERSION bump, `czc-*` tag, or GitHub Release unless the owner
+explicitly says 热更新 or 跳过发版. "合并、push、部署" is not a skip.
 
 ## Synchronizing Upstream Changes
 
@@ -109,7 +127,8 @@ then propagate `main-czc` to `dev-czc`.
 2. Make the smallest safe fix and run focused regression tests.
 3. Merge the hotfix into `main-czc` without squashing its release history.
 4. Merge the updated `main-czc` back into `dev-czc` immediately.
-5. Tag the repaired release when it is deployed.
+5. Follow Releasing Customized Changes (VERSION bump, notes, `czc-*` tag,
+   GitHub Release) before replacing the production binary.
 
 ## Required Agent Checks
 
@@ -131,6 +150,9 @@ Before finishing, the agent must report:
 - Tests and checks that were run, including any that could not be run.
 - Whether the work still needs promotion from a feature branch to `dev-czc` or
   from `dev-czc` to `main-czc`.
+- If the user asked to deploy: the `czc-*` tag, VERSION, GitHub Release URL,
+  and whether `/opt/sub2api/sub2api --version` matches. If any of those are
+  missing, the deploy is not finished.
 
 ## Safety Rules
 
@@ -157,3 +179,5 @@ Before finishing, the agent must report:
 
   Run from `backend/`. Do not deploy a binary built without `-tags embed`.
 - After replacing `/opt/sub2api/sub2api`, verify `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/` is `200` before treating the deploy as done.
+- The installed binary's `--version` must match the release VERSION. Do not
+  deploy a build whose version string still equals the previous release.
