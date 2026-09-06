@@ -395,7 +395,7 @@ export default {
     },
     currentBalance: '当前余额',
     groupFallback: '分组 #{id}',
-    rechargeAccount: '充值账户',
+    rechargeAccount: '充值',
     activeSubscription: '当前订阅',
     noActiveSubscription: '暂无有效订阅',
     tabTopUp: '充值',
@@ -433,7 +433,7 @@ export default {
       alipayMobileOpenHint: '请允许当前页面打开支付宝 App，或改用系统浏览器重新发起支付。',
       // Structured error codes (reason strings from backend ApplicationError)
       PAYMENT_DISABLED: '支付系统已关闭',
-      USER_INACTIVE: '账号已被禁用',
+      USER_INACTIVE: '用户已被禁用',
       BALANCE_PAYMENT_DISABLED: '余额充值功能已关闭',
       INVALID_AMOUNT: '金额无效',
       INVALID_INPUT: '参数有误',

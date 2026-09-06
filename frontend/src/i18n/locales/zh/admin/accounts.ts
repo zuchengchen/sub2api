@@ -311,7 +311,7 @@ export default {
         accountMode: {
           title: '账号类型',
           payg: '按量付费',
-          paygDesc: '消耗账户余额，按 Token 计费。余额不足自动冷却，充值后恢复。',
+          paygDesc: '消耗账号余额，按 Token 计费。余额不足自动冷却，充值后恢复。',
           coding: 'Coding Plan',
           codingDesc: '订阅制编程套餐，按 5 小时 / 每周滚动用量窗口限流。',
         },
@@ -349,7 +349,7 @@ export default {
         windowWeekly: '7d',
         probe: '查询',
         probeTooltip: '请求供应商额度端点，查询 5 小时 / 每周滚动窗口用量',
-        balanceProbeTooltip: '请求供应商余额端点，查询账户余额',
+        balanceProbeTooltip: '请求供应商余额端点，查询账号余额',
         balanceLow: '余额不足',
         noBalanceEndpoint: '该平台暂无余额查询接口',
       },
@@ -1108,12 +1108,12 @@ export default {
         batchFailed: '批量创建失败',
         // OpenAI specific
         openai: {
-          title: 'OpenAI 账户授权',
-          followSteps: '请按照以下步骤完成 OpenAI 账户的授权：',
+          title: 'OpenAI 账号授权',
+          followSteps: '请按照以下步骤完成 OpenAI 账号的授权：',
           step1GenerateUrl: '点击下方按钮生成授权链接',
           generateAuthUrl: '生成授权链接',
           step2OpenUrl: '在浏览器中打开链接并完成授权',
-          openUrlDesc: '请在新标签页中打开授权链接，登录您的 OpenAI 账户并授权。',
+          openUrlDesc: '请在新标签页中打开授权链接，登录您的 OpenAI 账号并授权。',
           importantNotice:
             '重要提示：授权后页面可能会加载较长时间，请耐心等待。当浏览器地址栏变为 http://localhost... 开头时，表示授权已完成。',
           step3EnterCode: '输入授权链接或 Code',

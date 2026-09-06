@@ -386,8 +386,8 @@ const eventDisplayMeta: Record<string, EventDisplayMeta> = {
     categoryLabel: "风控",
   },
   "content_moderation.account_disabled": {
-    label: "内容审计禁用账号",
-    timing: "内容审计违规次数达到封禁阈值并自动禁用用户账号时发送。",
+    label: "内容审计禁用用户",
+    timing: "内容审计违规次数达到封禁阈值并自动禁用用户时发送。",
     categoryLabel: "风控",
   },
   "ops.alert": {
