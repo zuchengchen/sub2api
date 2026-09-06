@@ -75,8 +75,18 @@ type AffiliateInvitee struct {
 	UserID      int64      `json:"user_id"`
 	Email       string     `json:"email"`
 	Username    string     `json:"username"`
+	AffCode     string     `json:"aff_code,omitempty"`
 	CreatedAt   *time.Time `json:"created_at,omitempty"`
 	TotalRebate float64    `json:"total_rebate"`
+}
+
+// affiliateInviteCodeRepository is implemented by the SQL affiliate repository.
+// Test stubs that only cover rebate/admission flows do not need it; BindInviterByCode
+// and GetAffiliateDetail fall back to the reusable identity aff_code in that case.
+type affiliateInviteCodeRepository interface {
+	EnsureUnusedInviteCode(ctx context.Context, userID int64) (string, error)
+	RotateUnusedInviteCode(ctx context.Context, userID int64) (string, error)
+	BindInviterByInviteCode(ctx context.Context, userID int64, code string) error
 }
 
 type AffiliateDetail struct {
@@ -253,9 +263,15 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 	if err != nil {
 		return nil, err
 	}
+	affCode := summary.AffCode
+	if store := s.inviteCodeStore(); store != nil {
+		if unused, unusedErr := store.EnsureUnusedInviteCode(ctx, userID); unusedErr == nil && unused != "" {
+			affCode = unused
+		}
+	}
 	return &AffiliateDetail{
 		UserID:                     summary.UserID,
-		AffCode:                    summary.AffCode,
+		AffCode:                    affCode,
 		InviterID:                  summary.InviterID,
 		AffCount:                   summary.AffCount,
 		AffQuota:                   summary.AffQuota,
@@ -264,6 +280,36 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 		EffectiveRebateRatePercent: s.resolveRebateRatePercent(ctx, summary),
 		Invitees:                   invitees,
 	}, nil
+}
+
+func (s *AffiliateService) inviteCodeStore() affiliateInviteCodeRepository {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	store, _ := s.repo.(affiliateInviteCodeRepository)
+	return store
+}
+
+// RotateUnusedInviteCode mints a new unused one-time invite code for the user
+// without invalidating previously issued unused codes.
+func (s *AffiliateService) RotateUnusedInviteCode(ctx context.Context, userID int64) (string, error) {
+	if userID <= 0 {
+		return "", infraerrors.BadRequest("INVALID_USER", "invalid user")
+	}
+	if s == nil || s.repo == nil {
+		return "", infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if _, err := s.EnsureUserAffiliate(ctx, userID); err != nil {
+		return "", err
+	}
+	if store := s.inviteCodeStore(); store != nil {
+		return store.RotateUnusedInviteCode(ctx, userID)
+	}
+	summary, err := s.repo.EnsureUserAffiliate(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return summary.AffCode, nil
 }
 
 // ValidateAffiliateCode resolves a user-facing affiliate code while enforcing
@@ -315,6 +361,10 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 	}
 	if selfSummary.InviterID != nil {
 		return nil
+	}
+
+	if store := s.inviteCodeStore(); store != nil {
+		return store.BindInviterByInviteCode(ctx, userID, code)
 	}
 
 	inviterSummary, err := s.ValidateAffiliateCode(ctx, code)

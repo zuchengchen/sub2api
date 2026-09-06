@@ -2424,6 +2424,16 @@ CREATE TABLE IF NOT EXISTS user_affiliates (
 	updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`)
 	require.NoError(t, err)
+	_, err = db.Exec(`
+CREATE TABLE IF NOT EXISTS user_affiliate_invite_codes (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	inviter_id INTEGER NOT NULL,
+	code TEXT NOT NULL UNIQUE,
+	used_by INTEGER NULL,
+	used_at TIMESTAMP NULL,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`)
+	require.NoError(t, err)
 
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))

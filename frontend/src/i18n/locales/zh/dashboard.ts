@@ -646,10 +646,15 @@ export default {
   affiliate: {
     title: '邀请返利',
     description: '邀请新用户注册，并将返利额度转入余额',
-    yourCode: '我的邀请码',
+    yourCode: '当前邀请码',
     inviteLink: '邀请链接',
+    oneTimeHint: '一次性邀请码，只能给一名用户注册。使用后会自动换成新码。',
     copyCode: '复制邀请码',
     copyLink: '复制链接',
+    generateNew: '生成新邀请码',
+    generating: '生成中...',
+    generated: '已生成新的邀请码',
+    generateFailed: '生成新邀请码失败',
     codeCopied: '邀请码已复制',
     linkCopied: '邀请链接已复制',
     loadFailed: '加载邀请返利数据失败',
@@ -677,13 +682,14 @@ export default {
       columns: {
         email: '邮箱',
         username: '用户名',
+        code: '邀请码',
         rebate: '返利明细',
         joinedAt: '注册时间'
       }
     },
     tips: {
       title: '使用说明',
-      line1: '将邀请码或邀请链接分享给新用户。',
+      line1: '把当前邀请码或链接发给一位新用户。每个码只能注册一次；需要再邀请别人时请生成新码。',
       line2: '被邀请用户充值后，你可获得 {rate} 的返利额度。',
       line3: '返利额度可随时转入余额。',
       line4: '新产生的返利需要经过冻结期后才能提现。'

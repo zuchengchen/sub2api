@@ -232,6 +232,25 @@ func (h *UserHandler) TransferAffiliateQuota(c *gin.Context) {
 	})
 }
 
+// RotateAffiliateInviteCode mints a new unused one-time invite code.
+// POST /api/v1/user/aff/invite-code
+func (h *UserHandler) RotateAffiliateInviteCode(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	code, err := h.affiliateService.RotateUnusedInviteCode(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{
+		"aff_code": code,
+	})
+}
+
 type StartIdentityBindingRequest struct {
 	Provider   string `json:"provider" binding:"required"`
 	RedirectTo string `json:"redirect_to"`
