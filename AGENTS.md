@@ -143,3 +143,17 @@ Before finishing, the agent must report:
   user request unless they are already part of the active task.
 - Match the scope of testing to the affected code. Upstream syncs and releases
   require broader verification than isolated feature changes.
+
+## Server Builds
+
+- Compiling `./cmd/server` (local run, release binary, or `/opt/sub2api`
+  deploy) MUST use `-tags embed`. Without it the frontend is omitted and `/`
+  returns `404 page not found`.
+- Required form:
+
+  ```bash
+  CGO_ENABLED=0 go build -tags embed -ldflags="-s -w -X main.Version=$(./scripts/resolve-version.sh)" -trimpath -o bin/server ./cmd/server
+  ```
+
+  Run from `backend/`. Do not deploy a binary built without `-tags embed`.
+- After replacing `/opt/sub2api/sub2api`, verify `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/` is `200` before treating the deploy as done.
