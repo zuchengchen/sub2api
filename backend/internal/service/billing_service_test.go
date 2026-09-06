@@ -261,9 +261,9 @@ func TestGetModelPricing_OpenAIGPT6AstraFallback(t *testing.T) {
 	require.InDelta(t, 75e-6, pricing.OutputPricePerToken, 1e-12)
 	require.InDelta(t, 1.5e-6, pricing.CacheReadPricePerToken, 1e-12)
 	require.InDelta(t, 18.75e-6, pricing.CacheCreationPricePerToken, 1e-12)
-	require.Zero(t, pricing.LongContextInputThreshold)
-	require.Zero(t, pricing.LongContextInputMultiplier)
-	require.Zero(t, pricing.LongContextOutputMultiplier)
+	require.Equal(t, 272000, pricing.LongContextInputThreshold)
+	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
+	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
 	require.False(t, pricing.LongContextThresholdInclusive)
 }
 
@@ -281,10 +281,46 @@ func TestCalculateCost_OpenAIGPT6AstraLongContextAppliesAPIMultipliers(t *testin
 	over := UsageTokens{InputTokens: 200000, OutputTokens: 4000, CacheReadTokens: 100000}
 	overCost, err := svc.CalculateCost("gpt-6-astra", over, 1.0)
 	require.NoError(t, err)
-	require.InDelta(t, float64(over.InputTokens)*15e-6, overCost.InputCost, 1e-10)
-	require.InDelta(t, float64(over.OutputTokens)*75e-6, overCost.OutputCost, 1e-10)
-	require.InDelta(t, float64(over.CacheReadTokens)*1.5e-6, overCost.CacheReadCost, 1e-10)
-	require.False(t, overCost.LongContextBillingApplied)
+	require.InDelta(t, float64(over.InputTokens)*15e-6*2.0, overCost.InputCost, 1e-10)
+	require.InDelta(t, float64(over.OutputTokens)*75e-6*1.5, overCost.OutputCost, 1e-10)
+	require.InDelta(t, float64(over.CacheReadTokens)*1.5e-6*2.0, overCost.CacheReadCost, 1e-10)
+	require.True(t, overCost.LongContextBillingApplied)
+}
+
+func TestGetModelPricing_OpenAIGPT56LunaFallback(t *testing.T) {
+	svc := newTestBillingService()
+
+	pricing, err := svc.GetModelPricing("gpt-5.6-luna")
+	require.NoError(t, err)
+	require.NotNil(t, pricing)
+	require.InDelta(t, 0.4e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 2.4e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.04e-6, pricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 0.5e-6, pricing.CacheCreationPricePerToken, 1e-12)
+	require.Equal(t, 272000, pricing.LongContextInputThreshold)
+	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
+	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+	require.False(t, pricing.LongContextThresholdInclusive)
+}
+
+func TestCalculateCost_OpenAIGPT56LunaLongContextAppliesAPIMultipliers(t *testing.T) {
+	svc := newTestBillingService()
+
+	below := UsageTokens{InputTokens: 100000, OutputTokens: 1000, CacheReadTokens: 50000}
+	belowCost, err := svc.CalculateCost("gpt-5.6-luna", below, 1.0)
+	require.NoError(t, err)
+	require.InDelta(t, float64(below.InputTokens)*0.4e-6, belowCost.InputCost, 1e-10)
+	require.InDelta(t, float64(below.OutputTokens)*2.4e-6, belowCost.OutputCost, 1e-10)
+	require.InDelta(t, float64(below.CacheReadTokens)*0.04e-6, belowCost.CacheReadCost, 1e-10)
+	require.False(t, belowCost.LongContextBillingApplied)
+
+	over := UsageTokens{InputTokens: 200000, OutputTokens: 4000, CacheReadTokens: 100000}
+	overCost, err := svc.CalculateCost("gpt-5.6-luna", over, 1.0)
+	require.NoError(t, err)
+	require.InDelta(t, float64(over.InputTokens)*0.4e-6*2.0, overCost.InputCost, 1e-10)
+	require.InDelta(t, float64(over.OutputTokens)*2.4e-6*1.5, overCost.OutputCost, 1e-10)
+	require.InDelta(t, float64(over.CacheReadTokens)*0.04e-6*2.0, overCost.CacheReadCost, 1e-10)
+	require.True(t, overCost.LongContextBillingApplied)
 }
 
 func TestGetModelPricing_OpenAIGPT54MiniFallback(t *testing.T) {
@@ -310,13 +346,13 @@ func TestCalculateCost_OpenAIGPT54LongContextAppliesWholeSessionMultipliers(t *t
 	cost, err := svc.CalculateCost("gpt-5.4-2026-03-05", tokens, 1.0)
 	require.NoError(t, err)
 
-	expectedInput := float64(tokens.InputTokens) * 2.5e-6
-	expectedOutput := float64(tokens.OutputTokens) * 15e-6
+	expectedInput := float64(tokens.InputTokens) * 2.5e-6 * 2.0
+	expectedOutput := float64(tokens.OutputTokens) * 15e-6 * 1.5
 	require.InDelta(t, expectedInput, cost.InputCost, 1e-10)
 	require.InDelta(t, expectedOutput, cost.OutputCost, 1e-10)
 	require.InDelta(t, expectedInput+expectedOutput, cost.TotalCost, 1e-10)
 	require.InDelta(t, expectedInput+expectedOutput, cost.ActualCost, 1e-10)
-	require.False(t, cost.LongContextBillingApplied)
+	require.True(t, cost.LongContextBillingApplied)
 }
 
 func TestCalculateCost_OpenAIGPT54LongContextMarkerRequiresActualCostIncrease(t *testing.T) {
@@ -346,8 +382,8 @@ func TestCalculateCost_OpenAIGPT55ProUsesGPT55PricingPolicy(t *testing.T) {
 	cost, err := svc.CalculateCost("gpt-5.5-pro", tokens, 1.0)
 	require.NoError(t, err)
 
-	expectedInput := float64(tokens.InputTokens) * 30e-6
-	expectedOutput := float64(tokens.OutputTokens) * 180e-6
+	expectedInput := float64(tokens.InputTokens) * 30e-6 * 2.0
+	expectedOutput := float64(tokens.OutputTokens) * 180e-6 * 1.5
 	require.InDelta(t, expectedInput, cost.InputCost, 1e-10)
 	require.InDelta(t, expectedOutput, cost.OutputCost, 1e-10)
 	require.InDelta(t, expectedInput+expectedOutput, cost.TotalCost, 1e-10)
@@ -396,14 +432,14 @@ func TestCalculateCost_OpenAIGPT54LongContextAppliesMultiplierToCacheRead(t *tes
 	cost, err := svc.CalculateCost("gpt-5.4-2026-03-05", tokens, 1.0)
 	require.NoError(t, err)
 
-	expectedInput := float64(tokens.InputTokens) * 2.5e-6
-	expectedOutput := float64(tokens.OutputTokens) * 15e-6
-	expectedCacheRead := float64(tokens.CacheReadTokens) * 0.25e-6
+	expectedInput := float64(tokens.InputTokens) * 2.5e-6 * 2.0
+	expectedOutput := float64(tokens.OutputTokens) * 15e-6 * 1.5
+	expectedCacheRead := float64(tokens.CacheReadTokens) * 0.25e-6 * 2.0
 
 	require.InDelta(t, expectedInput, cost.InputCost, 1e-10)
 	require.InDelta(t, expectedOutput, cost.OutputCost, 1e-10)
-	require.InDelta(t, expectedCacheRead, cost.CacheReadCost, 1e-10)
-	require.False(t, cost.LongContextBillingApplied)
+	require.InDelta(t, expectedCacheRead, cost.CacheReadCost, 1e-10,
+		"cache_read_cost should be scaled by LongContextInputMultiplier when long-context pricing applies (issue #2293)")
 
 	expectedTotal := expectedInput + expectedOutput + expectedCacheRead
 	require.InDelta(t, expectedTotal, cost.TotalCost, 1e-10)
@@ -447,9 +483,10 @@ func TestCalculateCost_OpenAIGPT54LongContextAppliesMultiplierToCacheCreation(t 
 	cost, err := svc.CalculateCost("gpt-5.4-2026-03-05", tokens, 1.0)
 	require.NoError(t, err)
 
-	expectedCacheCreation := float64(tokens.CacheCreationTokens) * 2.5e-6
-	require.InDelta(t, expectedCacheCreation, cost.CacheCreationCost, 1e-10)
-	require.False(t, cost.LongContextBillingApplied)
+	// gpt-5.4 fallback: CacheCreationPricePerToken = 2.5e-6, LongContextInputMultiplier = 2.0
+	expectedCacheCreation := float64(tokens.CacheCreationTokens) * 2.5e-6 * 2.0
+	require.InDelta(t, expectedCacheCreation, cost.CacheCreationCost, 1e-10,
+		"cache_creation_cost should be scaled by LongContextInputMultiplier when long-context pricing applies")
 }
 
 // 阴性测试：未触发长上下文时，cache_creation_price 不应被错误地乘以倍率。
@@ -505,10 +542,10 @@ func TestCalculateCost_LongContextAppliesMultiplierToCacheCreation5mAnd1h(t *tes
 	cost, err := svc.CalculateCost("claude-sonnet-4", tokens, 1.0)
 	require.NoError(t, err)
 
-	expected5m := float64(tokens.CacheCreation5mTokens) * 4e-6
-	expected1h := float64(tokens.CacheCreation1hTokens) * 5e-6
-	require.InDelta(t, expected5m+expected1h, cost.CacheCreationCost, 1e-10)
-	require.False(t, cost.LongContextBillingApplied)
+	expected5m := float64(tokens.CacheCreation5mTokens) * 4e-6 * 2.0
+	expected1h := float64(tokens.CacheCreation1hTokens) * 5e-6 * 2.0
+	require.InDelta(t, expected5m+expected1h, cost.CacheCreationCost, 1e-10,
+		"both 5m and 1h cache_creation prices should be scaled by LongContextInputMultiplier")
 }
 
 func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
@@ -1230,9 +1267,9 @@ func TestCalculateCostUnified_GroupLongContextToggleUsesPresetLadder(t *testing.
 	require.NoError(t, err)
 
 	require.False(t, disabled.LongContextBillingApplied)
-	require.False(t, enabled.LongContextBillingApplied)
-	require.InDelta(t, disabled.InputCost, enabled.InputCost, 1e-12)
-	require.InDelta(t, disabled.OutputCost, enabled.OutputCost, 1e-12)
+	require.True(t, enabled.LongContextBillingApplied)
+	require.InDelta(t, disabled.InputCost*2, enabled.InputCost, 1e-12)
+	require.InDelta(t, disabled.OutputCost*2, enabled.OutputCost, 1e-12)
 }
 
 func TestGetModelPricing_UnknownGrokTextFallsBackToGrok46(t *testing.T) {

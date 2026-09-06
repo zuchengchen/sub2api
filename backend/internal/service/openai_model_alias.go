@@ -133,6 +133,12 @@ func isOpenAIGPT6AstraModel(model string) bool {
 	return normalized == "gpt-6" || normalized == "gpt-6-astra" || strings.HasPrefix(normalized, "gpt-6-astra-")
 }
 
+// isOpenAIGPT56LunaModel reports GPT-5.6 Luna and dated/effort-suffixed variants.
+func isOpenAIGPT56LunaModel(model string) bool {
+	normalized := canonicalizeOpenAIModelAliasSpelling(model)
+	return normalized == "gpt-5.6-luna" || strings.HasPrefix(normalized, "gpt-5.6-luna-")
+}
+
 func appendUsageBillingModelCandidate(candidates []string, seen map[string]struct{}, model string) []string {
 	trimmed := strings.TrimSpace(model)
 	if trimmed == "" {

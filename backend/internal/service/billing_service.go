@@ -468,15 +468,16 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown:     false,
 	})
 
-	// OpenAI GPT-6 Astra：按官方 API 价的 1.5 倍计费。缓存写入仍为输入价的 1.25 倍。
+	// OpenAI GPT-6 Astra：以官方 API 价的 1.5 倍为基价。缓存写入仍为输入价的 1.25 倍。
+	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
 	// Source: https://developers.openai.com/api/docs/models/gpt-6-astra
-	s.fallbackPrices["gpt-6-astra"] = pricingWithPriorityMultiplier(&ModelPricing{
+	s.fallbackPrices["gpt-6-astra"] = applyOpenAIAPILongContextLadder("gpt-6-astra", pricingWithPriorityMultiplier(&ModelPricing{
 		InputPricePerToken:         gpt6AstraOfficialInputPricePerToken * gpt6AstraAPIBillingMultiplier,
 		OutputPricePerToken:        gpt6AstraOfficialOutputPricePerToken * gpt6AstraAPIBillingMultiplier,
 		CacheCreationPricePerToken: gpt6AstraOfficialCacheCreationPricePerToken * gpt6AstraAPIBillingMultiplier,
 		CacheReadPricePerToken:     gpt6AstraOfficialCacheReadPricePerToken * gpt6AstraAPIBillingMultiplier,
 		SupportsCacheBreakdown:     false,
-	}, 2.0)
+	}, 2.0))
 
 	// OpenAI GPT-5.6 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
 	s.fallbackPrices["gpt-5.6-sol"] = applyOpenAIAPILongContextLadder("gpt-5.6-sol", &ModelPricing{
@@ -499,16 +500,14 @@ func (s *BillingService) initFallbackPricing() {
 		CacheReadPricePerToken:             0.2e-6,
 		CacheReadPricePerTokenPriority:     0.4e-6,
 	})
-	s.fallbackPrices["gpt-5.6-luna"] = applyOpenAIAPILongContextLadder("gpt-5.6-luna", &ModelPricing{
-		InputPricePerToken:                 0.2e-6,
-		InputPricePerTokenPriority:         0.4e-6,
-		OutputPricePerToken:                1.2e-6,
-		OutputPricePerTokenPriority:        2.4e-6,
-		CacheCreationPricePerToken:         0.25e-6,
-		CacheCreationPricePerTokenPriority: 0.5e-6,
-		CacheReadPricePerToken:             0.02e-6,
-		CacheReadPricePerTokenPriority:     0.04e-6,
-	})
+	// OpenAI GPT-5.6 Luna：以官方 API 价的 2 倍为基价。缓存写入仍为输入价的 1.25 倍。
+	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
+	s.fallbackPrices["gpt-5.6-luna"] = applyOpenAIAPILongContextLadder("gpt-5.6-luna", pricingWithPriorityMultiplier(&ModelPricing{
+		InputPricePerToken:         gpt56LunaOfficialInputPricePerToken * gpt56LunaAPIBillingMultiplier,
+		OutputPricePerToken:        gpt56LunaOfficialOutputPricePerToken * gpt56LunaAPIBillingMultiplier,
+		CacheCreationPricePerToken: gpt56LunaOfficialCacheCreationPricePerToken * gpt56LunaAPIBillingMultiplier,
+		CacheReadPricePerToken:     gpt56LunaOfficialCacheReadPricePerToken * gpt56LunaAPIBillingMultiplier,
+	}, 2.0))
 
 	s.fallbackPrices["gpt-5.4-mini"] = &ModelPricing{
 		InputPricePerToken:     7.5e-7,
@@ -1332,7 +1331,10 @@ type CostInput struct {
 func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, error) {
 	if input.Resolver == nil {
 		// 无 Resolver，回退到旧路径
-		applyLongContextBilling := false
+		applyLongContextBilling := true
+		if input.LongContextBillingEnabled != nil {
+			applyLongContextBilling = *input.LongContextBillingEnabled
+		}
 		breakdown, err := s.calculateCostInternalWithPolicy(
 			input.Model,
 			input.Tokens,
@@ -1424,9 +1426,8 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 		}
 	}
 
-	// 本地定制：全面取消长上下文双倍计费。官方/目录阶梯不再叠加；
-	// 渠道显式区间定价仍按分组开关选档。
-	applyLongCtx := false
+	// 官方/目录长上下文阶梯仅在无区间定价时应用（区间定价已包含上下文分层）。
+	applyLongCtx := len(resolved.Intervals) == 0 && contextTierPricingEnabled
 
 	breakdown := s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongCtx)
 	applyCostBreakdownMultiplier(breakdown, resolvedChannelTimeMultiplier(resolved, input.PricingAt))
@@ -1645,7 +1646,7 @@ func (s *BillingService) calculateCostWithServiceTierPolicy(
 }
 
 func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens, rateMultiplier float64, serviceTier string, channelPricing *ChannelModelPricing) (*CostBreakdown, error) {
-	return s.calculateCostInternalWithPolicy(model, tokens, rateMultiplier, serviceTier, channelPricing, false)
+	return s.calculateCostInternalWithPolicy(model, tokens, rateMultiplier, serviceTier, channelPricing, true)
 }
 
 func (s *BillingService) calculateCostInternalWithPolicy(
@@ -1716,6 +1717,11 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		applyGPT6AstraAPIBillingRates(&cloned)
 		pricing = &cloned
 	}
+	if forceDeepSeekRates && isOpenAIGPT56LunaModel(normalized) {
+		cloned := *pricing
+		applyGPT56LunaAPIBillingRates(&cloned)
+		pricing = &cloned
+	}
 	isGPT56 := isOpenAIGPT56Model(normalized)
 	needsMaxReasoningEffortMultiplier := isClaudeFable51Model(model) && pricing.MaxReasoningEffortMultiplier == nil
 	needsCacheCreationPolicy := isGPT56 && !pricing.CacheCreationPriceExplicit && (pricing.CacheCreationPricePerToken <= 0 ||
@@ -1769,6 +1775,12 @@ const (
 	gpt6AstraOfficialCacheCreationPricePerToken = 12.5e-6
 	gpt6AstraOfficialCacheReadPricePerToken     = 1e-6
 	gpt6AstraAPIBillingMultiplier               = 1.5
+
+	gpt56LunaOfficialInputPricePerToken         = 0.2e-6
+	gpt56LunaOfficialOutputPricePerToken        = 1.2e-6
+	gpt56LunaOfficialCacheCreationPricePerToken = 0.25e-6
+	gpt56LunaOfficialCacheReadPricePerToken     = 0.02e-6
+	gpt56LunaAPIBillingMultiplier               = 2.0
 )
 
 func applyGPT6AstraAPIBillingRates(pricing *ModelPricing) {
@@ -1780,10 +1792,31 @@ func applyGPT6AstraAPIBillingRates(pricing *ModelPricing) {
 	pricing.OutputPricePerToken = gpt6AstraOfficialOutputPricePerToken * m
 	pricing.CacheCreationPricePerToken = gpt6AstraOfficialCacheCreationPricePerToken * m
 	pricing.CacheReadPricePerToken = gpt6AstraOfficialCacheReadPricePerToken * m
-	pricing.LongContextInputThreshold = 0
-	pricing.LongContextInputMultiplier = 0
-	pricing.LongContextOutputMultiplier = 0
-	pricing.LongContextThresholdInclusive = false
+	// 1.5× 官方价是基价；目录未给出阶梯时补齐 API 272K 阶梯，已有阈值则保留。
+	if pricing.LongContextInputThreshold <= 0 {
+		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
+		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
+		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
+		pricing.LongContextThresholdInclusive = false
+	}
+}
+
+func applyGPT56LunaAPIBillingRates(pricing *ModelPricing) {
+	if pricing == nil {
+		return
+	}
+	m := gpt56LunaAPIBillingMultiplier
+	pricing.InputPricePerToken = gpt56LunaOfficialInputPricePerToken * m
+	pricing.OutputPricePerToken = gpt56LunaOfficialOutputPricePerToken * m
+	pricing.CacheCreationPricePerToken = gpt56LunaOfficialCacheCreationPricePerToken * m
+	pricing.CacheReadPricePerToken = gpt56LunaOfficialCacheReadPricePerToken * m
+	// 2× 官方价是基价；目录未给出阶梯时补齐 API 272K 阶梯，已有阈值则保留。
+	if pricing.LongContextInputThreshold <= 0 {
+		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
+		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
+		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
+		pricing.LongContextThresholdInclusive = false
+	}
 }
 
 func openAIModelHasAPILongContextLadder(normalized string) bool {
