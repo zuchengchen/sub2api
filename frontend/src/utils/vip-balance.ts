@@ -6,6 +6,8 @@ import type { User } from '@/types'
  * 不写入 users.frozen_balance（该字段属于批量图片余额暂扣台账）。
  */
 export const VIP_FROZEN_RESERVE = 100
+/** 自动升级阈值（与后端 service.VipBalanceThreshold 同源）：总余额必须严格大于该值。 */
+export const VIP_BALANCE_THRESHOLD = 100
 
 /** 展示用冻结金额：VIP = 准备金 + 在途暂扣；普通用户 = 在途暂扣。 */
 export function displayFrozenBalance(user: Pick<User, 'balance' | 'frozen_balance' | 'is_vip'> | null | undefined): number {

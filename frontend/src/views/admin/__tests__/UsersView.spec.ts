@@ -23,6 +23,7 @@ vi.mock('@/api/admin', () => ({
     users: {
       list: listUsers,
       toggleStatus: vi.fn(),
+      setVIP: vi.fn(),
       delete: vi.fn()
     },
     groups: {

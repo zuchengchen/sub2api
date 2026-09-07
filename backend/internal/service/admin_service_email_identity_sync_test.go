@@ -222,3 +222,8 @@ func TestAdminService_UpdateUser_DoesNotReturnPartialSuccessFromEmailIdentityRes
 	require.Empty(t, repo.replaceCalls)
 	require.Empty(t, repo.ensureCalls)
 }
+
+func (s *emailSyncRepoStub) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
+	return false, nil
+}
+

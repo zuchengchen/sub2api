@@ -267,3 +267,8 @@ func (s *stubUserRepo) DisableTotp(ctx context.Context, userID int64) error {
 func (s *stubUserRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.User, error) {
 	panic("unexpected GetByIDIncludeDeleted call")
 }
+
+func (s *stubUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
+	return false, nil
+}
+

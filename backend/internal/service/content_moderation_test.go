@@ -948,3 +948,8 @@ func TestContentModerationUpdateConfig_CyberPolicyExcludeFromBanCount(t *testing
 	require.NoError(t, err)
 	require.False(t, view.CyberPolicyExcludeFromBanCount)
 }
+
+func (r *contentModerationTestUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
+	return false, nil
+}
+

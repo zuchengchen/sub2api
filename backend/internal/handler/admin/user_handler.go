@@ -397,6 +397,34 @@ func (h *UserHandler) Update(c *gin.Context) {
 	response.Success(c, dto.UserFromServiceAdmin(user))
 }
 
+// SetUserVIPRequest is the body for POST /admin/users/:id/vip.
+type SetUserVIPRequest struct {
+	VIP bool `json:"vip"`
+}
+
+// SetVIP POST /admin/users/:id/vip 手动开通或取消 SVIP。
+func (h *UserHandler) SetVIP(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+
+	var req SetUserVIPRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	user, err := h.adminService.SetUserVIP(c.Request.Context(), userID, req.VIP)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, dto.UserFromServiceAdmin(user))
+}
+
 // Delete handles deleting a user
 // DELETE /api/v1/admin/users/:id
 func (h *UserHandler) Delete(c *gin.Context) {

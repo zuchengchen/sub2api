@@ -2927,6 +2927,11 @@ func paginationResult(total int64, params pagination.PaginationParams) *paginati
 	}
 }
 
+func (r *stubUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
+	return false, nil
+}
+
+
 // Ensure compile-time interface compliance.
 var (
 	_ service.UserRepository             = (*stubUserRepo)(nil)
