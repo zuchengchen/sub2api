@@ -588,7 +588,9 @@ export default {
         concurrencyPlaceholder: '0 表示不限制',
         concurrencyHint: '该用户的最大并发请求数，0 = 不限制',
         rpmLimitPlaceholder: '0 表示不限制',
-        rpmLimitHint: '该用户每分钟最大请求数，0 = 不限制；仅在所用分组未设置 rpm_limit 时作为兜底生效'
+        rpmLimitHint: '该用户每分钟最大请求数，0 = 不限制；仅在所用分组未设置 rpm_limit 时作为兜底生效',
+        svipLabel: 'SVIP',
+        svipHint: '勾选立即开通 SVIP，取消勾选则降为普通用户。总余额仍大于 100 元时，之后可能被自动升级再次变成 SVIP。'
       },
       adjustBalance: '调整余额',
       adjustConcurrency: '调整并发数',

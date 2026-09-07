@@ -41,6 +41,18 @@
         />
       </div>
       <div>
+        <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+          <input
+            v-model="form.is_vip"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+            data-test="svip-checkbox"
+          />
+          {{ t('admin.users.form.svipLabel') }}
+        </label>
+        <p class="input-hint">{{ t('admin.users.form.svipHint') }}</p>
+      </div>
+      <div>
         <label class="input-label">{{ t('admin.users.notes') }}</label>
         <textarea data-test="admin-notes" v-model="form.notes" rows="3" class="input"></textarea>
       </div>
@@ -116,12 +128,13 @@ const form = reactive({
   role: 'user' as AdminUser['role'],
   concurrency: 1,
   rpm_limit: 0,
+  is_vip: false,
   customAttributes: {} as UserAttributeValuesMap
 })
 
 watch(() => props.user, (u) => {
   if (u) {
-    Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', role: u.role || 'user', concurrency: u.concurrency, rpm_limit: u.rpm_limit ?? 0, customAttributes: {} })
+    Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', role: u.role || 'user', concurrency: u.concurrency, rpm_limit: u.rpm_limit ?? 0, is_vip: Boolean(u.is_vip), customAttributes: {} })
     passwordCopied.value = false
   }
 }, { immediate: true })
@@ -156,6 +169,9 @@ const handleUpdateUser = async () => {
     if (form.password.trim()) data.password = form.password.trim()
     // 提升为管理员属敏感操作：后端返回 STEP_UP_REQUIRED 时弹 TOTP 验证并重试
     await stepUp.run(() => adminAPI.users.update(userId, data))
+    if (Boolean(props.user.is_vip) !== Boolean(form.is_vip)) {
+      await adminAPI.users.setVIP(userId, form.is_vip)
+    }
     if (Object.keys(form.customAttributes).length > 0) await adminAPI.userAttributes.updateUserAttributeValues(userId, form.customAttributes)
     appStore.showSuccess(t('admin.users.userUpdated'))
     emit('success'); emit('close')
