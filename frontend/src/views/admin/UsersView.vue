@@ -271,7 +271,7 @@
           selectable
           :selected-keys="selectedIds"
           :selection-label="getUserSelectionLabel"
-          :actions-count="7"
+          :actions-count="8"
           :server-side-sort="true"
           default-sort-key="created_at"
           default-sort-order="desc"
@@ -279,7 +279,7 @@
           @sort="handleSort"
           @update:selected-keys="handleSelectedKeysUpdate"
         >
-          <template #cell-email="{ value }">
+          <template #cell-email="{ row, value }">
             <div class="flex items-center gap-2">
               <div
                 class="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 dark:bg-primary-900/30"
@@ -289,6 +289,25 @@
                 </span>
               </div>
               <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+              <button
+                v-if="row.is_vip"
+                type="button"
+                class="inline-flex"
+                :title="t('admin.users.revokeSvip')"
+                data-test="svip-toggle"
+                @click.stop="openVipDialog(row, false)"
+              >
+                <VipBadge size="xs" />
+              </button>
+              <button
+                v-else
+                type="button"
+                class="rounded border border-amber-300 px-1 py-0.5 text-[10px] font-medium leading-none text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20"
+                data-test="svip-toggle"
+                @click.stop="openVipDialog(row, true)"
+              >
+                {{ t('admin.users.grantSvip') }}
+              </button>
             </div>
           </template>
 
@@ -619,6 +638,16 @@
               >
                 <Icon name="edit" size="sm" />
                 <span class="text-xs">{{ t('common.edit') }}</span>
+              </button>
+
+              <button
+                type="button"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-900/20 dark:hover:text-amber-300"
+                data-test="svip-action"
+                @click="openVipDialog(row, !row.is_vip)"
+              >
+                <Icon name="trophy" size="sm" />
+                <span class="text-xs">{{ row.is_vip ? t('admin.users.revokeSvip') : t('admin.users.grantSvip') }}</span>
               </button>
 
               <!-- Toggle Status Button (not for admin) -->
