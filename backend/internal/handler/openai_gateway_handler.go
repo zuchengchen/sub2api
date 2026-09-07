@@ -1583,9 +1583,7 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 
 // handleAnthropicFailoverExhausted maps upstream failover errors to Anthropic format.
 func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
-	if failoverErr != nil {
-		copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
-	}
+	applyFailoverRetryAfter(c, failoverErr)
 	if failoverErr != nil && failoverErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(failoverErr)
 		h.anthropicStreamingAwareError(c, status, "api_error", message, streamStarted)
@@ -3344,7 +3342,7 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", message, streamStarted)
 		return
 	}
-	copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
+	applyFailoverRetryAfter(c, failoverErr)
 	if failoverErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(failoverErr)
 		h.handleStreamingAwareError(c, status, "upstream_error", message, streamStarted)
@@ -3408,6 +3406,21 @@ func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError
 		return status, failoverErr.ClientMessage
 	}
 	return http.StatusServiceUnavailable, service.GrokCredentialUnavailableClientMessage
+}
+
+func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailoverError) {
+	if c == nil {
+		return
+	}
+	if failoverErr != nil {
+		copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
+	}
+	if strings.TrimSpace(c.Writer.Header().Get("Retry-After")) != "" {
+		return
+	}
+	if failoverErr != nil && failoverErr.IsOpenAICapacityShed() {
+		c.Header("Retry-After", strconv.Itoa(openAICapacityShedClientRetryAfterSeconds))
+	}
 }
 
 func copyFailoverRetryAfter(c *gin.Context, headers http.Header) {
