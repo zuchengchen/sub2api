@@ -36,9 +36,15 @@ const (
 	maxSameAccountRetries = 3
 	// sameAccountRetryDelay 同账号重试间隔
 	sameAccountRetryDelay = 500 * time.Millisecond
+	// requestScopedRetryDelay 是请求级瞬时故障（OpenAI server_is_overloaded 等）
+	// 的同号退避起点。上游降载窗口往往持续数秒，500ms 连打几乎帮不上忙。
+	requestScopedRetryDelay = 2 * time.Second
 	// maxRequestScopedRetryDelay 限制请求级瞬时错误的指数退避上限，避免高重试配置
 	// 将单次请求拖入分钟级等待。
 	maxRequestScopedRetryDelay = 8 * time.Second
+	// openAICapacityShedClientRetryAfterSeconds 在上游未给 Retry-After 时，
+	// 把过载 503 暴露给客户端的等待建议，与退避上限对齐。
+	openAICapacityShedClientRetryAfterSeconds = 8
 	// singleAccountBackoffDelay 单账号分组 503 退避重试固定延时。
 	// Service 层在 SingleAccountRetry 模式下已做充分原地重试（最多 3 次、总等待 30s），
 	// Handler 层只需短暂间隔后重新进入 Service 层即可。
@@ -62,11 +68,11 @@ func sameAccountRetryDelayFor(failoverErr *service.UpstreamFailoverError, retryC
 	if failoverErr.SameAccountRetryDelay > 0 {
 		return failoverErr.SameAccountRetryDelay
 	}
-	if !failoverErr.RequestScopedTransient || retryCount <= 1 {
+	if !failoverErr.RequestScopedTransient {
 		return sameAccountRetryDelay
 	}
 
-	delay := sameAccountRetryDelay
+	delay := requestScopedRetryDelay
 	for i := 1; i < retryCount; i++ {
 		if delay >= maxRequestScopedRetryDelay/2 {
 			return maxRequestScopedRetryDelay

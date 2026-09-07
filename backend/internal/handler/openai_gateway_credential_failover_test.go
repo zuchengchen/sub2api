@@ -85,6 +85,7 @@ func TestOpenAICapacityFailoverExhaustionPreservesMessageAsServerError(t *testin
 		require.Equal(t, "server_error", gjson.Get(recorder.Body.String(), "error.type").String())
 		require.Equal(t, message, gjson.Get(recorder.Body.String(), "error.message").String())
 		require.NotContains(t, recorder.Body.String(), "server_is_overloaded")
+		require.Equal(t, "8", recorder.Header().Get("Retry-After"))
 	})
 
 	t.Run("responses_compat", func(t *testing.T) {
@@ -94,6 +95,7 @@ func TestOpenAICapacityFailoverExhaustionPreservesMessageAsServerError(t *testin
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 		require.Equal(t, "server_error", gjson.Get(recorder.Body.String(), "error.code").String())
 		require.Equal(t, message, gjson.Get(recorder.Body.String(), "error.message").String())
+		require.Equal(t, "8", recorder.Header().Get("Retry-After"))
 	})
 
 	t.Run("anthropic_compat", func(t *testing.T) {
@@ -103,6 +105,16 @@ func TestOpenAICapacityFailoverExhaustionPreservesMessageAsServerError(t *testin
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 		require.Equal(t, "api_error", gjson.Get(recorder.Body.String(), "error.type").String())
 		require.Equal(t, message, gjson.Get(recorder.Body.String(), "error.message").String())
+		require.Equal(t, "8", recorder.Header().Get("Retry-After"))
+	})
+
+	t.Run("preserves_upstream_retry_after", func(t *testing.T) {
+		withHeader := *failoverErr
+		withHeader.ResponseHeaders = http.Header{"Retry-After": []string{"3"}}
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		(&GatewayHandler{}).handleResponsesFailoverExhausted(c, &withHeader, false)
+		require.Equal(t, "3", recorder.Header().Get("Retry-After"))
 	})
 }
 

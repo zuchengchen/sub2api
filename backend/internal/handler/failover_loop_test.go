@@ -39,11 +39,10 @@ func TestSameAccountRetryDelayFor(t *testing.T) {
 		retryCount int
 		want       time.Duration
 	}{
-		{name: "first retry", retryCount: 1, want: 500 * time.Millisecond},
-		{name: "second retry", retryCount: 2, want: time.Second},
-		{name: "third retry", retryCount: 3, want: 2 * time.Second},
-		{name: "fourth retry", retryCount: 4, want: 4 * time.Second},
-		{name: "fifth retry", retryCount: 5, want: 8 * time.Second},
+		{name: "first retry", retryCount: 1, want: 2 * time.Second},
+		{name: "second retry", retryCount: 2, want: 4 * time.Second},
+		{name: "third retry", retryCount: 3, want: 8 * time.Second},
+		{name: "fourth retry", retryCount: 4, want: 8 * time.Second},
 		{name: "capped retry", retryCount: 10, want: 8 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
