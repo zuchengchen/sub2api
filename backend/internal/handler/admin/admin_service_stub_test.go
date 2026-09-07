@@ -202,6 +202,11 @@ func (s *stubAdminService) UpdateUserBalance(ctx context.Context, userID int64, 
 	return &user, nil
 }
 
+func (s *stubAdminService) SetUserVIP(ctx context.Context, userID int64, vip bool) (*service.User, error) {
+	user := service.User{ID: userID, Email: "updated@example.com", Status: service.StatusActive, IsVIP: vip}
+	return &user, nil
+}
+
 func (s *stubAdminService) BatchUpdateConcurrency(ctx context.Context, userIDs []int64, value int, mode string) (int, error) {
 	return len(userIDs), nil
 }

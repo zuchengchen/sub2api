@@ -156,8 +156,10 @@ type UserRepository interface {
 	UpdateBalance(ctx context.Context, id int64, amount float64) error
 	DeductBalance(ctx context.Context, id int64, amount float64) error
 	// SetVIPIfNotSet 原子地将用户标记为 VIP（仅当当前未标记时生效）。
-	// 返回本次调用是否实际写入。VIP 升级永久生效，无降级路径。
+	// 返回本次调用是否实际写入。自动升级路径仍是单向的。
 	SetVIPIfNotSet(ctx context.Context, id int64) (bool, error)
+	// SetVIP 将 vip 设为指定值，已是该值时返回 false。管理员手动开通/取消 SVIP 使用。
+	SetVIP(ctx context.Context, id int64, vip bool) (bool, error)
 	// UpgradeUsersAboveBalanceThreshold 将总余额超过 threshold 的非 VIP 用户
 	// 批量升级为 VIP，返回完成升级的用户 ID 列表。用于启动扫描兜底。
 	UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error)

@@ -1171,3 +1171,8 @@ func cloneEmailBindUser(user *service.User) *service.User {
 	cloned := *user
 	return &cloned
 }
+
+func (s *emailBindUserRepoStub) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
+	return false, nil
+}
+

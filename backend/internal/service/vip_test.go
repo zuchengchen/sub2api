@@ -344,3 +344,8 @@ func TestVipPolicyRestrictedReviewKeywordIsAllowed(t *testing.T) {
 	require.True(t, nonVipDecision.Blocked)
 	require.Equal(t, int64(1), calls.Load())
 }
+
+func (s *vipExecutorUserRepoStub) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
+	return false, nil
+}
+
