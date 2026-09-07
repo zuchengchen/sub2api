@@ -180,6 +180,12 @@ Before finishing, the agent must report:
 - Compiling `./cmd/server` (local run, release binary, or `/opt/sub2api`
   deploy) MUST use `-tags embed`. Without it the frontend is omitted and `/`
   returns `404 page not found`.
+- Rebuild the frontend into `backend/internal/web/dist` immediately before
+  that embed build (`pnpm --dir frontend run build`, or
+  `frontend/node_modules/.bin/vue-tsc -b` then
+  `frontend/node_modules/.bin/vite build` if `pnpm run` tries to reinstall
+  and fails). `go:embed` packs whatever is already in `dist/`. A new VERSION
+  with a stale dist ships the old admin UI.
 - Required form:
 
   ```bash
