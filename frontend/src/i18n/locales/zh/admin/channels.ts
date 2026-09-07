@@ -541,7 +541,7 @@ export default {
       searchGroups: '搜索分组名称或平台',
       noGroups: '暂无可用分组',
       userEmailWhitelist: '用户邮箱白名单',
-      userEmailWhitelistHint: '名单内用户仍接受本地两层审核；关键词或模型风险仅记录，不拦截、不自动封禁。上游真实 cyber_policy 仍会硬阻断并执行账号处置。仅支持完整邮箱精确匹配，每行一个。',
+      userEmailWhitelistHint: '名单内用户仍接受本地两层审核。关键词、模型风险与上游 cyber_policy 都会保存对话记录，但不拦截、不自动封禁、不禁用账户。仅支持完整邮箱精确匹配，每行一个。',
       userEmailWhitelistPlaceholder: "user{'@'}example.com",
       userEmailWhitelistCount: '已配置 {count} 个邮箱',
       modelFilter: '模型范围',
