@@ -515,7 +515,9 @@ export default {
         concurrencyPlaceholder: '0 = unlimited',
         concurrencyHint: 'Max concurrent requests for this user; 0 = unlimited.',
         rpmLimitPlaceholder: '0 = unlimited',
-        rpmLimitHint: 'Max requests per minute for this user; 0 = unlimited. Acts as a fallback only when the group has no rpm_limit set.'
+        rpmLimitHint: 'Max requests per minute for this user; 0 = unlimited. Acts as a fallback only when the group has no rpm_limit set.',
+        svipLabel: 'SVIP',
+        svipHint: 'Check to grant SVIP immediately. Uncheck to revoke. If total balance stays above 100, they may be auto-upgraded to SVIP again.'
       },
       columns: {
         user: 'User',

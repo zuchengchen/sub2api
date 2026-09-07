@@ -3,8 +3,9 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 import UserEditModal from '../UserEditModal.vue'
 
-const { update, updateUserAttributeValues, showSuccess, showError } = vi.hoisted(() => ({
+const { update, setVIP, updateUserAttributeValues, showSuccess, showError } = vi.hoisted(() => ({
   update: vi.fn(),
+  setVIP: vi.fn(),
   updateUserAttributeValues: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
@@ -12,7 +13,7 @@ const { update, updateUserAttributeValues, showSuccess, showError } = vi.hoisted
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
-    users: { update },
+    users: { update, setVIP },
     userAttributes: { updateUserAttributeValues }
   }
 }))
@@ -56,10 +57,12 @@ const mountModal = (concurrency: number) => mount(UserEditModal, {
 describe('UserEditModal concurrency', () => {
   beforeEach(() => {
     update.mockReset()
+    setVIP.mockReset()
     updateUserAttributeValues.mockReset()
     showSuccess.mockReset()
     showError.mockReset()
     update.mockResolvedValue({})
+    setVIP.mockResolvedValue({})
   })
 
   // Regression coverage for issue #5977: the gateway treats concurrency <= 0 as
@@ -75,6 +78,16 @@ describe('UserEditModal concurrency', () => {
     expect(showError).not.toHaveBeenCalled()
     expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ concurrency: 0 }))
     expect(wrapper.emitted('success')).toBeTruthy()
+  })
+
+  it('saves SVIP changes through setVIP', async () => {
+    const wrapper = mountModal(1)
+    await wrapper.get('[data-test="svip-checkbox"]').setValue(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalled()
+    expect(setVIP).toHaveBeenCalledWith(7, true)
   })
 
   it('still rejects a negative concurrency', async () => {
