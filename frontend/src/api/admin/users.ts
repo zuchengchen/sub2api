@@ -216,6 +216,12 @@ export async function toggleStatus(id: number, status: 'active' | 'disabled'): P
   return update(id, { status })
 }
 
+/** Manually grant or revoke SVIP. */
+export async function setVIP(id: number, vip: boolean): Promise<AdminUser> {
+  const { data } = await apiClient.post<AdminUser>(`/admin/users/${id}/vip`, { vip })
+  return data
+}
+
 /**
  * Get user's API keys
  * @param id - User ID
@@ -409,6 +415,7 @@ export const usersAPI = {
   updateConcurrency,
   batchUpdateLimits,
   toggleStatus,
+  setVIP,
   getUserApiKeys,
   getUserUsageStats,
   getUserBalanceHistory,

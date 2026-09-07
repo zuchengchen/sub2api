@@ -285,6 +285,7 @@ func registerUserManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		users.POST("", h.Admin.User.Create)
 		users.PUT("/:id", h.Admin.User.Update)
 		users.DELETE("/:id", h.Admin.User.Delete)
+		users.POST("/:id/vip", h.Admin.User.SetVIP)
 		users.POST("/:id/balance", h.Admin.User.UpdateBalance)
 		users.GET("/:id/api-keys", h.Admin.User.GetUserAPIKeys)
 		users.GET("/:id/usage", h.Admin.User.GetUserUsage)

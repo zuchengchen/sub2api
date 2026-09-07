@@ -118,7 +118,7 @@ func NewVipUpgradeExecutor(userRepo UserRepository, invalidator APIKeyAuthCacheI
 }
 
 // EnsureUpgrade 惰性升级：余额超过阈值且未升级时原子置位 vip 并失效认证缓存。
-// 返回本次调用是否实际完成了升级。升级为永久生效，不提供降级路径。
+// 返回本次调用是否实际完成了升级。自动升级仍是单向的；管理员可手动取消 SVIP。
 func (e *vipUpgradeExecutor) EnsureUpgrade(ctx context.Context, userID int64) bool {
 	if e == nil || e.userRepo == nil || userID <= 0 {
 		return false

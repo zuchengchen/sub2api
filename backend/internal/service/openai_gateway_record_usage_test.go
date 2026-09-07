@@ -3189,3 +3189,8 @@ func TestOpenAIGatewayServiceRecordUsage_ServiceTierNeverRaisedByUpstreamRespons
 	require.NoError(t, calcErr)
 	require.InDelta(t, baseCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-10)
 }
+
+func (s *openAIRecordUsageUserRepoStub) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
+	return false, nil
+}
+

@@ -295,7 +295,23 @@
           <template #cell-username="{ row }">
             <span class="inline-flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-300">
               {{ row.username || '-' }}
-              <VipBadge v-if="row.is_vip" size="xs" />
+              <button
+                v-if="row.is_vip"
+                type="button"
+                class="inline-flex"
+                :title="t('admin.users.revokeSvip')"
+                @click.stop="openVipDialog(row, false)"
+              >
+                <VipBadge size="xs" />
+              </button>
+              <button
+                v-else
+                type="button"
+                class="rounded border border-amber-300 px-1 py-0.5 text-[10px] font-medium leading-none text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20"
+                @click.stop="openVipDialog(row, true)"
+              >
+                {{ t('admin.users.grantSvip') }}
+              </button>
             </span>
           </template>
 
@@ -727,6 +743,16 @@
 
               <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
 
+              <button
+                @click="openVipDialog(user, !user.is_vip); closeActionMenu()"
+                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+              >
+                <Icon name="trophy" size="sm" class="text-amber-500" :stroke-width="2" />
+                {{ user.is_vip ? t('admin.users.revokeSvip') : t('admin.users.grantSvip') }}
+              </button>
+
+              <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
+
               <!-- Delete (not for admin) -->
               <button
                 v-if="user.role !== 'admin'"
@@ -743,6 +769,14 @@
     </Teleport>
 
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.users.deleteUser')" :message="t('admin.users.deleteConfirm', { email: deletingUser?.email })" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
+    <ConfirmDialog
+      :show="showVipDialog"
+      :title="vipNextValue ? t('admin.users.grantSvipTitle') : t('admin.users.revokeSvipTitle')"
+      :message="vipConfirmMessage"
+      :danger="!vipNextValue"
+      @confirm="confirmToggleVip"
+      @cancel="showVipDialog = false"
+    />
     <UserCreateModal :show="showCreateModal" @close="showCreateModal = false" @success="loadUsers" />
     <UserEditModal :show="showEditModal" :user="editingUser" @close="closeEditModal" @success="loadUsers" />
     <BulkEditUserModal
@@ -806,6 +840,7 @@ import UserAllowedGroupsModal from '@/components/admin/user/UserAllowedGroupsMod
 import UserBalanceModal from '@/components/admin/user/UserBalanceModal.vue'
 import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryModal.vue'
 import GroupReplaceModal from '@/components/admin/user/GroupReplaceModal.vue'
+import { VIP_BALANCE_THRESHOLD } from '@/utils/vip-balance'
 
 const appStore = useAppStore()
 
@@ -1313,6 +1348,20 @@ const pagination = reactive({
 
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
+const showVipDialog = ref(false)
+const vipTarget = ref<AdminUser | null>(null)
+const vipNextValue = ref(false)
+const vipConfirmMessage = computed(() => {
+  const email = vipTarget.value?.email || ''
+  if (vipNextValue.value) {
+    return t('admin.users.grantSvipConfirm', { email })
+  }
+  const base = t('admin.users.revokeSvipConfirm', { email })
+  if (Number(vipTarget.value?.balance || 0) > VIP_BALANCE_THRESHOLD) {
+    return `${base}\n${t('admin.users.revokeSvipConfirmAutoUpgrade')}`
+  }
+  return base
+})
 const showBulkEditModal = ref(false)
 const showDeleteDialog = ref(false)
 const showApiKeysModal = ref(false)
@@ -1710,6 +1759,30 @@ const handleEdit = (user: AdminUser) => {
 const closeEditModal = () => {
   showEditModal.value = false
   editingUser.value = null
+}
+
+const openVipDialog = (user: AdminUser, nextValue: boolean) => {
+  vipTarget.value = user
+  vipNextValue.value = nextValue
+  showVipDialog.value = true
+}
+
+const confirmToggleVip = async () => {
+  const user = vipTarget.value
+  if (!user) {
+    showVipDialog.value = false
+    return
+  }
+  try {
+    await adminAPI.users.setVIP(user.id, vipNextValue.value)
+    appStore.showSuccess(vipNextValue.value ? t('admin.users.svipGranted') : t('admin.users.svipRevoked'))
+    showVipDialog.value = false
+    vipTarget.value = null
+    loadUsers()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.users.failedToToggleSvip'))
+    console.error('Error toggling SVIP:', error)
+  }
 }
 
 const handleToggleStatus = async (user: AdminUser) => {

@@ -922,3 +922,8 @@ func TestGetProfile_HydratesAvatarFromRepository(t *testing.T) {
 	require.Equal(t, "https://cdn.example.com/profile.png", user.AvatarURL)
 	require.Equal(t, "remote_url", user.AvatarSource)
 }
+
+func (m *mockUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
+	return false, nil
+}
+

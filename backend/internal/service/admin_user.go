@@ -336,6 +336,36 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	return user, nil
 }
 
+func (s *adminServiceImpl) SetUserVIP(ctx context.Context, userID int64, vip bool) (*User, error) {
+	if s == nil || s.userRepo == nil {
+		return nil, errors.New("user repository unavailable")
+	}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if user.IsVIP == vip {
+		return user, nil
+	}
+	changed, err := s.userRepo.SetVIP(ctx, userID, vip)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return user, nil
+	}
+	logger.LegacyPrintf("service.admin", "audit: user vip changed target_user_id=%d old_vip=%t new_vip=%t",
+		userID, user.IsVIP, vip)
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+	updated, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
 func sameInt64Set(a, b []int64) bool {
 	if len(a) != len(b) {
 		return false
