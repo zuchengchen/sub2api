@@ -214,7 +214,7 @@ func TestRecordCyberPolicyEvent_NonGPTGroupReceivesSideEffects(t *testing.T) {
 	require.Equal(t, 1, repo.disableUserCalls)
 }
 
-func TestRecordCyberPolicyEvent_UserEmailWhitelistStillForcesDisposition(t *testing.T) {
+func TestRecordCyberPolicyEvent_UserEmailWhitelistRecordsWithoutDisabling(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
 	rawCfg, err := json.Marshal(cfg)
@@ -243,12 +243,13 @@ func TestRecordCyberPolicyEvent_UserEmailWhitelistStillForcesDisposition(t *test
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 1)
 	require.Equal(t, ContentModerationActionCyberPolicy, logs[0].Action)
-	require.Equal(t, "disabled", logs[0].DispositionStatus)
-	require.True(t, logs[0].DispositionTransitioned)
-	require.Equal(t, 1, repo.disableUserCalls)
+	require.Equal(t, "skipped_whitelist", logs[0].DispositionStatus)
+	require.False(t, logs[0].DispositionTransitioned)
+	require.False(t, logs[0].AutoBanned)
+	require.Equal(t, 0, repo.disableUserCalls)
 }
 
-func TestRetryCyberPolicyDisposition_UserEmailWhitelistStillForcesDisposition(t *testing.T) {
+func TestRetryCyberPolicyDisposition_UserEmailWhitelistCancelsPendingSideEffects(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
 	rawCfg, err := json.Marshal(cfg)
@@ -269,7 +270,7 @@ func TestRetryCyberPolicyDisposition_UserEmailWhitelistStillForcesDisposition(t 
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, 1, repo.disableUserCalls)
+	require.Equal(t, 0, repo.disableUserCalls)
 	require.Empty(t, repo.snapshotLogs())
 }
 

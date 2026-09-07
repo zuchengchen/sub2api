@@ -3193,6 +3193,7 @@ type CyberPolicyRecordInput struct {
 // 并按配置发送通知。账户处置不受本地累计违规阈值约束。
 // 使用请求快照中的审计元数据；不受 risk_control_enabled 总开关和内容审核
 // Enabled/Mode/group/model/sample 约束，确保严重违规始终留痕并处置。
+// 用户邮箱白名单仍写入风控日志与对话归档，但不禁用用户/API Key。
 func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, in CyberPolicyRecordInput) {
 	if s == nil || s.repo == nil {
 		return
@@ -3246,11 +3247,31 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		RequestTarget:   in.RawRequest.Target,
 		ArchiveStatus:   ContentModerationArchiveStatusNone,
 	}
-	transitioned, dispositionErr := s.applyCyberPolicyDisposition(ctx, in, log)
-	if dispositionErr != nil {
-		log.DispositionStatus = "retry_required"
-		log.Error = trimRunes(log.Error+"\ndisposition_error="+redactContentModerationSecrets(dispositionErr.Error()), maxModerationErrorRunes)
-		slog.Error("content_moderation.cyber_disposition_failed", "user_id", in.UserID, "api_key_id", in.APIKeyID, "error", dispositionErr)
+	skipDisposition := false
+	if strings.TrimSpace(in.UserEmail) != "" {
+		whitelisted, err := s.IsUserEmailWhitelisted(ctx, in.UserEmail)
+		if err != nil {
+			slog.Warn("content_moderation.cyber_whitelist_lookup_failed", "user_id", in.UserID, "error", err)
+		} else if whitelisted {
+			skipDisposition = true
+		}
+	}
+	var transitioned bool
+	var dispositionErr error
+	if skipDisposition {
+		log.DispositionTarget = "user"
+		log.DispositionStatus = "skipped_whitelist"
+		slog.Info("content_moderation.skip_user_email_whitelist",
+			"user_id", in.UserID,
+			"api_key_id", in.APIKeyID,
+			"source", "cyber_policy")
+	} else {
+		transitioned, dispositionErr = s.applyCyberPolicyDisposition(ctx, in, log)
+		if dispositionErr != nil {
+			log.DispositionStatus = "retry_required"
+			log.Error = trimRunes(log.Error+"\ndisposition_error="+redactContentModerationSecrets(dispositionErr.Error()), maxModerationErrorRunes)
+			slog.Error("content_moderation.cyber_disposition_failed", "user_id", in.UserID, "api_key_id", in.APIKeyID, "error", dispositionErr)
+		}
 	}
 	log.EmailSent = false
 	var archiveErr error
@@ -3307,7 +3328,7 @@ func (s *ContentModerationService) retryCyberPolicyDisposition(ctx context.Conte
 	if kind != contentModerationDispositionCyber && kind != contentModerationDispositionLocal {
 		return fmt.Errorf("unknown content moderation disposition retry kind %q", kind)
 	}
-	if kind == contentModerationDispositionLocal && strings.TrimSpace(entry.UserEmail) != "" && s.settingRepo != nil {
+	if strings.TrimSpace(entry.UserEmail) != "" {
 		whitelisted, err := s.IsUserEmailWhitelisted(ctx, entry.UserEmail)
 		if err != nil {
 			return fmt.Errorf("load content moderation user email whitelist: %w", err)
