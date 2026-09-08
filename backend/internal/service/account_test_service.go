@@ -205,14 +205,16 @@ func withOpenAIAccountTestDisplayNames(models []openai.Model) []openai.Model {
 	out := make([]openai.Model, len(models))
 	copy(out, models)
 	for i := range out {
-		if strings.TrimSpace(out[i].DisplayName) != "" {
-			continue
+		if strings.TrimSpace(out[i].DisplayName) == "" {
+			if name := defaults[out[i].ID]; name != "" {
+				out[i].DisplayName = name
+			} else {
+				out[i].DisplayName = out[i].ID
+			}
 		}
-		if name := defaults[out[i].ID]; name != "" {
-			out[i].DisplayName = name
-			continue
+		if strings.TrimSpace(out[i].Type) == "" {
+			out[i].Type = "model"
 		}
-		out[i].DisplayName = out[i].ID
 	}
 	return out
 }
@@ -473,7 +475,9 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	} else {
 		req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
-		setAnthropicAPIKeyAuthHeader(req.Header, account, authToken)
+		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer，
+		// 其余保持 extra/default 行为。
+		setAnthropicAPIKeyAuthHeader(req.Header, account, authToken, account.GetBaseURL())
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
