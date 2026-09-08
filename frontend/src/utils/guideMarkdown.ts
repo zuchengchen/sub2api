@@ -39,6 +39,7 @@ const sectionIds: Record<string, string> = {
   'API Key：给软件使用的专用密码': 'api-key',
   '检查 API Key 能不能用': 'first-request',
   '三个可用网址': 'domains',
+  '五个可用网址': 'domains',
   '在 Codex 中使用本站': 'codex',
   '自动选择速度最快的网址': 'speed-script',
   '使用 goal-workflow 小助手': 'goal-workflow',

@@ -4,7 +4,7 @@
 
 下载地址：[下载自动测速工具](/downloads/select-fastest-codex-base-url.bat)
 
-SHA-256（可以理解为文件的“指纹”）：`4bef37d6600d0d77101794cb9f0059554e60f751dc7e5b2cde3e9dc67eb9a43b`
+SHA-256（可以理解为文件的“指纹”）：`6cd9e48586f8b766cf3549d420b293bc0da7c875c3c50ac5b03ef2a0e6f7d4f4`
 
 ### 运行前先确认
 
@@ -29,17 +29,18 @@ Get-Content .\select-fastest-codex-base-url.bat.sha256
 ### 工具会做什么
 
 1. 先备份 Codex 配置和 Windows hosts 文件。
-2. 测试下面四个网址：
+2. 测试下面五个网址：
    - `https://mofa.love.gd`
    - `https://key66.vip`
    - `https://mofayaoshipu.cc.cd`
    - `https://key66.cc.cd`
+   - `https://mofa.duoduohuiying.cn`
 3. 每个网址测试三次，减少一次偶然变快或变慢造成的影响。
 4. 选择能正常连接且速度最快的网址。
 5. 只会更换当前 Codex 配置中的网址域名，原来的 `/v1` 和其他设置保持不变。
 6. 修改后再检查一次；如果中途失败，会尝试恢复刚才的备份。
 
-`key66.vip` 只是测速时的候选网址，不属于前面承诺的三个稳定网址。它打不开时，工具会继续测试其他网址。
+某个网址打不开时，工具会继续测试其他网址。
 
 工具还会把 `mofa.love.gd` 记录到 Windows 的网址通讯录中，对应地址为 `15.204.82.11`。成功后这条记录会保留。
 
@@ -56,7 +57,7 @@ Get-Content .\select-fastest-codex-base-url.bat.sha256
 
 运行结束后，窗口会列出每个网址的速度，并告诉你最终选择了哪个网址。它还会显示两个备份文件放在哪里。
 
-如果四个网址全部失败，Codex 的服务地址不会改变。请先检查电脑能否正常上网，稍后再试。
+如果五个网址全部失败，Codex 的服务地址不会改变。请先检查电脑能否正常上网，稍后再试。
 
 ### 想恢复原来的设置
 

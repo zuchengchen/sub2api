@@ -8,6 +8,7 @@ const expectedDomains = [
   'https://key66.vip',
   'https://mofayaoshipu.cc.cd',
   'https://key66.cc.cd',
+  'https://mofa.duoduohuiying.cn',
 ]
 
 function addIssue(issues: BatValidationIssue[], code: string, message: string) {

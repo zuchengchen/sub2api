@@ -36,7 +36,8 @@ $domains = @(
     'https://mofa.love.gd',
     'https://key66.vip',
     'https://mofayaoshipu.cc.cd',
-    'https://key66.cc.cd'
+    'https://key66.cc.cd',
+    'https://mofa.duoduohuiying.cn'
 )
 $hostName = 'mofa.love.gd'
 $hostIp = '15.204.82.11'
