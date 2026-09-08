@@ -186,7 +186,35 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 	if err := json.Unmarshal(response.Body, &payload); err != nil {
 		return nil, fmt.Errorf("decode OpenAI account models: %w", err)
 	}
-	return payload.Data, nil
+	return withOpenAIAccountTestDisplayNames(payload.Data), nil
+}
+
+// withOpenAIAccountTestDisplayNames fills empty names so the admin test-connection
+// picker can label options. Live Codex conversion only keeps id/object/owned_by
+// unless the manifest already had a display name.
+func withOpenAIAccountTestDisplayNames(models []openai.Model) []openai.Model {
+	if len(models) == 0 {
+		return models
+	}
+	defaults := make(map[string]string, len(openai.DefaultModels))
+	for _, model := range openai.DefaultModels {
+		if name := strings.TrimSpace(model.DisplayName); name != "" {
+			defaults[model.ID] = name
+		}
+	}
+	out := make([]openai.Model, len(models))
+	copy(out, models)
+	for i := range out {
+		if strings.TrimSpace(out[i].DisplayName) != "" {
+			continue
+		}
+		if name := defaults[out[i].ID]; name != "" {
+			out[i].DisplayName = name
+			continue
+		}
+		out[i].DisplayName = out[i].ID
+	}
+	return out
 }
 
 // NewAccountTestService creates a new AccountTestService

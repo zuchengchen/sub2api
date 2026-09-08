@@ -47,7 +47,7 @@
         </label>
         <Select
           v-model="selectedModelId"
-          :options="availableModels"
+          :options="labeledAvailableModels"
           :disabled="loadingModels || status === 'connecting'"
           value-key="id"
           label-key="display_name"
@@ -281,6 +281,12 @@ const outputLines = ref<OutputLine[]>([])
 const streamingContent = ref('')
 const errorMessage = ref('')
 const availableModels = ref<ClaudeModel[]>([])
+const labeledAvailableModels = computed(() =>
+  availableModels.value.map((model) => ({
+    ...model,
+    display_name: model.display_name?.trim() || model.id
+  }))
+)
 const selectedModelId = ref('')
 const testPrompt = ref('')
 const loadingModels = ref(false)

@@ -474,16 +474,23 @@ const showModelSelect = computed(() => {
   return grokTestMode.value === 'text' || grokTestMode.value === 'image' || grokTestMode.value === 'video'
 })
 
+const labeledModels = (models: ClaudeModel[]): ClaudeModel[] =>
+  models.map((model) => ({
+    ...model,
+    display_name: model.display_name?.trim() || model.id
+  }))
+
 const modelOptionsForMode = computed(() => {
-  if (!isGrokAccount.value) return availableModels.value
+  const models = labeledModels(availableModels.value)
+  if (!isGrokAccount.value) return models
   if (grokTestMode.value === 'image') {
-    return availableModels.value.filter((m) => isGrokImageModel(m.id))
+    return models.filter((m) => isGrokImageModel(m.id))
   }
   if (grokTestMode.value === 'video') {
-    return availableModels.value.filter((m) => isGrokVideoModel(m.id))
+    return models.filter((m) => isGrokVideoModel(m.id))
   }
   if (grokTestMode.value === 'text') {
-    return availableModels.value.filter((m) => isGrokTextModel(m.id))
+    return models.filter((m) => isGrokTextModel(m.id))
   }
   return []
 })

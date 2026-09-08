@@ -118,6 +118,35 @@ describe('AccountTestModal', () => {
     localStorage.clear()
   })
 
+  it('falls back to model id when display_name is empty', async () => {
+    getAvailableModelsMock.mockResolvedValue([
+      { id: 'gpt-5.6-sol', display_name: '' },
+      { id: 'gpt-reserve' }
+    ])
+
+    const wrapper = mount(AccountTestModal, {
+      props: {
+        show: false,
+        account: buildAccount()
+      },
+      global: {
+        stubs: {
+          BaseDialog: BaseDialogStub,
+          Select: SelectStub,
+          TextArea: TextAreaStub,
+          Icon: true
+        }
+      }
+    })
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    const labels = (wrapper.vm as any).labeledAvailableModels.map(
+      (model: { display_name: string }) => model.display_name
+    )
+    expect(labels).toEqual(['gpt-5.6-sol', 'gpt-reserve'])
+  })
+
   it('posts compact mode for OpenAI compact probe', async () => {
     const wrapper = mount(AccountTestModal, {
       props: {

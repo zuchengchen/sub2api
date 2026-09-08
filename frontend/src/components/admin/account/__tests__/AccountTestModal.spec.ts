@@ -148,6 +148,29 @@ describe('AccountTestModal', () => {
     expect(preview.attributes('src')).toBe('data:image/png;base64,QUJD')
   })
 
+  it('OAuth 模型缺少 display_name 时用 id 作为下拉标签', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-5.6-sol', display_name: '' },
+      { id: 'gpt-reserve' }
+    ])
+
+    const wrapper = mountModal({
+      id: 23067,
+      name: 'binginingbot10',
+      platform: 'openai',
+      type: 'oauth',
+      status: 'active'
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const options = (wrapper.vm as any).modelOptionsForMode as Array<{ id: string; display_name: string }>
+    expect(options.map((model) => ({ id: model.id, display_name: model.display_name }))).toEqual([
+      { id: 'gpt-5.6-sol', display_name: 'gpt-5.6-sol' },
+      { id: 'gpt-reserve', display_name: 'gpt-reserve' }
+    ])
+  })
+
   it('grok 账号测试默认选择 Grok 模型', async () => {
     getAvailableModels.mockResolvedValue([
       { id: 'grok-4.3', display_name: 'Grok 4.3' },

@@ -122,7 +122,17 @@ func standardOpenAIModelsBody(body []byte, fromManifest bool) ([]byte, error) {
 		}
 		seen[id] = struct{}{}
 		if fromManifest {
+			// Codex manifests carry admin-facing names plus many internal
+			// fields. Keep the display name for the test picker; drop the rest.
+			var displayName string
+			if rawName := bytes.TrimSpace(entry["display_name"]); len(rawName) > 0 && string(rawName) != "null" {
+				_ = json.Unmarshal(rawName, &displayName)
+				displayName = strings.TrimSpace(displayName)
+			}
 			entry = make(map[string]json.RawMessage)
+			if displayName != "" {
+				entry["display_name"], _ = json.Marshal(displayName)
+			}
 		}
 		entry["id"], _ = json.Marshal(id)
 		entry["object"] = json.RawMessage(`"model"`)
