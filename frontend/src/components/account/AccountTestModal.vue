@@ -281,11 +281,14 @@ const outputLines = ref<OutputLine[]>([])
 const streamingContent = ref('')
 const errorMessage = ref('')
 const availableModels = ref<ClaudeModel[]>([])
-const labeledAvailableModels = computed(() =>
-  availableModels.value.map((model) => ({
-    ...model,
-    display_name: model.display_name?.trim() || model.id
-  }))
+const labeledAvailableModels = computed(
+  (): Array<Record<string, unknown>> =>
+    availableModels.value.map((model) => ({
+      id: model.id,
+      type: model.type,
+      display_name: model.display_name?.trim() || model.id,
+      created_at: model.created_at
+    }))
 )
 const selectedModelId = ref('')
 const testPrompt = ref('')

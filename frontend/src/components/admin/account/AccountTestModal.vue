@@ -62,7 +62,7 @@
         </label>
         <Select
           v-model="selectedModelId"
-          :options="modelOptionsForMode"
+          :options="modelSelectOptions"
           :disabled="loadingModels || status === 'connecting'"
           value-key="id"
           label-key="display_name"
@@ -494,6 +494,11 @@ const modelOptionsForMode = computed(() => {
   }
   return []
 })
+
+const modelSelectOptions = computed(
+  (): Array<Record<string, unknown>> =>
+    modelOptionsForMode.value as unknown as Array<Record<string, unknown>>
+)
 
 const supportsPromptInput = computed(() => {
   if (!isGrokAccount.value) {
