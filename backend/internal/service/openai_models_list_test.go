@@ -57,6 +57,17 @@ func TestFetchOpenAIModelsListUsesStandardRequestAndIsolatesCodexCache(t *testin
 	require.EqualValues(t, 3, calls.Load(), "credentials must participate in the cache key")
 }
 
+func TestFetchOpenAIModelsListOAuthPreservesDisplayName(t *testing.T) {
+	_, _ = newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"gpt-5.6-sol","display_name":"GPT-5.6-Sol"},{"slug":"special-oauth-model"}]}`)
+	s := &OpenAIGatewayService{}
+	account := newCodexModelsTestAccount()
+	response, err := s.FetchOpenAIModelsList(context.Background(), account)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"object":"list","data":[{"id":"gpt-5.6-sol","object":"model","owned_by":"openai","created":0,"display_name":"GPT-5.6-Sol"},{"id":"special-oauth-model","object":"model","owned_by":"openai","created":0}]}`, string(response.Body))
+	require.NotContains(t, string(response.Body), `"slug"`)
+	require.NotContains(t, string(response.Body), `"base_instructions"`)
+}
+
 func TestFetchOpenAIModelsListOAuthSharesManifestCache(t *testing.T) {
 	_, calls := newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"special-oauth-model"},{"slug":"gpt-image-1"}]}`)
 	s := &OpenAIGatewayService{}
