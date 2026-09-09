@@ -33,6 +33,7 @@ var DefaultModels = []Model{
 	{ID: "gpt-image-1", Object: "model", Created: 1733875200, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 1"},
 	{ID: "gpt-image-1.5", Object: "model", Created: 1735689600, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 1.5"},
 	{ID: "gpt-image-2", Object: "model", Created: 1738368000, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 2"},
+	{ID: "gpt-image-2.5", Object: "model", Created: 1789344000, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 2.5"},
 }
 
 // DefaultModelIDs returns the default model ID list

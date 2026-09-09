@@ -250,6 +250,49 @@ func TestAccountHandlerGetAvailableModels_OpenAIAPIKeyDefaultsToConcreteGPT56Sol
 	require.Equal(t, "gpt-5.6-sol", resp.Data[0].ID)
 }
 
+func TestAccountHandlerGetAvailableModels_OpenAIFallbackIncludesMappedImageModels(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       47,
+			Name:     "openai-oauth-images",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeOAuth,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"gpt-6-astra":   "gpt-6-astra",
+					"gpt-image-2":   "gpt-image-2",
+					"gpt-image-2.5": "gpt-image-2.5",
+				},
+			},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	ids := make([]string, 0, len(resp.Data))
+	display := map[string]string{}
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+		display[model.ID] = model.DisplayName
+	}
+	require.ElementsMatch(t, []string{"gpt-6-astra", "gpt-image-2", "gpt-image-2.5"}, ids)
+	require.Equal(t, "GPT Image 2.5", display["gpt-image-2.5"])
+}
+
 func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(t *testing.T) {
 	parentID := int64(100)
 	svc := &availableModelsAdminService{

@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -186,7 +187,64 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 	if err := json.Unmarshal(response.Body, &payload); err != nil {
 		return nil, fmt.Errorf("decode OpenAI account models: %w", err)
 	}
-	return withOpenAIAccountTestDisplayNames(payload.Data), nil
+	return MergeOpenAIAccountTestModels(payload.Data, account), nil
+}
+
+// MergeOpenAIAccountTestModels appends account model_mapping IDs that the live
+// Codex/OpenAI catalog omitted. Dedicated image generators (gpt-image-*) are
+// not Codex agent entries, so the admin test-connection picker would otherwise
+// hide models the account is already configured to serve.
+func MergeOpenAIAccountTestModels(models []openai.Model, account *Account) []openai.Model {
+	models = withOpenAIAccountTestDisplayNames(models)
+	if account == nil {
+		return models
+	}
+	mapping := account.GetModelMapping()
+	if len(mapping) == 0 {
+		return models
+	}
+
+	seen := make(map[string]struct{}, len(models)+len(mapping))
+	for _, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if id != "" {
+			seen[id] = struct{}{}
+		}
+	}
+
+	defaults := make(map[string]openai.Model, len(openai.DefaultModels))
+	for _, model := range openai.DefaultModels {
+		defaults[model.ID] = model
+	}
+
+	extras := make([]string, 0)
+	for requested := range mapping {
+		requested = strings.TrimSpace(requested)
+		if requested == "" || strings.Contains(requested, "*") {
+			continue
+		}
+		if _, exists := seen[requested]; exists {
+			continue
+		}
+		seen[requested] = struct{}{}
+		extras = append(extras, requested)
+	}
+	sort.Strings(extras)
+
+	for _, id := range extras {
+		if defaultModel, ok := defaults[id]; ok {
+			models = append(models, defaultModel)
+			continue
+		}
+		models = append(models, openai.Model{
+			ID:          id,
+			Object:      "model",
+			OwnedBy:     "openai",
+			Type:        "model",
+			DisplayName: id,
+		})
+	}
+	return withOpenAIAccountTestDisplayNames(models)
 }
 
 // withOpenAIAccountTestDisplayNames fills empty names so the admin test-connection
