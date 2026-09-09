@@ -85,11 +85,12 @@ deploy, or 上线 means this full sequence, not a binary hot-copy.
    commit, push the tag, and publish the matching GitHub Release from the
    notes file.
 8. Build the production binary **from that tag** with `-tags embed` (see
-   Server Builds). Backup `/opt/sub2api/sub2api` as
+   Server Builds), including `-X main.ReleaseURL` for the origin `czc-*`
+   GitHub Release. Backup `/opt/sub2api/sub2api` as
    `sub2api.bak.<tag>-<UTC timestamp>`, install, restart, and verify
    `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/` is `200`.
-9. Report the tag, VERSION, commit, and backup path. Never promote changes by
-   rewriting branch history.
+9. Report the tag, VERSION, commit, backup path, and
+   `current_release_url`. Never promote changes by rewriting branch history.
 
 Do not skip the VERSION bump, `czc-*` tag, or GitHub Release unless the owner
 explicitly says 热更新 or 跳过发版. "合并、push、部署" is not a skip.
@@ -150,8 +151,10 @@ Before finishing, the agent must report:
 - Tests and checks that were run, including any that could not be run.
 - Whether the work still needs promotion from a feature branch to `dev-czc` or
   from `dev-czc` to `main-czc`.
-- If the user asked to deploy: the `czc-*` tag, VERSION, GitHub Release URL,
-  and whether `/opt/sub2api/sub2api --version` matches. If any of those are
+- If the user asked to deploy: the `czc-*` tag, VERSION, GitHub Release URL
+  on `zuchengchen/sub2api` (not Wei-Shaw), whether
+  `/opt/sub2api/sub2api --version` matches, and whether the running app's
+  `current_release_url` is that same origin release. If any of those are
   missing, the deploy is not finished.
 
 ## Safety Rules
@@ -186,13 +189,21 @@ Before finishing, the agent must report:
   `frontend/node_modules/.bin/vite build` if `pnpm run` tries to reinstall
   and fails). `go:embed` packs whatever is already in `dist/`. A new VERSION
   with a stale dist ships the old admin UI.
-- Required form:
+- Required form (run from `backend/`):
 
   ```bash
-  CGO_ENABLED=0 go build -tags embed -ldflags="-s -w -X main.Version=$(./scripts/resolve-version.sh)" -trimpath -o bin/server ./cmd/server
+  CGO_ENABLED=0 go build -tags embed -ldflags="-s -w -X main.Version=$(./scripts/resolve-version.sh) -X main.ReleaseURL=$(./scripts/resolve-release-url.sh)" -trimpath -o bin/server ./cmd/server
   ```
 
-  Run from `backend/`. Do not deploy a binary built without `-tags embed`.
+  `resolve-release-url.sh` prints
+  `https://github.com/zuchengchen/sub2api/releases/tag/<exact-czc-tag>`
+  when the checkout is an exact `czc-*` tag, otherwise empty. Production
+  deploys MUST be built from that tag so `ReleaseURL` is non-empty. The
+  admin「查看发布」link uses `current_release_url` from this ldflag. Do not
+  let it fall back to the Wei-Shaw latest-release URL.
+- Do not deploy a binary built without `-tags embed`.
 - After replacing `/opt/sub2api/sub2api`, verify `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/` is `200` before treating the deploy as done.
 - The installed binary's `--version` must match the release VERSION. Do not
   deploy a build whose version string still equals the previous release.
+- After install, confirm the update-check payload's `current_release_url` is
+  the origin `czc-*` GitHub Release, not `github.com/Wei-Shaw/sub2api`.
