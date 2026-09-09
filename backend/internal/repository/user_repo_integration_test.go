@@ -354,6 +354,35 @@ func (s *UserRepoSuite) TestListWithFilters_Role() {
 	s.Require().Equal(service.RoleAdmin, users[0].Role)
 }
 
+func (s *UserRepoSuite) TestListWithFilters_VIP() {
+	regular := s.mustCreateUser(&service.User{Email: "regular-vip-filter@test.com"})
+	vipUser := s.mustCreateUser(&service.User{Email: "svip-filter@test.com"})
+	changed, err := s.repo.SetVIP(s.ctx, vipUser.ID, true)
+	s.Require().NoError(err)
+	s.Require().True(changed)
+
+	vipTrue := true
+	users, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, service.UserListFilters{VIP: &vipTrue})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(users, 1)
+	s.Require().Equal(vipUser.ID, users[0].ID)
+	s.Require().True(users[0].IsVIP)
+
+	vipFalse := false
+	users, page, err = s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, service.UserListFilters{VIP: &vipFalse})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(users, 1)
+	s.Require().Equal(regular.ID, users[0].ID)
+	s.Require().False(users[0].IsVIP)
+
+	users, page, err = s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, service.UserListFilters{})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), page.Total)
+	s.Require().Len(users, 2)
+}
+
 func (s *UserRepoSuite) TestListWithFilters_Search() {
 	s.mustCreateUser(&service.User{Email: "alice@test.com", Username: "Alice"})
 	s.mustCreateUser(&service.User{Email: "bob@test.com", Username: "Bob"})
