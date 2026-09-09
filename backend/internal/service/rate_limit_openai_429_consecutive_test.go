@@ -162,11 +162,20 @@ func TestOpenAI429OAuthRetryDoesNotZeroSoftCount(t *testing.T) {
 	resetOpenAI429TestState(t)
 	repo := &consecutive429Repo{}
 	svc := NewRateLimitService(repo, nil, nil, nil)
+	gw := &OpenAIGatewayService{rateLimitService: svc}
+	svc.SetAccountRuntimeBlocker(gw)
 	account := &Account{ID: 9006, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	for i := 0; i < 3; i++ {
 		svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, openai429Headers(), nil)
 	}
 	require.Equal(t, 3, openAI429Count(account.ID))
 	require.Equal(t, 0, repo.rateLimitCalls)
-	_ = time.Second
+
+	transientHeaders := http.Header{}
+	transientBody := []byte(`{"error":{"type":"rate_limit_error","message":"try again"}}`)
+	require.True(t, gw.ShouldRetryOpenAIOAuth429(account, transientHeaders, transientBody),
+		"same-account OAuth retry must still be eligible after soft 429 counts")
+	svc.handle429(context.Background(), account, transientHeaders, transientBody)
+	require.Equal(t, 3, openAI429Count(account.ID), "OAuth same-account retry must not zero the soft 429 counter")
+	require.Equal(t, 0, repo.rateLimitCalls, "OAuth retry must not SetRateLimited on soft counts")
 }
