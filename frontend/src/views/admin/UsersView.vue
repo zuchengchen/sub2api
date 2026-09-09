@@ -289,48 +289,13 @@
                 </span>
               </div>
               <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
-              <button
-                v-if="row.is_vip"
-                type="button"
-                class="inline-flex"
-                :title="t('admin.users.revokeSvip')"
-                data-test="svip-toggle"
-                @click.stop="openVipDialog(row, false)"
-              >
-                <VipBadge size="xs" />
-              </button>
-              <button
-                v-else
-                type="button"
-                class="rounded border border-amber-300 px-1 py-0.5 text-[10px] font-medium leading-none text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20"
-                data-test="svip-toggle"
-                @click.stop="openVipDialog(row, true)"
-              >
-                {{ t('admin.users.grantSvip') }}
-              </button>
+              <VipBadge v-if="row.is_vip" size="xs" data-test="svip-badge" />
             </div>
           </template>
 
           <template #cell-username="{ row }">
-            <span class="inline-flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-300">
+            <span data-test="username-cell" class="text-sm text-gray-700 dark:text-gray-300">
               {{ row.username || '-' }}
-              <button
-                v-if="row.is_vip"
-                type="button"
-                class="inline-flex"
-                :title="t('admin.users.revokeSvip')"
-                @click.stop="openVipDialog(row, false)"
-              >
-                <VipBadge size="xs" />
-              </button>
-              <button
-                v-else
-                type="button"
-                class="rounded border border-amber-300 px-1 py-0.5 text-[10px] font-medium leading-none text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20"
-                @click.stop="openVipDialog(row, true)"
-              >
-                {{ t('admin.users.grantSvip') }}
-              </button>
             </span>
           </template>
 

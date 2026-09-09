@@ -98,6 +98,9 @@ const DataTableStub = {
         <slot :name="'header-' + col.key" :column="col" />
       </template>
       <div v-for="row in data" :key="row.id">
+        <slot name="cell-email" :value="row.email" :row="row" />
+        <slot name="cell-username" :row="row" />
+        <slot name="cell-actions" :row="row" />
         <slot name="cell-last_used_at" :value="row.last_used_at" :row="row" />
       </div>
     </div>
@@ -367,5 +370,52 @@ describe('admin UsersView', () => {
     expect(wrapper.get('[data-test="row-order"]').text()).toBe('refreshed-page-two@example.com')
     expect(wrapper.find('[data-test="bulk-edit-limits"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="selected-keys"]').text()).toBe('')
+  })
+
+  it('shows a static SVIP badge on the user column and keeps the actions toggle', async () => {
+    listUsers.mockResolvedValue({
+      items: [createAdminUser({ is_vip: true, username: 'vip-name' })],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+
+    const wrapper = mount(UsersView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: {
+            template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
+          },
+          DataTable: DataTableStub,
+          Pagination: true,
+          ConfirmDialog: true,
+          EmptyState: true,
+          GroupBadge: true,
+          Select: true,
+          UserAttributesConfigModal: true,
+          UserConcurrencyCell: true,
+          UserCreateModal: true,
+          UserEditModal: true,
+          BulkEditUserModal: BulkEditUserModalStub,
+          UserPlatformQuotaModal: true,
+          UserApiKeysModal: true,
+          UserAllowedGroupsModal: true,
+          UserBalanceModal: true,
+          UserBalanceHistoryModal: true,
+          GroupReplaceModal: true,
+          Icon: true,
+          Teleport: true
+        }
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="vip-badge"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="svip-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="svip-action"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="username-cell"]').text()).toBe('vip-name')
+    expect(wrapper.get('[data-test="username-cell"]').find('[data-testid="vip-badge"]').exists()).toBe(false)
   })
 })
