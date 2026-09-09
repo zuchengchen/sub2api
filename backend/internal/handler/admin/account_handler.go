@@ -2717,27 +2717,7 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 			return
 		}
 
-		// Return mapped models
-		var models []openai.Model
-		for requestedModel := range mapping {
-			var found bool
-			for _, dm := range openai.DefaultModels {
-				if dm.ID == requestedModel {
-					models = append(models, dm)
-					found = true
-					break
-				}
-			}
-			if !found {
-				models = append(models, openai.Model{
-					ID:          requestedModel,
-					Object:      "model",
-					Type:        "model",
-					DisplayName: requestedModel,
-				})
-			}
-		}
-		response.Success(c, models)
+		response.Success(c, service.MergeOpenAIAccountTestModels(nil, account))
 		return
 	}
 
