@@ -152,20 +152,40 @@ func TestSelectAccountForModelWithExclusions_StaleSnapshotNotNearLimit(t *testin
 	require.Equal(t, int64(41102), account.ID, "stale 99% must not enter near-limit preference")
 }
 
+type recordingNearLimitSlotCache struct {
+	schedulerTestConcurrencyCache
+	lastID  int64
+	lastMax int
+}
+
+func (c *recordingNearLimitSlotCache) AcquireAccountSlot(_ context.Context, accountID int64, maxConcurrency int, _ string) (bool, error) {
+	c.lastID = accountID
+	c.lastMax = maxConcurrency
+	return true, nil
+}
+
 func TestGatewayTrySelectOpenAINearLimitTargetUsesDBConcurrency(t *testing.T) {
 	resetOpenAI429TestState(t)
-	acc := &Account{
+	acc := Account{
 		ID: 41201, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
 		Status: StatusActive, Schedulable: true, Concurrency: 100, Priority: 0,
 		Extra: nearLimitExtra(96, time.Minute),
 	}
-	MarkOpenAINearLimit429(acc)
-	require.False(t, canClaimOpenAINearLimitPreference(acc.ID, time.Now(), true))
+	MarkOpenAINearLimit429(&acc)
+	require.False(t, canClaimOpenAINearLimitPreference(acc.ID, time.Now(), true),
+		"OpenAI gateway near-limit path would skip this account during 2s backoff")
 
-	svc := &GatewayService{}
-	require.NotNil(t, svc)
-	// Path difference: gateway path does not consult probe backoff.
-	require.False(t, canClaimOpenAINearLimitPreference(acc.ID, time.Now(), true))
+	slots := &recordingNearLimitSlotCache{}
+	svc := &GatewayService{
+		accountRepo:         schedulerTestOpenAIAccountRepo{accounts: []Account{acc}},
+		concurrencyService:  NewConcurrencyService(slots),
+		cfg:                 &config.Config{Gateway: config.GatewayConfig{OpenAINearLimitMaxConcurrency: 20}},
+	}
+	got := svc.trySelectOpenAINearLimitTarget(context.Background(), nil, "", "", nil, PlatformOpenAI)
+	require.NotNil(t, got)
+	require.Equal(t, int64(41201), got.ID)
+	require.Equal(t, int64(41201), slots.lastID)
+	require.Equal(t, 100, slots.lastMax, "gateway near-limit path must pass DB Concurrency, not the effective cap")
 }
 
 func TestStreamFirstTokenTimeoutDefaultAndOff(t *testing.T) {
