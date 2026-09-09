@@ -224,6 +224,15 @@ gateway:
   openai_first_output_timeout_seconds: 0
   # Optional high/xhigh/max override (seconds, 0=use the standard timeout)
   openai_high_effort_first_output_timeout_seconds: 0
+  # HTTP semantic first-token timeout in seconds (0=off). Default 60. Does not apply to WebSocket.
+  # GATEWAY_STREAM_FIRST_TOKEN_TIMEOUT
+  stream_first_token_timeout: 60
+  # Effective concurrency/load-factor cap for OpenAI accounts at >=95% Codex window usage. Default 20.
+  # Override with GATEWAY_OPENAI_NEAR_LIMIT_MAX_CONCURRENCY (this install uses 50).
+  openai_near_limit_max_concurrency: 20
+  openai_near_limit_429_probe_backoff_seconds: 2
+  openai_near_limit_ttft_threshold_ms: 15000
+  openai_near_limit_ttft_backoff_seconds: 30
   # Max request body size in bytes (default: 256MB)
   # 请求体最大字节数（默认 256MB）
   max_body_size: 268435456

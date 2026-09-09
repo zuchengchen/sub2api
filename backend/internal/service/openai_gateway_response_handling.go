@@ -221,6 +221,21 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		firstOutputCh = firstOutputTimer.C
 		defer firstOutputTimer.Stop()
 	}
+	streamFirstTokenTimeout := time.Duration(0)
+	if account != nil && account.Platform == PlatformOpenAI && firstOutputTimeout <= 0 {
+		streamFirstTokenTimeout = s.httpStreamFirstTokenTimeout()
+	}
+	var streamFirstTokenTimer *time.Timer
+	var streamFirstTokenCh <-chan time.Time
+	if streamFirstTokenTimeout > 0 {
+		remaining := time.Until(startTime.Add(streamFirstTokenTimeout))
+		if remaining <= 0 {
+			remaining = time.Nanosecond
+		}
+		streamFirstTokenTimer = time.NewTimer(remaining)
+		streamFirstTokenCh = streamFirstTokenTimer.C
+		defer streamFirstTokenTimer.Stop()
+	}
 	stopFirstOutputTimer := func() {
 		if firstOutputTimer == nil {
 			return
@@ -233,6 +248,19 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		firstOutputTimer = nil
 		firstOutputCh = nil
+	}
+	stopStreamFirstTokenTimer := func() {
+		if streamFirstTokenTimer == nil {
+			return
+		}
+		if !streamFirstTokenTimer.Stop() {
+			select {
+			case <-streamFirstTokenTimer.C:
+			default:
+			}
+		}
+		streamFirstTokenTimer = nil
+		streamFirstTokenCh = nil
 	}
 	// Track downstream writes separately from upstream reads: pre-output failover
 	// can buffer response.created / response.in_progress, so keepalive must be
@@ -305,10 +333,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			firstOutputScanGuard.Store(false)
 			firstOutputProgressObserved = true
 			stopFirstOutputTimer()
+			stopStreamFirstTokenTimer()
 		}
 		if completedTTFTEvent && firstTokenMs == nil {
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
+			stopStreamFirstTokenTimer()
 		}
 		eventStartsClientOutput = false
 		eventStartsTTFTOutput = false
@@ -803,7 +833,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	}
 
 	// 无超时/无 keepalive 的常见路径走同步扫描，减少 goroutine 与 channel 开销。
-	if streamInterval <= 0 && keepaliveInterval <= 0 && firstOutputTimeout <= 0 {
+	if streamInterval <= 0 && keepaliveInterval <= 0 && firstOutputTimeout <= 0 && streamFirstTokenTimeout <= 0 {
 		defer putSSEScannerBuf64K(scanBuf)
 		for documentScanner.Scan() {
 			processSSELine(documentScanner.Text(), true)
@@ -922,6 +952,22 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 			sendErrorEvent("stream_timeout")
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
+
+		case <-streamFirstTokenCh:
+			if firstTokenMs != nil || firstOutputProgressObserved {
+				stopStreamFirstTokenTimer()
+				continue
+			}
+			MarkOpenAINearLimitFirstTokenTimeout(account)
+			_ = resp.Body.Close()
+			for ev := range events {
+				markEventProcessed(ev)
+			}
+			return resultWithUsage(), s.newOpenAIFirstOutputTimeoutError(
+				ctx, c, account, opsUpstreamProxyID(account), opsUpstreamProxyName(account),
+				startTime, originalModel, reasoningEffort,
+				streamFirstTokenTimeout, "semantic_output", resp.Header,
+			)
 
 		case <-firstOutputCh:
 			if firstOutputProgressObserved {

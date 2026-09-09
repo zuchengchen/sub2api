@@ -1297,6 +1297,7 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 	if s.runtimeBlocker != nil {
 		s.runtimeBlocker.ClearAccountSchedulingBlock(id)
 	}
+	ResetOpenAI429Counter(id)
 	return s.accountRepo.GetByID(ctx, id)
 }
 

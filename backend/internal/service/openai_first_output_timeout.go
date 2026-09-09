@@ -229,6 +229,13 @@ func (s *openAIFirstOutputStage) Close() error {
 	return closeErr
 }
 
+func (s *OpenAIGatewayService) httpStreamFirstTokenTimeout() time.Duration {
+	if s == nil {
+		return 0
+	}
+	return streamFirstTokenTimeout(s.cfg)
+}
+
 func (s *OpenAIGatewayService) openAIFirstOutputTimeout(reasoningEffort string) time.Duration {
 	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIFirstOutputTimeoutSeconds <= 0 {
 		return 0
