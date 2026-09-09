@@ -378,11 +378,17 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// 6-8. Build and send the upstream request. Compatibility retries are
 	// bounded per inbound request and only remove fields explicitly rejected by
-	// the upstream.
+	// the upstream. Client disconnect cancels the in-flight upstream stream.
+	cancelUpstream := func() {}
+	defer func() { cancelUpstream() }()
 	var resp *http.Response
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, responsesBody)
 	for {
+		cancelUpstream()
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+		if clientStream {
+			upstreamCtx, cancelUpstream = context.WithCancel(upstreamCtx)
+		}
 		upstreamReq, buildErr := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
 		releaseUpstreamCtx()
 		if buildErr != nil {

@@ -249,7 +249,12 @@ const { t } = useI18n()
 
 const PLATFORM_LABELS: Record<string, string> = {
   anthropic: 'Claude',
-  openai: 'OpenAI'
+  openai: 'OpenAI',
+  grok: 'Grok',
+  kimi: 'Kimi',
+  zhipu: 'Zhipu GLM',
+  deepseek: 'DeepSeek',
+  minimax: 'MiniMax',
 }
 
 const platformLabel = (p: string) => PLATFORM_LABELS[p] ?? p

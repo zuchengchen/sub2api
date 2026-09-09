@@ -31,6 +31,8 @@ func TestDefaultModelsPreferConcreteGPT56SolForAccountTests(t *testing.T) {
 func TestDefaultModelsIncludeGPTImage25(t *testing.T) {
 	require.Contains(t, DefaultModelIDs(), "gpt-image-2")
 	require.Contains(t, DefaultModelIDs(), "gpt-image-2.5")
+	require.Contains(t, DefaultModelIDs(), "gpt-image-2.5-flare")
+	require.Contains(t, DefaultModelIDs(), "gpt-image-2.5-sunburst")
 	var displayName string
 	for _, model := range DefaultModels {
 		if model.ID == "gpt-image-2.5" {

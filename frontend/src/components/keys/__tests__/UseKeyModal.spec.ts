@@ -763,7 +763,7 @@ describe('UseKeyModal', () => {
     )
   })
 
-  it.each(['anthropic', 'kimi', 'zhipu'] as const)(
+  it.each(['anthropic', 'kimi', 'zhipu', 'minimax'] as const)(
     'offers Codex catalog configuration for the %s routed group',
     async (platform) => {
       const wrapper = mount(UseKeyModal, {

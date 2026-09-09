@@ -199,12 +199,8 @@ func MergeOpenAIAccountTestModels(models []openai.Model, account *Account) []ope
 	if account == nil {
 		return models
 	}
-	mapping := account.GetModelMapping()
-	if len(mapping) == 0 {
-		return models
-	}
 
-	seen := make(map[string]struct{}, len(models)+len(mapping))
+	seen := make(map[string]struct{}, len(models)+len(openai.DefaultModels))
 	for _, model := range models {
 		id := strings.TrimSpace(model.ID)
 		if id != "" {
@@ -218,7 +214,19 @@ func MergeOpenAIAccountTestModels(models []openai.Model, account *Account) []ope
 	}
 
 	extras := make([]string, 0)
-	for requested := range mapping {
+	// Codex discovery lists Responses drivers, not image_generation tool models.
+	if account.IsOpenAIOAuthLike() {
+		for _, model := range openai.DefaultModels {
+			if IsGPTImageGenerationModel(model.ID) && account.IsModelSupported(model.ID) {
+				if _, exists := seen[model.ID]; !exists {
+					seen[model.ID] = struct{}{}
+					extras = append(extras, model.ID)
+				}
+			}
+		}
+	}
+
+	for requested := range account.GetModelMapping() {
 		requested = strings.TrimSpace(requested)
 		if requested == "" || strings.Contains(requested, "*") {
 			continue
@@ -2726,6 +2734,8 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	applyOpenAIImagesDefaults(parsed)
 
+	s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Responses driver: %s; image model: %s\n", openAIImagesResponsesMainModelValue(), parsed.Model)})
+
 	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, parsed.Model)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build image request: %s", err.Error()))
@@ -2799,6 +2809,12 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to parse image response: %s", err.Error()))
 	}
 	if len(results) == 0 {
+		if upstreamErr := extractOpenAIImagesUpstreamError(body); upstreamErr != nil {
+			return s.sendErrorAndEnd(c, upstreamErr.clientMessage())
+		}
+		if textErr := openAIImagesTextFallbackError(body); textErr != nil {
+			return s.sendErrorAndEnd(c, textErr.clientMessage())
+		}
 		return s.sendErrorAndEnd(c, "No images returned from responses API")
 	}
 

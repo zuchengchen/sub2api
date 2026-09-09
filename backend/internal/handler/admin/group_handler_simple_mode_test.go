@@ -64,7 +64,6 @@ func TestGroupHandlerSimpleModeSanitizesCommercialFields(t *testing.T) {
 	require.False(t, created.AllowImageGeneration)
 	require.False(t, created.LongContextPricingEnabled)
 	require.Empty(t, created.ModelPricing)
-	require.False(t, created.AllowBatchImageGeneration)
 	require.Nil(t, created.VideoPrice720P)
 	require.Nil(t, created.WebSearchPricePerCall)
 	require.Nil(t, created.AudioRealtimePricePerMin)
@@ -87,7 +86,6 @@ func TestGroupHandlerSimpleModeSanitizesCommercialFields(t *testing.T) {
 	require.Nil(t, updated.AllowImageGeneration)
 	require.Nil(t, updated.LongContextPricingEnabled)
 	require.Nil(t, updated.ModelPricing)
-	require.Nil(t, updated.AllowBatchImageGeneration)
 	require.Nil(t, updated.VideoPrice720P)
 	require.Nil(t, updated.WebSearchPricePerCall)
 	require.Nil(t, updated.AudioRealtimePricePerMin)
@@ -151,7 +149,7 @@ func TestGroupHandlerSimpleModeResponseUsesFieldAllowlist(t *testing.T) {
 		Status: service.StatusActive, RateMultiplier: 9, RPMLimit: 42,
 		LongContextPricingEnabled: true,
 		ModelPricing:              []service.ChannelModelPricing{{Models: []string{"claude"}}},
-		AllowBatchImageGeneration: true, VideoPrice720P: float64PtrForSimpleModeTest(2),
+		VideoPrice720P: float64PtrForSimpleModeTest(2),
 		WebSearchPricePerCall: float64PtrForSimpleModeTest(3), AudioRealtimePricePerMin: float64PtrForSimpleModeTest(4),
 		ModelRouting: map[string][]int64{"claude": {2}},
 	}}
