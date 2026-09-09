@@ -264,10 +264,7 @@ import { useClipboard } from '@/composables/useClipboard'
 import { fetchCodexModelsManifest } from '@/api/codex'
 import type { GroupPlatform } from '@/types'
 import {
-  findCodexCatalogModel,
-  formatCodexReasoningEffortTomlLine,
-  parseCodexCatalogModels,
-  selectCodexConfigReasoningEffort
+  parseCodexCatalogModels
 } from '@/utils/codexCatalogConfig'
 
 interface Props {
@@ -613,12 +610,6 @@ function selectCodexCatalogModel(preferredModel: string): string {
   return codexCatalogModelSlugs.value[0] || preferredModel
 }
 
-function codexReasoningEffortTomlLine(modelSlug: string): string {
-  return formatCodexReasoningEffortTomlLine(
-    selectCodexConfigReasoningEffort(findCodexCatalogModel(codexModelManifestContent.value, modelSlug))
-  )
-}
-
 // Generate file configs based on platform and active tab
 const currentFiles = computed((): FileConfig[] => {
   const baseUrl = props.baseUrl || window.location.origin
@@ -789,14 +780,17 @@ function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
-  const model = selectCodexCatalogModel('gpt-5.5')
-  const reasoningEffortLine = codexReasoningEffortTomlLine(model)
+  const model = selectCodexCatalogModel('gpt-6-astra')
 
   // config.toml content
   const configContent = `model_provider = "OpenAI"
 model = "${model}"
 review_model = "${model}"
-${reasoningEffortLine}disable_response_storage = true
+model_reasoning_effort = "xhigh"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+plan_mode_reasoning_effort = "max"
+disable_response_storage = true
 model_catalog_json = "${escapeTomlBasicString(codexModelCatalogPath.value)}"
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
@@ -1083,7 +1077,7 @@ function generateRoutedCodexFiles(
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
   const preferredModels: Partial<Record<GroupPlatform, string>> = {
-    openai: 'gpt-5.5',
+    openai: 'gpt-6-astra',
     anthropic: 'claude-sonnet-4-6',
     grok: 'grok-4.5',
     kimi: 'kimi-k2.5',
@@ -1139,14 +1133,17 @@ supports_websockets = false`
 function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-  const model = selectCodexCatalogModel('gpt-5.5')
-  const reasoningEffortLine = codexReasoningEffortTomlLine(model)
+  const model = selectCodexCatalogModel('gpt-6-astra')
 
   // config.toml content with WebSocket v2
   const configContent = `model_provider = "OpenAI"
 model = "${model}"
 review_model = "${model}"
-${reasoningEffortLine}disable_response_storage = true
+model_reasoning_effort = "xhigh"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+plan_mode_reasoning_effort = "max"
+disable_response_storage = true
 model_catalog_json = "${escapeTomlBasicString(codexModelCatalogPath.value)}"
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true

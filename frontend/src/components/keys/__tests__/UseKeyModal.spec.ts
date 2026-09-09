@@ -370,8 +370,9 @@ describe('UseKeyModal', () => {
     const configToml = codeBlocks.find((content) => content.includes('model_provider = "OpenAI"'))
 
     expect(configToml).toBeDefined()
-    expect(configToml).toContain('model = "gpt-5.5"')
-    expect(configToml).toContain('review_model = "gpt-5.5"')
+    expect(configToml).toContain('model = "gpt-6-astra"')
+    expect(configToml).toContain('review_model = "gpt-6-astra"')
+    expect(configToml).not.toContain('model = "gpt-5.5"')
     expect(configToml).not.toContain('model = "gpt-5.4"')
     expect(configToml).not.toContain('model_context_window')
     expect(configToml).not.toContain('model_auto_compact_token_limit')
@@ -383,7 +384,10 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('supports_websockets')
     expect(configToml).not.toContain('responses_websockets_v2')
     expect(configToml).toContain('[features]\ngoals = true')
-    expect(configToml).not.toContain('model_reasoning_effort = "xhigh"')
+    expect(configToml).toContain('model_reasoning_effort = "xhigh"')
+    expect(configToml).toContain('approval_policy = "never"')
+    expect(configToml).toContain('sandbox_mode = "danger-full-access"')
+    expect(configToml).toContain('plan_mode_reasoning_effort = "max"')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
     expect(wrapper.find('[data-testid="codex-api-key-restart-notice"]').exists()).toBe(false)
@@ -472,8 +476,9 @@ describe('UseKeyModal', () => {
     const configToml = codeBlocks.find((content) => content.includes('supports_websockets = true'))
 
     expect(configToml).toBeDefined()
-    expect(configToml).toContain('model = "gpt-5.5"')
-    expect(configToml).toContain('review_model = "gpt-5.5"')
+    expect(configToml).toContain('model = "gpt-6-astra"')
+    expect(configToml).toContain('review_model = "gpt-6-astra"')
+    expect(configToml).not.toContain('model = "gpt-5.5"')
     expect(configToml).not.toContain('model = "gpt-5.4"')
     expect(configToml).not.toContain('model_context_window')
     expect(configToml).not.toContain('model_auto_compact_token_limit')
@@ -483,6 +488,10 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('env_key')
     expect(configToml).not.toContain('image_generation')
     expect(configToml).toContain('supports_websockets = true')
+    expect(configToml).toContain('model_reasoning_effort = "xhigh"')
+    expect(configToml).toContain('approval_policy = "never"')
+    expect(configToml).toContain('sandbox_mode = "danger-full-access"')
+    expect(configToml).toContain('plan_mode_reasoning_effort = "max"')
     expect(configToml).toContain('[features]\nresponses_websockets_v2 = true\ngoals = true')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
@@ -840,7 +849,7 @@ describe('UseKeyModal', () => {
     expect(config).toContain('review_model = "gpt-5.5"')
   })
 
-  it('derives OpenAI Codex reasoning effort from the selected catalog descriptor', async () => {
+  it('keeps OpenAI Codex policy lines when the catalog falls back to another model', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -881,6 +890,9 @@ describe('UseKeyModal', () => {
       .map((code) => code.text())
       .find((content) => content.includes('model_provider = "OpenAI"'))
     expect(configToml).toContain('model = "glm-5.3"')
-    expect(configToml).not.toContain('model_reasoning_effort')
+    expect(configToml).toContain('model_reasoning_effort = "xhigh"')
+    expect(configToml).toContain('approval_policy = "never"')
+    expect(configToml).toContain('sandbox_mode = "danger-full-access"')
+    expect(configToml).toContain('plan_mode_reasoning_effort = "max"')
   })
 })
