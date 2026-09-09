@@ -85,7 +85,7 @@
 
         <UsageFilters v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" class="border-b border-gray-100 dark:border-dark-700/50" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
           <template #after-reset>
-            <div v-if="activeTab !== 'ranking'" class="relative" ref="columnDropdownRef">
+            <div class="relative" ref="columnDropdownRef">
               <button
                 data-testid="usage-column-settings"
                 @click="showColumnDropdown = !showColumnDropdown"
@@ -159,6 +159,7 @@
             :end-date="endDate"
             :filters="breakdownFilters"
             :model="filters.model"
+            :visible-column-keys="rankingVisibleColumnKeys"
             @select-user="handleRankingSelectUser"
           />
         </div>
@@ -772,14 +773,73 @@ const loadSavedErrColumns = () => {
   }
 }
 
-// 列设置下拉按当前 tab 分发
-const currentToggleableColumns = computed(() =>
-  activeTab.value === 'errors' ? errToggleableColumns.value : toggleableColumns.value
+// ---- 用户排行 tab 列设置 ----
+const RANK_ALWAYS_VISIBLE = ['user']
+const RANK_HIDDEN_COLUMNS_KEY = 'usage-ranking-hidden-columns'
+
+const rankingAllColumns = computed(() => [
+  { key: 'user', label: t('admin.usage.tokenRanking.columns.user') },
+  { key: 'notes', label: t('admin.usage.tokenRanking.columns.notes') },
+  { key: 'requests', label: t('admin.usage.tokenRanking.columns.requests') },
+  { key: 'input_tokens', label: t('admin.usage.tokenRanking.columns.inputTokens') },
+  { key: 'output_tokens', label: t('admin.usage.tokenRanking.columns.outputTokens') },
+  { key: 'cache_tokens', label: t('admin.usage.tokenRanking.columns.cacheTokens') },
+  { key: 'total_tokens', label: t('admin.usage.tokenRanking.columns.totalTokens') },
+  { key: 'actual_cost', label: t('admin.usage.tokenRanking.columns.cost') },
+])
+
+const rankingHiddenColumns = reactive<Set<string>>(new Set())
+
+const rankingToggleableColumns = computed(() =>
+  rankingAllColumns.value.filter(col => !RANK_ALWAYS_VISIBLE.includes(col.key))
 )
-const isCurrentColumnVisible = (key: string) =>
-  activeTab.value === 'errors' ? !errHiddenColumns.has(key) : isColumnVisible(key)
-const toggleCurrentColumn = (key: string) =>
-  activeTab.value === 'errors' ? toggleErrColumn(key) : toggleColumn(key)
+
+const rankingVisibleColumnKeys = computed(() =>
+  rankingAllColumns.value
+    .filter(col => RANK_ALWAYS_VISIBLE.includes(col.key) || !rankingHiddenColumns.has(col.key))
+    .map(col => col.key)
+)
+
+const toggleRankingColumn = (key: string) => {
+  if (rankingHiddenColumns.has(key)) {
+    rankingHiddenColumns.delete(key)
+  } else {
+    rankingHiddenColumns.add(key)
+  }
+  try {
+    localStorage.setItem(RANK_HIDDEN_COLUMNS_KEY, JSON.stringify([...rankingHiddenColumns]))
+  } catch (e) {
+    console.error('Failed to save ranking columns:', e)
+  }
+}
+
+const loadSavedRankingColumns = () => {
+  try {
+    const saved = localStorage.getItem(RANK_HIDDEN_COLUMNS_KEY)
+    if (saved) {
+      (JSON.parse(saved) as string[]).forEach((key) => rankingHiddenColumns.add(key))
+    }
+  } catch {
+    rankingHiddenColumns.clear()
+  }
+}
+
+// 列设置下拉按当前 tab 分发
+const currentToggleableColumns = computed(() => {
+  if (activeTab.value === 'errors') return errToggleableColumns.value
+  if (activeTab.value === 'ranking') return rankingToggleableColumns.value
+  return toggleableColumns.value
+})
+const isCurrentColumnVisible = (key: string) => {
+  if (activeTab.value === 'errors') return !errHiddenColumns.has(key)
+  if (activeTab.value === 'ranking') return !rankingHiddenColumns.has(key)
+  return isColumnVisible(key)
+}
+const toggleCurrentColumn = (key: string) => {
+  if (activeTab.value === 'errors') return toggleErrColumn(key)
+  if (activeTab.value === 'ranking') return toggleRankingColumn(key)
+  return toggleColumn(key)
+}
 
 const loadSavedColumns = () => {
   try {
@@ -903,6 +963,7 @@ onMounted(() => {
   }, 120)
   loadSavedColumns()
   loadSavedErrColumns()
+  loadSavedRankingColumns()
   document.addEventListener('click', handleColumnClickOutside)
 })
 onUnmounted(() => { abortController?.abort(); exportAbortController?.abort(); document.removeEventListener('click', handleColumnClickOutside) })

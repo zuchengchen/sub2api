@@ -19,9 +19,10 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-const item = (id: number, tokens: number) => ({
+const item = (id: number, tokens: number, notes = '') => ({
   user_id: id,
   email: `u${id}@test.com`,
+  notes,
   requests: 1,
   input_tokens: tokens,
   output_tokens: 0,
@@ -77,5 +78,25 @@ describe('UserTokenRanking', () => {
 
     expect(getUserBreakdown).toHaveBeenCalledTimes(2)
     expect(getUserBreakdown).toHaveBeenLastCalledWith(expect.objectContaining({ user_id: 9 }))
+  })
+
+  it('shows notes and hides them when the column is turned off', async () => {
+    getUserBreakdown.mockResolvedValue({
+      users: [item(1, 100, 'vip 客户'), item(2, 50, '')],
+    })
+    const wrapper = mountRanking()
+    await flushPromises()
+
+    const notes = wrapper.findAll('[data-testid="ranking-notes"]')
+    expect(notes).toHaveLength(2)
+    expect(notes[0].text()).toBe('vip 客户')
+    expect(notes[1].text()).toBe('—')
+    expect(wrapper.text()).toContain('admin.usage.tokenRanking.columns.notes')
+
+    await wrapper.setProps({
+      visibleColumnKeys: ['user', 'requests', 'total_tokens', 'actual_cost'],
+    })
+    expect(wrapper.findAll('[data-testid="ranking-notes"]')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('admin.usage.tokenRanking.columns.notes')
   })
 })

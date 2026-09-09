@@ -504,6 +504,7 @@ export default {
         userCount: '{count} users',
         columns: {
           user: 'User',
+          notes: 'Notes',
           requests: 'Requests',
           inputTokens: 'Input Tokens',
           outputTokens: 'Output Tokens',

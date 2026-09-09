@@ -78,6 +78,28 @@ func TestGetUserBreakdownStatsRequestTypeIncludesLegacyFallback(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetUserBreakdownStatsIncludesUserNotes(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+
+	mock.ExpectQuery(regexp.QuoteMeta("COALESCE(u.notes, '') as notes")).
+		WithArgs(start, end).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"user_id", "email", "notes", "requests", "input_tokens", "output_tokens",
+			"cache_tokens", "total_tokens", "cost", "actual_cost", "account_cost",
+		}).AddRow(int64(7), "a@test.com", "vip", int64(2), int64(10), int64(20),
+			int64(0), int64(30), 1.0, 0.5, 0.4))
+
+	rows, err := repo.GetUserBreakdownStats(context.Background(), start, end, usagestats.UserBreakdownDimension{}, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "vip", rows[0].Notes)
+	require.Equal(t, "a@test.com", rows[0].Email)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestGetUserBreakdownStatsFiltersNativeCompactionV2(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
