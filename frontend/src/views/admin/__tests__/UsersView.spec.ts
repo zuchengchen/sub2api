@@ -476,23 +476,35 @@ describe('admin UsersView', () => {
 
     expect(wrapper.find('[data-test="svip-filter"]').exists()).toBe(true)
     expect(JSON.parse(localStorage.getItem('user-visible-filters') || '[]')).toContain('vip')
-    expect(listUsers).toHaveBeenLastCalledWith(
-      1,
-      20,
-      expect.objectContaining({ vip: undefined }),
-      expect.any(Object)
-    )
-
-    await wrapper.get('[data-test="svip-filter"]').get('[data-test="select-option-true"]').trigger('click')
-    await flushPromises()
-
+    expect(JSON.parse(localStorage.getItem('user-filter-values') || '{}').vip).toBe('true')
     expect(listUsers).toHaveBeenLastCalledWith(
       1,
       20,
       expect.objectContaining({ vip: true }),
       expect.any(Object)
     )
-    expect(JSON.parse(localStorage.getItem('user-filter-values') || '{}').vip).toBe('true')
+  })
+
+  it('can switch the SVIP filter to non-SVIP users', async () => {
+    const wrapper = mount(UsersView, {
+      global: { stubs: usersViewStubs }
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="filter-settings"]').trigger('click')
+    await wrapper.get('[data-test="filter-toggle-vip"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-test="svip-filter"]').get('[data-test="select-option-false"]').trigger('click')
+    await flushPromises()
+
+    expect(listUsers).toHaveBeenLastCalledWith(
+      1,
+      20,
+      expect.objectContaining({ vip: false }),
+      expect.any(Object)
+    )
+    expect(JSON.parse(localStorage.getItem('user-filter-values') || '{}').vip).toBe('false')
   })
 
   it('restores a saved SVIP filter on load', async () => {
