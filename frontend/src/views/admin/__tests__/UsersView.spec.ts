@@ -418,4 +418,98 @@ describe('admin UsersView', () => {
     expect(wrapper.get('[data-test="username-cell"]').text()).toBe('vip-name')
     expect(wrapper.get('[data-test="username-cell"]').find('[data-testid="vip-badge"]').exists()).toBe(false)
   })
+
+  const SelectStub = {
+    props: ['modelValue', 'options'],
+    emits: ['update:modelValue', 'change'],
+    template: `
+      <div>
+        <button
+          v-for="opt in options"
+          :key="String(opt.value)"
+          :data-test="'select-option-' + String(opt.value)"
+          @click="$emit('update:modelValue', opt.value); $emit('change', opt.value)"
+        >{{ opt.label }}</button>
+      </div>
+    `
+  }
+
+  const usersViewStubs = {
+    AppLayout: { template: '<div><slot /></div>' },
+    TablePageLayout: {
+      template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
+    },
+    DataTable: DataTableStub,
+    Pagination: true,
+    ConfirmDialog: true,
+    EmptyState: true,
+    GroupBadge: true,
+    Select: SelectStub,
+    UserAttributesConfigModal: true,
+    UserConcurrencyCell: true,
+    UserCreateModal: true,
+    UserEditModal: true,
+    BulkEditUserModal: BulkEditUserModalStub,
+    UserPlatformQuotaModal: true,
+    UserApiKeysModal: true,
+    UserAllowedGroupsModal: true,
+    UserBalanceModal: true,
+    UserBalanceHistoryModal: true,
+    GroupReplaceModal: true,
+    Icon: true,
+    Teleport: true
+  }
+
+  it('adds SVIP to filter settings and lists users with vip=true', async () => {
+    const wrapper = mount(UsersView, {
+      global: { stubs: usersViewStubs }
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="svip-filter"]').exists()).toBe(false)
+
+    await wrapper.get('[data-test="filter-settings"]').trigger('click')
+    expect(wrapper.get('[data-test="filter-toggle-vip"]').text()).toContain('admin.users.svipFilter')
+
+    await wrapper.get('[data-test="filter-toggle-vip"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="svip-filter"]').exists()).toBe(true)
+    expect(JSON.parse(localStorage.getItem('user-visible-filters') || '[]')).toContain('vip')
+    expect(listUsers).toHaveBeenLastCalledWith(
+      1,
+      20,
+      expect.objectContaining({ vip: undefined }),
+      expect.any(Object)
+    )
+
+    await wrapper.get('[data-test="svip-filter"]').get('[data-test="select-option-true"]').trigger('click')
+    await flushPromises()
+
+    expect(listUsers).toHaveBeenLastCalledWith(
+      1,
+      20,
+      expect.objectContaining({ vip: true }),
+      expect.any(Object)
+    )
+    expect(JSON.parse(localStorage.getItem('user-filter-values') || '{}').vip).toBe('true')
+  })
+
+  it('restores a saved SVIP filter on load', async () => {
+    localStorage.setItem('user-visible-filters', JSON.stringify(['vip']))
+    localStorage.setItem('user-filter-values', JSON.stringify({ vip: 'false' }))
+
+    const wrapper = mount(UsersView, {
+      global: { stubs: usersViewStubs }
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="svip-filter"]').exists()).toBe(true)
+    expect(listUsers).toHaveBeenCalledWith(
+      1,
+      20,
+      expect.objectContaining({ vip: false }),
+      expect.any(Object)
+    )
+  })
 })

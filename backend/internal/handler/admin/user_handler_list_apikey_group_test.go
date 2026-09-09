@@ -51,3 +51,43 @@ func TestAdminUserList_ParsesAPIKeyGroupID(t *testing.T) {
 		})
 	}
 }
+
+func TestAdminUserList_ParsesVIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	boolPtr := func(v bool) *bool { return &v }
+	cases := []struct {
+		name  string
+		query string
+		want  *bool
+	}{
+		{"missing", "", nil},
+		{"empty ignored", "?vip=", nil},
+		{"true", "?vip=true", boolPtr(true)},
+		{"1", "?vip=1", boolPtr(true)},
+		{"yes", "?vip=yes", boolPtr(true)},
+		{"false", "?vip=false", boolPtr(false)},
+		{"0", "?vip=0", boolPtr(false)},
+		{"no", "?vip=no", boolPtr(false)},
+		{"invalid ignored", "?vip=abc", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &listUsersFilterStub{AdminService: newStubAdminService()}
+			r := gin.New()
+			h := NewUserHandler(stub, nil, nil, nil, nil, nil, nil)
+			r.GET("/admin/users", h.List)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest(http.MethodGet, "/admin/users"+tc.query, nil)
+			r.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			if tc.want == nil {
+				require.Nil(t, stub.captured.VIP)
+				return
+			}
+			require.NotNil(t, stub.captured.VIP)
+			require.Equal(t, *tc.want, *stub.captured.VIP)
+		})
+	}
+}

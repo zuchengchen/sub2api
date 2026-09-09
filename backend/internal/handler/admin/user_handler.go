@@ -150,6 +150,7 @@ type BindUserAuthIdentityChannelRequest struct {
 //   - attr[{id}]: filter by custom attribute value, e.g. attr[1]=company
 //   - group_name: fuzzy filter by allowed group name
 //   - api_key_group_id: filter by the exact group bound to the user's API keys
+//   - vip: filter by SVIP flag (true/false); omitted = no filter
 func (h *UserHandler) List(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
 
@@ -170,6 +171,11 @@ func (h *UserHandler) List(c *gin.Context) {
 	if raw := strings.TrimSpace(c.Query("api_key_group_id")); raw != "" {
 		if id, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && id > 0 {
 			filters.APIKeyGroupID = id
+		}
+	}
+	if raw, ok := c.GetQuery("vip"); ok {
+		if parsed, valid := parseOptionalBoolQuery(raw); valid {
+			filters.VIP = parsed
 		}
 	}
 	sortBy := c.DefaultQuery("sort_by", "created_at")
@@ -233,6 +239,21 @@ func parseAttributeFilters(c *gin.Context) map[int64]string {
 	}
 
 	return result
+}
+
+// parseOptionalBoolQuery parses a query flag into *bool.
+// Missing/empty/invalid values return (nil, false) so the caller leaves the filter unset.
+func parseOptionalBoolQuery(raw string) (*bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		v := true
+		return &v, true
+	case "0", "false", "no", "off":
+		v := false
+		return &v, true
+	default:
+		return nil, false
+	}
 }
 
 // GetByID handles getting a user by ID
