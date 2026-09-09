@@ -746,6 +746,30 @@ describe('admin UsageView ranking tab', () => {
     expect((wrapper.vm as any).filters.user_id).toBe(5)
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ user_id: 5 }), expect.anything())
   })
+
+  it('offers ranking column settings including notes', async () => {
+    const wrapper = mount(UsageView, {
+      global: { stubs: {
+        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+        UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
+        UserBalanceHistoryModal: true, Pagination: true, Select: true,
+        DateRangePicker: true, Icon: true, TokenUsageTrend: true,
+        ModelDistributionChart: true, GroupDistributionChart: true, EndpointDistributionChart: true,
+        UserTokenRanking: UserTokenRankingStub, OpsErrorLogTable: true, OpsErrorDetailModal: true,
+      } },
+    })
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    const tabs = wrapper.findAll('[data-testid="usage-detail-tab"]')
+    await tabs[2].trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="usage-column-settings"]').trigger('click')
+    expect(wrapper.find('[data-testid="usage-column-toggle-notes"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="usage-column-toggle-notes"]').text())
+      .toContain('admin.usage.tokenRanking.columns.notes')
+  })
 })
 
 describe('admin UsageView model audit export', () => {
