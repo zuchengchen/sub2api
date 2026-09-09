@@ -125,6 +125,9 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 		contentType = "application/json"
 	}
 	c.Data(http.StatusOK, contentType, respBody)
+	if account != nil {
+		ResetOpenAI429Counter(account.ID)
+	}
 	return nil
 }
 

@@ -896,6 +896,16 @@ type GatewayConfig struct {
 	GrokResponseHeaderTimeout int `mapstructure:"grok_response_header_timeout"`
 	// OpenAIFirstOutputTimeoutSeconds: native HTTP Responses 首个语义输出超时（秒），0表示禁用。
 	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
+	// StreamFirstTokenTimeout: HTTP 语义首字超时（秒）。0 表示关闭。WebSocket 不使用该值。
+	StreamFirstTokenTimeout int `mapstructure:"stream_first_token_timeout"`
+	// OpenAINearLimitMaxConcurrency caps effective concurrency/load-factor for 95% near-limit OpenAI accounts.
+	OpenAINearLimitMaxConcurrency int `mapstructure:"openai_near_limit_max_concurrency"`
+	// OpenAINearLimit429ProbeBackoffSeconds is the in-process 429 probe backoff for near-limit accounts.
+	OpenAINearLimit429ProbeBackoffSeconds int `mapstructure:"openai_near_limit_429_probe_backoff_seconds"`
+	// OpenAINearLimitTTFTThresholdMS is the slow first-token threshold for near-limit protection.
+	OpenAINearLimitTTFTThresholdMS int `mapstructure:"openai_near_limit_ttft_threshold_ms"`
+	// OpenAINearLimitTTFTBackoffSeconds is the in-process TTFT backoff after a slow first token.
+	OpenAINearLimitTTFTBackoffSeconds int `mapstructure:"openai_near_limit_ttft_backoff_seconds"`
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
 	// 0 表示回退到 OpenAIFirstOutputTimeoutSeconds。
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
@@ -2254,6 +2264,11 @@ func setDefaults() {
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
+	viper.SetDefault("gateway.stream_first_token_timeout", 60)
+	viper.SetDefault("gateway.openai_near_limit_max_concurrency", 20)
+	viper.SetDefault("gateway.openai_near_limit_429_probe_backoff_seconds", 2)
+	viper.SetDefault("gateway.openai_near_limit_ttft_threshold_ms", 15000)
+	viper.SetDefault("gateway.openai_near_limit_ttft_backoff_seconds", 30)
 	viper.SetDefault("gateway.log_upstream_error_body", true)
 	viper.SetDefault("gateway.log_upstream_error_body_max_bytes", 2048)
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
@@ -3110,6 +3125,21 @@ func (c *Config) Validate() error {
 	if c.Gateway.OpenAIFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIFirstOutputTimeoutSeconds > 600 ||
 		(c.Gateway.OpenAIFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIFirstOutputTimeoutSeconds < 30) {
 		return fmt.Errorf("gateway.openai_first_output_timeout_seconds must be 0 or between 30-600 seconds")
+	}
+	if c.Gateway.StreamFirstTokenTimeout < 0 || c.Gateway.StreamFirstTokenTimeout > 600 {
+		return fmt.Errorf("gateway.stream_first_token_timeout must be between 0-600 seconds")
+	}
+	if c.Gateway.OpenAINearLimitMaxConcurrency < 0 {
+		return fmt.Errorf("gateway.openai_near_limit_max_concurrency must be non-negative")
+	}
+	if c.Gateway.OpenAINearLimit429ProbeBackoffSeconds < 0 {
+		return fmt.Errorf("gateway.openai_near_limit_429_probe_backoff_seconds must be non-negative")
+	}
+	if c.Gateway.OpenAINearLimitTTFTThresholdMS < 0 {
+		return fmt.Errorf("gateway.openai_near_limit_ttft_threshold_ms must be non-negative")
+	}
+	if c.Gateway.OpenAINearLimitTTFTBackoffSeconds < 0 {
+		return fmt.Errorf("gateway.openai_near_limit_ttft_backoff_seconds must be non-negative")
 	}
 	if c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds > 1800 ||
 		(c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds < 30) {

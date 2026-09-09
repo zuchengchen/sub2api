@@ -340,6 +340,16 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		return false
 	}
 
+	// OpenAI consecutive 429: counts 1–29 skip formal cooldown / temp-unschedulable.
+	// Pool Mode and custom error-code skips above already returned, so those 429s
+	// never increment the counter.
+	if statusCode == http.StatusTooManyRequests && account != nil && account.Platform == PlatformOpenAI {
+		markOpenAINearLimit429WithConfig(account, s.cfg)
+		if !s.shouldCooldownOpenAI429(ctx, account, headers, responseBody) {
+			return false
+		}
+	}
+
 	if len(requestedModel) > 0 && s.HandleUpstreamModelNotFound(ctx, account, requestedModel[0], statusCode, responseBody) {
 		return true
 	}

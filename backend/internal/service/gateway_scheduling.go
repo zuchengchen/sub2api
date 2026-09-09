@@ -1827,6 +1827,12 @@ func shuffleWithinPriority(accounts []*Account) {
 
 // selectAccountForModelWithPlatform 选择单平台账户（完全隔离）
 func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, platform string) (*Account, error) {
+	if platform == PlatformOpenAI {
+		if near := s.trySelectOpenAINearLimitTarget(ctx, groupID, sessionHash, requestedModel, excludedIDs, platform); near != nil {
+			return near, nil
+		}
+	}
+
 	routingAccountIDs := s.routingAccountIDsForRequest(ctx, groupID, requestedModel, platform)
 
 	// require_privacy_set: 获取分组信息

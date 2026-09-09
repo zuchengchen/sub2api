@@ -386,6 +386,17 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		s.metrics.recordSelect(decision)
 	}()
 
+	if s.service != nil {
+		if near := s.service.trySelectOpenAINearLimitTarget(ctx, req.GroupID, req.Platform, req.SessionHash, req.RequestedModel, req.ExcludedIDs, req.RequireCompact, req.RequiredCapability); near != nil {
+			decision.Layer = openAIAccountScheduleLayerLoadBalance
+			if near.Account != nil {
+				decision.SelectedAccountID = near.Account.ID
+				decision.SelectedAccountType = near.Account.Type
+			}
+			return near, decision, nil
+		}
+	}
+
 	previousResponseID := strings.TrimSpace(req.PreviousResponseID)
 	if previousResponseID != "" && NormalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI &&
 		(!req.StickyWeighted || !req.PreviousResponseCanMove) {
@@ -2432,6 +2443,10 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Accoun
 	if success {
 		s.openaiOAuth429RetryStartedAt.Delete(accountID)
 		s.clearOpenAIAccountModelTransientState(accountID, normalizeOpenAIAccountModelTransientModel(model))
+		ResetOpenAI429Counter(accountID)
+		if firstTokenMs != nil {
+			updateOpenAINearLimitTTFTState(account, time.Duration(*firstTokenMs)*time.Millisecond, s.cfg)
+		}
 	}
 	scheduler := s.getOpenAIAccountScheduler(context.Background())
 	if scheduler == nil {
