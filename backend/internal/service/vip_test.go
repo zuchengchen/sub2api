@@ -72,6 +72,44 @@ func TestApplyVipGroupRateDiscount(t *testing.T) {
 	require.InDelta(t, 0.15, applyVipGroupRateDiscount(nil, group, 0.15), 1e-9)
 }
 
+func TestApplyLunaMinRateMultiplier(t *testing.T) {
+	require.InDelta(t, 0.2, ApplyLunaMinRateMultiplier("gpt-5.6-luna", 0.1), 1e-9)
+	require.InDelta(t, 0.2, ApplyLunaMinRateMultiplier("gpt-5.6-luna-2026-07-09", 0.0), 1e-9)
+	require.InDelta(t, 0.2, ApplyLunaMinRateMultiplier("openai/gpt_5.6_luna", 0.19), 1e-9)
+	require.InDelta(t, 0.25, ApplyLunaMinRateMultiplier("gpt-5.6-luna", 0.25), 1e-9)
+	require.InDelta(t, 0.1, ApplyLunaMinRateMultiplier("gpt-5.6-sol", 0.1), 1e-9)
+	require.InDelta(t, 0.1, ApplyLunaMinRateMultiplier("", 0.1), 1e-9)
+}
+
+func TestApplyRequestBillingRatePolicies(t *testing.T) {
+	vip := &User{IsVIP: true}
+	normal := &User{}
+	pro := &Group{Name: "gpt-pro"}
+	other := &Group{Name: "claude-code"}
+
+	t.Run("luna below floor", func(t *testing.T) {
+		require.InDelta(t, 0.2, applyRequestBillingRatePolicies(normal, pro, 0.1, "gpt-5.6-luna"), 1e-9)
+	})
+	t.Run("svip luna below floor applies discount after floor", func(t *testing.T) {
+		require.InDelta(t, 0.15, applyRequestBillingRatePolicies(vip, pro, 0.1, "gpt-5.6-luna"), 1e-9)
+	})
+	t.Run("other models keep group rate", func(t *testing.T) {
+		require.InDelta(t, 0.1, applyRequestBillingRatePolicies(normal, pro, 0.1, "gpt-5.6-sol"), 1e-9)
+	})
+	t.Run("svip other models keep group discount", func(t *testing.T) {
+		require.InDelta(t, 0.05, applyRequestBillingRatePolicies(vip, pro, 0.1, "gpt-5.6-sol"), 1e-9)
+	})
+	t.Run("luna above floor still gets svip discount", func(t *testing.T) {
+		require.InDelta(t, 0.25, applyRequestBillingRatePolicies(vip, pro, 0.3, "gpt-5.6-luna"), 1e-9)
+	})
+	t.Run("luna floor without gpt-pro does not apply svip discount", func(t *testing.T) {
+		require.InDelta(t, 0.2, applyRequestBillingRatePolicies(vip, other, 0.1, "gpt-5.6-luna"), 1e-9)
+	})
+	t.Run("any luna candidate triggers floor then svip discount", func(t *testing.T) {
+		require.InDelta(t, 0.15, applyRequestBillingRatePolicies(vip, pro, 0.1, "gpt-5.1", "gpt-5.6-luna"), 1e-9)
+	})
+}
+
 type vipExecutorInvalidatorStub struct {
 	invalidated []int64
 }

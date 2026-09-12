@@ -66,8 +66,8 @@ describe('guide BAT asset', () => {
     const viewVersion = guideViewSource.match(/^const bundledGuideVersion = '([^']+)'$/m)?.[1]
 
     // Both patterns must actually match; an absent version is a failure, not a passing match.
-    expect(documentVersion).toBe('1.3')
-    expect(viewVersion).toBe('1.3')
+    expect(documentVersion).toBe('1.4')
+    expect(viewVersion).toBe('1.4')
     expect(documentVersion).toBe(viewVersion)
   })
 
@@ -90,6 +90,7 @@ describe('guide BAT asset', () => {
       discount: vipSource.match(/VipRateDiscount\s*=\s*([\d.]+)/)?.[1],
       group: vipSource.match(/VipDiscountedGroupName\s*=\s*"([^"]+)"/)?.[1],
       model: vipSource.match(/VipExclusiveModelName\s*=\s*"([^"]+)"/)?.[1],
+      lunaMin: vipSource.match(/LunaMinRateMultiplier\s*=\s*([\d.]+)/)?.[1],
     }
 
     expect(constants).toEqual({
@@ -98,11 +99,15 @@ describe('guide BAT asset', () => {
       discount: '0.05',
       group: 'gpt-pro',
       model: 'gpt-5.6-luna',
+      lunaMin: '0.2',
     })
     expect(guide).toContain('严格大于 100 元')
     expect(guide).toContain('冻结 100 元')
     expect(guide).toContain('倍率减 0.05')
     expect(guide).toContain('`gpt-pro`')
     expect(guide).toContain('`gpt-5.6-luna`')
+    expect(guide).toContain('低于 0.2')
+    expect(guide).toContain('按 0.2 计费')
+    expect(guide).toContain('实际是 0.15')
   })
 })
