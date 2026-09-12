@@ -446,6 +446,73 @@ func TestOpenAIGatewayServiceRecordUsage_UsesUserSpecificGroupRate(t *testing.T)
 	require.Equal(t, 1, userRepo.deductCalls)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_LunaMinRateFloor(t *testing.T) {
+	usage := OpenAIUsage{InputTokens: 20, OutputTokens: 5}
+	groupID := int64(88)
+
+	newSvc := func() (*OpenAIGatewayService, *openAIRecordUsageLogRepoStub, *openAIRecordUsageUserRepoStub) {
+		usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+		userRepo := &openAIRecordUsageUserRepoStub{}
+		svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
+		return svc, usageRepo, userRepo
+	}
+
+	record := func(t *testing.T, model string, groupName string, groupRate float64, vip bool) (*UsageLog, *OpenAIGatewayService) {
+		t.Helper()
+		svc, usageRepo, _ := newSvc()
+		err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+			Result: &OpenAIForwardResult{
+				RequestID: "resp_luna_floor",
+				Usage:     usage,
+				Model:     model,
+				Duration:  time.Second,
+			},
+			APIKey: &APIKey{
+				ID:      1088,
+				GroupID: i64p(groupID),
+				Group: &Group{
+					ID:             groupID,
+					Name:           groupName,
+					RateMultiplier: groupRate,
+				},
+			},
+			User:    &User{ID: 2088, IsVIP: vip},
+			Account: &Account{ID: 3088},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, usageRepo.lastLog)
+		return usageRepo.lastLog, svc
+	}
+
+	t.Run("luna below floor bills at 0.2", func(t *testing.T) {
+		log, svc := record(t, "gpt-5.6-luna", "gpt-pro", 0.1, false)
+		require.InDelta(t, 0.2, log.RateMultiplier, 1e-12)
+		expected := expectedOpenAICost(t, svc, "gpt-5.6-luna", usage, 0.2)
+		require.InDelta(t, expected.ActualCost, log.ActualCost, 1e-12)
+	})
+
+	t.Run("svip luna below floor bills at 0.15", func(t *testing.T) {
+		log, svc := record(t, "gpt-5.6-luna", "gpt-pro", 0.1, true)
+		require.InDelta(t, 0.15, log.RateMultiplier, 1e-12)
+		expected := expectedOpenAICost(t, svc, "gpt-5.6-luna", usage, 0.15)
+		require.InDelta(t, expected.ActualCost, log.ActualCost, 1e-12)
+	})
+
+	t.Run("other models keep group rate and svip discount", func(t *testing.T) {
+		plain, _ := record(t, "gpt-5.1", "gpt-pro", 0.1, false)
+		require.InDelta(t, 0.1, plain.RateMultiplier, 1e-12)
+		vip, _ := record(t, "gpt-5.1", "gpt-pro", 0.1, true)
+		require.InDelta(t, 0.05, vip.RateMultiplier, 1e-12)
+	})
+
+	t.Run("luna at or above floor is unchanged before svip discount", func(t *testing.T) {
+		plain, _ := record(t, "gpt-5.6-luna", "gpt-pro", 0.3, false)
+		require.InDelta(t, 0.3, plain.RateMultiplier, 1e-12)
+		vip, _ := record(t, "gpt-5.6-luna", "gpt-pro", 0.3, true)
+		require.InDelta(t, 0.25, vip.RateMultiplier, 1e-12)
+	})
+}
+
 func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *testing.T) {
 	groupID := int64(14)
 	groupRate := 1.0

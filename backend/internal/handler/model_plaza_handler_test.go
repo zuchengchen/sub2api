@@ -276,6 +276,43 @@ func TestToModelPlazaGroupDTOVipDiscount(t *testing.T) {
 	require.Nil(t, dtoOther.UserRateMultiplier)
 }
 
+func TestToModelPlazaGroupDTOLunaMinRate(t *testing.T) {
+	g := service.PlazaGroup{
+		ID:             38,
+		Name:           "gpt-pro",
+		Platform:       "openai",
+		RateMultiplier: 0.1,
+		Models: []service.PlazaModel{
+			{Name: "gpt-5.6-sol"},
+			{Name: "gpt-5.6-luna"},
+			{Name: "gpt-5.6-luna-2026-07-09"},
+		},
+	}
+
+	plain := toModelPlazaGroupDTO(&g, nil, false)
+	require.Nil(t, plain.UserRateMultiplier)
+	require.Nil(t, plain.Models[0].RateMultiplier)
+	require.NotNil(t, plain.Models[1].RateMultiplier)
+	require.InDelta(t, 0.2, *plain.Models[1].RateMultiplier, 1e-9)
+	require.NotNil(t, plain.Models[2].RateMultiplier)
+	require.InDelta(t, 0.2, *plain.Models[2].RateMultiplier, 1e-9)
+
+	vip := toModelPlazaGroupDTO(&g, nil, true)
+	require.NotNil(t, vip.UserRateMultiplier)
+	require.InDelta(t, 0.05, *vip.UserRateMultiplier, 1e-9)
+	require.Nil(t, vip.Models[0].RateMultiplier)
+	require.NotNil(t, vip.Models[1].RateMultiplier)
+	require.InDelta(t, 0.15, *vip.Models[1].RateMultiplier, 1e-9)
+
+	aboveFloor := g
+	aboveFloor.RateMultiplier = 0.3
+	vipAbove := toModelPlazaGroupDTO(&aboveFloor, nil, true)
+	require.NotNil(t, vipAbove.UserRateMultiplier)
+	require.InDelta(t, 0.25, *vipAbove.UserRateMultiplier, 1e-9)
+	require.Nil(t, vipAbove.Models[0].RateMultiplier)
+	require.Nil(t, vipAbove.Models[1].RateMultiplier)
+}
+
 func TestFilterPlazaVisibleGroups_SubscribedExclusiveGroup(t *testing.T) {
 	groups := []service.PlazaGroup{
 		{ID: 42, IsExclusive: true, SubscriptionType: "subscription"},

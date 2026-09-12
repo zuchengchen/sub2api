@@ -102,6 +102,22 @@ describe('PlazaModelPricingTable', () => {
     expect(text).toContain('0.8x')
   })
 
+  it('模型级倍率覆盖分组倍率,并按该倍率计算实付', () => {
+    const luna = tokenModel({ name: 'gpt-5.6-luna', rate_multiplier: 0.15 })
+    const other = tokenModel({ name: 'gpt-5.6-sol' })
+    const wrapper = mountTable([luna, other], 0.1, 0.05)
+    const rows = wrapper.findAll('tbody tr')
+    const lunaRow = rows.find((tr) => tr.text().includes('gpt-5.6-luna'))
+    const otherRow = rows.find((tr) => tr.text().includes('gpt-5.6-sol'))
+
+    expect(lunaRow?.text()).toContain('0.15x')
+    expect(lunaRow?.text()).toContain('$0.45')
+    expect(lunaRow?.text()).toContain('$2.25')
+    expect(otherRow?.text()).toContain('0.05x')
+    expect(otherRow?.text()).toContain('$0.15')
+    expect(otherRow?.text()).toContain('$0.75')
+  })
+
   it('模型按官方输出价从高到低排序,无官方价的排最后', () => {
     const expensive = tokenModel({
       name: 'model-expensive',

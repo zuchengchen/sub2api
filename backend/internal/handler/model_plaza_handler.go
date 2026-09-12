@@ -2,6 +2,7 @@ package handler
 
 import (
 	"log/slog"
+	"math"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -72,6 +73,8 @@ type modelPlazaModel struct {
 	LongContextBasis string `json:"long_context_basis,omitempty"`
 	// TimePricing 分时倍率时段，落在时段内的请求整单乘倍率；无分时省略。
 	TimePricing *modelPlazaTimePricing `json:"time_pricing,omitempty"`
+	// RateMultiplier 仅在该模型实付倍率与分组展示倍率不同时给出（例如 Luna 保底）。
+	RateMultiplier *float64 `json:"rate_multiplier,omitempty"`
 }
 
 // modelPlazaGroup 广场分组条目（白名单字段）。
@@ -191,17 +194,23 @@ func filterPlazaVisibleGroups(
 
 // toModelPlazaGroupDTO 将 service 层广场分组映射为白名单 DTO,并合并用户专属倍率。
 func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64, userIsVIP bool) modelPlazaGroup {
+	groupRate := plazaGroupDisplayRate(g, userRates, userIsVIP)
 	models := make([]modelPlazaModel, 0, len(g.Models))
 	for i := range g.Models {
 		m := &g.Models[i]
-		models = append(models, modelPlazaModel{
+		item := modelPlazaModel{
 			Name:             m.Name,
 			Platform:         m.Platform,
 			Pricing:          toUserPricing(m.Pricing),
 			OfficialPricing:  toModelPlazaOfficialPricing(m.OfficialPricing),
 			LongContextBasis: string(m.LongContextBasis),
 			TimePricing:      toModelPlazaTimePricing(m.TimePricing),
-		})
+		}
+		if modelRate := plazaModelDisplayRate(m.Name, g, userRates, userIsVIP); math.Abs(modelRate-groupRate) > 1e-9 {
+			rate := modelRate
+			item.RateMultiplier = &rate
+		}
+		models = append(models, item)
 	}
 	dto := modelPlazaGroup{
 		ID:                        g.ID,
@@ -221,13 +230,9 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64, us
 		Models:                    models,
 	}
 	// 展示倍率与计费同源：管理员专属覆盖 ?? 分组默认；VIP 命中减免分组时
-	// 再叠加 -0.02，前端按专属倍率样式展示真实计费口径。
+	// 再叠加 -0.05，前端按专属倍率样式展示真实计费口径。
 	if userIsVIP && service.VipDiscountedGroup(g.Name) {
-		base := g.RateMultiplier
-		if rate, ok := userRates[g.ID]; ok {
-			base = rate
-		}
-		effective := service.ApplyVipRateDiscount(base)
+		effective := groupRate
 		dto.UserRateMultiplier = &effective
 		return dto
 	}
@@ -235,6 +240,29 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64, us
 		dto.UserRateMultiplier = &rate
 	}
 	return dto
+}
+
+func plazaGroupBaseRate(g *service.PlazaGroup, userRates map[int64]float64) float64 {
+	if rate, ok := userRates[g.ID]; ok {
+		return rate
+	}
+	return g.RateMultiplier
+}
+
+func plazaGroupDisplayRate(g *service.PlazaGroup, userRates map[int64]float64, userIsVIP bool) float64 {
+	base := plazaGroupBaseRate(g, userRates)
+	if userIsVIP && service.VipDiscountedGroup(g.Name) {
+		return service.ApplyVipRateDiscount(base)
+	}
+	return base
+}
+
+func plazaModelDisplayRate(modelName string, g *service.PlazaGroup, userRates map[int64]float64, userIsVIP bool) float64 {
+	base := service.ApplyLunaMinRateMultiplier(modelName, plazaGroupBaseRate(g, userRates))
+	if userIsVIP && service.VipDiscountedGroup(g.Name) {
+		return service.ApplyVipRateDiscount(base)
+	}
+	return base
 }
 
 // toModelPlazaTimePricing 转换分时倍率；nil 透传（JSON 省略）。

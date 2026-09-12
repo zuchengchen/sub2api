@@ -53,6 +53,8 @@ export interface PlazaModel {
   long_context_basis?: PlazaLongContextBasis
   /** 仅配置了分时倍率的模型返回。 */
   time_pricing?: PlazaTimePricing
+  /** 仅在该模型实付倍率与分组展示倍率不同时返回（例如 Luna 保底）。 */
+  rate_multiplier?: number
 }
 
 export interface ModelPlazaGroup {
