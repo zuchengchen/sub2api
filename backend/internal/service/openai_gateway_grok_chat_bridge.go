@@ -52,13 +52,17 @@ func grokChatResponsesBridgeEligibility(body []byte) (bool, string) {
 		return false, "invalid_json"
 	}
 
-	// These fields have no effect when explicitly set to JSON null. Accepting
-	// that common SDK representation keeps the request on the bridge path,
-	// while non-null values remain unsupported because the Responses converter
-	// cannot preserve their Chat Completions semantics.
-	for _, field := range []string{"stop", "reasoning_effort"} {
-		if raw, exists := root[field]; exists && !grokChatJSONNull(raw) {
-			return false, "unsupported_" + field
+	// stop has no Responses equivalent that preserves Chat Completions
+	// semantics. reasoning_effort does: ChatCompletionsToResponses maps it
+	// onto reasoning.effort. Rejecting it forced grok-4.6 onto raw Chat
+	// Completions, which hangs on both api.x.ai and cli-chat-proxy.
+	if raw, exists := root["stop"]; exists && !grokChatJSONNull(raw) {
+		return false, "unsupported_stop"
+	}
+	if raw, exists := root["reasoning_effort"]; exists && !grokChatJSONNull(raw) {
+		var effort string
+		if json.Unmarshal(raw, &effort) != nil || strings.TrimSpace(effort) == "" {
+			return false, "invalid_reasoning_effort"
 		}
 	}
 	if raw, exists := root["instructions"]; exists {
@@ -509,6 +513,19 @@ func grokChatResponsesRuntimeEligible(upstreamModel, cacheIdentity string) bool 
 	return grokChatResponsesBridgeModel(upstreamModel) && strings.TrimSpace(cacheIdentity) != ""
 }
 
+// grokChatOAuthMustUseResponses is true for Grok OAuth models whose raw
+// /v1/chat/completions path hangs (http2/net header timeout) on both the
+// official API and the CLI subscription proxy. Those models stay on the
+// Responses bridge even without a prompt-cache identity.
+func grokChatOAuthMustUseResponses(model string) bool {
+	switch strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model))) {
+	case "grok-4.6", "grok-4.6-latest":
+		return true
+	default:
+		return false
+	}
+}
+
 // forwardGrokChatCompletionsViaResponses converts a strictly compatible Chat
 // request into xAI Responses format and reuses the established Responses-to-
 // Chat response translators. It intentionally does not run the Codex OAuth
@@ -537,7 +554,9 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 	// for non-composer models, so they would be silently dropped. Route them to
 	// Responses even when no prompt-cache identity is available.
 	hasImageInput := openAIJSONValueMayContainImageInput(gjson.GetBytes(body, "messages"))
-	if !grokChatResponsesRuntimeEligible(upstreamModel, cacheIdentity) && (!hasImageInput || !grokChatResponsesBridgeModel(upstreamModel)) {
+	if !grokChatResponsesRuntimeEligible(upstreamModel, cacheIdentity) &&
+		!grokChatOAuthMustUseResponses(upstreamModel) &&
+		(!hasImageInput || !grokChatResponsesBridgeModel(upstreamModel)) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 

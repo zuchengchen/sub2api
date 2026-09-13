@@ -124,7 +124,7 @@ func TestGrokOAuthURLPolicy(t *testing.T) {
 		require.Equal(t, xai.DefaultCLIBaseURL+"/responses", target)
 	})
 
-	t.Run("stored official API endpoint is honored (manual endpoint switch)", func(t *testing.T) {
+	t.Run("stored official API default is redirected to CLI subscription proxy", func(t *testing.T) {
 		account := &Account{
 			Platform: PlatformGrok,
 			Type:     AccountTypeOAuth,
@@ -136,7 +136,7 @@ func TestGrokOAuthURLPolicy(t *testing.T) {
 
 		target, err := buildGrokResponsesURL(account, cfg)
 		require.NoError(t, err)
-		require.Equal(t, xai.DefaultBaseURL+"/responses", target)
+		require.Equal(t, xai.DefaultCLIBaseURL+"/responses", target)
 	})
 
 	t.Run("stored regional API endpoint is trusted even under restrictive allowlist", func(t *testing.T) {
