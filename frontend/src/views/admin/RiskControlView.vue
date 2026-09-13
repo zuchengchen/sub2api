@@ -101,140 +101,6 @@
           </div>
         </div>
 
-        <section
-          class="rounded-lg border border-gray-200 bg-white p-5 dark:border-dark-700 dark:bg-dark-800"
-          data-test="usage-policy-section"
-          aria-labelledby="usage-policy-heading"
-        >
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div class="min-w-0">
-              <h2 id="usage-policy-heading" class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t('admin.riskControl.usagePolicy.title') }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t('admin.riskControl.usagePolicy.summary') }}
-              </p>
-            </div>
-            <div class="flex flex-wrap items-center gap-4">
-              <label class="flex items-center gap-2">
-                <span class="text-sm text-gray-700 dark:text-gray-300">{{
-                  t('admin.riskControl.usagePolicy.enabled')
-                }}</span>
-                <Toggle v-model="usagePolicyForm.enabled" data-test="usage-policy-enabled" />
-              </label>
-              <label class="flex items-center gap-2">
-                <span class="text-sm text-gray-700 dark:text-gray-300">{{
-                  t('admin.riskControl.usagePolicy.autoBan')
-                }}</span>
-                <Toggle
-                  v-model="usagePolicyForm.auto_ban_enabled"
-                  :disabled="!usagePolicyForm.enabled"
-                  data-test="usage-policy-auto-ban"
-                />
-              </label>
-            </div>
-          </div>
-          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            {{ t('admin.riskControl.usagePolicy.autoBanHint') }}
-          </p>
-          <div class="mt-4 max-w-xs">
-            <label>
-              <span class="input-label">{{ t('admin.riskControl.usagePolicy.banThreshold') }}</span>
-              <input
-                v-model.number="usagePolicyForm.ban_threshold"
-                class="input"
-                type="number"
-                min="1"
-                max="1000"
-                data-test="usage-policy-ban-threshold"
-              />
-            </label>
-          </div>
-          <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4" data-test="usage-policy-stats">
-            <div class="rounded-lg border border-gray-100 px-3 py-2 dark:border-dark-700">
-              <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.usagePolicy.total') }}</p>
-              <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ usagePolicyStats?.total ?? 0 }}</p>
-            </div>
-            <div class="rounded-lg border border-gray-100 px-3 py-2 dark:border-dark-700">
-              <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.usagePolicy.uniqueUsers') }}</p>
-              <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ usagePolicyStats?.unique_users ?? 0 }}
-              </p>
-            </div>
-            <div class="rounded-lg border border-gray-100 px-3 py-2 dark:border-dark-700">
-              <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.riskControl.usagePolicy.disabledKeys') }}
-              </p>
-              <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ usagePolicyStats?.disabled_keys ?? 0 }}
-              </p>
-            </div>
-            <div class="rounded-lg border border-gray-100 px-3 py-2 dark:border-dark-700">
-              <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.riskControl.usagePolicy.autoBannedKeys') }}
-              </p>
-              <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ usagePolicyStats?.auto_banned_keys ?? 0 }}
-              </p>
-            </div>
-          </div>
-          <div class="mt-4 overflow-x-auto">
-            <table class="min-w-full text-sm" data-test="usage-policy-table">
-              <thead>
-                <tr class="border-b border-gray-100 text-left text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400">
-                  <th class="py-2 pr-3 font-medium">{{ t('admin.riskControl.usagePolicy.user') }}</th>
-                  <th class="py-2 pr-3 font-medium">{{ t('admin.riskControl.usagePolicy.apiKey') }}</th>
-                  <th class="py-2 pr-3 font-medium">{{ t('admin.riskControl.usagePolicy.count') }}</th>
-                  <th class="py-2 pr-3 font-medium">{{ t('admin.riskControl.usagePolicy.lastAt') }}</th>
-                  <th class="py-2 font-medium">{{ t('admin.riskControl.usagePolicy.status') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="!usagePolicyKeys.length">
-                  <td colspan="5" class="py-6 text-center text-gray-500 dark:text-gray-400">
-                    {{ t('admin.riskControl.usagePolicy.empty') }}
-                  </td>
-                </tr>
-                <tr
-                  v-for="row in usagePolicyKeys"
-                  :key="`${row.user_id}-${row.api_key_id ?? 'none'}`"
-                  class="border-b border-gray-50 dark:border-dark-800"
-                  :data-test="`usage-policy-user-${row.user_id}`"
-                >
-                  <td class="py-2 pr-3">
-                    <p class="font-medium text-gray-900 dark:text-white">{{ row.username || row.email || row.user_id }}</p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400">#{{ row.user_id }} {{ row.email }}</p>
-                  </td>
-                  <td class="py-2 pr-3">
-                    <p class="font-medium text-gray-900 dark:text-white">{{ row.api_key_name || '-' }}</p>
-                    <p v-if="row.api_key_id" class="text-xs text-gray-500 dark:text-gray-400">#{{ row.api_key_id }}</p>
-                  </td>
-                  <td class="py-2 pr-3 font-medium text-gray-900 dark:text-white">{{ row.count }}</td>
-                  <td class="py-2 pr-3 text-gray-600 dark:text-gray-300">{{ dateOrDash(row.last_at) }}</td>
-                  <td class="py-2">
-                    <span
-                      class="rounded-md px-2 py-0.5 text-xs"
-                      :class="row.api_key_status === 'disabled' ? statusClasses.danger : statusClasses.healthy"
-                    >
-                      {{
-                        row.api_key_status === 'disabled'
-                          ? t('admin.riskControl.usagePolicy.statusDisabled')
-                          : t('admin.riskControl.usagePolicy.statusActive')
-                      }}
-                    </span>
-                    <span
-                      v-if="row.auto_banned"
-                      class="ml-1 rounded-md bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300"
-                    >
-                      {{ t('admin.riskControl.usagePolicy.autoBanned') }}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
         <section class="border-y border-gray-200 py-6 dark:border-dark-700" aria-labelledby="reviewers-heading">
           <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -250,7 +116,6 @@
               <Toggle v-model="configForm.enabled" data-test="risk-control-enabled" />
             </div>
           </div>
-
           <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <article class="rounded-lg border border-gray-200 bg-white p-5 dark:border-dark-700 dark:bg-dark-800">
               <div class="flex items-start justify-between gap-4">
@@ -1422,8 +1287,6 @@ import type {
   DeepSeekModerationChannel,
   TestDeepSeekChannelResponse,
   UpdateContentModerationConfig,
-  UsagePolicyConfig,
-  UsagePolicyStats,
 } from '@/api/admin/riskControl'
 import type { AdminGroup } from '@/types'
 import { useAppStore } from '@/stores/app'
@@ -1548,16 +1411,6 @@ const configForm = reactive({
   layer1_keywords_text: '',
   layer2_keywords_text: '',
 })
-
-const defaultUsagePolicyConfig = (): UsagePolicyConfig => ({
-  enabled: true,
-  auto_ban_enabled: true,
-  ban_threshold: 1,
-})
-
-const usagePolicyForm = reactive(defaultUsagePolicyConfig())
-const usagePolicyStats = ref<UsagePolicyStats | null>(null)
-const usagePolicyKeys = computed(() => usagePolicyStats.value?.keys ?? [])
 
 const pagination = reactive({ page: 1, page_size: 20, total: 0, pages: 1 })
 const filters = reactive({
@@ -1869,28 +1722,19 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.layer2_keywords_text = (config.layer2_keywords ?? []).join('\n')
 }
 
-function applyUsagePolicyConfig(config: UsagePolicyConfig | null | undefined) {
-  const next = config ?? defaultUsagePolicyConfig()
-  usagePolicyForm.enabled = next.enabled ?? true
-  usagePolicyForm.auto_ban_enabled = next.auto_ban_enabled ?? true
-  usagePolicyForm.ban_threshold = next.ban_threshold && next.ban_threshold > 0 ? next.ban_threshold : 1
-}
-
 async function loadInitial() {
   loading.value = true
   configLoadError.value = false
   configLoaded.value = false
   try {
-    const [config, availableGroups, usagePolicy] = await Promise.all([
+    const [config, availableGroups] = await Promise.all([
       adminAPI.riskControl.getConfig(),
       adminAPI.groups.getAll().catch(() => [] as AdminGroup[]),
-      adminAPI.riskControl.getUsagePolicyConfig().catch(() => defaultUsagePolicyConfig()),
     ])
     applyConfig(config)
-    applyUsagePolicyConfig(usagePolicy)
     configLoaded.value = true
     groups.value = availableGroups
-    await Promise.all([loadStatus(true), loadLogs(), loadUsagePolicyStats(true)])
+    await Promise.all([loadStatus(true), loadLogs()])
   } catch (error: unknown) {
     configLoadError.value = true
     appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.loadFailed')))
@@ -1903,13 +1747,9 @@ async function refreshAll() {
   if (refreshing.value || !configLoaded.value) return
   refreshing.value = true
   try {
-    const [config, usagePolicy] = await Promise.all([
-      adminAPI.riskControl.getConfig(),
-      adminAPI.riskControl.getUsagePolicyConfig().catch(() => defaultUsagePolicyConfig()),
-    ])
+    const config = await adminAPI.riskControl.getConfig()
     applyConfig(config)
-    applyUsagePolicyConfig(usagePolicy)
-    await Promise.all([loadStatus(false), loadLogs(), loadUsagePolicyStats(false)])
+    await Promise.all([loadStatus(false), loadLogs()])
   } catch (error: unknown) {
     appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.loadFailed')))
   } finally {
@@ -1929,22 +1769,6 @@ async function loadStatus(silent: boolean) {
     if (!silent) appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.statusFailed')))
   } finally {
     statusLoading.value = false
-  }
-}
-
-async function loadUsagePolicyStats(silent: boolean) {
-  try {
-    usagePolicyStats.value = await adminAPI.riskControl.getUsagePolicyStats()
-  } catch (error: unknown) {
-    usagePolicyStats.value = {
-      total: 0,
-      unique_users: 0,
-      unique_keys: 0,
-      disabled_keys: 0,
-      auto_banned_keys: 0,
-      keys: [],
-    }
-    if (!silent) appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.usagePolicy.loadFailed')))
   }
 }
 
@@ -2044,13 +1868,7 @@ async function saveConfig() {
     }
     const updated = await adminAPI.riskControl.updateConfig(payload)
     applyConfig(updated)
-    const usageUpdated = await adminAPI.riskControl.updateUsagePolicyConfig({
-      enabled: usagePolicyForm.enabled,
-      auto_ban_enabled: usagePolicyForm.auto_ban_enabled,
-      ban_threshold: clampInteger(usagePolicyForm.ban_threshold, 1, 1000, 1),
-    })
-    applyUsagePolicyConfig(usageUpdated)
-    await Promise.all([loadStatus(true), loadLogs(), loadUsagePolicyStats(true)])
+    await Promise.all([loadStatus(true), loadLogs()])
     appStore.showSuccess(t('admin.riskControl.saved'))
   } catch (error: unknown) {
     appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.saveFailed')))

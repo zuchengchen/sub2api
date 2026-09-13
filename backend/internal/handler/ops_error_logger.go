@@ -208,17 +208,25 @@ func flushOpsErrorLogBatch(batch []opsErrorLogJob) {
 	opsErrorLogProcessed.Add(processed)
 }
 
-func persistUsagePolicyConversationFromContext(c *gin.Context, ops *service.OpsService, entry *service.OpsInsertErrorLogInput) {
-	if c == nil || ops == nil || entry == nil || !service.IsUsagePolicyViolation(entry) {
+func persistUsagePolicyConversationFromContext(c *gin.Context, _ *service.OpsService, entry *service.OpsInsertErrorLogInput) {
+	if c == nil || entry == nil {
 		return
 	}
 	input, ok := currentContentModerationInput(c)
-	if !ok {
+	if !ok || !service.IsUsagePolicyViolation(entry) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	ops.ArchiveUsagePolicyConversation(ctx, entry, input)
+	cloned := input
+	cloned.RawRequest = input.RawRequest.CloneMetadata()
+	if len(input.RawRequest.Body) > 0 {
+		cloned.RawRequest.Body = append([]byte(nil), input.RawRequest.Body...)
+	}
+	if len(input.Body) > 0 {
+		cloned.Body = append([]byte(nil), input.Body...)
+	} else {
+		cloned.Body = cloned.RawRequest.Body
+	}
+	entry.ConversationInput = &cloned
 }
 
 func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLogInput) {
