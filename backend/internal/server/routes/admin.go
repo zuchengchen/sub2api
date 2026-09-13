@@ -149,6 +149,9 @@ func registerContentModerationRoutes(admin *gin.RouterGroup, h *handler.Handlers
 		// route above for existing admin clients.
 		risk.POST("/deepseek/channels/:id/test-api", h.Admin.ContentModeration.TestContentModerationChannelAPI)
 		risk.GET("/status", h.Admin.ContentModeration.GetStatus)
+		risk.GET("/usage-policy", h.Admin.UsagePolicy.GetConfig)
+		risk.PUT("/usage-policy", h.Admin.UsagePolicy.UpdateConfig)
+		risk.GET("/usage-policy/stats", h.Admin.UsagePolicy.GetStats)
 		risk.GET("/logs", h.Admin.ContentModeration.ListLogs)
 		risk.GET("/logs/:id", h.Admin.ContentModeration.GetLog)
 		risk.GET("/logs/:id/archive/preview", h.Admin.ContentModeration.PreviewArchive)

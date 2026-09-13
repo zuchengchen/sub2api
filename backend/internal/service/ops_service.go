@@ -70,6 +70,10 @@ type OpsService struct {
 	// 立即同步到调度热路径读取的内存缓存，避免下次请求才能感知新值。
 	quotaAutoPauseSink func(OpsOpenAIAccountQuotaAutoPauseSettings)
 
+	// usagePolicyObserver 由 wire 在 UsagePolicyService 构造后注入，避免 OpsService
+	// 在构造期依赖 UsagePolicyService。
+	usagePolicyObserver UsagePolicyObserver
+
 	// Published snapshots are immutable. Gateway reads are lock-free; the mutex
 	// only serializes startup and administrative updates.
 	runtimeSettings   atomic.Pointer[opsRuntimeSettingsSnapshot]
@@ -106,6 +110,24 @@ func (s *OpsService) SetOpenAIQuotaAutoPauseSettingsSink(sink func(OpsOpenAIAcco
 		return
 	}
 	s.quotaAutoPauseSink = sink
+}
+
+type UsagePolicyObserver interface {
+	ObserveErrorLogs(ctx context.Context, entries []*OpsInsertErrorLogInput)
+}
+
+func (s *OpsService) SetUsagePolicyObserver(observer UsagePolicyObserver) {
+	if s == nil {
+		return
+	}
+	s.usagePolicyObserver = observer
+}
+
+func (s *OpsService) notifyUsagePolicy(ctx context.Context, entries []*OpsInsertErrorLogInput) {
+	if s == nil || s.usagePolicyObserver == nil || len(entries) == 0 {
+		return
+	}
+	s.usagePolicyObserver.ObserveErrorLogs(ctx, entries)
 }
 
 func NewOpsService(
@@ -416,6 +438,7 @@ func (s *OpsService) RecordError(ctx context.Context, entry *OpsInsertErrorLogIn
 		log.Printf("[Ops] RecordError failed: %v", err)
 		return err
 	}
+	s.notifyUsagePolicy(ctx, []*OpsInsertErrorLogInput{prepared})
 	return nil
 }
 
@@ -441,14 +464,17 @@ func (s *OpsService) RecordErrorBatch(ctx context.Context, entries []*OpsInsertE
 		_, err := s.opsRepo.InsertErrorLog(ctx, prepared[0])
 		if err != nil {
 			log.Printf("[Ops] RecordErrorBatch single insert failed: %v", err)
+			return err
 		}
-		return err
+		s.notifyUsagePolicy(ctx, prepared)
+		return nil
 	}
 
 	if _, err := s.opsRepo.BatchInsertErrorLogs(ctx, prepared); err != nil {
 		log.Printf("[Ops] RecordErrorBatch failed: %v", err)
 		return err
 	}
+	s.notifyUsagePolicy(ctx, prepared)
 	return nil
 }
 
