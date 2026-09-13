@@ -14,11 +14,10 @@ import (
 const (
 	usagePolicyFlagPhrase           = "flagged as potentially violating our usage policy"
 	defaultUsagePolicyBanThreshold  = 1
-	usagePolicySkipReasonAdmin      = "admin"
 	usagePolicySkipReasonDisabled   = "already_disabled"
 	usagePolicySkipReasonThreshold  = "below_threshold"
 	usagePolicySkipReasonAutoBanOff = "auto_ban_disabled"
-	usagePolicySkipReasonNoUser     = "missing_user"
+	usagePolicySkipReasonNoKey      = "missing_key"
 )
 
 // UsagePolicyConfig is stored as settings.usage_policy_config JSON.
@@ -52,54 +51,50 @@ type UsagePolicyViolation struct {
 	CreatedAt          time.Time
 }
 
-type UsagePolicyUserStat struct {
-	UserID     int64     `json:"user_id"`
-	Email      string    `json:"email"`
-	Username   string    `json:"username"`
-	Role       string    `json:"role"`
-	Status     string    `json:"status"`
-	Count      int       `json:"count"`
-	AutoBanned bool      `json:"auto_banned"`
-	LastAt     time.Time `json:"last_at"`
+type UsagePolicyKeyStat struct {
+	UserID       int64     `json:"user_id"`
+	Email        string    `json:"email"`
+	Username     string    `json:"username"`
+	Role         string    `json:"role"`
+	APIKeyID     *int64    `json:"api_key_id,omitempty"`
+	APIKeyName   string    `json:"api_key_name"`
+	APIKeyStatus string    `json:"api_key_status"`
+	Count        int       `json:"count"`
+	AutoBanned   bool      `json:"auto_banned"`
+	LastAt       time.Time `json:"last_at"`
 }
 
 type UsagePolicyStats struct {
-	Total           int                   `json:"total"`
-	UniqueUsers     int                   `json:"unique_users"`
-	DisabledUsers   int                   `json:"disabled_users"`
-	AutoBannedUsers int                   `json:"auto_banned_users"`
-	Users           []UsagePolicyUserStat `json:"users"`
-	Config          *UsagePolicyConfig    `json:"config"`
+	Total          int                  `json:"total"`
+	UniqueUsers    int                  `json:"unique_users"`
+	UniqueKeys     int                  `json:"unique_keys"`
+	DisabledKeys   int                  `json:"disabled_keys"`
+	AutoBannedKeys int                  `json:"auto_banned_keys"`
+	Keys           []UsagePolicyKeyStat `json:"keys"`
+	Config         *UsagePolicyConfig   `json:"config"`
 }
 
 type UsagePolicyRepository interface {
 	InsertViolation(ctx context.Context, v *UsagePolicyViolation) (id int64, inserted bool, count int, err error)
 	UpdateViolationDisposition(ctx context.Context, id int64, autoBanned bool, skipReason string) error
-	ListUserStats(ctx context.Context) ([]UsagePolicyUserStat, error)
-	DisableUserIfActive(ctx context.Context, userID int64) (bool, error)
-}
-
-type UsagePolicyUserReader interface {
-	GetByID(ctx context.Context, id int64) (*User, error)
+	ListKeyStats(ctx context.Context) ([]UsagePolicyKeyStat, error)
+	DisableAPIKeyIfActive(ctx context.Context, apiKeyID int64) (credential string, transitioned bool, err error)
 }
 
 type UsagePolicyService struct {
 	repo                 UsagePolicyRepository
 	settingRepo          SettingRepository
-	userRepo             UsagePolicyUserReader
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 }
 
 func NewUsagePolicyService(
 	repo UsagePolicyRepository,
 	settingRepo SettingRepository,
-	userRepo UsagePolicyUserReader,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 ) *UsagePolicyService {
 	return &UsagePolicyService{
 		repo:                 repo,
 		settingRepo:          settingRepo,
-		userRepo:             userRepo,
 		authCacheInvalidator: authCacheInvalidator,
 	}
 }
@@ -181,36 +176,43 @@ func (s *UsagePolicyService) GetStats(ctx context.Context) (*UsagePolicyStats, e
 	if err != nil {
 		return nil, err
 	}
-	stats := &UsagePolicyStats{Config: cfg, Users: []UsagePolicyUserStat{}}
+	stats := &UsagePolicyStats{Config: cfg, Keys: []UsagePolicyKeyStat{}}
 	if s.repo == nil {
 		return stats, nil
 	}
-	users, err := s.repo.ListUserStats(ctx)
+	keys, err := s.repo.ListKeyStats(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if users == nil {
-		users = []UsagePolicyUserStat{}
+	if keys == nil {
+		keys = []UsagePolicyKeyStat{}
 	}
-	stats.Users = users
-	seen := make(map[int64]struct{}, len(users))
-	for _, row := range users {
+	stats.Keys = keys
+	seenUsers := make(map[int64]struct{}, len(keys))
+	seenKeys := make(map[int64]struct{}, len(keys))
+	for _, row := range keys {
 		stats.Total += row.Count
-		if _, ok := seen[row.UserID]; !ok {
-			seen[row.UserID] = struct{}{}
+		if _, ok := seenUsers[row.UserID]; !ok {
+			seenUsers[row.UserID] = struct{}{}
 			stats.UniqueUsers++
-			if row.Status == StatusDisabled {
-				stats.DisabledUsers++
+		}
+		if row.APIKeyID != nil && *row.APIKeyID > 0 {
+			if _, ok := seenKeys[*row.APIKeyID]; !ok {
+				seenKeys[*row.APIKeyID] = struct{}{}
+				stats.UniqueKeys++
+				if row.APIKeyStatus == StatusDisabled || row.APIKeyStatus == StatusAPIKeyDisabled {
+					stats.DisabledKeys++
+				}
 			}
-			if row.AutoBanned {
-				stats.AutoBannedUsers++
-			}
+		}
+		if row.AutoBanned {
+			stats.AutoBannedKeys++
 		}
 	}
 	return stats, nil
 }
 
-// ObserveErrorLogs records matching upstream usage-policy failures and may disable the user.
+// ObserveErrorLogs records matching upstream usage-policy failures and may disable the API key.
 func (s *UsagePolicyService) ObserveErrorLogs(ctx context.Context, entries []*OpsInsertErrorLogInput) {
 	if s == nil || len(entries) == 0 {
 		return
@@ -276,15 +278,16 @@ func (s *UsagePolicyService) handleEntry(ctx context.Context, cfg *UsagePolicyCo
 	if !inserted {
 		return
 	}
-	skipReason, autoBanned := s.applyBan(ctx, cfg, *entry.UserID, count)
+	skipReason, autoBanned := s.applyBan(ctx, cfg, entry.APIKeyID, count)
 	if skipReason != "" || autoBanned {
 		if err := s.repo.UpdateViolationDisposition(ctx, id, autoBanned, skipReason); err != nil {
 			slog.Error("usage_policy.update_disposition_failed", "id", id, "user_id", *entry.UserID, "error", err)
 		}
 	}
 	if autoBanned {
-		slog.Warn("usage_policy.user_disabled",
+		slog.Warn("usage_policy.api_key_disabled",
 			"user_id", *entry.UserID,
+			"api_key_id", entry.APIKeyID,
 			"count", count,
 			"threshold", cfg.BanThreshold,
 			"request_id", violation.RequestID,
@@ -292,36 +295,26 @@ func (s *UsagePolicyService) handleEntry(ctx context.Context, cfg *UsagePolicyCo
 	}
 }
 
-func (s *UsagePolicyService) applyBan(ctx context.Context, cfg *UsagePolicyConfig, userID int64, count int) (skipReason string, autoBanned bool) {
+func (s *UsagePolicyService) applyBan(ctx context.Context, cfg *UsagePolicyConfig, apiKeyID *int64, count int) (skipReason string, autoBanned bool) {
 	if cfg == nil || !cfg.AutoBanEnabled {
 		return usagePolicySkipReasonAutoBanOff, false
 	}
 	if cfg.BanThreshold <= 0 || count < cfg.BanThreshold {
 		return usagePolicySkipReasonThreshold, false
 	}
-	if s.userRepo != nil {
-		user, err := s.userRepo.GetByID(ctx, userID)
-		if err != nil {
-			slog.Warn("usage_policy.load_user_failed", "user_id", userID, "error", err)
-			return usagePolicySkipReasonNoUser, false
-		}
-		if user.Role == RoleAdmin {
-			return usagePolicySkipReasonAdmin, false
-		}
-		if user.Status == StatusDisabled {
-			return usagePolicySkipReasonDisabled, false
-		}
+	if apiKeyID == nil || *apiKeyID <= 0 {
+		return usagePolicySkipReasonNoKey, false
 	}
-	transitioned, err := s.repo.DisableUserIfActive(ctx, userID)
+	credential, transitioned, err := s.repo.DisableAPIKeyIfActive(ctx, *apiKeyID)
 	if err != nil {
-		slog.Error("usage_policy.disable_user_failed", "user_id", userID, "error", err)
+		slog.Error("usage_policy.disable_api_key_failed", "api_key_id", *apiKeyID, "error", err)
 		return "", false
 	}
 	if !transitioned {
 		return usagePolicySkipReasonDisabled, false
 	}
-	if s.authCacheInvalidator != nil {
-		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	if s.authCacheInvalidator != nil && credential != "" {
+		s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, credential)
 	}
 	return "", true
 }

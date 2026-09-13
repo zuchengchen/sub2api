@@ -147,15 +147,18 @@ async function mockAPIs(page: Page) {
       return json(route, {
         total: 2,
         unique_users: 1,
-        disabled_users: 1,
-        auto_banned_users: 1,
-        users: [
+        unique_keys: 1,
+        disabled_keys: 1,
+        auto_banned_keys: 1,
+        keys: [
           {
             user_id: 9,
             email: 'hit@example.test',
             username: 'flagged',
             role: 'user',
-            status: 'disabled',
+            api_key_id: 88,
+            api_key_name: 'prod-key',
+            api_key_status: 'disabled',
             count: 2,
             auto_banned: true,
             last_at: '2026-09-13T05:00:00Z',

@@ -698,11 +698,10 @@ func ProvideOpsService(
 func ProvideUsagePolicyService(
 	repo UsagePolicyRepository,
 	settingRepo SettingRepository,
-	userRepo UserRepository,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	opsService *OpsService,
 ) *UsagePolicyService {
-	svc := NewUsagePolicyService(repo, settingRepo, userRepo, authCacheInvalidator)
+	svc := NewUsagePolicyService(repo, settingRepo, authCacheInvalidator)
 	if opsService != nil {
 		opsService.SetUsagePolicyObserver(svc)
 	}

@@ -308,15 +308,18 @@ describe('admin RiskControlView', () => {
     getUsagePolicyStats.mockResolvedValue({
       total: 3,
       unique_users: 2,
-      disabled_users: 1,
-      auto_banned_users: 1,
-      users: [
+      unique_keys: 2,
+      disabled_keys: 1,
+      auto_banned_keys: 1,
+      keys: [
         {
           user_id: 9,
           email: 'hit@example.com',
           username: 'flagged',
           role: 'user',
-          status: 'disabled',
+          api_key_id: 88,
+          api_key_name: 'prod-key',
+          api_key_status: 'disabled',
           count: 2,
           auto_banned: true,
           last_at: '2026-09-13T05:00:00Z',
@@ -326,7 +329,9 @@ describe('admin RiskControlView', () => {
           email: 'admin@example.com',
           username: 'admin',
           role: 'admin',
-          status: 'active',
+          api_key_id: 3,
+          api_key_name: 'admin-key',
+          api_key_status: 'active',
           count: 1,
           auto_banned: false,
           last_at: '2026-09-13T04:00:00Z',
