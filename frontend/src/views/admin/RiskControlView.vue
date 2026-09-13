@@ -1077,7 +1077,7 @@
             </div>
 
             <nav
-              class="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-900 sm:grid-cols-3 lg:grid-cols-6"
+              class="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-900 sm:grid-cols-3 lg:grid-cols-7"
               role="tablist"
               :aria-label="t('admin.riskControl.records')"
             >
@@ -1605,6 +1605,7 @@ const recordTabs = computed<Array<{ value: ContentModerationLogView; label: stri
   { value: 'review_unavailable', label: t('admin.riskControl.recordTabs.reviewUnavailable') },
   { value: 'evidence_capacity_exceeded', label: t('admin.riskControl.recordTabs.evidenceCapacityExceeded') },
   { value: 'cyber_policy', label: t('admin.riskControl.recordTabs.cyberPolicy') },
+  { value: 'usage_policy', label: t('admin.riskControl.recordTabs.usagePolicy') },
 ])
 
 const stageOptions = computed(() => [

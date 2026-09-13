@@ -413,6 +413,7 @@ export default {
       recordsHint: 'Review cyber policy, risk-control blocks, risky shadow decisions, and review failures by category.',
       recordTabs: {
         cyberPolicy: 'Cyber Policy',
+        usagePolicy: 'Usage Policy',
         violationBlocked: 'Violation blocks',
         restricted: 'Policy blocked (non-violation)',
         riskyShadow: 'Risky Shadow',

@@ -235,35 +235,55 @@ func TestContentModerationArchiveRuntimeRestrictsExistingLockFile(t *testing.T) 
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
-func TestContentModerationArchiveRuntimeImportsEmergencyAfterKeyRecovery(t *testing.T) {
+func TestContentModerationArchiveRuntimeStoresWithoutKeyRing(t *testing.T) {
 	root := t.TempDir()
-	keyRing := filepath.Join(root, "missing-keyring.json")
+	repo := &moderationArchiveRuntimeTestRepo{}
+	runtime, err := newContentModerationArchiveRuntime(repo, moderationArchiveRuntimeOptions(root, filepath.Join(root, "missing-keyring.json")))
+	require.NoError(t, err)
+	defer runtime.Close()
+
+	envelope := []byte("exact raw envelope")
+	log := &ContentModerationLog{Action: ContentModerationActionSecondLayerBlock}
+	require.NoError(t, runtime.Store(context.Background(), log, envelope))
+	require.Equal(t, ContentModerationArchivePlaintextKeyID, log.ArchiveKeyID)
+	require.Equal(t, ContentModerationArchiveStatusAvailable, log.ArchiveStatus)
+	require.False(t, runtime.Status().Degraded)
+
+	_, archives := repo.snapshot()
+	require.Len(t, archives, 1)
+	plaintext, err := runtime.cipher.Decrypt(&archives[0])
+	require.NoError(t, err)
+	require.Equal(t, envelope, plaintext)
+}
+
+func TestContentModerationArchiveRuntimeWritesPlaintextConversationFile(t *testing.T) {
+	root := t.TempDir()
+	keyRing := filepath.Join(root, "keyring.json")
+	writeModerationArchiveTestKeyRing(t, keyRing, "k1", map[string][]byte{"k1": []byte("0123456789abcdef0123456789abcdef")})
 	repo := &moderationArchiveRuntimeTestRepo{}
 	runtime, err := newContentModerationArchiveRuntime(repo, moderationArchiveRuntimeOptions(root, keyRing))
 	require.NoError(t, err)
 	defer runtime.Close()
 
-	log := &ContentModerationLog{Action: ContentModerationActionCyberPolicy}
-	err = runtime.Store(context.Background(), log, []byte("exact raw envelope"))
-	require.Error(t, err)
-	require.Equal(t, ContentModerationArchiveStatusEmergency, log.ArchiveStatus)
-	require.True(t, runtime.Status().Degraded)
+	envelope := []byte(`{"archive_id":"conv","request":{"body":"hello"}}`)
+	log := &ContentModerationLog{Action: ContentModerationActionKeywordBlock}
+	require.NoError(t, runtime.Store(context.Background(), log, envelope))
+	require.Equal(t, ContentModerationArchivePlaintextKeyID, log.ArchiveKeyID)
+	require.Equal(t, ContentModerationArchiveStatusAvailable, log.ArchiveStatus)
 
-	files, err := filepath.Glob(filepath.Join(runtime.options.EmergencyDir, "*"+contentModerationEmergencySuffix))
-	require.NoError(t, err)
-	require.Len(t, files, 1)
-	makeModerationRetryDue(t, files[0])
-	writeModerationArchiveTestKeyRing(t, keyRing, "k1", map[string][]byte{"k1": []byte("0123456789abcdef0123456789abcdef")})
-	runtime.processOnce(context.Background())
-
-	_, err = os.Stat(files[0])
-	require.ErrorIs(t, err, os.ErrNotExist)
 	_, archives := repo.snapshot()
 	require.Len(t, archives, 1)
-	plaintext, err := runtime.cipher.Decrypt(&archives[0])
+	require.Equal(t, ContentModerationArchivePlaintextKeyID, archives[0].KeyID)
+	got, err := runtime.cipher.Decrypt(&archives[0])
 	require.NoError(t, err)
-	require.Equal(t, []byte("exact raw envelope"), plaintext)
-	require.False(t, runtime.Status().Degraded)
+	require.Equal(t, envelope, got)
+
+	files, err := filepath.Glob(filepath.Join(runtime.options.ConversationDir, "*"+contentModerationConversationSuffix))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	raw, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	require.Equal(t, envelope, raw)
 }
 
 func TestContentModerationArchiveRuntimeRetriesSameArchiveId(t *testing.T) {

@@ -874,6 +874,8 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 		where = append(where, "l.action = 'restricted_block'")
 	case service.ContentModerationLogResultCyberPolicy:
 		where = append(where, "l.action = 'cyber_policy'")
+	case service.ContentModerationLogResultUsagePolicy:
+		where = append(where, "l.action = 'usage_policy'")
 	case service.ContentModerationLogResultRiskyShadow:
 		where = append(where, "l.action IN ('first_layer_shadow', 'second_layer_shadow', 'whitelist_shadow') AND COALESCE(BTRIM(l.highest_category), '') <> ''")
 	case service.ContentModerationLogResultReviewFailure:

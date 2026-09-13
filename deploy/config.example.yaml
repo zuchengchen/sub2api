@@ -897,6 +897,8 @@ content_moderation_archive:
   # 单实例持久队列目录，必须归服务账号所有、权限 0700，且不得被多进程共享。
   retry_dir: "/var/lib/sub2api/content-moderation/retry"
   emergency_dir: "/var/lib/sub2api/content-moderation/emergency"
+  # Plaintext conversation JSON for cyber_policy and usage_policy hits.
+  conversation_dir: "/var/lib/sub2api/content-moderation/conversations"
   chunk_bytes: 1048576
   disk_min_free_bytes: 536870912
   retry_initial_seconds: 1

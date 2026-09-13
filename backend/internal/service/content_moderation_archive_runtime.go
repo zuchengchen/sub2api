@@ -21,13 +21,14 @@ import (
 )
 
 const (
-	contentModerationArchiveLockFile   = ".sub2api.lock"
-	contentModerationRetrySuffix       = ".retry.json"
-	contentModerationEmergencySuffix   = ".emergency.json"
-	contentModerationDispositionSuffix = ".disposition.json"
-	contentModerationLostSummarySuffix = ".lost-summary.json"
-	contentModerationDispositionCyber  = "cyber_policy"
-	contentModerationDispositionLocal  = "local_auto_ban"
+	contentModerationArchiveLockFile    = ".sub2api.lock"
+	contentModerationRetrySuffix        = ".retry.json"
+	contentModerationEmergencySuffix    = ".emergency.json"
+	contentModerationDispositionSuffix  = ".disposition.json"
+	contentModerationLostSummarySuffix  = ".lost-summary.json"
+	contentModerationConversationSuffix = ".json"
+	contentModerationDispositionCyber   = "cyber_policy"
+	contentModerationDispositionLocal   = "local_auto_ban"
 )
 
 var ErrContentModerationArchiveDirectoryLocked = errors.New("content moderation archive directory is already locked")
@@ -36,6 +37,7 @@ type ContentModerationArchiveRuntimeOptions struct {
 	KeyRingPath      string
 	RetryDir         string
 	EmergencyDir     string
+	ConversationDir  string
 	ChunkBytes       int
 	DiskMinFreeBytes int64
 	RetryInitial     time.Duration
@@ -143,8 +145,12 @@ func newContentModerationArchiveRuntime(repo ContentModerationArchiveRepository,
 	}
 	options.RetryDir = strings.TrimSpace(options.RetryDir)
 	options.EmergencyDir = strings.TrimSpace(options.EmergencyDir)
+	options.ConversationDir = strings.TrimSpace(options.ConversationDir)
 	if options.RetryDir == "" || options.EmergencyDir == "" {
 		return nil, errors.New("content moderation retry and emergency directories are required")
+	}
+	if options.ConversationDir == "" {
+		options.ConversationDir = filepath.Join(filepath.Dir(options.RetryDir), "conversations")
 	}
 	if options.RetryInitial <= 0 {
 		options.RetryInitial = time.Second
@@ -155,7 +161,7 @@ func newContentModerationArchiveRuntime(repo ContentModerationArchiveRepository,
 	if options.RetryMax < options.RetryInitial {
 		options.RetryMax = options.RetryInitial
 	}
-	for _, dir := range []string{options.RetryDir, options.EmergencyDir} {
+	for _, dir := range []string{options.RetryDir, options.EmergencyDir, options.ConversationDir} {
 		if err := ensurePrivateModerationDirectory(dir); err != nil {
 			return nil, err
 		}
@@ -180,9 +186,6 @@ func newContentModerationArchiveRuntime(repo ContentModerationArchiveRepository,
 	}
 	runtime.cipher = NewContentModerationArchiveCipher(runtime.keyRing, options.ChunkBytes)
 	runtime.refreshDepths()
-	if _, _, err := runtime.keyRing.Current(); err != nil {
-		runtime.degraded.Store(true)
-	}
 	go runtime.loop()
 	return runtime, nil
 }
@@ -316,6 +319,7 @@ func (r *contentModerationArchiveRuntime) RemoveLocalCopies(archiveID string) er
 		filepath.Join(r.options.RetryDir, name+contentModerationDispositionSuffix),
 		filepath.Join(r.options.RetryDir, name+contentModerationLostSummarySuffix),
 		filepath.Join(r.options.EmergencyDir, name+contentModerationEmergencySuffix),
+		filepath.Join(r.options.ConversationDir, name+contentModerationConversationSuffix),
 	}
 	var removeErrs []error
 	for _, path := range paths {
@@ -339,15 +343,53 @@ func (r *contentModerationArchiveRuntime) storeWithArchiveID(ctx context.Context
 	if archiveID == "" {
 		return errors.New("content moderation archive ID is required")
 	}
-	archive, err := r.cipher.Encrypt(archiveID, envelope)
-	if err != nil {
-		r.degraded.Store(true)
-		return r.writeEmergency(log, archiveID, envelope, err)
+	archive := WrapPlaintextModerationArchive(archiveID, envelope, r.options.ChunkBytes)
+	if err := r.writeConversationFile(archiveID, envelope); err != nil {
+		slog.Warn("content_moderation.conversation_file_write_failed", "archive_id", archiveID, "error", err)
 	}
 	r.degraded.Store(false)
 	applyContentModerationArchiveMetadata(log, archive)
 	if err := r.repo.CreateLogWithArchive(ctx, log, archive); err != nil {
 		return r.writeEncryptedRetry(log, archive, err)
+	}
+	return nil
+}
+
+func (r *contentModerationArchiveRuntime) writeConversationFile(archiveID string, envelope []byte) error {
+	if r == nil || strings.TrimSpace(r.options.ConversationDir) == "" {
+		return errors.New("content moderation conversation directory is unavailable")
+	}
+	if err := ensurePrivateModerationDirectory(r.options.ConversationDir); err != nil {
+		return err
+	}
+	path := filepath.Join(r.options.ConversationDir, archiveID+contentModerationConversationSuffix)
+	file, err := os.CreateTemp(r.options.ConversationDir, ".conversation-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := file.Name()
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if _, err := file.Write(envelope); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
 	}
 	return nil
 }
@@ -467,12 +509,7 @@ func (r *contentModerationArchiveRuntime) loop() {
 }
 
 func (r *contentModerationArchiveRuntime) processOnce(ctx context.Context) {
-	if _, _, err := r.keyRing.Current(); err != nil {
-		r.degraded.Store(true)
-	} else {
-		r.degraded.Store(false)
-		r.processEmergency(ctx)
-	}
+	r.processEmergency(ctx)
 	r.processEncryptedRetries(ctx)
 	r.processLostSummaryRetries(ctx)
 	r.processDispositionRetries(ctx)
@@ -490,12 +527,12 @@ func (r *contentModerationArchiveRuntime) processEmergency(ctx context.Context) 
 		plaintext, err := base64.StdEncoding.DecodeString(entry.EnvelopeB64)
 		if err == nil {
 			archiveID := strings.TrimSuffix(filepath.Base(path), contentModerationEmergencySuffix)
-			var archive *ContentModerationEncryptedArchive
-			archive, err = r.cipher.Encrypt(archiveID, plaintext)
-			if err == nil {
-				entry.Log.ArchiveStatus = ContentModerationArchiveStatusAvailable
-				err = r.repo.CreateLogWithArchive(ctx, &entry.Log, archive)
+			archive := WrapPlaintextModerationArchive(archiveID, plaintext, r.options.ChunkBytes)
+			if writeErr := r.writeConversationFile(archiveID, plaintext); writeErr != nil {
+				slog.Warn("content_moderation.conversation_file_write_failed", "archive_id", archiveID, "error", writeErr)
 			}
+			entry.Log.ArchiveStatus = ContentModerationArchiveStatusAvailable
+			err = r.repo.CreateLogWithArchive(ctx, &entry.Log, archive)
 		}
 		r.archiveRetryAttempts.Add(1)
 		if err == nil {
