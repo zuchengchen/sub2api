@@ -118,7 +118,9 @@ func TestUsagePolicyObserveDisablesAPIKey(t *testing.T) {
 	keyID := int64(88)
 	repo := &usagePolicyRepoStub{insertedID: 9, inserted: true, count: 1, disabled: true, credential: "sk-test"}
 	cache := &usagePolicyAuthCacheStub{}
+	archiver := &usagePolicyArchiverStub{}
 	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), cache)
+	svc.SetConversationArchiver(archiver)
 
 	msg := "Invalid prompt: your prompt was flagged as potentially violating our usage policy."
 	svc.ObserveErrorLogs(context.Background(), []*OpsInsertErrorLogInput{{
@@ -127,12 +129,17 @@ func TestUsagePolicyObserveDisablesAPIKey(t *testing.T) {
 		RequestID:            "req-1",
 		ErrorMessage:         "Upstream service temporarily unavailable",
 		UpstreamErrorMessage: &msg,
+		ConversationInput: &ContentModerationCheckInput{
+			RawRequest: ContentModerationRawRequest{Body: []byte(`{"input":"hi"}`)},
+		},
 	}})
 
 	require.True(t, repo.disposition.autoBanned)
 	require.Equal(t, int64(88), repo.lastKeyID)
 	require.Equal(t, "sk-test", cache.key)
 	require.Equal(t, "", repo.disposition.skipReason)
+	require.Len(t, archiver.calls, 1)
+	require.Equal(t, []byte(`{"input":"hi"}`), archiver.calls[0].RawRequest.Body)
 }
 
 func TestUsagePolicyObserveDisablesAdminAPIKey(t *testing.T) {

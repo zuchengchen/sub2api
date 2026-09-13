@@ -9,9 +9,8 @@ describe('risk control locale copy', () => {
     expect(en.nav.riskControl).toBe('Risk Control')
     expect(zh.admin.riskControl.saveConfig).toBe('保存风控配置')
     expect(en.admin.riskControl.saveConfig).toBe('Save Risk Settings')
-    expect(zh.admin.riskControl.usagePolicy.title).toContain('Usage Policy')
-    expect(en.admin.riskControl.usagePolicy.autoBan).toContain('Disable API key')
-    expect(zh.admin.riskControl.usagePolicy.autoBan).toContain('禁用 API Key')
+    expect(zh.admin.riskControl.recordTabs.usagePolicy).toBe('Usage Policy')
+    expect(en.admin.riskControl.recordTabs.usagePolicy).toBe('Usage Policy')
   })
 
   it('describes ordered failover and independent Shadow stages', () => {

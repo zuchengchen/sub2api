@@ -122,6 +122,11 @@ type OpsInsertErrorLogInput struct {
 	// 有效(未删除)key 报错时快照的 key 脱敏前缀(前 8 位)。
 	// 落库快照而非读时 JOIN:key 之后被删(key 列被 tombstone 覆盖)仍保留当时前缀。
 	APIKeyPrefix string
+
+	// ConversationInput is request-local and never persisted to ops_error_logs.
+	// It carries the original request snapshot so usage-policy hits can archive
+	// the conversation the same way cyber_policy does.
+	ConversationInput *ContentModerationCheckInput
 }
 
 type OpsInsertSystemMetricsInput struct {
