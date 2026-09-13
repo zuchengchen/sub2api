@@ -11,6 +11,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWrapPlaintextModerationArchiveRoundTrip(t *testing.T) {
+	t.Parallel()
+	plaintext := []byte(`{"archive_id":"a1","request":{"body":"hello"}}`)
+	archive := WrapPlaintextModerationArchive("a1", plaintext, 8)
+	require.Equal(t, ContentModerationArchivePlaintextKeyID, archive.KeyID)
+	require.Greater(t, len(archive.Chunks), 1)
+
+	got, err := decryptPlaintextModerationArchive(archive)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, got)
+
+	cipher := &ContentModerationArchiveCipher{}
+	got, err = cipher.Decrypt(archive)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, got)
+}
+
 func TestContentModerationArchiveCipherRoundTripAndIntegrity(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "keyring.json")

@@ -49,11 +49,13 @@ const (
 	ContentModerationActionDegradedAllow            = "degraded_allow"
 	ContentModerationActionError                    = "error"
 	ContentModerationActionCyberPolicy              = "cyber_policy" // cyber_policy 硬阻断的风控日志 action（封号计数排除按此值过滤）
+	ContentModerationActionUsagePolicy              = "usage_policy" // OpenAI usage policy 拒绝的风控日志 action
 
 	ContentModerationLogResultBlocked                  = "blocked"         // legacy alias for violation_blocked
 	ContentModerationLogResultContentBlocked           = "content_blocked" // legacy alias for violation_blocked
 	ContentModerationLogResultViolationBlocked         = "violation_blocked"
 	ContentModerationLogResultCyberPolicy              = "cyber_policy"
+	ContentModerationLogResultUsagePolicy              = "usage_policy"
 	ContentModerationLogResultRestricted               = "restricted"
 	ContentModerationLogResultRiskyShadow              = "risky_shadow"
 	ContentModerationLogResultReviewFailure            = "review_unavailable"
@@ -1288,6 +1290,7 @@ func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentM
 	case ContentModerationLogResultBlocked, ContentModerationLogResultContentBlocked:
 		filter.Result = ContentModerationLogResultViolationBlocked
 	case ContentModerationLogResultCyberPolicy,
+		ContentModerationLogResultUsagePolicy,
 		ContentModerationLogResultViolationBlocked,
 		ContentModerationLogResultRestricted,
 		ContentModerationLogResultRiskyShadow,
@@ -3314,6 +3317,61 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		if err := s.archiveRuntime.QueueCyberDispositionRetry(in, log, dispositionErr == nil, cfg.EmailOnHit && s.emailService != nil, emailRequired, emailCompletionRequired, log.EmailSent, cause); err != nil {
 			slog.Error("content_moderation.cyber_disposition_retry_persist_failed", "user_id", in.UserID, "api_key_id", in.APIKeyID, "error", err)
 		}
+	}
+}
+
+// RecordUsagePolicyConversation stores a plaintext conversation archive for an
+// OpenAI usage-policy refusal. It does not disable users or API keys; that
+// remains UsagePolicyService's job.
+func (s *ContentModerationService) RecordUsagePolicyConversation(ctx context.Context, in CyberPolicyRecordInput) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	var userID *int64
+	if in.UserID > 0 {
+		userID = &in.UserID
+	}
+	var apiKeyID *int64
+	if in.APIKeyID > 0 {
+		apiKeyID = &in.APIKeyID
+	}
+	errBody := strings.TrimSpace(in.UpstreamMessage)
+	if b := strings.TrimSpace(in.UpstreamBody); b != "" {
+		errBody = strings.TrimSpace(errBody + "\n" + b)
+	}
+	log := &ContentModerationLog{
+		RequestID:       in.RequestID,
+		UserID:          userID,
+		UserEmail:       in.UserEmail,
+		APIKeyID:        apiKeyID,
+		APIKeyName:      in.APIKeyName,
+		GroupID:         cloneInt64Ptr(in.GroupID),
+		GroupName:       in.GroupName,
+		Endpoint:        in.Endpoint,
+		Provider:        "openai",
+		Model:           in.Model,
+		Mode:            "post_upstream",
+		Action:          ContentModerationActionUsagePolicy,
+		Flagged:         true,
+		HighestCategory: "usage_policy",
+		HighestScore:    1.0,
+		Error:           trimRunes(redactContentModerationSecrets(errBody), maxModerationErrorRunes),
+		CreatedAt:       time.Now(),
+		Protocol:        in.Protocol,
+		Transport:       defaultContentModerationString(in.RawRequest.Transport, "http"),
+		RequestStage:    defaultContentModerationString(in.RawRequest.Stage, "http"),
+		RequestTarget:   in.RawRequest.Target,
+		ArchiveStatus:   ContentModerationArchiveStatusNone,
+	}
+	if s.archiveRuntime != nil {
+		checkInput := ContentModerationCheckInput{RawRequest: in.RawRequest}
+		if err := s.persistContentModerationArchive(ctx, log, checkInput); err != nil {
+			slog.Warn("content_moderation.usage_policy_archive_failed", "user_id", in.UserID, "error", err)
+		}
+		return
+	}
+	if err := s.repo.CreateLog(ctx, log); err != nil {
+		slog.Warn("content_moderation.usage_policy_create_log_failed", "user_id", in.UserID, "error", err)
 	}
 }
 

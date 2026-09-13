@@ -411,6 +411,7 @@ export default {
       recordsHint: '按类别查看 Cyber Policy、风控拦截、影子模型风险和复审异常记录。',
       recordTabs: {
         cyberPolicy: 'Cyber Policy',
+        usagePolicy: 'Usage Policy',
         violationBlocked: '违规拦截',
         restricted: '策略阻断（非违规）',
         riskyShadow: 'Shadow 风险',
