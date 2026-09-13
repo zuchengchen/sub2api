@@ -229,7 +229,32 @@ export default {
 
     riskControl: {
       title: 'Risk Control',
-      description: 'Manage reviewers, keyword policy, and audit records',
+      description: 'Manage reviewers, keyword policy, upstream usage-policy flags, and audit records',
+      usagePolicy: {
+        title: 'Upstream Usage Policy',
+        summary:
+          'Count OpenAI usage-policy refusals and disable the user as soon as they trigger one. Admin accounts are never auto-disabled.',
+        enabled: 'Enable counting and enforcement',
+        autoBan: 'Disable user on trigger',
+        autoBanHint:
+          'When the threshold is reached, set the user to disabled and invalidate auth cache. Default is one hit.',
+        banThreshold: 'Ban threshold',
+        total: 'Violations',
+        uniqueUsers: 'Users',
+        disabledUsers: 'Disabled users',
+        autoBannedUsers: 'Auto-banned',
+        empty: 'No usage-policy violations recorded.',
+        user: 'User',
+        count: 'Count',
+        lastAt: 'Last seen',
+        status: 'Status',
+        statusActive: 'Active',
+        statusDisabled: 'Disabled',
+        autoBanned: 'Auto-banned',
+        skippedAdmin: 'Admin, ban skipped',
+        loadFailed: 'Failed to load usage-policy stats',
+        saveFailed: 'Failed to save usage-policy settings',
+      },
       loadFailed: 'Failed to load risk control',
       saveFailed: 'Failed to save risk control settings',
       logsFailed: 'Failed to load audit records',

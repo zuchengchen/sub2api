@@ -100,6 +100,7 @@ var ProviderSet = wire.NewSet(
 	NewChannelMonitorV2Repository,
 	NewChannelMonitorRequestTemplateRepository,
 	NewContentModerationRepository,
+	NewUsagePolicyRepository,
 	NewAffiliateRepository,
 	NewUserPlatformQuotaRepository,     // T14: user × platform quota
 	NewUserPlatformQuotaServiceAdapter, // T14: adapter → service.UserPlatformQuotaRepository

@@ -695,6 +695,20 @@ func ProvideOpsService(
 
 // ProvideOpsIngressRejectAggregator starts the bounded security aggregation
 // runtime and attaches it to OpsService, which is the middleware recorder.
+func ProvideUsagePolicyService(
+	repo UsagePolicyRepository,
+	settingRepo SettingRepository,
+	userRepo UserRepository,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	opsService *OpsService,
+) *UsagePolicyService {
+	svc := NewUsagePolicyService(repo, settingRepo, userRepo, authCacheInvalidator)
+	if opsService != nil {
+		opsService.SetUsagePolicyObserver(svc)
+	}
+	return svc
+}
+
 func ProvideOpsIngressRejectAggregator(opsRepo OpsRepository, opsService *OpsService) *OpsIngressRejectAggregator {
 	repo, ok := opsRepo.(OpsIngressRejectRepository)
 	if !ok {
@@ -913,6 +927,7 @@ var ProviderSet = wire.NewSet(
 	NewModelPricingResolver,
 	NewModelPlazaService,
 	ProvideContentModerationService,
+	ProvideUsagePolicyService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,
 	ProvidePaymentService,

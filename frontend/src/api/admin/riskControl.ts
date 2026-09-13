@@ -448,6 +448,53 @@ export async function unbanUser(userID: number): Promise<ContentModerationUnbanU
   return data
 }
 
+export interface UsagePolicyConfig {
+  enabled: boolean
+  auto_ban_enabled: boolean
+  ban_threshold: number
+}
+
+export interface UpdateUsagePolicyConfig {
+  enabled?: boolean
+  auto_ban_enabled?: boolean
+  ban_threshold?: number
+}
+
+export interface UsagePolicyUserStat {
+  user_id: number
+  email: string
+  username: string
+  role: string
+  status: string
+  count: number
+  auto_banned: boolean
+  last_at: string
+}
+
+export interface UsagePolicyStats {
+  total: number
+  unique_users: number
+  disabled_users: number
+  auto_banned_users: number
+  users: UsagePolicyUserStat[]
+  config?: UsagePolicyConfig
+}
+
+export async function getUsagePolicyConfig(): Promise<UsagePolicyConfig> {
+  const { data } = await apiClient.get<UsagePolicyConfig>('/admin/risk-control/usage-policy')
+  return data
+}
+
+export async function updateUsagePolicyConfig(payload: UpdateUsagePolicyConfig): Promise<UsagePolicyConfig> {
+  const { data } = await apiClient.put<UsagePolicyConfig>('/admin/risk-control/usage-policy', payload)
+  return data
+}
+
+export async function getUsagePolicyStats(): Promise<UsagePolicyStats> {
+  const { data } = await apiClient.get<UsagePolicyStats>('/admin/risk-control/usage-policy/stats')
+  return data
+}
+
 export async function deleteFlaggedHash(inputHash: string): Promise<DeleteFlaggedHashResponse> {
   const { data } = await apiClient.delete<DeleteFlaggedHashResponse>('/admin/risk-control/hashes', {
     data: { input_hash: inputHash },
@@ -472,6 +519,9 @@ export const riskControlAPI = {
   downloadArchive,
   deleteArchive,
   unbanUser,
+  getUsagePolicyConfig,
+  updateUsagePolicyConfig,
+  getUsagePolicyStats,
   deleteFlaggedHash,
   clearFlaggedHashes,
 }
