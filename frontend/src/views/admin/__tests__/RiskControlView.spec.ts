@@ -17,6 +17,9 @@ const {
   getLog,
   testAPIAvailability,
   testDeepSeekChannel,
+  getUsagePolicyConfig,
+  updateUsagePolicyConfig,
+  getUsagePolicyStats,
   getGroups,
   showError,
   showSuccess,
@@ -29,6 +32,9 @@ const {
     getLog: vi.fn(),
     testAPIAvailability: vi.fn(),
     testDeepSeekChannel: vi.fn(),
+    getUsagePolicyConfig: vi.fn(),
+    updateUsagePolicyConfig: vi.fn(),
+    getUsagePolicyStats: vi.fn(),
     getGroups: vi.fn(),
     showError: vi.fn(),
     showSuccess: vi.fn(),
@@ -44,6 +50,9 @@ vi.mock('@/api/admin', () => ({
       getLog,
       testAPIAvailability,
       testDeepSeekChannel,
+      getUsagePolicyConfig,
+      updateUsagePolicyConfig,
+      getUsagePolicyStats,
     },
     groups: { getAll: getGroups },
   },
@@ -264,6 +273,9 @@ describe('admin RiskControlView', () => {
     getLog.mockReset()
     testAPIAvailability.mockReset()
     testDeepSeekChannel.mockReset()
+    getUsagePolicyConfig.mockReset()
+    updateUsagePolicyConfig.mockReset()
+    getUsagePolicyStats.mockReset()
     getGroups.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
@@ -287,6 +299,62 @@ describe('admin RiskControlView', () => {
       checked_at: '2026-08-17T01:02:00Z',
     })
     getGroups.mockResolvedValue([])
+    getUsagePolicyConfig.mockResolvedValue({ enabled: true, auto_ban_enabled: true, ban_threshold: 1 })
+    updateUsagePolicyConfig.mockImplementation(async (payload) => ({
+      enabled: payload.enabled ?? true,
+      auto_ban_enabled: payload.auto_ban_enabled ?? true,
+      ban_threshold: payload.ban_threshold ?? 1,
+    }))
+    getUsagePolicyStats.mockResolvedValue({
+      total: 3,
+      unique_users: 2,
+      disabled_users: 1,
+      auto_banned_users: 1,
+      users: [
+        {
+          user_id: 9,
+          email: 'hit@example.com',
+          username: 'flagged',
+          role: 'user',
+          status: 'disabled',
+          count: 2,
+          auto_banned: true,
+          last_at: '2026-09-13T05:00:00Z',
+        },
+        {
+          user_id: 1,
+          email: 'admin@example.com',
+          username: 'admin',
+          role: 'admin',
+          status: 'active',
+          count: 1,
+          auto_banned: false,
+          last_at: '2026-09-13T04:00:00Z',
+        },
+      ],
+    })
+  })
+
+  it('shows upstream usage-policy stats and saves auto-ban settings', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="usage-policy-section"]').text()).toContain('admin.riskControl.usagePolicy.title')
+    expect(wrapper.get('[data-test="usage-policy-stats"]').text()).toContain('3')
+    expect(wrapper.get('[data-test="usage-policy-user-9"]').text()).toContain('flagged')
+    expect(wrapper.get('[data-test="usage-policy-enabled"]').attributes('aria-checked')).toBe('true')
+
+    await wrapper.get('[data-test="usage-policy-auto-ban"]').trigger('click')
+    await wrapper.get('[data-test="usage-policy-ban-threshold"]').setValue('2')
+    await wrapper.get('[data-test="save-risk-control"]').trigger('click')
+    await flushPromises()
+
+    expect(updateUsagePolicyConfig).toHaveBeenCalledWith({
+      enabled: true,
+      auto_ban_enabled: false,
+      ban_threshold: 2,
+    })
+    wrapper.unmount()
   })
 
   it('renders DeepSeek as the default risk reviewer', async () => {
