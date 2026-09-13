@@ -218,16 +218,26 @@ func grokCredentialAcquisitionContext(ctx context.Context, c *gin.Context) (cont
 	if c == nil {
 		return ctx, nil, false
 	}
-	deadline := time.Time{}
+	// Per-attempt budget. A request-wide deadline would include the previous
+	// account's upstream header wait, so a 60s http2 timeout made the next
+	// account look like "no healthy Grok OAuth account". Tests may still pin
+	// grokCredentialFailoverDeadlineKey to a shorter or already-expired time.
+	deadline := time.Now().Add(grokCredentialFailoverBudget)
 	if raw, ok := c.Get(grokCredentialFailoverDeadlineKey); ok {
-		deadline, _ = raw.(time.Time)
+		if stored, _ := raw.(time.Time); !stored.IsZero() {
+			if !time.Now().Before(stored) {
+				return ctx, nil, true
+			}
+			if stored.Before(deadline) {
+				deadline = stored
+			}
+		}
 	}
-	if deadline.IsZero() {
-		deadline = time.Now().Add(grokCredentialFailoverBudget)
-		c.Set(grokCredentialFailoverDeadlineKey, deadline)
-	}
-	if !time.Now().Before(deadline) {
-		return ctx, nil, true
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+		if !time.Now().Before(deadline) {
+			return ctx, nil, true
+		}
 	}
 	acquireCtx, cancel := context.WithDeadline(ctx, deadline)
 	return acquireCtx, cancel, false
