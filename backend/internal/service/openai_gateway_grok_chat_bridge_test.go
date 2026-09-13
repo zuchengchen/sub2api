@@ -175,9 +175,14 @@ func TestGrokChatResponsesBridgeEligibility(t *testing.T) {
 			reason: "invalid_parallel_tool_calls",
 		},
 		{
-			name:   "reasoning effort falls back because conversion adds summary",
-			body:   `{"model":"grok","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high"}`,
-			reason: "unsupported_reasoning_effort",
+			name: "reasoning effort is bridgeable",
+			body: `{"model":"grok","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high"}`,
+			want: true,
+		},
+		{
+			name:   "empty reasoning effort falls back",
+			body:   `{"model":"grok","messages":[{"role":"user","content":"hi"}],"reasoning_effort":""}`,
+			reason: "invalid_reasoning_effort",
 		},
 		{
 			name:   "both token limits fall back",
@@ -224,6 +229,10 @@ func TestGrokChatResponsesRuntimeEligibility(t *testing.T) {
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.5-build-free", "isolated-id"))
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.5", ""))
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.6", ""))
+	require.True(t, grokChatOAuthMustUseResponses("grok-4.6"))
+	require.True(t, grokChatOAuthMustUseResponses("grok-4.6-latest"))
+	require.False(t, grokChatOAuthMustUseResponses("grok-4.5"))
+	require.False(t, grokChatOAuthMustUseResponses("grok-4.3"))
 }
 
 func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.T) {
@@ -527,7 +536,7 @@ func TestForwardGrokChatRuntimeGateFallsBackToRaw(t *testing.T) {
 		mappedModel  string
 		wantUpstream string
 	}{
-		{name: "missing cache identity", wantUpstream: "grok-4.6"},
+		{name: "missing cache identity stays raw for grok-4.5", mappedModel: "grok-4.5", wantUpstream: "grok-4.5"},
 		{name: "non cache capable mapped model", setAPIKey: true, mappedModel: "grok-4.3", wantUpstream: "grok-4.3"},
 	}
 
@@ -571,6 +580,31 @@ func TestForwardGrokChatRuntimeGateFallsBackToRaw(t *testing.T) {
 			require.Equal(t, "raw ok", gjson.Get(recorder.Body.String(), "choices.0.message.content").String())
 		})
 	}
+}
+
+func TestForwardGrokChatGrok46WithoutCacheIdentityUsesResponses(t *testing.T) {
+	body := []byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"hi"}],"stream":false,"reasoning_effort":"high"}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
+
+	account := grokChatBridgeTestAccount(74)
+	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	upstream := &httpUpstreamRecorder{resp: grokChatBridgeCompletedResponse("resp_grok_46_no_cache", 0)}
+	svc := &OpenAIGatewayService{
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(repo, nil),
+		accountRepo:       repo,
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
+	require.Equal(t, grokChatResponsesEndpoint, result.UpstreamEndpoint)
+	require.Equal(t, "high", gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
 }
 
 func TestForwardGrokChatViaResponses429UsesGrokRateLimitPolicy(t *testing.T) {

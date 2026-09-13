@@ -926,7 +926,7 @@ func TestBuildGrokResponsesRequestAllowsPublicAPIKeyBaseURLByDefault(t *testing.
 	require.NotEqual(t, defaultGrokUpstreamUserAgent(), req.Header.Get("User-Agent"))
 }
 
-func TestBuildGrokResponsesRequestHonorsOAuthOfficialEndpointSwitch(t *testing.T) {
+func TestBuildGrokResponsesRequestRedirectsLegacyOAuthOfficialAPIDefaultToCLI(t *testing.T) {
 	t.Parallel()
 
 	account := &Account{
@@ -939,7 +939,7 @@ func TestBuildGrokResponsesRequestHonorsOAuthOfficialEndpointSwitch(t *testing.T
 
 	req, err := buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "access-token", "", nil)
 	require.NoError(t, err)
-	require.Equal(t, xai.DefaultBaseURL+"/responses", req.URL.String())
+	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", req.URL.String())
 }
 
 func TestBuildGrokResponsesRequestAppliesHeaderOverridesLast(t *testing.T) {

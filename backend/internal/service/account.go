@@ -1452,7 +1452,9 @@ func (a *Account) GetOpenAIRefreshToken() string {
 //
 // The stored base_url only rewrites forwarding endpoints. Credential lifecycle
 // traffic (OAuth authorization and token refresh) always uses the official
-// auth endpoints regardless of this value.
+// auth endpoints regardless of this value. Grok OAuth accounts that still
+// store the old https://api.x.ai/v1 default are sent to the CLI subscription
+// proxy; regional hosts and custom relays are unchanged.
 func (a *Account) GetGrokBaseURL() string {
 	if a == nil || !a.IsGrok() {
 		return ""
@@ -1485,6 +1487,13 @@ func (a *Account) GetGrokBaseURLOr(defaultBaseURL string) string {
 	if !a.IsGrokOAuth() {
 		return baseURL
 	}
+	// Older OAuth imports stored the official credit API as the default
+	// inference host. Subscription text traffic belongs on the CLI proxy;
+	// GetGrokMediaBaseURL still sends media to api.x.ai when text resolves
+	// to CLI. Regional hosts and custom relays stay pinned.
+	if isLegacyGrokOAuthOfficialAPIDefault(baseURL) {
+		return defaultBaseURL
+	}
 	// Explicit regional/API or custom values remain pinned. Custom endpoints are checked by the
 	// operator URL policy at the request builder, which has access to config.
 	if validated, err := xai.ValidateTrustedBaseURL(baseURL); err == nil {
@@ -1495,6 +1504,14 @@ func (a *Account) GetGrokBaseURLOr(defaultBaseURL string) string {
 		return strings.TrimRight(baseURL, "/")
 	}
 	return defaultBaseURL
+}
+
+func isLegacyGrokOAuthOfficialAPIDefault(raw string) bool {
+	validated, err := xai.ValidateTrustedBaseURL(raw)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(validated, strings.TrimRight(xai.DefaultBaseURL, "/"))
 }
 
 // GetGrokMediaBaseURL selects the upstream used by Grok Imagine APIs.

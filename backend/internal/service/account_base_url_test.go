@@ -69,7 +69,7 @@ func TestGetGrokBaseURLUsesSubscriptionProxyForOAuth(t *testing.T) {
 			expected: xai.DefaultCLIBaseURL,
 		},
 		{
-			name: "oauth stored official API endpoint is honored (manual endpoint switch)",
+			name: "oauth stored official API default is redirected to CLI subscription proxy",
 			account: Account{
 				Type:     AccountTypeOAuth,
 				Platform: PlatformGrok,
@@ -77,7 +77,18 @@ func TestGetGrokBaseURLUsesSubscriptionProxyForOAuth(t *testing.T) {
 					"base_url": xai.DefaultBaseURL,
 				},
 			},
-			expected: xai.DefaultBaseURL,
+			expected: xai.DefaultCLIBaseURL,
+		},
+		{
+			name: "oauth stored official API host without path is redirected to CLI subscription proxy",
+			account: Account{
+				Type:     AccountTypeOAuth,
+				Platform: PlatformGrok,
+				Credentials: map[string]any{
+					"base_url": "https://api.x.ai",
+				},
+			},
+			expected: xai.DefaultCLIBaseURL,
 		},
 		{
 			name: "oauth stored regional API endpoint is honored",
@@ -214,7 +225,7 @@ func TestGetGrokMediaBaseURLRedirectsCLIGatewayToOfficialAPI(t *testing.T) {
 			expected: xai.DefaultBaseURL,
 		},
 		{
-			name: "oauth stored official API endpoint is honored (manual endpoint switch)",
+			name: "oauth stored official API default still uses official media API",
 			account: Account{
 				Type:     AccountTypeOAuth,
 				Platform: PlatformGrok,

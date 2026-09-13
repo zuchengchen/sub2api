@@ -96,7 +96,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	if account.Platform == PlatformGrok {
 		if account.IsGrokOAuth() {
-			if eligible, reason := grokChatResponsesBridgeEligibility(body); eligible {
+			requestedModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+			mappedModel := account.GetMappedModel(requestedModel)
+			mustUseResponses := grokChatOAuthMustUseResponses(requestedModel) ||
+				grokChatOAuthMustUseResponses(mappedModel) ||
+				grokChatOAuthMustUseResponses(defaultMappedModel)
+			if eligible, reason := grokChatResponsesBridgeEligibility(body); eligible || mustUseResponses {
 				return s.forwardGrokChatCompletionsViaResponses(ctx, c, account, body, promptCacheKey, defaultMappedModel)
 			} else {
 				logger.L().Debug("grok chat_completions: using raw fallback",
