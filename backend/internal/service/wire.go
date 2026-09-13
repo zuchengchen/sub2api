@@ -700,8 +700,10 @@ func ProvideUsagePolicyService(
 	settingRepo SettingRepository,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	opsService *OpsService,
+	moderation *ContentModerationService,
 ) *UsagePolicyService {
 	svc := NewUsagePolicyService(repo, settingRepo, authCacheInvalidator)
+	svc.SetConversationArchiver(moderation)
 	if opsService != nil {
 		opsService.SetUsagePolicyObserver(svc)
 	}
@@ -810,6 +812,7 @@ func ProvideContentModerationService(
 		KeyRingPath:      archiveCfg.KeyRingPath,
 		RetryDir:         archiveCfg.RetryDir,
 		EmergencyDir:     archiveCfg.EmergencyDir,
+		ConversationDir:  archiveCfg.ConversationDir,
 		ChunkBytes:       archiveCfg.ChunkBytes,
 		DiskMinFreeBytes: archiveCfg.DiskMinFreeBytes,
 		RetryInitial:     time.Duration(archiveCfg.RetryInitialSeconds) * time.Second,

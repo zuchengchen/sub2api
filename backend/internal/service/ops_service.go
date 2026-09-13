@@ -114,6 +114,7 @@ func (s *OpsService) SetOpenAIQuotaAutoPauseSettingsSink(sink func(OpsOpenAIAcco
 
 type UsagePolicyObserver interface {
 	ObserveErrorLogs(ctx context.Context, entries []*OpsInsertErrorLogInput)
+	ArchiveConversation(ctx context.Context, entry *OpsInsertErrorLogInput, input ContentModerationCheckInput)
 }
 
 func (s *OpsService) SetUsagePolicyObserver(observer UsagePolicyObserver) {
@@ -128,6 +129,13 @@ func (s *OpsService) notifyUsagePolicy(ctx context.Context, entries []*OpsInsert
 		return
 	}
 	s.usagePolicyObserver.ObserveErrorLogs(ctx, entries)
+}
+
+func (s *OpsService) ArchiveUsagePolicyConversation(ctx context.Context, entry *OpsInsertErrorLogInput, input ContentModerationCheckInput) {
+	if s == nil || s.usagePolicyObserver == nil || entry == nil {
+		return
+	}
+	s.usagePolicyObserver.ArchiveConversation(ctx, entry, input)
 }
 
 func NewOpsService(

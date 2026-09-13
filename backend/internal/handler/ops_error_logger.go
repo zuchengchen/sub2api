@@ -208,6 +208,19 @@ func flushOpsErrorLogBatch(batch []opsErrorLogJob) {
 	opsErrorLogProcessed.Add(processed)
 }
 
+func persistUsagePolicyConversationFromContext(c *gin.Context, ops *service.OpsService, entry *service.OpsInsertErrorLogInput) {
+	if c == nil || ops == nil || entry == nil || !service.IsUsagePolicyViolation(entry) {
+		return
+	}
+	input, ok := currentContentModerationInput(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ops.ArchiveUsagePolicyConversation(ctx, entry, input)
+}
+
 func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLogInput) {
 	if ops == nil || entry == nil {
 		return
@@ -1269,6 +1282,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			entry.ClientIP = &clientIP
 		}
 
+		persistUsagePolicyConversationFromContext(c, ops, entry)
 		enqueueOpsErrorLog(ops, entry)
 	}
 }
@@ -1385,6 +1399,7 @@ func logOpsRecoveredUpstream(c *gin.Context, ops *service.OpsService, finalStatu
 		entry.ClientIP = &clientIP
 	}
 	applyOpsLatencyFieldsFromContext(c, entry)
+	persistUsagePolicyConversationFromContext(c, ops, entry)
 	enqueueOpsErrorLog(ops, entry)
 }
 
@@ -1553,6 +1568,7 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		entry.ClientIP = &clientIP
 	}
 
+	persistUsagePolicyConversationFromContext(c, ops, entry)
 	enqueueOpsErrorLog(ops, entry)
 }
 

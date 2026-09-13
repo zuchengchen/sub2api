@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	ContentModerationArchiveVersion    = 1
-	defaultModerationArchiveChunkBytes = 1 << 20
+	ContentModerationArchiveVersion        = 1
+	ContentModerationArchivePlaintextKeyID = "plaintext"
+	defaultModerationArchiveChunkBytes     = 1 << 20
 )
 
 var (
@@ -272,7 +273,63 @@ func (c *ContentModerationArchiveCipher) Encrypt(archiveID string, plaintext []b
 	return archive, nil
 }
 
+func WrapPlaintextModerationArchive(archiveID string, plaintext []byte, chunkSize int) *ContentModerationEncryptedArchive {
+	archiveID = strings.TrimSpace(archiveID)
+	if chunkSize <= 0 {
+		chunkSize = defaultModerationArchiveChunkBytes
+	}
+	total := (len(plaintext) + chunkSize - 1) / chunkSize
+	if total == 0 {
+		total = 1
+	}
+	archive := &ContentModerationEncryptedArchive{
+		ArchiveID:     archiveID,
+		Version:       ContentModerationArchiveVersion,
+		KeyID:         ContentModerationArchivePlaintextKeyID,
+		PlaintextHash: sha256Bytes(plaintext),
+		PlaintextSize: int64(len(plaintext)),
+		Chunks:        make([]ContentModerationArchiveChunk, 0, total),
+	}
+	for index := 0; index < total; index++ {
+		start := index * chunkSize
+		end := start + chunkSize
+		if end > len(plaintext) {
+			end = len(plaintext)
+		}
+		part := append([]byte(nil), plaintext[start:end]...)
+		archive.Chunks = append(archive.Chunks, ContentModerationArchiveChunk{
+			Index: index, Total: total, Ciphertext: part, PlaintextBytes: len(part),
+		})
+	}
+	return archive
+}
+
+func decryptPlaintextModerationArchive(archive *ContentModerationEncryptedArchive) ([]byte, error) {
+	if archive == nil || archive.Version != ContentModerationArchiveVersion || strings.TrimSpace(archive.ArchiveID) == "" {
+		return nil, ErrModerationArchiveIntegrity
+	}
+	if len(archive.Chunks) == 0 {
+		return nil, ErrModerationArchiveIntegrity
+	}
+	total := len(archive.Chunks)
+	var plaintext bytes.Buffer
+	for index, chunk := range archive.Chunks {
+		if chunk.Index != index || chunk.Total != total || chunk.PlaintextBytes != len(chunk.Ciphertext) || chunk.PlaintextBytes < 0 {
+			return nil, ErrModerationArchiveIntegrity
+		}
+		_, _ = plaintext.Write(chunk.Ciphertext)
+	}
+	out := plaintext.Bytes()
+	if int64(len(out)) != archive.PlaintextSize || !bytes.Equal(sha256Bytes(out), archive.PlaintextHash) {
+		return nil, ErrModerationArchiveIntegrity
+	}
+	return append([]byte(nil), out...), nil
+}
+
 func (c *ContentModerationArchiveCipher) Decrypt(archive *ContentModerationEncryptedArchive) ([]byte, error) {
+	if archive != nil && strings.TrimSpace(archive.KeyID) == ContentModerationArchivePlaintextKeyID {
+		return decryptPlaintextModerationArchive(archive)
+	}
 	if c == nil || c.keyRing == nil || archive == nil {
 		return nil, ErrModerationArchiveKeyUnavailable
 	}

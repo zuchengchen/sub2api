@@ -19,7 +19,8 @@ func isSevereContentModerationAction(action string) bool {
 		ContentModerationActionSecondLayerBlock,
 		ContentModerationActionRestrictedBlock,
 		ContentModerationActionCacheBlock,
-		ContentModerationActionCyberPolicy:
+		ContentModerationActionCyberPolicy,
+		ContentModerationActionUsagePolicy:
 		return true
 	default:
 		return false

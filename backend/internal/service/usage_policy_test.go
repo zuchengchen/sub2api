@@ -214,6 +214,37 @@ func TestUsagePolicyUpdateConfig(t *testing.T) {
 	require.Contains(t, settings.values[SettingKeyUsagePolicyConfig], `"enabled":false`)
 }
 
+type usagePolicyArchiverStub struct {
+	calls []CyberPolicyRecordInput
+}
+
+func (s *usagePolicyArchiverStub) RecordUsagePolicyConversation(_ context.Context, in CyberPolicyRecordInput) {
+	s.calls = append(s.calls, in)
+}
+
+func TestUsagePolicyArchiveConversation(t *testing.T) {
+	archiver := &usagePolicyArchiverStub{}
+	svc := NewUsagePolicyService(nil, usagePolicyEnabledSettings(), nil)
+	svc.SetConversationArchiver(archiver)
+	msg := "flagged as potentially violating our usage policy"
+	userID := int64(9)
+	keyID := int64(4)
+	svc.ArchiveConversation(context.Background(), &OpsInsertErrorLogInput{
+		UserID:       &userID,
+		APIKeyID:     &keyID,
+		RequestID:    "req-archive",
+		ErrorMessage: msg,
+		Model:        "gpt-5.6-luna",
+	}, ContentModerationCheckInput{
+		UserEmail:  "a@example.com",
+		RawRequest: ContentModerationRawRequest{Body: []byte(`{"input":"hi"}`)},
+	})
+	require.Len(t, archiver.calls, 1)
+	require.Equal(t, int64(9), archiver.calls[0].UserID)
+	require.Equal(t, int64(4), archiver.calls[0].APIKeyID)
+	require.Equal(t, []byte(`{"input":"hi"}`), archiver.calls[0].RawRequest.Body)
+}
+
 func TestUsagePolicyInsertFailureDoesNotBan(t *testing.T) {
 	userID := int64(9)
 	repo := &usagePolicyRepoStub{insertErr: errors.New("db down"), inserted: true, count: 1, disabled: true}

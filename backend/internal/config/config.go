@@ -111,6 +111,7 @@ type ContentModerationArchiveConfig struct {
 	KeyRingPath         string `mapstructure:"key_ring_path"`
 	RetryDir            string `mapstructure:"retry_dir"`
 	EmergencyDir        string `mapstructure:"emergency_dir"`
+	ConversationDir     string `mapstructure:"conversation_dir"`
 	ChunkBytes          int    `mapstructure:"chunk_bytes"`
 	DiskMinFreeBytes    int64  `mapstructure:"disk_min_free_bytes"`
 	RetryInitialSeconds int    `mapstructure:"retry_initial_seconds"`
@@ -1932,6 +1933,7 @@ func setDefaults() {
 	viper.SetDefault("content_moderation_archive.key_ring_path", "")
 	viper.SetDefault("content_moderation_archive.retry_dir", "./data/content-moderation/retry")
 	viper.SetDefault("content_moderation_archive.emergency_dir", "./data/content-moderation/emergency")
+	viper.SetDefault("content_moderation_archive.conversation_dir", "./data/content-moderation/conversations")
 	viper.SetDefault("content_moderation_archive.chunk_bytes", 1024*1024)
 	viper.SetDefault("content_moderation_archive.disk_min_free_bytes", int64(512*1024*1024))
 	viper.SetDefault("content_moderation_archive.retry_initial_seconds", 1)

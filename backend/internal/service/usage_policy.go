@@ -81,10 +81,15 @@ type UsagePolicyRepository interface {
 	DisableAPIKeyIfActive(ctx context.Context, apiKeyID int64) (credential string, transitioned bool, err error)
 }
 
+type UsagePolicyConversationArchiver interface {
+	RecordUsagePolicyConversation(ctx context.Context, in CyberPolicyRecordInput)
+}
+
 type UsagePolicyService struct {
 	repo                 UsagePolicyRepository
 	settingRepo          SettingRepository
 	authCacheInvalidator APIKeyAuthCacheInvalidator
+	archiver             UsagePolicyConversationArchiver
 }
 
 func NewUsagePolicyService(
@@ -97,6 +102,47 @@ func NewUsagePolicyService(
 		settingRepo:          settingRepo,
 		authCacheInvalidator: authCacheInvalidator,
 	}
+}
+
+func (s *UsagePolicyService) SetConversationArchiver(archiver UsagePolicyConversationArchiver) {
+	if s == nil {
+		return
+	}
+	s.archiver = archiver
+}
+
+func (s *UsagePolicyService) ArchiveConversation(ctx context.Context, entry *OpsInsertErrorLogInput, input ContentModerationCheckInput) {
+	if s == nil || s.archiver == nil || entry == nil || !IsUsagePolicyViolation(entry) {
+		return
+	}
+	in := CyberPolicyRecordInput{
+		RequestID:       entry.RequestID,
+		UserEmail:       input.UserEmail,
+		APIKeyName:      input.APIKeyName,
+		GroupID:         input.GroupID,
+		GroupName:       input.GroupName,
+		Endpoint:        firstNonEmpty(entry.InboundEndpoint, input.Endpoint),
+		Model:           firstNonEmpty(entry.RequestedModel, entry.Model, input.Model),
+		UpstreamMessage: usagePolicyMessage(entry),
+		UpstreamBody:    entry.ErrorBody,
+		Protocol:        input.Protocol,
+		RawRequest:      input.RawRequest,
+		UserRole:        input.UserRole,
+	}
+	if entry.UserID != nil {
+		in.UserID = *entry.UserID
+	} else if input.UserID > 0 {
+		in.UserID = input.UserID
+	}
+	if entry.APIKeyID != nil {
+		in.APIKeyID = *entry.APIKeyID
+	} else if input.APIKeyID > 0 {
+		in.APIKeyID = input.APIKeyID
+	}
+	if entry.UpstreamStatusCode != nil {
+		in.UpstreamStatus = *entry.UpstreamStatusCode
+	}
+	s.archiver.RecordUsagePolicyConversation(ctx, in)
 }
 
 func defaultUsagePolicyConfig() *UsagePolicyConfig {

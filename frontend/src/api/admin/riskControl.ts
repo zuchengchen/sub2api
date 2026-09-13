@@ -313,6 +313,7 @@ export type ContentModerationLogResult =
   | 'pass'
   | 'error'
   | 'cyber_policy'
+  | 'usage_policy'
   | 'content_blocked'
   | 'violation_blocked'
   | 'restricted'
@@ -322,6 +323,7 @@ export type ContentModerationLogResult =
 
 export type ContentModerationLogView =
   | 'cyber_policy'
+  | 'usage_policy'
   | 'violation_blocked'
   | 'restricted'
   | 'risky_shadow'
