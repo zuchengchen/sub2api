@@ -460,12 +460,14 @@ export interface UpdateUsagePolicyConfig {
   ban_threshold?: number
 }
 
-export interface UsagePolicyUserStat {
+export interface UsagePolicyKeyStat {
   user_id: number
   email: string
   username: string
   role: string
-  status: string
+  api_key_id?: number
+  api_key_name: string
+  api_key_status: string
   count: number
   auto_banned: boolean
   last_at: string
@@ -474,9 +476,10 @@ export interface UsagePolicyUserStat {
 export interface UsagePolicyStats {
   total: number
   unique_users: number
-  disabled_users: number
-  auto_banned_users: number
-  users: UsagePolicyUserStat[]
+  unique_keys: number
+  disabled_keys: number
+  auto_banned_keys: number
+  keys: UsagePolicyKeyStat[]
   config?: UsagePolicyConfig
 }
 

@@ -163,18 +163,18 @@
             </div>
             <div class="rounded-lg border border-gray-100 px-3 py-2 dark:border-dark-700">
               <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.riskControl.usagePolicy.disabledUsers') }}
+                {{ t('admin.riskControl.usagePolicy.disabledKeys') }}
               </p>
               <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ usagePolicyStats?.disabled_users ?? 0 }}
+                {{ usagePolicyStats?.disabled_keys ?? 0 }}
               </p>
             </div>
             <div class="rounded-lg border border-gray-100 px-3 py-2 dark:border-dark-700">
               <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.riskControl.usagePolicy.autoBannedUsers') }}
+                {{ t('admin.riskControl.usagePolicy.autoBannedKeys') }}
               </p>
               <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                {{ usagePolicyStats?.auto_banned_users ?? 0 }}
+                {{ usagePolicyStats?.auto_banned_keys ?? 0 }}
               </p>
             </div>
           </div>
@@ -183,20 +183,21 @@
               <thead>
                 <tr class="border-b border-gray-100 text-left text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400">
                   <th class="py-2 pr-3 font-medium">{{ t('admin.riskControl.usagePolicy.user') }}</th>
+                  <th class="py-2 pr-3 font-medium">{{ t('admin.riskControl.usagePolicy.apiKey') }}</th>
                   <th class="py-2 pr-3 font-medium">{{ t('admin.riskControl.usagePolicy.count') }}</th>
                   <th class="py-2 pr-3 font-medium">{{ t('admin.riskControl.usagePolicy.lastAt') }}</th>
                   <th class="py-2 font-medium">{{ t('admin.riskControl.usagePolicy.status') }}</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-if="!usagePolicyUsers.length">
-                  <td colspan="4" class="py-6 text-center text-gray-500 dark:text-gray-400">
+                <tr v-if="!usagePolicyKeys.length">
+                  <td colspan="5" class="py-6 text-center text-gray-500 dark:text-gray-400">
                     {{ t('admin.riskControl.usagePolicy.empty') }}
                   </td>
                 </tr>
                 <tr
-                  v-for="row in usagePolicyUsers"
-                  :key="row.user_id"
+                  v-for="row in usagePolicyKeys"
+                  :key="`${row.user_id}-${row.api_key_id ?? 'none'}`"
                   class="border-b border-gray-50 dark:border-dark-800"
                   :data-test="`usage-policy-user-${row.user_id}`"
                 >
@@ -204,15 +205,19 @@
                     <p class="font-medium text-gray-900 dark:text-white">{{ row.username || row.email || row.user_id }}</p>
                     <p class="text-xs text-gray-500 dark:text-gray-400">#{{ row.user_id }} {{ row.email }}</p>
                   </td>
+                  <td class="py-2 pr-3">
+                    <p class="font-medium text-gray-900 dark:text-white">{{ row.api_key_name || '-' }}</p>
+                    <p v-if="row.api_key_id" class="text-xs text-gray-500 dark:text-gray-400">#{{ row.api_key_id }}</p>
+                  </td>
                   <td class="py-2 pr-3 font-medium text-gray-900 dark:text-white">{{ row.count }}</td>
                   <td class="py-2 pr-3 text-gray-600 dark:text-gray-300">{{ dateOrDash(row.last_at) }}</td>
                   <td class="py-2">
                     <span
                       class="rounded-md px-2 py-0.5 text-xs"
-                      :class="row.status === 'disabled' ? statusClasses.danger : statusClasses.healthy"
+                      :class="row.api_key_status === 'disabled' ? statusClasses.danger : statusClasses.healthy"
                     >
                       {{
-                        row.status === 'disabled'
+                        row.api_key_status === 'disabled'
                           ? t('admin.riskControl.usagePolicy.statusDisabled')
                           : t('admin.riskControl.usagePolicy.statusActive')
                       }}
@@ -222,12 +227,6 @@
                       class="ml-1 rounded-md bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300"
                     >
                       {{ t('admin.riskControl.usagePolicy.autoBanned') }}
-                    </span>
-                    <span
-                      v-else-if="row.role === 'admin'"
-                      class="ml-1 rounded-md bg-amber-50 px-2 py-0.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
-                    >
-                      {{ t('admin.riskControl.usagePolicy.skippedAdmin') }}
                     </span>
                   </td>
                 </tr>
@@ -1558,7 +1557,7 @@ const defaultUsagePolicyConfig = (): UsagePolicyConfig => ({
 
 const usagePolicyForm = reactive(defaultUsagePolicyConfig())
 const usagePolicyStats = ref<UsagePolicyStats | null>(null)
-const usagePolicyUsers = computed(() => usagePolicyStats.value?.users ?? [])
+const usagePolicyKeys = computed(() => usagePolicyStats.value?.keys ?? [])
 
 const pagination = reactive({ page: 1, page_size: 20, total: 0, pages: 1 })
 const filters = reactive({
@@ -1936,7 +1935,14 @@ async function loadUsagePolicyStats(silent: boolean) {
   try {
     usagePolicyStats.value = await adminAPI.riskControl.getUsagePolicyStats()
   } catch (error: unknown) {
-    usagePolicyStats.value = { total: 0, unique_users: 0, disabled_users: 0, auto_banned_users: 0, users: [] }
+    usagePolicyStats.value = {
+      total: 0,
+      unique_users: 0,
+      unique_keys: 0,
+      disabled_keys: 0,
+      auto_banned_keys: 0,
+      keys: [],
+    }
     if (!silent) appStore.showError(extractApiErrorMessage(error, t('admin.riskControl.usagePolicy.loadFailed')))
   }
 }

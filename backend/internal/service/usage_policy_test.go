@@ -31,7 +31,9 @@ type usagePolicyRepoStub struct {
 	insertErr   error
 	disabled    bool
 	disableErr  error
-	users       []UsagePolicyUserStat
+	credential  string
+	lastKeyID   int64
+	keys        []UsagePolicyKeyStat
 	last        *UsagePolicyViolation
 	disposition struct {
 		id         int64
@@ -52,12 +54,13 @@ func (r *usagePolicyRepoStub) UpdateViolationDisposition(_ context.Context, id i
 	return nil
 }
 
-func (r *usagePolicyRepoStub) ListUserStats(context.Context) ([]UsagePolicyUserStat, error) {
-	return r.users, nil
+func (r *usagePolicyRepoStub) ListKeyStats(context.Context) ([]UsagePolicyKeyStat, error) {
+	return r.keys, nil
 }
 
-func (r *usagePolicyRepoStub) DisableUserIfActive(context.Context, int64) (bool, error) {
-	return r.disabled, r.disableErr
+func (r *usagePolicyRepoStub) DisableAPIKeyIfActive(_ context.Context, apiKeyID int64) (string, bool, error) {
+	r.lastKeyID = apiKeyID
+	return r.credential, r.disabled, r.disableErr
 }
 
 type usagePolicySettingsStub struct {
@@ -93,26 +96,14 @@ func (s *usagePolicySettingsStub) GetAll(context.Context) (map[string]string, er
 }
 func (s *usagePolicySettingsStub) Delete(context.Context, string) error { return nil }
 
-type usagePolicyUserRepoStub struct {
-	user *User
-	err  error
-}
-
-func (r *usagePolicyUserRepoStub) GetByID(context.Context, int64) (*User, error) {
-	if r.err != nil {
-		return nil, r.err
-	}
-	return r.user, nil
-}
-
 type usagePolicyAuthCacheStub struct {
-	userID int64
+	key string
 }
 
-func (s *usagePolicyAuthCacheStub) InvalidateAuthCacheByKey(context.Context, string) {}
-func (s *usagePolicyAuthCacheStub) InvalidateAuthCacheByUserID(_ context.Context, userID int64) {
-	s.userID = userID
+func (s *usagePolicyAuthCacheStub) InvalidateAuthCacheByKey(_ context.Context, key string) {
+	s.key = key
 }
+func (s *usagePolicyAuthCacheStub) InvalidateAuthCacheByUserID(context.Context, int64)  {}
 func (s *usagePolicyAuthCacheStub) InvalidateAuthCacheByGroupID(context.Context, int64) {}
 
 func usagePolicyEnabledSettings() *usagePolicySettingsStub {
@@ -122,51 +113,52 @@ func usagePolicyEnabledSettings() *usagePolicySettingsStub {
 	}}
 }
 
-func TestUsagePolicyObserveDisablesRegularUser(t *testing.T) {
+func TestUsagePolicyObserveDisablesAPIKey(t *testing.T) {
 	userID := int64(42)
-	repo := &usagePolicyRepoStub{insertedID: 9, inserted: true, count: 1, disabled: true}
-	users := &usagePolicyUserRepoStub{user: &User{ID: userID, Role: RoleUser, Status: StatusActive}}
+	keyID := int64(88)
+	repo := &usagePolicyRepoStub{insertedID: 9, inserted: true, count: 1, disabled: true, credential: "sk-test"}
 	cache := &usagePolicyAuthCacheStub{}
-	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), users, cache)
+	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), cache)
 
 	msg := "Invalid prompt: your prompt was flagged as potentially violating our usage policy."
 	svc.ObserveErrorLogs(context.Background(), []*OpsInsertErrorLogInput{{
 		UserID:               &userID,
+		APIKeyID:             &keyID,
 		RequestID:            "req-1",
 		ErrorMessage:         "Upstream service temporarily unavailable",
 		UpstreamErrorMessage: &msg,
 	}})
 
 	require.True(t, repo.disposition.autoBanned)
-	require.Equal(t, int64(42), cache.userID)
+	require.Equal(t, int64(88), repo.lastKeyID)
+	require.Equal(t, "sk-test", cache.key)
 	require.Equal(t, "", repo.disposition.skipReason)
 }
 
-func TestUsagePolicyObserveSkipsAdmin(t *testing.T) {
+func TestUsagePolicyObserveDisablesAdminAPIKey(t *testing.T) {
 	userID := int64(1)
-	repo := &usagePolicyRepoStub{insertedID: 3, inserted: true, count: 8, disabled: true}
-	users := &usagePolicyUserRepoStub{user: &User{ID: userID, Role: RoleAdmin, Status: StatusActive}}
+	keyID := int64(3)
+	repo := &usagePolicyRepoStub{insertedID: 3, inserted: true, count: 8, disabled: true, credential: "sk-admin"}
 	cache := &usagePolicyAuthCacheStub{}
-	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), users, cache)
+	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), cache)
 
 	msg := "your prompt was flagged as potentially violating our usage policy"
 	svc.ObserveErrorLogs(context.Background(), []*OpsInsertErrorLogInput{{
 		UserID:       &userID,
+		APIKeyID:     &keyID,
 		RequestID:    "req-admin",
 		ErrorMessage: msg,
 	}})
 
-	require.False(t, repo.disposition.autoBanned)
-	require.Equal(t, usagePolicySkipReasonAdmin, repo.disposition.skipReason)
-	require.Equal(t, int64(0), cache.userID)
+	require.True(t, repo.disposition.autoBanned)
+	require.Equal(t, int64(3), repo.lastKeyID)
+	require.Equal(t, "sk-admin", cache.key)
 }
 
 func TestUsagePolicyObserveIgnoresUnrelatedErrors(t *testing.T) {
 	userID := int64(7)
 	repo := &usagePolicyRepoStub{insertedID: 1, inserted: true, count: 1, disabled: true}
-	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), &usagePolicyUserRepoStub{
-		user: &User{ID: userID, Role: RoleUser, Status: StatusActive},
-	}, &usagePolicyAuthCacheStub{})
+	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), &usagePolicyAuthCacheStub{})
 
 	svc.ObserveErrorLogs(context.Background(), []*OpsInsertErrorLogInput{{
 		UserID:       &userID,
@@ -180,7 +172,7 @@ func TestUsagePolicyObserveRequiresRiskControl(t *testing.T) {
 	repo := &usagePolicyRepoStub{insertedID: 1, inserted: true, count: 1, disabled: true}
 	svc := NewUsagePolicyService(repo, &usagePolicySettingsStub{values: map[string]string{
 		SettingKeyRiskControlEnabled: "false",
-	}}, &usagePolicyUserRepoStub{user: &User{ID: userID, Role: RoleUser, Status: StatusActive}}, nil)
+	}}, nil)
 
 	msg := "flagged as potentially violating our usage policy"
 	svc.ObserveErrorLogs(context.Background(), []*OpsInsertErrorLogInput{{
@@ -191,22 +183,25 @@ func TestUsagePolicyObserveRequiresRiskControl(t *testing.T) {
 }
 
 func TestUsagePolicyGetStats(t *testing.T) {
-	repo := &usagePolicyRepoStub{users: []UsagePolicyUserStat{
-		{UserID: 2, Email: "a@example.com", Status: StatusDisabled, Count: 4, AutoBanned: true},
-		{UserID: 3, Email: "b@example.com", Status: StatusActive, Count: 1, AutoBanned: false},
+	keyA := int64(10)
+	keyB := int64(11)
+	repo := &usagePolicyRepoStub{keys: []UsagePolicyKeyStat{
+		{UserID: 2, Email: "a@example.com", APIKeyID: &keyA, APIKeyStatus: StatusDisabled, Count: 4, AutoBanned: true},
+		{UserID: 3, Email: "b@example.com", APIKeyID: &keyB, APIKeyStatus: StatusActive, Count: 1, AutoBanned: false},
 	}}
-	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), nil, nil)
+	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), nil)
 	stats, err := svc.GetStats(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, 5, stats.Total)
 	require.Equal(t, 2, stats.UniqueUsers)
-	require.Equal(t, 1, stats.DisabledUsers)
-	require.Equal(t, 1, stats.AutoBannedUsers)
+	require.Equal(t, 2, stats.UniqueKeys)
+	require.Equal(t, 1, stats.DisabledKeys)
+	require.Equal(t, 1, stats.AutoBannedKeys)
 }
 
 func TestUsagePolicyUpdateConfig(t *testing.T) {
 	settings := usagePolicyEnabledSettings()
-	svc := NewUsagePolicyService(nil, settings, nil, nil)
+	svc := NewUsagePolicyService(nil, settings, nil)
 	enabled := false
 	threshold := 3
 	cfg, err := svc.UpdateConfig(context.Background(), UpdateUsagePolicyConfigInput{
@@ -222,9 +217,7 @@ func TestUsagePolicyUpdateConfig(t *testing.T) {
 func TestUsagePolicyInsertFailureDoesNotBan(t *testing.T) {
 	userID := int64(9)
 	repo := &usagePolicyRepoStub{insertErr: errors.New("db down"), inserted: true, count: 1, disabled: true}
-	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), &usagePolicyUserRepoStub{
-		user: &User{ID: userID, Role: RoleUser, Status: StatusActive},
-	}, &usagePolicyAuthCacheStub{})
+	svc := NewUsagePolicyService(repo, usagePolicyEnabledSettings(), &usagePolicyAuthCacheStub{})
 	msg := "flagged as potentially violating our usage policy"
 	svc.ObserveErrorLogs(context.Background(), []*OpsInsertErrorLogInput{{
 		UserID:       &userID,
