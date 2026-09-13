@@ -53,23 +53,29 @@ RETURNING id`,
 		createdAt,
 	).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		count, countErr := r.countByUser(ctx, v.UserID)
+		count, countErr := r.countForBan(ctx, v)
 		return 0, false, count, countErr
 	}
 	if err != nil {
 		return 0, false, 0, fmt.Errorf("insert usage policy violation: %w", err)
 	}
-	count, err := r.countByUser(ctx, v.UserID)
+	count, err := r.countForBan(ctx, v)
 	if err != nil {
 		return id, true, 0, err
 	}
 	return id, true, count, nil
 }
 
-func (r *usagePolicyRepository) countByUser(ctx context.Context, userID int64) (int, error) {
+func (r *usagePolicyRepository) countForBan(ctx context.Context, v *service.UsagePolicyViolation) (int, error) {
 	var count int
-	err := r.db.QueryRowContext(ctx, `
-SELECT COUNT(*) FROM usage_policy_violations WHERE user_id = $1`, userID).Scan(&count)
+	var err error
+	if v != nil && v.APIKeyID != nil && *v.APIKeyID > 0 {
+		err = r.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM usage_policy_violations WHERE api_key_id = $1`, *v.APIKeyID).Scan(&count)
+	} else {
+		err = r.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM usage_policy_violations WHERE user_id = $1`, v.UserID).Scan(&count)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("count usage policy violations: %w", err)
 	}
@@ -90,7 +96,7 @@ WHERE id = $1`, id, autoBanned, skipReason)
 	return nil
 }
 
-func (r *usagePolicyRepository) ListUserStats(ctx context.Context) ([]service.UsagePolicyUserStat, error) {
+func (r *usagePolicyRepository) ListKeyStats(ctx context.Context) ([]service.UsagePolicyKeyStat, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("usage policy repository is unavailable")
 	}
@@ -100,49 +106,63 @@ SELECT
     COALESCE(u.email, ''),
     COALESCE(u.username, ''),
     COALESCE(u.role, ''),
-    COALESCE(u.status, ''),
+    v.api_key_id,
+    COALESCE(k.name, ''),
+    COALESCE(k.status, ''),
     COUNT(*)::int,
     BOOL_OR(v.auto_banned),
     MAX(v.created_at)
 FROM usage_policy_violations v
 LEFT JOIN users u ON u.id = v.user_id
-GROUP BY v.user_id, u.email, u.username, u.role, u.status
+LEFT JOIN api_keys k ON k.id = v.api_key_id
+GROUP BY v.user_id, u.email, u.username, u.role, v.api_key_id, k.name, k.status
 ORDER BY COUNT(*) DESC, MAX(v.created_at) DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list usage policy stats: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []service.UsagePolicyUserStat
+	var out []service.UsagePolicyKeyStat
 	for rows.Next() {
-		var row service.UsagePolicyUserStat
+		var row service.UsagePolicyKeyStat
+		var apiKeyID sql.NullInt64
 		if err := rows.Scan(
 			&row.UserID,
 			&row.Email,
 			&row.Username,
 			&row.Role,
-			&row.Status,
+			&apiKeyID,
+			&row.APIKeyName,
+			&row.APIKeyStatus,
 			&row.Count,
 			&row.AutoBanned,
 			&row.LastAt,
 		); err != nil {
 			return nil, err
 		}
+		if apiKeyID.Valid {
+			id := apiKeyID.Int64
+			row.APIKeyID = &id
+		}
 		out = append(out, row)
 	}
 	return out, rows.Err()
 }
 
-func (r *usagePolicyRepository) DisableUserIfActive(ctx context.Context, userID int64) (bool, error) {
+func (r *usagePolicyRepository) DisableAPIKeyIfActive(ctx context.Context, apiKeyID int64) (string, bool, error) {
 	if r == nil || r.db == nil {
-		return false, errors.New("usage policy repository is unavailable")
+		return "", false, errors.New("usage policy repository is unavailable")
 	}
-	result, err := r.db.ExecContext(ctx, `
-UPDATE users SET status = 'disabled', updated_at = NOW()
-WHERE id = $1 AND status = 'active' AND deleted_at IS NULL`, userID)
+	var credential string
+	err := r.db.QueryRowContext(ctx, `
+UPDATE api_keys SET status = 'disabled', updated_at = NOW()
+WHERE id = $1 AND status = 'active' AND deleted_at IS NULL
+RETURNING key`, apiKeyID).Scan(&credential)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
 	if err != nil {
-		return false, fmt.Errorf("disable usage policy user: %w", err)
+		return "", false, fmt.Errorf("disable usage policy API key: %w", err)
 	}
-	changed, err := result.RowsAffected()
-	return changed > 0, err
+	return credential, true, nil
 }

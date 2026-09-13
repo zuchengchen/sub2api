@@ -257,7 +257,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	}
 	contentModerationHandler := admin.NewContentModerationHandler(contentModerationService)
 	usagePolicyRepository := repository.NewUsagePolicyRepository(db)
-	usagePolicyService := service.ProvideUsagePolicyService(usagePolicyRepository, settingRepository, userRepository, apiKeyAuthCacheInvalidator, opsService)
+	usagePolicyService := service.ProvideUsagePolicyService(usagePolicyRepository, settingRepository, apiKeyAuthCacheInvalidator, opsService)
 	usagePolicyHandler := admin.NewUsagePolicyHandler(usagePolicyService)
 	paymentHandler := admin.NewPaymentHandler(paymentService, paymentConfigService)
 	affiliateHandler := admin.NewAffiliateHandler(affiliateService, adminService)
