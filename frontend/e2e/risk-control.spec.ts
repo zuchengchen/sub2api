@@ -143,32 +143,6 @@ async function mockAPIs(page: Page) {
     if (path.endsWith('/auth/me')) return json(route, { ...adminUser, run_mode: 'standard' })
     if (path.endsWith('/setup/status')) return json(route, { needs_setup: false })
     if (path.endsWith('/admin/risk-control/config')) return json(route, riskConfig)
-    if (path.endsWith('/admin/risk-control/usage-policy/stats')) {
-      return json(route, {
-        total: 2,
-        unique_users: 1,
-        unique_keys: 1,
-        disabled_keys: 1,
-        auto_banned_keys: 1,
-        keys: [
-          {
-            user_id: 9,
-            email: 'hit@example.test',
-            username: 'flagged',
-            role: 'user',
-            api_key_id: 88,
-            api_key_name: 'prod-key',
-            api_key_status: 'disabled',
-            count: 2,
-            auto_banned: true,
-            last_at: '2026-09-13T05:00:00Z',
-          },
-        ],
-      })
-    }
-    if (path.endsWith('/admin/risk-control/usage-policy')) {
-      return json(route, { enabled: true, auto_ban_enabled: true, ban_threshold: 1 })
-    }
     if (path.endsWith('/admin/risk-control/status')) {
       return json(route, {
         enabled: true,
@@ -232,8 +206,7 @@ test('风控中心在桌面与移动视口完整呈现', async ({ page }, testIn
   await page.goto('/admin/risk-control')
 
   await expect(page.locator('[data-test="risk-control-view"]')).toBeVisible()
-  await expect(page.locator('[data-test="usage-policy-section"]')).toContainText('上游 Usage Policy')
-  await expect(page.locator('[data-test="usage-policy-user-9"]')).toContainText('flagged')
+  await expect(page.locator('[data-test="record-tab-usage_policy"]')).toContainText('Usage Policy')
   await expect(page.locator('[data-test="risk-overview"]')).not.toContainText('admin.riskControl.')
   await expect(page.locator('[data-test="deepseek-enabled"]')).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('[data-test="yufeng-enabled"]')).toHaveCount(0)

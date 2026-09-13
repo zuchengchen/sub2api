@@ -111,6 +111,17 @@ func (s *UsagePolicyService) SetConversationArchiver(archiver UsagePolicyConvers
 	s.archiver = archiver
 }
 
+func (s *UsagePolicyService) archiveFromEntry(ctx context.Context, entry *OpsInsertErrorLogInput) {
+	if entry == nil {
+		return
+	}
+	input := ContentModerationCheckInput{}
+	if entry.ConversationInput != nil {
+		input = *entry.ConversationInput
+	}
+	s.ArchiveConversation(ctx, entry, input)
+}
+
 func (s *UsagePolicyService) ArchiveConversation(ctx context.Context, entry *OpsInsertErrorLogInput, input ContentModerationCheckInput) {
 	if s == nil || s.archiver == nil || entry == nil || !IsUsagePolicyViolation(entry) {
 		return
@@ -324,6 +335,7 @@ func (s *UsagePolicyService) handleEntry(ctx context.Context, cfg *UsagePolicyCo
 	if !inserted {
 		return
 	}
+	s.archiveFromEntry(ctx, entry)
 	skipReason, autoBanned := s.applyBan(ctx, cfg, entry.APIKeyID, count)
 	if skipReason != "" || autoBanned {
 		if err := s.repo.UpdateViolationDisposition(ctx, id, autoBanned, skipReason); err != nil {
