@@ -19,7 +19,7 @@ import (
 const (
 	usagePolicyFlagPhrase           = "flagged as potentially violating our usage policy"
 	defaultUsagePolicyBanThreshold  = 1
-	usagePolicyUserBanDuration      = time.Hour
+	usagePolicyUserBanDuration      = 15 * time.Minute
 	usagePolicyUnbanPollInterval    = 5 * time.Second
 	usagePolicyUnbanBatchSize       = 100
 	usagePolicySkipReasonDisabled   = "already_disabled"
@@ -30,7 +30,7 @@ const (
 	UsagePolicyClientErrorType = "invalid_prompt"
 	UsagePolicyClientErrorCode = "invalid_prompt"
 	UsagePolicyClientStatus    = http.StatusBadRequest
-	UsagePolicyClientNotice    = "已违反 OpenAI 使用政策，请立即停止本次会话。账户已禁用，冷却 1 小时后自动解禁。"
+	UsagePolicyClientNotice    = "已违反 OpenAI 使用政策，请立即停止本次会话。账户已禁用，冷却 15 分钟后自动解禁。"
 )
 
 // UsagePolicyConfig is stored as settings.usage_policy_config JSON.
@@ -312,7 +312,7 @@ func (s *UsagePolicyService) GetStats(ctx context.Context) (*UsagePolicyStats, e
 	return stats, nil
 }
 
-// ObserveErrorLogs records matching upstream usage-policy failures and may disable the user for one hour.
+// ObserveErrorLogs records matching upstream usage-policy failures and may disable the user for 15 minutes.
 func (s *UsagePolicyService) ObserveErrorLogs(ctx context.Context, entries []*OpsInsertErrorLogInput) {
 	if s == nil || len(entries) == 0 {
 		return

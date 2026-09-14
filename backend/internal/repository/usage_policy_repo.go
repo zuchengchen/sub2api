@@ -157,7 +157,7 @@ func (r *usagePolicyRepository) DisableUserForUsagePolicy(ctx context.Context, u
 		return false, nil
 	}
 	if until.IsZero() {
-		until = time.Now().UTC().Add(time.Hour)
+		until = time.Now().UTC().Add(15 * time.Minute)
 	}
 	var id int64
 	err := r.db.QueryRowContext(ctx, `
