@@ -30,6 +30,7 @@ const (
 	UsagePolicyClientErrorType = "invalid_prompt"
 	UsagePolicyClientErrorCode = "invalid_prompt"
 	UsagePolicyClientStatus    = http.StatusBadRequest
+	UsagePolicyClientNotice    = "已违反 OpenAI 使用政策，请立即停止本次会话。账户已禁用，冷却 1 小时后自动解禁。"
 )
 
 // UsagePolicyConfig is stored as settings.usage_policy_config JSON.
@@ -559,13 +560,24 @@ func UsagePolicyClientError(body []byte, extra ...string) (string, bool) {
 	}
 	for _, msg := range candidates {
 		if containsUsagePolicyPhrase(msg) {
-			return sanitizeUpstreamErrorMessage(msg), true
+			return appendUsagePolicyClientNotice(sanitizeUpstreamErrorMessage(msg)), true
 		}
 	}
 	if containsUsagePolicyPhrase(string(body)) {
-		return "Invalid prompt: your prompt was flagged as potentially violating our usage policy.", true
+		return appendUsagePolicyClientNotice("Invalid prompt: your prompt was flagged as potentially violating our usage policy."), true
 	}
 	return "", false
+}
+
+func appendUsagePolicyClientNotice(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if strings.Contains(msg, UsagePolicyClientNotice) {
+		return msg
+	}
+	if msg == "" {
+		return UsagePolicyClientNotice
+	}
+	return msg + " " + UsagePolicyClientNotice
 }
 
 func isOpenAIUsagePolicyError(upstreamMsg string, upstreamBody []byte) bool {

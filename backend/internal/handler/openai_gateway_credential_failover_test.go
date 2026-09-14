@@ -250,6 +250,7 @@ func TestFailoverExhaustionPassesUsagePolicyMessage(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	require.Contains(t, recorder.Body.String(), "flagged as potentially violating our usage policy")
+	require.Contains(t, recorder.Body.String(), service.UsagePolicyClientNotice)
 	require.Contains(t, recorder.Body.String(), "invalid_prompt")
 	require.NotContains(t, recorder.Body.String(), "temporarily unavailable")
 }
