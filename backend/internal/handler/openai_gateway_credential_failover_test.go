@@ -236,6 +236,24 @@ func TestCredentialFailoverExhaustionReturnsFixedSafe503(t *testing.T) {
 	require.NotContains(t, recorder.Body.String(), "must-not-leak")
 }
 
+func TestFailoverExhaustionPassesUsagePolicyMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	h := &OpenAIGatewayHandler{}
+	msg := "Invalid prompt: your prompt was flagged as potentially violating our usage policy. Please try again"
+
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusBadGateway,
+		ResponseBody: []byte(`{"error":{"code":"invalid_prompt","message":"` + msg + `"}}`),
+	}, false)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "flagged as potentially violating our usage policy")
+	require.Contains(t, recorder.Body.String(), "invalid_prompt")
+	require.NotContains(t, recorder.Body.String(), "temporarily unavailable")
+}
+
 func TestInferenceFailoverExhaustionRestoresRetryAfter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

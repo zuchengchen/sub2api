@@ -74,6 +74,12 @@ func TestOpenAICompatibleModelNotFound400FailoverScope(t *testing.T) {
 		"Invalid value for temperature",
 		[]byte(`{"error":{"code":"invalid_request_error","message":"Invalid value for temperature"}}`),
 	))
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(
+		&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		http.StatusBadGateway,
+		"Upstream service temporarily unavailable",
+		[]byte(`{"error":{"code":"invalid_prompt","message":"Invalid prompt: your prompt was flagged as potentially violating our usage policy."}}`),
+	))
 }
 
 func TestOpenAICompatibleModelNotFound400WithoutManagedCandidatesRemainsTerminal(t *testing.T) {

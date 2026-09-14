@@ -149,20 +149,80 @@ ORDER BY COUNT(*) DESC, MAX(v.created_at) DESC`)
 	return out, rows.Err()
 }
 
-func (r *usagePolicyRepository) DisableAPIKeyIfActive(ctx context.Context, apiKeyID int64) (string, bool, error) {
+func (r *usagePolicyRepository) DisableUserForUsagePolicy(ctx context.Context, userID int64, until time.Time) (bool, error) {
 	if r == nil || r.db == nil {
-		return "", false, errors.New("usage policy repository is unavailable")
+		return false, errors.New("usage policy repository is unavailable")
 	}
-	var credential string
+	if userID <= 0 {
+		return false, nil
+	}
+	if until.IsZero() {
+		until = time.Now().UTC().Add(time.Hour)
+	}
+	var id int64
 	err := r.db.QueryRowContext(ctx, `
-UPDATE api_keys SET status = 'disabled', updated_at = NOW()
-WHERE id = $1 AND status = 'active' AND deleted_at IS NULL
-RETURNING key`, apiKeyID).Scan(&credential)
+UPDATE users
+SET status = 'disabled', usage_policy_unban_at = $2, updated_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL AND status = 'active'
+RETURNING id`, userID, until).Scan(&id)
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("disable usage policy user: %w", err)
+	}
+	err = r.db.QueryRowContext(ctx, `
+UPDATE users
+SET usage_policy_unban_at = GREATEST(usage_policy_unban_at, $2), updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+  AND status = 'disabled'
+  AND usage_policy_unban_at IS NOT NULL
+RETURNING id`, userID, until).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
+		return false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("disable usage policy API key: %w", err)
+		return false, fmt.Errorf("extend usage policy user ban: %w", err)
 	}
-	return credential, true, nil
+	return true, nil
+}
+
+func (r *usagePolicyRepository) UnbanDueUsers(ctx context.Context, limit int) ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("usage policy repository is unavailable")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `
+WITH due AS (
+    SELECT id
+    FROM users
+    WHERE deleted_at IS NULL
+      AND status = 'disabled'
+      AND usage_policy_unban_at IS NOT NULL
+      AND usage_policy_unban_at <= NOW()
+    ORDER BY usage_policy_unban_at ASC
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE users AS u
+SET status = 'active', usage_policy_unban_at = NULL, updated_at = NOW()
+FROM due
+WHERE u.id = due.id
+RETURNING u.id`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("unban due usage policy users: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

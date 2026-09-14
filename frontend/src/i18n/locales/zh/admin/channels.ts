@@ -232,10 +232,10 @@ export default {
       description: '统一管理审核器、关键词策略、上游 usage policy 与审核记录',
       usagePolicy: {
         title: '上游 Usage Policy',
-        summary: '统计 OpenAI 返回的 usage policy 拒绝，并在触发后禁用该次请求使用的 API Key。管理员的 Key 同样处理，用户账号不停用。',
+        summary: '统计 OpenAI 返回的 usage policy 拒绝，把上游原文回给调用方，并立即停用该用户一小时。',
         enabled: '启用统计与自动处置',
-        autoBan: '触发后立即禁用 API Key',
-        autoBanHint: '达到阈值后禁用该次请求的 API Key，并刷新认证缓存。默认一次即封。管理员 Key 不豁免。',
+        autoBan: '触发后立即停用用户',
+        autoBanHint: '达到阈值后停用该用户一小时并刷新认证缓存。默认一次即封。管理员账号同样处理。',
         banThreshold: '封禁触发次数',
         total: '违规次数',
         uniqueUsers: '涉及用户',
