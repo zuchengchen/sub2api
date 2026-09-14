@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 func TestWrapPlaintextModerationArchiveRoundTrip(t *testing.T) {
@@ -17,6 +18,9 @@ func TestWrapPlaintextModerationArchiveRoundTrip(t *testing.T) {
 	archive := WrapPlaintextModerationArchive("a1", plaintext, 8)
 	require.Equal(t, ContentModerationArchivePlaintextKeyID, archive.KeyID)
 	require.Greater(t, len(archive.Chunks), 1)
+	for _, chunk := range archive.Chunks {
+		require.Len(t, chunk.Nonce, chacha20poly1305.NonceSizeX)
+	}
 
 	got, err := decryptPlaintextModerationArchive(archive)
 	require.NoError(t, err)
@@ -26,6 +30,37 @@ func TestWrapPlaintextModerationArchiveRoundTrip(t *testing.T) {
 	got, err = cipher.Decrypt(archive)
 	require.NoError(t, err)
 	require.Equal(t, plaintext, got)
+}
+
+func TestEnsurePlaintextArchiveChunkNoncesPadsLegacyEmptyNonce(t *testing.T) {
+	t.Parallel()
+	plaintext := []byte("usage-policy envelope")
+	archive := WrapPlaintextModerationArchive("req-1", plaintext, 8)
+	for i := range archive.Chunks {
+		archive.Chunks[i].Nonce = nil
+	}
+
+	EnsurePlaintextArchiveChunkNonces(archive)
+	for _, chunk := range archive.Chunks {
+		require.Len(t, chunk.Nonce, chacha20poly1305.NonceSizeX)
+		require.Equal(t, make([]byte, chacha20poly1305.NonceSizeX), chunk.Nonce)
+	}
+
+	got, err := decryptPlaintextModerationArchive(archive)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, got)
+}
+
+func TestEnsurePlaintextArchiveChunkNoncesLeavesEncryptedArchivesAlone(t *testing.T) {
+	t.Parallel()
+	archive := &ContentModerationEncryptedArchive{
+		KeyID: "k1",
+		Chunks: []ContentModerationArchiveChunk{{
+			Nonce: nil, Ciphertext: []byte("sealed"),
+		}},
+	}
+	EnsurePlaintextArchiveChunkNonces(archive)
+	require.Nil(t, archive.Chunks[0].Nonce)
 }
 
 func TestContentModerationArchiveCipherRoundTripAndIntegrity(t *testing.T) {
