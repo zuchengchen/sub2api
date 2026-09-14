@@ -658,6 +658,7 @@ func (r *contentModerationRepository) CreateLogWithArchive(ctx context.Context, 
 	if log == nil || archive == nil || len(archive.Chunks) == 0 {
 		return fmt.Errorf("content moderation encrypted archive is required")
 	}
+	service.EnsurePlaintextArchiveChunkNonces(archive)
 	applyArchiveMetadata(log, archive)
 	var existingID int64
 	var existingCreatedAt time.Time
