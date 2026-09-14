@@ -298,10 +298,26 @@ func WrapPlaintextModerationArchive(archiveID string, plaintext []byte, chunkSiz
 		}
 		part := append([]byte(nil), plaintext[start:end]...)
 		archive.Chunks = append(archive.Chunks, ContentModerationArchiveChunk{
-			Index: index, Total: total, Ciphertext: part, PlaintextBytes: len(part),
+			Index: index, Total: total,
+			Nonce:      make([]byte, chacha20poly1305.NonceSizeX),
+			Ciphertext: part, PlaintextBytes: len(part),
 		})
 	}
 	return archive
+}
+
+// EnsurePlaintextArchiveChunkNonces fills a 24-byte nonce on plaintext
+// archive chunks. content_moderation_log_chunks.nonce is CHECK (octet_length = 24);
+// older WrapPlaintext payloads left nonce empty and failed to insert.
+func EnsurePlaintextArchiveChunkNonces(archive *ContentModerationEncryptedArchive) {
+	if archive == nil || strings.TrimSpace(archive.KeyID) != ContentModerationArchivePlaintextKeyID {
+		return
+	}
+	for i := range archive.Chunks {
+		if len(archive.Chunks[i].Nonce) != chacha20poly1305.NonceSizeX {
+			archive.Chunks[i].Nonce = make([]byte, chacha20poly1305.NonceSizeX)
+		}
+	}
 }
 
 func decryptPlaintextModerationArchive(archive *ContentModerationEncryptedArchive) ([]byte, error) {
