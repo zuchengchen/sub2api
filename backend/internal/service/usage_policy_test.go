@@ -160,7 +160,7 @@ func TestUsagePolicyObserveDisablesUser(t *testing.T) {
 
 	require.True(t, repo.disposition.autoBanned)
 	require.Equal(t, int64(42), repo.lastUserID)
-	require.WithinDuration(t, time.Now().Add(time.Hour), repo.lastUntil, 5*time.Second)
+	require.WithinDuration(t, time.Now().Add(usagePolicyUserBanDuration), repo.lastUntil, 5*time.Second)
 	require.Equal(t, int64(42), cache.userID)
 	require.Equal(t, "", repo.disposition.skipReason)
 	require.Len(t, archiver.calls, 1)
