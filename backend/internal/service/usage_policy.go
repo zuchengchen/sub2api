@@ -1,23 +1,36 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+
+	"github.com/tidwall/gjson"
 )
 
 const (
 	usagePolicyFlagPhrase           = "flagged as potentially violating our usage policy"
 	defaultUsagePolicyBanThreshold  = 1
+	usagePolicyUserBanDuration      = time.Hour
+	usagePolicyUnbanPollInterval    = 5 * time.Second
+	usagePolicyUnbanBatchSize       = 100
 	usagePolicySkipReasonDisabled   = "already_disabled"
 	usagePolicySkipReasonThreshold  = "below_threshold"
 	usagePolicySkipReasonAutoBanOff = "auto_ban_disabled"
-	usagePolicySkipReasonNoKey      = "missing_key"
+	usagePolicySkipReasonNoUser     = "missing_user"
+
+	UsagePolicyClientErrorType = "invalid_prompt"
+	UsagePolicyClientErrorCode = "invalid_prompt"
+	UsagePolicyClientStatus    = http.StatusBadRequest
+	UsagePolicyClientNotice    = "已违反 OpenAI 使用政策，请立即停止本次会话。账户已禁用，冷却 1 小时后自动解禁。"
 )
 
 // UsagePolicyConfig is stored as settings.usage_policy_config JSON.
@@ -78,7 +91,8 @@ type UsagePolicyRepository interface {
 	InsertViolation(ctx context.Context, v *UsagePolicyViolation) (id int64, inserted bool, count int, err error)
 	UpdateViolationDisposition(ctx context.Context, id int64, autoBanned bool, skipReason string) error
 	ListKeyStats(ctx context.Context) ([]UsagePolicyKeyStat, error)
-	DisableAPIKeyIfActive(ctx context.Context, apiKeyID int64) (credential string, transitioned bool, err error)
+	DisableUserForUsagePolicy(ctx context.Context, userID int64, until time.Time) (transitioned bool, err error)
+	UnbanDueUsers(ctx context.Context, limit int) ([]int64, error)
 }
 
 type UsagePolicyConversationArchiver interface {
@@ -90,6 +104,12 @@ type UsagePolicyService struct {
 	settingRepo          SettingRepository
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	archiver             UsagePolicyConversationArchiver
+
+	start  sync.Once
+	stop   sync.Once
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func NewUsagePolicyService(
@@ -102,6 +122,29 @@ func NewUsagePolicyService(
 		settingRepo:          settingRepo,
 		authCacheInvalidator: authCacheInvalidator,
 	}
+}
+
+func (s *UsagePolicyService) Start() {
+	if s == nil || s.repo == nil {
+		return
+	}
+	s.start.Do(func() {
+		s.ctx, s.cancel = context.WithCancel(context.Background())
+		s.wg.Add(1)
+		go s.unbanLoop()
+	})
+}
+
+func (s *UsagePolicyService) Stop() {
+	if s == nil {
+		return
+	}
+	s.stop.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.wg.Wait()
+	})
 }
 
 func (s *UsagePolicyService) SetConversationArchiver(archiver UsagePolicyConversationArchiver) {
@@ -269,7 +312,7 @@ func (s *UsagePolicyService) GetStats(ctx context.Context) (*UsagePolicyStats, e
 	return stats, nil
 }
 
-// ObserveErrorLogs records matching upstream usage-policy failures and may disable the API key.
+// ObserveErrorLogs records matching upstream usage-policy failures and may disable the user for one hour.
 func (s *UsagePolicyService) ObserveErrorLogs(ctx context.Context, entries []*OpsInsertErrorLogInput) {
 	if s == nil || len(entries) == 0 {
 		return
@@ -336,16 +379,16 @@ func (s *UsagePolicyService) handleEntry(ctx context.Context, cfg *UsagePolicyCo
 		return
 	}
 	s.archiveFromEntry(ctx, entry)
-	skipReason, autoBanned := s.applyBan(ctx, cfg, entry.APIKeyID, count)
+	skipReason, autoBanned := s.applyBan(ctx, cfg, *entry.UserID, count)
 	if skipReason != "" || autoBanned {
 		if err := s.repo.UpdateViolationDisposition(ctx, id, autoBanned, skipReason); err != nil {
 			slog.Error("usage_policy.update_disposition_failed", "id", id, "user_id", *entry.UserID, "error", err)
 		}
 	}
 	if autoBanned {
-		slog.Warn("usage_policy.api_key_disabled",
+		slog.Warn("usage_policy.user_disabled",
 			"user_id", *entry.UserID,
-			"api_key_id", entry.APIKeyID,
+			"duration", usagePolicyUserBanDuration.String(),
 			"count", count,
 			"threshold", cfg.BanThreshold,
 			"request_id", violation.RequestID,
@@ -353,28 +396,63 @@ func (s *UsagePolicyService) handleEntry(ctx context.Context, cfg *UsagePolicyCo
 	}
 }
 
-func (s *UsagePolicyService) applyBan(ctx context.Context, cfg *UsagePolicyConfig, apiKeyID *int64, count int) (skipReason string, autoBanned bool) {
+func (s *UsagePolicyService) applyBan(ctx context.Context, cfg *UsagePolicyConfig, userID int64, count int) (skipReason string, autoBanned bool) {
 	if cfg == nil || !cfg.AutoBanEnabled {
 		return usagePolicySkipReasonAutoBanOff, false
 	}
 	if cfg.BanThreshold <= 0 || count < cfg.BanThreshold {
 		return usagePolicySkipReasonThreshold, false
 	}
-	if apiKeyID == nil || *apiKeyID <= 0 {
-		return usagePolicySkipReasonNoKey, false
+	if userID <= 0 {
+		return usagePolicySkipReasonNoUser, false
 	}
-	credential, transitioned, err := s.repo.DisableAPIKeyIfActive(ctx, *apiKeyID)
+	until := time.Now().UTC().Add(usagePolicyUserBanDuration)
+	transitioned, err := s.repo.DisableUserForUsagePolicy(ctx, userID, until)
 	if err != nil {
-		slog.Error("usage_policy.disable_api_key_failed", "api_key_id", *apiKeyID, "error", err)
+		slog.Error("usage_policy.disable_user_failed", "user_id", userID, "error", err)
 		return "", false
 	}
 	if !transitioned {
 		return usagePolicySkipReasonDisabled, false
 	}
-	if s.authCacheInvalidator != nil && credential != "" {
-		s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, credential)
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
 	return "", true
+}
+
+func (s *UsagePolicyService) unbanLoop() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(usagePolicyUnbanPollInterval)
+	defer ticker.Stop()
+	s.unbanDue(s.ctx)
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.unbanDue(s.ctx)
+		}
+	}
+}
+
+func (s *UsagePolicyService) unbanDue(ctx context.Context) {
+	if s == nil || s.repo == nil || ctx.Err() != nil {
+		return
+	}
+	ids, err := s.repo.UnbanDueUsers(ctx, usagePolicyUnbanBatchSize)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("usage_policy.unban_due_failed", "error", err)
+		}
+		return
+	}
+	if s.authCacheInvalidator == nil {
+		return
+	}
+	for _, id := range ids {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, id)
+	}
 }
 
 func (s *UsagePolicyService) isRiskControlEnabled(ctx context.Context) bool {
@@ -447,4 +525,62 @@ func usagePolicyMessage(entry *OpsInsertErrorLogInput) string {
 		}
 	}
 	return strings.TrimSpace(entry.ErrorMessage)
+}
+
+// UsagePolicyClientError returns the upstream usage-policy message that should
+// be sent to the caller. ok is false when the payload is not a usage-policy hit.
+func UsagePolicyClientError(body []byte, extra ...string) (string, bool) {
+	candidates := make([]string, 0, 8+len(extra))
+	if msg := strings.TrimSpace(extractUpstreamErrorMessage(body)); msg != "" {
+		candidates = append(candidates, msg)
+	}
+	if msg := strings.TrimSpace(gjson.GetBytes(body, "response.error.message").String()); msg != "" {
+		candidates = append(candidates, msg)
+	}
+	if msg := strings.TrimSpace(gjson.GetBytes(body, "error.message").String()); msg != "" {
+		candidates = append(candidates, msg)
+	}
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(line[len("data:"):])
+		if msg := strings.TrimSpace(gjson.GetBytes(payload, "response.error.message").String()); msg != "" {
+			candidates = append(candidates, msg)
+		}
+		if msg := strings.TrimSpace(gjson.GetBytes(payload, "error.message").String()); msg != "" {
+			candidates = append(candidates, msg)
+		}
+	}
+	for _, extraMsg := range extra {
+		if msg := strings.TrimSpace(extraMsg); msg != "" {
+			candidates = append(candidates, msg)
+		}
+	}
+	for _, msg := range candidates {
+		if containsUsagePolicyPhrase(msg) {
+			return appendUsagePolicyClientNotice(sanitizeUpstreamErrorMessage(msg)), true
+		}
+	}
+	if containsUsagePolicyPhrase(string(body)) {
+		return appendUsagePolicyClientNotice("Invalid prompt: your prompt was flagged as potentially violating our usage policy."), true
+	}
+	return "", false
+}
+
+func appendUsagePolicyClientNotice(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if strings.Contains(msg, UsagePolicyClientNotice) {
+		return msg
+	}
+	if msg == "" {
+		return UsagePolicyClientNotice
+	}
+	return msg + " " + UsagePolicyClientNotice
+}
+
+func isOpenAIUsagePolicyError(upstreamMsg string, upstreamBody []byte) bool {
+	_, ok := UsagePolicyClientError(upstreamBody, upstreamMsg)
+	return ok
 }

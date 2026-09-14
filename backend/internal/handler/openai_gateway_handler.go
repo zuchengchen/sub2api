@@ -3401,6 +3401,19 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", service.OpenAISilentRefusalClientMessage(), streamStarted)
 		return
 	}
+	if msg, ok := service.UsagePolicyClientError(responseBody, failoverErr.ClientMessage); ok {
+		service.SetOpsUpstreamError(c, service.UsagePolicyClientStatus, msg, "")
+		h.handleStreamingAwareErrorWithCode(
+			c,
+			service.UsagePolicyClientStatus,
+			service.UsagePolicyClientErrorType,
+			service.UsagePolicyClientErrorCode,
+			msg,
+			streamStarted,
+			false,
+		)
+		return
+	}
 
 	// 先检查透传规则
 	if h.errorPassthroughService != nil && len(responseBody) > 0 {
