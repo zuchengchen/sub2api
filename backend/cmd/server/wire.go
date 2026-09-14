@@ -123,6 +123,7 @@ func provideCleanup(
 	contentModeration *service.ContentModerationService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	pluginManager *service.PluginManager,
+	usagePolicyService *service.UsagePolicyService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -144,6 +145,12 @@ func provideCleanup(
 			{"OpenAIQuotaAutoResetService", func() error {
 				if openAIAutoReset != nil {
 					openAIAutoReset.Stop()
+				}
+				return nil
+			}},
+			{"UsagePolicyService", func() error {
+				if usagePolicyService != nil {
+					usagePolicyService.Stop()
 				}
 				return nil
 			}},

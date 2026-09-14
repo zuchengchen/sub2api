@@ -233,11 +233,11 @@ export default {
       usagePolicy: {
         title: 'Upstream Usage Policy',
         summary:
-          'Count OpenAI usage-policy refusals and disable the API key used by that request. Admin keys are treated the same; the user account stays enabled.',
+          'Count OpenAI usage-policy refusals, return the upstream error to the caller, and disable the user for one hour.',
         enabled: 'Enable counting and enforcement',
-        autoBan: 'Disable API key on trigger',
+        autoBan: 'Disable user on trigger',
         autoBanHint:
-          'When the threshold is reached, disable the request API key and invalidate auth cache. Default is one hit. Admin keys are not exempt.',
+          'When the threshold is reached, disable the user for one hour and invalidate auth cache. Default is one hit. Admin accounts are treated the same.',
         banThreshold: 'Ban threshold',
         total: 'Violations',
         uniqueUsers: 'Users',

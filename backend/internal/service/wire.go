@@ -707,6 +707,7 @@ func ProvideUsagePolicyService(
 	if opsService != nil {
 		opsService.SetUsagePolicyObserver(svc)
 	}
+	svc.Start()
 	return svc
 }
 

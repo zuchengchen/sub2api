@@ -357,6 +357,17 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 		return err
 	}
 
+	if fields.Status && userIn.Status == service.StatusActive {
+		exec := txAwareSQLExecutor(txCtx, r.sql, r.client)
+		if exec != nil {
+			if _, err := exec.ExecContext(txCtx, `
+UPDATE users SET usage_policy_unban_at = NULL
+WHERE id = $1 AND usage_policy_unban_at IS NOT NULL`, userIn.ID); err != nil {
+				return fmt.Errorf("clear usage policy unban timestamp: %w", err)
+			}
+		}
+	}
+
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
 			return err
