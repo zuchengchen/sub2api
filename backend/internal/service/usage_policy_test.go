@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ func TestUsagePolicyClientErrorExtractsSSEMessage(t *testing.T) {
 	msg, ok := UsagePolicyClientError(body, "Upstream service temporarily unavailable")
 	require.True(t, ok)
 	require.Contains(t, msg, "flagged as potentially violating our usage policy")
+	require.True(t, strings.HasSuffix(msg, UsagePolicyClientNotice))
 	require.NotContains(t, msg, "Upstream service temporarily unavailable")
 
 	_, ok = UsagePolicyClientError([]byte(`{"error":{"message":"Rate limit exceeded"}}`))
