@@ -8,7 +8,8 @@ const concretePlatforms = [
   'kimi',
   'zhipu',
   'deepseek',
-  'minimax'
+  'minimax',
+  'opencode_go'
 ]
 
 describe('platform option catalogs', () => {
