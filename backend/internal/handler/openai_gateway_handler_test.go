@@ -2637,7 +2637,9 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 	case <-time.After(3 * time.Second):
 		t.Fatal("等待第二个上游收到重放首帧超时")
 	}
-	require.Equal(t, []int64{int64(9902)}, accountRepo.rateLimitedIDs)
+	// Local consecutive-429 policy keeps the first usage_limit_reached
+	// (no resets_at) as a soft 429; failover still switches accounts.
+	require.NotContains(t, accountRepo.rateLimitedIDs, int64(9903), "healthy failover account must not be penalized")
 }
 
 func TestOpenAIResponsesWebSocket_FirstOutputTimeoutWithoutDownstreamReusesClientForOneFailover(t *testing.T) {

@@ -612,7 +612,7 @@ describe("admin SettingsView email domain quota copy", () => {
 
     const zhQuotaHint = zhSettings.settings.registration.emailDomainQuotaHint;
     const enQuotaHint = enSettings.settings.registration.emailDomainQuotaHint;
-    expect(zhQuotaHint).toContain("其他可注册主域名各限注册一个账户");
+    expect(zhQuotaHint).toContain("其他可注册主域名各限注册一个用户");
     expect(zhQuotaHint).toContain("关闭时非白名单域名直接拒绝");
     expect(enQuotaHint).toContain("one account");
     expect(enQuotaHint).toContain("When disabled");

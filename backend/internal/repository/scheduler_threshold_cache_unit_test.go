@@ -84,7 +84,7 @@ func TestSchedulerCacheAnthropicThresholdAdmission(t *testing.T) {
 			require.NotNil(t, full)
 			for _, candidate := range []*service.Account{candidates[0], full} {
 				repo := &snapshotThresholdRepo{}
-				limiter := service.NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+				limiter := service.NewRateLimitService(repo, nil, &config.Config{}, nil)
 				// Default platform thresholds are disabled, so the per-account override
 				// must survive both cache read paths to trigger admission control.
 				limiter.SetSettingService(service.NewSettingService(nil, &config.Config{}))

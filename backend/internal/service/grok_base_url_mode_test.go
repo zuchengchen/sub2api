@@ -58,9 +58,10 @@ func TestSettingServiceResolveGrokBaseURLHonorsModeAndExplicitPins(t *testing.T)
 	account := &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Credentials: map[string]any{}}
 	require.Equal(t, xai.DefaultUSWest2BaseURL, svc.ResolveGrokBaseURL(context.Background(), account))
 
-	// An explicit official endpoint remains pinned.
+	// Official api.x.ai on OAuth is the legacy default and remaps to the
+	// configured mode (us-west-2 here). Explicit regional hosts stay pinned.
 	account.Credentials["base_url"] = xai.DefaultBaseURL
-	require.Equal(t, xai.DefaultBaseURL, svc.ResolveGrokBaseURL(context.Background(), account))
+	require.Equal(t, xai.DefaultUSWest2BaseURL, svc.ResolveGrokBaseURL(context.Background(), account))
 
 	// An explicit regional pin remains authoritative.
 	account.Credentials["base_url"] = xai.DefaultEUWest1BaseURL

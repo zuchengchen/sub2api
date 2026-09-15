@@ -166,7 +166,7 @@ func TestHandleUpstreamError_AnthropicFableCreditsRequiredOnlyMarksModelRateLimi
 	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(resetAt.Unix(), 10))
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 	body := []byte(`{"type":"error","error":{"details":{"error_code":"credits_required","model":"claude-fable-5","disabled_reason":"org_level_disabled"},"message":"Usage credits are required for this model."}}`)
 
@@ -183,7 +183,7 @@ func TestHandleUpstreamError_AnthropicFableCreditsRequiredOnlyMarksModelRateLimi
 func TestHandleUpstreamError_AnthropicFableCreditsRequiredFallsBackToRequestedModel(t *testing.T) {
 	startedAt := time.Now()
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 	body := []byte(`{"type":"error","error":{"details":{"error_code":"credits_required"},"message":"Usage credits are required for this model."}}`)
 
@@ -201,7 +201,7 @@ func TestHandleUpstreamError_AnthropicNonFableCreditsRequiredKeepsLegacyBehavior
 	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(resetAt.Unix(), 10))
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 	body := []byte(`{"type":"error","error":{"details":{"error_code":"credits_required","model":"claude-opus-5"},"message":"Usage credits are required for this model."}}`)
 
@@ -225,7 +225,7 @@ func TestHandleUpstreamError_AnthropicSharedWindowStillWinsWithFableCreditsRequi
 	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(reset5h.Unix(), 10))
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 	body := []byte(`{"type":"error","error":{"details":{"error_code":"credits_required","model":"claude-fable-5"}}}`)
 

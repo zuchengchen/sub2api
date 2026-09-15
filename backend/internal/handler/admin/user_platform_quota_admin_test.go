@@ -154,7 +154,7 @@ func TestUpdateUserPlatformQuotas_AllUnlimitedClearsRows(t *testing.T) {
 
 	repo = &upsertCapturingQuotaRepo{}
 	h = buildTestHandler(repo, &billingCacheStub{})
-	c, w = putReq(t, `{"quotas":[{"platform":"gemini","daily_limit_usd":0}]}`)
+	c, w = putReq(t, `{"quotas":[{"platform":"grok","daily_limit_usd":0}]}`)
 	h.UpdateUserPlatformQuotas(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -162,7 +162,7 @@ func TestUpdateUserPlatformQuotas_AllUnlimitedClearsRows(t *testing.T) {
 	if len(repo.upsertCalls) != 1 || len(repo.upsertCalls[0].records) != 1 {
 		t.Fatalf("zero limit is a configured limit and must be upserted: %+v", repo.upsertCalls)
 	}
-	if r := repo.upsertCalls[0].records[0]; r.Platform != "gemini" || r.DailyLimitUSD == nil || *r.DailyLimitUSD != 0 {
+	if r := repo.upsertCalls[0].records[0]; r.Platform != "grok" || r.DailyLimitUSD == nil || *r.DailyLimitUSD != 0 {
 		t.Errorf("unexpected record: %+v", r)
 	}
 }

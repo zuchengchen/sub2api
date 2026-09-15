@@ -108,7 +108,7 @@ func (b *ollama429BlockerStub) last() (ollama429BlockRec, bool) {
 // IfLater + generation-CAS contracts the production *accountRepository provides.
 // updatedAt is simulated by bumping Account.UpdatedAt forward on every write.
 type ollama429Repo struct {
-	mockAccountRepoForGemini
+	mockAccountRepoForTest
 	mu             sync.Mutex
 	accounts       map[int64]*Account
 	casUpdated     int
@@ -240,7 +240,7 @@ func timePtrEqual(a, b *time.Time) bool {
 // scheduler. runtime blocker is injected so scheduling notifications are visible.
 func ollama429Fixture(t *testing.T, repo *ollama429Repo, scheduler *ollama429SchedulerStub) (*RateLimitService, *ollama429BlockerStub) {
 	t.Helper()
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil, nil)
 	blocker := &ollama429BlockerStub{}
 	svc.SetAccountRuntimeBlocker(blocker)
 	svc.SetOllamaCloudUsageProbeScheduler(scheduler)
@@ -540,7 +540,7 @@ func TestOllamaProbeCallback_DisabledSkips(t *testing.T) {
 func TestHandle429_OllamaSchedulerAbsentStillNotifiesRuntime(t *testing.T) {
 	acct := ollama429Account(504, PlatformOpenAI)
 	repo := newOllama429Repo(acct)
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil, nil)
 	blocker := &ollama429BlockerStub{}
 	svc.SetAccountRuntimeBlocker(blocker)
 	// No probe scheduler injected.
@@ -690,7 +690,7 @@ func TestOllama429RealProbeLinkage_SnapshotPersistThenWriteBack(t *testing.T) {
 	t.Cleanup(usageSvc.Stop)
 
 	blocker := &ollama429BlockerStub{}
-	rlSvc := NewRateLimitService(repo, nil, nil, nil, nil)
+	rlSvc := NewRateLimitService(repo, nil, nil, nil)
 	rlSvc.SetAccountRuntimeBlocker(blocker)
 	rlSvc.SetOllamaCloudUsageProbeScheduler(usageSvc)
 
