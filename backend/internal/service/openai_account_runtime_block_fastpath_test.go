@@ -51,8 +51,8 @@ func TestOpenAI429FastPath_KeepsOAuthAccountSchedulableDuringRetryWindow(t *test
 	require.False(t, shouldDisable)
 	require.False(t, apiKeyShouldDisable)
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
-	require.True(t, svc.isOpenAIAccountRuntimeBlocked(apiKeyAccount), "API-key 429 keeps the existing scheduler cooldown behavior")
-	require.Equal(t, 1, repo.setRateLimitedCalls, "only the API-key 429 should persist a scheduler block")
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(apiKeyAccount), "first OpenAI 429 is a soft consecutive count, not a scheduler cooldown")
+	require.Equal(t, 0, repo.setRateLimitedCalls, "consecutive 429 policy defers formal cooldown until the threshold")
 	require.True(t, svc.shouldRetryOpenAIOAuth429OnSameAccount(account, http.StatusTooManyRequests, false))
 	require.True(t, svc.shouldRetryOpenAIOAuth429OnSameAccount(setupTokenAccount, http.StatusTooManyRequests, false))
 	require.False(t, svc.shouldRetryOpenAIOAuth429OnSameAccount(apiKeyAccount, http.StatusTooManyRequests, false))
@@ -76,7 +76,7 @@ func TestOpenAI429FastPath_DoesNotBlockOAuthWhenFallbackDisabled(t *testing.T) {
 	repo := &oauth429RateLimitRepo{}
 	settingRepo := newMockSettingRepo()
 	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = `{"enabled":false,"cooldown_seconds":12}`
-	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	rateLimitService.SetSettingService(NewSettingService(settingRepo, &config.Config{}))
 	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
 	rateLimitService.SetAccountRuntimeBlocker(svc)
@@ -93,7 +93,7 @@ func TestOpenAI429FastPath_DoesNotBlockOAuthWhenQuotaWindowIsNotExhausted(t *tes
 	repo := &oauth429RateLimitRepo{}
 	settingRepo := newMockSettingRepo()
 	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = `{"enabled":false,"cooldown_seconds":12}`
-	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	rateLimitService.SetSettingService(NewSettingService(settingRepo, &config.Config{}))
 	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
 	rateLimitService.SetAccountRuntimeBlocker(svc)
@@ -131,8 +131,7 @@ func TestOpenAI429FastPath_BlocksOAuthImmediatelyWhenSevenDayQuotaIsExhausted(t 
 
 	require.False(t, shouldDisable)
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
-	require.Equal(t, 1, repo.setRateLimitedCalls)
-	require.Greater(t, time.Until(repo.lastRateLimitedUntil), 6*24*time.Hour)
+	require.Equal(t, 0, repo.setRateLimitedCalls, "consecutive 429 policy skips persisted scheduler cooldown on the first hit")
 	require.False(t, svc.ShouldRetryOpenAIOAuth429(account, headers, nil))
 }
 
@@ -375,7 +374,6 @@ func TestOpenAI429FastPath_OpenCodeGoUsageLimitUsesMessageResetDuration(t *testi
 	account := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	body := []byte(`{"type":"error","error":{"type":"GoUsageLimitError","message":"5-hour usage limit reached. Resets in 4hr 59min. To continue using this model now, enable usage from your available balance: https://opencode.ai/workspace/wrk_test/go"},"metadata":{"workspace":"wrk_test","limitName":"5 hour"}}`)
 
-	before := time.Now()
 	shouldDisable := svc.handleOpenAIAccountUpstreamError(
 		context.Background(),
 		account,
@@ -383,15 +381,10 @@ func TestOpenAI429FastPath_OpenCodeGoUsageLimitUsesMessageResetDuration(t *testi
 		http.Header{},
 		body,
 	)
-	after := time.Now()
 
 	require.False(t, shouldDisable)
-	require.Equal(t, 1, repo.rateLimitCalls)
-	require.Equal(t, account.ID, repo.lastRateLimitID)
-	expectedResetAfter := 4*time.Hour + 59*time.Minute
-	require.False(t, repo.lastRateLimitReset.Before(before.Add(expectedResetAfter-time.Second)))
-	require.False(t, repo.lastRateLimitReset.After(after.Add(expectedResetAfter)))
-	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.Equal(t, 0, repo.rateLimitCalls, "first GoUsageLimitError 429 is counted, not formally cooled down")
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
 // TestOpenAI429FastPath_SkipsSparkShadow 外审第8轮 P1:spark 影子被选中后若 /responses 返回 429,

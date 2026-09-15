@@ -139,7 +139,7 @@ INSERT INTO ops_system_metrics (
 		opsNullMetricInt(input.RedisConnTotal),
 		opsNullMetricInt(input.RedisConnIdle),
 
-		opsNullInt(input.DBConnActive),
+		opsNullableIntPointer(input.DBConnActive),
 		opsNullInt(input.DBConnIdle),
 		// 等待数与队列深度是量表型指标：0 是"确实没有积压"的有效观测，
 		// 不是"没有数据"。用 opsNullInt 会把 0 折叠成 NULL，
