@@ -1355,6 +1355,24 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 }
 
 // AdminResetAPIKeyRateLimitUsage resets all API key rate-limit usage windows.
+func (s *adminServiceImpl) AdminUpdateAPIKeyConcurrency(ctx context.Context, keyID int64, concurrency int) (*APIKey, error) {
+	if concurrency < 0 {
+		return nil, fmt.Errorf("api key concurrency must be non-negative")
+	}
+	apiKey, err := s.apiKeyRepo.GetByID(ctx, keyID)
+	if err != nil {
+		return nil, err
+	}
+	apiKey.Concurrency = concurrency
+	if err := s.apiKeyRepo.Update(ctx, apiKey, APIKeyUpdateFields{Concurrency: true}); err != nil {
+		return nil, fmt.Errorf("update api key concurrency: %w", err)
+	}
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+	}
+	return apiKey, nil
+}
+
 func (s *adminServiceImpl) AdminResetAPIKeyRateLimitUsage(ctx context.Context, keyID int64) (*APIKey, error) {
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, keyID)
 	if err != nil {

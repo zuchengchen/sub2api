@@ -109,6 +109,10 @@ func (s *helperConcurrencyCacheStub) TrackAPIKeySlot(ctx context.Context, apiKey
 	return nil
 }
 
+func (s *helperConcurrencyCacheStub) AcquireAPIKeySlot(ctx context.Context, apiKeyID int64, maxConcurrency int, requestID string) (bool, error) {
+	return true, s.TrackAPIKeySlot(ctx, apiKeyID, requestID)
+}
+
 func (s *helperConcurrencyCacheStub) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

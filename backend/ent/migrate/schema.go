@@ -21,6 +21,7 @@ var (
 		{Name: "last_used_at", Type: field.TypeTime, Nullable: true},
 		{Name: "ip_whitelist", Type: field.TypeJSON, Nullable: true},
 		{Name: "ip_blacklist", Type: field.TypeJSON, Nullable: true},
+		{Name: "concurrency", Type: field.TypeInt, Default: 0},
 		{Name: "quota", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "quota_used", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
@@ -44,13 +45,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "api_keys_groups_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[22]},
+				Columns:    []*schema.Column{APIKeysColumns[23]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "api_keys_users_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[23]},
+				Columns:    []*schema.Column{APIKeysColumns[24]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -59,12 +60,12 @@ var (
 			{
 				Name:    "apikey_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[23]},
+				Columns: []*schema.Column{APIKeysColumns[24]},
 			},
 			{
 				Name:    "apikey_group_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[22]},
+				Columns: []*schema.Column{APIKeysColumns[23]},
 			},
 			{
 				Name:    "apikey_status",
@@ -84,12 +85,12 @@ var (
 			{
 				Name:    "apikey_quota_quota_used",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[10], APIKeysColumns[11]},
+				Columns: []*schema.Column{APIKeysColumns[11], APIKeysColumns[12]},
 			},
 			{
 				Name:    "apikey_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[12]},
+				Columns: []*schema.Column{APIKeysColumns[13]},
 			},
 		},
 	}
@@ -1139,82 +1140,6 @@ var (
 			},
 		},
 	}
-	// PromoCodesColumns holds the columns for the "promo_codes" table.
-	PromoCodesColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt64, Increment: true},
-		{Name: "code", Type: field.TypeString, Unique: true, Size: 32},
-		{Name: "bonus_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
-		{Name: "max_uses", Type: field.TypeInt, Default: 0},
-		{Name: "used_count", Type: field.TypeInt, Default: 0},
-		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
-		{Name: "expires_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "notes", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
-		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
-	}
-	// PromoCodesTable holds the schema information for the "promo_codes" table.
-	PromoCodesTable = &schema.Table{
-		Name:       "promo_codes",
-		Columns:    PromoCodesColumns,
-		PrimaryKey: []*schema.Column{PromoCodesColumns[0]},
-		Indexes: []*schema.Index{
-			{
-				Name:    "promocode_status",
-				Unique:  false,
-				Columns: []*schema.Column{PromoCodesColumns[5]},
-			},
-			{
-				Name:    "promocode_expires_at",
-				Unique:  false,
-				Columns: []*schema.Column{PromoCodesColumns[6]},
-			},
-		},
-	}
-	// PromoCodeUsagesColumns holds the columns for the "promo_code_usages" table.
-	PromoCodeUsagesColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt64, Increment: true},
-		{Name: "bonus_amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
-		{Name: "used_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "promo_code_id", Type: field.TypeInt64},
-		{Name: "user_id", Type: field.TypeInt64},
-	}
-	// PromoCodeUsagesTable holds the schema information for the "promo_code_usages" table.
-	PromoCodeUsagesTable = &schema.Table{
-		Name:       "promo_code_usages",
-		Columns:    PromoCodeUsagesColumns,
-		PrimaryKey: []*schema.Column{PromoCodeUsagesColumns[0]},
-		ForeignKeys: []*schema.ForeignKey{
-			{
-				Symbol:     "promo_code_usages_promo_codes_usage_records",
-				Columns:    []*schema.Column{PromoCodeUsagesColumns[3]},
-				RefColumns: []*schema.Column{PromoCodesColumns[0]},
-				OnDelete:   schema.NoAction,
-			},
-			{
-				Symbol:     "promo_code_usages_users_promo_code_usages",
-				Columns:    []*schema.Column{PromoCodeUsagesColumns[4]},
-				RefColumns: []*schema.Column{UsersColumns[0]},
-				OnDelete:   schema.NoAction,
-			},
-		},
-		Indexes: []*schema.Index{
-			{
-				Name:    "promocodeusage_promo_code_id",
-				Unique:  false,
-				Columns: []*schema.Column{PromoCodeUsagesColumns[3]},
-			},
-			{
-				Name:    "promocodeusage_user_id",
-				Unique:  false,
-				Columns: []*schema.Column{PromoCodeUsagesColumns[4]},
-			},
-			{
-				Name:    "promocodeusage_promo_code_id_user_id",
-				Unique:  true,
-				Columns: []*schema.Column{PromoCodeUsagesColumns[3], PromoCodeUsagesColumns[4]},
-			},
-		},
-	}
 	// ProxiesColumns holds the columns for the "proxies" table.
 	ProxiesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -1927,8 +1852,6 @@ var (
 		PaymentOrdersTable,
 		PaymentProviderInstancesTable,
 		PendingAuthSessionsTable,
-		PromoCodesTable,
-		PromoCodeUsagesTable,
 		ProxiesTable,
 		RedeemCodesTable,
 		SecuritySecretsTable,
@@ -2024,14 +1947,6 @@ func init() {
 	PendingAuthSessionsTable.ForeignKeys[0].RefTable = UsersTable
 	PendingAuthSessionsTable.Annotation = &entsql.Annotation{
 		Table: "pending_auth_sessions",
-	}
-	PromoCodesTable.Annotation = &entsql.Annotation{
-		Table: "promo_codes",
-	}
-	PromoCodeUsagesTable.ForeignKeys[0].RefTable = PromoCodesTable
-	PromoCodeUsagesTable.ForeignKeys[1].RefTable = UsersTable
-	PromoCodeUsagesTable.Annotation = &entsql.Annotation{
-		Table: "promo_code_usages",
 	}
 	ProxiesTable.ForeignKeys[0].RefTable = ProxiesTable
 	ProxiesTable.Annotation = &entsql.Annotation{
