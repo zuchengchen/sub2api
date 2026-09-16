@@ -37,6 +37,26 @@ func TestReliabilityMigrationsPersistOutboxAndDirtyWork(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.PingContext(ctx))
 
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS accounts (
+			id bigserial PRIMARY KEY,
+			name text, platform text, type text, credentials text, extra jsonb,
+			proxy_id bigint, concurrency integer, load_factor double precision,
+			priority integer, rate_multiplier double precision, status text,
+			expires_at timestamptz, auto_pause_on_expired boolean,
+			schedulable boolean, rate_limit_reset_at timestamptz,
+			overload_until timestamptz, temp_unschedulable_until timestamptz,
+			deleted_at timestamptz
+		);
+		CREATE TABLE IF NOT EXISTS groups (
+			id bigserial PRIMARY KEY, name text, extra jsonb, deleted_at timestamptz
+		);
+		CREATE TABLE IF NOT EXISTS account_groups (
+			account_id bigint NOT NULL, group_id bigint NOT NULL, priority integer,
+			PRIMARY KEY (account_id, group_id)
+		);`)
+	require.NoError(t, err)
+
 	for _, name := range []string{
 		"244_billing_attempt_outbox.sql",
 		"249_scheduler_dirty_work.sql",
