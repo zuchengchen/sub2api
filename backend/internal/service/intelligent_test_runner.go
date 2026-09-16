@@ -23,12 +23,19 @@ type intelligentRunContext struct {
 	capture *intelligentCapture
 }
 
+// ChatGPT Codex plan-gates gpt-5.3-codex and gpt-5.4. Empty ChatGPT OAuth
+// intelligent tests use gpt-6-astra.
+const intelligentTestDefaultCodexModel = "gpt-6-astra"
+
 // Only an empty selection receives the protocol default. Explicit choices
 // remain observable even when the upstream rejects the requested model.
 func resolveIntelligentTestModel(account *Account, configured string) string {
 	model := strings.TrimSpace(configured)
-	if account != nil && account.UsesOpenAICodexProtocol() && model == "" {
-		return "gpt-5.3-codex"
+	if model != "" {
+		return model
+	}
+	if account != nil && account.IsOpenAIOAuthLike() {
+		return intelligentTestDefaultCodexModel
 	}
 	return model
 }
@@ -262,6 +269,8 @@ func classifyIntelligentError(code int, message string) string {
 		return "network_error"
 	case strings.Contains(lower, "max_tokens") || strings.Contains(lower, "max_output_tokens") || strings.Contains(lower, "max_completion_tokens"):
 		return "request_error"
+	case isOpenAICodexPlanGatedModelError(code, []byte(message)) || strings.Contains(lower, "model is not supported when using codex"):
+		return "model_error"
 	case code == 404 || strings.Contains(lower, "model not found") || strings.Contains(lower, "unsupported model"):
 		return "model_error"
 	case code == 400 || code == 422:
