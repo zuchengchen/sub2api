@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 	"github.com/gin-gonic/gin"
@@ -24,6 +23,10 @@ type intelligentRunContext struct {
 	capture *intelligentCapture
 }
 
+// ChatGPT Codex plan-gates gpt-5.3-codex and gpt-5.4. The low-iq source
+// project's OAuth intelligent-test fixtures send gpt-5.2.
+const intelligentTestDefaultCodexModel = "gpt-5.2"
+
 // Only an empty selection receives the protocol default. Explicit choices
 // remain observable even when the upstream rejects the requested model.
 func resolveIntelligentTestModel(account *Account, configured string) string {
@@ -31,11 +34,8 @@ func resolveIntelligentTestModel(account *Account, configured string) string {
 	if model != "" {
 		return model
 	}
-	// ChatGPT Codex rejects gpt-5.3-codex as plan-gated. Use the same default
-	// as account connectivity tests so an empty setting still reaches a model
-	// the current Codex catalog accepts.
 	if account != nil && account.IsOpenAIOAuthLike() {
-		return openai.DefaultTestModel
+		return intelligentTestDefaultCodexModel
 	}
 	return model
 }

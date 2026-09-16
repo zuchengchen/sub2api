@@ -3,15 +3,14 @@ package service
 import (
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolveIntelligentTestModelDefaultsChatGPTToConnectivityModel(t *testing.T) {
+func TestResolveIntelligentTestModelDefaultsChatGPTToGpt52(t *testing.T) {
 	t.Parallel()
 	oauth := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
-	require.Equal(t, openai.DefaultTestModel, resolveIntelligentTestModel(oauth, ""))
-	require.Equal(t, openai.DefaultTestModel, resolveIntelligentTestModel(oauth, "  "))
+	require.Equal(t, "gpt-5.2", resolveIntelligentTestModel(oauth, ""))
+	require.Equal(t, "gpt-5.2", resolveIntelligentTestModel(oauth, "  "))
 	require.Equal(t, "gpt-5.3-codex-spark", resolveIntelligentTestModel(oauth, "gpt-5.3-codex-spark"))
 	require.Equal(t, "", resolveIntelligentTestModel(&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, ""))
 	require.Equal(t, "", resolveIntelligentTestModel(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, ""))
