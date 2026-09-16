@@ -565,6 +565,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
 	}
+	applyIntelligentPayloadPrompt(ctx, payload)
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event
@@ -643,6 +644,7 @@ func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Con
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
 	}
+	applyIntelligentPayloadPrompt(ctx, payload)
 	payloadBytes, _ := json.Marshal(payload)
 	vertexBody, err := buildVertexAnthropicRequestBody(payloadBytes)
 	if err != nil {
@@ -727,6 +729,7 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 		"max_tokens":  256,
 		"temperature": 1,
 	}
+	applyIntelligentPayloadPrompt(ctx, bedrockPayload)
 	bedrockBody, _ := json.Marshal(bedrockPayload)
 
 	// Use non-streaming endpoint (response is standard Claude JSON)
@@ -892,6 +895,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
 	payload := createOpenAITestPayload(upstreamTestModelID, isOAuth)
+	applyIntelligentPayloadPrompt(ctx, payload)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to encode OpenAI test request")
@@ -952,6 +956,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	credentialAccount.ApplyHeaderOverrides(req.Header)
+	if err := applyIntelligentTestProtection(c, account, req.Header, payloadBytes); err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
 
 	// Get proxy URL
 	proxyURL := ""
@@ -1264,6 +1271,11 @@ func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx con
 	payloadBytes, err := buildGrokQuotaProbeBody(testModelID)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok test payload")
+	}
+	if intelligentPrompt(ctx) != "" {
+		payload := createOpenAITestPayload(testModelID, false)
+		applyIntelligentPayloadPrompt(ctx, payload)
+		payloadBytes, _ = json.Marshal(payload)
 	}
 
 	if !agentIdentityTaskRecoveryWasTried(ctx) {
@@ -2141,6 +2153,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	c.Writer.Flush()
 
 	payload := createOpenAIChatCompletionsTestPayload(testModelID, prompt)
+	applyIntelligentPayloadPrompt(ctx, payload)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to encode Chat Completions test request")
@@ -2165,6 +2178,9 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
+	if err := applyIntelligentTestProtection(c, account, req.Header, payloadBytes); err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
