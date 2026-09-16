@@ -67,6 +67,68 @@ func TestBillingOutboxDefaultPathEnqueuesInsteadOfApplying(t *testing.T) {
 	require.Equal(t, 1.25, outbox.commands[0].Billing.BalanceCost)
 }
 
+func TestBillingOutboxPreservesCustomizedBillingAmounts(t *testing.T) {
+	type tc struct {
+		name           string
+		cost           *CostBreakdown
+		isSubscription bool
+		wantBalance    float64
+		wantSub        float64
+	}
+	cases := []tc{
+		{
+			name:        "svip actual cost is enqueued unchanged",
+			cost:        &CostBreakdown{TotalCost: 2.5, ActualCost: 0.5},
+			wantBalance: 0.5,
+		},
+		{
+			name:        "luna and long-context actual cost is enqueued unchanged",
+			cost:        &CostBreakdown{TotalCost: 3.25, ActualCost: 3.25},
+			wantBalance: 3.25,
+		},
+		{
+			name:        "grok profit-control actual cost is enqueued unchanged",
+			cost:        &CostBreakdown{TotalCost: 1.0, ActualCost: 1.4},
+			wantBalance: 1.4,
+		},
+		{
+			name:           "subscription actual cost stays on subscription field",
+			cost:           &CostBreakdown{TotalCost: 0.8, ActualCost: 0.8},
+			isSubscription: true,
+			wantSub:        0.8,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			outbox := &capturingBillingOutbox{}
+			repo := &applyCountingBillingRepo{}
+			user := &User{ID: 3, Email: "u@example.com"}
+			apiKey := &APIKey{ID: 9, UserID: 3, Key: "sk-test"}
+			account := &Account{ID: 2, Platform: PlatformOpenAI, Type: "oauth"}
+			params := &postUsageBillingParams{
+				Cost:               c.cost,
+				User:               user,
+				APIKey:             apiKey,
+				Account:            account,
+				IsSubscriptionBill: c.isSubscription,
+				Platform:           PlatformOpenAI,
+			}
+			if c.isSubscription {
+				params.Subscription = &UserSubscription{ID: 11}
+			}
+			applied, err := applyUsageBilling(context.Background(), "req-amt", &UsageLog{RequestID: "req-amt", Model: "gpt-5.4"}, params, &billingDeps{}, repo, outbox)
+			require.NoError(t, err)
+			require.False(t, applied)
+			require.Zero(t, repo.calls)
+			require.Len(t, outbox.commands, 1)
+			require.Equal(t, c.wantBalance, outbox.commands[0].Billing.BalanceCost)
+			require.Equal(t, c.wantSub, outbox.commands[0].Billing.SubscriptionCost)
+			require.Equal(t, c.cost.ActualCost, outbox.commands[0].Billing.BalanceCost+outbox.commands[0].Billing.SubscriptionCost)
+		})
+	}
+}
+
 func TestBillingOutboxAbsentFallsBackToSyncApply(t *testing.T) {
 	repo := &applyCountingBillingRepo{}
 	user := &User{ID: 3}

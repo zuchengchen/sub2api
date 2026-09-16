@@ -56,6 +56,8 @@ const messages: Record<string, string> = {
   'keys.status.inactive': 'Inactive',
   'keys.status.quota_exhausted': 'Quota exhausted',
   'keys.usage': 'Usage',
+  'keys.concurrencyLabel': 'Concurrency limit',
+  'keys.concurrencyHint': '0 means unlimited concurrent requests for this key.',
 }
 
 vi.mock('@/api', () => ({
@@ -124,6 +126,7 @@ const createApiKey = (): ApiKey => ({
   expires_at: null,
   created_at: '2026-06-27T00:00:00Z',
   updated_at: '2026-06-27T00:00:00Z',
+  concurrency: 0,
   current_concurrency: 3,
   rate_limit_5h: 0,
   rate_limit_1d: 0,
@@ -568,6 +571,14 @@ describe('user KeysView column settings', () => {
 
     beforeEach(() => {
       getAvailableGroups.mockResolvedValue(availableGroups)
+    })
+
+    it('exposes an editable concurrency input defaulting to unlimited', async () => {
+      const wrapper = await openCreate()
+      const input = wrapper.get('[data-testid="key-concurrency"]')
+      expect((input.element as HTMLInputElement).value).toBe('0')
+      await input.setValue(4)
+      expect((input.element as HTMLInputElement).value).toBe('4')
     })
 
     it('classifies all configured platforms and retains the complete table filter', async () => {

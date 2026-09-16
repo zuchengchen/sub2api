@@ -27,6 +27,7 @@ func provideWorkerRuntime(
 	channelMonitorV2 *service.ChannelMonitorV2Aggregator,
 	outboxCleanup *service.OutboxCleanupService,
 	supportReader *service.SupportDecisionAtomicReader,
+	_ service.SupportDecisionReader,
 	dirtyWorkRepo service.SchedulerDirtyWorkRepository,
 	ownershipRepo service.SchedulerOwnershipRepository,
 	dirtyProcessor service.SchedulerSnapshotDirtyProcessor,

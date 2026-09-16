@@ -44,6 +44,7 @@ func TestProvideWorkerRuntimeRegistersAndStartsPilots(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -90,6 +91,7 @@ func TestProvideWorkerRuntimeRegistersTokenRefreshOnlyWhenEnabled(t *testing.T) 
 			service.NewChannelMonitorV2Aggregator(nil, nil, nil),
 			service.NewOutboxCleanupService(nil, nil, nil, 30*24*time.Hour),
 			service.NewSupportDecisionAtomicReader(30*time.Second),
+			nil,
 			nil,
 			nil,
 			nil,

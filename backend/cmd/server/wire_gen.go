@@ -236,8 +236,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorV2Aggregator := service.ProvideChannelMonitorV2Aggregator(channelMonitorV2Repository, db, settingService)
 	outboxCleanupService := service.ProvideOutboxCleanupService(billingOutboxRepository, schedulerOutboxRepository, schedulerCache, leaderLockCache, db, configConfig)
 	supportDecisionAtomicReader := service.ProvideSupportDecisionAtomicReader()
+	supportDecisionReader := service.ProvideSupportDecisionReader(supportDecisionAtomicReader, gatewayService, openAIGatewayService)
 	schedulerSnapshotDirtyProcessor := service.ProvideSchedulerSnapshotDirtyProcessor(schedulerSnapshotService)
-	runtime, err := provideWorkerRuntime(accountExpiryService, idempotencyCleanupService, usageRecordWorkerPool, subscriptionExpiryService, paymentOrderExpiryService, tokenRefreshService, oAuthService, openAIOAuthService, grokOAuthService, userMessageQueueService, concurrencyService, emailQueueService, opsSystemLogSink, channelMonitorV2Aggregator, outboxCleanupService, supportDecisionAtomicReader, schedulerDirtyWorkRepository, schedulerOwnershipRepository, schedulerSnapshotDirtyProcessor)
+	runtime, err := provideWorkerRuntime(accountExpiryService, idempotencyCleanupService, usageRecordWorkerPool, subscriptionExpiryService, paymentOrderExpiryService, tokenRefreshService, oAuthService, openAIOAuthService, grokOAuthService, userMessageQueueService, concurrencyService, emailQueueService, opsSystemLogSink, channelMonitorV2Aggregator, outboxCleanupService, supportDecisionAtomicReader, supportDecisionReader, schedulerDirtyWorkRepository, schedulerOwnershipRepository, schedulerSnapshotDirtyProcessor)
 	if err != nil {
 		return nil, err
 	}

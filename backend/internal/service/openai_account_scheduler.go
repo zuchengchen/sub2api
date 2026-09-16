@@ -1417,20 +1417,21 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	if err != nil {
 		return nil, 0, 0, 0, err
 	}
+	trustedGroup := trustedSchedulingGroupFromContext(ctx, req.GroupID)
 	if len(accounts) == 0 {
-		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary(""))
+		return nil, 0, 0, 0, s.unavailableError(ctx, req, nil, false, openAISelectionFilterStats{}.summary(""), trustedGroup)
 	}
 	// Local free-tier soft gate on the Grok scheduling path only (not admin probe).
 	accounts = s.filterGrokFreeQuotaAccounts(ctx, accounts)
 	if len(accounts) == 0 {
-		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary("grok_free_quota_soft_gate"))
+		return nil, 0, 0, 0, s.unavailableError(ctx, req, nil, false, openAISelectionFilterStats{}.summary("grok_free_quota_soft_gate"), trustedGroup)
 	}
 	// Team+model rate-limit cool: siblings of a 429'd team skip the hot model.
 	if req.Platform == PlatformGrok {
 		now := time.Now()
 		filtered := filterGrokTeamModelRateLimitedAccounts(accounts, req.RequestedModel, now)
 		if len(filtered) == 0 && len(accounts) > 0 {
-			return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary("grok_team_model_rate_limit"))
+			return nil, 0, 0, 0, s.unavailableError(ctx, req, accounts, false, openAISelectionFilterStats{}.summary("grok_team_model_rate_limit"), trustedGroup)
 		}
 		if filtered != nil {
 			accounts = filtered
@@ -1438,7 +1439,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		// Per-account model free-usage soft-block (other models stay eligible).
 		modelFiltered := filterGrokModelQuotaBlockedAccounts(accounts, req.RequestedModel, now)
 		if len(modelFiltered) == 0 && len(accounts) > 0 {
-			return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary("grok_model_quota_block"))
+			return nil, 0, 0, 0, s.unavailableError(ctx, req, accounts, false, openAISelectionFilterStats{}.summary("grok_model_quota_block"), trustedGroup)
 		}
 		accounts = modelFiltered
 	}
@@ -1494,7 +1495,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		})
 	}
 	if len(filtered) == 0 {
-		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, filterStats.summary(""))
+		return nil, 0, 0, 0, s.unavailableError(ctx, req, accounts, false, filterStats.summary(""), schedGroup)
 	}
 
 	loadMap := map[int64]*AccountLoadInfo{}
@@ -1688,7 +1689,7 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 	loadSkew := attempt.loadSkew
 
 	if len(attempt.selectionOrder) == 0 {
-		return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, attempt.compactBlocked, filterStats.summary("selection_order_empty"))
+		return nil, candidateCount, topK, loadSkew, s.unavailableError(ctx, req, nil, attempt.compactBlocked, filterStats.summary("selection_order_empty"), trustedSchedulingGroupFromContext(ctx, req.GroupID))
 	}
 
 	if stickyFallback, stickyErr := s.tryFallbackToWeightedSticky(ctx, req); stickyErr != nil {
@@ -1723,7 +1724,7 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 				continue
 			}
 			if !s.consumeOpenAISelectionDBRecheck(budget) {
-				return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, compactBlocked, filterStats.summary("selection_order_exhausted"))
+				return nil, candidateCount, topK, loadSkew, s.unavailableError(ctx, req, nil, compactBlocked, filterStats.summary("selection_order_exhausted"), trustedSchedulingGroupFromContext(ctx, req.GroupID))
 			}
 			fresh = s.service.recheckSelectedOpenAIAccountFromDB(ctx, fresh, req.GroupID, req.Platform, req.RequestedModel, false, req.RequiredCapability)
 			if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport) || !s.isAccountRequestCompatible(ctx, fresh, req) {
@@ -1745,7 +1746,34 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 		}
 	}
 
-	return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, compactBlocked, filterStats.summary("selection_order_exhausted"))
+	return nil, candidateCount, topK, loadSkew, s.unavailableError(ctx, req, nil, compactBlocked, filterStats.summary("selection_order_exhausted"), trustedSchedulingGroupFromContext(ctx, req.GroupID))
+}
+
+func (s *defaultOpenAIAccountScheduler) unavailableError(
+	ctx context.Context,
+	req OpenAIAccountScheduleRequest,
+	accounts []Account,
+	compactBlocked bool,
+	details string,
+	schedGroup *Group,
+) error {
+	if s == nil || s.service == nil {
+		return noAvailableOpenAISelectionError(req.RequestedModel, compactBlocked, details)
+	}
+	return s.service.emptyPoolOpenAISelectionError(
+		ctx,
+		req.GroupID,
+		accounts,
+		req.RequestedModel,
+		req.ExcludedIDs,
+		req.RequireCompact,
+		req.RequiredCapability,
+		req.RequiredImageCapability,
+		req.RequiredTransport,
+		schedGroup,
+		compactBlocked,
+		details,
+	)
 }
 
 func (s *defaultOpenAIAccountScheduler) isAccountTransportCompatible(account *Account, requiredTransport OpenAIUpstreamTransport) bool {
@@ -2181,6 +2209,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	previousResponseCanMove bool,
 	useUpstreamTokenCost bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	ctx = WithPublicModelSupportMiss404(ctx)
 	selection, decision, err := s.selectAccountWithSchedulerOnce(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
 	if err == nil || openAIProxyStreamQuarantineBypassed(ctx) {
 		return selection, decision, err

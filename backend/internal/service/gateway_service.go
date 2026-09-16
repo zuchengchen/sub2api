@@ -810,11 +810,18 @@ type GatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	billingOutboxRepo     BillingOutboxRepository
+	supportDecisionReader SupportDecisionReader
 }
 
 func (s *GatewayService) SetBillingOutboxRepository(repo BillingOutboxRepository) {
 	if s != nil {
 		s.billingOutboxRepo = repo
+	}
+}
+
+func (s *GatewayService) SetSupportDecisionReader(reader SupportDecisionReader) {
+	if s != nil {
+		s.supportDecisionReader = reader
 	}
 }
 

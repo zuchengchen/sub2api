@@ -65,7 +65,7 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 		// An empty requested model keeps account selection capability-based;
 		// the actual voice model remains in the upstream WS query below.
 		candidate, _, selectErr := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(), apiKey.GroupID, "", "", "", failed,
+			service.WithPublicModelSupportMiss404(c.Request.Context()), apiKey.GroupID, "", "", "", failed,
 			service.OpenAIUpstreamTransportHTTPSSE,
 			service.OpenAIEndpointCapabilityChatCompletions,
 			false, false, false, service.PlatformGrok,
@@ -224,7 +224,7 @@ func (h *OpenAIGatewayHandler) GrokVoice(c *gin.Context, endpoint string) {
 
 	for attempts := 0; attempts < 4; attempts++ {
 		selection, _, selectErr := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			service.WithPublicModelSupportMiss404(c.Request.Context()),
 			apiKey.GroupID,
 			"",
 			"",

@@ -468,6 +468,7 @@ type OpenAIGatewayService struct {
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	billingOutboxRepo     BillingOutboxRepository
+	supportDecisionReader SupportDecisionReader
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
 
@@ -513,6 +514,12 @@ type OpenAIGatewayService struct {
 func (s *OpenAIGatewayService) SetBillingOutboxRepository(repo BillingOutboxRepository) {
 	if s != nil {
 		s.billingOutboxRepo = repo
+	}
+}
+
+func (s *OpenAIGatewayService) SetSupportDecisionReader(reader SupportDecisionReader) {
+	if s != nil {
+		s.supportDecisionReader = reader
 	}
 }
 

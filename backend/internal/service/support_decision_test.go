@@ -35,6 +35,12 @@ func TestSupportDecisionUnknownFallbackForUnmodeledConstraints(t *testing.T) {
 		{Scope: SupportDecisionScope{Platform: PlatformGrok}, RequestedModel: "grok-4.6"},
 		{Scope: SupportDecisionScope{Platform: PlatformComposite}, RequestedModel: "routed-model"},
 		{Scope: SupportDecisionScope{Platform: PlatformAnthropic}, RequestedModel: "claude-opus-4-6"},
+		{Scope: SupportDecisionScope{Platform: PlatformKimi}, RequestedModel: "kimi-k2"},
+		{Scope: SupportDecisionScope{Platform: PlatformZhipu}, RequestedModel: "glm-4.6"},
+		{Scope: SupportDecisionScope{Platform: PlatformDeepseek}, RequestedModel: "deepseek-chat"},
+		{Scope: SupportDecisionScope{Platform: PlatformMiniMax}, RequestedModel: "MiniMax-M2"},
+		{Scope: SupportDecisionScope{Platform: PlatformOpenCodeGo}, RequestedModel: "opencode-go"},
+		{Scope: SupportDecisionScope{Platform: PlatformOpenAI}, RequestedModel: "gpt-5.4", Transport: OpenAIUpstreamTransportAny},
 	} {
 		require.Equal(t, SupportDecisionUnknown, reader.Lookup(query), query)
 		require.NotEqual(t, SupportDecisionPureMiss, reader.Lookup(query))

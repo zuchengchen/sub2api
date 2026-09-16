@@ -652,7 +652,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			service.WithPublicModelSupportMiss404(c.Request.Context()),
 			apiKey.GroupID,
 			previousResponseID,
 			sessionHash,
@@ -1283,7 +1283,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			service.WithPublicModelSupportMiss404(c.Request.Context()),
 			apiKey.GroupID,
 			"", // no previous_response_id
 			sessionHash,
@@ -2654,7 +2654,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		reqLog.Debug("openai.websocket_account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			ctx,
+			service.WithPublicModelSupportMiss404(ctx),
 			apiKey.GroupID,
 			previousResponseID,
 			sessionHash,

@@ -28,11 +28,14 @@ type SupportDecisionScope struct {
 }
 
 type SupportDecisionQuery struct {
-	Scope           SupportDecisionScope
-	RequestedModel  string
-	RequiresPrivacy bool
-	ThinkingEnabled bool
-	RequireCompact  bool
+	Scope              SupportDecisionScope
+	RequestedModel     string
+	RequiresPrivacy    bool
+	ThinkingEnabled    bool
+	RequireCompact     bool
+	EndpointCapability OpenAIEndpointCapability
+	ImageCapability    OpenAIImagesCapability
+	Transport          OpenAIUpstreamTransport
 }
 
 type SupportDecisionReader interface {
@@ -56,7 +59,17 @@ func ProvideSupportDecisionAtomicReader() *SupportDecisionAtomicReader {
 	return NewSupportDecisionAtomicReader(30 * time.Second)
 }
 
-func ProvideSupportDecisionReader(reader *SupportDecisionAtomicReader) SupportDecisionReader {
+func ProvideSupportDecisionReader(
+	reader *SupportDecisionAtomicReader,
+	gatewayService *GatewayService,
+	openAIGatewayService *OpenAIGatewayService,
+) SupportDecisionReader {
+	if gatewayService != nil {
+		gatewayService.SetSupportDecisionReader(reader)
+	}
+	if openAIGatewayService != nil {
+		openAIGatewayService.SetSupportDecisionReader(reader)
+	}
 	return reader
 }
 
@@ -123,12 +136,15 @@ func (t *SupportDecisionTable) Lookup(query SupportDecisionQuery) SupportDecisio
 	if strings.TrimSpace(query.RequestedModel) == "" {
 		return SupportDecisionUnknown
 	}
-	// Near-limit, Grok quota, compact, composite routing, and profit-control are
-	// unmodeled constraints. Conservative Unknown keeps existing selection.
+	// Near-limit, Grok quota, compact, composite routing, profit-control, and
+	// other unmodeled constraints stay Unknown so existing selection is unchanged.
 	if query.RequireCompact {
 		return SupportDecisionUnknown
 	}
 	if platform == PlatformComposite {
+		return SupportDecisionUnknown
+	}
+	if query.EndpointCapability != "" || query.ImageCapability != "" || query.Transport != "" {
 		return SupportDecisionUnknown
 	}
 	return SupportDecisionUnknown

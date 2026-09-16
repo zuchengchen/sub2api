@@ -32,6 +32,7 @@ func (s *GatewayService) SelectAccountForModel(ctx context.Context, groupID *int
 
 // SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
 func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
+	ctx = WithPublicModelSupportMiss404(ctx)
 	// 优先检查 context 中的强制平台
 	var platform string
 	forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)
@@ -98,6 +99,7 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 // metadataUserID: 用于客户端亲和调度，从中提取客户端 ID
 // sub2apiUserID: 系统用户 ID，用于二维亲和调度
 func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, metadataUserID string, sub2apiUserID int64) (*AccountSelectionResult, error) {
+	ctx = WithPublicModelSupportMiss404(ctx)
 	// 调试日志：记录调度入口参数
 	excludedIDsList := make([]int64, 0, len(excludedIDs))
 	for id := range excludedIDs {
@@ -224,7 +226,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		return nil, err
 	}
 	if len(accounts) == 0 {
-		return nil, ErrNoAvailableAccounts
+		return nil, s.emptyPoolSelectionError(ctx, accounts, requestedModel, platform, excludedIDs, false, group, groupID, ErrNoAvailableAccounts)
 	}
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
@@ -701,7 +703,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				"total_accounts", len(accounts))
 			return nil, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 		}
-		return nil, ErrNoAvailableAccounts
+		return nil, s.emptyPoolSelectionError(ctx, accounts, requestedModel, platform, excludedIDs, false, group, groupID, ErrNoAvailableAccounts)
 	}
 
 	accountLoads := make([]AccountWithConcurrency, 0, len(candidates))
@@ -2075,10 +2077,11 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 
 	if selected == nil {
 		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs)
+		fallback := ErrNoAvailableAccounts
 		if requestedModel != "" {
-			return nil, fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
+			fallback = fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
 		}
-		return nil, ErrNoAvailableAccounts
+		return nil, s.emptyPoolSelectionError(ctx, accounts, requestedModel, platform, excludedIDs, false, schedGroup, groupID, fallback)
 	}
 
 	// 4. 建立粘性绑定
@@ -2328,10 +2331,11 @@ func (s *GatewayService) selectAccountWithModelRouting(ctx context.Context, grou
 
 	if selected == nil {
 		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, nativePlatform, accounts, excludedIDs)
+		fallback := ErrNoAvailableAccounts
 		if requestedModel != "" {
-			return nil, fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
+			fallback = fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
 		}
-		return nil, ErrNoAvailableAccounts
+		return nil, s.emptyPoolSelectionError(ctx, accounts, requestedModel, nativePlatform, excludedIDs, true, schedGroup, groupID, fallback)
 	}
 
 	// 4. 建立粘性绑定

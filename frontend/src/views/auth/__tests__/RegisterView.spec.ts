@@ -144,9 +144,9 @@ describe('RegisterView', () => {
       turnstile_token: undefined,
       tencent_captcha_ticket: 'ticket',
       tencent_captcha_randstr: 'randstr',
-      promo_code: undefined,
       invitation_code: undefined
     })
+    expect(registerMock.mock.calls[0][0]).not.toHaveProperty('promo_code')
     expect(pushMock).toHaveBeenCalledWith('/dashboard')
   })
 
