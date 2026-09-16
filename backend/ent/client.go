@@ -37,6 +37,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
+	"github.com/Wei-Shaw/sub2api/ent/securitypolicykeyword"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
@@ -102,6 +103,8 @@ type Client struct {
 	Proxy *ProxyClient
 	// RedeemCode is the client for interacting with the RedeemCode builders.
 	RedeemCode *RedeemCodeClient
+	// SecurityPolicyKeyword is the client for interacting with the SecurityPolicyKeyword builders.
+	SecurityPolicyKeyword *SecurityPolicyKeywordClient
 	// SecuritySecret is the client for interacting with the SecuritySecret builders.
 	SecuritySecret *SecuritySecretClient
 	// Setting is the client for interacting with the Setting builders.
@@ -159,6 +162,7 @@ func (c *Client) init() {
 	c.PendingAuthSession = NewPendingAuthSessionClient(c.config)
 	c.Proxy = NewProxyClient(c.config)
 	c.RedeemCode = NewRedeemCodeClient(c.config)
+	c.SecurityPolicyKeyword = NewSecurityPolicyKeywordClient(c.config)
 	c.SecuritySecret = NewSecuritySecretClient(c.config)
 	c.Setting = NewSettingClient(c.config)
 	c.SubscriptionPlan = NewSubscriptionPlanClient(c.config)
@@ -285,6 +289,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		PendingAuthSession:            NewPendingAuthSessionClient(cfg),
 		Proxy:                         NewProxyClient(cfg),
 		RedeemCode:                    NewRedeemCodeClient(cfg),
+		SecurityPolicyKeyword:         NewSecurityPolicyKeywordClient(cfg),
 		SecuritySecret:                NewSecuritySecretClient(cfg),
 		Setting:                       NewSettingClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
@@ -338,6 +343,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		PendingAuthSession:            NewPendingAuthSessionClient(cfg),
 		Proxy:                         NewProxyClient(cfg),
 		RedeemCode:                    NewRedeemCodeClient(cfg),
+		SecurityPolicyKeyword:         NewSecurityPolicyKeywordClient(cfg),
 		SecuritySecret:                NewSecuritySecretClient(cfg),
 		Setting:                       NewSettingClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
@@ -385,9 +391,9 @@ func (c *Client) Use(hooks ...Hook) {
 		c.ChannelMonitorRequestTemplate, c.CompositeModelRoute, c.ErrorPassthroughRule,
 		c.Group, c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
 		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.Proxy,
-		c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
+		c.RedeemCode, c.SecurityPolicyKeyword, c.SecuritySecret, c.Setting,
+		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog,
+		c.User, c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
 		c.UserPlatformQuota, c.UserSubscription,
 	} {
 		n.Use(hooks...)
@@ -404,9 +410,9 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.ChannelMonitorRequestTemplate, c.CompositeModelRoute, c.ErrorPassthroughRule,
 		c.Group, c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
 		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.Proxy,
-		c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
+		c.RedeemCode, c.SecurityPolicyKeyword, c.SecuritySecret, c.Setting,
+		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog,
+		c.User, c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
 		c.UserPlatformQuota, c.UserSubscription,
 	} {
 		n.Intercept(interceptors...)
@@ -460,6 +466,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Proxy.mutate(ctx, m)
 	case *RedeemCodeMutation:
 		return c.RedeemCode.mutate(ctx, m)
+	case *SecurityPolicyKeywordMutation:
+		return c.SecurityPolicyKeyword.mutate(ctx, m)
 	case *SecuritySecretMutation:
 		return c.SecuritySecret.mutate(ctx, m)
 	case *SettingMutation:
@@ -2779,6 +2787,22 @@ func (c *GroupClient) QueryAllowedUsers(_m *Group) *UserQuery {
 	return query
 }
 
+// QuerySecurityPolicyKeywords queries the security_policy_keywords edge of a Group.
+func (c *GroupClient) QuerySecurityPolicyKeywords(_m *Group) *SecurityPolicyKeywordQuery {
+	query := (&SecurityPolicyKeywordClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(group.Table, group.FieldID, id),
+			sqlgraph.To(securitypolicykeyword.Table, securitypolicykeyword.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, true, group.SecurityPolicyKeywordsTable, group.SecurityPolicyKeywordsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryAccountGroups queries the account_groups edge of a Group.
 func (c *GroupClient) QueryAccountGroups(_m *Group) *AccountGroupQuery {
 	query := (&AccountGroupClient{config: c.config}).Query()
@@ -4061,6 +4085,157 @@ func (c *RedeemCodeClient) mutate(ctx context.Context, m *RedeemCodeMutation) (V
 		return (&RedeemCodeDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown RedeemCode mutation op: %q", m.Op())
+	}
+}
+
+// SecurityPolicyKeywordClient is a client for the SecurityPolicyKeyword schema.
+type SecurityPolicyKeywordClient struct {
+	config
+}
+
+// NewSecurityPolicyKeywordClient returns a client for the SecurityPolicyKeyword from the given config.
+func NewSecurityPolicyKeywordClient(c config) *SecurityPolicyKeywordClient {
+	return &SecurityPolicyKeywordClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `securitypolicykeyword.Hooks(f(g(h())))`.
+func (c *SecurityPolicyKeywordClient) Use(hooks ...Hook) {
+	c.hooks.SecurityPolicyKeyword = append(c.hooks.SecurityPolicyKeyword, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `securitypolicykeyword.Intercept(f(g(h())))`.
+func (c *SecurityPolicyKeywordClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SecurityPolicyKeyword = append(c.inters.SecurityPolicyKeyword, interceptors...)
+}
+
+// Create returns a builder for creating a SecurityPolicyKeyword entity.
+func (c *SecurityPolicyKeywordClient) Create() *SecurityPolicyKeywordCreate {
+	mutation := newSecurityPolicyKeywordMutation(c.config, OpCreate)
+	return &SecurityPolicyKeywordCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SecurityPolicyKeyword entities.
+func (c *SecurityPolicyKeywordClient) CreateBulk(builders ...*SecurityPolicyKeywordCreate) *SecurityPolicyKeywordCreateBulk {
+	return &SecurityPolicyKeywordCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SecurityPolicyKeywordClient) MapCreateBulk(slice any, setFunc func(*SecurityPolicyKeywordCreate, int)) *SecurityPolicyKeywordCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SecurityPolicyKeywordCreateBulk{err: fmt.Errorf("calling to SecurityPolicyKeywordClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SecurityPolicyKeywordCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SecurityPolicyKeywordCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SecurityPolicyKeyword.
+func (c *SecurityPolicyKeywordClient) Update() *SecurityPolicyKeywordUpdate {
+	mutation := newSecurityPolicyKeywordMutation(c.config, OpUpdate)
+	return &SecurityPolicyKeywordUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SecurityPolicyKeywordClient) UpdateOne(_m *SecurityPolicyKeyword) *SecurityPolicyKeywordUpdateOne {
+	mutation := newSecurityPolicyKeywordMutation(c.config, OpUpdateOne, withSecurityPolicyKeyword(_m))
+	return &SecurityPolicyKeywordUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SecurityPolicyKeywordClient) UpdateOneID(id int64) *SecurityPolicyKeywordUpdateOne {
+	mutation := newSecurityPolicyKeywordMutation(c.config, OpUpdateOne, withSecurityPolicyKeywordID(id))
+	return &SecurityPolicyKeywordUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SecurityPolicyKeyword.
+func (c *SecurityPolicyKeywordClient) Delete() *SecurityPolicyKeywordDelete {
+	mutation := newSecurityPolicyKeywordMutation(c.config, OpDelete)
+	return &SecurityPolicyKeywordDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SecurityPolicyKeywordClient) DeleteOne(_m *SecurityPolicyKeyword) *SecurityPolicyKeywordDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SecurityPolicyKeywordClient) DeleteOneID(id int64) *SecurityPolicyKeywordDeleteOne {
+	builder := c.Delete().Where(securitypolicykeyword.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SecurityPolicyKeywordDeleteOne{builder}
+}
+
+// Query returns a query builder for SecurityPolicyKeyword.
+func (c *SecurityPolicyKeywordClient) Query() *SecurityPolicyKeywordQuery {
+	return &SecurityPolicyKeywordQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSecurityPolicyKeyword},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SecurityPolicyKeyword entity by its id.
+func (c *SecurityPolicyKeywordClient) Get(ctx context.Context, id int64) (*SecurityPolicyKeyword, error) {
+	return c.Query().Where(securitypolicykeyword.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SecurityPolicyKeywordClient) GetX(ctx context.Context, id int64) *SecurityPolicyKeyword {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryGroup queries the group edge of a SecurityPolicyKeyword.
+func (c *SecurityPolicyKeywordClient) QueryGroup(_m *SecurityPolicyKeyword) *GroupQuery {
+	query := (&GroupClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(securitypolicykeyword.Table, securitypolicykeyword.FieldID, id),
+			sqlgraph.To(group.Table, group.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, securitypolicykeyword.GroupTable, securitypolicykeyword.GroupColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *SecurityPolicyKeywordClient) Hooks() []Hook {
+	hooks := c.hooks.SecurityPolicyKeyword
+	return append(hooks[:len(hooks):len(hooks)], securitypolicykeyword.Hooks[:]...)
+}
+
+// Interceptors returns the client interceptors.
+func (c *SecurityPolicyKeywordClient) Interceptors() []Interceptor {
+	inters := c.inters.SecurityPolicyKeyword
+	return append(inters[:len(inters):len(inters)], securitypolicykeyword.Interceptors[:]...)
+}
+
+func (c *SecurityPolicyKeywordClient) mutate(ctx context.Context, m *SecurityPolicyKeywordMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SecurityPolicyKeywordCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SecurityPolicyKeywordUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SecurityPolicyKeywordUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SecurityPolicyKeywordDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SecurityPolicyKeyword mutation op: %q", m.Op())
 	}
 }
 
@@ -6075,10 +6250,10 @@ type (
 		ChannelMonitorHistory, ChannelMonitorRequestTemplate, CompositeModelRoute,
 		ErrorPassthroughRule, Group, IdempotencyRecord, IdentityAdoptionDecision,
 		PaymentAuditLog, PaymentOrder, PaymentProviderInstance, PendingAuthSession,
-		Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Hook
+		Proxy, RedeemCode, SecurityPolicyKeyword, SecuritySecret, Setting,
+		SubscriptionPlan, TLSFingerprintProfile, UsageCleanupTask, UsageLog, User,
+		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		UserPlatformQuota, UserSubscription []ent.Hook
 	}
 	inters struct {
 		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
@@ -6086,10 +6261,10 @@ type (
 		ChannelMonitorHistory, ChannelMonitorRequestTemplate, CompositeModelRoute,
 		ErrorPassthroughRule, Group, IdempotencyRecord, IdentityAdoptionDecision,
 		PaymentAuditLog, PaymentOrder, PaymentProviderInstance, PendingAuthSession,
-		Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Interceptor
+		Proxy, RedeemCode, SecurityPolicyKeyword, SecuritySecret, Setting,
+		SubscriptionPlan, TLSFingerprintProfile, UsageCleanupTask, UsageLog, User,
+		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		UserPlatformQuota, UserSubscription []ent.Interceptor
 	}
 )
 

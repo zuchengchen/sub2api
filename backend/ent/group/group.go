@@ -38,6 +38,12 @@ const (
 	FieldPeakRateMultiplier = "peak_rate_multiplier"
 	// FieldIsExclusive holds the string denoting the is_exclusive field in the database.
 	FieldIsExclusive = "is_exclusive"
+	// FieldSecurityPolicyEnabled holds the string denoting the security_policy_enabled field in the database.
+	FieldSecurityPolicyEnabled = "security_policy_enabled"
+	// FieldSecurityPolicyMode holds the string denoting the security_policy_mode field in the database.
+	FieldSecurityPolicyMode = "security_policy_mode"
+	// FieldSecurityPolicyEmailEnabled holds the string denoting the security_policy_email_enabled field in the database.
+	FieldSecurityPolicyEmailEnabled = "security_policy_email_enabled"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldDuplicateOperationID holds the string denoting the duplicate_operation_id field in the database.
@@ -160,6 +166,8 @@ const (
 	EdgeAccounts = "accounts"
 	// EdgeAllowedUsers holds the string denoting the allowed_users edge name in mutations.
 	EdgeAllowedUsers = "allowed_users"
+	// EdgeSecurityPolicyKeywords holds the string denoting the security_policy_keywords edge name in mutations.
+	EdgeSecurityPolicyKeywords = "security_policy_keywords"
 	// EdgeAccountGroups holds the string denoting the account_groups edge name in mutations.
 	EdgeAccountGroups = "account_groups"
 	// EdgeUserAllowedGroups holds the string denoting the user_allowed_groups edge name in mutations.
@@ -204,6 +212,13 @@ const (
 	// AllowedUsersInverseTable is the table name for the User entity.
 	// It exists in this package in order to avoid circular dependency with the "user" package.
 	AllowedUsersInverseTable = "users"
+	// SecurityPolicyKeywordsTable is the table that holds the security_policy_keywords relation/edge.
+	SecurityPolicyKeywordsTable = "security_policy_keywords"
+	// SecurityPolicyKeywordsInverseTable is the table name for the SecurityPolicyKeyword entity.
+	// It exists in this package in order to avoid circular dependency with the "securitypolicykeyword" package.
+	SecurityPolicyKeywordsInverseTable = "security_policy_keywords"
+	// SecurityPolicyKeywordsColumn is the table column denoting the security_policy_keywords relation/edge.
+	SecurityPolicyKeywordsColumn = "group_id"
 	// AccountGroupsTable is the table that holds the account_groups relation/edge.
 	AccountGroupsTable = "account_groups"
 	// AccountGroupsInverseTable is the table name for the AccountGroup entity.
@@ -234,6 +249,9 @@ var Columns = []string{
 	FieldPeakEnd,
 	FieldPeakRateMultiplier,
 	FieldIsExclusive,
+	FieldSecurityPolicyEnabled,
+	FieldSecurityPolicyMode,
+	FieldSecurityPolicyEmailEnabled,
 	FieldStatus,
 	FieldDuplicateOperationID,
 	FieldPlatform,
@@ -342,6 +360,14 @@ var (
 	DefaultPeakRateMultiplier float64
 	// DefaultIsExclusive holds the default value on creation for the "is_exclusive" field.
 	DefaultIsExclusive bool
+	// DefaultSecurityPolicyEnabled holds the default value on creation for the "security_policy_enabled" field.
+	DefaultSecurityPolicyEnabled bool
+	// DefaultSecurityPolicyMode holds the default value on creation for the "security_policy_mode" field.
+	DefaultSecurityPolicyMode string
+	// SecurityPolicyModeValidator is a validator for the "security_policy_mode" field. It is called by the builders before save.
+	SecurityPolicyModeValidator func(string) error
+	// DefaultSecurityPolicyEmailEnabled holds the default value on creation for the "security_policy_email_enabled" field.
+	DefaultSecurityPolicyEmailEnabled bool
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -497,6 +523,21 @@ func ByPeakRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 // ByIsExclusive orders the results by the is_exclusive field.
 func ByIsExclusive(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldIsExclusive, opts...).ToFunc()
+}
+
+// BySecurityPolicyEnabled orders the results by the security_policy_enabled field.
+func BySecurityPolicyEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSecurityPolicyEnabled, opts...).ToFunc()
+}
+
+// BySecurityPolicyMode orders the results by the security_policy_mode field.
+func BySecurityPolicyMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSecurityPolicyMode, opts...).ToFunc()
+}
+
+// BySecurityPolicyEmailEnabled orders the results by the security_policy_email_enabled field.
+func BySecurityPolicyEmailEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSecurityPolicyEmailEnabled, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.
@@ -818,6 +859,20 @@ func ByAllowedUsers(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// BySecurityPolicyKeywordsCount orders the results by security_policy_keywords count.
+func BySecurityPolicyKeywordsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newSecurityPolicyKeywordsStep(), opts...)
+	}
+}
+
+// BySecurityPolicyKeywords orders the results by security_policy_keywords terms.
+func BySecurityPolicyKeywords(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newSecurityPolicyKeywordsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByAccountGroupsCount orders the results by account_groups count.
 func ByAccountGroupsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -885,6 +940,13 @@ func newAllowedUsersStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(AllowedUsersInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2M, true, AllowedUsersTable, AllowedUsersPrimaryKey...),
+	)
+}
+func newSecurityPolicyKeywordsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(SecurityPolicyKeywordsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, true, SecurityPolicyKeywordsTable, SecurityPolicyKeywordsColumn),
 	)
 }
 func newAccountGroupsStep() *sqlgraph.Step {

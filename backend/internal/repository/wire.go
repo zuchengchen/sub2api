@@ -158,13 +158,18 @@ var ProviderSet = wire.NewSet(
 	NewProxyExitInfoProber,
 	NewClaudeUsageFetcher,
 	NewClaudeOAuthClient,
-	NewHTTPUpstream,
+	NewControlledHTTPUpstream,
+	NewAccountTrafficCache,
+	NewSecurityPolicyRepository,
+	NewSecurityPolicySessionStore,
+	NewIntelligentTestRepository,
 	NewOpenAIOAuthClient,
 	NewGrokOAuthClient,
 
 	ProvideEnt,
 	ProvideSQLDB,
 	ProvideRedis,
+	ProvideSecurityPolicyLogStore,
 )
 
 // ProvideEnt 为依赖注入提供 Ent 客户端。

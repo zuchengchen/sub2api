@@ -20,13 +20,36 @@ vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ showError: showErrorMock, showSuccess: vi.fn(), showInfo: vi.fn() })
 }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ get isSimpleMode() { return authIsSimpleMode.value } }) }))
+vi.mock('@/api/admin/accountTraffic', async () => {
+  const actual = await vi.importActual<typeof import('@/api/admin/accountTraffic')>('@/api/admin/accountTraffic')
+  return {
+    ...actual,
+    accountTrafficAPI: {
+      get: vi.fn().mockResolvedValue({
+        policy: actual.defaultTrafficPolicy(),
+        state: null,
+        state_available: false,
+        hard_limit: 3
+      }),
+      save: vi.fn().mockImplementation(async (_id: number, policy: unknown) => ({
+        policy,
+        state_available: true,
+        hard_limit: 3
+      }))
+    }
+  }
+})
+
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
       getGrokMediaEligibility: getEligibilityMock,
       updateGrokMediaEligibility: updateEligibilityMock,
-      checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false })
+      checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
+      previewAntiDegrade: vi.fn(),
+      applyAntiDegrade: vi.fn(),
+      revertAntiDegrade: vi.fn()
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),

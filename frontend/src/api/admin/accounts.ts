@@ -240,6 +240,71 @@ export async function update(id: number, updates: UpdateAccountRequest): Promise
   return data
 }
 
+export type AntiDegradeMode = 'legacy' | 'mode1'
+export const DEFAULT_ANTI_DEGRADE_MODE: AntiDegradeMode = 'legacy'
+
+export interface AntiDegradeChange {
+  key: string
+  from?: unknown
+  to: unknown
+  note?: string
+}
+
+export interface AntiDegradePreview {
+  account_id: number
+  active_mode?: string
+  enabled: boolean
+  eligible: boolean
+  reason?: string
+  tls_profile?: string
+  changes: AntiDegradeChange[]
+}
+
+export interface AntiDegradeStrategyProfile {
+  id: AntiDegradeMode
+  name: string
+  tls_profile?: string
+  scope?: string
+}
+
+export async function setProtection(id: number, enabled: boolean, confirmDisable = false): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/protection`, {
+    enabled,
+    confirm_disable: confirmDisable
+  })
+  return data
+}
+
+export async function previewAntiDegrade(
+  id: number,
+  mode: AntiDegradeMode = DEFAULT_ANTI_DEGRADE_MODE
+): Promise<AntiDegradePreview> {
+  const { data } = await apiClient.get<AntiDegradePreview>(`/admin/accounts/${id}/anti-degrade`, { params: { mode } })
+  return data
+}
+
+export async function applyAntiDegrade(
+  id: number,
+  mode: AntiDegradeMode = DEFAULT_ANTI_DEGRADE_MODE
+): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/anti-degrade/apply`, { mode })
+  return data
+}
+
+export async function revertAntiDegrade(id: number, confirmDisable = false): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/anti-degrade/revert`, {
+    confirm_disable: confirmDisable
+  })
+  return data
+}
+
+export async function listAntiDegradeStrategies(): Promise<AntiDegradeStrategyProfile[]> {
+  const { data } = await apiClient.get<{ strategies: AntiDegradeStrategyProfile[] }>(
+    '/admin/accounts/anti-degrade/strategies'
+  )
+  return data.strategies || []
+}
+
 export async function getGrokMediaEligibility(id: number): Promise<GrokMediaEligibilityState> {
   const { data } = await apiClient.get<GrokMediaEligibilityState>(
     `/admin/accounts/${id}/grok-media-eligibility`
@@ -1068,6 +1133,11 @@ export const accountsAPI = {
   create,
   duplicate,
   update,
+  setProtection,
+  previewAntiDegrade,
+  applyAntiDegrade,
+  revertAntiDegrade,
+  listAntiDegradeStrategies,
   getGrokMediaEligibility,
   updateGrokMediaEligibility,
   checkMixedChannelRisk,

@@ -211,6 +211,9 @@ export default {
     channelMonitor: 'Channel Monitor',
     channelStatus: 'Channel Status',
     riskControl: 'Risk Control',
+    accountHealth: 'Account Health',
+    intelligentTests: 'Intelligent Tests',
+    securityPolicy: 'Security Policy',
     auditLogs: 'Audit Logs',
   },
 

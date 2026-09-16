@@ -65,6 +65,16 @@ func (Group) Fields() []ent.Field {
 			Comment("高峰时段叠加倍率，仅在 peak_rate_enabled 且处于 [peak_start, peak_end) 时乘入文本倍率"),
 		field.Bool("is_exclusive").
 			Default(false),
+		field.Bool("security_policy_enabled").
+			Default(false).
+			Comment("分组安全策略总开关，默认关闭"),
+		field.String("security_policy_mode").
+			MaxLen(20).
+			Default("block_session").
+			Comment("安全策略命中后处置：block_session 断会话 / block_request 仅拦当次"),
+		field.Bool("security_policy_email_enabled").
+			Default(true).
+			Comment("安全策略命中是否邮件提醒用户"),
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),
@@ -318,6 +328,8 @@ func (Group) Edges() []ent.Edge {
 		edge.From("allowed_users", User.Type).
 			Ref("allowed_groups").
 			Through("user_allowed_groups", UserAllowedGroup.Type),
+		edge.From("security_policy_keywords", SecurityPolicyKeyword.Type).
+			Ref("group"),
 		// 注意：fallback_group_id 直接作为字段使用，不定义 edge
 		// 这样允许多个分组指向同一个降级分组（M2O 关系）
 	}

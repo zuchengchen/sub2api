@@ -26,6 +26,45 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <fieldset v-if="account.platform === 'openai'" data-testid="account-protection-section" class="space-y-4 rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+        <legend class="px-1 text-sm font-medium text-gray-900 dark:text-white">账号保护</legend>
+        <p data-testid="anti-degrade-status" class="text-sm">{{ protectionEnabled ? `已开启：${protectionModeLabel}` : '未开启' }}</p>
+        <p class="text-xs leading-relaxed text-gray-500">选择策略后先预览再应用。开启不会默认套用初代兼容；保护立即生效，与底部保存分开。</p>
+        <div class="flex flex-wrap gap-2" data-testid="anti-degrade-strategies">
+          <button
+            v-for="strategy in protectionStrategies"
+            :key="strategy.id"
+            type="button"
+            class="btn btn-sm"
+            :class="currentProtectionMode === strategy.id ? 'btn-primary' : 'btn-secondary'"
+            :data-testid="strategy.id === 'mode1' ? 'anti-degrade-mode-1' : 'anti-degrade-mode-legacy'"
+            :disabled="protectionBusy || submitting"
+            :aria-pressed="currentProtectionMode === strategy.id"
+            @click="openProtectionPreview(strategy.id)"
+          >{{ strategy.name }}</button>
+        </div>
+        <button
+          v-if="protectionEnabled"
+          type="button"
+          class="btn btn-secondary btn-sm"
+          data-testid="anti-degrade-revert"
+          :disabled="protectionBusy || submitting"
+          @click="protectionRevertConfirm = true"
+        >关闭保护</button>
+      </fieldset>
+      <fieldset data-testid="account-traffic-section" class="space-y-4 rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+        <legend class="px-1 text-sm font-medium text-gray-900 dark:text-white">账号流量</legend>
+        <AccountTrafficControls
+          ref="trafficControls"
+          v-model="trafficPolicyDraft"
+          :account-id="account.id"
+          :platform="account.platform"
+          :hard-limit="form.concurrency"
+          :disabled="submitting"
+          embedded
+        />
+      </fieldset>
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <OpenAICompatibleProviderPresetSelector
@@ -2844,6 +2883,44 @@
     </template>
   </BaseDialog>
 
+  <ConfirmDialog
+    :show="protectionRevertConfirm"
+    title="关闭账号保护？"
+    message="关闭后将还原该策略管理的身份、传输或并发设置。保护策略不保证模型答题质量，尚未保存的其他编辑会保留在当前表单中。"
+    confirm-text="确认关闭"
+    cancel-text="取消"
+    danger
+    @cancel="protectionRevertConfirm = false"
+    @confirm="confirmRevertProtection"
+  />
+  <BaseDialog :show="protectionPreviewOpen" :title="protectionPreviewTitle" width="normal" @close="protectionPreviewOpen = false">
+    <div v-if="protectionPreview" class="space-y-2">
+      <p class="text-sm text-gray-600 dark:text-gray-300">{{ protectionPreviewTitle }} 将立即写入保护策略，不会改动账号流量开关。</p>
+      <p v-if="protectionPreview.reason" class="text-sm text-amber-700">{{ protectionPreview.reason }}</p>
+      <div
+        v-for="change in protectionPreview.changes"
+        :key="change.key"
+        class="rounded-lg bg-gray-50 p-3 text-sm dark:bg-dark-700"
+      >
+        <p class="font-medium">{{ change.key }}</p>
+        <p class="mt-1"><span class="text-gray-400">{{ String(change.from ?? '—') }}</span> → <span>{{ String(change.to) }}</span></p>
+      </div>
+    </div>
+    <template #footer>
+      <div class="flex justify-end gap-3">
+        <button type="button" class="btn btn-secondary" @click="protectionPreviewOpen = false">取消</button>
+        <button
+          v-if="protectionPreview?.eligible"
+          type="button"
+          class="btn btn-primary"
+          data-testid="anti-degrade-confirm"
+          :disabled="protectionBusy || submitting"
+          @click="applySelectedProtection"
+        >确认应用</button>
+      </div>
+    </template>
+  </BaseDialog>
+
   <!-- Mixed Channel Warning Dialog -->
   <ConfirmDialog
     :show="showMixedChannelWarning"
@@ -2895,6 +2972,15 @@ import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtoc
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import OpenAICompatibleProviderPresetSelector from '@/components/account/OpenAICompatibleProviderPresetSelector.vue'
+import AccountTrafficControls from '@/components/account/AccountTrafficControls.vue'
+import {
+  accountTrafficAPI,
+  defaultTrafficPolicy,
+  normalizeTrafficDraft,
+  trafficPolicyError,
+  type AccountTrafficPolicy
+} from '@/api/admin/accountTraffic'
+import type { AntiDegradeMode, AntiDegradePreview } from '@/api/admin/accounts'
 import {
   applyOpenAICompatibleProviderSelection,
   buildOpenAICompatibleProviderModelMappings,
@@ -2973,6 +3059,73 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const browserTimeZone = getBrowserTimeZone()
+const trafficControls = ref<InstanceType<typeof AccountTrafficControls> | null>(null)
+const trafficPolicyDraft = ref(defaultTrafficPolicy())
+const trafficSaveSnapshot = ref<AccountTrafficPolicy | null>(null)
+const protectionStrategies: { id: AntiDegradeMode; name: string }[] = [
+  { id: 'legacy', name: '初代兼容' },
+  { id: 'mode1', name: '兼容架构 v3' }
+]
+const protectionBusy = ref(false)
+const protectionRevertConfirm = ref(false)
+const protectionPreviewOpen = ref(false)
+const protectionPreview = ref<AntiDegradePreview | null>(null)
+const protectionSelectedMode = ref<AntiDegradeMode>('legacy')
+const protectionEnabled = computed(() => {
+  const extra = props.account?.extra as { anti_degrade?: { enabled?: boolean } } | undefined
+  return props.account?.anti_degradation ?? extra?.anti_degrade?.enabled === true
+})
+const currentProtectionMode = computed<AntiDegradeMode | ''>(() => {
+  if (!protectionEnabled.value || !props.account) return ''
+  const extra = props.account.extra as { anti_degrade?: { mode?: string } } | undefined
+  const mode = extra?.anti_degrade?.mode || props.account.protection_scope
+  if (mode === 'mode1' || props.account.protection_scope === 'codex_v3') return 'mode1'
+  if (mode === 'legacy' || props.account.protection_scope === 'legacy') return 'legacy'
+  return 'legacy'
+})
+const protectionModeLabel = computed(() => protectionStrategies.find(item => item.id === currentProtectionMode.value)?.name || '已开启')
+const protectionPreviewTitle = computed(() => protectionStrategies.find(item => item.id === protectionSelectedMode.value)?.name || '账号保护')
+async function openProtectionPreview(mode: AntiDegradeMode) {
+  if (!props.account || protectionBusy.value) return
+  protectionBusy.value = true
+  protectionSelectedMode.value = mode
+  try {
+    protectionPreview.value = await adminAPI.accounts.previewAntiDegrade(props.account.id, mode)
+    protectionPreviewOpen.value = true
+  } catch (error: any) {
+    appStore.showError(error?.message || '无法预览账号保护策略')
+  } finally {
+    protectionBusy.value = false
+  }
+}
+async function applySelectedProtection() {
+  if (!props.account || protectionBusy.value || !protectionPreview.value?.eligible) return
+  protectionBusy.value = true
+  try {
+    const updated = await adminAPI.accounts.applyAntiDegrade(props.account.id, protectionSelectedMode.value)
+    protectionPreviewOpen.value = false
+    emit('updated', updated)
+    appStore.showSuccess('账号保护已应用')
+  } catch (error: any) {
+    appStore.showError(error?.message || '应用账号保护失败')
+  } finally {
+    protectionBusy.value = false
+  }
+}
+async function confirmRevertProtection() {
+  if (!props.account || protectionBusy.value) return
+  protectionBusy.value = true
+  protectionRevertConfirm.value = false
+  try {
+    const updated = await adminAPI.accounts.revertAntiDegrade(props.account.id, true)
+    emit('updated', updated)
+    appStore.showSuccess('账号保护已关闭')
+  } catch (error: any) {
+    appStore.showError(error?.message || '关闭账号保护失败')
+  } finally {
+    protectionBusy.value = false
+  }
+}
 
 const selectableGroups = computed(() => {
   const groups = new Map<number, Group>(props.groups.map(group => [group.id, group]))
@@ -3819,6 +3972,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   editVertexClientEmail.value = ''
   editVertexLocation.value = 'us-central1'
 	const extra = newAccount.extra as Record<string, unknown> | undefined
+	trafficPolicyDraft.value = {
+		...defaultTrafficPolicy(),
+		...((extra?.account_traffic_control as Partial<AccountTrafficPolicy>) || {})
+	}
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
 	openAIImagesUrlToB64JsonEnabled.value = extra?.images_url_to_b64_json === true
 	autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
@@ -4672,6 +4829,12 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
   submitting.value = true
   try {
     let updatedAccount = await adminAPI.accounts.update(accountID, withMixedChannelConfirmFlag(updatePayload))
+    if (trafficSaveSnapshot.value) {
+      const savedTraffic = await accountTrafficAPI.save(accountID, trafficSaveSnapshot.value)
+      const extra = { ...((updatedAccount.extra as Record<string, unknown> | undefined) || {}) }
+      extra.account_traffic_control = savedTraffic.policy
+      updatedAccount = { ...updatedAccount, extra }
+    }
     updatedAccount = await persistGrokMediaEligibility(accountID, updatedAccount)
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
     emit('updated', updatedAccount)
@@ -4696,6 +4859,14 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
+  const trafficSnapshot = trafficControls.value?.prepareForSave() ?? normalizeTrafficDraft(trafficPolicyDraft.value)
+  const trafficError = !trafficSnapshot ? '流量控制参数无效' : trafficPolicyError(trafficSnapshot, form.concurrency)
+  if (!trafficSnapshot || trafficError) {
+    appStore.showError(trafficError)
+    return
+  }
+  trafficPolicyDraft.value = trafficSnapshot
+  trafficSaveSnapshot.value = trafficSnapshot
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
@@ -5382,6 +5553,11 @@ const handleSubmit = async () => {
         delete newExtra.upstream_request_id_header
       }
       updatePayload.extra = newExtra
+    }
+
+    if (trafficSnapshot) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+      updatePayload.extra = { ...currentExtra, account_traffic_control: trafficSnapshot }
     }
 
     const canContinue = await ensureMixedChannelConfirmed(async () => {

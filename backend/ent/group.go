@@ -42,6 +42,12 @@ type Group struct {
 	PeakRateMultiplier float64 `json:"peak_rate_multiplier,omitempty"`
 	// IsExclusive holds the value of the "is_exclusive" field.
 	IsExclusive bool `json:"is_exclusive,omitempty"`
+	// 分组安全策略总开关，默认关闭
+	SecurityPolicyEnabled bool `json:"security_policy_enabled,omitempty"`
+	// 安全策略命中后处置：block_session 断会话 / block_request 仅拦当次
+	SecurityPolicyMode string `json:"security_policy_mode,omitempty"`
+	// 安全策略命中是否邮件提醒用户
+	SecurityPolicyEmailEnabled bool `json:"security_policy_email_enabled,omitempty"`
 	// Status holds the value of the "status" field.
 	Status string `json:"status,omitempty"`
 	// 内部幂等恢复标识，不对 API 暴露
@@ -172,13 +178,15 @@ type GroupEdges struct {
 	Accounts []*Account `json:"accounts,omitempty"`
 	// AllowedUsers holds the value of the allowed_users edge.
 	AllowedUsers []*User `json:"allowed_users,omitempty"`
+	// SecurityPolicyKeywords holds the value of the security_policy_keywords edge.
+	SecurityPolicyKeywords []*SecurityPolicyKeyword `json:"security_policy_keywords,omitempty"`
 	// AccountGroups holds the value of the account_groups edge.
 	AccountGroups []*AccountGroup `json:"account_groups,omitempty"`
 	// UserAllowedGroups holds the value of the user_allowed_groups edge.
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [8]bool
+	loadedTypes [9]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -235,10 +243,19 @@ func (e GroupEdges) AllowedUsersOrErr() ([]*User, error) {
 	return nil, &NotLoadedError{edge: "allowed_users"}
 }
 
+// SecurityPolicyKeywordsOrErr returns the SecurityPolicyKeywords value or an error if the edge
+// was not loaded in eager-loading.
+func (e GroupEdges) SecurityPolicyKeywordsOrErr() ([]*SecurityPolicyKeyword, error) {
+	if e.loadedTypes[6] {
+		return e.SecurityPolicyKeywords, nil
+	}
+	return nil, &NotLoadedError{edge: "security_policy_keywords"}
+}
+
 // AccountGroupsOrErr returns the AccountGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e GroupEdges) AccountGroupsOrErr() ([]*AccountGroup, error) {
-	if e.loadedTypes[6] {
+	if e.loadedTypes[7] {
 		return e.AccountGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "account_groups"}
@@ -247,7 +264,7 @@ func (e GroupEdges) AccountGroupsOrErr() ([]*AccountGroup, error) {
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e GroupEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[7] {
+	if e.loadedTypes[8] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -260,13 +277,13 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case group.FieldVideoModelPrices, group.FieldModelPricing, group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelAllowlist, group.FieldCodexModelsManifestConfig, group.FieldReasoningEffortMappings:
 			values[i] = new([]byte)
-		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldLongContextPricingEnabled, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldForceOpenaiFast, group.FieldFreeOpenaiFast, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldProfitControlEnabled:
+		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldSecurityPolicyEnabled, group.FieldSecurityPolicyEmailEnabled, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldLongContextPricingEnabled, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldForceOpenaiFast, group.FieldFreeOpenaiFast, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldProfitControlEnabled:
 			values[i] = new(sql.NullBool)
 		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldWebSearchPricePerCall, group.FieldSearchPricePer1k, group.FieldAudioRealtimePricePerMin, group.FieldAudioTtsPricePerMillionChars, group.FieldAudioSttPricePerHour, group.FieldProfitMinMargin, group.FieldProfitSafetyBuffer:
 			values[i] = new(sql.NullFloat64)
 		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
-		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldDuplicateOperationID, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldMaxReasoningEffort, group.FieldMaxReasoningEffortOverLimit:
+		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldSecurityPolicyMode, group.FieldStatus, group.FieldDuplicateOperationID, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldMaxReasoningEffort, group.FieldMaxReasoningEffortOverLimit:
 			values[i] = new(sql.NullString)
 		case group.FieldCreatedAt, group.FieldUpdatedAt, group.FieldDeletedAt:
 			values[i] = new(sql.NullTime)
@@ -358,6 +375,24 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field is_exclusive", values[i])
 			} else if value.Valid {
 				_m.IsExclusive = value.Bool
+			}
+		case group.FieldSecurityPolicyEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field security_policy_enabled", values[i])
+			} else if value.Valid {
+				_m.SecurityPolicyEnabled = value.Bool
+			}
+		case group.FieldSecurityPolicyMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field security_policy_mode", values[i])
+			} else if value.Valid {
+				_m.SecurityPolicyMode = value.String
+			}
+		case group.FieldSecurityPolicyEmailEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field security_policy_email_enabled", values[i])
+			} else if value.Valid {
+				_m.SecurityPolicyEmailEnabled = value.Bool
 			}
 		case group.FieldStatus:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -765,6 +800,11 @@ func (_m *Group) QueryAllowedUsers() *UserQuery {
 	return NewGroupClient(_m.config).QueryAllowedUsers(_m)
 }
 
+// QuerySecurityPolicyKeywords queries the "security_policy_keywords" edge of the Group entity.
+func (_m *Group) QuerySecurityPolicyKeywords() *SecurityPolicyKeywordQuery {
+	return NewGroupClient(_m.config).QuerySecurityPolicyKeywords(_m)
+}
+
 // QueryAccountGroups queries the "account_groups" edge of the Group entity.
 func (_m *Group) QueryAccountGroups() *AccountGroupQuery {
 	return NewGroupClient(_m.config).QueryAccountGroups(_m)
@@ -834,6 +874,15 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("is_exclusive=")
 	builder.WriteString(fmt.Sprintf("%v", _m.IsExclusive))
+	builder.WriteString(", ")
+	builder.WriteString("security_policy_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SecurityPolicyEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("security_policy_mode=")
+	builder.WriteString(_m.SecurityPolicyMode)
+	builder.WriteString(", ")
+	builder.WriteString("security_policy_email_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SecurityPolicyEmailEnabled))
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(_m.Status)

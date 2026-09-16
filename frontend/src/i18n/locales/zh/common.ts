@@ -211,6 +211,9 @@ export default {
     channelMonitor: '渠道监控',
     channelStatus: '渠道状态',
     riskControl: '风控中心',
+    accountHealth: '账号健康',
+    intelligentTests: '智能测试',
+    securityPolicy: '安全策略',
     auditLogs: '操作日志',
   },
 

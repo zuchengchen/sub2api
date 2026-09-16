@@ -187,6 +187,9 @@ type CreateGroupRequest struct {
 	Platform                  string                        `json:"platform" binding:"omitempty,oneof=anthropic openai grok kimi zhipu deepseek minimax opencode_go composite"`
 	RateMultiplier            float64                       `json:"rate_multiplier"`
 	IsExclusive               bool                          `json:"is_exclusive"`
+	SecurityPolicyEnabled      bool                          `json:"security_policy_enabled"`
+	SecurityPolicyMode         string                        `json:"security_policy_mode"`
+	SecurityPolicyEmailEnabled *bool                         `json:"security_policy_email_enabled"`
 	SubscriptionType          string                        `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
 	DailyLimitUSD             optionalLimitField            `json:"daily_limit_usd"`
 	WeeklyLimitUSD            optionalLimitField            `json:"weekly_limit_usd"`
@@ -258,6 +261,9 @@ type UpdateGroupRequest struct {
 	Platform                  string                         `json:"platform" binding:"omitempty,oneof=anthropic openai grok kimi zhipu deepseek minimax opencode_go composite"`
 	RateMultiplier            *float64                       `json:"rate_multiplier"`
 	IsExclusive               *bool                          `json:"is_exclusive"`
+	SecurityPolicyEnabled      *bool                         `json:"security_policy_enabled"`
+	SecurityPolicyMode         *string                       `json:"security_policy_mode"`
+	SecurityPolicyEmailEnabled *bool                         `json:"security_policy_email_enabled"`
 	Status                    string                         `json:"status" binding:"omitempty,oneof=active inactive"`
 	SubscriptionType          string                         `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
 	DailyLimitUSD             optionalLimitField             `json:"daily_limit_usd"`
@@ -661,6 +667,9 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		Platform:                        req.Platform,
 		RateMultiplier:                  req.RateMultiplier,
 		IsExclusive:                     req.IsExclusive,
+		SecurityPolicyEnabled:           req.SecurityPolicyEnabled,
+		SecurityPolicyMode:              req.SecurityPolicyMode,
+		SecurityPolicyEmailEnabled:      req.SecurityPolicyEmailEnabled,
 		SubscriptionType:                req.SubscriptionType,
 		DailyLimitUSD:                   req.DailyLimitUSD.ToServiceInput(),
 		WeeklyLimitUSD:                  req.WeeklyLimitUSD.ToServiceInput(),
@@ -803,6 +812,9 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		Platform:                        req.Platform,
 		RateMultiplier:                  req.RateMultiplier,
 		IsExclusive:                     req.IsExclusive,
+		SecurityPolicyEnabled:           req.SecurityPolicyEnabled,
+		SecurityPolicyMode:              req.SecurityPolicyMode,
+		SecurityPolicyEmailEnabled:      req.SecurityPolicyEmailEnabled,
 		Status:                          req.Status,
 		SubscriptionType:                req.SubscriptionType,
 		DailyLimitUSD:                   req.DailyLimitUSD.ToServiceInput(),
@@ -906,14 +918,29 @@ func (h *GroupHandler) GetStats(c *gin.Context) {
 		return
 	}
 
-	// Return mock data for now
-	response.Success(c, gin.H{
-		"total_api_keys":  0,
-		"active_api_keys": 0,
-		"total_requests":  0,
-		"total_cost":      0.0,
-	})
-	_ = groupID // TODO: implement actual stats
+	var from, to *time.Time
+	if raw := strings.TrimSpace(c.Query("from")); raw != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
+			response.BadRequest(c, "Invalid from timestamp")
+			return
+		}
+		from = &parsed
+	}
+	if raw := strings.TrimSpace(c.Query("to")); raw != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
+			response.BadRequest(c, "Invalid to timestamp")
+			return
+		}
+		to = &parsed
+	}
+	stats, err := h.dashboardService.GetGroupDetailStats(c.Request.Context(), groupID, from, to)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, stats)
 }
 
 // GetUsageSummary returns today's, yesterday's, and cumulative cost for all groups.

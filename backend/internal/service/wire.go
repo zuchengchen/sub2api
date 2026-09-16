@@ -972,6 +972,13 @@ var ProviderSet = wire.NewSet(
 	NewModelPlazaService,
 	ProvideContentModerationService,
 	ProvideUsagePolicyService,
+	NewAccountTrafficService,
+	ProvideAntiDegradeService,
+	ProvideIntelligentTestService,
+	NewSecurityPolicyService,
+	ProvideAccountHealthService,
+	wire.Bind(new(AntiDegradeStore), new(AdminService)),
+	wire.Bind(new(SecurityPolicyModelReviewer), new(*ContentModerationService)),
 	NewAffiliateService,
 	ProvidePaymentConfigService,
 	ProvidePaymentService,
@@ -987,6 +994,12 @@ var ProviderSet = wire.NewSet(
 )
 
 // ProvideUserPlatformQuotaUsageFlusher 创建并启动 UserPlatformQuotaUsageFlusher。
+func ProvideIntelligentTestService(repo IntelligentTestRepository, runner *AccountTestService) *IntelligentTestService {
+	svc := NewIntelligentTestService(repo, runner)
+	svc.Start()
+	return svc
+}
+
 func ProvideUserPlatformQuotaUsageFlusher(cfg *config.Config, cache BillingCache, quotaRepo UserPlatformQuotaRepository, tw *TimingWheelService) *UserPlatformQuotaUsageFlusher {
 	svc := NewUserPlatformQuotaUsageFlusher(cfg, cache, quotaRepo, tw)
 	svc.Start()

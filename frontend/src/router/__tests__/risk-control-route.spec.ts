@@ -45,6 +45,22 @@ describe('unified risk-control routes', () => {
     expect(router.resolve('/admin/prompt-audit').name).toBe('NotFound')
   })
 
+  it('registers intelligent-test routes with mode props and redirects the old path', async () => {
+    const { default: router } = await import('@/router')
+    const propsOf = (path: string) => {
+      const matched = router.resolve(path).matched[0]
+      const props = matched.props as { default?: unknown }
+      return typeof props.default === 'function' ? props.default(router.resolve(path)) : props.default
+    }
+    expect(router.getRoutes().some((route) => route.path === '/admin/accounts/tests')).toBe(true)
+    expect(router.getRoutes().some((route) => route.path === '/admin/accounts/test-history')).toBe(true)
+    expect(router.getRoutes().some((route) => route.path === '/admin/accounts/test-settings')).toBe(true)
+    expect(propsOf('/admin/accounts/tests')).toEqual({ mode: 'tests' })
+    expect(propsOf('/admin/accounts/test-history')).toEqual({ mode: 'history' })
+    expect(propsOf('/admin/accounts/test-settings')).toEqual({ mode: 'settings' })
+    expect(router.getRoutes().find((route) => route.path === '/admin/intelligent-tests')?.redirect).toBe('/admin/accounts/tests')
+  })
+
   it('exposes Risk Control as a direct sidebar item', () => {
     const sidebarPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../components/layout/AppSidebar.vue')
     const source = readFileSync(sidebarPath, 'utf8')

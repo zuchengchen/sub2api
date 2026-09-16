@@ -430,6 +430,7 @@ type ContentModerationLog struct {
 	ViolationCount          int                              `json:"violation_count"`
 	AutoBanned              bool                             `json:"auto_banned"`
 	EmailSent               bool                             `json:"email_sent"`
+	Overturned              bool                             `json:"overturned"`
 	EmailDeliveryStatus     string                           `json:"email_delivery_status"`
 	EmailDeliveryClaimedAt  *time.Time                       `json:"email_delivery_claimed_at,omitempty"`
 	UserStatus              string                           `json:"user_status"`
@@ -2351,6 +2352,12 @@ func (s *ContentModerationService) applyFlaggedAccountSideEffects(ctx context.Co
 
 func (s *ContentModerationService) applyFlaggedAccountSideEffectsWithRole(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog, role string) (bool, error) {
 	if s == nil || cfg == nil || log == nil || !log.Flagged || log.UserID == nil || *log.UserID <= 0 {
+		return false, nil
+	}
+	if strings.HasPrefix(log.Action, "security_policy_") {
+		log.ViolationCount = 0
+		log.DispositionStatus = "not_counted"
+		log.AutoBanned = false
 		return false, nil
 	}
 	count := 1

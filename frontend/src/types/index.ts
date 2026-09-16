@@ -561,6 +561,19 @@ export interface ReasoningEffortMapping {
   model?: string
 }
 
+export interface SecurityPolicyKeywordSeed {
+  keyword: string
+  category: string
+}
+
+export interface SecurityPolicyKeyword {
+  id: number
+  group_id?: number | null
+  keyword: string
+  category: string
+  enabled: boolean
+}
+
 export interface Group {
   id: number
   name: string
@@ -572,6 +585,9 @@ export interface Group {
   max_reasoning_effort_over_limit?: string // downgrade (default) or deny when over the ceiling
   reasoning_effort_mappings?: ReasoningEffortMapping[]
   is_exclusive: boolean
+  security_policy_enabled?: boolean
+  security_policy_mode?: string
+  security_policy_email_enabled?: boolean
   status: 'active' | 'inactive'
   subscription_type: SubscriptionType
   daily_limit_usd: number | null
@@ -786,6 +802,9 @@ export interface CreateGroupRequest {
   platform?: GroupPlatform
   rate_multiplier?: number
   is_exclusive?: boolean
+  security_policy_enabled?: boolean
+  security_policy_mode?: string
+  security_policy_email_enabled?: boolean
   subscription_type?: SubscriptionType
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
@@ -848,6 +867,9 @@ export interface UpdateGroupRequest {
   platform?: GroupPlatform
   rate_multiplier?: number
   is_exclusive?: boolean
+  security_policy_enabled?: boolean
+  security_policy_mode?: string
+  security_policy_email_enabled?: boolean
   status?: 'active' | 'inactive'
   subscription_type?: SubscriptionType
   daily_limit_usd?: number | null
@@ -1154,6 +1176,8 @@ export interface Account {
   proxy_fallback_origin_id?: number | null
   proxy_fallback_origin_name?: string | null
   concurrency: number
+  anti_degradation?: boolean
+  protection_scope?: string
   load_factor?: number | null
   current_concurrency?: number // Real-time concurrency count from Redis
   scheduler_score?: {

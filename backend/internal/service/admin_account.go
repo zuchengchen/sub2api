@@ -703,6 +703,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			}
 		}
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
+		normalizedExtra, err = mergeAccountProtectionForSave(ctx, account, normalizedExtra)
+		if err != nil {
+			return nil, err
+		}
 		account.Extra = normalizedExtra
 		// 校验并预计算固定时间重置的下次重置时间
 		if err := ValidateQuotaResetConfig(account.Extra); err != nil {

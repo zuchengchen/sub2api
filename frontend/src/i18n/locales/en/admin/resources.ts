@@ -547,5 +547,21 @@ export default {
       }
     },
 
+    accountHealth: {
+      title: 'Account Health',
+      description: 'Account error-rate snapshot. Does not replace failure observation or ops email reports.',
+      settings: 'Thresholds',
+      account: 'Account',
+      platform: 'Platform',
+      score: 'Score',
+      errRate: 'Error rate',
+      latency: 'Avg latency',
+      samples: 'Samples',
+      state: 'State',
+      isolate: 'Isolate',
+      resume: 'Resume',
+      noData: 'No account activity in the window.'
+    }
+
     // Ops Monitoring
 }
