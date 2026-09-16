@@ -32,6 +32,8 @@ type stubConcurrencyCacheForTest struct {
 	cleanupErr           error
 	apiKeyTrackErr       error
 	apiKeyReleaseErr     error
+	apiKeyAcquireErr     error
+	apiKeyAcquireFull    bool
 	apiKeyConcurrency    map[int64]int
 	apiKeyConcurrencyErr error
 
@@ -133,6 +135,18 @@ func (c *stubConcurrencyCacheForTest) TrackAPIKeySlot(_ context.Context, apiKeyI
 	c.trackedAPIKeyIDs = append(c.trackedAPIKeyIDs, apiKeyID)
 	c.trackedAPIKeyRequestIDs = append(c.trackedAPIKeyRequestIDs, requestID)
 	return c.apiKeyTrackErr
+}
+func (c *stubConcurrencyCacheForTest) AcquireAPIKeySlot(_ context.Context, apiKeyID int64, maxConcurrency int, requestID string) (bool, error) {
+	if maxConcurrency <= 0 {
+		return true, c.TrackAPIKeySlot(context.Background(), apiKeyID, requestID)
+	}
+	if c.apiKeyAcquireErr != nil {
+		return false, c.apiKeyAcquireErr
+	}
+	if c.apiKeyAcquireFull {
+		return false, nil
+	}
+	return true, c.TrackAPIKeySlot(context.Background(), apiKeyID, requestID)
 }
 func (c *stubConcurrencyCacheForTest) ReleaseAPIKeySlot(_ context.Context, apiKeyID int64, requestID string) error {
 	c.releasedAPIKeyIDs = append(c.releasedAPIKeyIDs, apiKeyID)
@@ -286,6 +300,26 @@ func TestTrackAPIKeySlot_ReleaseDecrements(t *testing.T) {
 
 	require.Equal(t, []int64{88}, cache.releasedAPIKeyIDs)
 	require.Equal(t, cache.trackedAPIKeyRequestIDs, cache.releasedAPIKeyRequestIDs)
+}
+
+func TestAcquireAPIKeySlot_UnlimitedDoesNotLimit(t *testing.T) {
+	cache := &stubConcurrencyCacheForTest{}
+	svc := NewConcurrencyService(cache)
+
+	result, err := svc.AcquireAPIKeySlot(context.Background(), 88, 0)
+	require.NoError(t, err)
+	require.True(t, result.Acquired)
+	require.Equal(t, []int64{88}, cache.trackedAPIKeyIDs)
+}
+
+func TestAcquireAPIKeySlot_PositiveLimitRejectsWhenFull(t *testing.T) {
+	cache := &stubConcurrencyCacheForTest{apiKeyAcquireFull: true}
+	svc := NewConcurrencyService(cache)
+
+	result, err := svc.AcquireAPIKeySlot(context.Background(), 88, 2)
+	require.NoError(t, err)
+	require.False(t, result.Acquired)
+	require.Empty(t, cache.trackedAPIKeyIDs)
 }
 
 func TestTrackAPIKeySlot_FailOpen(t *testing.T) {

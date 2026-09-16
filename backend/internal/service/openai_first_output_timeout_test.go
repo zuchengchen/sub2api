@@ -497,7 +497,9 @@ func TestOpenAINativeFirstOutputStageOverflowFailsOverWithoutAttemptBytes(t *tes
 		Body: io.NopCloser(strings.NewReader(body)),
 	}
 
+	started := time.Now()
 	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "model", "model")
+	require.Less(t, time.Since(started), 5*time.Second, "staging overflow must fail over without tokenizing the uncommitted buffer")
 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)

@@ -77,6 +77,8 @@ type APIKeyUpdateFields struct {
 	RateLimitUsage bool
 	// IPRules 覆盖 ip_whitelist 与 ip_blacklist。
 	IPRules bool
+	// Concurrency covers the per-key concurrent request limit.
+	Concurrency bool
 }
 
 // IsEmpty 报告该次 Update 是否不写任何列。
@@ -222,6 +224,7 @@ type CreateAPIKeyRequest struct {
 	CustomKey   *string  `json:"custom_key"`   // 可选的自定义key
 	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
 	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单
+	Concurrency int      `json:"concurrency"`  // 0 = unlimited
 
 	// Quota fields
 	Quota         float64 `json:"quota"`           // Quota limit in USD (0 = unlimited)
@@ -240,6 +243,7 @@ type UpdateAPIKeyRequest struct {
 	Status      *string   `json:"status"`
 	IPWhitelist *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
 	IPBlacklist *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
+	Concurrency *int      `json:"concurrency"`  // nil = no change, 0 = unlimited
 
 	// Quota fields
 	Quota           *float64   `json:"quota"`       // Quota limit in USD (nil = no change, 0 = unlimited)
@@ -261,11 +265,21 @@ func validateAPIKeyLimit(v float64) error {
 	return nil
 }
 
+func validateAPIKeyConcurrency(v int) error {
+	if v < 0 {
+		return infraerrors.BadRequest("API_KEY_CONCURRENCY_INVALID", "API key concurrency must be non-negative")
+	}
+	return nil
+}
+
 func validateCreateAPIKeyRequest(req CreateAPIKeyRequest) error {
 	for _, v := range []float64{req.Quota, req.RateLimit5h, req.RateLimit1d, req.RateLimit7d} {
 		if err := validateAPIKeyLimit(v); err != nil {
 			return err
 		}
+	}
+	if err := validateAPIKeyConcurrency(req.Concurrency); err != nil {
+		return err
 	}
 	if req.ExpiresInDays != nil && *req.ExpiresInDays <= 0 {
 		return infraerrors.BadRequest("API_KEY_EXPIRY_INVALID", "expires_in_days must be greater than zero")
@@ -279,6 +293,11 @@ func validateUpdateAPIKeyRequest(req UpdateAPIKeyRequest) error {
 			if err := validateAPIKeyLimit(*v); err != nil {
 				return err
 			}
+		}
+	}
+	if req.Concurrency != nil {
+		if err := validateAPIKeyConcurrency(*req.Concurrency); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -608,6 +627,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		Status:      StatusActive,
 		IPWhitelist: req.IPWhitelist,
 		IPBlacklist: req.IPBlacklist,
+		Concurrency: req.Concurrency,
 		Quota:       req.Quota,
 		QuotaUsed:   0,
 		RateLimit5h: req.RateLimit5h,
@@ -936,6 +956,10 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	if req.IPBlacklist != nil {
 		apiKey.IPBlacklist = *req.IPBlacklist
 		fields.IPRules = true
+	}
+	if req.Concurrency != nil {
+		apiKey.Concurrency = *req.Concurrency
+		fields.Concurrency = true
 	}
 
 	// Update rate limit configuration

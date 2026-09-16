@@ -243,6 +243,17 @@ func TestClassifyNoAccountError_FromGin_NilContextStillSafe(t *testing.T) {
 // 没有账号能服务该模型（ModelNotFound=true），改判成 429 "All available accounts are
 // currently rate-limited" 是错误诊断——重试永远不会成功，而把 429 当限流的客户端会反复
 // 重试并吞掉 body（Codex 只显示 "exceeded retry limit"），恰好丢掉唯一说明真实原因的信息。
+func TestClassifySelectionFailureError_SupportDecisionPureMissIs404(t *testing.T) {
+	got := classifySelectionFailureError(
+		&service.ModelNotSupportedByAccountsError{RequestedModel: "gpt-missing"},
+		noAccountErrorClassification{Status: http.StatusServiceUnavailable, ErrType: "api_error", Message: "Service temporarily unavailable"},
+	)
+	require.Equal(t, http.StatusNotFound, got.Status)
+	require.Equal(t, "model_not_found", got.ErrType)
+	require.True(t, got.ModelNotFound)
+	require.Contains(t, got.Message, "gpt-missing")
+}
+
 func TestClassifySelectionFailureError_ModelNotFoundIsNotOverriddenByRateLimited(t *testing.T) {
 	modelNotFound := noAccountErrorClassification{
 		Status:        http.StatusNotFound,

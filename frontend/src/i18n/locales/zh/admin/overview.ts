@@ -546,6 +546,8 @@ export default {
       apiKeys: 'API密钥',
       userApiKeys: '用户 API 密钥',
       noApiKeys: '此用户暂无 API 密钥',
+      apiKeyConcurrency: '并发上限',
+      apiKeyConcurrencyHint: '0 表示该密钥不限制并发请求。',
       group: '分组',
       none: '无',
       groupChangedSuccess: '分组修改成功',

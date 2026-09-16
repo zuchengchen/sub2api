@@ -281,7 +281,7 @@ func (h *ConcurrencyHelper) acquireUserSlotWithWaitTimeout(c *gin.Context, userI
 	}
 
 	if acquired {
-		return h.withAPIKeySlotFromGin(c, releaseFunc), nil
+		return h.withAPIKeySlotFromGinLimited(c, releaseFunc)
 	}
 
 	queueLimit := service.CalculateMaxWait(maxConcurrency) - maxConcurrency
@@ -302,18 +302,26 @@ func (h *ConcurrencyHelper) acquireUserSlotWithWaitTimeout(c *gin.Context, userI
 	if err != nil {
 		return nil, err
 	}
-	return h.withAPIKeySlotFromGin(c, releaseFunc), nil
+	return h.withAPIKeySlotFromGinLimited(c, releaseFunc)
 }
 
 func (h *ConcurrencyHelper) withAPIKeySlotFromGin(c *gin.Context, releaseFunc func()) func() {
-	if c == nil {
+	wrapped, err := h.withAPIKeySlotFromGinLimited(c, releaseFunc)
+	if err != nil || wrapped == nil {
 		return releaseFunc
+	}
+	return wrapped
+}
+
+func (h *ConcurrencyHelper) withAPIKeySlotFromGinLimited(c *gin.Context, releaseFunc func()) (func(), error) {
+	if c == nil {
+		return releaseFunc, nil
 	}
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok || apiKey == nil {
-		return releaseFunc
+		return releaseFunc, nil
 	}
-	return h.withAPIKeySlot(c.Request.Context(), apiKey.ID, releaseFunc)
+	return h.withAPIKeyConcurrencyLimit(c.Request.Context(), apiKey, releaseFunc)
 }
 
 func (h *ConcurrencyHelper) withAPIKeySlot(ctx context.Context, apiKeyID int64, releaseFunc func()) func() {
@@ -329,6 +337,30 @@ func (h *ConcurrencyHelper) withAPIKeySlot(ctx context.Context, apiKeyID int64, 
 			apiKeyReleaseFunc()
 		}
 	}
+}
+
+func (h *ConcurrencyHelper) withAPIKeyConcurrencyLimit(ctx context.Context, apiKey *service.APIKey, releaseFunc func()) (func(), error) {
+	if h == nil || h.concurrencyService == nil || apiKey == nil || apiKey.ID <= 0 {
+		return releaseFunc, nil
+	}
+	if apiKey.Concurrency <= 0 {
+		return h.withAPIKeySlot(ctx, apiKey.ID, releaseFunc), nil
+	}
+	result, err := h.concurrencyService.AcquireAPIKeySlot(ctx, apiKey.ID, apiKey.Concurrency)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || !result.Acquired {
+		return nil, &ConcurrencyError{SlotType: "api_key"}
+	}
+	return func() {
+		if releaseFunc != nil {
+			releaseFunc()
+		}
+		if result.ReleaseFunc != nil {
+			result.ReleaseFunc()
+		}
+	}, nil
 }
 
 // AcquireAccountSlotWithWait acquires an account concurrency slot, waiting if necessary.

@@ -294,6 +294,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	eventStartsClientOutput := false
 	eventStartsTTFTOutput := false
 	eventShouldFlush := false
+	firstOutputStagingFailed := false
 	handlePendingWriteError := func(err error) {
 		if firstOutputStage != nil && !firstOutputStage.closed {
 			message := "OpenAI first-output staging failed"
@@ -303,6 +304,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			logger.LegacyPrintf("service.openai_gateway", "%s: account=%d model=%s error=%v", message, account.ID, originalModel, err)
 			failoverErr := s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, nil, message)
 			failoverErr.SafeToFailoverAfterWrite = true
+			firstOutputStagingFailed = true
 			streamEarlyErr = failoverErr
 			_ = resp.Body.Close()
 			return
@@ -378,7 +380,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	var streamedBilling strings.Builder
 	estimateRequestBody := takeOpenAIUsageEstimateRequestBody(c)
 	resultWithUsage := func() *openaiStreamingResult {
-		if streamedBilling.Len() > 0 {
+		// Staging overflow buffers multi-MB uncommitted SSE. tiktoken Count of
+		// that buffer can stall failover for minutes; skip estimation there only.
+		if streamedBilling.Len() > 0 && !firstOutputStagingFailed {
 			applyEstimatedOpenAIUsageIfMissing(usage, originalModel, estimateRequestBody, streamedBilling.String())
 		}
 		return &openaiStreamingResult{

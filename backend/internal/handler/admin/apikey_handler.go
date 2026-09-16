@@ -24,7 +24,8 @@ func NewAdminAPIKeyHandler(adminService service.AdminService) *AdminAPIKeyHandle
 
 // AdminUpdateAPIKeyGroupRequest represents the request to update an API key.
 type AdminUpdateAPIKeyGroupRequest struct {
-	GroupID             *int64 `json:"group_id"`               // nil=不修改, 0=解绑, >0=绑定到目标分组
+	GroupID             *int64 `json:"group_id"` // nil=不修改, 0=解绑, >0=绑定到目标分组
+	Concurrency         *int   `json:"concurrency" binding:"omitempty,min=0,max=2147483647"`
 	ResetRateLimitUsage *bool  `json:"reset_rate_limit_usage"` // true=重置 5h/1d/7d 限速用量
 }
 
@@ -59,6 +60,14 @@ func (h *AdminAPIKeyHandler) UpdateGroup(c *gin.Context) {
 	}
 	if resetKey != nil && req.GroupID == nil {
 		result.APIKey = resetKey
+	}
+	if req.Concurrency != nil {
+		updated, err := h.adminService.AdminUpdateAPIKeyConcurrency(c.Request.Context(), keyID, *req.Concurrency)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		result.APIKey = updated
 	}
 
 	resp := struct {

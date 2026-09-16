@@ -174,6 +174,8 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	ops := admin.Group("/ops")
 	{
 		// Realtime ops signals
+		ops.GET("/workers/status", h.Admin.Ops.GetWorkerRuntimeStatus)
+		ops.GET("/billing-outbox/health", h.Admin.Ops.GetBillingOutboxHealth)
 		ops.GET("/concurrency", h.Admin.Ops.GetConcurrencyStats)
 		ops.GET("/user-concurrency", h.Admin.Ops.GetUserConcurrencyStats)
 		ops.GET("/account-availability", h.Admin.Ops.GetAccountAvailability)

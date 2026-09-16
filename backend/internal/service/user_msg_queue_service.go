@@ -244,29 +244,42 @@ func (s *UserMessageQueueService) CalculateRPMAwareDelay(ctx context.Context, ac
 	return applyJitter(baseDelay, 0.15)
 }
 
-// StartCleanupWorker 启动孤儿锁清理 worker。
-// worker 只处理锁索引中的到期候选，真正删除前由 cache 层再次校验锁 PTTL。
+// CleanupInterval returns the configured orphan-lock cleanup interval.
+func (s *UserMessageQueueService) CleanupInterval() time.Duration {
+	if s == nil || s.cfg == nil || s.cfg.CleanupIntervalSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(s.cfg.CleanupIntervalSeconds) * time.Second
+}
+
+// CleanupEnabled reports whether orphan-lock cleanup can run.
+func (s *UserMessageQueueService) CleanupEnabled() bool {
+	return s != nil && s.cache != nil && s.CleanupInterval() > 0
+}
+
+// RunCleanup performs one orphan-lock reconcile cycle.
+func (s *UserMessageQueueService) RunCleanup(ctx context.Context) error {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cleaned, err := s.cache.ReconcileExpiredLockCandidates(cleanupCtx, 1000)
+	if err != nil {
+		logger.LegacyPrintf("service.umq", "Cleanup reconcile failed: %v", err)
+		return err
+	}
+	if cleaned > 0 {
+		logger.LegacyPrintf("service.umq", "Cleanup completed: released %d orphaned locks", cleaned)
+	}
+	return nil
+}
+
+// StartCleanupWorker is retained for tests; production cleanup is owned by the worker runtime.
 func (s *UserMessageQueueService) StartCleanupWorker(interval time.Duration) {
 	if s == nil || s.cache == nil || interval <= 0 {
 		return
 	}
-
-	runCleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// 每轮限制处理数量，避免清理任务在大量过期候选时长时间占用 Redis。
-		cleaned, err := s.cache.ReconcileExpiredLockCandidates(ctx, 1000)
-		if err != nil {
-			logger.LegacyPrintf("service.umq", "Cleanup reconcile failed: %v", err)
-			return
-		}
-
-		if cleaned > 0 {
-			logger.LegacyPrintf("service.umq", "Cleanup completed: released %d orphaned locks", cleaned)
-		}
-	}
-
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -275,7 +288,7 @@ func (s *UserMessageQueueService) StartCleanupWorker(interval time.Duration) {
 			case <-s.stopCh:
 				return
 			case <-ticker.C:
-				runCleanup()
+				_ = s.RunCleanup(context.Background())
 			}
 		}
 	}()

@@ -192,21 +192,34 @@ func (s *TokenRefreshService) notifyAccountSchedulingBlockCleared(accountID int6
 	s.runtimeBlocker.ClearAccountSchedulingBlock(accountID)
 }
 
-// Start 启动后台刷新服务
-func (s *TokenRefreshService) Start() {
-	if s.cfg == nil || !s.cfg.Enabled {
-		slog.Info("token_refresh.service_disabled")
-		return
-	}
-
-	s.wg.Add(1)
-	go s.refreshLoop()
-
-	slog.Info("token_refresh.service_started",
-		"check_interval_minutes", s.cfg.CheckIntervalMinutes,
-		"refresh_before_expiry_hours", s.cfg.RefreshBeforeExpiryHours,
-	)
+// Enabled reports whether background token refresh is configured.
+func (s *TokenRefreshService) Enabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Enabled
 }
+
+// Interval returns the configured fixed-delay check interval, preserving the legacy minimum.
+func (s *TokenRefreshService) Interval() time.Duration {
+	if s == nil || s.cfg == nil {
+		return 5 * time.Minute
+	}
+	checkInterval := time.Duration(s.cfg.CheckIntervalMinutes) * time.Minute
+	if checkInterval < time.Minute {
+		checkInterval = 5 * time.Minute
+	}
+	return checkInterval
+}
+
+// Run performs one refresh check using the runtime-provided context.
+func (s *TokenRefreshService) Run(ctx context.Context) error {
+	if s == nil || s.cfg == nil || !s.cfg.Enabled {
+		return nil
+	}
+	s.processRefreshContext(ctx)
+	return nil
+}
+
+// Start is retained as a no-op while runtime lifecycle ownership is introduced.
+func (s *TokenRefreshService) Start() {}
 
 // Stop 停止刷新服务（可安全多次调用）
 func (s *TokenRefreshService) Stop() {

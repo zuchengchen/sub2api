@@ -63,7 +63,7 @@ func TestIdempotencyCleanupService_CleanupOnce(t *testing.T) {
 		},
 	})
 
-	svc.cleanupOnce()
+	require.NoError(t, svc.Run(context.Background()))
 	require.Equal(t, 1, repo.deleteCalls)
 	require.Equal(t, 99, repo.lastLimit)
 }

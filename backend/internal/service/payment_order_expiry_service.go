@@ -54,50 +54,30 @@ func (s *PaymentOrderExpiryService) SetLeaderLock(lockCache LeaderLockCache, db 
 	s.db = db
 }
 
-func (s *PaymentOrderExpiryService) Start() {
-	if s == nil || s.paymentSvc == nil || s.interval <= 0 {
-		return
-	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(s.interval)
-		defer ticker.Stop()
+const paymentOrderExpiryLockAcquireTimeout = 2 * time.Second
 
-		s.runOnce()
-		for {
-			select {
-			case <-ticker.C:
-				s.runOnce()
-			case <-s.stopCh:
-				return
-			}
-		}
-	}()
-}
-
-func (s *PaymentOrderExpiryService) Stop() {
+// Interval returns the configured worker interval.
+func (s *PaymentOrderExpiryService) Interval() time.Duration {
 	if s == nil {
-		return
+		return 0
 	}
-	s.stopOnce.Do(func() {
-		close(s.stopCh)
-	})
-	s.wg.Wait()
+	return s.interval
 }
 
-func (s *PaymentOrderExpiryService) runOnce() {
-	// Multi-instance guard: only the leader reconciles/expires orders per cycle,
-	// avoiding N× upstream payment-provider API calls and update races.
-	lockCtx, lockCancel := context.WithTimeout(context.Background(), 2*time.Second)
+// Run reconciles and expires payment orders once while retaining its leader lock.
+func (s *PaymentOrderExpiryService) Run(ctx context.Context) error {
+	if s == nil || s.paymentSvc == nil {
+		return nil
+	}
+	lockCtx, lockCancel := context.WithTimeout(ctx, paymentOrderExpiryLockAcquireTimeout)
 	release, ok := tryAcquireSingletonLeaderLock(lockCtx, s.lockCache, s.db, paymentOrderExpiryLeaderLockKey, s.instanceID, paymentOrderExpiryLeaderLockTTL)
 	lockCancel()
 	if !ok {
-		return
+		return nil
 	}
 	defer release()
 
-	reconcileCtx, cancel := context.WithTimeout(context.Background(), expiryCheckTimeout)
+	reconcileCtx, cancel := context.WithTimeout(ctx, expiryCheckTimeout)
 	recovered, err := s.paymentSvc.ReconcilePendingPaymentOrders(reconcileCtx)
 	cancel()
 	if err != nil {
@@ -106,14 +86,20 @@ func (s *PaymentOrderExpiryService) runOnce() {
 		slog.Info("[PaymentOrderExpiry] reconciled paid orders", "count", recovered)
 	}
 
-	expireCtx, cancel := context.WithTimeout(context.Background(), expiryCheckTimeout)
+	expireCtx, cancel := context.WithTimeout(ctx, expiryCheckTimeout)
 	defer cancel()
 	expired, err := s.paymentSvc.ExpireTimedOutOrders(expireCtx)
 	if err != nil {
 		slog.Error("[PaymentOrderExpiry] failed to expire orders", "error", err)
-		return
+		return err
 	}
 	if expired > 0 {
 		slog.Info("[PaymentOrderExpiry] expired timed-out orders", "count", expired)
 	}
+	return nil
 }
+
+// Start is retained for compatibility; runtime owns this worker's lifecycle.
+func (s *PaymentOrderExpiryService) Start() {}
+
+func (s *PaymentOrderExpiryService) Stop() {}

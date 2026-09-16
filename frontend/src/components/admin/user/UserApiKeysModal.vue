@@ -43,6 +43,17 @@
               </button>
             </div>
             <div class="flex items-center gap-1"><span>{{ t('admin.users.columns.created') }}: {{ formatDateTime(key.created_at) }}</span></div>
+            <label class="flex items-center gap-1">
+              <span>{{ t('admin.users.apiKeyConcurrency') }}:</span>
+              <input
+                :value="key.concurrency ?? 0"
+                type="number"
+                min="0"
+                class="input h-7 w-20 text-xs"
+                data-testid="admin-key-concurrency"
+                @change="(event) => saveConcurrency(key, Number((event.target as HTMLInputElement).value))"
+              />
+            </label>
           </div>
         </div>
       </div>
@@ -200,6 +211,23 @@ const openGroupSelector = (key: ApiKey) => {
 const closeGroupSelector = () => {
   groupSelectorKeyId.value = null
   dropdownPosition.value = null
+}
+
+const saveConcurrency = async (key: ApiKey, concurrency: number) => {
+  const next = Number.isFinite(concurrency) && concurrency >= 0 ? Math.floor(concurrency) : 0
+  if ((key.concurrency ?? 0) === next) return
+  updatingKeyIds.value.add(key.id)
+  try {
+    const result = await adminAPI.apiKeys.updateApiKey(key.id, { concurrency: next })
+    const idx = apiKeys.value.findIndex((k) => k.id === key.id)
+    if (idx !== -1) {
+      apiKeys.value[idx] = result.api_key
+    }
+  } catch (error: unknown) {
+    appStore.showError(error instanceof Error ? error.message : t('admin.users.groupChangeFailed'))
+  } finally {
+    updatingKeyIds.value.delete(key.id)
+  }
 }
 
 const changeGroup = async (key: ApiKey, newGroupId: number | null) => {

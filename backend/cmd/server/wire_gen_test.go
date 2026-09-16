@@ -39,16 +39,11 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		cfg,
 		nil,
 	)
-	accountExpirySvc := service.NewAccountExpiryService(nil, time.Second)
 	codexVersionSyncSvc := service.NewOpenAICodexVersionSyncService(nil, nil, nil, time.Second)
 	proxyExpirySvc := service.NewProxyExpiryService(nil, time.Second)
-	subscriptionExpirySvc := service.NewSubscriptionExpiryService(nil, time.Second)
 	pricingSvc := service.NewPricingService(cfg, nil)
-	emailQueueSvc := service.NewEmailQueueService(nil, 1)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
-	idempotencyCleanupSvc := service.NewIdempotencyCleanupService(nil, cfg)
 	schedulerSnapshotSvc := service.NewSchedulerSnapshotService(nil, nil, nil, nil, cfg)
-	opsSystemLogSinkSvc := service.NewOpsSystemLogSink(nil)
 
 	cleanup := provideCleanup(
 		nil, // entClient
@@ -58,24 +53,18 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		&service.OpsAlertEvaluatorService{},
 		&service.OpsCleanupService{},
 		&service.OpsScheduledReportService{},
-		opsSystemLogSinkSvc,
 		nil, // opsService
 		nil, // opsIngressRejectAggregator
 		nil, // apiKeyService
 		nil, // authCacheInvalidationWorker
 		schedulerSnapshotSvc,
 		tokenRefreshSvc,
-		accountExpirySvc,
 		nil, // cnProviderBalanceCheck
 		codexVersionSyncSvc,
 		proxyExpirySvc,
-		subscriptionExpirySvc,
 		&service.UsageCleanupService{},
-		idempotencyCleanupSvc,
 		pricingSvc,
-		emailQueueSvc,
 		billingCacheSvc,
-		&service.UsageRecordWorkerPool{},
 		&service.SubscriptionService{},
 		oauthSvc,
 		openAIOAuthSvc,
@@ -83,9 +72,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // openAIGateway
 		nil, // scheduledTestRunner
 		nil, // backupSvc
-		nil, // paymentOrderExpiry
 		nil, // channelMonitorRunner
-		nil, // channelMonitorV2Aggregator
 		nil, // quotaFlusher
 		nil, // upstreamBillingProbe
 		nil, // ollamaCloudUsage
@@ -93,6 +80,9 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // contentModeration
 		nil, // openAIAutoReset
 		nil, // pluginManager
+		nil, // usagePolicyService
+		nil, // billingOutboxWorker
+		nil, // runtime
 	)
 
 	require.NotPanics(t, func() {

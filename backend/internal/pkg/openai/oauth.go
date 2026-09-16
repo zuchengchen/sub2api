@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -53,19 +54,11 @@ type OAuthSession struct {
 type SessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*OAuthSession
-	stopOnce sync.Once
-	stopCh   chan struct{}
 }
 
-// NewSessionStore creates a new session store
+// NewSessionStore creates a new session store. Cleanup is owned by the worker runtime.
 func NewSessionStore() *SessionStore {
-	store := &SessionStore{
-		sessions: make(map[string]*OAuthSession),
-		stopCh:   make(chan struct{}),
-	}
-	// Start cleanup goroutine
-	go store.cleanup()
-	return store
+	return &SessionStore{sessions: make(map[string]*OAuthSession)}
 }
 
 // Set stores a session
@@ -97,32 +90,33 @@ func (s *SessionStore) Delete(sessionID string) {
 	delete(s.sessions, sessionID)
 }
 
-// Stop stops the cleanup goroutine
-func (s *SessionStore) Stop() {
-	s.stopOnce.Do(func() {
-		close(s.stopCh)
-	})
+// CleanupExpiredSessions removes sessions older than SessionTTL for one runtime callback.
+func (s *SessionStore) CleanupExpiredSessions(ctx context.Context) error {
+	return s.cleanupExpiredAt(ctx, time.Now())
 }
 
-// cleanup removes expired sessions periodically
-func (s *SessionStore) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.stopCh:
-			return
-		case <-ticker.C:
-			s.mu.Lock()
-			for id, session := range s.sessions {
-				if time.Since(session.CreatedAt) > SessionTTL {
-					delete(s.sessions, id)
-				}
-			}
-			s.mu.Unlock()
+func (s *SessionStore) cleanupExpiredAt(ctx context.Context, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, session := range s.sessions {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if now.Sub(session.CreatedAt) > SessionTTL {
+			delete(s.sessions, id)
 		}
 	}
+	return nil
 }
+
+// Stop is retained for compatibility; session cleanup is owned by the worker runtime.
+func (s *SessionStore) Stop() {}
 
 // GenerateRandomBytes generates cryptographically secure random bytes
 func GenerateRandomBytes(n int) ([]byte, error) {

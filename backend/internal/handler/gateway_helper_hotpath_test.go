@@ -31,6 +31,7 @@ type helperConcurrencyCacheStub struct {
 	waitMaxWait         int
 	waitIncrementHook   func()
 	apiKeyTrackCalls    int
+	apiKeyAcquireCalls  int
 	apiKeyReleaseCalls  int
 	apiKeyTrackIDs      []int64
 }
@@ -107,6 +108,13 @@ func (s *helperConcurrencyCacheStub) TrackAPIKeySlot(ctx context.Context, apiKey
 	s.apiKeyTrackCalls++
 	s.apiKeyTrackIDs = append(s.apiKeyTrackIDs, apiKeyID)
 	return nil
+}
+
+func (s *helperConcurrencyCacheStub) AcquireAPIKeySlot(ctx context.Context, apiKeyID int64, maxConcurrency int, requestID string) (bool, error) {
+	s.mu.Lock()
+	s.apiKeyAcquireCalls++
+	s.mu.Unlock()
+	return true, s.TrackAPIKeySlot(ctx, apiKeyID, requestID)
 }
 
 func (s *helperConcurrencyCacheStub) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error {
@@ -519,4 +527,29 @@ func TestSetClaudeCodeClientContext_ParsedRequestProbeWithoutSystemPrompt(t *tes
 	c2.Request.Header.Set("User-Agent", "claude-cli/2.1.260 (external, cli)")
 	SetClaudeCodeClientContext(c2, nil, &service.ParsedRequest{Model: "claude-sonnet-4-5", MaxTokens: 64})
 	require.False(t, service.IsClaudeCodeClient(c2.Request.Context()))
+}
+
+func TestWithAPIKeyConcurrencyLimit_ZeroIsUnlimited(t *testing.T) {
+	cache := &helperConcurrencyCacheStub{}
+	helper := NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Millisecond)
+
+	release, err := helper.withAPIKeyConcurrencyLimit(context.Background(), &service.APIKey{ID: 9, Concurrency: 0}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.Zero(t, cache.apiKeyAcquireCalls)
+	require.Equal(t, 1, cache.apiKeyTrackCalls)
+	release()
+	require.Equal(t, 1, cache.apiKeyReleaseCalls)
+}
+
+func TestWithAPIKeyConcurrencyLimit_PositiveAcquiresSlot(t *testing.T) {
+	cache := &helperConcurrencyCacheStub{}
+	helper := NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Millisecond)
+
+	release, err := helper.withAPIKeyConcurrencyLimit(context.Background(), &service.APIKey{ID: 9, Concurrency: 2}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.Equal(t, 1, cache.apiKeyAcquireCalls)
+	release()
+	require.Equal(t, 1, cache.apiKeyReleaseCalls)
 }

@@ -467,6 +467,8 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	billingOutboxRepo     BillingOutboxRepository
+	supportDecisionReader SupportDecisionReader
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
 
@@ -507,6 +509,18 @@ type OpenAIGatewayService struct {
 	// 剥离跨账号回带（openai_codex_turn_state.go）。
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
+}
+
+func (s *OpenAIGatewayService) SetBillingOutboxRepository(repo BillingOutboxRepository) {
+	if s != nil {
+		s.billingOutboxRepo = repo
+	}
+}
+
+func (s *OpenAIGatewayService) SetSupportDecisionReader(reader SupportDecisionReader) {
+	if s != nil {
+		s.supportDecisionReader = reader
+	}
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

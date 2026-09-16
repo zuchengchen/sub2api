@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -60,6 +61,42 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	}
 	tx = nil
 	return result, nil
+}
+
+func (r *usageBillingRepository) ApplyAndStageOutboxFinalization(ctx context.Context, cmd *service.UsageBillingCommand, binding service.UsageBillingOutboxBinding) (*service.UsageBillingApplyResult, error) {
+	result, err := r.Apply(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	if r == nil || r.db == nil || binding.OutboxID <= 0 {
+		return result, nil
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE billing_attempt_outbox
+		SET status = 'finalization_pending', apply_result = $1::jsonb, updated_at = NOW()
+		WHERE id = $2 AND leased_by = $3 AND status IN ('processing', 'pending')
+	`, payload, binding.OutboxID, binding.WorkerID)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, service.ErrBillingOutboxClaimLost
+	}
+	return result, nil
+}
+
+func (r *usageBillingRepository) ApplyBatchAndStageOutboxFinalizations(ctx context.Context, items []service.UsageBillingBatchItem) ([]service.UsageBillingBatchOutcome, error) {
+	out := make([]service.UsageBillingBatchOutcome, 0, len(items))
+	for _, item := range items {
+		result, err := r.ApplyAndStageOutboxFinalization(ctx, &item.Command, item.Binding)
+		out = append(out, service.UsageBillingBatchOutcome{Result: result, Err: err})
+	}
+	return out, nil
 }
 
 func (r *usageBillingRepository) claimUsageBillingKey(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) (bool, error) {

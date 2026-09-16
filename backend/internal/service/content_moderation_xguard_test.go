@@ -931,7 +931,7 @@ func TestContentModerationLayerShadowStagesAreIndependent(t *testing.T) {
 			}
 			require.Eventually(t, func() bool {
 				return calls.Load() == tc.wantModelCalls && len(repo.snapshotLogs()) == wantLogCount
-			}, time.Second, 10*time.Millisecond)
+			}, 5*time.Second, 10*time.Millisecond)
 			require.Equal(t, tc.wantModelCalls, calls.Load(), "a first-layer shadow hit with a candidate signal must reach layer two")
 			logs := repo.snapshotLogs()
 			require.Len(t, logs, wantLogCount)

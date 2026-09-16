@@ -93,6 +93,11 @@
         />
       </div>
 
+      <div v-if="opsEnabled && !(loading && !hasLoadedOnce)" class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <OpsWorkerRuntimeCard :status="workerRuntimeStatus" :loading="loadingRuntimeHealth" />
+        <OpsBillingOutboxCard :health="billingOutboxHealth" :loading="loadingRuntimeHealth" />
+      </div>
+
       <!-- Alert Events -->
       <OpsAlertEventsCard v-if="opsEnabled && showAlertEvents && !(loading && !hasLoadedOnce)" />
 
@@ -154,7 +159,9 @@ import {
   type OpsErrorTrendResponse,
   type OpsLatencyHistogramResponse,
   type OpsThroughputTrendResponse,
-  type OpsMetricThresholds
+  type OpsMetricThresholds,
+  type OpsBillingOutboxHealth,
+  type OpsWorkerRuntimeStatus
 } from '@/api/admin/ops'
 import { useAdminSettingsStore, useAppStore } from '@/stores'
 import OpsDashboardHeader from './components/OpsDashboardHeader.vue'
@@ -170,6 +177,8 @@ import OpsSwitchRateTrendChart from './components/OpsSwitchRateTrendChart.vue'
 import OpsAlertEventsCard from './components/OpsAlertEventsCard.vue'
 import OpsOpenAITokenStatsCard from './components/OpsOpenAITokenStatsCard.vue'
 import OpsSystemLogTable from './components/OpsSystemLogTable.vue'
+import OpsBillingOutboxCard from './components/OpsBillingOutboxCard.vue'
+import OpsWorkerRuntimeCard from './components/OpsWorkerRuntimeCard.vue'
 import OpsRequestDetailsModal, { type OpsRequestDetailsPreset } from './components/OpsRequestDetailsModal.vue'
 import OpsSettingsDialog from './components/OpsSettingsDialog.vue'
 import OpsAlertRulesCard from './components/OpsAlertRulesCard.vue'
@@ -188,6 +197,9 @@ const allowedTimeRanges = new Set<TimeRange>(['5m', '30m', '1h', '6h', '24h', 'c
 type QueryMode = 'auto' | 'raw' | 'preagg'
 const allowedQueryModes = new Set<QueryMode>(['auto', 'raw', 'preagg'])
 
+const billingOutboxHealth = ref<OpsBillingOutboxHealth | null>(null)
+const workerRuntimeStatus = ref<OpsWorkerRuntimeStatus | null>(null)
+const loadingRuntimeHealth = ref(false)
 const loading = ref(true)
 const hasLoadedOnce = ref(false)
 const errorMessage = ref('')
@@ -738,10 +750,14 @@ async function fetchData() {
   loading.value = true
   errorMessage.value = ''
   try {
+    loadingRuntimeHealth.value = true
     await Promise.all([
       refreshCoreSnapshotWithCancel(fetchSeq, dashboardFetchController.signal),
       refreshSwitchTrendWithCancel(fetchSeq, dashboardFetchController.signal),
+      opsAPI.getBillingOutboxHealth().then((h) => { billingOutboxHealth.value = h }).catch(() => { billingOutboxHealth.value = null }),
+      opsAPI.getWorkerRuntimeStatus().then((s) => { workerRuntimeStatus.value = s }).catch(() => { workerRuntimeStatus.value = null }),
     ])
+    loadingRuntimeHealth.value = false
     if (fetchSeq !== dashboardFetchSeq) return
 
     lastUpdated.value = new Date()

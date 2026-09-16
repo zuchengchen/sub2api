@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"os"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -131,7 +130,6 @@ func ProvideTokenRefreshService(
 	// 调用侧显式注入后台刷新策略，避免策略漂移
 	svc.SetRefreshPolicy(DefaultBackgroundRefreshPolicy())
 	svc.SetAccountRuntimeBlocker(runtimeBlocker)
-	svc.Start()
 	return svc
 }
 
@@ -338,11 +336,10 @@ func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *Timing
 	return svc
 }
 
-// ProvideAccountExpiryService creates and starts AccountExpiryService.
+// ProvideAccountExpiryService constructs AccountExpiryService.
+// Its lifecycle is owned by the server worker runtime.
 func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpiryService {
-	svc := NewAccountExpiryService(accountRepo, time.Minute)
-	svc.Start()
-	return svc
+	return NewAccountExpiryService(accountRepo, time.Minute)
 }
 
 // ProvideOpenAICodexVersionSyncService creates and starts OpenAICodexVersionSyncService.
@@ -364,13 +361,13 @@ func ProvideProxyExpiryService(proxyRepo ProxyRepository) *ProxyExpiryService {
 	return svc
 }
 
-// ProvideSubscriptionExpiryService creates and starts SubscriptionExpiryService.
+// ProvideSubscriptionExpiryService configures SubscriptionExpiryService.
+// Its lifecycle is owned by the server worker runtime.
 func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, settingRepo SettingRepository, notificationEmailService *NotificationEmailService, lockCache LeaderLockCache, db *sql.DB) *SubscriptionExpiryService {
 	svc := NewSubscriptionExpiryService(userSubRepo, time.Minute)
 	svc.SetSettingRepository(settingRepo)
 	svc.SetNotificationEmailService(notificationEmailService)
 	svc.SetLeaderLock(lockCache, db)
-	svc.Start()
 	return svc
 }
 
@@ -399,29 +396,27 @@ func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountReposi
 	}
 	if cfg != nil {
 		svc.SetAccountLoadBatchCacheTTL(time.Duration(cfg.Gateway.Scheduling.LoadBatchCacheTTLMS) * time.Millisecond)
-		svc.StartSlotCleanupWorker(accountRepo, cfg.Gateway.Scheduling.SlotCleanupInterval)
+		svc.ConfigureSlotCleanup(cfg.Gateway.Scheduling.SlotCleanupInterval)
 	}
 	return svc
 }
 
 // ProvideUserMessageQueueService 创建用户消息串行队列服务并启动清理 worker
 func ProvideUserMessageQueueService(cache UserMsgQueueCache, rpmCache RPMCache, cfg *config.Config) *UserMessageQueueService {
-	svc := NewUserMessageQueueService(cache, rpmCache, &cfg.Gateway.UserMessageQueue)
-	if cfg.Gateway.UserMessageQueue.CleanupIntervalSeconds > 0 {
-		svc.StartCleanupWorker(time.Duration(cfg.Gateway.UserMessageQueue.CleanupIntervalSeconds) * time.Second)
-	}
-	return svc
+	return NewUserMessageQueueService(cache, rpmCache, &cfg.Gateway.UserMessageQueue)
 }
 
 // ProvideSchedulerSnapshotService creates and starts SchedulerSnapshotService.
 func ProvideSchedulerSnapshotService(
 	cache SchedulerCache,
 	outboxRepo SchedulerOutboxRepository,
+	dirtyWorkRepo SchedulerDirtyWorkRepository,
+	ownershipRepo SchedulerOwnershipRepository,
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
 	cfg *config.Config,
 ) *SchedulerSnapshotService {
-	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
+	svc := newSchedulerSnapshotService(cache, outboxRepo, dirtyWorkRepo, ownershipRepo, accountRepo, groupRepo, cfg)
 	svc.Start()
 	return svc
 }
@@ -516,7 +511,6 @@ func ProvideOpsCleanupService(
 
 func ProvideOpsSystemLogSink(opsRepo OpsRepository) *OpsSystemLogSink {
 	sink := NewOpsSystemLogSink(opsRepo)
-	sink.Start()
 	logger.SetSink(sink)
 	return sink
 }
@@ -563,8 +557,48 @@ func ProvideSystemOperationLockService(repo IdempotencyRepository, cfg *config.C
 }
 
 func ProvideIdempotencyCleanupService(repo IdempotencyRepository, cfg *config.Config) *IdempotencyCleanupService {
-	svc := NewIdempotencyCleanupService(repo, cfg)
-	svc.Start()
+	return NewIdempotencyCleanupService(repo, cfg)
+}
+
+func ProvideBillingOutboxWorker(
+	repo BillingOutboxRepository,
+	usageBillingRepo UsageBillingRepository,
+	apiKeyService *APIKeyService,
+	gatewayService *GatewayService,
+	openAIGatewayService *OpenAIGatewayService,
+) *BillingOutboxWorker {
+	if gatewayService != nil {
+		gatewayService.SetBillingOutboxRepository(repo)
+	}
+	if openAIGatewayService != nil {
+		openAIGatewayService.SetBillingOutboxRepository(repo)
+	}
+	var deps *billingDeps
+	if gatewayService != nil {
+		deps = gatewayService.billingDeps()
+	} else if openAIGatewayService != nil {
+		deps = openAIGatewayService.billingDeps()
+	}
+	worker := NewBillingOutboxWorker(repo, usageBillingRepo, NewBillingOutboxPostProcessor(deps, apiKeyService))
+	worker.Start()
+	return worker
+}
+
+func ProvideOutboxCleanupService(
+	billingRepo BillingOutboxRepository,
+	schedulerRepo SchedulerOutboxRepository,
+	schedulerCache SchedulerCache,
+	lockCache LeaderLockCache,
+	db *sql.DB,
+	cfg *config.Config,
+) *OutboxCleanupService {
+	retentionDays := 30
+	if cfg != nil && cfg.OutboxCleanup.TerminalRetentionDays > 0 {
+		retentionDays = cfg.OutboxCleanup.TerminalRetentionDays
+	}
+	svc := NewOutboxCleanupService(billingRepo, schedulerRepo, schedulerCache,
+		time.Duration(retentionDays)*24*time.Hour)
+	svc.SetLeaderLock(lockCache, db)
 	return svc
 }
 
@@ -900,6 +934,7 @@ var ProviderSet = wire.NewSet(
 	ProvideUserMessageQueueService,
 	NewUsageRecordWorkerPool,
 	ProvideSchedulerSnapshotService,
+	ProvideSchedulerSnapshotDirtyProcessor,
 	NewIdentityService,
 	NewCRSSyncService,
 	ProvideUpdateService,
@@ -924,6 +959,10 @@ var ProviderSet = wire.NewSet(
 	ProvideIdempotencyCoordinator,
 	ProvideSystemOperationLockService,
 	ProvideIdempotencyCleanupService,
+	ProvideBillingOutboxWorker,
+	ProvideOutboxCleanupService,
+	ProvideSupportDecisionAtomicReader,
+	ProvideSupportDecisionReader,
 	ProvideScheduledTestService,
 	ProvideScheduledTestRunnerService,
 	NewGroupCapacityService,
@@ -978,7 +1017,6 @@ func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, 
 func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache LeaderLockCache, db *sql.DB) *PaymentOrderExpiryService {
 	svc := NewPaymentOrderExpiryService(paymentSvc, 60*time.Second)
 	svc.SetLeaderLock(lockCache, db)
-	svc.Start()
 	return svc
 }
 
@@ -1030,10 +1068,5 @@ func ProvideChannelMonitorV2Service(repo ChannelMonitorV2Repository, settingServ
 // Aggregation only runs when channel_monitor_enabled=true and mode=v2 (and V2 config enabled).
 // Set CHANNEL_MONITOR_V2_DISABLE_AGGREGATOR=1 to skip Start (local demo with seeded facts).
 func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.DB, settingService *SettingService) *ChannelMonitorV2Aggregator {
-	aggregator := NewChannelMonitorV2Aggregator(repo, db, settingService)
-	if os.Getenv("CHANNEL_MONITOR_V2_DISABLE_AGGREGATOR") == "1" {
-		return aggregator
-	}
-	aggregator.Start()
-	return aggregator
+	return NewChannelMonitorV2Aggregator(repo, db, settingService)
 }

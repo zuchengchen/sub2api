@@ -71,52 +71,38 @@ func (s *SubscriptionExpiryService) SetNotificationEmailService(notificationEmai
 	s.notificationEmailService = notificationEmailService
 }
 
-func (s *SubscriptionExpiryService) Start() {
-	if s == nil || s.userSubRepo == nil || s.interval <= 0 {
-		return
-	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(s.interval)
-		defer ticker.Stop()
-
-		s.runOnce()
-		for {
-			select {
-			case <-ticker.C:
-				s.runOnce()
-			case <-s.stopCh:
-				return
-			}
-		}
-	}()
-}
-
-func (s *SubscriptionExpiryService) Stop() {
+// Interval returns the configured worker interval.
+func (s *SubscriptionExpiryService) Interval() time.Duration {
 	if s == nil {
-		return
+		return 0
 	}
-	s.stopOnce.Do(func() {
-		close(s.stopCh)
-	})
-	s.wg.Wait()
+	return s.interval
 }
 
-func (s *SubscriptionExpiryService) runOnce() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// Run updates expired subscriptions and sends configured reminders once.
+func (s *SubscriptionExpiryService) Run(ctx context.Context) error {
+	if s == nil || s.userSubRepo == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	updated, err := s.userSubRepo.BatchUpdateExpiredStatus(ctx)
 	if err != nil {
 		log.Printf("[SubscriptionExpiry] Update expired subscriptions failed: %v", err)
-		return
+		return err
 	}
 	if updated > 0 {
 		log.Printf("[SubscriptionExpiry] Updated %d expired subscriptions", updated)
 	}
 	s.sendExpiryReminders(ctx)
+	return nil
 }
+
+// Start is retained for compatibility; runtime owns this worker's lifecycle.
+func (s *SubscriptionExpiryService) Start() {}
+
+func (s *SubscriptionExpiryService) Stop() {}
 
 func (s *SubscriptionExpiryService) sendExpiryReminders(ctx context.Context) {
 	if s == nil || s.userSubRepo == nil || s.notificationEmailService == nil {

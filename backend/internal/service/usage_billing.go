@@ -163,13 +163,38 @@ type AccountQuotaState struct {
 }
 
 type UsageBillingApplyResult struct {
-	Applied              bool
-	APIKeyQuotaExhausted bool
-	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)
-	BalanceOverdrafted   bool               // true when the sufficient-balance guard missed and debt was still recorded
-	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
+	Applied              bool               `json:"applied"`
+	UsageLogPersisted    bool               `json:"usage_log_persisted"`
+	APIKeyQuotaExhausted bool               `json:"api_key_quota_exhausted"`
+	BalanceOverdrafted   bool               `json:"balance_overdrafted"`
+	NewBalance           *float64           `json:"new_balance,omitempty"`
+	QuotaState           *AccountQuotaState `json:"quota_state,omitempty"`
 }
 
 type UsageBillingRepository interface {
 	Apply(ctx context.Context, cmd *UsageBillingCommand) (*UsageBillingApplyResult, error)
+}
+
+type UsageBillingOutboxBinding struct {
+	OutboxID int64
+	WorkerID string
+}
+
+type UsageBillingFinalizationRepository interface {
+	UsageBillingRepository
+	ApplyAndStageOutboxFinalization(ctx context.Context, cmd *UsageBillingCommand, binding UsageBillingOutboxBinding) (*UsageBillingApplyResult, error)
+}
+
+type UsageBillingBatchItem struct {
+	Command UsageBillingCommand
+	Binding UsageBillingOutboxBinding
+}
+
+type UsageBillingBatchOutcome struct {
+	Result *UsageBillingApplyResult
+	Err    error
+}
+
+type UsageBillingBatchFinalizationRepository interface {
+	ApplyBatchAndStageOutboxFinalizations(ctx context.Context, items []UsageBillingBatchItem) ([]UsageBillingBatchOutcome, error)
 }

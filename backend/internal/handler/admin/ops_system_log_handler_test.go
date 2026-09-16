@@ -52,6 +52,8 @@ func newOpsSystemLogTestRouter(handler *OpsHandler, withUser bool) *gin.Engine {
 	r.GET("/logs", handler.ListSystemLogs)
 	r.POST("/logs/cleanup", handler.CleanupSystemLogs)
 	r.GET("/logs/health", handler.GetSystemLogIngestionHealth)
+	r.GET("/workers/status", handler.GetWorkerRuntimeStatus)
+	r.GET("/billing-outbox/health", handler.GetBillingOutboxHealth)
 	return r
 }
 

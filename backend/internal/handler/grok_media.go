@@ -220,7 +220,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
-				requestCtx,
+				service.WithPublicModelSupportMiss404(requestCtx),
 				apiKey.GroupID,
 				"",
 				sessionHash,

@@ -2132,6 +2132,10 @@ func (s *ContentModerationService) IsUserEmailWhitelisted(ctx context.Context, e
 	if strings.TrimSpace(email) == "" {
 		return false, nil
 	}
+	if s == nil || s.settingRepo == nil {
+		// No settings store means no whitelist; retry/check must not stall forever.
+		return false, nil
+	}
 	runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx)
 	if err != nil {
 		return false, err
