@@ -809,6 +809,13 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	billingOutboxRepo     BillingOutboxRepository
+}
+
+func (s *GatewayService) SetBillingOutboxRepository(repo BillingOutboxRepository) {
+	if s != nil {
+		s.billingOutboxRepo = repo
+	}
 }
 
 // NewGatewayService creates a new GatewayService

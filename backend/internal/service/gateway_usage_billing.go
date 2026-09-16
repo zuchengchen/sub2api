@@ -331,13 +331,36 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	return cmd
 }
 
-func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog, p *postUsageBillingParams, deps *billingDeps, repo UsageBillingRepository) (bool, error) {
+func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog, p *postUsageBillingParams, deps *billingDeps, repo UsageBillingRepository, outbox BillingOutboxRepository) (bool, error) {
 	if p == nil || deps == nil {
 		return false, nil
 	}
 
 	cmd := buildUsageBillingCommand(requestID, usageLog, p)
-	if cmd == nil || cmd.RequestID == "" || repo == nil {
+	if cmd == nil || cmd.RequestID == "" {
+		postUsageBilling(ctx, p, deps)
+		return true, nil
+	}
+	if outbox != nil {
+		attemptID := strings.TrimPrefix(cmd.RequestID, "attempt:")
+		if attemptID == "" {
+			attemptID = cmd.RequestID
+		}
+		billingCtx, cancel := detachedBillingContext(ctx)
+		defer cancel()
+		if _, err := outbox.Enqueue(billingCtx, &BillingOutboxCommand{
+			AttemptID:          attemptID,
+			RequestID:          cmd.RequestID,
+			APIKeyID:           cmd.APIKeyID,
+			RequestFingerprint: cmd.RequestFingerprint,
+			Billing:            *cmd,
+			PostEffects:        buildBillingOutboxPostEffects(p),
+		}); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if repo == nil {
 		postUsageBilling(ctx, p, deps)
 		return true, nil
 	}
@@ -561,6 +584,42 @@ func (s *GatewayService) billingDeps() *billingDeps {
 		balanceNotifyService:  s.balanceNotifyService,
 		userPlatformQuotaRepo: s.userPlatformQuotaRepo,
 		cfg:                   s.cfg,
+	}
+}
+
+func buildBillingOutboxPostEffects(p *postUsageBillingParams) *BillingOutboxPostEffects {
+	if p == nil || p.Cost == nil || p.User == nil || p.APIKey == nil || p.Account == nil {
+		return nil
+	}
+	return &BillingOutboxPostEffects{
+		UserID:                         p.User.ID,
+		UserUsername:                   p.User.Username,
+		UserEmail:                      p.User.Email,
+		UserBalance:                    p.User.Balance,
+		UserTotalRecharged:             p.User.TotalRecharged,
+		BalanceNotifyEnabled:           p.User.BalanceNotifyEnabled,
+		BalanceNotifyThreshold:         p.User.BalanceNotifyThreshold,
+		BalanceNotifyThresholdType:     p.User.BalanceNotifyThresholdType,
+		BalanceNotifyExtraEmails:       append([]NotifyEmailEntry(nil), p.User.BalanceNotifyExtraEmails...),
+		APIKeyGroupID:                  p.APIKey.GroupID,
+		AccountID:                      p.Account.ID,
+		AccountName:                    p.Account.Name,
+		AccountPlatform:                p.Account.Platform,
+		AccountType:                    p.Account.Type,
+		QuotaNotifyDailyEnabled:        p.Account.GetQuotaNotifyDailyEnabled(),
+		QuotaNotifyDailyThreshold:      p.Account.GetQuotaNotifyDailyThreshold(),
+		QuotaNotifyDailyThresholdType:  p.Account.GetQuotaNotifyDailyThresholdType(),
+		QuotaNotifyWeeklyEnabled:       p.Account.GetQuotaNotifyWeeklyEnabled(),
+		QuotaNotifyWeeklyThreshold:     p.Account.GetQuotaNotifyWeeklyThreshold(),
+		QuotaNotifyWeeklyThresholdType: p.Account.GetQuotaNotifyWeeklyThresholdType(),
+		QuotaNotifyTotalEnabled:        p.Account.GetQuotaNotifyTotalEnabled(),
+		QuotaNotifyTotalThreshold:      p.Account.GetQuotaNotifyTotalThreshold(),
+		QuotaNotifyTotalThresholdType:  p.Account.GetQuotaNotifyTotalThresholdType(),
+		ActualCost:                     p.Cost.ActualCost,
+		TotalCost:                      p.Cost.TotalCost,
+		IsSubscriptionBill:             p.IsSubscriptionBill,
+		AccountRateMultiplier:          p.AccountRateMultiplier,
+		Platform:                       p.Platform,
 	}
 }
 
@@ -867,7 +926,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		AccountRateMultiplier: accountRateMultiplier,
 		APIKeyService:         input.APIKeyService,
 		Platform:              quotaPlatform,
-	}, s.billingDeps(), s.usageBillingRepo)
+	}, s.billingDeps(), s.usageBillingRepo, s.billingOutboxRepo)
 
 	if billingErr != nil {
 		usageLog.ActualCost = 0

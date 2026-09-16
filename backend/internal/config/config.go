@@ -94,6 +94,7 @@ type Config struct {
 	Dashboard                DashboardCacheConfig           `mapstructure:"dashboard_cache"`
 	DashboardAgg             DashboardAggregationConfig     `mapstructure:"dashboard_aggregation"`
 	UsageCleanup             UsageCleanupConfig             `mapstructure:"usage_cleanup"`
+	OutboxCleanup            OutboxCleanupConfig            `mapstructure:"outbox_cleanup"`
 	Concurrency              ConcurrencyConfig              `mapstructure:"concurrency"`
 	TokenRefresh             TokenRefreshConfig             `mapstructure:"token_refresh"`
 	RunMode                  string                         `mapstructure:"run_mode" yaml:"run_mode"`
@@ -1693,6 +1694,10 @@ type DashboardAggregationRetentionConfig struct {
 }
 
 // UsageCleanupConfig 使用记录清理任务配置
+type OutboxCleanupConfig struct {
+	TerminalRetentionDays int `mapstructure:"terminal_retention_days"`
+}
+
 type UsageCleanupConfig struct {
 	// Enabled: 是否启用清理任务执行器
 	Enabled bool `mapstructure:"enabled"`
