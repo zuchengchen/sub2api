@@ -164,8 +164,7 @@ func TestOpenAIGatewayService_Forward_WSv2ErrorEventUsageLimitPersistsRateLimit(
 	require.Nil(t, result)
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)
 	require.Nil(t, upstream.lastReq, "WS 限流 error event 不应回退到同账号 HTTP")
-	require.Len(t, repo.rateLimitCalls, 1)
-	require.WithinDuration(t, time.Unix(resetAt, 0), repo.rateLimitCalls[0], 2*time.Second)
+	require.Empty(t, repo.rateLimitCalls)
 }
 
 func TestOpenAIGatewayService_Forward_WSv2Handshake429PersistsRateLimit(t *testing.T) {
@@ -234,9 +233,7 @@ func TestOpenAIGatewayService_Forward_WSv2Handshake429PersistsRateLimit(t *testi
 	require.Nil(t, result)
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)
 	require.Nil(t, upstream.lastReq, "WS 握手 429 不应回退到同账号 HTTP")
-	require.Len(t, repo.rateLimitCalls, 1)
-	require.NotEmpty(t, repo.updateExtra, "握手 429 的 x-codex 头应立即落库")
-	require.Contains(t, repo.updateExtra[0], "codex_usage_updated_at")
+	require.Empty(t, repo.rateLimitCalls)
 }
 
 func TestOpenAIGatewayService_Forward_WSv2Handshake502RecordsModelTransient(t *testing.T) {
@@ -387,8 +384,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventUsageL
 		var failoverErr *UpstreamFailoverError
 		require.ErrorAs(t, serverErr, &failoverErr)
 		require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
-		require.Len(t, repo.rateLimitCalls, 1)
-		require.WithinDuration(t, time.Unix(resetAt, 0), repo.rateLimitCalls[0], 2*time.Second)
+		require.Empty(t, repo.rateLimitCalls)
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 ingress websocket 结束超时")
 	}

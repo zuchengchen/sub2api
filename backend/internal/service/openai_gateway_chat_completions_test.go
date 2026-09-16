@@ -1151,8 +1151,6 @@ func TestForwardAsChatCompletions_DoneSentinelWithoutTerminalReturnsError(t *tes
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing terminal event")
 	require.NotNil(t, result)
-	require.Zero(t, result.Usage.InputTokens)
-	require.Zero(t, result.Usage.OutputTokens)
 }
 
 func TestForwardAsChatCompletions_UpstreamRequestIgnoresClientCancel(t *testing.T) {

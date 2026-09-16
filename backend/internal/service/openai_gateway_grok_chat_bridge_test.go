@@ -684,7 +684,7 @@ func TestForwardGrokRawChat429PreservesRetryAfter(t *testing.T) {
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 	require.Equal(t, "45", failoverErr.ResponseHeaders.Get("Retry-After"))
-	require.Equal(t, xai.DefaultCLIBaseURL+"/chat/completions", upstream.lastReq.URL.String())
+	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
 }
 
 func TestForwardGrokRawChatErrorRecordsActualEndpoint(t *testing.T) {
@@ -713,8 +713,8 @@ func TestForwardGrokRawChatErrorRecordsActualEndpoint(t *testing.T) {
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 	require.Error(t, err)
 	require.Nil(t, result)
-	require.Equal(t, xai.DefaultCLIBaseURL+"/chat/completions", upstream.lastReq.URL.String())
-	require.Equal(t, grokChatRawEndpoint, GetActualOpenAIUpstreamEndpoint(c))
+	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
+	require.Equal(t, grokChatResponsesEndpoint, GetActualOpenAIUpstreamEndpoint(c))
 }
 
 func grokChatBridgeTestAccount(id int64) *Account {

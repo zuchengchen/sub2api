@@ -47,10 +47,7 @@ func (r *contextBoundBlockingReadCloser) Read(p []byte) (int, error) {
 }
 
 func (r *contextBoundBlockingReadCloser) Close() error {
-	select {
-	case <-r.ctx.Done():
-	case <-r.forceClose:
-	}
+	r.forceUnblock()
 	return nil
 }
 

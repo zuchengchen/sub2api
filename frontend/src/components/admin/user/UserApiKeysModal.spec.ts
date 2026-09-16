@@ -21,9 +21,13 @@ vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ showError: vi.fn(), showSuccess: vi.fn() }),
 }))
 
-vi.mock('vue-i18n', () => ({
-  useI18n: () => ({ t: (key: string) => key }),
-}))
+vi.mock('vue-i18n', async () => {
+  const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
+  return {
+    ...actual,
+    useI18n: () => ({ t: (key: string) => key }),
+  }
+})
 
 describe('UserApiKeysModal concurrency field', () => {
   beforeEach(() => {
@@ -57,18 +61,22 @@ describe('UserApiKeysModal concurrency field', () => {
   it('lets admins edit per-key concurrency', async () => {
     const wrapper = mount(UserApiKeysModal, {
       props: {
-        show: true,
+        show: false,
         user: { id: 7, email: 'admin@example.com', username: 'admin' },
       },
       global: {
         stubs: {
-          BaseDialog: { template: '<div><slot /></div>' },
+          BaseDialog: {
+            props: ['show'],
+            template: '<div v-if="show"><slot /></div>',
+          },
           GroupBadge: true,
           GroupOptionItem: true,
           Teleport: true,
         },
       },
     })
+    await wrapper.setProps({ show: true })
     await flushPromises()
     const input = wrapper.get('[data-testid="admin-key-concurrency"]')
     expect((input.element as HTMLInputElement).value).toBe('0')
