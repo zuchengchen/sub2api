@@ -23,9 +23,9 @@ type intelligentRunContext struct {
 	capture *intelligentCapture
 }
 
-// ChatGPT Codex plan-gates gpt-5.3-codex and gpt-5.4. The low-iq source
-// project's OAuth intelligent-test fixtures send gpt-5.2.
-const intelligentTestDefaultCodexModel = "gpt-5.2"
+// ChatGPT Codex plan-gates gpt-5.3-codex and gpt-5.4. Empty ChatGPT OAuth
+// intelligent tests use gpt-6-astra.
+const intelligentTestDefaultCodexModel = "gpt-6-astra"
 
 // Only an empty selection receives the protocol default. Explicit choices
 // remain observable even when the upstream rejects the requested model.
