@@ -1,8 +1,8 @@
 package oauth
 
 import (
+	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -31,38 +31,41 @@ func TestAuthorizeURLMatchesClaudeCodeCLI(t *testing.T) {
 	}
 }
 
-func TestSessionStore_Stop_Idempotent(t *testing.T) {
+func TestSessionStoreCleanupExpiredPreservesTTLBoundary(t *testing.T) {
+	now := time.Date(2026, time.August, 4, 8, 0, 0, 0, time.UTC)
 	store := NewSessionStore()
+	store.Set("expired", &OAuthSession{CreatedAt: now.Add(-SessionTTL - time.Nanosecond)})
+	store.Set("boundary", &OAuthSession{CreatedAt: now.Add(-SessionTTL)})
+	store.Set("fresh", &OAuthSession{CreatedAt: now.Add(-SessionTTL + time.Nanosecond)})
 
-	store.Stop()
-	store.Stop()
-
-	select {
-	case <-store.stopCh:
-		// ok
-	case <-time.After(time.Second):
-		t.Fatal("stopCh 未关闭")
+	if err := store.cleanupExpiredAt(context.Background(), now); err != nil {
+		t.Fatalf("cleanupExpiredAt: %v", err)
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	if _, ok := store.sessions["expired"]; ok {
+		t.Fatal("expired session should be removed")
+	}
+	if _, ok := store.sessions["boundary"]; !ok {
+		t.Fatal("TTL boundary session should be kept")
+	}
+	if _, ok := store.sessions["fresh"]; !ok {
+		t.Fatal("fresh session should be kept")
 	}
 }
 
-func TestSessionStore_Stop_Concurrent(t *testing.T) {
+func TestSessionStoreCleanupExpiredHonorsCancellation(t *testing.T) {
 	store := NewSessionStore()
-
-	var wg sync.WaitGroup
-	for range 50 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			store.Stop()
-		}()
+	store.Set("expired", &OAuthSession{CreatedAt: time.Now().Add(-SessionTTL - time.Second)})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := store.CleanupExpired(ctx); err != context.Canceled {
+		t.Fatalf("CleanupExpired error = %v, want context.Canceled", err)
 	}
-
-	wg.Wait()
-
-	select {
-	case <-store.stopCh:
-		// ok
-	case <-time.After(time.Second):
-		t.Fatal("stopCh 未关闭")
+	store.mu.RLock()
+	_, ok := store.sessions["expired"]
+	store.mu.RUnlock()
+	if !ok {
+		t.Fatal("pre-canceled cleanup must leave the expired entry")
 	}
 }

@@ -1,45 +1,32 @@
 package openai
 
 import (
+	"context"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 )
 
-func TestSessionStore_Stop_Idempotent(t *testing.T) {
+func TestSessionStoreCleanupExpiredSessionsPreservesTTLBoundary(t *testing.T) {
+	now := time.Date(2026, time.August, 4, 8, 0, 0, 0, time.UTC)
 	store := NewSessionStore()
+	store.Set("expired", &OAuthSession{CreatedAt: now.Add(-SessionTTL - time.Nanosecond)})
+	store.Set("boundary", &OAuthSession{CreatedAt: now.Add(-SessionTTL)})
+	store.Set("fresh", &OAuthSession{CreatedAt: now.Add(-SessionTTL + time.Nanosecond)})
 
-	store.Stop()
-	store.Stop()
-
-	select {
-	case <-store.stopCh:
-		// ok
-	case <-time.After(time.Second):
-		t.Fatal("stopCh 未关闭")
+	if err := store.cleanupExpiredAt(context.Background(), now); err != nil {
+		t.Fatalf("cleanupExpiredAt: %v", err)
 	}
-}
-
-func TestSessionStore_Stop_Concurrent(t *testing.T) {
-	store := NewSessionStore()
-
-	var wg sync.WaitGroup
-	for range 50 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			store.Stop()
-		}()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	if _, ok := store.sessions["expired"]; ok {
+		t.Fatal("expired session should be removed")
 	}
-
-	wg.Wait()
-
-	select {
-	case <-store.stopCh:
-		// ok
-	case <-time.After(time.Second):
-		t.Fatal("stopCh 未关闭")
+	if _, ok := store.sessions["boundary"]; !ok {
+		t.Fatal("TTL boundary session should be kept")
+	}
+	if _, ok := store.sessions["fresh"]; !ok {
+		t.Fatal("fresh session should be kept")
 	}
 }
 

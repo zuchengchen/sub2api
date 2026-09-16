@@ -384,8 +384,17 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 	return creds
 }
 
+func (s *GrokOAuthService) CleanupSessions(ctx context.Context) error {
+	if s == nil || s.sessionStore == nil {
+		return nil
+	}
+	return s.sessionStore.CleanupExpired(ctx)
+}
+
 func (s *GrokOAuthService) Stop() {
-	s.sessionStore.Stop()
+	if s != nil && s.sessionStore != nil {
+		s.sessionStore.Stop()
+	}
 }
 
 func (s *GrokOAuthService) tokenInfoFromResponse(tokenResp *xai.TokenResponse, clientID string, existing map[string]any) *GrokTokenInfo {

@@ -86,8 +86,6 @@ type SessionStore struct {
 	mu        sync.RWMutex
 	sessions  map[string]*OAuthSession
 	localOnly map[string]struct{}
-	stopOnce  sync.Once
-	stopCh    chan struct{}
 	remote    *redissession.Store
 }
 
@@ -103,13 +101,10 @@ type oauthSessionDTO struct {
 }
 
 func NewSessionStore() *SessionStore {
-	store := &SessionStore{
+	return &SessionStore{
 		sessions:  make(map[string]*OAuthSession),
 		localOnly: make(map[string]struct{}),
-		stopCh:    make(chan struct{}),
 	}
-	go store.cleanup()
-	return store
 }
 
 func NewRedisSessionStore(rdb *redis.Client) *SessionStore {
@@ -215,31 +210,30 @@ func (s *SessionStore) tryConsumeMemory(sessionID string) bool {
 	return ok && session.TryConsume()
 }
 
-func (s *SessionStore) Stop() {
-	s.stopOnce.Do(func() {
-		close(s.stopCh)
-	})
-}
-
-func (s *SessionStore) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.stopCh:
-			return
-		case <-ticker.C:
-			s.mu.Lock()
-			for id, session := range s.sessions {
-				if time.Since(session.CreatedAt) > SessionTTL {
-					delete(s.sessions, id)
-					delete(s.localOnly, id)
-				}
-			}
-			s.mu.Unlock()
+func (s *SessionStore) CleanupExpired(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s == nil {
+		return nil
+	}
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, session := range s.sessions {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if now.Sub(session.CreatedAt) > SessionTTL {
+			delete(s.sessions, id)
+			delete(s.localOnly, id)
 		}
 	}
+	return nil
 }
+
+// Stop is retained for compatibility; session cleanup is owned by the worker runtime.
+func (s *SessionStore) Stop() {}
 
 func EffectiveAuthorizeURL() string {
 	return envOrDefault(EnvAuthorizeURL, DefaultAuthorizeURL)

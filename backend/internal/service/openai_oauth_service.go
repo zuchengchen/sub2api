@@ -438,9 +438,19 @@ func (s *OpenAIOAuthService) BuildAccountCredentials(tokenInfo *OpenAITokenInfo)
 	return NormalizeOpenAIPersonalAccessTokenCredentials(nil, tokenInfo, creds)
 }
 
-// Stop stops the session store cleanup goroutine
+// CleanupSessions removes expired pending sessions from the request-serving store.
+func (s *OpenAIOAuthService) CleanupSessions(ctx context.Context) error {
+	if s == nil || s.sessionStore == nil {
+		return nil
+	}
+	return s.sessionStore.CleanupExpiredSessions(ctx)
+}
+
+// Stop is retained for compatibility; session cleanup is owned by the worker runtime.
 func (s *OpenAIOAuthService) Stop() {
-	s.sessionStore.Stop()
+	if s != nil && s.sessionStore != nil {
+		s.sessionStore.Stop()
+	}
 }
 
 func normalizeOpenAIOAuthPlatform(platform string) string {
