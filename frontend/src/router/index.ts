@@ -521,6 +521,42 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/accounts/tests',
+    name: 'AdminIntelligentTests',
+    component: () => import('@/views/admin/IntelligentTestsView.vue'),
+    props: { mode: 'tests' },
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Intelligent Tests',
+      titleKey: 'nav.intelligentTests'
+    }
+  },
+  {
+    path: '/admin/accounts/test-history',
+    name: 'AdminIntelligentTestHistory',
+    component: () => import('@/views/admin/IntelligentTestsView.vue'),
+    props: { mode: 'history' },
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Intelligent Test History',
+      titleKey: 'nav.intelligentTests'
+    }
+  },
+  {
+    path: '/admin/accounts/test-settings',
+    name: 'AdminIntelligentTestSettings',
+    component: () => import('@/views/admin/IntelligentTestsView.vue'),
+    props: { mode: 'settings' },
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Intelligent Test Settings',
+      titleKey: 'nav.intelligentTests'
+    }
+  },
+  {
     path: '/admin/accounts',
     name: 'AdminAccounts',
     component: () => import('@/views/admin/AccountsView.vue'),
@@ -618,14 +654,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/admin/intelligent-tests',
-    name: 'AdminIntelligentTests',
-    component: () => import('@/views/admin/IntelligentTestsView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'Intelligent Tests',
-      titleKey: 'nav.intelligentTests'
-    }
+    redirect: '/admin/accounts/tests'
   },
   {
     path: '/admin/usage',

@@ -43,7 +43,7 @@
   </details>
 </template>
 <script setup lang="ts">
-import { computed, getCurrentInstance, onUnmounted, ref, watch } from 'vue'
+import { computed, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
 import { accountTrafficAPI, defaultTrafficPolicy, normalizeTrafficDraft, trafficPolicyError, type AccountTrafficPolicy, type AccountTrafficState } from '@/api/admin/accountTraffic'
 import { extractApiErrorMessage } from '@/utils/apiError'
 const props = defineProps<{ accountId: number; platform?: string; embedded?: boolean; modelValue?: AccountTrafficPolicy; hardLimit?: number; disabled?: boolean }>()
@@ -98,7 +98,8 @@ async function save() {
   } catch (err) { if (current === version) error.value = extractApiErrorMessage(err, '流量控制保存失败') }
   finally { saving.value = false }
 }
-watch(() => props.accountId, () => { version++; controller?.abort(); ready.value = false; loading.value = false; refreshing.value = false; saved.value = false; state.value = null; if (expanded.value) void load() })
+watch(() => props.accountId, () => { version++; controller?.abort(); ready.value = false; loading.value = false; refreshing.value = false; saved.value = false; state.value = null; if (props.embedded || expanded.value) void load() })
+onMounted(() => { if (props.embedded) { expanded.value = true; void load() } })
 onUnmounted(() => { version++; controller?.abort() })
 defineExpose({ prepareForSave })
 </script>
