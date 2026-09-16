@@ -4,6 +4,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/workerruntime"
 
 	"github.com/google/wire"
 )
@@ -83,6 +84,13 @@ func ProvideAdminHandlers(
 		Compliance:             complianceHandler,
 		AuditLog:               auditLogHandler,
 	}
+}
+
+func ProvideOpsHandler(opsService *service.OpsService, billingOutboxWorker *service.BillingOutboxWorker, runtime *workerruntime.Runtime) *admin.OpsHandler {
+	h := admin.NewOpsHandler(opsService)
+	h.SetBillingOutboxWorker(billingOutboxWorker)
+	h.SetWorkerRuntime(runtime)
+	return h
 }
 
 func ProvideGatewayHandler(
@@ -242,7 +250,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewProxyHandler,
 	admin.NewRedeemHandler,
 	ProvideAdminSettingHandler,
-	admin.NewOpsHandler,
+	ProvideOpsHandler,
 	ProvideSystemHandler,
 	admin.NewSubscriptionHandler,
 	admin.NewUsageHandler,
