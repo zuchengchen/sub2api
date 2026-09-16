@@ -233,11 +233,11 @@ export default {
       usagePolicy: {
         title: 'Upstream Usage Policy',
         summary:
-          'Count OpenAI usage-policy refusals, return the upstream error to the caller, and disable the user for 15 minutes.',
+          'Count OpenAI usage-policy refusals, return the upstream error to the caller, and disable the user for 5 minutes.',
         enabled: 'Enable counting and enforcement',
         autoBan: 'Disable user on trigger',
         autoBanHint:
-          'When the threshold is reached, disable the user for 15 minutes and invalidate auth cache. Default is one hit. Admin accounts are treated the same.',
+          'When the threshold is reached, disable the user for 5 minutes and invalidate auth cache. Default is one hit. Admin accounts are treated the same.',
         banThreshold: 'Ban threshold',
         total: 'Violations',
         uniqueUsers: 'Users',
