@@ -557,7 +557,28 @@ export default {
       state: '状态',
       isolate: '隔离',
       resume: '恢复',
-      noData: '窗口内暂无账号活动。'
+      noData: '窗口内暂无账号活动。',
+      errorCount: '错误 {count}',
+      enableAuto: '启用自动隔离',
+      windowMinutes: '窗口（分钟）',
+      minSamples: '最少样本',
+      isolateErrRate: '隔离错误率',
+      recoverErrRate: '恢复错误率',
+      cooldownMinutes: '冷却（分钟）',
+      intervalSeconds: '评估间隔（秒）',
+      settingsHint: '自动隔离使用临时不可调度，不删除账号。不替代现有失败观察与运维邮件。',
+      stateHealthy: '健康',
+      stateDegraded: '降级',
+      stateIsolated: '已隔离',
+      reasonManual: '管理员手动隔离',
+      reasonErrorRate: '错误率 {rate}',
+      loadFailed: '无法加载账号健康',
+      saveSuccess: '阈值已保存',
+      saveFailed: '保存阈值失败',
+      isolateSuccess: '已隔离该账号',
+      isolateFailed: '隔离失败',
+      resumeSuccess: '已恢复该账号',
+      resumeFailed: '恢复失败'
     }
 
     // Ops Monitoring

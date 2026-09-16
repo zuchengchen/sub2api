@@ -1281,6 +1281,32 @@ export interface Account {
 // operations still use Account from /admin/accounts/:id.
 export type AccountListItem = Omit<Account, 'groups'>
 
+export interface AccountHealthSettings {
+  enabled: boolean
+  window_minutes: number
+  min_samples: number
+  isolate_err_rate: number
+  recover_err_rate: number
+  cooldown_minutes: number
+  interval_seconds: number
+}
+
+export interface AccountHealthSnapshot {
+  account_id: number
+  name: string
+  platform: string
+  score: number
+  err_rate: number
+  avg_latency_ms?: number | null
+  total: number
+  errors: number
+  state: string
+  isolated: boolean
+  isolate_reason?: string
+  isolated_until?: string | null
+  evaluated_at: string
+}
+
 export interface AccountSchedulerGroupScore {
   group_id?: number | null
   group_name?: string
