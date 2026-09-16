@@ -55,7 +55,7 @@ const dirty = new Set<string>()
 const trialOutputs = ref<Record<string, string>>({}), previews = ref<Record<string, TestRecord | undefined>>({}), previewing = ref('')
 function markDirty(type: string) { dirty.add(type); saved.value = ''; previews.value[type] = undefined }
 // Suggestions remain editable; explicit choices are preserved by the runner.
-const modelSuggestions = ['gpt-5.3-codex', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.5', 'claude-sonnet-4-5-20250929', 'gemini-2.0-flash']
+const modelSuggestions = ['gpt-5.4', 'gpt-5.3-codex-spark', 'gpt-5.4-mini', 'gpt-5.5', 'claude-sonnet-4-5-20250929', 'gemini-2.0-flash']
 watch(() => props.settings, value => {
   drafts.value = value.map(item => {
     const existing = drafts.value.find(draft => draft.test_type === item.test_type)
