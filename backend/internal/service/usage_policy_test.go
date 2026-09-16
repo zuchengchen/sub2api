@@ -10,6 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUsagePolicyUserBanDurationIsFiveMinutes(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, 5*time.Minute, usagePolicyUserBanDuration)
+	require.Contains(t, UsagePolicyClientNotice, "冷却 5 分钟")
+}
+
 func TestUsagePolicyClientErrorExtractsSSEMessage(t *testing.T) {
 	t.Parallel()
 	body := []byte("event: response.failed\ndata: {\"response\":{\"error\":{\"code\":\"invalid_prompt\",\"message\":\"Invalid prompt: your prompt was flagged as potentially violating our usage policy. Please try again\"}}}\n\n")
