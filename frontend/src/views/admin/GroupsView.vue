@@ -380,6 +380,14 @@
           <template #cell-actions="{ row }">
             <div class="flex items-center gap-1">
               <button
+                data-testid="group-statistics"
+                @click="statisticsGroupId = row.id"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+              >
+                <Icon name="chart" size="sm" />
+                <span class="text-xs">统计</span>
+              </button>
+              <button
                 @click="handleEdit(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
               >
@@ -701,6 +709,17 @@
                   : t("admin.groups.public")
               }}
             </span>
+          </div>
+          <div class="mt-4 space-y-2" data-testid="group-security-policy-create">
+            <div class="flex items-center gap-3">
+              <Toggle v-model="createForm.security_policy_enabled" />
+              <span class="text-sm text-gray-500 dark:text-gray-400">{{ t("nav.securityPolicy") }}</span>
+            </div>
+            <p class="text-xs text-gray-500">默认关闭。开启后作为统一审核之前的额外门闸，命中不计入自动封号。</p>
+            <select v-if="createForm.security_policy_enabled" v-model="createForm.security_policy_mode" class="input">
+              <option value="block_session">block_session</option>
+              <option value="block_request">block_request</option>
+            </select>
           </div>
         </div>
 
@@ -2145,6 +2164,17 @@
                   : t("admin.groups.public")
               }}
             </span>
+          </div>
+          <div class="mt-4 space-y-2" data-testid="group-security-policy-edit">
+            <div class="flex items-center gap-3">
+              <Toggle v-model="editForm.security_policy_enabled" />
+              <span class="text-sm text-gray-500 dark:text-gray-400">{{ t("nav.securityPolicy") }}</span>
+            </div>
+            <p class="text-xs text-gray-500">默认关闭。开启后作为统一审核之前的额外门闸，命中不计入自动封号。</p>
+            <select v-if="editForm.security_policy_enabled" v-model="editForm.security_policy_mode" class="input">
+              <option value="block_session">block_session</option>
+              <option value="block_request">block_request</option>
+            </select>
           </div>
         </div>
         <div>
@@ -3875,6 +3905,7 @@
       @close="showRPMOverridesModal = false"
       @success="loadGroups"
     />
+    <GroupStatisticsDialog :group-id="statisticsGroupId" @close="statisticsGroupId = null" />
   </AppLayout>
 </template>
 
@@ -3910,6 +3941,7 @@ import BaseDialog from "@/components/common/BaseDialog.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import Select from "@/components/common/Select.vue";
+import GroupStatisticsDialog from "@/components/admin/groups/GroupStatisticsDialog.vue";
 import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
@@ -4407,6 +4439,7 @@ const duplicatingGroupIds = reactive(new Set<number>());
 const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
+const statisticsGroupId = ref<number | null>(null);
 const rpmOverridesGroup = ref<AdminGroup | null>(null);
 const sortableGroups = ref<AdminGroup[]>([]);
 type ConcreteGroupPlatform = Exclude<GroupPlatform, "composite">;
@@ -4509,6 +4542,9 @@ const createForm = reactive({
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
   is_exclusive: false,
+  security_policy_enabled: false,
+  security_policy_mode: "block_session",
+  security_policy_email_enabled: true,
   subscription_type: "standard" as SubscriptionType,
   daily_limit_usd: null as number | null,
   weekly_limit_usd: null as number | null,
@@ -4845,6 +4881,9 @@ const editForm = reactive({
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
   is_exclusive: false,
+  security_policy_enabled: false,
+  security_policy_mode: "block_session",
+  security_policy_email_enabled: true,
   status: "active" as "active" | "inactive",
   subscription_type: "standard" as SubscriptionType,
   daily_limit_usd: null as number | null,
@@ -5282,6 +5321,9 @@ const closeCreateModal = () => {
   createForm.platform = "anthropic";
   createForm.rate_multiplier = 1.0;
   createForm.is_exclusive = false;
+  createForm.security_policy_enabled = false;
+  createForm.security_policy_mode = "block_session";
+  createForm.security_policy_email_enabled = true;
   createForm.subscription_type = "standard";
   createForm.daily_limit_usd = null;
   createForm.weekly_limit_usd = null;
@@ -5534,6 +5576,9 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.platform = group.platform;
   editForm.rate_multiplier = group.rate_multiplier;
   editForm.is_exclusive = group.is_exclusive;
+  editForm.security_policy_enabled = group.security_policy_enabled ?? false;
+  editForm.security_policy_mode = group.security_policy_mode || "block_session";
+  editForm.security_policy_email_enabled = group.security_policy_email_enabled ?? true;
   editForm.status = group.status;
   editForm.subscription_type = group.subscription_type || "standard";
   editForm.daily_limit_usd = group.daily_limit_usd;

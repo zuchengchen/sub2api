@@ -190,6 +190,13 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 			return p
 		}
 	}
+	if account.Extra != nil {
+		if name, ok := account.Extra["tls_fingerprint_builtin"].(string); ok && name != "" {
+			if p := tlsfingerprint.BuiltinProfile(name); p != nil {
+				return p
+			}
+		}
+	}
 	// TLS 启用但无绑定 profile → 空 Profile → dialer 使用内置默认值
 	return &tlsfingerprint.Profile{Name: "Built-in Default (Node.js 24.x)"}
 }

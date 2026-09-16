@@ -25,8 +25,31 @@ func NewContentModerationRepository(db *sql.DB) service.ContentModerationReposit
 	return &contentModerationRepository{db: db}
 }
 
+func ProvideSecurityPolicyLogStore(repo service.ContentModerationRepository) service.SecurityPolicyLogStore {
+	if store, ok := repo.(service.SecurityPolicyLogStore); ok {
+		return store
+	}
+	return nil
+}
+
 func (r *contentModerationRepository) CreateLog(ctx context.Context, log *service.ContentModerationLog) error {
 	return insertContentModerationLog(ctx, r.db, log)
+}
+
+func (r *contentModerationRepository) UpdateLogEmailSent(ctx context.Context, id int64, sent bool) error {
+	if r == nil || r.db == nil || id <= 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE content_moderation_logs SET email_sent = $2 WHERE id = $1`, id, sent)
+	return err
+}
+
+func (r *contentModerationRepository) UpdateLogOverturned(ctx context.Context, id int64) error {
+	if r == nil || r.db == nil || id <= 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE content_moderation_logs SET overturned = TRUE WHERE id = $1`, id)
+	return err
 }
 
 func (r *contentModerationRepository) CreateContentLostLog(ctx context.Context, log *service.ContentModerationLog) error {
@@ -438,6 +461,7 @@ FROM content_moderation_logs
 WHERE user_id = $1
   AND flagged = TRUE
   AND action NOT IN ('hash_block', 'cache_block')
+  AND action NOT LIKE 'security_policy_%'
   AND cache_hit = FALSE
   AND decision_source <> 'cache_replay'
   AND ($3::bool IS FALSE OR action <> 'cyber_policy')

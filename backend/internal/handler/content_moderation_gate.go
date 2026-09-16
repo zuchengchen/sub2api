@@ -64,6 +64,9 @@ func runUnifiedContentModeration(c *gin.Context, reqLog *zap.Logger, unified *se
 	if c == nil || c.Request == nil {
 		return nil
 	}
+	if decision := checkGroupSecurityPolicy(c, currentSecurityPolicyService(), apiKey, protocol, model, body); decision != nil && !decision.Allowed {
+		return decision
+	}
 	cacheCompletion := cachesContentModerationCompletion(stage)
 	if cacheCompletion {
 		if completed, exists := c.Get(contentModerationCompletedContextKey); exists && completed == true {

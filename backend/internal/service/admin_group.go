@@ -520,6 +520,14 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		Platform:                        platform,
 		RateMultiplier:                  input.RateMultiplier,
 		IsExclusive:                     input.IsExclusive,
+		SecurityPolicyEnabled:           input.SecurityPolicyEnabled,
+		SecurityPolicyMode:              NormalizeSecurityPolicyMode(input.SecurityPolicyMode),
+		SecurityPolicyEmailEnabled: func() bool {
+			if input.SecurityPolicyEmailEnabled != nil {
+				return *input.SecurityPolicyEmailEnabled
+			}
+			return true
+		}(),
 		Status:                          StatusActive,
 		SubscriptionType:                subscriptionType,
 		DailyLimitUSD:                   dailyLimit,
@@ -736,6 +744,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.IsExclusive != nil {
 		group.IsExclusive = *input.IsExclusive
+	}
+	if input.SecurityPolicyEnabled != nil {
+		group.SecurityPolicyEnabled = *input.SecurityPolicyEnabled
+	}
+	if input.SecurityPolicyMode != nil {
+		group.SecurityPolicyMode = NormalizeSecurityPolicyMode(*input.SecurityPolicyMode)
+	}
+	if input.SecurityPolicyEmailEnabled != nil {
+		group.SecurityPolicyEmailEnabled = *input.SecurityPolicyEmailEnabled
 	}
 	if input.Status != "" {
 		group.Status = input.Status

@@ -240,6 +240,24 @@ export async function update(id: number, updates: UpdateAccountRequest): Promise
   return data
 }
 
+export async function setProtection(id: number, enabled: boolean, confirmDisable = false): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/protection`, {
+    enabled,
+    confirm_disable: confirmDisable
+  })
+  return data
+}
+
+export async function previewAntiDegrade(id: number, mode?: string) {
+  const { data } = await apiClient.get(`/admin/accounts/${id}/anti-degrade`, { params: { mode } })
+  return data
+}
+
+export async function applyAntiDegrade(id: number, mode?: string): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/anti-degrade/apply`, { mode })
+  return data
+}
+
 export async function getGrokMediaEligibility(id: number): Promise<GrokMediaEligibilityState> {
   const { data } = await apiClient.get<GrokMediaEligibilityState>(
     `/admin/accounts/${id}/grok-media-eligibility`
@@ -1068,6 +1086,9 @@ export const accountsAPI = {
   create,
   duplicate,
   update,
+  setProtection,
+  previewAntiDegrade,
+  applyAntiDegrade,
   getGrokMediaEligibility,
   updateGrokMediaEligibility,
   checkMixedChannelRisk,

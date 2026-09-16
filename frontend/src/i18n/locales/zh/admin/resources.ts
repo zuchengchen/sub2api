@@ -544,5 +544,21 @@ export default {
       }
     },
 
+    accountHealth: {
+      title: '账号健康',
+      description: '全站账号错误率评分。不替代现有失败观察与运维邮件账号健康报告。',
+      settings: '阈值设置',
+      account: '账号',
+      platform: '平台',
+      score: '评分',
+      errRate: '错误率',
+      latency: '平均延迟',
+      samples: '样本',
+      state: '状态',
+      isolate: '隔离',
+      resume: '恢复',
+      noData: '窗口内暂无账号活动。'
+    }
+
     // Ops Monitoring
 }

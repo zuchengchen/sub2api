@@ -101,6 +101,9 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 		SetRateMultiplier(groupIn.RateMultiplier).
 		SetSortOrder(groupIn.SortOrder).
 		SetIsExclusive(groupIn.IsExclusive).
+		SetSecurityPolicyEnabled(groupIn.SecurityPolicyEnabled).
+		SetSecurityPolicyMode(service.NormalizeSecurityPolicyMode(groupIn.SecurityPolicyMode)).
+		SetSecurityPolicyEmailEnabled(groupIn.SecurityPolicyEmailEnabled).
 		SetStatus(groupIn.Status).
 		SetSubscriptionType(groupIn.SubscriptionType).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
@@ -285,6 +288,9 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetPlatform(groupIn.Platform).
 		SetRateMultiplier(groupIn.RateMultiplier).
 		SetIsExclusive(groupIn.IsExclusive).
+		SetSecurityPolicyEnabled(groupIn.SecurityPolicyEnabled).
+		SetSecurityPolicyMode(service.NormalizeSecurityPolicyMode(groupIn.SecurityPolicyMode)).
+		SetSecurityPolicyEmailEnabled(groupIn.SecurityPolicyEmailEnabled).
 		SetStatus(groupIn.Status).
 		SetSubscriptionType(groupIn.SubscriptionType).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).

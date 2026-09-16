@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
+	"github.com/Wei-Shaw/sub2api/ent/securitypolicykeyword"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
@@ -191,6 +192,48 @@ func (_u *GroupUpdate) SetIsExclusive(v bool) *GroupUpdate {
 func (_u *GroupUpdate) SetNillableIsExclusive(v *bool) *GroupUpdate {
 	if v != nil {
 		_u.SetIsExclusive(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyEnabled sets the "security_policy_enabled" field.
+func (_u *GroupUpdate) SetSecurityPolicyEnabled(v bool) *GroupUpdate {
+	_u.mutation.SetSecurityPolicyEnabled(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyEnabled sets the "security_policy_enabled" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableSecurityPolicyEnabled(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetSecurityPolicyEnabled(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyMode sets the "security_policy_mode" field.
+func (_u *GroupUpdate) SetSecurityPolicyMode(v string) *GroupUpdate {
+	_u.mutation.SetSecurityPolicyMode(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyMode sets the "security_policy_mode" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableSecurityPolicyMode(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetSecurityPolicyMode(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyEmailEnabled sets the "security_policy_email_enabled" field.
+func (_u *GroupUpdate) SetSecurityPolicyEmailEnabled(v bool) *GroupUpdate {
+	_u.mutation.SetSecurityPolicyEmailEnabled(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyEmailEnabled sets the "security_policy_email_enabled" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableSecurityPolicyEmailEnabled(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetSecurityPolicyEmailEnabled(*v)
 	}
 	return _u
 }
@@ -1308,6 +1351,21 @@ func (_u *GroupUpdate) AddAllowedUsers(v ...*User) *GroupUpdate {
 	return _u.AddAllowedUserIDs(ids...)
 }
 
+// AddSecurityPolicyKeywordIDs adds the "security_policy_keywords" edge to the SecurityPolicyKeyword entity by IDs.
+func (_u *GroupUpdate) AddSecurityPolicyKeywordIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.AddSecurityPolicyKeywordIDs(ids...)
+	return _u
+}
+
+// AddSecurityPolicyKeywords adds the "security_policy_keywords" edges to the SecurityPolicyKeyword entity.
+func (_u *GroupUpdate) AddSecurityPolicyKeywords(v ...*SecurityPolicyKeyword) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSecurityPolicyKeywordIDs(ids...)
+}
+
 // Mutation returns the GroupMutation object of the builder.
 func (_u *GroupUpdate) Mutation() *GroupMutation {
 	return _u.mutation
@@ -1439,6 +1497,27 @@ func (_u *GroupUpdate) RemoveAllowedUsers(v ...*User) *GroupUpdate {
 	return _u.RemoveAllowedUserIDs(ids...)
 }
 
+// ClearSecurityPolicyKeywords clears all "security_policy_keywords" edges to the SecurityPolicyKeyword entity.
+func (_u *GroupUpdate) ClearSecurityPolicyKeywords() *GroupUpdate {
+	_u.mutation.ClearSecurityPolicyKeywords()
+	return _u
+}
+
+// RemoveSecurityPolicyKeywordIDs removes the "security_policy_keywords" edge to SecurityPolicyKeyword entities by IDs.
+func (_u *GroupUpdate) RemoveSecurityPolicyKeywordIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.RemoveSecurityPolicyKeywordIDs(ids...)
+	return _u
+}
+
+// RemoveSecurityPolicyKeywords removes "security_policy_keywords" edges to SecurityPolicyKeyword entities.
+func (_u *GroupUpdate) RemoveSecurityPolicyKeywords(v ...*SecurityPolicyKeyword) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSecurityPolicyKeywordIDs(ids...)
+}
+
 // Save executes the query and returns the number of nodes affected by the update operation.
 func (_u *GroupUpdate) Save(ctx context.Context) (int, error) {
 	if err := _u.defaults(); err != nil {
@@ -1496,6 +1575,11 @@ func (_u *GroupUpdate) check() error {
 	if v, ok := _u.mutation.PeakEnd(); ok {
 		if err := group.PeakEndValidator(v); err != nil {
 			return &ValidationError{Name: "peak_end", err: fmt.Errorf(`ent: validator failed for field "Group.peak_end": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.SecurityPolicyMode(); ok {
+		if err := group.SecurityPolicyModeValidator(v); err != nil {
+			return &ValidationError{Name: "security_policy_mode", err: fmt.Errorf(`ent: validator failed for field "Group.security_policy_mode": %w`, err)}
 		}
 	}
 	if v, ok := _u.mutation.Status(); ok {
@@ -1604,6 +1688,15 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.IsExclusive(); ok {
 		_spec.SetField(group.FieldIsExclusive, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyEnabled(); ok {
+		_spec.SetField(group.FieldSecurityPolicyEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyMode(); ok {
+		_spec.SetField(group.FieldSecurityPolicyMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyEmailEnabled(); ok {
+		_spec.SetField(group.FieldSecurityPolicyEmailEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(group.FieldStatus, field.TypeString, value)
@@ -2211,6 +2304,51 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		edge.Target.Fields = specE.Fields
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.SecurityPolicyKeywordsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: true,
+			Table:   group.SecurityPolicyKeywordsTable,
+			Columns: []string{group.SecurityPolicyKeywordsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(securitypolicykeyword.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSecurityPolicyKeywordsIDs(); len(nodes) > 0 && !_u.mutation.SecurityPolicyKeywordsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: true,
+			Table:   group.SecurityPolicyKeywordsTable,
+			Columns: []string{group.SecurityPolicyKeywordsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(securitypolicykeyword.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SecurityPolicyKeywordsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: true,
+			Table:   group.SecurityPolicyKeywordsTable,
+			Columns: []string{group.SecurityPolicyKeywordsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(securitypolicykeyword.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{group.Label}
@@ -2385,6 +2523,48 @@ func (_u *GroupUpdateOne) SetIsExclusive(v bool) *GroupUpdateOne {
 func (_u *GroupUpdateOne) SetNillableIsExclusive(v *bool) *GroupUpdateOne {
 	if v != nil {
 		_u.SetIsExclusive(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyEnabled sets the "security_policy_enabled" field.
+func (_u *GroupUpdateOne) SetSecurityPolicyEnabled(v bool) *GroupUpdateOne {
+	_u.mutation.SetSecurityPolicyEnabled(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyEnabled sets the "security_policy_enabled" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableSecurityPolicyEnabled(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetSecurityPolicyEnabled(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyMode sets the "security_policy_mode" field.
+func (_u *GroupUpdateOne) SetSecurityPolicyMode(v string) *GroupUpdateOne {
+	_u.mutation.SetSecurityPolicyMode(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyMode sets the "security_policy_mode" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableSecurityPolicyMode(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetSecurityPolicyMode(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyEmailEnabled sets the "security_policy_email_enabled" field.
+func (_u *GroupUpdateOne) SetSecurityPolicyEmailEnabled(v bool) *GroupUpdateOne {
+	_u.mutation.SetSecurityPolicyEmailEnabled(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyEmailEnabled sets the "security_policy_email_enabled" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableSecurityPolicyEmailEnabled(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetSecurityPolicyEmailEnabled(*v)
 	}
 	return _u
 }
@@ -3502,6 +3682,21 @@ func (_u *GroupUpdateOne) AddAllowedUsers(v ...*User) *GroupUpdateOne {
 	return _u.AddAllowedUserIDs(ids...)
 }
 
+// AddSecurityPolicyKeywordIDs adds the "security_policy_keywords" edge to the SecurityPolicyKeyword entity by IDs.
+func (_u *GroupUpdateOne) AddSecurityPolicyKeywordIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.AddSecurityPolicyKeywordIDs(ids...)
+	return _u
+}
+
+// AddSecurityPolicyKeywords adds the "security_policy_keywords" edges to the SecurityPolicyKeyword entity.
+func (_u *GroupUpdateOne) AddSecurityPolicyKeywords(v ...*SecurityPolicyKeyword) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSecurityPolicyKeywordIDs(ids...)
+}
+
 // Mutation returns the GroupMutation object of the builder.
 func (_u *GroupUpdateOne) Mutation() *GroupMutation {
 	return _u.mutation
@@ -3633,6 +3828,27 @@ func (_u *GroupUpdateOne) RemoveAllowedUsers(v ...*User) *GroupUpdateOne {
 	return _u.RemoveAllowedUserIDs(ids...)
 }
 
+// ClearSecurityPolicyKeywords clears all "security_policy_keywords" edges to the SecurityPolicyKeyword entity.
+func (_u *GroupUpdateOne) ClearSecurityPolicyKeywords() *GroupUpdateOne {
+	_u.mutation.ClearSecurityPolicyKeywords()
+	return _u
+}
+
+// RemoveSecurityPolicyKeywordIDs removes the "security_policy_keywords" edge to SecurityPolicyKeyword entities by IDs.
+func (_u *GroupUpdateOne) RemoveSecurityPolicyKeywordIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.RemoveSecurityPolicyKeywordIDs(ids...)
+	return _u
+}
+
+// RemoveSecurityPolicyKeywords removes "security_policy_keywords" edges to SecurityPolicyKeyword entities.
+func (_u *GroupUpdateOne) RemoveSecurityPolicyKeywords(v ...*SecurityPolicyKeyword) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSecurityPolicyKeywordIDs(ids...)
+}
+
 // Where appends a list predicates to the GroupUpdate builder.
 func (_u *GroupUpdateOne) Where(ps ...predicate.Group) *GroupUpdateOne {
 	_u.mutation.Where(ps...)
@@ -3703,6 +3919,11 @@ func (_u *GroupUpdateOne) check() error {
 	if v, ok := _u.mutation.PeakEnd(); ok {
 		if err := group.PeakEndValidator(v); err != nil {
 			return &ValidationError{Name: "peak_end", err: fmt.Errorf(`ent: validator failed for field "Group.peak_end": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.SecurityPolicyMode(); ok {
+		if err := group.SecurityPolicyModeValidator(v); err != nil {
+			return &ValidationError{Name: "security_policy_mode", err: fmt.Errorf(`ent: validator failed for field "Group.security_policy_mode": %w`, err)}
 		}
 	}
 	if v, ok := _u.mutation.Status(); ok {
@@ -3828,6 +4049,15 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.IsExclusive(); ok {
 		_spec.SetField(group.FieldIsExclusive, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyEnabled(); ok {
+		_spec.SetField(group.FieldSecurityPolicyEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyMode(); ok {
+		_spec.SetField(group.FieldSecurityPolicyMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyEmailEnabled(); ok {
+		_spec.SetField(group.FieldSecurityPolicyEmailEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(group.FieldStatus, field.TypeString, value)
@@ -4433,6 +4663,51 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 		createE.defaults()
 		_, specE := createE.createSpec()
 		edge.Target.Fields = specE.Fields
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SecurityPolicyKeywordsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: true,
+			Table:   group.SecurityPolicyKeywordsTable,
+			Columns: []string{group.SecurityPolicyKeywordsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(securitypolicykeyword.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSecurityPolicyKeywordsIDs(); len(nodes) > 0 && !_u.mutation.SecurityPolicyKeywordsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: true,
+			Table:   group.SecurityPolicyKeywordsTable,
+			Columns: []string{group.SecurityPolicyKeywordsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(securitypolicykeyword.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SecurityPolicyKeywordsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: true,
+			Table:   group.SecurityPolicyKeywordsTable,
+			Columns: []string{group.SecurityPolicyKeywordsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(securitypolicykeyword.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
 	_node = &Group{config: _u.config}

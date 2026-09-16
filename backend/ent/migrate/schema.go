@@ -733,6 +733,9 @@ var (
 		{Name: "peak_end", Type: field.TypeString, Size: 5, Default: ""},
 		{Name: "peak_rate_multiplier", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(10,4)"}},
 		{Name: "is_exclusive", Type: field.TypeBool, Default: false},
+		{Name: "security_policy_enabled", Type: field.TypeBool, Default: false},
+		{Name: "security_policy_mode", Type: field.TypeString, Size: 20, Default: "block_session"},
+		{Name: "security_policy_email_enabled", Type: field.TypeBool, Default: true},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "duplicate_operation_id", Type: field.TypeString, Nullable: true, Size: 64},
 		{Name: "platform", Type: field.TypeString, Size: 50, Default: "anthropic"},
@@ -798,17 +801,17 @@ var (
 			{
 				Name:    "group_status",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[12]},
+				Columns: []*schema.Column{GroupsColumns[15]},
 			},
 			{
 				Name:    "group_platform",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[14]},
+				Columns: []*schema.Column{GroupsColumns[17]},
 			},
 			{
 				Name:    "group_subscription_type",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[15]},
+				Columns: []*schema.Column{GroupsColumns[18]},
 			},
 			{
 				Name:    "group_is_exclusive",
@@ -823,12 +826,12 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[49]},
+				Columns: []*schema.Column{GroupsColumns[52]},
 			},
 			{
 				Name:    "idx_groups_duplicate_operation_id_active",
 				Unique:  true,
-				Columns: []*schema.Column{GroupsColumns[13]},
+				Columns: []*schema.Column{GroupsColumns[16]},
 				Annotation: &entsql.IndexAnnotation{
 					Where: "duplicate_operation_id IS NOT NULL AND deleted_at IS NULL",
 				},
@@ -1248,6 +1251,64 @@ var (
 				Name:    "redeemcode_expires_at",
 				Unique:  false,
 				Columns: []*schema.Column{RedeemCodesColumns[8]},
+			},
+		},
+	}
+	// SecurityPolicyKeywordsColumns holds the columns for the "security_policy_keywords" table.
+	SecurityPolicyKeywordsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "deleted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "keyword", Type: field.TypeString, Size: 200},
+		{Name: "category", Type: field.TypeString, Size: 50, Default: ""},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "group_id", Type: field.TypeInt64, Nullable: true},
+	}
+	// SecurityPolicyKeywordsTable holds the schema information for the "security_policy_keywords" table.
+	SecurityPolicyKeywordsTable = &schema.Table{
+		Name:       "security_policy_keywords",
+		Columns:    SecurityPolicyKeywordsColumns,
+		PrimaryKey: []*schema.Column{SecurityPolicyKeywordsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "security_policy_keywords_groups_group",
+				Columns:    []*schema.Column{SecurityPolicyKeywordsColumns[7]},
+				RefColumns: []*schema.Column{GroupsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "idx_secpol_kw_global_unique",
+				Unique:  true,
+				Columns: []*schema.Column{SecurityPolicyKeywordsColumns[4]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "group_id IS NULL AND deleted_at IS NULL",
+				},
+			},
+			{
+				Name:    "idx_secpol_kw_group_unique",
+				Unique:  true,
+				Columns: []*schema.Column{SecurityPolicyKeywordsColumns[7], SecurityPolicyKeywordsColumns[4]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "group_id IS NOT NULL AND deleted_at IS NULL",
+				},
+			},
+			{
+				Name:    "securitypolicykeyword_group_id",
+				Unique:  false,
+				Columns: []*schema.Column{SecurityPolicyKeywordsColumns[7]},
+			},
+			{
+				Name:    "securitypolicykeyword_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{SecurityPolicyKeywordsColumns[6]},
+			},
+			{
+				Name:    "securitypolicykeyword_deleted_at",
+				Unique:  false,
+				Columns: []*schema.Column{SecurityPolicyKeywordsColumns[3]},
 			},
 		},
 	}
@@ -1854,6 +1915,7 @@ var (
 		PendingAuthSessionsTable,
 		ProxiesTable,
 		RedeemCodesTable,
+		SecurityPolicyKeywordsTable,
 		SecuritySecretsTable,
 		SettingsTable,
 		SubscriptionPlansTable,
@@ -1956,6 +2018,10 @@ func init() {
 	RedeemCodesTable.ForeignKeys[1].RefTable = UsersTable
 	RedeemCodesTable.Annotation = &entsql.Annotation{
 		Table: "redeem_codes",
+	}
+	SecurityPolicyKeywordsTable.ForeignKeys[0].RefTable = GroupsTable
+	SecurityPolicyKeywordsTable.Annotation = &entsql.Annotation{
+		Table: "security_policy_keywords",
 	}
 	SecuritySecretsTable.Annotation = &entsql.Annotation{
 		Table: "security_secrets",

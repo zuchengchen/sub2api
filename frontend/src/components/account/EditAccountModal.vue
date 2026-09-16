@@ -26,6 +26,23 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <fieldset v-if="account.platform === 'openai'" data-testid="account-protection-section" class="space-y-4 rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+        <legend class="px-1 text-sm font-medium text-gray-900 dark:text-white">账号保护</legend>
+        <ProtectionToggle :account="account" @updated="onProtectionUpdated" />
+      </fieldset>
+      <fieldset data-testid="account-traffic-section" class="space-y-4 rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+        <legend class="px-1 text-sm font-medium text-gray-900 dark:text-white">账号流量</legend>
+        <AccountTrafficControls
+          ref="trafficControls"
+          v-model="trafficPolicyDraft"
+          :account-id="account.id"
+          :platform="account.platform"
+          :hard-limit="form.concurrency"
+          :disabled="submitting"
+          embedded
+        />
+      </fieldset>
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <OpenAICompatibleProviderPresetSelector
@@ -2895,6 +2912,8 @@ import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtoc
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import OpenAICompatibleProviderPresetSelector from '@/components/account/OpenAICompatibleProviderPresetSelector.vue'
+import ProtectionToggle from '@/components/account/ProtectionToggle.vue'
+import AccountTrafficControls from '@/components/account/AccountTrafficControls.vue'
 import {
   applyOpenAICompatibleProviderSelection,
   buildOpenAICompatibleProviderModelMappings,
@@ -2973,6 +2992,11 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const browserTimeZone = getBrowserTimeZone()
+const trafficControls = ref<InstanceType<typeof AccountTrafficControls> | null>(null)
+const trafficPolicyDraft = ref()
+function onProtectionUpdated(account: Account) {
+  emit('updated', account)
+}
 
 const selectableGroups = computed(() => {
   const groups = new Map<number, Group>(props.groups.map(group => [group.id, group]))
