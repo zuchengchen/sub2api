@@ -32,7 +32,7 @@ type outboxCleanupSchedulerRepoStub struct {
 	lastWm       int64
 }
 
-func (s *outboxCleanupSchedulerRepoStub) CleanupConsumed(_ context.Context, watermark int64, _ int) (int64, error) {
+func (s *outboxCleanupSchedulerRepoStub) DeleteConsumedUpTo(_ context.Context, watermark int64, _ int) (int64, error) {
 	s.cleanupCalls.Add(1)
 	s.lastWm = watermark
 	return s.deleted, nil

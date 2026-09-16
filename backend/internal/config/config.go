@@ -2260,6 +2260,8 @@ func setDefaults() {
 	viper.SetDefault("usage_cleanup.worker_interval_seconds", 10)
 	viper.SetDefault("usage_cleanup.task_timeout_seconds", 1800)
 
+	viper.SetDefault("outbox_cleanup.terminal_retention_days", 30)
+
 	// Idempotency
 	viper.SetDefault("idempotency.observe_only", true)
 	viper.SetDefault("idempotency.default_ttl_seconds", 86400)
