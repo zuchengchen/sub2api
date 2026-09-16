@@ -38,6 +38,6 @@ export function trafficPolicyError(policy: AccountTrafficPolicy, hardLimit: numb
   return ''
 }
 export const accountTrafficAPI = {
-  async get(id: number, signal?: AbortSignal) { return (await apiClient.get<AccountTrafficResponse>(`/admin/accounts/${id}/traffic-control`, { signal })).data },
-  async save(id: number, policy: AccountTrafficPolicy) { return (await apiClient.put<AccountTrafficResponse>(`/admin/accounts/${id}/traffic-control`, policy)).data }
+  async get(id: number, signal?: AbortSignal) { return (await apiClient.get<AccountTrafficResponse>(`/admin/accounts/${id}/traffic`, { signal })).data },
+  async save(id: number, policy: AccountTrafficPolicy) { return (await apiClient.put<AccountTrafficResponse>(`/admin/accounts/${id}/traffic`, policy)).data }
 }
