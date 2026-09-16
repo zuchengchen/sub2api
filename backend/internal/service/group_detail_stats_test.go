@@ -15,10 +15,30 @@ func TestGroupDetailStatsRejectsInvertedRange(t *testing.T) {
 	require.Error(t, err)
 }
 
+type readOnlyGroupStatsRepo struct {
+	UsageLogRepository
+}
+
+func (readOnlyGroupStatsRepo) GetGroupDetailStats(_ context.Context, id int64, from, to *time.Time) (*GroupDetailStats, error) {
+	return &GroupDetailStats{
+		GroupID:          id,
+		TotalCost:        32,
+		TotalActualCost:  16,
+		TotalAccountCost: 13,
+		BalanceCost:      9,
+		SubscriptionCost: 7,
+		From:             from,
+		To:               to,
+	}, nil
+}
+
 func TestGroupStatisticsReadOnlyShape(t *testing.T) {
-	stats := GroupDetailStats{TotalCost: 10, TotalActualCost: 4, TotalAccountCost: 3, BalanceCost: 2, SubscriptionCost: 2}
-	require.Equal(t, 4.0, stats.TotalActualCost)
-	require.Equal(t, 3.0, stats.TotalAccountCost)
-	require.Equal(t, 2.0, stats.BalanceCost)
-	require.Equal(t, 2.0, stats.SubscriptionCost)
+	stats, err := NewDashboardService(readOnlyGroupStatsRepo{}, nil, nil, nil).GetGroupDetailStats(context.Background(), 7, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), stats.GroupID)
+	require.Equal(t, 32.0, stats.TotalCost)
+	require.Equal(t, 16.0, stats.TotalActualCost)
+	require.Equal(t, 13.0, stats.TotalAccountCost)
+	require.Equal(t, 9.0, stats.BalanceCost)
+	require.Equal(t, 7.0, stats.SubscriptionCost)
 }
