@@ -121,6 +121,8 @@ type schedulerActiveGroupIDLister interface {
 type SchedulerSnapshotService struct {
 	cache                        SchedulerCache
 	outboxRepo                   SchedulerOutboxRepository
+	dirtyWorkRepo                SchedulerDirtyWorkRepository
+	ownershipRepo                SchedulerOwnershipRepository
 	accountRepo                  AccountRepository
 	groupRepo                    GroupRepository
 	cfg                          *config.Config
@@ -152,6 +154,18 @@ func NewSchedulerSnapshotService(
 	groupRepo GroupRepository,
 	cfg *config.Config,
 ) *SchedulerSnapshotService {
+	return newSchedulerSnapshotService(cache, outboxRepo, nil, nil, accountRepo, groupRepo, cfg)
+}
+
+func newSchedulerSnapshotService(
+	cache SchedulerCache,
+	outboxRepo SchedulerOutboxRepository,
+	dirtyWorkRepo SchedulerDirtyWorkRepository,
+	ownershipRepo SchedulerOwnershipRepository,
+	accountRepo AccountRepository,
+	groupRepo GroupRepository,
+	cfg *config.Config,
+) *SchedulerSnapshotService {
 	maxQPS := 0
 	if cfg != nil {
 		maxQPS = cfg.Gateway.Scheduling.DbFallbackMaxQPS
@@ -159,6 +173,8 @@ func NewSchedulerSnapshotService(
 	return &SchedulerSnapshotService{
 		cache:         cache,
 		outboxRepo:    outboxRepo,
+		dirtyWorkRepo: dirtyWorkRepo,
+		ownershipRepo: ownershipRepo,
 		accountRepo:   accountRepo,
 		groupRepo:     groupRepo,
 		cfg:           cfg,
