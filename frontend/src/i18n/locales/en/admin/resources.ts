@@ -560,7 +560,28 @@ export default {
       state: 'State',
       isolate: 'Isolate',
       resume: 'Resume',
-      noData: 'No account activity in the window.'
+      noData: 'No account activity in the window.',
+      errorCount: '{count} errors',
+      enableAuto: 'Enable automatic isolation',
+      windowMinutes: 'Window (minutes)',
+      minSamples: 'Minimum samples',
+      isolateErrRate: 'Isolate error rate',
+      recoverErrRate: 'Recover error rate',
+      cooldownMinutes: 'Cooldown (minutes)',
+      intervalSeconds: 'Eval interval (seconds)',
+      settingsHint: 'Automatic isolation uses temporary unschedulable state. It does not replace failure observation or ops email.',
+      stateHealthy: 'Healthy',
+      stateDegraded: 'Degraded',
+      stateIsolated: 'Isolated',
+      reasonManual: 'Manual isolation',
+      reasonErrorRate: 'Error rate {rate}',
+      loadFailed: 'Failed to load account health',
+      saveSuccess: 'Thresholds saved',
+      saveFailed: 'Failed to save thresholds',
+      isolateSuccess: 'Account isolated',
+      isolateFailed: 'Failed to isolate',
+      resumeSuccess: 'Account resumed',
+      resumeFailed: 'Failed to resume'
     }
 
     // Ops Monitoring
