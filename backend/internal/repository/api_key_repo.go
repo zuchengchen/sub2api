@@ -52,6 +52,7 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		SetStatus(key.Status).
 		SetNillableGroupID(key.GroupID).
 		SetNillableLastUsedAt(key.LastUsedAt).
+		SetConcurrency(key.Concurrency).
 		SetQuota(key.Quota).
 		SetQuotaUsed(key.QuotaUsed).
 		SetNillableExpiresAt(key.ExpiresAt).
@@ -352,6 +353,10 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey, fiel
 		} else {
 			builder.ClearExpiresAt()
 		}
+	}
+
+	if fields.Concurrency {
+		builder.SetConcurrency(key.Concurrency)
 	}
 
 	// IP 限制字段
@@ -934,6 +939,7 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		Window5hStart: m.Window5hStart,
 		Window1dStart: m.Window1dStart,
 		Window7dStart: m.Window7dStart,
+		Concurrency:   m.Concurrency,
 	}
 	if m.Edges.User != nil {
 		out.User = userEntityToService(m.Edges.User)

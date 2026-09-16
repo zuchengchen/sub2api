@@ -37,6 +37,7 @@ type CreateAPIKeyRequest struct {
 	CustomKey     *string  `json:"custom_key"`      // 可选的自定义key
 	IPWhitelist   []string `json:"ip_whitelist"`    // IP 白名单
 	IPBlacklist   []string `json:"ip_blacklist"`    // IP 黑名单
+	Concurrency   int      `json:"concurrency" binding:"min=0,max=2147483647"`
 	Quota         *float64 `json:"quota"`           // 配额限制 (USD)
 	ExpiresInDays *int     `json:"expires_in_days"` // 过期天数
 
@@ -53,6 +54,7 @@ type UpdateAPIKeyRequest struct {
 	Status      string    `json:"status" binding:"omitempty,oneof=active inactive"`
 	IPWhitelist *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
 	IPBlacklist *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
+	Concurrency *int      `json:"concurrency" binding:"omitempty,min=0,max=2147483647"`
 	Quota       *float64  `json:"quota"`        // 配额限制 (USD), 0=无限制
 	ExpiresAt   *string   `json:"expires_at"`   // 过期时间 (ISO 8601)
 	ResetQuota  *bool     `json:"reset_quota"`  // 重置已用配额
@@ -202,6 +204,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		CustomKey:     req.CustomKey,
 		IPWhitelist:   req.IPWhitelist,
 		IPBlacklist:   req.IPBlacklist,
+		Concurrency:   req.Concurrency,
 		ExpiresInDays: req.ExpiresInDays,
 	}
 	if req.Quota != nil {
@@ -254,6 +257,7 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	svcReq := service.UpdateAPIKeyRequest{
 		IPWhitelist:         req.IPWhitelist,
 		IPBlacklist:         req.IPBlacklist,
+		Concurrency:         req.Concurrency,
 		Quota:               req.Quota,
 		ResetQuota:          req.ResetQuota,
 		RateLimit5h:         req.RateLimit5h,

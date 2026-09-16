@@ -60,6 +60,7 @@ type ConcurrencyCache interface {
 
 type APIKeyConcurrencyCache interface {
 	TrackAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
+	AcquireAPIKeySlot(ctx context.Context, apiKeyID int64, maxConcurrency int, requestID string) (bool, error)
 	ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
 	GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
 }
@@ -238,6 +239,7 @@ type ConcurrencyService struct {
 	accountLoadCacheMu  sync.RWMutex
 	accountLoadCache    map[string]cachedAccountLoadBatch
 	accountLoadGroup    singleflight.Group
+	slotCleanupInterval atomic.Int64
 }
 
 type cachedAccountLoadBatch struct {
@@ -414,6 +416,47 @@ func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, 
 	return &AcquireResult{
 		Acquired:    false,
 		ReleaseFunc: nil,
+	}, nil
+}
+
+// AcquireAPIKeySlot enforces a per-key concurrent request limit.
+// maxConcurrency <= 0 means unlimited and returns a tracking-only slot so live
+// counts still work. A full slot returns Acquired=false with no wait queue.
+func (s *ConcurrencyService) AcquireAPIKeySlot(ctx context.Context, apiKeyID int64, maxConcurrency int) (*AcquireResult, error) {
+	if maxConcurrency <= 0 {
+		return &AcquireResult{Acquired: true, ReleaseFunc: s.TrackAPIKeySlot(ctx, apiKeyID)}, nil
+	}
+	if s == nil || s.cache == nil || apiKeyID <= 0 {
+		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
+	}
+	cache, ok := s.cache.(APIKeyConcurrencyCache)
+	if !ok {
+		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
+	}
+	requestID := generateRequestID()
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	acquireCtx, cancel := context.WithTimeout(baseCtx, apiKeySlotTrackTimeout)
+	acquired, err := cache.AcquireAPIKeySlot(acquireCtx, apiKeyID, maxConcurrency, requestID)
+	cancel()
+	if err != nil {
+		logger.LegacyPrintf("service.concurrency", "Warning: failed to acquire api key slot for %d: %v", apiKeyID, err)
+		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
+	}
+	if !acquired {
+		return &AcquireResult{Acquired: false}, nil
+	}
+	return &AcquireResult{
+		Acquired: true,
+		ReleaseFunc: func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := cache.ReleaseAPIKeySlot(bgCtx, apiKeyID, requestID); err != nil {
+				logger.LegacyPrintf("service.concurrency", "Warning: failed to release API key slot for %d (req=%s): %v", apiKeyID, requestID, err)
+			}
+		},
 	}, nil
 }
 
@@ -732,29 +775,52 @@ func (s *ConcurrencyService) CleanupExpiredAccountSlots(ctx context.Context, acc
 	return s.cache.CleanupExpiredAccountSlots(ctx, accountID)
 }
 
-// StartSlotCleanupWorker starts a background cleanup worker for expired account slots.
+// ConfigureSlotCleanup stores the interval used by the runtime-owned cleanup worker.
+func (s *ConcurrencyService) ConfigureSlotCleanup(interval time.Duration) {
+	if s != nil {
+		s.slotCleanupInterval.Store(int64(interval))
+	}
+}
+
+// CleanupInterval returns the configured expired account-slot cleanup interval.
+func (s *ConcurrencyService) CleanupInterval() time.Duration {
+	if s == nil {
+		return 0
+	}
+	return time.Duration(s.slotCleanupInterval.Load())
+}
+
+// CleanupEnabled reports whether expired account-slot cleanup can run.
+func (s *ConcurrencyService) CleanupEnabled() bool {
+	return s != nil && s.cache != nil && s.CleanupInterval() > 0
+}
+
+// RunSlotCleanup performs one cache-wide expired account-slot cleanup cycle.
+func (s *ConcurrencyService) RunSlotCleanup(ctx context.Context) error {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.cache.CleanupExpiredAccountSlotKeys(cleanupCtx); err != nil {
+		logger.LegacyPrintf("service.concurrency", "Warning: cleanup expired account slots failed: %v", err)
+		return err
+	}
+	return cleanupCtx.Err()
+}
+
+// StartSlotCleanupWorker is retained for tests; production cleanup is owned by the worker runtime.
 func (s *ConcurrencyService) StartSlotCleanupWorker(_ AccountRepository, interval time.Duration) {
-	if s == nil || s.cache == nil || interval <= 0 {
+	s.ConfigureSlotCleanup(interval)
+	if !s.CleanupEnabled() {
 		return
 	}
-
-	runCleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := s.cache.CleanupExpiredAccountSlotKeys(cleanupCtx)
-		cancel()
-		if err != nil {
-			logger.LegacyPrintf("service.concurrency", "Warning: cleanup expired account slots failed: %v", err)
-			return
-		}
-	}
-
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-
-		runCleanup()
+		_ = s.RunSlotCleanup(context.Background())
 		for range ticker.C {
-			runCleanup()
+			_ = s.RunSlotCleanup(context.Background())
 		}
 	}()
 }
