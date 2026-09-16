@@ -570,6 +570,8 @@ export default {
       apiKeys: 'API Keys',
       userApiKeys: 'User API Keys',
       noApiKeys: 'This user has no API keys',
+      apiKeyConcurrency: 'Concurrency limit',
+      apiKeyConcurrencyHint: '0 means unlimited concurrent requests for this key.',
       group: 'Group',
       none: 'None',
       groupChangedSuccess: 'Group updated successfully',

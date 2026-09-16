@@ -694,6 +694,18 @@
 
           <div class="space-y-4">
             <div>
+              <label class="input-label">{{ t('keys.concurrencyLabel') }}</label>
+              <input
+                v-model.number="formData.concurrency"
+                type="number"
+                min="0"
+                step="1"
+                class="input"
+                data-testid="key-concurrency"
+              />
+              <p class="mt-1 text-xs text-gray-500">{{ t('keys.concurrencyHint') }}</p>
+            </div>
+            <div>
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                 <input
@@ -1401,6 +1413,7 @@ const formData = ref({
   // Quota settings (empty = unlimited)
   enable_quota: false,
   quota: null as number | null,
+  concurrency: 0,
   // Rate limit settings
   enable_rate_limit: false,
   rate_limit_5h: null as number | null,
@@ -1668,6 +1681,7 @@ const editKey = (key: ApiKey) => {
     ip_blacklist: (key.ip_blacklist || []).join('\n'),
     enable_quota: key.quota > 0,
     quota: key.quota > 0 ? key.quota : null,
+    concurrency: key.concurrency ?? 0,
     enable_rate_limit: (key.rate_limit_5h > 0) || (key.rate_limit_1d > 0) || (key.rate_limit_7d > 0),
     rate_limit_5h: key.rate_limit_5h || null,
     rate_limit_1d: key.rate_limit_1d || null,
@@ -1820,6 +1834,7 @@ const handleSubmit = async () => {
         ip_whitelist: ipWhitelist,
         ip_blacklist: ipBlacklist,
         quota: quota,
+        concurrency: formData.value.concurrency ?? 0,
         expires_at: expiresAt,
         rate_limit_5h: rateLimitData.rate_limit_5h,
         rate_limit_1d: rateLimitData.rate_limit_1d,
@@ -1840,7 +1855,8 @@ const handleSubmit = async () => {
         ipBlacklist,
         quota,
         expiresInDays,
-        rateLimitData
+        rateLimitData,
+        formData.value.concurrency ?? 0
       )
       appStore.showSuccess(t('keys.keyCreatedSuccess'))
       // Only advance tour if active, on submit step, and creation succeeded
@@ -1894,6 +1910,7 @@ const closeModals = () => {
     ip_blacklist: '',
     enable_quota: false,
     quota: null,
+    concurrency: 0,
     enable_rate_limit: false,
     rate_limit_5h: null,
     rate_limit_1d: null,

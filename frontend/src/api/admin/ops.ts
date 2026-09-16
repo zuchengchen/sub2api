@@ -1279,6 +1279,45 @@ export async function getSystemLogSinkHealth(): Promise<OpsSystemLogSinkHealth> 
   return data
 }
 
+export interface OpsBillingOutboxHealth {
+  running: boolean
+  processed: number
+  failures: number
+  pending: number
+  processing: number
+  terminal: number
+  oldest_lag: number
+  last_error?: string
+  stats_error?: string
+  max_attempts: number
+  circuit_open: boolean
+  circuit_error?: string
+  circuit_opened_at?: string | null
+  permanent_failures: number
+  backlogged_rounds: number
+  round_timeouts: number
+  terminal_alert?: string
+}
+
+export async function getBillingOutboxHealth(): Promise<OpsBillingOutboxHealth> {
+  const { data } = await apiClient.get<OpsBillingOutboxHealth>('/admin/ops/billing-outbox/health')
+  return data
+}
+
+export interface OpsWorkerRuntimeStatus {
+  scope: string
+  workers: Array<{
+    Descriptor: { Name: string; Kind: string; Group?: string; CoordinationMode?: string; Description?: string; Tags?: string[] }
+    Lifecycle: { State: string; UpdatedAt: string }
+    Status?: Record<string, unknown>
+  }>
+}
+
+export async function getWorkerRuntimeStatus(): Promise<OpsWorkerRuntimeStatus> {
+  const { data } = await apiClient.get<OpsWorkerRuntimeStatus>('/admin/ops/workers/status')
+  return data
+}
+
 // Advanced settings (DB-backed)
 export async function getAdvancedSettings(): Promise<OpsAdvancedSettings> {
   const { data } = await apiClient.get<OpsAdvancedSettings>('/admin/ops/advanced-settings')
@@ -1351,7 +1390,9 @@ export const opsAPI = {
   updateMetricThresholds,
   listSystemLogs,
   cleanupSystemLogs,
-  getSystemLogSinkHealth
+  getSystemLogSinkHealth,
+  getBillingOutboxHealth,
+  getWorkerRuntimeStatus
 }
 
 export default opsAPI
