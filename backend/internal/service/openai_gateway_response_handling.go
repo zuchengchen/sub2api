@@ -378,7 +378,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	var streamedBilling strings.Builder
 	estimateRequestBody := takeOpenAIUsageEstimateRequestBody(c)
 	resultWithUsage := func() *openaiStreamingResult {
-		if streamedBilling.Len() > 0 {
+		// Pre-commit failover (staging overflow, first-output timeout, empty
+		// completed) must not tokenize the uncommitted buffer. tiktoken Count
+		// on multi-MB overflow content can stall the request for minutes.
+		if streamedBilling.Len() > 0 && clientOutputStarted {
 			applyEstimatedOpenAIUsageIfMissing(usage, originalModel, estimateRequestBody, streamedBilling.String())
 		}
 		return &openaiStreamingResult{
