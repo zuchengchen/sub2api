@@ -926,6 +926,14 @@ type GatewayConfig struct {
 	// ForceCodexCLI: 强制将 OpenAI `/v1/responses` 请求按 Codex CLI 处理。
 	// 用于网关未透传/改写 User-Agent 时的兼容兜底（默认关闭，避免影响其他客户端）。
 	ForceCodexCLI bool `mapstructure:"force_codex_cli"`
+	// DisableOpenAIClientLocalTimeRewrite: 关闭「把客户端注入的本地日期/时区改写成美西」。
+	// 默认开启改写：Codex `<environment_context>` 的 current_date / timezone / current_time，
+	// 以及 JSON 里的 current_date、IANA timezone、web_search user_location.timezone，
+	// 在出站给 OpenAI 之前固定替换为 America/Los_Angeles（含夏令时），
+	// 不用操作系统时区，也不用应用配置 timezone（默认 Asia/Shanghai）。
+	// 不改写用户正文里随口提到的日期。置 true 可回滚。
+	// 取反义命名：零值（测试/未加载配置）必须落在「改写开启」这一侧。
+	DisableOpenAIClientLocalTimeRewrite bool `mapstructure:"disable_openai_client_local_time_rewrite"`
 	// DisableCodexIdentityEnforcement: 关闭「强制统一 Codex 出站身份」。上游 /backend-api/codex
 	// 在容量紧张时按客户端身份分优先级降载，被降载的请求会拿到 HTTP 200 + 流内
 	// server_is_overloaded，该次请求失败。默认强制统一出口：所有 OAuth 出站的
@@ -2289,6 +2297,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.force_codex_cli", false)
+	viper.SetDefault("gateway.disable_openai_client_local_time_rewrite", false)
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
