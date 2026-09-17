@@ -307,6 +307,13 @@ gateway:
   # Docker 用户可将宿主机文件挂载到 /app/data/codex-instructions.md.tmpl，
   # 然后把本字段指向该路径。
   forced_codex_instructions_template_file: ""
+  # 把客户端注入的本地日期/时区改写成美西（America/Los_Angeles）后再转给 OpenAI。默认开启。
+  # Rewrite client-injected local date/timezone to US Pacific Time
+  # (America/Los_Angeles, with DST) before forwarding to OpenAI. Enabled by default.
+  # 覆盖 Codex <environment_context> 的 current_date / timezone，以及 JSON 中的
+  # current_date、IANA timezone、web_search user_location.timezone。
+  # 不改写用户正文里随口提到的日期。置 true 关闭。
+  disable_openai_client_local_time_rewrite: false
   # OpenAI 透传模式是否放行客户端超时头（如 x-stainless-timeout）
   # 默认 false：过滤超时头，降低上游提前断流风险。
   openai_passthrough_allow_timeout_headers: false
