@@ -101,7 +101,6 @@ export interface ContentModerationConfig {
   remote_reviewers?: DeepSeekModerationChannel[]
   all_groups?: boolean
   group_ids?: number[]
-  user_email_whitelist?: string[]
   record_non_hits?: boolean
   block_status?: number
   block_message?: string
@@ -141,7 +140,6 @@ export interface UpdateContentModerationConfig {
   remote_reviewers?: UpdateDeepSeekModerationChannel[]
   all_groups?: boolean
   group_ids?: number[]
-  user_email_whitelist?: string[]
   record_non_hits?: boolean
   block_status?: number
   block_message?: string

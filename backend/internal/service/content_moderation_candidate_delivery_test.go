@@ -36,7 +36,7 @@ func TestContentModerationEveryLayer2CandidateGetsIndependentDeepSeekReview(t *t
 	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	decision := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "independent-candidates"},
-		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t), false,
+		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t),
 	)
 
 	require.True(t, decision.Allowed)
@@ -78,7 +78,7 @@ func TestContentModerationEnforceColdStartWaitsForStartupReview(t *testing.T) {
 	started := time.Now()
 	decision := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "cold-backup-enforce"},
-		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t)[:1], false,
+		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t)[:1],
 	)
 
 	require.False(t, decision.Allowed)
@@ -113,7 +113,7 @@ func TestContentModerationLayer2SafeResultIsAlwaysAuditedBeforeCaching(t *testin
 	for index := range 2 {
 		decision := svc.checkUnifiedCandidateEvidence(
 			context.Background(), ContentModerationCheckInput{RequestID: fmt.Sprintf("safe-audit-%d", index)},
-			cfg, cfg.fragmentCacheNamespace(), candidate, false,
+			cfg, cfg.fragmentCacheNamespace(), candidate,
 		)
 		require.True(t, decision.Allowed)
 	}
@@ -160,7 +160,7 @@ func TestContentModerationEnforceReviewsAllCandidatesBeforeAnyDisposition(t *tes
 	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
 	decision := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "enforce-two-phase", UserID: 81, UserRole: RoleUser},
-		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t), false,
+		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t),
 	)
 
 	require.False(t, decision.Allowed)
@@ -209,7 +209,7 @@ func TestContentModerationLayer2RiskCacheBlocksEveryRequestAndAppliesSideEffects
 		decision := svc.checkUnifiedCandidateEvidence(
 			context.Background(), ContentModerationCheckInput{
 				RequestID: fmt.Sprintf("cached-risk-%d", index), UserID: 82, UserRole: RoleUser,
-			}, cfg, cfg.fragmentCacheNamespace(), candidate, false,
+			}, cfg, cfg.fragmentCacheNamespace(), candidate,
 		)
 		require.True(t, decision.Blocked)
 		require.True(t, decision.Flagged)
@@ -472,7 +472,7 @@ func TestContentModerationRestrictedReviewerDisagreementIsUndeterminedAndNotCach
 	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
 	decision := svc.applyUnifiedCandidateReviewResult(
 		context.Background(), ContentModerationCheckInput{RequestID: "restricted-disagreement"},
-		cfg, cfg.fragmentCacheNamespace(), work, contentModerationCandidateReviewOutcome{result: result}, false, false,
+		cfg, cfg.fragmentCacheNamespace(), work, contentModerationCandidateReviewOutcome{result: result}, false,
 	)
 
 	require.False(t, decision.Allowed)
@@ -682,7 +682,7 @@ func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *tes
 	go func() {
 		leaderDecision <- svc.checkUnifiedCandidateEvidence(
 			leaderCtx, ContentModerationCheckInput{RequestID: "canceled-leader", UserID: 83, UserRole: RoleUser},
-			cfg, cfg.fragmentCacheNamespace(), candidate, false,
+			cfg, cfg.fragmentCacheNamespace(), candidate,
 		)
 	}()
 	select {
@@ -695,7 +695,7 @@ func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *tes
 	go func() {
 		followerDecision <- svc.checkUnifiedCandidateEvidence(
 			context.Background(), ContentModerationCheckInput{RequestID: "active-follower", UserID: 83, UserRole: RoleUser},
-			cfg, cfg.fragmentCacheNamespace(), candidate, false,
+			cfg, cfg.fragmentCacheNamespace(), candidate,
 		)
 	}()
 	time.Sleep(20 * time.Millisecond)
@@ -713,7 +713,7 @@ func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *tes
 
 	replay := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "post-cancel-replay", UserID: 83, UserRole: RoleUser},
-		cfg, cfg.fragmentCacheNamespace(), candidate, false,
+		cfg, cfg.fragmentCacheNamespace(), candidate,
 	)
 	require.True(t, replay.Blocked)
 	require.Equal(t, int64(1), calls.Load())
@@ -734,64 +734,6 @@ func TestContentModerationCanceledFlightLeaderCannotPublishUndisposedRisk(t *tes
 	require.Equal(t, "cache_replay", replayLog.DecisionSource)
 	require.NotNil(t, replayLog.SourceLogID)
 	require.Equal(t, followerLog.ID, *replayLog.SourceLogID)
-}
-
-func TestContentModerationWhitelistRiskCacheIsSharedAndPromotedForEnforce(t *testing.T) {
-	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if contentModerationCandidateDeliveryConnectivityProbe(w, r) {
-			return
-		}
-		calls.Add(1)
-		contentModerationDeepSeekRuntimeWriteEnvelope(
-			t, w, `{"disposition":"violation","confidence":0.95,"category":"cyber_abuse","reason":"明确攻击意图"}`, "stop",
-		)
-	}))
-	defer server.Close()
-
-	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
-	cache := &contentModerationReplayCache{}
-	repo := &contentModerationReplayRepo{}
-	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
-	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
-	candidate := contentModerationCandidateDeliveryFixtures(t)[:1]
-
-	shadow := svc.checkUnifiedCandidateEvidence(
-		context.Background(), ContentModerationCheckInput{RequestID: "whitelist-shadow", UserID: 84, UserRole: RoleUser},
-		cfg, cfg.fragmentCacheNamespace(), candidate, true,
-	)
-	require.True(t, shadow.Allowed)
-	require.Eventually(t, func() bool {
-		return len(repo.snapshotLogs()) == 1
-	}, time.Second, 10*time.Millisecond, "whitelist shadow review did not finish")
-	require.Equal(t, 1, contextualRoutingCacheEntryCount(cache), "whitelist risk must publish a shared model-result cache entry")
-	bundle := buildContentModerationCandidateEvidence(candidate, contentModerationEvidenceWindowBudgetRunes, cfg)
-	entry, found, err := cache.GetFragmentCacheEntry(context.Background(), cfg.fragmentCacheNamespace(), bundle.CacheHash)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.False(t, entry.DispositionApplied, "whitelist audit must not claim that Enforce disposition ran")
-
-	enforced := svc.checkUnifiedCandidateEvidence(
-		context.Background(), ContentModerationCheckInput{RequestID: "later-enforce", UserID: 84, UserRole: RoleUser},
-		cfg, cfg.fragmentCacheNamespace(), candidate, false,
-	)
-	require.True(t, enforced.Blocked)
-	require.Equal(t, int64(1), calls.Load(), "Enforce must promote the cached model result without another DeepSeek call")
-	require.Equal(t, 1, repo.countCalls, "the first regular Enforce request must apply disposition once")
-	require.Equal(t, 1, contextualRoutingCacheEntryCount(cache))
-	entry, found, err = cache.GetFragmentCacheEntry(context.Background(), cfg.fragmentCacheNamespace(), bundle.CacheHash)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.True(t, entry.DispositionApplied)
-	logs := repo.snapshotLogs()
-	require.Len(t, logs, 2)
-	require.Equal(t, "model_whitelist_shadow", logs[0].DecisionSource)
-	require.Equal(t, "cache_promotion", logs[1].DecisionSource)
-	require.NotNil(t, logs[1].SourceLogID)
-	require.Equal(t, logs[0].ID, *logs[1].SourceLogID)
-	require.Nil(t, logs[1].UpstreamLatencyMS)
-	require.NotNil(t, entry.SourceLogID)
-	require.Equal(t, logs[1].ID, *entry.SourceLogID)
 }
 
 func TestContentModerationLayer2FailuresAreNeverCached(t *testing.T) {
@@ -815,7 +757,7 @@ func TestContentModerationLayer2FailuresAreNeverCached(t *testing.T) {
 	for index := range 2 {
 		decision := svc.checkUnifiedCandidateEvidence(
 			context.Background(), ContentModerationCheckInput{RequestID: fmt.Sprintf("uncached-failure-%d", index)},
-			cfg, cfg.fragmentCacheNamespace(), candidate, false,
+			cfg, cfg.fragmentCacheNamespace(), candidate,
 		)
 		require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
 		require.Equal(t, ContentModerationActionReviewUnavailable, decision.Action)
@@ -859,7 +801,7 @@ func TestContentModerationLayer2CacheInvalidatesWhenDecisionConfigChanges(t *tes
 	for index, cfg := range configs {
 		decision := svc.checkUnifiedCandidateEvidence(
 			context.Background(), ContentModerationCheckInput{RequestID: fmt.Sprintf("cache-version-%d", index)},
-			cfg, cfg.fragmentCacheNamespace(), candidate, false,
+			cfg, cfg.fragmentCacheNamespace(), candidate,
 		)
 		require.True(t, decision.Allowed)
 		require.False(t, decision.Blocked)

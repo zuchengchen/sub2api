@@ -706,14 +706,6 @@
                 </label>
               </div>
               <label>
-                <span class="input-label">{{ t('admin.riskControl.userEmailWhitelist') }}</span>
-                <textarea
-                  v-model="configForm.user_email_whitelist_text"
-                  class="input min-h-24 resize-y text-sm"
-                  :placeholder="t('admin.riskControl.userEmailWhitelistPlaceholder')"
-                ></textarea>
-              </label>
-              <label>
                 <span class="input-label">{{ t('admin.riskControl.modelFilter') }}</span>
                 <select v-model="configForm.model_filter_type" class="input" data-test="model-filter-type">
                   <option value="all">{{ t('admin.riskControl.modelFilterAll') }}</option>
@@ -1393,7 +1385,6 @@ const configForm = reactive({
   deepseek_channels: [] as EditableDeepSeekChannel[],
   all_groups: true,
   group_ids: [] as number[],
-  user_email_whitelist_text: '',
   record_non_hits: false,
   block_status: 403,
   block_message: defaultBlockMessage(),
@@ -1703,7 +1694,6 @@ function applyConfig(config: ContentModerationConfig) {
   }
   configForm.all_groups = config.all_groups ?? true
   configForm.group_ids = [...(config.group_ids ?? [])]
-  configForm.user_email_whitelist_text = (config.user_email_whitelist ?? []).join('\n')
   configForm.record_non_hits = config.record_non_hits ?? false
   configForm.block_status = config.block_status ?? 403
   configForm.block_message = config.block_message || defaultBlockMessage()
@@ -1850,7 +1840,6 @@ async function saveConfig() {
       layer2_keywords: layer2Keywords.value,
       all_groups: configForm.all_groups,
       group_ids: configForm.all_groups ? [] : [...configForm.group_ids],
-      user_email_whitelist: parseEmailList(configForm.user_email_whitelist_text),
       record_non_hits: configForm.record_non_hits,
       block_status: clampInteger(configForm.block_status, 400, 599, 403),
       block_message: configForm.block_message.trim() || defaultBlockMessage(),
@@ -2518,10 +2507,6 @@ function parseLineList(value: string): string[] {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter((item, index, values) => item.length > 0 && values.indexOf(item) === index)
-}
-
-function parseEmailList(value: string): string[] {
-  return parseLineList(value.toLowerCase())
 }
 
 function isValidChannelID(value: string): boolean {

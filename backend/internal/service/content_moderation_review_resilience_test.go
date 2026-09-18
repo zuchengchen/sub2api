@@ -59,7 +59,7 @@ func TestContentModerationFullContextChunksReviewTailRiskAndNeverCachePartialEvi
 
 	safe := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "chunk-safe"},
-		cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{safeCandidate}, false,
+		cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{safeCandidate},
 	)
 	require.True(t, safe.Allowed)
 	require.False(t, safe.Blocked)
@@ -69,7 +69,7 @@ func TestContentModerationFullContextChunksReviewTailRiskAndNeverCachePartialEvi
 
 	risky := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "chunk-risk"},
-		cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{riskyCandidate}, false,
+		cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{riskyCandidate},
 	)
 	require.True(t, risky.Blocked)
 	require.Equal(t, ContentModerationActionSecondLayerBlock, risky.Action)
@@ -109,7 +109,7 @@ func TestContentModerationFullContextChunksFailClosedWhenAnyChunkIsUnavailable(t
 
 	decision := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "chunk-unavailable"},
-		cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{candidate}, false,
+		cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{candidate},
 	)
 	require.False(t, decision.Allowed)
 	require.False(t, decision.Blocked)
@@ -228,7 +228,7 @@ func TestContentModerationRiskTieredTransientOutageAllowsAndAuditsWithoutCaching
 
 	decision := svc.checkUnifiedCandidateEvidence(
 		context.Background(), ContentModerationCheckInput{RequestID: "degraded-transient"},
-		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t)[:1], false,
+		cfg, cfg.fragmentCacheNamespace(), contentModerationCandidateDeliveryFixtures(t)[:1],
 	)
 	require.True(t, decision.Allowed)
 	require.False(t, decision.Blocked)
@@ -271,7 +271,7 @@ func TestContentModerationOversizedCandidateContextReturnsCapacityErrorWithoutRe
 	for attempt := 0; attempt < 2; attempt++ {
 		decision := svc.checkUnifiedCandidateEvidence(
 			context.Background(), ContentModerationCheckInput{RequestID: "oversized-safe-" + strconv.Itoa(attempt)},
-			cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{candidate}, false,
+			cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{candidate},
 		)
 		require.False(t, decision.Allowed)
 		require.False(t, decision.Blocked)
@@ -458,7 +458,7 @@ func TestContentModerationRiskTieredMixedFailuresNeverHideHardFailure(t *testing
 		}
 		decision := svc.checkUnifiedCandidateEvidence(
 			context.Background(), ContentModerationCheckInput{RequestID: "mixed-failures"},
-			cfg, cfg.fragmentCacheNamespace(), candidates, false,
+			cfg, cfg.fragmentCacheNamespace(), candidates,
 		)
 		require.False(t, decision.Allowed)
 		require.Equal(t, http.StatusServiceUnavailable, decision.StatusCode)
@@ -489,7 +489,7 @@ func TestContentModerationRiskTieredPolicyReviewFailureRemainsUndeterminedInAnyO
 		}
 		decision := svc.checkUnifiedCandidateEvidence(
 			context.Background(), ContentModerationCheckInput{RequestID: "policy-floor-mixed"},
-			cfg, cfg.fragmentCacheNamespace(), candidates, false,
+			cfg, cfg.fragmentCacheNamespace(), candidates,
 		)
 		require.False(t, decision.Blocked)
 		require.False(t, decision.Allowed)
