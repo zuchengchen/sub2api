@@ -216,12 +216,11 @@ func TestRunUnifiedContentModerationLogsWebSocketChecksAndCacheHits(t *testing.T
 	require.Equal(t, "subsequent_turn", doneLogs[1].ContextMap()["stage"])
 }
 
-func TestRunContentModerationStage_UserEmailWhitelistRemainsInScopeAndUsesBodyBudget(t *testing.T) {
+func TestRunContentModerationStage_InScopeRequestUsesBodyBudget(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := map[string]any{
-		"enabled":              true,
-		"mode":                 "pre_block",
-		"user_email_whitelist": []string{"allowed@example.com"},
+		"enabled": true,
+		"mode":    "pre_block",
 	}
 	rawCfg, err := json.Marshal(cfg)
 	require.NoError(t, err)
@@ -236,10 +235,10 @@ func TestRunContentModerationStage_UserEmailWhitelistRemainsInScopeAndUsesBodyBu
 	groupID := int64(7)
 	apiKey := &service.APIKey{
 		ID:      11,
-		Name:    "whitelisted-key",
+		Name:    "in-scope-key",
 		GroupID: &groupID,
 		Group:   &service.Group{ID: groupID, Name: "GPT Production"},
-		User:    &service.User{ID: 42, Email: "Allowed@Example.COM"},
+		User:    &service.User{ID: 42, Email: "user@example.com"},
 	}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

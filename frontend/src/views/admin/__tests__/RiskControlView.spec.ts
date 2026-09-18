@@ -114,7 +114,6 @@ const baseConfig = (): ContentModerationConfig => ({
   deepseek_channels: [officialChannel(), backupChannel()],
   all_groups: true,
   group_ids: [],
-  user_email_whitelist: [],
   record_non_hits: false,
   block_status: 403,
   block_message: 'request blocked',

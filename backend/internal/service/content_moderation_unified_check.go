@@ -28,7 +28,6 @@ var contentModerationBodySizeUpperBounds = [...]int64{
 }
 
 const (
-	contentModerationWhitelistShadowCacheSuffix = ":whitelist-shadow-v1"
 	// contentModerationVipCacheSuffix VIP 请求的独立缓存域后缀。
 	// 升级前共享域内的第二层 restricted/block 判定不得对 VIP 重放；
 	// VIP 域内只积累其自身的第一层硬拦截记录。
@@ -143,7 +142,6 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	if !cfg.includesGroup(input.Scope.GroupID) || !cfg.includesModel(input.Model) {
 		return allow
 	}
-	whitelistShadow := cfg.includesUserEmail(input.UserEmail)
 	// VIP 用户只执行第一层关键词拦截：
 	//   - 不收集第二层候选，也不调用远程审核；
 	//   - 上下文级/策略限制级关键词（本应交由第二层裁决）对 VIP 一律放行，
@@ -158,34 +156,22 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 	input.lineageFragments = fragments
 	lineageFragments := append(append([]ContentModerationFragment(nil), historicalFragments...), fragments...)
 	cache, _ := s.hashCache.(ContentModerationFragmentCache)
-	// Model-review entries are shared across whitelist and ordinary traffic so
-	// a later Enforce request can promote an already reviewed risk. Whole-
-	// fragment decisions keep the whitelist suffix because their disposition
-	// semantics differ; the hash domains also prevent cross-entry collisions.
 	reviewNamespace := runtime.fragmentCacheNamespace
 	if reviewNamespace == "" {
 		reviewNamespace = cfg.fragmentCacheNamespace()
 	}
-	// 片段缓存 / 谱系拒绝 / 历史硬关键词统一使用该命名空间：
-	//   - whitelist shadow 流量走影子域（其判定不回写主域）；
-	//   - VIP 走独立域：升级前共享域里的 restricted/block 判定（含第二层结论）
-	//     不得对 VIP 重放；VIP 域内只积累其自身的第一层硬拦截记录。
+	// 片段缓存 / 谱系拒绝 / 历史硬关键词统一使用该命名空间。
+	// VIP 走独立域：升级前共享域里的 restricted/block 判定（含第二层结论）
+	// 不得对 VIP 重放；VIP 域内只积累其自身的第一层硬拦截记录。
 	fragmentNamespace := reviewNamespace
-	if whitelistShadow {
-		fragmentNamespace += contentModerationWhitelistShadowCacheSuffix
-	}
 	if input.UserIsVIP {
 		fragmentNamespace += contentModerationVipCacheSuffix
 	}
-	if !whitelistShadow {
-		if lineageDecision := s.replayUnifiedLineageRejection(ctx, input, cfg, fragmentNamespace, cache, lineageFragments); lineageDecision != nil {
-			return lineageDecision
-		}
+	if lineageDecision := s.replayUnifiedLineageRejection(ctx, input, cfg, fragmentNamespace, cache, lineageFragments); lineageDecision != nil {
+		return lineageDecision
 	}
-	if !whitelistShadow {
-		if historyDecision := s.checkUnifiedHistoryHardKeywords(ctx, input, cfg, runtime, fragmentNamespace, cache, historicalFragments); historyDecision != nil {
-			return historyDecision
-		}
+	if historyDecision := s.checkUnifiedHistoryHardKeywords(ctx, input, cfg, runtime, fragmentNamespace, cache, historicalFragments); historyDecision != nil {
+		return historyDecision
 	}
 	if len(fragments) == 0 {
 		return allow
@@ -270,13 +256,6 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 						cachedAudit.ReviewOutcome = "policy_restricted"
 						cachedAudit.DeepSeekCategory = ContentModerationRestrictedCategory
 					}
-					if whitelistShadow {
-						shadowRiskObserved = true
-						cachedAudit.DecisionSource = "cache_replay_whitelist_shadow"
-						s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, category, keyword, cachedAudit)
-						releaseDecisionLock()
-						continue
-					}
 					var decision *ContentModerationDecision
 					var log *ContentModerationLog
 					if restrictedReplay {
@@ -337,11 +316,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 					audit.DeepSeekCategory = ContentModerationRestrictedCategory
 					audit.DeepSeekConfidence = 1
 				}
-				if whitelistShadow {
-					shadowRiskObserved = true
-					audit.DecisionSource = "keyword_high_confidence_whitelist_shadow"
-					s.persistUnifiedShadowAudit(ctx, input, cfg, fragment, ContentModerationActionWhitelistShadow, keywordCategory, keyword, audit)
-				} else if cfg.FirstLayerStage == ContentModerationFirstLayerStageShadow {
+				if cfg.FirstLayerStage == ContentModerationFirstLayerStageShadow {
 					shadowRiskObserved = true
 					audit.DecisionSource = "keyword_high_confidence_shadow"
 					audit.KeywordTier = "first_layer_shadow"
@@ -429,7 +404,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 				releaseDecisionLock()
 				continue
 			}
-			if fragmentCacheEligible && !whitelistShadow && !shadowRiskObserved {
+			if fragmentCacheEligible && !shadowRiskObserved {
 				s.putUnifiedFragmentCache(ctx, cache, fragmentNamespace, cfg, fragment, ContentModerationFragmentAllow)
 			}
 			releaseDecisionLock()
@@ -446,7 +421,7 @@ func (s *ContentModerationService) checkUnifiedFragments(ctx context.Context, in
 		releaseDecisionLock()
 	}
 	if len(candidates) > 0 {
-		return s.checkUnifiedCandidateEvidence(ctx, input, cfg, reviewNamespace, candidates, whitelistShadow)
+		return s.checkUnifiedCandidateEvidence(ctx, input, cfg, reviewNamespace, candidates)
 	}
 	return allow
 }
@@ -1619,7 +1594,6 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	cfg *ContentModerationConfig,
 	namespace string,
 	candidates []contentModerationCandidateFragment,
-	whitelistShadow bool,
 ) *ContentModerationDecision {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
 	// 兜底守卫：VIP 不进入任何第二层审核路径（正常流程已在候选收集阶段排除）。
@@ -1636,12 +1610,12 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 			bundle: bundle, primary: primary, source: candidate.Fragment,
 			matches:                append([]contentModerationKeywordMatch(nil), candidate.Matches...),
 			sourceComplete:         !candidate.WholeFragmentTruncated,
-			background:             whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,
+			background:             cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow,
 			reviewRequired:         isContentModerationContextualReviewTier(candidate.Tier) || candidate.WholeFragment,
-			requireHealthyReviewer: !whitelistShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce,
+			requireHealthyReviewer: cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce,
 		})
 	}
-	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+	if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
 		asyncInput := input
 		// Shadow decisions never archive or mutate the request. Keep only the
 		// scalar metadata needed for the audit row so queued work cannot retain
@@ -1662,19 +1636,19 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 				if outcome.err != nil {
 					if contentModerationEvidenceCapacityFailure(outcome.parserStatus) {
 						_ = s.handleContextualEvidenceCapacityExceeded(
-							shadowCtx, asyncInput, asyncCfg, namespace, work.bundle, work.primary, whitelistShadow,
+							shadowCtx, asyncInput, asyncCfg, namespace, work.bundle, work.primary,
 							outcome.parserStatus, outcome.err, outcome.result,
 						)
 						return
 					}
 					_ = s.handleContextualReviewUnavailable(
-						shadowCtx, asyncInput, asyncCfg, namespace, work.bundle, work.primary, whitelistShadow,
+						shadowCtx, asyncInput, asyncCfg, namespace, work.bundle, work.primary,
 						false, outcome.parserStatus, outcome.err, outcome.result,
 					)
 					return
 				}
 				_ = s.applyUnifiedCandidateReviewResult(
-					shadowCtx, asyncInput, asyncCfg, namespace, work, outcome, whitelistShadow, false,
+					shadowCtx, asyncInput, asyncCfg, namespace, work, outcome, false,
 				)
 			})
 		}
@@ -1730,7 +1704,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 		if outcome.err != nil {
 			if contentModerationEvidenceCapacityFailure(outcome.parserStatus) {
 				decision := s.handleContextualEvidenceCapacityExceeded(
-					ctx, input, cfg, namespace, work.bundle, work.primary, whitelistShadow,
+					ctx, input, cfg, namespace, work.bundle, work.primary,
 					outcome.parserStatus, outcome.err, outcome.result,
 				)
 				if decision.Blocked {
@@ -1743,7 +1717,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 				continue
 			}
 			decision := s.handleContextualReviewUnavailable(
-				ctx, input, cfg, namespace, work.bundle, work.primary, whitelistShadow,
+				ctx, input, cfg, namespace, work.bundle, work.primary,
 				degradeFailures && degradeEligibility[index], outcome.parserStatus, outcome.err, outcome.result,
 			)
 			if decision.Blocked {
@@ -1757,7 +1731,7 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 		}
 		forceShadow := outcome.result.Blocked && index != formalBlockIndex
 		decision := s.applyUnifiedCandidateReviewResult(
-			ctx, input, cfg, namespace, work, outcome, whitelistShadow, forceShadow,
+			ctx, input, cfg, namespace, work, outcome, forceShadow,
 		)
 		if outcome.result.Blocked && !forceShadow {
 			blockDecision = decision
@@ -2175,12 +2149,11 @@ func outcomeFromUnifiedCandidateReviewCache(entry ContentModerationFragmentCache
 func contentModerationCandidateNeedsDisposition(
 	outcome contentModerationCandidateReviewOutcome,
 	cfg *ContentModerationConfig,
-	whitelistShadow bool,
 	forceShadow bool,
 ) bool {
 	return outcome.result.Blocked && !outcome.dispositionApplied &&
 		cfg != nil && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce &&
-		!whitelistShadow && !forceShadow
+		!forceShadow
 }
 
 func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
@@ -2190,7 +2163,6 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 	namespace string,
 	work contentModerationCandidateReviewWork,
 	outcome contentModerationCandidateReviewOutcome,
-	whitelistShadow bool,
 	forceShadow bool,
 ) *ContentModerationDecision {
 	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), contentModerationAuditPersistenceTimeout)
@@ -2198,7 +2170,7 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 
 	cacheEligible := !work.bundle.ContextIncomplete && !work.bundle.CoverageIncomplete
 	var releaseCommit func()
-	needsDisposition := contentModerationCandidateNeedsDisposition(outcome, cfg, whitelistShadow, forceShadow)
+	needsDisposition := contentModerationCandidateNeedsDisposition(outcome, cfg, forceShadow)
 	if cacheEligible && (!outcome.cacheHit || needsDisposition) {
 		startedFromCache := outcome.cacheHit
 		releaseCommit = s.acquireContentModerationFragmentDecisionLock(namespace + "\x00layer2-review-commit\x00" + work.bundle.CacheHash)
@@ -2206,7 +2178,7 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 			persistCtx, namespace, work.bundle.CacheHash, false, !startedFromCache,
 		); found {
 			outcome = outcomeFromUnifiedCandidateReviewCache(entry, work.bundle.CacheHash)
-			if contentModerationCandidateNeedsDisposition(outcome, cfg, whitelistShadow, forceShadow) {
+			if contentModerationCandidateNeedsDisposition(outcome, cfg, forceShadow) {
 				outcome.cacheHit = false
 				outcome.cachePromotion = true
 			} else {
@@ -2237,7 +2209,7 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 			reviewErr = errors.New("independent reviewers disagreed on the strategy restriction")
 		}
 		return s.handleContextualReviewUnavailable(
-			ctx, input, cfg, namespace, bundle, primary, whitelistShadow, false,
+			ctx, input, cfg, namespace, bundle, primary, false,
 			parserStatus, reviewErr, result,
 		)
 	}
@@ -2246,7 +2218,7 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 			return
 		}
 		dispositionApplied := !result.Blocked ||
-			(cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce && !whitelistShadow && !forceShadow)
+			(cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce && !forceShadow)
 		s.putUnifiedCandidateReviewCache(
 			persistCtx, namespace, cfg, bundle.CacheHash, result, contentModerationLogIDPtr(log), dispositionApplied,
 		)
@@ -2295,13 +2267,10 @@ func (s *ContentModerationService) applyUnifiedCandidateReviewResult(
 		audit.ReviewOutcome = "safe"
 	}
 	if result.Blocked {
-		if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow || forceShadow {
+		if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow || forceShadow {
 			action := ContentModerationActionSecondLayerShadow
 			audit.DecisionSource = "model_shadow"
-			if whitelistShadow {
-				action = ContentModerationActionWhitelistShadow
-				audit.DecisionSource = "model_whitelist_shadow"
-			} else if forceShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce {
+			if forceShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce {
 				audit.DecisionSource = "model_enforce_suppressed"
 			}
 			log, persisted := s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, action, result.Category, bundle.PrimaryKeyword, audit)
@@ -2411,7 +2380,6 @@ func (s *ContentModerationService) handleContextualEvidenceCapacityExceeded(
 	namespace string,
 	bundle contentModerationEvidenceBundle,
 	primary ContentModerationFragment,
-	whitelistShadow bool,
 	parserStatus string,
 	reviewErr error,
 	reviewResults ...contentModerationSecondLayerResult,
@@ -2452,7 +2420,7 @@ func (s *ContentModerationService) handleContextualEvidenceCapacityExceeded(
 		audit.ModelProfile = endpoints[0].Profile
 		audit.PromptVersion = endpoints[0].PromptVersion
 	}
-	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+	if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
 		audit.DecisionSource += "_shadow"
 		s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionEvidenceCapacityExceeded, "", bundle.PrimaryKeyword, audit)
 		return &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow, InputHash: bundle.CacheHash}
@@ -2477,7 +2445,6 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 	namespace string,
 	bundle contentModerationEvidenceBundle,
 	primary ContentModerationFragment,
-	whitelistShadow bool,
 	degradeEligible bool,
 	parserStatus string,
 	reviewErr error,
@@ -2530,12 +2497,10 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 	if bundle.PrimaryTier == contentModerationKeywordTierPolicyRestrictedReview && audit.DecisionSource == "review_unavailable" {
 		audit.DecisionSource = "policy_review_unavailable"
 	}
-	if whitelistShadow {
-		audit.DecisionSource += "_whitelist_shadow"
-	} else if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+	if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
 		audit.DecisionSource += "_shadow"
 	}
-	if degradeEligible && !whitelistShadow && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce {
+	if degradeEligible && cfg.SecondLayerStage == ContentModerationSecondLayerStageEnforce {
 		audit.DecisionSource = "review_unavailable_degraded_allow"
 		audit.ReviewOutcome = "degraded_allow"
 		s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
@@ -2548,7 +2513,7 @@ func (s *ContentModerationService) handleContextualReviewUnavailable(
 	s.recordContentModerationReviewUnavailable(ctx, input.RequestID, cfg, audit.DecisionSource, parserStatus, reviewErr, audit.ReviewAttempts)
 	s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionReviewUnavailable, "", bundle.PrimaryKeyword, audit)
 
-	if whitelistShadow || cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
+	if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
 		return &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
 	}
 
