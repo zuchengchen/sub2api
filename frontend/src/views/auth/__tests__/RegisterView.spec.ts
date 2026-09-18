@@ -5,14 +5,20 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RegisterView from '@/views/auth/RegisterView.vue'
 
-const { getPublicSettingsMock, registerMock, showErrorMock, validateInvitationCodeMock, routeQuery, pushMock, verifyActionMock } = vi.hoisted(() => ({
+const { getPublicSettingsMock, registerMock, showErrorMock, validateInvitationCodeMock, routeQuery, pushMock, verifyActionMock, appStoreMock } = vi.hoisted(() => ({
   getPublicSettingsMock: vi.fn(),
   registerMock: vi.fn(),
   showErrorMock: vi.fn(),
   validateInvitationCodeMock: vi.fn(),
   routeQuery: {} as Record<string, string>,
   pushMock: vi.fn(),
-  verifyActionMock: vi.fn()
+  verifyActionMock: vi.fn(),
+  appStoreMock: {
+    cachedPublicSettings: null as { promo_code_enabled?: boolean } | null,
+    showError: (...args: unknown[]) => showErrorMock(...args),
+    showSuccess: vi.fn(),
+    showWarning: vi.fn()
+  }
 }))
 
 const publicSettings = {
@@ -53,11 +59,7 @@ vi.mock('vue-i18n', () => ({
 
 vi.mock('@/stores', () => ({
   useAuthStore: () => ({ register: (...args: unknown[]) => registerMock(...args) }),
-  useAppStore: () => ({
-    showError: (...args: unknown[]) => showErrorMock(...args),
-    showSuccess: vi.fn(),
-    showWarning: vi.fn()
-  })
+  useAppStore: () => appStoreMock
 }))
 
 vi.mock('@/api/auth', async () => {
@@ -100,11 +102,30 @@ describe('RegisterView', () => {
     Object.keys(routeQuery).forEach(key => delete routeQuery[key])
     pushMock.mockReset()
     verifyActionMock.mockReset()
+    appStoreMock.cachedPublicSettings = null
     sessionStorage.removeItem('register_data')
     verifyActionMock.mockResolvedValue({ token: 'ticket', randstr: 'randstr' })
     getPublicSettingsMock.mockResolvedValue(publicSettings)
     registerMock.mockResolvedValue({})
     validateInvitationCodeMock.mockResolvedValue({ valid: true })
+  })
+
+  it('does not flash the promo-code field before disabled settings finish loading', async () => {
+    let resolveSettings!: (settings: typeof publicSettings) => void
+    getPublicSettingsMock.mockReturnValueOnce(
+      new Promise<typeof publicSettings>((resolve) => {
+        resolveSettings = resolve
+      })
+    )
+
+    const wrapper = mountRegister()
+
+    expect(wrapper.find('#promo_code').exists()).toBe(false)
+
+    resolveSettings(publicSettings)
+    await flushPromises()
+
+    expect(wrapper.find('#promo_code').exists()).toBe(false)
   })
 
   it.each([
