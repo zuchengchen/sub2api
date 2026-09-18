@@ -391,6 +391,9 @@ func TestAPIContracts(t *testing.T) {
 						"fallback_group_id_on_invalid_request": null,
 						"require_oauth_only": false,
 						"require_privacy_set": false,
+						"security_policy_email_enabled": false,
+						"security_policy_enabled": false,
+						"security_policy_mode": "",
 						"max_reasoning_effort": "",
 						"max_reasoning_effort_over_limit": "",
 						"reasoning_effort_mappings": null,
@@ -892,6 +895,9 @@ func TestAPIContracts(t *testing.T) {
 						"table_page_size_options": [10, 20, 50, 100],
 					"min_claude_code_version": "",
 					"max_claude_code_version": "",
+					"openai_codex_ticket_enabled": false,
+					"openai_codex_ticket_harvest_proxy_url": "",
+					"openai_codex_ticket_harvest_proxy_configured": false,
 					"min_codex_version": "",
 					"max_codex_version": "",
 					"codex_cli_only_blacklist": "",
@@ -1215,6 +1221,9 @@ func TestAPIContracts(t *testing.T) {
 					"enable_anthropic_cache_ttl_1h_injection": false,
 					"rewrite_message_cache_control": false,
 					"enable_client_dateline_normalization": true,
+					"openai_codex_ticket_enabled": false,
+					"openai_codex_ticket_harvest_proxy_url": "",
+					"openai_codex_ticket_harvest_proxy_configured": false,
 					"min_codex_version": "",
 					"max_codex_version": "",
 					"codex_cli_only_blacklist": "",
@@ -2940,7 +2949,6 @@ func paginationResult(total int64, params pagination.PaginationParams) *paginati
 func (r *stubUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
-
 
 // Ensure compile-time interface compliance.
 var (

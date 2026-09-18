@@ -421,6 +421,7 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	if !isConcreteRequestPlatform(strings.TrimSpace(input.Platform)) {
 		return nil, ErrAccountUnsupportedPlatform
 	}
+	accountExtra = MergeOpenAICodexTicketExtra(accountExtra, nil)
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -702,6 +703,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				normalizedExtra[key] = v
 			}
 		}
+		normalizedExtra = MergeOpenAICodexTicketExtra(normalizedExtra, account.Extra)
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
 		normalizedExtra, err = mergeAccountProtectionForSave(ctx, account, normalizedExtra)
 		if err != nil {
@@ -912,6 +914,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	updates = MergeOpenAICodexTicketExtra(updates, nil)
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	// Managed provider presets must be changed through UpdateAccount so the
 	// provider marker, base URL, model mapping, transport, and runtime policy
@@ -942,6 +945,8 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	// Managed probe/session state may only enter through dedicated typed endpoints.
+	input.Extra = MergeOpenAICodexTicketExtra(input.Extra, nil)
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	// A bulk marker update cannot safely apply provider-specific credentials to
 	// heterogeneous accounts. Require the single-account managed preset path.
