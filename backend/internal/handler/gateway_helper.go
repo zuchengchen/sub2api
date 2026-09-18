@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -150,9 +151,9 @@ type ConcurrencyError struct {
 
 func (e *ConcurrencyError) Error() string {
 	if e.IsTimeout {
-		return fmt.Sprintf("timeout waiting for %s concurrency slot", e.SlotType)
+		return userfacing.TimeoutWaitingConcurrency(e.SlotType)
 	}
-	return fmt.Sprintf("%s concurrency limit reached", e.SlotType)
+	return userfacing.ConcurrencyLimitReached(e.SlotType)
 }
 
 type WaitQueueFullError struct {
@@ -160,7 +161,7 @@ type WaitQueueFullError struct {
 }
 
 func (e *WaitQueueFullError) Error() string {
-	return "Too many pending requests, please retry later"
+	return userfacing.TooManyPendingRequests
 }
 
 // ConcurrencyHelper provides common concurrency slot management for gateway handlers

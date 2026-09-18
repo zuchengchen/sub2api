@@ -11,6 +11,7 @@ import (
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -58,12 +59,12 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	requestStart := time.Now()
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 
@@ -88,11 +89,11 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 				return
 			}
-			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 			return
 		}
 		if len(body) == 0 {
-			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 			return
 		}
 	}
@@ -102,7 +103,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	requestModel := requestInfo.Model
 	routingModel := service.NormalizeGrokMediaModelForEndpoint(endpoint, requestModel, requestInfo.HasInputImage())
 	if endpoint.IsGenerationRequest() && strings.TrimSpace(requestModel) == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	if endpoint.IsVideoLookupRequest() && strings.TrimSpace(requestID) == "" {
@@ -270,7 +271,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, false)
 			} else {
-				h.errorResponse(c, http.StatusBadGateway, "api_error", "Upstream request failed")
+				h.errorResponse(c, http.StatusBadGateway, "api_error", userfacing.UpstreamRequestFailed)
 			}
 			return
 		}
@@ -438,7 +439,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, grokMediaScheduleModel(account, routingModel, nil), false, nil)
 			if !service.IsResponseCommitted(c) && c.Writer.Size() == writerSizeBeforeForward {
-				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				h.errorResponse(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed)
 			}
 			reqLog.Warn("grok_media.forward_failed",
 				zap.Int64("account_id", account.ID),

@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -387,13 +388,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Get apiKey and user from context (set by ApiKeyAuth middleware)
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -415,12 +416,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		logRequestBodyReadFailure(reqLog, c.Request, err)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 
 	if len(body) == 0 {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
@@ -446,20 +447,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 校验请求体 JSON 合法性
 	if !gjson.ValidBytes(body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 
 	// 使用 gjson 只读提取字段做校验，避免完整 Unmarshal
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || modelResult.String() == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	reqModel := modelResult.String()
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	if !openAICompatibleTextTargetAllowed(c, apiKey, reqModel) {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByOpenAICompatibleComposite)
 		return
 	}
 	if cappedBody, changed, err := applyOpenAIReasoningEffortPolicyForRequest(c, apiKey, body); err != nil {
@@ -677,7 +678,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			if len(failedAccountIDs) == 0 {
 				if legacyCompact && errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available accounts support /responses/compact", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", userfacing.NoAvailableCompactAccounts, streamStarted)
 					return
 				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, requestPlatform)
@@ -1143,13 +1144,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.anthropicErrorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.anthropicErrorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.anthropicErrorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.anthropicErrorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -1177,29 +1178,29 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			h.anthropicErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 	if len(body) == 0 {
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
 	if !gjson.ValidBytes(body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || modelResult.String() == "" {
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	reqModel := modelResult.String()
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	if !openAICompatibleTextTargetAllowed(c, apiKey, reqModel) {
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByOpenAICompatibleComposite)
 		return
 	}
 	bindOpenAIReasoningEffortPolicyForMessagesRequest(c, apiKey, body)
@@ -1318,7 +1319,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				if lastFailoverErr != nil {
 					h.handleAnthropicFailoverExhausted(c, lastFailoverErr, streamStarted)
 				} else {
-					h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
+					h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", userfacing.UpstreamRequestFailed, streamStarted)
 				}
 				return
 			}
@@ -1624,7 +1625,7 @@ func (h *OpenAIGatewayHandler) ensureAnthropicErrorResponse(c *gin.Context, stre
 	if c == nil || c.Writer == nil || c.Writer.Written() {
 		return false
 	}
-	h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
+	h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", userfacing.UpstreamRequestFailed, streamStarted)
 	return true
 }
 
@@ -2173,7 +2174,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	}
 	if selection == nil || selection.Account == nil {
 		markOpsRoutingCapacityLimited(c)
-		writeError(http.StatusServiceUnavailable, "api_error", "", "No available accounts")
+		writeError(http.StatusServiceUnavailable, "api_error", "", userfacing.NoAvailableAccounts)
 		return nil, openAISlotAcquireFailed
 	}
 
@@ -2203,7 +2204,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	}
 	if selection.WaitPlan == nil {
 		markOpsRoutingCapacityLimited(c)
-		writeError(http.StatusServiceUnavailable, "api_error", "", "No available accounts")
+		writeError(http.StatusServiceUnavailable, "api_error", "", userfacing.NoAvailableAccounts)
 		return nil, openAISlotAcquireFailed
 	}
 
@@ -2304,12 +2305,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 
@@ -2518,11 +2519,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	userReleaseFunc, userAcquired, err := h.concurrencyHelper.TryAcquireUserSlotForAPIKey(ctx, subject.UserID, subject.Concurrency, apiKey.ID)
 	if err != nil {
 		reqLog.Warn("openai.websocket_user_slot_acquire_failed", zap.Error(err))
-		closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "failed to acquire user concurrency slot")
+		closeOpenAIClientWS(wsConn, coderws.StatusInternalError, userfacing.FailedToAcquireUserSlot)
 		return
 	}
 	if !userAcquired {
-		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "too many concurrent requests, please retry later")
+		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, userfacing.TooManyConcurrentRequests)
 		return
 	}
 	currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
@@ -2533,11 +2534,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		userReleaseFunc, userAcquired, err := h.concurrencyHelper.TryAcquireUserSlotForAPIKey(ctx, subject.UserID, subject.Concurrency, apiKey.ID)
 		if err != nil {
 			reqLog.Warn("openai.websocket_user_slot_reacquire_failed", zap.Error(err))
-			closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "failed to acquire user concurrency slot")
+			closeOpenAIClientWS(wsConn, coderws.StatusInternalError, userfacing.FailedToAcquireUserSlot)
 			return false
 		}
 		if !userAcquired {
-			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "too many concurrent requests, please retry later")
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, userfacing.TooManyConcurrentRequests)
 			return false
 		}
 		currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
@@ -2915,10 +2916,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				// 非首轮 turn 需要重新抢占并发槽位，避免长连接空闲占槽。
 				userReleaseFunc, userAcquired, err := h.concurrencyHelper.TryAcquireUserSlotForAPIKey(ctx, subject.UserID, subject.Concurrency, apiKey.ID)
 				if err != nil {
-					return service.NewOpenAIWSClientCloseError(coderws.StatusInternalError, "failed to acquire user concurrency slot", err)
+					return service.NewOpenAIWSClientCloseError(coderws.StatusInternalError, userfacing.FailedToAcquireUserSlot, err)
 				}
 				if !userAcquired {
-					return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "too many concurrent requests, please retry later", nil)
+					return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, userfacing.TooManyConcurrentRequests, nil)
 				}
 				accountReleaseFunc, accountAcquired, err := h.concurrencyHelper.TryAcquireAccountSlot(ctx, account.ID, accountMaxConcurrency)
 				if err != nil {
@@ -3367,7 +3368,7 @@ func (h *OpenAIGatewayHandler) acquireImageGenerationSlot(c *gin.Context, stream
 	if acquired {
 		return release, true
 	}
-	h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", gatewayConcurrencyLimitCode, "Image generation concurrency limit exceeded, please retry later", streamStarted, false)
+	h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", gatewayConcurrencyLimitCode, userfacing.ImageConcurrencyExceeded, streamStarted, false)
 	return nil, false
 }
 
@@ -3551,7 +3552,7 @@ func (h *OpenAIGatewayHandler) mapUpstreamError(statusCode int) (int, string, st
 	case 500, 502, 503, 504:
 		return http.StatusBadGateway, "upstream_error", "Upstream service temporarily unavailable"
 	default:
-		return http.StatusBadGateway, "upstream_error", "Upstream request failed"
+		return http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed
 	}
 }
 
@@ -3598,7 +3599,7 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 			}
 			payload, err := json.Marshal(gin.H{"error": errorObject})
 			if err != nil {
-				payload = []byte(`{"error":{"type":"upstream_error","message":"Upstream request failed"}}`)
+				payload = []byte(`{"error":{"type":"upstream_error","message":userfacing.UpstreamRequestFailed}}`)
 			}
 			errorEvent := "event: error\ndata: " + string(payload) + "\n\n"
 			if _, err := fmt.Fprint(c.Writer, errorEvent); err != nil {
@@ -3666,7 +3667,7 @@ func (h *OpenAIGatewayHandler) ensureForwardErrorResponse(c *gin.Context, stream
 	if c.Writer.Written() && !imageKeepalivePaddingOnly {
 		streamStarted = true
 	}
-	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed", streamStarted)
+	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed, streamStarted)
 	return true
 }
 
@@ -3930,7 +3931,7 @@ func writeCyberSessionBlockedWSError(ctx context.Context, conn *coderws.Conn) {
 		},
 	})
 	if err != nil {
-		payload = []byte(`{"event_id":"evt_cyber_session_blocked","type":"error","error":{"type":"permission_error","code":"session_blocked_by_cyber_policy","message":"This session is blocked by cyber-security policy, please start a new session"}}`)
+		payload = []byte(`{"event_id":"evt_cyber_session_blocked","type":"error","error":{"type":"permission_error","code":"session_blocked_by_cyber_policy","message":"` + userfacing.CyberSessionBlocked + `"}}`)
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -4007,7 +4008,7 @@ func buildCyberPolicyOpsErrorEntry(meta cyberPolicyOpsErrorMeta, mark *service.C
 }
 
 // 双语单串：网关客户端面向中英用户，且本错误无 i18n 协商通道。
-const cyberSessionBlockedClientMsg = "该会话已被网络安全策略屏蔽，请开启新会话 / This session is blocked by cyber-security policy, please start a new session"
+var cyberSessionBlockedClientMsg = userfacing.CyberSessionBlocked
 
 // buildCyberSessionBlockedOpsEntry builds the ops_error_logs entry for a request
 // rejected locally by the cyber session block (F5a). Distinct error_type from

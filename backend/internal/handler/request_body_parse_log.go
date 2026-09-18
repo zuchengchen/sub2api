@@ -13,8 +13,8 @@ import (
 const parseFailureSnippetLen = 256
 
 // logRequestBodyParseFailure records the real reason a request body failed
-// JSON parsing/validation. The client keeps receiving the generic
-// "Failed to parse request body"; the sanitized diagnostics (underlying
+// JSON parsing/validation. The client keeps receiving a generic parse error;
+// the sanitized diagnostics (underlying
 // error with byte offset, body length, escaped head/tail snippets) land in
 // the server log only, so operators can distinguish genuinely invalid JSON
 // from a truncated or partially consumed body.

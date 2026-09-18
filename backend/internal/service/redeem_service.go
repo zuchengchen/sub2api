@@ -13,15 +13,16 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 )
 
 var (
-	ErrRedeemCodeNotFound  = infraerrors.NotFound("REDEEM_CODE_NOT_FOUND", "redeem code not found")
-	ErrRedeemCodeUsed      = infraerrors.Conflict("REDEEM_CODE_USED", "redeem code already used")
-	ErrRedeemCodeExpired   = infraerrors.Conflict("REDEEM_CODE_EXPIRED", "redeem code expired")
-	ErrInsufficientBalance = infraerrors.BadRequest("INSUFFICIENT_BALANCE", "insufficient balance")
-	ErrRedeemRateLimited   = infraerrors.TooManyRequests("REDEEM_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrRedeemCodeLocked    = infraerrors.Conflict("REDEEM_CODE_LOCKED", "redeem code is being processed, please try again")
+	ErrRedeemCodeNotFound  = infraerrors.NotFound("REDEEM_CODE_NOT_FOUND", userfacing.RedeemCodeNotFound)
+	ErrRedeemCodeUsed      = infraerrors.Conflict("REDEEM_CODE_USED", userfacing.RedeemCodeUsed)
+	ErrRedeemCodeExpired   = infraerrors.Conflict("REDEEM_CODE_EXPIRED", userfacing.RedeemCodeExpired)
+	ErrInsufficientBalance = infraerrors.BadRequest("INSUFFICIENT_BALANCE", userfacing.InsufficientBalance)
+	ErrRedeemRateLimited   = infraerrors.TooManyRequests("REDEEM_RATE_LIMITED", userfacing.RedeemRateLimited)
+	ErrRedeemCodeLocked    = infraerrors.Conflict("REDEEM_CODE_LOCKED", userfacing.RedeemCodeLocked)
 )
 
 const (

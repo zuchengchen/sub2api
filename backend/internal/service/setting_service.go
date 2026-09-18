@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"golang.org/x/sync/singleflight"
 	"sync"
@@ -84,7 +85,7 @@ func (s *SettingService) ResolveGrokBaseURL(ctx context.Context, account *Accoun
 }
 
 var (
-	ErrRegistrationDisabled   = infraerrors.Forbidden("REGISTRATION_DISABLED", "registration is currently disabled")
+	ErrRegistrationDisabled   = infraerrors.Forbidden("REGISTRATION_DISABLED", userfacing.RegistrationDisabled)
 	ErrSettingNotFound        = infraerrors.NotFound("SETTING_NOT_FOUND", "setting not found")
 	ErrDefaultSubGroupInvalid = infraerrors.BadRequest(
 		"DEFAULT_SUBSCRIPTION_GROUP_INVALID",
