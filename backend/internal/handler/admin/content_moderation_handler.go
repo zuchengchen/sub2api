@@ -48,7 +48,6 @@ type contentModerationConfigRequest struct {
 	RemoteReviewers         *[]service.ContentModerationDeepSeekChannelInput `json:"remote_reviewers"`
 	AllGroups               *bool                                            `json:"all_groups"`
 	GroupIDs                *[]int64                                         `json:"group_ids"`
-	UserEmailWhitelist      *[]string                                        `json:"user_email_whitelist"`
 	RecordNonHits           *bool                                            `json:"record_non_hits"`
 	BlockStatus             *int                                             `json:"block_status"`
 	BlockMessage            *string                                          `json:"block_message"`
@@ -117,7 +116,6 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		RemoteReviewers:                req.RemoteReviewers,
 		AllGroups:                      req.AllGroups,
 		GroupIDs:                       req.GroupIDs,
-		UserEmailWhitelist:             req.UserEmailWhitelist,
 		RecordNonHits:                  req.RecordNonHits,
 		BlockStatus:                    req.BlockStatus,
 		BlockMessage:                   req.BlockMessage,

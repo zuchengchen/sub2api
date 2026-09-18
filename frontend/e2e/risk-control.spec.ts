@@ -63,7 +63,6 @@ const riskConfig = {
   ],
   all_groups: true,
   group_ids: [],
-  user_email_whitelist: [],
   record_non_hits: false,
   block_status: 403,
   block_message: '请调整输入后重试',

@@ -214,16 +214,21 @@ func TestRecordCyberPolicyEvent_NonGPTGroupReceivesSideEffects(t *testing.T) {
 	require.Equal(t, 1, repo.disableUserCalls)
 }
 
-func TestRecordCyberPolicyEvent_UserEmailWhitelistRecordsWithoutDisabling(t *testing.T) {
+func TestRecordCyberPolicyEvent_LegacyStoredEmailAllowlistNoLongerSkipsDisable(t *testing.T) {
 	cfg := defaultContentModerationConfig()
-	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
 	rawCfg, err := json.Marshal(cfg)
 	require.NoError(t, err)
+	var stored map[string]any
+	require.NoError(t, json.Unmarshal(rawCfg, &stored))
+	stored["user_email_whitelist"] = []string{"allowed@example.com"}
+	legacy, err := json.Marshal(stored)
+	require.NoError(t, err)
+
 	repo := &cyberDispositionTestRepo{userActive: true}
 	svc := NewContentModerationService(
 		&contentModerationTestSettingRepo{values: map[string]string{
 			SettingKeyRiskControlEnabled:      "true",
-			SettingKeyContentModerationConfig: string(rawCfg),
+			SettingKeyContentModerationConfig: string(legacy),
 		}},
 		repo, nil, nil, nil, nil, nil, nil,
 	)
@@ -242,61 +247,9 @@ func TestRecordCyberPolicyEvent_UserEmailWhitelistRecordsWithoutDisabling(t *tes
 
 	logs := repo.snapshotLogs()
 	require.Len(t, logs, 1)
-	require.Equal(t, ContentModerationActionCyberPolicy, logs[0].Action)
-	require.Equal(t, "skipped_whitelist", logs[0].DispositionStatus)
-	require.False(t, logs[0].DispositionTransitioned)
-	require.False(t, logs[0].AutoBanned)
-	require.Equal(t, 0, repo.disableUserCalls)
-}
-
-func TestRetryCyberPolicyDisposition_UserEmailWhitelistCancelsPendingSideEffects(t *testing.T) {
-	cfg := defaultContentModerationConfig()
-	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
-	rawCfg, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	repo := &cyberDispositionTestRepo{userActive: true}
-	svc := NewContentModerationService(
-		&contentModerationTestSettingRepo{values: map[string]string{
-			SettingKeyRiskControlEnabled:      "true",
-			SettingKeyContentModerationConfig: string(rawCfg),
-		}},
-		repo, nil, nil, nil, nil, nil, nil,
-	)
-
-	err = svc.retryCyberPolicyDisposition(context.Background(), &contentModerationDispositionRetryFile{
-		Kind:      contentModerationDispositionCyber,
-		UserID:    1,
-		UserEmail: "ALLOWED@example.com",
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, 0, repo.disableUserCalls)
-	require.Empty(t, repo.snapshotLogs())
-}
-
-func TestRetryLocalDisposition_UserEmailWhitelistCancelsPendingSideEffects(t *testing.T) {
-	cfg := defaultContentModerationConfig()
-	cfg.UserEmailWhitelist = []string{"allowed@example.com"}
-	rawCfg, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	repo := &cyberDispositionTestRepo{userActive: true}
-	svc := NewContentModerationService(
-		&contentModerationTestSettingRepo{values: map[string]string{
-			SettingKeyRiskControlEnabled:      "true",
-			SettingKeyContentModerationConfig: string(rawCfg),
-		}},
-		repo, nil, nil, nil, nil, nil, nil,
-	)
-
-	err = svc.retryCyberPolicyDisposition(context.Background(), &contentModerationDispositionRetryFile{
-		Kind:      contentModerationDispositionLocal,
-		UserID:    1,
-		UserEmail: "ALLOWED@example.com",
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, 0, repo.disableUserCalls)
-	require.Empty(t, repo.snapshotLogs())
+	require.Equal(t, "disabled", logs[0].DispositionStatus)
+	require.True(t, logs[0].AutoBanned)
+	require.Equal(t, 1, repo.disableUserCalls)
 }
 
 func TestRecordCyberPolicyEvent_WritesLogAndDisablesUserOnce(t *testing.T) {

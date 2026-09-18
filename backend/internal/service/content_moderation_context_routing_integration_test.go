@@ -1103,40 +1103,23 @@ func TestContentModerationContextualReviewFailureAllowsAndAuditsShadowPaths(t *t
 	}))
 	defer server.Close()
 
-	tests := []struct {
-		name           string
-		whitelistEmail string
-		secondStage    string
-		wantSource     string
-	}{
-		{name: "second layer shadow", secondStage: ContentModerationSecondLayerStageShadow, wantSource: "review_unavailable_shadow"},
-		{name: "whitelist shadow", whitelistEmail: "allowed@example.com", secondStage: ContentModerationSecondLayerStageEnforce, wantSource: "review_unavailable_whitelist_shadow"},
-	}
+	cfg := contextualRoutingTestConfig(server.URL)
+	cfg.SecondLayerStage = ContentModerationSecondLayerStageShadow
+	cfg.normalize()
+	repo := &contentModerationReplayRepo{}
+	cache := &contentModerationReplayCache{}
+	svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
+	decision := svc.checkUnifiedFragments(context.Background(), contextualRoutingTestInput("请介绍恶意宏", ""), contextualRoutingTestRuntime(cfg, nil))
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := contextualRoutingTestConfig(server.URL)
-			cfg.SecondLayerStage = tc.secondStage
-			if tc.whitelistEmail != "" {
-				cfg.UserEmailWhitelist = []string{tc.whitelistEmail}
-			}
-			cfg.normalize()
-			repo := &contentModerationReplayRepo{}
-			cache := &contentModerationReplayCache{}
-			svc := NewContentModerationService(nil, repo, cache, nil, nil, nil, nil, nil)
-			decision := svc.checkUnifiedFragments(context.Background(), contextualRoutingTestInput("请介绍恶意宏", tc.whitelistEmail), contextualRoutingTestRuntime(cfg, nil))
-
-			require.True(t, decision.Allowed)
-			require.False(t, decision.Blocked)
-			require.Eventually(t, func() bool { return len(repo.snapshotLogs()) == 1 }, time.Second, 10*time.Millisecond)
-			logs := repo.snapshotLogs()
-			require.Equal(t, ContentModerationActionReviewUnavailable, logs[0].Action)
-			require.Equal(t, tc.wantSource, logs[0].DecisionSource)
-			require.False(t, logs[0].Flagged)
-			require.Zero(t, logs[0].ViolationCount)
-			require.Zero(t, contextualRoutingCacheEntryCount(cache))
-		})
-	}
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Eventually(t, func() bool { return len(repo.snapshotLogs()) == 1 }, time.Second, 10*time.Millisecond)
+	logs := repo.snapshotLogs()
+	require.Equal(t, ContentModerationActionReviewUnavailable, logs[0].Action)
+	require.Equal(t, "review_unavailable_shadow", logs[0].DecisionSource)
+	require.False(t, logs[0].Flagged)
+	require.Zero(t, logs[0].ViolationCount)
+	require.Zero(t, contextualRoutingCacheEntryCount(cache))
 }
 
 func TestContentModerationOrdinaryCandidateFailureIsRetryableInEnforce(t *testing.T) {
@@ -1329,7 +1312,7 @@ func TestContentModerationIncompleteContextCannotReplayCompleteAllowCache(t *tes
 	require.NoError(t, completeOutcome.err)
 	require.False(t, completeOutcome.cacheHit)
 	completeDecision := svc.applyUnifiedCandidateReviewResult(
-		context.Background(), input, cfg, cfg.fragmentCacheNamespace(), work, completeOutcome, false, false,
+		context.Background(), input, cfg, cfg.fragmentCacheNamespace(), work, completeOutcome, false,
 	)
 	require.True(t, completeDecision.Allowed)
 	require.Equal(t, 1, contextualRoutingCacheEntryCount(cache))
@@ -1344,7 +1327,7 @@ func TestContentModerationIncompleteContextCannotReplayCompleteAllowCache(t *tes
 	require.False(t, incompleteOutcome.cacheHit)
 	require.True(t, incompleteOutcome.result.Blocked)
 	incompleteDecision := svc.applyUnifiedCandidateReviewResult(
-		context.Background(), input, cfg, cfg.fragmentCacheNamespace(), incompleteWork, incompleteOutcome, false, false,
+		context.Background(), input, cfg, cfg.fragmentCacheNamespace(), incompleteWork, incompleteOutcome, false,
 	)
 	require.True(t, incompleteDecision.Blocked)
 	require.False(t, incompleteDecision.Allowed)

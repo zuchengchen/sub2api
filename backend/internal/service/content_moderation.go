@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/mail"
 	"sort"
 	"strings"
 	"sync"
@@ -39,8 +38,10 @@ const (
 	// RestrictedBlock stops a policy-restricted request without treating it as
 	// an abuse violation. It must never enter the flagged-account disposition
 	// path.
-	ContentModerationActionRestrictedBlock          = "restricted_block"
-	ContentModerationActionSecondLayerShadow        = "second_layer_shadow"
+	ContentModerationActionRestrictedBlock   = "restricted_block"
+	ContentModerationActionSecondLayerShadow = "second_layer_shadow"
+	// ContentModerationActionWhitelistShadow is retained so historical logs
+	// from the removed user-email allowlist still filter and display.
 	ContentModerationActionWhitelistShadow          = "whitelist_shadow"
 	ContentModerationActionCacheBlock               = "cache_block"
 	ContentModerationActionBudgetRejected           = "budget_rejected"
@@ -90,8 +91,6 @@ const (
 	maxContentModerationNonHitRetentionDays            = 3
 	maxContentModerationBlockedKeywords                = 10000
 	maxContentModerationBlockedKeywordRunes            = 200
-	maxContentModerationUserEmailWhitelist             = 1000
-	maxContentModerationUserEmailRunes                 = 254
 	maxContentModerationModelFilterModels              = 1000
 	maxContentModerationModelFilterRunes               = 200
 	defaultContentModerationCacheVersion               = "v1"
@@ -125,7 +124,6 @@ type ContentModerationConfig struct {
 	DeepSeekChannels         []ContentModerationDeepSeekChannel `json:"deepseek_channels"`
 	AllGroups                bool                               `json:"all_groups"`
 	GroupIDs                 []int64                            `json:"group_ids"`
-	UserEmailWhitelist       []string                           `json:"user_email_whitelist"`
 	RecordNonHits            bool                               `json:"record_non_hits"`
 	BlockStatus              int                                `json:"block_status"`
 	BlockMessage             string                             `json:"block_message"`
@@ -178,7 +176,6 @@ type ContentModerationConfigView struct {
 	RemoteReviewers                []ContentModerationDeepSeekChannelView `json:"remote_reviewers"`
 	AllGroups                      bool                                   `json:"all_groups"`
 	GroupIDs                       []int64                                `json:"group_ids"`
-	UserEmailWhitelist             []string                               `json:"user_email_whitelist"`
 	RecordNonHits                  bool                                   `json:"record_non_hits"`
 	BlockStatus                    int                                    `json:"block_status"`
 	BlockMessage                   string                                 `json:"block_message"`
@@ -265,7 +262,6 @@ type UpdateContentModerationConfigInput struct {
 	RemoteReviewers                *[]ContentModerationDeepSeekChannelInput `json:"remote_reviewers"`
 	AllGroups                      *bool                                    `json:"all_groups"`
 	GroupIDs                       *[]int64                                 `json:"group_ids"`
-	UserEmailWhitelist             *[]string                                `json:"user_email_whitelist"`
 	RecordNonHits                  *bool                                    `json:"record_non_hits"`
 	BlockStatus                    *int                                     `json:"block_status"`
 	BlockMessage                   *string                                  `json:"block_message"`
@@ -1181,9 +1177,6 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if input.GroupIDs != nil {
 		cfg.GroupIDs = normalizeInt64IDs(*input.GroupIDs)
-	}
-	if input.UserEmailWhitelist != nil {
-		cfg.UserEmailWhitelist = normalizeContentModerationUserEmailWhitelist(*input.UserEmailWhitelist)
 	}
 	if input.RecordNonHits != nil {
 		cfg.RecordNonHits = *input.RecordNonHits
@@ -2127,23 +2120,6 @@ func (s *ContentModerationService) isRiskControlEnabled(ctx context.Context) boo
 	return raw == "true"
 }
 
-// IsUserEmailWhitelisted reports whether an exact user email uses local
-// shadow-only moderation. Matching is case-insensitive.
-func (s *ContentModerationService) IsUserEmailWhitelisted(ctx context.Context, email string) (bool, error) {
-	if strings.TrimSpace(email) == "" {
-		return false, nil
-	}
-	if s == nil || s.settingRepo == nil {
-		// No settings store means no whitelist; retry/check must not stall forever.
-		return false, nil
-	}
-	runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx)
-	if err != nil {
-		return false, err
-	}
-	return runtimeSnapshot != nil && runtimeSnapshot.config != nil && runtimeSnapshot.config.includesUserEmail(email), nil
-}
-
 func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *ContentModerationConfig) error {
 	if err := s.validateUnifiedConfig(cfg); err != nil {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_SECOND_LAYER", err.Error())
@@ -2178,18 +2154,6 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 	}
 	if cfg.ModelFilter.Type != ContentModerationModelFilterAll && len(cfg.ModelFilter.Models) == 0 {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_MODEL_FILTER", "指定或排除模型时至少需要配置 1 个模型")
-	}
-	if len(cfg.UserEmailWhitelist) > maxContentModerationUserEmailWhitelist {
-		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_USER_EMAIL_WHITELIST", fmt.Sprintf("用户邮箱白名单最多配置 %d 项", maxContentModerationUserEmailWhitelist))
-	}
-	for _, email := range cfg.UserEmailWhitelist {
-		if len([]rune(email)) > maxContentModerationUserEmailRunes {
-			return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_USER_EMAIL_WHITELIST", fmt.Sprintf("用户邮箱白名单地址过长: %s", email))
-		}
-		address, err := mail.ParseAddress(email)
-		if err != nil || !strings.EqualFold(address.Address, email) {
-			return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_USER_EMAIL_WHITELIST", fmt.Sprintf("用户邮箱白名单地址无效: %s", email))
-		}
 	}
 	if !cfg.AllGroups && len(cfg.GroupIDs) > 0 && s.groupRepo != nil {
 		for _, groupID := range cfg.GroupIDs {
@@ -2587,7 +2551,6 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		DeepSeekChannels:        defaultContentModerationDeepSeekChannels(),
 		AllGroups:               true,
 		GroupIDs:                []int64{},
-		UserEmailWhitelist:      []string{},
 		RecordNonHits:           false,
 		BlockStatus:             defaultContentModerationBlockHTTPStatus,
 		BlockMessage:            defaultContentModerationBlockMessage,
@@ -2632,7 +2595,6 @@ func cloneContentModerationConfig(cfg *ContentModerationConfig) *ContentModerati
 	clone := *cfg
 	clone.DeepSeekChannels = cloneContentModerationDeepSeekChannels(cfg.DeepSeekChannels)
 	clone.GroupIDs = append([]int64(nil), cfg.GroupIDs...)
-	clone.UserEmailWhitelist = append([]string(nil), cfg.UserEmailWhitelist...)
 	clone.BlockedKeywords = append([]string(nil), cfg.BlockedKeywords...)
 	clone.HardBlockPatterns = append([]string(nil), cfg.HardBlockPatterns...)
 	clone.CandidateKeywords = append([]string(nil), cfg.CandidateKeywords...)
@@ -2721,7 +2683,6 @@ func (cfg *ContentModerationConfig) normalize() {
 		cfg.NonHitRetentionDays = maxContentModerationNonHitRetentionDays
 	}
 	cfg.GroupIDs = normalizeInt64IDs(cfg.GroupIDs)
-	cfg.UserEmailWhitelist = normalizeContentModerationUserEmailWhitelist(cfg.UserEmailWhitelist)
 	cfg.BlockedKeywords = normalizeBlockedKeywords(cfg.BlockedKeywords)
 	cfg.KeywordBlockingMode = normalizeKeywordBlockingMode(cfg.KeywordBlockingMode)
 	cfg.ModelFilter = normalizeContentModerationModelFilter(cfg.ModelFilter)
@@ -2782,22 +2743,6 @@ func (cfg *ContentModerationConfig) normalize() {
 	cfg.KeywordPolicyVersion = normalizeContentModerationCacheVersion(cfg.KeywordPolicyVersion)
 	cfg.ContextPolicyVersion = normalizeContentModerationCacheVersion(cfg.ContextPolicyVersion)
 	cfg.EvidencePolicyVersion = normalizeContentModerationCacheVersion(cfg.EvidencePolicyVersion)
-}
-
-func (cfg *ContentModerationConfig) includesUserEmail(email string) bool {
-	if cfg == nil {
-		return false
-	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return false
-	}
-	for _, allowed := range cfg.UserEmailWhitelist {
-		if email == strings.ToLower(strings.TrimSpace(allowed)) {
-			return true
-		}
-	}
-	return false
 }
 
 func (cfg *ContentModerationConfig) includesGroup(groupID *int64) bool {
@@ -2876,7 +2821,6 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		RemoteReviewers:                s.contentModerationDeepSeekChannelViews(cfg.DeepSeekChannels),
 		AllGroups:                      cfg.AllGroups,
 		GroupIDs:                       append([]int64(nil), cfg.GroupIDs...),
-		UserEmailWhitelist:             append([]string(nil), cfg.UserEmailWhitelist...),
 		RecordNonHits:                  cfg.RecordNonHits,
 		BlockStatus:                    cfg.BlockStatus,
 		BlockMessage:                   cfg.BlockMessage,
@@ -2998,26 +2942,6 @@ func normalizeInt64IDs(ids []int64) []int64 {
 		out = append(out, id)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
-}
-
-func normalizeContentModerationUserEmailWhitelist(in []string) []string {
-	if len(in) == 0 {
-		return []string{}
-	}
-	out := make([]string, 0, len(in))
-	seen := make(map[string]struct{}, len(in))
-	for _, raw := range in {
-		email := strings.ToLower(strings.TrimSpace(raw))
-		if email == "" {
-			continue
-		}
-		if _, ok := seen[email]; ok {
-			continue
-		}
-		seen[email] = struct{}{}
-		out = append(out, email)
-	}
 	return out
 }
 
@@ -3207,7 +3131,6 @@ type CyberPolicyRecordInput struct {
 // 并按配置发送通知。账户处置不受本地累计违规阈值约束。
 // 使用请求快照中的审计元数据；不受 risk_control_enabled 总开关和内容审核
 // Enabled/Mode/group/model/sample 约束，确保严重违规始终留痕并处置。
-// 用户邮箱白名单仍写入风控日志与对话归档，但不禁用用户/API Key。
 func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, in CyberPolicyRecordInput) {
 	if s == nil || s.repo == nil {
 		return
@@ -3261,31 +3184,11 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		RequestTarget:   in.RawRequest.Target,
 		ArchiveStatus:   ContentModerationArchiveStatusNone,
 	}
-	skipDisposition := false
-	if strings.TrimSpace(in.UserEmail) != "" {
-		whitelisted, err := s.IsUserEmailWhitelisted(ctx, in.UserEmail)
-		if err != nil {
-			slog.Warn("content_moderation.cyber_whitelist_lookup_failed", "user_id", in.UserID, "error", err)
-		} else if whitelisted {
-			skipDisposition = true
-		}
-	}
-	var transitioned bool
-	var dispositionErr error
-	if skipDisposition {
-		log.DispositionTarget = "user"
-		log.DispositionStatus = "skipped_whitelist"
-		slog.Info("content_moderation.skip_user_email_whitelist",
-			"user_id", in.UserID,
-			"api_key_id", in.APIKeyID,
-			"source", "cyber_policy")
-	} else {
-		transitioned, dispositionErr = s.applyCyberPolicyDisposition(ctx, in, log)
-		if dispositionErr != nil {
-			log.DispositionStatus = "retry_required"
-			log.Error = trimRunes(log.Error+"\ndisposition_error="+redactContentModerationSecrets(dispositionErr.Error()), maxModerationErrorRunes)
-			slog.Error("content_moderation.cyber_disposition_failed", "user_id", in.UserID, "api_key_id", in.APIKeyID, "error", dispositionErr)
-		}
+	transitioned, dispositionErr := s.applyCyberPolicyDisposition(ctx, in, log)
+	if dispositionErr != nil {
+		log.DispositionStatus = "retry_required"
+		log.Error = trimRunes(log.Error+"\ndisposition_error="+redactContentModerationSecrets(dispositionErr.Error()), maxModerationErrorRunes)
+		slog.Error("content_moderation.cyber_disposition_failed", "user_id", in.UserID, "api_key_id", in.APIKeyID, "error", dispositionErr)
 	}
 	log.EmailSent = false
 	var archiveErr error
@@ -3396,19 +3299,6 @@ func (s *ContentModerationService) retryCyberPolicyDisposition(ctx context.Conte
 	}
 	if kind != contentModerationDispositionCyber && kind != contentModerationDispositionLocal {
 		return fmt.Errorf("unknown content moderation disposition retry kind %q", kind)
-	}
-	if strings.TrimSpace(entry.UserEmail) != "" {
-		whitelisted, err := s.IsUserEmailWhitelisted(ctx, entry.UserEmail)
-		if err != nil {
-			return fmt.Errorf("load content moderation user email whitelist: %w", err)
-		}
-		if whitelisted {
-			slog.Info("content_moderation.skip_user_email_whitelist",
-				"user_id", entry.UserID,
-				"api_key_id", entry.APIKeyID,
-				"source", kind+"_retry")
-			return nil
-		}
 	}
 	log := &ContentModerationLog{
 		ID: entry.LogID, ArchiveID: entry.ArchiveID, Action: ContentModerationActionCyberPolicy,

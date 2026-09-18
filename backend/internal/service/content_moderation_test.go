@@ -670,34 +670,6 @@ func TestNormalizeKeywordBlockingMode_UnknownFallsBackToDefault(t *testing.T) {
 	require.Equal(t, ContentModerationKeywordModeAPIOnly, normalizeKeywordBlockingMode("api_only"))
 }
 
-func TestContentModerationUpdateConfig_NormalizesAndValidatesUserEmailWhitelist(t *testing.T) {
-	cfg := defaultContentModerationConfig()
-	rawCfg, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	repo := &contentModerationTestSettingRepo{values: map[string]string{
-		SettingKeyContentModerationConfig: string(rawCfg),
-	}}
-	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
-	emails := []string{" Allowed@Example.COM ", "allowed@example.com", "second@example.net"}
-
-	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-		UserEmailWhitelist: &emails,
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, []string{"allowed@example.com", "second@example.net"}, view.UserEmailWhitelist)
-	var saved ContentModerationConfig
-	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &saved))
-	require.Equal(t, view.UserEmailWhitelist, saved.UserEmailWhitelist)
-
-	invalid := []string{"not-an-email"}
-	_, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-		UserEmailWhitelist: &invalid,
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "用户邮箱白名单地址无效")
-}
-
 func TestUnifiedSevereBlockPersistsSynchronously(t *testing.T) {
 	repo := &contentModerationTestRepo{}
 	svc := NewContentModerationService(nil, repo, nil, nil, nil, nil, nil, nil)
@@ -952,4 +924,3 @@ func TestContentModerationUpdateConfig_CyberPolicyExcludeFromBanCount(t *testing
 func (r *contentModerationTestUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
-
