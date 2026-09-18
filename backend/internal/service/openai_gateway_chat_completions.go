@@ -320,15 +320,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if err != nil {
 		return nil, fmt.Errorf("prepare GPT-5.6 prompt caching: %w", err)
 	}
-	// Chat Completions → Responses 会给 GPT-5.6+ 自动补 prompt_cache_options。
-	// ChatGPT Codex 内部接口不保证认这个 Platform 字段，线上 400 全来自这条转换路径。
-	// 只剥转换结果，不改原生 /v1/responses。
-	if account.UsesOpenAICodexProtocol() && !isResponsesShape {
-		stripped, stripErr := sjson.DeleteBytes(responsesBody, "prompt_cache_options")
-		if stripErr != nil {
-			return nil, fmt.Errorf("strip Codex chat completions prompt_cache_options: %w", stripErr)
-		}
-		responsesBody = stripped
+	// Chat Completions → Responses 会给 GPT-5.6+ 自动补 prompt_cache_options
+	// 和 nested prompt_cache_breakpoint。ChatGPT Codex 内部接口不认这些
+	// Platform 字段；Codex 出站一律剥掉，也不再注入 breakpoint。
+	if account.UsesOpenAICodexProtocol() {
+		promptCachePreparation.EnsureBreakpoint = false
 	}
 
 	logFields := []zap.Field{
@@ -400,6 +396,19 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 				}
 			}
 		}
+	}
+	if account.UsesOpenAICodexProtocol() {
+		stripped, strippedCache, stripErr := removeOpenAIPromptCacheConfiguration(responsesBody)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip Codex unsupported prompt cache fields: %w", stripErr)
+		}
+		if strippedCache {
+			logger.L().Debug("openai chat_completions: stripped Codex-unsupported prompt cache fields",
+				zap.Int64("account_id", account.ID),
+				zap.String("upstream_model", upstreamModel),
+			)
+		}
+		responsesBody = stripped
 	}
 	if promptCachePreparation.EnsureBreakpoint {
 		responsesBody, _, err = ensureOpenAIExplicitPromptCacheBreakpoint(responsesBody)

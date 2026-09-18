@@ -167,10 +167,13 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 	cacheParamMatchesMessage := cacheMessageParam == "" || cacheParam == cacheMessageParam
 	cacheModelRejection := code == "invalid_parameter" || cacheMessageParam != ""
 	if cacheParam != "" && cacheParamMatchesMessage && cacheModelRejection {
-		if cacheParam == "prompt_cache_breakpoint" && gjson.GetBytes(body, cacheParam).Exists() {
-			retryBody, err := sjson.DeleteBytes(body, cacheParam)
+		if cacheParam == "prompt_cache_breakpoint" {
+			retryBody, changed, err := removeOpenAIPromptCacheConfiguration(body)
 			if err != nil {
 				return nil, "", false, fmt.Errorf("delete rejected prompt_cache_breakpoint: %w", err)
+			}
+			if !changed {
+				return nil, "", false, nil
 			}
 			return retryBody, "prompt_cache_breakpoint parameter rejection", true, nil
 		}

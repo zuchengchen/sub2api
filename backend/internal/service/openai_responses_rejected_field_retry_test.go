@@ -580,36 +580,45 @@ func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRejectsAmbiguousPromptCac
 
 func TestOpenAIGatewayService_RetriesRejectedPromptCacheOptionsWithoutThem(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-sol","stream":false,"prompt_cache_options":{"mode":"explicit","ttl":"30m"},"input":"hello"}`)
-	accounts := []struct {
-		name    string
-		account func() *Account
-	}{
-		{name: "API key", account: newOpenAIRejectedFieldTestAccount},
-		{name: "OAuth", account: newOpenAIOAuthNamespaceTestAccount},
-	}
 
-	for _, tt := range accounts {
-		t.Run(tt.name, func(t *testing.T) {
-			upstream := &httpUpstreamRecorder{responses: []*http.Response{
-				newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: 'prompt_cache_options.mode'.","param":"prompt_cache_options.mode"}}`),
-				newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
-			}}
+	t.Run("API key", func(t *testing.T) {
+		upstream := &httpUpstreamRecorder{responses: []*http.Response{
+			newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: 'prompt_cache_options.mode'.","param":"prompt_cache_options.mode"}}`),
+			newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+		}}
 
-			result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
-				context.Background(),
-				newOpenAIRejectedFieldTestContext(body),
-				tt.account(),
-				body,
-			)
+		result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+			context.Background(),
+			newOpenAIRejectedFieldTestContext(body),
+			newOpenAIRejectedFieldTestAccount(),
+			body,
+		)
 
-			require.NoError(t, err)
-			require.NotNil(t, result)
-			require.Len(t, upstream.bodies, 2)
-			require.Equal(t, "explicit", gjson.GetBytes(upstream.bodies[0], "prompt_cache_options.mode").String())
-			require.Equal(t, "30m", gjson.GetBytes(upstream.bodies[0], "prompt_cache_options.ttl").String())
-			require.False(t, gjson.GetBytes(upstream.bodies[1], "prompt_cache_options").Exists())
-		})
-	}
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Len(t, upstream.bodies, 2)
+		require.Equal(t, "explicit", gjson.GetBytes(upstream.bodies[0], "prompt_cache_options.mode").String())
+		require.Equal(t, "30m", gjson.GetBytes(upstream.bodies[0], "prompt_cache_options.ttl").String())
+		require.False(t, gjson.GetBytes(upstream.bodies[1], "prompt_cache_options").Exists())
+	})
+
+	t.Run("OAuth strips before first forward", func(t *testing.T) {
+		upstream := &httpUpstreamRecorder{responses: []*http.Response{
+			newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+		}}
+
+		result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+			context.Background(),
+			newOpenAIRejectedFieldTestContext(body),
+			newOpenAIOAuthNamespaceTestAccount(),
+			body,
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Len(t, upstream.bodies, 1)
+		require.False(t, gjson.GetBytes(upstream.bodies[0], "prompt_cache_options").Exists())
+	})
 }
 
 func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyDropsOptionsAndNestedBreakpointsTogether(t *testing.T) {
@@ -624,6 +633,20 @@ func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyDropsOptionsAndNestedBrea
 	require.False(t, gjson.GetBytes(retryBody, "prompt_cache_options").Exists())
 	require.False(t, gjson.GetBytes(retryBody, "input.0.content.0.prompt_cache_breakpoint").Exists())
 	require.Equal(t, "stable", gjson.GetBytes(retryBody, "input.0.content.0.text").String())
+}
+
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRemovesNestedBreakpointWithoutParam(t *testing.T) {
+	body := []byte(`{"prompt_cache_key":"keep","input":[{"role":"developer","content":[{"type":"input_text","text":"stable","prompt_cache_breakpoint":{"mode":"explicit"}}]},{"role":"user","content":"dynamic"}]}`)
+	responseBody := []byte(`{"error":{"message":"prompt_cache_breakpoint is not supported on this model","type":"invalid_request_error"}}`)
+
+	retryBody, reason, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, responseBody)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "prompt_cache_breakpoint parameter rejection", reason)
+	require.False(t, gjson.GetBytes(retryBody, "input.0.content.0.prompt_cache_breakpoint").Exists())
+	require.Equal(t, "stable", gjson.GetBytes(retryBody, "input.0.content.0.text").String())
+	require.Equal(t, "keep", gjson.GetBytes(retryBody, "prompt_cache_key").String())
 }
 
 func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRemovesNestedPromptCacheBreakpoint(t *testing.T) {
