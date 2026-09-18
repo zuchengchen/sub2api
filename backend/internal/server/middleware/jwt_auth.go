@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -40,20 +41,20 @@ func jwtAuth(
 		// 从Authorization header中提取token
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			AbortWithError(c, 401, "UNAUTHORIZED", "Authorization header is required")
+			AbortWithError(c, 401, "UNAUTHORIZED", userfacing.AuthorizationHeaderRequired)
 			return
 		}
 
 		// 验证Bearer scheme
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			AbortWithError(c, 401, "INVALID_AUTH_HEADER", "Authorization header format must be 'Bearer {token}'")
+			AbortWithError(c, 401, "INVALID_AUTH_HEADER", userfacing.InvalidAuthHeader)
 			return
 		}
 
 		tokenString := strings.TrimSpace(parts[1])
 		if tokenString == "" {
-			AbortWithError(c, 401, "EMPTY_TOKEN", "Token cannot be empty")
+			AbortWithError(c, 401, "EMPTY_TOKEN", userfacing.EmptyToken)
 			return
 		}
 
@@ -61,10 +62,10 @@ func jwtAuth(
 		claims, err := authService.ValidateToken(tokenString)
 		if err != nil {
 			if errors.Is(err, service.ErrTokenExpired) {
-				AbortWithError(c, 401, "TOKEN_EXPIRED", "Token has expired")
+				AbortWithError(c, 401, "TOKEN_EXPIRED", userfacing.TokenExpired)
 				return
 			}
-			AbortWithError(c, 401, "INVALID_TOKEN", "Invalid token")
+			AbortWithError(c, 401, "INVALID_TOKEN", userfacing.InvalidToken)
 			return
 		}
 
@@ -72,23 +73,23 @@ func jwtAuth(
 		user, err := userService.GetByID(c.Request.Context(), claims.UserID)
 		if err != nil {
 			if errors.Is(err, service.ErrUserNotFound) {
-				AbortWithError(c, 401, "USER_NOT_FOUND", "User not found")
+				AbortWithError(c, 401, "USER_NOT_FOUND", userfacing.UserNotFound)
 			} else {
-				AbortWithError(c, 500, "INTERNAL_ERROR", "Failed to load user")
+				AbortWithError(c, 500, "INTERNAL_ERROR", userfacing.FailedToLoadUser)
 			}
 			return
 		}
 
 		// 检查用户状态
 		if !user.IsActive() {
-			AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
+			AbortWithError(c, 401, "USER_INACTIVE", userfacing.UserInactive)
 			return
 		}
 
 		// Security: Validate TokenVersion to ensure token hasn't been invalidated
 		// This check ensures tokens issued before a password change are rejected
 		if claims.TokenVersion != user.TokenVersion {
-			AbortWithError(c, 401, "TOKEN_REVOKED", "Token has been revoked (password changed)")
+			AbortWithError(c, 401, "TOKEN_REVOKED", userfacing.TokenRevoked)
 			return
 		}
 

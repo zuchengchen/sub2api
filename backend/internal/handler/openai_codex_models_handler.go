@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -26,7 +27,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	}
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok || apiKey.Group == nil {
-		h.errorResponse(c, http.StatusUnauthorized, "invalid_request_error", "API key group is required")
+		h.errorResponse(c, http.StatusUnauthorized, "invalid_request_error", userfacing.APIKeyGroupRequired)
 		return
 	}
 	if apiKey.Group.Platform != service.PlatformOpenAI && apiKey.Group.Platform != service.PlatformComposite {
@@ -50,7 +51,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			}
 			if !apiKey.Group.CodexModelsManifestConfig.FallbackToScheduler {
 				if errors.Is(pinnedErr, service.ErrNoPinnedCodexModelsAccounts) {
-					h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "No available pinned OpenAI accounts")
+					h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", userfacing.NoAvailablePinnedOpenAIAccounts)
 					return
 				}
 				h.errorResponse(c, infraerrors.Code(pinnedErr), "upstream_error", infraerrors.Message(pinnedErr))
@@ -114,7 +115,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 				h.errorResponse(c, infraerrors.Code(lastUpstreamErr), "upstream_error", infraerrors.Message(lastUpstreamErr))
 				return
 			}
-			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "No available OpenAI accounts")
+			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", userfacing.NoAvailableOpenAIAccounts)
 			return
 		}
 		// 让 ops 错误日志携带实际选中的上游账号，便于定位失效账号（#4544）。

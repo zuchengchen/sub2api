@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -22,12 +23,12 @@ import (
 func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	if apiKey.Group == nil || (apiKey.Group.Platform != service.PlatformOpenAI && apiKey.Group.Platform != service.PlatformComposite) {
@@ -81,7 +82,7 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	if h.billingCacheService == nil {
-		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing service unavailable")
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", userfacing.BillingUnavailable)
 		return
 	}
 	if err := h.billingCacheService.CheckBillingEligibility(
@@ -110,7 +111,7 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		return
 	}
 	if !acquired {
-		h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Live concurrency limit reached")
+		h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", userfacing.LiveConcurrencyReached)
 		return
 	}
 	defer userRelease()
@@ -183,7 +184,7 @@ func liveCallIdentity(
 func (h *OpenAIGatewayHandler) writeLiveCreateError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrLiveConcurrencyFull):
-		h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Live concurrency limit reached")
+		h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", userfacing.LiveConcurrencyReached)
 	case errors.Is(err, service.ErrLiveUnavailable):
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Live is unavailable")
 	default:
@@ -204,12 +205,12 @@ func (h *OpenAIGatewayHandler) writeLiveCreateError(c *gin.Context, err error) {
 func (h *OpenAIGatewayHandler) LiveSideband(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	if !liveEnabledForAPIKey(apiKey) {

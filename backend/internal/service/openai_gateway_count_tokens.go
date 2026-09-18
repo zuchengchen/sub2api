@@ -12,6 +12,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tiktoken-go/tokenizer"
@@ -51,13 +52,13 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	body []byte,
 ) error {
 	if account == nil {
-		writeOpenAIResponsesInputTokensError(c, http.StatusServiceUnavailable, "api_error", "No available OpenAI accounts")
+		writeOpenAIResponsesInputTokensError(c, http.StatusServiceUnavailable, "api_error", userfacing.NoAvailableOpenAIAccounts)
 		return fmt.Errorf("responses input_tokens: missing account")
 	}
 
 	prepared, err := prepareNativeOpenAIInputTokensCountRequest(body, account)
 	if err != nil {
-		writeOpenAIResponsesInputTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		writeOpenAIResponsesInputTokensError(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return err
 	}
 
@@ -87,7 +88,7 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
-		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed)
 		return fmt.Errorf("responses input_tokens: upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -108,7 +109,7 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 		}
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, "")
-		writeOpenAIResponsesInputTokensError(c, resp.StatusCode, "upstream_error", "Upstream request failed")
+		writeOpenAIResponsesInputTokensError(c, resp.StatusCode, "upstream_error", userfacing.UpstreamRequestFailed)
 		if upstreamMsg == "" {
 			return fmt.Errorf("responses input_tokens: upstream error: %d", resp.StatusCode)
 		}
@@ -263,7 +264,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	defaultMappedModel string,
 ) error {
 	if account == nil {
-		writeAnthropicCountTokensError(c, http.StatusServiceUnavailable, "api_error", "No available OpenAI accounts")
+		writeAnthropicCountTokensError(c, http.StatusServiceUnavailable, "api_error", userfacing.NoAvailableOpenAIAccounts)
 		return fmt.Errorf("count_tokens: missing account")
 	}
 
@@ -277,7 +278,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	if account.IsCNProvider() || account.IsOpenCodeGo() {
 		estimated, err := estimateAnthropicCountTokensLocally(body)
 		if err != nil {
-			writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+			writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 			return fmt.Errorf("count_tokens: estimate cn provider input tokens: %w", err)
 		}
 		logger.L().Debug("openai count_tokens: cn provider local estimate",
@@ -292,7 +293,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 
 	prepared, err := prepareOpenAIInputTokensCountRequest(body, account, defaultMappedModel)
 	if err != nil {
-		writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return err
 	}
 
@@ -330,7 +331,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed)
 		return fmt.Errorf("openai input_tokens upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -367,7 +368,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		}
 		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 
-		errMsg := "Upstream request failed"
+		errMsg := userfacing.UpstreamRequestFailed
 		switch resp.StatusCode {
 		case 429:
 			errMsg = "Rate limit exceeded"

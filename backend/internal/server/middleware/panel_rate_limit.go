@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -159,5 +160,5 @@ func abortPanelRateLimited(c *gin.Context, retryAfter time.Duration) {
 		seconds++
 	}
 	c.Header("Retry-After", strconv.FormatInt(seconds, 10))
-	AbortWithError(c, http.StatusTooManyRequests, "RATE_LIMITED", "Too many requests, please slow down and try again later")
+	AbortWithError(c, http.StatusTooManyRequests, "RATE_LIMITED", userfacing.TooManyRequests)
 }

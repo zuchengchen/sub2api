@@ -14,6 +14,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -81,11 +82,11 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 			imageTaskJSONError(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 	if len(body) == 0 {
-		imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 	if asyncImageRequestStreams(c.GetHeader("Content-Type"), body) {
@@ -131,7 +132,7 @@ func (h *AsyncImageHandler) checkContentModerationBeforeSubmit(c *gin.Context, a
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		imageTaskJSONError(c, http.StatusInternalServerError, "api_error", "User context not found")
+		imageTaskJSONError(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return false
 	}
 	model := ""
@@ -194,7 +195,7 @@ func (h *AsyncImageHandler) validateRequest(c *gin.Context, platform string, bod
 	if platform == service.PlatformGrok {
 		parsed := service.ParseGrokMediaRequest(c.GetHeader("Content-Type"), body)
 		if strings.TrimSpace(parsed.Model) == "" {
-			return errors.New("model is required")
+			return errors.New(userfacing.ModelRequired)
 		}
 		return nil
 	}

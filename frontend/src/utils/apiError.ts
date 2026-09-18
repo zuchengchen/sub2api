@@ -3,7 +3,11 @@
  *
  * The API client interceptor rejects with a plain object: { status, code, message, error }
  * This utility extracts the user-facing message from any error shape.
+ * Website popups prefer i18n by error code so they follow the selected locale.
+ * API clients still receive bilingual backend messages.
  */
+
+import { i18n } from '@/i18n'
 
 interface ApiErrorLike {
   status?: number
@@ -120,6 +124,21 @@ export function extractI18nErrorMessage(
  * @param fallback - Fallback message if none can be extracted (use t('common.error') or similar)
  * @param i18nMap - Optional map of error codes to i18n translated strings
  */
+function lookupCommonApiError(err: unknown): string | undefined {
+  const code = extractApiErrorCode(err)
+  if (!code || /^\d+$/.test(code)) return undefined
+  const key = `common.apiErrors.${code}`
+  const global = i18n.global as unknown as {
+    t: TranslateFn
+    te?: (key: string) => boolean
+  }
+  if (typeof global.t !== 'function') return undefined
+  if (typeof global.te === 'function' && !global.te(key)) return undefined
+  const translated = String(global.t(key, extractApiErrorMetadata(err)))
+  if (!translated || translated === key) return undefined
+  return translated
+}
+
 export function extractApiErrorMessage(
   err: unknown,
   fallback = 'Unknown error',
@@ -132,6 +151,9 @@ export function extractApiErrorMessage(
     const code = extractApiErrorCode(err)
     if (code && i18nMap[code]) return i18nMap[code]
   }
+
+  const localized = lookupCommonApiError(err)
+  if (localized) return localized
 
   // Plain object from API client interceptor (most common case)
   if (typeof err === 'object' && err !== null) {

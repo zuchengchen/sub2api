@@ -3,13 +3,13 @@ package middleware
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -35,14 +35,14 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 	return func(c *gin.Context) {
 		// ── 1. 提取 API Key ──────────────────────────────────────────
 		if rejectInvalidAuthAbuse(c, apiKeyService) {
-			AbortWithError(c, http.StatusTooManyRequests, "INVALID_AUTH_RATE_LIMITED", "Too many invalid authentication attempts; retry later")
+			AbortWithError(c, http.StatusTooManyRequests, "INVALID_AUTH_RATE_LIMITED", userfacing.InvalidAuthRateLimited)
 			return
 		}
 
 		if apiKeyHeadersTooLarge(c) {
 			recordInvalidAuthFailure(c, apiKeyService)
 			MarkIngressRejected(c, IngressRejectInvalidAPIKey)
-			AbortWithError(c, http.StatusUnauthorized, "INVALID_API_KEY", "Invalid API key")
+			AbortWithError(c, http.StatusUnauthorized, "INVALID_API_KEY", userfacing.InvalidAPIKey)
 			return
 		}
 
@@ -51,7 +51,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		if queryKey != "" || queryApiKey != "" {
 			recordInvalidAuthFailure(c, apiKeyService)
 			MarkIngressRejected(c, IngressRejectQueryAPIKeyDeprecated)
-			AbortWithError(c, 400, "api_key_in_query_deprecated", "API key in query parameter is deprecated. Please use Authorization header instead.")
+			AbortWithError(c, 400, "api_key_in_query_deprecated", userfacing.APIKeyQueryDeprecated)
 			return
 		}
 
@@ -74,7 +74,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		if len(apiKeyString) > service.MaxAPIKeyCredentialBytes {
 			recordInvalidAuthFailure(c, apiKeyService)
 			MarkIngressRejected(c, IngressRejectInvalidAPIKey)
-			AbortWithError(c, http.StatusUnauthorized, "INVALID_API_KEY", "Invalid API key")
+			AbortWithError(c, http.StatusUnauthorized, "INVALID_API_KEY", userfacing.InvalidAPIKey)
 			return
 		}
 
@@ -91,7 +91,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			} else {
 				MarkIngressRejected(c, IngressRejectAPIKeyRequired)
 			}
-			AbortWithError(c, 401, "API_KEY_REQUIRED", "API key is required in Authorization header (Bearer scheme), x-api-key header, or x-goog-api-key header")
+			AbortWithError(c, 401, "API_KEY_REQUIRED", userfacing.APIKeyRequired)
 			return
 		}
 
@@ -102,15 +102,15 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			if errors.Is(err, service.ErrAPIKeyNotFound) {
 				recordInvalidAuthFailure(c, apiKeyService)
 				MarkIngressRejected(c, IngressRejectInvalidAPIKey)
-				AbortWithError(c, 401, "INVALID_API_KEY", "Invalid API key")
+				AbortWithError(c, 401, "INVALID_API_KEY", userfacing.InvalidAPIKey)
 				return
 			}
 			if errors.Is(err, service.ErrAPIKeyAuthOverloaded) {
 				MarkIngressRejected(c, IngressRejectAPIKeyAuthOverloaded)
-				AbortWithError(c, http.StatusServiceUnavailable, "API_KEY_AUTH_OVERLOADED", "API key authentication is temporarily unavailable")
+				AbortWithError(c, http.StatusServiceUnavailable, "API_KEY_AUTH_OVERLOADED", userfacing.APIKeyAuthOverloaded)
 				return
 			}
-			AbortWithError(c, 500, "INTERNAL_ERROR", "Failed to validate API key")
+			AbortWithError(c, 500, "INTERNAL_ERROR", userfacing.FailedToValidateAPIKey)
 			return
 		}
 
@@ -125,7 +125,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			apiKey.Status != service.StatusAPIKeyExpired &&
 			apiKey.Status != service.StatusAPIKeyQuotaExhausted {
 			MarkIngressRejected(c, IngressRejectAPIKeyDisabled)
-			AbortWithError(c, 401, "API_KEY_DISABLED", "API key is disabled")
+			AbortWithError(c, 401, "API_KEY_DISABLED", userfacing.APIKeyDisabled)
 			return
 		}
 
@@ -140,21 +140,21 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 				}
 				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonIPRestriction)
 				MarkIngressRejected(c, IngressRejectIPRestricted)
-				AbortWithError(c, 403, "ACCESS_DENIED", fmt.Sprintf("Access denied. Your IP is %s", clientIP))
+				AbortWithError(c, 403, "ACCESS_DENIED", userfacing.AccessDeniedIP(clientIP))
 				return
 			}
 		}
 
 		// 检查关联的用户
 		if apiKey.User == nil {
-			AbortWithError(c, 401, "USER_NOT_FOUND", "User associated with API key not found")
+			AbortWithError(c, 401, "USER_NOT_FOUND", userfacing.APIKeyUserNotFound)
 			return
 		}
 
 		// 检查用户状态
 		if !apiKey.User.IsActive() {
 			MarkIngressRejected(c, IngressRejectUserInactive)
-			AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
+			AbortWithError(c, 401, "USER_INACTIVE", userfacing.UserInactive)
 			return
 		}
 		if abortIfAPIKeyGroupUnavailable(c, apiKey) {
@@ -202,7 +202,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			)
 			if subErr != nil {
 				if !skipBilling {
-					AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", "No active subscription found for this group")
+					AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", userfacing.NoActiveSubscription)
 					return
 				}
 				// skipBilling: 订阅不存在也放行，handler 会返回可用的数据
@@ -240,7 +240,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 				if needsMaintenance {
 					refreshed, maintenanceErr := subscriptionService.EnsureWindowMaintenance(c.Request.Context(), subscription)
 					if maintenanceErr != nil {
-						AbortWithError(c, 500, "SUBSCRIPTION_MAINTENANCE_FAILED", "Failed to maintain subscription usage windows")
+						AbortWithError(c, 500, "SUBSCRIPTION_MAINTENANCE_FAILED", userfacing.SubscriptionMaintenanceFailed)
 						return
 					}
 					subscription = refreshed
@@ -261,7 +261,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			} else {
 				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查
 				if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
-					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", userfacing.InsufficientAccountBalance)
 					return
 				}
 			}

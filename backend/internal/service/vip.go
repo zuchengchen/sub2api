@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 )
 
 // VIP 用户策略常量。
@@ -26,11 +27,12 @@ const (
 	// LunaMinRateMultiplier 是 gpt-5.6-luna 家族在分组/用户倍率低于该值时的计费保底。
 	// 先抬到该保底，再叠加 VIP 分组减免：分组 0.1 时普通用户按 0.2、SVIP 按 0.15。
 	LunaMinRateMultiplier = 0.2
-	// VipExclusiveModelAccessMessage 是网关拒绝普通用户调用 VIP 专属模型时的稳定提示。
-	VipExclusiveModelAccessMessage = "The gpt-5.6-luna model is available to VIP users only"
 	// vipSweepTimeout 启动扫描的超时上限。
 	vipSweepTimeout = 30 * time.Second
 )
+
+// VipExclusiveModelAccessMessage 是网关拒绝普通用户调用 VIP 专属模型时的稳定提示。
+var VipExclusiveModelAccessMessage = userfacing.VipExclusiveModel
 
 // VipDiscountedGroup 判断分组名是否享受 VIP 倍率减免。
 func VipDiscountedGroup(groupName string) bool {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"image"
 	"image/color"
 	stddraw "image/draw"
@@ -29,8 +30,8 @@ import (
 )
 
 var (
-	ErrUserNotFound             = infraerrors.NotFound("USER_NOT_FOUND", "user not found")
-	ErrPasswordIncorrect        = infraerrors.BadRequest("PASSWORD_INCORRECT", "current password is incorrect")
+	ErrUserNotFound             = infraerrors.NotFound("USER_NOT_FOUND", userfacing.UserNotFound)
+	ErrPasswordIncorrect        = infraerrors.BadRequest("PASSWORD_INCORRECT", userfacing.PasswordIncorrect)
 	ErrBalanceNegative          = infraerrors.BadRequest("BALANCE_NEGATIVE", "balance cannot be negative")
 	ErrInsufficientPerms        = infraerrors.Forbidden("INSUFFICIENT_PERMISSIONS", "insufficient permissions")
 	ErrNotifyCodeUserRateLimit  = infraerrors.TooManyRequests("NOTIFY_CODE_USER_RATE_LIMIT", "too many verification codes requested, please try again later")
