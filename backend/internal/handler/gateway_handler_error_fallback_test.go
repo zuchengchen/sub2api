@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -33,7 +34,7 @@ func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testi
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "upstream_error", errorObj["type"])
-	assert.Equal(t, "Upstream request failed", errorObj["message"])
+	assert.Equal(t, userfacing.UpstreamRequestFailed, errorObj["message"])
 }
 
 // Writer 已写后 ensureForwardErrorResponse 必须把错误以 SSE 形式追加，

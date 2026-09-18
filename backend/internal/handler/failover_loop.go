@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"go.uber.org/zap"
 )
@@ -59,7 +60,7 @@ const (
 
 // profitVetoExhaustedMessage 是利润否决次数耗尽时返回给客户端的文案。
 // 语义上等同于「无可用账号」：候选账号都不满足分组的利润约束。
-const profitVetoExhaustedMessage = "No available accounts: all candidates rejected by group profit control"
+var profitVetoExhaustedMessage = userfacing.NoAvailableAccountsDetail("all candidates rejected by group profit control")
 
 func sameAccountRetryDelayFor(failoverErr *service.UpstreamFailoverError, retryCount int) time.Duration {
 	if failoverErr == nil {

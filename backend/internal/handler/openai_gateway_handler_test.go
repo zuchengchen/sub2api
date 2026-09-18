@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -297,7 +298,7 @@ func TestOpenAIEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testin
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "upstream_error", errorObj["type"])
-	assert.Equal(t, "Upstream request failed", errorObj["message"])
+	assert.Equal(t, userfacing.UpstreamRequestFailed, errorObj["message"])
 }
 
 // Writer 已写后 ensureForwardErrorResponse 必须仍然把错误信息以 SSE
@@ -428,7 +429,7 @@ func TestOpenAIEnsureForwardErrorResponse_ImageJSONKeepaliveWritesSingleJSONFall
 	require.NoError(t, decoder.Decode(&payload))
 	require.ErrorIs(t, decoder.Decode(&payload), io.EOF)
 	require.Equal(t, "upstream_error", gjson.Get(w.Body.String(), "error.type").String())
-	require.Equal(t, "Upstream request failed", gjson.Get(w.Body.String(), "error.message").String())
+	require.Equal(t, userfacing.UpstreamRequestFailed, gjson.Get(w.Body.String(), "error.message").String())
 }
 
 func TestOpenAIEnsureForwardErrorResponse_ImageJSONKeepalivePreservesCompletedJSON(t *testing.T) {
@@ -547,7 +548,7 @@ func TestOpenAIRecoverResponsesPanic_WritesFallbackResponse(t *testing.T) {
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "upstream_error", errorObj["type"])
-	assert.Equal(t, "Upstream request failed", errorObj["message"])
+	assert.Equal(t, userfacing.UpstreamRequestFailed, errorObj["message"])
 }
 
 func TestOpenAIRecoverResponsesPanic_NoPanicNoWrite(t *testing.T) {

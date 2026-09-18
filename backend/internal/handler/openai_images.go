@@ -11,6 +11,7 @@ import (
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -28,13 +29,13 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -54,11 +55,11 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 	if len(body) == 0 {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
@@ -81,7 +82,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		routingModel = resolvedModel
 	}
 	if !compositeTargetPlatformAllowed(c, apiKey, requestModel, service.PlatformOpenAI) {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByOpenAICompatibleComposite)
 		return
 	}
 
@@ -183,7 +184,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
-					message = "No available compatible accounts"
+					message = userfacing.NoAvailableCompatibleAccounts
 				}
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 				return
@@ -202,7 +203,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			}
 			message := cls.Message
 			if !cls.ModelNotFound {
-				message = "No available compatible accounts"
+				message = userfacing.NoAvailableCompatibleAccounts
 			}
 			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 			return

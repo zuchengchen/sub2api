@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -27,13 +28,13 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.chatCompletionsErrorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.chatCompletionsErrorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.chatCompletionsErrorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.chatCompletionsErrorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -51,12 +52,12 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 			h.chatCompletionsErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 
 	if len(body) == 0 {
-		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
@@ -65,21 +66,21 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	// Validate JSON
 	if !gjson.ValidBytes(body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
-		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 
 	// Extract model and stream
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || modelResult.String() == "" {
-		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	reqModel := modelResult.String()
 	bindRequestedReasoningEffort(c, body, reqModel)
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	if !compositeTargetPlatformResolved(c, apiKey, reqModel) {
-		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by composite groups")
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByComposite)
 		return
 	}
 	reqStream, ok := parseOpenAICompatibleStream(body)
@@ -88,7 +89,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 	if service.IsGPTImageGenerationModel(reqModel) {
-		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "This model is not supported on the Chat Completions endpoint")
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedOnChatCompletions)
 		return
 	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
@@ -182,7 +183,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
-					message = "No available accounts: " + err.Error()
+					message = userfacing.NoAvailableAccountsDetail(err.Error())
 				}
 				h.chatCompletionsErrorResponse(c, cls.Status, cls.ErrType, message)
 				return
@@ -211,7 +212,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		if !selection.Acquired {
 			if selection.WaitPlan == nil {
 				markOpsRoutingCapacityLimited(c)
-				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", userfacing.NoAvailableAccounts)
 				return
 			}
 			accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(

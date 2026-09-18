@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -27,13 +28,13 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.responsesErrorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.responsesErrorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.responsesErrorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.responsesErrorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -51,12 +52,12 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			h.responsesErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 
 	if len(body) == 0 {
-		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
@@ -65,21 +66,21 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 	// Validate JSON
 	if !gjson.ValidBytes(body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
-		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 
 	// Extract model and stream using gjson (like OpenAI handler)
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || modelResult.String() == "" {
-		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	reqModel := modelResult.String()
 	bindRequestedReasoningEffort(c, body, reqModel)
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	if !compositeTargetPlatformResolved(c, apiKey, reqModel) {
-		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by composite groups")
+		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByComposite)
 		return
 	}
 	reqStream, ok := parseOpenAICompatibleStream(body)
@@ -190,7 +191,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
-					message = "No available accounts: " + err.Error()
+					message = userfacing.NoAvailableAccountsDetail(err.Error())
 				}
 				h.responsesErrorResponse(c, cls.Status, cls.ErrType, message)
 				return
@@ -219,7 +220,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		if !selection.Acquired {
 			if selection.WaitPlan == nil {
 				markOpsRoutingCapacityLimited(c)
-				h.responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+				h.responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", userfacing.NoAvailableAccounts)
 				return
 			}
 			accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(

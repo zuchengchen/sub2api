@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -106,13 +107,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// 从context获取apiKey和user（ApiKeyAuth中间件已设置）
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -131,12 +132,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 
 	if len(body) == 0 {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
@@ -146,7 +147,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	parsedReq, err := service.ParseGatewayRequest(bodyRef, domain.PlatformAnthropic)
 	if err != nil {
 		logRequestBodyParseFailure(reqLog, body, err)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 	body = parsedReq.Body.Bytes()
@@ -198,11 +199,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// 验证 model 必填
 	if reqModel == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	if !compositeTargetPlatformResolved(c, apiKey, reqModel) {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by composite groups")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByComposite)
 		return
 	}
 	if !requireUserModelAccess(c, apiKey, h.errorResponse, reqModel, channelMapping.MappedModel) {
@@ -321,7 +322,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		for {
 			attemptParsedReq, err := parsedReq.CloneForBody(body)
 			if err != nil {
-				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 				return
 			}
 
@@ -349,7 +350,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					)
 					message := cls.Message
 					if !cls.ModelNotFound {
-						message = "No available accounts: " + err.Error()
+						message = userfacing.NoAvailableAccountsDetail(err.Error())
 					}
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 					return
@@ -411,7 +412,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.String("model", reqModel),
 						zap.String("platform", platform),
 					)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", userfacing.NoAvailableAccounts, streamStarted)
 					return
 				}
 				accountWaitCounted := false
@@ -552,13 +553,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if channelMapping.Mapped {
 				attemptParsedReq.Model = channelMapping.MappedModel
 				if err := attemptParsedReq.ReplaceBody(h.gatewayService.ReplaceModelInBody(attemptParsedReq.Body.Bytes(), channelMapping.MappedModel)); err != nil {
-					h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+					h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 					return
 				}
 			}
 			// Bedrock CC 兼容：清理 body 专有字段 + 过滤 anthropic-beta header，适用于所有转发路径
 			if err := attemptParsedReq.ReplaceBody(h.gatewayService.ApplyBedrockCCCompat(c, attemptParsedReq.Body.Bytes(), attemptParsedReq.Model, account, apiKey.GroupID)); err != nil {
-				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 				return
 			}
 			// 转发请求 - 根据账号平台分流
@@ -822,7 +823,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 func (h *GatewayHandler) CodexModels(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok || apiKey == nil || apiKey.Group == nil {
-		h.errorResponse(c, http.StatusUnauthorized, "invalid_request_error", "API key group is required")
+		h.errorResponse(c, http.StatusUnauthorized, "invalid_request_error", userfacing.APIKeyGroupRequired)
 		return
 	}
 
@@ -1128,13 +1129,13 @@ func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service
 func (h *GatewayHandler) Usage(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
@@ -1528,7 +1529,7 @@ func (h *GatewayHandler) mapUpstreamError(statusCode int) (int, string, string) 
 	case 500, 502, 503, 504:
 		return http.StatusBadGateway, "upstream_error", "Upstream service temporarily unavailable"
 	default:
-		return http.StatusBadGateway, "upstream_error", "Upstream request failed"
+		return http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed
 	}
 }
 
@@ -1587,7 +1588,7 @@ func (h *GatewayHandler) ensureForwardErrorResponse(c *gin.Context, streamStarte
 	if c.Writer.Written() {
 		streamStarted = true
 	}
-	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed", streamStarted)
+	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed, streamStarted)
 	return true
 }
 
@@ -1683,13 +1684,13 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	// 从context获取apiKey和user（ApiKeyAuth中间件已设置）
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	_, ok = middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -1707,12 +1708,12 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 
 	if len(body) == 0 {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
@@ -1722,7 +1723,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	parsedReq, err := service.ParseGatewayRequest(bodyRef, domain.PlatformAnthropic)
 	if err != nil {
 		logRequestBodyParseFailure(reqLog, body, err)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 	body = parsedReq.Body.Bytes()
@@ -1735,11 +1736,11 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 
 	// 验证 model 必填
 	if parsedReq.Model == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	if !compositeTargetPlatformResolved(c, apiKey, parsedReq.Model) {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by composite groups")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByComposite)
 		return
 	}
 	if !requireUserModelAccess(c, apiKey, h.errorResponse, parsedReq.Model) {
@@ -2044,7 +2045,7 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 	if errors.Is(err, service.ErrBillingServiceUnavailable) {
 		msg := pkgerrors.Message(err)
 		if msg == "" {
-			msg = "Billing service temporarily unavailable. Please retry later."
+			msg = userfacing.BillingUnavailable
 		}
 		return http.StatusServiceUnavailable, "billing_service_error", msg, 0
 	}
@@ -2081,7 +2082,7 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 			zap.String("component", "handler.gateway.billing"),
 			zap.Error(err),
 		).Warn("gateway.billing_error_missing_message")
-		msg = "Billing error"
+		msg = userfacing.BillingError
 	}
 	return http.StatusForbidden, "billing_error", msg, 0
 }

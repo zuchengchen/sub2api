@@ -21,6 +21,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/cespare/xxhash/v2"
@@ -421,7 +422,7 @@ var (
 var ErrNoAvailableAccounts = errors.New("no available accounts")
 
 // ErrClaudeCodeOnly 表示分组仅允许 Claude Code 客户端访问
-var ErrClaudeCodeOnly = errors.New("this group only allows Claude Code clients")
+var ErrClaudeCodeOnly = errors.New(userfacing.ClaudeCodeOnly)
 
 // allowedHeaders 白名单headers（参考CRS项目）
 var allowedHeaders = map[string]bool{

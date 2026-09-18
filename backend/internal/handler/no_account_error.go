@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -51,7 +52,7 @@ func classifySelectionFailureError(err error, fallback noAccountErrorClassificat
 		return noAccountErrorClassification{
 			Status:        http.StatusNotFound,
 			ErrType:       "model_not_found",
-			Message:       fmt.Sprintf("Model %q is not supported by any configured account in this group", model),
+			Message:       userfacing.ModelNotSupportedByGroup(model),
 			ModelNotFound: true,
 		}
 	}
@@ -137,7 +138,7 @@ func classifyNoAccountError(
 		return noAccountErrorClassification{
 			Status:        http.StatusNotFound,
 			ErrType:       "model_not_found",
-			Message:       fmt.Sprintf("Model %q is not supported by any configured account in this group", displayModel),
+			Message:       userfacing.ModelNotSupportedByGroup(displayModel),
 			ModelNotFound: true,
 		}
 	}

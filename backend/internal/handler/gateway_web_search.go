@@ -12,6 +12,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -144,7 +145,7 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 			if attempt == 0 {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
 					"type":    "scheduling_error",
-					"message": "No available accounts",
+					"message": userfacing.NoAvailableAccounts,
 				}})
 				return
 			}
@@ -194,7 +195,7 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 	if account == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
 			"type":    "scheduling_error",
-			"message": "No available accounts",
+			"message": userfacing.NoAvailableAccounts,
 		}})
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -27,7 +28,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok || apiKey.Group == nil {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 	if apiKey.Group.Platform != service.PlatformOpenAI && apiKey.Group.Platform != service.PlatformComposite {
@@ -36,7 +37,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -56,22 +57,22 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 	if len(body) == 0 {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 	if !gjson.ValidBytes(body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || strings.TrimSpace(modelResult.String()) == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	requestedModel := strings.TrimSpace(modelResult.String())
@@ -165,7 +166,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, false)
 			} else {
-				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				h.errorResponse(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed)
 			}
 			return
 		}
@@ -215,7 +216,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		if !errors.As(err, &failoverErr) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestedModel, false, result), false, nil, err)
 			if c.Writer.Size() == writerSizeBeforeForward {
-				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				h.errorResponse(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed)
 			}
 			reqLog.Warn("openai_alpha_search.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 			return

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -21,12 +22,12 @@ import (
 func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -46,22 +47,22 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 	if len(body) == 0 || !gjson.ValidBytes(body) {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || strings.TrimSpace(modelResult.String()) == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 	reqModel := strings.TrimSpace(modelResult.String())
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	if !openAICompatibleTextTargetAllowed(c, apiKey, reqModel) {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByOpenAICompatibleComposite)
 		return
 	}
 	if !requireUserModelAccess(c, apiKey, h.errorResponse, reqModel) {
@@ -148,11 +149,11 @@ func (h *OpenAIGatewayHandler) GrokCountTokens(c *gin.Context) {
 			h.anthropicErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 	if len(body) == 0 {
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
@@ -160,18 +161,18 @@ func (h *OpenAIGatewayHandler) GrokCountTokens(c *gin.Context) {
 	parsedReq, err := service.ParseGatewayRequest(bodyRef, domain.PlatformAnthropic)
 	if err != nil {
 		logRequestBodyParseFailure(requestLogger(c, "handler.openai_gateway.grok_count_tokens"), body, err)
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 	if parsedReq.Model == "" {
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 
 	estimated, err := service.EstimateGrokCountTokens(parsedReq.Body.Bytes())
 	if err != nil {
 		requestLogger(c, "handler.openai_gateway.grok_count_tokens").Warn("grok_count_tokens.local_estimate_failed", zap.Error(err))
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 
@@ -185,13 +186,13 @@ func (h *OpenAIGatewayHandler) GrokCountTokens(c *gin.Context) {
 func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
-		h.anthropicErrorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		h.anthropicErrorResponse(c, http.StatusUnauthorized, "authentication_error", userfacing.InvalidAPIKey)
 		return
 	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
-		h.anthropicErrorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		h.anthropicErrorResponse(c, http.StatusInternalServerError, "api_error", userfacing.UserContextNotFound)
 		return
 	}
 	reqLog := requestLogger(
@@ -218,11 +219,11 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 			h.anthropicErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToReadBody)
 		return
 	}
 	if len(body) == 0 {
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
 
@@ -230,12 +231,12 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	parsedReq, err := service.ParseGatewayRequest(bodyRef, domain.PlatformAnthropic)
 	if err != nil {
 		logRequestBodyParseFailure(reqLog, body, err)
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.FailedToParseBody)
 		return
 	}
 	body = parsedReq.Body.Bytes()
 	if parsedReq.Model == "" {
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelRequired)
 		return
 	}
 
@@ -244,7 +245,7 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	// composite+grok 在路由层已分流到 GrokCountTokens，这里可达的目标平台是
 	// openai 与 CN 供应商；CN 账号由 ForwardCountTokensAsAnthropic 本地估算。
 	if !openAICompatibleTextTargetAllowed(c, apiKey, reqModel) {
-		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.ModelNotSupportedByOpenAICompatibleComposite)
 		return
 	}
 	if !requireUserModelAccess(c, apiKey, h.anthropicErrorResponse, reqModel) {
