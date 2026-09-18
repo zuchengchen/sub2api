@@ -330,6 +330,23 @@ func TestOpenAIGatewayService_Forward_NormalizesMaxTokensAndFiltersPromptCacheOp
 		require.False(t, gjson.GetBytes(out, "input.0.content.0.prompt_cache_breakpoint").Exists())
 	})
 
+	t.Run("Codex OAuth 剥掉合法 prompt cache 字段", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5.6-luna","stream":false,"prompt_cache_key":"keep","prompt_cache_options":{"mode":"implicit","ttl":"30m"},"input":[{"role":"developer","content":[{"type":"input_text","text":"stable","prompt_cache_breakpoint":{"mode":"explicit"}}]}]}`)
+		out, changed, err := filterOpenAIResponsesPromptCacheConfiguration(&Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"access_token":       "oauth-token",
+				"chatgpt_account_id": "chatgpt-acc",
+			},
+		}, "gpt-5.6-luna", body)
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.False(t, gjson.GetBytes(out, "prompt_cache_options").Exists())
+		require.False(t, gjson.GetBytes(out, "input.0.content.0.prompt_cache_breakpoint").Exists())
+		require.Equal(t, "keep", gjson.GetBytes(out, "prompt_cache_key").String())
+	})
+
 	t.Run("同时存在时保留 max_output_tokens 丢弃 max_tokens", func(t *testing.T) {
 		out := runForward(t, []byte(`{"model":"gpt-5.4","stream":false,"max_tokens":256,"max_output_tokens":512,"input":[{"type":"message","content":"hi"}]}`))
 		require.Equal(t, int64(512), gjson.GetBytes(out, "max_output_tokens").Int())

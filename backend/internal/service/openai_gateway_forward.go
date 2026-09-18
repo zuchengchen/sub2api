@@ -44,6 +44,15 @@ func filterOpenAIResponsesPromptCacheConfiguration(account *Account, model strin
 	if !strings.Contains(string(body), "prompt_cache_") {
 		return body, false, nil
 	}
+	// Codex internal APIs reject Platform prompt-cache options and breakpoints.
+	// Keep prompt_cache_key; strip the rest before the request leaves.
+	if account != nil && account.UsesOpenAICodexProtocol() {
+		filtered, changed, err := removeOpenAIPromptCacheConfiguration(body)
+		if err != nil {
+			return nil, false, fmt.Errorf("filter prompt cache configuration: %w", err)
+		}
+		return filtered, changed, nil
+	}
 	options := gjson.GetBytes(body, "prompt_cache_options")
 	modelSupportsPromptCache := account != nil && account.IsOpenAI() && isOpenAIGPT56OrLaterModel(model)
 	if modelSupportsPromptCache && (!options.Exists() || shouldForwardOpenAIResponsesPromptCacheOptions(account, model, options)) {

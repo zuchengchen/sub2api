@@ -1849,6 +1849,41 @@ func TestApplyCodexOAuthTransform_StripsPromptCacheRetention(t *testing.T) {
 		"prompt_cache_retention must be stripped before forwarding to Codex upstream")
 }
 
+func TestApplyCodexOAuthTransform_StripsPromptCacheOptionsAndBreakpoints(t *testing.T) {
+	reqBody := map[string]any{
+		"model":            "gpt-5.6-luna",
+		"prompt_cache_key": "keep-key",
+		"prompt_cache_options": map[string]any{
+			"mode": "implicit",
+			"ttl":  "30m",
+		},
+		"input": []any{
+			map[string]any{
+				"role": "developer",
+				"content": []any{
+					map[string]any{
+						"type":                    "input_text",
+						"text":                    "stable",
+						"prompt_cache_breakpoint": map[string]any{"mode": "explicit"},
+					},
+				},
+			},
+			map[string]any{"role": "user", "content": "dynamic"},
+		},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false, false)
+
+	require.True(t, result.Modified)
+	require.NotContains(t, reqBody, "prompt_cache_options")
+	require.Equal(t, "keep-key", reqBody["prompt_cache_key"])
+	input := reqBody["input"].([]any)
+	developer := input[0].(map[string]any)
+	part := developer["content"].([]any)[0].(map[string]any)
+	require.Equal(t, "stable", part["text"])
+	require.NotContains(t, part, "prompt_cache_breakpoint")
+}
+
 func TestApplyCodexOAuthTransform_StripsChatGPTInternalUnsupportedFields(t *testing.T) {
 	reqBody := map[string]any{
 		"model":                  "gpt-5.4",

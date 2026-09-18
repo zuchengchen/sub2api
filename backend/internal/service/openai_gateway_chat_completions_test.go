@@ -419,7 +419,7 @@ func TestForwardAsChatCompletions_OAuthGPT56AddsReusablePrefixBreakpoint(t *test
 	require.False(t, gjson.GetBytes(firstUpstreamBody, "prompt_cache_options").Exists())
 	require.Equal(t, "developer", gjson.GetBytes(firstUpstreamBody, "input.0.role").String())
 	require.Equal(t, systemPrompt, gjson.GetBytes(firstUpstreamBody, "input.0.content.0.text").String())
-	require.Equal(t, "explicit", gjson.GetBytes(firstUpstreamBody, "input.0.content.0.prompt_cache_breakpoint.mode").String())
+	require.False(t, gjson.GetBytes(firstUpstreamBody, "input.0.content.0.prompt_cache_breakpoint").Exists())
 	require.Equal(t, "user", gjson.GetBytes(firstUpstreamBody, "input.1.role").String())
 	require.Equal(t, 1, strings.Count(string(firstUpstreamBody), systemPrompt))
 	require.NotEmpty(t, gjson.GetBytes(firstUpstreamBody, "prompt_cache_key").String())
@@ -439,7 +439,7 @@ func TestForwardAsChatCompletions_OAuthGPT56KeepsSystemAndInstructionsOrderWitho
 	require.Equal(t, "", gjson.GetBytes(upstreamBody, "instructions").String())
 	require.Equal(t, "developer", gjson.GetBytes(upstreamBody, "input.0.role").String())
 	require.Equal(t, systemPrompt+"\n\n"+instructions, gjson.GetBytes(upstreamBody, "input.0.content.0.text").String())
-	require.Equal(t, "explicit", gjson.GetBytes(upstreamBody, "input.0.content.0.prompt_cache_breakpoint.mode").String())
+	require.False(t, gjson.GetBytes(upstreamBody, "input.0.content.0.prompt_cache_breakpoint").Exists())
 	require.Equal(t, 1, strings.Count(string(upstreamBody), systemPrompt))
 	require.Equal(t, 1, strings.Count(string(upstreamBody), instructions))
 }
@@ -483,7 +483,7 @@ func TestForwardAsChatCompletions_OAuthGPT56RetriesWithoutRejectedPromptCacheFie
 	require.Nil(t, result)
 	require.Len(t, upstream.bodies, 1)
 	require.False(t, gjson.GetBytes(upstream.bodies[0], "prompt_cache_options").Exists())
-	require.Equal(t, "explicit", gjson.GetBytes(upstream.bodies[0], "input.0.content.0.prompt_cache_breakpoint.mode").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "input.0.content.0.prompt_cache_breakpoint").Exists())
 	require.Equal(t, "shared instructions", gjson.GetBytes(upstream.bodies[0], "input.0.content.0.text").String())
 }
 
