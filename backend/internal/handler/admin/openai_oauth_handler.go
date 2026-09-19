@@ -488,7 +488,6 @@ func (h *OpenAIOAuthHandler) QueryQuota(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	service.NotifyOpenAIAutoResetCredit(accountID)
 	response.Success(c, usage)
 }
 
@@ -519,8 +518,6 @@ func (h *OpenAIOAuthHandler) RefreshQuota(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "openai quota query returned an empty result")
 		return
 	}
-	service.NotifyOpenAIAutoResetCredit(accountID)
-
 	refreshResponse := openAIQuotaRefreshResponse{OpenAIQuotaUsage: *usage}
 	// A failed snapshot write leaves the previous cache intact — report it as a
 	// partial success instead of discarding the usage payload we just fetched,

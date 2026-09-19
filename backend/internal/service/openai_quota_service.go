@@ -87,7 +87,6 @@ type OpenAIQuotaUsage struct {
 	AdditionalRateLimits  []OpenAIAdditionalRateLimit  `json:"additional_rate_limits,omitempty"`
 	RateLimitResetCredits *OpenAIRateLimitResetCredits `json:"rate_limit_reset_credits,omitempty"`
 	FetchedAt             int64                        `json:"fetched_at"`
-	autoResetCandidates   []openAIAutoResetCreditCandidate
 }
 
 // OpenAIQuotaResetCredit captures the redeemed credit metadata returned by the
@@ -181,10 +180,6 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 				continue
 			}
 			status := resp.StatusCode
-			if isOpenAIAutoResetContext(ctx) {
-				slog.Warn("openai_quota_query_failed", "account_id", accountID, "status", status, "source", "auto_reset")
-				return nil, infraerrors.Newf(mapUpstreamStatus(status), "OPENAI_QUOTA_UPSTREAM_ERROR", "upstream returned %d", status)
-			}
 			body := truncate(s.redactQuotaErrorBody(ctx, accountID, resp.String()), 240)
 			slog.Warn("openai_quota_query_failed", "account_id", accountID, "status", status, "body", body)
 			return nil, infraerrors.Newf(mapUpstreamStatus(status), "OPENAI_QUOTA_UPSTREAM_ERROR", "upstream returned %d: %s", status, body)
@@ -195,7 +190,6 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 	payload.FetchedAt = time.Now().Unix()
 	details := s.queryResetCreditDetails(callCtx, client, accessToken, chatGPTAccountID, fedRAMP, accountID)
 	if details != nil {
-		payload.autoResetCandidates = details.AutoResetCandidates
 		hasDetailCount := details.AvailableCount != nil
 		if payload.RateLimitResetCredits == nil {
 			payload.RateLimitResetCredits = &OpenAIRateLimitResetCredits{}
@@ -237,7 +231,7 @@ func (s *OpenAIQuotaService) CachePostResetSnapshot(ctx context.Context, account
 		ctx,
 		accountID,
 		usage.RateLimitResetCredits,
-		buildOpenAIAutoResetUsageUpdates(usage, time.Now()),
+		buildOpenAIQuotaUsageWindowUpdates(usage, time.Now()),
 	)
 }
 
@@ -261,6 +255,34 @@ func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, acco
 		).WithCause(err)
 	}
 	return nil
+}
+
+func buildOpenAIQuotaUsageWindowUpdates(usage *OpenAIQuotaUsage, now time.Time) map[string]any {
+	if usage == nil || usage.RateLimit == nil {
+		return nil
+	}
+	rateLimit := usage.RateLimit
+	snapshot := &OpenAICodexUsageSnapshot{UpdatedAt: now.UTC().Format(time.RFC3339)}
+	applyWindow := func(window *OpenAIRateLimitWindow, primary bool) {
+		if window == nil {
+			return
+		}
+		used := window.UsedPercent
+		resetAfter := int(window.ResetAfterSeconds)
+		windowMinutes := int(window.LimitWindowSeconds / 60)
+		if primary {
+			snapshot.PrimaryUsedPercent = &used
+			snapshot.PrimaryResetAfterSeconds = &resetAfter
+			snapshot.PrimaryWindowMinutes = &windowMinutes
+		} else {
+			snapshot.SecondaryUsedPercent = &used
+			snapshot.SecondaryResetAfterSeconds = &resetAfter
+			snapshot.SecondaryWindowMinutes = &windowMinutes
+		}
+	}
+	applyWindow(rateLimit.PrimaryWindow, true)
+	applyWindow(rateLimit.SecondaryWindow, false)
+	return buildCodexUsageExtraUpdates(snapshot, now)
 }
 
 func (s *OpenAIQuotaService) queryResetCreditDetails(ctx context.Context, client *req.Client, accessToken, chatGPTAccountID string, fedRAMP bool, accountID int64) *openAIRateLimitResetCreditDetails {

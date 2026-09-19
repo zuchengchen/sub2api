@@ -721,9 +721,6 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	// 单影子场景直接变成无可用账号(外审第8轮 P1)。整段跳过;影子的 codex_* 仅由 account_usage 的
 	// QueryUsage→persistOpenAICodexProbeSnapshot 维护,枯竭由调度守卫处理。
 	if account.IsShadow() {
-		if account.ParentAccountID != nil {
-			notifyOpenAIAutoReset(*account.ParentAccountID)
-		}
 		return
 	}
 	// 真实 Ollama Cloud 用量账号（credentials base_url 指向 ollama.com）的 429 由
@@ -745,7 +742,6 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	if account.Platform == PlatformOpenAI {
 		persistOpenAI429PlanType(ctx, s.accountRepo, account, responseBody)
 		s.persistOpenAICodexSnapshot(ctx, account, headers)
-		notifyOpenAIAutoReset(account.ID)
 		if resetAt := s.calculateOpenAI429ResetTime(headers); resetAt != nil {
 			s.notifyAccountSchedulingBlocked(account, *resetAt, "429")
 			if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
@@ -1291,7 +1287,6 @@ func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, accou
 		slog.Warn("openai_codex_snapshot_persist_failed", "account_id", account.ID, "error", err)
 		return
 	}
-	notifyOpenAIAutoReset(account.ID)
 }
 
 // parseOpenAIRateLimitResetTime 解析 OpenAI 兼容格式的 429 响应，返回重置时间的 Unix 时间戳

@@ -510,8 +510,6 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 			s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 		}
-	} else if account.ParentAccountID != nil {
-		notifyOpenAIAutoReset(*account.ParentAccountID)
 	}
 
 	if usage == nil {
