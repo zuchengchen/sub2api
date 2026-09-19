@@ -22,7 +22,8 @@ const (
 	VipRateDiscount = 0.05
 	// VipDiscountedGroupName 享受倍率减免的分组名（大小写不敏感）。
 	VipDiscountedGroupName = "gpt-pro"
-	// VipExclusiveModelName 仅允许 VIP 用户调用的模型家族基名。
+	// VipExclusiveModelName 是 gpt-5.6-luna 家族基名。访问已对全部用户开放，
+	// 该常量仍作为 Luna 保底计费的家族标识。
 	VipExclusiveModelName = "gpt-5.6-luna"
 	// LunaMinRateMultiplier 是 gpt-5.6-luna 家族在分组/用户倍率低于该值时的计费保底。
 	// 先抬到该保底，再叠加 VIP 分组减免：分组 0.1 时普通用户按 0.2、SVIP 按 0.15。
@@ -31,7 +32,8 @@ const (
 	vipSweepTimeout = 30 * time.Second
 )
 
-// VipExclusiveModelAccessMessage 是网关拒绝普通用户调用 VIP 专属模型时的稳定提示。
+// VipExclusiveModelAccessMessage 是网关拒绝用户调用受限模型时的稳定提示。
+// Luna 已对全部用户开放；该文案仅在未来的用户级模型策略拒绝时使用。
 var VipExclusiveModelAccessMessage = userfacing.VipExclusiveModel
 
 // VipDiscountedGroup 判断分组名是否享受 VIP 倍率减免。
@@ -49,8 +51,8 @@ func ApplyVipRateDiscount(multiplier float64) float64 {
 	return math.Round(discounted*1e6) / 1e6
 }
 
-// IsVIPOnlyModel 判断模型是否属于 VIP 专属家族。日期版等带连字符后缀的
-// Luna 变体与基名使用相同权限，避免通过版本化模型名绕过限制。
+// IsVIPOnlyModel 判断模型是否属于 gpt-5.6-luna 家族。日期版等带连字符后缀的
+// Luna 变体与基名使用相同保底计费。名称是历史遗留：Luna 已对全部用户开放。
 func IsVIPOnlyModel(model string) bool {
 	normalized := normalizeVIPModelCandidate(model)
 	return normalized == VipExclusiveModelName || strings.HasPrefix(normalized, VipExclusiveModelName+"-")
@@ -72,35 +74,16 @@ func normalizeVIPModelCandidate(model string) string {
 	return normalized
 }
 
-// UserCanAccessModel 判断用户是否可以调用指定模型。非 VIP 模型保持原有行为；
-// VIP 专属模型在用户信息缺失时按普通用户处理并拒绝访问。
-func UserCanAccessModel(user *User, model string) bool {
-	return !IsVIPOnlyModel(model) || (user != nil && user.IsVIP)
+// UserCanAccessModel 判断用户是否可以调用指定模型。
+// Luna 已对全部用户开放；该钩子保留给未来的用户级模型策略。
+func UserCanAccessModel(_ *User, _ string) bool {
+	return true
 }
 
-// FilterUserAccessibleModels 从模型发现列表中移除当前用户无权调用的模型，
-// 保持原顺序且不修改调用方传入的切片。
-func FilterUserAccessibleModels(user *User, models []string) []string {
-	if user != nil && user.IsVIP {
-		return models
-	}
-
-	var filtered []string
-	for i, model := range models {
-		if IsVIPOnlyModel(model) {
-			if filtered == nil {
-				filtered = append(make([]string, 0, len(models)-1), models[:i]...)
-			}
-			continue
-		}
-		if filtered != nil {
-			filtered = append(filtered, model)
-		}
-	}
-	if filtered == nil {
-		return models
-	}
-	return filtered
+// FilterUserAccessibleModels 返回当前用户在模型发现列表中可见的模型。
+// Luna 已对全部用户开放，因此按原顺序原样返回，不复制切片。
+func FilterUserAccessibleModels(_ *User, models []string) []string {
+	return models
 }
 
 // applyVipGroupRateDiscount 仅当 VIP 用户命中减免分组时应用倍率减免。

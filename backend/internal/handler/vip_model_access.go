@@ -11,7 +11,7 @@ type modelAccessErrorWriter func(c *gin.Context, status int, errType, message st
 
 // requireUserModelAccess enforces user-level model policy before account
 // selection. The resolved composite model is checked as well as the public
-// request model so an alias cannot expose a VIP-only upstream model.
+// request model so an alias cannot expose a restricted upstream model.
 func requireUserModelAccess(c *gin.Context, apiKey *service.APIKey, writeError modelAccessErrorWriter, models ...string) bool {
 	if apiKeyCanAccessModels(c, apiKey, models...) {
 		return true

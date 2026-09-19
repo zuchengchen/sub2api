@@ -160,7 +160,7 @@ import {
 import { getBundledGuideChapters } from '@/utils/guideSections'
 
 const downloadUrl = '/downloads/select-fastest-codex-base-url.bat'
-const bundledGuideVersion = '1.4'
+const bundledGuideVersion = '1.5'
 const bundledGuideUpdatedAt = '2026-08-31'
 const commandLabels: Record<string, string> = {
   'skill-install': '安装 goal-workflow',

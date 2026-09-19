@@ -565,7 +565,7 @@ export default {
       grantSvipTitle: '设为 SVIP',
       revokeSvipTitle: '取消 SVIP',
       grantSvipConfirm: "确定将用户 '{email}' 设为 SVIP 吗？即使总余额不超过 100 元也会立即生效。",
-      revokeSvipConfirm: "确定取消用户 '{email}' 的 SVIP 吗？将失去 gpt-5.6-luna 专属模型和 gpt-pro 倍率减免。",
+      revokeSvipConfirm: "确定取消用户 '{email}' 的 SVIP 吗？将失去 gpt-pro 分组的倍率减免。",
       revokeSvipConfirmAutoUpgrade: '该用户总余额仍大于 100 元，之后可能被自动升级再次变成 SVIP。若要保持普通用户，请先把总余额降到 100 及以下。',
       svipGranted: '已设为 SVIP',
       svipRevoked: '已取消 SVIP',

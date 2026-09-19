@@ -866,7 +866,7 @@ func TestGatewayModels_CompositeUnmappedAccountsFallbackToLinkedPlatformsOnly(t 
 	require.NotContains(t, ids, "gemini-2.5-flash")
 }
 
-func TestGatewayModels_FiltersVIPOnlyModelsByUser(t *testing.T) {
+func TestGatewayModels_IncludesLunaForAllUsers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(3401)
@@ -892,7 +892,7 @@ func TestGatewayModels_FiltersVIPOnlyModelsByUser(t *testing.T) {
 		return modelIDsForTest(got.Data)
 	}
 
-	require.NotContains(t, modelIDs(false), service.VipExclusiveModelName)
+	require.Contains(t, modelIDs(false), service.VipExclusiveModelName)
 	require.Contains(t, modelIDs(true), service.VipExclusiveModelName)
 }
 
