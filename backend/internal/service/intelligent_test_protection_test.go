@@ -23,6 +23,7 @@ func TestApplyIntelligentPayloadPromptReplacesConnectivityPing(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "骑自行车的鹈鹕")
 	require.NotContains(t, string(raw), `"text":"hi"`)
+	require.Contains(t, string(raw), `"reasoning":{"effort":"low"}`)
 }
 
 func TestApplyIntelligentTestProtectionSetsSessionHeaders(t *testing.T) {

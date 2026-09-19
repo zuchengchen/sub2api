@@ -11,8 +11,9 @@
         </div>
       </div>
       <div class="mt-4 grid gap-4 sm:grid-cols-2">
-        <label class="block text-sm">模型<input v-model.trim="setting.config.model" class="input mt-2" :list="`intelligent-models-${setting.test_type}`" placeholder="留空使用账号默认模型" maxlength="200" />
+        <label class="block text-sm">模型<input v-model.trim="setting.config.model" class="input mt-2" :list="`intelligent-models-${setting.test_type}`" placeholder="留空：ChatGPT OAuth 使用 gpt-6-astra" maxlength="200" />
           <datalist :id="`intelligent-models-${setting.test_type}`"><option v-for="model in modelSuggestions" :key="model" :value="model" /></datalist>
+          <span class="mt-1 block text-xs text-gray-500">OpenAI Responses / Chat Completions 固定 reasoning.effort=low，不随上游默认 medium。</span>
         </label>
         <label class="block text-sm">超时（秒）<input v-model.number="setting.config.timeout_seconds" type="number" class="input mt-2" min="30" max="600" required /></label>
         <label class="block text-sm sm:col-span-2">测试题目<textarea v-model="setting.config.prompt" class="input mt-2 min-h-32" maxlength="16000" required /></label>

@@ -18,10 +18,11 @@ type intelligentTestIdentity struct {
 }
 
 type ProtectionRuntimeState struct {
-	Strategy       string `json:"strategy,omitempty"`
-	IdentityMode   string `json:"identity_mode,omitempty"`
-	RequestedModel string `json:"requested_model,omitempty"`
-	Model          string `json:"model,omitempty"`
+	Strategy        string `json:"strategy,omitempty"`
+	IdentityMode    string `json:"identity_mode,omitempty"`
+	RequestedModel  string `json:"requested_model,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 func snapshotIntelligentProtectionRuntime(account *Account) *ProtectionRuntimeState {
