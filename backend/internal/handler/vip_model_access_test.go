@@ -21,12 +21,12 @@ func TestRequireUserModelAccess(t *testing.T) {
 		wantAllowed   bool
 	}{
 		{name: "vip can use luna", user: &service.User{IsVIP: true}, model: "gpt-5.6-luna", wantAllowed: true},
-		{name: "ordinary user cannot use luna", user: &service.User{}, model: "gpt-5.6-luna", wantAllowed: false},
-		{name: "ordinary user cannot use compact luna spelling", user: &service.User{}, model: "gpt5.6luna", wantAllowed: false},
-		{name: "ordinary user cannot use dated luna", user: &service.User{}, model: "gpt-5.6-luna-2026-07-09", wantAllowed: false},
-		{name: "missing user fails closed for luna", model: "gpt-5.6-luna", wantAllowed: false},
+		{name: "ordinary user can use luna", user: &service.User{}, model: "gpt-5.6-luna", wantAllowed: true},
+		{name: "ordinary user can use compact luna spelling", user: &service.User{}, model: "gpt5.6luna", wantAllowed: true},
+		{name: "ordinary user can use dated luna", user: &service.User{}, model: "gpt-5.6-luna-2026-07-09", wantAllowed: true},
+		{name: "missing user can use luna", model: "gpt-5.6-luna", wantAllowed: true},
 		{name: "ordinary user can use other model", user: &service.User{}, model: "gpt-5.6-sol", wantAllowed: true},
-		{name: "composite alias cannot expose luna", user: &service.User{}, model: "vip-alias", resolvedModel: "gpt-5.6-luna", wantAllowed: false},
+		{name: "composite alias can resolve to luna", user: &service.User{}, model: "vip-alias", resolvedModel: "gpt-5.6-luna", wantAllowed: true},
 	}
 
 	for _, tt := range tests {
@@ -70,32 +70,32 @@ func TestRequireUserAccountModelAccess(t *testing.T) {
 		wantAllowed    bool
 	}{
 		{
-			name: "ordinary user cannot use account alias to luna",
+			name: "ordinary user can use account alias to luna",
 			user: &service.User{},
 			account: &service.Account{Platform: service.PlatformOpenAI, Credentials: map[string]any{
 				"model_mapping": map[string]any{"luna-alias": service.VipExclusiveModelName},
 			}},
 			model:       "luna-alias",
-			wantAllowed: false,
+			wantAllowed: true,
 		},
 		{
-			name: "ordinary user cannot use wildcard account alias to luna",
+			name: "ordinary user can use wildcard account alias to luna",
 			user: &service.User{},
 			account: &service.Account{Platform: service.PlatformOpenAI, Credentials: map[string]any{
 				"model_mapping": map[string]any{"vip-*": service.VipExclusiveModelName},
 			}},
 			model:       "vip-alias",
-			wantAllowed: false,
+			wantAllowed: true,
 		},
 		{
-			name: "ordinary user cannot use compact account alias to luna",
+			name: "ordinary user can use compact account alias to luna",
 			user: &service.User{},
 			account: &service.Account{Platform: service.PlatformOpenAI, Credentials: map[string]any{
 				"compact_model_mapping": map[string]any{"compact-alias": service.VipExclusiveModelName},
 			}},
 			model:          "compact-alias",
 			requireCompact: true,
-			wantAllowed:    false,
+			wantAllowed:    true,
 		},
 		{
 			name: "ordinary user can use compact alias on normal responses",
@@ -107,7 +107,7 @@ func TestRequireUserAccountModelAccess(t *testing.T) {
 			wantAllowed: true,
 		},
 		{
-			name: "openai passthrough fails closed for stale ordinary mapping",
+			name: "openai passthrough allows ordinary mapping to luna",
 			user: &service.User{},
 			account: &service.Account{
 				Platform: service.PlatformOpenAI,
@@ -118,16 +118,16 @@ func TestRequireUserAccountModelAccess(t *testing.T) {
 				Extra: map[string]any{"openai_passthrough": true},
 			},
 			model:       "public-alias",
-			wantAllowed: false,
+			wantAllowed: true,
 		},
 		{
-			name: "ordinary user cannot use non-openai account alias to luna",
+			name: "ordinary user can use non-openai account alias to luna",
 			user: &service.User{},
 			account: &service.Account{Platform: service.PlatformAnthropic, Credentials: map[string]any{
 				"model_mapping": map[string]any{"luna-alias": service.VipExclusiveModelName},
 			}},
 			model:       "luna-alias",
-			wantAllowed: false,
+			wantAllowed: true,
 		},
 		{
 			name: "vip can use account alias to luna",

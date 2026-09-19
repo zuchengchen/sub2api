@@ -2373,9 +2373,10 @@ func TestFilterCodexModelsManifestForUser(t *testing.T) {
 
 	plain, err := FilterCodexModelsManifestForUser(manifest, &User{}, "")
 	require.NoError(t, err)
-	require.NotEqual(t, manifest.ETag, plain.ETag)
-	require.JSONEq(t, `{"models":[{"slug":"gpt-5.6-sol","extra":true},null],"extra":{"keep":true}}`, string(plain.Body))
+	require.Equal(t, manifest.ETag, plain.ETag)
+	require.JSONEq(t, string(body), string(plain.Body))
 	require.Equal(t, body, manifest.Body, "shared manifest must not be mutated")
+	require.NotSame(t, manifest, plain)
 
 	notModified, err := FilterCodexModelsManifestForUser(manifest, &User{}, plain.ETag)
 	require.NoError(t, err)
@@ -2384,7 +2385,8 @@ func TestFilterCodexModelsManifestForUser(t *testing.T) {
 
 	vip, err := FilterCodexModelsManifestForUser(manifest, &User{IsVIP: true}, "")
 	require.NoError(t, err)
-	require.Same(t, manifest, vip)
+	require.Equal(t, manifest.ETag, vip.ETag)
+	require.JSONEq(t, string(body), string(vip.Body))
 }
 
 func TestFetchCodexModelsManifestAPIKeyDisablesResponsesLiteForAffectedModels(t *testing.T) {

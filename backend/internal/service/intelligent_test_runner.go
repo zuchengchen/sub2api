@@ -24,8 +24,12 @@ type intelligentRunContext struct {
 }
 
 // ChatGPT Codex plan-gates gpt-5.3-codex and gpt-5.4. Empty ChatGPT OAuth
-// intelligent tests use gpt-6-astra.
-const intelligentTestDefaultCodexModel = "gpt-6-astra"
+// intelligent tests use gpt-6-astra with explicit low reasoning; omitting
+// reasoning.effort lets Codex default to medium.
+const (
+	intelligentTestDefaultCodexModel      = "gpt-6-astra"
+	intelligentTestDefaultReasoningEffort = "low"
+)
 
 // Only an empty selection receives the protocol default. Explicit choices
 // remain observable even when the upstream rejects the requested model.
@@ -64,7 +68,25 @@ func applyIntelligentPayloadPrompt(ctx context.Context, payload map[string]any) 
 			payload["max_tokens"] = 8192
 		}
 	}
+	applyIntelligentTestReasoning(payload)
 }
+
+func applyIntelligentTestReasoning(payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	if _, ok := payload["input"]; ok {
+		payload["reasoning"] = map[string]any{"effort": intelligentTestDefaultReasoningEffort}
+		return
+	}
+	if _, ok := payload["messages"]; ok {
+		if _, hasSystem := payload["system"]; hasSystem {
+			return
+		}
+		payload["reasoning_effort"] = intelligentTestDefaultReasoningEffort
+	}
+}
+
 // RunIntelligentTest uses the existing authenticated outbound protocol adapters.
 // A per-run service avoids mutating shared service state. Runtime health writes
 // are suppressed: an observation never changes account policy or scheduling.
@@ -86,6 +108,7 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 	r.ConfigSnapshot.Execution = snapshotIntelligentProtectionRuntime(account)
 	r.ConfigSnapshot.Execution.RequestedModel = r.ConfigSnapshot.Model
 	r.ConfigSnapshot.Execution.Model = r.Model
+	r.ConfigSnapshot.Execution.ReasoningEffort = intelligentTestDefaultReasoningEffort
 	capture := &intelligentCapture{}
 	capture.collectCredentialSecrets(account.Credentials)
 	ctx = context.WithValue(ctx, intelligentRunKey{}, &intelligentRunContext{prompt: r.Input, capture: capture})

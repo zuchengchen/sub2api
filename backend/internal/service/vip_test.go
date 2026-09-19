@@ -43,19 +43,17 @@ func TestIsVIPOnlyModel(t *testing.T) {
 
 func TestUserCanAccessModel(t *testing.T) {
 	require.True(t, UserCanAccessModel(&User{IsVIP: true}, "gpt-5.6-luna"))
-	require.False(t, UserCanAccessModel(&User{}, "gpt-5.6-luna"))
-	require.False(t, UserCanAccessModel(nil, "gpt-5.6-luna-2026-07-09"))
+	require.True(t, UserCanAccessModel(&User{}, "gpt-5.6-luna"))
+	require.True(t, UserCanAccessModel(nil, "gpt-5.6-luna-2026-07-09"))
 	require.True(t, UserCanAccessModel(&User{}, "gpt-5.6-sol"))
 }
 
 func TestFilterUserAccessibleModels(t *testing.T) {
 	models := []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-luna-2026-07-09", "gpt-5.6-terra"}
 
-	require.Equal(t,
-		[]string{"gpt-5.6-sol", "gpt-5.6-terra"},
-		FilterUserAccessibleModels(&User{}, models),
-	)
+	require.Equal(t, models, FilterUserAccessibleModels(&User{}, models))
 	require.Equal(t, models, FilterUserAccessibleModels(&User{IsVIP: true}, models))
+	require.Equal(t, models, FilterUserAccessibleModels(nil, models))
 	require.Equal(t, models, []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-luna-2026-07-09", "gpt-5.6-terra"}, "input must not be modified")
 }
 

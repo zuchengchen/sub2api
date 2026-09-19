@@ -1999,66 +1999,15 @@ func codexModelsManifestBodyETag(body []byte) string {
 	return fmt.Sprintf(`"%x"`, sum)
 }
 
-// FilterCodexModelsManifestForUser removes VIP-only models from a shared
-// upstream manifest without mutating the cached representation. A filtered
-// representation receives its own ETag so VIP and non-VIP clients cannot
-// reuse each other's cached model catalog.
-func FilterCodexModelsManifestForUser(manifest *OpenAIModelsResponse, user *User, ifNoneMatch string) (*OpenAIModelsResponse, error) {
-	if manifest == nil || (user != nil && user.IsVIP) || manifest.NotModified {
+// FilterCodexModelsManifestForUser previously hid Luna from ordinary users.
+// gpt-5.6-luna is now available to all users, so the catalog is returned
+// unfiltered. The function still honors If-None-Match without mutating the
+// cached representation.
+func FilterCodexModelsManifestForUser(manifest *OpenAIModelsResponse, _ *User, ifNoneMatch string) (*OpenAIModelsResponse, error) {
+	if manifest == nil || manifest.NotModified {
 		return manifest, nil
 	}
-
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(manifest.Body, &envelope); err != nil {
-		return nil, fmt.Errorf("decode codex models manifest: %w", err)
-	}
-	var models []json.RawMessage
-	if err := json.Unmarshal(envelope["models"], &models); err != nil {
-		return nil, fmt.Errorf("decode codex models array: %w", err)
-	}
-
-	filtered := make([]json.RawMessage, 0, len(models))
-	changed := false
-	for _, rawModel := range models {
-		if IsVIPOnlyModel(codexManifestModelID(rawModel)) {
-			changed = true
-			continue
-		}
-		filtered = append(filtered, rawModel)
-	}
-	if !changed {
-		return openAIModelsResponseForClient(manifest, ifNoneMatch), nil
-	}
-
-	filteredModels, err := json.Marshal(filtered)
-	if err != nil {
-		return nil, fmt.Errorf("encode filtered codex models array: %w", err)
-	}
-	envelope["models"] = filteredModels
-	body, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("encode filtered codex models manifest: %w", err)
-	}
-	result := &OpenAIModelsResponse{
-		Body:         body,
-		ETag:         codexModelsManifestBodyETag(body),
-		upstreamETag: manifest.ETag,
-	}
-	return openAIModelsResponseForClient(result, ifNoneMatch), nil
-}
-
-func codexManifestModelID(rawModel json.RawMessage) string {
-	var object struct {
-		Slug string `json:"slug"`
-	}
-	if err := json.Unmarshal(rawModel, &object); err == nil && strings.TrimSpace(object.Slug) != "" {
-		return object.Slug
-	}
-	var modelID string
-	if err := json.Unmarshal(rawModel, &modelID); err == nil {
-		return modelID
-	}
-	return ""
+	return openAIModelsResponseForClient(manifest, ifNoneMatch), nil
 }
 
 // CodexModelsManifestETag returns the strong ETag for a generated client
