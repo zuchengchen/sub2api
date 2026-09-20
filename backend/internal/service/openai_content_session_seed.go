@@ -9,7 +9,7 @@ import (
 )
 
 // contentSessionSeedPrefix prevents collisions between content-derived seeds
-// and explicit session IDs (e.g. "sess-xxx" or "compat_cc_xxx").
+// and explicit session IDs (e.g. "sess-xxx" or "compat_cc2_xxx").
 const contentSessionSeedPrefix = "compat_cs_"
 
 // contentStablePrefixSessionSeedPrefix distinguishes cache identities derived
