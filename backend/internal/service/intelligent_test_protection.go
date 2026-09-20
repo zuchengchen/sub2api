@@ -23,6 +23,7 @@ type ProtectionRuntimeState struct {
 	RequestedModel  string `json:"requested_model,omitempty"`
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	GroupName       string `json:"group_name,omitempty"`
 }
 
 func snapshotIntelligentProtectionRuntime(account *Account) *ProtectionRuntimeState {
@@ -100,3 +101,5 @@ func (e *TestAdmissionWaitError) Error() string {
 	}
 	return e.Reason
 }
+
+func (e *TestAdmissionWaitError) Unwrap() error { return ErrIntelligentAccountBusy }

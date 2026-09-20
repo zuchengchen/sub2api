@@ -18,6 +18,13 @@ import (
 	"github.com/lib/pq"
 )
 
+// Batch tests start immediately: no global running cap and no per-account
+// serialization. leftover queued rows (crash between insert and ClaimID) are
+// drained by Claim in arrival order.
+const intelligentClaimPickSQL = `SELECT q.id FROM account_tests q WHERE q.status='queued' AND q.available_at<=NOW() ORDER BY q.available_at,q.id FOR UPDATE SKIP LOCKED LIMIT 1`
+
+const intelligentStartSetSQL = `status='running',queue_reason='',started_at=NOW(),lease_token=$1,lease_until=NOW()+make_interval(secs=>LEAST(600,GREATEST(30,(t.config_snapshot->>'timeout_seconds')::integer))+90),anti_degradation=(SELECT ` + intelligentProtectionSQL + ` FROM accounts a WHERE a.id=t.account_id)`
+
 func (r *intelligentTestRepository) Enqueue(ctx context.Context, actor int64, req service.IntelligentTestEnqueue) (*service.IntelligentTestEnqueued, error) {
 	accountIDs := append([]int64{}, req.AccountIDs...)
 	types := append([]string{}, req.TestTypes...)
@@ -105,7 +112,7 @@ func (r *intelligentTestRepository) Enqueue(ctx context.Context, actor int64, re
 			active, activeErr := scanIntelligentRecord(tx.QueryRowContext(ctx, `SELECT `+intelligentRecordColumns+` FROM account_tests t WHERE account_id=$1 AND test_type=$2 AND status IN ('queued','running') FOR UPDATE`, id, kind))
 			if activeErr == nil {
 				if !service.SameIntelligentTestConfig(*active.ConfigSnapshot, cfg) {
-					return nil, infraerrors.Conflict("INTELLIGENT_TEST_ACTIVE_CONFLICT", fmt.Sprintf("账号 %d 的 %s 已有不同模型或配置的任务 #%d；请等待完成或取消排队任务", id, kind, active.ID))
+					return nil, infraerrors.Conflict("INTELLIGENT_TEST_ACTIVE_CONFLICT", fmt.Sprintf("账号 %d 的 %s 已有不同模型或配置的任务 #%d；请等待完成后再试", id, kind, active.ID))
 				}
 				compactIntelligentRecord(active)
 				out.Records = append(out.Records, active)
@@ -118,7 +125,7 @@ func (r *intelligentTestRepository) Enqueue(ctx context.Context, actor int64, re
 				return nil, activeErr
 			}
 			if queued+out.CreatedCount >= 2000 {
-				return nil, infraerrors.TooManyRequests("INTELLIGENT_TEST_QUEUE_FULL", "测试队列已满，请稍后重试")
+				return nil, infraerrors.TooManyRequests("INTELLIGENT_TEST_QUEUE_FULL", "同时进行的测试过多，请稍后重试")
 			}
 			cfgJSON, _ := json.Marshal(cfg)
 			var testID int64
@@ -165,7 +172,7 @@ func (r *intelligentTestRepository) Claim(ctx context.Context) (*service.Intelli
 		return nil, err
 	}
 	token := uuid.NewString()
-	record, err := scanIntelligentRecord(tx.QueryRowContext(ctx, `WITH picked AS(SELECT q.id FROM account_tests q WHERE q.status='queued' AND q.available_at<=NOW() AND NOT EXISTS(SELECT 1 FROM account_tests running WHERE running.account_id=q.account_id AND running.status='running') AND (SELECT COUNT(*) FROM account_tests WHERE status='running')<4 ORDER BY q.available_at,q.id FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE account_tests t SET status='running',queue_reason='',started_at=NOW(),lease_token=$1,lease_until=NOW()+make_interval(secs=>LEAST(600,GREATEST(30,(t.config_snapshot->>'timeout_seconds')::integer))+90),anti_degradation=`+`(SELECT `+intelligentProtectionSQL+` FROM accounts a WHERE a.id=t.account_id)`+` FROM picked WHERE t.id=picked.id RETURNING `+intelligentRecordColumns, token))
+	record, err := scanIntelligentRecord(tx.QueryRowContext(ctx, `WITH picked AS(`+intelligentClaimPickSQL+`) UPDATE account_tests t SET `+intelligentStartSetSQL+` FROM picked WHERE t.id=picked.id RETURNING `+intelligentRecordColumns, token))
 	if errors.Is(err, service.ErrIntelligentTestNotFound) {
 		return nil, tx.Commit()
 	}
@@ -173,6 +180,18 @@ func (r *intelligentTestRepository) Claim(ctx context.Context) (*service.Intelli
 		return nil, err
 	}
 	return record, tx.Commit()
+}
+
+func (r *intelligentTestRepository) ClaimID(ctx context.Context, id int64) (*service.IntelligentTestRecord, error) {
+	if id < 1 {
+		return nil, nil
+	}
+	token := uuid.NewString()
+	record, err := scanIntelligentRecord(r.db.QueryRowContext(ctx, `UPDATE account_tests t SET `+intelligentStartSetSQL+` WHERE t.id=$2 AND t.status='queued' RETURNING `+intelligentRecordColumns, token, id))
+	if errors.Is(err, service.ErrIntelligentTestNotFound) {
+		return nil, nil
+	}
+	return record, err
 }
 func (r *intelligentTestRepository) Finish(ctx context.Context, record *service.IntelligentTestRecord) error {
 	if record.Status == "queued" || record.Status == "running" || record.Status == "" {

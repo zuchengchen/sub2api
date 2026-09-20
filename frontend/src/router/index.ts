@@ -201,6 +201,18 @@ const routes: RouteRecordRaw[] = [
     redirect: '/home'
   },
   {
+    path: '/pelican-test',
+    name: 'PelicanTest',
+    component: () => import('@/views/user/PelicanTestView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Pelican Test',
+      titleKey: 'nav.pelicanTest',
+      descriptionKey: 'pelicanTest.subtitle'
+    }
+  },
+  {
     path: '/dashboard',
     name: 'Dashboard',
     component: () => import('@/views/user/DashboardView.vue'),

@@ -74,6 +74,8 @@ func RegisterUserRoutes(
 		}
 
 		// API Key管理
+		authenticated.GET("/pelican-tests", h.Admin.IntelligentTest.UserPelicanTests)
+
 		keys := authenticated.Group("/keys")
 		{
 			keys.GET("", h.APIKey.List)
