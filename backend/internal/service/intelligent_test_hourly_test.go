@@ -66,14 +66,14 @@ func (r *userPelicanListRepo) UserPelicanTests(_ context.Context, f IntelligentT
 	return &UserPelicanTests{Items: []UserPelicanTest{}, Page: f.Page, PageSize: f.PageSize}, nil
 }
 
-func TestUserPelicanTestsListsLastThreeHours(t *testing.T) {
+func TestUserPelicanTestsListsLastSixHours(t *testing.T) {
 	repo := &userPelicanListRepo{}
 	svc := &IntelligentTestService{repo: repo}
 	out, err := svc.UserPelicanTests(context.Background(), 9, IntelligentTestFilter{Page: 3, PageSize: 12})
 	require.NoError(t, err)
 	require.Equal(t, 1, repo.filter.Page)
-	require.Equal(t, 18, repo.filter.PageSize)
-	require.Equal(t, 18, out.PageSize)
+	require.Equal(t, pelicanUserPageSize, repo.filter.PageSize)
+	require.Equal(t, pelicanUserPageSize, out.PageSize)
 }
 
 type purgePelicanRepo struct {
@@ -86,7 +86,7 @@ func (r *purgePelicanRepo) DeleteStalePelicanTests(context.Context) (int64, erro
 	return r.deleted, nil
 }
 
-func TestPurgeStalePelicanTestsDeletesOlderThanThreeHours(t *testing.T) {
+func TestPurgeStalePelicanTestsDeletesOlderThanSixHours(t *testing.T) {
 	repo := &purgePelicanRepo{}
 	svc := &IntelligentTestService{repo: repo}
 	svc.purgeStalePelicanTests(context.Background())

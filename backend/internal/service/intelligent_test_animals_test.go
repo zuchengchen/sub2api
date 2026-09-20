@@ -40,9 +40,15 @@ func TestIntelligentAnimalHTMLPromptInsertsName(t *testing.T) {
 	require.Contains(t, prompt, "不要依赖我本地的AGENTS.md")
 }
 
-func TestPelicanSlotKeyTruncatesToTenMinutes(t *testing.T) {
+func TestPelicanSlotKeyTruncatesToTwentyMinutes(t *testing.T) {
 	t.Parallel()
 	now, err := time.Parse(time.RFC3339, "2026-09-20T03:17:44Z")
 	require.NoError(t, err)
-	require.Equal(t, "pelican-slot-202609200310", pelicanSlotKey(now))
+	require.Equal(t, "pelican-slot-202609200300", pelicanSlotKey(now))
+	same, err := time.Parse(time.RFC3339, "2026-09-20T03:19:59Z")
+	require.NoError(t, err)
+	require.Equal(t, "pelican-slot-202609200300", pelicanSlotKey(same))
+	next, err := time.Parse(time.RFC3339, "2026-09-20T03:20:00Z")
+	require.NoError(t, err)
+	require.Equal(t, "pelican-slot-202609200320", pelicanSlotKey(next))
 }

@@ -18,6 +18,11 @@ var ErrIntelligentTestNotFound = infraerrors.NotFound("INTELLIGENT_TEST_NOT_FOUN
 var ErrIntelligentTestForbidden = infraerrors.Forbidden("INTELLIGENT_TEST_FORBIDDEN", "administrator access required")
 var ErrIntelligentTestConflict = infraerrors.Conflict("INTELLIGENT_TEST_CONFLICT", "idempotency key was already used with different parameters")
 
+const (
+	pelicanScheduleInterval = 20 * time.Minute
+	pelicanUserPageSize     = 18 // 20-minute runs × 6h
+)
+
 func intelligentTestBad(message string) error {
 	return infraerrors.BadRequest("INTELLIGENT_TEST_INVALID", message)
 }
@@ -265,13 +270,12 @@ func (s *IntelligentTestService) UserPelicanTests(ctx context.Context, user int6
 	}
 	f = normalizeIntelligentFilter(f)
 	f.Page = 1
-	// 10-minute runs × 3h = 18 slots.
-	f.PageSize = 18
+	f.PageSize = pelicanUserPageSize
 	return s.repo.UserPelicanTests(ctx, f)
 }
 
 func pelicanSlotKey(now time.Time) string {
-	slot := now.UTC().Truncate(10 * time.Minute)
+	slot := now.UTC().Truncate(pelicanScheduleInterval)
 	return "pelican-slot-" + slot.Format("200601021504")
 }
 
@@ -279,7 +283,7 @@ func (s *IntelligentTestService) scheduledPelicanLoop(ctx context.Context) {
 	defer s.wg.Done()
 	s.purgeStalePelicanTests(ctx)
 	s.runScheduledPelican(ctx)
-	ticker := time.NewTicker(10 * time.Minute)
+	ticker := time.NewTicker(pelicanScheduleInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -302,7 +306,7 @@ func (s *IntelligentTestService) purgeStalePelicanTests(ctx context.Context) {
 		return
 	}
 	if n > 0 {
-		slog.Info("deleted pelican tests older than 3 hours", "count", n)
+		slog.Info("deleted pelican tests older than 6 hours", "count", n)
 	}
 }
 
