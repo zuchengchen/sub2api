@@ -79,7 +79,7 @@ func TestDeriveCompatPromptCacheKey_StableAcrossLaterTurns(t *testing.T) {
 	require.NotEmpty(t, k1)
 }
 
-func TestDeriveCompatPromptCacheKey_ReusablePrefixIgnoresFirstUser(t *testing.T) {
+func TestDeriveCompatPromptCacheKey_ReusablePrefixShardsByFirstUser(t *testing.T) {
 	tests := []struct {
 		name  string
 		apply func(*apicompat.ChatCompletionsRequest)
@@ -111,10 +111,10 @@ func TestDeriveCompatPromptCacheKey_ReusablePrefixIgnoresFirstUser(t *testing.T)
 			tt.apply(first)
 			tt.apply(second)
 
-			require.Equal(t,
+			require.NotEqual(t,
 				deriveCompatPromptCacheKey(first, "gpt-5.6-luna"),
 				deriveCompatPromptCacheKey(second, "gpt-5.6-luna"),
-				"a reusable prefix should route independent user prompts to the same cache group",
+				"a reusable prefix must still shard independent first user messages",
 			)
 		})
 	}
@@ -379,7 +379,7 @@ func TestDeriveCompatPromptCacheKey_CanonicalizesJSONSettings(t *testing.T) {
 		ResponseFormat: mustRawJSON(t, `{ "json_schema": { "schema": { "type": "object" }, "name": "result" }, "type": "json_schema" }`),
 		Messages: []apicompat.ChatMessage{
 			{Role: "developer", Content: mustRawJSON(t, `"Shared developer prompt"`)},
-			{Role: "user", Content: mustRawJSON(t, `"Question B"`)},
+			{Role: "user", Content: mustRawJSON(t, `"Question A"`)},
 		},
 	}
 
@@ -403,7 +403,7 @@ func TestDeriveCompatPromptCacheKey_NormalizesRoleAndServiceTierAliases(t *testi
 		ServiceTier: "priority",
 		Messages: []apicompat.ChatMessage{
 			{Role: "system", Content: mustRawJSON(t, `"Shared prompt"`)},
-			{Role: "user", Content: mustRawJSON(t, `"Question B"`)},
+			{Role: "user", Content: mustRawJSON(t, `"Question A"`)},
 		},
 	}
 
@@ -411,6 +411,71 @@ func TestDeriveCompatPromptCacheKey_NormalizesRoleAndServiceTierAliases(t *testi
 		deriveCompatPromptCacheKey(first, first.Model),
 		deriveCompatPromptCacheKey(second, second.Model),
 	)
+}
+
+func TestDeriveCompatPromptCacheKey_AstraShardsByFirstUserAndStaysStable(t *testing.T) {
+	sharedSystem := []apicompat.ChatMessage{{Role: "system", Content: mustRawJSON(t, `"You are Codex."`)}}
+	taskA := append(append([]apicompat.ChatMessage{}, sharedSystem...), apicompat.ChatMessage{Role: "user", Content: mustRawJSON(t, `"Refactor package foo"`)})
+	taskB := append(append([]apicompat.ChatMessage{}, sharedSystem...), apicompat.ChatMessage{Role: "user", Content: mustRawJSON(t, `"Investigate flaky test bar"`)})
+	taskALater := append(append([]apicompat.ChatMessage{}, taskA...),
+		apicompat.ChatMessage{Role: "assistant", Content: mustRawJSON(t, `"Working on foo"`)},
+		apicompat.ChatMessage{Role: "user", Content: mustRawJSON(t, `"Continue"`)},
+	)
+
+	kA := deriveCompatPromptCacheKey(&apicompat.ChatCompletionsRequest{Model: "gpt-6-astra", Messages: taskA}, "gpt-6-astra")
+	kB := deriveCompatPromptCacheKey(&apicompat.ChatCompletionsRequest{Model: "gpt-6-astra", Messages: taskB}, "gpt-6-astra")
+	kALater := deriveCompatPromptCacheKey(&apicompat.ChatCompletionsRequest{Model: "gpt-6-astra", Messages: taskALater}, "openai/gpt-6-astra")
+
+	require.NotEmpty(t, kA)
+	require.True(t, strings.HasPrefix(kA, compatPromptCacheKeyPrefix))
+	require.NotEqual(t, kA, kB, "parallel Astra conversations must not share a cache key")
+	require.Equal(t, kA, kALater, "later turns of the same Astra conversation must keep the cache key")
+}
+
+func TestDeriveCompatPromptCacheKey_SystemOnlyWithoutUserKeepsPrefixKey(t *testing.T) {
+	key := deriveCompatPromptCacheKey(&apicompat.ChatCompletionsRequest{
+		Model: "gpt-6-astra",
+		Messages: []apicompat.ChatMessage{
+			{Role: "system", Content: mustRawJSON(t, `"Shared system prompt"`)},
+		},
+	}, "gpt-6-astra")
+	require.NotEmpty(t, key)
+	require.True(t, strings.HasPrefix(key, compatPromptCacheKeyPrefix))
+}
+
+func TestDeriveCompatPromptCacheKey_DigestsLargeFirstUser(t *testing.T) {
+	huge, err := json.Marshal(strings.Repeat("x", 2<<20))
+	require.NoError(t, err)
+	key := deriveCompatPromptCacheKey(&apicompat.ChatCompletionsRequest{
+		Model: "gpt-6-astra",
+		Messages: []apicompat.ChatMessage{
+			{Role: "system", Content: mustRawJSON(t, `"Shared system prompt"`)},
+			{Role: "user", Content: huge},
+		},
+	}, "gpt-6-astra")
+	require.NotEmpty(t, key)
+	require.True(t, strings.HasPrefix(key, compatPromptCacheKeyPrefix))
+	require.Less(t, len(key), 80, "large first-user content must not inflate the cache key")
+}
+
+func TestDeriveCompatPromptCacheKey_NotRewrittenByCodexFingerprint(t *testing.T) {
+	key := deriveCompatPromptCacheKey(&apicompat.ChatCompletionsRequest{
+		Model: "gpt-6-astra",
+		Messages: []apicompat.ChatMessage{
+			{Role: "system", Content: mustRawJSON(t, `"Shared"`)},
+			{Role: "user", Content: mustRawJSON(t, `"Task"`)},
+		},
+	}, "gpt-6-astra")
+	require.NotEmpty(t, key)
+
+	ids := &codexFingerprintIDs{
+		mode:                          codexFingerprintSession,
+		sessionID:                     "account-converged-session",
+		originalBodySessionID:         "client-session-uuid",
+		originalBodySessionIDCaptured: true,
+	}
+	require.False(t, shouldRewriteCodexFingerprintPromptCacheKey(ids, key),
+		"auto-injected compat cache keys must not collapse onto the account session id")
 }
 
 func TestDeriveCompatPromptCacheKey_UsesResolvedSparkFamily(t *testing.T) {

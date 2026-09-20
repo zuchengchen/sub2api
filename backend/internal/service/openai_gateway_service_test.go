@@ -380,7 +380,7 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 	}
 }
 
-func TestOpenAIGatewayService_GenerateChatCompletionsSessionHash_UsesReusablePrefix(t *testing.T) {
+func TestOpenAIGatewayService_GenerateChatCompletionsSessionHash_ShardsReusablePrefixByFirstUser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	newContext := func() *gin.Context {
 		recorder := httptest.NewRecorder()
@@ -392,10 +392,15 @@ func TestOpenAIGatewayService_GenerateChatCompletionsSessionHash_UsesReusablePre
 	svc := &OpenAIGatewayService{}
 	first := []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"system","content":"shared prefix"},{"role":"user","content":"question A"}]}`)
 	second := []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"system","content":"shared prefix"},{"role":"user","content":"question B"}]}`)
+	firstLater := []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"system","content":"shared prefix"},{"role":"user","content":"question A"},{"role":"assistant","content":"ok"},{"role":"user","content":"continue"}]}`)
 
-	require.Equal(t,
+	require.NotEqual(t,
 		svc.GenerateChatCompletionsSessionHash(newContext(), first, "gpt-5.6-luna"),
 		svc.GenerateChatCompletionsSessionHash(newContext(), second, "gpt-5.6-luna"),
+	)
+	require.Equal(t,
+		svc.GenerateChatCompletionsSessionHash(newContext(), first, "gpt-5.6-luna"),
+		svc.GenerateChatCompletionsSessionHash(newContext(), firstLater, "gpt-5.6-luna"),
 	)
 }
 
