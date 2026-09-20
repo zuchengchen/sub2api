@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -32,10 +33,17 @@ func (r *hourlyPelicanRepo) ClaimID(context.Context, int64) (*IntelligentTestRec
 	return nil, nil
 }
 
+func pelicanNoonBeijing(t *testing.T) time.Time {
+	t.Helper()
+	now, err := time.Parse(time.RFC3339, "2026-09-20T04:00:00Z")
+	require.NoError(t, err)
+	return now
+}
+
 func TestRunScheduledPelicanEnqueuesRandomAnimalPrompt(t *testing.T) {
 	repo := &hourlyPelicanRepo{adminID: 3, accountIDs: []int64{11, 12}}
 	svc := &IntelligentTestService{repo: repo}
-	svc.runScheduledPelican(context.Background())
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
 	require.Equal(t, []int64{3}, repo.actors)
 	require.Len(t, repo.enqueued, 1)
 	require.Len(t, repo.enqueued[0].AccountIDs, 1)
@@ -94,18 +102,28 @@ func TestPurgeStalePelicanTestsDeletesOlderThanSixHours(t *testing.T) {
 }
 
 func TestRunScheduledPelicanSkipsWithoutAdminOrAccounts(t *testing.T) {
+	now := pelicanNoonBeijing(t)
 	empty := &hourlyPelicanRepo{adminID: 0, accountIDs: []int64{1}}
-	(&IntelligentTestService{repo: empty}).runScheduledPelican(context.Background())
+	(&IntelligentTestService{repo: empty}).runScheduledPelicanAt(context.Background(), now)
 	require.Empty(t, empty.enqueued)
 
 	noAccounts := &hourlyPelicanRepo{adminID: 8}
-	(&IntelligentTestService{repo: noAccounts}).runScheduledPelican(context.Background())
+	(&IntelligentTestService{repo: noAccounts}).runScheduledPelicanAt(context.Background(), now)
 	require.Empty(t, noAccounts.enqueued)
 }
 
 func TestRunScheduledPelicanUsesOnlyListedTicketedAccounts(t *testing.T) {
 	repo := &hourlyPelicanRepo{adminID: 3, accountIDs: []int64{42}}
 	svc := &IntelligentTestService{repo: repo}
-	svc.runScheduledPelican(context.Background())
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
 	require.Equal(t, []int64{42}, repo.enqueued[0].AccountIDs)
+}
+
+func TestRunScheduledPelicanSkipsOutsideBeijingWindow(t *testing.T) {
+	repo := &hourlyPelicanRepo{adminID: 3, accountIDs: []int64{42}}
+	svc := &IntelligentTestService{repo: repo}
+	night, err := time.Parse(time.RFC3339, "2026-09-20T16:00:00Z")
+	require.NoError(t, err)
+	svc.runScheduledPelicanAt(context.Background(), night)
+	require.Empty(t, repo.enqueued)
 }

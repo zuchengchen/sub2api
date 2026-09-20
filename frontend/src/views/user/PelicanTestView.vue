@@ -85,7 +85,7 @@ function formatTime(value?: string | null) {
 
 onMounted(async () => {
   try {
-    const page = await pelicanTestsAPI.list(1, 18)
+    const page = await pelicanTestsAPI.list(1, 12)
     items.value = page.items || []
     selected.value = items.value[0] ?? null
   } catch (err) {
