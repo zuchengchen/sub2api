@@ -87,9 +87,20 @@ func applyIntelligentTestReasoning(payload map[string]any) {
 	}
 }
 
+// applyIntelligentTestOpenAICodexTicket 让 GPT OAuth 智能测试走和生产转发相同的
+// 292 门票注入。普通「测试连接」不含 intelligent 上下文，仍发不带门票的探测。
+func (s *AccountTestService) applyIntelligentTestOpenAICodexTicket(ctx context.Context, account *Account, body []byte, h http.Header) error {
+	if s == nil || s.openaiGatewayService == nil || intelligentContext(ctx) == nil {
+		return nil
+	}
+	return s.openaiGatewayService.applyOpenAICodexTicket(ctx, account, extractOpenAICodexTicketModel(body), h)
+}
+
 // RunIntelligentTest uses the existing authenticated outbound protocol adapters.
 // A per-run service avoids mutating shared service state. Runtime health writes
 // are suppressed: an observation never changes account policy or scheduling.
+// ChatGPT OAuth 出站复用网关 applyOpenAICodexTicket：有票则覆盖 x-codex-turn-state，
+// fail-closed 无票则与业务请求一样拒绝，不裸打门控模型。
 func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *IntelligentTestRecord) error {
 	account, err := s.accountRepo.GetByID(ctx, r.AccountID)
 	if err != nil {
@@ -298,6 +309,8 @@ func classifyIntelligentError(code int, message string) string {
 		return "model_error"
 	case code == 400 || code == 422:
 		return "request_error"
+	case strings.Contains(lower, "codex turn-state ticket unavailable"):
+		return "account_error"
 	case strings.Contains(lower, "expired token") || strings.Contains(lower, "access token") || strings.Contains(lower, "credential") || strings.Contains(lower, "api key") || strings.Contains(lower, "account not found") || strings.Contains(message, "账号认证"):
 		return "account_error"
 	case strings.Contains(lower, "timeout") || strings.Contains(lower, "connection") || strings.Contains(lower, "deadline"):
