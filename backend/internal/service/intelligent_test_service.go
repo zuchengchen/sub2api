@@ -20,7 +20,7 @@ var ErrIntelligentTestConflict = infraerrors.Conflict("INTELLIGENT_TEST_CONFLICT
 
 const (
 	pelicanScheduleInterval = 20 * time.Minute
-	pelicanUserPageSize     = 9 // 20-minute runs × 3h
+	pelicanUserPageSize     = 18 // 20-minute runs × 6h
 )
 
 func intelligentTestBad(message string) error {
@@ -306,7 +306,7 @@ func (s *IntelligentTestService) purgeStalePelicanTests(ctx context.Context) {
 		return
 	}
 	if n > 0 {
-		slog.Info("deleted pelican tests older than 3 hours", "count", n)
+		slog.Info("deleted pelican tests older than 6 hours", "count", n)
 	}
 }
 
