@@ -102,7 +102,9 @@ type IntelligentTestEnqueue struct {
 	TestTypes  []string `json:"test_types"`
 	// Models optionally overrides the configured model per test type for this
 	// run. Empty or missing entries use the saved test setting.
-	Models         map[string]string `json:"models,omitempty"`
+	Models map[string]string `json:"models,omitempty"`
+	// Prompts optionally overrides the saved prompt per test type for this run.
+	Prompts        map[string]string `json:"prompts,omitempty"`
 	IdempotencyKey string            `json:"idempotency_key"`
 }
 type IntelligentTestEnqueued struct {

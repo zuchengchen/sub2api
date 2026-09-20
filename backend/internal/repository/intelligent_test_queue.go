@@ -109,6 +109,9 @@ func (r *intelligentTestRepository) Enqueue(ctx context.Context, actor int64, re
 			if override := strings.TrimSpace(req.Models[kind]); override != "" {
 				cfg.Model = override
 			}
+			if override := strings.TrimSpace(req.Prompts[kind]); override != "" {
+				cfg.Prompt = override
+			}
 			active, activeErr := scanIntelligentRecord(tx.QueryRowContext(ctx, `SELECT `+intelligentRecordColumns+` FROM account_tests t WHERE account_id=$1 AND test_type=$2 AND status IN ('queued','running') FOR UPDATE`, id, kind))
 			if activeErr == nil {
 				if !service.SameIntelligentTestConfig(*active.ConfigSnapshot, cfg) {
