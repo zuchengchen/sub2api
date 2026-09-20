@@ -183,7 +183,7 @@ WHERE t.test_type='pelican' AND t.status NOT IN ('queued','running','cancelled')
   AND s.user_visible
   AND a.deleted_at IS NULL
   AND t.result ILIKE '%<svg%'
-  AND COALESCE(t.finished_at, t.created_at) >= NOW() - INTERVAL '6 hours'
+  AND COALESCE(t.finished_at, t.created_at) >= NOW() - INTERVAL '24 hours'
   AND EXISTS (
     SELECT 1 FROM account_groups ag JOIN groups g ON g.id=ag.group_id
     WHERE ag.account_id=a.id AND g.deleted_at IS NULL AND lower(g.name)=$1
@@ -219,7 +219,7 @@ func (r *intelligentTestRepository) DeleteStalePelicanTests(ctx context.Context)
 DELETE FROM account_tests
 WHERE test_type='pelican'
   AND status NOT IN ('queued','running')
-  AND COALESCE(finished_at, created_at) < NOW() - INTERVAL '6 hours'`)
+  AND COALESCE(finished_at, created_at) < NOW() - INTERVAL '24 hours'`)
 	if err != nil {
 		return 0, err
 	}
@@ -227,7 +227,7 @@ WHERE test_type='pelican'
 	if _, err := r.db.ExecContext(ctx, `
 DELETE FROM intelligent_test_requests
 WHERE (request_key LIKE 'pelican-slot-%' OR request_key LIKE 'pelican-hourly-%')
-  AND created_at < NOW() - INTERVAL '6 hours'`); err != nil {
+  AND created_at < NOW() - INTERVAL '24 hours'`); err != nil {
 		return n, err
 	}
 	return n, nil
