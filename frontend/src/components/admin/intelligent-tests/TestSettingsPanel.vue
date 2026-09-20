@@ -1,6 +1,6 @@
 <template>
   <div class="space-y-5">
-    <div class="rounded-xl border border-primary-200 bg-primary-50/50 p-4 text-sm leading-relaxed text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-300">测试功能与用户可见性独立控制。关闭用户可见后，普通用户的入口和结果接口都会隐藏；检测不会自动修改账号策略。</div>
+    <div class="rounded-xl border border-primary-200 bg-primary-50/50 p-4 text-sm leading-relaxed text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-300">测试功能与用户可见性独立控制。关闭用户可见后，普通用户的入口和结果接口都会隐藏。管理员页不会自动发起测试，只能手动点运行；用户页鹈鹕动画仍按独立日程定时生成。检测不会自动修改账号策略。</div>
     <form v-for="setting in drafts" :key="setting.test_type" class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-dark-700 dark:bg-dark-800" @submit.prevent="save(setting)">
       <fieldset :disabled="saving === setting.test_type" @input="markDirty(setting.test_type)" @change="markDirty(setting.test_type)">
       <div class="flex flex-wrap items-center justify-between gap-4 border-b border-gray-100 pb-4 dark:border-dark-700">
