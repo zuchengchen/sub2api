@@ -85,3 +85,10 @@ func TestRunScheduledPelicanSkipsWithoutAdminOrAccounts(t *testing.T) {
 	(&IntelligentTestService{repo: noAccounts}).runScheduledPelican(context.Background())
 	require.Empty(t, noAccounts.enqueued)
 }
+
+func TestRunScheduledPelicanUsesOnlyListedTicketedAccounts(t *testing.T) {
+	repo := &hourlyPelicanRepo{adminID: 3, accountIDs: []int64{42}}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelican(context.Background())
+	require.Equal(t, []int64{42}, repo.enqueued[0].AccountIDs)
+}

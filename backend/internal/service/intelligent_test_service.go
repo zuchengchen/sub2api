@@ -323,6 +323,7 @@ func (s *IntelligentTestService) runScheduledPelican(ctx context.Context) {
 		return
 	}
 	if len(ids) == 0 {
+		slog.Info("scheduled pelican skipped: no GPT-PRO ChatGPT OAuth account with a live 292 gpt-6-astra ticket")
 		return
 	}
 	s.mu.Lock()
