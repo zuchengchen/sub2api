@@ -17,6 +17,15 @@ type IntelligentTestHandler struct {
 func NewIntelligentTestHandler(svc *service.IntelligentTestService) *IntelligentTestHandler {
 	return &IntelligentTestHandler{svc: svc}
 }
+func intelligentUserActor(c *gin.Context) (int64, bool) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "authentication required")
+		return 0, false
+	}
+	return subject.UserID, true
+}
+
 func intelligentAdminActor(c *gin.Context) (int64, bool) {
 	subject, ok := middleware.GetAuthSubjectFromContext(c)
 	if !ok || subject.UserID <= 0 {
@@ -102,6 +111,21 @@ func IntelligentTestParamID(c *gin.Context, param string) (int64, bool) {
 	}
 	return id, true
 }
+func (h *IntelligentTestHandler) UserPelicanTests(c *gin.Context) {
+	actor, ok := intelligentUserActor(c)
+	if !ok {
+		return
+	}
+	f, ok := ParseIntelligentTestFilter(c)
+	if !ok {
+		return
+	}
+	out, err := h.svc.UserPelicanTests(c.Request.Context(), actor, f)
+	if !response.ErrorFrom(c, err) {
+		response.Success(c, out)
+	}
+}
+
 func (h *IntelligentTestHandler) Accounts(c *gin.Context) {
 	actor, ok := intelligentAdminActor(c)
 	if !ok {

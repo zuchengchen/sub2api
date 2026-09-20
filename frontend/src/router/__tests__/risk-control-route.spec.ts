@@ -61,6 +61,16 @@ describe('unified risk-control routes', () => {
     expect(router.getRoutes().find((route) => route.path === '/admin/intelligent-tests')?.redirect).toBe('/admin/accounts/tests')
   })
 
+  it('registers the user pelican test page without a run action', async () => {
+    const { default: router } = await import('@/router')
+    expect(router.getRoutes().some((route) => route.path === '/pelican-test')).toBe(true)
+    expect(router.getRoutes().find((route) => route.path === '/pelican-test')?.meta.requiresAdmin).toBe(false)
+    const sidebarPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../components/layout/AppSidebar.vue')
+    const source = readFileSync(sidebarPath, 'utf8')
+    expect(source).toContain("path: '/pelican-test'")
+    expect(source).toContain("t('nav.pelicanTest')")
+  })
+
   it('exposes Risk Control as a direct sidebar item', () => {
     const sidebarPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../components/layout/AppSidebar.vue')
     const source = readFileSync(sidebarPath, 'utf8')

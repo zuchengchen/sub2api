@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 )
 
 // This predicate is shared by list, detail, history and image reads. Visibility
@@ -126,4 +128,76 @@ func (r *intelligentTestRepository) Capabilities(ctx context.Context, user int64
 		}
 	}
 	return out, total, nil
+}
+
+func (r *intelligentTestRepository) FirstAdminUserID(ctx context.Context) (int64, error) {
+	var id int64
+	err := r.db.QueryRowContext(ctx, `SELECT id FROM users WHERE role=$1 AND status=$2 AND deleted_at IS NULL ORDER BY id LIMIT 1`, service.RoleAdmin, service.StatusActive).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
+}
+
+func (r *intelligentTestRepository) ListGPTProOpenAIAccountIDs(ctx context.Context) ([]int64, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT DISTINCT a.id
+FROM accounts a
+JOIN account_groups ag ON ag.account_id=a.id
+JOIN groups g ON g.id=ag.group_id
+WHERE a.deleted_at IS NULL AND a.status=$1 AND a.platform=$2 AND a.type=ANY($3)
+  AND a.parent_account_id IS NULL AND a.schedulable=true
+  AND g.deleted_at IS NULL AND g.status=$1 AND lower(g.name)=$4
+ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.VipDiscountedGroupName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (r *intelligentTestRepository) UserPelicanTests(ctx context.Context, f service.IntelligentTestFilter) (*service.UserPelicanTests, error) {
+	out := &service.UserPelicanTests{Items: []service.UserPelicanTest{}, Page: f.Page, PageSize: f.PageSize}
+	base := `
+FROM account_tests t
+JOIN accounts a ON a.id=t.account_id
+JOIN test_settings s ON s.test_type=t.test_type
+WHERE t.test_type='pelican' AND t.status NOT IN ('queued','running','cancelled')
+  AND s.user_visible
+  AND a.deleted_at IS NULL
+  AND EXISTS (
+    SELECT 1 FROM account_groups ag JOIN groups g ON g.id=ag.group_id
+    WHERE ag.account_id=a.id AND g.deleted_at IS NULL AND lower(g.name)=$1
+  )`
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) `+base, service.VipDiscountedGroupName).Scan(&out.Total); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT t.id,t.status,t.result,t.model,t.created_at,t.finished_at,t.duration_ms,
+COALESCE(NULLIF(t.config_snapshot#>>'{execution,group_name}',''),'GPT-PRO'),
+COALESCE(NULLIF(t.config_snapshot#>>'{execution,reasoning_effort}',''),'low')
+`+base+` ORDER BY t.id DESC LIMIT $2 OFFSET $3`, service.VipDiscountedGroupName, f.PageSize, (f.Page-1)*f.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		item := service.UserPelicanTest{}
+		var raw string
+		if err := rows.Scan(&item.ID, &item.Status, &raw, &item.Model, &item.CreatedAt, &item.FinishedAt, &item.DurationMS, &item.GroupName, &item.ReasoningEffort); err != nil {
+			return nil, err
+		}
+		if html, err := service.SanitizeIntelligentTestHTML(raw); err == nil {
+			item.HTML = html
+		}
+		out.Items = append(out.Items, item)
+	}
+	return out, rows.Err()
 }

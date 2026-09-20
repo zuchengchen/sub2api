@@ -33,6 +33,18 @@ const (
 
 // Only an empty selection receives the protocol default. Explicit choices
 // remain observable even when the upstream rejects the requested model.
+func pelicanTestGroupName(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	for _, group := range account.Groups {
+		if group != nil && VipDiscountedGroup(group.Name) {
+			return strings.TrimSpace(group.Name)
+		}
+	}
+	return ""
+}
+
 func resolveIntelligentTestModel(account *Account, configured string) string {
 	model := strings.TrimSpace(configured)
 	if model != "" {
@@ -120,6 +132,7 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 	r.ConfigSnapshot.Execution.RequestedModel = r.ConfigSnapshot.Model
 	r.ConfigSnapshot.Execution.Model = r.Model
 	r.ConfigSnapshot.Execution.ReasoningEffort = intelligentTestDefaultReasoningEffort
+	r.ConfigSnapshot.Execution.GroupName = pelicanTestGroupName(account)
 	capture := &intelligentCapture{}
 	capture.collectCredentialSecrets(account.Credentials)
 	ctx = context.WithValue(ctx, intelligentRunKey{}, &intelligentRunContext{prompt: r.Input, capture: capture})

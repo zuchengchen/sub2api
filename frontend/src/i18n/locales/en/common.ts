@@ -213,6 +213,7 @@ export default {
     riskControl: 'Risk Control',
     accountHealth: 'Account Health',
     intelligentTests: 'Intelligent Tests',
+    pelicanTest: 'Pelican Test',
     securityPolicy: 'Security Policy',
     auditLogs: 'Audit Logs',
   },
@@ -504,5 +505,14 @@ export default {
     adminApiKeyForbidden: 'Admin API keys cannot perform this operation. Use a two-factor verified admin session.'
   },
 
-  // Dashboard
+  pelicanTest: {
+    subtitle: 'Every hour GPT-PRO accounts generate an HTML pelican-on-a-bicycle SVG animation with gpt-6-astra (reasoning low). This page only shows results; you cannot start a test.',
+    empty: 'No results yet. Wait for the next hourly run.',
+    time: 'Test time',
+    group: 'Group',
+    model: 'Model',
+    reasoning: 'Reasoning',
+    htmlUnavailable: 'This HTML cannot be displayed safely',
+    loadFailed: 'Failed to load pelican tests'
+  }
 }
