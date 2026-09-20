@@ -66,14 +66,14 @@ func (r *userPelicanListRepo) UserPelicanTests(_ context.Context, f IntelligentT
 	return &UserPelicanTests{Items: []UserPelicanTest{}, Page: f.Page, PageSize: f.PageSize}, nil
 }
 
-func TestUserPelicanTestsListsLastHour(t *testing.T) {
+func TestUserPelicanTestsListsLastDay(t *testing.T) {
 	repo := &userPelicanListRepo{}
 	svc := &IntelligentTestService{repo: repo}
-	out, err := svc.UserPelicanTests(context.Background(), 9, IntelligentTestFilter{Page: 3, PageSize: 99})
+	out, err := svc.UserPelicanTests(context.Background(), 9, IntelligentTestFilter{Page: 3, PageSize: 12})
 	require.NoError(t, err)
 	require.Equal(t, 1, repo.filter.Page)
-	require.Equal(t, 12, repo.filter.PageSize)
-	require.Equal(t, 12, out.PageSize)
+	require.Equal(t, 144, repo.filter.PageSize)
+	require.Equal(t, 144, out.PageSize)
 }
 
 func TestRunScheduledPelicanSkipsWithoutAdminOrAccounts(t *testing.T) {
