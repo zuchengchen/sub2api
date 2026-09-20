@@ -506,8 +506,8 @@ export default {
   },
 
   pelicanTest: {
-    subtitle: 'Once an hour a random GPT-PRO account generates one HTML pelican-on-a-bicycle SVG animation with gpt-6-astra (reasoning low). This page shows only the latest result; you cannot start a test.',
-    empty: 'No results yet. Wait for the next hourly run.',
+    subtitle: 'Every 10 minutes a random animal is chosen, then one GPT-PRO account generates an HTML bicycle SVG animation with gpt-6-astra (reasoning low). Results from the last hour are kept; click a timestamp to view one. You cannot start a test.',
+    empty: 'No results in the last hour. Wait for the next automatic run.',
     time: 'Test time',
     group: 'Group',
     model: 'Model',
