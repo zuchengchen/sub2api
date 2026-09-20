@@ -7,6 +7,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"regexp"
 	"strings"
 	"sync"
@@ -262,7 +263,10 @@ func (s *IntelligentTestService) UserPelicanTests(ctx context.Context, user int6
 	if user < 1 {
 		return nil, ErrIntelligentTestForbidden
 	}
-	return s.repo.UserPelicanTests(ctx, normalizeIntelligentFilter(f))
+	f = normalizeIntelligentFilter(f)
+	f.Page = 1
+	f.PageSize = 1
+	return s.repo.UserPelicanTests(ctx, f)
 }
 
 func (s *IntelligentTestService) hourlyPelicanLoop(ctx context.Context) {
@@ -314,26 +318,21 @@ func (s *IntelligentTestService) runHourlyPelican(ctx context.Context) {
 	if len(ids) == 0 {
 		return
 	}
-	hourKey := time.Now().UTC().Format("2006010215")
-	for start := 0; start < len(ids); start += 100 {
-		end := start + 100
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunk := ids[start:end]
-		req := IntelligentTestEnqueue{
-			AccountIDs:     append([]int64(nil), chunk...),
-			TestTypes:      []string{"pelican"},
-			Models:         map[string]string{"pelican": intelligentTestDefaultCodexModel},
-			IdempotencyKey: fmt.Sprintf("pelican-hourly-%s-%d", hourKey, start/100),
-		}
-		out, err := s.repo.Enqueue(ctx, actor, req)
-		if err != nil {
-			slog.Error("hourly pelican enqueue failed", "error", err, "offset", start)
-			continue
-		}
-		s.startEnqueued(ctx, out)
+	// One request per hour, as if a user hit GPT-PRO once: pick a single
+	// schedulable ChatGPT OAuth account from the group at random.
+	picked := ids[rand.IntN(len(ids))]
+	req := IntelligentTestEnqueue{
+		AccountIDs:     []int64{picked},
+		TestTypes:      []string{"pelican"},
+		Models:         map[string]string{"pelican": intelligentTestDefaultCodexModel},
+		IdempotencyKey: fmt.Sprintf("pelican-hourly-%s", time.Now().UTC().Format("2006010215")),
 	}
+	out, err := s.repo.Enqueue(ctx, actor, req)
+	if err != nil {
+		slog.Error("hourly pelican enqueue failed", "error", err, "account_id", picked)
+		return
+	}
+	s.startEnqueued(ctx, out)
 }
 
 func (s *IntelligentTestService) Capabilities(ctx context.Context, user int64, f IntelligentTestFilter) ([]AccountCapability, int64, error) {

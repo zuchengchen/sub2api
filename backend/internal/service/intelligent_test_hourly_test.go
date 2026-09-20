@@ -37,10 +37,31 @@ func TestRunHourlyPelicanEnqueuesAstraLowOnGPTProAccounts(t *testing.T) {
 	svc.runHourlyPelican(context.Background())
 	require.Equal(t, []int64{3}, repo.actors)
 	require.Len(t, repo.enqueued, 1)
-	require.Equal(t, []int64{11, 12}, repo.enqueued[0].AccountIDs)
+	require.Len(t, repo.enqueued[0].AccountIDs, 1)
+	require.Contains(t, []int64{11, 12}, repo.enqueued[0].AccountIDs[0])
 	require.Equal(t, []string{"pelican"}, repo.enqueued[0].TestTypes)
 	require.Equal(t, "gpt-6-astra", repo.enqueued[0].Models["pelican"])
-	require.Contains(t, repo.enqueued[0].IdempotencyKey, "pelican-hourly-")
+	require.Regexp(t, `^pelican-hourly-\d{10}$`, repo.enqueued[0].IdempotencyKey)
+}
+
+type userPelicanListRepo struct {
+	IntelligentTestRepository
+	filter IntelligentTestFilter
+}
+
+func (r *userPelicanListRepo) UserPelicanTests(_ context.Context, f IntelligentTestFilter) (*UserPelicanTests, error) {
+	r.filter = f
+	return &UserPelicanTests{Items: []UserPelicanTest{}, Page: f.Page, PageSize: f.PageSize}, nil
+}
+
+func TestUserPelicanTestsForcesSingleLatestResult(t *testing.T) {
+	repo := &userPelicanListRepo{}
+	svc := &IntelligentTestService{repo: repo}
+	out, err := svc.UserPelicanTests(context.Background(), 9, IntelligentTestFilter{Page: 3, PageSize: 12})
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.filter.Page)
+	require.Equal(t, 1, repo.filter.PageSize)
+	require.Equal(t, 1, out.PageSize)
 }
 
 func TestRunHourlyPelicanSkipsWithoutAdminOrAccounts(t *testing.T) {

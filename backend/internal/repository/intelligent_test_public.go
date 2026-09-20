@@ -173,6 +173,7 @@ JOIN test_settings s ON s.test_type=t.test_type
 WHERE t.test_type='pelican' AND t.status NOT IN ('queued','running','cancelled')
   AND s.user_visible
   AND a.deleted_at IS NULL
+  AND t.result ILIKE '%<svg%'
   AND EXISTS (
     SELECT 1 FROM account_groups ag JOIN groups g ON g.id=ag.group_id
     WHERE ag.account_id=a.id AND g.deleted_at IS NULL AND lower(g.name)=$1
@@ -182,7 +183,8 @@ WHERE t.test_type='pelican' AND t.status NOT IN ('queued','running','cancelled')
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT t.id,t.status,t.result,t.model,t.created_at,t.finished_at,t.duration_ms,
 COALESCE(NULLIF(t.config_snapshot#>>'{execution,group_name}',''),'GPT-PRO'),
-COALESCE(NULLIF(t.config_snapshot#>>'{execution,reasoning_effort}',''),'low')
+COALESCE(NULLIF(t.config_snapshot#>>'{execution,reasoning_effort}',''),'low'),
+COALESCE(NULLIF(t.input,''),NULLIF(t.config_snapshot->>'prompt',''),'')
 `+base+` ORDER BY t.id DESC LIMIT $2 OFFSET $3`, service.VipDiscountedGroupName, f.PageSize, (f.Page-1)*f.PageSize)
 	if err != nil {
 		return nil, err
@@ -191,7 +193,7 @@ COALESCE(NULLIF(t.config_snapshot#>>'{execution,reasoning_effort}',''),'low')
 	for rows.Next() {
 		item := service.UserPelicanTest{}
 		var raw string
-		if err := rows.Scan(&item.ID, &item.Status, &raw, &item.Model, &item.CreatedAt, &item.FinishedAt, &item.DurationMS, &item.GroupName, &item.ReasoningEffort); err != nil {
+		if err := rows.Scan(&item.ID, &item.Status, &raw, &item.Model, &item.CreatedAt, &item.FinishedAt, &item.DurationMS, &item.GroupName, &item.ReasoningEffort, &item.Prompt); err != nil {
 			return nil, err
 		}
 		if html, err := service.SanitizeIntelligentTestHTML(raw); err == nil {
