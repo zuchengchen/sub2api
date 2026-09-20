@@ -8,6 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDeleteStalePelicanTestsSQLKeepsThreeHours(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("intelligent_test_public.go")
+	require.NoError(t, err)
+	body := string(src)
+	require.Contains(t, body, "INTERVAL '3 hours'")
+	require.Contains(t, body, "DELETE FROM account_tests")
+	require.NotContains(t, body, "INTERVAL '1 day'")
+}
+
 func TestListGPTProOpenAIAccountIDsSQLRequiresLiveAstraTicket(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("intelligent_test_public.go")

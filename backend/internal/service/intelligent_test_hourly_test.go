@@ -66,14 +66,31 @@ func (r *userPelicanListRepo) UserPelicanTests(_ context.Context, f IntelligentT
 	return &UserPelicanTests{Items: []UserPelicanTest{}, Page: f.Page, PageSize: f.PageSize}, nil
 }
 
-func TestUserPelicanTestsListsLastDay(t *testing.T) {
+func TestUserPelicanTestsListsLastThreeHours(t *testing.T) {
 	repo := &userPelicanListRepo{}
 	svc := &IntelligentTestService{repo: repo}
 	out, err := svc.UserPelicanTests(context.Background(), 9, IntelligentTestFilter{Page: 3, PageSize: 12})
 	require.NoError(t, err)
 	require.Equal(t, 1, repo.filter.Page)
-	require.Equal(t, 144, repo.filter.PageSize)
-	require.Equal(t, 144, out.PageSize)
+	require.Equal(t, 18, repo.filter.PageSize)
+	require.Equal(t, 18, out.PageSize)
+}
+
+type purgePelicanRepo struct {
+	IntelligentTestRepository
+	deleted int64
+}
+
+func (r *purgePelicanRepo) DeleteStalePelicanTests(context.Context) (int64, error) {
+	r.deleted = 4
+	return r.deleted, nil
+}
+
+func TestPurgeStalePelicanTestsDeletesOlderThanThreeHours(t *testing.T) {
+	repo := &purgePelicanRepo{}
+	svc := &IntelligentTestService{repo: repo}
+	svc.purgeStalePelicanTests(context.Background())
+	require.Equal(t, int64(4), repo.deleted)
 }
 
 func TestRunScheduledPelicanSkipsWithoutAdminOrAccounts(t *testing.T) {
