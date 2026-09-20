@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"io"
+	"maps"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +28,8 @@ func ticketTestAccount(id int64) *Account {
 		ID:          id,
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
 		Credentials: map[string]any{"access_token": "tok", "chatgpt_account_id": "acc-1"},
 	}
 }
@@ -337,7 +341,7 @@ type codexTicketRefreshRepo struct {
 func (r *codexTicketRefreshRepo) ListByPlatform(context.Context, string) ([]Account, error) {
 	return r.accounts, nil
 }
-func (r *codexTicketRefreshRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
+func (r *codexTicketRefreshRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.updates == nil {
@@ -345,6 +349,19 @@ func (r *codexTicketRefreshRepo) UpdateExtra(_ context.Context, _ int64, updates
 	}
 	for k, v := range updates {
 		r.updates[k] = v
+	}
+	for i := range r.accounts {
+		if r.accounts[i].ID != id {
+			continue
+		}
+		extra := maps.Clone(r.accounts[i].Extra)
+		if extra == nil {
+			extra = make(map[string]any, len(updates))
+		}
+		for k, v := range updates {
+			extra[k] = v
+		}
+		r.accounts[i].Extra = extra
 	}
 	return nil
 }
@@ -447,4 +464,192 @@ func TestOpenAICodexTicketGate_CompactRequestUsesForwardOutboundModel(t *testing
 
 	// 回归锚点：按客户端原始模型判定（旧实现的口径）在 compact 下必然误拦。
 	require.True(t, svc.openAICodexTicketBlocksAccount(account, canonicalOpenAIAccountSchedulingModel(account, "gpt-6-astra")))
+}
+
+func TestOpenAICodexTicketHarvestSkipReason(t *testing.T) {
+	now := time.Now()
+	fresh := now.Format(time.RFC3339)
+	quota := func(window string, used float64, reset time.Time, updated string) map[string]any {
+		return map[string]any{
+			"codex_" + window + "_used_percent": used,
+			"codex_" + window + "_reset_at":     reset.Format(time.RFC3339),
+			"codex_usage_updated_at":            updated,
+		}
+	}
+
+	t.Run("usable_account_keeps_harvesting", func(t *testing.T) {
+		require.Empty(t, openAICodexTicketHarvestSkipReason(ticketTestAccount(1), now))
+	})
+	t.Run("rate_limit_without_full_quota_is_not_skipped", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		reset := now.Add(2 * time.Hour)
+		account.RateLimitResetAt = &reset
+		account.Extra = quota("5h", 50, now.Add(3*time.Hour), fresh)
+		require.Empty(t, openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("overload_is_not_skipped", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		until := now.Add(time.Hour)
+		account.OverloadUntil = &until
+		require.Empty(t, openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("health_temp_unschedulable_is_not_skipped", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		until := now.Add(time.Hour)
+		account.TempUnschedulableUntil = &until
+		account.TempUnschedulableReason = "health:auto err_rate=50.0%"
+		require.Empty(t, openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("quota_7d_100_skips", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		account.Extra = quota("7d", 100, now.Add(48*time.Hour), fresh)
+		require.Equal(t, "quota_7d", openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("quota_5h_100_skips", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		account.Extra = quota("5h", 100, now.Add(2*time.Hour), fresh)
+		require.Equal(t, "quota_5h", openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("quota_100_after_reset_does_not_skip", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		account.Extra = quota("7d", 100, now.Add(-time.Minute), fresh)
+		require.Empty(t, openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("stale_quota_snapshot_does_not_skip", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		account.Extra = quota("7d", 100, now.Add(48*time.Hour), now.Add(-3*time.Hour).Format(time.RFC3339))
+		require.Empty(t, openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("auth_cooldown_skips", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		until := now.Add(10 * time.Minute)
+		account.TempUnschedulableUntil = &until
+		account.TempUnschedulableReason = "OAuth 401: invalid or expired credentials"
+		require.Equal(t, "auth", openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("error_status_skips", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		account.Status = StatusError
+		require.Equal(t, "not_active", openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("manual_unschedulable_skips", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		account.Schedulable = false
+		require.Equal(t, "manual_unschedulable", openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("expired_account_skips", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		account.AutoPauseOnExpired = true
+		expired := now.Add(-time.Minute)
+		account.ExpiresAt = &expired
+		require.Equal(t, "expired", openAICodexTicketHarvestSkipReason(account, now))
+	})
+	t.Run("missing_ticket_is_not_a_skip", func(t *testing.T) {
+		account := ticketTestAccount(1)
+		require.Empty(t, openAICodexTicketHarvestSkipReason(account, now))
+		require.True(t, ticketTestService(t, config.OpenAICodexTicketConfig{
+			Enabled: true, FailClosed: true, TargetLength: 292,
+		}, nil).openAICodexTicketBlocksAccount(account, "gpt-6-astra"))
+	})
+}
+
+func TestRefreshOpenAICodexTickets_SkipsExhaustedQuotaButNotRateLimitCooldown(t *testing.T) {
+	now := time.Now()
+	exhausted := ticketTestAccount(68)
+	exhausted.Extra = map[string]any{
+		"codex_7d_used_percent":  100.0,
+		"codex_7d_reset_at":      now.Add(48 * time.Hour).Format(time.RFC3339),
+		"codex_usage_updated_at": now.Format(time.RFC3339),
+		"codex_5h_used_percent":  0.0,
+	}
+	limited := ticketTestAccount(73)
+	reset := now.Add(3 * time.Hour)
+	limited.RateLimitResetAt = &reset
+	limited.Extra = map[string]any{
+		"codex_5h_used_percent":  50.0,
+		"codex_5h_reset_at":      now.Add(4 * time.Hour).Format(time.RFC3339),
+		"codex_usage_updated_at": now.Format(time.RFC3339),
+	}
+	upstream := &httpUpstreamRecorder{resp: func() *http.Response {
+		h := http.Header{}
+		h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+		return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
+	}()}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		HarvestProxyURL: "socks5h://harvest.example:31",
+		Models:          []string{"gpt-6-astra"},
+	}, upstream)
+	svc.accountRepo = &codexTicketRefreshRepo{accounts: []Account{*exhausted, *limited}}
+	svc.refreshOpenAICodexTickets(context.Background())
+	require.Len(t, upstream.requests, 1)
+	require.NotNil(t, svc.lookupOpenAICodexTicket(limited, "gpt-6-astra"))
+	require.Nil(t, svc.lookupOpenAICodexTicket(exhausted, "gpt-6-astra"))
+}
+
+func TestProbeOpenAICodexTicket_UsageLimitReachedPersistsQuotaSnapshot(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-reset-after-seconds", "604800")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	body := `{"error":{"type":"usage_limit_reached","message":"limit reached"}}`
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     headers,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}}}
+	account := ticketTestAccount(68)
+	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		HarvestProxyURL: "socks5h://harvest.example:31",
+		Models:          []string{"gpt-6-astra"},
+	}, upstream)
+	svc.accountRepo = repo
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+	require.Nil(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra"))
+	require.Equal(t, 100.0, repo.updates["codex_7d_used_percent"])
+	require.Equal(t, "quota_7d", openAICodexTicketHarvestSkipReason(account, time.Now()))
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+	require.Len(t, upstream.requests, 1)
+}
+
+func TestProbeOpenAICodexTicket_NonQuota429KeepsHunting(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "37")
+	headers.Set("x-codex-primary-reset-after-seconds", "604800")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	headers.Set("x-codex-secondary-used-percent", "12")
+	headers.Set("x-codex-secondary-reset-after-seconds", "18000")
+	headers.Set("x-codex-secondary-window-minutes", "300")
+	header292 := http.Header{}
+	header292.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusTooManyRequests, Header: headers, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_exceeded"}}`))},
+		{StatusCode: http.StatusOK, Header: header292, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))},
+	}}
+	account := ticketTestAccount(73)
+	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		HarvestProxyURL: "socks5h://harvest.example:31",
+	}, upstream)
+	svc.accountRepo = repo
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+	require.Nil(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra"))
+	require.Empty(t, openAICodexTicketHarvestSkipReason(account, time.Now()))
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+	ticket := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
+	require.NotNil(t, ticket)
+	require.Len(t, upstream.requests, 2)
+}
+
+func TestOpenAICodexTicketHarvestQuotaUpdatesFromUsageLimitBody(t *testing.T) {
+	now := time.Now()
+	fiveHourReset := now.Add(90 * time.Minute).Unix()
+	updates := openAICodexTicketHarvestQuotaUpdatesFromProbe(nil, []byte(
+		`{"error":{"type":"usage_limit_reached","message":"limit reached","resets_at":`+strconv.FormatInt(fiveHourReset, 10)+`}}`,
+	), now)
+	require.Equal(t, 100.0, updates["codex_5h_used_percent"])
+	require.NotContains(t, updates, "codex_7d_used_percent")
 }
