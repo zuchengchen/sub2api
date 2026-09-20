@@ -10,7 +10,7 @@
       <p v-else-if="error" class="text-sm text-red-600" role="alert">{{ error }}</p>
       <p v-else-if="!items.length" class="rounded-2xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-400 dark:border-dark-700">{{ t('pelicanTest.empty') }}</p>
       <div v-else class="mx-auto max-w-4xl space-y-4">
-        <div v-if="items.length > 1" class="flex flex-wrap gap-2">
+        <div v-if="items.length > 1" class="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
           <button
             v-for="row in items"
             :key="row.id"
@@ -85,7 +85,7 @@ function formatTime(value?: string | null) {
 
 onMounted(async () => {
   try {
-    const page = await pelicanTestsAPI.list(1, 12)
+    const page = await pelicanTestsAPI.list(1, 144)
     items.value = page.items || []
     selected.value = items.value[0] ?? null
   } catch (err) {

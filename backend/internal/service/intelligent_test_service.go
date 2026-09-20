@@ -265,9 +265,8 @@ func (s *IntelligentTestService) UserPelicanTests(ctx context.Context, user int6
 	}
 	f = normalizeIntelligentFilter(f)
 	f.Page = 1
-	if f.PageSize < 1 || f.PageSize > 12 {
-		f.PageSize = 12
-	}
+	// 10-minute runs × 24h = 144 slots; keep the user gallery to one day.
+	f.PageSize = 144
 	return s.repo.UserPelicanTests(ctx, f)
 }
 

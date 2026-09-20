@@ -183,7 +183,7 @@ WHERE t.test_type='pelican' AND t.status NOT IN ('queued','running','cancelled')
   AND s.user_visible
   AND a.deleted_at IS NULL
   AND t.result ILIKE '%<svg%'
-  AND COALESCE(t.finished_at, t.created_at) >= NOW() - INTERVAL '1 hour'
+  AND COALESCE(t.finished_at, t.created_at) >= NOW() - INTERVAL '1 day'
   AND EXISTS (
     SELECT 1 FROM account_groups ag JOIN groups g ON g.id=ag.group_id
     WHERE ag.account_id=a.id AND g.deleted_at IS NULL AND lower(g.name)=$1
