@@ -139,6 +139,25 @@ type PublicAccountTests struct {
 	Page     int                 `json:"page"`
 	PageSize int                 `json:"page_size"`
 }
+
+type UserPelicanTest struct {
+	ID              int64      `json:"id"`
+	Status          string     `json:"status"`
+	HTML            string     `json:"html"`
+	Model           string     `json:"model"`
+	GroupName       string     `json:"group_name"`
+	ReasoningEffort string     `json:"reasoning_effort"`
+	CreatedAt       time.Time  `json:"created_at"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	DurationMS      int64      `json:"duration_ms"`
+}
+
+type UserPelicanTests struct {
+	Items    []UserPelicanTest `json:"items"`
+	Total    int64             `json:"total"`
+	Page     int               `json:"page"`
+	PageSize int               `json:"page_size"`
+}
 type IntelligentTestRepository interface {
 	IsAdmin(context.Context, int64) (bool, error)
 	Settings(context.Context) ([]IntelligentTestSetting, error)
@@ -148,6 +167,7 @@ type IntelligentTestRepository interface {
 	Records(context.Context, IntelligentTestFilter) (*IntelligentTestRecords, error)
 	Get(context.Context, int64) (*IntelligentTestRecord, error)
 	Claim(context.Context) (*IntelligentTestRecord, error)
+	ClaimID(context.Context, int64) (*IntelligentTestRecord, error)
 	Finish(context.Context, *IntelligentTestRecord) error
 	DeferForCapacity(context.Context, *IntelligentTestRecord) error
 	Cancel(context.Context, int64, int64) (*IntelligentTestRecord, error)
@@ -155,6 +175,9 @@ type IntelligentTestRepository interface {
 	Capabilities(context.Context, int64, IntelligentTestFilter) ([]AccountCapability, int64, error)
 	PublicRecords(context.Context, int64, IntelligentTestFilter) (*PublicAccountTests, error)
 	PublicGet(context.Context, int64, int64) (*PublicAccountTest, error)
+	FirstAdminUserID(context.Context) (int64, error)
+	ListGPTProOpenAIAccountIDs(context.Context) ([]int64, error)
+	UserPelicanTests(context.Context, IntelligentTestFilter) (*UserPelicanTests, error)
 }
 type IntelligentTestRunner interface {
 	RunIntelligentTest(context.Context, *IntelligentTestRecord) error

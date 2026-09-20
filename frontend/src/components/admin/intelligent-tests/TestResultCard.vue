@@ -17,7 +17,7 @@
       </div>
       <div v-else class="p-6 text-center text-sm text-gray-400">
         <span class="mb-3 block text-2xl" aria-hidden="true">{{ record?.status === 'running' ? '◌' : '▷' }}</span>
-        {{ record?.status === 'running' ? '正在等待模型输出' : record?.status === 'queued' ? '当前排队' : '等待第一份检测结果' }}
+        {{ record?.status === 'running' ? '正在等待模型输出' : record?.status === 'queued' ? '正在启动' : '等待第一份检测结果' }}
       </div>
     </button>
     <div class="flex items-center justify-between gap-2 px-4">

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"log/slog"
+	"maps"
 	"regexp"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ type IntelligentTestService struct {
 	runner     IntelligentTestRunner
 	evaluators map[string]IntelligentTestEvaluator
 	cancel     context.CancelFunc
+	runCtx     context.Context
 	mu         sync.Mutex
 	wg         sync.WaitGroup
 }
@@ -167,8 +169,173 @@ func (s *IntelligentTestService) Enqueue(ctx context.Context, actor int64, req I
 			return nil, intelligentTestBad("model overrides must target selected test types and be at most 200 characters")
 		}
 	}
-	return s.repo.Enqueue(ctx, actor, req)
+	out, err := s.repo.Enqueue(ctx, actor, req)
+	if err != nil {
+		return nil, err
+	}
+	s.startEnqueued(ctx, out)
+	return out, nil
 }
+
+func (s *IntelligentTestService) startEnqueued(ctx context.Context, out *IntelligentTestEnqueued) {
+	if out == nil {
+		return
+	}
+	for i, rec := range out.Records {
+		if rec == nil || rec.Status != "queued" {
+			continue
+		}
+		started, err := s.repo.ClaimID(ctx, rec.ID)
+		if err != nil {
+			slog.Error("intelligent test start failed", "id", rec.ID, "error", err)
+			continue
+		}
+		if started == nil {
+			continue
+		}
+		s.spawn(started)
+		compactIntelligentTestAPIRecord(started)
+		out.Records[i] = started
+	}
+}
+
+func compactIntelligentTestAPIRecord(r *IntelligentTestRecord) {
+	if r == nil {
+		return
+	}
+	r.Input = ""
+	r.RawResponse = ""
+	r.ConfigSnapshot = nil
+	if len([]rune(r.Result)) > 600 {
+		r.Result = string([]rune(r.Result)[:600]) + "…"
+	}
+}
+
+func cloneIntelligentTestRecord(r *IntelligentTestRecord) *IntelligentTestRecord {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	if r.ConfigSnapshot != nil {
+		cfg := *r.ConfigSnapshot
+		out.ConfigSnapshot = &cfg
+	}
+	if r.Evaluation != nil {
+		out.Evaluation = maps.Clone(r.Evaluation)
+	}
+	if r.AvailableAt != nil {
+		t := *r.AvailableAt
+		out.AvailableAt = &t
+	}
+	if r.StartedAt != nil {
+		t := *r.StartedAt
+		out.StartedAt = &t
+	}
+	if r.FinishedAt != nil {
+		t := *r.FinishedAt
+		out.FinishedAt = &t
+	}
+	if r.Score != nil {
+		v := *r.Score
+		out.Score = &v
+	}
+	return &out
+}
+
+func (s *IntelligentTestService) spawn(rec *IntelligentTestRecord) {
+	clone := cloneIntelligentTestRecord(rec)
+	s.mu.Lock()
+	ctx := s.runCtx
+	if ctx != nil && ctx.Err() == nil {
+		s.wg.Add(1)
+		s.mu.Unlock()
+		go func() {
+			defer s.wg.Done()
+			s.execute(ctx, clone)
+		}()
+		return
+	}
+	s.mu.Unlock()
+	go s.execute(context.Background(), clone)
+}
+func (s *IntelligentTestService) UserPelicanTests(ctx context.Context, user int64, f IntelligentTestFilter) (*UserPelicanTests, error) {
+	if user < 1 {
+		return nil, ErrIntelligentTestForbidden
+	}
+	return s.repo.UserPelicanTests(ctx, normalizeIntelligentFilter(f))
+}
+
+func (s *IntelligentTestService) hourlyPelicanLoop(ctx context.Context) {
+	defer s.wg.Done()
+	s.runHourlyPelican(ctx)
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.runHourlyPelican(ctx)
+		}
+	}
+}
+
+func (s *IntelligentTestService) runHourlyPelican(ctx context.Context) {
+	if s == nil || s.repo == nil || ctx.Err() != nil {
+		return
+	}
+	settings, err := s.repo.Settings(ctx)
+	if err != nil {
+		slog.Error("hourly pelican settings failed", "error", err)
+		return
+	}
+	enabled := false
+	for _, setting := range settings {
+		if setting.TestType == "pelican" && setting.Enabled {
+			enabled = true
+			break
+		}
+	}
+	if !enabled {
+		return
+	}
+	actor, err := s.repo.FirstAdminUserID(ctx)
+	if err != nil || actor < 1 {
+		if err != nil {
+			slog.Error("hourly pelican admin lookup failed", "error", err)
+		}
+		return
+	}
+	ids, err := s.repo.ListGPTProOpenAIAccountIDs(ctx)
+	if err != nil {
+		slog.Error("hourly pelican account list failed", "error", err)
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	hourKey := time.Now().UTC().Format("2006010215")
+	for start := 0; start < len(ids); start += 100 {
+		end := start + 100
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		req := IntelligentTestEnqueue{
+			AccountIDs:     append([]int64(nil), chunk...),
+			TestTypes:      []string{"pelican"},
+			Models:         map[string]string{"pelican": intelligentTestDefaultCodexModel},
+			IdempotencyKey: fmt.Sprintf("pelican-hourly-%s-%d", hourKey, start/100),
+		}
+		out, err := s.repo.Enqueue(ctx, actor, req)
+		if err != nil {
+			slog.Error("hourly pelican enqueue failed", "error", err, "offset", start)
+			continue
+		}
+		s.startEnqueued(ctx, out)
+	}
+}
+
 func (s *IntelligentTestService) Capabilities(ctx context.Context, user int64, f IntelligentTestFilter) ([]AccountCapability, int64, error) {
 	return s.repo.Capabilities(ctx, user, normalizeIntelligentFilter(f))
 }
@@ -193,6 +360,7 @@ func (s *IntelligentTestService) Start() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
+	s.runCtx = ctx
 	for i := 0; i < 2; i++ {
 		s.wg.Add(1)
 		go func() {
@@ -209,6 +377,8 @@ func (s *IntelligentTestService) Start() {
 			}
 		}()
 	}
+	s.wg.Add(1)
+	go s.hourlyPelicanLoop(ctx)
 }
 func (s *IntelligentTestService) Stop() {
 	if s == nil {
@@ -222,31 +392,41 @@ func (s *IntelligentTestService) Stop() {
 	s.wg.Wait()
 }
 func (s *IntelligentTestService) work(ctx context.Context) {
-	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	record, err := s.repo.Claim(claimCtx)
-	cancel()
-	if err != nil {
-		if ctx.Err() == nil {
-			slog.Error("intelligent test claim failed", "error", err)
+	for {
+		if ctx.Err() != nil {
+			return
 		}
-		return
+		claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		record, err := s.repo.Claim(claimCtx)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Error("intelligent test claim failed", "error", err)
+			}
+			return
+		}
+		if record == nil {
+			return
+		}
+		s.spawn(record)
 	}
-	if record == nil {
-		return
-	}
+}
+
+func (s *IntelligentTestService) execute(ctx context.Context, record *IntelligentTestRecord) {
 	s.run(ctx, record)
 	saveCtx, saveCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer saveCancel()
-	if record.Status == "queued" {
-		if err := s.repo.DeferForCapacity(saveCtx, record); err != nil {
-			slog.Error("intelligent capacity requeue failed", "id", record.ID, "error", err)
+	if record.Status == "queued" || record.Status == "running" || record.Status == "" {
+		record.Status = "failed"
+		if record.ErrorMessage == "" {
+			record.ErrorMessage = "test did not reach a terminal status"
 		}
-		return
 	}
 	if err := s.repo.Finish(saveCtx, record); err != nil {
 		slog.Error("intelligent test result save failed; lease recovery will record interruption", "id", record.ID, "error", err)
 	}
 }
+
 func (s *IntelligentTestService) run(ctx context.Context, r *IntelligentTestRecord) {
 	start := time.Now()
 	defer func() {
@@ -266,25 +446,55 @@ func (s *IntelligentTestService) run(ctx context.Context, r *IntelligentTestReco
 		r.ErrorMessage = "missing test configuration snapshot"
 		return
 	}
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(r.ConfigSnapshot.TimeoutSeconds)*time.Second)
+	timeout := time.Duration(r.ConfigSnapshot.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	err := s.runner.RunIntelligentTest(runCtx, r)
-	if errors.Is(err, ErrIntelligentAccountBusy) {
-		r.Status = "queued"
-		r.QueueReason = "等待账号空闲，不占用额外业务并发"
-		var wait *TestAdmissionWaitError
-		if errors.As(err, &wait) {
-			r.AvailableAt = &wait.Until
-			r.QueueReason = wait.Reason + "，任务延后执行"
+	for {
+		err := s.runner.RunIntelligentTest(runCtx, r)
+		if err == nil {
+			evaluator, ok := s.evaluators[r.ConfigSnapshot.Evaluator]
+			if !ok {
+				r.Status = "failed"
+				r.ErrorMessage = "evaluator unavailable"
+				return
+			}
+			evaluated := evaluator.Evaluate(r.Result, *r.ConfigSnapshot)
+			r.Status = evaluated.Status
+			r.Score = evaluated.Score
+			r.ResultImage = evaluated.Image
+			r.Evaluation = evaluated.Detail
+			return
 		}
-		return
-	}
-	if runCtx.Err() != nil {
-		r.Status = "failed"
-		r.ErrorMessage = "测试超时或服务中断；未自动重试以避免重复计费"
-		return
-	}
-	if err != nil {
+		if errors.Is(err, ErrIntelligentAccountBusy) {
+			if runCtx.Err() != nil {
+				r.Status = "rate_limited"
+				r.ErrorMessage = "账号繁忙，测试超时未等到空闲"
+				return
+			}
+			delay := 5 * time.Second
+			var wait *TestAdmissionWaitError
+			if errors.As(err, &wait) && wait != nil && wait.Until.After(time.Now()) {
+				delay = time.Until(wait.Until)
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-runCtx.Done():
+				timer.Stop()
+				r.Status = "rate_limited"
+				r.ErrorMessage = "账号繁忙，测试超时未等到空闲"
+				return
+			case <-timer.C:
+				continue
+			}
+		}
+		if runCtx.Err() != nil {
+			r.Status = "failed"
+			r.ErrorMessage = "测试超时或服务中断；未自动重试以避免重复计费"
+			return
+		}
 		if r.Status == "running" || r.Status == "" {
 			r.Status = "failed"
 		}
@@ -295,17 +505,6 @@ func (s *IntelligentTestService) run(ctx context.Context, r *IntelligentTestReco
 		r.Evaluation["execution_status"], r.Evaluation["answer_verdict"], r.Evaluation["format_verdict"] = "failed", "not_evaluated", "not_evaluated"
 		return
 	}
-	evaluator, ok := s.evaluators[r.ConfigSnapshot.Evaluator]
-	if !ok {
-		r.Status = "failed"
-		r.ErrorMessage = "evaluator unavailable"
-		return
-	}
-	evaluated := evaluator.Evaluate(r.Result, *r.ConfigSnapshot)
-	r.Status = evaluated.Status
-	r.Score = evaluated.Score
-	r.ResultImage = evaluated.Image
-	r.Evaluation = evaluated.Detail
 }
 
 func (s *IntelligentTestService) PreviewEvaluation(ctx context.Context, actor int64, output string, cfg IntelligentTestConfig) (*IntelligentTestRecord, error) {

@@ -1,6 +1,6 @@
 <template>
   <BaseDialog :show="accountId !== null" :title="`测试账号 #${accountId}`" width="narrow" @close="!busy && emit('close')">
-    <p class="mb-4 text-sm leading-relaxed text-gray-500">测试会发送真实模型请求并产生上游用量。提交后在后台排队执行，可到智能测试页面查看进度。</p>
+    <p class="mb-4 text-sm leading-relaxed text-gray-500">测试会发送真实模型请求并产生上游用量。提交后立即执行，可到智能测试页面查看进度。</p>
     <p v-if="error" class="mb-4 text-sm text-red-600" role="alert">{{ error }}</p>
     <label class="mb-4 block text-sm text-gray-600 dark:text-gray-300">测试模型
       <select v-model="selectedModel" class="input mt-1.5" :disabled="busy || loadingModels">
