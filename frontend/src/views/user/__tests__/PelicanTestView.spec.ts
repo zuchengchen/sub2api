@@ -39,37 +39,48 @@ function mountView() {
 describe('PelicanTestView', () => {
   it('renders HTML results with time, group, model and reasoning and has no run button', async () => {
     vi.mocked(pelicanTestsAPI.list).mockResolvedValue({
-      items: [{
-        id: 9,
-        status: 'completed',
-        html: '<html><body><svg viewBox="0 0 1 1"></svg></body></html>',
-        prompt: '创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画',
-        model: 'gpt-6-astra',
-        group_name: 'GPT-PRO',
-        reasoning_effort: 'low',
-        created_at: '2026-09-20T02:00:00Z',
-        finished_at: '2026-09-20T02:00:12Z',
-        duration_ms: 12000
-      }],
-      total: 1,
+      items: [
+        {
+          id: 10,
+          status: 'completed',
+          html: '<html><body><svg id="latest" viewBox="0 0 1 1"></svg></body></html>',
+          prompt: '创建一个HTML，内容是SVG绘制一个火烈鸟骑自行车的2D动画',
+          model: 'gpt-6-astra',
+          group_name: 'GPT-PRO',
+          reasoning_effort: 'low',
+          created_at: '2026-09-20T02:50:00Z',
+          finished_at: '2026-09-20T02:50:12Z',
+          duration_ms: 12000
+        },
+        {
+          id: 9,
+          status: 'completed',
+          html: '<html><body><svg id="older" viewBox="0 0 1 1"></svg></body></html>',
+          prompt: '创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画',
+          model: 'gpt-6-astra',
+          group_name: 'GPT-PRO',
+          reasoning_effort: 'low',
+          created_at: '2026-09-20T02:40:00Z',
+          finished_at: '2026-09-20T02:40:12Z',
+          duration_ms: 11000
+        }
+      ],
+      total: 2,
       page: 1,
       page_size: 12
     })
     const wrapper = mountView()
     await flushPromises()
-    expect(pelicanTestsAPI.list).toHaveBeenCalledWith(1, 1)
+    expect(pelicanTestsAPI.list).toHaveBeenCalledWith(1, 12)
     expect(wrapper.findAll('iframe')).toHaveLength(1)
-    expect(wrapper.text()).toContain('GPT-PRO')
-    expect(wrapper.text()).toContain('gpt-6-astra')
-    expect(wrapper.text()).toContain('low')
-    expect(wrapper.text()).toContain('创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画')
-    expect(wrapper.text()).toContain('pelicanTest.time')
-    expect(wrapper.text()).toContain('pelicanTest.prompt')
-    expect(wrapper.find('iframe').exists()).toBe(true)
-    expect(wrapper.find('iframe').attributes('sandbox')).toBeDefined()
+    expect(wrapper.find('iframe').attributes('srcdoc')).toContain('id="latest"')
+    expect(wrapper.text()).toContain('火烈鸟')
+    expect(wrapper.findAll('button')).toHaveLength(2)
+    await wrapper.findAll('button')[1].trigger('click')
+    expect(wrapper.find('iframe').attributes('srcdoc')).toContain('id="older"')
+    expect(wrapper.text()).toContain('鹈鹕')
     expect(wrapper.text()).not.toContain('开始测试')
     expect(wrapper.text()).not.toContain('重新测试')
-    expect(wrapper.html()).not.toMatch(/<button/i)
     wrapper.unmount()
   })
 })

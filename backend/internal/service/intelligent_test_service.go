@@ -7,7 +7,6 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"log/slog"
 	"maps"
-	"math/rand/v2"
 	"regexp"
 	"strings"
 	"sync"
@@ -29,6 +28,7 @@ type IntelligentTestService struct {
 	evaluators map[string]IntelligentTestEvaluator
 	cancel     context.CancelFunc
 	runCtx     context.Context
+	lastAnimal string
 	mu         sync.Mutex
 	wg         sync.WaitGroup
 }
@@ -265,32 +265,39 @@ func (s *IntelligentTestService) UserPelicanTests(ctx context.Context, user int6
 	}
 	f = normalizeIntelligentFilter(f)
 	f.Page = 1
-	f.PageSize = 1
+	if f.PageSize < 1 || f.PageSize > 12 {
+		f.PageSize = 12
+	}
 	return s.repo.UserPelicanTests(ctx, f)
 }
 
-func (s *IntelligentTestService) hourlyPelicanLoop(ctx context.Context) {
+func pelicanSlotKey(now time.Time) string {
+	slot := now.UTC().Truncate(10 * time.Minute)
+	return "pelican-slot-" + slot.Format("200601021504")
+}
+
+func (s *IntelligentTestService) scheduledPelicanLoop(ctx context.Context) {
 	defer s.wg.Done()
-	s.runHourlyPelican(ctx)
-	ticker := time.NewTicker(time.Hour)
+	s.runScheduledPelican(ctx)
+	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.runHourlyPelican(ctx)
+			s.runScheduledPelican(ctx)
 		}
 	}
 }
 
-func (s *IntelligentTestService) runHourlyPelican(ctx context.Context) {
+func (s *IntelligentTestService) runScheduledPelican(ctx context.Context) {
 	if s == nil || s.repo == nil || ctx.Err() != nil {
 		return
 	}
 	settings, err := s.repo.Settings(ctx)
 	if err != nil {
-		slog.Error("hourly pelican settings failed", "error", err)
+		slog.Error("scheduled pelican settings failed", "error", err)
 		return
 	}
 	enabled := false
@@ -306,30 +313,33 @@ func (s *IntelligentTestService) runHourlyPelican(ctx context.Context) {
 	actor, err := s.repo.FirstAdminUserID(ctx)
 	if err != nil || actor < 1 {
 		if err != nil {
-			slog.Error("hourly pelican admin lookup failed", "error", err)
+			slog.Error("scheduled pelican admin lookup failed", "error", err)
 		}
 		return
 	}
 	ids, err := s.repo.ListGPTProOpenAIAccountIDs(ctx)
 	if err != nil {
-		slog.Error("hourly pelican account list failed", "error", err)
+		slog.Error("scheduled pelican account list failed", "error", err)
 		return
 	}
 	if len(ids) == 0 {
 		return
 	}
-	// One request per hour, as if a user hit GPT-PRO once: pick a single
-	// schedulable ChatGPT OAuth account from the group at random.
-	picked := ids[rand.IntN(len(ids))]
+	s.mu.Lock()
+	animal := pickIntelligentTestAnimal(s.lastAnimal)
+	s.lastAnimal = animal
+	s.mu.Unlock()
+	picked := ids[randIntN(len(ids))]
 	req := IntelligentTestEnqueue{
 		AccountIDs:     []int64{picked},
 		TestTypes:      []string{"pelican"},
 		Models:         map[string]string{"pelican": intelligentTestDefaultCodexModel},
-		IdempotencyKey: fmt.Sprintf("pelican-hourly-%s", time.Now().UTC().Format("2006010215")),
+		Prompts:        map[string]string{"pelican": intelligentAnimalHTMLPrompt(animal)},
+		IdempotencyKey: pelicanSlotKey(time.Now()),
 	}
 	out, err := s.repo.Enqueue(ctx, actor, req)
 	if err != nil {
-		slog.Error("hourly pelican enqueue failed", "error", err, "account_id", picked)
+		slog.Error("scheduled pelican enqueue failed", "error", err, "account_id", picked, "animal", animal)
 		return
 	}
 	s.startEnqueued(ctx, out)
@@ -377,7 +387,7 @@ func (s *IntelligentTestService) Start() {
 		}()
 	}
 	s.wg.Add(1)
-	go s.hourlyPelicanLoop(ctx)
+	go s.scheduledPelicanLoop(ctx)
 }
 func (s *IntelligentTestService) Stop() {
 	if s == nil {
