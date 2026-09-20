@@ -19,8 +19,8 @@ var ErrIntelligentTestForbidden = infraerrors.Forbidden("INTELLIGENT_TEST_FORBID
 var ErrIntelligentTestConflict = infraerrors.Conflict("INTELLIGENT_TEST_CONFLICT", "idempotency key was already used with different parameters")
 
 const (
-	pelicanScheduleInterval = 20 * time.Minute
-	pelicanUserPageSize     = 18 // 20-minute runs × 6h
+	pelicanScheduleInterval = 30 * time.Minute
+	pelicanUserPageSize     = 12 // 30-minute runs × 6h
 )
 
 func intelligentTestBad(message string) error {
@@ -279,19 +279,41 @@ func pelicanSlotKey(now time.Time) string {
 	return "pelican-slot-" + slot.Format("200601021504")
 }
 
+func pelicanBeijingLocation() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("CST", 8*3600)
+	}
+	return loc
+}
+
+// pelicanInBeijingWindow is [08:00, 24:00) Asia/Shanghai (hour 8–23).
+func pelicanInBeijingWindow(now time.Time) bool {
+	return now.In(pelicanBeijingLocation()).Hour() >= 8
+}
+
+func pelicanNextBoundary(now time.Time) time.Time {
+	local := now.In(pelicanBeijingLocation())
+	return local.Truncate(pelicanScheduleInterval).Add(pelicanScheduleInterval)
+}
+
 func (s *IntelligentTestService) scheduledPelicanLoop(ctx context.Context) {
 	defer s.wg.Done()
 	s.purgeStalePelicanTests(ctx)
-	s.runScheduledPelican(ctx)
-	ticker := time.NewTicker(pelicanScheduleInterval)
-	defer ticker.Stop()
+	s.runScheduledPelicanAt(ctx, time.Now())
 	for {
+		wait := time.Until(pelicanNextBoundary(time.Now()))
+		if wait < time.Second {
+			wait = time.Second
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			s.purgeStalePelicanTests(ctx)
-			s.runScheduledPelican(ctx)
+			s.runScheduledPelicanAt(ctx, time.Now())
 		}
 	}
 }
@@ -311,7 +333,14 @@ func (s *IntelligentTestService) purgeStalePelicanTests(ctx context.Context) {
 }
 
 func (s *IntelligentTestService) runScheduledPelican(ctx context.Context) {
+	s.runScheduledPelicanAt(ctx, time.Now())
+}
+
+func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now time.Time) {
 	if s == nil || s.repo == nil || ctx.Err() != nil {
+		return
+	}
+	if !pelicanInBeijingWindow(now) {
 		return
 	}
 	settings, err := s.repo.Settings(ctx)
@@ -355,7 +384,7 @@ func (s *IntelligentTestService) runScheduledPelican(ctx context.Context) {
 		TestTypes:      []string{"pelican"},
 		Models:         map[string]string{"pelican": intelligentTestDefaultCodexModel},
 		Prompts:        map[string]string{"pelican": intelligentAnimalHTMLPrompt(animal)},
-		IdempotencyKey: pelicanSlotKey(time.Now()),
+		IdempotencyKey: pelicanSlotKey(now),
 	}
 	out, err := s.repo.Enqueue(ctx, actor, req)
 	if err != nil {
