@@ -74,7 +74,7 @@ func (r *userPelicanListRepo) UserPelicanTests(_ context.Context, f IntelligentT
 	return &UserPelicanTests{Items: []UserPelicanTest{}, Page: f.Page, PageSize: f.PageSize}, nil
 }
 
-func TestUserPelicanTestsListsLastSixHours(t *testing.T) {
+func TestUserPelicanTestsListsLastTwentyFourHours(t *testing.T) {
 	repo := &userPelicanListRepo{}
 	svc := &IntelligentTestService{repo: repo}
 	out, err := svc.UserPelicanTests(context.Background(), 9, IntelligentTestFilter{Page: 3, PageSize: 12})
@@ -94,7 +94,7 @@ func (r *purgePelicanRepo) DeleteStalePelicanTests(context.Context) (int64, erro
 	return r.deleted, nil
 }
 
-func TestPurgeStalePelicanTestsDeletesOlderThanSixHours(t *testing.T) {
+func TestPurgeStalePelicanTestsDeletesOlderThanTwentyFourHours(t *testing.T) {
 	repo := &purgePelicanRepo{}
 	svc := &IntelligentTestService{repo: repo}
 	svc.purgeStalePelicanTests(context.Background())
