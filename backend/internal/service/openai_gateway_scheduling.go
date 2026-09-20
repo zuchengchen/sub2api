@@ -183,11 +183,12 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	return currentHash
 }
 
-// GenerateChatCompletionsSessionHash keeps requests with the same reusable
-// Chat Completions prefix on the same upstream account. Account selection runs
-// before ForwardAsChatCompletions derives prompt_cache_key, so using the same
-// seed here prevents identical prefixes with different user questions from
-// being fragmented across an OAuth account pool.
+// GenerateChatCompletionsSessionHash keeps one Chat Completions conversation on
+// the same upstream account. Account selection runs before
+// ForwardAsChatCompletions derives prompt_cache_key, so this hash uses the same
+// seed: the reusable prefix plus the first user message. Parallel conversations
+// that only share system/tools therefore do not collapse onto one OAuth
+// account. An explicit client session id still wins.
 func (s *OpenAIGatewayService) GenerateChatCompletionsSessionHash(c *gin.Context, body []byte, mappedModel string) string {
 	if c == nil {
 		return ""

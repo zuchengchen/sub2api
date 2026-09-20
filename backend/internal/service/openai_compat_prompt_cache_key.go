@@ -9,7 +9,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 )
 
-const compatPromptCacheKeyPrefix = "compat_cc_"
+// compatPromptCacheKeyPrefix versions the Chat Completions auto cache key.
+// v2 always shards by the first user message so parallel conversations that
+// share a system/tools prefix do not collapse onto one OAuth account.
+const compatPromptCacheKeyPrefix = "compat_cc2_"
 
 func shouldAutoInjectPromptCacheKeyForCompat(model string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(model))
@@ -81,9 +84,11 @@ func deriveCompatPromptCacheKey(req *apicompat.ChatCompletionsRequest, mappedMod
 		appendCompatPromptCacheSeedPart(&seedParts, "instructions", req.Instructions)
 	}
 
-	// Only leading system/developer messages form a reusable prompt prefix.
-	// System-like messages appended after a user/assistant turn are conversation
-	// history and must not make the routing key change on later turns.
+	// Leading system/developer messages are part of the cacheable prefix, but
+	// they are not a session boundary. Parallel conversations that share tools
+	// and a system prompt must still shard so each can grow its own prefix
+	// cache. System-like messages after a user/assistant turn are history and
+	// must not change the key on later turns.
 	prefixOpen := true
 	firstUserCaptured := false
 	firstUserContent := ""
@@ -115,14 +120,14 @@ func deriveCompatPromptCacheKey(req *apicompat.ChatCompletionsRequest, mappedMod
 		}
 	}
 
-	if !hasStablePrefix {
-		// Without a reusable static prefix, retain the first user message as a
-		// narrow session anchor. Returning no key for an unanchored request is
-		// safer than grouping every request by model alone.
-		if !firstUserCaptured || !firstUserMeaningful {
-			return ""
-		}
-		appendCompatPromptCacheSeedPart(&seedParts, "first_user", firstUserContent)
+	if firstUserCaptured && firstUserMeaningful {
+		// Digest large first-user payloads (hundreds of thousands of tokens)
+		// instead of concatenating them into the seed string.
+		appendCompatPromptCacheSeedPart(&seedParts, "first_user", hashSensitiveValueForLog(firstUserContent))
+	} else if !hasStablePrefix {
+		// Returning no key for an unanchored request is safer than grouping
+		// every request by model alone.
+		return ""
 	}
 
 	return compatPromptCacheKeyPrefix + hashSensitiveValueForLog(strings.Join(seedParts, "|"))
