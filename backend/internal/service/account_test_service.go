@@ -959,6 +959,11 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	if err := applyIntelligentTestProtection(c, account, req.Header, payloadBytes); err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
+	if isOAuth {
+		if err := s.applyIntelligentTestOpenAICodexTicket(ctx, account, payloadBytes, req.Header); err != nil {
+			return s.sendErrorAndEnd(c, err.Error())
+		}
+	}
 
 	// Get proxy URL
 	proxyURL := ""
