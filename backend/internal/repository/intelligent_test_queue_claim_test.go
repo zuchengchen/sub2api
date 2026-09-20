@@ -29,6 +29,17 @@ func TestListGPTProOpenAIAccountIDsSQLRequiresLiveAstraTicket(t *testing.T) {
 	require.Contains(t, body, "expires_at")
 }
 
+func TestAdminIntelligentTestSQLExcludesPelicanSchedule(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("intelligent_test_repo.go")
+	require.NoError(t, err)
+	body := string(src)
+	require.Contains(t, body, "pelican-schedule")
+	require.Contains(t, body, "intelligentAdminManualSQL")
+	require.Contains(t, body, "pelican-slot-%")
+	require.GreaterOrEqual(t, strings.Count(body, "intelligentAdminManualSQL"), 6)
+}
+
 func TestIntelligentClaimPickSQLStartsImmediately(t *testing.T) {
 	t.Parallel()
 	require.NotContains(t, intelligentClaimPickSQL, "<4")

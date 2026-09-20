@@ -19,8 +19,9 @@ var ErrIntelligentTestForbidden = infraerrors.Forbidden("INTELLIGENT_TEST_FORBID
 var ErrIntelligentTestConflict = infraerrors.Conflict("INTELLIGENT_TEST_CONFLICT", "idempotency key was already used with different parameters")
 
 const (
-	pelicanScheduleInterval = 30 * time.Minute
-	pelicanUserPageSize     = 12 // 30-minute runs × 6h
+	pelicanScheduleInterval              = 30 * time.Minute
+	pelicanUserPageSize                  = 12 // 30-minute runs × 6h
+	IntelligentTestSourcePelicanSchedule = "pelican-schedule"
 )
 
 func intelligentTestBad(message string) error {
@@ -385,6 +386,7 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 		Models:         map[string]string{"pelican": intelligentTestDefaultCodexModel},
 		Prompts:        map[string]string{"pelican": intelligentAnimalHTMLPrompt(animal)},
 		IdempotencyKey: pelicanSlotKey(now),
+		Source:         IntelligentTestSourcePelicanSchedule,
 	}
 	out, err := s.repo.Enqueue(ctx, actor, req)
 	if err != nil {
