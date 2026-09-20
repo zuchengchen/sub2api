@@ -265,8 +265,8 @@ func (s *IntelligentTestService) UserPelicanTests(ctx context.Context, user int6
 	}
 	f = normalizeIntelligentFilter(f)
 	f.Page = 1
-	// 10-minute runs × 24h = 144 slots; keep the user gallery to one day.
-	f.PageSize = 144
+	// 10-minute runs × 3h = 18 slots.
+	f.PageSize = 18
 	return s.repo.UserPelicanTests(ctx, f)
 }
 
@@ -277,6 +277,7 @@ func pelicanSlotKey(now time.Time) string {
 
 func (s *IntelligentTestService) scheduledPelicanLoop(ctx context.Context) {
 	defer s.wg.Done()
+	s.purgeStalePelicanTests(ctx)
 	s.runScheduledPelican(ctx)
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
@@ -285,8 +286,23 @@ func (s *IntelligentTestService) scheduledPelicanLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.purgeStalePelicanTests(ctx)
 			s.runScheduledPelican(ctx)
 		}
+	}
+}
+
+func (s *IntelligentTestService) purgeStalePelicanTests(ctx context.Context) {
+	if s == nil || s.repo == nil || ctx.Err() != nil {
+		return
+	}
+	n, err := s.repo.DeleteStalePelicanTests(ctx)
+	if err != nil {
+		slog.Error("stale pelican cleanup failed", "error", err)
+		return
+	}
+	if n > 0 {
+		slog.Info("deleted pelican tests older than 3 hours", "count", n)
 	}
 }
 

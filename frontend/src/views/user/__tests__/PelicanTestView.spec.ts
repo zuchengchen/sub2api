@@ -71,7 +71,7 @@ describe('PelicanTestView', () => {
     })
     const wrapper = mountView()
     await flushPromises()
-    expect(pelicanTestsAPI.list).toHaveBeenCalledWith(1, 144)
+    expect(pelicanTestsAPI.list).toHaveBeenCalledWith(1, 18)
     expect(wrapper.findAll('iframe')).toHaveLength(1)
     expect(wrapper.find('iframe').attributes('srcdoc')).toContain('id="latest"')
     expect(wrapper.text()).toContain('火烈鸟')

@@ -181,6 +181,7 @@ type IntelligentTestRepository interface {
 	FirstAdminUserID(context.Context) (int64, error)
 	ListGPTProOpenAIAccountIDs(context.Context) ([]int64, error)
 	UserPelicanTests(context.Context, IntelligentTestFilter) (*UserPelicanTests, error)
+	DeleteStalePelicanTests(context.Context) (int64, error)
 }
 type IntelligentTestRunner interface {
 	RunIntelligentTest(context.Context, *IntelligentTestRecord) error
