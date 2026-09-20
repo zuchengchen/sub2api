@@ -16,6 +16,9 @@ type IntelligentTestConfig struct {
 	Evaluator      string                  `json:"evaluator"`
 	ExpectedAnswer string                  `json:"expected_answer"`
 	TimeoutSeconds int                     `json:"timeout_seconds"`
+	// Source marks how the run was created. "pelican-schedule" is the user-page
+	// timer and is hidden from the admin intelligent-test console.
+	Source string `json:"source,omitempty"`
 }
 type IntelligentTestSetting struct {
 	TestType    string                `json:"test_type"`
@@ -106,6 +109,7 @@ type IntelligentTestEnqueue struct {
 	// Prompts optionally overrides the saved prompt per test type for this run.
 	Prompts        map[string]string `json:"prompts,omitempty"`
 	IdempotencyKey string            `json:"idempotency_key"`
+	Source         string            `json:"source,omitempty"`
 }
 type IntelligentTestEnqueued struct {
 	CreatedCount int                      `json:"created_count"`

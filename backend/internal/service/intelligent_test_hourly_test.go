@@ -62,6 +62,7 @@ func TestRunScheduledPelicanEnqueuesRandomAnimalPrompt(t *testing.T) {
 	}
 	require.True(t, matched, "prompt %q should name a known animal", prompt)
 	require.Regexp(t, `^pelican-slot-\d{12}$`, repo.enqueued[0].IdempotencyKey)
+	require.Equal(t, IntelligentTestSourcePelicanSchedule, repo.enqueued[0].Source)
 }
 
 type userPelicanListRepo struct {

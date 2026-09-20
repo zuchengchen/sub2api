@@ -19,6 +19,13 @@ func NewIntelligentTestRepository(db *sql.DB) service.IntelligentTestRepository 
 }
 
 const intelligentProtectionSQL = `COALESCE((a.extra->'anti_degradation')='true'::jsonb,(a.extra#>'{anti_degrade,enabled}')='true'::jsonb,false)`
+
+// Admin 智能测试 lists skip the user-page pelican timer so that console stays click-to-run.
+const intelligentAdminManualSQL = `COALESCE(t.config_snapshot->>'source','') <> 'pelican-schedule' AND NOT EXISTS (
+  SELECT 1 FROM intelligent_test_requests r
+  WHERE (r.request_key LIKE 'pelican-slot-%' OR r.request_key LIKE 'pelican-hourly-%')
+    AND t.id = ANY(r.record_ids)
+)`
 const intelligentRecordColumns = `t.id,t.account_id,t.test_type,t.status,t.score,t.result,t.result_image,t.input,t.raw_response,t.raw_truncated,t.error_message,t.duration_ms,t.model,t.anti_degradation,t.config_snapshot,t.evaluation,t.started_at,t.finished_at,t.created_at,COALESCE(t.lease_token,''),t.queue_reason,t.available_at`
 const intelligentSummaryColumns = `t.id,t.account_id,t.test_type,t.status,t.score,LEFT(t.result,1200),t.result_image,'','',t.raw_truncated,t.error_message,t.duration_ms,t.model,t.anti_degradation,'{}'::jsonb,t.evaluation,t.started_at,t.finished_at,t.created_at,'',t.queue_reason,t.available_at`
 
@@ -164,6 +171,7 @@ func intelligentRecordWhere(f service.IntelligentTestFilter) *intelligentWhere {
 	if f.OnlyAbnormal {
 		w.parts = append(w.parts, `(t.status IN ('failed','rate_limited','account_error','model_error','request_error','network_error','suspected_degradation') OR t.evaluation->>'answer_verdict' IN ('incorrect','undetermined'))`)
 	}
+	w.parts = append(w.parts, intelligentAdminManualSQL)
 	return w
 }
 func (r *intelligentTestRepository) Records(ctx context.Context, f service.IntelligentTestFilter) (*service.IntelligentTestRecords, error) {
@@ -206,7 +214,7 @@ func intelligentAccountWhere(f service.IntelligentTestFilter) *intelligentWhere 
 	if f.AntiDegradation != nil {
 		w.add(intelligentProtectionSQL+"=$%d", *f.AntiDegradation)
 	}
-	sub := `SELECT DISTINCT ON(t.test_type) t.test_type,t.status,t.evaluation FROM account_tests t WHERE t.account_id=a.id`
+	sub := `SELECT DISTINCT ON(t.test_type) t.test_type,t.status,t.evaluation FROM account_tests t WHERE t.account_id=a.id AND ` + intelligentAdminManualSQL
 	if f.TestType != "" && (f.Status != "" || f.OnlyAbnormal) {
 		w.args = append(w.args, f.TestType)
 		sub += fmt.Sprintf(` AND t.test_type=$%d`, len(w.args))
@@ -238,12 +246,12 @@ func (r *intelligentTestRepository) Accounts(ctx context.Context, f service.Inte
 		typeCondition = fmt.Sprintf("t.test_type=$%d", len(overviewArgs))
 	}
 	overviewSQL := `WITH selected AS(SELECT a.id FROM accounts a WHERE ` + w.sql() + `), latest AS(
-SELECT DISTINCT ON(t.account_id,t.test_type) t.account_id,t.test_type,t.status,t.evaluation FROM account_tests t JOIN selected a ON a.id=t.account_id WHERE ` + typeCondition + ` AND t.status NOT IN ('queued','running','cancelled') ORDER BY t.account_id,t.test_type,t.id DESC), per_account AS(
+SELECT DISTINCT ON(t.account_id,t.test_type) t.account_id,t.test_type,t.status,t.evaluation FROM account_tests t JOIN selected a ON a.id=t.account_id WHERE ` + typeCondition + ` AND t.status NOT IN ('queued','running','cancelled') AND ` + intelligentAdminManualSQL + ` ORDER BY t.account_id,t.test_type,t.id DESC), per_account AS(
 SELECT account_id,bool_or(COALESCE(evaluation->>'answer_verdict'='correct',false)) AS success,
 bool_or(status IN ('failed','rate_limited','account_error','model_error','request_error','network_error')) AS abnormal,
 bool_or(status='suspected_degradation' OR COALESCE(evaluation->>'answer_verdict' IN ('incorrect','undetermined'),false)) AS review
 FROM latest GROUP BY account_id)
-SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a ON a.id=t.account_id WHERE t.finished_at>=date_trunc('day',NOW()) AND t.status<>'cancelled' AND ` + typeCondition + `),COUNT(*) FILTER(WHERE success AND NOT abnormal AND NOT review),COUNT(*) FILTER(WHERE abnormal),COUNT(*) FILTER(WHERE review) FROM per_account`
+SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a ON a.id=t.account_id WHERE t.finished_at>=date_trunc('day',NOW()) AND t.status<>'cancelled' AND ` + typeCondition + ` AND ` + intelligentAdminManualSQL + `),COUNT(*) FILTER(WHERE success AND NOT abnormal AND NOT review),COUNT(*) FILTER(WHERE abnormal),COUNT(*) FILTER(WHERE review) FROM per_account`
 	if err := r.db.QueryRowContext(ctx, overviewSQL, overviewArgs...).Scan(&out.Overview.TestedToday, &out.Overview.SuccessAccounts, &out.Overview.AbnormalAccounts, &out.Overview.ReviewAccounts); err != nil {
 		return nil, err
 	}
@@ -275,7 +283,7 @@ SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a
 	if err != nil {
 		return nil, err
 	}
-	latestRows, err := r.db.QueryContext(ctx, `SELECT `+intelligentSummaryColumns+` FROM account_tests t JOIN (SELECT DISTINCT ON(account_id,test_type) id FROM account_tests WHERE account_id=ANY($1) ORDER BY account_id,test_type,id DESC) latest ON latest.id=t.id`, pq.Array(ids))
+	latestRows, err := r.db.QueryContext(ctx, `SELECT `+intelligentSummaryColumns+` FROM account_tests t JOIN (SELECT DISTINCT ON(account_id,test_type) id FROM account_tests t WHERE account_id=ANY($1) AND `+intelligentAdminManualSQL+` ORDER BY account_id,test_type,id DESC) latest ON latest.id=t.id`, pq.Array(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +297,7 @@ SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a
 		compactIntelligentRecord(record)
 		byKey[key(record.AccountID, record.TestType)] = record
 	}
-	completedRows, err := r.db.QueryContext(ctx, `SELECT `+intelligentSummaryColumns+` FROM account_tests t JOIN (SELECT DISTINCT ON(account_id,test_type) id FROM account_tests WHERE account_id=ANY($1) AND status NOT IN ('queued','running','cancelled') ORDER BY account_id,test_type,id DESC) latest ON latest.id=t.id`, pq.Array(ids))
+	completedRows, err := r.db.QueryContext(ctx, `SELECT `+intelligentSummaryColumns+` FROM account_tests t JOIN (SELECT DISTINCT ON(account_id,test_type) id FROM account_tests t WHERE account_id=ANY($1) AND status NOT IN ('queued','running','cancelled') AND `+intelligentAdminManualSQL+` ORDER BY account_id,test_type,id DESC) latest ON latest.id=t.id`, pq.Array(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +311,7 @@ SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a
 		completedByKey[key(record.AccountID, record.TestType)] = record
 	}
 	counts := map[string]int64{}
-	countRows, err := r.db.QueryContext(ctx, `SELECT account_id,test_type,COUNT(*) FROM account_tests WHERE account_id=ANY($1) GROUP BY account_id,test_type`, pq.Array(ids))
+	countRows, err := r.db.QueryContext(ctx, `SELECT account_id,test_type,COUNT(*) FROM account_tests t WHERE account_id=ANY($1) AND `+intelligentAdminManualSQL+` GROUP BY account_id,test_type`, pq.Array(ids))
 	if err != nil {
 		return nil, err
 	}
