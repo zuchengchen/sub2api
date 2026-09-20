@@ -72,8 +72,8 @@ func TestUserPelicanTestsListsLastThreeHours(t *testing.T) {
 	out, err := svc.UserPelicanTests(context.Background(), 9, IntelligentTestFilter{Page: 3, PageSize: 12})
 	require.NoError(t, err)
 	require.Equal(t, 1, repo.filter.Page)
-	require.Equal(t, 18, repo.filter.PageSize)
-	require.Equal(t, 18, out.PageSize)
+	require.Equal(t, pelicanUserPageSize, repo.filter.PageSize)
+	require.Equal(t, pelicanUserPageSize, out.PageSize)
 }
 
 type purgePelicanRepo struct {
