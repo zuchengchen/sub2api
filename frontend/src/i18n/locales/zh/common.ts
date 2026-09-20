@@ -505,12 +505,13 @@ export default {
   },
 
   pelicanTest: {
-    subtitle: '每小时自动使用 GPT-PRO 分组的 gpt-6-astra（推理深度 low）生成鹈鹕骑自行车的 HTML 动画。本页只展示结果，不能手动发起测试。',
+    subtitle: '每小时从 GPT-PRO 分组随机抽一个账号，用 gpt-6-astra（推理深度 low）生成一张鹈鹕骑自行车的 HTML 动画。本页只展示最新结果，不能手动发起测试。',
     empty: '暂无测试结果，请等待整点自动测试。',
     time: '测试时间',
     group: '测试分组',
     model: '模型',
     reasoning: '推理深度',
+    prompt: '原始提示词',
     htmlUnavailable: '无法安全显示这段 HTML',
     loadFailed: '加载鹈鹕测试失败'
   }

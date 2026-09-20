@@ -506,12 +506,13 @@ export default {
   },
 
   pelicanTest: {
-    subtitle: 'Every hour GPT-PRO accounts generate an HTML pelican-on-a-bicycle SVG animation with gpt-6-astra (reasoning low). This page only shows results; you cannot start a test.',
+    subtitle: 'Once an hour a random GPT-PRO account generates one HTML pelican-on-a-bicycle SVG animation with gpt-6-astra (reasoning low). This page shows only the latest result; you cannot start a test.',
     empty: 'No results yet. Wait for the next hourly run.',
     time: 'Test time',
     group: 'Group',
     model: 'Model',
     reasoning: 'Reasoning',
+    prompt: 'Original prompt',
     htmlUnavailable: 'This HTML cannot be displayed safely',
     loadFailed: 'Failed to load pelican tests'
   }

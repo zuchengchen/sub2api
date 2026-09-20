@@ -144,6 +144,7 @@ type UserPelicanTest struct {
 	ID              int64      `json:"id"`
 	Status          string     `json:"status"`
 	HTML            string     `json:"html"`
+	Prompt          string     `json:"prompt"`
 	Model           string     `json:"model"`
 	GroupName       string     `json:"group_name"`
 	ReasoningEffort string     `json:"reasoning_effort"`

@@ -4,6 +4,7 @@ export interface PelicanTestItem {
   id: number
   status: string
   html: string
+  prompt: string
   model: string
   group_name: string
   reasoning_effort: string

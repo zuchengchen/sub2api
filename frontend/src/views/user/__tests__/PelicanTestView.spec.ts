@@ -25,6 +25,7 @@ const messages = {
       model: '模型',
       reasoning: '推理深度',
       htmlUnavailable: '无法安全显示这段 HTML',
+      prompt: '原始提示词',
       loadFailed: '加载失败'
     }
   }
@@ -42,6 +43,7 @@ describe('PelicanTestView', () => {
         id: 9,
         status: 'completed',
         html: '<html><body><svg viewBox="0 0 1 1"></svg></body></html>',
+        prompt: '创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画',
         model: 'gpt-6-astra',
         group_name: 'GPT-PRO',
         reasoning_effort: 'low',
@@ -55,10 +57,14 @@ describe('PelicanTestView', () => {
     })
     const wrapper = mountView()
     await flushPromises()
+    expect(pelicanTestsAPI.list).toHaveBeenCalledWith(1, 1)
+    expect(wrapper.findAll('iframe')).toHaveLength(1)
     expect(wrapper.text()).toContain('GPT-PRO')
     expect(wrapper.text()).toContain('gpt-6-astra')
     expect(wrapper.text()).toContain('low')
+    expect(wrapper.text()).toContain('创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画')
     expect(wrapper.text()).toContain('pelicanTest.time')
+    expect(wrapper.text()).toContain('pelicanTest.prompt')
     expect(wrapper.find('iframe').exists()).toBe(true)
     expect(wrapper.find('iframe').attributes('sandbox')).toBeDefined()
     expect(wrapper.text()).not.toContain('开始测试')
