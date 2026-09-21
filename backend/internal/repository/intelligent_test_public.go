@@ -140,31 +140,54 @@ func (r *intelligentTestRepository) FirstAdminUserID(ctx context.Context) (int64
 	return id, err
 }
 
-func (r *intelligentTestRepository) ListGPTProOpenAIAccountIDs(ctx context.Context) ([]int64, error) {
-	// GPT-PRO ChatGPT OAuth accounts. Scheduled pelican follows the same outbound
-	// path as a normal user request and does not require a specific ticket length.
+func (r *intelligentTestRepository) ListPelicanCandidates(ctx context.Context) ([]service.PelicanCandidate, error) {
+	// Same schedulable gates as normal OpenAI routing, plus skip 5h/7d quota
+	// exhaustion. Live 292 tickets are preferred in Go, not required.
+	const astraTicket = `codex_turn_ticket:gpt-6-astra`
 	rows, err := r.db.QueryContext(ctx, `
-SELECT DISTINCT a.id
+SELECT DISTINCT a.id,
+  (
+    jsonb_typeof(a.extra->$5) = 'object'
+    AND COALESCE((a.extra->$5->>'length')::int, 0) = 292
+    AND length(COALESCE(a.extra->$5->>'state','')) = 292
+    AND COALESCE(a.extra->$5->>'state','') LIKE 'gAAAAA%'
+    AND NULLIF(btrim(a.extra->$5->>'expires_at'),'') IS NOT NULL
+    AND (a.extra->$5->>'expires_at')::timestamptz > NOW()
+  ) AS has_ticket
 FROM accounts a
 JOIN account_groups ag ON ag.account_id=a.id
 JOIN groups g ON g.id=ag.group_id
 WHERE a.deleted_at IS NULL AND a.status=$1 AND a.platform=$2 AND a.type=ANY($3)
   AND a.parent_account_id IS NULL AND a.schedulable=true
   AND g.deleted_at IS NULL AND g.status=$1 AND lower(g.name)=$4
-ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.VipDiscountedGroupName)
+  AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= NOW())
+  AND (a.overload_until IS NULL OR a.overload_until <= NOW())
+  AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= NOW())
+  AND (a.expires_at IS NULL OR a.expires_at > NOW() OR a.auto_pause_on_expired = false)
+  AND NOT (
+    COALESCE(NULLIF(a.extra->>'codex_5h_used_percent','')::numeric, 0) >= 100
+    AND NULLIF(btrim(a.extra->>'codex_5h_reset_at'),'') IS NOT NULL
+    AND (a.extra->>'codex_5h_reset_at')::timestamptz > NOW()
+  )
+  AND NOT (
+    COALESCE(NULLIF(a.extra->>'codex_7d_used_percent','')::numeric, 0) >= 100
+    AND NULLIF(btrim(a.extra->>'codex_7d_reset_at'),'') IS NOT NULL
+    AND (a.extra->>'codex_7d_reset_at')::timestamptz > NOW()
+  )
+ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.VipDiscountedGroupName, astraTicket)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	ids := []int64{}
+	out := []service.PelicanCandidate{}
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var item service.PelicanCandidate
+		if err := rows.Scan(&item.ID, &item.HasTicket); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		out = append(out, item)
 	}
-	return ids, rows.Err()
+	return out, rows.Err()
 }
 
 func (r *intelligentTestRepository) ListPelicanSlotAttempts(ctx context.Context, slotKey string) ([]service.PelicanSlotAttempt, error) {
