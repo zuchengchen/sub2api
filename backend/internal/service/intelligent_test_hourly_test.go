@@ -11,19 +11,27 @@ import (
 
 type hourlyPelicanRepo struct {
 	IntelligentTestRepository
-	adminID    int64
-	accountIDs []int64
-	enqueued   []IntelligentTestEnqueue
-	actors     []int64
-	attempts   []PelicanSlotAttempt
+	adminID     int64
+	accountIDs  []int64
+	candidates  []PelicanCandidate
+	enqueued    []IntelligentTestEnqueue
+	actors      []int64
+	attempts    []PelicanSlotAttempt
 }
 
 func (r *hourlyPelicanRepo) Settings(context.Context) ([]IntelligentTestSetting, error) {
 	return []IntelligentTestSetting{{TestType: "pelican", Enabled: true}}, nil
 }
 func (r *hourlyPelicanRepo) FirstAdminUserID(context.Context) (int64, error) { return r.adminID, nil }
-func (r *hourlyPelicanRepo) ListGPTProOpenAIAccountIDs(context.Context) ([]int64, error) {
-	return r.accountIDs, nil
+func (r *hourlyPelicanRepo) ListPelicanCandidates(context.Context) ([]PelicanCandidate, error) {
+	if len(r.candidates) > 0 {
+		return r.candidates, nil
+	}
+	out := make([]PelicanCandidate, 0, len(r.accountIDs))
+	for _, id := range r.accountIDs {
+		out = append(out, PelicanCandidate{ID: id, HasTicket: true})
+	}
+	return out, nil
 }
 func (r *hourlyPelicanRepo) Enqueue(_ context.Context, actor int64, req IntelligentTestEnqueue) (*IntelligentTestEnqueued, error) {
 	r.actors = append(r.actors, actor)
@@ -122,6 +130,27 @@ func TestRunScheduledPelicanUsesOnlyListedTicketedAccounts(t *testing.T) {
 	svc := &IntelligentTestService{repo: repo}
 	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
 	require.Equal(t, []int64{42}, repo.enqueued[0].AccountIDs)
+}
+
+func TestPickPelicanAccountIDPrefersUnusedTicket(t *testing.T) {
+	t.Parallel()
+	cands := []PelicanCandidate{{ID: 11, HasTicket: false}, {ID: 12, HasTicket: true}, {ID: 13, HasTicket: false}}
+	require.Equal(t, int64(12), pickPelicanAccountID(cands, nil))
+	got := pickPelicanAccountID(cands, map[int64]struct{}{12: {}})
+	require.Contains(t, []int64{11, 13}, got)
+}
+
+func TestRunScheduledPelicanPrefersTicketedAccount(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID: 3,
+		candidates: []PelicanCandidate{
+			{ID: 11, HasTicket: false},
+			{ID: 12, HasTicket: true},
+		},
+	}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Equal(t, []int64{12}, repo.enqueued[0].AccountIDs)
 }
 
 func TestRunScheduledPelicanSkipsOutsideBeijingWindow(t *testing.T) {

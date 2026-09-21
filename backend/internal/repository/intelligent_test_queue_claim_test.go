@@ -19,15 +19,18 @@ func TestDeleteStalePelicanTestsSQLKeepsTwentyFourHours(t *testing.T) {
 	require.NotContains(t, body, "INTERVAL '3 hours'")
 }
 
-func TestListGPTProOpenAIAccountIDsSQLDoesNotRequireTicketLength(t *testing.T) {
+func TestListPelicanCandidatesSQLRequiresSchedulableAndPrefers292(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("intelligent_test_public.go")
 	require.NoError(t, err)
 	body := string(src)
-	require.Contains(t, body, "func (r *intelligentTestRepository) ListGPTProOpenAIAccountIDs")
-	require.Contains(t, body, "lower(g.name)=$4")
-	require.NotContains(t, body, "codex_turn_ticket:gpt-6-astra")
-	require.NotContains(t, body, "IN (292, 312)")
+	require.Contains(t, body, "func (r *intelligentTestRepository) ListPelicanCandidates")
+	require.Contains(t, body, "rate_limit_reset_at")
+	require.Contains(t, body, "temp_unschedulable_until")
+	require.Contains(t, body, "codex_7d_used_percent")
+	require.Contains(t, body, "codex_turn_ticket:gpt-6-astra")
+	require.Contains(t, body, "AS has_ticket")
+	require.Contains(t, body, "COALESCE((a.extra->$5->>'length')::int, 0) = 292")
 }
 
 func TestListPelicanSlotAttemptsSQLIncludesRetries(t *testing.T) {
