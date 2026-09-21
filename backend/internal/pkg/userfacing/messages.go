@@ -51,6 +51,7 @@ var (
 	ModelNotSupportedByOpenAICompatibleComposite = ZHEN("该模型不受此 OpenAI 兼容接口的组合分组支持", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
 	ModelNotSupportedOnChatCompletions           = ZHEN("该模型不支持 Chat Completions 接口", "This model is not supported on the Chat Completions endpoint")
 	FailedToReadBody                             = ZHEN("读取请求体失败", "Failed to read request body")
+	RequestBodyIncomplete                        = ZHEN("客户端在请求体传输完成前断开或超时", "Client disconnected or timed out before the request body was fully received")
 	RequestBodyEmpty                             = ZHEN("请求体为空", "Request body is empty")
 	FailedToParseBody                            = ZHEN("解析请求体失败", "Failed to parse request body")
 	UserContextNotFound                          = ZHEN("用户上下文不存在", "User context not found")

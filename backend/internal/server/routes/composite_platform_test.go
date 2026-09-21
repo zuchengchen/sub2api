@@ -266,3 +266,39 @@ func TestCompositeTargetPlatformMiddlewareUsesExplicitRouteForMultipartImages(t 
 
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
+
+type errReadCloser struct {
+	err error
+}
+
+func (r errReadCloser) Read([]byte) (int, error) { return 0, r.err }
+func (r errReadCloser) Close() error             { return nil }
+
+func TestCompositeTargetPlatformMiddlewareTruncatedBodyReturns408(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		groupID := int64(1)
+		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+			GroupID: &groupID,
+			Group:   &service.Group{Platform: service.PlatformComposite},
+		})
+		c.Next()
+	})))
+	router.Use(compositeTargetPlatformMiddleware(nil))
+	handlerRan := false
+	router.POST("/", func(c *gin.Context) {
+		handlerRan = true
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Content-Type", "application/json")
+	req.Body = errReadCloser{err: io.ErrUnexpectedEOF}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusRequestTimeout, w.Code)
+	require.Contains(t, w.Body.String(), "Client disconnected or timed out")
+	require.False(t, handlerRan)
+}

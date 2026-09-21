@@ -149,6 +149,33 @@ func TestGroupModelAllowlistRequestBodyTooLargePassesThrough413(t *testing.T) {
 	}
 }
 
+type errReadCloser struct {
+	err error
+}
+
+func (r errReadCloser) Read([]byte) (int, error) { return 0, r.err }
+func (r errReadCloser) Close() error             { return nil }
+
+func TestGroupModelAllowlistTruncatedBodyReturns408(t *testing.T) {
+	router, calls := newGroupModelAllowlistTestRouter(allowlistAPIKey(true, "claude-sonnet-4.5"), "/v1")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("Content-Type", "application/json")
+	req.Body = errReadCloser{err: io.ErrUnexpectedEOF}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestTimeout {
+		t.Fatalf("expected 408, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Client disconnected or timed out") {
+		t.Fatalf("expected incomplete-body message, got %s", w.Body.String())
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("expected handler not to run, got %v", *calls)
+	}
+}
+
 func TestGroupModelAllowlistJSONBodyAllowed(t *testing.T) {
 	router, calls := newGroupModelAllowlistTestRouter(allowlistAPIKey(true, "claude-sonnet-4.5"), "/v1")
 

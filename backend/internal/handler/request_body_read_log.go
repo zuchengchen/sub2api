@@ -1,79 +1,68 @@
 package handler
 
 import (
-	"context"
-	"errors"
-	"io"
-	"net"
 	"net/http"
-	"strings"
-	"syscall"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
 // logRequestBodyReadFailure records a bounded, payload-free reason for a body
-// read failure. Clients continue to receive the stable generic error message;
-// operators get enough information to distinguish compression failures from a
+// read failure. Clients receive a classified status/message; operators get
+// enough information to distinguish compression failures from a
 // disconnected/truncated upload without logging request content.
 func logRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error) {
-	if reqLog == nil || err == nil {
+	if err == nil {
 		return
+	}
+	if reqLog == nil {
+		if req != nil {
+			reqLog = logger.FromContext(req.Context())
+		} else {
+			reqLog = logger.FromContext(nil)
+		}
 	}
 
 	contentLength := int64(-1)
 	contentEncoding := "identity"
 	if req != nil {
 		contentLength = req.ContentLength
-		contentEncoding = requestContentEncodingCategory(req.Header.Get("Content-Encoding"))
+		contentEncoding = pkghttputil.RequestContentEncodingCategory(req.Header.Get("Content-Encoding"))
 	}
 
 	reqLog.Warn("read request body failed",
-		zap.String("error_kind", requestBodyReadErrorKind(err)),
+		zap.String("error_kind", pkghttputil.RequestBodyReadErrorKind(err)),
 		zap.String("content_encoding", contentEncoding),
 		zap.Int64("content_length", contentLength),
 	)
 }
 
 func requestContentEncodingCategory(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "identity":
-		return "identity"
-	case "gzip", "x-gzip":
-		return "gzip"
-	case "zstd":
-		return "zstd"
-	case "deflate":
-		return "deflate"
-	default:
-		return "other"
-	}
+	return pkghttputil.RequestContentEncodingCategory(value)
 }
 
 func requestBodyReadErrorKind(err error) string {
-	if err == nil {
-		return "none"
+	return pkghttputil.RequestBodyReadErrorKind(err)
+}
+
+type gatewayErrorWriter func(*gin.Context, int, string, string)
+
+// writeRequestBodyReadFailure logs the bounded failure reason and writes the
+// classified client response (413 / 408 / 400).
+func writeRequestBodyReadFailure(c *gin.Context, reqLog *zap.Logger, err error, write gatewayErrorWriter) {
+	if write == nil {
+		return
 	}
-	var maxErr *http.MaxBytesError
-	if errors.As(err, &maxErr) {
-		return "max_bytes"
+	if maxErr, ok := extractMaxBytesError(err); ok {
+		write(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
+		return
 	}
-	lower := strings.ToLower(err.Error())
-	if strings.Contains(lower, "decode content-encoding") {
-		if strings.Contains(lower, "unsupported content-encoding") {
-			return "unsupported_content_encoding"
-		}
-		return "decode_content_encoding"
+	var req *http.Request
+	if c != nil {
+		req = c.Request
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
-		return "client_disconnect"
-	}
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		return "truncated_body"
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return "transport"
-	}
-	return "io_read"
+	logRequestBodyReadFailure(reqLog, req, err)
+	write(c, pkghttputil.RequestBodyReadHTTPStatus(err), "invalid_request_error", pkghttputil.RequestBodyReadErrorMessage(err))
 }
