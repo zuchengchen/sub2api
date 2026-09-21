@@ -29,9 +29,13 @@ const (
 	openAICodexTicketStatePrefix     = "gAAAAA"
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
+	// 292 was the historical Astra lane. Harvest previously discarded 312.
+	// Hunt 312 while still injecting a live 292 so production stays gated.
+	openAICodexTicketLegacyLength = 292
+	openAICodexTicketHuntLength   = 312
 )
 
-// ErrOpenAICodexTicketUnavailable 表示该号该模型没有可用的 292 门票，
+// ErrOpenAICodexTicketUnavailable 表示该号该模型没有可用的门票，
 // 且 fail_closed 禁止裸打业务请求。
 var ErrOpenAICodexTicketUnavailable = errors.New("codex turn-state ticket unavailable")
 
@@ -177,18 +181,35 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestProxyURLContext(ctx conte
 	return strings.TrimSpace(s.openAICodexTicketConfig().HarvestProxyURL)
 }
 
+func openAICodexTicketAcceptsLength(n, targetLen int) bool {
+	if n <= 0 {
+		return false
+	}
+	if targetLen > 0 && n == targetLen {
+		return true
+	}
+	return n == openAICodexTicketLegacyLength || n == openAICodexTicketHuntLength
+}
+
 func (t *openAICodexTicket) valid(now time.Time, targetLen int) bool {
 	if t == nil {
 		return false
 	}
 	state := strings.TrimSpace(t.State)
-	if len(state) != targetLen || t.Length != targetLen || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+	if !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+		return false
+	}
+	if len(state) != t.Length || !openAICodexTicketAcceptsLength(t.Length, targetLen) {
 		return false
 	}
 	if t.ExpiresAt.IsZero() || !now.Before(t.ExpiresAt) {
 		return false
 	}
 	return true
+}
+
+func (t *openAICodexTicket) hasPreferredHuntLength() bool {
+	return t != nil && t.Length == openAICodexTicketHuntLength
 }
 
 func (t *openAICodexTicket) needsRefresh(now time.Time, refreshBefore time.Duration) bool {
@@ -436,12 +457,20 @@ func jsonString(v string) string {
 func applyOpenAICodexTicketHarvestIdentity(h http.Header, model string) {
 	ensureCodexIdentityHeaders(h)
 	enforceCodexIdentityHeaders(h)
-	version := strings.TrimSpace(h.Get("version"))
-	if needsOpenAICodexAstraVersion(model) && (version == "" || CompareVersions(version, openAICodexAstraMinVersion) < 0) {
-		h.Set("version", openAICodexAstraMinVersion)
-		h.Set("user-agent", buildCodexCLIUserAgent(openAICodexAstraMinVersion))
-		h.Set("originator", openai.CodexDefaultOriginator)
+	if !needsOpenAICodexAstraVersion(model) {
+		return
 	}
+	version := strings.TrimSpace(h.Get("version"))
+	if version != "" && CompareVersions(version, openAICodexAstraMinVersion) >= 0 {
+		return
+	}
+	use := strings.TrimSpace(CodexCanonicalClientVersion())
+	if use == "" || CompareVersions(use, openAICodexAstraMinVersion) < 0 {
+		use = openAICodexAstraMinVersion
+	}
+	h.Set("version", use)
+	h.Set("user-agent", buildCodexCLIUserAgent(use))
+	h.Set("originator", openai.CodexDefaultOriginator)
 }
 
 func needsOpenAICodexAstraVersion(model string) bool {
@@ -532,8 +561,9 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 			if model == "" {
 				continue
 			}
-			// 已有一张有效且未临近过期的票 → 本周期不打，省得白刷。
-			if t := s.lookupOpenAICodexTicket(&account, model); t.valid(now, cfg.TargetLength) && !t.needsRefresh(now, refreshBefore) {
+			// 已有一张首选猎长（312）且未临近过期 → 本周期不打。
+			// 仅有 292 时继续打，292 仍注入，不中断业务。
+			if t := s.lookupOpenAICodexTicket(&account, model); t.valid(now, cfg.TargetLength) && t.hasPreferredHuntLength() && !t.needsRefresh(now, refreshBefore) {
 				continue
 			}
 			acc := account
@@ -557,9 +587,9 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	}
 }
 
-// probeOnceOpenAICodexTicket 走打票代理打一发。命中合格 292（HTTP 200、长度==target、
-// gAAAAA 前缀）就落库；否则记 Info miss，交给下个周期重试。同一 key 并发去重，避免上一发还没
-// 回来又叠一发。
+// probeOnceOpenAICodexTicket 走打票代理打一发。命中合格 gAAAAA 门票（HTTP 200、
+// 长度 312 或 292 或配置 target）就落库；否则记 Info miss，交给下个周期重试。
+// 同一 key 并发去重，避免上一发还没回来又叠一发。
 func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, account *Account, model string) {
 	if s == nil || !isOpenAICodexTicketAccount(account) || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
 		return
@@ -591,7 +621,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 				zap.String("reason", "error"), zap.Error(perr))
 			return nil, nil
 		}
-		if result.status != http.StatusOK || result.state == "" || len(result.state) != cfg.TargetLength || !strings.HasPrefix(result.state, openAICodexTicketStatePrefix) {
+		if result.status != http.StatusOK || result.state == "" || !strings.HasPrefix(result.state, openAICodexTicketStatePrefix) || !openAICodexTicketAcceptsLength(len(result.state), cfg.TargetLength) {
 			s.applyOpenAICodexTicketHarvestProbeOutcome(ctx, account, model, result)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
@@ -599,6 +629,9 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			return nil, nil
 		}
 		now := time.Now()
+		if current := s.lookupOpenAICodexTicket(account, model); current.valid(now, cfg.TargetLength) && current.hasPreferredHuntLength() && len(result.state) != openAICodexTicketHuntLength {
+			return nil, nil
+		}
 		ticket := &openAICodexTicket{
 			AccountID:  account.ID,
 			Model:      model,
