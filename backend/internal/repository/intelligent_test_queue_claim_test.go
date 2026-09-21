@@ -27,6 +27,9 @@ func TestListGPTProOpenAIAccountIDsSQLRequiresLiveAstraTicket(t *testing.T) {
 	require.Contains(t, body, "codex_turn_ticket:gpt-6-astra")
 	require.Contains(t, body, "LIKE 'gAAAAA%'")
 	require.Contains(t, body, "expires_at")
+	require.Contains(t, body, "IN (292, 312)")
+	require.NotContains(t, body, "length')::int, 0) = 292")
+	require.Contains(t, body, "length(COALESCE(a.extra->$5->>'state','')) = COALESCE((a.extra->$5->>'length')::int, 0)")
 }
 
 func TestAdminIntelligentTestSQLExcludesPelicanSchedule(t *testing.T) {
