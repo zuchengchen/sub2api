@@ -141,9 +141,8 @@ func (r *intelligentTestRepository) FirstAdminUserID(ctx context.Context) (int64
 }
 
 func (r *intelligentTestRepository) ListGPTProOpenAIAccountIDs(ctx context.Context) ([]int64, error) {
-	// Only accounts with a still-valid 292 or 312 gpt-6-astra ticket. Scheduled
-	// pelican tests inject that ticket; picking an expired/missing ticket fails fail-closed.
-	const astraTicket = `codex_turn_ticket:gpt-6-astra`
+	// GPT-PRO ChatGPT OAuth accounts. Scheduled pelican follows the same outbound
+	// path as a normal user request and does not require a specific ticket length.
 	rows, err := r.db.QueryContext(ctx, `
 SELECT DISTINCT a.id
 FROM accounts a
@@ -152,13 +151,7 @@ JOIN groups g ON g.id=ag.group_id
 WHERE a.deleted_at IS NULL AND a.status=$1 AND a.platform=$2 AND a.type=ANY($3)
   AND a.parent_account_id IS NULL AND a.schedulable=true
   AND g.deleted_at IS NULL AND g.status=$1 AND lower(g.name)=$4
-  AND jsonb_typeof(a.extra->$5) = 'object'
-  AND COALESCE((a.extra->$5->>'length')::int, 0) IN (292, 312)
-  AND length(COALESCE(a.extra->$5->>'state','')) = COALESCE((a.extra->$5->>'length')::int, 0)
-  AND COALESCE(a.extra->$5->>'state','') LIKE 'gAAAAA%'
-  AND NULLIF(btrim(a.extra->$5->>'expires_at'),'') IS NOT NULL
-  AND (a.extra->$5->>'expires_at')::timestamptz > NOW()
-ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.VipDiscountedGroupName, astraTicket)
+ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.VipDiscountedGroupName)
 	if err != nil {
 		return nil, err
 	}
