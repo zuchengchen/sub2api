@@ -2,29 +2,32 @@
   <AppLayout>
     <div class="space-y-6">
       <div>
-        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t('nav.pelicanTest') }}</h1>
-        <p class="mt-2 max-w-3xl text-sm leading-relaxed text-gray-500 dark:text-gray-400">{{ t('pelicanTest.subtitle') }}</p>
+        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 lg:hidden">{{ t('nav.pelicanTest') }}</h1>
+        <p class="mt-2 max-w-3xl text-sm leading-relaxed text-gray-500 dark:text-gray-400 lg:mt-0">{{ t('pelicanTest.subtitle') }}</p>
       </div>
 
       <div v-if="loading" class="flex justify-center py-16"><LoadingSpinner /></div>
       <p v-else-if="error" class="text-sm text-red-600" role="alert">{{ error }}</p>
       <p v-else-if="!items.length" class="rounded-2xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-400 dark:border-dark-700">{{ t('pelicanTest.empty') }}</p>
-      <div v-else class="mx-auto max-w-4xl space-y-4">
-        <div v-if="items.length > 1" class="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+      <div v-else class="mx-auto flex max-w-5xl items-start gap-3 sm:gap-4">
+        <div
+          v-if="items.length > 1"
+          class="flex max-h-[min(36rem,70vh)] w-[7.25rem] shrink-0 flex-col gap-1.5 overflow-y-auto sm:w-40"
+        >
           <button
             v-for="row in items"
             :key="row.id"
             type="button"
-            class="rounded-full border px-3 py-1 text-xs"
+            class="rounded-lg border px-2 py-1.5 text-left text-xs leading-snug"
             :class="selected?.id === row.id
               ? 'border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900/30 dark:text-primary-200'
               : 'border-gray-200 text-gray-600 hover:border-gray-300 dark:border-dark-600 dark:text-gray-300'"
             @click="selected = row"
           >
-            {{ formatTime(row.finished_at || row.created_at) }}
+            {{ formatSlot(row.finished_at || row.created_at) }}
           </button>
         </div>
-        <article v-if="selected" class="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-800">
+        <article v-if="selected" class="min-w-0 flex-1 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-800">
           <div v-if="selected.html" class="aspect-[4/3] bg-[#0b1220]">
             <iframe
               class="h-full w-full border-0"
@@ -81,6 +84,14 @@ function formatTime(value?: string | null) {
   if (!value) return '—'
   const date = new Date(value)
   return Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { hour12: false }) : '—'
+}
+
+function formatSlot(value?: string | null) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return '—'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 onMounted(async () => {

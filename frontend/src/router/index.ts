@@ -208,8 +208,7 @@ const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       requiresAdmin: false,
       title: 'Pelican Test',
-      titleKey: 'nav.pelicanTest',
-      descriptionKey: 'pelicanTest.subtitle'
+      titleKey: 'nav.pelicanTest'
     }
   },
   {
