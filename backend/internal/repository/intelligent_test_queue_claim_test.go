@@ -19,17 +19,15 @@ func TestDeleteStalePelicanTestsSQLKeepsTwentyFourHours(t *testing.T) {
 	require.NotContains(t, body, "INTERVAL '3 hours'")
 }
 
-func TestListGPTProOpenAIAccountIDsSQLRequiresLiveAstraTicket(t *testing.T) {
+func TestListGPTProOpenAIAccountIDsSQLDoesNotRequireTicketLength(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("intelligent_test_public.go")
 	require.NoError(t, err)
 	body := string(src)
-	require.Contains(t, body, "codex_turn_ticket:gpt-6-astra")
-	require.Contains(t, body, "LIKE 'gAAAAA%'")
-	require.Contains(t, body, "expires_at")
-	require.Contains(t, body, "IN (292, 312)")
-	require.NotContains(t, body, "length')::int, 0) = 292")
-	require.Contains(t, body, "length(COALESCE(a.extra->$5->>'state','')) = COALESCE((a.extra->$5->>'length')::int, 0)")
+	require.Contains(t, body, "func (r *intelligentTestRepository) ListGPTProOpenAIAccountIDs")
+	require.Contains(t, body, "lower(g.name)=$4")
+	require.NotContains(t, body, "codex_turn_ticket:gpt-6-astra")
+	require.NotContains(t, body, "IN (292, 312)")
 }
 
 func TestListPelicanSlotAttemptsSQLIncludesRetries(t *testing.T) {
