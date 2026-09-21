@@ -183,7 +183,7 @@ type IntelligentTestRepository interface {
 	PublicRecords(context.Context, int64, IntelligentTestFilter) (*PublicAccountTests, error)
 	PublicGet(context.Context, int64, int64) (*PublicAccountTest, error)
 	FirstAdminUserID(context.Context) (int64, error)
-	ListGPTProOpenAIAccountIDs(context.Context) ([]int64, error)
+	ListPelicanCandidates(context.Context) ([]PelicanCandidate, error)
 	ListPelicanSlotAttempts(context.Context, string) ([]PelicanSlotAttempt, error)
 	UserPelicanTests(context.Context, IntelligentTestFilter) (*UserPelicanTests, error)
 	DeleteStalePelicanTests(context.Context) (int64, error)
@@ -194,6 +194,13 @@ type PelicanSlotAttempt struct {
 	AccountID int64
 	Status    string
 	HasSVG    bool
+}
+
+// PelicanCandidate is a GPT-PRO OAuth account that is currently schedulable.
+// HasTicket means it has a live 292 gpt-6-astra ticket.
+type PelicanCandidate struct {
+	ID        int64
+	HasTicket bool
 }
 type IntelligentTestRunner interface {
 	RunIntelligentTest(context.Context, *IntelligentTestRecord) error

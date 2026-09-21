@@ -308,18 +308,34 @@ func pelicanSlotInFlight(attempts []PelicanSlotAttempt) bool {
 	return false
 }
 
-func pickPelicanAccountID(ids []int64, used map[int64]struct{}) int64 {
-	unused := make([]int64, 0, len(ids))
-	for _, id := range ids {
-		if _, ok := used[id]; !ok {
-			unused = append(unused, id)
+func pickPelicanAccountID(cands []PelicanCandidate, used map[int64]struct{}) int64 {
+	if len(cands) == 0 {
+		return 0
+	}
+	var unusedTicketed, unused, ticketed, all []int64
+	for _, cand := range cands {
+		all = append(all, cand.ID)
+		if cand.HasTicket {
+			ticketed = append(ticketed, cand.ID)
+		}
+		if _, ok := used[cand.ID]; ok {
+			continue
+		}
+		unused = append(unused, cand.ID)
+		if cand.HasTicket {
+			unusedTicketed = append(unusedTicketed, cand.ID)
 		}
 	}
-	pool := unused
-	if len(pool) == 0 {
-		pool = ids
+	switch {
+	case len(unusedTicketed) > 0:
+		return unusedTicketed[randIntN(len(unusedTicketed))]
+	case len(unused) > 0:
+		return unused[randIntN(len(unused))]
+	case len(ticketed) > 0:
+		return ticketed[randIntN(len(ticketed))]
+	default:
+		return all[randIntN(len(all))]
 	}
-	return pool[randIntN(len(pool))]
 }
 
 func pelicanBeijingLocation() *time.Location {
@@ -427,13 +443,13 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 		}
 		return
 	}
-	ids, err := s.repo.ListGPTProOpenAIAccountIDs(ctx)
+	cands, err := s.repo.ListPelicanCandidates(ctx)
 	if err != nil {
 		slog.Error("scheduled pelican account list failed", "error", err)
 		return
 	}
-	if len(ids) == 0 {
-		slog.Info("scheduled pelican skipped: no GPT-PRO ChatGPT OAuth account")
+	if len(cands) == 0 {
+		slog.Info("scheduled pelican skipped: no schedulable GPT-PRO ChatGPT OAuth account")
 		return
 	}
 	slotKey := pelicanSlotKey(now)
@@ -455,7 +471,10 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 	animal := pickIntelligentTestAnimal(s.lastAnimal)
 	s.lastAnimal = animal
 	s.mu.Unlock()
-	picked := pickPelicanAccountID(ids, used)
+	picked := pickPelicanAccountID(cands, used)
+	if picked < 1 {
+		return
+	}
 	req := IntelligentTestEnqueue{
 		AccountIDs:     []int64{picked},
 		TestTypes:      []string{"pelican"},
