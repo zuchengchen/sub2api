@@ -20,6 +20,8 @@ var ErrIntelligentTestConflict = infraerrors.Conflict("INTELLIGENT_TEST_CONFLICT
 
 const (
 	pelicanScheduleInterval              = 30 * time.Minute
+	pelicanRetryInterval                 = 3 * time.Minute
+	pelicanSlotMaxAttempts               = 3
 	pelicanUserPageSize                  = 32 // 30-minute runs in 08:00–24:00 Beijing, 24h window
 	IntelligentTestSourcePelicanSchedule = "pelican-schedule"
 )
@@ -280,6 +282,46 @@ func pelicanSlotKey(now time.Time) string {
 	return "pelican-slot-" + slot.Format("200601021504")
 }
 
+func pelicanAttemptKey(now time.Time, attempt int) string {
+	base := pelicanSlotKey(now)
+	if attempt < 1 {
+		return base
+	}
+	return fmt.Sprintf("%s-r%d", base, attempt)
+}
+
+func pelicanSlotSucceeded(attempts []PelicanSlotAttempt) bool {
+	for _, attempt := range attempts {
+		if attempt.Status == "completed" && attempt.HasSVG {
+			return true
+		}
+	}
+	return false
+}
+
+func pelicanSlotInFlight(attempts []PelicanSlotAttempt) bool {
+	for _, attempt := range attempts {
+		if attempt.Status == "queued" || attempt.Status == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+func pickPelicanAccountID(ids []int64, used map[int64]struct{}) int64 {
+	unused := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := used[id]; !ok {
+			unused = append(unused, id)
+		}
+	}
+	pool := unused
+	if len(pool) == 0 {
+		pool = ids
+	}
+	return pool[randIntN(len(pool))]
+}
+
 func pelicanBeijingLocation() *time.Location {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
@@ -298,16 +340,35 @@ func pelicanNextBoundary(now time.Time) time.Time {
 	return local.Truncate(pelicanScheduleInterval).Add(pelicanScheduleInterval)
 }
 
+func pelicanLoopWait(now time.Time) time.Duration {
+	if !pelicanInBeijingWindow(now) {
+		local := now.In(pelicanBeijingLocation())
+		next := time.Date(local.Year(), local.Month(), local.Day(), 8, 0, 0, 0, local.Location())
+		if !next.After(local) {
+			next = next.Add(24 * time.Hour)
+		}
+		wait := next.Sub(now)
+		if wait < time.Second {
+			return time.Second
+		}
+		return wait
+	}
+	wait := pelicanRetryInterval
+	if untilBoundary := pelicanNextBoundary(now).Sub(now); untilBoundary < wait {
+		wait = untilBoundary
+	}
+	if wait < time.Second {
+		return time.Second
+	}
+	return wait
+}
+
 func (s *IntelligentTestService) scheduledPelicanLoop(ctx context.Context) {
 	defer s.wg.Done()
 	s.purgeStalePelicanTests(ctx)
 	s.runScheduledPelicanAt(ctx, time.Now())
 	for {
-		wait := time.Until(pelicanNextBoundary(time.Now()))
-		if wait < time.Second {
-			wait = time.Second
-		}
-		timer := time.NewTimer(wait)
+		timer := time.NewTimer(pelicanLoopWait(time.Now()))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -375,23 +436,41 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 		slog.Info("scheduled pelican skipped: no GPT-PRO ChatGPT OAuth account with a live 292 or 312 gpt-6-astra ticket")
 		return
 	}
+	slotKey := pelicanSlotKey(now)
+	attempts, err := s.repo.ListPelicanSlotAttempts(ctx, slotKey)
+	if err != nil {
+		slog.Error("scheduled pelican slot lookup failed", "error", err, "slot", slotKey)
+		return
+	}
+	if pelicanSlotSucceeded(attempts) || pelicanSlotInFlight(attempts) || len(attempts) >= pelicanSlotMaxAttempts {
+		return
+	}
+	used := map[int64]struct{}{}
+	for _, attempt := range attempts {
+		if attempt.AccountID > 0 {
+			used[attempt.AccountID] = struct{}{}
+		}
+	}
 	s.mu.Lock()
 	animal := pickIntelligentTestAnimal(s.lastAnimal)
 	s.lastAnimal = animal
 	s.mu.Unlock()
-	picked := ids[randIntN(len(ids))]
+	picked := pickPelicanAccountID(ids, used)
 	req := IntelligentTestEnqueue{
 		AccountIDs:     []int64{picked},
 		TestTypes:      []string{"pelican"},
 		Models:         map[string]string{"pelican": intelligentTestDefaultCodexModel},
 		Prompts:        map[string]string{"pelican": intelligentAnimalHTMLPrompt(animal)},
-		IdempotencyKey: pelicanSlotKey(now),
+		IdempotencyKey: pelicanAttemptKey(now, len(attempts)),
 		Source:         IntelligentTestSourcePelicanSchedule,
 	}
 	out, err := s.repo.Enqueue(ctx, actor, req)
 	if err != nil {
-		slog.Error("scheduled pelican enqueue failed", "error", err, "account_id", picked, "animal", animal)
+		slog.Error("scheduled pelican enqueue failed", "error", err, "account_id", picked, "animal", animal, "attempt", len(attempts)+1)
 		return
+	}
+	if len(attempts) > 0 {
+		slog.Info("scheduled pelican retry", "slot", slotKey, "attempt", len(attempts)+1, "account_id", picked, "animal", animal)
 	}
 	s.startEnqueued(ctx, out)
 }

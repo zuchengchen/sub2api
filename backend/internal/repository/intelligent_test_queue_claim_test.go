@@ -32,6 +32,16 @@ func TestListGPTProOpenAIAccountIDsSQLRequiresLiveAstraTicket(t *testing.T) {
 	require.Contains(t, body, "length(COALESCE(a.extra->$5->>'state','')) = COALESCE((a.extra->$5->>'length')::int, 0)")
 }
 
+func TestListPelicanSlotAttemptsSQLIncludesRetries(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("intelligent_test_public.go")
+	require.NoError(t, err)
+	body := string(src)
+	require.Contains(t, body, "ListPelicanSlotAttempts")
+	require.Contains(t, body, "request_key LIKE $1 || '-r%'")
+	require.Contains(t, body, "t.result ILIKE '%<svg%'")
+}
+
 func TestAdminIntelligentTestSQLExcludesPelicanSchedule(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("intelligent_test_repo.go")
