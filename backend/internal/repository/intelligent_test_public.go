@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
@@ -171,6 +172,32 @@ ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (r *intelligentTestRepository) ListPelicanSlotAttempts(ctx context.Context, slotKey string) ([]service.PelicanSlotAttempt, error) {
+	slotKey = strings.TrimSpace(slotKey)
+	if slotKey == "" {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT t.account_id, t.status, t.result ILIKE '%<svg%'
+FROM intelligent_test_requests r
+JOIN account_tests t ON t.id = ANY(r.record_ids)
+WHERE r.request_key = $1 OR r.request_key LIKE $1 || '-r%'
+ORDER BY t.id`, slotKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []service.PelicanSlotAttempt{}
+	for rows.Next() {
+		var item service.PelicanSlotAttempt
+		if err := rows.Scan(&item.AccountID, &item.Status, &item.HasSVG); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (r *intelligentTestRepository) UserPelicanTests(ctx context.Context, f service.IntelligentTestFilter) (*service.UserPelicanTests, error) {

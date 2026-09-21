@@ -184,8 +184,16 @@ type IntelligentTestRepository interface {
 	PublicGet(context.Context, int64, int64) (*PublicAccountTest, error)
 	FirstAdminUserID(context.Context) (int64, error)
 	ListGPTProOpenAIAccountIDs(context.Context) ([]int64, error)
+	ListPelicanSlotAttempts(context.Context, string) ([]PelicanSlotAttempt, error)
 	UserPelicanTests(context.Context, IntelligentTestFilter) (*UserPelicanTests, error)
 	DeleteStalePelicanTests(context.Context) (int64, error)
+}
+
+// PelicanSlotAttempt is one scheduled (or retried) pelican run in a 30-minute slot.
+type PelicanSlotAttempt struct {
+	AccountID int64
+	Status    string
+	HasSVG    bool
 }
 type IntelligentTestRunner interface {
 	RunIntelligentTest(context.Context, *IntelligentTestRecord) error

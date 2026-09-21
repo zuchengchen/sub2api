@@ -15,6 +15,7 @@ type hourlyPelicanRepo struct {
 	accountIDs []int64
 	enqueued   []IntelligentTestEnqueue
 	actors     []int64
+	attempts   []PelicanSlotAttempt
 }
 
 func (r *hourlyPelicanRepo) Settings(context.Context) ([]IntelligentTestSetting, error) {
@@ -31,6 +32,9 @@ func (r *hourlyPelicanRepo) Enqueue(_ context.Context, actor int64, req Intellig
 }
 func (r *hourlyPelicanRepo) ClaimID(context.Context, int64) (*IntelligentTestRecord, error) {
 	return nil, nil
+}
+func (r *hourlyPelicanRepo) ListPelicanSlotAttempts(context.Context, string) ([]PelicanSlotAttempt, error) {
+	return r.attempts, nil
 }
 
 func pelicanNoonBeijing(t *testing.T) time.Time {
@@ -127,4 +131,88 @@ func TestRunScheduledPelicanSkipsOutsideBeijingWindow(t *testing.T) {
 	require.NoError(t, err)
 	svc.runScheduledPelicanAt(context.Background(), night)
 	require.Empty(t, repo.enqueued)
+}
+
+func TestPelicanAttemptKeyAddsRetrySuffix(t *testing.T) {
+	t.Parallel()
+	now := pelicanNoonBeijing(t)
+	require.Equal(t, "pelican-slot-202609200400", pelicanAttemptKey(now, 0))
+	require.Equal(t, "pelican-slot-202609200400-r1", pelicanAttemptKey(now, 1))
+	require.Equal(t, "pelican-slot-202609200400-r2", pelicanAttemptKey(now, 2))
+}
+
+func TestRunScheduledPelicanRetriesFailedSlotOnAnotherAccount(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID:    3,
+		accountIDs: []int64{11, 12},
+		attempts:   []PelicanSlotAttempt{{AccountID: 11, Status: "rate_limited"}},
+	}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Len(t, repo.enqueued, 1)
+	require.Equal(t, []int64{12}, repo.enqueued[0].AccountIDs)
+	require.Equal(t, "pelican-slot-202609200400-r1", repo.enqueued[0].IdempotencyKey)
+}
+
+func TestRunScheduledPelicanRetriesCompletedWithoutSVG(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID:    3,
+		accountIDs: []int64{11, 12},
+		attempts:   []PelicanSlotAttempt{{AccountID: 11, Status: "completed", HasSVG: false}},
+	}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Len(t, repo.enqueued, 1)
+	require.Equal(t, "pelican-slot-202609200400-r1", repo.enqueued[0].IdempotencyKey)
+	require.Equal(t, []int64{12}, repo.enqueued[0].AccountIDs)
+}
+
+func TestRunScheduledPelicanSkipsSuccessfulSVGSlot(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID:    3,
+		accountIDs: []int64{11, 12},
+		attempts:   []PelicanSlotAttempt{{AccountID: 11, Status: "completed", HasSVG: true}},
+	}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Empty(t, repo.enqueued)
+}
+
+func TestRunScheduledPelicanSkipsInFlightSlot(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID:    3,
+		accountIDs: []int64{11, 12},
+		attempts:   []PelicanSlotAttempt{{AccountID: 11, Status: "running"}},
+	}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Empty(t, repo.enqueued)
+}
+
+func TestRunScheduledPelicanStopsAfterMaxAttempts(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID:    3,
+		accountIDs: []int64{11, 12, 13},
+		attempts: []PelicanSlotAttempt{
+			{AccountID: 11, Status: "failed"},
+			{AccountID: 12, Status: "rate_limited"},
+			{AccountID: 13, Status: "completed", HasSVG: false},
+		},
+	}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Empty(t, repo.enqueued)
+}
+
+func TestPelicanLoopWaitRetriesInsideWindowAndSleepsOvernight(t *testing.T) {
+	t.Parallel()
+	noon := pelicanNoonBeijing(t)
+	require.Equal(t, pelicanRetryInterval, pelicanLoopWait(noon))
+	nearBoundary, err := time.Parse(time.RFC3339, "2026-09-20T04:28:00Z")
+	require.NoError(t, err)
+	require.InDelta(t, (2 * time.Minute).Seconds(), pelicanLoopWait(nearBoundary).Seconds(), 1)
+	night, err := time.Parse(time.RFC3339, "2026-09-20T16:10:00Z")
+	require.NoError(t, err)
+	nextEight := time.Date(2026, 9, 21, 8, 0, 0, 0, pelicanBeijingLocation())
+	require.Equal(t, nextEight.Sub(night), pelicanLoopWait(night))
 }
