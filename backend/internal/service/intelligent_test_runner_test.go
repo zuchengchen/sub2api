@@ -78,6 +78,7 @@ func TestApplyIntelligentTestOpenAICodexTicketMatchesGatewayInjection(t *testing
 		Model:      "gpt-6-astra",
 		State:      state,
 		Length:     292,
+		Cookies:    "__cf_bm=bm; __cflb=lb; __oailb=ol",
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
 	})
@@ -89,6 +90,7 @@ func TestApplyIntelligentTestOpenAICodexTicketMatchesGatewayInjection(t *testing
 	require.NoError(t, svc.applyIntelligentTestOpenAICodexTicket(intelligentCtx, account, body, injected))
 	require.Equal(t, state, injected.Get(openAICodexTurnStateHeader))
 	require.Equal(t, 292, len(injected.Get(openAICodexTurnStateHeader)))
+	require.Equal(t, "__cf_bm=bm; __cflb=lb; __oailb=ol", injected.Get("Cookie"))
 
 	plain := http.Header{}
 	require.NoError(t, svc.applyIntelligentTestOpenAICodexTicket(context.Background(), account, body, plain))
