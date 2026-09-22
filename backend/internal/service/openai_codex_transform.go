@@ -1659,6 +1659,9 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			if !opts.PreserveReferences {
 				continue
 			}
+			if id, ok := m["id"].(string); ok && shouldStripOpenAIResponsesInputItemID(typ, id) {
+				continue
+			}
 			newItem := make(map[string]any, len(m))
 			for key, value := range m {
 				newItem[key] = value

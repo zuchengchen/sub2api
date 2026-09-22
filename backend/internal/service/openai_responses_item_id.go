@@ -46,6 +46,15 @@ func openAIResponsesToolCallIDPrefix(itemType string) string {
 // Invalid replayed IDs are removed rather than rewritten because a fabricated
 // ID may point at a different upstream object.
 func shouldStripOpenAIResponsesInputItemID(itemType, id string) bool {
+	// ctco_* is Codex's custom-tool output namespace. "ctc" is a string prefix
+	// of "ctco_", so a plain HasPrefix(id, "ctc") check treats it as a valid
+	// custom_tool_call id and lets it through. Upstream validates the fc
+	// namespace instead and rejects the replay:
+	// Invalid 'input[N].id': 'ctco_...'. Expected an ID that begins with 'fc'.
+	// fco_* stays: it really does begin with "fc", which is the check upstream uses.
+	if strings.HasPrefix(id, "ctco_") {
+		return true
+	}
 	prefix, constrained := openAIResponsesInputItemIDPrefix(itemType)
 	if !constrained {
 		return false
@@ -72,6 +81,7 @@ func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
 		raw         string
 		stripID     bool
 		stripCallID bool
+		drop        bool
 	}
 
 	items := make([]inputItem, 0)
@@ -85,13 +95,17 @@ func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
 			if id.Type == gjson.String {
 				parsed.stripID = shouldStripOpenAIResponsesInputItemID(trimmedItemType, id.String())
 			}
+			// A reference with no usable id cannot point at an upstream item.
+			if trimmedItemType == "item_reference" && parsed.stripID {
+				parsed.drop = true
+			}
 		}
 		items = append(items, parsed)
 		return true
 	})
 	hasSanitization := false
 	for _, item := range items {
-		if item.stripID || item.stripCallID {
+		if item.drop || item.stripID || item.stripCallID {
 			hasSanitization = true
 			break
 		}
@@ -102,6 +116,9 @@ func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
 
 	rebuiltItems := make([]string, 0, len(items))
 	for index, item := range items {
+		if item.drop {
+			continue
+		}
 		if !item.stripID && !item.stripCallID {
 			rebuiltItems = append(rebuiltItems, item.raw)
 			continue
