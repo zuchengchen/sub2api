@@ -1174,7 +1174,7 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 }
 
 // OpenAICodexTicketConfig 控制 ChatGPT OAuth 的 x-codex-turn-state 门票。
-// 打票走 harvest_proxy_url（SOCKS），业务出站仍用账号住宅 proxy_id，只替换该请求头。
+// 打票走 harvest_proxy_url（SOCKS），业务出站仍用账号自己的代理，并带上同一张票的 Cookie。
 // 门票默认有效 180 秒。refresh_before_seconds 为 0 时到期再打，不提前。
 type OpenAICodexTicketConfig struct {
 	Enabled                      bool     `mapstructure:"enabled"`
