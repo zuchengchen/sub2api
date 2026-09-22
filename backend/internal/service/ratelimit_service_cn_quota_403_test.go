@@ -47,7 +47,7 @@ func runKimi403(service *RateLimitService, account *Account, body string) bool {
 func TestHandleUpstreamError_KimiQuotaExhausted403RateLimitedToWindowReset(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	blocker := &runtimeBlockRecorder{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetAccountRuntimeBlocker(blocker)
 	account := newCNQuotaExhaustedTestAccount(2 * time.Hour)
 
@@ -66,7 +66,7 @@ func TestHandleUpstreamError_KimiQuotaExhausted403RateLimitedToWindowReset(t *te
 
 func TestHandleUpstreamError_KimiQuotaExhausted403WithoutSnapshotFallsBackToTemp(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := newCNQuotaExhaustedTestAccount(0)
 
 	shouldDisable := runKimi403(service, account, kimiWeeklyQuotaExhaustedBody)
@@ -81,7 +81,7 @@ func TestHandleUpstreamError_KimiQuotaExhausted403WithoutSnapshotFallsBackToTemp
 
 func TestHandleUpstreamError_KimiQuotaExhausted403MatchedByMessageOnly(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := newCNQuotaExhaustedTestAccount(2 * time.Hour)
 	// 无 error.type 字段，仅靠文案兜底匹配。
 	body := `{"error":{"message":"You've reached your weekly (7-day) usage limit. Your quota will reset when the current 7-day window ends."}}`
@@ -95,7 +95,7 @@ func TestHandleUpstreamError_KimiQuotaExhausted403MatchedByMessageOnly(t *testin
 
 func TestHandleUpstreamError_KimiConcurrencyLimit403StillUsesConcurrencyPath(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := newCNQuotaExhaustedTestAccount(2 * time.Hour)
 	body := fmt.Sprintf(`{"error":{"message":%q,"type":"access_terminated_error"}}`, kimiConcurrentRequestLimitMessage)
 
@@ -111,7 +111,7 @@ func TestHandleUpstreamError_KimiConcurrencyLimit403StillUsesConcurrencyPath(t *
 func TestHandleUpstreamError_KimiGeneric403StillEscalates(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{3}}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	account := newCNQuotaExhaustedTestAccount(2 * time.Hour)
 
@@ -125,7 +125,7 @@ func TestHandleUpstreamError_KimiGeneric403StillEscalates(t *testing.T) {
 func TestHandleUpstreamError_KimiNonCodingPlanQuotaMessageUsesGeneric403(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{3}}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	account := newCNQuotaExhaustedTestAccount(2 * time.Hour)
 	account.Credentials = map[string]any{"account_mode": AccountModePayG}
@@ -141,7 +141,7 @@ func TestHandleUpstreamError_KimiNonCodingPlanQuotaMessageUsesGeneric403(t *test
 func TestHandleUpstreamError_NonCNAccessTerminated403KeepsGenericPath(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{1}}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	service.SetOpenAI403CounterCache(counter)
 	account := &Account{
 		ID:       402,

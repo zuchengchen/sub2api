@@ -138,13 +138,12 @@ func (s *SecurityPolicyService) EvaluateRequest(ctx context.Context, c *gin.Cont
 			}
 		}
 	}
-	input := ExtractContentModerationInput(in.Protocol, in.Body)
-	input.Normalize()
-	if input.IsEmpty() {
+	keywordText := trimRunes(extractContentModerationKeywordText(in.Protocol, in.Body), maxModerationInputRunes)
+	if strings.TrimSpace(keywordText) == "" {
 		return allow
 	}
 	snapshot := s.keywordSnapshot(ctx)
-	keyword, category, ok := snapshot.Match(groupID, input.Text)
+	keyword, category, ok := snapshot.Match(groupID, keywordText)
 	if !ok {
 		return allow
 	}
@@ -156,8 +155,8 @@ func (s *SecurityPolicyService) EvaluateRequest(ctx context.Context, c *gin.Cont
 		ClientMessage:  "请求内容违反本分组安全策略（敏感话题），该请求已被拦截。请调整输入后重试。",
 		ScopeKey:       scope,
 		SessionKeys:    lookupKeys,
-		Excerpt:        trimRunes(redactContentModerationSecrets(input.Text), maxModerationExcerptRunes),
-		ReviewText:     input.Text,
+		Excerpt:        trimRunes(redactContentModerationSecrets(keywordText), maxModerationExcerptRunes),
+		ReviewText:     keywordText,
 	}
 }
 

@@ -165,6 +165,7 @@ var ProviderSet = wire.NewSet(
 	NewSecurityPolicySessionStore,
 	NewIntelligentTestRepository,
 	NewOpenAIOAuthClient,
+	NewOpenAIReferralClient,
 	NewGrokOAuthClient,
 
 	ProvideEnt,
