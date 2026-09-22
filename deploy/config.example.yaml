@@ -343,7 +343,7 @@ gateway:
     harvest_proxy_url: ""
     harvest_probe_interval_seconds: 6
     harvest_attempt_timeout_seconds: 25
-    fail_closed: true
+    fail_closed: false
     models:
       - gpt-6-astra
       - gpt-5.6-sol
