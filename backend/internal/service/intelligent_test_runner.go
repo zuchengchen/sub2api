@@ -19,8 +19,9 @@ import (
 
 type intelligentRunKey struct{}
 type intelligentRunContext struct {
-	prompt  string
-	capture *intelligentCapture
+	prompt   string
+	testType string
+	capture  *intelligentCapture
 }
 
 // ChatGPT Codex plan-gates gpt-5.3-codex and gpt-5.4. Empty ChatGPT OAuth
@@ -104,11 +105,30 @@ func applyIntelligentTestReasoning(payload map[string]any) {
 
 // applyIntelligentTestOpenAICodexTicket 让 GPT OAuth 智能测试走和生产转发相同的
 // 292 门票注入。普通「测试连接」不含 intelligent 上下文，仍发不带门票的探测。
+// 鹈鹕测试在本号没有可用票时，借用其他号上带 Cookie 的 292，出站仍同时带上头和 Cookie。
 func (s *AccountTestService) applyIntelligentTestOpenAICodexTicket(ctx context.Context, account *Account, body []byte, h http.Header) error {
 	if s == nil || s.openaiGatewayService == nil || intelligentContext(ctx) == nil {
 		return nil
 	}
-	return s.openaiGatewayService.applyOpenAICodexTicket(ctx, account, extractOpenAICodexTicketModel(body), h)
+	model := extractOpenAICodexTicketModel(body)
+	err := s.openaiGatewayService.applyOpenAICodexTicket(ctx, account, model, h)
+	if openAICodexTicketInjected(h, s.openaiGatewayService.openAICodexTicketConfig().TargetLength) {
+		return nil
+	}
+	if intelligentContext(ctx).testType != "pelican" {
+		return err
+	}
+	exceptID := int64(0)
+	if account != nil {
+		exceptID = account.ID
+	}
+	borrowed := s.openaiGatewayService.lookupBorrowedOpenAICodexTicket(ctx, exceptID, model)
+	if borrowed.usable(s.openaiGatewayService.openAICodexTicketConfig().TargetLength) {
+		h.Set(openAICodexTurnStateHeader, borrowed.State)
+		applyOpenAICodexTicketCookies(h, borrowed.Cookies)
+		return nil
+	}
+	return err
 }
 
 // RunIntelligentTest uses the existing authenticated outbound protocol adapters.
@@ -138,7 +158,7 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 	r.ConfigSnapshot.Execution.GroupName = pelicanTestGroupName(account)
 	capture := &intelligentCapture{}
 	capture.collectCredentialSecrets(account.Credentials)
-	ctx = context.WithValue(ctx, intelligentRunKey{}, &intelligentRunContext{prompt: r.Input, capture: capture})
+	ctx = context.WithValue(ctx, intelligentRunKey{}, &intelligentRunContext{prompt: r.Input, testType: r.TestType, capture: capture})
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	recorder := &intelligentSSEWriter{header: http.Header{}, cancel: cancel}
