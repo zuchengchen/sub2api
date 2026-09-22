@@ -37,6 +37,8 @@ const (
 	openAICodexTicketProbeBodyLimit  = 4 << 20
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
+	// 上游把 gpt-5.6-sol 完成成 gpt-6-sol，说明这张 292 票是好的。
+	openAICodexTicketUpgradedSolModel = "gpt-6-sol"
 	// 新鲜票少于这个数量就继续打。多一张可以，少一张不行。
 	openAICodexTicketPoolTarget = 2
 	// 最新一张超过这个票龄，即使已经有两张也再补一张。
@@ -1294,10 +1296,24 @@ func (o *upstreamResponseModelObserver) noteOpenAICodexTicketCompletion(payload 
 		return
 	}
 	model, ok := openAICodexSuccessfulCompletionModel(payload, eventType)
-	if !ok || model == o.ticketWatch.model {
+	if !ok || openAICodexTicketCompletionKeepsTicket(o.ticketWatch.model, model) {
 		return
 	}
 	o.ticketWatch.fail("model_mismatch")
+}
+
+// openAICodexTicketCompletionKeepsTicket 判断完成模型是否还配得上这张票。
+// 出站 gpt-5.6-sol、完成成 gpt-6-sol 是票生效的信号，不作废。
+func openAICodexTicketCompletionKeepsTicket(requested, actual string) bool {
+	requested = strings.TrimSpace(requested)
+	actual = strings.TrimSpace(actual)
+	if actual == "" {
+		return false
+	}
+	if requested == actual {
+		return true
+	}
+	return requested == openAICodexTicketDefaultSolModel && actual == openAICodexTicketUpgradedSolModel
 }
 
 // applyOpenAICodexTicketForRequest 注入门票，并让这条请求的响应观察器盯着这一张 state。
@@ -1334,7 +1350,7 @@ func (s *OpenAIGatewayService) observeOpenAICodexTicketEvent(c *gin.Context, eve
 		return
 	}
 	model, ok := openAICodexSuccessfulCompletionModel(payload, eventType)
-	if !ok || model == watch.model {
+	if !ok || openAICodexTicketCompletionKeepsTicket(watch.model, model) {
 		return
 	}
 	watch.fail("model_mismatch")
