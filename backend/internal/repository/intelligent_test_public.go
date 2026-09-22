@@ -142,7 +142,8 @@ func (r *intelligentTestRepository) FirstAdminUserID(ctx context.Context) (int64
 
 func (r *intelligentTestRepository) ListPelicanCandidates(ctx context.Context) ([]service.PelicanCandidate, error) {
 	// Same schedulable gates as normal OpenAI routing, plus skip 5h/7d quota
-	// exhaustion. Live 292 tickets are preferred in Go, not required.
+	// exhaustion. A valid ticket is an unexpired 292 with its harvest cookies.
+	// Go prefers those accounts, then any other schedulable GPT-PRO account.
 	const astraTicket = `codex_turn_ticket:gpt-6-astra`
 	rows, err := r.db.QueryContext(ctx, `
 SELECT DISTINCT a.id,
@@ -151,6 +152,7 @@ SELECT DISTINCT a.id,
     AND COALESCE((a.extra->$5->>'length')::int, 0) = 292
     AND length(COALESCE(a.extra->$5->>'state','')) = 292
     AND COALESCE(a.extra->$5->>'state','') LIKE 'gAAAAA%'
+    AND NULLIF(btrim(a.extra->$5->>'cookies'),'') IS NOT NULL
     AND NULLIF(btrim(a.extra->$5->>'expires_at'),'') IS NOT NULL
     AND (a.extra->$5->>'expires_at')::timestamptz > NOW()
   ) AS has_ticket
