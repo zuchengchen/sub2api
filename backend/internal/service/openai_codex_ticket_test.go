@@ -534,7 +534,14 @@ func TestRefreshOpenAICodexTickets_OneSharedAstraTicket(t *testing.T) {
 	require.Equal(t, shared.State, headers.Get(openAICodexTurnStateHeader))
 	require.Equal(t, openAICodexTicketTestCookies, headers.Get("Cookie"))
 	svc.refreshOpenAICodexTickets(context.Background())
-	require.Len(t, upstream.requests, 1)
+	require.Len(t, upstream.requests, 2)
+	otherState := openAICodexTicketStatePrefix + strings.Repeat("C", 286)
+	svc.rememberSharedOpenAICodexTicket(&openAICodexTicket{
+		AccountID: 99, Model: openAICodexTicketDefaultModel, State: otherState, Length: 292,
+		Cookies: openAICodexTicketTestCookies, CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
+	})
+	svc.refreshOpenAICodexTickets(context.Background())
+	require.Len(t, upstream.requests, 2)
 }
 func TestOpenAICodexTicketStatuses_RespectRuntimeConfiguration(t *testing.T) {
 	account := ticketTestAccount(41)
@@ -780,7 +787,7 @@ func TestProbeOpenAICodexTicket_NonQuota429KeepsHunting(t *testing.T) {
 	require.Len(t, upstream.requests, 2)
 }
 
-func TestHarvestOpenAICodexTicket_PausesAfterARoundWithoutTicket(t *testing.T) {
+func TestHarvestOpenAICodexTicket_KeepsHuntingUntilTwoFreshTickets(t *testing.T) {
 	miss := http.Header{}
 	miss.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
 	stampCodexTicketSetCookies(miss)
@@ -811,22 +818,26 @@ func TestHarvestOpenAICodexTicket_PausesAfterARoundWithoutTicket(t *testing.T) {
 		require.Contains(t, string(body), `"model":"gpt-6-astra"`)
 	}
 	svc.refreshOpenAICodexTickets(ctx)
-	require.Len(t, upstream.requests, 2)
+	require.Len(t, upstream.requests, 3)
 	require.Equal(t, StatusActive, first.Status)
 	require.True(t, first.Schedulable)
 
-	svc.openaiCodexShared.mu.Lock()
-	svc.openaiCodexShared.pauseUntil = time.Now().Add(-time.Second)
-	svc.openaiCodexShared.mu.Unlock()
 	good := http.Header{}
 	good.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
 	stampCodexTicketSetCookies(good)
 	upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: good, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
 	svc.refreshOpenAICodexTickets(ctx)
-	require.Len(t, upstream.requests, 3)
+	require.Len(t, upstream.requests, 4)
 	require.True(t, svc.currentSharedOpenAICodexTicket().usable(292))
+	require.True(t, svc.openAICodexTicketPoolNeedsHunt(time.Now()))
+	svc.rememberSharedOpenAICodexTicket(&openAICodexTicket{
+		AccountID: 99, Model: openAICodexTicketDefaultModel,
+		State: openAICodexTicketStatePrefix + strings.Repeat("C", 286), Length: 292,
+		Cookies: openAICodexTicketTestCookies, CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.False(t, svc.openAICodexTicketPoolNeedsHunt(time.Now()))
 	svc.refreshOpenAICodexTickets(ctx)
-	require.Len(t, upstream.requests, 3)
+	require.Len(t, upstream.requests, 4)
 }
 
 func TestApplyOpenAICodexTicket_UsesExpiredTicket(t *testing.T) {
