@@ -514,7 +514,7 @@ type OpenAIGatewayService struct {
 	openaiCodexTickets      sync.Map
 	openaiCodexTicketFlight singleflight.Group
 	// openaiCodexTicketHarvestBackoff: accountID\x00model → *openAICodexTicketHarvestBackoff。
-	// 连续打不中后的打票冷却。只跳过探测，不改变账号调度。
+	// 票已过期或还没有票时的下次探测时间。只跳过打票，不改变账号调度。
 	openaiCodexTicketHarvestBackoff sync.Map
 	openaiCodexTicketLifecycleMu    sync.Mutex
 	openaiCodexTicketCancel         context.CancelFunc
