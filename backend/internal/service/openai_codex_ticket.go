@@ -31,8 +31,25 @@ const (
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
 )
 
-// ErrOpenAICodexTicketUnavailable 表示该号该模型没有可用的 292 门票，
-// 且 fail_closed 禁止裸打业务请求。
+type openAICodexTicketHarvestContextKey struct{}
+
+func withOpenAICodexTicketHarvest(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, openAICodexTicketHarvestContextKey{}, true)
+}
+
+func isOpenAICodexTicketHarvest(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(openAICodexTicketHarvestContextKey{}).(bool)
+	return value
+}
+
+// ErrOpenAICodexTicketUnavailable 表示该号该模型没有可用的 292 门票。
+// 仅当 fail_closed 为 true 时才会拒绝业务请求；默认没票也继续调用。
 var ErrOpenAICodexTicketUnavailable = errors.New("codex turn-state ticket unavailable")
 
 type openAICodexTicket struct {
@@ -675,14 +692,15 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 	}
 	key := openAICodexTicketKey(account.ID, model)
 	_, _, _ = s.openaiCodexTicketFlight.Do(key, func() (any, error) {
-		token, _, err := s.GetAccessToken(ctx, account)
+		harvestCtx := withOpenAICodexTicketHarvest(ctx)
+		token, _, err := s.GetAccessToken(harvestCtx, account)
 		if err != nil || strings.TrimSpace(token) == "" {
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "token"), zap.Error(err))
 			return nil, nil
 		}
-		result, perr := s.doOpenAICodexTicketProbe(ctx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
+		result, perr := s.doOpenAICodexTicketProbe(harvestCtx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
 		if perr != nil {
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
@@ -691,7 +709,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		}
 		cookies := openAICodexTicketCookieHeader(result.headers)
 		if result.status != http.StatusOK || result.state == "" || len(result.state) != cfg.TargetLength || !strings.HasPrefix(result.state, openAICodexTicketStatePrefix) || cookies == "" {
-			s.applyOpenAICodexTicketHarvestProbeOutcome(ctx, account, model, result)
+			s.applyOpenAICodexTicketHarvestProbeOutcome(harvestCtx, account, model, result)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.Int("http", result.status), zap.Int("len", len(result.state)),
@@ -796,9 +814,8 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicketHarvestProbeOutcome(ctx con
 	}
 	switch result.status {
 	case http.StatusUnauthorized:
-		if s.rateLimitService != nil {
-			s.rateLimitService.HandleUpstreamError(ctx, account, result.status, result.headers, result.body, model)
-		}
+		// Ticket harvesting is auxiliary. A probe 401 must not pause or disable
+		// an account used by normal traffic; the next request owns auth policy.
 	case http.StatusTooManyRequests:
 		// 满额只写 usage 快照，不走 handle429，以免把降智 429 写成 RateLimitResetAt。
 		s.persistOpenAICodexTicketHarvestQuota(ctx, account, result.headers, result.body)
