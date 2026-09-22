@@ -337,6 +337,19 @@ func TestHarvestOpenAICodexTicket_HTTP503DoesNotAbortHunt(t *testing.T) {
 	require.Len(t, upstream.requests, 2)
 }
 
+func TestOpenAICodexTicketClampExpiry_ShortensStoredHour(t *testing.T) {
+	now := time.Now()
+	ticket := &openAICodexTicket{
+		State:      fakeCodexTicketState(292),
+		Length:     292,
+		CapturedAt: now.Add(-200 * time.Second),
+		ExpiresAt:  now.Add(time.Hour),
+	}
+	ticket.clampExpiry(180 * time.Second)
+	require.True(t, ticket.needsRefresh(now, 0))
+	require.False(t, ticket.valid(now, 292))
+}
+
 func TestLookupOpenAICodexTicket_HydratesFromExtra(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TargetLength: 292, TTLSeconds: 3600}, nil)
 	state := fakeCodexTicketState(292)

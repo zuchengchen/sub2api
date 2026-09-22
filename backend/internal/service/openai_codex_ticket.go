@@ -70,10 +70,10 @@ func (s *OpenAIGatewayService) openAICodexTicketConfig() config.OpenAICodexTicke
 		cfg.TargetLength = 292
 	}
 	if cfg.TTLSeconds <= 0 {
-		cfg.TTLSeconds = 3600
+		cfg.TTLSeconds = 180
 	}
-	if cfg.RefreshBeforeSeconds <= 0 {
-		cfg.RefreshBeforeSeconds = 600
+	if cfg.RefreshBeforeSeconds < 0 {
+		cfg.RefreshBeforeSeconds = 0
 	}
 	if cfg.HarvestProbeIntervalSeconds <= 0 {
 		cfg.HarvestProbeIntervalSeconds = 6
@@ -131,6 +131,9 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 		ticket := parseOpenAICodexTicketFromAny(0, model, nil)
 		if account != nil && account.Extra != nil {
 			ticket = parseOpenAICodexTicketFromAny(account.ID, model, account.Extra[openAICodexTicketExtraKey(model)])
+		}
+		if cfg.TTLSeconds > 0 {
+			ticket.clampExpiry(time.Duration(cfg.TTLSeconds) * time.Second)
 		}
 		if ticket.valid(now, targetLen) {
 			status.Ready = true
@@ -198,6 +201,17 @@ func (t *openAICodexTicket) needsRefresh(now time.Time, refreshBefore time.Durat
 	return !t.ExpiresAt.After(now.Add(refreshBefore))
 }
 
+// clampExpiry 把历史门票的过期时间收到当前 TTL 内。缩短 ttl 后，库里仍写着 1 小时过期的票会按 captured_at+ttl 重新到期。
+func (t *openAICodexTicket) clampExpiry(ttl time.Duration) {
+	if t == nil || ttl <= 0 || t.CapturedAt.IsZero() {
+		return
+	}
+	capAt := t.CapturedAt.Add(ttl)
+	if t.ExpiresAt.IsZero() || capAt.Before(t.ExpiresAt) {
+		t.ExpiresAt = capAt
+	}
+}
+
 func (s *OpenAIGatewayService) lookupOpenAICodexTicket(account *Account, model string) *openAICodexTicket {
 	if s == nil || account == nil || account.ID <= 0 {
 		return nil
@@ -212,13 +226,16 @@ func (s *OpenAIGatewayService) lookupOpenAICodexTicket(account *Account, model s
 		targetLen = s.openAICodexTicketConfig().TargetLength
 	}
 	now := time.Now()
+	ttl := time.Duration(s.openAICodexTicketConfig().TTLSeconds) * time.Second
 	var mem *openAICodexTicket
 	if raw, ok := s.openaiCodexTickets.Load(key); ok {
 		mem, _ = raw.(*openAICodexTicket)
+		mem.clampExpiry(ttl)
 	}
 	var extra *openAICodexTicket
 	if account.Extra != nil {
 		extra = parseOpenAICodexTicketFromAny(account.ID, model, account.Extra[openAICodexTicketExtraKey(model)])
+		extra.clampExpiry(ttl)
 	}
 	if extra.valid(now, targetLen) && (mem == nil || extra.CapturedAt.After(mem.CapturedAt)) {
 		s.openaiCodexTickets.Store(key, extra)
