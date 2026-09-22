@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"maps"
@@ -8,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,7 +85,7 @@ func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
 	require.Equal(t, 292, len(h.Get(openAICodexTurnStateHeader)))
 }
 
-func TestApplyOpenAICodexTicket_DoesNotReuseOtherModelOrAccount(t *testing.T) {
+func TestApplyOpenAICodexTicket_SharesAstraTicketAcrossAccountsAndSol(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled:         true,
 		TargetLength:    292,
@@ -112,13 +112,18 @@ func TestApplyOpenAICodexTicket_DoesNotReuseOtherModelOrAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "keep-ungated", h.Get(openAICodexTurnStateHeader))
 	require.False(t, svc.openAICodexTicketBlocksAccount(a, "gpt-5.5"))
-	require.True(t, svc.openAICodexTicketBlocksAccount(b, "gpt-6-astra"))
+	require.False(t, svc.openAICodexTicketBlocksAccount(b, "gpt-6-astra"))
 	require.False(t, svc.openAICodexTicketBlocksAccount(a, "gpt-6-astra"))
 
 	h = http.Header{}
 	err = svc.applyOpenAICodexTicket(context.Background(), b, "gpt-6-astra", h)
-	require.ErrorIs(t, err, ErrOpenAICodexTicketUnavailable)
-	require.Empty(t, h.Get(openAICodexTurnStateHeader))
+	require.NoError(t, err)
+	require.Equal(t, astra, h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, openAICodexTicketTestCookies, h.Get("Cookie"))
+	h = http.Header{}
+	err = svc.applyOpenAICodexTicket(context.Background(), b, "gpt-5.6-sol", h)
+	require.NoError(t, err)
+	require.Equal(t, astra, h.Get(openAICodexTurnStateHeader))
 }
 
 func TestLookupOpenAICodexTicket_PrefersNewerExtra(t *testing.T) {
@@ -495,46 +500,41 @@ func (r *codexTicketRefreshRepo) UpdateExtra(_ context.Context, id int64, update
 	return nil
 }
 
-type codexTicketConcurrentUpstream struct {
-	HTTPUpstream
-	started atomic.Int64
-	ready   chan struct{}
+func readRequestBody(t *testing.T, req *http.Request) []byte {
+	t.Helper()
+	if req == nil || req.Body == nil {
+		return nil
+	}
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	return body
 }
 
-func (u *codexTicketConcurrentUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	if u.started.Add(1) == 2 {
-		close(u.ready)
-	}
-	select {
-	case <-u.ready:
-	case <-req.Context().Done():
-		return nil, req.Context().Err()
-	}
-	h := http.Header{}
-	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
-	return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}, nil
-}
-func TestRefreshOpenAICodexTickets_ConcurrentModelsPreserveAccountSnapshot(t *testing.T) {
+func TestRefreshOpenAICodexTickets_OneSharedAstraTicket(t *testing.T) {
 	account := ticketTestAccount(41)
 	account.Status = StatusActive
 	account.Extra = map[string]any{"existing": true}
 	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
-	upstream := &codexTicketConcurrentUpstream{ready: make(chan struct{})}
-	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, HarvestProxyURL: "socks5h://proxy.example.com:1080"}, upstream)
+	h := http.Header{}
+	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+	stampCodexTicketSetCookies(h)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TTLSeconds: 180, HarvestProxyURL: "socks5h://proxy.example.com:1080"}, upstream)
 	svc.accountRepo = repo
 	svc.refreshOpenAICodexTickets(context.Background())
-	require.Equal(t, int64(2), upstream.started.Load())
+	require.Len(t, upstream.requests, 1)
+	require.Contains(t, string(readRequestBody(t, upstream.requests[0])), `"model":"gpt-6-astra"`)
 	require.Equal(t, map[string]any{"existing": true}, account.Extra)
-	require.Len(t, repo.updates, 2)
-	for _, model := range []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel} {
-		ticket := svc.lookupOpenAICodexTicket(account, model)
-		require.NotNil(t, ticket)
-		require.True(t, ticket.valid(time.Now(), 292))
-		require.Equal(t, 292, ticket.Length)
-	}
-	// Valid 292 tickets do not produce another probe on the next cycle.
+	shared := svc.currentSharedOpenAICodexTicket()
+	require.True(t, shared.usable(292))
+	other := ticketTestAccount(42)
+	headers := http.Header{}
+	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), other, "gpt-5.6-sol", headers))
+	require.Equal(t, shared.State, headers.Get(openAICodexTurnStateHeader))
+	require.Equal(t, openAICodexTicketTestCookies, headers.Get("Cookie"))
 	svc.refreshOpenAICodexTickets(context.Background())
-	require.Equal(t, int64(2), upstream.started.Load())
+	require.Len(t, upstream.requests, 1)
 }
 func TestOpenAICodexTicketStatuses_RespectRuntimeConfiguration(t *testing.T) {
 	account := ticketTestAccount(41)
@@ -708,6 +708,7 @@ func TestRefreshOpenAICodexTickets_SkipsExhaustedQuotaButNotRateLimitCooldown(t 
 	upstream := &httpUpstreamRecorder{resp: func() *http.Response {
 		h := http.Header{}
 		h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+		stampCodexTicketSetCookies(h)
 		return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
 	}()}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
@@ -779,7 +780,7 @@ func TestProbeOpenAICodexTicket_NonQuota429KeepsHunting(t *testing.T) {
 	require.Len(t, upstream.requests, 2)
 }
 
-func TestHarvestOpenAICodexTicket_RetriesMissingTicketOnceAMinute(t *testing.T) {
+func TestHarvestOpenAICodexTicket_PausesAfterARoundWithoutTicket(t *testing.T) {
 	miss := http.Header{}
 	miss.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
 	stampCodexTicketSetCookies(miss)
@@ -797,46 +798,33 @@ func TestHarvestOpenAICodexTicket_RetriesMissingTicketOnceAMinute(t *testing.T) 
 		HarvestAttemptTimeoutSeconds: 5,
 		Models:                       []string{"gpt-6-astra", "gpt-5.6-sol"},
 	}, upstream)
-	account := ticketTestAccount(41)
-	ctx := context.Background()
-
-	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
-	require.Len(t, upstream.requests, 1)
-	require.True(t, svc.openAICodexTicketHarvestRetryWaiting(account.ID, "gpt-6-astra", time.Now()))
-	require.Equal(t, StatusActive, account.Status)
-	require.True(t, account.Schedulable)
-
-	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
-	require.Len(t, upstream.requests, 1)
-	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-5.6-sol")
-	require.Len(t, upstream.requests, 2)
-	require.True(t, svc.openAICodexTicketHarvestRetryWaiting(account.ID, "gpt-5.6-sol", time.Now()))
-
-	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	first := ticketTestAccount(41)
+	second := ticketTestAccount(42)
+	repo := &codexTicketRefreshRepo{accounts: []Account{*first, *second}}
 	svc.accountRepo = repo
-	svc.cfg.Gateway.OpenAICodexTicket.Models = []string{"gpt-6-astra"}
+	ctx := context.Background()
+	svc.refreshOpenAICodexTickets(ctx)
 	svc.refreshOpenAICodexTickets(ctx)
 	require.Len(t, upstream.requests, 2)
+	require.Len(t, upstream.bodies, 2)
+	for _, body := range upstream.bodies {
+		require.Contains(t, string(body), `"model":"gpt-6-astra"`)
+	}
+	svc.refreshOpenAICodexTickets(ctx)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, StatusActive, first.Status)
+	require.True(t, first.Schedulable)
 
-	key := openAICodexTicketKey(account.ID, "gpt-6-astra")
-	raw, ok := svc.openaiCodexTicketHarvestBackoff.Load(key)
-	require.True(t, ok)
-	waiting := *raw.(*openAICodexTicketHarvestBackoff)
-	require.True(t, waiting.nextProbeAt.After(time.Now().Add(30*time.Second)))
-	waiting.nextProbeAt = time.Now().Add(-time.Second)
-	svc.openaiCodexTicketHarvestBackoff.Store(key, &waiting)
-
+	svc.openaiCodexShared.mu.Lock()
+	svc.openaiCodexShared.pauseUntil = time.Now().Add(-time.Second)
+	svc.openaiCodexShared.mu.Unlock()
 	good := http.Header{}
 	good.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
 	stampCodexTicketSetCookies(good)
-	upstream.resp = &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     good,
-		Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
-	}
-	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
+	upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: good, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
+	svc.refreshOpenAICodexTickets(ctx)
 	require.Len(t, upstream.requests, 3)
-	require.False(t, svc.openAICodexTicketHarvestRetryWaiting(account.ID, "gpt-6-astra", time.Now()))
+	require.True(t, svc.currentSharedOpenAICodexTicket().usable(292))
 	svc.refreshOpenAICodexTickets(ctx)
 	require.Len(t, upstream.requests, 3)
 }
@@ -846,7 +834,7 @@ func TestApplyOpenAICodexTicket_UsesExpiredTicket(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled: true, TargetLength: 292, TTLSeconds: 180, FailClosed: true,
 		HarvestProxyURL: "socks5h://harvest.example:31",
-		Models:          []string{"gpt-6-astra"},
+		Models:          []string{"gpt-6-astra", "gpt-5.6-sol"},
 	}, nil)
 	account := ticketTestAccount(41)
 	expired := time.Now().Add(-time.Minute)
@@ -856,7 +844,7 @@ func TestApplyOpenAICodexTicket_UsesExpiredTicket(t *testing.T) {
 			"length":      292,
 			"model":       "gpt-6-astra",
 			"cookies":     openAICodexTicketTestCookies,
-			"captured_at": expired.Add(-time.Minute),
+			"captured_at": time.Now().Add(-4 * time.Minute),
 			"expires_at":  expired,
 		},
 	}
@@ -872,8 +860,12 @@ func TestApplyOpenAICodexTicket_UsesExpiredTicket(t *testing.T) {
 	svc.refreshOpenAICodexTickets(context.Background())
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, state, h.Get(openAICodexTurnStateHeader))
+	sol := http.Header{}
+	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), ticketTestAccount(99), "gpt-5.6-sol", sol))
+	require.Equal(t, state, sol.Get(openAICodexTurnStateHeader))
+	require.Equal(t, openAICodexTicketTestCookies, sol.Get("Cookie"))
 	svc.refreshOpenAICodexTickets(context.Background())
-	require.Len(t, upstream.requests, 1)
+	require.Len(t, upstream.requests, 2)
 }
 
 func TestOpenAICodexTicketHarvestQuotaUpdatesFromUsageLimitBody(t *testing.T) {

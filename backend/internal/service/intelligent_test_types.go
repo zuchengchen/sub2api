@@ -197,7 +197,7 @@ type PelicanSlotAttempt struct {
 }
 
 // PelicanCandidate is a GPT-PRO OAuth account that is currently schedulable.
-// HasTicket means it has a live 292 gpt-6-astra ticket.
+// HasTicket means it has an unexpired 292 gpt-6-astra ticket and its harvest cookies.
 type PelicanCandidate struct {
 	ID        int64
 	HasTicket bool

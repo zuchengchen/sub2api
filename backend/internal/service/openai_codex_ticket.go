@@ -29,9 +29,19 @@ const (
 	openAICodexTicketStatePrefix     = "gAAAAA"
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
-	// 票已过期或还没有票时，同一（账号, 模型）两次探测至少间隔 1 分钟。
+	// 没有共用票、并且一轮号都没打中时，歇 1 分钟再轮换。
 	openAICodexTicketHarvestRetryInterval = time.Minute
+	// 共用票还新鲜时不打。默认 3 分钟有效期提前 30 秒开始找下一张。
+	openAICodexTicketRefreshLead = 30 * time.Second
 )
+
+// openAICodexSharedTicketState 是全池共用的一张 Astra 票，以及找下一张时的轮换进度。
+type openAICodexSharedTicketState struct {
+	mu         sync.Mutex
+	ticket     *openAICodexTicket
+	tried      map[int64]struct{}
+	pauseUntil time.Time
+}
 
 // openAICodexTicketHarvestBackoff 是进程内的下次探测时间。发布后不再改写。
 type openAICodexTicketHarvestBackoff struct {
@@ -266,6 +276,14 @@ func openAICodexTicketCookieCount(cookieHeader string) int {
 	return len(strings.Split(cookieHeader, ";"))
 }
 
+func openAICodexTicketInjected(h http.Header, targetLen int) bool {
+	if h == nil || targetLen <= 0 {
+		return false
+	}
+	state := strings.TrimSpace(h.Get(openAICodexTurnStateHeader))
+	return len(state) == targetLen && strings.HasPrefix(state, openAICodexTicketStatePrefix) && strings.TrimSpace(h.Get("Cookie")) != ""
+}
+
 func applyOpenAICodexTicketCookies(h http.Header, ticketCookies string) {
 	ticketCookies = strings.TrimSpace(ticketCookies)
 	if h == nil || ticketCookies == "" {
@@ -309,6 +327,43 @@ func (t *openAICodexTicket) clampExpiry(ttl time.Duration) {
 	if t.ExpiresAt.IsZero() || capAt.Before(t.ExpiresAt) {
 		t.ExpiresAt = capAt
 	}
+}
+
+// lookupBorrowedOpenAICodexTicket finds a 292-plus-cookie ticket on another
+// account. Unexpired tickets win; otherwise the newest expired one is used.
+func (s *OpenAIGatewayService) lookupBorrowedOpenAICodexTicket(ctx context.Context, exceptAccountID int64, model string) *openAICodexTicket {
+	if s == nil || s.accountRepo == nil {
+		return nil
+	}
+	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
+	if err != nil {
+		return nil
+	}
+	cfg := s.openAICodexTicketConfig()
+	now := time.Now()
+	var fresh, stale *openAICodexTicket
+	for i := range accounts {
+		if accounts[i].ID == exceptAccountID {
+			continue
+		}
+		ticket := s.lookupOpenAICodexTicket(&accounts[i], model)
+		if !ticket.usable(cfg.TargetLength) {
+			continue
+		}
+		if ticket.valid(now, cfg.TargetLength) {
+			if fresh == nil || ticket.ExpiresAt.After(fresh.ExpiresAt) {
+				fresh = ticket
+			}
+			continue
+		}
+		if stale == nil || ticket.CapturedAt.After(stale.CapturedAt) {
+			stale = ticket
+		}
+	}
+	if fresh != nil {
+		return fresh
+	}
+	return stale
 }
 
 func (s *OpenAIGatewayService) lookupOpenAICodexTicket(account *Account, model string) *openAICodexTicket {
@@ -386,6 +441,9 @@ func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, accou
 	ticket.Model = model
 	ticket.AccountID = account.ID
 	s.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, model), ticket)
+	if model == openAICodexTicketDefaultModel {
+		s.rememberSharedOpenAICodexTicket(ticket)
+	}
 	if s.accountRepo == nil {
 		return
 	}
@@ -414,7 +472,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 		return nil
 	}
 	cfg := s.openAICodexTicketConfig()
-	ticket := s.lookupOpenAICodexTicket(account, model)
+	ticket := s.sharedOpenAICodexTicketForInjection(ctx, account)
 	if ticket.usable(cfg.TargetLength) {
 		h.Set(openAICodexTurnStateHeader, ticket.State)
 		applyOpenAICodexTicketCookies(h, ticket.Cookies)
@@ -470,7 +528,7 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 	if !s.openAICodexTicketGatedModel(model) {
 		return false
 	}
-	ticket := s.lookupOpenAICodexTicket(account, model)
+	ticket := s.sharedOpenAICodexTicketForInjection(context.Background(), account)
 	return !ticket.usable(cfg.TargetLength)
 }
 
@@ -627,11 +685,114 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestLoop(ctx context.Context)
 	}
 }
 
-// refreshOpenAICodexTickets probes each account/model whose ticket is missing or
-// expired. A ticket still inside its 3-minute TTL is left alone. Missing and
-// expired tickets are retried at most once a minute; an expired ticket keeps
-// being injected until a fresh one replaces it. The loop waits for all probes,
-// then waits the configured interval before starting the next cycle.
+func openAICodexTicketRefreshAfter(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		ttl = 180 * time.Second
+	}
+	if ttl <= openAICodexTicketRefreshLead {
+		return ttl / 2
+	}
+	return ttl - openAICodexTicketRefreshLead
+}
+
+func (s *OpenAIGatewayService) currentSharedOpenAICodexTicket() *openAICodexTicket {
+	if s == nil {
+		return nil
+	}
+	s.openaiCodexShared.mu.Lock()
+	defer s.openaiCodexShared.mu.Unlock()
+	return s.openaiCodexShared.ticket
+}
+
+func (s *OpenAIGatewayService) rememberSharedOpenAICodexTicket(ticket *openAICodexTicket) {
+	if s == nil || !ticket.usable(s.openAICodexTicketConfig().TargetLength) {
+		return
+	}
+	s.openaiCodexShared.mu.Lock()
+	defer s.openaiCodexShared.mu.Unlock()
+	if s.openaiCodexShared.ticket != nil && !ticket.CapturedAt.After(s.openaiCodexShared.ticket.CapturedAt) {
+		return
+	}
+	s.openaiCodexShared.ticket = ticket
+	s.openaiCodexShared.tried = nil
+	s.openaiCodexShared.pauseUntil = time.Time{}
+}
+
+func (s *OpenAIGatewayService) adoptSharedOpenAICodexTicket(accounts []Account) {
+	cfg := s.openAICodexTicketConfig()
+	var newest *openAICodexTicket
+	for i := range accounts {
+		ticket := s.lookupOpenAICodexTicket(&accounts[i], openAICodexTicketDefaultModel)
+		if !ticket.usable(cfg.TargetLength) {
+			continue
+		}
+		if newest == nil || ticket.CapturedAt.After(newest.CapturedAt) {
+			newest = ticket
+		}
+	}
+	s.rememberSharedOpenAICodexTicket(newest)
+}
+
+// sharedOpenAICodexTicketForInjection 返回全池正在用的 Astra 票。Astra 和 Sol 请求都带这一张。
+func (s *OpenAIGatewayService) sharedOpenAICodexTicketForInjection(ctx context.Context, account *Account) *openAICodexTicket {
+	if s == nil {
+		return nil
+	}
+	cfg := s.openAICodexTicketConfig()
+	if ticket := s.currentSharedOpenAICodexTicket(); ticket.usable(cfg.TargetLength) {
+		return ticket
+	}
+	if account != nil {
+		if ticket := s.lookupOpenAICodexTicket(account, openAICodexTicketDefaultModel); ticket.usable(cfg.TargetLength) {
+			s.rememberSharedOpenAICodexTicket(ticket)
+			return ticket
+		}
+	}
+	exceptID := int64(0)
+	if account != nil {
+		exceptID = account.ID
+	}
+	if ticket := s.lookupBorrowedOpenAICodexTicket(ctx, exceptID, openAICodexTicketDefaultModel); ticket.usable(cfg.TargetLength) {
+		s.rememberSharedOpenAICodexTicket(ticket)
+		return ticket
+	}
+	return nil
+}
+
+func (s *OpenAIGatewayService) pickOpenAICodexTicketHarvestAccount(eligible []Account, haveTicket bool, now time.Time) *Account {
+	if s == nil || len(eligible) == 0 {
+		return nil
+	}
+	s.openaiCodexShared.mu.Lock()
+	defer s.openaiCodexShared.mu.Unlock()
+	if !haveTicket && now.Before(s.openaiCodexShared.pauseUntil) {
+		return nil
+	}
+	if s.openaiCodexShared.tried == nil {
+		s.openaiCodexShared.tried = map[int64]struct{}{}
+	}
+	untried := make([]Account, 0, len(eligible))
+	for i := range eligible {
+		if _, ok := s.openaiCodexShared.tried[eligible[i].ID]; !ok {
+			untried = append(untried, eligible[i])
+		}
+	}
+	if len(untried) == 0 {
+		s.openaiCodexShared.tried = map[int64]struct{}{}
+		if !haveTicket {
+			s.openaiCodexShared.pauseUntil = now.Add(openAICodexTicketHarvestRetryInterval)
+			return nil
+		}
+		untried = eligible
+	}
+	chosen := untried[randIntN(len(untried))]
+	s.openaiCodexShared.tried[chosen.ID] = struct{}{}
+	return &chosen
+}
+
+// refreshOpenAICodexTickets 维护全池一张 Astra 票。票龄不到刷新点时不打。
+// 到点后每次只随机打一个别的号；没有票时一轮都没中就歇 1 分钟。
+// Astra 和 Sol 的业务请求都注入这张票，直到更新的票替换它。
 func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	if s == nil || s.accountRepo == nil || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
 		return
@@ -643,47 +804,37 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	}
 	cfg := s.openAICodexTicketConfig()
 	now := time.Now()
-	var wg sync.WaitGroup
-	probed := 0
-	skipped := map[string]int{}
+	s.adoptSharedOpenAICodexTicket(accounts)
+	shared := s.currentSharedOpenAICodexTicket()
+	haveTicket := shared.usable(cfg.TargetLength)
+	if haveTicket && now.Sub(shared.CapturedAt) < openAICodexTicketRefreshAfter(time.Duration(cfg.TTLSeconds)*time.Second) {
+		return
+	}
+	eligible := make([]Account, 0, len(accounts))
 	for i := range accounts {
-		account := accounts[i]
-		if reason := openAICodexTicketHarvestSkipReason(&account, now); reason != "" {
-			skipped[reason]++
+		if openAICodexTicketHarvestSkipReason(&accounts[i], now) != "" {
 			continue
 		}
-		for _, model := range cfg.Models {
-			model := normalizeOpenAICodexTicketModel(model)
-			if model == "" {
-				continue
+		eligible = append(eligible, accounts[i])
+	}
+	if haveTicket && shared != nil && len(eligible) > 1 {
+		others := make([]Account, 0, len(eligible)-1)
+		for i := range eligible {
+			if eligible[i].ID != shared.AccountID {
+				others = append(others, eligible[i])
 			}
-			// 3 分钟内未过期的票不打。过期或没有票时，最多每分钟打一次。
-			if t := s.lookupOpenAICodexTicket(&account, model); t.valid(now, cfg.TargetLength) {
-				continue
-			}
-			if s.openAICodexTicketHarvestRetryWaiting(account.ID, model, now) {
-				skipped["retry_wait"]++
-				continue
-			}
-			acc := account
-			// Token/header helpers may update account metadata; each model owns its maps.
-			acc.Extra = maps.Clone(account.Extra)
-			acc.Credentials = maps.Clone(account.Credentials)
-			probed++
-			wg.Add(1)
-			go func(acc Account, model string) {
-				defer wg.Done()
-				s.probeOnceOpenAICodexTicket(ctx, &acc, model)
-			}(acc, model)
+		}
+		if len(others) > 0 {
+			eligible = others
 		}
 	}
-	wg.Wait()
-	if probed > 0 || len(skipped) > 0 {
-		logger.L().Info("openai_codex_ticket probe cycle",
-			zap.Int("probed", probed),
-			zap.Any("skipped", skipped),
-		)
+	account := s.pickOpenAICodexTicketHarvestAccount(eligible, haveTicket, now)
+	if account == nil {
+		return
 	}
+	account.Extra = maps.Clone(account.Extra)
+	account.Credentials = maps.Clone(account.Credentials)
+	s.probeOnceOpenAICodexTicket(ctx, account, openAICodexTicketDefaultModel)
 }
 
 // probeOnceOpenAICodexTicket 走打票代理打一发。命中合格 292（HTTP 200、长度==target、
@@ -698,16 +849,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			zap.String("reason", reason))
 		return
 	}
-	if s.openAICodexTicketHarvestRetryWaiting(account.ID, model, time.Now()) {
-		logger.L().Info("openai_codex_ticket probe skip",
-			zap.Int64("account_id", account.ID), zap.String("model", model),
-			zap.String("reason", "retry_wait"))
-		return
-	}
 	cfg := s.openAICodexTicketConfig()
-	if s.lookupOpenAICodexTicket(account, model).valid(time.Now(), cfg.TargetLength) {
-		return
-	}
 	proxyURL := s.openAICodexTicketHarvestProxyURLContext(ctx)
 	if proxyURL == "" || s.httpUpstream == nil || ctx.Err() != nil {
 		return
