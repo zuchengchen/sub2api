@@ -979,6 +979,38 @@ func TestOpenAICodexTicketBusinessResponseRevokesOnlyThatState(t *testing.T) {
 	require.Equal(t, good, svc.lookupOpenAICodexTicket(other, "gpt-6-astra").State)
 }
 
+func TestOpenAICodexTicketSolUpgradeKeepsTicket(t *testing.T) {
+	require.True(t, openAICodexTicketCompletionKeepsTicket("gpt-5.6-sol", "gpt-6-sol"))
+	require.True(t, openAICodexTicketCompletionKeepsTicket("gpt-5.6-sol", "gpt-5.6-sol"))
+	require.False(t, openAICodexTicketCompletionKeepsTicket("gpt-6-sol", "gpt-5.6-sol"))
+	require.False(t, openAICodexTicketCompletionKeepsTicket("gpt-6-astra", "gpt-6-sol"))
+
+	gin.SetMode(gin.TestMode)
+	state := fakeCodexTicketState(292)
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled: true, TargetLength: 292, TTLSeconds: 180, FailClosed: true,
+		Models: []string{"gpt-6-astra", "gpt-5.6-sol"},
+	}, nil)
+	now := time.Now()
+	owner := ticketTestAccount(41)
+	svc.storeOpenAICodexTicket(context.Background(), owner, &openAICodexTicket{
+		AccountID: 41, Model: "gpt-6-astra", State: state, Length: 292,
+		Cookies: openAICodexTicketTestCookies, CapturedAt: now, ExpiresAt: now.Add(time.Hour),
+	})
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	beginUpstreamResponseModelObservation(c)
+	svc.armOpenAICodexTicketWatch(c, &openAICodexTicketInjectionSlot{
+		State: state, RequestModel: "gpt-5.6-sol", TicketModel: "gpt-6-astra", AccountID: owner.ID,
+	})
+	obs := upstreamResponseModelObserverFromContext(c)
+	obs.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"status":"completed","model":"gpt-6-sol"}}`), "response.completed")
+	require.Equal(t, state, svc.lookupOpenAICodexTicket(owner, "gpt-6-astra").State)
+	require.False(t, svc.openAICodexTicketStateRevoked(svc.lookupOpenAICodexTicket(owner, "gpt-6-astra"), owner))
+
+	obs.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"status":"completed","model":"gpt-5.6-luna"}}`), "response.completed")
+	require.Nil(t, svc.lookupOpenAICodexTicket(owner, "gpt-6-astra"))
+}
+
 func TestOpenAICodexTicketResponse312RevokesInjectedState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	bad := fakeCodexTicketState(292)
