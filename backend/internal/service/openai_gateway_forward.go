@@ -1602,6 +1602,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 客户端自报身份不参与构造，浏览器型 UA 也因此不会再到达上游（原浏览器 UA 兜底已被吸收）。
 	if account.UsesOpenAICodexProtocol() {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		restoreOpenAICodexTicketIdentity(c, req.Header)
 	}
 
 	// Ensure required headers exist
