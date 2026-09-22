@@ -511,12 +511,15 @@ type OpenAIGatewayService struct {
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
 	// openaiCodexTickets: accountID\x00model → *openAICodexTicket，292 长度门票。
-	openaiCodexTickets           sync.Map
-	openaiCodexTicketFlight      singleflight.Group
-	openaiCodexTicketLifecycleMu sync.Mutex
-	openaiCodexTicketCancel      context.CancelFunc
-	openaiCodexTicketDone        chan struct{}
-	openaiCodexTicketStopped     bool
+	openaiCodexTickets      sync.Map
+	openaiCodexTicketFlight singleflight.Group
+	// openaiCodexTicketHarvestBackoff: accountID\x00model → *openAICodexTicketHarvestBackoff。
+	// 连续打不中后的打票冷却。只跳过探测，不改变账号调度。
+	openaiCodexTicketHarvestBackoff sync.Map
+	openaiCodexTicketLifecycleMu    sync.Mutex
+	openaiCodexTicketCancel         context.CancelFunc
+	openaiCodexTicketDone           chan struct{}
+	openaiCodexTicketStopped        bool
 }
 
 func (s *OpenAIGatewayService) SetBillingOutboxRepository(repo BillingOutboxRepository) {

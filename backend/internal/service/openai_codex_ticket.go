@@ -29,7 +29,16 @@ const (
 	openAICodexTicketStatePrefix     = "gAAAAA"
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
+	// 连续打不中后暂停该（账号, 模型）的探测。业务请求不受影响。
+	openAICodexTicketHarvestMissesBeforeCooldown = 3
+	openAICodexTicketHarvestCooldown             = 3 * time.Minute
 )
+
+// openAICodexTicketHarvestBackoff 是进程内的打票冷却。发布后不再改写。
+type openAICodexTicketHarvestBackoff struct {
+	misses        int
+	cooldownUntil time.Time
+}
 
 type openAICodexTicketHarvestContextKey struct{}
 
@@ -652,6 +661,10 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 			if t := s.lookupOpenAICodexTicket(&account, model); t.valid(now, cfg.TargetLength) && !t.needsRefresh(now, refreshBefore) {
 				continue
 			}
+			if s.openAICodexTicketHarvestCooldownActive(account.ID, model, now) {
+				skipped["harvest_cooldown"]++
+				continue
+			}
 			acc := account
 			// Token/header helpers may update account metadata; each model owns its maps.
 			acc.Extra = maps.Clone(account.Extra)
@@ -685,6 +698,12 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			zap.String("reason", reason))
 		return
 	}
+	if s.openAICodexTicketHarvestCooldownActive(account.ID, model, time.Now()) {
+		logger.L().Info("openai_codex_ticket probe skip",
+			zap.Int64("account_id", account.ID), zap.String("model", model),
+			zap.String("reason", "harvest_cooldown"))
+		return
+	}
 	cfg := s.openAICodexTicketConfig()
 	proxyURL := s.openAICodexTicketHarvestProxyURLContext(ctx)
 	if proxyURL == "" || s.httpUpstream == nil || ctx.Err() != nil {
@@ -695,6 +714,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		harvestCtx := withOpenAICodexTicketHarvest(ctx)
 		token, _, err := s.GetAccessToken(harvestCtx, account)
 		if err != nil || strings.TrimSpace(token) == "" {
+			s.noteOpenAICodexTicketHarvestMiss(account.ID, model, time.Now())
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "token"), zap.Error(err))
@@ -702,6 +722,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		}
 		result, perr := s.doOpenAICodexTicketProbe(harvestCtx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
 		if perr != nil {
+			s.noteOpenAICodexTicketHarvestMiss(account.ID, model, time.Now())
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "error"), zap.Error(perr))
@@ -710,12 +731,14 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		cookies := openAICodexTicketCookieHeader(result.headers)
 		if result.status != http.StatusOK || result.state == "" || len(result.state) != cfg.TargetLength || !strings.HasPrefix(result.state, openAICodexTicketStatePrefix) || cookies == "" {
 			s.applyOpenAICodexTicketHarvestProbeOutcome(harvestCtx, account, model, result)
+			s.noteOpenAICodexTicketHarvestMiss(account.ID, model, time.Now())
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.Int("http", result.status), zap.Int("len", len(result.state)),
 				zap.Int("cookie_count", openAICodexTicketCookieCount(cookies)))
 			return nil, nil
 		}
+		s.clearOpenAICodexTicketHarvestBackoff(account.ID, model)
 		now := time.Now()
 		ticket := &openAICodexTicket{
 			AccountID:  account.ID,
@@ -734,6 +757,55 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			zap.String("mode", "continuous"))
 		return nil, nil
 	})
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketHarvestCooldownActive(accountID int64, model string, now time.Time) bool {
+	if s == nil || accountID <= 0 {
+		return false
+	}
+	raw, ok := s.openaiCodexTicketHarvestBackoff.Load(openAICodexTicketKey(accountID, model))
+	if !ok {
+		return false
+	}
+	state, ok := raw.(*openAICodexTicketHarvestBackoff)
+	if !ok || state == nil || state.cooldownUntil.IsZero() {
+		return false
+	}
+	return now.Before(state.cooldownUntil)
+}
+
+func (s *OpenAIGatewayService) noteOpenAICodexTicketHarvestMiss(accountID int64, model string, now time.Time) {
+	if s == nil || accountID <= 0 {
+		return
+	}
+	key := openAICodexTicketKey(accountID, model)
+	next := openAICodexTicketHarvestBackoff{}
+	if raw, ok := s.openaiCodexTicketHarvestBackoff.Load(key); ok {
+		if prev, ok := raw.(*openAICodexTicketHarvestBackoff); ok && prev != nil {
+			next.misses = prev.misses
+		}
+	}
+	next.misses++
+	if next.misses >= openAICodexTicketHarvestMissesBeforeCooldown {
+		next.cooldownUntil = now.Add(openAICodexTicketHarvestCooldown)
+	}
+	s.openaiCodexTicketHarvestBackoff.Store(key, &next)
+	if next.cooldownUntil.IsZero() {
+		return
+	}
+	logger.L().Info("openai_codex_ticket harvest cooldown",
+		zap.Int64("account_id", accountID),
+		zap.String("model", model),
+		zap.Int("misses", next.misses),
+		zap.Time("until", next.cooldownUntil),
+	)
+}
+
+func (s *OpenAIGatewayService) clearOpenAICodexTicketHarvestBackoff(accountID int64, model string) {
+	if s == nil || accountID <= 0 {
+		return
+	}
+	s.openaiCodexTicketHarvestBackoff.Delete(openAICodexTicketKey(accountID, model))
 }
 
 // openAICodexTicketHarvestSkipReason 只排除「打了也没用」的号：额度 100%、掉认证、
