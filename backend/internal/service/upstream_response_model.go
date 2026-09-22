@@ -36,6 +36,9 @@ type upstreamResponseModelObserver struct {
 	firstTier         string
 	firstTierConflict bool
 	terminalTier      string
+
+	// ticketWatch 是本次出站注入的 292 票。完成模型不符或响应头出现 312 时作废这一张。
+	ticketWatch *openAICodexTicketWatch
 }
 
 func (o *upstreamResponseModelObserver) Observe(model string, terminal bool) {
@@ -69,6 +72,7 @@ func normalizeObservedUpstreamResponseModel(model string) string {
 }
 
 func (o *upstreamResponseModelObserver) ObserveOpenAI(payload []byte, eventType string) {
+	o.noteOpenAICodexTicketCompletion(payload, eventType)
 	model := firstValidTrimmedGJSONString(payload, "response.model", "model")
 	terminal := isUpstreamResponseModelTerminalEvent(eventType)
 	o.Observe(model, terminal)
@@ -176,6 +180,9 @@ func (o *upstreamResponseModelObserver) Conflict() bool {
 func beginUpstreamResponseModelObservation(c *gin.Context) *upstreamResponseModelObserver {
 	observer := &upstreamResponseModelObserver{}
 	if c != nil {
+		// 打票注入可能早于这条观察器。把已经挂在请求上的票抄过来，
+		// 后面的完成事件才能作废这一张。
+		observer.adoptOpenAICodexTicketWatch(c)
 		c.Set(upstreamResponseModelObserverContextKey, observer)
 	}
 	return observer

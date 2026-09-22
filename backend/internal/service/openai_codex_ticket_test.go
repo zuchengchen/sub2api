@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,6 +25,15 @@ func fakeCodexTicketState(n int) string {
 		return strings.Repeat("A", n)
 	}
 	return openAICodexTicketStatePrefix + strings.Repeat("B", n-len(openAICodexTicketStatePrefix))
+}
+
+func codexTicketCompletedBody(model string) io.ReadCloser {
+	payload, _ := jsonMarshalCodexTicketCompletion(model)
+	return io.NopCloser(strings.NewReader("data: " + string(payload) + "\n\n"))
+}
+
+func jsonMarshalCodexTicketCompletion(model string) ([]byte, error) {
+	return []byte(`{"type":"response.completed","response":{"id":"resp_ticket","status":"completed","model":"` + model + `"}}`), nil
 }
 
 func stampCodexTicketSetCookies(h http.Header) {
@@ -234,12 +245,12 @@ func TestHarvestOpenAICodexTicket_Stores292AndUsesHarvestProxy(t *testing.T) {
 			{
 				StatusCode: http.StatusOK,
 				Header:     header312,
-				Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+				Body:       codexTicketCompletedBody("gpt-6-astra"),
 			},
 			{
 				StatusCode: http.StatusOK,
 				Header:     header292,
-				Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+				Body:       codexTicketCompletedBody("gpt-6-astra"),
 			},
 		},
 	}
@@ -280,7 +291,7 @@ func TestHarvestOpenAICodexTicket_IdentityFollowsCanonicalVersion(t *testing.T) 
 	header292 := http.Header{}
 	header292.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
 	stampCodexTicketSetCookies(header292)
-	upstream := &httpUpstreamRecorder{responses: []*http.Response{{StatusCode: 200, Header: header292, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}}}
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{{StatusCode: 200, Header: header292, Body: codexTicketCompletedBody("gpt-6-astra")}}}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled:                      true,
 		TargetLength:                 292,
@@ -306,8 +317,8 @@ func TestHarvestOpenAICodexTicket_Keeps292WhenProbeReturns312(t *testing.T) {
 	header312.Set(openAICodexTurnStateHeader, state312)
 	upstream := &httpUpstreamRecorder{
 		responses: []*http.Response{
-			{StatusCode: 200, Header: header292, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))},
-			{StatusCode: 200, Header: header312, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))},
+			{StatusCode: 200, Header: header292, Body: codexTicketCompletedBody("gpt-6-astra")},
+			{StatusCode: 200, Header: header312, Body: codexTicketCompletedBody("gpt-6-astra")},
 		},
 	}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
@@ -345,7 +356,7 @@ func TestHarvestOpenAICodexTicket_HTTP503DoesNotAbortHunt(t *testing.T) {
 	responses = append(responses, &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     header292,
-		Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+		Body:       codexTicketCompletedBody("gpt-6-astra"),
 	})
 	upstream := &httpUpstreamRecorder{responses: responses}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
@@ -391,7 +402,7 @@ func TestHarvestOpenAICodexTicket_292WithoutCookiesIsMiss(t *testing.T) {
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{{
 		StatusCode: http.StatusOK,
 		Header:     header,
-		Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+		Body:       codexTicketCompletedBody("gpt-6-astra"),
 	}}}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled: true, TargetLength: 292, TTLSeconds: 180, FailClosed: true,
@@ -519,7 +530,7 @@ func TestRefreshOpenAICodexTickets_OneSharedAstraTicket(t *testing.T) {
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
 	stampCodexTicketSetCookies(h)
-	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: 200, Header: h, Body: codexTicketCompletedBody("gpt-6-astra")}}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TTLSeconds: 180, HarvestProxyURL: "socks5h://proxy.example.com:1080"}, upstream)
 	svc.accountRepo = repo
 	svc.refreshOpenAICodexTickets(context.Background())
@@ -716,7 +727,7 @@ func TestRefreshOpenAICodexTickets_SkipsExhaustedQuotaButNotRateLimitCooldown(t 
 		h := http.Header{}
 		h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
 		stampCodexTicketSetCookies(h)
-		return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
+		return &http.Response{StatusCode: 200, Header: h, Body: codexTicketCompletedBody("gpt-6-astra")}
 	}()}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled:         true,
@@ -767,9 +778,10 @@ func TestProbeOpenAICodexTicket_NonQuota429KeepsHunting(t *testing.T) {
 	headers.Set("x-codex-secondary-window-minutes", "300")
 	header292 := http.Header{}
 	header292.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+	stampCodexTicketSetCookies(header292)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		{StatusCode: http.StatusTooManyRequests, Header: headers, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_exceeded"}}`))},
-		{StatusCode: http.StatusOK, Header: header292, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))},
+		{StatusCode: http.StatusOK, Header: header292, Body: codexTicketCompletedBody("gpt-6-astra")},
 	}}
 	account := ticketTestAccount(73)
 	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
@@ -794,7 +806,7 @@ func TestHarvestOpenAICodexTicket_KeepsHuntingUntilTwoFreshTickets(t *testing.T)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     miss,
-		Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+		Body:       codexTicketCompletedBody("gpt-6-astra"),
 	}}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled:                      true,
@@ -825,7 +837,7 @@ func TestHarvestOpenAICodexTicket_KeepsHuntingUntilTwoFreshTickets(t *testing.T)
 	good := http.Header{}
 	good.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
 	stampCodexTicketSetCookies(good)
-	upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: good, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
+	upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: good, Body: codexTicketCompletedBody("gpt-6-astra")}
 	svc.refreshOpenAICodexTickets(ctx)
 	require.Len(t, upstream.requests, 4)
 	require.True(t, svc.currentSharedOpenAICodexTicket().usable(292))
@@ -887,4 +899,127 @@ func TestOpenAICodexTicketHarvestQuotaUpdatesFromUsageLimitBody(t *testing.T) {
 	), now)
 	require.Equal(t, 100.0, updates["codex_5h_used_percent"])
 	require.NotContains(t, updates, "codex_7d_used_percent")
+}
+
+func TestHarvestOpenAICodexTicket_RequiresMatchingCompletionModel(t *testing.T) {
+	state := fakeCodexTicketState(292)
+	header := http.Header{}
+	header.Set(openAICodexTurnStateHeader, state)
+	stampCodexTicketSetCookies(header)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))},
+		{StatusCode: http.StatusOK, Header: header, Body: codexTicketCompletedBody("gpt-5.6-luna")},
+		{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(
+			"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"gpt-5.6-luna\"}}\n\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"gpt-6-astra\"}}\n\n",
+		))},
+		{StatusCode: http.StatusOK, Header: header, Body: codexTicketCompletedBody("gpt-6-astra")},
+	}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled: true, TargetLength: 292, HarvestProxyURL: "socks5h://harvest.example:31",
+		HarvestAttemptTimeoutSeconds: 5,
+	}, upstream)
+	account := ticketTestAccount(41)
+	for i := 0; i < 3; i++ {
+		svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+		require.Nil(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra"))
+		releaseCodexTicketHarvestRetry(svc, account.ID, "gpt-6-astra")
+	}
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+	got := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
+	require.NotNil(t, got)
+	require.Equal(t, state, got.State)
+}
+
+func TestOpenAICodexTicketBusinessResponseRevokesOnlyThatState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	bad := fakeCodexTicketState(292)
+	good := openAICodexTicketStatePrefix + strings.Repeat("C", 286)
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled: true, TargetLength: 292, TTLSeconds: 180, FailClosed: true,
+		Models: []string{"gpt-6-astra", "gpt-5.6-sol"},
+	}, nil)
+	repo := &codexTicketRefreshRepo{}
+	svc.accountRepo = repo
+	now := time.Now()
+	owner := ticketTestAccount(41)
+	other := ticketTestAccount(42)
+	svc.storeOpenAICodexTicket(context.Background(), owner, &openAICodexTicket{
+		AccountID: 41, Model: "gpt-6-astra", State: bad, Length: 292,
+		Cookies: openAICodexTicketTestCookies, CapturedAt: now, ExpiresAt: now.Add(time.Hour),
+	})
+	svc.storeOpenAICodexTicket(context.Background(), other, &openAICodexTicket{
+		AccountID: 42, Model: "gpt-6-astra", State: good, Length: 292,
+		Cookies: openAICodexTicketTestCookies, CapturedAt: now.Add(time.Second), ExpiresAt: now.Add(time.Hour),
+	})
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	beginUpstreamResponseModelObservation(c)
+	svc.armOpenAICodexTicketWatch(c, &openAICodexTicketInjectionSlot{
+		State: bad, RequestModel: "gpt-6-astra", TicketModel: "gpt-6-astra", AccountID: owner.ID,
+	})
+	obs := upstreamResponseModelObserverFromContext(c)
+	obs.ObserveOpenAI([]byte(`{"type":"response.created","response":{"model":"gpt-5.6-luna"}}`), "response.created")
+	obs.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"status":"completed","model":"gpt-5.6-luna","error":{"message":"no"}}}`), "response.completed")
+	require.Equal(t, bad, svc.lookupOpenAICodexTicket(owner, "gpt-6-astra").State)
+
+	obs.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"status":"completed","model":"gpt-6-astra"}}`), "response.completed")
+	require.Equal(t, bad, svc.lookupOpenAICodexTicket(owner, "gpt-6-astra").State)
+
+	obs.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"status":"completed","model":"gpt-5.6-luna"}}`), "response.completed")
+	require.Nil(t, svc.lookupOpenAICodexTicket(owner, "gpt-6-astra"))
+	require.Equal(t, good, svc.lookupOpenAICodexTicket(other, "gpt-6-astra").State)
+	require.Equal(t, bad, repo.updates[openAICodexTicketRevokedExtraKey("gpt-6-astra")])
+	headers := http.Header{}
+	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), owner, "gpt-6-astra", headers))
+	require.Equal(t, good, headers.Get(openAICodexTurnStateHeader))
+
+	// 迟到的旧响应不能再动已经留下的新票。
+	obs.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"status":"completed","model":"gpt-5.6-luna"}}`), "response.completed")
+	require.Equal(t, good, svc.lookupOpenAICodexTicket(other, "gpt-6-astra").State)
+}
+
+func TestOpenAICodexTicketResponse312RevokesInjectedState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	bad := fakeCodexTicketState(292)
+	good := openAICodexTicketStatePrefix + strings.Repeat("D", 286)
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled: true, TargetLength: 292, TTLSeconds: 180, FailClosed: true,
+	}, nil)
+	now := time.Now()
+	owner := ticketTestAccount(41)
+	other := ticketTestAccount(42)
+	svc.storeOpenAICodexTicket(context.Background(), owner, &openAICodexTicket{
+		AccountID: 41, Model: "gpt-6-astra", State: bad, Length: 292,
+		Cookies: openAICodexTicketTestCookies, CapturedAt: now, ExpiresAt: now.Add(time.Hour),
+	})
+	svc.storeOpenAICodexTicket(context.Background(), other, &openAICodexTicket{
+		AccountID: 42, Model: "gpt-6-astra", State: good, Length: 292,
+		Cookies: openAICodexTicketTestCookies, CapturedAt: now.Add(time.Second), ExpiresAt: now.Add(time.Hour),
+	})
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	svc.armOpenAICodexTicketWatch(c, &openAICodexTicketInjectionSlot{
+		State: bad, RequestModel: "gpt-5.6-sol", TicketModel: "gpt-6-astra", AccountID: owner.ID,
+	})
+	noise := http.Header{}
+	noise.Set(openAICodexTurnStateHeader, strings.Repeat("!", 312))
+	svc.observeOpenAICodexTicketResponseHeader(c, noise)
+	require.Equal(t, bad, svc.lookupOpenAICodexTicket(owner, "gpt-6-astra").State)
+
+	header := http.Header{}
+	header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
+	svc.observeOpenAICodexTicketResponseHeader(c, header)
+	require.Nil(t, svc.lookupOpenAICodexTicket(owner, "gpt-6-astra"))
+	require.Equal(t, good, svc.currentSharedOpenAICodexTicket().State)
+
+	// 重启后库里的作废标记仍然挡住这张票。
+	restarted := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TargetLength: 292}, nil)
+	owner.Extra = map[string]any{
+		openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
+			"account_id": owner.ID, "model": "gpt-6-astra", "state": bad, "length": 292,
+			"cookies": openAICodexTicketTestCookies, "captured_at": now, "expires_at": now.Add(time.Hour),
+		},
+		openAICodexTicketRevokedExtraKey("gpt-6-astra"): bad,
+	}
+	require.Nil(t, restarted.lookupOpenAICodexTicket(owner, "gpt-6-astra"))
 }

@@ -517,10 +517,12 @@ type OpenAIGatewayService struct {
 	// 保留给单账号探测的测试节奏。共享票池的轮换在 openaiCodexShared。
 	openaiCodexTicketHarvestBackoff sync.Map
 	openaiCodexShared               openAICodexSharedTicketState
-	openaiCodexTicketLifecycleMu    sync.Mutex
-	openaiCodexTicketCancel         context.CancelFunc
-	openaiCodexTicketDone           chan struct{}
-	openaiCodexTicketStopped        bool
+	// openaiCodexTicketRevoked: state blob → 作废时间。只挡住这一张票，池里其它票继续用。
+	openaiCodexTicketRevoked     sync.Map
+	openaiCodexTicketLifecycleMu sync.Mutex
+	openaiCodexTicketCancel      context.CancelFunc
+	openaiCodexTicketDone        chan struct{}
+	openaiCodexTicketStopped     bool
 }
 
 func (s *OpenAIGatewayService) SetBillingOutboxRepository(repo BillingOutboxRepository) {

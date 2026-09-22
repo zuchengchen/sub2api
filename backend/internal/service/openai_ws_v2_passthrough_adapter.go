@@ -961,6 +961,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		interTurnStarted:     make(chan struct{}, 1),
 		restoreResponseModel: func(payload []byte) []byte {
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+			s.observeOpenAICodexTicketEvent(c, eventType, payload)
 			if !openAIWSEventMayContainModel(eventType) {
 				return payload
 			}

@@ -61,6 +61,7 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	// 因此 bucket 重建事件永远搬不动门票状态，续期时开事务+发 outbox 是白干。
 	// 归为观测型后仍会同步单账号快照（见 UpdateExtra），不丢任何新鲜度。
 	"codex_turn_ticket:",
+	"codex_turn_ticket_revoked:",
 	"passive_usage_",
 	"upstream_billing_probe",
 	"upstream_billing_rate_sync",
