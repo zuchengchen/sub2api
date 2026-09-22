@@ -46,6 +46,7 @@ func openAICodexTurnStateSeed(c *gin.Context) string {
 // 可能残留的上一 failover attempt 的值——否则换号后旧账号的 blob 会粘到
 // 新账号的响应上，这正是本文件要防止的跨账号矛盾。
 func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account *Account, upstream http.Header) {
+	s.observeOpenAICodexTicketResponseHeader(c, upstream)
 	if c == nil || c.Writer == nil {
 		return
 	}

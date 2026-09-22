@@ -559,6 +559,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			return nil, fmt.Errorf("upstream http bridge request failed: %s", safeErr)
 		}
 		if resp.StatusCode < 400 {
+			responseModelObserver.adoptOpenAICodexTicketWatch(c)
+			s.observeOpenAICodexTicketResponseHeader(c, resp.Header)
 			break
 		}
 
