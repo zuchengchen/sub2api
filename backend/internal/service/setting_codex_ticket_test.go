@@ -34,6 +34,7 @@ func TestCodexTicketEnabledRuntimeSettingOverridesYaml(t *testing.T) {
 		Model:      "gpt-6-astra",
 		State:      fakeCodexTicketState(292),
 		Length:     292,
+		Cookies:    "__cf_bm=bm; __cflb=lb; __oailb=ol",
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
 	})

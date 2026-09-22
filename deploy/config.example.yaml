@@ -325,8 +325,8 @@ gateway:
   # ChatGPT OAuth x-codex-turn-state ticket: harvest a 292-length header via a
   # dedicated HTTP(S)/SOCKS proxy, store it for ttl_seconds (default 180), then inject
   # it on residential-IP production requests. Off by default.
-  # ChatGPT OAuth 门票：用独立 HTTP(S)/SOCKS 代理打到 292 长度的 x-codex-turn-state，默认缓存 3 分钟，
-  # 到期再打，不提前。再在住宅 IP 业务请求中覆盖该头。默认关闭。
+  # ChatGPT OAuth 门票：用独立 HTTP(S)/SOCKS 代理打到 292 长度的 x-codex-turn-state，并保存当时的 Cookie。
+  # 默认缓存 3 分钟，到期再打，不提前。业务请求和智能测试出站都带上这张票和这组 Cookie。默认关闭。
   # Env: GATEWAY_OPENAI_CODEX_TICKET_ENABLED=true
   #      GATEWAY_OPENAI_CODEX_TICKET_HARVEST_PROXY_URL=socks5h://user:pass@host:port
   # Admin UI 开关（系统设置 → 网关 → Codex 设置 → 292 打票）可覆盖 enabled，无需重启。

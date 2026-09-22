@@ -47,6 +47,7 @@ func TestIntelligentOpenAIOAuthTestInjectsCodex292Ticket(t *testing.T) {
 		Model:      "gpt-6-astra",
 		State:      state,
 		Length:     292,
+		Cookies:    "__cf_bm=bm; __cflb=lb; __oailb=ol",
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
 	})
@@ -58,6 +59,7 @@ func TestIntelligentOpenAIOAuthTestInjectsCodex292Ticket(t *testing.T) {
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, state, upstream.requests[0].Header.Get(openAICodexTurnStateHeader))
 	require.Equal(t, 292, len(upstream.requests[0].Header.Get(openAICodexTurnStateHeader)))
+	require.Equal(t, "__cf_bm=bm; __cflb=lb; __oailb=ol", upstream.requests[0].Header.Get("Cookie"))
 }
 
 func TestOpenAIOAuthConnectivityProbeDoesNotInjectCodexTicket(t *testing.T) {

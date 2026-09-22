@@ -40,6 +40,7 @@ type openAICodexTicket struct {
 	Model      string    `json:"model"`
 	State      string    `json:"state"`
 	Length     int       `json:"length"`
+	Cookies    string    `json:"cookies,omitempty"`
 	CapturedAt time.Time `json:"captured_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	Attempts   int       `json:"attempts"`
@@ -191,6 +192,10 @@ func (t *openAICodexTicket) valid(now time.Time, targetLen int) bool {
 	if t.ExpiresAt.IsZero() || !now.Before(t.ExpiresAt) {
 		return false
 	}
+	// 没有打票时的 Cookie，292 头单独出站仍会被上游改到 Luna。
+	if strings.TrimSpace(t.Cookies) == "" {
+		return false
+	}
 	return true
 }
 
@@ -202,6 +207,74 @@ func (t *openAICodexTicket) needsRefresh(now time.Time, refreshBefore time.Durat
 }
 
 // clampExpiry 把历史门票的过期时间收到当前 TTL 内。缩短 ttl 后，库里仍写着 1 小时过期的票会按 captured_at+ttl 重新到期。
+func openAICodexTicketCookieHeader(h http.Header) string {
+	if h == nil {
+		return ""
+	}
+	seen := map[string]struct{}{}
+	pairs := make([]string, 0, len(h.Values("Set-Cookie")))
+	for _, raw := range h.Values("Set-Cookie") {
+		part := strings.TrimSpace(raw)
+		if i := strings.Index(part, ";"); i >= 0 {
+			part = strings.TrimSpace(part[:i])
+		}
+		name, value, ok := strings.Cut(part, "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		pairs = append(pairs, name+"="+value)
+	}
+	return strings.Join(pairs, "; ")
+}
+
+func openAICodexTicketCookieCount(cookieHeader string) int {
+	cookieHeader = strings.TrimSpace(cookieHeader)
+	if cookieHeader == "" {
+		return 0
+	}
+	return len(strings.Split(cookieHeader, ";"))
+}
+
+func applyOpenAICodexTicketCookies(h http.Header, ticketCookies string) {
+	ticketCookies = strings.TrimSpace(ticketCookies)
+	if h == nil || ticketCookies == "" {
+		return
+	}
+	merged := map[string]string{}
+	order := make([]string, 0, 8)
+	add := func(raw string) {
+		for _, part := range strings.Split(raw, ";") {
+			part = strings.TrimSpace(part)
+			name, value, ok := strings.Cut(part, "=")
+			name = strings.TrimSpace(name)
+			if !ok || name == "" {
+				continue
+			}
+			if _, seen := merged[name]; !seen {
+				order = append(order, name)
+			}
+			merged[name] = value
+		}
+	}
+	add(h.Get("Cookie"))
+	add(ticketCookies)
+	var b strings.Builder
+	for i, name := range order {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(name)
+		b.WriteByte('=')
+		b.WriteString(merged[name])
+	}
+	h.Set("Cookie", b.String())
+}
+
 func (t *openAICodexTicket) clampExpiry(ttl time.Duration) {
 	if t == nil || ttl <= 0 || t.CapturedAt.IsZero() {
 		return
@@ -319,6 +392,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 	ticket := s.lookupOpenAICodexTicket(account, model)
 	if ticket.valid(time.Now(), cfg.TargetLength) {
 		h.Set(openAICodexTurnStateHeader, ticket.State)
+		applyOpenAICodexTicketCookies(h, ticket.Cookies)
 		return nil
 	}
 	if !cfg.FailClosed {
@@ -615,11 +689,13 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 				zap.String("reason", "error"), zap.Error(perr))
 			return nil, nil
 		}
-		if result.status != http.StatusOK || result.state == "" || len(result.state) != cfg.TargetLength || !strings.HasPrefix(result.state, openAICodexTicketStatePrefix) {
+		cookies := openAICodexTicketCookieHeader(result.headers)
+		if result.status != http.StatusOK || result.state == "" || len(result.state) != cfg.TargetLength || !strings.HasPrefix(result.state, openAICodexTicketStatePrefix) || cookies == "" {
 			s.applyOpenAICodexTicketHarvestProbeOutcome(ctx, account, model, result)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
-				zap.Int("http", result.status), zap.Int("len", len(result.state)))
+				zap.Int("http", result.status), zap.Int("len", len(result.state)),
+				zap.Int("cookie_count", openAICodexTicketCookieCount(cookies)))
 			return nil, nil
 		}
 		now := time.Now()
@@ -628,6 +704,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			Model:      model,
 			State:      result.state,
 			Length:     len(result.state),
+			Cookies:    cookies,
 			CapturedAt: now,
 			ExpiresAt:  now.Add(time.Duration(cfg.TTLSeconds) * time.Second),
 			Attempts:   1,
@@ -635,7 +712,8 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		s.storeOpenAICodexTicket(ctx, account, ticket)
 		logger.L().Info("openai_codex_ticket harvested",
 			zap.Int64("account_id", account.ID), zap.String("model", model),
-			zap.Int("length", ticket.Length), zap.String("mode", "continuous"))
+			zap.Int("length", ticket.Length), zap.Int("cookie_count", openAICodexTicketCookieCount(cookies)),
+			zap.String("mode", "continuous"))
 		return nil, nil
 	})
 }
