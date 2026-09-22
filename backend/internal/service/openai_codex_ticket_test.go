@@ -771,6 +771,80 @@ func TestProbeOpenAICodexTicket_NonQuota429KeepsHunting(t *testing.T) {
 	require.Len(t, upstream.requests, 2)
 }
 
+func TestHarvestOpenAICodexTicket_CooldownAfterThreeMisses(t *testing.T) {
+	miss := http.Header{}
+	miss.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
+	stampCodexTicketSetCookies(miss)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     miss,
+		Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+	}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:                      true,
+		TargetLength:                 292,
+		TTLSeconds:                   180,
+		FailClosed:                   false,
+		HarvestProxyURL:              "socks5h://harvest.example:31",
+		HarvestAttemptTimeoutSeconds: 5,
+		Models:                       []string{"gpt-6-astra", "gpt-5.6-sol"},
+	}, upstream)
+	account := ticketTestAccount(41)
+	ctx := context.Background()
+
+	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
+	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
+	require.False(t, svc.openAICodexTicketHarvestCooldownActive(account.ID, "gpt-6-astra", time.Now()))
+	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
+	require.Len(t, upstream.requests, 3)
+	require.True(t, svc.openAICodexTicketHarvestCooldownActive(account.ID, "gpt-6-astra", time.Now()))
+	require.Equal(t, StatusActive, account.Status)
+	require.True(t, account.Schedulable)
+	h := http.Header{}
+	require.NoError(t, svc.applyOpenAICodexTicket(ctx, account, "gpt-6-astra", h))
+	require.Empty(t, h.Get(openAICodexTurnStateHeader))
+
+	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
+	require.Len(t, upstream.requests, 3)
+	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-5.6-sol")
+	require.Len(t, upstream.requests, 4)
+	require.False(t, svc.openAICodexTicketHarvestCooldownActive(account.ID, "gpt-5.6-sol", time.Now()))
+
+	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	svc.accountRepo = repo
+	svc.cfg.Gateway.OpenAICodexTicket.Models = []string{"gpt-6-astra"}
+	svc.refreshOpenAICodexTickets(ctx)
+	require.Len(t, upstream.requests, 4)
+
+	key := openAICodexTicketKey(account.ID, "gpt-6-astra")
+	raw, ok := svc.openaiCodexTicketHarvestBackoff.Load(key)
+	require.True(t, ok)
+	cooled := *raw.(*openAICodexTicketHarvestBackoff)
+	cooled.cooldownUntil = time.Now().Add(-time.Second)
+	svc.openaiCodexTicketHarvestBackoff.Store(key, &cooled)
+	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
+	require.Len(t, upstream.requests, 5)
+	require.True(t, svc.openAICodexTicketHarvestCooldownActive(account.ID, "gpt-6-astra", time.Now()))
+
+	good := http.Header{}
+	good.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+	stampCodexTicketSetCookies(good)
+	upstream.resp = &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     good,
+		Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+	}
+	raw, ok = svc.openaiCodexTicketHarvestBackoff.Load(key)
+	require.True(t, ok)
+	cooled = *raw.(*openAICodexTicketHarvestBackoff)
+	cooled.cooldownUntil = time.Now().Add(-time.Second)
+	svc.openaiCodexTicketHarvestBackoff.Store(key, &cooled)
+	svc.probeOnceOpenAICodexTicket(ctx, account, "gpt-6-astra")
+	require.NotNil(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra"))
+	require.False(t, svc.openAICodexTicketHarvestCooldownActive(account.ID, "gpt-6-astra", time.Now()))
+	require.Equal(t, StatusActive, account.Status)
+}
+
 func TestOpenAICodexTicketHarvestQuotaUpdatesFromUsageLimitBody(t *testing.T) {
 	now := time.Now()
 	fiveHourReset := now.Add(90 * time.Minute).Unix()
