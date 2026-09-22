@@ -224,6 +224,9 @@ func TestShouldStripOpenAIResponsesInputItemID_Reasoning(t *testing.T) {
 		{"web search item id", "web_search_call", "item_001", true},
 		{"custom output fc id", "custom_tool_call_output", "fc_001", false},
 		{"custom output ctco id", "custom_tool_call_output", "ctco_001", true},
+		{"custom call ctco id collides with ctc prefix", "custom_tool_call", "ctco_001", true},
+		{"function output fco id", "function_call_output", "fco_001", false},
+		{"function output ctco id", "function_call_output", "ctco_01a094c3-d768-7532-8173-c1ef3880ba91", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -275,12 +278,11 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBodyPreservesOpaqueRefere
 
 			require.NoError(t, err)
 			require.True(t, changed)
-			require.Len(t, gjson.GetBytes(normalized, "input").Array(), 4)
+			require.Len(t, gjson.GetBytes(normalized, "input").Array(), 3)
 			require.Equal(t, "ctc_call", gjson.GetBytes(normalized, "input.0.id").String())
 			require.Equal(t, "call_custom", gjson.GetBytes(normalized, "input.1.call_id").String())
 			require.False(t, gjson.GetBytes(normalized, "input.1.id").Exists())
-			require.Equal(t, "ctco_bad", gjson.GetBytes(normalized, "input.2.id").String())
-			require.Equal(t, "item_future", gjson.GetBytes(normalized, "input.3.id").String())
+			require.Equal(t, "item_future", gjson.GetBytes(normalized, "input.2.id").String())
 
 			second, changedAgain, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(normalized, &Account{
 				Platform: PlatformOpenAI,

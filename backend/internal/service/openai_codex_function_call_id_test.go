@@ -198,9 +198,30 @@ func TestFilterCodexInput_StripsItemIDFromAllToolCallInputTypes(t *testing.T) {
 	}
 }
 
+func TestFilterCodexInput_StripsCustomToolOutputIDFromFunctionOutput(t *testing.T) {
+	const replayedID = "ctco_01a094c3-d768-7532-8173-c1ef3880ba91"
+	input := []any{
+		map[string]any{"type": "function_call_output", "id": replayedID, "call_id": "fc_custom", "output": "done"},
+		map[string]any{"type": "custom_tool_call", "id": replayedID, "call_id": "ctc_custom", "name": "apply_patch"},
+		map[string]any{"type": "item_reference", "id": replayedID},
+		map[string]any{"type": "function_call_output", "id": "fco_keep", "call_id": "fc_keep", "output": "ok"},
+	}
+
+	filtered := filterCodexInputWithOptions(input, codexInputFilterOptions{PreserveReferences: true})
+
+	require.Len(t, filtered, 3)
+	output := filtered[0].(map[string]any)
+	require.NotContains(t, output, "id")
+	require.Equal(t, "fc_custom", output["call_id"])
+	require.Equal(t, "done", output["output"])
+	require.NotContains(t, filtered[1].(map[string]any), "id")
+	require.Equal(t, "ctc_custom", filtered[1].(map[string]any)["call_id"])
+	require.Equal(t, "fco_keep", filtered[2].(map[string]any)["id"])
+}
+
 // TestFilterCodexInput_OutputTypeKeepsItemID ensures tool-output items
-// (e.g. function_call_output) keep their id — only call-input types have
-// the fc* constraint.
+// (e.g. function_call_output) keep opaque ids. ctco_* is the exception:
+// upstream rejects that namespace with "Expected an ID that begins with 'fc'."
 func TestFilterCodexInput_OutputTypeKeepsItemID(t *testing.T) {
 	input := []any{
 		map[string]any{

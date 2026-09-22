@@ -29,11 +29,17 @@ func TestOpenAIResponsesInputItemIDPrefixUsesObservedOutputContracts(t *testing.
 		{itemType: "tool_search_call", id: "fc_123", strip: true},
 		{itemType: "web_search_call", id: "ws_123", strip: false},
 		{itemType: "web_search_call", id: "item_123", strip: true},
+		{itemType: "custom_tool_call", id: "ctco_123", strip: true},
 		{itemType: "custom_tool_call_output", id: "fc_123", strip: false},
 		{itemType: "custom_tool_call_output", id: "ctco_123", strip: true},
-		// Do not impose an inferred contract on output types for which there is
-		// no observed upstream prefix rejection.
+		// ctco_* is Codex's custom-tool output namespace. It is a string prefix
+		// of neither "fc" nor a distinct "ctc_" token, and upstream rejects it
+		// with "Expected an ID that begins with 'fc'." fco_* still begins with
+		// "fc", so it stays. Other output namespaces stay unconstrained.
 		{itemType: "function_call_output", id: "fco_123", strip: false},
+		{itemType: "function_call_output", id: "ctco_01a094c3-d768-7532-8173-c1ef3880ba91", strip: true},
+		{itemType: "item_reference", id: "ctco_123", strip: true},
+		{itemType: "item_reference", id: "fc_123", strip: false},
 		{itemType: "tool_search_output", id: "tso_123", strip: false},
 		{itemType: "mcp_tool_call_output", id: "mcpo_123", strip: false},
 		{itemType: "future_item", id: "item_123", strip: false},
