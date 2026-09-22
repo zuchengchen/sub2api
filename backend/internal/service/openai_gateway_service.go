@@ -514,7 +514,7 @@ type OpenAIGatewayService struct {
 	openaiCodexTickets      sync.Map
 	openaiCodexTicketFlight singleflight.Group
 	// openaiCodexTicketHarvestBackoff: accountID\x00model → *openAICodexTicketHarvestBackoff。
-	// 保留给单账号探测的测试节奏。共享打票的轮换在 openaiCodexShared。
+	// 保留给单账号探测的测试节奏。共享票池的轮换在 openaiCodexShared。
 	openaiCodexTicketHarvestBackoff sync.Map
 	openaiCodexShared               openAICodexSharedTicketState
 	openaiCodexTicketLifecycleMu    sync.Mutex
