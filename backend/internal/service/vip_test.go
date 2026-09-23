@@ -77,6 +77,13 @@ func TestApplyLunaMinRateMultiplier(t *testing.T) {
 	require.InDelta(t, 0.25, ApplyLunaMinRateMultiplier("gpt-5.6-luna", 0.25), 1e-9)
 	require.InDelta(t, 0.1, ApplyLunaMinRateMultiplier("gpt-5.6-sol", 0.1), 1e-9)
 	require.InDelta(t, 0.1, ApplyLunaMinRateMultiplier("", 0.1), 1e-9)
+	require.InDelta(t, 0.2, ApplyLunaMinRateMultiplier("gpt-6-luna", 0.1), 1e-9)
+	require.InDelta(t, 0.2, ApplyLunaMinRateMultiplier("gpt-6-luna-2026-09-22", 0.05), 1e-9)
+	require.InDelta(t, 0.2, ApplyLunaMinRateMultiplier("openai/gpt_6_luna", 0.19), 1e-9)
+	require.InDelta(t, 0.25, ApplyLunaMinRateMultiplier("gpt-6-luna", 0.25), 1e-9)
+	require.InDelta(t, 0.1, ApplyLunaMinRateMultiplier("gpt-6-sol", 0.1), 1e-9)
+	require.InDelta(t, 0.1, ApplyLunaMinRateMultiplier("gpt-6-astra", 0.1), 1e-9)
+	require.InDelta(t, 0.1, ApplyLunaMinRateMultiplier("gpt-6-lunatic", 0.1), 1e-9)
 }
 
 func TestApplyRequestBillingRatePolicies(t *testing.T) {
@@ -105,6 +112,15 @@ func TestApplyRequestBillingRatePolicies(t *testing.T) {
 	})
 	t.Run("any luna candidate triggers floor then svip discount", func(t *testing.T) {
 		require.InDelta(t, 0.15, applyRequestBillingRatePolicies(vip, pro, 0.1, "gpt-5.1", "gpt-5.6-luna"), 1e-9)
+	})
+	t.Run("gpt-6-luna below floor", func(t *testing.T) {
+		require.InDelta(t, 0.2, applyRequestBillingRatePolicies(normal, pro, 0.1, "gpt-6-luna"), 1e-9)
+	})
+	t.Run("svip gpt-6-luna below floor applies discount after floor", func(t *testing.T) {
+		require.InDelta(t, 0.15, applyRequestBillingRatePolicies(vip, pro, 0.1, "gpt-6-luna"), 1e-9)
+	})
+	t.Run("gpt-6-sol keeps group rate", func(t *testing.T) {
+		require.InDelta(t, 0.05, applyRequestBillingRatePolicies(vip, pro, 0.1, "gpt-6-sol"), 1e-9)
 	})
 }
 
@@ -384,4 +400,3 @@ func TestVipPolicyRestrictedReviewKeywordIsAllowed(t *testing.T) {
 func (s *vipExecutorUserRepoStub) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
-
