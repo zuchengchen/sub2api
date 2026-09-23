@@ -174,3 +174,16 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 
 	return client, drv.DB(), nil
 }
+
+// ensureSimpleModeStartup keeps admin concurrency setup independent of group seeding.
+func ensureSimpleModeStartup(ctx context.Context, client *ent.Client, cfg *config.Config) error {
+	if cfg.RunMode != config.RunModeSimple {
+		return nil
+	}
+	if cfg.SimpleMode.AutoCreateDefaultGroups {
+		if err := ensureSimpleModeDefaultGroups(ctx, client); err != nil {
+			return err
+		}
+	}
+	return ensureSimpleModeAdminConcurrency(ctx, client)
+}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -136,6 +137,19 @@ func TestSanitizeOpenAIResponsesInputItemIDsStripsEmptyKnownIDsOnly(t *testing.T
 	require.True(t, changed)
 	require.False(t, gjson.GetBytes(sanitized, "input.0.id").Exists())
 	require.True(t, gjson.GetBytes(sanitized, "input.1.id").Exists())
+}
+
+func TestSanitizeOpenAIResponsesInputItemIDsStripsOversizedWebSearchID(t *testing.T) {
+	validID := "ws_" + strings.Repeat("x", 61)
+	oversizedID := "ws_" + strings.Repeat("x", 62)
+	body := []byte(`{"input":[{"type":"web_search_call","id":"` + validID + `"},{"type":"web_search_call","id":"` + oversizedID + `"}]}`)
+
+	sanitized, changed, err := sanitizeOpenAIResponsesInputItemIDs(body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, validID, gjson.GetBytes(sanitized, "input.0.id").String())
+	require.False(t, gjson.GetBytes(sanitized, "input.1.id").Exists())
 }
 
 func TestSanitizeOpenAIResponsesInputItemIDsStripsOnlyNonPairCallIDs(t *testing.T) {

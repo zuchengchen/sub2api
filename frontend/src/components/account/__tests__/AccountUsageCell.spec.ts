@@ -74,11 +74,35 @@ function makeOllamaUsage(accountId: number, overrides: Partial<NonNullable<Accou
   }
 }
 
-// CN 平台 Ollama Cloud 用例共用的子组件 stub：按 data-test 断言渲染与否
+function makeOpenCodeGoUsage(accountId: number, overrides: Partial<NonNullable<Account['opencode_go_usage']>> = {}) {
+  return {
+    account_id: accountId,
+    eligible: true,
+    auto_refresh_enabled: true,
+    snapshot: {
+      status: 'ok' as const,
+      fetched_at: '2026-07-22T12:00:00Z',
+      last_attempt_at: '2026-07-22T12:00:00Z',
+      next_refresh_at: '2026-07-22T13:00:00Z',
+      data: {
+        rolling: { percent: 5.6, resets_at: '2026-07-23T03:00:00Z' },
+        weekly: { percent: 14.2, resets_at: '2026-07-29T00:00:00Z' },
+        monthly: { percent: 33.3, resets_at: '2026-08-01T00:00:00Z' }
+      }
+    },
+    ...overrides,
+  }
+}
+
+// CN 平台 Ollama Cloud / OpenCode Go 用例共用的子组件 stub：按 data-test 断言渲染与否
 const cnUsageCellStubs = {
   OllamaCloudUsageCell: {
     props: ['account'],
     template: '<div data-test="embedded-ollama">ollama</div>'
+  },
+  OpenCodeGoUsageCell: {
+    props: ['account'],
+    template: '<div data-test="opencode-go-cell" />'
   },
   CNProviderQuotaCell: {
     template: '<div data-test="cn-quota-cell" />'
