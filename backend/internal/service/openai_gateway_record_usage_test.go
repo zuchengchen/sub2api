@@ -511,6 +511,13 @@ func TestOpenAIGatewayServiceRecordUsage_LunaMinRateFloor(t *testing.T) {
 		vip, _ := record(t, "gpt-5.6-luna", "gpt-pro", 0.3, true)
 		require.InDelta(t, 0.25, vip.RateMultiplier, 1e-12)
 	})
+
+	t.Run("gpt-6-luna uses the same floor and price card", func(t *testing.T) {
+		log, svc := record(t, "gpt-6-luna", "gpt-pro", 0.1, true)
+		require.InDelta(t, 0.15, log.RateMultiplier, 1e-12)
+		expected := expectedOpenAICost(t, svc, "gpt-5.6-luna", usage, 0.15)
+		require.InDelta(t, expected.ActualCost, log.ActualCost, 1e-12)
+	})
 }
 
 func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *testing.T) {
@@ -3332,4 +3339,3 @@ func TestOpenAIGatewayServiceRecordUsage_ServiceTierNeverRaisedByUpstreamRespons
 func (s *openAIRecordUsageUserRepoStub) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
-

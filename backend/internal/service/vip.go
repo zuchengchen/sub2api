@@ -25,7 +25,7 @@ const (
 	// VipExclusiveModelName 是 gpt-5.6-luna 家族基名。访问已对全部用户开放，
 	// 该常量仍作为 Luna 保底计费的家族标识。
 	VipExclusiveModelName = "gpt-5.6-luna"
-	// LunaMinRateMultiplier 是 gpt-5.6-luna 家族在分组/用户倍率低于该值时的计费保底。
+	// LunaMinRateMultiplier 是 gpt-5.6-luna 与 gpt-6-luna 家族在分组/用户倍率低于该值时的计费保底。
 	// 先抬到该保底，再叠加 VIP 分组减免：分组 0.1 时普通用户按 0.2、SVIP 按 0.15。
 	LunaMinRateMultiplier = 0.2
 	// vipSweepTimeout 启动扫描的超时上限。
@@ -94,10 +94,16 @@ func applyVipGroupRateDiscount(user *User, group *Group, multiplier float64) flo
 	return ApplyVipRateDiscount(multiplier)
 }
 
+// isLunaMinRateModel 判断模型是否套用 Luna 0.2 倍率保底。
+// 覆盖 gpt-5.6-luna 与 gpt-6-luna，含日期版和紧凑拼写。gpt-6-sol / gpt-6-astra 不在内。
+func isLunaMinRateModel(model string) bool {
+	return IsVIPOnlyModel(model) || isOpenAIGPT6LunaModel(model)
+}
+
 // ApplyLunaMinRateMultiplier 在计费模型属于 Luna 家族且当前倍率低于保底时抬到 0.2。
 // 不修改非 Luna 模型；已达到或超过保底的倍率原样返回。
 func ApplyLunaMinRateMultiplier(model string, multiplier float64) float64 {
-	if !IsVIPOnlyModel(model) || multiplier >= LunaMinRateMultiplier {
+	if !isLunaMinRateModel(model) || multiplier >= LunaMinRateMultiplier {
 		return multiplier
 	}
 	return LunaMinRateMultiplier
@@ -105,7 +111,7 @@ func ApplyLunaMinRateMultiplier(model string, multiplier float64) float64 {
 
 func applyLunaMinRateForModels(multiplier float64, models ...string) float64 {
 	for _, model := range models {
-		if IsVIPOnlyModel(model) {
+		if isLunaMinRateModel(model) {
 			return ApplyLunaMinRateMultiplier(model, multiplier)
 		}
 	}

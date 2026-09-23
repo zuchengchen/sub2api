@@ -549,12 +549,16 @@ func (s *BillingService) initFallbackPricing() {
 	})
 	// OpenAI GPT-5.6 Luna：以官方 API 价的 2 倍为基价。缓存写入仍为输入价的 1.25 倍。
 	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
-	s.fallbackPrices["gpt-5.6-luna"] = applyOpenAIAPILongContextLadder("gpt-5.6-luna", pricingWithPriorityMultiplier(&ModelPricing{
+	// gpt-6-luna 使用同一张价卡，不按 GPT-6 Luna 更低的官方价计费。
+	gpt56LunaBilledPrice := applyOpenAIAPILongContextLadder("gpt-5.6-luna", pricingWithPriorityMultiplier(&ModelPricing{
 		InputPricePerToken:         gpt56LunaOfficialInputPricePerToken * gpt56LunaAPIBillingMultiplier,
 		OutputPricePerToken:        gpt56LunaOfficialOutputPricePerToken * gpt56LunaAPIBillingMultiplier,
 		CacheCreationPricePerToken: gpt56LunaOfficialCacheCreationPricePerToken * gpt56LunaAPIBillingMultiplier,
 		CacheReadPricePerToken:     gpt56LunaOfficialCacheReadPricePerToken * gpt56LunaAPIBillingMultiplier,
 	}, 2.0))
+	s.fallbackPrices["gpt-5.6-luna"] = gpt56LunaBilledPrice
+	gpt6LunaBilledPrice := *gpt56LunaBilledPrice
+	s.fallbackPrices["gpt-6-luna"] = &gpt6LunaBilledPrice
 
 	s.fallbackPrices["gpt-5.4-mini"] = &ModelPricing{
 		InputPricePerToken:     7.5e-7,
@@ -1119,6 +1123,12 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	// 覆盖带版本后缀的别名（如 doubao-embedding-vision-251215）。
 	if strings.Contains(modelLower, "doubao-embedding-vision") {
 		return s.fallbackPrices["doubao-embedding-vision"]
+	}
+
+	// gpt-6-luna 不进入 Codex 模型名归一化，避免把上游模型改写成 5.6。
+	// 计费仍使用与 gpt-5.6-luna 相同的价卡，含日期和 effort 后缀。
+	if isOpenAIGPT6LunaModel(modelLower) {
+		return s.fallbackPrices["gpt-6-luna"]
 	}
 
 	// OpenAI（GPT-5 / Codex 族）：仅匹配已知型号，避免未知 OpenAI 型号误计价。
@@ -1808,7 +1818,9 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		applyGPT6AstraAPIBillingRates(&cloned)
 		pricing = &cloned
 	}
-	if forceDeepSeekRates && isOpenAIGPT56LunaModel(normalized) {
+	// 目录里的 gpt-6-luna 官方价更低。默认价卡强制改写成 5.6 Luna 的 2 倍官价；
+	// 分组/渠道自定义定价（forceDeepSeekRates=false）保持运营者配置。
+	if forceDeepSeekRates && (isOpenAIGPT56LunaModel(normalized) || isLunaBilledAsGPT56Model(model)) {
 		cloned := *pricing
 		applyGPT56LunaAPIBillingRates(&cloned)
 		pricing = &cloned
@@ -1817,6 +1829,9 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	needsCacheCreationPolicy := isGPT56 && !pricing.CacheCreationPriceExplicit && (pricing.CacheCreationPricePerToken <= 0 ||
 		(pricing.InputPricePerTokenPriority > 0 && pricing.CacheCreationPricePerTokenPriority <= 0))
 	fastRatio := openAIModelFastPricingRatio(normalized)
+	if fastRatio <= 0 && isOpenAIGPT6LunaModel(model) {
+		fastRatio = 2
+	}
 	if !needsCacheCreationPolicy && fastRatio <= 0 {
 		return pricing
 	}
@@ -1924,7 +1939,7 @@ func applyOpenAIAPILongContextLadder(model string, pricing *ModelPricing) *Model
 		return pricing
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
-	if !openAIModelHasAPILongContextLadder(normalized) {
+	if !openAIModelHasAPILongContextLadder(normalized) && !isOpenAIGPT6LunaModel(model) {
 		return pricing
 	}
 	cloned := *pricing

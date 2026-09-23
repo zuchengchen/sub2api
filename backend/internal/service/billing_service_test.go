@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
@@ -301,6 +302,76 @@ func TestGetModelPricing_OpenAIGPT56LunaFallback(t *testing.T) {
 	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
 	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
 	require.False(t, pricing.LongContextThresholdInclusive)
+}
+
+func TestGetModelPricing_OpenAIGPT6LunaUsesGPT56LunaCard(t *testing.T) {
+	svc := newTestBillingService()
+
+	for _, model := range []string{"gpt-6-luna", "gpt-6-luna-2026-09-22", "openai/gpt_6_luna", "gpt6luna"} {
+		pricing, err := svc.GetModelPricing(model)
+		require.NoError(t, err, model)
+		require.InDelta(t, 0.4e-6, pricing.InputPricePerToken, 1e-12, model)
+		require.InDelta(t, 2.4e-6, pricing.OutputPricePerToken, 1e-12, model)
+		require.InDelta(t, 0.04e-6, pricing.CacheReadPricePerToken, 1e-12, model)
+		require.InDelta(t, 0.5e-6, pricing.CacheCreationPricePerToken, 1e-12, model)
+		require.InDelta(t, 0.8e-6, pricing.InputPricePerTokenPriority, 1e-12, model)
+		require.InDelta(t, 4.8e-6, pricing.OutputPricePerTokenPriority, 1e-12, model)
+		require.Equal(t, 272000, pricing.LongContextInputThreshold, model)
+		require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12, model)
+		require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12, model)
+	}
+}
+
+func TestGetModelPricing_OpenAIGPT6LunaCatalogIsRewrittenToGPT56Card(t *testing.T) {
+	pricingSvc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gpt-6-luna": {
+			InputCostPerToken:               0.1e-6,
+			InputCostPerTokenPriority:       0.2e-6,
+			OutputCostPerToken:              0.5e-6,
+			OutputCostPerTokenPriority:      1e-6,
+			CacheReadInputTokenCost:         0.01e-6,
+			CacheReadInputTokenCostPriority: 0.02e-6,
+			CacheCreationInputTokenCost:     0.125e-6,
+			LongContextInputTokenThreshold:  272000,
+			LongContextInputCostMultiplier:  2,
+			LongContextOutputCostMultiplier: 1.5,
+			LiteLLMProvider:                 "openai",
+			Mode:                            "chat",
+		},
+		"gpt-6-sol": {
+			InputCostPerToken:  2e-6,
+			OutputCostPerToken: 10e-6,
+			LiteLLMProvider:    "openai",
+			Mode:               "chat",
+		},
+	}}
+	svc := NewBillingService(&config.Config{}, pricingSvc)
+
+	pricing, err := svc.GetModelPricing("gpt-6-luna")
+	require.NoError(t, err)
+	require.InDelta(t, 0.4e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 2.4e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.04e-6, pricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 0.5e-6, pricing.CacheCreationPricePerToken, 1e-12)
+	require.InDelta(t, 0.8e-6, pricing.InputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 4.8e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+	require.Equal(t, 272000, pricing.LongContextInputThreshold)
+
+	sol, err := svc.GetModelPricing("gpt-6-sol")
+	require.NoError(t, err)
+	require.InDelta(t, 2e-6, sol.InputPricePerToken, 1e-12)
+	require.InDelta(t, 10e-6, sol.OutputPricePerToken, 1e-12)
+}
+
+func TestApplyModelSpecificPricingPolicy_GPT6LunaCustomPriceIsPreserved(t *testing.T) {
+	svc := newTestBillingService()
+	custom := &ModelPricing{
+		InputPricePerToken:  1e-6,
+		OutputPricePerToken: 3e-6,
+	}
+	got := svc.applyModelSpecificPricingPolicyEx("gpt-6-luna", custom, false, time.Time{})
+	require.InDelta(t, 1e-6, got.InputPricePerToken, 1e-12)
+	require.InDelta(t, 3e-6, got.OutputPricePerToken, 1e-12)
 }
 
 func TestCalculateCost_OpenAIGPT56LunaLongContextAppliesAPIMultipliers(t *testing.T) {

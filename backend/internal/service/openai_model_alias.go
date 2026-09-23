@@ -112,6 +112,32 @@ func isOpenAIGPT56LunaModel(model string) bool {
 	return normalized == "gpt-5.6-luna" || strings.HasPrefix(normalized, "gpt-5.6-luna-")
 }
 
+// isOpenAIGPT6LunaModel reports GPT-6 Luna and dated/effort-suffixed variants.
+// Compact spellings such as gpt6luna are accepted. gpt-6-lunatic is not.
+func isOpenAIGPT6LunaModel(model string) bool {
+	normalized := canonicalizeOpenAIModelAliasSpelling(model)
+	if normalized == "" {
+		normalized = strings.ToLower(strings.TrimSpace(lastOpenAIModelSegment(model)))
+		normalized = strings.ReplaceAll(normalized, "_", "-")
+		normalized = strings.Join(strings.Fields(normalized), "-")
+		for strings.Contains(normalized, "--") {
+			normalized = strings.ReplaceAll(normalized, "--", "-")
+		}
+	}
+	if strings.HasPrefix(normalized, "gpt6") {
+		normalized = "gpt-6" + strings.TrimPrefix(normalized, "gpt6")
+	}
+	if strings.HasPrefix(normalized, "gpt-6luna") {
+		normalized = "gpt-6-luna" + strings.TrimPrefix(normalized, "gpt-6luna")
+	}
+	return normalized == "gpt-6-luna" || strings.HasPrefix(normalized, "gpt-6-luna-")
+}
+
+// isLunaBilledAsGPT56Model is true when the request uses the GPT-5.6 Luna price card.
+func isLunaBilledAsGPT56Model(model string) bool {
+	return isOpenAIGPT56LunaModel(model) || isOpenAIGPT6LunaModel(model)
+}
+
 func appendUsageBillingModelCandidate(candidates []string, seen map[string]struct{}, model string) []string {
 	trimmed := strings.TrimSpace(model)
 	if trimmed == "" {
