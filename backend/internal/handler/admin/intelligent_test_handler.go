@@ -183,6 +183,26 @@ func (h *IntelligentTestHandler) Image(c *gin.Context) {
 	}
 	WriteIntelligentTestImage(c, out.ResultImage)
 }
+func (h *IntelligentTestHandler) HTML(c *gin.Context) {
+	actor, ok := intelligentAdminActor(c)
+	if !ok {
+		return
+	}
+	id, ok := IntelligentTestParamID(c, "id")
+	if !ok {
+		return
+	}
+	out, err := h.svc.Get(c.Request.Context(), actor, id)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	html, err := service.SanitizeIntelligentTestHTML(out.Result)
+	if err != nil || html == "" {
+		response.NotFound(c, "test animation unavailable")
+		return
+	}
+	response.Success(c, gin.H{"html": html})
+}
 func (h *IntelligentTestHandler) Run(c *gin.Context) {
 	actor, ok := intelligentAdminActor(c)
 	if !ok {

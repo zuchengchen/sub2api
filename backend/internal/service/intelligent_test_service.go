@@ -178,12 +178,40 @@ func (s *IntelligentTestService) Enqueue(ctx context.Context, actor int64, req I
 			return nil, intelligentTestBad("model overrides must target selected test types and be at most 200 characters")
 		}
 	}
+	req = s.withAdminPelicanAnimal(req)
 	out, err := s.repo.Enqueue(ctx, actor, req)
 	if err != nil {
 		return nil, err
 	}
 	s.startEnqueued(ctx, out)
 	return out, nil
+}
+
+// Admin pelican runs use the same rotating animal as the user-page timer.
+// A caller-supplied prompt, including the scheduler's own choice, is kept.
+func (s *IntelligentTestService) withAdminPelicanAnimal(req IntelligentTestEnqueue) IntelligentTestEnqueue {
+	if req.Source == IntelligentTestSourcePelicanSchedule {
+		return req
+	}
+	selected := false
+	for _, kind := range req.TestTypes {
+		if kind == "pelican" {
+			selected = true
+			break
+		}
+	}
+	if !selected || strings.TrimSpace(req.Prompts["pelican"]) != "" {
+		return req
+	}
+	if req.Prompts == nil {
+		req.Prompts = map[string]string{}
+	}
+	s.mu.Lock()
+	animal := pickIntelligentTestAnimal(s.lastAnimal)
+	s.lastAnimal = animal
+	s.mu.Unlock()
+	req.Prompts["pelican"] = intelligentAnimalHTMLPrompt(animal)
+	return req
 }
 
 func (s *IntelligentTestService) startEnqueued(ctx context.Context, out *IntelligentTestEnqueued) {

@@ -1,6 +1,7 @@
 <template>
   <div class="flex h-full min-h-40 w-full items-center rounded-xl bg-white bg-[linear-gradient(45deg,#f3f4f6_25%,transparent_25%),linear-gradient(-45deg,#f3f4f6_25%,transparent_25%)] p-2 dark:bg-dark-900" :class="fullSize ? 'justify-start' : 'justify-center'" data-testid="generated-test-image">
-    <img v-if="url && !failed" :src="url" alt="模型生成的鹈鹕测试图像" :style="fullSize ? dimensions : undefined" :class="fullSize ? 'max-w-none shrink-0' : 'max-h-[65vh] max-w-full object-contain'" @error="failed = true" />
+    <iframe v-if="animated && html && !failed" class="h-full min-h-40 w-full border-0 bg-[#0b1220]" sandbox="" referrerpolicy="no-referrer" title="鹈鹕测试动画" :srcdoc="html" />
+    <img v-else-if="url && !failed" :src="url" alt="模型生成的鹈鹕测试图像" :style="fullSize ? dimensions : undefined" :class="fullSize ? 'max-w-none shrink-0' : 'max-h-[65vh] max-w-full object-contain'" @error="failed = true" />
     <p v-else class="p-5 text-center text-xs text-gray-500">{{ loading ? '正在加载生成图像…' : '暂无可安全显示的图像，可查看原始答复或重新评估。' }}</p>
   </div>
 </template>
@@ -8,10 +9,11 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { intelligentTestsAPI } from '@/api/intelligentTests'
 import { testImageURL } from './display'
-const props = defineProps<{ source?: string; recordId?: number; publicView?: boolean; fullSize?: boolean }>()
-const inline = computed(() => testImageURL(props.source))
+const props = defineProps<{ source?: string; recordId?: number; publicView?: boolean; fullSize?: boolean; animated?: boolean }>()
+const inline = computed(() => props.animated ? '' : testImageURL(props.source))
 const fetched = ref(''), loading = ref(false), failed = ref(false)
 const fetchedSVG = ref('')
+const html = ref('')
 const dimensions = computed(() => {
   const raw = props.source || fetchedSVG.value
   if (!raw || raw.length > 2_000_000) return undefined
@@ -25,10 +27,22 @@ const dimensions = computed(() => {
 })
 let controller: AbortController | undefined, generation = 0
 const url = computed(() => inline.value || fetched.value)
-function release() { if (fetched.value) URL.revokeObjectURL(fetched.value); fetched.value = ''; fetchedSVG.value = '' }
-watch(() => [props.source, props.recordId, props.publicView], async () => {
+function release() { if (fetched.value) URL.revokeObjectURL(fetched.value); fetched.value = ''; fetchedSVG.value = ''; html.value = '' }
+watch(() => [props.source, props.recordId, props.publicView, props.animated], async () => {
   const current = ++generation
   controller?.abort(); release(); failed.value = false; loading.value = false
+  if (props.animated) {
+    if (!props.recordId) { failed.value = true; return }
+    controller = new AbortController(); loading.value = true
+    try {
+      const page = await intelligentTestsAPI.animation(props.recordId, controller.signal)
+      if (current !== generation) return
+      html.value = page.html || ''
+      failed.value = !html.value
+    } catch { if (current === generation) failed.value = true }
+    finally { if (current === generation) loading.value = false }
+    return
+  }
   if (inline.value || !props.recordId) return
   controller = new AbortController(); loading.value = true
   try {

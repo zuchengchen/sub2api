@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,26 @@ func TestIntelligentAnimalHTMLPromptInsertsName(t *testing.T) {
 	prompt := intelligentAnimalHTMLPrompt("火烈鸟")
 	require.Contains(t, prompt, "绘制一个火烈鸟骑自行车")
 	require.Contains(t, prompt, "不要依赖我本地的AGENTS.md")
+}
+
+func TestAdminPelicanRunPicksRandomAnimal(t *testing.T) {
+	t.Parallel()
+	svc := &IntelligentTestService{}
+	req := svc.withAdminPelicanAnimal(IntelligentTestEnqueue{TestTypes: []string{"pelican", "candy"}})
+	prompt := req.Prompts["pelican"]
+	require.Contains(t, prompt, "骑自行车的2D动画")
+	matched := false
+	for _, animal := range intelligentTestAnimals {
+		if strings.Contains(prompt, "绘制一个"+animal+"骑自行车") {
+			matched = true
+			break
+		}
+	}
+	require.True(t, matched, "prompt %q should name a known animal", prompt)
+	kept := svc.withAdminPelicanAnimal(IntelligentTestEnqueue{TestTypes: []string{"pelican"}, Prompts: map[string]string{"pelican": "keep"}})
+	require.Equal(t, "keep", kept.Prompts["pelican"])
+	scheduled := svc.withAdminPelicanAnimal(IntelligentTestEnqueue{TestTypes: []string{"pelican"}, Source: IntelligentTestSourcePelicanSchedule})
+	require.Empty(t, scheduled.Prompts)
 }
 
 func TestPelicanSlotKeyTruncatesToTenMinutes(t *testing.T) {

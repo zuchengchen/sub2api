@@ -30,9 +30,7 @@
       <p v-if="record.queue_reason" class="text-sm text-gray-500">{{ record.queue_reason }}</p>
       <p v-if="record.status === 'queued' && record.queue_reason && record.available_at" class="text-xs text-gray-500">下次检查：{{ testTime(record.available_at) }}</p>
       <div v-if="record.test_type === 'pelican' && !isPending(record.status)" class="rounded-xl border border-gray-200 p-3 dark:border-dark-700">
-        <TestGeneratedImage :source="record.result_image" :record-id="record.id" :public-view="publicView" />
-        <button class="mt-3 text-sm text-primary-600" @click="fullImage = !fullImage">{{ fullImage ? '收起原尺寸' : '查看原图' }}</button>
-        <div v-if="fullImage" class="mt-3 max-h-[65vh] overflow-auto rounded-lg border p-2"><TestGeneratedImage :source="record.result_image" :record-id="record.id" :public-view="publicView" full-size /></div>
+        <div class="aspect-[4/3] overflow-hidden rounded-xl"><TestGeneratedImage :record-id="record.id" animated /></div>
       </div>
       <section v-if="!publicView && record.input"><h4 class="mb-2 text-sm font-semibold">测试输入</h4><pre class="test-output">{{ record.input }}</pre></section>
       <details v-if="record.test_type === 'pelican'"><summary class="cursor-pointer text-sm text-gray-500">模型原始答复 / SVG 源码</summary><pre class="test-output mt-2">{{ record.result || '暂无输出' }}</pre></details>
@@ -73,7 +71,7 @@ const execution = computed(() => {
   const config = record.value?.config_snapshot as { execution?: { strategy: string; identity_mode: string; effective_tls: string; concurrency: number; tls_reason?: string; integrity_mode?: string } } | undefined
   return config?.execution
 })
-const loading = ref(false), error = ref(''), fullImage = ref(false)
+const loading = ref(false), error = ref('')
 const actionBusy = ref(false), actionError = ref('')
 const { copied, copyToClipboard } = useClipboard()
 const canReevaluate = computed(() => {
@@ -113,7 +111,7 @@ async function load() {
     if (version === requestVersion) { record.value = null; error.value = extractApiErrorMessage(err, '无法获取测试结果') }
   } finally { if (version === requestVersion) loading.value = false }
 }
-watch(() => props.recordId, () => { requestVersion++; clearTimeout(timer); record.value = null; error.value = ''; actionError.value = ''; copied.value = false; fullImage.value = false; void load() }, { immediate: true })
+watch(() => props.recordId, () => { requestVersion++; clearTimeout(timer); record.value = null; error.value = ''; actionError.value = ''; copied.value = false; void load() }, { immediate: true })
 onUnmounted(() => { requestVersion++; clearTimeout(timer) })
 async function copy() {
   if (!record.value) return

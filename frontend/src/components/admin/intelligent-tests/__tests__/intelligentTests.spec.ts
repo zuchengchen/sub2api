@@ -11,7 +11,7 @@ import { intelligentTestsAPI, newTestRequestKey, type TestSetting, type TestReco
 import { getAvailableModels } from '@/api/admin/accounts'
 
 vi.mock('@/api/intelligentTests', () => ({
-  intelligentTestsAPI: { settings: vi.fn(), run: vi.fn(), saveSetting: vi.fn(), detail: vi.fn(), publicDetail: vi.fn(), publicAccounts: vi.fn(), publicTests: vi.fn(), image: vi.fn(), reevaluate: vi.fn(), cancel: vi.fn(), previewEvaluation: vi.fn() },
+  intelligentTestsAPI: { settings: vi.fn(), run: vi.fn(), saveSetting: vi.fn(), detail: vi.fn(), publicDetail: vi.fn(), publicAccounts: vi.fn(), publicTests: vi.fn(), image: vi.fn(), animation: vi.fn(), reevaluate: vi.fn(), cancel: vi.fn(), previewEvaluation: vi.fn() },
   newTestRequestKey: vi.fn(() => 'fixed-request-key')
 }))
 vi.mock('@/api/admin/accounts', () => ({ getAvailableModels: vi.fn() }))
@@ -162,11 +162,14 @@ describe('independent settings and persisted status', () => {
     expect((wrapper.findAll('form')[1].find('textarea').element as HTMLTextAreaElement).value).toBe('My unsaved question')
     wrapper.unmount()
   })
-  it('renders the generated pelican while a new attempt waits and keeps B verdicts distinct', () => {
+  it('renders the generated pelican while a new attempt waits and keeps B verdicts distinct', async () => {
+    vi.mocked(intelligentTestsAPI.animation).mockResolvedValue({ html: '<!DOCTYPE html><html><body><svg><animate attributeName="x" values="0;1"/></svg></body></html>' })
     const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], anti_degradation: true, tests: [] }
     const completed: TestRecord = { ...record, id: 7, status: 'completed', result_image: '<svg viewBox="0 0 20 20"><circle r="5" cx="10" cy="10"/></svg>', evaluation: { evaluator_version: 2, answer_verdict: 'not_evaluated', format_verdict: 'compliant' } }
     const wrapper = mount(TestResultCard, { props: { account, summary: { test_type: 'pelican', latest: { ...record, id: 8, status: 'queued' }, latest_completed: completed, history_count: 2, consecutive_anomalies: 0, risk: '' }, now: Date.now() }, global })
-    expect(wrapper.find('img').attributes('src')).toContain('data:image/svg+xml')
+    await flushPromises()
+    expect(wrapper.find('iframe').attributes('srcdoc')).toContain('<animate')
+    expect(intelligentTestsAPI.animation).toHaveBeenCalledWith(7, expect.any(AbortSignal))
     expect(wrapper.text()).toContain('最近完成的结果 · #7')
     expect(wrapper.text()).toContain('内容未自动评估')
     expect(wrapper.text()).not.toContain('100')
