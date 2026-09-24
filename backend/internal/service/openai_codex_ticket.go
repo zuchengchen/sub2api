@@ -9,9 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -727,6 +725,10 @@ func (s *OpenAIGatewayService) doOpenAICodexTicketProbe(ctx context.Context, acc
 	// Synthetic probes must use the dedicated no-reuse transport even when the
 	// production account is bound to a plugin. This also avoids reading pluginManager
 	// while handlers are still wiring it during gateway construction.
+	proxyURL, err = resolveOpenAICodexTicketHarvestProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		return nil, err
@@ -1595,60 +1597,6 @@ func MergeOpenAICodexTicketExtra(extra, current map[string]any) map[string]any {
 		}
 	}
 	return result
-}
-
-// ValidateOpenAICodexTicketHarvestProxyURL validates only syntax, without making
-// a network request or including credentials in validation errors.
-func ValidateOpenAICodexTicketHarvestProxyURL(raw string) error {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Hostname() == "" || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return errors.New("harvest proxy must be an HTTP(S) or SOCKS5(h) URL with a host and no path, query or fragment")
-	}
-	switch parsed.Scheme {
-	case "http", "https", "socks5", "socks5h":
-	default:
-		return errors.New("harvest proxy scheme must be http, https, socks5 or socks5h")
-	}
-	if port := parsed.Port(); port != "" {
-		n, err := strconv.Atoi(port)
-		if err != nil || n < 1 || n > 65535 {
-			return errors.New("harvest proxy port must be between 1 and 65535")
-		}
-	}
-	return nil
-}
-
-// MaskProxyURL never returns a stored proxy password, even for invalid legacy data.
-func MaskProxyURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || ValidateOpenAICodexTicketHarvestProxyURL(raw) != nil {
-		return ""
-	}
-	parsed, _ := url.Parse(raw)
-	if parsed.User != nil {
-		if _, ok := parsed.User.Password(); ok {
-			parsed.User = url.UserPassword(parsed.User.Username(), "***")
-		}
-	}
-	return parsed.String()
-}
-
-// IsMaskedProxyURL recognizes the exact password placeholder emitted by the API.
-func IsMaskedProxyURL(raw string) bool {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return true
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.User == nil {
-		return false
-	}
-	password, ok := parsed.User.Password()
-	return ok && password == "***"
 }
 
 // Credential shadows do not own tickets. Keep their existing forwarding policy

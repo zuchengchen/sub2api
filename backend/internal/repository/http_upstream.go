@@ -245,8 +245,7 @@ func (s *httpUpstreamService) doUncontrolled(req *http.Request, proxyURL string,
 	if err != nil {
 		s.handleOpenAIHTTP2Failure(profile, entry, err)
 		// 请求失败，立即减少计数
-		atomic.AddInt64(&entry.inFlight, -1)
-		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
+		s.releaseClientRequest(entry)
 		return nil, err
 	}
 	// 如果上游返回了压缩内容，解压后再交给业务层
@@ -255,13 +254,27 @@ func (s *httpUpstreamService) doUncontrolled(req *http.Request, proxyURL string,
 	// 包装响应体，在关闭时自动减少计数并更新时间戳
 	// 这确保了流式响应（如 SSE）在完全读取前不会被淘汰
 	resp.Body = wrapTrackedBodyWithReadError(resp.Body, func() {
-		atomic.AddInt64(&entry.inFlight, -1)
-		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
+		s.releaseClientRequest(entry)
 	}, func(err error) {
 		s.handleOpenAIHTTP2Failure(profile, entry, err)
 	})
 
 	return resp, nil
+}
+
+func (s *httpUpstreamService) releaseClientRequest(entry *upstreamClientEntry) {
+	remaining := atomic.AddInt64(&entry.inFlight, -1)
+	atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
+	if entry.protocolMode != upstreamProtocolModeOpenAIH1NoReuse || remaining != 0 {
+		return
+	}
+	// Harvest sessions rotate per attempt and their connections cannot be reused.
+	// Retire the completed client so retries do not fill the shared client cache.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.clients[entry.cacheKey] == entry && atomic.LoadInt64(&entry.inFlight) == 0 {
+		s.removeClientLocked(entry.cacheKey, entry)
+	}
 }
 
 // DoWithTLS 执行带 TLS 指纹伪装的 HTTP 请求
