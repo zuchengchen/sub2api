@@ -1186,7 +1186,11 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 // 打票走 harvest_proxy_url（SOCKS），业务出站仍用账号自己的代理，并带上同一张票的 Cookie。
 // 门票默认有效 180 秒。refresh_before_seconds 为 0 时到期再打，不提前。
 type OpenAICodexTicketConfig struct {
-	Enabled                      bool     `mapstructure:"enabled"`
+	Enabled bool `mapstructure:"enabled"`
+	// Mode selects legacy turn_state tickets or verified Cookie + direct WS for Astra.
+	Mode string `mapstructure:"mode"`
+	// CookieWSAccountIDs limits the Cookie WS rollout; empty enables all eligible accounts.
+	CookieWSAccountIDs           []int64  `mapstructure:"cookie_ws_account_ids"`
 	TargetLength                 int      `mapstructure:"target_length"`
 	TTLSeconds                   int      `mapstructure:"ttl_seconds"`
 	RefreshBeforeSeconds         int      `mapstructure:"refresh_before_seconds"`
@@ -2341,6 +2345,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_attempt_timeout_seconds", 25)
 	viper.SetDefault("gateway.openai_codex_ticket.fail_closed", false)
 	viper.SetDefault("gateway.openai_codex_ticket.models", []string{"gpt-6-astra", "gpt-5.6-sol"})
+	viper.SetDefault("gateway.openai_codex_ticket.mode", "turn_state")
+	viper.SetDefault("gateway.openai_codex_ticket.cookie_ws_account_ids", []int64{})
 	viper.SetDefault("gateway.live.max_session_duration_seconds", 3600)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
@@ -3407,6 +3413,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIWS.StickyPreviousResponseTTLSeconds < 0 {
 		return fmt.Errorf("gateway.openai_ws.sticky_previous_response_ttl_seconds must be non-negative")
+	}
+	if err := validateOpenAICodexTicketMode(c.Gateway.OpenAICodexTicket); err != nil {
+		return err
 	}
 	if c.Gateway.OpenAIHTTP2.FallbackErrorThreshold < 0 {
 		return fmt.Errorf("gateway.openai_http2.fallback_error_threshold must be non-negative")

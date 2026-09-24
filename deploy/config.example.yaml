@@ -337,12 +337,22 @@ gateway:
   # 默认缓存 3 分钟，到期再打，不提前。业务请求和智能测试出站都带上这张票和这组 Cookie。默认关闭。
   # Env: GATEWAY_OPENAI_CODEX_TICKET_ENABLED=true
   #      GATEWAY_OPENAI_CODEX_TICKET_HARVEST_PROXY_URL=socks5h://user:pass@host:port
-  # Admin UI 开关（系统设置 → 网关 → Codex 设置 → 292 打票）可覆盖 enabled，无需重启。
+  # Admin UI 开关（系统设置 → 网关 → Codex 设置 → Codex 打票）可覆盖 enabled，无需重启。
   # Off: do not harvest or inject. On: harvest in the background and inject on production requests.
   # The harvest proxy should rotate egress IPs itself (fresh CONNECT per request).
   # Credential shadow accounts retain their existing forwarding policy and are not ticket-gated.
   openai_codex_ticket:
     enabled: false
+    # turn_state: legacy ticket flow. cookie_ws: Astra uses verified HTTP cookies
+    # on direct WS connections; refresh after 50 minutes, expire after 60 minutes.
+    # Each account maintains 2 independent Cookie groups, each with up to 10
+    # business WS connections. Refresh temporarily uses one extra validation WS.
+    # Keep the account WS pool limit at least 21 (24 is recommended).
+    # Cookie WS requires HTTP and direct WS Tibo probes to return True, has no
+    # turn-state length gate, and sends no active periodic Ping.
+    mode: turn_state
+    # Restrict cookie_ws to these upstream account IDs; [] applies to all eligible accounts.
+    cookie_ws_account_ids: []
     target_length: 292
     ttl_seconds: 180
     refresh_before_seconds: 0

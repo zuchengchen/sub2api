@@ -79,6 +79,8 @@ func newDefaultOpenAIWSClientDialer() openAIWSClientDialer {
 }
 
 type coderOpenAIWSClientDialer struct {
+	directOnce   sync.Once
+	directClient *http.Client
 	proxyMu      sync.Mutex
 	proxyClients map[string]*openAIWSProxyClientEntry
 	proxyHits    atomic.Int64
@@ -138,6 +140,10 @@ func (d *coderOpenAIWSClientDialer) Dial(
 			return nil, 0, nil, err
 		}
 		opts.HTTPClient = proxyClient
+	} else {
+		// An empty account proxy means a direct connection, including when the
+		// server process has HTTP(S)_PROXY configured for other workloads.
+		opts.HTTPClient = d.directHTTPClient()
 	}
 
 	conn, resp, err := coderws.Dial(ctx, targetURL, opts)
@@ -164,6 +170,19 @@ func (d *coderOpenAIWSClientDialer) Dial(
 	}
 	wrapped.conn = conn
 	return wrapped, 0, respHeaders, nil
+}
+
+func (d *coderOpenAIWSClientDialer) directHTTPClient() *http.Client {
+	d.directOnce.Do(func() {
+		d.directClient = &http.Client{Transport: &http.Transport{
+			Proxy:               nil,
+			MaxIdleConns:        openAIWSProxyTransportMaxIdleConns,
+			MaxIdleConnsPerHost: openAIWSProxyTransportMaxIdleConnsPerHost,
+			IdleConnTimeout:     openAIWSProxyTransportIdleConnTimeout,
+			TLSHandshakeTimeout: 10 * time.Second,
+		}}
+	})
+	return d.directClient
 }
 
 func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client, error) {

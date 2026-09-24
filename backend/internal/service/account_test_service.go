@@ -838,6 +838,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
 	}
+	if s.openaiGatewayService != nil && s.openaiGatewayService.openAICookieWSEnabledForModel(account, normalizeOpenAIModelForUpstream(account, testModelID)) {
+		return s.testOpenAICookieWSAccountConnection(c, account, normalizeOpenAIModelForUpstream(account, testModelID), prompt)
+	}
 
 	credentialAccount := account
 	if account.IsCredentialShadow() {

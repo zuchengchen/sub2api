@@ -141,8 +141,11 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	if state := strings.TrimSpace(turnState); state != "" {
 		headers.Set(openAIWSTurnStateHeader, state)
 	}
-	if err := s.applyOpenAICodexTicketForRequest(ctx, c, account, routingModel, headers); err != nil {
-		return nil, sessionResolution, err
+	cookieWS := s.openAICookieWSEnabledForModel(account, routingModel)
+	if !cookieWS {
+		if err := s.applyOpenAICodexTicketForRequest(ctx, c, account, routingModel, headers); err != nil {
+			return nil, sessionResolution, err
+		}
 	}
 	if metadata := strings.TrimSpace(turnMetadata); metadata != "" {
 		headers.Set(openAIWSTurnMetadataHeader, metadata)
@@ -188,6 +191,16 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	// 覆盖所有 WS 模式（ctx_pool/dedicated/passthrough）的握手头。
 	account.ApplyHeaderOverrides(headers)
 	setOpenAICodexRoutingHint(headers, account, routingModel, routingServiceTier)
+	if cookieWS {
+		// Preserve the complete identity that obtained the HTTP Cookie. This
+		// must run after account, client and fingerprint identity overrides.
+		if err := s.applySelectedOpenAICookieWSHeaders(ctx, account, routingModel, headers); err != nil {
+			return nil, sessionResolution, openAICookieWSUnavailableFailover(err)
+		}
+		// The validated HTTP identity and Kit WS handshake do not carry the
+		// synthetic legacy beta-feature header.
+		headers.Del("x-codex-beta-features")
+	}
 	logOpenAIRoutingDiagnostics(
 		ctx,
 		account,
