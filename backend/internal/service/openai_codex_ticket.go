@@ -173,20 +173,24 @@ func (s *OpenAIGatewayService) openAICodexTicketGatedModel(model string) bool {
 
 // OpenAICodexTicketStatus 是给管理端看的门票摘要，不含 state blob。
 type OpenAICodexTicketStatus struct {
-	Model             string     `json:"model"`
-	Mode              string     `json:"mode,omitempty"`
-	CapturedAt        *time.Time `json:"captured_at,omitempty"`
-	RefreshAt         *time.Time `json:"refresh_at,omitempty"`
-	CookieGroupsReady int        `json:"cookie_groups_ready,omitempty"`
-	CookieGroupsTotal int        `json:"cookie_groups_total,omitempty"`
-	WSPerGroup        int        `json:"ws_per_group,omitempty"`
-	VerifiedWS        int        `json:"verified_ws,omitempty"`
-	MinimumWS         int        `json:"minimum_ws,omitempty"`
-	Length            int        `json:"length,omitempty"`
-	Ready             bool       `json:"ready"`
-	RemainingSeconds  int64      `json:"remaining_seconds"`
-	Blocked           bool       `json:"blocked"`
-	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
+	Model             string                     `json:"model"`
+	Mode              string                     `json:"mode,omitempty"`
+	CapturedAt        *time.Time                 `json:"captured_at,omitempty"`
+	RefreshAt         *time.Time                 `json:"refresh_at,omitempty"`
+	CookieGroupsReady int                        `json:"cookie_groups_ready"`
+	CookieGroupsValid int                        `json:"cookie_groups_valid"`
+	CookieGroupsTotal int                        `json:"cookie_groups_total,omitempty"`
+	WSPerGroup        int                        `json:"ws_per_group,omitempty"`
+	VerifiedWS        int                        `json:"verified_ws"`
+	MinimumWS         int                        `json:"minimum_ws,omitempty"`
+	Length            int                        `json:"length,omitempty"`
+	Ready             bool                       `json:"ready"`
+	RemainingSeconds  int64                      `json:"remaining_seconds"`
+	Blocked           bool                       `json:"blocked"`
+	ExpiresAt         *time.Time                 `json:"expires_at,omitempty"`
+	RecoveryState     string                     `json:"recovery_state,omitempty"`
+	SkipReason        string                     `json:"skip_reason,omitempty"`
+	CookieSlots       []OpenAICookieWSSlotStatus `json:"cookie_slots,omitempty"`
 }
 
 func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketConfig, now time.Time) []OpenAICodexTicketStatus {

@@ -324,6 +324,28 @@ describe('EditAccountModal', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('shows all three Cookie WS recovery groups in the edit dialog', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = {}
+    account.codex_turn_tickets = [{
+      model: 'gpt-6-astra', mode: 'cookie_ws', ready: true, blocked: false, remaining_seconds: 2520,
+      verified_ws: 0, minimum_ws: 3, cookie_groups_ready: 0, cookie_groups_valid: 3, recovery_state: 'recovering',
+      cookie_slots: [{ slot: 2, state: 'backoff', cookie_ready: false, verified_ws: 0,
+        refresh: { phase: 'backoff', attempts: 2, next_attempt_at: '2026-09-24T15:10:00Z',
+          last_error: { code: 'http_rate_limited', message: '请求暂时受限', http_status: 429 } } }]
+    }]
+    const wrapper = mountModal(account)
+    expect(wrapper.get('[data-testid="cookie-ws-summary"]').attributes('data-state')).toBe('recovering')
+    expect(wrapper.findAll('[data-testid^="cookie-ws-slot-"]')).toHaveLength(3)
+    expect(wrapper.get('[data-testid="cookie-ws-slot-2"]').text()).toContain('请求暂时受限 (http_rate_limited · HTTP 429)')
+    expect(wrapper.get('[data-testid="cookie-ws-slot-2"]').text()).toContain('admin.accounts.openai.codexCookieNextAttempt')
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTurnTicketReady')
+    await wrapper.setProps({ account: { ...account, codex_turn_tickets: [{ ...account.codex_turn_tickets[0], recovery_state: 'paused', skip_reason: 'manual_unschedulable' }] } })
+    expect(wrapper.get('[data-testid="cookie-ws-summary"]').attributes('data-state')).toBe('paused')
+    wrapper.unmount()
+  })
+
   it('sets expiry presets from now instead of extending the saved expiry', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2028-02-29T12:34:00'))
@@ -1682,4 +1704,3 @@ describe('EditAccountModal', () => {
   })
 
 })
-

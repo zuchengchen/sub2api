@@ -452,10 +452,11 @@ func TestOpenAICookieWSTwoSlotsAreIndependentAndEitherReadySchedules(t *testing.
 	require.False(t, s.openAICookieWSSlotRetryWaiting(account.ID, 1, time.Now()))
 	account.Extra = map[string]any{openAICookieWSExtraKeySlot(first.Model, 0): first, openAICookieWSExtraKeySlot(second.Model, 1): second}
 	status := openAICookieWSStatus(account, second.Model, time.Now())
-	require.Equal(t, 1, status.CookieGroupsReady)
+	require.Equal(t, 1, status.CookieGroupsValid)
+	require.Zero(t, status.CookieGroupsReady)
 	require.Equal(t, 3, status.CookieGroupsTotal)
 	require.Equal(t, 1, status.WSPerGroup)
-	require.True(t, status.Ready)
+	require.False(t, status.Ready, "persisted cookies do not prove runtime WS readiness")
 	require.NotContains(t, RedactOpenAICodexTicketExtra(account.Extra), openAICookieWSExtraKeySlot(second.Model, 1))
 	require.NotEqual(t, first.Identity.SessionID, second.Identity.SessionID)
 }
@@ -510,7 +511,8 @@ func TestOpenAICookieWSThirdSlotRefreshAndRetryRemainIndependent(t *testing.T) {
 	saved.Extra[openAICookieWSExtraKeySlot(first.Model, 0)] = first
 	saved.Extra[openAICookieWSExtraKeySlot(first.Model, 1)] = second
 	status := openAICookieWSStatus(saved, first.Model, time.Now())
-	require.Equal(t, 3, status.CookieGroupsReady)
+	require.Equal(t, 3, status.CookieGroupsValid)
+	require.Zero(t, status.CookieGroupsReady)
 	require.Equal(t, 3, status.CookieGroupsTotal)
 	require.Equal(t, 1, status.WSPerGroup)
 }
