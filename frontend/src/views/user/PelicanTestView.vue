@@ -96,7 +96,7 @@ function formatSlot(value?: string | null) {
 
 onMounted(async () => {
   try {
-    const page = await pelicanTestsAPI.list(1, 32)
+    const page = await pelicanTestsAPI.list(1, 96)
     items.value = page.items || []
     selected.value = items.value[0] ?? null
   } catch (err) {
