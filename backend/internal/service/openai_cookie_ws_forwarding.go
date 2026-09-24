@@ -156,7 +156,8 @@ func openAICookieWSProxyURL(account *Account, cookieWS bool) string {
 }
 
 func openAICookieWSUnavailableFailover(err error) error {
-	if !errors.Is(err, ErrOpenAICodexTicketUnavailable) && !errors.Is(err, errOpenAIWSCookieExpired) && !errors.Is(err, errOpenAIWSCookieRetired) {
+	if !errors.Is(err, ErrOpenAICodexTicketUnavailable) && !errors.Is(err, errOpenAIWSCookieExpired) && !errors.Is(err, errOpenAIWSCookieRetired) &&
+		!errors.Is(err, errOpenAICookieWSAccountUnavailable) && !errors.Is(err, errOpenAIWSCookieValidatorMissing) {
 		return err
 	}
 	return &UpstreamFailoverError{

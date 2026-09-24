@@ -227,3 +227,23 @@ func TestCookieWSBusinessValidatorUpstreamStopsFurtherProbes(t *testing.T) {
 		})
 	}
 }
+
+func TestCookieWSRejectedNewConnectionFailsOverBeforeBusiness(t *testing.T) {
+	conn := &openAIWSCaptureConn{events: [][]byte{cookieWSCompletion("gpt-6-astra", "False")}}
+	svc, account, _, _ := newCookieForwardFixture(t, conn)
+	svc.getOpenAIWSConnPool().SetCookieValidator(svc.validateOpenAICookieWSBusinessConn)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","input":"A business request","stream":false}`))
+	require.Nil(t, result)
+	var failover *UpstreamFailoverError
+	require.ErrorAs(t, err, &failover)
+	require.Equal(t, http.StatusServiceUnavailable, failover.StatusCode)
+	require.False(t, c.Writer.Written(), "safe account failover remains possible before any business response")
+	require.True(t, conn.closed)
+	require.Len(t, conn.writes, 1, "only the internal probe was sent")
+	require.True(t, openAICookieWSIsProbePayload(conn.writes[0]))
+	require.Empty(t, svc.httpUpstream.(*httpUpstreamRecorder).requests)
+}

@@ -69,6 +69,9 @@ func (s *OpenAIGatewayService) validateOpenAICookieWSBusinessConn(ctx context.Co
 	defer func() {
 		if !verified {
 			lease.MarkBroken()
+			if err != nil {
+				err = errors.Join(ErrOpenAICodexTicketUnavailable, err)
+			}
 		}
 	}()
 	probeCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
