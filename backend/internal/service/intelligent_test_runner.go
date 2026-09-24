@@ -215,14 +215,11 @@ func finalizeIntelligentTestRun(r *IntelligentTestRecord, capture *intelligentCa
 		textOverflow = recorder.truncated
 	}
 	if capture != nil {
-		if t := capture.outputText(); t != "" {
+		if t := capture.outputText(); t != "" || capture.authoritativeText {
 			textOutput = t
 		}
-		switch {
-		case capture.upstreamComplete():
-			complete = true
-		case capture.responsesStream() && !capture.complete:
-			complete = false
+		if capture.responsesStream() {
+			complete = capture.upstreamComplete()
 		}
 		textOverflow = textOverflow || capture.textTruncated
 	}
@@ -278,6 +275,10 @@ func finalizeIntelligentTestRun(r *IntelligentTestRecord, capture *intelligentCa
 			status = capture.status
 		}
 		r.Status = classifyIntelligentError(status, r.ErrorMessage)
+		var cookieErr *openAICookieWSTestError
+		if errors.As(err, &cookieErr) {
+			r.Status = cookieErr.Category
+		}
 		return err
 	}
 	return nil
@@ -517,18 +518,19 @@ func (w *intelligentSSEWriter) appendText(s string) {
 }
 
 type intelligentCapture struct {
-	trafficWait    *AccountTrafficLimitError
-	mu             sync.Mutex
-	body           bytes.Buffer
-	pending        []byte
-	text           strings.Builder
-	status         int
-	truncated      bool
-	textTruncated  bool
-	complete       bool
-	incomplete     bool
-	sawOutputDelta bool
-	secrets        []string
+	trafficWait       *AccountTrafficLimitError
+	mu                sync.Mutex
+	body              bytes.Buffer
+	pending           []byte
+	text              strings.Builder
+	status            int
+	truncated         bool
+	textTruncated     bool
+	complete          bool
+	incomplete        bool
+	sawOutputDelta    bool
+	authoritativeText bool
+	secrets           []string
 }
 
 func (c *intelligentCapture) outputText() string {
@@ -617,16 +619,34 @@ func (c *intelligentCapture) ingestUpstreamEvent(v map[string]any) {
 	switch kind {
 	case "response.output_text.delta":
 		c.sawOutputDelta = true
-		if delta, ok := v["delta"].(string); ok {
+		if delta, ok := v["delta"].(string); ok && !c.complete {
 			c.appendText(delta)
 		}
-	case "response.completed", "response.done", "message_stop":
+	case "response.completed", "response.done":
+		if !intelligentResponsesTerminalSuccessful(v) {
+			c.incomplete = true
+			c.retainFailedResponseText(v)
+			break
+		}
+		if text, present := intelligentResponsesTerminalText(v); present {
+			// The completed response is the authoritative ordered output. It
+			// repairs missing/interleaved deltas without appending duplicates.
+			c.text.Reset()
+			c.textTruncated = false
+			c.authoritativeText = true
+			c.appendText(text)
+		}
+		c.complete = true
+	case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+		c.incomplete = true
+		c.retainFailedResponseText(v)
+	case "message_stop":
 		c.complete = true
 	}
 	if nested, ok := v["response"].(map[string]any); ok {
 		c.ingestUpstreamEvent(nested)
 	}
-	if status, _ := v["status"].(string); status == "incomplete" || status == "failed" {
+	if status, _ := v["status"].(string); status == "incomplete" || status == "failed" || status == "cancelled" || status == "canceled" {
 		c.incomplete = true
 	}
 	if reason, _ := v["stop_reason"].(string); reason != "" {
@@ -675,6 +695,74 @@ func (c *intelligentCapture) ingestUpstreamEvent(v map[string]any) {
 		}
 	}
 }
+
+func (c *intelligentCapture) retainFailedResponseText(event map[string]any) {
+	if text, present := intelligentResponsesTerminalText(event); present && text != "" {
+		// Failure output is diagnostic only; this never clears incomplete.
+		c.text.Reset()
+		c.textTruncated = false
+		c.appendText(text)
+	}
+}
+
+func intelligentResponsesTerminalSuccessful(event map[string]any) bool {
+	kind, _ := event["type"].(string)
+	if kind != "response.completed" && kind != "response.done" {
+		return false
+	}
+	if event["error"] != nil {
+		return false
+	}
+	if status, _ := event["status"].(string); status != "" && status != "completed" {
+		return false
+	}
+	response, _ := event["response"].(map[string]any)
+	if response["error"] != nil {
+		return false
+	}
+	if status, _ := response["status"].(string); status != "" && status != "completed" {
+		return false
+	}
+	if output, ok := response["output"].([]any); ok {
+		for _, value := range output {
+			item, _ := value.(map[string]any)
+			if status, _ := item["status"].(string); status != "" && status != "completed" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func intelligentResponsesTerminalText(event map[string]any) (string, bool) {
+	response, _ := event["response"].(map[string]any)
+	output, present := response["output"].([]any)
+	if !present {
+		return "", false
+	}
+	var text strings.Builder
+	for _, value := range output {
+		item, _ := value.(map[string]any)
+		content, _ := item["content"].([]any)
+		for _, value := range content {
+			part, _ := value.(map[string]any)
+			if part["type"] != "output_text" {
+				continue
+			}
+			partText, _ := part["text"].(string)
+			remaining := intelligentCaptureTextLimit + 1 - text.Len()
+			if len(partText) > remaining {
+				partText = partText[:remaining]
+			}
+			text.WriteString(partText)
+			if text.Len() > intelligentCaptureTextLimit {
+				return text.String(), true
+			}
+		}
+	}
+	return text.String(), true
+}
+
 func (c *intelligentCapture) appendText(s string) {
 	if s == "" || c.textTruncated {
 		return

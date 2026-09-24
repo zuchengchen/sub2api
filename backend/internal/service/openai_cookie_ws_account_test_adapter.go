@@ -15,8 +15,14 @@ import (
 // Admin connection/intelligence tests use the same verified Cookie pool. Their
 // events stay in the existing TestEvent format and never mutate account health.
 func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context, account *Account, model, prompt string) (retErr error) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
-	defer cancel()
+	ctx := c.Request.Context()
+	// Intelligent runs already own their configured deadline (up to 600s).
+	// A connectivity test keeps its shorter, independent default deadline.
+	if intelligentContext(ctx) == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 90*time.Second)
+		defer cancel()
+	}
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
@@ -24,25 +30,25 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
 	gateway := s.openaiGatewayService
 	if gateway.openAICodexTicketBlocksAccount(account, model) {
-		return s.sendErrorAndEnd(c, "No verified Cookie websocket is available for this account")
+		return s.sendCookieWSTestError(c, account, "acquire", ErrOpenAICodexTicketUnavailable)
 	}
 	reserveCtx, reserveCancel := context.WithTimeout(ctx, gateway.openAIWSAcquireTimeout())
 	slot, releaseSlot, err := gateway.reserveOpenAICookieWSSlot(reserveCtx, account, model, "")
 	reserveCancel()
 	if err != nil {
-		return s.sendErrorAndEnd(c, "Cookie websocket capacity is unavailable; retry the test later")
+		return s.sendCookieWSTestError(c, account, "reserve", err)
 	}
 	defer releaseSlot()
 	ctx = context.WithValue(ctx, openAICookieWSSlotContextKey{}, slot)
 	token, _, err := gateway.GetAccessToken(ctx, account)
 	if err != nil || token == "" {
-		return s.sendErrorAndEnd(c, "Cookie websocket authentication is unavailable")
+		return s.sendCookieWSTestError(c, account, "authentication", err)
 	}
 	headers, _, err := gateway.buildOpenAIWSHeaders(ctx, c, account, token,
 		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2, Reason: "cookie_ws"},
 		true, "", "", "", model, "")
 	if err != nil {
-		return s.sendErrorAndEnd(c, "No verified Cookie websocket is available for this account")
+		return s.sendCookieWSTestError(c, account, "acquire", err)
 	}
 	setOpenAICookieWSExecutionScope(headers, c, "admin-account-test")
 	payload := openAICookieWSProbePayload(true)
@@ -65,14 +71,14 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 				run.capture.trafficWait = wait
 			}
 		}
-		return s.sendErrorAndEnd(c, "Account is busy; retry the test later")
+		return s.sendCookieWSTestError(c, account, "reserve", err)
 	}
 	defer func() { finishAccountTrafficTurn(permit, retErr) }()
 	lease, err := gateway.getOpenAIWSConnPool().Acquire(trafficCtx, openAIWSAcquireRequest{
 		Account: account, WSURL: strings.Replace(chatgptCodexURL, "https://", "wss://", 1), Headers: headers,
 	})
 	if err != nil {
-		return s.sendErrorAndEnd(c, "Cookie websocket connection failed")
+		return s.sendCookieWSTestError(c, account, "acquire", err)
 	}
 	complete := false
 	defer func() {
@@ -89,26 +95,32 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 		capture.secrets = append(capture.secrets, token, headers.Get("Cookie"))
 		capture.mu.Unlock()
 	}
+	collector := capture
+	if collector == nil {
+		collector = &intelligentCapture{}
+	}
 	if err := lease.WriteJSONContext(trafficCtx, payload); err != nil {
-		return s.sendErrorAndEnd(c, "Cookie websocket request failed")
+		return s.sendCookieWSTestError(c, account, "write", err)
 	}
 	total, outputBytes := 0, 0
 	probeObserver := openAICookieWSProbeObserver{enabled: openAICookieWSIsProbePayload(payload)}
-	hasDelta := false
+	var emitted strings.Builder
 	for {
 		message, err := lease.ReadMessageContext(trafficCtx)
 		if err != nil {
-			return s.sendErrorAndEnd(c, "Cookie websocket stream ended before completion")
+			return s.sendCookieWSTestError(c, account, "read", err)
 		}
 		total += len(message)
 		if total > intelligentCaptureUpstreamLimit {
 			return s.sendErrorAndEnd(c, "Account test response is too large")
 		}
-		if capture != nil {
-			_, _ = capture.Write(append(append([]byte("data: "), message...), '\n', '\n'))
-		}
+		_, _ = collector.Write(append(append([]byte("data: "), message...), '\n', '\n'))
 		eventType := gjson.GetBytes(message, "type").String()
-		probeObserver.observe(lease, message, eventType)
+		probeEventType := eventType
+		if probeEventType == "response.done" {
+			probeEventType = "response.completed"
+		}
+		probeObserver.observe(lease, message, probeEventType)
 		switch eventType {
 		case "response.output_text.delta":
 			text := gjson.GetBytes(message, "delta").String()
@@ -116,32 +128,33 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 			if outputBytes > intelligentCaptureTextLimit {
 				return s.sendErrorAndEnd(c, "Account test output is too large")
 			}
-			if text != "" {
-				hasDelta = true
+			if text != "" && capture == nil {
+				emitted.WriteString(text)
 				s.sendEvent(c, TestEvent{Type: "content", Text: text})
 			}
-		case "response.completed":
-			if _, ok := openAICodexSuccessfulCompletionModel(message, "response.completed"); !ok {
+		case "response.completed", "response.done":
+			if _, ok := openAICodexSuccessfulCompletionModel(message, "response.completed"); !ok || !collector.upstreamComplete() {
+				if status := cookieWSTestPayloadStatus(message); status >= 400 {
+					return s.sendCookieWSTestError(c, account, "response", cookieWSTestStatusError("response", status))
+				}
 				return s.sendErrorAndEnd(c, "Cookie websocket response was not completed successfully")
 			}
-			if !hasDelta {
-				for _, item := range gjson.GetBytes(message, "response.output").Array() {
-					for _, part := range item.Get("content").Array() {
-						if part.Get("type").String() == "output_text" {
-							text := part.Get("text").String()
-							outputBytes += len(text)
-							if outputBytes > intelligentCaptureTextLimit {
-								return s.sendErrorAndEnd(c, "Account test output is too large")
-							}
-							s.sendEvent(c, TestEvent{Type: "content", Text: text})
-						}
-					}
-				}
+			finalText := collector.outputText()
+			if !strings.HasPrefix(finalText, emitted.String()) {
+				// TestEvent content is append-only. A normal live connectivity
+				// view cannot replace text already sent without client support.
+				return s.sendErrorAndEnd(c, "Cookie websocket final output differs from the streamed text")
+			}
+			if suffix := strings.TrimPrefix(finalText, emitted.String()); suffix != "" {
+				s.sendEvent(c, TestEvent{Type: "content", Text: suffix})
 			}
 			complete = true
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
-		case "error", "response.failed", "response.incomplete", "response.cancelled":
+		case "error", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+			if status := cookieWSTestPayloadStatus(message); status >= 400 {
+				return s.sendCookieWSTestError(c, account, "response", cookieWSTestStatusError("response", status))
+			}
 			return s.sendErrorAndEnd(c, "Cookie websocket returned an unsuccessful response")
 		}
 	}

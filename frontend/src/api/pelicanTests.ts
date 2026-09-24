@@ -4,6 +4,7 @@ export interface PelicanTestItem {
   id: number
   status: string
   html: string
+  preview_issue?: 'incomplete' | 'unavailable' | 'scripts_removed'
   prompt: string
   model: string
   group_name: string
