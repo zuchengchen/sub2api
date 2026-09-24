@@ -17,4 +17,3 @@ data: {"type":"response.content_part.done","output_index":1,"content_index":0,"p
 data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"29个"}],"id":"fixture_item_1"}}
 
 data: {"type":"response.completed","response":{"status":"completed","model":"gpt-6-astra","output":[]}}
-
