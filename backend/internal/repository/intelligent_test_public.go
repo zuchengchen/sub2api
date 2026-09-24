@@ -143,7 +143,9 @@ func (r *intelligentTestRepository) FirstAdminUserID(ctx context.Context) (int64
 func (r *intelligentTestRepository) ListPelicanCandidates(ctx context.Context) ([]service.PelicanCandidate, error) {
 	// Same schedulable gates as normal OpenAI routing, plus skip 5h/7d quota
 	// exhaustion. A valid ticket is an unexpired 292 with its harvest cookies.
-	// Go prefers those accounts, then any other schedulable GPT-PRO account.
+	// The https://ai8.my/v1 API-key account is preferred. Other rows are the
+	// random GPT-PRO OAuth / setup-token pool used when it is absent or already
+	// tried in this slot.
 	const astraTicket = `codex_turn_ticket:gpt-6-astra`
 	rows, err := r.db.QueryContext(ctx, `
 SELECT DISTINCT a.id,
@@ -155,11 +157,28 @@ SELECT DISTINCT a.id,
     AND NULLIF(btrim(a.extra->$5->>'cookies'),'') IS NOT NULL
     AND NULLIF(btrim(a.extra->$5->>'expires_at'),'') IS NOT NULL
     AND (a.extra->$5->>'expires_at')::timestamptz > NOW()
-  ) AS has_ticket
+  ) AS has_ticket,
+  (
+    a.type = 'apikey'
+    AND (
+      rtrim(btrim(COALESCE(a.credentials->>'base_url','')), '/') = 'https://ai8.my/v1'
+      OR btrim(a.name) = 'https://ai8.my/v1'
+    )
+  ) AS preferred
 FROM accounts a
 JOIN account_groups ag ON ag.account_id=a.id
 JOIN groups g ON g.id=ag.group_id
-WHERE a.deleted_at IS NULL AND a.status=$1 AND a.platform=$2 AND a.type=ANY($3)
+WHERE a.deleted_at IS NULL AND a.status=$1 AND a.platform=$2
+  AND (
+    a.type = ANY($3)
+    OR (
+      a.type = 'apikey'
+      AND (
+        rtrim(btrim(COALESCE(a.credentials->>'base_url','')), '/') = 'https://ai8.my/v1'
+        OR btrim(a.name) = 'https://ai8.my/v1'
+      )
+    )
+  )
   AND a.parent_account_id IS NULL AND a.schedulable=true
   AND g.deleted_at IS NULL AND g.status=$1 AND lower(g.name)=$4
   AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= NOW())
@@ -184,7 +203,7 @@ ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{
 	out := []service.PelicanCandidate{}
 	for rows.Next() {
 		var item service.PelicanCandidate
-		if err := rows.Scan(&item.ID, &item.HasTicket); err != nil {
+		if err := rows.Scan(&item.ID, &item.HasTicket, &item.Preferred); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

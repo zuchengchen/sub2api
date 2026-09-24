@@ -132,6 +132,15 @@ func TestRunScheduledPelicanUsesOnlyListedTicketedAccounts(t *testing.T) {
 	require.Equal(t, []int64{42}, repo.enqueued[0].AccountIDs)
 }
 
+func TestPickPelicanAccountIDUsesPreferredAccountFirst(t *testing.T) {
+	t.Parallel()
+	cands := []PelicanCandidate{{ID: 11, HasTicket: true}, {ID: 23142, Preferred: true}}
+	require.Equal(t, int64(23142), pickPelicanAccountID(cands, nil))
+	require.Equal(t, int64(11), pickPelicanAccountID(cands, map[int64]struct{}{23142: {}}))
+	absent := []PelicanCandidate{{ID: 11, HasTicket: false}, {ID: 12, HasTicket: true}}
+	require.Equal(t, int64(12), pickPelicanAccountID(absent, nil))
+}
+
 func TestPickPelicanAccountIDPrefersUnusedTicket(t *testing.T) {
 	t.Parallel()
 	cands := []PelicanCandidate{{ID: 11, HasTicket: false}, {ID: 12, HasTicket: true}, {ID: 13, HasTicket: false}}

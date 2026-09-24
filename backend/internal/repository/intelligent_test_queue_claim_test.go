@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,6 +20,23 @@ func TestDeleteStalePelicanTestsSQLKeepsTwentyFourHours(t *testing.T) {
 	require.NotContains(t, body, "INTERVAL '3 hours'")
 }
 
+func TestIntelligentAccountWhereSchedulableMeansDispatchable(t *testing.T) {
+	t.Parallel()
+	w := intelligentAccountWhere(service.IntelligentTestFilter{AccountStatus: "schedulable"})
+	sqlText := w.sql()
+	require.Contains(t, sqlText, "a.status = 'active'")
+	require.Contains(t, sqlText, "a.schedulable = TRUE")
+	require.Contains(t, sqlText, "a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= NOW()")
+	require.Contains(t, sqlText, "a.overload_until IS NULL OR a.overload_until <= NOW()")
+	require.Contains(t, sqlText, "a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= NOW()")
+	require.Contains(t, sqlText, "a.auto_pause_on_expired = FALSE")
+	require.Empty(t, w.args)
+
+	exact := intelligentAccountWhere(service.IntelligentTestFilter{AccountStatus: "disabled"})
+	require.Contains(t, exact.sql(), "a.status=$1")
+	require.Equal(t, []any{"disabled"}, exact.args)
+}
+
 func TestListPelicanCandidatesSQLRequiresSchedulableAndPrefers292(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("intelligent_test_public.go")
@@ -31,6 +49,9 @@ func TestListPelicanCandidatesSQLRequiresSchedulableAndPrefers292(t *testing.T) 
 	require.Contains(t, body, "codex_turn_ticket:gpt-6-astra")
 	require.Contains(t, body, "AS has_ticket")
 	require.Contains(t, body, "COALESCE((a.extra->$5->>'length')::int, 0) = 292")
+	require.Contains(t, body, "https://ai8.my/v1")
+	require.Contains(t, body, "a.type = 'apikey'")
+	require.Contains(t, body, "AS preferred")
 }
 
 func TestListPelicanSlotAttemptsSQLIncludesRetries(t *testing.T) {

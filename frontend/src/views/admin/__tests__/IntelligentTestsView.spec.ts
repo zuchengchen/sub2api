@@ -27,7 +27,12 @@ vi.mock('@/api/intelligentTests', () => ({
   },
   newTestRequestKey: vi.fn(() => 'test-key')
 }))
-vi.mock('@/api/admin/groups', () => ({ getAllIncludingInactive: vi.fn().mockResolvedValue([]) }))
+vi.mock('@/api/admin/groups', () => ({
+  getAllIncludingInactive: vi.fn().mockResolvedValue([
+    { id: 9, name: 'GPT-PRO' },
+    { id: 10, name: 'GPT-PRO-企业' }
+  ])
+}))
 vi.mock('@/components/layout/AppLayout.vue', () => ({ default: { template: '<div><slot /></div>' } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError: vi.fn(), showSuccess: vi.fn() }) }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin: true }) }))
@@ -96,6 +101,10 @@ describe('IntelligentTestsView router modes', () => {
     await router.push('/admin/accounts/tests')
     const wrapper = mount(AppLayoutHost, { global: { plugins: [i18n, router] } })
     await flushPromises()
+    expect(intelligentTestsAPI.accounts).toHaveBeenCalledWith(
+      expect.objectContaining({ group_id: '9', account_status: 'schedulable', test_type: 'pelican', page: 1 }),
+      expect.anything()
+    )
     const historyButton = wrapper.findAll('button').find(button => button.text().includes('历史'))
     expect(historyButton).toBeTruthy()
     await historyButton!.trigger('click')

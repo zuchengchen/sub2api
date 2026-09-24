@@ -312,6 +312,7 @@ func pickPelicanAccountID(cands []PelicanCandidate, used map[int64]struct{}) int
 	if len(cands) == 0 {
 		return 0
 	}
+	var preferred int64
 	var unusedTicketed, unused, ticketed, all []int64
 	for _, cand := range cands {
 		all = append(all, cand.ID)
@@ -321,10 +322,16 @@ func pickPelicanAccountID(cands []PelicanCandidate, used map[int64]struct{}) int
 		if _, ok := used[cand.ID]; ok {
 			continue
 		}
+		if cand.Preferred && (preferred == 0 || cand.ID < preferred) {
+			preferred = cand.ID
+		}
 		unused = append(unused, cand.ID)
 		if cand.HasTicket {
 			unusedTicketed = append(unusedTicketed, cand.ID)
 		}
+	}
+	if preferred > 0 {
+		return preferred
 	}
 	switch {
 	case len(unusedTicketed) > 0:
@@ -449,7 +456,7 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 		return
 	}
 	if len(cands) == 0 {
-		slog.Info("scheduled pelican skipped: no schedulable GPT-PRO ChatGPT OAuth account")
+		slog.Info("scheduled pelican skipped: no schedulable ai8 account or GPT-PRO ChatGPT OAuth account")
 		return
 	}
 	slotKey := pelicanSlotKey(now)
