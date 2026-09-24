@@ -2283,24 +2283,21 @@
           {{ t('admin.accounts.openai.codexTurnTicketDesc') }}
         </p>
         <div class="mt-3 space-y-1.5">
-          <div v-for="ticket in codexTurnTickets" :key="ticket.model" class="flex items-center justify-between text-sm">
-            <span class="font-medium">
-              {{ ticket.model }}
-              <span v-if="ticket.mode === 'cookie_ws'" class="ml-1 text-xs text-sky-600 dark:text-sky-400">
-                {{ t('admin.accounts.openai.codexCookieGroups', { ready: ticket.cookie_groups_ready ?? 0, total: ticket.cookie_groups_total ?? 3, sockets: ticket.ws_per_group ?? 1 }) }}
-                · {{ t('admin.accounts.openai.codexCookieVerifiedWS', { count: ticket.verified_ws ?? 0, minimum: ticket.minimum_ws ?? 3 }) }}
+          <div v-for="ticket in codexTurnTickets" :key="ticket.model" class="text-sm">
+            <template v-if="ticket.mode === 'cookie_ws'">
+              <p class="mb-1 font-medium">{{ ticket.model }}</p>
+              <CookieWSStatus :ticket="ticket" />
+            </template>
+            <div v-else class="flex items-center justify-between">
+              <span class="font-medium">{{ ticket.model }}</span>
+              <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">
+                {{ t('admin.accounts.openai.codexTurnTicketReady', { time: formatCodexTicketRemaining(ticket.remaining_seconds) }) }}
               </span>
-              <span v-if="ticket.refresh_at" class="mt-0.5 block text-xs font-normal text-gray-500">
-                {{ t('admin.accounts.openai.codexCookieRefreshAt', { time: formatDateTime(new Date(ticket.refresh_at)) }) }}
+              <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">
+                {{ t('admin.accounts.openai.codexTurnTicketPaused') }}
               </span>
-            </span>
-            <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">
-              {{ t('admin.accounts.openai.codexTurnTicketReady', { time: formatCodexTicketRemaining(ticket.remaining_seconds) }) }}
-            </span>
-            <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">
-              {{ t('admin.accounts.openai.codexTurnTicketPaused') }}
-            </span>
-            <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
+              <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -3032,6 +3029,7 @@ import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import OpenAICompatibleProviderPresetSelector from '@/components/account/OpenAICompatibleProviderPresetSelector.vue'
 import AccountTrafficControls from '@/components/account/AccountTrafficControls.vue'
+import CookieWSStatus from '@/components/account/CookieWSStatus.vue'
 import {
   accountTrafficAPI,
   defaultTrafficPolicy,

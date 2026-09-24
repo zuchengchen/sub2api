@@ -1177,6 +1177,56 @@ export interface OpenCodeGoUsageSettings {
   debounce_minutes: number
 }
 
+export type OpenAICookieWSRecoveryState = 'ready' | 'partial' | 'recovering' | 'paused' | 'unavailable'
+
+export interface OpenAICookieWSRecoveryDiagnostic {
+  phase: string
+  attempts: number
+  last_attempt_at?: string
+  last_success_at?: string
+  last_failure_at?: string
+  next_attempt_at?: string
+  last_error?: {
+    code: string
+    message: string
+    stage?: string
+    http_status?: number
+  }
+}
+
+export interface OpenAICookieWSSlotStatus {
+  slot: number
+  state: string
+  cookie_ready: boolean
+  verified_ws: number
+  captured_at?: string
+  refresh_at?: string
+  expires_at?: string
+  refresh?: OpenAICookieWSRecoveryDiagnostic
+  warmup?: OpenAICookieWSRecoveryDiagnostic
+}
+
+export interface CodexTurnTicketStatus {
+  model: string
+  mode?: 'turn_state' | 'cookie_ws'
+  cookie_groups_ready?: number
+  cookie_groups_valid?: number
+  cookie_groups_total?: number
+  ws_per_group?: number
+  verified_ws?: number
+  minimum_ws?: number
+  recovery_state?: OpenAICookieWSRecoveryState
+  skip_reason?: string
+  cookie_slots?: OpenAICookieWSSlotStatus[]
+  length?: number
+  ready: boolean
+  remaining_seconds: number
+  blocked: boolean
+  expires_at?: string
+  captured_at?: string
+  refresh_at?: string
+}
+
 export interface Account {
   id: number
   name: string
@@ -1191,22 +1241,7 @@ export interface Account {
   credentials_status?: Record<string, boolean>
   ollama_cloud_usage?: OllamaCloudUsageState
   opencode_go_usage?: OpenCodeGoUsageState
-  codex_turn_tickets?: Array<{
-    model: string
-    mode?: 'turn_state' | 'cookie_ws'
-    cookie_groups_ready?: number
-    cookie_groups_total?: number
-    ws_per_group?: number
-    verified_ws?: number
-    minimum_ws?: number
-    length?: number
-    ready: boolean
-    remaining_seconds: number
-    blocked: boolean
-    expires_at?: string
-    captured_at?: string
-    refresh_at?: string
-  }>
+  codex_turn_tickets?: CodexTurnTicketStatus[]
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>

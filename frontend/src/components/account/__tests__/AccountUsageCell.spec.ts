@@ -165,6 +165,29 @@ describe('AccountUsageCell', () => {
     wrapper.unmount()
   })
 
+  it('renders Cookie WS recovery instead of the persisted ticket countdown', async () => {
+    getUsage.mockResolvedValue({})
+    const value = makeAccount({
+      id: 9703, platform: 'openai', type: 'oauth',
+      codex_turn_tickets: [{
+        model: 'gpt-6-astra', mode: 'cookie_ws', ready: true, remaining_seconds: 2520, blocked: false,
+        cookie_groups_valid: 3, cookie_groups_ready: 0, verified_ws: 0, minimum_ws: 3, recovery_state: 'recovering'
+      }]
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: value },
+      global: { stubs: { OpenAIQuotaResetCell: true, UsageProgressBar: true } }
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="cookie-ws-summary"]').attributes('data-state')).toBe('recovering')
+    expect(wrapper.text()).not.toContain('42m00s')
+    expect(wrapper.text()).not.toContain('codexTurnTicketMissing')
+    expect(wrapper.find('[data-testid="cookie-ws-slot-0"]').exists()).toBe(false)
+    await wrapper.setProps({ account: { ...value, codex_turn_tickets: [{ ...value.codex_turn_tickets![0], verified_ws: 1, recovery_state: 'partial' }] } })
+    expect(wrapper.get('[data-testid="cookie-ws-summary"]').attributes('data-state')).toBe('partial')
+    wrapper.unmount()
+  })
+
   it('renders eligible Ollama Cloud state and forwards query updates', async () => {
     const wrapper = mount(AccountUsageCell, {
       props: {

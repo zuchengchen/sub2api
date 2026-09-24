@@ -125,17 +125,16 @@
           class="flex items-center gap-1 text-[10px] leading-4"
         >
           <span class="truncate font-medium text-gray-500 dark:text-gray-400" :title="ticket.model">{{ shortCodexTicketModel(ticket.model) }}</span>
-          <span
+          <CookieWSStatus
             v-if="ticket.mode === 'cookie_ws'"
-            class="text-sky-600 dark:text-sky-400"
-            :title="ticket.refresh_at ? t('admin.accounts.openai.codexCookieRefreshAt', { time: ticket.refresh_at }) : undefined"
-          >{{ t('admin.accounts.openai.codexCookieGroups', { ready: ticket.cookie_groups_ready ?? 0, total: ticket.cookie_groups_total ?? 3, sockets: ticket.ws_per_group ?? 1 }) }}</span>
-          <span v-if="ticket.mode === 'cookie_ws'" :class="(ticket.verified_ws ?? 0) >= (ticket.minimum_ws ?? 3) ? 'text-emerald-600' : 'text-amber-600'">
-            {{ t('admin.accounts.openai.codexCookieVerifiedWS', { count: ticket.verified_ws ?? 0, minimum: ticket.minimum_ws ?? 3 }) }}
-          </span>
-          <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">{{ formatCodexTicketRemaining(ticket.remaining_seconds) }}</span>
-          <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.codexTurnTicketPaused') }}</span>
-          <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
+            :ticket="ticket"
+            compact
+          />
+          <template v-else>
+            <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">{{ formatCodexTicketRemaining(ticket.remaining_seconds) }}</span>
+            <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.codexTurnTicketPaused') }}</span>
+            <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
+          </template>
         </div>
       </div>
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
@@ -442,6 +441,7 @@ import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
+import CookieWSStatus from './CookieWSStatus.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
 import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
