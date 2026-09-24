@@ -628,7 +628,7 @@ export default {
           "Controls background acquisition and injection. Server configuration selects turn-state tickets or verified Cookies with direct WS. Turning this off restores the original forwarding policy.",
         codexTicketHarvestProxy: "Codex harvest proxy",
         codexTicketHarvestProxyDesc:
-          "Used for background HTTP acquisition. Changes apply to subsequent probes without a restart. Cookie WS traffic connects directly to the upstream. Paste a full HTTP or SOCKS5h proxy URL including credentials; the provider must rotate egress IPs. Leave blank when saving to keep the stored value.",
+          "Used for background HTTP acquisition. Changes apply to subsequent probes without a restart. Cookie WS traffic connects directly to the upstream. Paste a full HTTP, HTTPS, or SOCKS5h proxy URL including credentials. Use {'{'}session{'}'} or {'{'}SESSION{'}'} in the username or password to change the proxy session for each Cookie acquisition; whether the egress IP changes depends on your provider. Leave blank when saving to keep the stored value.",
         codexTicketHarvestProxyPlaceholder: "http://user:pass{'@'}proxy.example.com:1080",
         codexTicketHarvestProxyConfigured: "Configured (password hidden). Paste a full new proxy URL to replace it.",
         codexClientRestrictionTitle: "Codex client restriction",

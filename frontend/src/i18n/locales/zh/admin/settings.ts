@@ -621,7 +621,7 @@ export default {
           '控制后台获取与注入。服务端配置决定使用 turn-state 门票或经验证的 Cookie 直连 WS；关闭后恢复原转发策略。',
         codexTicketHarvestProxy: 'Codex 打票代理',
         codexTicketHarvestProxyDesc:
-          '用于后台 HTTP 获取，保存后后续探测使用新代理，无需重启。Cookie WS 模式的业务请求直连上游。填写完整代理 URL（http 或 socks5h，含用户名和密码），由代理服务商轮换出口 IP。留空并保存表示不改已保存的值。',
+          "用于后台 HTTP 获取，保存后后续探测使用新代理，无需重启。Cookie WS 模式的业务请求直连上游。填写完整代理 URL（支持 HTTP、HTTPS、SOCKS5h，含用户名和密码）。在用户名或密码中使用 {'{'}session{'}'} 或 {'{'}SESSION{'}'}，每次获取 Cookie 会自动更换代理会话；是否更换出口 IP 取决于代理服务商。留空并保存表示不改已保存的值。",
         codexTicketHarvestProxyPlaceholder: "http://user:pass{'@'}proxy.example.com:1080",
         codexTicketHarvestProxyConfigured: '已配置（密码已隐藏）。要更换请整段粘贴新的代理 URL。',
         codexClientRestrictionTitle: 'Codex 客户端限制',

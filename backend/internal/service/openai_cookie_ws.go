@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"maps"
 	"net/http"
@@ -395,6 +396,13 @@ func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, ac
 	identity.apply(req.Header)
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
 		return nil, cookieWSRecoveryFailure("account_headers", "cookie_ws_account_identity_unavailable", "Cookie recovery account identity could not be prepared", 0, nil)
+	}
+	proxy, err = resolveOpenAICodexTicketHarvestProxyURL(proxy)
+	if err != nil {
+		if errors.Is(err, errOpenAICodexTicketProxySessionUnavailable) {
+			return nil, cookieWSRecoveryFailure("configuration", "cookie_ws_harvest_proxy_session_unavailable", "Cookie recovery proxy session could not be generated", 0, nil)
+		}
+		return nil, cookieWSRecoveryFailure("configuration", "cookie_ws_harvest_proxy_invalid", "Cookie recovery proxy configuration is invalid", 0, nil)
 	}
 	resp, err := s.httpUpstream.Do(req, proxy, account.ID, account.Concurrency)
 	if err != nil {

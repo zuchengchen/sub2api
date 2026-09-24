@@ -46,3 +46,23 @@ func TestSettingsCodexTicketRejectInvalidProxyWithoutLeakingPassword(t *testing.
 	require.NotContains(t, rec.Body.String(), "invalid-secret")
 	require.Equal(t, "http://previous.example.com:8080", repo.values[key])
 }
+
+func TestSettingsCodexTicketSessionTemplateWriteReadAndHotReload(t *testing.T) {
+	key := service.SettingKeyOpenAICodexTicketHarvestProxyURL
+	for _, placeholder := range []string{"{session}", "{SESSION}", "%7Bsession%7D", "%7bSESSION%7d"} {
+		t.Run(placeholder, func(t *testing.T) {
+			h, repo := newStepUpSwitchTestHandler(t, map[string]string{key: "http://previous.example:8080"})
+			previous := h.settingService.GetOpenAICodexTicketHarvestProxyURL(context.Background())
+			require.NotEmpty(t, previous)
+			template := "socks5h://user-sid-" + placeholder + ":private-secret@proxy.example:1080"
+			rec := doUpdateSettings(t, h, map[string]any{key: template}, nil)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Equal(t, template, repo.values[key])
+			require.Equal(t, template, h.settingService.GetOpenAICodexTicketHarvestProxyURL(context.Background()))
+			require.NotContains(t, rec.Body.String(), "private-secret")
+			rec = doUpdateSettings(t, h, map[string]any{key: service.MaskProxyURL(template)}, nil)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Equal(t, template, repo.values[key], "masked settings round trip must preserve the template and password")
+		})
+	}
+}
