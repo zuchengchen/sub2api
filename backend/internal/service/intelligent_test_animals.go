@@ -16,7 +16,7 @@ func randIntN(n int) int {
 const intelligentAnimalHTMLPromptTmpl = "创建一个HTML，内容是SVG绘制一个%s骑自行车的2D动画，你不需要任何测试，只靠你自己完成，不要使用任何skill，不要依赖我本地的AGENTS.md"
 
 // Rotating subjects for the user-facing HTML animation probe. One animal is
-// chosen at random every 30 minutes during 08:00–24:00 Beijing time.
+// chosen at random every 10 minutes during 08:00–24:00 Beijing time.
 var intelligentTestAnimals = []string{
 	"熊猫", "浣熊", "赤狐", "北极狐", "灰狼", "郊狼", "鬣狗", "猎豹", "美洲豹", "雪豹",
 	"老虎", "狮子", "猞猁", "豹猫", "家猫", "薮猫", "水獭", "海獭", "獾", "鼬",

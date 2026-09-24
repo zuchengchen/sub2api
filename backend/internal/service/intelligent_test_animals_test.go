@@ -40,17 +40,17 @@ func TestIntelligentAnimalHTMLPromptInsertsName(t *testing.T) {
 	require.Contains(t, prompt, "不要依赖我本地的AGENTS.md")
 }
 
-func TestPelicanSlotKeyTruncatesToThirtyMinutes(t *testing.T) {
+func TestPelicanSlotKeyTruncatesToTenMinutes(t *testing.T) {
 	t.Parallel()
 	now, err := time.Parse(time.RFC3339, "2026-09-20T03:17:44Z")
 	require.NoError(t, err)
-	require.Equal(t, "pelican-slot-202609200300", pelicanSlotKey(now))
-	same, err := time.Parse(time.RFC3339, "2026-09-20T03:29:59Z")
+	require.Equal(t, "pelican-slot-202609200310", pelicanSlotKey(now))
+	same, err := time.Parse(time.RFC3339, "2026-09-20T03:19:59Z")
 	require.NoError(t, err)
-	require.Equal(t, "pelican-slot-202609200300", pelicanSlotKey(same))
-	next, err := time.Parse(time.RFC3339, "2026-09-20T03:30:00Z")
+	require.Equal(t, "pelican-slot-202609200310", pelicanSlotKey(same))
+	next, err := time.Parse(time.RFC3339, "2026-09-20T03:20:00Z")
 	require.NoError(t, err)
-	require.Equal(t, "pelican-slot-202609200330", pelicanSlotKey(next))
+	require.Equal(t, "pelican-slot-202609200320", pelicanSlotKey(next))
 }
 
 func TestPelicanInBeijingWindowIsEightToMidnight(t *testing.T) {
@@ -67,11 +67,14 @@ func TestPelicanInBeijingWindowIsEightToMidnight(t *testing.T) {
 	require.False(t, pelicanInBeijingWindow(parse("2026-09-19T23:59:59Z"))) // 07:59
 }
 
-func TestPelicanNextBoundaryAlignsToHalfHours(t *testing.T) {
+func TestPelicanNextBoundaryAlignsToTenMinutes(t *testing.T) {
 	t.Parallel()
 	now, err := time.Parse(time.RFC3339, "2026-09-19T23:50:00Z") // 07:50 Beijing
 	require.NoError(t, err)
 	next := pelicanNextBoundary(now)
 	require.Equal(t, "2026-09-20T08:00:00+08:00", next.Format(time.RFC3339))
 	require.True(t, pelicanInBeijingWindow(next))
+	inside, err := time.Parse(time.RFC3339, "2026-09-20T00:07:00Z") // 08:07 Beijing
+	require.NoError(t, err)
+	require.Equal(t, "2026-09-20T08:10:00+08:00", pelicanNextBoundary(inside).Format(time.RFC3339))
 }
