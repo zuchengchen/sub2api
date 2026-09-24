@@ -616,12 +616,12 @@ export default {
         claudeCodeVersionAutoSyncHint: '每小时从官方发布渠道获取最新版本的 Claude Code 客户端版本号，无需为了跟版本而升级本服务。关闭后停止获取新版本，已同步的版本仍可使用；上方手填版本始终优先。',
         claudeCodeVersionSyncedValue: '当前同步到：{version}',
         codexHardeningTitle: 'Codex 设置',
-        codexTicketEnabled: '292 打票',
+        codexTicketEnabled: 'Codex 打票',
         codexTicketEnabledDesc:
-          '关闭后不打票、不注入 x-codex-turn-state，按原链路转发。开启后后台打票，并在业务请求中覆盖该头。',
-        codexTicketHarvestProxy: '292 打票代理',
+          '控制后台获取与注入。服务端配置决定使用 turn-state 门票或经验证的 Cookie 直连 WS；关闭后恢复原转发策略。',
+        codexTicketHarvestProxy: 'Codex 打票代理',
         codexTicketHarvestProxyDesc:
-          '仅在门票功能开启时用于打票，保存后后续探测会使用新代理，无需重启。日常业务仍走账号自己的住宅代理。填写完整代理 URL（http 或 socks5h，含用户名和密码）。代理服务商需自行负责出口 IP 轮换。留空并保存表示不改已保存的值。',
+          '用于后台 HTTP 获取，保存后后续探测使用新代理，无需重启。Cookie WS 模式的业务请求直连上游。填写完整代理 URL（http 或 socks5h，含用户名和密码），由代理服务商轮换出口 IP。留空并保存表示不改已保存的值。',
         codexTicketHarvestProxyPlaceholder: "http://user:pass{'@'}proxy.example.com:1080",
         codexTicketHarvestProxyConfigured: '已配置（密码已隐藏）。要更换请整段粘贴新的代理 URL。',
         codexClientRestrictionTitle: 'Codex 客户端限制',

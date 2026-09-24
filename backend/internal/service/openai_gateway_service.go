@@ -513,6 +513,11 @@ type OpenAIGatewayService struct {
 	// openaiCodexTickets: accountID\x00model → *openAICodexTicket，292 长度门票。
 	openaiCodexTickets      sync.Map
 	openaiCodexTicketFlight singleflight.Group
+	// Cookie WS generations are isolated from legacy turn-state tickets.
+	openaiCookieWSTickets sync.Map
+	openaiCookieWSFlight  singleflight.Group
+	openaiCookieWSRetry   sync.Map
+	openaiCookieWSSlots   sync.Map
 	// openaiCodexTicketHarvestBackoff: accountID\x00model → *openAICodexTicketHarvestBackoff。
 	// 保留给单账号探测的测试节奏。共享票池的轮换在 openaiCodexShared。
 	openaiCodexTicketHarvestBackoff sync.Map
