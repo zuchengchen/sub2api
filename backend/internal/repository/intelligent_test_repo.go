@@ -20,6 +20,16 @@ func NewIntelligentTestRepository(db *sql.DB) service.IntelligentTestRepository 
 
 const intelligentProtectionSQL = `COALESCE((a.extra->'anti_degradation')='true'::jsonb,(a.extra#>'{anti_degrade,enabled}')='true'::jsonb,false)`
 
+// intelligentSchedulableAccountSQL matches Account.IsSchedulable and the
+// scheduler's candidate query: active, manually schedulable, and not inside
+// an expiry, rate-limit, overload, or temporary-unschedulable window.
+const intelligentSchedulableAccountSQL = `a.status = 'active'
+AND a.schedulable = TRUE
+AND (a.expires_at IS NULL OR a.expires_at > NOW() OR a.auto_pause_on_expired = FALSE)
+AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= NOW())
+AND (a.overload_until IS NULL OR a.overload_until <= NOW())
+AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= NOW())`
+
 // Admin 智能测试 lists skip the user-page pelican timer so that console stays click-to-run.
 const intelligentAdminManualSQL = `COALESCE(t.config_snapshot->>'source','') <> 'pelican-schedule' AND NOT EXISTS (
   SELECT 1 FROM intelligent_test_requests r
@@ -205,7 +215,9 @@ func intelligentAccountWhere(f service.IntelligentTestFilter) *intelligentWhere 
 	if f.AccountType != "" {
 		w.add("a.type=$%d", f.AccountType)
 	}
-	if f.AccountStatus != "" {
+	if f.AccountStatus == "schedulable" {
+		w.parts = append(w.parts, intelligentSchedulableAccountSQL)
+	} else if f.AccountStatus != "" {
 		w.add("a.status=$%d", f.AccountStatus)
 	}
 	if f.GroupID > 0 {
