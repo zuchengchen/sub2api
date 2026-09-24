@@ -365,6 +365,13 @@ func (h *AccountHandler) enrichCodexTicketStatus(account *service.Account, out *
 			cfg.Enabled = h.codexTicketSettings.GetOpenAICodexTicketEnabled(context.Background(), cfg.Enabled)
 		}
 		out.CodexTurnTickets = service.OpenAICodexTicketStatuses(account, cfg, time.Now())
+		for i := range out.CodexTurnTickets {
+			if out.CodexTurnTickets[i].Mode == "cookie_ws" {
+				counts := h.accountTestService.OpenAICookieWSVerifiedCounts(account.ID)
+				out.CodexTurnTickets[i].VerifiedWS = counts[0] + counts[1] + counts[2]
+				out.CodexTurnTickets[i].MinimumWS = 3
+			}
+		}
 	}
 }
 

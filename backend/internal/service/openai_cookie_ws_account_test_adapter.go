@@ -93,6 +93,7 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 		return s.sendErrorAndEnd(c, "Cookie websocket request failed")
 	}
 	total, outputBytes := 0, 0
+	probeObserver := openAICookieWSProbeObserver{enabled: openAICookieWSIsProbePayload(payload)}
 	hasDelta := false
 	for {
 		message, err := lease.ReadMessageContext(trafficCtx)
@@ -106,7 +107,9 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 		if capture != nil {
 			_, _ = capture.Write(append(append([]byte("data: "), message...), '\n', '\n'))
 		}
-		switch gjson.GetBytes(message, "type").String() {
+		eventType := gjson.GetBytes(message, "type").String()
+		probeObserver.observe(lease, message, eventType)
+		switch eventType {
 		case "response.output_text.delta":
 			text := gjson.GetBytes(message, "delta").String()
 			outputBytes += len(text)

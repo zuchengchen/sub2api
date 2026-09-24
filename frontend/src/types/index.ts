@@ -1197,6 +1197,8 @@ export interface Account {
     cookie_groups_ready?: number
     cookie_groups_total?: number
     ws_per_group?: number
+    verified_ws?: number
+    minimum_ws?: number
     length?: number
     ready: boolean
     remaining_seconds: number

@@ -49,6 +49,25 @@ type cookieWSLifecycleRepo struct {
 	accounts []Account
 	updates  map[int64]map[string]any
 	err      error
+	getErr   error
+}
+
+func (r *cookieWSLifecycleRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	for _, account := range r.accounts {
+		if account.ID != id {
+			continue
+		}
+		copy := account
+		copy.Extra = maps.Clone(account.Extra)
+		copy.Credentials = maps.Clone(account.Credentials)
+		return &copy, nil
+	}
+	return nil, errors.New("account not found")
 }
 
 func (r *cookieWSLifecycleRepo) ListByPlatform(context.Context, string) ([]Account, error) {
@@ -75,12 +94,24 @@ func (r *cookieWSLifecycleRepo) UpdateExtra(_ context.Context, accountID int64, 
 		r.updates[accountID] = make(map[string]any)
 	}
 	maps.Copy(r.updates[accountID], updates)
+	for i := range r.accounts {
+		if r.accounts[i].ID != accountID {
+			continue
+		}
+		extra := maps.Clone(r.accounts[i].Extra)
+		if extra == nil {
+			extra = make(map[string]any)
+		}
+		maps.Copy(extra, updates)
+		r.accounts[i].Extra = extra
+	}
 	return nil
 }
 
 type cookieWSProbeConn struct {
 	answers   [][]byte
 	writes    []map[string]any
+	afterRead func()
 	closed    atomic.Bool
 	pingCount atomic.Int32
 }
@@ -95,6 +126,9 @@ func (c *cookieWSProbeConn) ReadMessage(context.Context) ([]byte, error) {
 	}
 	answer := c.answers[0]
 	c.answers = c.answers[1:]
+	if c.afterRead != nil {
+		c.afterRead()
+	}
 	return answer, nil
 }
 func (c *cookieWSProbeConn) Ping(context.Context) error { c.pingCount.Add(1); return nil }
@@ -118,6 +152,7 @@ func cookieWSTestService(t *testing.T, upstream HTTPUpstream, answers ...string)
 	s := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled: true, Mode: openAICookieWSMode, HarvestProxyURL: "socks5h://dynamic.example:1080", HarvestAttemptTimeoutSeconds: 1,
 	}, upstream)
+	s.accountRepo = &cookieWSLifecycleRepo{accounts: []Account{*ticketTestAccount(41), *ticketTestAccount(42)}}
 	conn := &cookieWSProbeConn{}
 	for _, answer := range answers {
 		conn.answers = append(conn.answers, cookieWSCompletion(openAICodexTicketDefaultModel, answer))
@@ -129,6 +164,7 @@ func cookieWSTestService(t *testing.T, upstream HTTPUpstream, answers ...string)
 	s.cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 1
 	s.openaiWSPool = newOpenAIWSConnPool(s.cfg)
 	s.openaiWSPool.setClientDialerForTest(dialer)
+	s.openaiWSPool.SetCookieValidator(s.validateOpenAICookieWSBusinessConn)
 	t.Cleanup(s.openaiWSPool.Close)
 	return s, dialer
 }
@@ -214,7 +250,7 @@ func TestOpenAICookieWSRefreshFailureKeepsOldGeneration(t *testing.T) {
 			old := cookieWSTestTicket(account.ID, time.Now().Add(-51*time.Minute))
 			s.openaiCookieWSTickets.Store(openAICodexTicketKey(account.ID, old.Model), old)
 			if failure == "persistence" {
-				s.accountRepo = &cookieWSLifecycleRepo{err: errors.New("unavailable")}
+				s.accountRepo = &cookieWSLifecycleRepo{accounts: []Account{*account}, err: errors.New("unavailable")}
 			}
 			s.refreshOpenAICookieWSAccount(context.Background(), account)
 			require.Same(t, old, s.lookupOpenAICookieWSTicket(account, old.Model))
@@ -254,6 +290,7 @@ func TestOpenAICookieWSRestoreRevalidatesWithoutExtendingLifetime(t *testing.T) 
 	account := ticketTestAccount(41)
 	stored := cookieWSTestTicket(account.ID, time.Now().Add(-20*time.Minute))
 	account.Extra = map[string]any{openAICookieWSExtraKey(stored.Model): stored}
+	s.accountRepo = &cookieWSLifecycleRepo{accounts: []Account{*account}}
 	require.True(t, s.openAICodexTicketBlocksAccount(account, stored.Model))
 	s.refreshOpenAICookieWSAccount(context.Background(), account)
 	got := s.lookupOpenAICookieWSTicket(account, stored.Model)
@@ -352,7 +389,7 @@ func TestOpenAICookieWSAdminTestsUseVerifiedDirectPool(t *testing.T) {
 	for _, intelligent := range []bool{false, true} {
 		t.Run(map[bool]string{false: "connection", true: "intelligence"}[intelligent], func(t *testing.T) {
 			u := &httpUpstreamRecorder{err: errors.New("HTTP business fallback forbidden")}
-			gateway, dialer := cookieWSTestService(t, u, "True")
+			gateway, dialer := cookieWSTestService(t, u, "True", "True")
 			account := ticketTestAccount(41)
 			ticket := cookieWSTestTicket(account.ID, time.Now())
 			gateway.openaiCookieWSTickets.Store(openAICodexTicketKey(account.ID, ticket.Model), ticket)
@@ -416,8 +453,8 @@ func TestOpenAICookieWSTwoSlotsAreIndependentAndEitherReadySchedules(t *testing.
 	account.Extra = map[string]any{openAICookieWSExtraKeySlot(first.Model, 0): first, openAICookieWSExtraKeySlot(second.Model, 1): second}
 	status := openAICookieWSStatus(account, second.Model, time.Now())
 	require.Equal(t, 1, status.CookieGroupsReady)
-	require.Equal(t, 2, status.CookieGroupsTotal)
-	require.Equal(t, 10, status.WSPerGroup)
+	require.Equal(t, 3, status.CookieGroupsTotal)
+	require.Equal(t, 1, status.WSPerGroup)
 	require.True(t, status.Ready)
 	require.NotContains(t, RedactOpenAICodexTicketExtra(account.Extra), openAICookieWSExtraKeySlot(second.Model, 1))
 	require.NotEqual(t, first.Identity.SessionID, second.Identity.SessionID)
@@ -436,6 +473,46 @@ func TestOpenAICookieWSRefreshSecondSlotKeepsFirst(t *testing.T) {
 	require.Same(t, first, s.lookupOpenAICookieWSTicketSlot(account, first.Model, 0))
 	require.NotEqual(t, first.Identity, second.Identity)
 	require.NotEqual(t, first.Generation, second.Generation)
+}
+
+func TestOpenAICookieWSThirdSlotRefreshAndRetryRemainIndependent(t *testing.T) {
+	u := &httpUpstreamRecorder{resp: cookieWSHTTPResponse("True")}
+	s, _ := cookieWSTestService(t, u, "True", "True")
+	account := ticketTestAccount(41)
+	first := cookieWSTestTicket(account.ID, time.Now())
+	second := cookieWSTestTicket(account.ID, time.Now())
+	second.Slot, second.Generation = 1, "slot-one"
+	s.openaiCookieWSTickets.Store(openAICookieWSKeySlot(account.ID, first.Model, 0), first)
+	s.openaiCookieWSTickets.Store(openAICookieWSKeySlot(account.ID, second.Model, 1), second)
+	s.noteOpenAICookieWSSlotMiss(account.ID, 1, time.Now(), "http_probe_failed", 500, nil)
+	s.refreshOpenAICookieWSSlot(context.Background(), account, 2)
+	third := s.lookupOpenAICookieWSTicketSlot(account, first.Model, 2)
+	require.True(t, third.ready(time.Now()))
+	require.Equal(t, 2, third.Slot)
+	require.NotEqual(t, first.Identity, third.Identity)
+	require.NotEqual(t, second.Identity, third.Identity)
+	require.NotEqual(t, first.Generation, third.Generation)
+	require.NotEqual(t, second.Generation, third.Generation)
+	require.Same(t, first, s.lookupOpenAICookieWSTicketSlot(account, first.Model, 0))
+	require.Same(t, second, s.lookupOpenAICookieWSTicketSlot(account, first.Model, 1))
+	require.True(t, s.openAICookieWSSlotRetryWaiting(account.ID, 1, time.Now()))
+	require.False(t, s.openAICookieWSSlotRetryWaiting(account.ID, 2, time.Now()))
+	require.Equal(t, openAICookieWSRefreshAge, third.RefreshAt.Sub(third.CapturedAt))
+	require.Equal(t, openAICookieWSLifetime, third.ExpiresAt.Sub(third.CapturedAt))
+	h := http.Header{}
+	require.NoError(t, s.applyOpenAICookieWSHeadersForSlot(context.Background(), account, first.Model, h, 2))
+	require.Equal(t, "2", h.Get(openAICookieWSSlotHeader))
+	repo := s.accountRepo.(*cookieWSLifecycleRepo)
+	saved, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Contains(t, saved.Extra, openAICookieWSExtraKeySlot(first.Model, 2))
+	require.NotContains(t, RedactOpenAICodexTicketExtra(saved.Extra), openAICookieWSExtraKeySlot(first.Model, 2))
+	saved.Extra[openAICookieWSExtraKeySlot(first.Model, 0)] = first
+	saved.Extra[openAICookieWSExtraKeySlot(first.Model, 1)] = second
+	status := openAICookieWSStatus(saved, first.Model, time.Now())
+	require.Equal(t, 3, status.CookieGroupsReady)
+	require.Equal(t, 3, status.CookieGroupsTotal)
+	require.Equal(t, 1, status.WSPerGroup)
 }
 
 func TestOpenAICookieWSHTTPMissDiagnosticsDistinguishStatusCookieAndAnswer(t *testing.T) {

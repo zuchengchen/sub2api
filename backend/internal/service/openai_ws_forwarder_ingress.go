@@ -116,7 +116,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	firstRoutingModel := gjson.GetBytes(firstClientMessage, "model").String()
-	if s.openAICookieWSAccountEnabled(account) && hooks != nil && hooks.MapRequestModel != nil {
+	if s.openAICookieWSModeConfigured() && hooks != nil && hooks.MapRequestModel != nil {
 		mapped, mapErr := hooks.MapRequestModel(1, firstRoutingModel)
 		if mapErr != nil {
 			return mapErr
@@ -132,7 +132,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		wsDecision = OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2, Reason: "cookie_ws"}
 	}
 	forceHTTPBridge := account.Platform == PlatformGrok ||
-		(s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account))
+		(s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account)) ||
+		s.openAICookieWSHTTPOnlyModel(account, normalizeOpenAIModelForUpstream(account, account.GetMappedModel(firstRoutingModel)))
 	if cookieWS {
 		forceHTTPBridge = false
 	}
@@ -411,6 +412,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestModel))
 		if cookieWS && !s.openAICookieWSEnabledForModel(account, upstreamModel) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "this Cookie websocket session does not support switching models", nil)
+		}
+		if !cookieWS && forceHTTPBridge && s.openAICookieWSEnabledForModel(account, upstreamModel) {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "reconnect to use gpt-6-astra with its verified Cookie websocket", nil)
 		}
 		if modelMissing || upstreamModel != originalModel {
 			next, setErr := applyPayloadMutation(normalized, "model", upstreamModel)
@@ -1017,6 +1021,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			payloadBytes = len(payload)
 		}
 		turnStart := time.Now()
+		cookieProbeObserver := openAICookieWSProbeObserver{enabled: cookieWS && openAICookieWSIsProbePayloadRaw(payload)}
 		wroteDownstream := false
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
@@ -1081,6 +1086,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
+			cookieProbeObserver.observe(lease, upstreamMessage, eventType)
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}

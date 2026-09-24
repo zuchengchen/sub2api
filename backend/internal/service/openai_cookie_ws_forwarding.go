@@ -24,41 +24,43 @@ type openAICookieWSSlotContextKey struct{}
 
 type openAICookieWSSlotReservations struct {
 	mu      sync.Mutex
-	active  [2]int
+	active  [openAICookieWSSlotCount]int
 	changed chan struct{}
 	last    int
 }
 
 func (s *OpenAIGatewayService) reserveOpenAICookieWSSlot(ctx context.Context, account *Account, model, preferredConnID string) (int, func(), error) {
-	ready := [2]bool{}
+	ready := [openAICookieWSSlotCount]bool{}
 	preferred := -1
 	if preferredConnID != "" {
 		if slot, ok := s.getOpenAIWSConnPool().ConnCookieSlot(account.ID, preferredConnID); ok {
 			preferred = slot
 		}
 	}
-	raw, _ := s.openaiCookieWSSlots.LoadOrStore(account.ID, &openAICookieWSSlotReservations{changed: make(chan struct{}), last: 1})
+	raw, _ := s.openaiCookieWSSlots.LoadOrStore(account.ID, &openAICookieWSSlotReservations{changed: make(chan struct{}), last: openAICookieWSSlotCount - 1})
 	state := raw.(*openAICookieWSSlotReservations)
 	for {
 		if err := ctx.Err(); err != nil {
 			return 0, nil, err
 		}
+		anyReady := false
 		for slot := range ready {
 			ready[slot] = s.lookupOpenAICookieWSTicketSlot(account, model, slot).ready(time.Now())
+			anyReady = anyReady || ready[slot]
 		}
-		if (preferred >= 0 && !ready[preferred]) || (!ready[0] && !ready[1]) {
+		if (preferred >= 0 && !ready[preferred]) || !anyReady {
 			return 0, nil, openAICookieWSUnavailableFailover(ErrOpenAICodexTicketUnavailable)
 		}
 		state.mu.Lock()
 		chosen := -1
 		if preferred >= 0 {
-			if state.active[preferred] < 10 {
+			if state.active[preferred] < 1 {
 				chosen = preferred
 			}
 		} else {
-			for offset := 1; offset <= 2; offset++ {
-				slot := (state.last + offset) % 2
-				if ready[slot] && state.active[slot] < 10 && (chosen < 0 || state.active[slot] < state.active[chosen]) {
+			for offset := 1; offset <= openAICookieWSSlotCount; offset++ {
+				slot := (state.last + offset) % openAICookieWSSlotCount
+				if ready[slot] && state.active[slot] < 1 && (chosen < 0 || state.active[slot] < state.active[chosen]) {
 					chosen = slot
 				}
 			}
@@ -80,7 +82,7 @@ func (s *OpenAIGatewayService) reserveOpenAICookieWSSlot(ctx context.Context, ac
 		}
 		changed := state.changed
 		state.mu.Unlock()
-		// A background refresh can make the second slot available while all
+		// A background refresh can make another slot available while all
 		// current reservations remain active; recheck without sending probes.
 		timer := time.NewTimer(time.Second)
 		select {
@@ -99,7 +101,7 @@ func openAICookieWSSlotFromContext(ctx context.Context) (int, bool) {
 		return 0, false
 	}
 	slot, ok := ctx.Value(openAICookieWSSlotContextKey{}).(int)
-	return slot, ok && slot >= 0 && slot < 2
+	return slot, ok && slot >= 0 && slot < openAICookieWSSlotCount
 }
 
 func (s *OpenAIGatewayService) applySelectedOpenAICookieWSHeaders(ctx context.Context, account *Account, model string, headers http.Header) error {
@@ -110,10 +112,22 @@ func (s *OpenAIGatewayService) applySelectedOpenAICookieWSHeaders(ctx context.Co
 }
 
 func (s *OpenAIGatewayService) resolveOpenAICookieWSDecision(account *Account, model string, compact bool, decision OpenAIWSProtocolDecision) (OpenAIWSProtocolDecision, bool) {
-	if compact || account == nil || !s.openAICookieWSEnabledForModel(account, resolveOpenAIAccountUpstreamModelForRequest(account, model, false)) {
+	if compact || account == nil {
+		return decision, false
+	}
+	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, model, false)
+	if s.openAICookieWSHTTPOnlyModel(account, upstreamModel) {
+		return openAIWSHTTPDecision("cookie_ws_non_astra_http"), false
+	}
+	if !s.openAICookieWSEnabledForModel(account, upstreamModel) {
 		return decision, false
 	}
 	return OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2, Reason: "cookie_ws"}, true
+}
+
+func (s *OpenAIGatewayService) openAICookieWSHTTPOnlyModel(account *Account, upstreamModel string) bool {
+	return account != nil && account.Platform == PlatformOpenAI && s.openAICookieWSModeConfigured() &&
+		s.openAICodexTicketEnabled() && strings.TrimSpace(upstreamModel) != openAICodexTicketDefaultModel
 }
 
 func setOpenAICookieWSExecutionScope(headers http.Header, c *gin.Context, scope string) {

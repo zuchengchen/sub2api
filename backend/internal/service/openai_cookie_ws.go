@@ -28,7 +28,7 @@ const (
 	openAICookieWSExpiresHeader    = "x-sub2api-cookie-expires-at"
 	openAICookieWSSlotHeader       = "x-sub2api-cookie-slot"
 	openAICookieWSProbeHeader      = "x-sub2api-cookie-probe"
-	openAICookieWSSlotCount        = 2
+	openAICookieWSSlotCount        = 3
 	openAICookieWSLifetime         = 60 * time.Minute
 	openAICookieWSRefreshAge       = 50 * time.Minute
 	openAICookieWSProbePrompt      = "Tell me whether you know who Tibo is in OpenAI based on your knowledge without searching online. Only return True or  False."
@@ -365,6 +365,18 @@ func observeOpenAICookieWSHTTPProbe(body []byte) *openAICookieWSObservation {
 }
 
 func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, account *Account, token, proxy string, identity openAICookieWSIdentity) (*openAICodexTicketProbeResult, error) {
+	if account == nil {
+		return nil, errOpenAICookieWSAccountUnavailable
+	}
+	current, err := s.latestOpenAICookieWSAccount(ctx, account.ID)
+	if err != nil {
+		return nil, err
+	}
+	account = current
+	token, _, err = s.GetAccessToken(ctx, account)
+	if err != nil || token == "" {
+		return nil, errOpenAICookieWSAccountUnavailable
+	}
 	body, _ := json.Marshal(openAICookieWSProbePayload(false))
 	req, err := http.NewRequestWithContext(WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAIHarvest), http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
 	if err != nil {
@@ -403,6 +415,18 @@ func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, ac
 // validateOpenAICookieWSCandidate keeps a successful probe connection in the pool;
 // its generation cannot be selected by business traffic until publication.
 func (s *OpenAIGatewayService) validateOpenAICookieWSCandidate(ctx context.Context, account *Account, token string, ticket *openAICookieWSTicket) (*openAIWSConnLease, error) {
+	if account == nil {
+		return nil, errOpenAICookieWSAccountUnavailable
+	}
+	current, err := s.latestOpenAICookieWSAccount(ctx, account.ID)
+	if err != nil {
+		return nil, err
+	}
+	account = current
+	token, _, err = s.GetAccessToken(ctx, account)
+	if err != nil || token == "" {
+		return nil, errOpenAICookieWSAccountUnavailable
+	}
 	h := make(http.Header)
 	h.Set("Authorization", "Bearer "+token)
 	applyOpenAICookieWSTicketHeaders(h, ticket)
@@ -426,6 +450,9 @@ func (s *OpenAIGatewayService) validateOpenAICookieWSCandidate(ctx context.Conte
 		}
 	}()
 	for turn := 0; turn < 2; turn++ {
+		if _, err := s.latestOpenAICookieWSAccount(ctx, account.ID); err != nil {
+			return nil, err
+		}
 		if err := lease.WriteJSONContext(ctx, openAICookieWSProbePayload(true)); err != nil {
 			return nil, errors.New("cookie WS probe write failed")
 		}
@@ -509,7 +536,7 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSTickets(ctx context.Context)
 	var wg sync.WaitGroup
 	for i := range accounts {
 		account := accounts[i]
-		if !s.openAICookieWSAccountEnabled(&account) || openAICodexTicketHarvestSkipReason(&account, time.Now()) != "" {
+		if !s.openAICookieWSAccountEnabled(&account) || openAICookieWSAccountSkipReason(&account, time.Now()) != "" {
 			continue
 		}
 		account.Extra = maps.Clone(account.Extra)
@@ -527,6 +554,7 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSTickets(ctx context.Context)
 			for slot := 0; slot < openAICookieWSSlotCount; slot++ {
 				s.refreshOpenAICookieWSSlot(ctx, &account, slot)
 			}
+			s.maintainOpenAICookieWSMinimum(ctx, account.ID)
 		}(account)
 	}
 	wg.Wait()
@@ -542,9 +570,14 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 	}
 	key := openAICookieWSKeySlot(account.ID, openAICodexTicketDefaultModel, slot)
 	_, _, _ = s.openaiCookieWSFlight.Do(key, func() (any, error) {
+		latest, err := s.latestOpenAICookieWSAccount(ctx, account.ID)
+		if err != nil {
+			return nil, nil
+		}
+		account = latest
 		now := time.Now()
 		previous := s.lookupOpenAICookieWSTicketSlot(account, openAICodexTicketDefaultModel, slot)
-		if !previous.needsRefresh(now) || s.openAICookieWSSlotRetryWaiting(account.ID, slot, now) || openAICodexTicketHarvestSkipReason(account, now) != "" {
+		if !previous.needsRefresh(now) || s.openAICookieWSSlotRetryWaiting(account.ID, slot, now) || openAICookieWSAccountSkipReason(account, now) != "" {
 			return nil, nil
 		}
 		harvestCtx := withOpenAICodexTicketHarvest(ctx)
@@ -643,7 +676,7 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 }
 
 func openAICookieWSStatus(account *Account, model string, now time.Time) OpenAICodexTicketStatus {
-	status := OpenAICodexTicketStatus{Model: model, Mode: openAICookieWSMode, Blocked: true, CookieGroupsTotal: openAICookieWSSlotCount, WSPerGroup: 10}
+	status := OpenAICodexTicketStatus{Model: model, Mode: openAICookieWSMode, Blocked: true, CookieGroupsTotal: openAICookieWSSlotCount, WSPerGroup: 1}
 	var ticket *openAICookieWSTicket
 	for slot := 0; slot < openAICookieWSSlotCount; slot++ {
 		candidate := parseOpenAICookieWSTicket(account.ID, model, account.Extra[openAICookieWSExtraKeySlot(model, slot)])

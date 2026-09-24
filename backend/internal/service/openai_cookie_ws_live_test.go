@@ -42,9 +42,9 @@ type cookieWSLiveCaptureDialer struct {
 	seq     atomic.Int64
 	mu      sync.Mutex
 	slots   map[string]int
-	opened  [2]int
-	active  [2]int
-	peak    [2]int
+	opened  [3]int
+	active  [3]int
+	peak    [3]int
 	barrier chan struct{}
 	ready   int
 }
@@ -64,7 +64,7 @@ func (c *cookieWSLiveCaptureConn) WriteJSON(ctx context.Context, value any) erro
 		c.once.Do(func() {
 			c.owner.mu.Lock()
 			c.owner.ready++
-			if c.owner.ready == 20 {
+			if c.owner.ready == 3 {
 				close(c.owner.barrier)
 			}
 			c.owner.mu.Unlock()
@@ -135,7 +135,7 @@ func (*cookieWSLiveHTTP) Do(req *http.Request, proxy string, _ int64, _ int) (*h
 	return response, nil
 }
 
-func TestOpenAICookieWSLiveForwardTwenty(t *testing.T) {
+func TestOpenAICookieWSLiveForwardThree(t *testing.T) {
 	file := os.Getenv("SUB2API_COOKIE_WS_LIVE_FIXTURE")
 	if file == "" {
 		t.Skip("set SUB2API_COOKIE_WS_LIVE_FIXTURE to opt into billed upstream verification")
@@ -162,7 +162,7 @@ func TestOpenAICookieWSLiveForwardTwenty(t *testing.T) {
 	if restore := os.Getenv("SUB2API_COOKIE_WS_LIVE_TICKETS"); restore != "" {
 		encoded, err := os.ReadFile(restore)
 		require.NoError(t, err)
-		var restored [2]*openAICookieWSTicket
+		var restored [3]*openAICookieWSTicket
 		require.NoError(t, json.Unmarshal(encoded, &restored))
 		if account.Extra == nil {
 			account.Extra = make(map[string]any)
@@ -175,7 +175,7 @@ func TestOpenAICookieWSLiveForwardTwenty(t *testing.T) {
 			account.Extra[openAICookieWSExtraKeySlot(saved.Model, slot)] = saved
 		}
 	}
-	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	repo := &cookieWSLifecycleRepo{accounts: []Account{*account}}
 	svc := &OpenAIGatewayService{cfg: cfg, accountRepo: repo, httpUpstream: &cookieWSLiveHTTP{}, openaiWSStateStore: NewOpenAIWSStateStore(nil), toolCorrector: NewCodexToolCorrector()}
 	dialer := &cookieWSLiveCaptureDialer{openAIWSClientDialer: newDefaultOpenAIWSClientDialer(), dir: filepath.Dir(file), barrier: make(chan struct{})}
 	svc.getOpenAIWSConnPool().setClientDialerForTest(dialer)
@@ -186,8 +186,8 @@ func TestOpenAICookieWSLiveForwardTwenty(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
-	var tickets [2]*openAICookieWSTicket
-	for slot := 0; slot < 2; slot++ {
+	var tickets [3]*openAICookieWSTicket
+	for slot := 0; slot < 3; slot++ {
 		for attempt := 1; attempt <= 12; attempt++ {
 			svc.refreshOpenAICookieWSSlot(ctx, account, slot)
 			tickets[slot] = svc.lookupOpenAICookieWSTicketSlot(account, openAICodexTicketDefaultModel, slot)
@@ -216,7 +216,7 @@ func TestOpenAICookieWSLiveForwardTwenty(t *testing.T) {
 	require.NotEqual(t, tickets[0].Cookies, tickets[1].Cookies)
 	require.NotEqual(t, tickets[0].Identity.InstallationID, tickets[1].Identity.InstallationID)
 	dialer.mu.Lock()
-	dialer.slots = map[string]int{tickets[0].Cookies: 0, tickets[1].Cookies: 1}
+	dialer.slots = map[string]int{tickets[0].Cookies: 0, tickets[1].Cookies: 1, tickets[2].Cookies: 2}
 	dialer.mu.Unlock()
 	ticket := tickets[0]
 	privateTicket, _ := json.Marshal(tickets)
@@ -232,12 +232,12 @@ func TestOpenAICookieWSLiveForwardTwenty(t *testing.T) {
 		Error      bool   `json:"error"`
 		ResponseID string `json:"response_id"`
 	}
-	all := make([]outcome, 0, 40)
+	all := make([]outcome, 0, 6)
 	for round := 1; round <= 2; round++ {
 		start := make(chan struct{})
-		out := make(chan outcome, 20)
+		out := make(chan outcome, 3)
 		var wg sync.WaitGroup
-		for i := 0; i < 20; i++ {
+		for i := 0; i < 3; i++ {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
@@ -276,17 +276,17 @@ func TestOpenAICookieWSLiveForwardTwenty(t *testing.T) {
 				passed++
 			}
 		}
-		t.Logf("production Forward round %d: %d/20 True via WS", round, passed)
+		t.Logf("production Forward round %d: %d/3 True via WS", round, passed)
 	}
 	dialer.mu.Lock()
 	opened, peak := dialer.opened, dialer.peak
 	dialer.mu.Unlock()
-	result := map[string]any{"account": fixture.Email, "model": openAICodexTicketDefaultModel, "reasoning_effort": "low", "cookie_groups": 2, "opened_ws_per_group": opened, "peak_ws_per_group": peak, "captured_at": ticket.CapturedAt, "refresh_at": ticket.RefreshAt, "expires_at": ticket.ExpiresAt, "active_ping": false, "results": all}
+	result := map[string]any{"account": fixture.Email, "model": openAICodexTicketDefaultModel, "reasoning_effort": "low", "cookie_groups": 3, "opened_ws_per_group": opened, "peak_ws_per_group": peak, "captured_at": ticket.CapturedAt, "refresh_at": ticket.RefreshAt, "expires_at": ticket.ExpiresAt, "active_ping": false, "results": all}
 	encoded, err := json.MarshalIndent(result, "", "  ")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(file), "go-live-results.json"), encoded, 0600))
-	require.Len(t, all, 40)
-	require.Equal(t, [2]int{10, 10}, peak, "each independently acquired Cookie group must serve ten concurrent WS")
+	require.Len(t, all, 6)
+	require.Equal(t, [3]int{1, 1, 1}, peak, "each independently acquired Cookie group must serve one concurrent WS")
 	for _, r := range all {
 		require.True(t, r.Passed && r.WS && !r.Error, "round=%d request=%d output=%s status=%d", r.Round, r.Request, r.Output, r.Status)
 	}
