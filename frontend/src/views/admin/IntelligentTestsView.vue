@@ -18,7 +18,7 @@
             <template v-if="mode === 'tests'">
               <label class="text-xs text-gray-500">账号类型<select v-model="filters.type" class="input mt-1.5"><option value="">全部类型</option><option value="oauth">OAuth</option><option value="apikey">API Key</option><option value="setup-token">Setup Token</option><option value="upstream">Upstream</option></select></label>
               <label class="text-xs text-gray-500">账号池 / 分组<select v-model="filters.group_id" class="input mt-1.5"><option value="">全部账号池</option><option v-for="group in groups" :key="group.id" :value="String(group.id)">{{ group.name }}</option></select></label>
-              <label class="text-xs text-gray-500">账号状态<select v-model="filters.account_status" class="input mt-1.5"><option value="">全部状态</option><option value="active">正常</option><option value="error">异常</option><option value="disabled">停用</option></select></label>
+              <label class="text-xs text-gray-500">账号状态<select v-model="filters.account_status" class="input mt-1.5"><option value="">全部状态</option><option value="schedulable">正常</option><option value="error">异常</option><option value="disabled">停用</option></select></label>
             </template>
             <label class="text-xs text-gray-500">测试类型<select v-model="filters.test_type" class="input mt-1.5"><option value="">全部测试</option><option v-for="setting in settings" :key="setting.test_type" :value="setting.test_type">{{ setting.name || testName(setting.test_type) }}</option></select></label>
             <label class="text-xs text-gray-500">测试结果<select v-model="filters.status" class="input mt-1.5"><option value="">全部结果</option><option v-for="(label, value) in statusLabels" :key="value" :value="value">{{ label }}</option></select></label>
@@ -142,7 +142,17 @@ function applyFilters() {
   }
   applied = next; page.value = 1; selected.value = []; void load()
 }
-function resetFilters() { Object.assign(filters, defaults); applyFilters() }
+function defaultGroupId() {
+  const group = groups.value.find(item => item.name.trim().toLowerCase() === 'gpt-pro')
+  return group ? String(group.id) : ''
+}
+function testPageDefaults() {
+  return { ...defaults, account_status: 'schedulable', test_type: 'pelican', group_id: defaultGroupId() }
+}
+function resetFilters() {
+  Object.assign(filters, props.mode === 'tests' ? testPageDefaults() : defaults)
+  applyFilters()
+}
 function changePage(value: number) { page.value = value; selected.value = []; void load() }
 function changePageSize(value: number) { pageSize.value = value; changePage(1) }
 function selectPage() { selected.value = allPageSelected.value ? [] : accounts.value.map(item => item.account_id) }
@@ -158,15 +168,27 @@ async function run(ids: number[], types: string[]) {
   catch (err) { app.showError(extractApiErrorMessage(err, '任务提交失败，可重试')) }
   finally { running.value = false }
 }
-function routeFilters() {
-  Object.assign(filters, defaults)
-  if (props.mode === 'history') { filters.search = String(route.query.account_id || ''); filters.test_type = String(route.query.test_type || '') }
+async function routeFilters() {
+  if (props.mode === 'history') {
+    Object.assign(filters, defaults)
+    filters.search = String(route.query.account_id || '')
+    filters.test_type = String(route.query.test_type || '')
+    applyFilters()
+    return
+  }
+  if (props.mode !== 'tests') {
+    Object.assign(filters, defaults)
+    applyFilters()
+    return
+  }
+  if (!groups.value.length) await loadMetadata()
+  Object.assign(filters, testPageDefaults())
   applyFilters()
 }
-watch(() => [props.mode, route.query.account_id, route.query.test_type], routeFilters)
+watch(() => [props.mode, route.query.account_id, route.query.test_type], () => { void routeFilters() })
 onMounted(() => {
-  routeFilters()
-  if (props.mode !== 'settings') void loadMetadata()
+  void routeFilters()
+  if (props.mode === 'history') void loadMetadata()
 })
 onMounted(() => {
   pollTimer = setInterval(() => { if (props.mode !== 'settings' && !document.hidden && !loading.value && !running.value) void load(true) }, 5000)

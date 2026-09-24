@@ -189,18 +189,21 @@ type IntelligentTestRepository interface {
 	DeleteStalePelicanTests(context.Context) (int64, error)
 }
 
-// PelicanSlotAttempt is one scheduled (or retried) pelican run in a 30-minute slot.
+// PelicanSlotAttempt is one scheduled (or retried) pelican run in a 10-minute slot.
 type PelicanSlotAttempt struct {
 	AccountID int64
 	Status    string
 	HasSVG    bool
 }
 
-// PelicanCandidate is a GPT-PRO OAuth account that is currently schedulable.
+// PelicanCandidate is a schedulable GPT-PRO account eligible for the timer.
+// OAuth and setup-token accounts are the random pool. Preferred is the
+// https://ai8.my/v1 API-key account, which is tried before that pool.
 // HasTicket means it has an unexpired 292 gpt-6-astra ticket and its harvest cookies.
 type PelicanCandidate struct {
 	ID        int64
 	HasTicket bool
+	Preferred bool
 }
 type IntelligentTestRunner interface {
 	RunIntelligentTest(context.Context, *IntelligentTestRecord) error
