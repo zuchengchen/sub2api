@@ -193,10 +193,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
 	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
-	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	compactPath := isOpenAIResponsesCompactPath(c)
+	// Cookie mode is a separately validated HTTP/WS -> WS route. Its explicit
+	// account/model opt-in also overrides legacy HTTP passthrough settings.
+	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), compactPath, wsDecision)
+	passthroughEnabled := account.IsOpenAIPassthroughEnabled() && !cookieWS
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
 		if err != nil {
@@ -478,7 +480,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
-	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeCNResponses {
+	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeCNResponses && !cookieWS {
 		markPatchSet("instructions", defaultCodexSynthInstructions(upstreamModel))
 	}
 	if billingModel != requestedModel {
@@ -613,8 +615,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                          isCodexCLI,
 				IsCompact:                           isCompactRequest,
+				SkipDefaultInstructions:             cookieWS,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 			})
+			if cookieWS {
+				// Keep the caller's instructions, including an intentionally
+				// empty string, as in the validated HTTP/WS Cookie request.
+				ensureCodexOAuthInstructionsField(decoded)
+				markDecodedModified()
+			}
 		}
 		if codexResult.Error != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": codexResult.Error.Error()}})
@@ -908,6 +917,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		wsPrevResponseRecoveryTried := false
 		wsInvalidEncryptedContentRecoveryTried := false
 		recoverPrevResponseNotFound := func(attempt int) bool {
+			if cookieWS {
+				// HTTP callers may send only the current delta. A rotated Cookie
+				// connection cannot silently discard the missing history anchor.
+				return false
+			}
 			if wsPrevResponseRecoveryTried {
 				return false
 			}
@@ -1113,6 +1127,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				wsResult.BillingModel = imageBillingModel
 			}
 			return wsResult, nil
+		}
+		var failoverErr *UpstreamFailoverError
+		if cookieWS {
+			wsErr = openAICookieWSUnavailableFailover(wsErr)
+		}
+		if cookieWS && errors.As(wsErr, &failoverErr) && (c == nil || c.Writer == nil || !c.Writer.Written()) {
+			return nil, failoverErr
 		}
 		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
 		return nil, wsErr

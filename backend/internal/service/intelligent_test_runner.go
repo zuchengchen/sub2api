@@ -112,6 +112,11 @@ func (s *AccountTestService) applyIntelligentTestOpenAICodexTicket(ctx context.C
 	}
 	model := extractOpenAICodexTicketModel(body)
 	err := s.openaiGatewayService.applyOpenAICodexTicket(ctx, account, model, h)
+	if s.openaiGatewayService.openAICookieWSModeConfigured() {
+		// Cookie mode owns its direct WS adapter. Never borrow legacy material
+		// or fall back to an unvalidated HTTP probe for this mode.
+		return err
+	}
 	if openAICodexTicketInjected(h, s.openaiGatewayService.openAICodexTicketConfig().TargetLength) {
 		return nil
 	}

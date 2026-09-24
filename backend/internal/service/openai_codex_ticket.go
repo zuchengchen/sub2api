@@ -160,6 +160,9 @@ func (s *OpenAIGatewayService) openAICodexTicketGatedModel(model string) bool {
 	if model == "" || !s.openAICodexTicketEnabled() {
 		return false
 	}
+	if s.openAICookieWSModeConfigured() {
+		return model == openAICodexTicketDefaultModel
+	}
 	for _, item := range s.openAICodexTicketConfig().Models {
 		if normalizeOpenAICodexTicketModel(item) == model {
 			return true
@@ -170,16 +173,28 @@ func (s *OpenAIGatewayService) openAICodexTicketGatedModel(model string) bool {
 
 // OpenAICodexTicketStatus 是给管理端看的门票摘要，不含 state blob。
 type OpenAICodexTicketStatus struct {
-	Model            string     `json:"model"`
-	Length           int        `json:"length,omitempty"`
-	Ready            bool       `json:"ready"`
-	RemainingSeconds int64      `json:"remaining_seconds"`
-	Blocked          bool       `json:"blocked"`
-	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	Model             string     `json:"model"`
+	Mode              string     `json:"mode,omitempty"`
+	CapturedAt        *time.Time `json:"captured_at,omitempty"`
+	RefreshAt         *time.Time `json:"refresh_at,omitempty"`
+	CookieGroupsReady int        `json:"cookie_groups_ready,omitempty"`
+	CookieGroupsTotal int        `json:"cookie_groups_total,omitempty"`
+	WSPerGroup        int        `json:"ws_per_group,omitempty"`
+	Length            int        `json:"length,omitempty"`
+	Ready             bool       `json:"ready"`
+	RemainingSeconds  int64      `json:"remaining_seconds"`
+	Blocked           bool       `json:"blocked"`
+	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
 }
 
 func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketConfig, now time.Time) []OpenAICodexTicketStatus {
 	if !cfg.Enabled || !isOpenAICodexTicketAccount(account) {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Mode), openAICookieWSMode) {
+		if openAICookieWSAccountConfigured(account, cfg) {
+			return []OpenAICodexTicketStatus{openAICookieWSStatus(account, openAICodexTicketDefaultModel, now)}
+		}
 		return nil
 	}
 	models, targetLen := cfg.Models, cfg.TargetLength
@@ -193,6 +208,10 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 	for _, model := range models {
 		model = normalizeOpenAICodexTicketModel(model)
 		if model == "" {
+			continue
+		}
+		if model == openAICodexTicketDefaultModel && openAICookieWSAccountConfigured(account, cfg) {
+			out = append(out, openAICookieWSStatus(account, model, now))
 			continue
 		}
 		status := OpenAICodexTicketStatus{Model: model}
@@ -480,6 +499,12 @@ func (s *OpenAIGatewayService) openAICodexTicketHeld(account *Account) bool {
 	if s == nil || account == nil {
 		return false
 	}
+	if s.openAICookieWSAccountEnabled(account) {
+		return s.lookupOpenAICookieWSTicket(account, openAICodexTicketDefaultModel).ready(time.Now())
+	}
+	if s.openAICookieWSModeConfigured() {
+		return false
+	}
 	ticket := s.lookupOpenAICodexTicket(account, openAICodexTicketDefaultModel)
 	return ticket.hasHarvestIdentity() &&
 		ticket.usable(s.openAICodexTicketConfig().TargetLength) &&
@@ -559,6 +584,14 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) {
 		return nil
 	}
+	if s.openAICookieWSEnabledForModel(account, model) {
+		// Cookie mode is WS-only. Only the final WS header builder may inject
+		// its private pool metadata; a legacy HTTP path must fail closed.
+		return ErrOpenAICodexTicketUnavailable
+	}
+	if s.openAICookieWSModeConfigured() {
+		return nil
+	}
 	model = normalizeOpenAICodexTicketModel(model)
 	if model == "" || !s.openAICodexTicketGatedModel(model) {
 		return nil
@@ -623,6 +656,12 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 	if s == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabled() {
 		return false
 	}
+	if s.openAICookieWSEnabledForModel(account, outboundModel) {
+		return !s.lookupOpenAICookieWSTicket(account, strings.TrimSpace(outboundModel)).ready(time.Now())
+	}
+	if s.openAICookieWSModeConfigured() {
+		return false
+	}
 	cfg := s.openAICodexTicketConfig()
 	if !cfg.FailClosed {
 		return false
@@ -638,6 +677,7 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 const openAICodexTicketHarvestErrorBodyLimit = 8 << 10
 
 type openAICodexTicketProbeResult struct {
+	capturedAt time.Time
 	state      string
 	sessionID  string
 	version    string
@@ -793,6 +833,7 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestLoop(ctx context.Context)
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			s.refreshOpenAICookieWSTickets(ctx)
 			s.refreshOpenAICodexTickets(ctx)
 			timer.Reset(time.Duration(s.openAICodexTicketConfig().HarvestProbeIntervalSeconds) * time.Second)
 		}
@@ -940,7 +981,7 @@ func (s *OpenAIGatewayService) pickOpenAICodexTicketHarvestAccount(eligible []Ac
 // refreshOpenAICodexTickets 给还没有自己的有效票的号打票。
 // 已有打票会话身份、且未被作废的票不会被新票换掉。
 func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
-	if s == nil || s.accountRepo == nil || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
+	if s == nil || s.accountRepo == nil || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) || s.openAICookieWSModeConfigured() {
 		return
 	}
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
@@ -951,6 +992,9 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	now := time.Now()
 	eligible := make([]Account, 0, len(accounts))
 	for i := range accounts {
+		if s.openAICookieWSAccountEnabled(&accounts[i]) {
+			continue
+		}
 		if openAICodexTicketHarvestSkipReason(&accounts[i], now) != "" {
 			continue
 		}
@@ -975,7 +1019,7 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 // gAAAAA 前缀、打票 Cookie，且完整成功响应的模型就是所请求模型）就落库；312 和
 // 完成模型不符都当 miss。同一 key 并发去重，避免上一发还没回来又叠一发。
 func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, account *Account, model string) {
-	if s == nil || !isOpenAICodexTicketAccount(account) || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
+	if s == nil || !isOpenAICodexTicketAccount(account) || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) || s.openAICookieWSModeConfigured() {
 		return
 	}
 	if reason := openAICodexTicketHarvestSkipReason(account, time.Now()); reason != "" {
@@ -1523,7 +1567,7 @@ func (s *OpenAIGatewayService) persistOpenAICodexTicketRevocation(accountID int6
 
 // IsOpenAICodexTicketExtraKey identifies server-managed ticket material.
 func IsOpenAICodexTicketExtraKey(key string) bool {
-	return strings.HasPrefix(key, openAICodexTicketExtraKeyPrefix) || strings.HasPrefix(key, openAICodexTicketRevokedExtraKeyPrefix)
+	return strings.HasPrefix(key, openAICodexTicketExtraKeyPrefix) || strings.HasPrefix(key, openAICodexTicketRevokedExtraKeyPrefix) || strings.HasPrefix(key, openAICookieWSExtraKeyPrefix)
 }
 
 // MergeOpenAICodexTicketExtra preserves only persisted tickets, never summaries or

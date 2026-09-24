@@ -1193,11 +1193,17 @@ export interface Account {
   opencode_go_usage?: OpenCodeGoUsageState
   codex_turn_tickets?: Array<{
     model: string
+    mode?: 'turn_state' | 'cookie_ws'
+    cookie_groups_ready?: number
+    cookie_groups_total?: number
+    ws_per_group?: number
     length?: number
     ready: boolean
     remaining_seconds: number
     blocked: boolean
     expires_at?: string
+    captured_at?: string
+    refresh_at?: string
   }>
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {

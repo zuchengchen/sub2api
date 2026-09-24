@@ -62,6 +62,7 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	// 归为观测型后仍会同步单账号快照（见 UpdateExtra），不丢任何新鲜度。
 	"codex_turn_ticket:",
 	"codex_turn_ticket_revoked:",
+	"codex_cookie_ws:",
 	"passive_usage_",
 	"upstream_billing_probe",
 	"upstream_billing_rate_sync",
