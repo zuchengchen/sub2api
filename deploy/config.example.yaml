@@ -345,9 +345,12 @@ gateway:
     enabled: false
     # turn_state: legacy ticket flow. cookie_ws: Astra uses verified HTTP cookies
     # on direct WS connections; refresh after 50 minutes, expire after 60 minutes.
-    # Each account maintains 2 independent Cookie groups, each with up to 10
+    # Each account maintains 3 independent Cookie groups, each with exactly one
     # business WS connections. Refresh temporarily uses one extra validation WS.
-    # Keep the account WS pool limit at least 21 (24 is recommended).
+    # Eligible accounts replenish 3 individually verified sockets in total.
+    # Rate-limited/unschedulable accounts skip harvest and replenishment. Probe
+    # non-True sockets close immediately and never count toward the minimum.
+    # Keep the account WS pool limit at least 4 (3 business sockets plus one refresh validation socket).
     # Cookie WS requires HTTP and direct WS Tibo probes to return True, has no
     # turn-state length gate, and sends no active periodic Ping.
     mode: turn_state

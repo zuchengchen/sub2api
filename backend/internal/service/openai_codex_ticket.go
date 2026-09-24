@@ -180,6 +180,8 @@ type OpenAICodexTicketStatus struct {
 	CookieGroupsReady int        `json:"cookie_groups_ready,omitempty"`
 	CookieGroupsTotal int        `json:"cookie_groups_total,omitempty"`
 	WSPerGroup        int        `json:"ws_per_group,omitempty"`
+	VerifiedWS        int        `json:"verified_ws,omitempty"`
+	MinimumWS         int        `json:"minimum_ws,omitempty"`
 	Length            int        `json:"length,omitempty"`
 	Ready             bool       `json:"ready"`
 	RemainingSeconds  int64      `json:"remaining_seconds"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -40,15 +42,17 @@ func newCookieForwardFixture(t *testing.T, conn *openAIWSCaptureConn) (*OpenAIGa
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 	pool := newOpenAIWSConnPool(cfg)
+	pool.SetCookieValidator(func(context.Context, *Account, *openAIWSConnLease) error { return nil })
 	t.Cleanup(pool.Close)
 	dialer := &cookieForwardDialer{openAIWSCaptureDialer: openAIWSCaptureDialer{conn: conn}}
 	pool.setClientDialerForTest(dialer)
 	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &httpUpstreamRecorder{}, cache: &stubGatewayCache{}, openaiWSPool: pool, toolCorrector: NewCodexToolCorrector()}
 	proxyID := int64(1)
-	account := &Account{ID: 23141, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 20,
+	account := &Account{ID: 23141, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 20, Status: StatusActive, Schedulable: true,
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-chatgpt", "model_mapping": map[string]any{"astra-alias": "gpt-6-astra"}},
 		Extra:       map[string]any{"openai_passthrough": true, "openai_oauth_responses_websockets_v2_mode": "off"},
 		ProxyID:     &proxyID, Proxy: &Proxy{ID: 1, Protocol: "socks5", Host: "bound-proxy.invalid", Port: 1080}}
+	svc.accountRepo = &cookieWSLifecycleRepo{accounts: []Account{*account}}
 	now := time.Now().Add(-time.Minute)
 	ticket := &openAICookieWSTicket{AccountID: account.ID, Model: "gpt-6-astra", Generation: "generation-one", Cookies: "__oailb=test; __cf_bm=test; __cflb=test", Identity: newOpenAICookieWSIdentity(), CapturedAt: now, RefreshAt: now.Add(50 * time.Minute), ExpiresAt: now.Add(time.Hour), HTTPVerified: true, WSVerified: true, processVerified: true}
 	svc.openaiCookieWSTickets.Store(openAICodexTicketKey(account.ID, ticket.Model), ticket)
@@ -124,21 +128,20 @@ func TestCookieWSRouteScopeAndLegacyBoundaries(t *testing.T) {
 	decision, enabled := svc.resolveOpenAICookieWSDecision(account, "astra-alias", false, legacy)
 	require.True(t, enabled)
 	require.Equal(t, OpenAIUpstreamTransportResponsesWebsocketV2, decision.Transport)
-	for _, tc := range []struct {
-		model   string
-		compact bool
-	}{{"gpt-6-sol", false}, {"gpt-6-astra", true}} {
-		decision, enabled = svc.resolveOpenAICookieWSDecision(account, tc.model, tc.compact, legacy)
-		require.False(t, enabled)
-		require.Equal(t, legacy, decision)
-	}
+	decision, enabled = svc.resolveOpenAICookieWSDecision(account, "gpt-6-sol", false, legacy)
+	require.False(t, enabled)
+	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
+	decision, enabled = svc.resolveOpenAICookieWSDecision(account, "gpt-6-astra", true, legacy)
+	require.False(t, enabled)
+	require.Equal(t, legacy, decision)
 	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress, "astra-alias"))
 	account.Extra["openai_passthrough"] = true
 	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress, "astra-alias"))
 	decision, enabled = svc.resolveOpenAICookieWSDecision(account, "astra-alias", false, legacy)
 	require.False(t, enabled, "HTTP passthrough leaves an alias unmapped")
-	require.Equal(t, legacy, decision)
-	require.False(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress, "gpt-6-sol"))
+	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
+	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress, "gpt-6-sol"), "non-Astra WS clients use the HTTP Responses bridge")
+	require.False(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2, "gpt-6-sol"))
 	svc.cfg.Gateway.OpenAICodexTicket.Mode = "turn_state"
 	decision, enabled = svc.resolveOpenAICookieWSDecision(account, "gpt-6-astra", false, legacy)
 	require.False(t, enabled)
@@ -212,21 +215,23 @@ func TestCookieWSIngressOverridesLegacyHTTPBridge(t *testing.T) {
 	}
 }
 
-func TestCookieWSSlotReservationBalancesTwentyAndWaits(t *testing.T) {
+func TestCookieWSSlotReservationBalancesThreeAndWaits(t *testing.T) {
 	svc, account, first, _ := newCookieForwardFixture(t, &openAIWSCaptureConn{})
-	second := *first
-	second.Slot = 1
-	second.Generation = "generation-slot-one"
-	second.Identity = newOpenAICookieWSIdentity()
-	svc.openaiCookieWSTickets.Store(openAICookieWSKeySlot(account.ID, first.Model, 1), &second)
+	for slot := 1; slot < openAICookieWSSlotCount; slot++ {
+		ticket := *first
+		ticket.Slot = slot
+		ticket.Generation = fmt.Sprintf("generation-slot-%d", slot)
+		ticket.Identity = newOpenAICookieWSIdentity()
+		svc.openaiCookieWSTickets.Store(openAICookieWSKeySlot(account.ID, first.Model, slot), &ticket)
+	}
 	type reservation struct {
 		slot    int
 		release func()
 		err     error
 	}
-	results := make(chan reservation, 20)
+	results := make(chan reservation, 3)
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 3; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -236,7 +241,7 @@ func TestCookieWSSlotReservationBalancesTwentyAndWaits(t *testing.T) {
 	}
 	wg.Wait()
 	close(results)
-	counts := [2]int{}
+	counts := [openAICookieWSSlotCount]int{}
 	var releases []func()
 	for r := range results {
 		require.NoError(t, r.err)
@@ -248,7 +253,7 @@ func TestCookieWSSlotReservationBalancesTwentyAndWaits(t *testing.T) {
 			release()
 		}
 	}()
-	require.Equal(t, [2]int{10, 10}, counts)
+	require.Equal(t, [openAICookieWSSlotCount]int{1, 1, 1}, counts)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, _, err := svc.reserveOpenAICookieWSSlot(ctx, account, first.Model, "")
@@ -256,6 +261,99 @@ func TestCookieWSSlotReservationBalancesTwentyAndWaits(t *testing.T) {
 	releases[0]()
 	slot, release, err := svc.reserveOpenAICookieWSSlot(context.Background(), account, first.Model, "")
 	require.NoError(t, err)
-	require.Contains(t, []int{0, 1}, slot)
+	require.Contains(t, []int{0, 1, 2}, slot)
 	release()
+}
+
+func TestCookieWSNonAstraModelsUseHTTPResponses(t *testing.T) {
+	for _, model := range []string{"gpt-6-sol", "gpt-5.5", "gpt-6-luna"} {
+		for _, passthrough := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s_passthrough_%v", model, passthrough), func(t *testing.T) {
+				svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{})
+				account.Extra["openai_passthrough"] = passthrough
+				account.Extra["openai_oauth_responses_websockets_v2_mode"] = "ctx_pool"
+				svc.cfg.Gateway.OpenAIWS.Enabled = true
+				svc.cfg.Gateway.OpenAIWS.OAuthEnabled = true
+				svc.cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+				upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+				upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: " + string(cookieWSCompletion(model, "HTTP answer")) + "\n\n"))}
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+				result, err := svc.Forward(context.Background(), c, account, []byte(fmt.Sprintf(`{"model":%q,"input":"hello","stream":false}`, model)))
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.False(t, result.OpenAIWSMode)
+				require.Zero(t, dialer.DialCount())
+				require.Contains(t, upstream.lastReq.URL.Path, "/responses")
+				require.Empty(t, upstream.lastReq.Header.Get("Cookie"))
+				require.Contains(t, rec.Body.String(), "HTTP answer")
+			})
+		}
+	}
+}
+
+func TestCookieWSNonAstraIngressUsesHTTPBridge(t *testing.T) {
+	svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{})
+	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: " + string(cookieWSCompletion("gpt-6-sol", "HTTP bridge")) + "\n\n"))}
+	errCh := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer ws.CloseNow()
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = r
+		_, first, err := ws.Read(r.Context())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), c, ws, account, "test-token", first, nil)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+	defer client.CloseNow()
+	require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-6-sol","input":"hello"}`)))
+	_, response, err := client.Read(ctx)
+	require.NoError(t, err)
+	require.Contains(t, string(response), "HTTP bridge")
+	_ = client.Close(coderws.StatusNormalClosure, "done")
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("HTTP bridge close timed out")
+	}
+	require.Zero(t, dialer.DialCount())
+	require.Contains(t, upstream.lastReq.URL.Path, "/responses")
+}
+
+func TestCookieWSNonAstraAPIKeyForcesResponsesOutsideAllowlist(t *testing.T) {
+	svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{})
+	account.ID = 999
+	account.Type = AccountTypeAPIKey
+	account.Credentials = map[string]any{"api_key": "test-api-key"}
+	account.Extra = map[string]any{openai_compat.ExtraKeyResponsesSupported: false, "openai_passthrough": false}
+	require.True(t, shouldForwardOpenAIResponsesViaRawChatCompletions(account), "fixture has explicit legacy Chat Completions routing")
+	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"resp_http","model":"gpt-6-sol","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"HTTP API key"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`))}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-sol","input":"hello","stream":false}`))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Zero(t, dialer.DialCount())
+	require.Equal(t, "/v1/responses", upstream.lastReq.URL.Path)
+	require.Equal(t, "Bearer test-api-key", upstream.lastReq.Header.Get("Authorization"))
+	require.Contains(t, rec.Body.String(), "HTTP API key")
 }

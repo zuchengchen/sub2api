@@ -276,6 +276,11 @@ func (s *OpenAIGatewayService) getOpenAIWSConnPool() *openAIWSConnPool {
 	s.openaiWSPoolOnce.Do(func() {
 		if s.openaiWSPool == nil {
 			s.openaiWSPool = newOpenAIWSConnPool(s.cfg)
+			s.openaiWSPool.SetCookieEligibility(func(ctx context.Context, account *Account) error {
+				_, err := s.latestOpenAICookieWSAccount(ctx, account.ID)
+				return err
+			})
+			s.openaiWSPool.SetCookieValidator(s.validateOpenAICookieWSBusinessConn)
 		}
 	})
 	return s.openaiWSPool
