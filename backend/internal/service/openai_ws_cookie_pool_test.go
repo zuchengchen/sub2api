@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +41,7 @@ func cookiePoolTestPool(t *testing.T, max int) *openAIWSConnPool {
 	cfg.Gateway.OpenAIWS.PoolTargetUtilization = 1
 	p := newOpenAIWSConnPool(cfg)
 	p.setClientDialerForTest(&openAIWSFakeDialer{})
+	p.SetCookieValidator(func(context.Context, *Account, *openAIWSConnLease) error { return nil })
 	t.Cleanup(p.Close)
 	return p
 }
@@ -66,7 +69,9 @@ func TestOpenAIWSCookiePool_GenerationAndScopeIsolationWithoutFingerprint(t *tes
 	_, err = p.Acquire(context.Background(), otherScope)
 	require.ErrorIs(t, err, errOpenAIWSPreferredConnUnavailable)
 
-	candidate, err := p.Acquire(context.Background(), cookiePoolTestRequest("new"))
+	candidateReq := cookiePoolTestRequest("new")
+	candidateReq.Headers.Set(openAICookieWSProbeHeader, "1")
+	candidate, err := p.Acquire(context.Background(), candidateReq)
 	require.NoError(t, err)
 	require.NotEqual(t, first.ConnID(), candidate.ConnID())
 	candidate.MarkBroken()
@@ -74,7 +79,8 @@ func TestOpenAIWSCookiePool_GenerationAndScopeIsolationWithoutFingerprint(t *tes
 	// A failed candidate neither rotates nor invalidates the current version.
 	stillOld, err := p.Acquire(context.Background(), old)
 	require.NoError(t, err)
-	require.Equal(t, first.ConnID(), stillOld.ConnID())
+	require.True(t, first.conn.isClosed(), "other execution scope replaced the one-slot idle socket")
+	require.NotEqual(t, isolated.ConnID(), stillOld.ConnID())
 	stillOld.Release()
 }
 
@@ -97,12 +103,10 @@ func TestOpenAIWSCookiePool_CandidateDoesNotEvictServingCapacity(t *testing.T) {
 }
 
 func TestOpenAIWSCookiePool_ReservesValidationSlotAtBusinessCapacity(t *testing.T) {
-	p := cookiePoolTestPool(t, 3)
+	p := cookiePoolTestPool(t, 2)
 	old := cookiePoolTestRequest("old")
 	p.RotateCookieGeneration(old.Account.ID, "old")
 	first, err := p.Acquire(context.Background(), old)
-	require.NoError(t, err)
-	second, err := p.Acquire(context.Background(), old)
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -114,12 +118,11 @@ func TestOpenAIWSCookiePool_ReservesValidationSlotAtBusinessCapacity(t *testing.
 	probe, err := p.Acquire(context.Background(), candidate)
 	require.NoError(t, err, "validation retains a slot despite business saturation")
 	inflight, _, conns := p.AccountPoolLoad(old.Account.ID)
-	require.Equal(t, 3, inflight)
-	require.Equal(t, 3, conns)
+	require.Equal(t, 2, inflight)
+	require.Equal(t, 2, conns)
 	probe.MarkBroken()
 	probe.Release()
 	first.Release()
-	second.Release()
 }
 
 func TestOpenAIWSCookiePool_RotationDrainsActiveAndPreservesPinnedContinuation(t *testing.T) {
@@ -130,8 +133,11 @@ func TestOpenAIWSCookiePool_RotationDrainsActiveAndPreservesPinnedContinuation(t
 	p.RotateCookieGeneration(old.Account.ID, "old")
 	require.True(t, p.PinConn(old.Account.ID, active.ConnID()))
 	next := cookiePoolTestRequest("new")
-	candidate, err := p.Acquire(context.Background(), next)
+	probeReq := cloneOpenAIWSAcquireRequest(next)
+	probeReq.Headers.Set(openAICookieWSProbeHeader, "1")
+	candidate, err := p.Acquire(context.Background(), probeReq)
 	require.NoError(t, err)
+	candidate.MarkBroken()
 	candidate.Release()
 	p.RotateCookieGeneration(old.Account.ID, "new")
 	require.False(t, active.conn.isClosed(), "rotation must not interrupt active output")
@@ -152,7 +158,7 @@ func TestOpenAIWSCookiePool_RotationDrainsActiveAndPreservesPinnedContinuation(t
 	require.ErrorIs(t, err, errOpenAIWSCookieRetired)
 	current, err := p.Acquire(context.Background(), next)
 	require.NoError(t, err)
-	require.Equal(t, candidate.ConnID(), current.ConnID())
+	require.NotEqual(t, active.ConnID(), current.ConnID())
 	current.Release()
 }
 
@@ -167,6 +173,11 @@ func TestOpenAIWSCookiePool_RotatingOneSlotLeavesOtherSlotAvailable(t *testing.T
 	require.NoError(t, err)
 	second.Release()
 	p.RotateCookieSlot(one.Account.ID, 1, "one-current")
+	two := cookiePoolSlotRequest(2, "two-current")
+	third, err := p.Acquire(context.Background(), two)
+	require.NoError(t, err)
+	third.Release()
+	p.RotateCookieSlot(two.Account.ID, 2, "two-current")
 	newZero := cookiePoolSlotRequest(0, "zero-new")
 	probe := cloneOpenAIWSAcquireRequest(newZero)
 	probe.Headers.Set(openAICookieWSProbeHeader, "1")
@@ -176,6 +187,7 @@ func TestOpenAIWSCookiePool_RotatingOneSlotLeavesOtherSlotAvailable(t *testing.T
 	p.RotateCookieSlot(zero.Account.ID, 0, "zero-new")
 	require.False(t, first.conn.isClosed(), "old slot's executing response drains")
 	require.False(t, second.conn.isClosed(), "other slot is not retired")
+	require.False(t, third.conn.isClosed(), "third slot is not retired")
 	reused, err := p.Acquire(context.Background(), one)
 	require.NoError(t, err)
 	require.Equal(t, second.ConnID(), reused.ConnID())
@@ -188,6 +200,10 @@ func TestOpenAIWSCookiePool_RotatingOneSlotLeavesOtherSlotAvailable(t *testing.T
 	require.NoError(t, err)
 	require.NotEqual(t, first.ConnID(), newLease.ConnID())
 	newLease.Release()
+	p.RotateCookieSlot(two.Account.ID, 2, "two-next")
+	require.True(t, third.conn.isClosed(), "slot two can independently retire its idle socket")
+	require.False(t, second.conn.isClosed())
+	require.False(t, newLease.conn.isClosed())
 }
 
 func TestOpenAIWSCookiePool_ExpiryBlocksPinnedAndLongLivedNewTurns(t *testing.T) {
@@ -237,9 +253,9 @@ func TestOpenAIWSCookiePool_NoActivePingWithPassiveReaderAndPeerClose(t *testing
 	require.Eventually(t, func() bool { _, _, count := p.AccountPoolLoad(req.Account.ID); return count == 0 }, time.Second, time.Millisecond)
 }
 
-func TestOpenAIWSCookiePool_TwoSlotsOfTenIndependentConcurrentLeases(t *testing.T) {
+func TestOpenAIWSCookiePool_ThreeSlotsOfOneIndependentConcurrentLease(t *testing.T) {
 	p := cookiePoolTestPool(t, 24)
-	requests := [2]openAIWSAcquireRequest{cookiePoolSlotRequest(0, "shared-zero"), cookiePoolSlotRequest(1, "shared-one")}
+	requests := [openAICookieWSSlotCount]openAIWSAcquireRequest{cookiePoolSlotRequest(0, "shared-zero"), cookiePoolSlotRequest(1, "shared-one"), cookiePoolSlotRequest(2, "shared-two")}
 	for slot, req := range requests {
 		p.RotateCookieSlot(req.Account.ID, slot, req.Headers.Get(openAICookieWSGenerationHeader))
 	}
@@ -248,10 +264,10 @@ func TestOpenAIWSCookiePool_TwoSlotsOfTenIndependentConcurrentLeases(t *testing.
 		lease *openAIWSConnLease
 		err   error
 	}
-	results := make(chan result, 20)
+	results := make(chan result, 3)
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		req := requests[i%2]
+	for i := 0; i < 3; i++ {
+		req := requests[i]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -274,29 +290,29 @@ func TestOpenAIWSCookiePool_TwoSlotsOfTenIndependentConcurrentLeases(t *testing.
 		leases = append(leases, result.lease)
 	}
 	inflight, waiters, conns := p.AccountPoolLoad(requests[0].Account.ID)
-	require.Equal(t, 20, inflight)
+	require.Equal(t, 3, inflight)
 	require.Zero(t, waiters)
-	require.GreaterOrEqual(t, conns, 20)
+	require.Equal(t, 3, conns)
 	require.LessOrEqual(t, conns, 24)
-	slots := [2]int{}
+	slots := [openAICookieWSSlotCount]int{}
 	for _, lease := range leases {
 		slot, ok := p.ConnCookieSlot(requests[0].Account.ID, lease.ConnID())
 		require.True(t, ok)
 		slots[slot]++
 	}
-	require.Equal(t, [2]int{10, 10}, slots)
+	require.Equal(t, [openAICookieWSSlotCount]int{1, 1, 1}, slots)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, err := p.Acquire(ctx, requests[0])
-	require.ErrorIs(t, err, context.DeadlineExceeded, "one slot cannot exceed ten business connections")
+	require.ErrorIs(t, err, context.DeadlineExceeded, "one slot cannot exceed one business connection")
 	probeReq := cookiePoolSlotRequest(0, "next-zero")
 	probeReq.ForceNewConn = true
 	probeReq.Headers.Set(openAICookieWSProbeHeader, "1")
 	probe, err := p.Acquire(context.Background(), probeReq)
 	require.NoError(t, err)
 	inflight, _, conns = p.AccountPoolLoad(requests[0].Account.ID)
-	require.Equal(t, 21, inflight, "twenty business sockets allow one temporary validation socket")
-	require.Equal(t, 21, conns)
+	require.Equal(t, 4, inflight, "three business sockets allow one temporary validation socket")
+	require.Equal(t, 4, conns)
 	anotherProbe := cookiePoolSlotRequest(1, "next-one")
 	anotherProbe.ForceNewConn = true
 	anotherProbe.Headers.Set(openAICookieWSProbeHeader, "1")
@@ -311,7 +327,7 @@ func TestOpenAIWSCookiePool_TwoSlotsOfTenIndependentConcurrentLeases(t *testing.
 
 func TestOpenAIWSCookiePool_StalePrewarmCannotReenterAfterRotation(t *testing.T) {
 	p := cookiePoolTestPool(t, 4)
-	d := newOpenAIWSFirstDialBlockingCaptureDialer()
+	d := &openAIWSCountingDialer{}
 	p.setClientDialerForTest(d)
 	req := cookiePoolTestRequest("old")
 	ap := p.getOrCreateAccountPool(req.Account.ID)
@@ -323,27 +339,15 @@ func TestOpenAIWSCookiePool_StalePrewarmCannotReenterAfterRotation(t *testing.T)
 	ap.cookieCreating[0] = 1
 	generation := ap.generation
 	ap.mu.Unlock()
-	done := make(chan struct{})
-	go func() { p.prewarmConns(req.Account.ID, req, 1, generation); close(done) }()
-	<-d.firstStarted
+	p.prewarmConns(req.Account.ID, req, 1, generation)
 	p.RotateCookieGeneration(req.Account.ID, "new")
-	close(d.releaseFirst)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("prewarm did not finish")
-	}
 	_, _, conns := p.AccountPoolLoad(req.Account.ID)
 	require.Zero(t, conns)
-	d.mu.Lock()
-	sent := d.headers[0]
-	d.mu.Unlock()
-	require.Empty(t, sent.Get(openAICookieWSGenerationHeader))
-	require.Empty(t, sent.Get(openAICookieWSExpiresHeader))
-	require.Empty(t, sent.Get(openAICookieWSScopeHeader))
-	require.Empty(t, sent.Get(openAICookieWSSlotHeader))
-	require.Empty(t, sent.Get(openAICookieWSProbeHeader))
-	require.Equal(t, req.Headers.Get("Cookie"), sent.Get("Cookie"))
+	require.Zero(t, d.DialCount(), "legacy automatic warmup must not create unverified Cookie sockets")
+	ap.mu.Lock()
+	require.Zero(t, ap.creating)
+	require.Zero(t, ap.cookieCreating[0])
+	ap.mu.Unlock()
 }
 
 func TestCoderOpenAIWSClientDialer_DirectTransportIgnoresEnvironmentProxy(t *testing.T) {
@@ -357,15 +361,15 @@ func TestCoderOpenAIWSClientDialer_DirectTransportIgnoresEnvironmentProxy(t *tes
 	require.Same(t, c, d.directHTTPClient())
 }
 
-func TestOpenAIWSCookiePool_CleanupKeepsTwentyCookieSocketsAndTrimsLegacyIdle(t *testing.T) {
+func TestOpenAIWSCookiePool_CleanupKeepsThreeCookieSocketsAndTrimsLegacyIdle(t *testing.T) {
 	p := cookiePoolTestPool(t, 24)
 	p.cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
 	ap := p.getOrCreateAccountPool(41)
-	for slot := 0; slot < 2; slot++ {
+	for slot := 0; slot < openAICookieWSSlotCount; slot++ {
 		generation := "slot-" + strconv.Itoa(slot)
 		ap.cookieGenerations[slot] = generation
 		req := cookiePoolSlotRequest(slot, generation)
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 1; i++ {
 			conn := newOpenAIWSConn(generation+"-"+strconv.Itoa(i), 41, &openAIWSFakeConn{}, nil)
 			conn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
 			conn.cookieExpiresAt = time.Now().Add(time.Hour)
@@ -388,7 +392,7 @@ func TestOpenAIWSCookiePool_CleanupKeepsTwentyCookieSocketsAndTrimsLegacyIdle(t 
 	}
 	ap.mu.Unlock()
 	closeOpenAIWSConns(evicted)
-	require.Equal(t, 20, cookieCount)
+	require.Equal(t, 3, cookieCount)
 	require.Equal(t, 2, legacyCount)
 	require.Len(t, evicted, 2)
 	// Cookie expiry still takes precedence over preservation of idle sockets.
@@ -399,4 +403,175 @@ func TestOpenAIWSCookiePool_CleanupKeepsTwentyCookieSocketsAndTrimsLegacyIdle(t 
 	}
 	ap.mu.Unlock()
 	closeOpenAIWSConns(evicted)
+}
+
+func TestOpenAIWSCookiePool_VerifiesBeforePublishingAndClosesFalse(t *testing.T) {
+	p := cookiePoolTestPool(t, 24)
+	req := cookiePoolSlotRequest(0, "verified")
+	p.RotateCookieSlot(req.Account.ID, 0, "verified")
+	var failed *openAIWSConn
+	p.SetCookieValidator(func(ctx context.Context, account *Account, lease *openAIWSConnLease) error {
+		failed = lease.conn
+		require.True(t, lease.conn.isLeased())
+		require.Equal(t, [openAICookieWSSlotCount]int{}, p.CookieVerifiedCounts(account.ID))
+		_, _, count := p.AccountPoolLoad(account.ID)
+		require.Zero(t, count, "connection stays private while validator consumes its response")
+		return errors.New("probe returned False")
+	})
+	_, err := p.Acquire(context.Background(), req)
+	require.EqualError(t, err, "probe returned False")
+	require.True(t, failed.isClosed())
+	require.Equal(t, [openAICookieWSSlotCount]int{}, p.CookieVerifiedCounts(req.Account.ID))
+	var validations atomic.Int32
+	p.SetCookieValidator(func(context.Context, *Account, *openAIWSConnLease) error {
+		validations.Add(1)
+		return nil
+	})
+	verified, err := p.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, [openAICookieWSSlotCount]int{1, 0}, p.CookieVerifiedCounts(req.Account.ID), "leased verified sockets count toward the minimum")
+	verified.Release()
+	reused, err := p.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, verified.ConnID(), reused.ConnID())
+	require.Equal(t, int32(1), validations.Load(), "healthy reused socket does not repeat validation")
+	reused.MarkBroken()
+	reused.Release()
+	require.Equal(t, [openAICookieWSSlotCount]int{}, p.CookieVerifiedCounts(req.Account.ID))
+}
+
+func TestOpenAIWSCookiePool_MissingValidatorFailsClosedAndProbeBypassesIt(t *testing.T) {
+	p := cookiePoolTestPool(t, 24)
+	p.SetCookieValidator(nil)
+	req := cookiePoolTestRequest("business")
+	_, err := p.Acquire(context.Background(), req)
+	require.ErrorIs(t, err, errOpenAIWSCookieValidatorMissing)
+	req.Headers.Set(openAICookieWSProbeHeader, "1")
+	probe, err := p.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, [openAICookieWSSlotCount]int{}, p.CookieVerifiedCounts(req.Account.ID))
+	probe.MarkBroken()
+	probe.Release()
+}
+
+func TestOpenAIWSCookiePool_IneligibleAccountDoesNotDial(t *testing.T) {
+	p := cookiePoolTestPool(t, 24)
+	dialer := &openAIWSCountingDialer{}
+	p.setClientDialerForTest(dialer)
+	want := errors.New("account is rate limited")
+	p.SetCookieEligibility(func(context.Context, *Account) error { return want })
+	_, err := p.Acquire(context.Background(), cookiePoolTestRequest("limited"))
+	require.ErrorIs(t, err, want)
+	require.Zero(t, dialer.DialCount())
+	require.Equal(t, [openAICookieWSSlotCount]int{}, p.CookieVerifiedCounts(41))
+}
+
+func TestOpenAIWSCookiePool_WarmupAdoptsScopeOnceWithoutCrossUserReuse(t *testing.T) {
+	p := cookiePoolTestPool(t, 24)
+	warm := cookiePoolSlotRequest(0, "current")
+	warm.Headers.Del(openAICookieWSScopeHeader)
+	warm.CookieWarmup = true
+	p.RotateCookieSlot(warm.Account.ID, 0, "current")
+	ready, err := p.Acquire(context.Background(), warm)
+	require.NoError(t, err)
+	ready.Release()
+	require.Equal(t, [openAICookieWSSlotCount]int{1, 0}, p.CookieVerifiedCounts(warm.Account.ID))
+	require.True(t, ready.conn.cookieUnassigned)
+	a := cookiePoolSlotRequest(0, "current")
+	a.Headers.Set(openAICookieWSScopeHeader, "user-a")
+	first, err := p.Acquire(context.Background(), a)
+	require.NoError(t, err)
+	require.Equal(t, ready.ConnID(), first.ConnID(), "first scoped request adopts verified spare")
+	first.Release()
+	b := cloneOpenAIWSAcquireRequest(a)
+	b.Headers.Set(openAICookieWSScopeHeader, "user-b")
+	second, err := p.Acquire(context.Background(), b)
+	require.NoError(t, err)
+	require.NotEqual(t, first.ConnID(), second.ConnID())
+	second.Release()
+	again, err := p.Acquire(context.Background(), a)
+	require.NoError(t, err)
+	require.NotEqual(t, first.ConnID(), again.ConnID(), "a different scope caused the idle one-slot connection to be replaced")
+	again.Release()
+	b.PreferredConnID, b.ForcePreferredConn = first.ConnID(), true
+	_, err = p.Acquire(context.Background(), b)
+	require.ErrorIs(t, err, errOpenAIWSPreferredConnUnavailable)
+}
+
+func TestOpenAIWSCookiePool_ThreeWarmSocketsAreVerifiedAndBoundAtomically(t *testing.T) {
+	p := cookiePoolTestPool(t, 24)
+	p.RotateCookieSlot(41, 0, "zero")
+	p.RotateCookieSlot(41, 1, "one")
+	p.RotateCookieSlot(41, 2, "two")
+	var validations atomic.Int32
+	p.SetCookieValidator(func(context.Context, *Account, *openAIWSConnLease) error { validations.Add(1); return nil })
+	for slot, generation := range []string{"zero", "one", "two"} {
+		for i := 0; i < 1; i++ {
+			req := cookiePoolSlotRequest(slot, generation)
+			req.CookieWarmup = true
+			req.Headers.Del(openAICookieWSScopeHeader)
+			lease, err := p.Acquire(context.Background(), req)
+			require.NoError(t, err)
+			lease.Release()
+		}
+	}
+	require.Equal(t, [openAICookieWSSlotCount]int{1, 1, 1}, p.CookieVerifiedCounts(41))
+	start := make(chan struct{})
+	results := make(chan *openAIWSConnLease, 3)
+	errs := make(chan error, 3)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			generation := []string{"zero", "one", "two"}[i]
+			req := cookiePoolSlotRequest(i, generation)
+			req.Headers.Set(openAICookieWSScopeHeader, "user-"+strconv.Itoa(i))
+			lease, err := p.Acquire(context.Background(), req)
+			results <- lease
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	ids := make(map[string]bool)
+	for lease := range results {
+		require.False(t, ids[lease.ConnID()])
+		ids[lease.ConnID()] = true
+		lease.Release()
+	}
+	require.Equal(t, int32(3), validations.Load(), "adopted sockets were validated during warmup only")
+	require.Equal(t, [openAICookieWSSlotCount]int{1, 1, 1}, p.CookieVerifiedCounts(41))
+}
+
+func TestOpenAIWSCookiePool_WarmupDoesNotReplaceFullBusinessSlot(t *testing.T) {
+	p := cookiePoolTestPool(t, 24)
+	p.RotateCookieSlot(41, 0, "full")
+	var leases []*openAIWSConnLease
+	for i := 0; i < 1; i++ {
+		req := cookiePoolSlotRequest(0, "full")
+		req.Headers.Set(openAICookieWSScopeHeader, "user-"+strconv.Itoa(i))
+		lease, err := p.Acquire(context.Background(), req)
+		require.NoError(t, err)
+		leases = append(leases, lease)
+	}
+	for _, lease := range leases {
+		lease.Release()
+	}
+	warm := cookiePoolSlotRequest(0, "full")
+	warm.Headers.Del(openAICookieWSScopeHeader)
+	warm.CookieWarmup = true
+	_, err := p.Acquire(context.Background(), warm)
+	require.ErrorIs(t, err, errOpenAIWSConnQueueFull)
+	require.Equal(t, [openAICookieWSSlotCount]int{1, 0, 0}, p.CookieVerifiedCounts(41))
+	for _, lease := range leases {
+		require.False(t, lease.conn.isClosed())
+	}
 }

@@ -385,6 +385,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	usage := &OpenAIUsage{}
+	cookieProbeObserver := openAICookieWSProbeObserver{enabled: cookieWS && openAICookieWSIsProbePayload(payload)}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	responseID := ""
@@ -634,6 +635,7 @@ readLoop:
 			continue
 		}
 		responseModelObserver.ObserveOpenAI(message, eventType)
+		cookieProbeObserver.observe(lease, message, eventType)
 		eventCount++
 		if firstEventType == "" {
 			firstEventType = eventType

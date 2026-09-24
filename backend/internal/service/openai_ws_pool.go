@@ -43,6 +43,7 @@ var (
 	errOpenAIWSPoolChanged              = errors.New("openai ws account pool changed")
 	errOpenAIWSCookieExpired            = errors.New("openai ws cookie expired")
 	errOpenAIWSCookieRetired            = errors.New("openai ws cookie generation retired")
+	errOpenAIWSCookieValidatorMissing   = errors.New("openai ws cookie connection validator unavailable")
 )
 
 type openAIWSDialError struct {
@@ -83,6 +84,9 @@ type openAIWSAcquireRequest struct {
 	ForceNewConn bool
 	// ForcePreferredConn: 强制本次只使用 PreferredConnID，禁止漂移到其它连接。
 	ForcePreferredConn bool
+	// CookieWarmup creates a verified, initially unassigned business socket.
+	// The first real request atomically binds it to its execution scope.
+	CookieWarmup bool
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
@@ -269,7 +273,11 @@ func (l *openAIWSConnLease) CookieExpired() bool {
 }
 
 func (l *openAIWSConnLease) MarkBroken() {
-	if l == nil || l.pool == nil || l.conn == nil || l.released.Load() {
+	if l == nil || l.conn == nil || l.released.Load() {
+		return
+	}
+	if l.pool == nil {
+		l.conn.close()
 		return
 	}
 	l.pool.evictConn(l.accountID, l.conn.id)
@@ -297,6 +305,11 @@ type openAIWSConn struct {
 	routingAffinity        string
 	cookieExpiresAt        time.Time
 	cookieDraining         atomic.Bool
+	cookieVerified         atomic.Bool
+	// cookieUnassigned and cookieScope are guarded by the account pool mutex.
+	// handshakeCompatibility stays immutable once the connection is dialed.
+	cookieUnassigned bool
+	cookieScope      string
 
 	leaseCh   chan struct{}
 	closedCh  chan struct{}
@@ -793,17 +806,25 @@ func (c *openAIWSConn) handshakeHeader(name string) string {
 }
 
 func (c *openAIWSConn) matchesHandshakeCompatibility(compatibility openAIWSHandshakeCompatibilityKey) bool {
-	return c != nil && !c.cookieDraining.Load() && !c.cookieExpired(time.Now()) && c.handshakeCompatibility == compatibility
+	return c != nil && !c.cookieUnassigned && !c.cookieDraining.Load() && !c.cookieExpired(time.Now()) && c.effectiveHandshakeCompatibility() == compatibility
+}
+
+func (c *openAIWSConn) effectiveHandshakeCompatibility() openAIWSHandshakeCompatibilityKey {
+	key := c.handshakeCompatibility
+	if key.cookieGeneration != "" {
+		key.cookieScope = c.cookieScope
+	}
+	return key
 }
 
 // A bound continuation may finish on its original generation until expiry.
 // Identity and user/session scope still have to match; only the generation
 // itself may change when the same account rotates its Cookie.
 func (c *openAIWSConn) matchesPreferredHandshakeCompatibility(compatibility openAIWSHandshakeCompatibilityKey) bool {
-	if c == nil || c.cookieExpired(time.Now()) {
+	if c == nil || c.cookieUnassigned || c.cookieExpired(time.Now()) {
 		return false
 	}
-	key := c.handshakeCompatibility
+	key := c.effectiveHandshakeCompatibility()
 	if key.cookieGeneration != "" && compatibility.cookieGeneration != "" {
 		key.cookieGeneration = compatibility.cookieGeneration
 	}
@@ -852,12 +873,12 @@ type openAIWSAccountPool struct {
 	prewarmUntil             time.Time
 	prewarmFails             int
 	prewarmFailAt            time.Time
-	cookieGenerations        [2]string
-	cookieExpiresAts         [2]time.Time
-	cookieCreating           [2]int
+	cookieGenerations        [openAICookieWSSlotCount]string
+	cookieExpiresAts         [openAICookieWSSlotCount]time.Time
+	cookieCreating           [openAICookieWSSlotCount]int
 	cookieProbeCreating      int
 	retiredCookieGenerations map[string]time.Time
-	candidateAcquires        [2]*openAIWSAcquireRequest
+	candidateAcquires        [openAICookieWSSlotCount]*openAIWSAcquireRequest
 }
 
 func (ap *openAIWSAccountPool) changeChannelLocked() chan struct{} {
@@ -904,7 +925,10 @@ type openAIWSPoolMetrics struct {
 type openAIWSConnPool struct {
 	cfg *config.Config
 	// 通过接口解耦底层 WS 客户端实现，默认使用 coder/websocket。
-	clientDialer openAIWSClientDialer
+	clientDialer      openAIWSClientDialer
+	cookieValidatorMu sync.RWMutex
+	cookieValidator   func(context.Context, *Account, *openAIWSConnLease) error
+	cookieEligibility func(context.Context, *Account) error
 
 	accounts sync.Map // key: int64(accountID), value: *openAIWSAccountPool
 	seq      atomic.Uint64
@@ -914,6 +938,54 @@ type openAIWSConnPool struct {
 	workerStopCh chan struct{}
 	workerWg     sync.WaitGroup
 	closeOnce    sync.Once
+}
+
+func (p *openAIWSConnPool) SetCookieValidator(validator func(context.Context, *Account, *openAIWSConnLease) error) {
+	if p == nil {
+		return
+	}
+	p.cookieValidatorMu.Lock()
+	p.cookieValidator = validator
+	p.cookieValidatorMu.Unlock()
+}
+
+func (p *openAIWSConnPool) SetCookieEligibility(eligibility func(context.Context, *Account) error) {
+	if p == nil {
+		return
+	}
+	p.cookieValidatorMu.Lock()
+	p.cookieEligibility = eligibility
+	p.cookieValidatorMu.Unlock()
+}
+
+func (p *openAIWSConnPool) validateCookieConn(ctx context.Context, account *Account, conn *openAIWSConn) error {
+	if conn.cookieGeneration() == "" || conn.handshakeCompatibility.cookieProbe {
+		return nil
+	}
+	p.cookieValidatorMu.RLock()
+	validator := p.cookieValidator
+	eligibility := p.cookieEligibility
+	p.cookieValidatorMu.RUnlock()
+	if validator == nil {
+		return errOpenAIWSCookieValidatorMissing
+	}
+	if eligibility != nil {
+		if err := eligibility(ctx, account); err != nil {
+			return err
+		}
+	}
+	// The caller has already claimed the sole lease. Keep this private lease
+	// detached from the pool until validation succeeds, so a False response
+	// cannot leak into the business pool or be counted as ready capacity.
+	lease := &openAIWSConnLease{accountID: account.ID, conn: conn}
+	if err := validator(ctx, account, lease); err != nil {
+		return err
+	}
+	if conn.isClosed() || conn.cookieExpired(time.Now()) {
+		return errOpenAIWSConnClosed
+	}
+	conn.cookieVerified.Store(true)
+	return nil
 }
 
 func newOpenAIWSConnPool(cfg *config.Config) *openAIWSConnPool {
@@ -1162,6 +1234,14 @@ type openAIWSAcquireQueueWait struct {
 }
 
 func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConnLease, error) {
+	if req.CookieWarmup {
+		if req.Headers.Get(openAICookieWSGenerationHeader) == "" || req.Headers.Get(openAICookieWSScopeHeader) != "" || req.Headers.Get(openAICookieWSProbeHeader) == "1" {
+			return nil, errors.New("invalid cookie warmup request")
+		}
+		req.ForceNewConn = true
+		req.ForcePreferredConn = false
+		req.PreferredConnID = ""
+	}
 	if p != nil {
 		p.metrics.acquireTotal.Add(1)
 	}
@@ -1425,6 +1505,20 @@ retryAcquire:
 		}
 	}
 
+	// Prefer an already-bound compatible socket above. A verified spare has
+	// never served a business turn, so it also satisfies fresh-connection mode.
+	if compatibility.cookieGeneration != "" && !compatibility.cookieProbe && !req.CookieWarmup {
+		if conn := p.adoptCookieWarmupConnLocked(ap, compatibility); conn != nil {
+			connPick := time.Since(pickStartedAt)
+			p.recordConnPickDuration(connPick)
+			ap.mu.Unlock()
+			closeOpenAIWSConns(evicted)
+			p.metrics.acquireReuseTotal.Add(1)
+			p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
+			return &openAIWSConnLease{pool: p, accountID: accountID, conn: conn, connPick: connPick, reused: true}, nil
+		}
+	}
+
 	if !req.ForceNewConn && !candidate && p.cookieRequestAtCapacityLocked(ap, compatibility, effectiveMaxConns) {
 		affine := p.pickLeastBusyConnWithRoutingAffinityLocked(ap, compatibility, routingAffinity)
 		idle := p.pickOldestIdleConnWithoutHandshakeCompatibilityLocked(ap, compatibility)
@@ -1466,7 +1560,7 @@ retryAcquire:
 		}
 	}
 
-	if req.ForceNewConn && !candidate && p.cookieRequestAtCapacityLocked(ap, compatibility, effectiveMaxConns) {
+	if req.ForceNewConn && !req.CookieWarmup && !candidate && p.cookieRequestAtCapacityLocked(ap, compatibility, effectiveMaxConns) {
 		idle := p.pickOldestIdleConnLocked(ap)
 		if compatibility.cookieGeneration != "" {
 			idle = p.pickOldestIdleCookieConnLocked(ap, compatibility, false)
@@ -1487,6 +1581,18 @@ retryAcquire:
 		closeOpenAIWSConns(evicted)
 
 		conn, dialErr := p.dialConn(ctx, req)
+		if dialErr == nil {
+			// Claim before running the validator. The permanent reader loop may
+			// already be running, but all probe events belong to this lease.
+			if !conn.tryAcquire() {
+				dialErr = errOpenAIWSConnClosed
+			} else {
+				dialErr = p.validateCookieConn(ctx, req.Account, conn)
+			}
+			if dialErr != nil {
+				conn.close()
+			}
+		}
 
 		ap = p.getOrCreateAccountPool(accountID)
 		ap.mu.Lock()
@@ -1511,15 +1617,9 @@ retryAcquire:
 			ap.mu.Unlock()
 			return nil, dialErr
 		}
-		// Claim the freshly dialed connection before publishing it. Otherwise a
-		// topology waiter awakened below can take the free semaphore first and
-		// make the caller that paid for the dial queue behind it.
-		if !conn.tryAcquire() {
-			ap.signalChangedLocked()
-			ap.mu.Unlock()
-			conn.close()
-			return nil, errOpenAIWSConnClosed
-		}
+		// Validation owns the freshly dialed connection's lease throughout;
+		// topology waiters cannot take it before the creating caller returns.
+		conn.cookieUnassigned = req.CookieWarmup
 		ap.conns[conn.id] = conn
 		ap.prewarmFails = 0
 		ap.prewarmFailAt = time.Time{}
@@ -1619,7 +1719,7 @@ func (p *openAIWSConnPool) recordConnPickDuration(duration time.Duration) {
 }
 
 func (p *openAIWSConnPool) recordLastSuccessfulAcquire(accountID int64, generation uint64, req openAIWSAcquireRequest) {
-	if p == nil || accountID <= 0 {
+	if p == nil || accountID <= 0 || req.CookieWarmup {
 		return
 	}
 	ap, ok := p.getAccountPool(accountID)
@@ -1662,7 +1762,7 @@ func (p *openAIWSConnPool) pickOldestIdleConnLocked(ap *openAIWSAccountPool) *op
 	return oldest
 }
 
-const openAIWSCookieSlotConnLimit = 10
+const openAIWSCookieSlotConnLimit = 1
 
 func (ap *openAIWSAccountPool) adjustCookieCreatingLocked(key openAIWSHandshakeCompatibilityKey, delta int) {
 	if key.cookieGeneration == "" {
@@ -1727,6 +1827,49 @@ func (p *openAIWSConnPool) ConnCookieSlot(accountID int64, connID string) (int, 
 		return 0, false
 	}
 	return conn.handshakeCompatibility.cookieSlot, true
+}
+
+// adoptCookieWarmupConnLocked binds a verified unused socket once. The
+// handshake identity remains immutable; only this local execution scope is
+// assigned while holding the same mutex used by all compatibility lookups.
+func (p *openAIWSConnPool) adoptCookieWarmupConnLocked(ap *openAIWSAccountPool, key openAIWSHandshakeCompatibilityKey) *openAIWSConn {
+	for _, conn := range ap.conns {
+		if conn == nil || !conn.cookieUnassigned || !conn.cookieVerified.Load() || conn.cookieDraining.Load() || conn.cookieExpired(time.Now()) || conn.isClosed() {
+			continue
+		}
+		other := conn.effectiveHandshakeCompatibility()
+		other.cookieScope = key.cookieScope
+		if other != key || !conn.tryAcquire() {
+			continue
+		}
+		conn.cookieScope = key.cookieScope
+		conn.cookieUnassigned = false
+		return conn
+	}
+	return nil
+}
+
+// CookieVerifiedCounts includes idle and leased business sockets that passed
+// their own Tibo check and still belong to the slot's published generation.
+func (p *openAIWSConnPool) CookieVerifiedCounts(accountID int64) [openAICookieWSSlotCount]int {
+	counts := [openAICookieWSSlotCount]int{}
+	ap, ok := p.getAccountPool(accountID)
+	if !ok || ap == nil {
+		return counts
+	}
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+	now := time.Now()
+	for _, conn := range ap.conns {
+		if conn == nil || !conn.cookieVerified.Load() || conn.cookieDraining.Load() || conn.cookieExpired(now) || conn.isClosed() || conn.isUnusable() || (!conn.isLeased() && conn.readerLoopPending()) {
+			continue
+		}
+		key := conn.handshakeCompatibility
+		if key.cookieGeneration != "" && !key.cookieProbe && key.cookieGeneration == ap.cookieGenerations[key.cookieSlot] {
+			counts[key.cookieSlot]++
+		}
+	}
+	return counts
 }
 
 func (p *openAIWSConnPool) pickOldestIdleConnWithoutHandshakeCompatibilityLocked(
@@ -1896,7 +2039,7 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 				}
 				continue
 			}
-			// Cookie business sockets already have a strict ten-per-slot
+			// Cookie business sockets already have a strict one-per-slot
 			// bound. Keep healthy current sockets for the next concurrent wave;
 			// the legacy idle limit must not shrink that capacity to two.
 			key := conn.handshakeCompatibility
@@ -2049,6 +2192,11 @@ func (p *openAIWSConnPool) ensureTargetIdleAsync(accountID int64) {
 	if ap.lastAcquire == nil {
 		return
 	}
+	// Cookie sockets are warmed by the verified-minimum worker, which owns
+	// model validation and safe assignment of an initially empty scope.
+	if ap.lastAcquire.Headers.Get(openAICookieWSGenerationHeader) != "" {
+		return
+	}
 	if _, err := openAIWSCookieExpiry(ap.lastAcquire.Headers); err != nil {
 		return
 	}
@@ -2151,6 +2299,17 @@ func (p *openAIWSConnPool) targetConnCountLocked(ap *openAIWSAccountPool, maxCon
 
 func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequest, total int, generations ...uint64) {
 	key := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	if key.cookieGeneration != "" {
+		if ap, ok := p.getAccountPool(accountID); ok && ap != nil {
+			ap.mu.Lock()
+			ap.creating -= total
+			ap.adjustCookieCreatingLocked(key, -total)
+			ap.prewarmActive = false
+			ap.signalChangedLocked()
+			ap.mu.Unlock()
+		}
+		return
+	}
 	generation := uint64(0)
 	if len(generations) > 0 {
 		generation = generations[0]
@@ -2236,7 +2395,7 @@ func (p *openAIWSConnPool) RotateCookieGeneration(accountID int64, generation st
 // never interrupts a leased response, nor closes pinned continuations before
 // their original Cookie expires. The other slot and legacy pools are untouched.
 func (p *openAIWSConnPool) RotateCookieSlot(accountID int64, slot int, generation string) {
-	if p == nil || accountID <= 0 || slot < 0 || slot > 1 || strings.TrimSpace(generation) == "" {
+	if p == nil || accountID <= 0 || slot < 0 || slot >= openAICookieWSSlotCount || strings.TrimSpace(generation) == "" {
 		return
 	}
 	ap := p.getOrCreateAccountPool(accountID)
@@ -2316,10 +2475,10 @@ func (p *openAIWSConnPool) ClearAccount(accountID int64) {
 		}
 	}
 	ap.lastAcquire = nil
-	ap.cookieGenerations = [2]string{}
-	ap.cookieExpiresAts = [2]time.Time{}
+	ap.cookieGenerations = [openAICookieWSSlotCount]string{}
+	ap.cookieExpiresAts = [openAICookieWSSlotCount]time.Time{}
 	ap.retiredCookieGenerations = nil
-	ap.candidateAcquires = [2]*openAIWSAcquireRequest{}
+	ap.candidateAcquires = [openAICookieWSSlotCount]*openAIWSAcquireRequest{}
 	ap.prewarmUntil = time.Time{}
 	ap.prewarmFails = 0
 	ap.prewarmFailAt = time.Time{}
@@ -2434,6 +2593,16 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	if p == nil || p.clientDialer == nil {
 		return nil, errors.New("openai ws client dialer is nil")
 	}
+	if req.Headers.Get(openAICookieWSGenerationHeader) != "" && req.Headers.Get(openAICookieWSProbeHeader) != "1" {
+		p.cookieValidatorMu.RLock()
+		eligibility := p.cookieEligibility
+		p.cookieValidatorMu.RUnlock()
+		if eligibility != nil {
+			if err := eligibility(ctx, req.Account); err != nil {
+				return nil, err
+			}
+		}
+	}
 	headers := cloneHeader(req.Headers)
 	var err error
 	if req.HeadersFactory != nil {
@@ -2480,6 +2649,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)
 	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	pooledConn.cookieScope = pooledConn.handshakeCompatibility.cookieScope
 	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
 	pooledConn.cookieExpiresAt = cookieExpiry
 	return pooledConn, nil
@@ -2717,7 +2887,7 @@ func openAIWSCookieExpiry(headers http.Header) (time.Time, error) {
 	if strings.TrimSpace(headers.Get(openAICookieWSGenerationHeader)) == "" {
 		return time.Time{}, nil
 	}
-	if slot := strings.TrimSpace(headers.Get(openAICookieWSSlotHeader)); slot != "" && slot != "0" && slot != "1" {
+	if slot := strings.TrimSpace(headers.Get(openAICookieWSSlotHeader)); slot != "" && slot != "0" && slot != "1" && slot != "2" {
 		return time.Time{}, errors.New("invalid openai ws cookie slot")
 	}
 	epoch, err := strconv.ParseInt(strings.TrimSpace(headers.Get(openAICookieWSExpiresHeader)), 10, 64)
@@ -2732,8 +2902,9 @@ func openAIWSCookieExpiry(headers http.Header) (time.Time, error) {
 }
 
 func openAIWSCookieSlot(headers http.Header) int {
-	if strings.TrimSpace(headers.Get(openAICookieWSSlotHeader)) == "1" {
-		return 1
+	slot, err := strconv.Atoi(strings.TrimSpace(headers.Get(openAICookieWSSlotHeader)))
+	if err == nil && slot >= 0 && slot < openAICookieWSSlotCount {
+		return slot
 	}
 	return 0
 }

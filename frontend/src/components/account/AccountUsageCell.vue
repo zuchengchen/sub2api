@@ -129,7 +129,10 @@
             v-if="ticket.mode === 'cookie_ws'"
             class="text-sky-600 dark:text-sky-400"
             :title="ticket.refresh_at ? t('admin.accounts.openai.codexCookieRefreshAt', { time: ticket.refresh_at }) : undefined"
-          >{{ t('admin.accounts.openai.codexCookieGroups', { ready: ticket.cookie_groups_ready ?? 0, total: ticket.cookie_groups_total ?? 2, sockets: ticket.ws_per_group ?? 10 }) }}</span>
+          >{{ t('admin.accounts.openai.codexCookieGroups', { ready: ticket.cookie_groups_ready ?? 0, total: ticket.cookie_groups_total ?? 3, sockets: ticket.ws_per_group ?? 1 }) }}</span>
+          <span v-if="ticket.mode === 'cookie_ws'" :class="(ticket.verified_ws ?? 0) >= (ticket.minimum_ws ?? 3) ? 'text-emerald-600' : 'text-amber-600'">
+            {{ t('admin.accounts.openai.codexCookieVerifiedWS', { count: ticket.verified_ws ?? 0, minimum: ticket.minimum_ws ?? 3 }) }}
+          </span>
           <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">{{ formatCodexTicketRemaining(ticket.remaining_seconds) }}</span>
           <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.codexTurnTicketPaused') }}</span>
           <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>

@@ -2533,8 +2533,12 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 		return false
 	}
 	if (requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress || requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2) && len(requestedModel) > 0 {
-		if s.openAICookieWSEnabledForModel(account, normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestedModel[0]))) {
+		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestedModel[0]))
+		if s.openAICookieWSEnabledForModel(account, upstreamModel) {
 			return true
+		}
+		if s.openAICookieWSHTTPOnlyModel(account, upstreamModel) {
+			return requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress
 		}
 	}
 	if requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress {
