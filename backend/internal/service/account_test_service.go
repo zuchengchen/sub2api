@@ -2621,6 +2621,7 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 	reader := bufio.NewReader(body)
 	buffered := c.Request != nil && intelligentContext(c.Request.Context()) != nil
 	var text strings.Builder
+	var completedOutput intelligentCompletedOutput
 	terminalError := func(data map[string]any, eventType string) error {
 		response, _ := data["response"].(map[string]any)
 		for _, value := range []any{response["error"], data["error"]} {
@@ -2654,6 +2655,7 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 			}
 			var data map[string]any
 			if json.Unmarshal([]byte(jsonStr), &data) == nil {
+				completedOutput.observe(data)
 				eventType, _ := data["type"].(string)
 				switch eventType {
 				case "response.output_text.delta":
@@ -2670,11 +2672,11 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 					if !intelligentResponsesTerminalSuccessful(data) {
 						return terminalError(data, eventType)
 					}
-					finalText, present := intelligentResponsesTerminalText(data)
+					finalText, present, truncated := completedOutput.terminalText(data)
 					if !present {
 						finalText = text.String()
 					}
-					if len(finalText) > intelligentCaptureTextLimit {
+					if truncated || len(finalText) > intelligentCaptureTextLimit {
 						return s.sendErrorAndEnd(c, "Account test output is too large")
 					}
 					if !buffered {
