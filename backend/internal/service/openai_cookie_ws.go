@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"maps"
 	"net/http"
@@ -288,12 +287,14 @@ func openAICookieWSProbePayload(websocket bool) map[string]any {
 }
 
 type openAICookieWSObservation struct {
-	delta       strings.Builder
-	completed   bool
-	failed      bool
-	trueAnswer  bool
-	modelMatch  bool
-	answerClass string
+	delta                strings.Builder
+	completed            bool
+	successfulCompletion bool
+	failureStatus        int
+	failed               bool
+	trueAnswer           bool
+	modelMatch           bool
+	answerClass          string
 }
 
 func (o *openAICookieWSObservation) event(payload []byte, eventType string) {
@@ -306,6 +307,7 @@ func (o *openAICookieWSObservation) event(payload []byte, eventType string) {
 	switch eventType {
 	case "error", "response.failed", "response.incomplete", "response.cancelled":
 		o.failed = true
+		o.failureStatus = cookieWSTestPayloadStatus(payload)
 	case "response.output_text.delta":
 		o.delta.WriteString(gjson.GetBytes(payload, "delta").String())
 	case "response.completed":
@@ -315,6 +317,8 @@ func (o *openAICookieWSObservation) event(payload []byte, eventType string) {
 		}
 		o.completed = true
 		model, success := openAICodexSuccessfulCompletionModel(payload, eventType)
+		o.successfulCompletion = success
+		o.failureStatus = cookieWSTestPayloadStatus(payload)
 		o.modelMatch = success && model == openAICodexTicketDefaultModel
 		if !o.modelMatch {
 			o.failed = true
@@ -366,21 +370,21 @@ func observeOpenAICookieWSHTTPProbe(body []byte) *openAICookieWSObservation {
 
 func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, account *Account, token, proxy string, identity openAICookieWSIdentity) (*openAICodexTicketProbeResult, error) {
 	if account == nil {
-		return nil, errOpenAICookieWSAccountUnavailable
+		return nil, cookieWSRecoveryOperationError("account", errOpenAICookieWSAccountUnavailable, 0, nil)
 	}
 	current, err := s.latestOpenAICookieWSAccount(ctx, account.ID)
 	if err != nil {
-		return nil, err
+		return nil, cookieWSRecoveryOperationError("account", err, 0, nil)
 	}
 	account = current
 	token, _, err = s.GetAccessToken(ctx, account)
 	if err != nil || token == "" {
-		return nil, errOpenAICookieWSAccountUnavailable
+		return nil, cookieWSRecoveryFailure("authentication", "cookie_ws_token_unavailable", "Cookie recovery access token is unavailable", 0, errOpenAICookieWSAccountUnavailable)
 	}
 	body, _ := json.Marshal(openAICookieWSProbePayload(false))
 	req, err := http.NewRequestWithContext(WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAIHarvest), http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, cookieWSRecoveryOperationError("http_request", err, 0, nil)
 	}
 	req.Close = true
 	req.Host = "chatgpt.com"
@@ -390,14 +394,28 @@ func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, ac
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 	identity.apply(req.Header)
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
-		return nil, err
+		return nil, cookieWSRecoveryFailure("account_headers", "cookie_ws_account_identity_unavailable", "Cookie recovery account identity could not be prepared", 0, nil)
 	}
 	resp, err := s.httpUpstream.Do(req, proxy, account.ID, account.Concurrency)
 	if err != nil {
-		return nil, err
+		var result *openAICodexTicketProbeResult
+		if resp != nil {
+			result = &openAICodexTicketProbeResult{capturedAt: time.Now(), status: resp.StatusCode, headers: resp.Header.Clone()}
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return result, cookieWSRecoveryOperationError("http_request", err, result.status, result.headers)
+		}
+		return nil, cookieWSRecoveryOperationError("http_request", err, 0, nil)
 	}
 	if resp == nil || resp.Body == nil {
-		return nil, errors.New("cookie HTTP probe returned no body")
+		var result *openAICodexTicketProbeResult
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+			result = &openAICodexTicketProbeResult{capturedAt: time.Now(), status: status, headers: resp.Header.Clone()}
+		}
+		return result, cookieWSRecoveryFailure("http_stream", "cookie_ws_http_body_missing", "Cookie recovery HTTP response had no body", status, nil)
 	}
 	capturedAt := time.Now()
 	defer resp.Body.Close()
@@ -406,33 +424,34 @@ func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, ac
 		limit = openAICodexTicketProbeBodyLimit + 1
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	result := &openAICodexTicketProbeResult{capturedAt: capturedAt, status: resp.StatusCode, headers: resp.Header.Clone(), body: data}
 	if err != nil {
-		return nil, errors.New("cookie HTTP probe stream failed")
+		return result, cookieWSRecoveryOperationError("http_stream", err, resp.StatusCode, resp.Header)
 	}
-	return &openAICodexTicketProbeResult{capturedAt: capturedAt, status: resp.StatusCode, headers: resp.Header.Clone(), body: data}, nil
+	return result, nil
 }
 
 // validateOpenAICookieWSCandidate keeps a successful probe connection in the pool;
 // its generation cannot be selected by business traffic until publication.
 func (s *OpenAIGatewayService) validateOpenAICookieWSCandidate(ctx context.Context, account *Account, token string, ticket *openAICookieWSTicket) (*openAIWSConnLease, error) {
 	if account == nil {
-		return nil, errOpenAICookieWSAccountUnavailable
+		return nil, cookieWSRecoveryOperationError("account", errOpenAICookieWSAccountUnavailable, 0, nil)
 	}
 	current, err := s.latestOpenAICookieWSAccount(ctx, account.ID)
 	if err != nil {
-		return nil, err
+		return nil, cookieWSRecoveryOperationError("account", err, 0, nil)
 	}
 	account = current
 	token, _, err = s.GetAccessToken(ctx, account)
 	if err != nil || token == "" {
-		return nil, errOpenAICookieWSAccountUnavailable
+		return nil, cookieWSRecoveryFailure("authentication", "cookie_ws_token_unavailable", "Cookie recovery access token is unavailable", 0, errOpenAICookieWSAccountUnavailable)
 	}
 	h := make(http.Header)
 	h.Set("Authorization", "Bearer "+token)
 	applyOpenAICookieWSTicketHeaders(h, ticket)
 	h.Set(openAICookieWSProbeHeader, "1")
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, h, account); err != nil {
-		return nil, err
+		return nil, cookieWSRecoveryFailure("account_headers", "cookie_ws_account_identity_unavailable", "Cookie recovery account identity could not be prepared", 0, nil)
 	}
 	pool := s.getOpenAIWSConnPool()
 	lease, err := pool.Acquire(ctx, openAIWSAcquireRequest{
@@ -440,7 +459,7 @@ func (s *OpenAIGatewayService) validateOpenAICookieWSCandidate(ctx context.Conte
 		Headers: h, ProxyURL: "", ForceNewConn: true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, cookieWSRecoveryOperationError("ws_acquire", err, 0, nil)
 	}
 	success := false
 	defer func() {
@@ -451,26 +470,26 @@ func (s *OpenAIGatewayService) validateOpenAICookieWSCandidate(ctx context.Conte
 	}()
 	for turn := 0; turn < 2; turn++ {
 		if _, err := s.latestOpenAICookieWSAccount(ctx, account.ID); err != nil {
-			return nil, err
+			return nil, cookieWSRecoveryOperationError("account", err, 0, nil)
 		}
 		if err := lease.WriteJSONContext(ctx, openAICookieWSProbePayload(true)); err != nil {
-			return nil, errors.New("cookie WS probe write failed")
+			return nil, cookieWSRecoveryOperationError("ws_write", err, 0, nil)
 		}
 		var observation openAICookieWSObservation
 		total := 0
 		for !observation.completed && !observation.failed {
 			message, err := lease.ReadMessageContext(ctx)
 			if err != nil {
-				return nil, errors.New("cookie WS probe read failed")
+				return nil, cookieWSRecoveryOperationError("ws_read", err, 0, nil)
 			}
 			total += len(message)
 			if total > openAICodexTicketProbeBodyLimit {
-				return nil, errors.New("cookie WS probe exceeded response limit")
+				return nil, cookieWSRecoveryFailure("ws_validation", "cookie_ws_ws_validation_too_large", "Cookie recovery websocket validation response exceeded its size limit", 0, nil)
 			}
 			observation.event(message, "")
 		}
 		if !observation.completed || !observation.trueAnswer || observation.failed {
-			return nil, errors.New("cookie WS probe did not return True")
+			return nil, cookieWSRecoveryObservationError("ws_validation", &observation, 0)
 		}
 	}
 	success = true
@@ -507,6 +526,7 @@ func (s *OpenAIGatewayService) noteOpenAICookieWSSlotMiss(accountID int64, slot 
 		next = *reset
 	}
 	s.openaiCookieWSRetry.Store(key, &openAICookieWSRetryState{attempts: attempts, nextAttemptAt: next, reason: reason})
+	s.phaseOpenAICookieWSRecovery(accountID, slot, "refresh", "backoff", &next)
 	logger.L().Info("openai_cookie_ws refresh deferred", zap.Int64("account_id", accountID), zap.Int("slot", slot), zap.String("reason", reason), zap.Int("http", status), zap.Time("next_attempt_at", next))
 }
 
@@ -529,6 +549,7 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSTickets(ctx context.Context)
 	}
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
 	if err != nil {
+		logger.L().Info("openai_cookie_ws recovery account scan failed", zap.String("stage", "account"), zap.String("code", "cookie_ws_account_list_unavailable"))
 		return
 	}
 	// Bounded parallelism prevents one slow proxy from delaying every account.
@@ -572,40 +593,53 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 	_, _, _ = s.openaiCookieWSFlight.Do(key, func() (any, error) {
 		latest, err := s.latestOpenAICookieWSAccount(ctx, account.ID)
 		if err != nil {
+			s.failOpenAICookieWSRecovery(account.ID, slot, "refresh", "waiting", cookieWSRecoveryOperationError("account", err, 0, nil), nil)
 			return nil, nil
 		}
 		account = latest
 		now := time.Now()
 		previous := s.lookupOpenAICookieWSTicketSlot(account, openAICodexTicketDefaultModel, slot)
-		if !previous.needsRefresh(now) || s.openAICookieWSSlotRetryWaiting(account.ID, slot, now) || openAICookieWSAccountSkipReason(account, now) != "" {
+		if !previous.needsRefresh(now) {
+			s.phaseOpenAICookieWSRecovery(account.ID, slot, "refresh", "idle", nil)
 			return nil, nil
 		}
+		if s.openAICookieWSSlotRetryWaiting(account.ID, slot, now) || openAICookieWSAccountSkipReason(account, now) != "" {
+			return nil, nil
+		}
+		s.beginOpenAICookieWSRecovery(account.ID, slot, "refresh", "waiting")
 		harvestCtx := withOpenAICodexTicketHarvest(ctx)
 		token, _, err := s.GetAccessToken(harvestCtx, account)
 		if err != nil || token == "" {
-			s.noteOpenAICookieWSSlotMiss(account.ID, slot, now, "token_unavailable", 0, nil)
+			s.deferOpenAICookieWSRecovery(account.ID, slot, "token_unavailable", cookieWSRecoveryFailure("authentication", "cookie_ws_token_unavailable", "Cookie recovery access token is unavailable", 0, errOpenAICookieWSAccountUnavailable))
 			return nil, nil
 		}
 		timeout := time.Duration(s.openAICodexTicketConfig().HarvestAttemptTimeoutSeconds) * time.Second
 		var candidate *openAICookieWSTicket
 		if previous.valid(now) && !previous.processVerified && now.Before(previous.CapturedAt.Add(openAICookieWSRefreshAge)) {
+			s.phaseOpenAICookieWSRecovery(account.ID, slot, "refresh", "restoring", nil)
 			copy := *previous
 			candidate = &copy
 		} else {
 			proxy := s.openAICodexTicketHarvestProxyURLContext(ctx)
 			if proxy == "" || s.httpUpstream == nil {
-				s.noteOpenAICookieWSSlotMiss(account.ID, slot, now, "harvest_proxy_unavailable", 0, nil)
+				s.deferOpenAICookieWSRecovery(account.ID, slot, "harvest_proxy_unavailable", cookieWSRecoveryFailure("configuration", "cookie_ws_harvest_proxy_unavailable", "Cookie recovery HTTP harvester or proxy configuration is unavailable", 0, nil))
 				return nil, nil
 			}
 			identity := newOpenAICookieWSIdentity()
 			if previous != nil && previous.Identity.valid() {
 				identity = previous.Identity
 			}
+			s.phaseOpenAICookieWSRecovery(account.ID, slot, "refresh", "harvesting", nil)
 			probeCtx, cancel := context.WithTimeout(harvestCtx, timeout)
 			result, probeErr := s.doOpenAICookieWSHTTPProbe(probeCtx, account, token, proxy, identity)
 			cancel()
 			if probeErr != nil {
-				s.noteOpenAICookieWSSlotMiss(account.ID, slot, time.Now(), "http_probe_failed", 0, nil)
+				status := 0
+				var headers http.Header
+				if result != nil {
+					status, headers = result.status, result.headers
+				}
+				s.deferOpenAICookieWSRecovery(account.ID, slot, "http_probe_failed", cookieWSRecoveryOperationError("http_request", probeErr, status, headers))
 				return nil, nil
 			}
 			cookies := openAICodexTicketCookieHeader(result.headers)
@@ -618,10 +652,19 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 					reason = "http_probe_missing_cookie"
 				}
 				observation := observeOpenAICookieWSHTTPProbe(result.body)
+				failure := cookieWSRecoveryObservationError("http_validation", observation, result.status)
+				if result.status != http.StatusOK {
+					failure = cookieWSRecoveryStatusFailure("http_request", result.status)
+				} else if cookies == "" {
+					failure = cookieWSRecoveryFailure("http_validation", "cookie_ws_http_cookie_missing", "Cookie recovery HTTP response did not provide a usable Cookie", result.status, nil)
+				} else if len(result.body) > openAICodexTicketProbeBodyLimit {
+					failure = cookieWSRecoveryFailure("http_validation", "cookie_ws_http_validation_too_large", "Cookie recovery HTTP validation response exceeded its size limit", result.status, nil)
+				}
+				failure.retryAt = parseRetryAfterResetTime(result.headers, time.Now())
 				logger.L().Info("openai_cookie_ws HTTP probe rejected", zap.Int64("account_id", account.ID), zap.Int("slot", slot),
 					zap.Int("http", result.status), zap.Int("cookie_count", openAICodexTicketCookieCount(cookies)),
 					zap.Bool("completed", observation.completed), zap.Bool("model_match", observation.modelMatch), zap.String("answer_class", observation.answerClass))
-				s.noteOpenAICookieWSSlotMiss(account.ID, slot, time.Now(), reason, result.status, result.headers)
+				s.deferOpenAICookieWSRecovery(account.ID, slot, reason, failure)
 				return nil, nil
 			}
 			captured := result.capturedAt
@@ -629,6 +672,7 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 				Generation: uuid.NewString(), Cookies: cookies, Identity: identity, HTTPVerified: true,
 				CapturedAt: captured, RefreshAt: captured.Add(openAICookieWSRefreshAge), ExpiresAt: captured.Add(openAICookieWSLifetime)}
 		}
+		s.phaseOpenAICookieWSRecovery(account.ID, slot, "refresh", "validating", nil)
 		verifyCtx, cancel := context.WithTimeout(harvestCtx, 3*timeout)
 		lease, verifyErr := s.validateOpenAICookieWSCandidate(verifyCtx, account, token, candidate)
 		cancel()
@@ -640,19 +684,14 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 				invalid.WSVerified = false
 				s.openaiCookieWSTickets.Store(key, &invalid)
 			}
-			status := 0
-			var headers http.Header
-			var dialErr *openAIWSDialError
-			if errors.As(verifyErr, &dialErr) {
-				status, headers = dialErr.StatusCode, dialErr.ResponseHeaders
-			}
-			s.noteOpenAICookieWSSlotMiss(account.ID, slot, time.Now(), "ws_probe_failed", status, headers)
+			s.deferOpenAICookieWSRecovery(account.ID, slot, "ws_probe_failed", cookieWSRecoveryOperationError("ws_validation", verifyErr, 0, nil))
 			return nil, nil
 		}
 		defer lease.Release()
 		candidate.WSVerified, candidate.processVerified = true, true
 		if !candidate.ready(time.Now()) {
 			lease.MarkBroken()
+			s.failOpenAICookieWSRecovery(account.ID, slot, "refresh", "waiting", cookieWSRecoveryOperationError("ws_validation", errOpenAIWSCookieExpired, 0, nil), nil)
 			return nil, nil
 		}
 		if s.accountRepo != nil {
@@ -661,12 +700,13 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 			cancel()
 			if err != nil {
 				lease.MarkBroken()
-				s.noteOpenAICookieWSSlotMiss(account.ID, slot, time.Now(), "persist_failed", 0, nil)
+				s.deferOpenAICookieWSRecovery(account.ID, slot, "persist_failed", cookieWSRecoveryFailure("persistence", "cookie_ws_persist_failed", "Verified Cookie could not be saved", 0, nil))
 				return nil, nil
 			}
 		}
 		s.openaiCookieWSTickets.Store(key, candidate)
 		s.openaiCookieWSRetry.Delete(key)
+		s.succeedOpenAICookieWSRecovery(account.ID, slot, "refresh")
 		s.getOpenAIWSConnPool().RotateCookieSlot(account.ID, slot, candidate.Generation)
 		lease.MarkBroken() // Candidate probe never consumes a business slot.
 		logger.L().Info("openai_cookie_ws ready", zap.Int64("account_id", account.ID), zap.String("model", candidate.Model),
@@ -676,30 +716,6 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 }
 
 func openAICookieWSStatus(account *Account, model string, now time.Time) OpenAICodexTicketStatus {
-	status := OpenAICodexTicketStatus{Model: model, Mode: openAICookieWSMode, Blocked: true, CookieGroupsTotal: openAICookieWSSlotCount, WSPerGroup: 1}
-	var ticket *openAICookieWSTicket
-	for slot := 0; slot < openAICookieWSSlotCount; slot++ {
-		candidate := parseOpenAICookieWSTicket(account.ID, model, account.Extra[openAICookieWSExtraKeySlot(model, slot)])
-		if candidate == nil || candidate.Slot != slot {
-			continue
-		}
-		if candidate.valid(now) {
-			status.CookieGroupsReady++
-			if ticket == nil || !ticket.valid(now) || candidate.ExpiresAt.Before(ticket.ExpiresAt) {
-				ticket = candidate
-			}
-		} else if ticket == nil {
-			ticket = candidate
-		}
-	}
-	if ticket != nil {
-		status.CapturedAt, status.RefreshAt, status.ExpiresAt = &ticket.CapturedAt, &ticket.RefreshAt, &ticket.ExpiresAt
-		status.RemainingSeconds = int64(ticket.ExpiresAt.Sub(now) / time.Second)
-		if status.RemainingSeconds < 0 {
-			status.RemainingSeconds = 0
-		}
-	}
-	status.Ready = status.CookieGroupsReady > 0
-	status.Blocked = !status.Ready
-	return status
+	// Without this process's gateway there is no evidence of a ready socket.
+	return (*OpenAIGatewayService)(nil).openAICookieWSRuntimeStatus(account, model, now)
 }

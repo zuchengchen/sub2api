@@ -520,6 +520,7 @@ type OpenAIGatewayService struct {
 	openaiCookieWSSlots        sync.Map
 	openaiCookieWSWarmupFlight singleflight.Group
 	openaiCookieWSWarmupRetry  sync.Map
+	openaiCookieWSRecovery     sync.Map
 	// openaiCodexTicketHarvestBackoff: accountID\x00model → *openAICodexTicketHarvestBackoff。
 	// 保留给单账号探测的测试节奏。共享票池的轮换在 openaiCodexShared。
 	openaiCodexTicketHarvestBackoff sync.Map
