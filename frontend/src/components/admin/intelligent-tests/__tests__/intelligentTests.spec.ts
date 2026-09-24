@@ -227,6 +227,16 @@ describe('independent settings and persisted status', () => {
     expect(wrapper.findAll('button').at(-1)?.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
+  it('shows the latest failure reason even when previewing an earlier completed result', () => {
+    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], anti_degradation: false, tests: [] }
+    const latest: TestRecord = { ...record, id: 8, status: 'account_error', error_message: 'WS 验证未返回 True；该连接已关闭 <script>unsafe</script>' }
+    const completed: TestRecord = { ...record, id: 7, status: 'completed', result: '7' }
+    const wrapper = mount(TestResultCard, { props: { account, summary: { test_type: 'candy', latest, latest_completed: completed, history_count: 2, consecutive_anomalies: 0, risk: '' }, now: Date.now() }, global })
+    expect(wrapper.get('[data-testid="test-error-detail"]').text()).toBe(latest.error_message)
+    expect(wrapper.find('script').exists()).toBe(false)
+    expect(wrapper.text()).toContain('展示最近完成的结果 · #7')
+    wrapper.unmount()
+  })
 })
 
 describe('ordinary-user visibility', () => {

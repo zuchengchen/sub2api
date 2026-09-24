@@ -150,6 +150,7 @@ type UserPelicanTest struct {
 	ID              int64      `json:"id"`
 	Status          string     `json:"status"`
 	HTML            string     `json:"html"`
+	PreviewIssue    string     `json:"preview_issue,omitempty"`
 	Prompt          string     `json:"prompt"`
 	Model           string     `json:"model"`
 	GroupName       string     `json:"group_name"`

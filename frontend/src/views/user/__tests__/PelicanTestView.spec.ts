@@ -25,6 +25,10 @@ const messages = {
       model: '模型',
       reasoning: '推理深度',
       htmlUnavailable: '无法安全显示这段 HTML',
+      incompleteLabel: '输出未完成',
+      incompleteResult: '本次测试未返回完整内容，残缺结果不作为完整画面展示。',
+      incompletePreview: '本次输出未完成，请选择其他时间的结果。',
+      scriptsRemoved: '原答复包含脚本，当前预览不执行脚本，部分画面或动画可能无法显示。',
       prompt: '原始提示词',
       loadFailed: '加载失败'
     }
@@ -32,11 +36,61 @@ const messages = {
 }
 
 function mountView() {
-  const i18n = createI18n({ legacy: false, locale: 'zh', messages })
+  // Production and tests use the CSP-safe runtime build, which accepts
+  // precompiled message functions rather than compiling strings at runtime.
+  const compiled = {
+    zh: {
+      nav: { pelicanTest: () => messages.zh.nav.pelicanTest },
+      pelicanTest: Object.fromEntries(Object.entries(messages.zh.pelicanTest).map(([key, value]) => [key, () => value]))
+    }
+  }
+  const i18n = createI18n({ legacy: false, locale: 'zh', messages: compiled })
   return mount(PelicanTestView, { global: { plugins: [i18n] } })
 }
 
 describe('PelicanTestView', () => {
+  it('selects a complete result and labels interrupted attempts without rendering partial HTML', async () => {
+    const base = {
+      model: 'gpt-6-astra', group_name: 'GPT-PRO', reasoning_effort: 'low',
+      prompt: 'draw', created_at: '2026-09-24T06:00:00Z', duration_ms: 90053
+    }
+    vi.mocked(pelicanTestsAPI.list).mockResolvedValue({
+      items: [
+        { ...base, id: 3, status: 'failed', html: '<html><body><svg><path' },
+        { ...base, id: 2, status: 'completed', html: '', preview_issue: 'incomplete' },
+        { ...base, id: 1, status: 'completed', html: '<html><svg id="complete"></svg></html>' }
+      ],
+      total: 3, page: 1, page_size: 96
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('iframe').attributes('srcdoc')).toContain('id="complete"')
+    const buttons = wrapper.findAll('button')
+    expect(buttons[0].text()).toContain('输出未完成')
+    expect(buttons[1].text()).toContain('输出未完成')
+    await buttons[0].trigger('click')
+    expect(wrapper.find('iframe').exists()).toBe(false)
+    expect(wrapper.get('[role="status"]').text()).toContain('未返回完整内容')
+    await buttons[1].trigger('click')
+    expect(wrapper.find('iframe').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('explains disabled scripts while retaining the safe preview sandbox', async () => {
+    vi.mocked(pelicanTestsAPI.list).mockResolvedValue({
+      items: [{
+        id: 1, status: 'completed', html: '<html><svg></svg></html>', preview_issue: 'scripts_removed',
+        model: 'gpt-6-astra', group_name: 'GPT-PRO', reasoning_effort: 'low',
+        prompt: 'draw', created_at: '2026-09-24T06:00:00Z', duration_ms: 100000
+      }], total: 1, page: 1, page_size: 96
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('[role="status"]').text()).toContain('当前预览不执行脚本')
+    expect(wrapper.get('iframe').attributes('sandbox')).toBe('')
+    wrapper.unmount()
+  })
+
   it('renders HTML results with time, group, model and reasoning and has no run button', async () => {
     vi.mocked(pelicanTestsAPI.list).mockResolvedValue({
       items: [

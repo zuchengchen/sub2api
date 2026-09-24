@@ -81,32 +81,42 @@ func (s *OpenAIGatewayService) validateOpenAICookieWSBusinessConn(ctx context.Co
 		return errOpenAICookieWSAccountUnavailable
 	}
 	account = current
-	if lease.WriteJSONContext(probeCtx, openAICookieWSProbePayload(true)) != nil {
-		return errors.New("Cookie websocket validation write failed")
+	if writeErr := lease.WriteJSONContext(probeCtx, openAICookieWSProbePayload(true)); writeErr != nil {
+		return cookieWSTestOperationError("validation", writeErr)
 	}
 	var observation openAICookieWSObservation
 	total := 0
 	for {
 		message, readErr := lease.ReadMessageContext(probeCtx)
 		if readErr != nil {
-			return errors.New("Cookie websocket validation stream failed")
+			return cookieWSTestOperationError("validation", readErr)
 		}
 		total += len(message)
 		if total > 4<<20 {
-			return errors.New("Cookie websocket validation response exceeded limit")
+			return newCookieWSTestError("cookie_ws_validation_too_large", "request_error", "Cookie websocket validation response exceeded its size limit", 0, nil)
 		}
 		if !gjson.ValidBytes(message) {
-			return errors.New("Cookie websocket validation response was malformed")
+			return newCookieWSTestError("cookie_ws_validation_malformed", "failed", "Cookie websocket validation response was malformed", 0, nil)
 		}
 		eventType := gjson.GetBytes(message, "type").String()
 		observation.event(message, eventType)
 		if observation.failed {
 			s.applyOpenAICookieWSValidationFailure(probeCtx, account, lease.HandshakeHeaders(), message)
-			return errors.New("Cookie websocket validation did not complete successfully")
+			status := cookieWSTestPayloadStatus(message)
+			if status >= 400 && status <= 599 {
+				return cookieWSTestStatusError("validation", status)
+			}
+			if observation.completed && !observation.modelMatch {
+				if _, success := openAICodexSuccessfulCompletionModel(message, eventType); !success {
+					return newCookieWSTestError("cookie_ws_validation_incomplete", "failed", "Cookie websocket validation probe did not complete successfully", 0, nil)
+				}
+				return newCookieWSTestError("cookie_ws_validation_model_mismatch", "model_error", "Cookie websocket validation response did not match the required model", 0, nil)
+			}
+			return newCookieWSTestError("cookie_ws_validation_incomplete", "failed", "Cookie websocket validation probe did not complete successfully", 0, nil)
 		}
 		if observation.completed {
 			if !observation.modelMatch || !observation.trueAnswer {
-				return errors.New("Cookie websocket validation did not return True")
+				return newCookieWSTestError("cookie_ws_validation_not_true", "failed", "Cookie websocket validation probe did not return True; this socket was closed", 0, nil)
 			}
 			verified = true
 			return nil

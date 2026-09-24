@@ -2619,69 +2619,87 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 // processOpenAIStream processes the SSE stream from OpenAI Responses API
 func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
 	reader := bufio.NewReader(body)
-	seenCompleted := false
+	buffered := c.Request != nil && intelligentContext(c.Request.Context()) != nil
+	var text strings.Builder
+	terminalError := func(data map[string]any, eventType string) error {
+		response, _ := data["response"].(map[string]any)
+		for _, value := range []any{response["error"], data["error"]} {
+			if errData, ok := value.(map[string]any); ok {
+				if message, ok := errData["message"].(string); ok && message != "" {
+					return s.sendErrorAndEnd(c, message)
+				}
+			}
+		}
+		message := "OpenAI response was not completed successfully"
+		if eventType != "response.completed" && eventType != "response.done" {
+			message = "OpenAI response " + strings.TrimPrefix(eventType, "response.")
+		}
+		if details, ok := response["incomplete_details"].(map[string]any); ok {
+			if reason, ok := details["reason"].(string); ok && reason != "" {
+				message += ": " + reason
+			}
+		}
+		return s.sendErrorAndEnd(c, message)
+	}
 
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				if seenCompleted {
-					s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
-					return nil
-				}
+		line, readErr := reader.ReadString('\n')
+		// ReadString may return a valid final event together with EOF. Consume
+		// its bytes first so a terminal line does not require a trailing newline.
+		line = strings.TrimSpace(line)
+		if line != "" && sseDataPrefix.MatchString(line) {
+			jsonStr := sseDataPrefix.ReplaceAllString(line, "")
+			if jsonStr == "[DONE]" {
 				return s.sendErrorAndEnd(c, "Stream ended before response.completed")
 			}
-			return s.sendErrorAndEnd(c, fmt.Sprintf("Stream read error: %s", err.Error()))
-		}
-
-		line = strings.TrimSpace(line)
-		if line == "" || !sseDataPrefix.MatchString(line) {
-			continue
-		}
-
-		jsonStr := sseDataPrefix.ReplaceAllString(line, "")
-		if jsonStr == "[DONE]" {
-			if seenCompleted {
-				s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
-				return nil
-			}
-			return s.sendErrorAndEnd(c, "Stream ended before response.completed")
-		}
-
-		var data map[string]any
-		if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
-			continue
-		}
-
-		eventType, _ := data["type"].(string)
-
-		switch eventType {
-		case "response.output_text.delta":
-			// OpenAI Responses API uses "delta" field for text content
-			if delta, ok := data["delta"].(string); ok && delta != "" {
-				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
-			}
-		case "response.completed", "response.done":
-			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
-			return nil
-		case "response.failed":
-			errorMsg := "OpenAI response failed"
-			if responseData, ok := data["response"].(map[string]any); ok {
-				if errData, ok := responseData["error"].(map[string]any); ok {
-					if msg, ok := errData["message"].(string); ok && msg != "" {
-						errorMsg = msg
+			var data map[string]any
+			if json.Unmarshal([]byte(jsonStr), &data) == nil {
+				eventType, _ := data["type"].(string)
+				switch eventType {
+				case "response.output_text.delta":
+					if delta, ok := data["delta"].(string); ok && delta != "" {
+						if len(delta) > intelligentCaptureTextLimit-text.Len() {
+							return s.sendErrorAndEnd(c, "Account test output is too large")
+						}
+						text.WriteString(delta)
+						if !buffered {
+							s.sendEvent(c, TestEvent{Type: "content", Text: delta})
+						}
 					}
+				case "response.completed", "response.done":
+					if !intelligentResponsesTerminalSuccessful(data) {
+						return terminalError(data, eventType)
+					}
+					finalText, present := intelligentResponsesTerminalText(data)
+					if !present {
+						finalText = text.String()
+					}
+					if len(finalText) > intelligentCaptureTextLimit {
+						return s.sendErrorAndEnd(c, "Account test output is too large")
+					}
+					if !buffered {
+						// Live TestEvent content is append-only. Emit only the
+						// missing suffix; a conflicting final cannot replace it.
+						if !strings.HasPrefix(finalText, text.String()) {
+							return s.sendErrorAndEnd(c, "OpenAI final output differs from the streamed text")
+						}
+						finalText = finalText[text.Len():]
+					}
+					if finalText != "" {
+						s.sendEvent(c, TestEvent{Type: "content", Text: finalText})
+					}
+					s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+					return nil
+				case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+					return terminalError(data, eventType)
 				}
 			}
-			return s.sendErrorAndEnd(c, errorMsg)
-		case "error":
-			errorMsg := "Unknown error"
-			if errData, ok := data["error"].(map[string]any); ok {
-				if msg, ok := errData["message"].(string); ok {
-					errorMsg = msg
-				}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return s.sendErrorAndEnd(c, "Stream ended before response.completed")
 			}
-			return s.sendErrorAndEnd(c, errorMsg)
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Stream read error: %s", readErr.Error()))
 		}
 	}
 }

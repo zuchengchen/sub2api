@@ -513,6 +513,10 @@ export default {
     reasoning: '推理深度',
     prompt: '原始提示词',
     htmlUnavailable: '无法安全显示这段 HTML',
+    incompleteLabel: '输出未完成',
+    incompleteResult: '本次测试未返回完整内容，残缺结果不作为完整画面展示。',
+    incompletePreview: '本次输出未完成，请选择其他时间的结果。',
+    scriptsRemoved: '原答复包含脚本，当前预览不执行脚本，部分画面或动画可能无法显示。',
     loadFailed: '加载鹈鹕测试失败'
   }
 }

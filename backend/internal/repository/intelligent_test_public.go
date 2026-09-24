@@ -270,8 +270,12 @@ COALESCE(NULLIF(t.input,''),NULLIF(t.config_snapshot->>'prompt',''),'')
 		if err := rows.Scan(&item.ID, &item.Status, &raw, &item.Model, &item.CreatedAt, &item.FinishedAt, &item.DurationMS, &item.GroupName, &item.ReasoningEffort, &item.Prompt); err != nil {
 			return nil, err
 		}
-		if html, err := service.SanitizeIntelligentTestHTML(raw); err == nil {
-			item.HTML = html
+		if item.Status != "completed" && item.Status != "success" {
+			// Preserve the history entry, but do not present interrupted output
+			// as a successfully generated picture.
+			item.PreviewIssue = "incomplete"
+		} else {
+			item.HTML, item.PreviewIssue = service.PreviewIntelligentTestHTML(raw)
 		}
 		out.Items = append(out.Items, item)
 	}
