@@ -514,6 +514,10 @@ export default {
     reasoning: 'Reasoning',
     prompt: 'Original prompt',
     htmlUnavailable: 'This HTML cannot be displayed safely',
+    incompleteLabel: 'Incomplete output',
+    incompleteResult: 'This test did not return complete content. Its partial output is not shown as a finished picture.',
+    incompletePreview: 'The output is incomplete. Choose a result from another time.',
+    scriptsRemoved: 'The original answer contains scripts. This preview does not run them, so some artwork or animation may be missing.',
     loadFailed: 'Failed to load pelican tests'
   }
 }

@@ -25,10 +25,12 @@
             @click="selected = row"
           >
             {{ formatSlot(row.finished_at || row.created_at) }}
+            <span v-if="isIncomplete(row)" class="mt-1 block text-amber-700 dark:text-amber-400">{{ t('pelicanTest.incompleteLabel') }}</span>
           </button>
         </div>
         <article v-if="selected" class="min-w-0 flex-1 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-800">
-          <div v-if="selected.html" class="aspect-[4/3] bg-[#0b1220]">
+          <p v-if="previewMessage(selected)" class="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200" role="status">{{ previewMessage(selected) }}</p>
+          <div v-if="selected.html && !isIncomplete(selected)" class="aspect-[4/3] bg-[#0b1220]">
             <iframe
               class="h-full w-full border-0"
               sandbox=""
@@ -37,7 +39,7 @@
               :srcdoc="selected.html"
             />
           </div>
-          <p v-else class="flex aspect-[4/3] items-center justify-center px-6 text-center text-sm text-gray-400">{{ t('pelicanTest.htmlUnavailable') }}</p>
+          <p v-else class="flex aspect-[4/3] items-center justify-center px-6 text-center text-sm text-gray-400">{{ isIncomplete(selected) ? t('pelicanTest.incompletePreview') : t('pelicanTest.htmlUnavailable') }}</p>
           <dl class="grid grid-cols-2 gap-3 px-4 py-4 text-sm sm:grid-cols-4">
             <div>
               <dt class="text-xs text-gray-400">{{ t('pelicanTest.time') }}</dt>
@@ -80,6 +82,16 @@ const error = ref('')
 const items = ref<PelicanTestItem[]>([])
 const selected = ref<PelicanTestItem | null>(null)
 
+function isIncomplete(item: PelicanTestItem) {
+  return !['completed', 'success'].includes(item.status) || item.preview_issue === 'incomplete'
+}
+
+function previewMessage(item: PelicanTestItem) {
+  if (isIncomplete(item)) return t('pelicanTest.incompleteResult')
+  if (item.preview_issue === 'scripts_removed') return t('pelicanTest.scriptsRemoved')
+  return ''
+}
+
 function formatTime(value?: string | null) {
   if (!value) return '—'
   const date = new Date(value)
@@ -98,7 +110,7 @@ onMounted(async () => {
   try {
     const page = await pelicanTestsAPI.list(1, 96)
     items.value = page.items || []
-    selected.value = items.value[0] ?? null
+    selected.value = items.value.find((item) => item.html && !isIncomplete(item)) ?? items.value[0] ?? null
   } catch (err) {
     error.value = extractApiErrorMessage(err, t('pelicanTest.loadFailed'))
   } finally {

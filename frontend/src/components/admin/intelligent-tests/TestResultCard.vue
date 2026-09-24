@@ -24,6 +24,7 @@
       <TestStatusBadge :status="record?.status ?? 'waiting'" />
       <span class="text-xs tabular-nums text-gray-400">{{ duration }}</span>
     </div>
+    <p v-if="record?.error_message && !isPending(record.status)" data-testid="test-error-detail" class="break-words px-4 pt-2 text-xs leading-relaxed text-red-700 dark:text-red-300">{{ record.error_message }}</p>
     <p v-if="resultRecord && resultRecord.id !== record?.id" class="px-4 pt-2 text-xs text-gray-500">展示最近完成的结果 · #{{ resultRecord.id }}</p>
     <TestAssessment v-if="resultRecord" class="px-4 pt-3" :assessment="resultRecord.evaluation" :status="resultRecord.status" />
     <p v-if="record?.queue_reason" class="px-4 pt-2 text-xs text-gray-500">{{ record.queue_reason }}</p>
