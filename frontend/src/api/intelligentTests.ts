@@ -69,6 +69,7 @@ export const intelligentTestsAPI = {
     return (await apiClient.post<TestSubmission>(`${base}/run`, { account_ids, test_types, idempotency_key, ...(models ? { models } : {}) })).data
   },
   async image(id: number, publicView = false, signal?: AbortSignal) { return (await apiClient.get<Blob>(publicView ? `/account-capabilities/results/${id}/image` : `${base}/records/${id}/image`, { responseType: 'blob', signal })).data },
+  async animation(id: number, signal?: AbortSignal) { return (await apiClient.get<{ html: string }>(`${base}/records/${id}/html`, { signal })).data },
   async cancel(id: number) { return (await apiClient.post<TestRecord>(`${base}/records/${id}/cancel`)).data },
   async reevaluate(id: number) { return (await apiClient.post<TestRecord>(`${base}/records/${id}/reevaluate`)).data },
   async previewEvaluation(output: string, config: TestConfig) { return (await apiClient.post<TestRecord>(`${base}/evaluate-preview`, { output, config })).data },
