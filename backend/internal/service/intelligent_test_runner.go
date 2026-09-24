@@ -265,7 +265,16 @@ func finalizeIntelligentTestRun(r *IntelligentTestRecord, capture *intelligentCa
 	r.ErrorMessage = strings.ToValidUTF8(r.ErrorMessage, "�")
 	if err != nil || eventError != "" || !complete || strings.TrimSpace(r.Result) == "" || textOverflow {
 		if err == nil {
-			err = errors.New("upstream did not return a complete, nonempty test result")
+			switch {
+			case eventError != "":
+				err = errors.New(r.ErrorMessage)
+			case textOverflow:
+				err = errors.New("test output exceeded capture limit")
+			case !complete:
+				err = errors.New("upstream response ended before a successful completion event")
+			default:
+				err = errors.New("upstream completed without a nonempty text result")
+			}
 		}
 		if r.ErrorMessage == "" {
 			r.ErrorMessage = err.Error()
@@ -530,6 +539,7 @@ type intelligentCapture struct {
 	incomplete        bool
 	sawOutputDelta    bool
 	authoritativeText bool
+	completedOutput   intelligentCompletedOutput
 	secrets           []string
 }
 
@@ -615,6 +625,7 @@ func (c *intelligentCapture) ingestUpstreamLine(line []byte) {
 	c.ingestUpstreamEvent(event)
 }
 func (c *intelligentCapture) ingestUpstreamEvent(v map[string]any) {
+	c.completedOutput.observe(v)
 	kind, _ := v["type"].(string)
 	switch kind {
 	case "response.output_text.delta":
@@ -628,11 +639,11 @@ func (c *intelligentCapture) ingestUpstreamEvent(v map[string]any) {
 			c.retainFailedResponseText(v)
 			break
 		}
-		if text, present := intelligentResponsesTerminalText(v); present {
-			// The completed response is the authoritative ordered output. It
-			// repairs missing/interleaved deltas without appending duplicates.
+		if text, present, truncated := c.completedOutput.terminalText(v); present {
+			// Use terminal output or the completed items it omitted. Both
+			// repair missing/interleaved deltas without appending duplicates.
 			c.text.Reset()
-			c.textTruncated = false
+			c.textTruncated = truncated
 			c.authoritativeText = true
 			c.appendText(text)
 		}
