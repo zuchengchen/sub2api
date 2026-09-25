@@ -417,17 +417,21 @@ func TestOpenAICookieWSAdminTestsUseVerifiedDirectPool(t *testing.T) {
 	}
 }
 
-func TestOpenAICookieWSAdminMissingCookieNeverUsesHTTP(t *testing.T) {
-	u := &httpUpstreamRecorder{err: errors.New("HTTP business fallback forbidden")}
+func TestOpenAICookieWSAdminMissingCookieUsesHTTP(t *testing.T) {
+	u := &httpUpstreamRecorder{resp: cookieWSHTTPResponse("HTTP fallback")}
 	gateway, dialer := cookieWSTestService(t, u)
 	svc := &AccountTestService{openaiGatewayService: gateway, httpUpstream: u}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/admin/accounts/41/test", nil)
-	require.Error(t, svc.testOpenAIAccountConnection(c, ticketTestAccount(41), openAICodexTicketDefaultModel, "", AccountTestModeDefault))
-	require.Empty(t, u.requests)
+	require.NoError(t, svc.testOpenAIAccountConnection(c, ticketTestAccount(41), openAICodexTicketDefaultModel, "", AccountTestModeDefault))
+	require.Len(t, u.requests, 1)
+	require.Equal(t, "/backend-api/codex/responses", u.requests[0].URL.Path)
+	require.Empty(t, u.requests[0].Header.Get("Cookie"))
 	require.Zero(t, dialer.dials)
-	require.Contains(t, recorder.Body.String(), "No verified Cookie websocket")
+	require.NotContains(t, recorder.Body.String(), "No verified Cookie websocket")
+	require.Contains(t, recorder.Body.String(), accountTestCookieWSHTTPFallbackMessage)
+	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
 }
 
 func TestOpenAICookieWSTwoSlotsAreIndependentAndEitherReadySchedules(t *testing.T) {
