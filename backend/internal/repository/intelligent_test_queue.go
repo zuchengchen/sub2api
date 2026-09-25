@@ -109,7 +109,7 @@ func (r *intelligentTestRepository) Enqueue(ctx context.Context, actor int64, re
 			if override := strings.TrimSpace(req.Models[kind]); override != "" {
 				cfg.Model = override
 			}
-			if override := strings.TrimSpace(req.Prompts[kind]); override != "" {
+			if override := service.IntelligentTestPromptOverride(req, id, kind); override != "" {
 				cfg.Prompt = override
 			}
 			if source := strings.TrimSpace(req.Source); source != "" {

@@ -187,8 +187,8 @@ func (s *IntelligentTestService) Enqueue(ctx context.Context, actor int64, req I
 	return out, nil
 }
 
-// Admin pelican runs use the same rotating animal as the user-page timer.
-// A caller-supplied prompt, including the scheduler's own choice, is kept.
+// Admin pelican runs pick a rotating animal per record, matching the user-page
+// timer's pool. A caller-supplied prompt, including the scheduler's own choice, is kept.
 func (s *IntelligentTestService) withAdminPelicanAnimal(req IntelligentTestEnqueue) IntelligentTestEnqueue {
 	if req.Source == IntelligentTestSourcePelicanSchedule {
 		return req
@@ -203,15 +203,27 @@ func (s *IntelligentTestService) withAdminPelicanAnimal(req IntelligentTestEnque
 	if !selected || strings.TrimSpace(req.Prompts["pelican"]) != "" {
 		return req
 	}
-	if req.Prompts == nil {
-		req.Prompts = map[string]string{}
+	req.PromptFor = func(_ int64, kind string) string {
+		if kind != "pelican" {
+			return ""
+		}
+		s.mu.Lock()
+		animal := pickIntelligentTestAnimal(s.lastAnimal)
+		s.lastAnimal = animal
+		s.mu.Unlock()
+		return intelligentAnimalHTMLPrompt(animal)
 	}
-	s.mu.Lock()
-	animal := pickIntelligentTestAnimal(s.lastAnimal)
-	s.lastAnimal = animal
-	s.mu.Unlock()
-	req.Prompts["pelican"] = intelligentAnimalHTMLPrompt(animal)
 	return req
+}
+
+func IntelligentTestPromptOverride(req IntelligentTestEnqueue, accountID int64, kind string) string {
+	if override := strings.TrimSpace(req.Prompts[kind]); override != "" {
+		return override
+	}
+	if req.PromptFor != nil {
+		return strings.TrimSpace(req.PromptFor(accountID, kind))
+	}
+	return ""
 }
 
 func (s *IntelligentTestService) startEnqueued(ctx context.Context, out *IntelligentTestEnqueued) {

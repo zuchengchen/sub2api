@@ -45,7 +45,9 @@ func TestAdminPelicanRunPicksRandomAnimal(t *testing.T) {
 	t.Parallel()
 	svc := &IntelligentTestService{}
 	req := svc.withAdminPelicanAnimal(IntelligentTestEnqueue{TestTypes: []string{"pelican", "candy"}})
-	prompt := req.Prompts["pelican"]
+	require.Empty(t, req.Prompts)
+	require.NotNil(t, req.PromptFor)
+	prompt := req.PromptFor(1, "pelican")
 	require.Contains(t, prompt, "骑自行车的2D动画")
 	matched := false
 	for _, animal := range intelligentTestAnimals {
@@ -55,10 +57,26 @@ func TestAdminPelicanRunPicksRandomAnimal(t *testing.T) {
 		}
 	}
 	require.True(t, matched, "prompt %q should name a known animal", prompt)
+	require.Empty(t, req.PromptFor(1, "candy"))
 	kept := svc.withAdminPelicanAnimal(IntelligentTestEnqueue{TestTypes: []string{"pelican"}, Prompts: map[string]string{"pelican": "keep"}})
 	require.Equal(t, "keep", kept.Prompts["pelican"])
+	require.Nil(t, kept.PromptFor)
 	scheduled := svc.withAdminPelicanAnimal(IntelligentTestEnqueue{TestTypes: []string{"pelican"}, Source: IntelligentTestSourcePelicanSchedule})
 	require.Empty(t, scheduled.Prompts)
+	require.Nil(t, scheduled.PromptFor)
+}
+
+func TestAdminPelicanBatchPicksDifferentAnimals(t *testing.T) {
+	t.Parallel()
+	svc := &IntelligentTestService{}
+	req := svc.withAdminPelicanAnimal(IntelligentTestEnqueue{TestTypes: []string{"pelican"}})
+	first := IntelligentTestPromptOverride(req, 11, "pelican")
+	second := IntelligentTestPromptOverride(req, 12, "pelican")
+	require.NotEqual(t, first, second)
+	require.Equal(t, "keep-all", IntelligentTestPromptOverride(IntelligentTestEnqueue{
+		Prompts:   map[string]string{"pelican": "keep-all"},
+		PromptFor: req.PromptFor,
+	}, 13, "pelican"))
 }
 
 func TestPelicanSlotKeyTruncatesToThirtyMinutes(t *testing.T) {

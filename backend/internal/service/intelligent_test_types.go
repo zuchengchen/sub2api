@@ -107,9 +107,12 @@ type IntelligentTestEnqueue struct {
 	// run. Empty or missing entries use the saved test setting.
 	Models map[string]string `json:"models,omitempty"`
 	// Prompts optionally overrides the saved prompt per test type for this run.
-	Prompts        map[string]string `json:"prompts,omitempty"`
-	IdempotencyKey string            `json:"idempotency_key"`
-	Source         string            `json:"source,omitempty"`
+	Prompts map[string]string `json:"prompts,omitempty"`
+	// PromptFor supplies a per-record prompt when Prompts[kind] is empty.
+	// Admin pelican batch tests use this so each account gets its own animal.
+	PromptFor      func(accountID int64, kind string) string `json:"-"`
+	IdempotencyKey string                                    `json:"idempotency_key"`
+	Source         string                                    `json:"source,omitempty"`
 }
 type IntelligentTestEnqueued struct {
 	CreatedCount int                      `json:"created_count"`
