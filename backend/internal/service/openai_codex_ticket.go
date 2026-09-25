@@ -1439,7 +1439,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicketForRequest(ctx context.Cont
 	// Cookie WS accounts may temporarily lack a process-verified websocket
 	// ticket. The gateway then intentionally uses the normal OAuth /responses
 	// path; do not fail that HTTP request closed on the WS-only ticket gate.
-	if c != nil && c.GetString("openai_ws_transport_reason") == openAICookieWSHTTPFallbackReason {
+	if c != nil && isOpenAICookieWSHTTPTransportReason(c.GetString("openai_ws_transport_reason")) {
 		return nil
 	}
 	slot := &openAICodexTicketInjectionSlot{}

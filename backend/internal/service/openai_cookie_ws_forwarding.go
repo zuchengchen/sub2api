@@ -21,9 +21,25 @@ import (
 const openAICookieWSScopeHeader = "x-sub2api-cookie-ws-scope"
 
 const (
-	openAICookieWSHTTPFallbackReason = "cookie_ws_unavailable_http"
-	openAICookieWSUnavailableMessage = "No verified Cookie websocket is available for this account"
+	openAICookieWSHTTPFallbackReason                      = "cookie_ws_unavailable_http"
+	openAICookieWSPayloadTooLargeHTTPFallbackReason       = "cookie_ws_payload_too_large_http"
+	openAICookieWSUnavailableMessage                      = "No verified Cookie websocket is available for this account"
+	openAICookieWSHTTPFallbackThresholdBytesDefault int64 = 256 * 1024
 )
+
+// openAICookieWSPayloadTooLargeError 表示即将写出的 Cookie WS JSON 已达到
+// 配置阈值，应在抢槽/拨号前改走 OAuth HTTP /responses。
+type openAICookieWSPayloadTooLargeError struct {
+	PayloadBytes   int
+	ThresholdBytes int64
+}
+
+func (e *openAICookieWSPayloadTooLargeError) Error() string {
+	if e == nil {
+		return "cookie ws payload too large"
+	}
+	return fmt.Sprintf("cookie ws payload too large: payload_bytes=%d threshold_bytes=%d", e.PayloadBytes, e.ThresholdBytes)
+}
 
 type openAICookieWSSlotContextKey struct{}
 
@@ -207,6 +223,72 @@ func isOpenAICookieWSUnavailableError(err error) bool {
 	var failoverErr *UpstreamFailoverError
 	return errors.As(err, &failoverErr) && failoverErr != nil &&
 		strings.TrimSpace(failoverErr.ClientMessage) == openAICookieWSUnavailableMessage
+}
+
+func isOpenAIWSMessageTooBigError(err error) bool {
+	var fallbackErr *openAIWSFallbackError
+	if !errors.As(err, &fallbackErr) || fallbackErr == nil {
+		return false
+	}
+	reason := strings.TrimPrefix(strings.TrimSpace(fallbackErr.Reason), "prewarm_")
+	return reason == "message_too_big"
+}
+
+func shouldOpenAICookieWSHTTPFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isOpenAICookieWSUnavailableError(err) || isOpenAIWSMessageTooBigError(err) {
+		return true
+	}
+	var tooLarge *openAICookieWSPayloadTooLargeError
+	return errors.As(err, &tooLarge)
+}
+
+func isOpenAICookieWSHTTPTransportReason(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case openAICookieWSHTTPFallbackReason, openAICookieWSPayloadTooLargeHTTPFallbackReason:
+		return true
+	default:
+		return false
+	}
+}
+
+func cookieWSHTTPFallbackReasonFor(err error) string {
+	if isOpenAIWSMessageTooBigError(err) {
+		return openAICookieWSPayloadTooLargeHTTPFallbackReason
+	}
+	var tooLarge *openAICookieWSPayloadTooLargeError
+	if errors.As(err, &tooLarge) {
+		return openAICookieWSPayloadTooLargeHTTPFallbackReason
+	}
+	return openAICookieWSHTTPFallbackReason
+}
+
+func cookieWSFallbackPayloadStats(err error) (payloadBytes int, thresholdBytes int64) {
+	var tooLarge *openAICookieWSPayloadTooLargeError
+	if errors.As(err, &tooLarge) && tooLarge != nil {
+		return tooLarge.PayloadBytes, tooLarge.ThresholdBytes
+	}
+	return -1, -1
+}
+
+func (s *OpenAIGatewayService) openAICookieWSHTTPFallbackThresholdBytes() int64 {
+	if s == nil || s.cfg == nil {
+		return openAICookieWSHTTPFallbackThresholdBytesDefault
+	}
+	if s.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes < 0 {
+		return openAICookieWSHTTPFallbackThresholdBytesDefault
+	}
+	return s.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes
+}
+
+func (s *OpenAIGatewayService) cookieWSPayloadTooLargeError(payloadBytes int) *openAICookieWSPayloadTooLargeError {
+	threshold := s.openAICookieWSHTTPFallbackThresholdBytes()
+	if threshold <= 0 || int64(payloadBytes) < threshold {
+		return nil
+	}
+	return &openAICookieWSPayloadTooLargeError{PayloadBytes: payloadBytes, ThresholdBytes: threshold}
 }
 
 func wrapOpenAICookieWSCurrentTurnFailover(err error, originalPayload []byte, replayInput []json.RawMessage, replayExists bool, originalModel string) error {
