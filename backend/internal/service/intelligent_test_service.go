@@ -19,10 +19,10 @@ var ErrIntelligentTestForbidden = infraerrors.Forbidden("INTELLIGENT_TEST_FORBID
 var ErrIntelligentTestConflict = infraerrors.Conflict("INTELLIGENT_TEST_CONFLICT", "idempotency key was already used with different parameters")
 
 const (
-	pelicanScheduleInterval              = 10 * time.Minute
+	pelicanScheduleInterval              = 30 * time.Minute
 	pelicanRetryInterval                 = 3 * time.Minute
 	pelicanSlotMaxAttempts               = 3
-	pelicanUserPageSize                  = 96 // 10-minute runs in 08:00–24:00 Beijing, 24h window
+	pelicanUserPageSize                  = 32 // 30-minute runs in 08:00–24:00 Beijing, 24h window
 	IntelligentTestSourcePelicanSchedule = "pelican-schedule"
 )
 

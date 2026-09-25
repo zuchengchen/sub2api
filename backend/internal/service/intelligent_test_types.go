@@ -190,7 +190,7 @@ type IntelligentTestRepository interface {
 	DeleteStalePelicanTests(context.Context) (int64, error)
 }
 
-// PelicanSlotAttempt is one scheduled (or retried) pelican run in a 10-minute slot.
+// PelicanSlotAttempt is one scheduled (or retried) pelican run in a 30-minute slot.
 type PelicanSlotAttempt struct {
 	AccountID int64
 	Status    string
