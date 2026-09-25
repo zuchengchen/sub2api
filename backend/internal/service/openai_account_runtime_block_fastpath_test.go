@@ -748,6 +748,33 @@ func TestOpenAIRuntimeBlock_DoesNotShortenExistingBlock(t *testing.T) {
 	require.WithinDuration(t, longUntil, actualUntil, time.Second)
 }
 
+func TestOpenAIOAuth401DoesNotRuntimeBlockAccount(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	rateLimits := NewRateLimitService(repo, nil, &config.Config{}, nil)
+	svc := &OpenAIGatewayService{rateLimitService: rateLimits}
+	rateLimits.SetAccountRuntimeBlocker(svc)
+	account := &Account{
+		ID:          77,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"refresh_token": "rt-77"},
+	}
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusUnauthorized,
+		http.Header{},
+		[]byte(`{"error":{"code":"invalid_api_key","message":"Incorrect API key provided: sk-svcacct-test"}}`),
+		"gpt-6-sol",
+	)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
 func TestOpenAIRuntimeBlock_ClearAccountSchedulingBlock(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 47, Platform: PlatformOpenAI, Type: AccountTypeOAuth}

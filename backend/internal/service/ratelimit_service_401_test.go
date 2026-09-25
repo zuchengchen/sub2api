@@ -129,11 +129,43 @@ func TestRateLimitService_HandleUpstreamError_OAuth401SetsTempUnschedulable(t *t
 		require.Len(t, invalidator.accounts, 1)
 	})
 
+	t.Run("anthropic", func(t *testing.T) {
+		repo := &rateLimitAccountRepoStub{}
+		service := NewRateLimitService(repo, nil, &config.Config{}, nil)
+		account := &Account{
+			ID:          109,
+			Platform:    PlatformAnthropic,
+			Type:        AccountTypeOAuth,
+			Credentials: map[string]any{"refresh_token": "rt-109"},
+		}
+		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
+		require.True(t, shouldDisable)
+		require.Equal(t, 1, repo.tempCalls)
+		require.Equal(t, 0, repo.setErrorCalls)
+	})
+
+	t.Run("openai does not freeze", func(t *testing.T) {
+		repo := &rateLimitAccountRepoStub{}
+		invalidator := &tokenCacheInvalidatorRecorder{}
+		service := NewRateLimitService(repo, nil, &config.Config{}, nil)
+		service.SetTokenCacheInvalidator(invalidator)
+		account := &Account{
+			ID:          110,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Credentials: map[string]any{"refresh_token": "rt-110"},
+		}
+		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte(`{"error":{"message":"Incorrect API key provided: sk-svcacct-test","code":"invalid_api_key"}}`))
+		require.True(t, shouldDisable)
+		require.Equal(t, 0, repo.tempCalls)
+		require.Equal(t, 0, repo.setErrorCalls)
+		require.Len(t, invalidator.accounts, 1)
+	})
 }
 
 // TestRateLimitService_HandleUpstreamError_SparkShadow401RedirectsToParent 外审第9轮:影子无独立凭据,
-// 401(母账号 token 问题)必须重定向到凭据 owner(母账号)——母账号 temp-unschedulable + token cache 失效,
-// 影子不得被永久禁用(否则母账号可恢复的 token 问题会把影子永久打死)。
+// 401(母账号 token 问题)必须重定向到凭据 owner(母账号)——token cache 失效落在母账号,
+// 影子不得被永久禁用。ChatGPT Codex 401 不再把母账号打成临时不可调度。
 func TestRateLimitService_HandleUpstreamError_SparkShadow401RedirectsToParent(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	repo.accountsByID = map[int64]*Account{}
@@ -164,14 +196,13 @@ func TestRateLimitService_HandleUpstreamError_SparkShadow401RedirectsToParent(t 
 
 	require.True(t, shouldDisable)
 	require.Equal(t, 0, repo.setErrorCalls, "spark shadow must not be permanently disabled on a parent-token 401")
-	require.Equal(t, 1, repo.tempCalls)
-	require.Equal(t, parentID, repo.lastTempID, "temp-unschedulable must target the credential owner (parent)")
+	require.Equal(t, 0, repo.tempCalls, "ChatGPT Codex 401 must not freeze the parent account")
 	require.Len(t, invalidator.accounts, 1)
 	require.Equal(t, parentID, invalidator.accounts[0].ID, "token cache invalidation must target the parent")
 }
 
 // TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError
-// OpenAI OAuth 401 缓存失效出错时仍走 temp_unschedulable。
+// OpenAI OAuth 401 缓存失效出错时仍 failover，但不再 temp-unschedulable。
 // 注意：401 handler 不再回写 credentials(避免请求开始时的快照整列覆盖 DB
 // 把另一个 worker 刚刷新出来的新 refresh_token 回滚为旧值),
 // 因此 updateCredentialsCalls 应当为 0。
@@ -193,7 +224,7 @@ func TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError(t *testin
 
 	require.True(t, shouldDisable)
 	require.Equal(t, 0, repo.setErrorCalls)
-	require.Equal(t, 1, repo.tempCalls)
+	require.Equal(t, 0, repo.tempCalls, "ChatGPT Codex 401 must not temp-unschedule the account")
 	require.Equal(t, 0, repo.updateCredentialsCalls)
 	require.Len(t, invalidator.accounts, 1)
 }
@@ -262,7 +293,7 @@ func TestRateLimitService_HandleUpstreamError_OAuth401DoesNotOverwriteCredential
 	require.True(t, shouldDisable)
 	require.Equal(t, 0, repo.updateCredentialsCalls, "401 handler must not write credentials back from the request-start snapshot")
 	require.Equal(t, 0, repo.updateExtraCalls, "OpenAI 401 must not write extra markers")
-	require.Equal(t, 1, repo.tempCalls, "401 handler should still set temp-unschedulable cooldown")
+	require.Equal(t, 0, repo.tempCalls, "ChatGPT Codex 401 must not temp-unschedule the account")
 	require.Nil(t, repo.lastCredentials, "no credentials should have been persisted")
 }
 

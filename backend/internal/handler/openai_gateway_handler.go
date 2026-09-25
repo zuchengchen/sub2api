@@ -535,6 +535,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 使用 IsExplicitImageGenerationIntent 排除被动 image_gen namespace 声明。
 	// Codex 在所有请求中被动声明 image_gen namespace，宽泛检测会导致禁了生图的
 	// 分组中所有 Codex 请求被 403（#4447），并误占生图并发槽位。
+	// 分组关掉生图时先剥掉 Codex 自带的 image_generation 工具，避免普通对话被 403，
+	// 也避免 BPS 把它回退到 Codex。
+	var imagePolicyErr error
+	body, imagePolicyErr = service.StripOpenAIImageGenerationToolsIfDisabled(apiKey.Group, nil, body)
+	if imagePolicyErr != nil {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Invalid request body")
+		return
+	}
 	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, body)
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
@@ -2449,6 +2457,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 
+	var imagePolicyErr error
+	firstMessage, imagePolicyErr = service.StripOpenAIImageGenerationToolsIfDisabled(apiKey.Group, nil, firstMessage)
+	if imagePolicyErr != nil {
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "Invalid request body")
+		return
+	}
 	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage)
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.ImageGenerationPermissionMessage())
