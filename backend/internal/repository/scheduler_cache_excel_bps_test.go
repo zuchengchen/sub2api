@@ -12,13 +12,27 @@ func TestFilterSchedulerExtraKeepsExcelBPSKeys(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		account := service.Account{Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: map[string]any{
 			"openai_excel_bps": true, "openai_excel_bps_auto_disable_on_403": enabled,
-			"unrelated": "drop",
+			"openai_excel_bps_cache_creation_as_input": enabled, "unrelated": "drop",
 		}}
 		filtered := filterSchedulerExtra(account.Extra)
 		require.Equal(t, true, filtered["openai_excel_bps"])
 		require.Equal(t, enabled, filtered["openai_excel_bps_auto_disable_on_403"])
+		require.Equal(t, enabled, filtered["openai_excel_bps_cache_creation_as_input"])
 		require.NotContains(t, filtered, "unrelated")
 	}
+}
+
+func TestBuildSchedulerMetadataAccount_KeepsExcelBPSCacheCreationAsInput(t *testing.T) {
+	account := service.Account{Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: map[string]any{
+		"openai_excel_bps": true, "openai_excel_bps_cache_creation_as_input": true, "unrelated": "drop",
+	}}
+	require.True(t, account.IsExcelBPSCacheCreationAsInputEnabled())
+	payload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	require.NoError(t, err)
+	var restored service.Account
+	require.NoError(t, json.Unmarshal(payload, &restored))
+	require.True(t, restored.IsExcelBPSCacheCreationAsInputEnabled())
+	require.NotContains(t, restored.Extra, "unrelated")
 }
 
 func TestFilterSchedulerExtraKeepsExcelBPSModelScope(t *testing.T) {
