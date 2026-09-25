@@ -49,9 +49,9 @@ func TestListPelicanCandidatesSQLRequiresSchedulableAndPrefers292(t *testing.T) 
 	require.Contains(t, body, "codex_turn_ticket:gpt-6-astra")
 	require.Contains(t, body, "AS has_ticket")
 	require.Contains(t, body, "COALESCE((a.extra->$5->>'length')::int, 0) = 292")
-	require.Contains(t, body, "https://ai8.my/v1")
-	require.Contains(t, body, "a.type = 'apikey'")
-	require.Contains(t, body, "AS preferred")
+	require.Contains(t, body, "a.type = ANY($3)")
+	require.NotContains(t, body, "https://ai8.my/v1")
+	require.NotContains(t, body, "AS preferred")
 }
 
 func TestListPelicanSlotAttemptsSQLIncludesRetries(t *testing.T) {

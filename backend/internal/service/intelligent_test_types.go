@@ -197,14 +197,14 @@ type PelicanSlotAttempt struct {
 	HasSVG    bool
 }
 
-// PelicanCandidate is a schedulable GPT-PRO account eligible for the timer.
-// OAuth and setup-token accounts are the random pool. Preferred is the
-// https://ai8.my/v1 API-key account, which is tried before that pool.
-// HasTicket means it has an unexpired 292 gpt-6-astra ticket and its harvest cookies.
+// PelicanCandidate is a schedulable GPT-PRO OAuth or setup-token account
+// eligible for the timer. HasTicket means it has an unexpired 292 gpt-6-astra
+// ticket and its harvest cookies. HasWS means this process currently holds a
+// verified Cookie websocket for it.
 type PelicanCandidate struct {
 	ID        int64
 	HasTicket bool
-	Preferred bool
+	HasWS     bool
 }
 type IntelligentTestRunner interface {
 	RunIntelligentTest(context.Context, *IntelligentTestRecord) error
