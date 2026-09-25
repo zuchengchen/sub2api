@@ -134,12 +134,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 	managedModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	managedNonReasoning := false
 	if managedModel != "" {
 		managedModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(managedModel))
-		managedBody, _, managedErr := enforceOpenAICompatibleNonReasoning(account, managedModel, body, openAICompatibleWireResponses)
+		managedBody, enforced, managedErr := enforceOpenAICompatibleNonReasoning(account, managedModel, body, openAICompatibleWireResponses)
 		if managedErr != nil {
 			return nil, managedErr
 		}
+		managedNonReasoning = enforced
 		body = managedBody
 	}
 
@@ -1143,6 +1145,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
 	// 国产模型默认 effort 补充：此处 reqModel 已被 mapping 重写为 billingModel。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, reqModel)
+	if managedNonReasoning {
+		// The provider policy owns this request's reasoning mode. The wire body
+		// intentionally carries the provider-specific non-reasoning marker (for
+		// example reasoning.effort=none), but that marker must not become a
+		// billable reasoning effort in the result metadata.
+		reasoningEffort = nil
+	}
 	reasoningEffortValue := ""
 	if reasoningEffort != nil {
 		reasoningEffortValue = *reasoningEffort
