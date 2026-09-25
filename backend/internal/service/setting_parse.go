@@ -265,6 +265,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:         "",
 
 		SettingKeyAllowUserViewErrorRequests: "false",
+		SettingKeyExcelBPSImageRelayEnabled:  "false",
+		SettingKeyExcelBPSImageBaseURL:       "",
+		SettingKeyExcelBPSImageBodyLimitMiB:  strconv.Itoa(DefaultExcelBPSImageBodyLimitMiB),
+		SettingKeyExcelBPSImageBudgetMiB:     strconv.Itoa(DefaultExcelBPSImageBudgetMiB),
+		SettingKeyExcelBPSImageMaxRequests:   strconv.Itoa(DefaultExcelBPSImageMaxRequests),
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -973,6 +978,16 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 
 	result.AllowUserViewErrorRequests = settings[SettingKeyAllowUserViewErrorRequests] == "true" // default false
+	result.ExcelBPSImageRelayEnabled = settings[SettingKeyExcelBPSImageRelayEnabled] == "true"
+	result.ExcelBPSImageBaseURL = settings[SettingKeyExcelBPSImageBaseURL]
+	result.ExcelBPSImageBodyLimitMiB, _ = parseExcelBPSImageCapacity(settings[SettingKeyExcelBPSImageBodyLimitMiB], DefaultExcelBPSImageBodyLimitMiB)
+	result.ExcelBPSImageBudgetMiB, _ = parseExcelBPSImageCapacity(settings[SettingKeyExcelBPSImageBudgetMiB], DefaultExcelBPSImageBudgetMiB)
+	result.ExcelBPSImageMaxRequests, _ = parseExcelBPSImageCapacity(settings[SettingKeyExcelBPSImageMaxRequests], DefaultExcelBPSImageMaxRequests)
+	if validateExcelBPSImageCapacity(result.ExcelBPSImageBodyLimitMiB, result.ExcelBPSImageBudgetMiB, result.ExcelBPSImageMaxRequests) != nil {
+		result.ExcelBPSImageBodyLimitMiB = DefaultExcelBPSImageBodyLimitMiB
+		result.ExcelBPSImageBudgetMiB = DefaultExcelBPSImageBudgetMiB
+		result.ExcelBPSImageMaxRequests = DefaultExcelBPSImageMaxRequests
+	}
 
 	// Publish Grok default model_mapping options for accounts with empty mapping.
 	xai.SetRuntimeModelMappingOptions(xai.ModelMappingOptions{

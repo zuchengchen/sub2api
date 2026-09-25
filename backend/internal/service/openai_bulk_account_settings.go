@@ -3,12 +3,14 @@ package service
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 )
 
 type bulkOpenAISettings struct {
+	excelBPS                bool
 	longContextBilling      bool
 	endpointCapabilities    bool
 	responsesMode           bool
@@ -17,13 +19,18 @@ type bulkOpenAISettings struct {
 }
 
 func (s bulkOpenAISettings) any() bool {
-	return s.longContextBilling || s.endpointCapabilities || s.responsesMode
+	return s.excelBPS || s.longContextBilling || s.endpointCapabilities || s.responsesMode
 }
 
 func normalizeBulkOpenAISettings(input *BulkUpdateAccountsInput) (bulkOpenAISettings, error) {
 	var settings bulkOpenAISettings
 	if input == nil {
 		return settings, nil
+	}
+	var err error
+	settings.excelBPS, err = normalizeBulkExcelBPSExtra(input.Extra)
+	if err != nil {
+		return settings, err
 	}
 
 	if _, exists := input.Extra[openAILongContextBillingEnabledKey]; exists {
@@ -68,6 +75,57 @@ func normalizeBulkOpenAISettings(input *BulkUpdateAccountsInput) (bulkOpenAISett
 	}
 
 	return settings, nil
+}
+
+// A nil model scope removes the key (all models); an empty list selects no models.
+func normalizeBulkExcelBPSExtra(extra map[string]any) (bool, error) {
+	changed := false
+	for _, key := range []string{"openai_excel_bps", "openai_excel_bps_cache_creation_as_input", "openai_excel_bps_auto_disable_on_403"} {
+		if raw, exists := extra[key]; exists {
+			changed = true
+			if _, ok := raw.(bool); !ok {
+				return true, infraerrors.BadRequest("OPENAI_EXCEL_BPS_INVALID", key+" must be a boolean")
+			}
+		}
+	}
+	if raw, exists := extra["openai_excel_bps_models"]; exists {
+		changed = true
+		if raw != nil {
+			models := make([]string, 0)
+			switch values := raw.(type) {
+			case []string:
+				models = append(models, values...)
+			case []any:
+				for _, value := range values {
+					model, ok := value.(string)
+					if !ok {
+						return true, infraerrors.BadRequest("OPENAI_EXCEL_BPS_INVALID", "openai_excel_bps_models must be an array of strings or null")
+					}
+					models = append(models, model)
+				}
+			default:
+				return true, infraerrors.BadRequest("OPENAI_EXCEL_BPS_INVALID", "openai_excel_bps_models must be an array of strings or null")
+			}
+			normalized := make([]string, 0, len(models))
+			seen := make(map[string]bool, len(models))
+			for _, model := range models {
+				model = strings.TrimSpace(model)
+				if model != "" && !seen[model] {
+					normalized = append(normalized, model)
+					seen[model] = true
+				}
+			}
+			extra["openai_excel_bps_models"] = normalized
+		}
+	}
+	if enabled, exists := extra["openai_excel_bps"].(bool); exists && !enabled {
+		extra["openai_excel_bps_models"] = nil
+		extra["openai_excel_bps_cache_creation_as_input"] = false
+		if _, exists := extra["openai_excel_bps_auto_disable_on_403"]; exists {
+			extra["openai_excel_bps_auto_disable_on_403"] = false
+		}
+	}
+	return changed, nil
 }
 
 func normalizeBulkOpenAIEndpointCapabilities(raw any) (any, bool, error) {
@@ -161,6 +219,11 @@ func validateBulkOpenAISettingsTargets(
 		account, ok := targetsByID[accountID]
 		if !ok || account == nil {
 			return 0, invalidBulkOpenAITarget(accountID, "account does not exist")
+		}
+
+		if settings.excelBPS && (account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth ||
+			account.IsShadow() || account.IsOpenAIAgentIdentity() || account.IsOpenAIPersonalAccessToken()) {
+			return 0, invalidBulkOpenAITarget(accountID, "Excel / BPS requires a regular ChatGPT OAuth account")
 		}
 
 		if settings.longContextBilling {

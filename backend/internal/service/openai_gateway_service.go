@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
+	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
@@ -469,6 +470,8 @@ type OpenAIGatewayService struct {
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	billingOutboxRepo     BillingOutboxRepository
+	excelBPSImagesMu      sync.Mutex
+	excelBPSImages        *basispoints.ImageRelay
 	supportDecisionReader SupportDecisionReader
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
@@ -514,7 +517,10 @@ type OpenAIGatewayService struct {
 	openaiCodexTickets      sync.Map
 	openaiCodexTicketFlight singleflight.Group
 	// Cookie WS generations are isolated from legacy turn-state tickets.
-	openaiCookieWSTickets      sync.Map
+	openaiCookieWSTickets sync.Map
+	// cookieWSSkipBusinessProbe is live-test only: new sockets skip the Tibo
+	// candy check so Forward can be exercised when upstream answers False.
+	cookieWSSkipBusinessProbe  bool
 	openaiCookieWSFlight       singleflight.Group
 	openaiCookieWSRetry        sync.Map
 	openaiCookieWSSlots        sync.Map

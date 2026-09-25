@@ -28,6 +28,10 @@ func RegisterGatewayRoutes(
 	compositeResolver *service.CompositeRouteResolver,
 	cfg *config.Config,
 ) {
+	// BPS fetches these capability URLs without the client's API key. There is
+	// no public upload route; only authenticated BPS requests can create them.
+	r.GET("/api/bps-images/:token", h.OpenAIGateway.ExcelBPSImage)
+	r.HEAD("/api/bps-images/:token", h.OpenAIGateway.ExcelBPSImage)
 	// The unified moderation service owns the request-body budget. Install the
 	// lifecycle hook before gateway routes so reservations survive until the
 	// handler has observed the upstream result and then release exactly once.

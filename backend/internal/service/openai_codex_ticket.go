@@ -588,6 +588,9 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) {
 		return nil
 	}
+	if account.IsExcelBPSEnabledForModel(model) {
+		return nil
+	}
 	if s.openAICookieWSEnabledForModel(account, model) {
 		// Cookie metadata is injected only on the WS header path.
 		// HTTP /responses continues without a Cookie ticket.
@@ -634,6 +637,9 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 // （默认非空），此时若门控仍按客户端原始模型判定，就会把「实际出站是非门控
 // 模型、根本不需要票」的 compact 请求整片误拦成不可调度。
 func (s *OpenAIGatewayService) openAICodexTicketOutboundModel(account *Account, requestedModel string, requireCompact bool) string {
+	if account != nil && account.IsExcelBPSEnabledForModel(requestedModel) {
+		return account.GetMappedModel(requestedModel)
+	}
 	model := strings.TrimSpace(requestedModel)
 	if account == nil || model == "" {
 		return model
@@ -658,6 +664,9 @@ func (s *OpenAIGatewayService) openAICodexTicketOutboundModel(account *Account, 
 // 不是客户端原始模型：注入侧读的是出站 body.model，两侧口径必须一致。
 func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, outboundModel string) bool {
 	if s == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabled() {
+		return false
+	}
+	if account.IsExcelBPSEnabledForModel(outboundModel) || account.isExcelBPSUpstreamModelEnabled(outboundModel) {
 		return false
 	}
 	// Cookie websocket is an optimization. Missing or unverified cookies use

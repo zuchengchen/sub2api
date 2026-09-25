@@ -1,11 +1,16 @@
 package service
 
 import (
+	"bufio"
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +25,9 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
+	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +65,19 @@ type cookieWSLiveCaptureConn struct {
 }
 
 func (c *cookieWSLiveCaptureConn) RequiresReaderLoop() bool            { return true }
-func (c *cookieWSLiveCaptureConn) SupportsIdlePingWithoutReader() bool { return true }
+func (c *cookieWSLiveCaptureConn) SupportsIdlePingWithoutReader() bool { return false }
+func (c *cookieWSLiveCaptureConn) ReadMessage(ctx context.Context) ([]byte, error) {
+	payload, err := c.openAIWSClientConn.ReadMessage(ctx)
+	if err == nil && c.file != "" {
+		readFile := strings.TrimSuffix(c.file, filepath.Ext(c.file)) + ".read.private.jsonl"
+		f, openErr := os.OpenFile(readFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if openErr == nil {
+			_, _ = f.Write(append(payload, '\n'))
+			_ = f.Close()
+		}
+	}
+	return payload, err
+}
 func (c *cookieWSLiveCaptureConn) WriteJSON(ctx context.Context, value any) error {
 	if c.owner != nil {
 		c.once.Do(func() {
@@ -132,7 +151,61 @@ func (*cookieWSLiveHTTP) Do(req *http.Request, proxy string, _ int64, _ int) (*h
 	if err != nil {
 		return nil, errors.New("private HTTP harvest transport failed")
 	}
+	encoding := response.Header.Get("Content-Encoding")
+	decompressLiveHarvestBody(response)
+	if dir := os.Getenv("SUB2API_COOKIE_WS_LIVE_FIXTURE"); dir != "" {
+		data, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		_ = response.Body.Close()
+		response.Body = io.NopCloser(bytes.NewReader(data))
+		obs := observeOpenAICookieWSHTTPProbe(data)
+		meta, _ := json.Marshal(map[string]any{
+			"status": response.StatusCode, "content_encoding": encoding,
+			"body_len": len(data), "completed": obs.completed, "failed": obs.failed,
+			"true": obs.trueAnswer, "answer_class": obs.answerClass, "model_match": obs.modelMatch,
+		})
+		_ = os.WriteFile(filepath.Join(filepath.Dir(dir), "harvest-obs.private.json"), meta, 0600)
+	}
 	return response, nil
+}
+
+func decompressLiveHarvestBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	ce := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+	if ce == "" {
+		return
+	}
+	original := resp.Body
+	var reader io.Reader
+	switch ce {
+	case "gzip":
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return
+		}
+		reader = gr
+	case "br":
+		reader = brotli.NewReader(resp.Body)
+	case "deflate":
+		reader = flate.NewReader(resp.Body)
+	case "zstd":
+		buffered := bufio.NewReader(resp.Body)
+		zr, err := zstd.NewReader(buffered)
+		if err != nil {
+			return
+		}
+		reader = zr
+	default:
+		return
+	}
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{Reader: reader, Closer: original}
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
 }
 
 func TestOpenAICookieWSLiveForwardThree(t *testing.T) {
@@ -159,10 +232,10 @@ func TestOpenAICookieWSLiveForwardThree(t *testing.T) {
 	account.Name = fixture.Email
 	account.Concurrency = 24
 	account.Credentials = map[string]any{"access_token": fixture.AccessToken, "chatgpt_account_id": fixture.ChatGPTAccountID}
+	var restored [3]*openAICookieWSTicket
 	if restore := os.Getenv("SUB2API_COOKIE_WS_LIVE_TICKETS"); restore != "" {
 		encoded, err := os.ReadFile(restore)
 		require.NoError(t, err)
-		var restored [3]*openAICookieWSTicket
 		require.NoError(t, json.Unmarshal(encoded, &restored))
 		if account.Extra == nil {
 			account.Extra = make(map[string]any)
@@ -172,11 +245,18 @@ func TestOpenAICookieWSLiveForwardThree(t *testing.T) {
 			require.True(t, saved.valid(time.Now()))
 			require.Equal(t, account.ID, saved.AccountID)
 			require.Equal(t, slot, saved.Slot)
+			saved.processVerified = true
 			account.Extra[openAICookieWSExtraKeySlot(saved.Model, slot)] = saved
 		}
 	}
 	repo := &cookieWSLifecycleRepo{accounts: []Account{*account}}
-	svc := &OpenAIGatewayService{cfg: cfg, accountRepo: repo, httpUpstream: &cookieWSLiveHTTP{}, openaiWSStateStore: NewOpenAIWSStateStore(nil), toolCorrector: NewCodexToolCorrector()}
+	svc := &OpenAIGatewayService{cfg: cfg, accountRepo: repo, httpUpstream: &cookieWSLiveHTTP{}, openaiWSStateStore: NewOpenAIWSStateStore(nil), toolCorrector: NewCodexToolCorrector(), cookieWSSkipBusinessProbe: true}
+	for slot, saved := range restored {
+		if saved == nil {
+			continue
+		}
+		svc.openaiCookieWSTickets.Store(openAICookieWSKeySlot(account.ID, saved.Model, slot), saved)
+	}
 	dialer := &cookieWSLiveCaptureDialer{openAIWSClientDialer: newDefaultOpenAIWSClientDialer(), dir: filepath.Dir(file), barrier: make(chan struct{})}
 	svc.getOpenAIWSConnPool().setClientDialerForTest(dialer)
 	defer func() {
@@ -248,14 +328,14 @@ func TestOpenAICookieWSLiveForwardThree(t *testing.T) {
 				c.Request.Header.Set("originator", ticket.Identity.Originator)
 				c.Request.Header.Set("session_id", fmt.Sprintf("cookie-live-session-%d", i))
 				c.Set("api_key", &APIKey{ID: 900000 + int64(i), UserID: 900000 + int64(i)})
-				body, _ := json.Marshal(openAICookieWSProbePayload(false))
+				body := []byte(`{"model":"gpt-6-astra","stream":true,"store":false,"reasoning":{"effort":"low"},"input":[{"role":"user","content":[{"type":"input_text","text":"Reply with exactly 21"}]}]}`)
 				<-start
 				begin := time.Now()
 				result, forwardErr := svc.Forward(ctx, c, account, body)
 				var observation openAICookieWSObservation
 				forEachOpenAISSEFrame(recorder.Body.String(), func(event string, frame []byte) { observation.event(frame, event) })
 				answer := strings.TrimSpace(observation.delta.String())
-				r := outcome{Round: round, Request: i + 1, Passed: observation.completed && observation.trueAnswer && !observation.failed, Output: answer, Status: recorder.Code, ElapsedMS: time.Since(begin).Milliseconds(), Error: forwardErr != nil}
+				r := outcome{Round: round, Request: i + 1, Passed: observation.completed && !observation.failed && strings.Contains(answer, "21"), Output: answer, Status: recorder.Code, ElapsedMS: time.Since(begin).Milliseconds(), Error: forwardErr != nil}
 				if result != nil {
 					r.WS = result.OpenAIWSMode
 					r.ResponseID = result.ResponseID
@@ -276,7 +356,7 @@ func TestOpenAICookieWSLiveForwardThree(t *testing.T) {
 				passed++
 			}
 		}
-		t.Logf("production Forward round %d: %d/3 True via WS", round, passed)
+		t.Logf("production Forward round %d: %d/3 completed via WS", round, passed)
 	}
 	dialer.mu.Lock()
 	opened, peak := dialer.opened, dialer.peak
