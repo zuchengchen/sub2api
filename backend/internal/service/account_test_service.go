@@ -196,7 +196,7 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 	if err := json.Unmarshal(projectedBody, &payload); err != nil {
 		return nil, fmt.Errorf("decode OpenAI account models: %w", err)
 	}
-	return MergeOpenAIAccountTestModels(payload.Data, account), nil
+	return mergeOpenAIAccountTestModels(payload.Data, account, false), nil
 }
 
 // MergeOpenAIAccountTestModels appends account model_mapping IDs that the live
@@ -204,6 +204,15 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 // not Codex agent entries, so the admin test-connection picker would otherwise
 // hide models the account is already configured to serve.
 func MergeOpenAIAccountTestModels(models []openai.Model, account *Account) []openai.Model {
+	return mergeOpenAIAccountTestModels(models, account, true)
+}
+
+// mergeOpenAIAccountTestModels adds picker-only entries after the caller has
+// optionally projected the upstream catalog through account mappings. The public
+// helper keeps its historical behavior for callers that provide an already raw
+// catalog; account discovery uses strictMappedAliases=false so stale text aliases
+// cannot be resurrected after projection filtered them out.
+func mergeOpenAIAccountTestModels(models []openai.Model, account *Account, includeMappedAliases bool) []openai.Model {
 	models = withOpenAIAccountTestDisplayNames(models)
 	if account == nil {
 		return models
@@ -225,20 +234,53 @@ func MergeOpenAIAccountTestModels(models []openai.Model, account *Account) []ope
 	extras := make([]string, 0)
 	// Codex discovery lists Responses drivers, not image_generation tool models.
 	if account.IsOpenAIOAuthLike() {
+		passthrough := account.IsOpenAIPassthroughEnabled()
+		mapping := account.GetModelMapping()
 		for _, model := range openai.DefaultModels {
-			if IsGPTImageGenerationModel(model.ID) && account.IsModelSupported(model.ID) {
-				if _, exists := seen[model.ID]; !exists {
-					seen[model.ID] = struct{}{}
-					extras = append(extras, model.ID)
+			if !IsGPTImageGenerationModel(model.ID) || !account.IsModelSupported(model.ID) {
+				continue
+			}
+			// With an explicit mapping, an image-shaped public name is only
+			// testable as a native image choice when its resolved upstream target
+			// is also an image model. Otherwise a stale mapping such as
+			// gpt-image-2.5-flare -> gpt-6-astra would resurrect the local image
+			// entry even though the account serves it as text (or not at all).
+			if !passthrough && len(mapping) > 0 {
+				target, matched := account.ResolveMappedModel(model.ID)
+				if !matched || !IsGPTImageGenerationModel(target) {
+					continue
 				}
+			}
+			if _, exists := seen[model.ID]; !exists {
+				seen[model.ID] = struct{}{}
+				extras = append(extras, model.ID)
 			}
 		}
 	}
 
+	passthrough := account.IsOpenAIPassthroughEnabled()
 	for requested := range account.GetModelMapping() {
 		requested = strings.TrimSpace(requested)
 		if requested == "" || strings.Contains(requested, "*") {
 			continue
+		}
+		if !includeMappedAliases {
+			// The strict account-discovery path already contains aliases whose
+			// mapped text target exists in the upstream catalog. Only synthesize
+			// image aliases that are intentionally supported by the picker:
+			// Codex does not list local image-generation models, while stale text
+			// aliases must stay absent. Passthrough ignores mapping targets, but
+			// still preserves explicitly named native image choices.
+			if !account.IsOpenAIOAuthLike() {
+				continue
+			}
+			target := requested
+			if !passthrough {
+				target = account.GetMappedModel(requested)
+			}
+			if !IsGPTImageGenerationModel(target) {
+				continue
+			}
 		}
 		if _, exists := seen[requested]; exists {
 			continue
