@@ -1953,6 +1953,7 @@ type openAIWSCaptureConn struct {
 	mu         sync.Mutex
 	readDelays []time.Duration
 	events     [][]byte
+	readErr    error
 	lastWrite  map[string]any
 	writes     []map[string]any
 	closed     bool
@@ -1993,6 +1994,11 @@ func (c *openAIWSCaptureConn) ReadMessage(ctx context.Context) ([]byte, error) {
 	if c.closed {
 		c.mu.Unlock()
 		return nil, errOpenAIWSConnClosed
+	}
+	if c.readErr != nil {
+		err := c.readErr
+		c.mu.Unlock()
+		return nil, err
 	}
 	if len(c.events) == 0 {
 		c.mu.Unlock()

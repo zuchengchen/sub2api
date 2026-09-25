@@ -153,6 +153,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	forceNewConn := forceNewConnByPolicy && storeDisabled && previousResponseID == "" && sessionHash != "" && preferredConnID == ""
 	cookieWS := s.openAICookieWSEnabledForModel(account, mappedModel)
 	if cookieWS {
+		payloadBytes := resolvePayloadBytes()
+		if tooLarge := s.cookieWSPayloadTooLargeError(payloadBytes); tooLarge != nil {
+			logOpenAIWSModeInfo(
+				"cookie_ws_payload_too_large account_id=%d model=%s payload_bytes=%d threshold_bytes=%d",
+				account.ID,
+				mappedModel,
+				payloadBytes,
+				tooLarge.ThresholdBytes,
+			)
+			return nil, tooLarge
+		}
 		reserveCtx, reserveCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 		reservationPreference := ""
 		if previousResponseID != "" {
@@ -599,13 +610,14 @@ readLoop:
 			lease.MarkBroken()
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
 			logOpenAIWSModeInfo(
-				"read_fail account_id=%d conn_id=%s wrote_downstream=%v close_status=%s close_reason=%s cause=%s events=%d token_events=%d terminal_events=%d buffered_pending=%d buffered_flushed=%d first_event=%s last_event=%s",
+				"read_fail account_id=%d conn_id=%s wrote_downstream=%v close_status=%s close_reason=%s cause=%s payload_bytes=%d events=%d token_events=%d terminal_events=%d buffered_pending=%d buffered_flushed=%d first_event=%s last_event=%s",
 				account.ID,
 				connID,
 				wroteDownstream,
 				closeStatus,
 				closeReason,
 				truncateOpenAIWSLogValue(readErr.Error(), openAIWSLogValueMaxLen),
+				resolvePayloadBytes(),
 				eventCount,
 				tokenEventCount,
 				terminalEventCount,

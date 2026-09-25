@@ -211,7 +211,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// Cookie mode is a separately validated HTTP/WS -> WS route. Its explicit
 	// account/model opt-in also overrides legacy HTTP passthrough settings.
 	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), compactPath, wsDecision)
-	cookieWSHTTPFallback := wsDecision.Reason == openAICookieWSHTTPFallbackReason
+	cookieWSHTTPFallback := isOpenAICookieWSHTTPTransportReason(wsDecision.Reason)
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled() && !cookieWS && !cookieWSHTTPFallback
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
@@ -1142,21 +1142,25 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return wsResult, nil
 		}
-		// A Cookie websocket is an optimization for this account/model. If the
-		// process has no usable ticket or all Cookie websocket capacity is busy,
-		// continue through the ordinary OAuth /responses request instead of
-		// returning the internal websocket-unavailable 503 to the caller.
-		if cookieWS && isOpenAICookieWSUnavailableError(wsErr) && (c == nil || c.Writer == nil || !c.Writer.Written()) {
-			wsDecision = openAIWSHTTPDecision(openAICookieWSHTTPFallbackReason)
+		// Cookie websocket is an optimization. Unavailable tickets, oversized
+		// frames, and upstream 1009 MessageTooBig fall through to OAuth HTTP
+		// /responses instead of failing the caller.
+		if cookieWS && shouldOpenAICookieWSHTTPFallback(wsErr) && (c == nil || c.Writer == nil || !c.Writer.Written()) {
+			fallbackReason := cookieWSHTTPFallbackReasonFor(wsErr)
+			wsDecision = openAIWSHTTPDecision(fallbackReason)
 			cookieWS = false
 			if c != nil {
 				c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
 				c.Set("openai_ws_transport_reason", wsDecision.Reason)
 			}
+			payloadBytes, thresholdBytes := cookieWSFallbackPayloadStats(wsErr)
 			logOpenAIWSModeInfo(
-				"cookie_ws_http_fallback account_id=%d model=%s reason=%s",
+				"cookie_ws_http_fallback account_id=%d model=%s reason=%s payload_bytes=%d threshold_bytes=%d cause=%s",
 				account.ID,
 				upstreamModel,
+				normalizeOpenAIWSLogValue(fallbackReason),
+				payloadBytes,
+				thresholdBytes,
 				normalizeOpenAIWSLogValue(wsErr.Error()),
 			)
 		} else {

@@ -405,6 +405,9 @@ gateway:
     store_disabled_force_new_conn: true
     # 是否启用 WSv2 generate=false 预热（默认 false）
     prewarm_generate_enabled: false
+    # Cookie WS 上行 JSON 达到该字节数时，不抢槽、不拨号，直接走 OAuth HTTP /responses。
+    # 用于避开上游 1009 MessageTooBig。0 关闭预判（失败后的 HTTP 回落仍生效）。
+    cookie_ws_http_fallback_threshold_bytes: 262144
     # 协议 feature 开关，v2 优先于 v1
     responses_websockets: false
     responses_websockets_v2: true
