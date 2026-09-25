@@ -20,6 +20,11 @@ import (
 // still belongs to the originating API key and client execution scope.
 const openAICookieWSScopeHeader = "x-sub2api-cookie-ws-scope"
 
+const (
+	openAICookieWSHTTPFallbackReason = "cookie_ws_unavailable_http"
+	openAICookieWSUnavailableMessage = "No verified Cookie websocket is available for this account"
+)
+
 type openAICookieWSSlotContextKey struct{}
 
 type openAICookieWSSlotReservations struct {
@@ -122,7 +127,27 @@ func (s *OpenAIGatewayService) resolveOpenAICookieWSDecision(account *Account, m
 	if !s.openAICookieWSEnabledForModel(account, upstreamModel) {
 		return decision, false
 	}
+	// Persisted Cookie tickets deliberately keep processVerified=false after a
+	// restart. They are not evidence that this process has a usable websocket;
+	// route the request through the normal Responses HTTP path until a fresh
+	// websocket validation publishes a ready ticket.
+	if !s.openAICookieWSHasReadyTicket(account, upstreamModel) {
+		return openAIWSHTTPDecision(openAICookieWSHTTPFallbackReason), false
+	}
 	return OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2, Reason: "cookie_ws"}, true
+}
+
+func (s *OpenAIGatewayService) openAICookieWSHasReadyTicket(account *Account, model string) bool {
+	if s == nil || account == nil {
+		return false
+	}
+	now := time.Now()
+	for slot := 0; slot < openAICookieWSSlotCount; slot++ {
+		if ticket := s.lookupOpenAICookieWSTicketSlot(account, model, slot); ticket != nil && ticket.ready(now) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *OpenAIGatewayService) openAICookieWSHTTPOnlyModel(account *Account, upstreamModel string) bool {
@@ -164,8 +189,24 @@ func openAICookieWSUnavailableFailover(err error) error {
 		StatusCode:       http.StatusServiceUnavailable,
 		ResponseBody:     []byte(`{"error":{"type":"upstream_unavailable","message":"No verified Cookie websocket is available for this account"}}`),
 		ClientStatusCode: http.StatusServiceUnavailable,
-		ClientMessage:    "No verified Cookie websocket is available for this account",
+		ClientMessage:    openAICookieWSUnavailableMessage,
 	}
+}
+
+func isOpenAICookieWSUnavailableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errOpenAIWSCookieExpired) ||
+		errors.Is(err, errOpenAIWSCookieRetired) ||
+		errors.Is(err, errOpenAICookieWSAccountUnavailable) ||
+		errors.Is(err, errOpenAIWSCookieValidatorMissing) ||
+		errors.Is(err, errOpenAIWSConnQueueFull) {
+		return true
+	}
+	var failoverErr *UpstreamFailoverError
+	return errors.As(err, &failoverErr) && failoverErr != nil &&
+		strings.TrimSpace(failoverErr.ClientMessage) == openAICookieWSUnavailableMessage
 }
 
 func wrapOpenAICookieWSCurrentTurnFailover(err error, originalPayload []byte, replayInput []json.RawMessage, replayExists bool, originalModel string) error {

@@ -104,30 +104,41 @@ func TestCookieWSForwardHTTPRoutingAndFinalIdentity(t *testing.T) {
 	}
 }
 
-func TestCookieWSForwardMissingCookieFailsOverWithoutHTTP(t *testing.T) {
+func TestCookieWSForwardMissingCookieUsesHTTPResponses(t *testing.T) {
 	svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{})
 	svc.openaiCookieWSTickets.Delete(openAICodexTicketKey(account.ID, "gpt-6-astra"))
+	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream.resp = cookieWSHTTPResponse("HTTP fallback")
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
-	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","input":"hello"}`))
-	require.Nil(t, result)
-	var failover *UpstreamFailoverError
-	require.ErrorAs(t, err, &failover)
-	require.Equal(t, http.StatusServiceUnavailable, failover.StatusCode)
-	require.False(t, c.Writer.Written(), "scheduler must retain ability to choose another account")
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","input":"hello","stream":false}`))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.OpenAIWSMode)
+	_, passthrough := c.Get("openai_passthrough")
+	require.False(t, passthrough, "missing Cookie WS must use the normal Responses path")
 	require.Zero(t, dialer.DialCount())
-	require.Empty(t, svc.httpUpstream.(*httpUpstreamRecorder).lastBody)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "/backend-api/codex/responses", upstream.lastReq.URL.Path)
+	require.Empty(t, upstream.lastReq.Header.Get("Cookie"))
+	require.Contains(t, rec.Body.String(), "HTTP fallback")
 }
 
 func TestCookieWSRouteScopeAndLegacyBoundaries(t *testing.T) {
-	svc, account, _, _ := newCookieForwardFixture(t, &openAIWSCaptureConn{})
+	svc, account, ticket, _ := newCookieForwardFixture(t, &openAIWSCaptureConn{})
 	account.Extra["openai_passthrough"] = false
 	legacy := openAIWSHTTPDecision("client_protocol_http")
 	decision, enabled := svc.resolveOpenAICookieWSDecision(account, "astra-alias", false, legacy)
 	require.True(t, enabled)
 	require.Equal(t, OpenAIUpstreamTransportResponsesWebsocketV2, decision.Transport)
+	svc.openaiCookieWSTickets.Delete(openAICodexTicketKey(account.ID, ticket.Model))
+	decision, enabled = svc.resolveOpenAICookieWSDecision(account, "astra-alias", false, legacy)
+	require.False(t, enabled)
+	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
+	require.Equal(t, openAICookieWSHTTPFallbackReason, decision.Reason)
+	svc.openaiCookieWSTickets.Store(openAICodexTicketKey(account.ID, ticket.Model), ticket)
 	decision, enabled = svc.resolveOpenAICookieWSDecision(account, "gpt-6-sol", false, legacy)
 	require.False(t, enabled)
 	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
