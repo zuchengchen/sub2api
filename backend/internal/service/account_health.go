@@ -332,6 +332,8 @@ func formatRate(v float64) string {
 }
 
 func (s *AccountHealthService) queryWindowStats(ctx context.Context, windowMinutes int) ([]accountHealthRow, error) {
+	// Cookie websocket unavailability is an optimization miss; Forward falls
+	// back to /responses HTTP and must not isolate the account.
 	q := `
 SELECT a.id, COALESCE(a.name, ''), COALESCE(a.platform, ''),
   COALESCE(u.ok_count, 0), u.avg_ms,
@@ -351,13 +353,14 @@ LEFT JOIN (
   WHERE created_at >= NOW() - ($1 || ' minutes')::interval
     AND COALESCE(status_code, 0) >= 400
     AND NOT COALESCE(is_business_limited, FALSE)
+    AND COALESCE(upstream_error_message, error_message, '') <> $2
     AND account_id IS NOT NULL
   GROUP BY account_id
 ) e ON e.account_id = a.id
 WHERE a.deleted_at IS NULL
   AND (u.account_id IS NOT NULL OR e.account_id IS NOT NULL
     OR COALESCE(a.temp_unschedulable_reason, '') LIKE 'health:%')`
-	rows, err := s.db.QueryContext(ctx, q, windowMinutes)
+	rows, err := s.db.QueryContext(ctx, q, windowMinutes, openAICookieWSUnavailableMessage)
 	if err != nil {
 		return nil, err
 	}

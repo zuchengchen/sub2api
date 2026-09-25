@@ -29,7 +29,7 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 	c.Writer.Flush()
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
 	gateway := s.openaiGatewayService
-	if gateway.openAICodexTicketBlocksAccount(account, model) {
+	if !gateway.openAICookieWSHasReadyTicket(account, model) {
 		return s.sendCookieWSTestError(c, account, "acquire", ErrOpenAICodexTicketUnavailable)
 	}
 	reserveCtx, reserveCancel := context.WithTimeout(ctx, gateway.openAIWSAcquireTimeout())
