@@ -2754,6 +2754,7 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		}
 	}
 	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
+	extraExpression = applyExcelBPSExtraExpression(extraExpression, updates)
 	if clearProbeSnapshot {
 		extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
 	}
@@ -2997,6 +2998,25 @@ func ollamaCloudUsageSnapshotClearRequested(extra map[string]any) bool {
 	return ok && value == nil
 }
 
+func applyExcelBPSExtraExpression(extraExpression string, extra map[string]any) string {
+	if enabled, exists := extra["openai_excel_bps"].(bool); exists && !enabled {
+		return "(" + extraExpression + ") - 'openai_excel_bps' - 'openai_excel_bps_models' - 'openai_excel_bps_cache_creation_as_input' - 'openai_excel_bps_auto_disable_on_403'"
+	}
+	if extra == nil {
+		return extraExpression
+	}
+	if scope, exists := extra["openai_excel_bps_models"]; exists && scope == nil {
+		extraExpression = "(" + extraExpression + ") - 'openai_excel_bps_models'"
+	}
+	if enabled, exists := extra["openai_excel_bps_cache_creation_as_input"].(bool); exists && !enabled {
+		extraExpression = "(" + extraExpression + ") - 'openai_excel_bps_cache_creation_as_input'"
+	}
+	if enabled, exists := extra["openai_excel_bps_auto_disable_on_403"].(bool); exists && !enabled {
+		extraExpression = "(" + extraExpression + ") - 'openai_excel_bps_auto_disable_on_403'"
+	}
+	return extraExpression
+}
+
 func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates service.AccountBulkUpdate) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -3131,6 +3151,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			extraExpression += " || $" + itoa(idx) + "::jsonb"
 			args = append(args, payload)
 			idx++
+			extraExpression = applyExcelBPSExtraExpression(extraExpression, updates.Extra)
 			if upstreamBillingProbeExplicitlyDisabled(updates.Extra) || upstreamBillingProbeSnapshotClearRequested(updates.Extra) {
 				extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
 			}

@@ -535,6 +535,11 @@ const baseSettingsResponse = {
     openai:      { daily: null, weekly: 12.5, monthly: null },
     grok:        { daily: null, weekly: null, monthly: 200 },
   },
+  excel_bps_image_relay_enabled: false,
+  excel_bps_image_base_url: '',
+  excel_bps_image_body_limit_mib: 64,
+  excel_bps_image_budget_mib: 512,
+  excel_bps_image_max_requests: 32,
 };
 
 function mountView() {
@@ -1879,6 +1884,32 @@ describe("admin SettingsView wechat connect controls", () => {
         oidc_connect_validate_id_token: false,
       }),
     );
+  });
+
+  it("saves Excel BPS image relay from the feature switches tab", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    const tab = wrapper.findAll('button').find((node) => node.text().includes('admin.settings.tabs.features'));
+    expect(tab).toBeDefined();
+    await tab?.trigger('click');
+    const card = wrapper.get('[data-testid="excel-bps-image-settings"]');
+    expect(card.isVisible()).toBe(true);
+    expect(card.find('#excel-bps-image-base-url').exists()).toBe(false);
+    await card.get('#excel-bps-image-enabled').setValue(true);
+    await card.get('#excel-bps-image-base-url').setValue(' https://images.example/ ');
+    await card.get('#excel-bps-image-body-limit').setValue('32');
+    await card.get('#excel-bps-image-budget').setValue('768');
+    await card.get('#excel-bps-image-max-requests').setValue('48');
+    await wrapper.find('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0]).toMatchObject({
+      excel_bps_image_relay_enabled: true,
+      excel_bps_image_base_url: 'https://images.example',
+      excel_bps_image_body_limit_mib: 32,
+      excel_bps_image_budget_mib: 768,
+      excel_bps_image_max_requests: 48,
+    });
+    wrapper.unmount();
   });
 });
 

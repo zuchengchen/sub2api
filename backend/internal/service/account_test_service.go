@@ -854,6 +854,14 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
 
+	// Excel/BPS accounts must use the same gateway path as user Responses
+	// requests. The legacy account-test probe hard-codes ChatGPT Codex and
+	// silently bypasses the account's protocol toggle, producing misleading
+	// quality-test results.
+	if account.IsExcelBPSEnabled() && s.openaiGatewayService != nil {
+		return s.testExcelBPSAccountConnection(c, account, modelID, prompt)
+	}
+
 	// Default to openai.DefaultTestModel for OpenAI testing
 	testModelID := modelID
 	if testModelID == "" {
@@ -2276,6 +2284,78 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	}
 
 	return s.processOpenAIChatCompletionsStream(c, resp.Body)
+}
+
+func (s *AccountTestService) testExcelBPSAccountConnection(c *gin.Context, account *Account, modelID, prompt string) error {
+	model := strings.TrimSpace(modelID)
+	if model == "" {
+		model = openai.DefaultTestModel
+	}
+	model = account.GetMappedModel(model)
+	prompt = excelBPSPromptOrDefault(prompt)
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
+
+	body, err := buildExcelBPSAccountTestBody(model, prompt)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create Excel BPS test payload")
+	}
+
+	probe := httptest.NewRecorder()
+	probeCtx, _ := gin.CreateTestContext(probe)
+	probeCtx.Request = c.Request.Clone(c.Request.Context())
+	result, err := s.openaiGatewayService.Forward(probeCtx, probeCtx, account, body)
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
+
+	answer := strings.Builder{}
+	completed := false
+	for _, line := range strings.Split(probe.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var event map[string]any
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) != nil {
+			continue
+		}
+		switch event["type"] {
+		case "response.output_text.delta":
+			if delta, ok := event["delta"].(string); ok {
+				_, _ = answer.WriteString(delta)
+				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
+			}
+		case "response.completed":
+			completed = true
+		}
+	}
+	if result == nil || result.ClientDisconnect {
+		return s.sendErrorAndEnd(c, "Excel BPS test response was interrupted")
+	}
+	if !completed {
+		return s.sendErrorAndEnd(c, "Excel BPS test response ended before completion")
+	}
+	if strings.TrimSpace(answer.String()) == "" {
+		return s.sendErrorAndEnd(c, "Excel BPS returned empty output")
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}
+
+func excelBPSPromptOrDefault(prompt string) string {
+	if value := strings.TrimSpace(prompt); value != "" {
+		return value
+	}
+	return "hi"
+}
+
+func buildExcelBPSAccountTestBody(model, prompt string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"model": model, "stream": true, "store": false,
+		"input": []any{map[string]any{"type": "message", "role": "user", "content": []any{
+			map[string]any{"type": "input_text", "text": excelBPSPromptOrDefault(prompt)},
+		}}},
+		"reasoning": map[string]any{"effort": "medium"},
+	})
 }
 
 // testOpenAICompactConnection probes native remote compaction v2 (streaming

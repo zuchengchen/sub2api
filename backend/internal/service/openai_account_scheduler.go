@@ -2531,6 +2531,9 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 	if s == nil || account == nil {
 		return false
 	}
+	if len(requestedModel) > 0 && account.IsExcelBPSEnabledForModel(requestedModel[0]) {
+		return false
+	}
 	if (requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress || requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2) && len(requestedModel) > 0 {
 		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestedModel[0]))
 		if s.openAICookieWSEnabledForModel(account, upstreamModel) {

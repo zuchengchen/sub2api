@@ -65,6 +65,9 @@ func (s *OpenAIGatewayService) validateOpenAICookieWSBusinessConn(ctx context.Co
 	if s == nil || account == nil || lease == nil {
 		return errors.New("Cookie websocket validation is unavailable")
 	}
+	if s.cookieWSSkipBusinessProbe {
+		return nil
+	}
 	verified := false
 	defer func() {
 		if !verified {

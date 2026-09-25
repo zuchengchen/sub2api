@@ -1184,3 +1184,43 @@ func TestBuildSchedulerMetadataAccount_KeepsRPMFieldsForRPMGate(t *testing.T) {
 			"投影裁掉 rpm_strategy 会让粘性豁免账号退回三区判定")
 	})
 }
+
+func TestBuildSchedulerMetadataAccount_KeepsExcelBPSAutoDisable(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		account := service.Account{Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: map[string]any{
+			"openai_excel_bps": true, "openai_excel_bps_auto_disable_on_403": enabled,
+		}}
+		payload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+		require.NoError(t, err)
+		var restored service.Account
+		require.NoError(t, json.Unmarshal(payload, &restored))
+		require.Equal(t, enabled, restored.IsExcelBPSAutoDisableOn403Enabled())
+	}
+}
+
+func TestBuildSchedulerMetadataAccount_KeepsExcelBPSModelSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		scoped     bool
+		models     any
+		astra, sol bool
+	}{
+		{"legacy", false, nil, true, true},
+		{"astra only", true, []string{"gpt-6-astra"}, true, false},
+		{"empty", true, []string{}, false, false},
+		{"null stays scoped", true, nil, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := service.Account{Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: map[string]any{"openai_excel_bps": true}}
+			if tc.scoped {
+				account.Extra["openai_excel_bps_models"] = tc.models
+			}
+			payload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+			require.NoError(t, err)
+			var restored service.Account
+			require.NoError(t, json.Unmarshal(payload, &restored))
+			require.Equal(t, tc.astra, restored.IsExcelBPSEnabledForModel("gpt-6-astra"))
+			require.Equal(t, tc.sol, restored.IsExcelBPSEnabledForModel("gpt-6-sol"))
+		})
+	}
+}
