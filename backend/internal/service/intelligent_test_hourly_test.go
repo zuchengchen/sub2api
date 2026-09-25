@@ -132,13 +132,18 @@ func TestRunScheduledPelicanUsesOnlyListedTicketedAccounts(t *testing.T) {
 	require.Equal(t, []int64{42}, repo.enqueued[0].AccountIDs)
 }
 
-func TestPickPelicanAccountIDUsesPreferredAccountFirst(t *testing.T) {
+func TestPickPelicanAccountIDPrefersLiveWS(t *testing.T) {
 	t.Parallel()
-	cands := []PelicanCandidate{{ID: 11, HasTicket: true}, {ID: 23142, Preferred: true}}
-	require.Equal(t, int64(23142), pickPelicanAccountID(cands, nil))
-	require.Equal(t, int64(11), pickPelicanAccountID(cands, map[int64]struct{}{23142: {}}))
-	absent := []PelicanCandidate{{ID: 11, HasTicket: false}, {ID: 12, HasTicket: true}}
-	require.Equal(t, int64(12), pickPelicanAccountID(absent, nil))
+	cands := []PelicanCandidate{
+		{ID: 11, HasTicket: true},
+		{ID: 12, HasWS: true},
+		{ID: 13},
+	}
+	require.Equal(t, int64(12), pickPelicanAccountID(cands, nil))
+	require.Equal(t, int64(11), pickPelicanAccountID(cands, map[int64]struct{}{12: {}}))
+	onlySchedulable := []PelicanCandidate{{ID: 11}, {ID: 13}}
+	got := pickPelicanAccountID(onlySchedulable, nil)
+	require.Contains(t, []int64{11, 13}, got)
 }
 
 func TestPickPelicanAccountIDPrefersUnusedTicket(t *testing.T) {
@@ -158,6 +163,49 @@ func TestRunScheduledPelicanPrefersTicketedAccount(t *testing.T) {
 		},
 	}
 	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Equal(t, []int64{12}, repo.enqueued[0].AccountIDs)
+}
+
+func TestRunScheduledPelicanPrefersLiveWSAccount(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID: 3,
+		candidates: []PelicanCandidate{
+			{ID: 11, HasTicket: true},
+			{ID: 12, HasWS: true},
+			{ID: 13},
+		},
+	}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Equal(t, []int64{12}, repo.enqueued[0].AccountIDs)
+}
+
+type pelicanLiveWSRunner struct {
+	counts map[int64][openAICookieWSSlotCount]int
+}
+
+func (pelicanLiveWSRunner) RunIntelligentTest(context.Context, *IntelligentTestRecord) error {
+	return nil
+}
+
+func (r pelicanLiveWSRunner) OpenAICookieWSVerifiedCounts(id int64) [openAICookieWSSlotCount]int {
+	return r.counts[id]
+}
+
+func TestRunScheduledPelicanMarksLiveWSFromRunner(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID: 3,
+		candidates: []PelicanCandidate{
+			{ID: 11, HasTicket: true},
+			{ID: 12},
+			{ID: 13},
+		},
+	}
+	svc := &IntelligentTestService{
+		repo:   repo,
+		runner: pelicanLiveWSRunner{counts: map[int64][openAICookieWSSlotCount]int{12: {0, 1, 0}}},
+	}
 	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
 	require.Equal(t, []int64{12}, repo.enqueued[0].AccountIDs)
 }

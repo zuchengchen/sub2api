@@ -340,36 +340,69 @@ func pickPelicanAccountID(cands []PelicanCandidate, used map[int64]struct{}) int
 	if len(cands) == 0 {
 		return 0
 	}
-	var preferred int64
-	var unusedTicketed, unused, ticketed, all []int64
+	var unusedWS, unusedTicketed, unused, liveWS, ticketed, all []int64
 	for _, cand := range cands {
 		all = append(all, cand.ID)
+		if cand.HasWS {
+			liveWS = append(liveWS, cand.ID)
+		}
 		if cand.HasTicket {
 			ticketed = append(ticketed, cand.ID)
 		}
 		if _, ok := used[cand.ID]; ok {
 			continue
 		}
-		if cand.Preferred && (preferred == 0 || cand.ID < preferred) {
-			preferred = cand.ID
-		}
 		unused = append(unused, cand.ID)
+		if cand.HasWS {
+			unusedWS = append(unusedWS, cand.ID)
+		}
 		if cand.HasTicket {
 			unusedTicketed = append(unusedTicketed, cand.ID)
 		}
 	}
-	if preferred > 0 {
-		return preferred
-	}
 	switch {
+	case len(unusedWS) > 0:
+		return unusedWS[randIntN(len(unusedWS))]
 	case len(unusedTicketed) > 0:
 		return unusedTicketed[randIntN(len(unusedTicketed))]
 	case len(unused) > 0:
 		return unused[randIntN(len(unused))]
+	case len(liveWS) > 0:
+		return liveWS[randIntN(len(liveWS))]
 	case len(ticketed) > 0:
 		return ticketed[randIntN(len(ticketed))]
 	default:
 		return all[randIntN(len(all))]
+	}
+}
+
+type pelicanCookieWSCounter interface {
+	OpenAICookieWSVerifiedCounts(int64) [openAICookieWSSlotCount]int
+}
+
+var _ pelicanCookieWSCounter = (*AccountTestService)(nil)
+
+func pelicanHasLiveCookieWS(counts [openAICookieWSSlotCount]int) bool {
+	for _, n := range counts {
+		if n > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *IntelligentTestService) markPelicanLiveWS(cands []PelicanCandidate) {
+	if s == nil || len(cands) == 0 {
+		return
+	}
+	counter, ok := s.runner.(pelicanCookieWSCounter)
+	if !ok {
+		return
+	}
+	for i := range cands {
+		if pelicanHasLiveCookieWS(counter.OpenAICookieWSVerifiedCounts(cands[i].ID)) {
+			cands[i].HasWS = true
+		}
 	}
 }
 
@@ -484,9 +517,10 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 		return
 	}
 	if len(cands) == 0 {
-		slog.Info("scheduled pelican skipped: no schedulable ai8 account or GPT-PRO ChatGPT OAuth account")
+		slog.Info("scheduled pelican skipped: no schedulable GPT-PRO ChatGPT OAuth account")
 		return
 	}
+	s.markPelicanLiveWS(cands)
 	slotKey := pelicanSlotKey(now)
 	attempts, err := s.repo.ListPelicanSlotAttempts(ctx, slotKey)
 	if err != nil {
