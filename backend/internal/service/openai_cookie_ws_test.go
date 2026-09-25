@@ -274,7 +274,7 @@ func TestOpenAICookieWSIsolationExpiryAndRestartGate(t *testing.T) {
 	require.Equal(t, ticket.Generation, h.Get(openAICookieWSGenerationHeader))
 	require.Empty(t, h.Get(openAICodexTurnStateHeader))
 	require.ErrorIs(t, s.applyOpenAICookieWSHeaders(context.Background(), b, ticket.Model, http.Header{}), ErrOpenAICodexTicketUnavailable)
-	require.True(t, s.openAICodexTicketBlocksAccount(b, ticket.Model), "cookie mode is fail closed even with legacy FailClosed=false")
+	require.False(t, s.openAICodexTicketBlocksAccount(b, ticket.Model), "missing cookie must not unschedulable; HTTP /responses remains available")
 	require.False(t, s.openAICodexTicketBlocksAccount(a, ticket.Model))
 	parsed := parseOpenAICookieWSTicket(a.ID, ticket.Model, ticket)
 	require.False(t, parsed.ready(time.Now()), "restart cannot trust stale process validation")
@@ -291,7 +291,7 @@ func TestOpenAICookieWSRestoreRevalidatesWithoutExtendingLifetime(t *testing.T) 
 	stored := cookieWSTestTicket(account.ID, time.Now().Add(-20*time.Minute))
 	account.Extra = map[string]any{openAICookieWSExtraKey(stored.Model): stored}
 	s.accountRepo = &cookieWSLifecycleRepo{accounts: []Account{*account}}
-	require.True(t, s.openAICodexTicketBlocksAccount(account, stored.Model))
+	require.False(t, s.openAICodexTicketBlocksAccount(account, stored.Model), "unverified persisted cookie must not unschedulable")
 	s.refreshOpenAICookieWSAccount(context.Background(), account)
 	got := s.lookupOpenAICookieWSTicket(account, stored.Model)
 	require.True(t, got.ready(time.Now()))

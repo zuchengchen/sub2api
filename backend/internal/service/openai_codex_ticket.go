@@ -589,9 +589,9 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 		return nil
 	}
 	if s.openAICookieWSEnabledForModel(account, model) {
-		// Cookie mode is WS-only. Only the final WS header builder may inject
-		// its private pool metadata; a legacy HTTP path must fail closed.
-		return ErrOpenAICodexTicketUnavailable
+		// Cookie metadata is injected only on the WS header path.
+		// HTTP /responses continues without a Cookie ticket.
+		return nil
 	}
 	if s.openAICookieWSModeConfigured() {
 		return nil
@@ -660,9 +660,8 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 	if s == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabled() {
 		return false
 	}
-	if s.openAICookieWSEnabledForModel(account, outboundModel) {
-		return !s.lookupOpenAICookieWSTicket(account, strings.TrimSpace(outboundModel)).ready(time.Now())
-	}
+	// Cookie websocket is an optimization. Missing or unverified cookies use
+	// ordinary OAuth /responses HTTP; they must not unschedulable the account.
 	if s.openAICookieWSModeConfigured() {
 		return false
 	}

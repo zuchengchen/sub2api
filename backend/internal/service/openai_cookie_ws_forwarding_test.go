@@ -104,6 +104,17 @@ func TestCookieWSForwardHTTPRoutingAndFinalIdentity(t *testing.T) {
 	}
 }
 
+func TestCookieWSMissingCookieDoesNotBlockScheduling(t *testing.T) {
+	svc, account, ticket, _ := newCookieForwardFixture(t, &openAIWSCaptureConn{})
+	require.False(t, svc.openAICodexTicketBlocksAccount(account, ticket.Model))
+	svc.openaiCookieWSTickets.Delete(openAICodexTicketKey(account.ID, ticket.Model))
+	require.False(t, svc.openAICodexTicketBlocksAccount(account, ticket.Model))
+	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, ticket.Model, false))
+	h := http.Header{}
+	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, ticket.Model, h))
+	require.Empty(t, h.Get(openAICodexTurnStateHeader))
+}
+
 func TestCookieWSForwardMissingCookieUsesHTTPResponses(t *testing.T) {
 	svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{})
 	svc.openaiCookieWSTickets.Delete(openAICodexTicketKey(account.ID, "gpt-6-astra"))
