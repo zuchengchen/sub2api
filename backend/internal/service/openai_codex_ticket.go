@@ -1437,6 +1437,12 @@ func openAICodexTicketCompletionKeepsTicket(requested, actual string) bool {
 
 // applyOpenAICodexTicketForRequest 注入门票，并让这条请求的响应观察器盯着这一张 state。
 func (s *OpenAIGatewayService) applyOpenAICodexTicketForRequest(ctx context.Context, c *gin.Context, account *Account, model string, h http.Header) error {
+	// Cookie WS accounts may temporarily lack a process-verified websocket
+	// ticket. The gateway then intentionally uses the normal OAuth /responses
+	// path; do not fail that HTTP request closed on the WS-only ticket gate.
+	if c != nil && c.GetString("openai_ws_transport_reason") == openAICookieWSHTTPFallbackReason {
+		return nil
+	}
 	slot := &openAICodexTicketInjectionSlot{}
 	err := s.applyOpenAICodexTicket(context.WithValue(ctx, openAICodexTicketInjectionSlotKey{}, slot), account, model, h)
 	if err != nil {
