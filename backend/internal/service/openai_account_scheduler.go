@@ -972,9 +972,8 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		}
 	}
 
-	// Reset 因子（use-it-or-lose-it）：优先读取 Codex 5h 重置时间，回退到会话窗口。
-	// 剩余时间越短 → 因子越接近 1（越早重置越优先用尽）。无活跃窗口的账号因子为 0。
-	// 仅在 weights.Reset > 0 时计算，默认关闭不影响原有行为。
+	// Reset 因子（use-it-or-lose-it）：按 Codex 7 天额度窗口剩余时间打分。
+	// 剩余时间越短 → 因子越接近 1，避免周期到期时额度浪费。无 7d 窗口的账号因子为 0。
 	minResetRemaining, maxResetRemaining := 0.0, 0.0
 	hasResetSample := false
 	if weights.Reset > 0 {
@@ -2690,7 +2689,7 @@ func (s *OpenAIGatewayService) openAIWSSchedulerWeights() GatewayOpenAIWSSchedul
 		Queue:         0.7,
 		ErrorRate:     0.8,
 		TTFT:          0.5,
-		Reset:         0.0,
+		Reset:         3.0,
 		QuotaHeadroom: 0.0,
 		UpstreamCost:  0.0,
 		Previous:      5.0,
@@ -2749,7 +2748,7 @@ type GatewayOpenAIWSSchedulerScoreWeightsView struct {
 	Queue     float64
 	ErrorRate float64
 	TTFT      float64
-	// Reset 倾向「会话窗口最早重置」的账号；0 表示关闭（默认）。
+	// Reset 倾向「7 天额度窗口最早重置」的账号。
 	Reset         float64
 	QuotaHeadroom float64
 	UpstreamCost  float64
@@ -3167,13 +3166,67 @@ func openAISchedulingResetWindowEnd(account *Account, now time.Time) (time.Time,
 	if account == nil {
 		return time.Time{}, false
 	}
-	if end, ok := openAICodexWindowResetAt(account.Extra, "5h"); ok && now.Before(end) {
+	end, ok := openAIScheduling7dResetAt(account.Extra)
+	if !ok || !now.Before(end) {
+		return time.Time{}, false
+	}
+	return end, true
+}
+
+func openAIScheduling7dResetAt(extra map[string]any) (time.Time, bool) {
+	if end, ok := openAICodexWindowResetAt(extra, "7d"); ok {
 		return end, true
 	}
-	if end := account.SessionWindowEnd; end != nil && now.Before(*end) {
-		return *end, true
+	window := openAICanonical7dWindowName(extra)
+	if window == "" || window == "7d" {
+		return time.Time{}, false
 	}
-	return time.Time{}, false
+	return openAICodexWindowResetAt(extra, window)
+}
+
+func openAICanonical7dWindowName(extra map[string]any) string {
+	if len(extra) == 0 {
+		return ""
+	}
+	snapshot := &OpenAICodexUsageSnapshot{}
+	if minutes := parseExtraInt(extra["codex_primary_window_minutes"]); minutes > 0 {
+		snapshot.PrimaryWindowMinutes = &minutes
+	}
+	if minutes := parseExtraInt(extra["codex_secondary_window_minutes"]); minutes > 0 {
+		snapshot.SecondaryWindowMinutes = &minutes
+	}
+	if used, ok := resolveAccountExtraNumber(extra, "codex_primary_used_percent"); ok {
+		snapshot.PrimaryUsedPercent = &used
+	}
+	if used, ok := resolveAccountExtraNumber(extra, "codex_secondary_used_percent"); ok {
+		snapshot.SecondaryUsedPercent = &used
+	}
+	normalized := snapshot.Normalize()
+	if normalized == nil {
+		return ""
+	}
+	if normalized.Used7dPercent != nil {
+		if snapshot.PrimaryUsedPercent != nil && normalized.Used7dPercent == snapshot.PrimaryUsedPercent {
+			return "primary"
+		}
+		if snapshot.SecondaryUsedPercent != nil && normalized.Used7dPercent == snapshot.SecondaryUsedPercent {
+			return "secondary"
+		}
+	}
+	if normalized.Window7dMinutes != nil {
+		if snapshot.PrimaryWindowMinutes != nil && *normalized.Window7dMinutes == *snapshot.PrimaryWindowMinutes {
+			return "primary"
+		}
+		if snapshot.SecondaryWindowMinutes != nil && *normalized.Window7dMinutes == *snapshot.SecondaryWindowMinutes {
+			return "secondary"
+		}
+	}
+	if snapshot.PrimaryWindowMinutes == nil && snapshot.SecondaryWindowMinutes == nil {
+		if _, ok := extra["codex_primary_reset_at"]; ok || parseExtraInt(extra["codex_primary_reset_after_seconds"]) > 0 {
+			return "primary"
+		}
+	}
+	return ""
 }
 
 func openAIQuotaHeadroomSnapshotStale(extra map[string]any, now time.Time) bool {

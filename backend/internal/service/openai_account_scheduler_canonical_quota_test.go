@@ -90,8 +90,8 @@ func TestOpenAISchedulerCanonicalResetScoresMatchSnapshot(t *testing.T) {
 	now := time.Now()
 	scheduler := openAIResetTestScheduler(1)
 	accounts := []*Account{
-		{ID: 1, Extra: map[string]any{"codex_5h_reset_at": now.Add(10 * time.Minute).Format(time.RFC3339)}},
-		{ID: 2, Extra: map[string]any{"codex_5h_reset_at": now.Add(4 * time.Hour).Format(time.RFC3339)}},
+		{ID: 1, Extra: map[string]any{"codex_7d_reset_at": now.Add(10 * time.Minute).Format(time.RFC3339)}},
+		{ID: 2, Extra: map[string]any{"codex_7d_reset_at": now.Add(4 * time.Hour).Format(time.RFC3339)}},
 	}
 	plan := scheduler.buildOpenAIAccountLoadPlan(context.Background(), OpenAIAccountScheduleRequest{}, accounts, nil)
 	scores := openAIPlanScores(plan)
@@ -108,22 +108,22 @@ func TestOpenAISchedulingResetWindowEnd(t *testing.T) {
 	updated := now.Add(-30 * time.Minute)
 	account := &Account{Extra: map[string]any{
 		"codex_usage_updated_at":       updated.Format(time.RFC3339),
-		"codex_5h_reset_after_seconds": 3600,
+		"codex_7d_reset_after_seconds": 3600,
 	}}
 	end, ok := openAISchedulingResetWindowEnd(account, now)
 	require.True(t, ok)
 	require.Equal(t, updated.Add(time.Hour), end)
 
-	account.Extra["codex_5h_reset_at"] = now.Add(10 * time.Minute).Format(time.RFC3339)
+	account.Extra["codex_7d_reset_at"] = now.Add(10 * time.Minute).Format(time.RFC3339)
 	end, ok = openAISchedulingResetWindowEnd(account, now)
 	require.True(t, ok)
 	require.Equal(t, now.Add(10*time.Minute), end)
 
-	delete(account.Extra, "codex_5h_reset_at")
-	account.Extra["codex_5h_reset_after_seconds"] = 60
+	delete(account.Extra, "codex_7d_reset_at")
+	account.Extra["codex_7d_reset_after_seconds"] = 60
 	_, ok = openAISchedulingResetWindowEnd(account, now)
 	require.False(t, ok)
-	account.Extra["codex_5h_reset_after_seconds"] = 3600
+	account.Extra["codex_7d_reset_after_seconds"] = 3600
 	delete(account.Extra, "codex_usage_updated_at")
 	_, ok = openAISchedulingResetWindowEnd(account, now)
 	require.False(t, ok, "缺少采样时间时不能把相对倒计时锚定到当前时间")
@@ -133,9 +133,19 @@ func TestOpenAISchedulingResetWindowEnd(t *testing.T) {
 
 	sessionEnd := now.Add(2 * time.Hour)
 	account.SessionWindowEnd = &sessionEnd
-	end, ok = openAISchedulingResetWindowEnd(account, now)
-	require.True(t, ok)
-	require.Equal(t, sessionEnd, end)
+	account.Extra["codex_5h_reset_at"] = now.Add(5 * time.Minute).Format(time.RFC3339)
+	_, ok = openAISchedulingResetWindowEnd(account, now)
+	require.False(t, ok, "5h 窗口和会话窗口不参与 7 天额度重置优先")
 	_, ok = openAISchedulingResetWindowEnd(nil, now)
 	require.False(t, ok)
+}
+
+func TestOpenAISchedulingResetWindowEnd_PrimaryLegacyIs7d(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	account := &Account{Extra: map[string]any{
+		"codex_primary_reset_at": now.Add(3 * time.Hour).Format(time.RFC3339),
+	}}
+	end, ok := openAISchedulingResetWindowEnd(account, now)
+	require.True(t, ok)
+	require.Equal(t, now.Add(3*time.Hour), end)
 }
