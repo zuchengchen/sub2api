@@ -208,6 +208,7 @@ func TestCookieWSBusinessValidatorUpstreamStopsFurtherProbes(t *testing.T) {
 		{"rate_limit", `{"type":"error","error":{"status":429,"type":"rate_limit_exceeded","message":"rate limited"}}`},
 		{"quota", `{"type":"response.failed","response":{"error":{"status":429,"type":"usage_limit_reached","message":"usage limit reached"}}}`},
 		{"unauthorized", `{"type":"error","error":{"status":401,"type":"authentication_error","message":"unauthorized"}}`},
+		{"forbidden", `{"type":"error","error":{"status":403,"type":"permission_error","message":"forbidden"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := &openAIWSCaptureConn{events: [][]byte{[]byte(tc.event)}}
@@ -219,9 +220,20 @@ func TestCookieWSBusinessValidatorUpstreamStopsFurtherProbes(t *testing.T) {
 			require.True(t, conn.closed)
 			require.Len(t, conn.writes, 1)
 			_, err := svc.latestOpenAICookieWSAccount(context.Background(), account.ID)
-			require.ErrorIs(t, err, errOpenAICookieWSAccountUnavailable)
 			if tc.name == "quota" {
-				repo := svc.accountRepo.(*cookieWSLifecycleRepo)
+				// A reported exhausted quota can still make this Cookie WS
+				// candidate ineligible, but must not pause the account globally.
+				require.ErrorIs(t, err, errOpenAICookieWSAccountUnavailable)
+			} else {
+				require.NoError(t, err)
+			}
+			require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "Cookie validation failure must not pause the account")
+			repo := svc.accountRepo.(*cookieWSLifecycleRepo)
+			current, getErr := repo.GetByID(context.Background(), account.ID)
+			require.NoError(t, getErr)
+			require.Equal(t, StatusActive, current.Status)
+			require.True(t, current.Schedulable)
+			if tc.name == "quota" {
 				require.Equal(t, 100.0, repo.updates[account.ID]["codex_7d_used_percent"])
 			}
 		})
