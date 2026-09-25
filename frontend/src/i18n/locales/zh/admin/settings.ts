@@ -1320,7 +1320,7 @@ export default {
         queueWeight: '排队',
         errorRateWeight: '错误率',
         ttftWeight: '首包延迟',
-        resetWeight: '重置窗口',
+        resetWeight: '7 天额度重置',
         quotaHeadroomWeight: '额度余量',
         upstreamCostWeight: '计费倍率',
         previousResponseWeight: 'previous_response 粘性',

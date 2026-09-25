@@ -1326,7 +1326,7 @@ export default {
         queueWeight: 'Queue',
         errorRateWeight: 'Error rate',
         ttftWeight: 'TTFT',
-        resetWeight: 'Reset window',
+        resetWeight: '7-day quota reset',
         quotaHeadroomWeight: 'Quota headroom',
         upstreamCostWeight: 'Billing rate',
         previousResponseWeight: 'previous_response sticky',

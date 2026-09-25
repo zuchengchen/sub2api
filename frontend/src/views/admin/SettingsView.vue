@@ -10167,7 +10167,7 @@ const openAIAdvancedSchedulerWeightFields = computed<
     {
       key: "openai_advanced_scheduler_weight_reset",
       label: t("admin.settings.openaiExperimentalScheduler.resetWeight"),
-      placeholder: placeholder("openai_advanced_scheduler_effective_weight_reset", "0"),
+      placeholder: placeholder("openai_advanced_scheduler_effective_weight_reset", "3"),
     },
     {
       key: "openai_advanced_scheduler_weight_quota_headroom",

@@ -3619,6 +3619,7 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	require.Equal(t, 0.7, defaultWeights.Queue)
 	require.Equal(t, 0.8, defaultWeights.ErrorRate)
 	require.Equal(t, 0.5, defaultWeights.TTFT)
+	require.Equal(t, 3.0, defaultWeights.Reset)
 
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.LBTopK = 9
