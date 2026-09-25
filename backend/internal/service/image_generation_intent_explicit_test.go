@@ -3,7 +3,10 @@ package service
 import (
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestIsExplicitImageGenerationIntent_IgnoresPassiveNamespace(t *testing.T) {
@@ -49,6 +52,26 @@ func TestIsExplicitImageGenerationIntent_DetectsExplicitToolChoice(t *testing.T)
 	body := []byte(`{"model":"gpt-5.5","tools":[{"type":"function","name":"Read"}],"tool_choice":"image_generation"}`)
 	assert.True(t, IsExplicitImageGenerationIntent("/v1/responses", "gpt-5.5", body),
 		"explicit tool_choice selecting image_generation IS explicit intent")
+}
+
+func TestStripOpenAIImageGenerationToolsIfDisabled(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-sol","tools":[{"type":"function","name":"shell"},{"type":"image_generation","model":"gpt-image-2"}]}`)
+
+	kept, err := StripOpenAIImageGenerationToolsIfDisabled(&Group{AllowImageGeneration: true}, nil, body)
+	require.NoError(t, err)
+	require.Equal(t, string(body), string(kept))
+
+	stripped, err := StripOpenAIImageGenerationToolsIfDisabled(&Group{AllowImageGeneration: false}, nil, body)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(stripped, `tools.#(type=="image_generation")`).Exists())
+	require.True(t, gjson.GetBytes(stripped, `tools.#(type=="function")`).Exists())
+	require.Equal(t, "image_generation", basispoints.NativeFallbackReason(body))
+	require.Empty(t, basispoints.NativeFallbackReason(stripped))
+
+	account := &Account{Platform: PlatformOpenAI, Extra: map[string]any{featureKeyCodexImageGenerationExplicitToolPolicy: "strip"}}
+	strippedByAccount, err := StripOpenAIImageGenerationToolsIfDisabled(&Group{AllowImageGeneration: true}, account, body)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(strippedByAccount, `tools.#(type=="image_generation")`).Exists())
 }
 
 func TestIsExplicitImageGenerationIntent_PlainTextRequest(t *testing.T) {

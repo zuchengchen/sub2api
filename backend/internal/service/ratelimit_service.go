@@ -461,6 +461,12 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 				shouldDisable = true
 				break
 			}
+			// ChatGPT Codex 401 只让本请求换号，不把整号打成临时不可调度。
+			// 同一 OAuth 号还可能走 BPS 等其它协议；Codex 上游 401 不能把那些路径一起停掉。
+			if authAccount.IsOpenAI() {
+				shouldDisable = true
+				break
+			}
 			// 2. 临时不可调度，替代 SetError（保持 status=active 让刷新服务能拾取）
 			// 注意：此处不再写回 account.Credentials/expires_at。
 			// 原实现使用请求开始时的 account 快照整列覆盖 credentials JSONB（见

@@ -38,6 +38,28 @@ func GroupAllowsImageGeneration(group *Group) bool {
 	return group == nil || group.AllowImageGeneration
 }
 
+func shouldStripOpenAIImageGenerationTools(group *Group, account *Account) bool {
+	if group != nil && !group.AllowImageGeneration {
+		return true
+	}
+	return account != nil && account.CodexImageGenerationExplicitToolPolicy() == codexImageGenerationExplicitToolPolicyStrip
+}
+
+// StripOpenAIImageGenerationToolsIfDisabled removes native image_generation tools
+// when the group or account has image generation turned off. Codex CLI advertises
+// that tool on ordinary chats; stripping it keeps those requests on BPS instead
+// of falling back to Codex, and avoids a group-level 403.
+func StripOpenAIImageGenerationToolsIfDisabled(group *Group, account *Account, body []byte) ([]byte, error) {
+	if !shouldStripOpenAIImageGenerationTools(group, account) {
+		return body, nil
+	}
+	stripped, _, err := stripOpenAIImageGenerationToolsFromRawPayload(body)
+	if err != nil {
+		return body, err
+	}
+	return stripped, nil
+}
+
 // IsImageGenerationIntent classifies requests that can produce generated images.
 func IsImageGenerationIntent(endpoint string, requestedModel string, body []byte) bool {
 	if IsImageGenerationEndpoint(endpoint) {
