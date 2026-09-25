@@ -352,11 +352,27 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 
 func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog, p *postUsageBillingParams, deps *billingDeps, repo UsageBillingRepository, outbox BillingOutboxRepository) (bool, error) {
 	if p == nil || deps == nil {
+		if p != nil && p.SimpleModeKeyRateLimitOnly {
+			return false, ErrSimpleModeKeyRateLimitBillingUnavailable
+		}
+		return false, nil
+	}
+	if p.Cost == nil {
+		if p.SimpleModeKeyRateLimitOnly {
+			return false, ErrSimpleModeKeyRateLimitBillingUnavailable
+		}
 		return false, nil
 	}
 
 	cmd := buildUsageBillingCommand(requestID, usageLog, p)
-	if cmd == nil || cmd.RequestID == "" {
+	if cmd == nil || cmd.RequestID == "" || repo == nil {
+		if p.SimpleModeKeyRateLimitOnly {
+			// Simple mode must retain request-id deduplication and never fall back
+			// to the legacy path, which can charge balances or dereference absent
+			// standard-mode dependencies.
+			return false, ErrSimpleModeKeyRateLimitBillingUnavailable
+		}
+		// The legacy path is only a fallback for standard billing.
 		postUsageBilling(ctx, p, deps)
 		return true, nil
 	}
@@ -379,11 +395,6 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 		}
 		return false, nil
 	}
-	if repo == nil {
-		postUsageBilling(ctx, p, deps)
-		return true, nil
-	}
-
 	billingCtx, cancel := detachedBillingContext(ctx)
 	defer cancel()
 
@@ -393,7 +404,9 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 	}
 
 	if result == nil || !result.Applied {
-		deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+		if deps.deferredService != nil && p.Account != nil {
+			deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+		}
 		return false, nil
 	}
 
@@ -422,7 +435,9 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 				logger.LegacyPrintf("service.gateway", "Warning: invalidate simple-mode api key rate-limit cache failed for key %d: %v", p.APIKey.ID, err)
 			}
 		}
-		deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+		if deps.deferredService != nil && p.Account != nil {
+			deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+		}
 		return
 	}
 
@@ -438,7 +453,9 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 		deps.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(p.APIKey.ID, p.Cost.ActualCost)
 	}
 
-	deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+	if deps.deferredService != nil && p.Account != nil {
+		deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+	}
 
 	// Platform quota 累加：仅在 standard（余额）模式生效；订阅模式豁免；仅对有 limit 的用户写
 	// Redis 同步写 + DB 异步持久化（flag=false 降级）或 flusher 异步刷（flag=true）:

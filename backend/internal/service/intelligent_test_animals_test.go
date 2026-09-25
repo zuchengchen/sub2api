@@ -61,17 +61,17 @@ func TestAdminPelicanRunPicksRandomAnimal(t *testing.T) {
 	require.Empty(t, scheduled.Prompts)
 }
 
-func TestPelicanSlotKeyTruncatesToTenMinutes(t *testing.T) {
+func TestPelicanSlotKeyTruncatesToThirtyMinutes(t *testing.T) {
 	t.Parallel()
-	now, err := time.Parse(time.RFC3339, "2026-09-20T03:17:44Z")
+	now, err := time.Parse(time.RFC3339, "2026-09-20T03:37:44Z")
 	require.NoError(t, err)
-	require.Equal(t, "pelican-slot-202609200310", pelicanSlotKey(now))
-	same, err := time.Parse(time.RFC3339, "2026-09-20T03:19:59Z")
+	require.Equal(t, "pelican-slot-202609200330", pelicanSlotKey(now))
+	same, err := time.Parse(time.RFC3339, "2026-09-20T03:39:59Z")
 	require.NoError(t, err)
-	require.Equal(t, "pelican-slot-202609200310", pelicanSlotKey(same))
-	next, err := time.Parse(time.RFC3339, "2026-09-20T03:20:00Z")
+	require.Equal(t, "pelican-slot-202609200330", pelicanSlotKey(same))
+	next, err := time.Parse(time.RFC3339, "2026-09-20T04:00:00Z")
 	require.NoError(t, err)
-	require.Equal(t, "pelican-slot-202609200320", pelicanSlotKey(next))
+	require.Equal(t, "pelican-slot-202609200400", pelicanSlotKey(next))
 }
 
 func TestPelicanInBeijingWindowIsEightToMidnight(t *testing.T) {
@@ -88,7 +88,7 @@ func TestPelicanInBeijingWindowIsEightToMidnight(t *testing.T) {
 	require.False(t, pelicanInBeijingWindow(parse("2026-09-19T23:59:59Z"))) // 07:59
 }
 
-func TestPelicanNextBoundaryAlignsToTenMinutes(t *testing.T) {
+func TestPelicanNextBoundaryAlignsToThirtyMinutes(t *testing.T) {
 	t.Parallel()
 	now, err := time.Parse(time.RFC3339, "2026-09-19T23:50:00Z") // 07:50 Beijing
 	require.NoError(t, err)
@@ -97,5 +97,5 @@ func TestPelicanNextBoundaryAlignsToTenMinutes(t *testing.T) {
 	require.True(t, pelicanInBeijingWindow(next))
 	inside, err := time.Parse(time.RFC3339, "2026-09-20T00:07:00Z") // 08:07 Beijing
 	require.NoError(t, err)
-	require.Equal(t, "2026-09-20T08:10:00+08:00", pelicanNextBoundary(inside).Format(time.RFC3339))
+	require.Equal(t, "2026-09-20T08:30:00+08:00", pelicanNextBoundary(inside).Format(time.RFC3339))
 }

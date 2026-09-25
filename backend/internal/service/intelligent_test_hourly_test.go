@@ -11,12 +11,12 @@ import (
 
 type hourlyPelicanRepo struct {
 	IntelligentTestRepository
-	adminID     int64
-	accountIDs  []int64
-	candidates  []PelicanCandidate
-	enqueued    []IntelligentTestEnqueue
-	actors      []int64
-	attempts    []PelicanSlotAttempt
+	adminID    int64
+	accountIDs []int64
+	candidates []PelicanCandidate
+	enqueued   []IntelligentTestEnqueue
+	actors     []int64
+	attempts   []PelicanSlotAttempt
 }
 
 func (r *hourlyPelicanRepo) Settings(context.Context) ([]IntelligentTestSetting, error) {
@@ -249,9 +249,9 @@ func TestPelicanLoopWaitRetriesInsideWindowAndSleepsOvernight(t *testing.T) {
 	nearBoundary, err := time.Parse(time.RFC3339, "2026-09-20T04:28:00Z")
 	require.NoError(t, err)
 	require.InDelta(t, (2 * time.Minute).Seconds(), pelicanLoopWait(nearBoundary).Seconds(), 1)
-	tenMinuteBoundary, err := time.Parse(time.RFC3339, "2026-09-20T04:09:00Z") // 12:09 Beijing
+	halfHourBoundary, err := time.Parse(time.RFC3339, "2026-09-20T04:29:00Z") // 12:29 Beijing
 	require.NoError(t, err)
-	require.InDelta(t, time.Minute.Seconds(), pelicanLoopWait(tenMinuteBoundary).Seconds(), 1)
+	require.InDelta(t, time.Minute.Seconds(), pelicanLoopWait(halfHourBoundary).Seconds(), 1)
 	night, err := time.Parse(time.RFC3339, "2026-09-20T16:10:00Z")
 	require.NoError(t, err)
 	nextEight := time.Date(2026, 9, 21, 8, 0, 0, 0, pelicanBeijingLocation())
