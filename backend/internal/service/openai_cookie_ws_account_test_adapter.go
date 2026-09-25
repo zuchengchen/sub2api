@@ -12,8 +12,14 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// Admin connection/intelligence tests use the same verified Cookie pool. Their
-// events stay in the existing TestEvent format and never mutate account health.
+const (
+	accountTestCookieWSHTTPFallbackKey     = "account_test_cookie_ws_http_fallback"
+	accountTestCookieWSHTTPFallbackMessage = "Cookie websocket is not ready; testing via HTTP /responses"
+)
+
+// Admin connection/intelligence tests use the same verified Cookie pool when a
+// process-ready ticket exists. Otherwise they follow live traffic onto HTTP
+// /responses. Events stay in TestEvent format and never mutate account health.
 func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context, account *Account, model, prompt string) (retErr error) {
 	ctx := c.Request.Context()
 	// Intelligent runs already own their configured deadline (up to 600s).

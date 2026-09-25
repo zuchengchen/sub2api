@@ -880,8 +880,15 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
 	}
-	if s.openaiGatewayService != nil && s.openaiGatewayService.openAICookieWSEnabledForModel(account, normalizeOpenAIModelForUpstream(account, testModelID)) {
-		return s.testOpenAICookieWSAccountConnection(c, account, normalizeOpenAIModelForUpstream(account, testModelID), prompt)
+	if s.openaiGatewayService != nil {
+		upstreamModel := normalizeOpenAIModelForUpstream(account, testModelID)
+		if s.openaiGatewayService.openAICookieWSEnabledForModel(account, upstreamModel) &&
+			s.openaiGatewayService.openAICookieWSHasReadyTicket(account, upstreamModel) {
+			return s.testOpenAICookieWSAccountConnection(c, account, upstreamModel, prompt)
+		}
+		if s.openaiGatewayService.openAICookieWSEnabledForModel(account, upstreamModel) {
+			c.Set(accountTestCookieWSHTTPFallbackKey, true)
+		}
 	}
 
 	credentialAccount := account
@@ -961,6 +968,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// restart this probe after registering a replacement task.
 	if !agentIdentityTaskRecoveryWasTried(ctx) {
 		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+		if fallback, ok := c.Get(accountTestCookieWSHTTPFallbackKey); ok && fallback == true {
+			s.sendEvent(c, TestEvent{Type: "status", Text: accountTestCookieWSHTTPFallbackMessage})
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
