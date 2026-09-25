@@ -423,9 +423,13 @@ func TestForwardAsChatCompletions_OAuthGPT56AddsReusablePrefixBreakpoint(t *test
 	require.Equal(t, "user", gjson.GetBytes(firstUpstreamBody, "input.1.role").String())
 	require.Equal(t, 1, strings.Count(string(firstUpstreamBody), systemPrompt))
 	require.NotEmpty(t, gjson.GetBytes(firstUpstreamBody, "prompt_cache_key").String())
-	require.Equal(t,
+	// The reusable system prefix gets an explicit breakpoint, while the
+	// automatically generated cache key still shards by the first user message
+	// so parallel conversations do not share one growing prefix cache.
+	require.NotEqual(t,
 		gjson.GetBytes(firstUpstreamBody, "prompt_cache_key").String(),
 		gjson.GetBytes(secondUpstreamBody, "prompt_cache_key").String(),
+		"different first user messages must keep independent cache identities",
 	)
 }
 

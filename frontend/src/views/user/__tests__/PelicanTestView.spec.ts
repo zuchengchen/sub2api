@@ -125,7 +125,7 @@ describe('PelicanTestView', () => {
     })
     const wrapper = mountView()
     await flushPromises()
-    expect(pelicanTestsAPI.list).toHaveBeenCalledWith(1, 96)
+    expect(pelicanTestsAPI.list).toHaveBeenCalledWith(1, 32)
     expect(wrapper.findAll('h1')).toHaveLength(1)
     expect(wrapper.get('h1').classes()).toContain('lg:hidden')
     expect(wrapper.findAll('iframe')).toHaveLength(1)
