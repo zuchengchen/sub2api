@@ -201,7 +201,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// Cookie mode is a separately validated HTTP/WS -> WS route. Its explicit
 	// account/model opt-in also overrides legacy HTTP passthrough settings.
 	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), compactPath, wsDecision)
-	passthroughEnabled := account.IsOpenAIPassthroughEnabled() && !cookieWS
+	cookieWSHTTPFallback := wsDecision.Reason == openAICookieWSHTTPFallbackReason
+	passthroughEnabled := account.IsOpenAIPassthroughEnabled() && !cookieWS && !cookieWSHTTPFallback
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
 		if err != nil {
@@ -1131,15 +1132,34 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return wsResult, nil
 		}
-		var failoverErr *UpstreamFailoverError
-		if cookieWS {
-			wsErr = openAICookieWSUnavailableFailover(wsErr)
+		// A Cookie websocket is an optimization for this account/model. If the
+		// process has no usable ticket or all Cookie websocket capacity is busy,
+		// continue through the ordinary OAuth /responses request instead of
+		// returning the internal websocket-unavailable 503 to the caller.
+		if cookieWS && isOpenAICookieWSUnavailableError(wsErr) && (c == nil || c.Writer == nil || !c.Writer.Written()) {
+			wsDecision = openAIWSHTTPDecision(openAICookieWSHTTPFallbackReason)
+			cookieWS = false
+			if c != nil {
+				c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
+				c.Set("openai_ws_transport_reason", wsDecision.Reason)
+			}
+			logOpenAIWSModeInfo(
+				"cookie_ws_http_fallback account_id=%d model=%s reason=%s",
+				account.ID,
+				upstreamModel,
+				normalizeOpenAIWSLogValue(wsErr.Error()),
+			)
+		} else {
+			var failoverErr *UpstreamFailoverError
+			if cookieWS {
+				wsErr = openAICookieWSUnavailableFailover(wsErr)
+			}
+			if cookieWS && errors.As(wsErr, &failoverErr) && (c == nil || c.Writer == nil || !c.Writer.Written()) {
+				return nil, failoverErr
+			}
+			s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
+			return nil, wsErr
 		}
-		if cookieWS && errors.As(wsErr, &failoverErr) && (c == nil || c.Writer == nil || !c.Writer.Written()) {
-			return nil, failoverErr
-		}
-		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
-		return nil, wsErr
 	}
 
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
