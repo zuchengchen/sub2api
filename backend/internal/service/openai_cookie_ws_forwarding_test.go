@@ -379,3 +379,81 @@ func TestCookieWSNonAstraAPIKeyForcesResponsesOutsideAllowlist(t *testing.T) {
 	require.Equal(t, "Bearer test-api-key", upstream.lastReq.Header.Get("Authorization"))
 	require.Contains(t, rec.Body.String(), "HTTP API key")
 }
+
+func TestCookieWSFallbackHelpers(t *testing.T) {
+	require.False(t, isOpenAIWSMessageTooBigError(nil))
+	require.False(t, isOpenAIWSMessageTooBigError(errors.New("read_event")))
+	require.True(t, isOpenAIWSMessageTooBigError(wrapOpenAIWSFallback("message_too_big", errors.New("1009"))))
+	require.True(t, isOpenAIWSMessageTooBigError(wrapOpenAIWSFallback("prewarm_message_too_big", errors.New("1009"))))
+	require.False(t, shouldOpenAICookieWSHTTPFallback(nil))
+	require.True(t, shouldOpenAICookieWSHTTPFallback(wrapOpenAIWSFallback("message_too_big", errors.New("1009"))))
+	tooLarge := &openAICookieWSPayloadTooLargeError{PayloadBytes: 300000, ThresholdBytes: 262144}
+	require.True(t, shouldOpenAICookieWSHTTPFallback(tooLarge))
+	require.Equal(t, openAICookieWSPayloadTooLargeHTTPFallbackReason, cookieWSHTTPFallbackReasonFor(tooLarge))
+	require.Equal(t, openAICookieWSPayloadTooLargeHTTPFallbackReason, cookieWSHTTPFallbackReasonFor(wrapOpenAIWSFallback("message_too_big", errors.New("1009"))))
+	require.Equal(t, openAICookieWSHTTPFallbackReason, cookieWSHTTPFallbackReasonFor(errOpenAIWSConnQueueFull))
+	require.True(t, isOpenAICookieWSHTTPTransportReason(openAICookieWSHTTPFallbackReason))
+	require.True(t, isOpenAICookieWSHTTPTransportReason(openAICookieWSPayloadTooLargeHTTPFallbackReason))
+	require.False(t, isOpenAICookieWSHTTPTransportReason("cookie_ws"))
+	payloadBytes, threshold := cookieWSFallbackPayloadStats(tooLarge)
+	require.Equal(t, 300000, payloadBytes)
+	require.Equal(t, int64(262144), threshold)
+	payloadBytes, threshold = cookieWSFallbackPayloadStats(wrapOpenAIWSFallback("message_too_big", errors.New("1009")))
+	require.Equal(t, -1, payloadBytes)
+	require.Equal(t, int64(-1), threshold)
+
+	require.Equal(t, openAICookieWSHTTPFallbackThresholdBytesDefault, (*OpenAIGatewayService)(nil).openAICookieWSHTTPFallbackThresholdBytes())
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	require.Zero(t, svc.openAICookieWSHTTPFallbackThresholdBytes())
+	require.Nil(t, svc.cookieWSPayloadTooLargeError(1<<30))
+	svc.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = openAICookieWSHTTPFallbackThresholdBytesDefault
+	require.Nil(t, svc.cookieWSPayloadTooLargeError(100))
+	require.NotNil(t, svc.cookieWSPayloadTooLargeError(int(openAICookieWSHTTPFallbackThresholdBytesDefault)))
+	svc.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = 1
+	require.NotNil(t, svc.cookieWSPayloadTooLargeError(1))
+}
+
+func TestCookieWSOversizedPayloadUsesHTTPResponsesWithoutDial(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	conn := &openAIWSCaptureConn{events: [][]byte{[]byte(`{"type":"response.completed","response":{"id":"resp_should_not_use_ws","model":"gpt-6-astra","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"WS"}]}],"usage":{"input_tokens":1,"output_tokens":1}}}`)}}
+	svc, account, _, dialer := newCookieForwardFixture(t, conn)
+	svc.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = 1
+	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream.resp = cookieWSHTTPResponse("HTTP oversized")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","input":"hello","stream":false}`))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.OpenAIWSMode)
+	require.Zero(t, dialer.DialCount(), "oversized Cookie WS must not reserve a slot or dial")
+	require.Equal(t, openAICookieWSPayloadTooLargeHTTPFallbackReason, c.GetString("openai_ws_transport_reason"))
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "/backend-api/codex/responses", upstream.lastReq.URL.Path)
+	require.Empty(t, upstream.lastReq.Header.Get("Cookie"))
+	require.Contains(t, rec.Body.String(), "HTTP oversized")
+}
+
+func TestCookieWSMessageTooBigFallsBackToHTTP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	conn := &openAIWSCaptureConn{readErr: coderws.CloseError{Code: coderws.StatusMessageTooBig}}
+	svc, account, _, dialer := newCookieForwardFixture(t, conn)
+	svc.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = 0
+	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream.resp = cookieWSHTTPResponse("HTTP after 1009")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","input":"hello","stream":false}`))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.OpenAIWSMode)
+	require.Equal(t, 1, dialer.DialCount(), "under-threshold 1009 should try Cookie WS once")
+	require.Equal(t, openAICookieWSPayloadTooLargeHTTPFallbackReason, c.GetString("openai_ws_transport_reason"))
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "/backend-api/codex/responses", upstream.lastReq.URL.Path)
+	require.Contains(t, rec.Body.String(), "HTTP after 1009")
+}

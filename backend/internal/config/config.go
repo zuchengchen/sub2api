@@ -1248,6 +1248,10 @@ type GatewayOpenAIWSConfig struct {
 	HTTPBridgeEnabled bool `mapstructure:"http_bridge_enabled"`
 	// HTTPBridgeThresholdBytes: 触发 HTTP bridge 的入站 WS payload 阈值。
 	HTTPBridgeThresholdBytes int64 `mapstructure:"http_bridge_threshold_bytes"`
+	// CookieWSHTTPFallbackThresholdBytes: Cookie WS 上行 JSON 达到该字节数时，
+	// 不抢槽、不拨号，直接走 OAuth HTTP /responses，避免上游 1009 MessageTooBig。
+	// 0 关闭预判（失败后的 HTTP 回落仍生效）。
+	CookieWSHTTPFallbackThresholdBytes int64 `mapstructure:"cookie_ws_http_fallback_threshold_bytes"`
 
 	// Feature 开关：v2 优先于 v1
 	ResponsesWebsockets   bool `mapstructure:"responses_websockets"`
@@ -2366,6 +2370,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.client_read_limit_bytes", 64*1024*1024)
 	viper.SetDefault("gateway.openai_ws.http_bridge_enabled", true)
 	viper.SetDefault("gateway.openai_ws.http_bridge_threshold_bytes", 15*1024*1024)
+	viper.SetDefault("gateway.openai_ws.cookie_ws_http_fallback_threshold_bytes", 256*1024)
 	viper.SetDefault("gateway.openai_ws.responses_websockets", false)
 	viper.SetDefault("gateway.openai_ws.responses_websockets_v2", true)
 	viper.SetDefault("gateway.openai_ws.max_conns_per_account", 128)
@@ -3363,6 +3368,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIWS.HTTPBridgeEnabled && c.Gateway.OpenAIWS.HTTPBridgeThresholdBytes == 0 {
 		return fmt.Errorf("gateway.openai_ws.http_bridge_threshold_bytes must be positive when http_bridge_enabled is true")
+	}
+	if c.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes < 0 {
+		return fmt.Errorf("gateway.openai_ws.cookie_ws_http_fallback_threshold_bytes must be non-negative")
 	}
 	if c.Gateway.OpenAIWS.FallbackCooldownSeconds < 0 {
 		return fmt.Errorf("gateway.openai_ws.fallback_cooldown_seconds must be non-negative")

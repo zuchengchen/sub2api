@@ -512,6 +512,9 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes != 15*1024*1024 {
 		t.Fatalf("Gateway.OpenAIWS.HTTPBridgeThresholdBytes = %d, want %d", cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes, 15*1024*1024)
 	}
+	if cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes != 256*1024 {
+		t.Fatalf("Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = %d, want %d", cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes, 256*1024)
+	}
 	if cfg.Gateway.OpenAIWS.RetryBackoffInitialMS != 120 {
 		t.Fatalf("Gateway.OpenAIWS.RetryBackoffInitialMS = %d, want 120", cfg.Gateway.OpenAIWS.RetryBackoffInitialMS)
 	}
@@ -2284,6 +2287,11 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			name:    "fallback_cooldown_seconds 不能为负数",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.FallbackCooldownSeconds = -1 },
 			wantErr: "gateway.openai_ws.fallback_cooldown_seconds",
+		},
+		{
+			name:    "cookie_ws_http_fallback_threshold_bytes 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = -1 },
+			wantErr: "gateway.openai_ws.cookie_ws_http_fallback_threshold_bytes",
 		},
 		{
 			name:    "store_disabled_conn_mode 必须为 strict|adaptive|off",
