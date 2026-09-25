@@ -124,19 +124,17 @@ func (s *OpenAIGatewayService) validateOpenAICookieWSBusinessConn(ctx context.Co
 	}
 }
 
-func (s *OpenAIGatewayService) applyOpenAICookieWSValidationFailure(ctx context.Context, account *Account, headers http.Header, payload []byte) {
+func (s *OpenAIGatewayService) applyOpenAICookieWSValidationFailure(ctx context.Context, account *Account, _ http.Header, payload []byte) {
 	message := extractOpenAISSEErrorMessage(payload)
 	status := openAIStreamFailureStatus(payload, message)
 	if status == http.StatusTooManyRequests {
+		// Cookie validation is an auxiliary health probe. Preserve quota telemetry
+		// when the probe exposes it, but never feed the probe failure into the
+		// normal request error path: doing so can pause or disable a healthy
+		// account before normal traffic has had a chance to authenticate it.
 		body := openAIStreamFailedEventPassthroughBody(payload, message)
 		s.applyOpenAICodexTicketHarvestProbeOutcome(ctx, account, openAICodexTicketDefaultModel, &openAICodexTicketProbeResult{
 			status: status, body: body,
 		})
-	}
-	s.handleOpenAIWSFailureAccountSideEffects(ctx, account, openAICodexTicketDefaultModel, headers, payload)
-	if (status == http.StatusTooManyRequests || status == http.StatusUnauthorized) && !s.isOpenAIAccountRuntimeBlocked(account) {
-		// Background socket validation has no business retry window. Stop new
-		// attempts immediately while durable quota/auth state catches up.
-		s.BlockAccountScheduling(account, time.Now().Add(openAIOAuth429FallbackCooldown), "cookie_ws_validation")
 	}
 }
