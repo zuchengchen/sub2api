@@ -25,6 +25,20 @@ import (
 
 var excelBPSReplay basispoints.ReplayCache
 
+var errExcelBPSHTTPFallback = errors.New("excel BPS fallback to HTTP")
+
+const excelBPSHTTPFallbackReason = "bps_error"
+
+func excelBPSCanFallbackToHTTP(c *gin.Context) bool {
+	if c == nil || c.Writer == nil {
+		return true
+	}
+	if IsResponseCommitted(c) {
+		return false
+	}
+	return !c.Writer.Written()
+}
+
 func (s *OpenAIGatewayService) disableExcelBPSOn403(ctx context.Context, account *Account) bool {
 	if !account.IsExcelBPSAutoDisableOn403Enabled() {
 		return false
@@ -111,11 +125,13 @@ func newExcelBPSRequest(ctx context.Context, body []byte, token, accountID strin
 // only the selected account's bearer and ChatGPT account ID belong on this host.
 func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Context, account *Account, body []byte, start time.Time) (*OpenAIForwardResult, error) {
 	fail := func(status int, code, message string) (*OpenAIForwardResult, error) {
-		// A compact keepalive may already have committed SSE headers. Otherwise
-		// finish a single JSON response so the handler cannot append another error.
-		committed := StopOpenAICompactSSEKeepaliveCommitted(c)
+		keepaliveCommitted := StopOpenAICompactSSEKeepaliveCommitted(c)
+		if excelBPSCanFallbackToHTTP(c) && !keepaliveCommitted {
+			logger.LegacyPrintf("service.openai_excel_bps", "falling back to Codex HTTP: account_id=%d code=%s", account.ID, code)
+			return nil, fmt.Errorf("%w: %s", errExcelBPSHTTPFallback, code)
+		}
 		MarkResponseCommitted(c)
-		if committed {
+		if keepaliveCommitted {
 			writeOpenAICompactSSEFailureMessage(c, status, code, message)
 		} else {
 			c.JSON(status, gin.H{"error": gin.H{"type": "invalid_request_error", "code": code, "message": message}})
@@ -305,27 +321,20 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			result.ClientDisconnect = true
 			return result, ctx.Err()
 		}
-		MarkResponseCommitted(c)
-		if stream {
-			_, _ = c.Writer.WriteString("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"basispoints_stream_incomplete\",\"message\":\"Upstream stream ended before completion\"}}}\n\n")
-			c.Writer.Flush()
-		} else {
-			c.JSON(502, gin.H{"error": gin.H{"code": "basispoints_stream_incomplete", "message": "Excel BPS stream ended before completion"}})
-		}
-		return result, fmt.Errorf("excel BPS stream incomplete")
+		return fail(http.StatusBadGateway, "basispoints_stream_incomplete", "Excel BPS stream ended before completion")
 	}
 	if terminal != "response.completed" {
+		if !stream {
+			return fail(http.StatusBadGateway, "basispoints_protocol_error", "Excel BPS did not complete the response")
+		}
+		if excelBPSCanFallbackToHTTP(c) {
+			return fail(http.StatusBadGateway, "basispoints_protocol_error", "Excel BPS did not complete the response")
+		}
 		MarkResponseCommitted(c)
+		return result, fmt.Errorf("excel BPS terminal: %s", terminal)
 	}
 	if !stream {
-		if terminal != "response.completed" {
-			c.JSON(502, gin.H{"error": gin.H{"code": "basispoints_protocol_error", "message": "Excel BPS did not complete the response"}})
-		} else {
-			c.Data(200, "application/json", completed)
-		}
-	}
-	if terminal != "response.completed" {
-		return result, fmt.Errorf("excel BPS terminal: %s", terminal)
+		c.Data(200, "application/json", completed)
 	}
 	s.bindHTTPResponseAccount(ctx, c, account, result.ResponseID)
 	return result, nil

@@ -68,18 +68,17 @@ func TestExcelBPSInlineImageForwardAndFetch(t *testing.T) {
 	}
 }
 
-func TestExcelBPSImageRelayValidationDoesNotCallUpstream(t *testing.T) {
+func TestExcelBPSImageRelayValidationFallsBackToHTTP(t *testing.T) {
 	t.Setenv("DATA_DIR", t.TempDir())
 	for _, tt := range []struct {
 		name, baseURL, dataURL string
-		status                 int
 	}{
-		{"disabled", "", "data:image/png;base64,PRIVATE_PAYLOAD", 400},
-		{"invalid data", "https://images.example", "data:image/png;base64,PRIVATE_PAYLOAD", 400},
-		{"invalid origin", "http://images.example", "data:image/png;base64,PRIVATE_PAYLOAD", 503},
+		{"disabled", "", "data:image/png;base64,PRIVATE_PAYLOAD"},
+		{"invalid data", "https://images.example", "data:image/png;base64,PRIVATE_PAYLOAD"},
+		{"invalid origin", "http://images.example", "data:image/png;base64,PRIVATE_PAYLOAD"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			upstream := &httpUpstreamRecorder{}
+			upstream := &httpUpstreamRecorder{resp: excelBPSCodexHTTPSuccessResponse()}
 			svc := openAIClientToolsTestService(upstream)
 			t.Cleanup(func() { require.NoError(t, svc.CloseExcelBPSImages()) })
 			svc.settingService = NewSettingService(&excelBPSImageSettingsRepo{values: map[string]string{SettingKeyExcelBPSImageRelayEnabled: fmt.Sprint(tt.baseURL != ""), SettingKeyExcelBPSImageBaseURL: tt.baseURL}}, svc.cfg)
@@ -87,12 +86,13 @@ func TestExcelBPSImageRelayValidationDoesNotCallUpstream(t *testing.T) {
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			body := []byte(fmt.Sprintf(`{"model":"gpt-6-astra","input":[{"role":"user","content":[{"type":"input_image","image_url":%q}]}]}`, tt.dataURL))
-			_, err := svc.Forward(context.Background(), c, excelAccount(), body)
-			require.Error(t, err)
-			require.Equal(t, tt.status, rec.Code)
-			require.Empty(t, upstream.requests)
+			result, err := svc.Forward(context.Background(), c, excelAccount(), body)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotEmpty(t, upstream.requests)
+			require.Equal(t, "chatgpt.com", upstream.requests[0].URL.Host)
+			require.Equal(t, "bps_error", rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
 			require.NotContains(t, rec.Body.String(), "PRIVATE_PAYLOAD")
-			require.True(t, IsResponseCommitted(c))
 		})
 	}
 }

@@ -2,7 +2,7 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,18 +57,17 @@ func TestExcelBPSErrorDoesNotAppendFallback(t *testing.T) {
 			_, err := gateway.Forward(context.Background(), c, account, []byte(body))
 			require.Error(t, err)
 			response := rec.Body.String()
+			var failover *service.UpstreamFailoverError
+			if errors.As(err, &failover) {
+				require.Empty(t, response)
+				return
+			}
 			require.NotEmpty(t, response, "forward error: %v", err)
 			h := &OpenAIGatewayHandler{}
 			if !openAIForwardErrorAlreadyCommunicated(c, before, err) {
 				require.False(t, h.ensureForwardErrorResponse(c, false))
 			}
-			require.Equal(t, response, rec.Body.String())
-			if tt.name == "incomplete_stream" || tt.name == "failed_stream" {
-				require.Equal(t, 1, strings.Count(response, "event: response.failed"))
-			} else {
-				require.True(t, json.Valid([]byte(response)), response)
-				require.NotContains(t, response, "event:")
-			}
+			require.Equal(t, response, rec.Body.String(), "handler must not append a second client error after BPS HTTP fallback")
 		})
 	}
 }

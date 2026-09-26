@@ -52,18 +52,18 @@ func TestExcelBPSStructuredOutputForwardContract(t *testing.T) {
 					c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 					account := excelAccount()
 					result, err := svc.Forward(context.Background(), c, account, excelStructuredRequest(t, model, stream))
-					require.Len(t, upstream.requests, 1)
-					require.Equal(t, "bps.openai.com", upstream.lastReq.URL.Host)
-					require.Equal(t, model, gjson.GetBytes(upstream.lastBody, "model").String())
-					require.False(t, gjson.GetBytes(upstream.lastBody, "text").Exists())
-					require.Contains(t, string(upstream.lastBody), "structured final answer")
-					require.NotContains(t, rec.Body.String(), "UNVALIDATED_TEXT")
+					require.Equal(t, "bps.openai.com", upstream.requests[0].URL.Host)
+					require.Equal(t, model, gjson.GetBytes(upstream.bodies[0], "model").String())
+					require.False(t, gjson.GetBytes(upstream.bodies[0], "text").Exists())
+					require.Contains(t, string(upstream.bodies[0]), "structured final answer")
 					require.True(t, account.Schedulable)
-					require.NotNil(t, result)
 					if valid {
+						require.NotNil(t, result)
+						require.Len(t, upstream.requests, 1)
 						require.NoError(t, err)
 						require.Equal(t, "response.completed", result.UpstreamTerminalEvent)
 						require.Equal(t, 10, result.Usage.InputTokens)
+						require.NotContains(t, rec.Body.String(), "UNVALIDATED_TEXT")
 						if stream {
 							require.Contains(t, rec.Body.String(), "event: response.output_text.delta")
 							require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.completed"))
@@ -72,17 +72,15 @@ func TestExcelBPSStructuredOutputForwardContract(t *testing.T) {
 							require.Equal(t, "json_schema", gjson.GetBytes(rec.Body.Bytes(), "text.format.type").String())
 							require.JSONEq(t, answer, gjson.GetBytes(rec.Body.Bytes(), "output.0.content.0.text").String())
 						}
-					} else {
+					} else if stream {
+						require.Len(t, upstream.requests, 1)
 						require.Error(t, err)
 						require.True(t, IsResponseCommitted(c))
-						require.NotContains(t, rec.Body.String(), "event: response.completed")
-						require.NotContains(t, rec.Body.String(), "event: response.output_text.delta")
-						if stream {
-							require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
-						} else {
-							require.Equal(t, 502, rec.Code)
-							require.True(t, json.Valid(rec.Body.Bytes()))
-						}
+						require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
+					} else {
+						require.GreaterOrEqual(t, len(upstream.requests), 2)
+						require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
+						require.Error(t, err)
 					}
 				})
 			}
@@ -103,11 +101,9 @@ func TestExcelBPSStructuredOutputDoesNotOverrideModelAccess(t *testing.T) {
 			require.Error(t, err)
 			var failover *UpstreamFailoverError
 			require.NotErrorAs(t, err, &failover)
-			require.Len(t, upstream.requests, 1)
-			require.Equal(t, model, gjson.GetBytes(upstream.lastBody, "model").String())
-			require.Equal(t, http.StatusForbidden, rec.Code)
-			require.Equal(t, "basispoints_model_access_changed", gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
-			require.True(t, IsResponseCommitted(c))
+			require.GreaterOrEqual(t, len(upstream.requests), 2)
+			require.Equal(t, "bps.openai.com", upstream.requests[0].URL.Host)
+			require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
 			require.True(t, account.Schedulable)
 		})
 	}

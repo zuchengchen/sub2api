@@ -150,20 +150,43 @@ func TestExcelBPSStripsImageGenerationWhenGroupDisablesImages(t *testing.T) {
 	require.False(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation")`).Exists())
 }
 
-func TestExcelBPSModelDeniedDoesNotFailover(t *testing.T) {
-	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: 403, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"basispoints_model_access_changed","message":"SECRET_UPSTREAM"}}`))}}
+func excelBPSCodexHTTPSuccessResponse() *http.Response {
+	wire := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_http\",\"status\":\"completed\",\"model\":\"gpt-5.6-sol\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"
+	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}
+}
+
+func TestExcelBPSUpstreamErrorFallsBackToHTTP(t *testing.T) {
+	bps := &http.Response{StatusCode: 403, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"basispoints_model_access_changed","message":"SECRET_UPSTREAM"}}`))}
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{bps, excelBPSCodexHTTPSuccessResponse()}}
 	svc := openAIClientToolsTestService(upstream)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
-	_, err := svc.Forward(context.Background(), c, excelAccount(), []byte(`{"model":"gpt-5.6-sol","input":"x"}`))
-	require.Error(t, err)
-	var failover *UpstreamFailoverError
-	require.NotErrorAs(t, err, &failover)
-	require.Equal(t, 403, rec.Code)
-	require.Contains(t, rec.Body.String(), "basispoints_model_access_changed")
+	result, err := svc.Forward(context.Background(), c, excelAccount(), []byte(`{"model":"gpt-5.6-sol","input":"x"}`))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "bps.openai.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
+	require.Equal(t, "bps_error", rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+	require.Contains(t, rec.Body.String(), "ok")
 	require.NotContains(t, rec.Body.String(), "SECRET_UPSTREAM")
-	require.True(t, IsResponseCommitted(c))
+}
+
+func TestExcelBPSDataImageFallsBackToHTTP(t *testing.T) {
+	upstream := &httpUpstreamRecorder{resp: excelBPSCodexHTTPSuccessResponse()}
+	svc := openAIClientToolsTestService(upstream)
+	body := []byte(`{"model":"gpt-5.6-sol","input":[{"role":"user","content":[{"type":"input_text","text":"see"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest("POST", "/v1/responses", bytes.NewReader(body))
+	result, err := svc.Forward(context.Background(), c, excelAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "chatgpt.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "bps_error", rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+	require.Contains(t, string(upstream.lastBody), "data:image/png;base64")
 }
 
 func TestExcelBPSHTTPErrorRecordsUpstreamRejection(t *testing.T) {
@@ -185,32 +208,28 @@ func TestExcelBPSHTTPErrorRecordsUpstreamRejection(t *testing.T) {
 			require.Error(t, err)
 			var failover *UpstreamFailoverError
 			require.NotErrorAs(t, err, &failover)
-			require.Len(t, upstream.requests, 1)
+			require.GreaterOrEqual(t, len(upstream.requests), 2)
+			require.Equal(t, "bps.openai.com", upstream.requests[0].URL.Host)
+			require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
 			require.True(t, account.Schedulable)
 			require.True(t, IsResponseCommitted(c))
-			require.Equal(t, http.StatusBadRequest, rec.Code)
-			require.True(t, json.Valid(rec.Body.Bytes()))
+			require.True(t, json.Valid(rec.Body.Bytes()) || strings.Contains(rec.Body.String(), "event:"), rec.Body.String())
 			require.NotContains(t, rec.Body.String(), "Expected an ID")
-			require.Equal(t, http.StatusBadRequest, c.GetInt(OpsUpstreamStatusCodeKey))
-			if logBody {
-				require.Contains(t, c.GetString(OpsUpstreamErrorMessageKey), "Expected an ID")
-			} else {
-				require.Equal(t, "Excel BPS returned HTTP 400", c.GetString(OpsUpstreamErrorMessageKey))
-			}
 			events, exists := c.Get(OpsUpstreamErrorsKey)
 			require.True(t, exists)
 			attempts, ok := events.([]*OpsUpstreamErrorEvent)
 			require.True(t, ok)
-			require.Len(t, attempts, 1)
+			require.GreaterOrEqual(t, len(attempts), 1)
 			require.Equal(t, "bps-upstream-request", attempts[0].UpstreamRequestID)
 			require.Equal(t, basispoints.ResponsesURL, attempts[0].UpstreamURL)
 			require.Equal(t, account.ID, attempts[0].AccountID)
 			require.Equal(t, "direct/no_proxy", attempts[0].ProxyName)
 			if logBody {
+				require.Contains(t, attempts[0].Message, "Expected an ID")
 				require.Equal(t, "invalid_value", gjson.Get(attempts[0].Detail, "error.code").String())
 				require.Equal(t, "input[2].id", gjson.Get(attempts[0].Detail, "error.param").String())
-				require.Equal(t, c.GetString(OpsUpstreamErrorDetailKey), attempts[0].Detail)
 			} else {
+				require.Equal(t, "Excel BPS returned HTTP 400", attempts[0].Message)
 				require.Empty(t, attempts[0].Detail)
 				require.Empty(t, attempts[0].UpstreamResponseBody)
 				require.Empty(t, c.GetString(OpsUpstreamErrorDetailKey))

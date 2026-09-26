@@ -150,10 +150,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		body = managedBody
 	}
 
+	bpsHTTPFallback := false
 	if account.IsExcelBPSEnabledForModel(gjson.GetBytes(body, "model").String()) {
 		reason := basispoints.NativeFallbackReason(body)
 		if reason == "" {
-			return s.forwardExcelBPS(ctx, c, account, body, startTime)
+			result, bpsErr := s.forwardExcelBPS(ctx, c, account, body, startTime)
+			if bpsErr == nil || !errors.Is(bpsErr, errExcelBPSHTTPFallback) {
+				return result, bpsErr
+			}
+			bpsHTTPFallback = true
+			reason = excelBPSHTTPFallbackReason
+			ClearActualOpenAIUpstreamEndpoint(c)
 		}
 		c.Header("X-Codex2API-Upstream", "codex")
 		c.Header("X-Codex2API-Basispoints-Bypass", reason)
@@ -215,6 +222,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// Cookie mode is a separately validated HTTP/WS -> WS route. Its explicit
 	// account/model opt-in also overrides legacy HTTP passthrough settings.
 	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), compactPath, wsDecision)
+	if bpsHTTPFallback {
+		cookieWS = false
+		wsDecision = openAIWSHTTPDecision(excelBPSHTTPFallbackReason)
+		if c != nil {
+			c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
+			c.Set("openai_ws_transport_reason", wsDecision.Reason)
+		}
+	}
 	cookieWSHTTPFallback := isOpenAICookieWSHTTPTransportReason(wsDecision.Reason)
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled() && !cookieWS && !cookieWSHTTPFallback
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
