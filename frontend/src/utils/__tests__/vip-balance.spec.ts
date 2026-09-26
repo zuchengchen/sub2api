@@ -9,22 +9,22 @@ describe('vip balance display helpers', () => {
     expect(displayAvailableBalance(user)).toBe(50)
   })
 
-  it('vip users show the 100 reserve as frozen and reduced available', () => {
+  it('vip users show the 50 reserve as frozen and reduced available', () => {
     const user = { balance: 139, frozen_balance: 0, is_vip: true }
-    expect(displayFrozenBalance(user)).toBe(100)
-    expect(displayAvailableBalance(user)).toBe(39)
+    expect(displayFrozenBalance(user)).toBe(50)
+    expect(displayAvailableBalance(user)).toBe(89)
   })
 
   it('vip reserve adds on top of transient batch holds', () => {
     const user = { balance: 139, frozen_balance: 7, is_vip: true }
-    expect(displayFrozenBalance(user)).toBe(107)
-    expect(displayAvailableBalance(user)).toBe(39)
+    expect(displayFrozenBalance(user)).toBe(57)
+    expect(displayAvailableBalance(user)).toBe(89)
   })
 
   it('vip available never goes negative', () => {
     const user = { balance: 40, frozen_balance: 0, is_vip: true }
     expect(displayAvailableBalance(user)).toBe(0)
-    expect(displayFrozenBalance(user)).toBe(100)
+    expect(displayFrozenBalance(user)).toBe(50)
   })
 
   it('handles missing user fields', () => {

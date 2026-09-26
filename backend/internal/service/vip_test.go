@@ -235,8 +235,9 @@ func TestCheckBalanceEligibilityVipFrozenReserve(t *testing.T) {
 		{name: "non-vip zero balance rejected", isVIP: false, balance: 0, wantErr: true},
 		{name: "non-vip negative balance rejected", isVIP: false, balance: -1, wantErr: true},
 		{name: "vip above reserve passes", isVIP: true, balance: 150},
-		{name: "vip at exactly frozen amount rejected", isVIP: true, balance: 100, wantErr: true},
-		{name: "vip below frozen amount rejected", isVIP: true, balance: 99.99, wantErr: true},
+		{name: "vip just above frozen amount passes", isVIP: true, balance: 50.01},
+		{name: "vip at exactly frozen amount rejected", isVIP: true, balance: 50, wantErr: true},
+		{name: "vip below frozen amount rejected", isVIP: true, balance: 49.99, wantErr: true},
 	}
 
 	for _, tt := range tests {

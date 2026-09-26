@@ -95,14 +95,14 @@ describe('guide BAT asset', () => {
 
     expect(constants).toEqual({
       threshold: '100.0',
-      reserve: '100.0',
+      reserve: '50.0',
       discount: '0.05',
       group: 'gpt-pro',
       model: 'gpt-5.6-luna',
       lunaMin: '0.2',
     })
     expect(guide).toContain('严格大于 100 元')
-    expect(guide).toContain('冻结 100 元')
+    expect(guide).toContain('冻结 50 元')
     expect(guide).toContain('倍率减 0.05')
     expect(guide).toContain('`gpt-pro`')
     expect(guide).toContain('`gpt-5.6-luna`')

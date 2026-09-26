@@ -5,7 +5,7 @@ import type { User } from '@/types'
  * VIP 的冻结是逻辑冻结：计费资格按「总余额 - 准备金」判定，
  * 不写入 users.frozen_balance（该字段属于批量图片余额暂扣台账）。
  */
-export const VIP_FROZEN_RESERVE = 100
+export const VIP_FROZEN_RESERVE = 50
 /** 自动升级阈值（与后端 service.VipBalanceThreshold 同源）：总余额必须严格大于该值。 */
 export const VIP_BALANCE_THRESHOLD = 100
 

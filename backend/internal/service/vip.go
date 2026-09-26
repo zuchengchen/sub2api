@@ -17,7 +17,7 @@ const (
 	VipBalanceThreshold = 100.0
 	// VipFrozenReserve VIP 冻结金额：可用余额 = balance - VipFrozenReserve。
 	// 逻辑冻结，不占用 users.frozen_balance（该列被批量图片余额暂扣使用）。
-	VipFrozenReserve = 100.0
+	VipFrozenReserve = 50.0
 	// VipRateDiscount VIP 在指定分组的计费倍率减免额（显示倍率 - 0.05）。
 	VipRateDiscount = 0.05
 	// VipDiscountedGroupName 享受倍率减免的分组名（大小写不敏感）。
