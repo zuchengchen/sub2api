@@ -132,7 +132,10 @@ func TestRejectedInvocationDoesNotEmitPartialClientTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "response.failed") || strings.Contains(string(got), "response.function_call_arguments") || strings.Contains(string(got), "private-command") {
-		t.Fatal("invalid wrapper must fail without exposing or dispatching a partial tool call")
+	if strings.Contains(string(got), "response.failed") || strings.Contains(string(got), "response.function_call_arguments") || strings.Contains(string(got), "private-command") || strings.Contains(string(got), "run_officejs") {
+		t.Fatal("invalid wrapper must be dropped without exposing or dispatching a partial tool call")
+	}
+	if !strings.Contains(string(got), "response.completed") {
+		t.Fatal("dropping a malformed envelope must still complete the stream")
 	}
 }

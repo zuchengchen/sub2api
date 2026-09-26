@@ -208,9 +208,31 @@ func TestMalformedAndUndeclaredCallsFailWithoutDispatch(t *testing.T) {
 		body := bridge.Stream(io.NopCloser(strings.NewReader(sse(object{"type": "response.completed", "response": object{"output": []any{native}}}))))
 		out, err := io.ReadAll(body)
 		_ = body.Close()
-		if err != nil || !bytes.Contains(out, []byte("response.failed")) || bytes.Contains(out, []byte("response.output_item.added")) {
-			t.Fatalf("unsafe tool was not rejected: %s; %v", out, err)
+		if err != nil || bytes.Contains(out, []byte("response.failed")) || bytes.Contains(out, []byte("response.output_item.added")) || bytes.Contains(out, []byte("run_officejs")) || bytes.Contains(out, []byte("delete_workbook")) {
+			t.Fatalf("unsafe tool must be dropped without dispatch or stream failure: %s; %v", out, err)
 		}
+		if !bytes.Contains(out, []byte("response.completed")) {
+			t.Fatalf("dropping an undeclared tool must still complete: %s", out)
+		}
+	}
+}
+
+func TestUndeclaredToolDoesNotDropSiblingText(t *testing.T) {
+	source := testSource()
+	source["tools"] = []any{object{"type": "function", "name": "shell"}}
+	native := nativeCall(object{"name": "delete_workbook", "arguments": object{}})
+	message := object{"type": "message", "role": "assistant", "content": []any{object{"type": "output_text", "text": "keep this"}}}
+	_, bridge := mustPrepare(t, source, "", nil)
+	wire := sse(object{"type": "response.output_text.delta", "delta": "keep this"}) +
+		sse(object{"type": "response.completed", "response": object{"output": []any{native, message}}})
+	body := bridge.Stream(io.NopCloser(strings.NewReader(wire)))
+	out, err := io.ReadAll(body)
+	_ = body.Close()
+	if err != nil || bytes.Contains(out, []byte("response.failed")) || bytes.Contains(out, []byte("delete_workbook")) {
+		t.Fatalf("text must survive an undeclared sibling tool: %s; %v", out, err)
+	}
+	if !bytes.Contains(out, []byte("keep this")) || !bytes.Contains(out, []byte("response.completed")) {
+		t.Fatalf("completed text was lost: %s", out)
 	}
 }
 

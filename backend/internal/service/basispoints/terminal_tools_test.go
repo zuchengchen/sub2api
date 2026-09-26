@@ -44,14 +44,32 @@ func TestToolsUseTerminalItemWhileTextStaysIncremental(t *testing.T) {
 	}
 }
 
+func TestCompletedResponseDropsUndeclaredToolsAndKeepsCatalogTools(t *testing.T) {
+	source := testSource()
+	source["tools"] = []any{object{"type": "function", "name": "shell"}}
+	valid := nativeCall(object{"name": "shell", "arguments": object{"cmd": "pwd"}})
+	invalid := nativeCall(object{"name": "other", "arguments": object{}})
+	invalid["id"], invalid["call_id"] = "fc_other", "call_other"
+	_, bridge := mustPrepare(t, source, "", nil)
+	wire := sse(object{"type": "response.output_item.done", "item": valid}) +
+		sse(object{"type": "response.output_item.done", "item": invalid}) +
+		sse(object{"type": "response.completed", "response": object{"output": []any{valid, invalid}}})
+	body := bridge.Stream(io.NopCloser(strings.NewReader(wire)))
+	out, err := io.ReadAll(body)
+	_ = body.Close()
+	if err != nil || bytes.Contains(out, []byte("response.failed")) || bytes.Contains(out, []byte("run_officejs")) || bytes.Contains(out, []byte(`"name":"other"`)) {
+		t.Fatalf("undeclared tool leaked or failed the stream: %s, %v", out, err)
+	}
+	if !bytes.Contains(out, []byte("response.completed")) || !bytes.Contains(out, []byte(`"name":"shell"`)) {
+		t.Fatalf("catalog tool must still be dispatched: %s", out)
+	}
+}
+
 func TestTerminalValidationDoesNotDispatchPartialOrMixedTools(t *testing.T) {
 	source := testSource()
 	source["tools"] = []any{object{"type": "function", "name": "shell"}}
 	valid := nativeCall(object{"name": "shell", "arguments": object{}})
-	invalid := nativeCall(object{"name": "other", "arguments": object{}})
-	invalid["id"], invalid["call_id"] = "fc_other", "call_other"
 	for _, terminal := range []object{
-		{"type": "response.completed", "response": object{"output": []any{valid, invalid}}},
 		{"type": "response.completed", "response": object{"output": []any{}}},
 		{"type": "response.incomplete", "response": object{"output": []any{valid}}},
 		{"type": "response.failed", "response": object{"output": []any{valid}, "error": object{"code": "upstream_failure"}}},

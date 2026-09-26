@@ -531,16 +531,23 @@ func (b *Bridge) translateResponse(response object) error {
 		return nil
 	}
 	output, _ := response["output"].([]any)
-	for i, raw := range output {
+	filtered := make([]any, 0, len(output))
+	for _, raw := range output {
 		item, _ := raw.(object)
 		if isTool(item) {
 			translated, err := b.translateCall(item)
 			if err != nil {
-				return err
+				// Undeclared native Excel tools and non-JSON OfficeJS envelopes
+				// must not be dispatched. Drop that item so text and catalog
+				// tools can still complete instead of failing the whole SSE.
+				continue
 			}
-			output[i] = translated
+			filtered = append(filtered, translated)
+			continue
 		}
+		filtered = append(filtered, raw)
 	}
+	response["output"] = filtered
 	response["reasoning"] = object{"effort": b.Effort}
 	response["parallel_tool_calls"] = false
 	return nil
