@@ -892,7 +892,10 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		upstreamModel := normalizeOpenAIModelForUpstream(account, testModelID)
 		if s.openaiGatewayService.openAICookieWSEnabledForModel(account, upstreamModel) &&
 			s.openaiGatewayService.openAICookieWSHasReadyTicket(account, upstreamModel) {
-			return s.testOpenAICookieWSAccountConnection(c, account, upstreamModel, prompt)
+			err := s.testOpenAICookieWSAccountConnection(c, account, upstreamModel, prompt)
+			if err == nil || !errors.Is(err, errAccountTestCookieWSHTTPFallback) {
+				return err
+			}
 		}
 		if s.openaiGatewayService.openAICookieWSEnabledForModel(account, upstreamModel) {
 			c.Set(accountTestCookieWSHTTPFallbackKey, true)

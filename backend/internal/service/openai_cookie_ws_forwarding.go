@@ -242,7 +242,21 @@ func shouldOpenAICookieWSHTTPFallback(err error) bool {
 		return true
 	}
 	var tooLarge *openAICookieWSPayloadTooLargeError
-	return errors.As(err, &tooLarge)
+	if errors.As(err, &tooLarge) {
+		return true
+	}
+	return isOpenAICookieWSUnusableProbeError(err)
+}
+
+func isOpenAICookieWSUnusableProbeError(err error) bool {
+	var testErr *openAICookieWSTestError
+	if !errors.As(err, &testErr) || testErr == nil {
+		return false
+	}
+	if errors.Is(testErr.cause, context.Canceled) || testErr.Code == "cookie_ws_cancelled" {
+		return false
+	}
+	return true
 }
 
 func isOpenAICookieWSHTTPTransportReason(reason string) bool {

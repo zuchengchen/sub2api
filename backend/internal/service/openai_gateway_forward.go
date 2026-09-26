@@ -1161,9 +1161,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return wsResult, nil
 		}
-		// Cookie websocket is an optimization. Unavailable tickets, oversized
-		// frames, and upstream 1009 MessageTooBig fall through to OAuth HTTP
-		// /responses instead of failing the caller.
+		// Cookie websocket is an optimization. Unavailable tickets, failed
+		// validation probes, oversized frames, and upstream 1009 MessageTooBig
+		// fall through to OAuth HTTP /responses instead of failing the caller.
 		if cookieWS && shouldOpenAICookieWSHTTPFallback(wsErr) && (c == nil || c.Writer == nil || !c.Writer.Written()) {
 			fallbackReason := cookieWSHTTPFallbackReasonFor(wsErr)
 			wsDecision = openAIWSHTTPDecision(fallbackReason)

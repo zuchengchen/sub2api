@@ -17,6 +17,19 @@ const (
 	accountTestCookieWSHTTPFallbackMessage = "Cookie websocket is not ready; testing via HTTP /responses"
 )
 
+var errAccountTestCookieWSHTTPFallback = errors.New("cookie websocket account test fallback to HTTP")
+
+func (s *AccountTestService) cookieWSHTTPFallbackOrError(c *gin.Context, account *Account, stage string, err error) error {
+	classified := cookieWSTestOperationError(stage, err)
+	if intelligentContext(c.Request.Context()) == nil &&
+		(shouldOpenAICookieWSHTTPFallback(err) || shouldOpenAICookieWSHTTPFallback(classified)) {
+		c.Set(accountTestCookieWSHTTPFallbackKey, true)
+		s.sendEvent(c, TestEvent{Type: "content", Text: accountTestCookieWSHTTPFallbackMessage})
+		return errAccountTestCookieWSHTTPFallback
+	}
+	return s.sendCookieWSTestError(c, account, stage, err)
+}
+
 // Admin connection/intelligence tests use the same verified Cookie pool when a
 // process-ready ticket exists. Otherwise they follow live traffic onto HTTP
 // /responses. Events stay in TestEvent format and never mutate account health.
@@ -36,25 +49,25 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
 	gateway := s.openaiGatewayService
 	if !gateway.openAICookieWSHasReadyTicket(account, model) {
-		return s.sendCookieWSTestError(c, account, "acquire", ErrOpenAICodexTicketUnavailable)
+		return s.cookieWSHTTPFallbackOrError(c, account, "acquire", ErrOpenAICodexTicketUnavailable)
 	}
 	reserveCtx, reserveCancel := context.WithTimeout(ctx, gateway.openAIWSAcquireTimeout())
 	slot, releaseSlot, err := gateway.reserveOpenAICookieWSSlot(reserveCtx, account, model, "")
 	reserveCancel()
 	if err != nil {
-		return s.sendCookieWSTestError(c, account, "reserve", err)
+		return s.cookieWSHTTPFallbackOrError(c, account, "reserve", err)
 	}
 	defer releaseSlot()
 	ctx = context.WithValue(ctx, openAICookieWSSlotContextKey{}, slot)
 	token, _, err := gateway.GetAccessToken(ctx, account)
 	if err != nil || token == "" {
-		return s.sendCookieWSTestError(c, account, "authentication", err)
+		return s.cookieWSHTTPFallbackOrError(c, account, "authentication", err)
 	}
 	headers, _, err := gateway.buildOpenAIWSHeaders(ctx, c, account, token,
 		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2, Reason: "cookie_ws"},
 		true, "", "", "", model, "")
 	if err != nil {
-		return s.sendCookieWSTestError(c, account, "acquire", err)
+		return s.cookieWSHTTPFallbackOrError(c, account, "acquire", err)
 	}
 	setOpenAICookieWSExecutionScope(headers, c, "admin-account-test")
 	payload := openAICookieWSProbePayload(true)
@@ -77,14 +90,14 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 				run.capture.trafficWait = wait
 			}
 		}
-		return s.sendCookieWSTestError(c, account, "reserve", err)
+		return s.cookieWSHTTPFallbackOrError(c, account, "reserve", err)
 	}
 	defer func() { finishAccountTrafficTurn(permit, retErr) }()
 	lease, err := gateway.getOpenAIWSConnPool().Acquire(trafficCtx, openAIWSAcquireRequest{
 		Account: account, WSURL: strings.Replace(chatgptCodexURL, "https://", "wss://", 1), Headers: headers,
 	})
 	if err != nil {
-		return s.sendCookieWSTestError(c, account, "acquire", err)
+		return s.cookieWSHTTPFallbackOrError(c, account, "acquire", err)
 	}
 	complete := false
 	defer func() {

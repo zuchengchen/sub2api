@@ -387,6 +387,9 @@ func TestCookieWSFallbackHelpers(t *testing.T) {
 	require.True(t, isOpenAIWSMessageTooBigError(wrapOpenAIWSFallback("prewarm_message_too_big", errors.New("1009"))))
 	require.False(t, shouldOpenAICookieWSHTTPFallback(nil))
 	require.True(t, shouldOpenAICookieWSHTTPFallback(wrapOpenAIWSFallback("message_too_big", errors.New("1009"))))
+	require.True(t, shouldOpenAICookieWSHTTPFallback(newCookieWSTestError("cookie_ws_validation_not_true", "failed", "Cookie websocket validation probe did not return True; this socket was closed", 0, nil)))
+	require.True(t, shouldOpenAICookieWSHTTPFallback(newCookieWSTestError("cookie_ws_validation_closed", "network_error", "closed", 0, nil)))
+	require.False(t, shouldOpenAICookieWSHTTPFallback(newCookieWSTestError("cookie_ws_cancelled", "failed", "cancelled", 0, context.Canceled)))
 	tooLarge := &openAICookieWSPayloadTooLargeError{PayloadBytes: 300000, ThresholdBytes: 262144}
 	require.True(t, shouldOpenAICookieWSHTTPFallback(tooLarge))
 	require.Equal(t, openAICookieWSPayloadTooLargeHTTPFallbackReason, cookieWSHTTPFallbackReasonFor(tooLarge))
@@ -411,6 +414,30 @@ func TestCookieWSFallbackHelpers(t *testing.T) {
 	require.NotNil(t, svc.cookieWSPayloadTooLargeError(int(openAICookieWSHTTPFallbackThresholdBytesDefault)))
 	svc.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = 1
 	require.NotNil(t, svc.cookieWSPayloadTooLargeError(1))
+}
+
+func TestCookieWSValidationFailureFallsBackToHTTP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	conn := &openAIWSCaptureConn{events: [][]byte{[]byte(`{"type":"response.completed","response":{"id":"resp_should_not_use_ws","model":"gpt-6-astra","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"WS"}]}],"usage":{"input_tokens":1,"output_tokens":1}}}`)}}
+	svc, account, _, _ := newCookieForwardFixture(t, conn)
+	svc.getOpenAIWSConnPool().SetCookieValidator(func(context.Context, *Account, *openAIWSConnLease) error {
+		return newCookieWSTestError("cookie_ws_validation_not_true", "failed", "Cookie websocket validation probe did not return True; this socket was closed", 0, nil)
+	})
+	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream.resp = cookieWSHTTPResponse("HTTP after probe")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","input":"hello","stream":false}`))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.OpenAIWSMode)
+	require.Equal(t, openAICookieWSHTTPFallbackReason, c.GetString("openai_ws_transport_reason"))
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "/backend-api/codex/responses", upstream.lastReq.URL.Path)
+	require.Contains(t, rec.Body.String(), "HTTP after probe")
+	require.NotContains(t, rec.Body.String(), "did not return True")
 }
 
 func TestCookieWSOversizedPayloadUsesHTTPResponsesWithoutDial(t *testing.T) {
