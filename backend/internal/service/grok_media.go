@@ -966,18 +966,28 @@ func isGrokCLIProxyTarget(rawURL string) bool {
 }
 
 func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, contentType string) ([]byte, string, error) {
-	if endpoint != GrokMediaEndpointImagesEdits {
-		return body, contentType, nil
-	}
 	if gjson.ValidBytes(body) {
-		out, err := normalizeGrokMediaJSONImageRefs(body)
-		return out, contentType, err
+		if endpoint == GrokMediaEndpointImagesEdits {
+			out, err := normalizeGrokMediaJSONImageRefs(body)
+			return out, contentType, err
+		}
+		return body, contentType, nil
 	}
 	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(contentType))
 	if err != nil || !strings.EqualFold(mediaType, "multipart/form-data") {
 		return body, contentType, nil
 	}
+	switch endpoint {
+	case GrokMediaEndpointImagesEdits:
+		return grokMediaMultipartToJSON(endpoint, contentType, body)
+	case GrokMediaEndpointVideosGenerations:
+		return grokMediaMultipartToJSON(endpoint, contentType, body)
+	default:
+		return body, contentType, nil
+	}
+}
 
+func grokMediaMultipartToJSON(endpoint GrokMediaEndpoint, contentType string, body []byte) ([]byte, string, error) {
 	info := ParseGrokMediaRequest(contentType, body)
 	payload := make(map[string]any)
 	if info.Model != "" {
@@ -986,15 +996,6 @@ func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, conten
 	if info.Prompt != "" {
 		payload["prompt"] = info.Prompt
 	}
-	if info.N > 1 {
-		payload["n"] = info.N
-	}
-	if info.Size != "" {
-		payload["size"] = info.Size
-	}
-	if info.ImageResolution != "" {
-		payload["resolution"] = info.ImageResolution
-	}
 	if info.AspectRatio != "" {
 		payload["aspect_ratio"] = info.AspectRatio
 	}
@@ -1002,7 +1003,7 @@ func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, conten
 	images := make([]map[string]string, 0, len(info.InputImageURLs)+len(info.Uploads))
 	for _, imageURL := range info.InputImageURLs {
 		if imageURL = strings.TrimSpace(imageURL); imageURL != "" {
-			images = append(images, grokMediaImageObject(imageURL))
+			images = append(images, grokMediaUpstreamImageObject(endpoint, imageURL))
 		}
 	}
 	for _, upload := range info.Uploads {
@@ -1010,28 +1011,53 @@ func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, conten
 		if err != nil {
 			return nil, "", err
 		}
-		images = append(images, grokMediaImageObject(dataURL))
-	}
-	if len(images) > grokMediaMaxEditSourceImages {
-		return nil, "", fmt.Errorf("a maximum of %d source images is supported for image edits", grokMediaMaxEditSourceImages)
-	}
-	if len(images) > 0 {
-		payload["image"] = images[0]
-		if len(images) > 1 {
-			payload["images"] = images
-		}
+		images = append(images, grokMediaUpstreamImageObject(endpoint, dataURL))
 	}
 
-	maskImageURL := strings.TrimSpace(info.MaskImageURL)
-	if info.MaskUpload != nil {
-		dataURL, err := openAIImageUploadToDataURL(*info.MaskUpload)
-		if err != nil {
-			return nil, "", err
+	switch endpoint {
+	case GrokMediaEndpointImagesEdits:
+		if info.N > 1 {
+			payload["n"] = info.N
 		}
-		maskImageURL = dataURL
-	}
-	if maskImageURL != "" {
-		payload["mask"] = grokMediaImageObject(maskImageURL)
+		if info.Size != "" {
+			payload["size"] = info.Size
+		}
+		if info.ImageResolution != "" {
+			payload["resolution"] = info.ImageResolution
+		}
+		if len(images) > grokMediaMaxEditSourceImages {
+			return nil, "", fmt.Errorf("a maximum of %d source images is supported for image edits", grokMediaMaxEditSourceImages)
+		}
+		if len(images) > 0 {
+			payload["image"] = images[0]
+			if len(images) > 1 {
+				payload["images"] = images
+			}
+		}
+		maskImageURL := strings.TrimSpace(info.MaskImageURL)
+		if info.MaskUpload != nil {
+			dataURL, err := openAIImageUploadToDataURL(*info.MaskUpload)
+			if err != nil {
+				return nil, "", err
+			}
+			maskImageURL = dataURL
+		}
+		if maskImageURL != "" {
+			payload["mask"] = grokMediaUpstreamImageObject(endpoint, maskImageURL)
+		}
+	case GrokMediaEndpointVideosGenerations:
+		if info.Resolution != "" {
+			payload["resolution"] = info.Resolution
+		}
+		if info.DurationSeconds > 0 {
+			payload["duration"] = info.DurationSeconds
+		}
+		if len(images) == 1 {
+			payload["image"] = images[0]
+		} else if len(images) > 1 {
+			payload["image"] = images[0]
+			payload["reference_images"] = images[1:]
+		}
 	}
 
 	out, err := marshalOpenAIUpstreamJSON(payload)
@@ -1039,6 +1065,13 @@ func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, conten
 		return nil, "", err
 	}
 	return out, "application/json", nil
+}
+
+func grokMediaUpstreamImageObject(endpoint GrokMediaEndpoint, imageURL string) map[string]string {
+	if endpoint == GrokMediaEndpointVideosGenerations {
+		return map[string]string{"url": imageURL}
+	}
+	return grokMediaImageObject(imageURL)
 }
 
 func normalizeGrokMediaJSONImageRefs(body []byte) ([]byte, error) {
@@ -1143,23 +1176,53 @@ func canonicalizeGrokMediaImageURLFields(body []byte, fields ...string) ([]byte,
 }
 
 func canonicalizeGrokMediaImageURLObject(body []byte, path string) ([]byte, error) {
-	legacyPath := path + ".image_url"
-	legacy := gjson.GetBytes(body, legacyPath)
-	if !legacy.Exists() {
+	value := gjson.GetBytes(body, path)
+	if !value.Exists() {
 		return body, nil
 	}
-
-	out := body
-	if strings.TrimSpace(gjson.GetBytes(out, path+".url").String()) == "" {
-		var err error
-		out, err = sjson.SetBytes(out, path+".url", legacy.Value())
+	if value.Type == gjson.String {
+		imageURL := strings.TrimSpace(value.String())
+		if imageURL == "" {
+			return body, nil
+		}
+		out, err := sjson.SetBytes(body, path, map[string]string{"url": imageURL})
 		if err != nil {
 			return nil, fmt.Errorf("normalize grok media image url: %w", err)
 		}
+		return out, nil
 	}
-	out, err := sjson.DeleteBytes(out, legacyPath)
-	if err != nil {
-		return nil, fmt.Errorf("remove legacy grok media image url: %w", err)
+
+	legacyPath := path + ".image_url"
+	legacy := gjson.GetBytes(body, legacyPath)
+	out := body
+	if legacy.Exists() && strings.TrimSpace(gjson.GetBytes(out, path+".url").String()) == "" {
+		imageURL := extractGrokMediaImageURL(value)
+		if imageURL == "" {
+			if legacy.Type == gjson.String {
+				imageURL = strings.TrimSpace(legacy.String())
+			}
+		}
+		if imageURL != "" {
+			var err error
+			out, err = sjson.SetBytes(out, path+".url", imageURL)
+			if err != nil {
+				return nil, fmt.Errorf("normalize grok media image url: %w", err)
+			}
+		}
+	}
+	if gjson.GetBytes(out, legacyPath).Exists() {
+		var err error
+		out, err = sjson.DeleteBytes(out, legacyPath)
+		if err != nil {
+			return nil, fmt.Errorf("remove legacy grok media image url: %w", err)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(gjson.GetBytes(out, path+".type").String()), "image_url") {
+		var err error
+		out, err = sjson.DeleteBytes(out, path+".type")
+		if err != nil {
+			return nil, fmt.Errorf("remove grok media image type: %w", err)
+		}
 	}
 	return out, nil
 }
@@ -1173,6 +1236,19 @@ func sanitizeGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, conte
 		out, err := applyGrokImagineImageGeometry(body)
 		if err != nil {
 			return nil, "", fmt.Errorf("sanitize grok media size: %w", err)
+		}
+		return out, contentType, nil
+	case GrokMediaEndpointVideosGenerations:
+		out := body
+		for _, field := range []string{"size", "n", "response_format"} {
+			if !gjson.GetBytes(out, field).Exists() {
+				continue
+			}
+			next, err := sjson.DeleteBytes(out, field)
+			if err != nil {
+				return nil, "", fmt.Errorf("sanitize grok video %s: %w", field, err)
+			}
+			out = next
 		}
 		return out, contentType, nil
 	default:

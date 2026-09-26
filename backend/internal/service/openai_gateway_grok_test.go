@@ -1089,6 +1089,58 @@ func TestNormalizeGrokMediaForwardBodyCanonicalizesImageURLAlias(t *testing.T) {
 	require.False(t, gjson.GetBytes(out, "image.image_url").Exists())
 }
 
+func TestNormalizeGrokMediaForwardBodyWrapsStringImageForVideo(t *testing.T) {
+	body := []byte(`{
+		"model":"grok-imagine-video-1.5",
+		"prompt":"animate",
+		"image":"data:image/png;base64,abc",
+		"size":"1024x1024",
+		"n":1
+	}`)
+
+	normalized, contentType, err := normalizeGrokMediaForwardBody(GrokMediaEndpointVideosGenerations, body, "application/json")
+	require.NoError(t, err)
+	out, contentType, err := sanitizeGrokMediaForwardBody(GrokMediaEndpointVideosGenerations, normalized, contentType)
+	require.NoError(t, err)
+	require.Equal(t, "application/json", contentType)
+	require.Equal(t, "data:image/png;base64,abc", gjson.GetBytes(out, "image.url").String())
+	require.False(t, gjson.GetBytes(out, "image").IsArray())
+	require.False(t, gjson.GetBytes(out, "size").Exists())
+	require.False(t, gjson.GetBytes(out, "n").Exists())
+	require.False(t, gjson.GetBytes(out, "image.type").Exists())
+}
+
+func TestPrepareGrokMediaForwardBodyConvertsVideoMultipartToJSON(t *testing.T) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	require.NoError(t, writer.WriteField("model", "grok-imagine-video-1.5"))
+	require.NoError(t, writer.WriteField("prompt", "animate this still"))
+	require.NoError(t, writer.WriteField("duration", "10"))
+	require.NoError(t, writer.WriteField("resolution", "720p"))
+	partHeader := textproto.MIMEHeader{}
+	partHeader.Set("Content-Disposition", `form-data; name="image"; filename="still.png"`)
+	partHeader.Set("Content-Type", "image/png")
+	part, err := writer.CreatePart(partHeader)
+	require.NoError(t, err)
+	_, err = part.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	out, contentType, err := prepareGrokMediaForwardBody(
+		GrokMediaEndpointVideosGenerations,
+		buf.Bytes(),
+		writer.FormDataContentType(),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "application/json", contentType)
+	require.Equal(t, "grok-imagine-video-1.5", gjson.GetBytes(out, "model").String())
+	require.Equal(t, "animate this still", gjson.GetBytes(out, "prompt").String())
+	require.Equal(t, float64(10), gjson.GetBytes(out, "duration").Num)
+	require.Equal(t, "720p", gjson.GetBytes(out, "resolution").String())
+	require.True(t, strings.HasPrefix(gjson.GetBytes(out, "image.url").String(), "data:image/png;base64,"))
+	require.False(t, gjson.GetBytes(out, "image.type").Exists())
+}
+
 func TestNormalizeGrokMediaForwardBodyPreservesImageToVideoModelForOfficialURL(t *testing.T) {
 	body := []byte(`{
 		"model":"grok-imagine-video-1.5",
