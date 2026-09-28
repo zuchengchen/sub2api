@@ -306,14 +306,6 @@ func (h *ConcurrencyHelper) acquireUserSlotWithWaitTimeout(c *gin.Context, userI
 	return h.withAPIKeySlotFromGinLimited(c, releaseFunc)
 }
 
-func (h *ConcurrencyHelper) withAPIKeySlotFromGin(c *gin.Context, releaseFunc func()) func() {
-	wrapped, err := h.withAPIKeySlotFromGinLimited(c, releaseFunc)
-	if err != nil || wrapped == nil {
-		return releaseFunc
-	}
-	return wrapped
-}
-
 func (h *ConcurrencyHelper) withAPIKeySlotFromGinLimited(c *gin.Context, releaseFunc func()) (func(), error) {
 	if c == nil {
 		return releaseFunc, nil

@@ -490,10 +490,6 @@ func (s *IntelligentTestService) purgeStalePelicanTests(ctx context.Context) {
 	}
 }
 
-func (s *IntelligentTestService) runScheduledPelican(ctx context.Context) {
-	s.runScheduledPelicanAt(ctx, time.Now())
-}
-
 func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now time.Time) {
 	if s == nil || s.repo == nil || ctx.Err() != nil {
 		return

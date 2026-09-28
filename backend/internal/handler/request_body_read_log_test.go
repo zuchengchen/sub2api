@@ -34,13 +34,6 @@ func TestLogRequestBodyReadFailureClassifiesWithoutPayload(t *testing.T) {
 	require.NotContains(t, entries[0].Message+fmt.Sprint(fields), "secret-payload-marker")
 }
 
-func TestRequestBodyReadErrorKind(t *testing.T) {
-	require.Equal(t, "unsupported_content_encoding", requestBodyReadErrorKind(errors.New(`decode Content-Encoding "br": unsupported Content-Encoding`)))
-	require.Equal(t, "truncated_body", requestBodyReadErrorKind(io.ErrUnexpectedEOF))
-	require.Equal(t, "max_bytes", requestBodyReadErrorKind(&http.MaxBytesError{Limit: 10}))
-	require.Equal(t, "other", requestContentEncodingCategory("private-payload-marker"))
-}
-
 func TestWriteRequestBodyReadFailureClassifiesTruncatedBodyAs408(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

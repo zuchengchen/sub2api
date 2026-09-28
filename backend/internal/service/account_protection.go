@@ -133,10 +133,6 @@ func isMode1ProtectionEnabled(a *Account) bool {
 	return marker["mode"] == string(AntiDegradeMode1) && (version == 2 || version == mode1PolicyVersion)
 }
 
-func isLegacyProtectionEnabled(a *Account) bool {
-	return a != nil && a.AntiDegradationEnabled() && antiDegradeMode(a) == AntiDegradeModeLegacy
-}
-
 // Mode1EffectiveConcurrency is the editable account ceiling. Protection does
 // not replace the 429 near-limit selector; it only reports the stored cap.
 func (a *Account) Mode1EffectiveConcurrency() int {
@@ -553,17 +549,6 @@ func restoreProtectionSnapshot(account *Account, raw any) error {
 		}
 	}
 	account.Extra = extra
-	return nil
-}
-
-func enforceProtectionWriteExpectation(ctx context.Context, current *Account) error {
-	expected, ok := GetProtectionWriteExpectation(ctx)
-	if !ok || current == nil {
-		return nil
-	}
-	if expected.AccountID != current.ID || !expected.UpdatedAt.Equal(current.UpdatedAt) {
-		return ErrProtectionConflict
-	}
 	return nil
 }
 

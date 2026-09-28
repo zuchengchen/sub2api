@@ -413,28 +413,6 @@ func (r *contentModerationArchiveRuntime) writeEncryptedRetry(log *ContentModera
 	return fmt.Errorf("content moderation archive queued for retry: %w", cause)
 }
 
-func (r *contentModerationArchiveRuntime) writeEmergency(log *ContentModerationLog, archiveID string, envelope []byte, cause error) error {
-	log.ArchiveID = archiveID
-	if !r.hasDiskHeadroom(r.options.EmergencyDir) {
-		r.contentLost.Add(1)
-		log.ArchiveStatus = ContentModerationArchiveStatusLost
-		log.ArchiveContentLost = true
-		return r.persistContentLostSummary(log, cause)
-	}
-	log.ArchiveStatus = ContentModerationArchiveStatusEmergency
-	entry := contentModerationEmergencyFile{
-		OperationKey: "emergency:" + archiveID, NextAttempt: time.Now().Add(r.options.RetryInitial),
-		LastError: boundedModerationArchiveError(cause), Log: *cloneContentModerationLog(log),
-		EnvelopeB64: base64.StdEncoding.EncodeToString(envelope),
-	}
-	path := filepath.Join(r.options.EmergencyDir, archiveID+contentModerationEmergencySuffix)
-	if err := writePrivateModerationJSON(path, entry); err != nil {
-		return fmt.Errorf("persist content moderation emergency archive: %w", err)
-	}
-	r.refreshDepths()
-	return fmt.Errorf("content moderation key unavailable; emergency archive queued: %w", cause)
-}
-
 func writePrivateModerationJSON(path string, value any) error {
 	return writePrivateModerationJSONAtomic(path, value)
 }

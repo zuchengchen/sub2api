@@ -39,14 +39,6 @@ func logRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error)
 	)
 }
 
-func requestContentEncodingCategory(value string) string {
-	return pkghttputil.RequestContentEncodingCategory(value)
-}
-
-func requestBodyReadErrorKind(err error) string {
-	return pkghttputil.RequestBodyReadErrorKind(err)
-}
-
 type gatewayErrorWriter func(*gin.Context, int, string, string)
 
 // writeRequestBodyReadFailure logs the bounded failure reason and writes the

@@ -118,18 +118,6 @@ func effectiveOpenAIAccountConcurrency(account *Account, cfg *config.Config) int
 	return effective
 }
 
-func effectiveOpenAIAccountLoadFactor(account *Account, cfg *config.Config) int {
-	if account == nil {
-		return openAINearLimitMaxConcurrency(cfg)
-	}
-	capLimit := openAINearLimitMaxConcurrency(cfg)
-	effective := account.EffectiveLoadFactor()
-	if effective <= 0 || effective > capLimit {
-		return capLimit
-	}
-	return effective
-}
-
 func classifyOpenAINearLimitCandidate(account *Account, now time.Time) (openAINearLimitCandidate, bool) {
 	if account == nil || !account.IsOpenAI() {
 		return openAINearLimitCandidate{}, false

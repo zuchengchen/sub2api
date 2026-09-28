@@ -32,8 +32,6 @@ type SubscriptionExpiryService struct {
 	notificationEmailService *NotificationEmailService
 	interval                 time.Duration
 	stopCh                   chan struct{}
-	stopOnce                 sync.Once
-	wg                       sync.WaitGroup
 
 	lockCache  LeaderLockCache
 	db         *sql.DB

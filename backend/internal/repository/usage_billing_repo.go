@@ -247,22 +247,6 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 	return newBalance, false, nil
 }
 
-func userExistsForBilling(ctx context.Context, tx *sql.Tx, userID int64) (bool, error) {
-	var exists int
-	err := tx.QueryRowContext(ctx, `
-		SELECT 1
-		FROM users
-		WHERE id = $1 AND deleted_at IS NULL
-	`, userID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID int64, amount float64) (bool, error) {
 	var exhausted bool
 	err := tx.QueryRowContext(ctx, `
