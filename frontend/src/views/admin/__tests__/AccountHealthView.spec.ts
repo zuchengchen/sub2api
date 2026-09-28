@@ -3,8 +3,8 @@ import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import AccountHealthView from '../AccountHealthView.vue'
 
-vi.mock('@/api/admin/accountHealth', () => ({
-  accountHealthAPI: {
+vi.mock('@/api/admin/accountHealth', () => {
+  const accountHealthAPI = {
     snapshot: vi.fn().mockResolvedValue({ items: [] }),
     getSettings: vi.fn().mockResolvedValue({
       enabled: true,
@@ -16,7 +16,9 @@ vi.mock('@/api/admin/accountHealth', () => ({
       interval_seconds: 60
     })
   }
-}))
+  // @/api/admin 用默认导出组装 adminAPI.accountHealth，视图经由它调用。
+  return { accountHealthAPI, default: accountHealthAPI }
+})
 vi.mock('@/components/layout/AppLayout.vue', () => ({ default: { template: '<div><slot /></div>' } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError: vi.fn(), showSuccess: vi.fn() }) }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin: true }) }))
