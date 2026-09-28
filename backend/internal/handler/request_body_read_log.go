@@ -21,7 +21,7 @@ func logRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error)
 		if req != nil {
 			reqLog = logger.FromContext(req.Context())
 		} else {
-			reqLog = logger.FromContext(nil)
+			reqLog = logger.L()
 		}
 	}
 

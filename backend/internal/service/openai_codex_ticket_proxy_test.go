@@ -145,7 +145,7 @@ func TestCodexTicketProxySessionEachLegacyProbeUsesNewSession(t *testing.T) {
 func TestCookieWSProxySessionInvalidConfigurationIsSafeAndDoesNotSend(t *testing.T) {
 	u := &httpUpstreamRecorder{}
 	s, d := cookieWSTestService(t, u)
-	_, err := s.doOpenAICookieWSHTTPProbe(context.Background(), ticketTestAccount(41), "unused", "socks5h://user:secret@{session}.example:1080", newOpenAICookieWSIdentity())
+	_, err := s.doOpenAICookieWSHTTPProbe(context.Background(), ticketTestAccount(41), "socks5h://user:secret@{session}.example:1080", newOpenAICookieWSIdentity())
 	var failure *openAICookieWSRecoveryFailure
 	require.ErrorAs(t, err, &failure)
 	require.Equal(t, "configuration", failure.detail.Stage)

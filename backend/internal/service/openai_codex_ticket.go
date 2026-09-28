@@ -1379,7 +1379,7 @@ func openAICodexTicketStateValid(state string, n int) bool {
 		return false
 	}
 	for _, c := range state {
-		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '=') {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-' && c != '=' {
 			return false
 		}
 	}

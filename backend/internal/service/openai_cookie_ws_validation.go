@@ -63,7 +63,7 @@ func (o *openAICookieWSProbeObserver) observe(lease *openAIWSConnLease, payload 
 // the client's response stream or business usage accounting.
 func (s *OpenAIGatewayService) validateOpenAICookieWSBusinessConn(ctx context.Context, account *Account, lease *openAIWSConnLease) (err error) {
 	if s == nil || account == nil || lease == nil {
-		return errors.New("Cookie websocket validation is unavailable")
+		return errors.New("cookie websocket validation is unavailable")
 	}
 	if s.cookieWSSkipBusinessProbe {
 		return nil

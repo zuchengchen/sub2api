@@ -88,7 +88,7 @@ func TestOpenAICookieWSHTTPUsesLatestSchedulingState(t *testing.T) {
 	s.refreshOpenAICookieWSSlot(context.Background(), stale, 0)
 	require.Zero(t, u.requests)
 	require.Zero(t, dialer.dials)
-	_, err := s.doOpenAICookieWSHTTPProbe(context.Background(), stale, "stale-token", "socks5h://example", newOpenAICookieWSIdentity())
+	_, err := s.doOpenAICookieWSHTTPProbe(context.Background(), stale, "socks5h://example", newOpenAICookieWSIdentity())
 	require.ErrorIs(t, err, errOpenAICookieWSAccountUnavailable)
 	require.Zero(t, u.requests)
 }
@@ -128,7 +128,7 @@ func TestOpenAICookieWSCandidateRechecksBeforeEveryValidationTurn(t *testing.T) 
 	s, dialer := cookieWSTestService(t, nil, "True", "True")
 	repo := mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo)
 	dialer.conn.afterRead = func() { repo.mu.Lock(); defer repo.mu.Unlock(); repo.accounts[0].Schedulable = false }
-	lease, err := s.validateOpenAICookieWSCandidate(context.Background(), ticketTestAccount(41), "stale-token", cookieWSTestTicket(41, time.Now()))
+	lease, err := s.validateOpenAICookieWSCandidate(context.Background(), ticketTestAccount(41), cookieWSTestTicket(41, time.Now()))
 	require.ErrorIs(t, err, errOpenAICookieWSAccountUnavailable)
 	require.Nil(t, lease)
 	require.Len(t, dialer.conn.writes, 1, "a scheduling stop after first answer must prevent second probe")

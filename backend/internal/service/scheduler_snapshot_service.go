@@ -843,7 +843,7 @@ func schedulerBucketsForGroup(groupID int64) []SchedulerBucket {
 }
 
 func schedulerCanonicalBucketCount() int {
-	return 2 * len(schedulerSnapshotPlatforms())
+	return len(schedulerCanonicalBuckets(0))
 }
 
 func schedulerCanonicalBuckets(groupID int64) []SchedulerBucket {

@@ -775,7 +775,7 @@ func (s *IntelligentTestService) Reevaluate(ctx context.Context, actor, id int64
 		if r.ConfigSnapshot == nil || r.RawTruncated || strings.TrimSpace(r.Result) == "" {
 			return intelligentTestBad("原始答复或配置不完整，无法自动重评")
 		}
-		if r.Status != "success" && r.Status != "completed" && r.Status != "suspected_degradation" && !(r.Status == "failed" && r.Evaluation["method"] != nil && r.ErrorMessage == "") {
+		if r.Status != "success" && r.Status != "completed" && r.Status != "suspected_degradation" && (r.Status != "failed" || r.Evaluation["method"] == nil || r.ErrorMessage != "") {
 			return intelligentTestBad("只能重评已经完成且具有完整答复的记录")
 		}
 		evaluator, ok := s.evaluators[r.ConfigSnapshot.Evaluator]

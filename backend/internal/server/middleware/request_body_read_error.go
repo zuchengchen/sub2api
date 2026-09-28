@@ -36,7 +36,7 @@ func logRequestBodyReadFailure(req *http.Request, err error) {
 	}
 	contentLength := int64(-1)
 	contentEncoding := "identity"
-	reqLog := logger.FromContext(nil)
+	reqLog := logger.L()
 	if req != nil {
 		contentLength = req.ContentLength
 		contentEncoding = pkghttputil.RequestContentEncodingCategory(req.Header.Get("Content-Encoding"))

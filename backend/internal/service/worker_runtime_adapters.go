@@ -49,7 +49,7 @@ func NewOpenAIOAuthSessionCleanupWorker(svc *OpenAIOAuthService) (*workerruntime
 // NewClaudeOAuthSessionCleanupWorker adapts Claude OAuth session cleanup to the worker runtime.
 func NewClaudeOAuthSessionCleanupWorker(svc *OAuthService) (*workerruntime.PeriodicJob, error) {
 	if svc == nil || svc.sessionStore == nil {
-		return nil, fmt.Errorf("Claude OAuth service is required")
+		return nil, fmt.Errorf("OAuth service for Claude is required")
 	}
 	return workerruntime.NewPeriodicJob(workerruntime.PeriodicJobSpec{
 		Descriptor: workerruntime.Descriptor{
@@ -432,7 +432,7 @@ func (w *startStopPoolWorker) Snapshot() workerruntime.Snapshot {
 // NewOpsSystemLogSinkWorker returns the runtime component for buffered operational logs.
 func NewOpsSystemLogSinkWorker(sink *OpsSystemLogSink) (*startStopPoolWorker, error) {
 	if sink == nil {
-		return nil, fmt.Errorf("Ops system log sink is required")
+		return nil, fmt.Errorf("ops system log sink is required")
 	}
 	return newStartStopPoolWorker(
 		workerruntime.Descriptor{
