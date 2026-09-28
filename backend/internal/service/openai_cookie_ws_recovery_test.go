@@ -69,7 +69,7 @@ func TestOpenAICookieWSRecoveryHTTPStreamRetainsStatusAndRetryAfter(t *testing.T
 			u := &httpUpstreamRecorder{resp: resp}
 			s, d := cookieWSTestService(t, u)
 			before := time.Now()
-			result, err := s.doOpenAICookieWSHTTPProbe(context.Background(), ticketTestAccount(41), "unused", "socks5://test", newOpenAICookieWSIdentity())
+			result, err := s.doOpenAICookieWSHTTPProbe(context.Background(), ticketTestAccount(41), "socks5://test", newOpenAICookieWSIdentity())
 			require.Error(t, err)
 			require.NotNil(t, result)
 			require.Equal(t, status, result.status)
@@ -86,7 +86,7 @@ func TestOpenAICookieWSRecoveryHTTPStreamRetainsStatusAndRetryAfter(t *testing.T
 			require.NotNil(t, diagnostic.LastFailureAt)
 			require.WithinDuration(t, before.Add(120*time.Second), *diagnostic.NextAttemptAt, 2*time.Second)
 			raw, _ := s.openaiCookieWSRetry.Load(openAICookieWSKeySlot(41, openAICodexTicketDefaultModel, 1))
-			require.True(t, raw.(*openAICookieWSRetryState).nextAttemptAt.Equal(*diagnostic.NextAttemptAt))
+			require.True(t, mustTestValue[*openAICookieWSRetryState](t, raw).nextAttemptAt.Equal(*diagnostic.NextAttemptAt))
 			assertCookieRecoverySafe(t, diagnostic)
 			require.Zero(t, d.dials)
 		})
@@ -140,7 +140,7 @@ func TestOpenAICookieWSRecoveryCandidateReasonsCloseSocket(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, d := cookieWSTestService(t, nil)
 			d.conn.answers = [][]byte{tc.message}
-			lease, err := s.validateOpenAICookieWSCandidate(context.Background(), ticketTestAccount(41), "unused", cookieWSTestTicket(41, time.Now()))
+			lease, err := s.validateOpenAICookieWSCandidate(context.Background(), ticketTestAccount(41), cookieWSTestTicket(41, time.Now()))
 			require.Nil(t, lease)
 			var failure *openAICookieWSRecoveryFailure
 			require.ErrorAs(t, err, &failure)
@@ -183,21 +183,21 @@ func TestOpenAICookieWSRecoveryAccountTokenPersistence(t *testing.T) {
 	for _, tc := range []struct {
 		name, code, stage string
 		attempts          int
-		setup             func(*OpenAIGatewayService)
+		setup             func(*testing.T, *OpenAIGatewayService)
 	}{
-		{"account", "cookie_ws_account_unavailable", "account", 0, func(s *OpenAIGatewayService) {
-			s.accountRepo.(*cookieWSLifecycleRepo).getErr = errors.New(cookieTestSecret)
+		{"account", "cookie_ws_account_unavailable", "account", 0, func(t *testing.T, s *OpenAIGatewayService) {
+			mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo).getErr = errors.New(cookieTestSecret)
 		}},
-		{"token", "cookie_ws_token_unavailable", "authentication", 1, func(s *OpenAIGatewayService) {
-			s.accountRepo.(*cookieWSLifecycleRepo).accounts[0].Credentials = map[string]any{}
+		{"token", "cookie_ws_token_unavailable", "authentication", 1, func(t *testing.T, s *OpenAIGatewayService) {
+			mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo).accounts[0].Credentials = map[string]any{}
 		}},
-		{"persistence", "cookie_ws_persist_failed", "persistence", 1, func(s *OpenAIGatewayService) {
-			s.accountRepo.(*cookieWSLifecycleRepo).err = errors.New(cookieTestSecret)
+		{"persistence", "cookie_ws_persist_failed", "persistence", 1, func(t *testing.T, s *OpenAIGatewayService) {
+			mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo).err = errors.New(cookieTestSecret)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, d := cookieWSTestService(t, &httpUpstreamRecorder{resp: cookieWSHTTPResponse("True")}, "True", "True")
-			tc.setup(s)
+			tc.setup(t, s)
 			s.refreshOpenAICookieWSSlot(context.Background(), ticketTestAccount(41), 0)
 			diagnostic := s.openAICookieWSRecoverySnapshot(41, 0, "refresh")
 			require.Equal(t, tc.code, diagnostic.LastError.Code)
@@ -221,7 +221,7 @@ func TestOpenAICookieWSRecoveryWarmupFailureAndRetry(t *testing.T) {
 		require.Equal(t, 1, diagnostic.Attempts)
 		require.Equal(t, "cookie_ws_validation_not_true", diagnostic.LastError.Code)
 		require.Equal(t, "ws_validation", diagnostic.LastError.Stage)
-		require.True(t, raw.(time.Time).Equal(*diagnostic.NextAttemptAt))
+		require.True(t, mustTestValue[time.Time](t, raw).Equal(*diagnostic.NextAttemptAt))
 		require.Nil(t, s.openAICookieWSRecoverySnapshot(a.ID, slot, "refresh"))
 	}
 	s.maintainOpenAICookieWSMinimum(context.Background(), a.ID)

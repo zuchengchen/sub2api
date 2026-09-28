@@ -15,11 +15,11 @@ import (
 
 func nearLimitExtra(used float64, age time.Duration) map[string]any {
 	return map[string]any{
-		"codex_5h_used_percent":   used,
-		"codex_5h_reset_at":       time.Now().Add(time.Hour).Format(time.RFC3339),
-		"codex_usage_updated_at":  time.Now().Add(-age).Format(time.RFC3339),
-		"auto_pause_5h_disabled":  true,
-		"auto_pause_7d_disabled":  true,
+		"codex_5h_used_percent":  used,
+		"codex_5h_reset_at":      time.Now().Add(time.Hour).Format(time.RFC3339),
+		"codex_usage_updated_at": time.Now().Add(-age).Format(time.RFC3339),
+		"auto_pause_5h_disabled": true,
+		"auto_pause_7d_disabled": true,
 	}
 }
 
@@ -177,9 +177,9 @@ func TestGatewayTrySelectOpenAINearLimitTargetUsesDBConcurrency(t *testing.T) {
 
 	slots := &recordingNearLimitSlotCache{}
 	svc := &GatewayService{
-		accountRepo:         schedulerTestOpenAIAccountRepo{accounts: []Account{acc}},
-		concurrencyService:  NewConcurrencyService(slots),
-		cfg:                 &config.Config{Gateway: config.GatewayConfig{OpenAINearLimitMaxConcurrency: 20}},
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{acc}},
+		concurrencyService: NewConcurrencyService(slots),
+		cfg:                &config.Config{Gateway: config.GatewayConfig{OpenAINearLimitMaxConcurrency: 20}},
 	}
 	got := svc.trySelectOpenAINearLimitTarget(context.Background(), nil, "", "", nil, PlatformOpenAI)
 	require.NotNil(t, got)

@@ -9,8 +9,8 @@ import (
 
 func TestAccountProtectionExtraMergePreserves429NearLimitKeys(t *testing.T) {
 	original := map[string]any{
-		"auto_pause_5h_disabled": true,
-		"auto_pause_7d_disabled": false,
+		"auto_pause_5h_disabled":  true,
+		"auto_pause_7d_disabled":  false,
 		"auto_pause_5h_threshold": 0.95,
 		"auto_pause_7d_threshold": 0.95,
 		"unrelated_ops_key":       "keep-me",
@@ -61,14 +61,14 @@ func TestAccountProtectionPreserveDoesNotDrop429KeysOnOrdinarySave(t *testing.T)
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Extra: map[string]any{
-			AntiDegradationExtraKey:       true,
-			ProtectionScopeExtraKey:       "legacy",
-			AntiDegradeMarkerExtraKey:     map[string]any{"enabled": true, "mode": "legacy"},
-			codexFingerprintModeExtraKey:  string(codexFingerprintSession),
-			tlsFingerprintEnabledKey:      true,
-			tlsFingerprintBuiltinKey:      "nodejs24",
-			"auto_pause_5h_threshold":     0.95,
-			"auto_pause_7d_disabled":      true,
+			AntiDegradationExtraKey:      true,
+			ProtectionScopeExtraKey:      "legacy",
+			AntiDegradeMarkerExtraKey:    map[string]any{"enabled": true, "mode": "legacy"},
+			codexFingerprintModeExtraKey: string(codexFingerprintSession),
+			tlsFingerprintEnabledKey:     true,
+			tlsFingerprintBuiltinKey:     "nodejs24",
+			"auto_pause_5h_threshold":    0.95,
+			"auto_pause_7d_disabled":     true,
 		},
 	}
 	incoming := map[string]any{

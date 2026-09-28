@@ -12,11 +12,11 @@ func SecurityPolicyKeywordSeedFromService(seed service.SecurityPolicyKeywordSeed
 }
 
 type SecurityPolicyKeyword struct {
-	ID        int64  `json:"id"`
-	GroupID   *int64 `json:"group_id,omitempty"`
-	Keyword   string `json:"keyword"`
-	Category  string `json:"category"`
-	Enabled   bool   `json:"enabled"`
+	ID       int64  `json:"id"`
+	GroupID  *int64 `json:"group_id,omitempty"`
+	Keyword  string `json:"keyword"`
+	Category string `json:"category"`
+	Enabled  bool   `json:"enabled"`
 }
 
 func SecurityPolicyKeywordsFromService(items []service.SecurityPolicyKeyword) []SecurityPolicyKeyword {

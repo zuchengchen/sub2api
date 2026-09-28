@@ -105,7 +105,7 @@ func (c *intelligentCompletedOutput) terminalText(event map[string]any) (text st
 	var result strings.Builder
 	result.Grow(c.bytes)
 	for _, position := range positions {
-		result.WriteString(c.items[position].text)
+		_, _ = result.WriteString(c.items[position].text)
 	}
 	return result.String(), true, false
 }

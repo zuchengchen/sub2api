@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,8 +25,6 @@ type PaymentOrderExpiryService struct {
 	paymentSvc *PaymentService
 	interval   time.Duration
 	stopCh     chan struct{}
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
 
 	lockCache  LeaderLockCache
 	db         *sql.DB

@@ -501,10 +501,12 @@ func (r *billingOutboxRepository) Ack(ctx context.Context, id int64, workerID st
 //
 // 运维恢复窗口：误判 terminal（或需要重放某条 terminal 记录）时，可在
 // 保留期（CleanupTerminal 的 cutoff）内手动重置回 pending 重试——
-//   UPDATE billing_attempt_outbox
-//   SET status = 'pending', available_at = NOW(), lease_until = NULL,
-//       leased_by = NULL, attempts = 0
-//   WHERE status = 'terminal';
+//
+//	UPDATE billing_attempt_outbox
+//	SET status = 'pending', available_at = NOW(), lease_until = NULL,
+//	    leased_by = NULL, attempts = 0
+//	WHERE status = 'terminal';
+//
 // 保留期不得短于人工恢复窗口（Task F 复核 retention 与恢复窗口的关系）；
 // 重放由 usage_billing_dedup 去重键幂等兜底，不会重复计费。注意：该重放只
 // 适用于 apply 路径 terminal 的行（重放重新 apply，去重幂等后转入

@@ -149,8 +149,8 @@ func TestGroupHandlerSimpleModeResponseUsesFieldAllowlist(t *testing.T) {
 		Status: service.StatusActive, RateMultiplier: 9, RPMLimit: 42,
 		LongContextPricingEnabled: true,
 		ModelPricing:              []service.ChannelModelPricing{{Models: []string{"claude"}}},
-		VideoPrice720P: float64PtrForSimpleModeTest(2),
-		WebSearchPricePerCall: float64PtrForSimpleModeTest(3), AudioRealtimePricePerMin: float64PtrForSimpleModeTest(4),
+		VideoPrice720P:            float64PtrForSimpleModeTest(2),
+		WebSearchPricePerCall:     float64PtrForSimpleModeTest(3), AudioRealtimePricePerMin: float64PtrForSimpleModeTest(4),
 		ModelRouting: map[string][]int64{"claude": {2}},
 	}}
 	r := newSimpleModeGroupRouter(svc)

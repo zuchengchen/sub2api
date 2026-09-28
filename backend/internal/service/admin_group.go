@@ -515,13 +515,13 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	group := &Group{
-		Name:                            input.Name,
-		Description:                     input.Description,
-		Platform:                        platform,
-		RateMultiplier:                  input.RateMultiplier,
-		IsExclusive:                     input.IsExclusive,
-		SecurityPolicyEnabled:           input.SecurityPolicyEnabled,
-		SecurityPolicyMode:              NormalizeSecurityPolicyMode(input.SecurityPolicyMode),
+		Name:                  input.Name,
+		Description:           input.Description,
+		Platform:              platform,
+		RateMultiplier:        input.RateMultiplier,
+		IsExclusive:           input.IsExclusive,
+		SecurityPolicyEnabled: input.SecurityPolicyEnabled,
+		SecurityPolicyMode:    NormalizeSecurityPolicyMode(input.SecurityPolicyMode),
 		SecurityPolicyEmailEnabled: func() bool {
 			if input.SecurityPolicyEmailEnabled != nil {
 				return *input.SecurityPolicyEmailEnabled

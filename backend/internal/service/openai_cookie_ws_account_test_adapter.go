@@ -148,7 +148,7 @@ func (s *AccountTestService) testOpenAICookieWSAccountConnection(c *gin.Context,
 				return s.sendErrorAndEnd(c, "Account test output is too large")
 			}
 			if text != "" && capture == nil {
-				emitted.WriteString(text)
+				_, _ = emitted.WriteString(text)
 				s.sendEvent(c, TestEvent{Type: "content", Text: text})
 			}
 		case "response.completed", "response.done":

@@ -13,23 +13,23 @@ import (
 // fingerprint, TLS template, and concurrency stable across ordinary saves.
 
 const (
-	AntiDegradeMarkerExtraKey   = "anti_degrade"
-	AntiDegradationExtraKey     = "anti_degradation"
-	ProtectionScopeExtraKey     = "protection_scope"
-	AntiDegradeConcurrencyCap   = 16
-	tlsFingerprintBuiltinKey    = "tls_fingerprint_builtin"
-	tlsFingerprintEnabledKey    = "enable_tls_fingerprint"
-	tlsFingerprintProfileIDKey  = "tls_fingerprint_profile_id"
-	accountProxyModeExtraKey    = "proxy_mode"
-	mode1PolicyVersion          = 3
+	AntiDegradeMarkerExtraKey  = "anti_degrade"
+	AntiDegradationExtraKey    = "anti_degradation"
+	ProtectionScopeExtraKey    = "protection_scope"
+	AntiDegradeConcurrencyCap  = 16
+	tlsFingerprintBuiltinKey   = "tls_fingerprint_builtin"
+	tlsFingerprintEnabledKey   = "enable_tls_fingerprint"
+	tlsFingerprintProfileIDKey = "tls_fingerprint_profile_id"
+	accountProxyModeExtraKey   = "proxy_mode"
+	mode1PolicyVersion         = 3
 )
 
 type AntiDegradeMode string
 
 const (
-	AntiDegradeModeLegacy AntiDegradeMode = "legacy"
-	AntiDegradeMode1      AntiDegradeMode = "mode1"
-	DefaultAntiDegradeMode                = AntiDegradeModeLegacy
+	AntiDegradeModeLegacy  AntiDegradeMode = "legacy"
+	AntiDegradeMode1       AntiDegradeMode = "mode1"
+	DefaultAntiDegradeMode                 = AntiDegradeModeLegacy
 )
 
 var (
@@ -131,10 +131,6 @@ func isMode1ProtectionEnabled(a *Account) bool {
 		version = int(n)
 	}
 	return marker["mode"] == string(AntiDegradeMode1) && (version == 2 || version == mode1PolicyVersion)
-}
-
-func isLegacyProtectionEnabled(a *Account) bool {
-	return a != nil && a.AntiDegradationEnabled() && antiDegradeMode(a) == AntiDegradeModeLegacy
 }
 
 // Mode1EffectiveConcurrency is the editable account ceiling. Protection does
@@ -553,17 +549,6 @@ func restoreProtectionSnapshot(account *Account, raw any) error {
 		}
 	}
 	account.Extra = extra
-	return nil
-}
-
-func enforceProtectionWriteExpectation(ctx context.Context, current *Account) error {
-	expected, ok := GetProtectionWriteExpectation(ctx)
-	if !ok || current == nil {
-		return nil
-	}
-	if expected.AccountID != current.ID || !expected.UpdatedAt.Equal(current.UpdatedAt) {
-		return ErrProtectionConflict
-	}
 	return nil
 }
 

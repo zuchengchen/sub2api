@@ -57,9 +57,6 @@ type securityPolicyKeywordSnapshot struct {
 // securityPolicySnapshotTTL 词表快照 TTL：关键词变更最多延迟 60s 生效。
 const securityPolicySnapshotTTL = 60 * time.Second
 
-// securityPolicySnapshotErrorTTL 快照加载失败时的退避，避免 DB 故障时每请求重试。
-const securityPolicySnapshotErrorTTL = 5 * time.Second
-
 func NewSecurityPolicyService(
 	reviewer SecurityPolicyModelReviewer,
 	keywordRepo SecurityPolicyRepository,
@@ -362,16 +359,16 @@ func (s *SecurityPolicyService) sendViolationEmail(ctx context.Context, log *Con
 
 func buildSecurityPolicyNoticeEmailBody(siteName string, log *ContentModerationLog, verdict *SecurityPolicyVerdict) string {
 	var sb strings.Builder
-	sb.WriteString("您好 " + emailRecipientName(log.UserEmail) + "：\n\n")
-	sb.WriteString("您在分组「" + log.GroupName + "」的一次请求触发了安全策略（敏感话题），该请求已被拦截。\n")
+	_, _ = sb.WriteString("您好 " + emailRecipientName(log.UserEmail) + "：\n\n")
+	_, _ = sb.WriteString("您在分组「" + log.GroupName + "」的一次请求触发了安全策略（敏感话题），该请求已被拦截。\n")
 	if verdict.MatchedKeyword != "" {
-		sb.WriteString("命中关键词：" + verdict.MatchedKeyword + "\n")
+		_, _ = sb.WriteString("命中关键词：" + verdict.MatchedKeyword + "\n")
 	}
 	if verdict.SessionTerminated {
-		sb.WriteString("该会话已被终止，请新建会话后继续。\n")
+		_, _ = sb.WriteString("该会话已被终止，请新建会话后继续。\n")
 	}
-	sb.WriteString("\n如认为系误判，请调整输入措辞后重试，或联系管理员。\n")
-	sb.WriteString("\n—— " + siteName)
+	_, _ = sb.WriteString("\n如认为系误判，请调整输入措辞后重试，或联系管理员。\n")
+	_, _ = sb.WriteString("\n—— " + siteName)
 	return sb.String()
 }
 

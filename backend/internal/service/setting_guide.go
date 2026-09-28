@@ -412,10 +412,10 @@ func deriveGuideChapterSlug(title string, used map[string]struct{}) string {
 	for _, r := range strings.ToLower(title) {
 		switch {
 		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
-			builder.WriteRune(r)
+			_, _ = builder.WriteRune(r)
 			lastHyphen = false
 		case !lastHyphen:
-			builder.WriteRune('-')
+			_, _ = builder.WriteRune('-')
 			lastHyphen = true
 		}
 	}

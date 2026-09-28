@@ -108,9 +108,9 @@ func TestAccountTestProcessOpenAIStreamReconcilesFinalOutput(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var stream strings.Builder
 			for _, delta := range test.deltas {
-				stream.WriteString(accountOpenAIStreamDelta(t, delta))
+				_, _ = stream.WriteString(accountOpenAIStreamDelta(t, delta))
 			}
-			stream.WriteString(accountOpenAIStreamTerminal(t, "response.completed", test.final))
+			_, _ = stream.WriteString(accountOpenAIStreamTerminal(t, "response.completed", test.final))
 			events, _, err := runAccountOpenAIStream(t, strings.NewReader(stream.String()), test.intelligent)
 			if test.wantError != "" {
 				require.ErrorContains(t, err, test.wantError)

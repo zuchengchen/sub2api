@@ -2798,7 +2798,7 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 						if len(delta) > intelligentCaptureTextLimit-text.Len() {
 							return s.sendErrorAndEnd(c, "Account test output is too large")
 						}
-						text.WriteString(delta)
+						_, _ = text.WriteString(delta)
 						if !buffered {
 							s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 						}

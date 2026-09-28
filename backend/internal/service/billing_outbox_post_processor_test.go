@@ -10,6 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type billingOutboxNotificationFinalizerFunc func(context.Context, *BillingOutboxCommand, *UsageBillingApplyResult) error
+
+func (f billingOutboxNotificationFinalizerFunc) FinalizeNotifications(ctx context.Context, command *BillingOutboxCommand, result *UsageBillingApplyResult) error {
+	return f(ctx, command, result)
+}
+
 func TestBuildBillingOutboxPostEffectsCapturesNotificationInputs(t *testing.T) {
 	balanceThreshold := 12.5
 	p := &postUsageBillingParams{

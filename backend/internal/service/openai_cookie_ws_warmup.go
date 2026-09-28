@@ -33,11 +33,12 @@ func (s *OpenAIGatewayService) maintainOpenAICookieWSMinimum(ctx context.Context
 				}
 			}
 		}
-		if next, ok := s.openaiCookieWSWarmupRetry.Load(accountID); ok && time.Now().Before(next.(time.Time)) {
+		raw, _ := s.openaiCookieWSWarmupRetry.Load(accountID)
+		if next, ok := raw.(time.Time); ok && time.Now().Before(next) {
 			counts := s.getOpenAIWSConnPool().CookieVerifiedCounts(accountID)
 			for slot, count := range counts {
 				if count < 1 {
-					value := next.(time.Time)
+					value := next
 					s.phaseOpenAICookieWSRecovery(accountID, slot, "warmup", "backoff", &value)
 				}
 			}

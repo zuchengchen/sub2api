@@ -1931,16 +1931,6 @@ func (p *openAIWSConnPool) getAccountPool(accountID int64) (*openAIWSAccountPool
 	return ap, typed && ap != nil
 }
 
-func (p *openAIWSConnPool) notifyAccountPoolChanged(accountID int64) {
-	ap, ok := p.getAccountPool(accountID)
-	if !ok || ap == nil {
-		return
-	}
-	ap.mu.Lock()
-	ap.signalChangedLocked()
-	ap.mu.Unlock()
-}
-
 func (p *openAIWSConnPool) releaseConn(accountID int64, conn *openAIWSConn) {
 	ap, ok := p.getAccountPool(accountID)
 	if !ok || ap == nil || conn == nil {

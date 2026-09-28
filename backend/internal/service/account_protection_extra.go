@@ -6,16 +6,6 @@ import (
 	"time"
 )
 
-// extra429NearLimitKeys are existing OpenAI extra keys that protection backfill
-// must never overwrite or delete. The list is the live 429 near-limit / auto-pause
-// contract; adding a protection key to the merge must not include these names.
-var extra429NearLimitKeys = []string{
-	"auto_pause_5h_disabled",
-	"auto_pause_7d_disabled",
-	"auto_pause_5h_threshold",
-	"auto_pause_7d_threshold",
-}
-
 // OpenAILegacyProtectionBackfillEligible is true only for independent OpenAI
 // accounts that do not already have protection enabled. Shadow, non-OpenAI,
 // random-proxy, and already-protected rows are skipped so the upgrade is
@@ -89,15 +79,6 @@ func ApplyOpenAILegacyProtectionBackfill(platform string, parentAccountID *int64
 		return extra, false
 	}
 	return MergeLegacyProtectionIntoExtra(extra), true
-}
-
-func extraHas429NearLimitKeys(extra map[string]any) bool {
-	for _, key := range extra429NearLimitKeys {
-		if _, ok := extra[key]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func cloneExtraJSON(extra map[string]any) map[string]any {

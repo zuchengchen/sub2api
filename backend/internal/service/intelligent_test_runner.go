@@ -293,78 +293,6 @@ func finalizeIntelligentTestRun(r *IntelligentTestRecord, capture *intelligentCa
 	return nil
 }
 
-// Some old connectivity adapters treat EOF as success. Capability scoring
-// requires a real terminal event and rejects token-budget truncation.
-func intelligentRawComplete(raw string) bool {
-	complete, truncated := false, false
-	var inspect func(map[string]any)
-	inspect = func(v map[string]any) {
-		if nested, ok := v["response"].(map[string]any); ok {
-			inspect(nested)
-		}
-		kind, _ := v["type"].(string)
-		if kind == "response.completed" || kind == "response.done" || kind == "message_stop" {
-			complete = true
-		}
-		if status, _ := v["status"].(string); status == "incomplete" || status == "failed" {
-			truncated = true
-		}
-		if reason, _ := v["stop_reason"].(string); reason != "" {
-			if reason == "max_tokens" {
-				truncated = true
-			} else {
-				complete = true
-			}
-		}
-		if delta, ok := v["delta"].(map[string]any); ok {
-			inspect(delta)
-		}
-		if choices, ok := v["choices"].([]any); ok {
-			for _, item := range choices {
-				if choice, ok := item.(map[string]any); ok {
-					if reason, _ := choice["finish_reason"].(string); reason != "" {
-						if reason == "length" || reason == "content_filter" {
-							truncated = true
-						} else {
-							complete = true
-						}
-					}
-				}
-			}
-		}
-		if candidates, ok := v["candidates"].([]any); ok {
-			for _, item := range candidates {
-				if candidate, ok := item.(map[string]any); ok {
-					if reason, _ := candidate["finishReason"].(string); reason != "" {
-						if reason == "STOP" {
-							complete = true
-						} else {
-							truncated = true
-						}
-					}
-				}
-			}
-		}
-	}
-	var body map[string]any
-	if json.Unmarshal([]byte(raw), &body) == nil {
-		inspect(body)
-	} else {
-		scanner := bufio.NewScanner(strings.NewReader(raw))
-		scanner.Buffer(make([]byte, 8192), 4<<20)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if !strings.HasPrefix(line, "data:") {
-				continue
-			}
-			var event map[string]any
-			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) == nil {
-				inspect(event)
-			}
-		}
-	}
-	return complete && !truncated
-}
 func parseIntelligentSSE(raw string) (output, errorMessage, model string, complete bool) {
 	var text strings.Builder
 	scanner := bufio.NewScanner(strings.NewReader(raw))
@@ -380,7 +308,7 @@ func parseIntelligentSSE(raw string) (output, errorMessage, model string, comple
 		}
 		switch e.Type {
 		case "content":
-			text.WriteString(e.Text)
+			_, _ = text.WriteString(e.Text)
 		case "error":
 			errorMessage = e.Error
 		case "test_start":
@@ -518,12 +446,12 @@ func (w *intelligentSSEWriter) appendText(s string) {
 	if w.text.Len()+len(s) > intelligentCaptureTextLimit {
 		remain := intelligentCaptureTextLimit - w.text.Len()
 		if remain > 0 {
-			w.text.WriteString(s[:remain])
+			_, _ = w.text.WriteString(s[:remain])
 		}
 		w.truncated = true
 		return
 	}
-	w.text.WriteString(s)
+	_, _ = w.text.WriteString(s)
 }
 
 type intelligentCapture struct {
@@ -765,7 +693,7 @@ func intelligentResponsesTerminalText(event map[string]any) (string, bool) {
 			if len(partText) > remaining {
 				partText = partText[:remaining]
 			}
-			text.WriteString(partText)
+			_, _ = text.WriteString(partText)
 			if text.Len() > intelligentCaptureTextLimit {
 				return text.String(), true
 			}
@@ -781,12 +709,12 @@ func (c *intelligentCapture) appendText(s string) {
 	if c.text.Len()+len(s) > intelligentCaptureTextLimit {
 		remain := intelligentCaptureTextLimit - c.text.Len()
 		if remain > 0 {
-			c.text.WriteString(s[:remain])
+			_, _ = c.text.WriteString(s[:remain])
 		}
 		c.textTruncated = true
 		return
 	}
-	c.text.WriteString(s)
+	_, _ = c.text.WriteString(s)
 }
 func (c *intelligentCapture) collectCredentialSecrets(values map[string]any) {
 	for key, value := range values {
@@ -859,12 +787,6 @@ func (h *intelligentHTTPUpstream) DoWithTLS(req *http.Request, proxy string, id 
 }
 func (h *intelligentHTTPUpstream) AccountTrafficController() *AccountTrafficService {
 	return accountTrafficController(h.inner)
-}
-func captureIntelligentResponse(req *http.Request, resp *http.Response) *http.Response {
-	if v := intelligentContext(req.Context()); v != nil {
-		return v.capture.response(req, resp)
-	}
-	return resp
 }
 
 type intelligentReadOnlyAccountRepo struct {

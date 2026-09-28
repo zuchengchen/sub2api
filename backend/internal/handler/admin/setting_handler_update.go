@@ -382,11 +382,11 @@ type UpdateSettingsRequest struct {
 
 	AllowUserViewErrorRequests *bool `json:"allow_user_view_error_requests"`
 
-	ExcelBPSImageRelayEnabled   *bool   `json:"excel_bps_image_relay_enabled"`
-	ExcelBPSImageBaseURL        *string `json:"excel_bps_image_base_url"`
-	ExcelBPSImageBodyLimitMiB   *int    `json:"excel_bps_image_body_limit_mib"`
-	ExcelBPSImageBudgetMiB      *int    `json:"excel_bps_image_budget_mib"`
-	ExcelBPSImageMaxRequests    *int    `json:"excel_bps_image_max_requests"`
+	ExcelBPSImageRelayEnabled *bool   `json:"excel_bps_image_relay_enabled"`
+	ExcelBPSImageBaseURL      *string `json:"excel_bps_image_base_url"`
+	ExcelBPSImageBodyLimitMiB *int    `json:"excel_bps_image_body_limit_mib"`
+	ExcelBPSImageBudgetMiB    *int    `json:"excel_bps_image_budget_mib"`
+	ExcelBPSImageMaxRequests  *int    `json:"excel_bps_image_max_requests"`
 }
 
 // UpdateSettings 更新系统设置

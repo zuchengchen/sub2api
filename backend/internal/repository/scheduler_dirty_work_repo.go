@@ -284,7 +284,7 @@ func (r *schedulerDirtyWorkRepository) List(ctx context.Context, limit int) ([]s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	work := make([]service.SchedulerDirtyWork, 0, limit)
 	for rows.Next() {
@@ -386,10 +386,10 @@ func schedulerDirtyFailureClass(failure error) string {
 	for _, r := range failureType {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			class.WriteRune(r)
+			_, _ = class.WriteRune(r)
 			lastUnderscore = false
 		case class.Len() > 0 && !lastUnderscore:
-			class.WriteByte('_')
+			_ = class.WriteByte('_')
 			lastUnderscore = true
 		}
 		if class.Len() >= maxDirtyWorkFailureText {

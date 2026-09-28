@@ -44,9 +44,10 @@ func cookieWSTestStatusError(stage string, status int) *openAICookieWSTestError 
 		category = "network_error"
 	}
 	label := "upstream request"
-	if stage == "handshake" {
+	switch stage {
+	case "handshake":
 		label = "handshake"
-	} else if stage == "validation" {
+	case "validation":
 		label = "validation probe"
 	}
 	return newCookieWSTestError("cookie_ws_"+stage+"_http_"+fmt.Sprint(status), category,

@@ -143,7 +143,7 @@ func TestCookieWSIntelligentRejectsUnsuccessfulTerminalAndCancellation(t *testin
 	for _, kind := range []string{"response.failed", "response.incomplete", "response.cancelled", "response.canceled", "response.done"} {
 		t.Run(kind, func(t *testing.T) {
 			event := intelligentCaptureCompletion(kind, pelicanCaptureTestHTML)
-			event["response"].(map[string]any)["status"] = "incomplete"
+			mustTestValue[map[string]any](t, event["response"])["status"] = "incomplete"
 			terminal, _ := json.Marshal(event)
 			conn := &openAIWSCaptureConn{events: [][]byte{cookieAdapterDelta("<html><svg>"), terminal}}
 			gateway, account, _, _ := newCookieForwardFixture(t, conn)

@@ -37,8 +37,6 @@ const (
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
 	// 上游把 gpt-5.6-sol 完成成 gpt-6-sol，说明这张 292 票是好的。
 	openAICodexTicketUpgradedSolModel = "gpt-6-sol"
-	// 新鲜票少于这个数量就继续打。多一张可以，少一张不行。
-	openAICodexTicketPoolTarget = 2
 	// 最新一张超过这个票龄，即使已经有两张也再补一张。
 	openAICodexTicketPoolRefillAge = 90 * time.Second
 	openAICodexTicketPoolLimit     = 4
@@ -376,11 +374,11 @@ func applyOpenAICodexTicketCookies(h http.Header, ticketCookies string) {
 	var b strings.Builder
 	for i, name := range order {
 		if i > 0 {
-			b.WriteString("; ")
+			_, _ = b.WriteString("; ")
 		}
-		b.WriteString(name)
-		b.WriteByte('=')
-		b.WriteString(merged[name])
+		_, _ = b.WriteString(name)
+		_ = b.WriteByte('=')
+		_, _ = b.WriteString(merged[name])
 	}
 	h.Set("Cookie", b.String())
 }
@@ -856,35 +854,6 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestLoop(ctx context.Context)
 	}
 }
 
-func openAICodexTicketFreshWindow(ttl time.Duration) time.Duration {
-	if ttl <= 0 {
-		return 180 * time.Second
-	}
-	return ttl
-}
-
-func (s *OpenAIGatewayService) currentSharedOpenAICodexTicket() *openAICodexTicket {
-	if s == nil {
-		return nil
-	}
-	s.openaiCodexShared.mu.Lock()
-	defer s.openaiCodexShared.mu.Unlock()
-	return newestOpenAICodexTicket(s.openaiCodexShared.tickets)
-}
-
-func newestOpenAICodexTicket(tickets []*openAICodexTicket) *openAICodexTicket {
-	var newest *openAICodexTicket
-	for _, ticket := range tickets {
-		if ticket == nil {
-			continue
-		}
-		if newest == nil || ticket.CapturedAt.After(newest.CapturedAt) {
-			newest = ticket
-		}
-	}
-	return newest
-}
-
 func (s *OpenAIGatewayService) rememberSharedOpenAICodexTicket(ticket *openAICodexTicket) {
 	if s == nil || !ticket.usable(s.openAICodexTicketConfig().TargetLength) || s.openAICodexTicketStateRevoked(ticket, nil) {
 		return
@@ -917,43 +886,6 @@ func (s *OpenAIGatewayService) rememberSharedOpenAICodexTicket(ticket *openAICod
 	if !replaced {
 		s.openaiCodexShared.tried = nil
 	}
-}
-
-func (s *OpenAIGatewayService) adoptSharedOpenAICodexTicket(accounts []Account) {
-	cfg := s.openAICodexTicketConfig()
-	for i := range accounts {
-		ticket := s.lookupOpenAICodexTicket(&accounts[i], openAICodexTicketDefaultModel)
-		if ticket.usable(cfg.TargetLength) && !s.openAICodexTicketStateRevoked(ticket, &accounts[i]) {
-			s.rememberSharedOpenAICodexTicket(ticket)
-		}
-	}
-}
-
-func (s *OpenAIGatewayService) openAICodexTicketPoolNeedsHunt(now time.Time) bool {
-	if s == nil {
-		return false
-	}
-	window := openAICodexTicketFreshWindow(time.Duration(s.openAICodexTicketConfig().TTLSeconds) * time.Second)
-	s.openaiCodexShared.mu.Lock()
-	defer s.openaiCodexShared.mu.Unlock()
-	fresh := 0
-	var newest time.Time
-	for _, ticket := range s.openaiCodexShared.tickets {
-		if ticket == nil || !ticket.usable(s.openAICodexTicketConfig().TargetLength) {
-			continue
-		}
-		if now.Sub(ticket.CapturedAt) >= window {
-			continue
-		}
-		fresh++
-		if ticket.CapturedAt.After(newest) {
-			newest = ticket.CapturedAt
-		}
-	}
-	if fresh < openAICodexTicketPoolTarget {
-		return true
-	}
-	return newest.IsZero() || now.Sub(newest) >= openAICodexTicketPoolRefillAge
 }
 
 // sharedOpenAICodexTicketForInjection 只返回这个号自己打到的 Astra 票。
@@ -1107,21 +1039,6 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			zap.String("mode", "continuous"))
 		return nil, nil
 	})
-}
-
-func (s *OpenAIGatewayService) openAICodexTicketHarvestRetryWaiting(accountID int64, model string, now time.Time) bool {
-	if s == nil || accountID <= 0 {
-		return false
-	}
-	raw, ok := s.openaiCodexTicketHarvestBackoff.Load(openAICodexTicketKey(accountID, model))
-	if !ok {
-		return false
-	}
-	state, ok := raw.(*openAICodexTicketHarvestBackoff)
-	if !ok || state == nil || state.nextProbeAt.IsZero() {
-		return false
-	}
-	return now.Before(state.nextProbeAt)
 }
 
 func (s *OpenAIGatewayService) noteOpenAICodexTicketHarvestMiss(accountID int64, model string, now time.Time) {
@@ -1379,7 +1296,7 @@ func openAICodexTicketStateValid(state string, n int) bool {
 		return false
 	}
 	for _, c := range state {
-		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '=') {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-' && c != '=' {
 			return false
 		}
 	}
