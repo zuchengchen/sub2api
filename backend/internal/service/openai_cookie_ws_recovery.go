@@ -53,8 +53,11 @@ func (s *OpenAIGatewayService) openAICookieWSRecoveryState(accountID int64, slot
 		return nil
 	}
 	key := openAICookieWSRecoveryKey{accountID, slot, operation}
-	state, _ := s.openaiCookieWSRecovery.LoadOrStore(key, &openAICookieWSRecoveryState{diagnostic: OpenAICookieWSRecoveryDiagnostic{Phase: "waiting"}})
-	return state.(*openAICookieWSRecoveryState)
+	raw, _ := s.openaiCookieWSRecovery.LoadOrStore(key, &openAICookieWSRecoveryState{diagnostic: OpenAICookieWSRecoveryDiagnostic{Phase: "waiting"}})
+	if state, ok := raw.(*openAICookieWSRecoveryState); ok {
+		return state
+	}
+	return nil
 }
 
 func (s *OpenAIGatewayService) openAICookieWSRecoverySnapshot(accountID int64, slot int, operation string) *OpenAICookieWSRecoveryDiagnostic {
@@ -65,7 +68,10 @@ func (s *OpenAIGatewayService) openAICookieWSRecoverySnapshot(accountID int64, s
 	if !ok {
 		return nil
 	}
-	state := raw.(*openAICookieWSRecoveryState)
+	state, ok := raw.(*openAICookieWSRecoveryState)
+	if !ok {
+		return nil
+	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	copy := state.diagnostic

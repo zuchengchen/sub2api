@@ -65,7 +65,7 @@ func TestCookieWSTestAdapterPreservesSafeFailureThroughFinalize(t *testing.T) {
 	for _, tc := range []struct {
 		name, code, category string
 		events               [][]byte
-		setup                func(*OpenAIGatewayService, *Account)
+		setup                func(*testing.T, *OpenAIGatewayService, *Account)
 	}{
 		{"not_true", "cookie_ws_validation_not_true", "failed", [][]byte{cookieWSCompletion("gpt-6-astra", "False")}, nil},
 		{"model_mismatch", "cookie_ws_validation_model_mismatch", "model_error", [][]byte{cookieWSCompletion("gpt-6-sol", "True")}, nil},
@@ -74,20 +74,20 @@ func TestCookieWSTestAdapterPreservesSafeFailureThroughFinalize(t *testing.T) {
 		{"probe_503", "cookie_ws_validation_http_503", "network_error", [][]byte{[]byte(`{"type":"response.failed","response":{"error":{"status":503,"type":"server_error","message":"secret-token"}}}`)}, nil},
 		{"malformed", "cookie_ws_validation_malformed", "failed", [][]byte{[]byte(cookieTestSecret)}, nil},
 		{"probe_closed", "cookie_ws_validation_closed", "network_error", nil, nil},
-		{"account_disabled", "cookie_ws_account_unavailable", "account_error", nil, func(s *OpenAIGatewayService, a *Account) {
-			s.accountRepo.(*cookieWSLifecycleRepo).accounts[0].Status = StatusDisabled
+		{"account_disabled", "cookie_ws_account_unavailable", "account_error", nil, func(t *testing.T, s *OpenAIGatewayService, a *Account) {
+			mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo).accounts[0].Status = StatusDisabled
 		}},
-		{"account_limit", "cookie_ws_account_rate_limited", "rate_limited", nil, func(s *OpenAIGatewayService, a *Account) {
+		{"account_limit", "cookie_ws_account_rate_limited", "rate_limited", nil, func(t *testing.T, s *OpenAIGatewayService, a *Account) {
 			until := time.Now().Add(time.Hour)
-			s.accountRepo.(*cookieWSLifecycleRepo).accounts[0].RateLimitResetAt = &until
+			mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo).accounts[0].RateLimitResetAt = &until
 		}},
-		{"no_cookie", "cookie_ws_cookie_unavailable", "account_error", nil, func(s *OpenAIGatewayService, a *Account) {
+		{"no_cookie", "cookie_ws_cookie_unavailable", "account_error", nil, func(t *testing.T, s *OpenAIGatewayService, a *Account) {
 			s.openaiCookieWSTickets.Delete(openAICodexTicketKey(a.ID, "gpt-6-astra"))
 		}},
-		{"handshake", "cookie_ws_handshake_http_403", "account_error", nil, func(s *OpenAIGatewayService, a *Account) {
+		{"handshake", "cookie_ws_handshake_http_403", "account_error", nil, func(t *testing.T, s *OpenAIGatewayService, a *Account) {
 			s.getOpenAIWSConnPool().setClientDialerForTest(&cookieTestErrorDialer{status: 403, err: errors.New(cookieTestSecret)})
 		}},
-		{"dial_timeout", "cookie_ws_acquire_timeout", "network_error", nil, func(s *OpenAIGatewayService, a *Account) {
+		{"dial_timeout", "cookie_ws_acquire_timeout", "network_error", nil, func(t *testing.T, s *OpenAIGatewayService, a *Account) {
 			s.getOpenAIWSConnPool().setClientDialerForTest(&cookieTestErrorDialer{err: fmt.Errorf("%s: %w", cookieTestSecret, context.DeadlineExceeded)})
 		}},
 	} {
@@ -96,7 +96,7 @@ func TestCookieWSTestAdapterPreservesSafeFailureThroughFinalize(t *testing.T) {
 			gateway, account, _, dialer := newCookieForwardFixture(t, conn)
 			gateway.getOpenAIWSConnPool().SetCookieValidator(gateway.validateOpenAICookieWSBusinessConn)
 			if tc.setup != nil {
-				tc.setup(gateway, account)
+				tc.setup(t, gateway, account)
 			}
 			svc := &AccountTestService{openaiGatewayService: gateway, httpUpstream: gateway.httpUpstream}
 			capture := &intelligentCapture{}

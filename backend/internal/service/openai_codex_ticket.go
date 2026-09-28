@@ -376,11 +376,11 @@ func applyOpenAICodexTicketCookies(h http.Header, ticketCookies string) {
 	var b strings.Builder
 	for i, name := range order {
 		if i > 0 {
-			b.WriteString("; ")
+			_, _ = b.WriteString("; ")
 		}
-		b.WriteString(name)
-		b.WriteByte('=')
-		b.WriteString(merged[name])
+		_, _ = b.WriteString(name)
+		_ = b.WriteByte('=')
+		_, _ = b.WriteString(merged[name])
 	}
 	h.Set("Cookie", b.String())
 }

@@ -51,7 +51,9 @@ func TestApplyIntelligentPayloadPromptPinsAstraLowReasoning(t *testing.T) {
 	applyIntelligentPayloadPrompt(context.Background(), untouched)
 	_, hasReasoning = untouched["reasoning"]
 	require.False(t, hasReasoning)
-	require.Equal(t, "hi", untouched["input"].([]map[string]any)[0]["content"].([]map[string]any)[0]["text"])
+	input := mustTestValue[[]map[string]any](t, untouched["input"])
+	content := mustTestValue[[]map[string]any](t, input[0]["content"])
+	require.Equal(t, "hi", content[0]["text"])
 }
 
 func TestClassifyIntelligentErrorTreatsCodexPlanGateAsModelError(t *testing.T) {

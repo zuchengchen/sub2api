@@ -59,7 +59,10 @@ func (s *OpenAIGatewayService) reserveOpenAICookieWSSlot(ctx context.Context, ac
 		}
 	}
 	raw, _ := s.openaiCookieWSSlots.LoadOrStore(account.ID, &openAICookieWSSlotReservations{changed: make(chan struct{}), last: openAICookieWSSlotCount - 1})
-	state := raw.(*openAICookieWSSlotReservations)
+	state, ok := raw.(*openAICookieWSSlotReservations)
+	if !ok {
+		return 0, nil, errors.New("cookie ws slot reservations have invalid type")
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return 0, nil, err

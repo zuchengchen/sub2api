@@ -125,7 +125,7 @@ func TestCookieWSIngressFalseProbeClosesAfterCompleted(t *testing.T) {
 			errCh <- err
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = r
 		_, first, err := ws.Read(r.Context())
@@ -140,7 +140,7 @@ func TestCookieWSIngressFalseProbeClosesAfterCompleted(t *testing.T) {
 	defer cancel()
 	client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	probe, _ := json.Marshal(openAICookieWSProbePayload(true))
 	require.NoError(t, client.Write(ctx, coderws.MessageText, probe))
 	_, response, err := client.Read(ctx)
@@ -186,7 +186,7 @@ func TestCookieWSBusinessValidatorRechecksCurrentAccountBeforeProbe(t *testing.T
 		t.Run(tc, func(t *testing.T) {
 			conn := &openAIWSCaptureConn{events: [][]byte{cookieWSCompletion("gpt-6-astra", "True")}}
 			svc, account, _, _ := newCookieForwardFixture(t, conn)
-			repo := svc.accountRepo.(*cookieWSLifecycleRepo)
+			repo := mustTestValue[*cookieWSLifecycleRepo](t, svc.accountRepo)
 			if tc == "disabled" {
 				repo.accounts[0].Status = StatusDisabled
 			} else {
@@ -228,7 +228,7 @@ func TestCookieWSBusinessValidatorUpstreamStopsFurtherProbes(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "Cookie validation failure must not pause the account")
-			repo := svc.accountRepo.(*cookieWSLifecycleRepo)
+			repo := mustTestValue[*cookieWSLifecycleRepo](t, svc.accountRepo)
 			current, getErr := repo.GetByID(context.Background(), account.ID)
 			require.NoError(t, getErr)
 			require.Equal(t, StatusActive, current.Status)
@@ -244,7 +244,7 @@ func TestCookieWSRejectedNewConnectionFallsBackToHTTPBeforeBusiness(t *testing.T
 	conn := &openAIWSCaptureConn{events: [][]byte{cookieWSCompletion("gpt-6-astra", "False")}}
 	svc, account, _, _ := newCookieForwardFixture(t, conn)
 	svc.getOpenAIWSConnPool().SetCookieValidator(svc.validateOpenAICookieWSBusinessConn)
-	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.resp = cookieWSHTTPResponse("HTTP after closed probe")
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

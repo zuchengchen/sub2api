@@ -17,7 +17,7 @@ func TestHTTPUpstreamHarvestRotatedSessionsRetireCompletedClients(t *testing.T) 
 		_, _ = io.WriteString(w, "ok")
 	}))
 	t.Cleanup(server.Close)
-	svc := NewHTTPUpstream(nil).(*httpUpstreamService)
+	svc := mustTestValue[*httpUpstreamService](t, NewHTTPUpstream(nil))
 	request := func(harvest bool, proxy string) *http.Response {
 		ctx := t.Context()
 		if harvest {
@@ -63,13 +63,15 @@ func TestHTTPUpstreamHarvestRotatedSessionsRetireCompletedClients(t *testing.T) 
 
 func TestHTTPUpstreamHarvestFailureRetiresClient(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, _, err := w.(http.Hijacker).Hijack()
+		hijacker, ok := w.(http.Hijacker)
+		require.True(t, ok)
+		conn, _, err := hijacker.Hijack()
 		if err == nil {
 			_ = conn.Close()
 		}
 	}))
 	t.Cleanup(server.Close)
-	svc := NewHTTPUpstream(nil).(*httpUpstreamService)
+	svc := mustTestValue[*httpUpstreamService](t, NewHTTPUpstream(nil))
 	req, err := http.NewRequestWithContext(
 		service.WithHTTPUpstreamProfile(t.Context(), service.HTTPUpstreamProfileOpenAIHarvest),
 		http.MethodGet, server.URL, nil,

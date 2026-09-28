@@ -29,7 +29,7 @@ func paddedOpenAIDeltaSSE(t *testing.T, html string, minBytes int) string {
 		require.NoError(t, err)
 		fmt.Fprintf(&b, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":%s,\"obfuscation\":%q,\"sequence_number\":%d}\n\n", delta, pad, i+1)
 	}
-	b.WriteString("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+	_, _ = b.WriteString("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
 	require.Greater(t, b.Len(), minBytes)
 	return b.String()
 }
@@ -100,9 +100,9 @@ func TestFinalizeIntelligentTestSucceedsWhenRawDebugTruncatedButHTMLComplete(t *
 	t.Parallel()
 	record := &IntelligentTestRecord{ConfigSnapshot: &IntelligentTestConfig{}}
 	capture := &intelligentCapture{truncated: true, complete: true, textTruncated: false}
-	capture.text.WriteString(pelicanCaptureTestHTML)
+	_, _ = capture.text.WriteString(pelicanCaptureTestHTML)
 	writer := &intelligentSSEWriter{header: http.Header{}, cancel: func() {}, sawComplete: true}
-	writer.text.WriteString(pelicanCaptureTestHTML)
+	_, _ = writer.text.WriteString(pelicanCaptureTestHTML)
 	err := finalizeIntelligentTestRun(record, capture, writer, pelicanCaptureTestHTML, "", "", nil)
 	require.NoError(t, err)
 	require.Empty(t, record.Status)
@@ -114,7 +114,7 @@ func TestFinalizeIntelligentTestStillFailsWithoutCompletedEvent(t *testing.T) {
 	t.Parallel()
 	record := &IntelligentTestRecord{ConfigSnapshot: &IntelligentTestConfig{}}
 	capture := &intelligentCapture{complete: false}
-	capture.text.WriteString(pelicanCaptureTestHTML)
+	_, _ = capture.text.WriteString(pelicanCaptureTestHTML)
 	writer := &intelligentSSEWriter{header: http.Header{}, cancel: func() {}}
 	err := finalizeIntelligentTestRun(record, capture, writer, pelicanCaptureTestHTML, "", "", nil)
 	require.Error(t, err)
@@ -189,7 +189,7 @@ func TestIntelligentCaptureEmptyFinalOutputClearsStaleDelta(t *testing.T) {
 	writeIntelligentCaptureEvent(t, capture, map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "output": []any{}}})
 	require.Empty(t, capture.outputText())
 	writer := &intelligentSSEWriter{sawComplete: true}
-	writer.text.WriteString(pelicanCaptureTestHTML)
+	_, _ = writer.text.WriteString(pelicanCaptureTestHTML)
 	record := &IntelligentTestRecord{ConfigSnapshot: &IntelligentTestConfig{}}
 	require.Error(t, finalizeIntelligentTestRun(record, capture, writer, pelicanCaptureTestHTML, "", "", nil))
 	require.Empty(t, record.Result)
@@ -211,7 +211,7 @@ func TestIntelligentCaptureFailureCannotInheritWriterSuccess(t *testing.T) {
 		t.Run("completed_status_"+status, func(t *testing.T) {
 			capture := &intelligentCapture{}
 			event := intelligentCaptureCompletion("response.completed", pelicanCaptureTestHTML)
-			event["response"].(map[string]any)["status"] = status
+			mustTestValue[map[string]any](t, event["response"])["status"] = status
 			writeIntelligentCaptureEvent(t, capture, event)
 			require.False(t, capture.upstreamComplete())
 		})
@@ -232,7 +232,7 @@ func TestIntelligentCaptureFailedTerminalOnlyRetainsDiagnosticOutput(t *testing.
 	for _, kind := range []string{"response.failed", "response.incomplete", "response.cancelled", "response.canceled"} {
 		capture := &intelligentCapture{}
 		event := intelligentCaptureCompletion(kind, "<html><svg>partial")
-		event["response"].(map[string]any)["status"] = "incomplete"
+		mustTestValue[map[string]any](t, event["response"])["status"] = "incomplete"
 		writeIntelligentCaptureEvent(t, capture, event)
 		record := &IntelligentTestRecord{ConfigSnapshot: &IntelligentTestConfig{}}
 		require.Error(t, finalizeIntelligentTestRun(record, capture, nil, "", "", "", nil))

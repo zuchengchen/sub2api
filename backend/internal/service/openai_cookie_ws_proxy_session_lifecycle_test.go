@@ -121,7 +121,7 @@ func TestOpenAICookieWSProxySessionChangesOnlyOnActualHarvestRetry(t *testing.T)
 					require.Len(t, upstream.snapshot(), attempt+1, "backoff must not consume another proxy session")
 					raw, ok := s.openaiCookieWSRetry.Load(key)
 					require.True(t, ok)
-					retry := *raw.(*openAICookieWSRetryState)
+					retry := *mustTestValue[*openAICookieWSRetryState](t, raw)
 					retry.nextAttemptAt = time.Now().Add(-time.Second)
 					s.openaiCookieWSRetry.Store(key, &retry)
 				}

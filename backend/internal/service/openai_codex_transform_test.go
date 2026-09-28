@@ -1877,9 +1877,9 @@ func TestApplyCodexOAuthTransform_StripsPromptCacheOptionsAndBreakpoints(t *test
 	require.True(t, result.Modified)
 	require.NotContains(t, reqBody, "prompt_cache_options")
 	require.Equal(t, "keep-key", reqBody["prompt_cache_key"])
-	input := reqBody["input"].([]any)
-	developer := input[0].(map[string]any)
-	part := developer["content"].([]any)[0].(map[string]any)
+	input := mustTestValue[[]any](t, reqBody["input"])
+	developer := mustTestValue[map[string]any](t, input[0])
+	part := mustTestValue[map[string]any](t, mustTestValue[[]any](t, developer["content"])[0])
 	require.Equal(t, "stable", part["text"])
 	require.NotContains(t, part, "prompt_cache_breakpoint")
 }
