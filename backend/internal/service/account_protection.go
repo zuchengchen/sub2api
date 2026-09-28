@@ -13,23 +13,23 @@ import (
 // fingerprint, TLS template, and concurrency stable across ordinary saves.
 
 const (
-	AntiDegradeMarkerExtraKey   = "anti_degrade"
-	AntiDegradationExtraKey     = "anti_degradation"
-	ProtectionScopeExtraKey     = "protection_scope"
-	AntiDegradeConcurrencyCap   = 16
-	tlsFingerprintBuiltinKey    = "tls_fingerprint_builtin"
-	tlsFingerprintEnabledKey    = "enable_tls_fingerprint"
-	tlsFingerprintProfileIDKey  = "tls_fingerprint_profile_id"
-	accountProxyModeExtraKey    = "proxy_mode"
-	mode1PolicyVersion          = 3
+	AntiDegradeMarkerExtraKey  = "anti_degrade"
+	AntiDegradationExtraKey    = "anti_degradation"
+	ProtectionScopeExtraKey    = "protection_scope"
+	AntiDegradeConcurrencyCap  = 16
+	tlsFingerprintBuiltinKey   = "tls_fingerprint_builtin"
+	tlsFingerprintEnabledKey   = "enable_tls_fingerprint"
+	tlsFingerprintProfileIDKey = "tls_fingerprint_profile_id"
+	accountProxyModeExtraKey   = "proxy_mode"
+	mode1PolicyVersion         = 3
 )
 
 type AntiDegradeMode string
 
 const (
-	AntiDegradeModeLegacy AntiDegradeMode = "legacy"
-	AntiDegradeMode1      AntiDegradeMode = "mode1"
-	DefaultAntiDegradeMode                = AntiDegradeModeLegacy
+	AntiDegradeModeLegacy  AntiDegradeMode = "legacy"
+	AntiDegradeMode1       AntiDegradeMode = "mode1"
+	DefaultAntiDegradeMode                 = AntiDegradeModeLegacy
 )
 
 var (

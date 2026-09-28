@@ -14,14 +14,14 @@ import (
 //
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
 var monitorProviders = map[string]struct{}{
-	MonitorProviderOpenAI:      {},
-	MonitorProviderAnthropic:   {},
-	MonitorProviderGrok:        {},
-	MonitorProviderKimi:        {},
-	MonitorProviderZhipu:       {},
-	MonitorProviderDeepseek:    {},
-	MonitorProviderMiniMax:     {},
-	MonitorProviderOpenCodeGo:  {},
+	MonitorProviderOpenAI:     {},
+	MonitorProviderAnthropic:  {},
+	MonitorProviderGrok:       {},
+	MonitorProviderKimi:       {},
+	MonitorProviderZhipu:      {},
+	MonitorProviderDeepseek:   {},
+	MonitorProviderMiniMax:    {},
+	MonitorProviderOpenCodeGo: {},
 }
 
 // probeCapableProviders 支持探活（probe / quota_probe）的 provider。

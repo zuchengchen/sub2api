@@ -27,10 +27,10 @@ type openAINearLimitRuntimeState struct {
 }
 
 type openAINearLimitCandidate struct {
-	account      *Account
-	usedPercent  float64
-	resetAt      time.Time
-	window       string
+	account     *Account
+	usedPercent float64
+	resetAt     time.Time
+	window      string
 }
 
 type skipOpenAINearLimitKey struct{}
@@ -381,5 +381,3 @@ func logOpenAINearLimitPrioritized(cand openAINearLimitCandidate) {
 		"result", "slot_acquired",
 	)
 }
-
-

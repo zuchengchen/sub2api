@@ -12,12 +12,12 @@ import (
 )
 
 const (
-	claudeOAuthSessionCleanupInterval = 5 * time.Minute
-	claudeOAuthSessionCleanupTimeout  = 5 * time.Second
-	openAIOAuthCleanupInterval        = 5 * time.Minute
-	openAIOAuthCleanupTimeout         = 5 * time.Second
-	grokOAuthSessionCleanupInterval   = 5 * time.Minute
-	grokOAuthSessionCleanupTimeout    = 5 * time.Second
+	claudeOAuthSessionCleanupInterval   = 5 * time.Minute
+	claudeOAuthSessionCleanupTimeout    = 5 * time.Second
+	openAIOAuthCleanupInterval          = 5 * time.Minute
+	openAIOAuthCleanupTimeout           = 5 * time.Second
+	grokOAuthSessionCleanupInterval     = 5 * time.Minute
+	grokOAuthSessionCleanupTimeout      = 5 * time.Second
 	concurrencySlotCleanupWorkerTimeout = 6 * time.Second
 )
 
@@ -191,8 +191,8 @@ func NewTokenRefreshWorker(svc *TokenRefreshService) (*workerruntime.PeriodicJob
 			Description:      "Refreshes eligible OAuth tokens before expiry",
 			Tags:             []string{"oauth", "token-refresh"},
 		},
-		Interval: svc.Interval(),
-		Timeout:  100 * 365 * 24 * time.Hour,
+		Interval:       svc.Interval(),
+		Timeout:        100 * 365 * 24 * time.Hour,
 		RunImmediately: true,
 		Run:            svc.Run,
 		OnStart: func() {
