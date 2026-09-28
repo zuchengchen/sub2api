@@ -274,7 +274,7 @@ type ResponsesText struct {
 // The Type field determines which other fields are populated.
 type ResponsesInputItem struct {
 	// Common
-	Type                  string                 `json:"type,omitempty"` // "" for role-based messages
+	Type                  string                 `json:"type,omitempty"` // "message" for role-based messages
 	PromptCacheBreakpoint *PromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 
 	// Role-based messages (developer/system/user/assistant)

@@ -1207,6 +1207,11 @@ func openAICodexTicketHarvestQuotaExhaustedWindow(account *Account, now time.Tim
 	if account == nil {
 		return ""
 	}
+	// 调度在快照陈旧但重置时间未到时仍按满额暂停；打票不跟随，陈旧快照照常探测，
+	// 探测拿到的 429 会刷新 usage 快照（见 persistOpenAICodexTicketHarvestQuota）。
+	if openAICodexSnapshotStaleForPause(account.Extra, now) {
+		return ""
+	}
 	for _, window := range []string{"5h", "7d"} {
 		util, ok := resolveOpenAIQuotaUtilization(account.Extra, window, now)
 		if ok && util >= 1 {
