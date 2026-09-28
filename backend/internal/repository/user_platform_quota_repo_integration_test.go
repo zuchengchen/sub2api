@@ -278,7 +278,7 @@ func TestUserPlatformQuotaRepository_ResetExpiredWindow(t *testing.T) {
 	// 先通过 ent 直接建一条记录
 	_, err := client.UserPlatformQuota.Create().
 		SetUserID(userID).
-		SetPlatform("gemini").
+		SetPlatform("grok").
 		SetDailyUsageUsd(10.0).
 		SetWeeklyUsageUsd(20.0).
 		SetMonthlyUsageUsd(50.0).
@@ -289,9 +289,9 @@ func TestUserPlatformQuotaRepository_ResetExpiredWindow(t *testing.T) {
 	require.NoError(t, err)
 
 	newStart := time.Date(2026, 5, 22, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, repo.ResetExpiredWindow(txCtx, userID, "gemini", "daily", newStart))
+	require.NoError(t, repo.ResetExpiredWindow(txCtx, userID, "grok", "daily", newStart))
 
-	rec, err := repo.GetByUserPlatform(txCtx, userID, "gemini")
+	rec, err := repo.GetByUserPlatform(txCtx, userID, "grok")
 	require.NoError(t, err)
 	require.InDelta(t, 0.0, rec.DailyUsageUSD, 1e-9, "daily usage reset to 0")
 	require.NotNil(t, rec.DailyWindowStart)
@@ -323,7 +323,7 @@ func TestUserPlatformQuotaRepository_BulkInsertInitial_MultiRow(t *testing.T) {
 	records := []UserPlatformQuotaRecord{
 		{UserID: userID, Platform: "anthropic", DailyLimitUSD: &d1},
 		{UserID: userID, Platform: "openai", DailyLimitUSD: &d2},
-		{UserID: userID, Platform: "gemini", DailyLimitUSD: &d3},
+		{UserID: userID, Platform: "grok", DailyLimitUSD: &d3},
 	}
 	require.NoError(t, repo.BulkInsertInitial(txCtx, records), "multi-row insert failed")
 
@@ -344,9 +344,9 @@ func TestUserPlatformQuotaRepository_BulkInsertInitial_MultiRow(t *testing.T) {
 	require.NotNil(t, byPlatform["openai"].DailyLimitUSD, "openai daily limit should be set")
 	require.InDelta(t, 10.0, *byPlatform["openai"].DailyLimitUSD, 1e-9, "openai daily_limit = want 10.0")
 
-	require.NotNil(t, byPlatform["gemini"], "gemini record should exist")
-	require.NotNil(t, byPlatform["gemini"].DailyLimitUSD, "gemini daily limit should be set")
-	require.InDelta(t, 15.0, *byPlatform["gemini"].DailyLimitUSD, 1e-9, "gemini daily_limit = want 15.0")
+	require.NotNil(t, byPlatform["grok"], "grok record should exist")
+	require.NotNil(t, byPlatform["grok"].DailyLimitUSD, "grok daily limit should be set")
+	require.InDelta(t, 15.0, *byPlatform["grok"].DailyLimitUSD, 1e-9, "grok daily_limit = want 15.0")
 }
 
 func TestUserPlatformQuotaRepository_ResetExpiredWindow_NotFoundReturnsSentinel(t *testing.T) {

@@ -166,7 +166,8 @@ func TestOpenAIHTTPAuthMessagesUseExistingStatusPolicies(t *testing.T) {
 		require.False(t, isOpenAIHTTPUpstreamAccessStateError(http.StatusUnauthorized, "", body))
 		require.True(t, svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusUnauthorized, nil, body))
 		require.Zero(t, repo.setErrorCalls)
-		require.Equal(t, 1, repo.tempCalls)
+		// ChatGPT Codex 401 只换号不冻结账号（见 3b035cf4a）。
+		require.Zero(t, repo.tempCalls)
 	})
 
 	t.Run("403 uses counter cooldown", func(t *testing.T) {

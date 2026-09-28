@@ -29,7 +29,8 @@ func TestOpenAIGatewayHandlerResponses_GrokResponsesLiteImageToolDeclarationBypa
 	require.NotContains(t, rec.Body.String(), service.ImageGenerationPermissionMessage())
 }
 
-func TestOpenAIGatewayHandlerResponses_ImagePermissionHardSignalsStillRejected(t *testing.T) {
+// 分组关了生图时，只声明的生图工具会被剥掉后转发（见 3b035cf4a），不触发 403。
+func TestOpenAIGatewayHandlerResponses_DisabledGroupStripsDeclaredImageTools(t *testing.T) {
 	tests := []struct {
 		name     string
 		platform string
@@ -41,14 +42,38 @@ func TestOpenAIGatewayHandlerResponses_ImagePermissionHardSignalsStillRejected(t
 			body:     `{"model":"grok-4.5","tools":[{"type":"image_generation"}],"input":"draw"}`,
 		},
 		{
+			name:     "OpenAI native image_generation tool",
+			platform: service.PlatformOpenAI,
+			body:     `{"model":"gpt-5.5","tools":[{"type":"image_generation","model":"gpt-image-2"}],"input":"draw a cat"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := runOpenAIResponsesImagePermissionGateTest(t, tt.platform, tt.body)
+
+			require.NotEqual(t, http.StatusForbidden, rec.Code)
+			require.NotContains(t, rec.Body.String(), service.ImageGenerationPermissionMessage())
+		})
+	}
+}
+
+// 显式点名生图（tool_choice）或请求生图模型时仍返回 403，不静默降级成纯文本。
+func TestOpenAIGatewayHandlerResponses_ImagePermissionHardSignalsStillRejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform string
+		body     string
+	}{
+		{
 			name:     "Grok explicit image_gen tool choice",
 			platform: service.PlatformGrok,
 			body:     `{"model":"grok-4.5","tools":[{"type":"namespace","name":"image_gen"}],"tool_choice":{"type":"namespace","name":"image_gen"},"input":"draw"}`,
 		},
 		{
-			name:     "OpenAI native image_generation tool",
+			name:     "OpenAI explicit image_generation tool choice",
 			platform: service.PlatformOpenAI,
-			body:     `{"model":"gpt-5.5","tools":[{"type":"image_generation","model":"gpt-image-2"}],"input":"draw a cat"}`,
+			body:     `{"model":"gpt-5.5","tools":[{"type":"image_generation","model":"gpt-image-2"}],"tool_choice":{"type":"image_generation"},"input":"draw a cat"}`,
 		},
 		{
 			name:     "OpenAI image model",

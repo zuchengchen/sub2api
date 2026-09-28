@@ -2151,7 +2151,8 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 			input, output, write, read float64
 		}{
 			{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, 0.2e-6},
-			{"gpt-6-luna", 0.1e-6, 0.5e-6, 0.125e-6, 0.01e-6},
+			// gpt-6-luna 与 gpt-5.6-luna 同一张价卡（官价 2 倍），不按 GPT-6 Luna 更低的官价计费。
+			{"gpt-6-luna", 0.4e-6, 2.4e-6, 0.5e-6, 0.04e-6},
 		} {
 			t.Run(source+"/"+tc.model, func(t *testing.T) {
 				for _, n := range []int{271999, 272000, 272001} {
@@ -2206,9 +2207,10 @@ func TestNewModelPricingChannelOverridesAndFamilyIsolation(t *testing.T) {
 	prices, err := svc.GetModelPricing("claude-opus-5")
 	require.NoError(t, err)
 	require.Equal(t, 5e-6, prices.InputPricePerToken)
+	// gpt-6 归一到 gpt-6-astra，按 API 官价 1.5 倍计费。
 	prices, err = svc.GetModelPricing("gpt-6")
 	require.NoError(t, err)
-	require.Equal(t, 10e-6, prices.InputPricePerToken)
+	require.InDelta(t, 15e-6, prices.InputPricePerToken, 1e-12)
 	require.Equal(t, "gpt-6-sol", normalizeKnownOpenAICodexModel("openai/gpt-6-sol-max"))
 	require.Equal(t, "gpt-6-luna", normalizeKnownOpenAICodexModel("gpt-6-luna-openai-compact"))
 }

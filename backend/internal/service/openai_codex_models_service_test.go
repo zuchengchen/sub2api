@@ -3277,7 +3277,9 @@ func newCodexModels401TestService(repo AccountRepository) *OpenAIGatewayService 
 	return s
 }
 
-func TestFetchCodexModelsManifestOAuth401MarksAccountUnschedulable(t *testing.T) {
+// ChatGPT Codex 401 只让本次请求换号，不把整个 OAuth 号打成临时不可调度（见 3b035cf4a）：
+// 同一凭据上的 BPS 等其它协议仍要能继续调度。
+func TestFetchCodexModelsManifestOAuth401FailsOverWithoutFreezingAccount(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"detail":{"message":"invalid token"}}`))
@@ -3296,9 +3298,9 @@ func TestFetchCodexModelsManifestOAuth401MarksAccountUnschedulable(t *testing.T)
 	_, err := s.FetchCodexModelsManifest(context.Background(), account, "0.137.0", "")
 	require.Error(t, err)
 	require.True(t, IsRetryableCodexModelsManifestError(err), "manifest 401 should allow account failover")
-	require.Equal(t, 1, repo.setTempUnschedCalls, "OAuth 401 should temp-unschedule the account")
-	require.Equal(t, 0, repo.setErrorCalls)
-	require.True(t, s.isOpenAIAccountRuntimeBlocked(account), "account should be runtime-blocked after manifest 401")
+	require.Zero(t, repo.setTempUnschedCalls, "Codex 401 must not freeze the OAuth account")
+	require.Zero(t, repo.setErrorCalls)
+	require.False(t, s.isOpenAIAccountRuntimeBlocked(account), "account stays schedulable for other protocols")
 }
 
 func TestFetchCodexModelsManifestOAuth401TokenRevokedDisablesAccount(t *testing.T) {

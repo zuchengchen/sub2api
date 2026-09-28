@@ -114,12 +114,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, err
 	}
 	startTime := time.Now()
-	body, stripErr := StripOpenAIImageGenerationToolsIfDisabled(apiKeyGroup(getAPIKeyFromContext(c)), account, body)
+	body, stripErr := StripOpenAIImageGenerationToolsForGroup(apiKeyGroup(getAPIKeyFromContext(c)), body)
 	if stripErr != nil {
 		return nil, stripErr
 	}
 	// 固定渠道映射后的请求级 canonical body；账号 normalize/strip 不得改写跨 failover hint。
 	canonicalImageIntentBody := body
+	// 账号策略剥离只影响本次 attempt，之后按剥离后的 body 重算本次的生图意图。
+	body, accountStrippedImageTools, stripErr := stripOpenAIImageGenerationToolsForAccount(account, body)
+	if stripErr != nil {
+		return nil, stripErr
+	}
 
 	restrictionResult := s.detectCodexClientRestriction(c, account, body)
 	apiKeyID := getAPIKeyIDFromContext(c)
@@ -397,7 +402,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("openai ws v1 is temporarily unsupported; use ws v2")
 	}
 	if passthroughEnabled {
-		attemptImageIntentInvalidated := false
+		attemptImageIntentInvalidated := accountStrippedImageTools
 		if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
 			strippedBody, changed, stripErr := stripOpenAIImageGenerationToolsFromRawPayload(body)
 			if stripErr != nil {
@@ -511,6 +516,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Stripped /responses image_generation tool for Codex client by account policy")
 		}
 		imageIntent = IsImageGenerationIntentMap(openAIResponsesEndpoint, reqModel, decoded)
+	} else if accountStrippedImageTools {
+		imageIntent = IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body)
 	} else {
 		imageIntent = canonicalImageIntent
 	}
