@@ -1555,6 +1555,11 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	if isOpenAIContextWindowError(message, payload) {
 		return false
 	}
+	// Encrypted items only decrypt on the account that minted them; every other
+	// account fails the same way (openai_encrypted_content_error.go).
+	if isOpenAIEncryptedContentError(message, payload) {
+		return false
+	}
 	if isOpenAIUpstreamAccessStateError(message, payload) {
 		return true
 	}
@@ -1605,6 +1610,9 @@ func openAIStreamErrorEventShouldFailover(payload []byte, message string) bool {
 		return false
 	}
 	if isOpenAIContextWindowError(message, payload) {
+		return false
+	}
+	if isOpenAIEncryptedContentError(message, payload) {
 		return false
 	}
 	if isOpenAIUpstreamAccessStateError(message, payload) {

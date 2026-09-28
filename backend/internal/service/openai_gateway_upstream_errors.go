@@ -263,6 +263,10 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(account *Acc
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
 	}
+	// Request-scoped: another account cannot decrypt this request's items either.
+	if isOpenAIEncryptedContentError(upstreamMsg, upstreamBody) {
+		return false
+	}
 	if isOpenAIHTTPUpstreamAccessStateError(statusCode, upstreamMsg, upstreamBody) {
 		return true
 	}
