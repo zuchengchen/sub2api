@@ -457,7 +457,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		cancelUpstream()
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 		if clientStream {
-			upstreamCtx, cancelUpstream = context.WithCancel(upstreamCtx)
+			var cancel context.CancelFunc
+			upstreamCtx, cancel = context.WithCancel(upstreamCtx)
+			// 交给外层 defer 与下一轮重试负责调用。
+			cancelUpstream = cancel
 		}
 		upstreamReq, buildErr := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
 		releaseUpstreamCtx()
