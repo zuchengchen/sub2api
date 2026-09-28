@@ -127,8 +127,11 @@ func TestGroupUsageRollupTriggerSerializesInsertTransactionAcrossMidnight(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// 生产中所有连接共用配置时区（DSN 的 TimeZone），水位发布、写入与断言必须按同一时区取日期。
+	const tz = "America/Los_Angeles"
 	schema := createGroupUsageRollupTriggerTestSchema(t, ctx, false)
 	seedTx := beginGroupUsageRollupTriggerTestTx(t, ctx, schema)
+	require.NoError(t, setGroupUsageRollupTriggerTimeZone(ctx, seedTx, tz))
 	_, err := seedTx.ExecContext(ctx, `
 		INSERT INTO groups (id) VALUES (10);
 		INSERT INTO users (id) VALUES (1);
@@ -141,6 +144,7 @@ func TestGroupUsageRollupTriggerSerializesInsertTransactionAcrossMidnight(t *tes
 
 	syncTx := beginGroupUsageRollupTriggerTestTx(t, ctx, schema)
 	defer func() { _ = syncTx.Rollback() }()
+	require.NoError(t, setGroupUsageRollupTriggerTimeZone(ctx, syncTx, tz))
 	var stateID int16
 	require.NoError(t, syncTx.QueryRowContext(ctx, `
 		SELECT id
@@ -151,7 +155,7 @@ func TestGroupUsageRollupTriggerSerializesInsertTransactionAcrossMidnight(t *tes
 
 	insertTx := beginGroupUsageRollupTriggerTestTx(t, ctx, schema)
 	defer func() { _ = insertTx.Rollback() }()
-	require.NoError(t, setGroupUsageRollupTriggerTimeZone(ctx, insertTx, "Asia/Shanghai"))
+	require.NoError(t, setGroupUsageRollupTriggerTimeZone(ctx, insertTx, tz))
 	var insertBackendPID int
 	require.NoError(t, insertTx.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&insertBackendPID))
 
@@ -190,8 +194,8 @@ func TestGroupUsageRollupTriggerSerializesInsertTransactionAcrossMidnight(t *tes
 
 	var currentDate string
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		SELECT CURRENT_TIMESTAMP::date::text
-	`).Scan(&currentDate))
+		SELECT (CURRENT_TIMESTAMP AT TIME ZONE $1::text)::date::text
+	`, tz).Scan(&currentDate))
 	var closedBefore string
 	err = integrationDB.QueryRowContext(ctx, fmt.Sprintf(
 		"SELECT closed_before::text FROM %s.usage_group_rollup_state WHERE id = 1",
