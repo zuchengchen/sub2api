@@ -38,19 +38,27 @@ func GroupAllowsImageGeneration(group *Group) bool {
 	return group == nil || group.AllowImageGeneration
 }
 
-func shouldStripOpenAIImageGenerationTools(group *Group, account *Account) bool {
-	if group != nil && !group.AllowImageGeneration {
-		return true
-	}
-	return account != nil && account.CodexImageGenerationExplicitToolPolicy() == codexImageGenerationExplicitToolPolicyStrip
-}
-
 // StripOpenAIImageGenerationToolsIfDisabled removes native image_generation tools
 // when the group or account has image generation turned off. Codex CLI advertises
 // that tool on ordinary chats; stripping it keeps those requests on BPS instead
 // of falling back to Codex, and avoids a group-level 403.
 func StripOpenAIImageGenerationToolsIfDisabled(group *Group, account *Account, body []byte) ([]byte, error) {
-	if !shouldStripOpenAIImageGenerationTools(group, account) {
+	body, err := StripOpenAIImageGenerationToolsForGroup(group, body)
+	if err != nil {
+		return body, err
+	}
+	stripped, _, err := stripOpenAIImageGenerationToolsForAccount(account, body)
+	return stripped, err
+}
+
+// StripOpenAIImageGenerationToolsForGroup applies the group policy only. A
+// tool_choice that explicitly selects image generation is left intact so the
+// image permission gate rejects it instead of silently answering with text.
+func StripOpenAIImageGenerationToolsForGroup(group *Group, body []byte) ([]byte, error) {
+	if group == nil || group.AllowImageGeneration {
+		return body, nil
+	}
+	if openAIJSONToolChoiceSelectsExplicitImageGeneration(gjson.GetBytes(body, "tool_choice")) {
 		return body, nil
 	}
 	stripped, _, err := stripOpenAIImageGenerationToolsFromRawPayload(body)
@@ -58,6 +66,19 @@ func StripOpenAIImageGenerationToolsIfDisabled(group *Group, account *Account, b
 		return body, err
 	}
 	return stripped, nil
+}
+
+// stripOpenAIImageGenerationToolsForAccount applies the account strip policy.
+// It is attempt-local and must not feed the request-level image intent hint.
+func stripOpenAIImageGenerationToolsForAccount(account *Account, body []byte) ([]byte, bool, error) {
+	if account == nil || account.CodexImageGenerationExplicitToolPolicy() != codexImageGenerationExplicitToolPolicyStrip {
+		return body, false, nil
+	}
+	stripped, changed, err := stripOpenAIImageGenerationToolsFromRawPayload(body)
+	if err != nil {
+		return body, false, err
+	}
+	return stripped, changed, nil
 }
 
 // IsImageGenerationIntent classifies requests that can produce generated images.

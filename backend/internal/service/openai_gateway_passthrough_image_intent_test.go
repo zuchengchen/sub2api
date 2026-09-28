@@ -10,20 +10,24 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func TestOpenAIGatewayService_APIKeyPassthrough_ImageIntentPreservesGateAndBilling(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-5.4","stream":false,"tools":[{"type":"image_generation","model":"gpt-image-2","size":"2048x1152"}],"input":"draw"}`)
 
-	t.Run("disabled group rejects before upstream", func(t *testing.T) {
+	t.Run("disabled group rejects explicit image choice before upstream", func(t *testing.T) {
 		upstream := &httpUpstreamRecorder{}
 		svc := newOpenAIImageGenerationControlTestService(upstream)
 		c, recorder := newOpenAIImageGenerationControlTestContext(false, "curl/8.0")
 		account := newOpenAIImageGenerationControlTestAccount()
 		account.Extra = map[string]any{"openai_passthrough": true}
+		// 只声明的生图工具会被剥掉后转发；显式 tool_choice 才在上游之前被拒。
+		explicit, err := sjson.SetBytes(body, "tool_choice", map[string]any{"type": "image_generation"})
+		require.NoError(t, err)
 
-		result, err := svc.Forward(context.Background(), c, account, body)
+		result, err := svc.Forward(context.Background(), c, account, explicit)
 
 		require.Error(t, err)
 		require.Nil(t, result)
