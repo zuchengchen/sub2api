@@ -353,6 +353,9 @@ gateway:
     # Keep the account WS pool limit at least 4 (3 business sockets plus one refresh validation socket).
     # Cookie WS requires HTTP and direct WS Tibo probes to return True, has no
     # turn-state length gate, and sends no active periodic Ping.
+    # Cookie WS accounts first ask Tibo once over their own HTTP path (astra/low,
+    # cached 10m). True keeps requests on HTTP; otherwise try Excel/BPS (if the
+    # account enables it), then Cookie WS, then HTTP.
     mode: turn_state
     # Restrict cookie_ws to these upstream account IDs; [] applies to all eligible accounts.
     cookie_ws_account_ids: []

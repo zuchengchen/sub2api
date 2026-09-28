@@ -153,6 +153,7 @@ func cookieWSTestService(t *testing.T, upstream HTTPUpstream, answers ...string)
 		Enabled: true, Mode: openAICookieWSMode, HarvestProxyURL: "socks5h://dynamic.example:1080", HarvestAttemptTimeoutSeconds: 1,
 	}, upstream)
 	s.accountRepo = &cookieWSLifecycleRepo{accounts: []Account{*ticketTestAccount(41), *ticketTestAccount(42)}}
+	s.tiboRouteDisabled = true // Cookie WS lifecycle tests; Tibo routing is tested separately.
 	conn := &cookieWSProbeConn{}
 	for _, answer := range answers {
 		conn.answers = append(conn.answers, cookieWSCompletion(openAICodexTicketDefaultModel, answer))
@@ -182,7 +183,7 @@ func TestOpenAICookieWSLifecycleClockBoundaries(t *testing.T) {
 	require.False(t, ticket.ready(captured.Add(-time.Second)), "future capture rejected")
 }
 
-func TestOpenAICookieWSProbeRequiresExactSuccessfulTrue(t *testing.T) {
+func TestOpenAICookieWSProbeRequiresSuccessfulTrue(t *testing.T) {
 	tests := []struct {
 		name, body string
 		passed     bool
@@ -190,7 +191,8 @@ func TestOpenAICookieWSProbeRequiresExactSuccessfulTrue(t *testing.T) {
 		{"true", "data: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "True")) + "\n\n", true},
 		{"false", "data: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "False")) + "\n\n", false},
 		{"wrong model", "data: " + string(cookieWSCompletion("gpt-5.6-luna", "True")) + "\n\n", false},
-		{"explanation", "data: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "True because")) + "\n\n", false},
+		{"explanation", "data: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "True because")) + "\n\n", true},
+		{"ambiguous", "data: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "True or False")) + "\n\n", false},
 		{"truncated", `data: {"type":"response.output_text.delta","delta":"True"}` + "\n\n", false},
 		{"failed first", `data: {"type":"response.failed"}` + "\n\ndata: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "True")) + "\n\n", false},
 		{"duplicate completed", "data: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "True")) + "\n\ndata: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "True")) + "\n\n", false},

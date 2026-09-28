@@ -150,8 +150,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		body = managedBody
 	}
 
+	// Tibo routing: HTTP first while its probe answers True; otherwise
+	// BPS -> Tibo-verified Cookie WS -> HTTP (openai_tibo_route.go).
+	tiboRoute := s.openAITiboRouteApplies(account)
+	tiboHTTPOK := tiboRoute && s.openAITiboHTTPHealthy(ctx, account)
 	bpsHTTPFallback := false
-	if account.IsExcelBPSEnabledForModel(gjson.GetBytes(body, "model").String()) {
+	if tiboHTTPOK && account.IsExcelBPSEnabledForModel(gjson.GetBytes(body, "model").String()) {
+		c.Header("X-Codex2API-Upstream", "codex")
+		c.Header("X-Codex2API-Basispoints-Bypass", openAITiboHTTPOKReason)
+	} else if account.IsExcelBPSEnabledForModel(gjson.GetBytes(body, "model").String()) {
 		reason := basispoints.NativeFallbackReason(body)
 		if reason == "" {
 			result, bpsErr := s.forwardExcelBPS(ctx, c, account, body, startTime)
@@ -222,7 +229,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// Cookie mode is a separately validated HTTP/WS -> WS route. Its explicit
 	// account/model opt-in also overrides legacy HTTP passthrough settings.
 	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), compactPath, wsDecision)
-	if bpsHTTPFallback {
+	if tiboHTTPOK && cookieWS {
+		cookieWS = false
+		wsDecision = openAIWSHTTPDecision(openAITiboHTTPOKReason)
+		if c != nil {
+			c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
+			c.Set("openai_ws_transport_reason", wsDecision.Reason)
+		}
+	} else if bpsHTTPFallback && tiboRoute && cookieWS {
+		// BPS unusable (e.g. 403): keep the Tibo-verified Cookie WS decision;
+		// its own failures still fall back to HTTP below.
+	} else if bpsHTTPFallback {
 		cookieWS = false
 		wsDecision = openAIWSHTTPDecision(excelBPSHTTPFallbackReason)
 		if c != nil {
