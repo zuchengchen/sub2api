@@ -27,10 +27,10 @@ type openAINearLimitRuntimeState struct {
 }
 
 type openAINearLimitCandidate struct {
-	account      *Account
-	usedPercent  float64
-	resetAt      time.Time
-	window       string
+	account     *Account
+	usedPercent float64
+	resetAt     time.Time
+	window      string
 }
 
 type skipOpenAINearLimitKey struct{}
@@ -112,18 +112,6 @@ func effectiveOpenAIAccountConcurrency(account *Account, cfg *config.Config) int
 	}
 	capLimit := openAINearLimitMaxConcurrency(cfg)
 	effective := account.Concurrency
-	if effective <= 0 || effective > capLimit {
-		return capLimit
-	}
-	return effective
-}
-
-func effectiveOpenAIAccountLoadFactor(account *Account, cfg *config.Config) int {
-	if account == nil {
-		return openAINearLimitMaxConcurrency(cfg)
-	}
-	capLimit := openAINearLimitMaxConcurrency(cfg)
-	effective := account.EffectiveLoadFactor()
 	if effective <= 0 || effective > capLimit {
 		return capLimit
 	}
@@ -381,5 +369,3 @@ func logOpenAINearLimitPrioritized(cand openAINearLimitCandidate) {
 		"result", "slot_acquired",
 	)
 }
-
-

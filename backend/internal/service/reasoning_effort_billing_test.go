@@ -220,7 +220,6 @@ func TestReasoningEffortBillingPreservesForwardedNoneAndMinimal(t *testing.T) {
 				require.NotNil(t, got)
 				require.Equal(t, effort, *got)
 				require.Equal(t, 0.5, reasoningEffortBillingMultiplier(*got, map[string]float64{effort: 0.5}))
-				require.Equal(t, got, extractCCReasoningEffortFromBody(body, "gpt-5.4"))
 			}
 			for _, body := range []map[string]any{
 				{"reasoning": map[string]any{"effort": effort}},

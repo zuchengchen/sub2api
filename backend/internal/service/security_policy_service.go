@@ -57,9 +57,6 @@ type securityPolicyKeywordSnapshot struct {
 // securityPolicySnapshotTTL 词表快照 TTL：关键词变更最多延迟 60s 生效。
 const securityPolicySnapshotTTL = 60 * time.Second
 
-// securityPolicySnapshotErrorTTL 快照加载失败时的退避，避免 DB 故障时每请求重试。
-const securityPolicySnapshotErrorTTL = 5 * time.Second
-
 func NewSecurityPolicyService(
 	reviewer SecurityPolicyModelReviewer,
 	keywordRepo SecurityPolicyRepository,

@@ -1109,17 +1109,6 @@ func mergeModelIDs(primary, secondary []string) []string {
 	return merged
 }
 
-func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service.APIKey {
-	if apiKey == nil || group == nil {
-		return apiKey
-	}
-	cloned := *apiKey
-	groupID := group.ID
-	cloned.GroupID = &groupID
-	cloned.Group = group
-	return &cloned
-}
-
 // Usage handles getting account balance and usage statistics for CC Switch integration
 // GET /v1/usage
 //

@@ -21,7 +21,7 @@ func logRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error)
 		if req != nil {
 			reqLog = logger.FromContext(req.Context())
 		} else {
-			reqLog = logger.FromContext(nil)
+			reqLog = logger.L()
 		}
 	}
 
@@ -37,14 +37,6 @@ func logRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error)
 		zap.String("content_encoding", contentEncoding),
 		zap.Int64("content_length", contentLength),
 	)
-}
-
-func requestContentEncodingCategory(value string) string {
-	return pkghttputil.RequestContentEncodingCategory(value)
-}
-
-func requestBodyReadErrorKind(err error) string {
-	return pkghttputil.RequestBodyReadErrorKind(err)
 }
 
 type gatewayErrorWriter func(*gin.Context, int, string, string)

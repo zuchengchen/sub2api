@@ -360,7 +360,7 @@ func observeOpenAICookieWSHTTPProbe(body []byte) *openAICookieWSObservation {
 	return observation
 }
 
-func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, account *Account, token, proxy string, identity openAICookieWSIdentity) (*openAICodexTicketProbeResult, error) {
+func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, account *Account, proxy string, identity openAICookieWSIdentity) (*openAICodexTicketProbeResult, error) {
 	if account == nil {
 		return nil, cookieWSRecoveryOperationError("account", errOpenAICookieWSAccountUnavailable, 0, nil)
 	}
@@ -369,7 +369,7 @@ func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, ac
 		return nil, cookieWSRecoveryOperationError("account", err, 0, nil)
 	}
 	account = current
-	token, _, err = s.GetAccessToken(ctx, account)
+	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil || token == "" {
 		return nil, cookieWSRecoveryFailure("authentication", "cookie_ws_token_unavailable", "Cookie recovery access token is unavailable", 0, errOpenAICookieWSAccountUnavailable)
 	}
@@ -432,7 +432,7 @@ func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, ac
 
 // validateOpenAICookieWSCandidate keeps a successful probe connection in the pool;
 // its generation cannot be selected by business traffic until publication.
-func (s *OpenAIGatewayService) validateOpenAICookieWSCandidate(ctx context.Context, account *Account, token string, ticket *openAICookieWSTicket) (*openAIWSConnLease, error) {
+func (s *OpenAIGatewayService) validateOpenAICookieWSCandidate(ctx context.Context, account *Account, ticket *openAICookieWSTicket) (*openAIWSConnLease, error) {
 	if account == nil {
 		return nil, cookieWSRecoveryOperationError("account", errOpenAICookieWSAccountUnavailable, 0, nil)
 	}
@@ -441,7 +441,7 @@ func (s *OpenAIGatewayService) validateOpenAICookieWSCandidate(ctx context.Conte
 		return nil, cookieWSRecoveryOperationError("account", err, 0, nil)
 	}
 	account = current
-	token, _, err = s.GetAccessToken(ctx, account)
+	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil || token == "" {
 		return nil, cookieWSRecoveryFailure("authentication", "cookie_ws_token_unavailable", "Cookie recovery access token is unavailable", 0, errOpenAICookieWSAccountUnavailable)
 	}
@@ -630,7 +630,7 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 			}
 			s.phaseOpenAICookieWSRecovery(account.ID, slot, "refresh", "harvesting", nil)
 			probeCtx, cancel := context.WithTimeout(harvestCtx, timeout)
-			result, probeErr := s.doOpenAICookieWSHTTPProbe(probeCtx, account, token, proxy, identity)
+			result, probeErr := s.doOpenAICookieWSHTTPProbe(probeCtx, account, proxy, identity)
 			cancel()
 			if probeErr != nil {
 				status := 0
@@ -673,7 +673,7 @@ func (s *OpenAIGatewayService) refreshOpenAICookieWSSlot(ctx context.Context, ac
 		}
 		s.phaseOpenAICookieWSRecovery(account.ID, slot, "refresh", "validating", nil)
 		verifyCtx, cancel := context.WithTimeout(harvestCtx, 3*timeout)
-		lease, verifyErr := s.validateOpenAICookieWSCandidate(verifyCtx, account, token, candidate)
+		lease, verifyErr := s.validateOpenAICookieWSCandidate(verifyCtx, account, candidate)
 		cancel()
 		if verifyErr != nil {
 			if previous != nil && !previous.processVerified && candidate.Generation == previous.Generation {

@@ -233,38 +233,6 @@ func (s *TokenRefreshService) Stop() {
 	slog.Info("token_refresh.service_stopped")
 }
 
-// refreshLoop 刷新循环
-func (s *TokenRefreshService) refreshLoop() {
-	defer s.wg.Done()
-	ctx := s.runCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	// 计算检查间隔
-	checkInterval := time.Duration(s.cfg.CheckIntervalMinutes) * time.Minute
-	if checkInterval < time.Minute {
-		checkInterval = 5 * time.Minute
-	}
-
-	ticker := time.NewTicker(checkInterval)
-	defer ticker.Stop()
-
-	// 启动时立即执行一次检查
-	s.processRefreshContext(ctx)
-
-	for {
-		select {
-		case <-ticker.C:
-			s.processRefreshContext(ctx)
-		case <-ctx.Done():
-			return
-		case <-s.stopCh:
-			return
-		}
-	}
-}
-
 type tokenRefreshPageStats struct {
 	total        int
 	oauth        int

@@ -293,78 +293,6 @@ func finalizeIntelligentTestRun(r *IntelligentTestRecord, capture *intelligentCa
 	return nil
 }
 
-// Some old connectivity adapters treat EOF as success. Capability scoring
-// requires a real terminal event and rejects token-budget truncation.
-func intelligentRawComplete(raw string) bool {
-	complete, truncated := false, false
-	var inspect func(map[string]any)
-	inspect = func(v map[string]any) {
-		if nested, ok := v["response"].(map[string]any); ok {
-			inspect(nested)
-		}
-		kind, _ := v["type"].(string)
-		if kind == "response.completed" || kind == "response.done" || kind == "message_stop" {
-			complete = true
-		}
-		if status, _ := v["status"].(string); status == "incomplete" || status == "failed" {
-			truncated = true
-		}
-		if reason, _ := v["stop_reason"].(string); reason != "" {
-			if reason == "max_tokens" {
-				truncated = true
-			} else {
-				complete = true
-			}
-		}
-		if delta, ok := v["delta"].(map[string]any); ok {
-			inspect(delta)
-		}
-		if choices, ok := v["choices"].([]any); ok {
-			for _, item := range choices {
-				if choice, ok := item.(map[string]any); ok {
-					if reason, _ := choice["finish_reason"].(string); reason != "" {
-						if reason == "length" || reason == "content_filter" {
-							truncated = true
-						} else {
-							complete = true
-						}
-					}
-				}
-			}
-		}
-		if candidates, ok := v["candidates"].([]any); ok {
-			for _, item := range candidates {
-				if candidate, ok := item.(map[string]any); ok {
-					if reason, _ := candidate["finishReason"].(string); reason != "" {
-						if reason == "STOP" {
-							complete = true
-						} else {
-							truncated = true
-						}
-					}
-				}
-			}
-		}
-	}
-	var body map[string]any
-	if json.Unmarshal([]byte(raw), &body) == nil {
-		inspect(body)
-	} else {
-		scanner := bufio.NewScanner(strings.NewReader(raw))
-		scanner.Buffer(make([]byte, 8192), 4<<20)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if !strings.HasPrefix(line, "data:") {
-				continue
-			}
-			var event map[string]any
-			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) == nil {
-				inspect(event)
-			}
-		}
-	}
-	return complete && !truncated
-}
 func parseIntelligentSSE(raw string) (output, errorMessage, model string, complete bool) {
 	var text strings.Builder
 	scanner := bufio.NewScanner(strings.NewReader(raw))
@@ -859,12 +787,6 @@ func (h *intelligentHTTPUpstream) DoWithTLS(req *http.Request, proxy string, id 
 }
 func (h *intelligentHTTPUpstream) AccountTrafficController() *AccountTrafficService {
 	return accountTrafficController(h.inner)
-}
-func captureIntelligentResponse(req *http.Request, resp *http.Response) *http.Response {
-	if v := intelligentContext(req.Context()); v != nil {
-		return v.capture.response(req, resp)
-	}
-	return resp
 }
 
 type intelligentReadOnlyAccountRepo struct {

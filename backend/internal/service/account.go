@@ -2289,7 +2289,7 @@ func (a *Account) IsTLSFingerprintEnabled() bool {
 	if a == nil {
 		return false
 	}
-	if !a.IsAnthropicOAuthOrSetupToken() && !(a.IsOpenAIOAuthLike() && a.AntiDegradationEnabled()) {
+	if !a.IsAnthropicOAuthOrSetupToken() && (!a.IsOpenAIOAuthLike() || !a.AntiDegradationEnabled()) {
 		return false
 	}
 	if a.Extra == nil {

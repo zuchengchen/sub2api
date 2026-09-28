@@ -116,7 +116,7 @@ func TestZZLiveReviewBody234924(t *testing.T) {
 		}
 		add(contentModerationCandidateFragment{
 			Fragment: cand, Matches: matches, Tier: tier,
-			WholeFragment: cf.WholeFragment || contentModerationPreserveWholeUserFragment(cand),
+			WholeFragment:          cf.WholeFragment || contentModerationPreserveWholeUserFragment(cand),
 			WholeFragmentTruncated: cf.WholeFragmentTruncated,
 		})
 	}
@@ -142,7 +142,7 @@ func TestZZLiveReviewBody234924(t *testing.T) {
 		primary.Text = bundle.Evidence.Text
 		result, attempted, err := svc.scanUnifiedSecondLayerPrepared(context.Background(), &cfg, contentModerationSecondLayerInput{
 			Fragment: primary, Evidence: bundle.Evidence,
-			KeywordTier: defaultContentModerationString(cand.Tier, "candidate"),
+			KeywordTier:   defaultContentModerationString(cand.Tier, "candidate"),
 			KeywordRuleID: contentModerationKeywordRuleID(cand.Matches[0].Keyword),
 		})
 		kws := make([]string, 0, len(cand.Matches))

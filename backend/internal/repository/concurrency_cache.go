@@ -977,9 +977,11 @@ func (c *concurrencyCache) SumActiveAccountWaitingCounts(ctx context.Context) (i
 		return 0, err
 	}
 
-	members, err := c.rdb.ZRangeByScore(ctx, accountActiveIndexKey, &redis.ZRangeBy{
-		Min: strconv.FormatInt(now, 10),
-		Max: "+inf",
+	members, err := c.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     accountActiveIndexKey,
+		Start:   strconv.FormatInt(now, 10),
+		Stop:    "+inf",
+		ByScore: true,
 	}).Result()
 	if err != nil {
 		return 0, fmt.Errorf("read active index %s: %w", accountActiveIndexKey, err)

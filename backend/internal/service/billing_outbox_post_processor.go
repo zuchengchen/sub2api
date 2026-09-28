@@ -6,12 +6,6 @@ type billingOutboxNotificationFinalizer interface {
 	FinalizeNotifications(context.Context, *BillingOutboxCommand, *UsageBillingApplyResult) error
 }
 
-type billingOutboxNotificationFinalizerFunc func(context.Context, *BillingOutboxCommand, *UsageBillingApplyResult) error
-
-func (f billingOutboxNotificationFinalizerFunc) FinalizeNotifications(ctx context.Context, command *BillingOutboxCommand, result *UsageBillingApplyResult) error {
-	return f(ctx, command, result)
-}
-
 // billingOutboxPostProcessor restores request-independent cache, enforcement,
 // and notification effects from the immutable outbox snapshot.
 type billingOutboxPostProcessor struct {

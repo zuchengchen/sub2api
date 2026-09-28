@@ -3380,4 +3380,3 @@ func (oauthPendingFlowTotpEncryptorStub) Decrypt(ciphertext string) (string, err
 func (r *oauthPendingFlowUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
-

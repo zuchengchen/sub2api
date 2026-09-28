@@ -12,12 +12,12 @@ import (
 )
 
 const (
-	claudeOAuthSessionCleanupInterval = 5 * time.Minute
-	claudeOAuthSessionCleanupTimeout  = 5 * time.Second
-	openAIOAuthCleanupInterval        = 5 * time.Minute
-	openAIOAuthCleanupTimeout         = 5 * time.Second
-	grokOAuthSessionCleanupInterval   = 5 * time.Minute
-	grokOAuthSessionCleanupTimeout    = 5 * time.Second
+	claudeOAuthSessionCleanupInterval   = 5 * time.Minute
+	claudeOAuthSessionCleanupTimeout    = 5 * time.Second
+	openAIOAuthCleanupInterval          = 5 * time.Minute
+	openAIOAuthCleanupTimeout           = 5 * time.Second
+	grokOAuthSessionCleanupInterval     = 5 * time.Minute
+	grokOAuthSessionCleanupTimeout      = 5 * time.Second
 	concurrencySlotCleanupWorkerTimeout = 6 * time.Second
 )
 
@@ -49,7 +49,7 @@ func NewOpenAIOAuthSessionCleanupWorker(svc *OpenAIOAuthService) (*workerruntime
 // NewClaudeOAuthSessionCleanupWorker adapts Claude OAuth session cleanup to the worker runtime.
 func NewClaudeOAuthSessionCleanupWorker(svc *OAuthService) (*workerruntime.PeriodicJob, error) {
 	if svc == nil || svc.sessionStore == nil {
-		return nil, fmt.Errorf("Claude OAuth service is required")
+		return nil, fmt.Errorf("OAuth service for Claude is required")
 	}
 	return workerruntime.NewPeriodicJob(workerruntime.PeriodicJobSpec{
 		Descriptor: workerruntime.Descriptor{
@@ -191,8 +191,8 @@ func NewTokenRefreshWorker(svc *TokenRefreshService) (*workerruntime.PeriodicJob
 			Description:      "Refreshes eligible OAuth tokens before expiry",
 			Tags:             []string{"oauth", "token-refresh"},
 		},
-		Interval: svc.Interval(),
-		Timeout:  100 * 365 * 24 * time.Hour,
+		Interval:       svc.Interval(),
+		Timeout:        100 * 365 * 24 * time.Hour,
 		RunImmediately: true,
 		Run:            svc.Run,
 		OnStart: func() {
@@ -432,7 +432,7 @@ func (w *startStopPoolWorker) Snapshot() workerruntime.Snapshot {
 // NewOpsSystemLogSinkWorker returns the runtime component for buffered operational logs.
 func NewOpsSystemLogSinkWorker(sink *OpsSystemLogSink) (*startStopPoolWorker, error) {
 	if sink == nil {
-		return nil, fmt.Errorf("Ops system log sink is required")
+		return nil, fmt.Errorf("ops system log sink is required")
 	}
 	return newStartStopPoolWorker(
 		workerruntime.Descriptor{

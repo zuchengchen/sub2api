@@ -69,7 +69,7 @@ func TestOpenAICookieWSRecoveryHTTPStreamRetainsStatusAndRetryAfter(t *testing.T
 			u := &httpUpstreamRecorder{resp: resp}
 			s, d := cookieWSTestService(t, u)
 			before := time.Now()
-			result, err := s.doOpenAICookieWSHTTPProbe(context.Background(), ticketTestAccount(41), "unused", "socks5://test", newOpenAICookieWSIdentity())
+			result, err := s.doOpenAICookieWSHTTPProbe(context.Background(), ticketTestAccount(41), "socks5://test", newOpenAICookieWSIdentity())
 			require.Error(t, err)
 			require.NotNil(t, result)
 			require.Equal(t, status, result.status)
@@ -140,7 +140,7 @@ func TestOpenAICookieWSRecoveryCandidateReasonsCloseSocket(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, d := cookieWSTestService(t, nil)
 			d.conn.answers = [][]byte{tc.message}
-			lease, err := s.validateOpenAICookieWSCandidate(context.Background(), ticketTestAccount(41), "unused", cookieWSTestTicket(41, time.Now()))
+			lease, err := s.validateOpenAICookieWSCandidate(context.Background(), ticketTestAccount(41), cookieWSTestTicket(41, time.Now()))
 			require.Nil(t, lease)
 			var failure *openAICookieWSRecoveryFailure
 			require.ErrorAs(t, err, &failure)
