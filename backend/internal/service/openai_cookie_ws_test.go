@@ -117,7 +117,11 @@ type cookieWSProbeConn struct {
 }
 
 func (c *cookieWSProbeConn) WriteJSON(_ context.Context, v any) error {
-	c.writes = append(c.writes, v.(map[string]any))
+	payload, ok := v.(map[string]any)
+	if !ok {
+		return errors.New("unexpected websocket payload type")
+	}
+	c.writes = append(c.writes, payload)
 	return nil
 }
 func (c *cookieWSProbeConn) ReadMessage(context.Context) ([]byte, error) {
@@ -309,11 +313,11 @@ func TestOpenAICookieWSBackoffHonorsRetryAfter(t *testing.T) {
 	for _, delay := range []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute, time.Minute} {
 		s.noteOpenAICookieWSMiss(41, now, "http_false", 200, nil)
 		raw, _ := s.openaiCookieWSRetry.Load(openAICodexTicketKey(41, openAICodexTicketDefaultModel))
-		require.Equal(t, now.Add(delay), raw.(*openAICookieWSRetryState).nextAttemptAt)
+		require.Equal(t, now.Add(delay), mustTestValue[*openAICookieWSRetryState](t, raw).nextAttemptAt)
 	}
 	s.noteOpenAICookieWSMiss(41, now, "quota", 429, http.Header{"Retry-After": []string{"180"}})
 	raw, _ := s.openaiCookieWSRetry.Load(openAICodexTicketKey(41, openAICodexTicketDefaultModel))
-	require.Equal(t, now.Add(180*time.Second), raw.(*openAICookieWSRetryState).nextAttemptAt)
+	require.Equal(t, now.Add(180*time.Second), mustTestValue[*openAICookieWSRetryState](t, raw).nextAttemptAt)
 }
 
 func TestOpenAICookieWSPrivateExtraCannotBeExportedOrOverwritten(t *testing.T) {
@@ -323,7 +327,7 @@ func TestOpenAICookieWSPrivateExtraCannotBeExportedOrOverwritten(t *testing.T) {
 	require.NotContains(t, redacted, key)
 	merged := MergeOpenAICodexTicketExtra(map[string]any{key: "spoofed", "setting": true}, current)
 	require.Equal(t, current[key], merged[key])
-	require.True(t, merged["setting"].(bool))
+	require.True(t, mustTestValue[bool](t, merged["setting"]))
 }
 
 func TestOpenAICookieWSRolloutScopeAndMetadata(t *testing.T) {
@@ -338,8 +342,8 @@ func TestOpenAICookieWSRolloutScopeAndMetadata(t *testing.T) {
 	applyOpenAICookieWSTicketHeaders(h, ticket)
 	payload := map[string]any{"client_metadata": map[string]any{"session_id": "untrusted", "turn_id": "preserve"}}
 	applyOpenAICookieWSMetadataFromHeaders(h, payload)
-	require.Equal(t, ticket.Identity.SessionID, payload["client_metadata"].(map[string]any)["session_id"])
-	require.Equal(t, "preserve", payload["client_metadata"].(map[string]any)["turn_id"])
+	require.Equal(t, ticket.Identity.SessionID, mustTestValue[map[string]any](t, payload["client_metadata"])["session_id"])
+	require.Equal(t, "preserve", mustTestValue[map[string]any](t, payload["client_metadata"])["turn_id"])
 	empty := map[string]any{}
 	applyOpenAICookieWSMetadataFromHeaders(h, empty)
 	require.NotContains(t, empty, "client_metadata")
@@ -509,7 +513,7 @@ func TestOpenAICookieWSThirdSlotRefreshAndRetryRemainIndependent(t *testing.T) {
 	h := http.Header{}
 	require.NoError(t, s.applyOpenAICookieWSHeadersForSlot(context.Background(), account, first.Model, h, 2))
 	require.Equal(t, "2", h.Get(openAICookieWSSlotHeader))
-	repo := s.accountRepo.(*cookieWSLifecycleRepo)
+	repo := mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo)
 	saved, err := repo.GetByID(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.Contains(t, saved.Extra, openAICookieWSExtraKeySlot(first.Model, 2))
@@ -544,7 +548,7 @@ func TestOpenAICookieWSHTTPMissDiagnosticsDistinguishStatusCookieAndAnswer(t *te
 			s.refreshOpenAICookieWSSlot(context.Background(), ticketTestAccount(41), 1)
 			raw, ok := s.openaiCookieWSRetry.Load(openAICookieWSKeySlot(41, openAICodexTicketDefaultModel, 1))
 			require.True(t, ok)
-			require.Equal(t, tc.reason, raw.(*openAICookieWSRetryState).reason)
+			require.Equal(t, tc.reason, mustTestValue[*openAICookieWSRetryState](t, raw).reason)
 		})
 	}
 }

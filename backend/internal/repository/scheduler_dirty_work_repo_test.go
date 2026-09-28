@@ -17,7 +17,7 @@ import (
 func TestSchedulerSourcePromotionRejectsMissingOwnership(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	promoted, err := NewSchedulerDirtyWorkRepository(db).Promote(context.Background(), nil, 10)
 	require.Zero(t, promoted)
@@ -27,7 +27,7 @@ func TestSchedulerSourcePromotionRejectsMissingOwnership(t *testing.T) {
 func TestSchedulerDirtyWorkListIsBoundedAndOrdered(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	now := time.Now().UTC()
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -51,7 +51,7 @@ func TestSchedulerDirtyWorkListIsBoundedAndOrdered(t *testing.T) {
 func TestSchedulerDirtyWorkAcknowledgeIsGenerationConditional(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := NewSchedulerDirtyWorkRepository(db)
 	item := service.SchedulerDirtyWork{Kind: 1, EntityID: 42, Generation: 7}
 	query := regexp.QuoteMeta(`
@@ -66,7 +66,7 @@ func TestSchedulerDirtyWorkAcknowledgeIsGenerationConditional(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	conn, err := db.Conn(context.Background())
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	owner := &postgresSchedulerOwnership{conn: conn, epoch: 11, ctx: context.Background()}
 	acknowledged, err := repo.Acknowledge(context.Background(), owner, item)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestSchedulerDirtyWorkAcknowledgeIsGenerationConditional(t *testing.T) {
 func TestSchedulerDirtyWorkAcknowledgeRejectsMissingOwnership(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	acknowledged, err := NewSchedulerDirtyWorkRepository(db).Acknowledge(context.Background(), nil, service.SchedulerDirtyWork{Kind: 1, EntityID: 42, Generation: 1})
 	require.False(t, acknowledged)
@@ -93,7 +93,7 @@ func TestSchedulerDirtyWorkAcknowledgeRejectsMissingOwnership(t *testing.T) {
 func TestSchedulerDirtyWorkRecordFailureIsGenerationConditional(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := NewSchedulerDirtyWorkRepository(db)
 	item := service.SchedulerDirtyWork{Kind: 1, EntityID: 42, Generation: 7}
 	query := regexp.QuoteMeta(`
@@ -110,7 +110,7 @@ func TestSchedulerDirtyWorkRecordFailureIsGenerationConditional(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	conn, err := db.Conn(context.Background())
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	owner := &postgresSchedulerOwnership{conn: conn, epoch: 12, ctx: context.Background()}
 
 	recorded, err := repo.RecordFailure(context.Background(), owner, item, errors.New("failed"))
@@ -122,7 +122,7 @@ func TestSchedulerDirtyWorkRecordFailureIsGenerationConditional(t *testing.T) {
 func TestSchedulerDirtyWorkPendingStatsUsesWholePopulation(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	now := time.Now().UTC()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -156,7 +156,7 @@ func TestSchedulerDirtyWorkPendingStatsUsesWholePopulation(t *testing.T) {
 func TestSchedulerOwnershipUsesDedicatedSession(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1, $2)`)).
 		WithArgs(lockArg(schedulerAdvisoryLockNamespace), lockArg(schedulerAdvisoryLockID)).
 		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
@@ -185,7 +185,7 @@ func TestSchedulerOwnershipUsesDedicatedSession(t *testing.T) {
 func TestSchedulerOwnershipConcurrentCloseStoresOneResult(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1, $2)`)).
 		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
 	mock.ExpectQuery("INSERT INTO scheduler_ownership_epoch").
@@ -217,7 +217,7 @@ func TestSchedulerOwnershipConcurrentCloseStoresOneResult(t *testing.T) {
 func TestSchedulerOwnershipUnlockFailureDiscardsSession(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1, $2)`)).
 		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
 	mock.ExpectQuery("INSERT INTO scheduler_ownership_epoch").
@@ -239,7 +239,7 @@ func TestSchedulerOwnershipConnectionLossIsSurfacedAndDiscarded(t *testing.T) {
 	lostErr := errors.New("connection lost")
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1, $2)`)).
 		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
 	mock.ExpectQuery("INSERT INTO scheduler_ownership_epoch").

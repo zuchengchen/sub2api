@@ -380,7 +380,7 @@ func parseIntelligentSSE(raw string) (output, errorMessage, model string, comple
 		}
 		switch e.Type {
 		case "content":
-			text.WriteString(e.Text)
+			_, _ = text.WriteString(e.Text)
 		case "error":
 			errorMessage = e.Error
 		case "test_start":
@@ -518,12 +518,12 @@ func (w *intelligentSSEWriter) appendText(s string) {
 	if w.text.Len()+len(s) > intelligentCaptureTextLimit {
 		remain := intelligentCaptureTextLimit - w.text.Len()
 		if remain > 0 {
-			w.text.WriteString(s[:remain])
+			_, _ = w.text.WriteString(s[:remain])
 		}
 		w.truncated = true
 		return
 	}
-	w.text.WriteString(s)
+	_, _ = w.text.WriteString(s)
 }
 
 type intelligentCapture struct {
@@ -765,7 +765,7 @@ func intelligentResponsesTerminalText(event map[string]any) (string, bool) {
 			if len(partText) > remaining {
 				partText = partText[:remaining]
 			}
-			text.WriteString(partText)
+			_, _ = text.WriteString(partText)
 			if text.Len() > intelligentCaptureTextLimit {
 				return text.String(), true
 			}
@@ -781,12 +781,12 @@ func (c *intelligentCapture) appendText(s string) {
 	if c.text.Len()+len(s) > intelligentCaptureTextLimit {
 		remain := intelligentCaptureTextLimit - c.text.Len()
 		if remain > 0 {
-			c.text.WriteString(s[:remain])
+			_, _ = c.text.WriteString(s[:remain])
 		}
 		c.textTruncated = true
 		return
 	}
-	c.text.WriteString(s)
+	_, _ = c.text.WriteString(s)
 }
 func (c *intelligentCapture) collectCredentialSecrets(values map[string]any) {
 	for key, value := range values {

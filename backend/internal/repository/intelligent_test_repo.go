@@ -61,7 +61,7 @@ func scanIntelligentRecord(row intelligentScanner) (*service.IntelligentTestReco
 	return r, nil
 }
 func readIntelligentRecords(rows *sql.Rows) ([]*service.IntelligentTestRecord, error) {
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []*service.IntelligentTestRecord{}
 	for rows.Next() {
 		r, err := scanIntelligentRecord(rows)
@@ -90,7 +90,7 @@ func (r *intelligentTestRepository) Settings(ctx context.Context) ([]service.Int
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []service.IntelligentTestSetting{}
 	for rows.Next() {
 		var s service.IntelligentTestSetting
@@ -125,7 +125,7 @@ func (r *intelligentTestRepository) UpdateSetting(ctx context.Context, actor int
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	cfg, err := json.Marshal(s.Config)
 	if err != nil {
 		return err
@@ -276,7 +276,7 @@ SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a
 	for rows.Next() {
 		var card service.IntelligentTestAccountCard
 		if err := rows.Scan(&card.AccountID, &card.Name, &card.Notes, &card.Platform, &card.AccountType, &card.AccountStatus, &card.AntiDegradation, pq.Array(&card.GroupIDs)); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		ids = append(ids, card.AccountID)
@@ -287,7 +287,7 @@ SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a
 		out.Items = append(out.Items, card)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil || len(ids) == 0 {
 		return out, err
 	}
@@ -331,13 +331,13 @@ SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a
 		var id, count int64
 		var kind string
 		if err := countRows.Scan(&id, &kind, &count); err != nil {
-			countRows.Close()
+			_ = countRows.Close()
 			return nil, err
 		}
 		counts[key(id, kind)] = count
 	}
 	err = countRows.Err()
-	countRows.Close()
+	_ = countRows.Close()
 	if err != nil {
 		return nil, err
 	}

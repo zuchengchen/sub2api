@@ -40,7 +40,7 @@ func appendOpenAIStreamedBillingDelta(eventType string, data []byte, buf *string
 		return
 	}
 	if delta := gjson.GetBytes(data, "delta").String(); delta != "" {
-		buf.WriteString(delta)
+		_, _ = buf.WriteString(delta)
 	}
 }
 

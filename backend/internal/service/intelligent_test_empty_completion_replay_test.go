@@ -44,7 +44,7 @@ func replayEmptyCompletion(t *testing.T, path string, events []map[string]any) (
 		raw, err := json.Marshal(event)
 		require.NoError(t, err)
 		wsEvents = append(wsEvents, raw)
-		stream.WriteString("data: " + string(raw) + "\n\n")
+		_, _ = stream.WriteString("data: " + string(raw) + "\n\n")
 	}
 	// Exercise the valid EOF tail in both capture and HTTP replay.
 	sse := strings.TrimRight(stream.String(), "\n")
@@ -114,7 +114,7 @@ func TestIntelligentEmptyCompletionOrdersAndDeduplicatesCompletedItems(t *testin
 	for _, path := range emptyCompletionReplayPaths {
 		t.Run(path, func(t *testing.T) {
 			last := emptyCompletionMessageDone(9, "third")
-			last["item"].(map[string]any)["content"] = []any{
+			mustTestValue[map[string]any](t, last["item"])["content"] = []any{
 				map[string]any{"type": "output_text", "text": "thi"},
 				map[string]any{"type": "refusal", "text": "must not appear"},
 				map[string]any{"type": "output_text", "text": "rd"},
@@ -133,7 +133,7 @@ func TestIntelligentEmptyCompletionOrdersAndDeduplicatesCompletedItems(t *testin
 			var output strings.Builder
 			for _, event := range emitted {
 				if event.Type == "content" {
-					output.WriteString(event.Text)
+					_, _ = output.WriteString(event.Text)
 				}
 			}
 			if path != "capture" {
@@ -172,21 +172,29 @@ func TestIntelligentEmptyCompletionNonemptyTerminalRemainsAuthoritative(t *testi
 func TestIntelligentEmptyCompletionRejectsUnfinishedOrInvalidItems(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		mutate func(map[string]any)
+		mutate func(*testing.T, map[string]any)
 	}{
-		{"user_message", func(event map[string]any) { event["item"].(map[string]any)["role"] = "user" }},
-		{"other_item_type", func(event map[string]any) { event["item"].(map[string]any)["type"] = "reasoning" }},
-		{"missing_status", func(event map[string]any) { delete(event["item"].(map[string]any), "status") }},
-		{"in_progress", func(event map[string]any) { event["item"].(map[string]any)["status"] = "in_progress" }},
-		{"missing_index", func(event map[string]any) { delete(event, "output_index") }},
-		{"negative_index", func(event map[string]any) { event["output_index"] = -1 }},
-		{"fractional_index", func(event map[string]any) { event["output_index"] = 1.5 }},
-		{"string_index", func(event map[string]any) { event["output_index"] = "1" }},
+		{"user_message", func(t *testing.T, event map[string]any) {
+			mustTestValue[map[string]any](t, event["item"])["role"] = "user"
+		}},
+		{"other_item_type", func(t *testing.T, event map[string]any) {
+			mustTestValue[map[string]any](t, event["item"])["type"] = "reasoning"
+		}},
+		{"missing_status", func(t *testing.T, event map[string]any) {
+			delete(mustTestValue[map[string]any](t, event["item"]), "status")
+		}},
+		{"in_progress", func(t *testing.T, event map[string]any) {
+			mustTestValue[map[string]any](t, event["item"])["status"] = "in_progress"
+		}},
+		{"missing_index", func(t *testing.T, event map[string]any) { delete(event, "output_index") }},
+		{"negative_index", func(t *testing.T, event map[string]any) { event["output_index"] = -1 }},
+		{"fractional_index", func(t *testing.T, event map[string]any) { event["output_index"] = 1.5 }},
+		{"string_index", func(t *testing.T, event map[string]any) { event["output_index"] = "1" }},
 	} {
 		for _, path := range []string{"capture", "http-intelligent", "ws-intelligent"} {
 			t.Run(tc.name+"/"+path, func(t *testing.T) {
 				item := emptyCompletionMessageDone(1, "unverified text")
-				tc.mutate(item)
+				tc.mutate(t, item)
 				record, _, _, err := replayEmptyCompletion(t, path, []map[string]any{item, emptyCompletionTerminal([]any{})})
 				require.Error(t, err)
 				require.Empty(t, record.Result)
@@ -197,7 +205,7 @@ func TestIntelligentEmptyCompletionRejectsUnfinishedOrInvalidItems(t *testing.T)
 		t.Run("pending_message/"+path, func(t *testing.T) {
 			pending := emptyCompletionMessageDone(3, "unfinished")
 			pending["type"] = "response.output_item.added"
-			pending["item"].(map[string]any)["status"] = "in_progress"
+			mustTestValue[map[string]any](t, pending["item"])["status"] = "in_progress"
 			record, _, _, err := replayEmptyCompletion(t, path, []map[string]any{
 				emptyCompletionMessageDone(1, "first finished"), pending, emptyCompletionTerminal([]any{}),
 			})
@@ -224,7 +232,7 @@ func TestIntelligentEmptyCompletionRequiresItemDoneOnlyForExplicitEmptyOutput(t 
 		})
 		t.Run("missing_output_keeps_delta_compatibility/"+path, func(t *testing.T) {
 			terminal := emptyCompletionTerminal(nil)
-			delete(terminal["response"].(map[string]any), "output")
+			delete(mustTestValue[map[string]any](t, terminal["response"]), "output")
 			record, _, _, err := replayEmptyCompletion(t, path, []map[string]any{
 				{"type": "response.output_text.delta", "delta": "legacy delta"}, terminal,
 			})
@@ -249,7 +257,7 @@ func TestIntelligentEmptyCompletionCannotUpgradeFailureOrMissingTerminal(t *test
 				if tc.kind != "" {
 					terminal := emptyCompletionTerminal([]any{})
 					terminal["type"] = tc.kind
-					terminal["response"].(map[string]any)["status"] = tc.status
+					mustTestValue[map[string]any](t, terminal["response"])["status"] = tc.status
 					events = append(events, terminal)
 				}
 				record, capture, _, err := replayEmptyCompletion(t, path, events)
@@ -315,7 +323,7 @@ func TestIntelligentEmptyCompletionSanitizedReplayRecoversCompletedMessage(t *te
 			for _, event := range events {
 				if event.Type == "content" {
 					contents++
-					output.WriteString(event.Text)
+					_, _ = output.WriteString(event.Text)
 				}
 				if event.Type == "test_complete" && event.Success {
 					completions++

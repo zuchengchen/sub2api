@@ -353,7 +353,7 @@ func TestOpenAIWSCookiePool_StalePrewarmCannotReenterAfterRotation(t *testing.T)
 func TestCoderOpenAIWSClientDialer_DirectTransportIgnoresEnvironmentProxy(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
-	d := newDefaultOpenAIWSClientDialer().(*coderOpenAIWSClientDialer)
+	d := mustTestValue[*coderOpenAIWSClientDialer](t, newDefaultOpenAIWSClientDialer())
 	c := d.directHTTPClient()
 	transport, ok := c.Transport.(*http.Transport)
 	require.True(t, ok)

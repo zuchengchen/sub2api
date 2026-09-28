@@ -44,7 +44,7 @@ func newTiboRouteCase(t *testing.T, bps, wsReady bool, responses ...*http.Respon
 	if !wsReady {
 		svc.openaiCookieWSTickets.Delete(openAICodexTicketKey(account.ID, ticket.Model))
 	}
-	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.responses = responses
 	return &tiboRouteCase{svc: svc, account: account, upstream: upstream, dialer: dialer}
 }

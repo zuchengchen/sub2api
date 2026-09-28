@@ -890,7 +890,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		refusalDetector.ObservePayload([]byte(payload))
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 		if isOpenAIStreamedBillingDelta(event.Type) && event.Delta != "" {
-			streamedBilling.WriteString(event.Delta)
+			_, _ = streamedBilling.WriteString(event.Delta)
 		}
 
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)

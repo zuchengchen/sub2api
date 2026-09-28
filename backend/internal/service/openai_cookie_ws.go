@@ -310,7 +310,7 @@ func (o *openAICookieWSObservation) event(payload []byte, eventType string) {
 		o.failed = true
 		o.failureStatus = cookieWSTestPayloadStatus(payload)
 	case "response.output_text.delta":
-		o.delta.WriteString(gjson.GetBytes(payload, "delta").String())
+		_, _ = o.delta.WriteString(gjson.GetBytes(payload, "delta").String())
 	case "response.completed":
 		if o.completed {
 			o.failed = true
@@ -329,7 +329,7 @@ func (o *openAICookieWSObservation) event(payload []byte, eventType string) {
 		for _, item := range gjson.GetBytes(payload, "response.output").Array() {
 			for _, content := range item.Get("content").Array() {
 				if content.Get("type").String() == "output_text" {
-					output.WriteString(content.Get("text").String())
+					_, _ = output.WriteString(content.Get("text").String())
 				}
 				if content.Get("type").String() == "refusal" {
 					o.failed = true
@@ -417,7 +417,7 @@ func (s *OpenAIGatewayService) doOpenAICookieWSHTTPProbe(ctx context.Context, ac
 		return result, cookieWSRecoveryFailure("http_stream", "cookie_ws_http_body_missing", "Cookie recovery HTTP response had no body", status, nil)
 	}
 	capturedAt := time.Now()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	limit := int64(openAICodexTicketHarvestErrorBodyLimit)
 	if resp.StatusCode == http.StatusOK {
 		limit = openAICodexTicketProbeBodyLimit + 1

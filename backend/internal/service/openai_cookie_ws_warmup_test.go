@@ -65,7 +65,7 @@ func TestCookieWSMinimumBuildsThreeAndDoesNotProbeAgain(t *testing.T) {
 		require.Len(t, d.conns, slots, "healthy established sockets are not periodically probed")
 		// A failed socket is removed and replaced; it cannot pad the target.
 		s.getOpenAIWSConnPool().accounts.Range(func(_, v any) bool {
-			ap := v.(*openAIWSAccountPool)
+			ap := mustTestValue[*openAIWSAccountPool](t, v)
 			ap.mu.Lock()
 			var id string
 			for key := range ap.conns {
@@ -97,7 +97,7 @@ func TestCookieWSMinimumFalseClosesAndBacksOff(t *testing.T) {
 
 func TestCookieWSMinimumSkipsCurrentRateLimitedAccount(t *testing.T) {
 	s, a, d := cookieWarmupFixture(t, 3, "True")
-	repo := s.accountRepo.(*cookieWSLifecycleRepo)
+	repo := mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo)
 	until := time.Now().Add(time.Hour)
 	repo.accounts[0].RateLimitResetAt = &until
 	s.maintainOpenAICookieWSMinimum(context.Background(), a.ID)

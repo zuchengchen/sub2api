@@ -239,7 +239,7 @@ func TestBillingOutboxRepository_FinalizationTransitionsRequireUnexpiredOwnershi
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
-	repo := NewBillingOutboxRepository(db).(service.BillingOutboxFinalizationRepository)
+	repo := mustTestValue[service.BillingOutboxFinalizationRepository](t, NewBillingOutboxRepository(db))
 	next := time.Now().Add(time.Minute)
 
 	mock.ExpectExec(`(?s)UPDATE billing_attempt_outbox.*status = \$5.*leased_by = \$2.*status = 'finalizing'.*lease_until > NOW\(\)`).

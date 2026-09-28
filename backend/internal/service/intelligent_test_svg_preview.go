@@ -139,7 +139,7 @@ func PrepareIntelligentSVGPreview(output string) (string, bool, error) {
 		if name == "style" {
 			var css strings.Builder
 			for _, child := range node.children {
-				css.WriteString(child.text)
+				_, _ = css.WriteString(child.text)
 			}
 			rawCSS := css.String()
 			if len(rawCSS) >= 32<<10 || strings.Contains(rawCSS, "@") {

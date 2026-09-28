@@ -345,7 +345,7 @@ func sanitizeGuideAssetName(raw string) string {
 		case r == '/' || r == '\\':
 			continue
 		default:
-			builder.WriteRune(r)
+			_, _ = builder.WriteRune(r)
 		}
 	}
 	name := strings.TrimSpace(builder.String())

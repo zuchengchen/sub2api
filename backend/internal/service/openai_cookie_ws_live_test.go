@@ -278,7 +278,7 @@ func TestOpenAICookieWSLiveForwardThree(t *testing.T) {
 			if attempt < 12 {
 				wait := time.Second
 				if raw, ok := svc.openaiCookieWSRetry.Load(openAICookieWSKeySlot(account.ID, openAICodexTicketDefaultModel, slot)); ok {
-					state := raw.(*openAICookieWSRetryState)
+					state := mustTestValue[*openAICookieWSRetryState](t, raw)
 					t.Logf("slot %d attempt %d not qualified, reason=%s", slot, attempt, state.reason)
 					if remaining := time.Until(state.nextAttemptAt); remaining > wait {
 						wait = remaining

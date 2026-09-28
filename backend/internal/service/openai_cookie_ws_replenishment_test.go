@@ -188,7 +188,7 @@ func TestOpenAICookieWSReplenishmentBackgroundSkipsUnavailableAccounts(t *testin
 		for _, reason := range []string{"rate_limited", "unschedulable"} {
 			t.Run(reason+"/ready="+strconv.FormatBool(ready), func(t *testing.T) {
 				s, account, upstream, dialer := cookieReplenishmentFixture(t, ready)
-				repo := s.accountRepo.(*cookieWSLifecycleRepo)
+				repo := mustTestValue[*cookieWSLifecycleRepo](t, s.accountRepo)
 				repo.mu.Lock()
 				if reason == "rate_limited" {
 					until := time.Now().Add(time.Hour)

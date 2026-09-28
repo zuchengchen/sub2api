@@ -156,9 +156,9 @@ func securityPolicyTranscriptItemText(protocol string, item gjson.Result) (strin
 		content.ForEach(func(_, block gjson.Result) bool {
 			if text := block.Get("text"); text.Type == gjson.String && strings.TrimSpace(text.String()) != "" {
 				if sb.Len() > 0 {
-					sb.WriteString("\n")
+					_, _ = sb.WriteString("\n")
 				}
-				sb.WriteString(text.String())
+				_, _ = sb.WriteString(text.String())
 			}
 			return true
 		})

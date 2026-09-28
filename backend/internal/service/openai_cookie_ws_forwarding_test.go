@@ -95,11 +95,11 @@ func TestCookieWSForwardHTTPRoutingAndFinalIdentity(t *testing.T) {
 			require.Equal(t, "gpt-6-astra", conn.lastWrite["model"])
 			require.Equal(t, tc.instructions, conn.lastWrite["instructions"])
 			require.NotContains(t, conn.lastWrite, "stream")
-			metadata := conn.lastWrite["client_metadata"].(map[string]any)
+			metadata := mustTestValue[map[string]any](t, conn.lastWrite["client_metadata"])
 			require.Equal(t, ticket.Identity.SessionID, metadata["session_id"])
 			require.Equal(t, ticket.Identity.InstallationID, metadata["x-codex-installation-id"])
 			require.Equal(t, ticket.Identity.WindowID, metadata["x-codex-window-id"])
-			require.Empty(t, svc.httpUpstream.(*httpUpstreamRecorder).lastBody)
+			require.Empty(t, mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream).lastBody)
 			require.Contains(t, rec.Body.String(), "True")
 		})
 	}
@@ -119,7 +119,7 @@ func TestCookieWSMissingCookieDoesNotBlockScheduling(t *testing.T) {
 func TestCookieWSForwardMissingCookieUsesHTTPResponses(t *testing.T) {
 	svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{})
 	svc.openaiCookieWSTickets.Delete(openAICodexTicketKey(account.ID, "gpt-6-astra"))
-	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.resp = cookieWSHTTPResponse("HTTP fallback")
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -196,7 +196,7 @@ func TestCookieWSIngressOverridesLegacyHTTPBridge(t *testing.T) {
 			serverErrors <- err
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = r
 		c.Set("api_key", &APIKey{ID: 88})
@@ -213,7 +213,7 @@ func TestCookieWSIngressOverridesLegacyHTTPBridge(t *testing.T) {
 	defer cancel()
 	client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	for i := 1; i <= 2; i++ {
 		require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"channel-alias","input":"hello","client_metadata":{"session_id":"source"}}`)))
 		_, event, readErr := client.Read(ctx)
@@ -230,11 +230,11 @@ func TestCookieWSIngressOverridesLegacyHTTPBridge(t *testing.T) {
 	require.Equal(t, 1, dialer.DialCount())
 	require.Equal(t, "", dialer.proxy)
 	require.Equal(t, ticket.Cookies, dialer.lastHeaders.Get("Cookie"))
-	require.Empty(t, svc.httpUpstream.(*httpUpstreamRecorder).lastBody)
+	require.Empty(t, mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream).lastBody)
 	require.Len(t, conn.writes, 2)
 	for _, payload := range conn.writes {
 		require.Equal(t, "gpt-6-astra", payload["model"])
-		require.Equal(t, ticket.Identity.SessionID, payload["client_metadata"].(map[string]any)["session_id"])
+		require.Equal(t, ticket.Identity.SessionID, mustTestValue[map[string]any](t, payload["client_metadata"])["session_id"])
 	}
 }
 
@@ -298,7 +298,7 @@ func TestCookieWSNonAstraModelsUseHTTPResponses(t *testing.T) {
 				svc.cfg.Gateway.OpenAIWS.Enabled = true
 				svc.cfg.Gateway.OpenAIWS.OAuthEnabled = true
 				svc.cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-				upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+				upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 				upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: " + string(cookieWSCompletion(model, "HTTP answer")) + "\n\n"))}
 				rec := httptest.NewRecorder()
 				c, _ := gin.CreateTestContext(rec)
@@ -319,7 +319,7 @@ func TestCookieWSNonAstraModelsUseHTTPResponses(t *testing.T) {
 
 func TestCookieWSNonAstraIngressUsesHTTPBridge(t *testing.T) {
 	svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{})
-	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: " + string(cookieWSCompletion("gpt-6-sol", "HTTP bridge")) + "\n\n"))}
 	errCh := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -328,7 +328,7 @@ func TestCookieWSNonAstraIngressUsesHTTPBridge(t *testing.T) {
 			errCh <- err
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = r
 		_, first, err := ws.Read(r.Context())
@@ -343,7 +343,7 @@ func TestCookieWSNonAstraIngressUsesHTTPBridge(t *testing.T) {
 	defer cancel()
 	client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-6-sol","input":"hello"}`)))
 	_, response, err := client.Read(ctx)
 	require.NoError(t, err)
@@ -366,7 +366,7 @@ func TestCookieWSNonAstraAPIKeyForcesResponsesOutsideAllowlist(t *testing.T) {
 	account.Credentials = map[string]any{"api_key": "test-api-key"}
 	account.Extra = map[string]any{openai_compat.ExtraKeyResponsesSupported: false, "openai_passthrough": false}
 	require.True(t, shouldForwardOpenAIResponsesViaRawChatCompletions(account), "fixture has explicit legacy Chat Completions routing")
-	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"resp_http","model":"gpt-6-sol","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"HTTP API key"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`))}
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -424,7 +424,7 @@ func TestCookieWSValidationFailureFallsBackToHTTP(t *testing.T) {
 	svc.getOpenAIWSConnPool().SetCookieValidator(func(context.Context, *Account, *openAIWSConnLease) error {
 		return newCookieWSTestError("cookie_ws_validation_not_true", "failed", "Cookie websocket validation probe did not return True; this socket was closed", 0, nil)
 	})
-	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.resp = cookieWSHTTPResponse("HTTP after probe")
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -446,7 +446,7 @@ func TestCookieWSOversizedPayloadUsesHTTPResponsesWithoutDial(t *testing.T) {
 	conn := &openAIWSCaptureConn{events: [][]byte{[]byte(`{"type":"response.completed","response":{"id":"resp_should_not_use_ws","model":"gpt-6-astra","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"WS"}]}],"usage":{"input_tokens":1,"output_tokens":1}}}`)}}
 	svc, account, _, dialer := newCookieForwardFixture(t, conn)
 	svc.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = 1
-	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.resp = cookieWSHTTPResponse("HTTP oversized")
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -469,7 +469,7 @@ func TestCookieWSMessageTooBigFallsBackToHTTP(t *testing.T) {
 	conn := &openAIWSCaptureConn{readErr: coderws.CloseError{Code: coderws.StatusMessageTooBig}}
 	svc, account, _, dialer := newCookieForwardFixture(t, conn)
 	svc.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = 0
-	upstream := svc.httpUpstream.(*httpUpstreamRecorder)
+	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.resp = cookieWSHTTPResponse("HTTP after 1009")
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
