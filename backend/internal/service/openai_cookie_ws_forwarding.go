@@ -261,7 +261,7 @@ func isOpenAICookieWSUnusableProbeError(err error) bool {
 
 func isOpenAICookieWSHTTPTransportReason(reason string) bool {
 	switch strings.TrimSpace(reason) {
-	case openAICookieWSHTTPFallbackReason, openAICookieWSPayloadTooLargeHTTPFallbackReason:
+	case openAICookieWSHTTPFallbackReason, openAICookieWSPayloadTooLargeHTTPFallbackReason, openAITiboHTTPOKReason:
 		return true
 	default:
 		return false

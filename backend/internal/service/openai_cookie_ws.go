@@ -340,17 +340,8 @@ func (o *openAICookieWSObservation) event(payload []byte, eventType string) {
 		if answer == "" {
 			answer = o.delta.String()
 		}
-		switch strings.TrimSpace(answer) {
-		case "True":
-			o.answerClass = "True"
-		case "False":
-			o.answerClass = "False"
-		case "":
-			o.answerClass = "none"
-		default:
-			o.answerClass = "other"
-		}
-		o.trueAnswer = o.answerClass == "True"
+		o.answerClass = classifyTiboAnswer(answer)
+		o.trueAnswer = o.answerClass == tiboAnswerTrue
 	}
 }
 

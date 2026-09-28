@@ -520,7 +520,13 @@ type OpenAIGatewayService struct {
 	openaiCookieWSTickets sync.Map
 	// cookieWSSkipBusinessProbe is live-test only: new sockets skip the Tibo
 	// candy check so Forward can be exercised when upstream answers False.
-	cookieWSSkipBusinessProbe  bool
+	cookieWSSkipBusinessProbe bool
+	// tiboRouteDisabled is live-test only: keep Cookie WS accounts on the
+	// pre-Tibo-routing path so Forward exercises the websocket directly.
+	tiboRouteDisabled bool
+	// openaiTiboHTTP: accountID → *openAITiboHTTPState (openai_tibo_route.go).
+	openaiTiboHTTP             sync.Map
+	openaiTiboHTTPFlight       singleflight.Group
 	openaiCookieWSFlight       singleflight.Group
 	openaiCookieWSRetry        sync.Map
 	openaiCookieWSSlots        sync.Map
