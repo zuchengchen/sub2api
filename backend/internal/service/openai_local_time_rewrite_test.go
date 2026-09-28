@@ -75,8 +75,14 @@ func TestRewriteOpenAIClientLocalTimeContext_Idempotent(t *testing.T) {
 }
 
 func TestRewriteOpenAIClientLocalTimeIfEnabled_UsesPacificTime(t *testing.T) {
+	// timezone.Init 会改全局 time.Local；不恢复会让同包后面按本地时间比较的测试（如支付租约）失败。
+	prevName, prevLocal := timezone.Name(), time.Local
 	require.NoError(t, timezone.Init("Asia/Shanghai"))
 	t.Cleanup(func() {
+		if prevName != "Local" {
+			require.NoError(t, timezone.Init(prevName))
+		}
+		time.Local = prevLocal
 		openAIOutboundLocalTimeContextFn = currentOpenAIOutboundLocalTimeContext
 	})
 	openAIOutboundLocalTimeContextFn = func() openAILocalTimeContext {
