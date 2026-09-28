@@ -46,7 +46,8 @@ func newCookieForwardFixture(t *testing.T, conn *openAIWSCaptureConn) (*OpenAIGa
 	t.Cleanup(pool.Close)
 	dialer := &cookieForwardDialer{openAIWSCaptureDialer: openAIWSCaptureDialer{conn: conn}}
 	pool.setClientDialerForTest(dialer)
-	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &httpUpstreamRecorder{}, cache: &stubGatewayCache{}, openaiWSPool: pool, toolCorrector: NewCodexToolCorrector()}
+	// These tests pin Cookie WS transport itself; Tibo routing has its own tests.
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &httpUpstreamRecorder{}, cache: &stubGatewayCache{}, openaiWSPool: pool, toolCorrector: NewCodexToolCorrector(), tiboRouteDisabled: true}
 	proxyID := int64(1)
 	account := &Account{ID: 23141, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 20, Status: StatusActive, Schedulable: true,
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-chatgpt", "model_mapping": map[string]any{"astra-alias": "gpt-6-astra"}},

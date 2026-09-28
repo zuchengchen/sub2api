@@ -250,7 +250,7 @@ func TestOpenAICookieWSLiveForwardThree(t *testing.T) {
 		}
 	}
 	repo := &cookieWSLifecycleRepo{accounts: []Account{*account}}
-	svc := &OpenAIGatewayService{cfg: cfg, accountRepo: repo, httpUpstream: &cookieWSLiveHTTP{}, openaiWSStateStore: NewOpenAIWSStateStore(nil), toolCorrector: NewCodexToolCorrector(), cookieWSSkipBusinessProbe: true}
+	svc := &OpenAIGatewayService{cfg: cfg, accountRepo: repo, httpUpstream: &cookieWSLiveHTTP{}, openaiWSStateStore: NewOpenAIWSStateStore(nil), toolCorrector: NewCodexToolCorrector(), cookieWSSkipBusinessProbe: true, tiboRouteDisabled: true}
 	for slot, saved := range restored {
 		if saved == nil {
 			continue
