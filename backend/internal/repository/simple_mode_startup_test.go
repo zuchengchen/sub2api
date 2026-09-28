@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	"entgo.io/ent/dialect"
@@ -62,4 +64,18 @@ func TestEnsureSimpleModeStartupSeedingFailure(t *testing.T) {
 	// No admin setup query is expected after a seeding failure.
 	require.ErrorIs(t, ensureSimpleModeStartup(context.Background(), client, cfg), seedErr)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// InitEnt 必须经 ensureSimpleModeStartup 启动，simple_mode.auto_create_default_groups 才会生效；
+// 直接调用 ensureSimpleModeDefaultGroups 会绕过这个开关。
+func TestInitEntUsesSimpleModeStartup(t *testing.T) {
+	source, err := os.ReadFile("ent.go")
+	require.NoError(t, err)
+	content := string(source)
+	start := strings.Index(content, "func InitEnt(")
+	require.GreaterOrEqual(t, start, 0)
+	body := content[start:]
+	body = body[:strings.Index(body, "\n}\n")]
+	require.Contains(t, body, "ensureSimpleModeStartup(seedCtx, client, cfg)")
+	require.NotContains(t, body, "ensureSimpleModeDefaultGroups(")
 }

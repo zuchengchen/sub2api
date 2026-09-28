@@ -95,6 +95,27 @@ func TestAccountFromServiceShallow_RedactsOllamaCloudManagedExtra(t *testing.T) 
 	require.Contains(t, src.Extra, service.OllamaCloudUsageSessionExtraKey)
 }
 
+// OpenCode Go 用量快照与自动刷新开关由服务端维护，已经通过 opencode_go_usage 下发，
+// 不应再以原始键出现在 extra 里。
+func TestAccountFromServiceShallow_RedactsOpenCodeGoManagedExtra(t *testing.T) {
+	src := &service.Account{
+		ID: 165, Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey,
+		Credentials: map[string]any{"base_url": "https://opencode.ai/zen/go/v1", "api_key": "secret-key"},
+		Extra: map[string]any{
+			service.OpenCodeGoUsageAutoRefreshExtraKey: true,
+			service.OpenCodeGoUsageSnapshotExtraKey:    &service.OpenCodeGoUsageSnapshot{Status: service.OpenCodeGoUsageStatusOK},
+			"ordinary":                                 "kept",
+		},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.NotContains(t, got.Extra, service.OpenCodeGoUsageAutoRefreshExtraKey)
+	require.NotContains(t, got.Extra, service.OpenCodeGoUsageSnapshotExtraKey)
+	require.Equal(t, "kept", got.Extra["ordinary"])
+	require.NotNil(t, got.OpenCodeGoUsage)
+	require.True(t, got.OpenCodeGoUsage.AutoRefreshEnabled)
+}
+
 func TestAccountFromServiceShallow_RedactsCodexTurnTicketState(t *testing.T) {
 	blob := "gAAAAA" + strings.Repeat("B", 286)
 	src := &service.Account{

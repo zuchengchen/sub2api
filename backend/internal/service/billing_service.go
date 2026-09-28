@@ -1875,7 +1875,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		fastRatio = 2
 	}
 	needsOpus55FastMultiplier := claude.IsOpus55(model) && pricing.FastMultiplier == nil
-	if !needsCacheCreationPolicy && fastRatio <= 0 {
+	if !needsCacheCreationPolicy && fastRatio <= 0 && !needsOpus55FastMultiplier {
 		return pricing
 	}
 	cloned := *pricing

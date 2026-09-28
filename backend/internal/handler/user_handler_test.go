@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -799,7 +800,7 @@ func TestUserHandlerBindEmailIdentityRejectsWrongCurrentPasswordForBoundEmail(t 
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, http.StatusBadRequest, resp.Code)
 	require.Equal(t, "PASSWORD_INCORRECT", resp.Reason)
-	require.Equal(t, "current password is incorrect", resp.Message)
+	require.Equal(t, userfacing.PasswordIncorrect, resp.Message)
 	require.Equal(t, "current@example.com", repo.user.Email)
 }
 
