@@ -46,7 +46,7 @@ func TestUpsertForUser_PartialUpdateSoftDeletesMissingPlatforms(t *testing.T) {
 	}))
 	require.NoError(t, repo.UpsertForUser(ctx, userID, []UserPlatformQuotaRecord{
 		{UserID: userID, Platform: "anthropic", DailyLimitUSD: &d2},
-		{UserID: userID, Platform: "gemini", DailyLimitUSD: &d1},
+		{UserID: userID, Platform: "grok", DailyLimitUSD: &d1},
 	}))
 
 	active, err := repo.ListByUser(ctx, userID)
@@ -58,7 +58,7 @@ func TestUpsertForUser_PartialUpdateSoftDeletesMissingPlatforms(t *testing.T) {
 	}
 	require.Len(t, platforms, 2)
 	require.InDelta(t, 20.0, platforms["anthropic"], 1e-9)
-	require.InDelta(t, 10.0, platforms["gemini"], 1e-9)
+	require.InDelta(t, 10.0, platforms["grok"], 1e-9)
 	_, openaiActive := platforms["openai"]
 	require.False(t, openaiActive, "openai should be soft-deleted")
 }
