@@ -449,6 +449,8 @@ func (r *contentModerationRepository) CountFlaggedByUserSinceExcludingArchive(ct
 	}
 	// SQL action literals must stay aligned with the service constants. Replay
 	// rows prove no new violation and therefore do not contribute to auto-ban.
+	// 'cyber_log_only' / 'risk_control_log_only' match the allowlist log-only modes;
+	// these events remain evidence but never become penalties after allowlist removal.
 	var count int
 	err := r.db.QueryRowContext(ctx, `
 WITH last_auto_ban AS (
@@ -462,6 +464,8 @@ WHERE user_id = $1
   AND flagged = TRUE
   AND action NOT IN ('hash_block', 'cache_block')
   AND action NOT LIKE 'security_policy_%'
+  AND mode <> 'cyber_log_only'
+  AND mode <> 'risk_control_log_only'
   AND cache_hit = FALSE
   AND decision_source <> 'cache_replay'
   AND ($3::bool IS FALSE OR action <> 'cyber_policy')

@@ -40,6 +40,44 @@ describe('UseKeyModal', () => {
     saveAsMock.mockClear()
   })
 
+  it('shows only Claude Code for Claude Code-only groups', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-anthropic-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'anthropic'
+      },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+
+    const clientTabs = () => wrapper.find('nav[aria-label="Client"]').text()
+    expect(clientTabs()).toContain('keys.useKeyModal.cliTabs.codexCli')
+    expect(clientTabs()).toContain('keys.useKeyModal.cliTabs.opencode')
+
+    const codexTab = wrapper.find('nav[aria-label="Client"]').findAll('button').find(
+      (button) => button.text().includes('keys.useKeyModal.cliTabs.codexCli')
+    )
+    await codexTab!.trigger('click')
+    await wrapper.setProps({ claudeCodeOnly: true })
+
+    expect(clientTabs()).toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(clientTabs()).not.toContain('keys.useKeyModal.cliTabs.codexCli')
+    expect(clientTabs()).not.toContain('keys.useKeyModal.cliTabs.opencode')
+    expect(wrapper.find('pre code').text()).toContain('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')
+
+    await wrapper.setProps({ platform: 'openai' })
+    expect(clientTabs()).toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(clientTabs()).not.toContain('keys.useKeyModal.cliTabs.codexCli')
+    expect(clientTabs()).not.toContain('keys.useKeyModal.cliTabs.opencode')
+    expect(wrapper.find('pre code').text()).toContain('ANTHROPIC_BASE_URL')
+  })
+
   it('omits the attribution override from every standard Claude Code setup form', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -892,21 +930,9 @@ describe('UseKeyModal', () => {
     expect(config).toContain('review_model = "gpt-5.5"')
   })
 
-  it('keeps OpenAI Codex policy lines when the catalog falls back to another model', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        models: [
-          {
-            slug: 'glm-5.3',
-            default_reasoning_level: 'none',
-            supported_reasoning_levels: [{ effort: 'none' }]
-          }
-        ]
-      })
-    }))
-
+  it('omits the Codex catalog for OpenAI in both transport modes and on both platforms', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -926,16 +952,22 @@ describe('UseKeyModal', () => {
       }
     })
 
-    await wrapper.get('[data-testid="codex-model-catalog-fetch"]').trigger('click')
-    await flushPromises()
-
-    const configToml = wrapper.findAll('pre code')
-      .map((code) => code.text())
-      .find((content) => content.includes('model_provider = "OpenAI"'))
-    expect(configToml).toContain('model = "glm-5.3"')
-    expect(configToml).toContain('model_reasoning_effort = "max"')
-    expect(configToml).toContain('approval_policy = "never"')
-    expect(configToml).toContain('sandbox_mode = "danger-full-access"')
-    expect(configToml).toContain('plan_mode_reasoning_effort = "max"')
+    for (const transport of ['keys.useKeyModal.cliTabs.codexCli', 'keys.useKeyModal.cliTabs.codexCliWs']) {
+      await wrapper.findAll('button').find((button) => button.text().trim() === transport)!.trigger('click')
+      for (const os of ['macOS / Linux', 'Windows']) {
+        await wrapper.findAll('button').find((button) => button.text().trim() === os)!.trigger('click')
+        const configToml = wrapper.findAll('pre code')
+          .map((code) => code.text())
+          .find((content) => content.includes('model_provider = "OpenAI"'))
+        expect(configToml).toContain('model = "gpt-6-astra"')
+        expect(configToml).not.toContain('model_catalog_json')
+        expect(configToml).toContain('model_reasoning_effort = "max"')
+        expect(configToml).toContain('approval_policy = "never"')
+        expect(configToml).toContain('sandbox_mode = "danger-full-access"')
+        expect(configToml).toContain('plan_mode_reasoning_effort = "max"')
+        expect(wrapper.find('[data-testid="codex-model-catalog"]').exists()).toBe(false)
+      }
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

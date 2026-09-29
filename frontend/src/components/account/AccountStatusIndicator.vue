@@ -235,6 +235,7 @@ const formatScopeName = (scope: string): string => {
     'claude-sonnet-4-6': 'CSon46',
     'claude-sonnet-4-5': 'CSon45',
     'claude-sonnet-4-5-thinking': 'CSon45T',
+    'claude-sonnet-5-5': 'CSon55',
     'claude-sonnet-5': 'CSon5',
     // 其他
     'gpt-oss-120b-medium': 'GPT120',

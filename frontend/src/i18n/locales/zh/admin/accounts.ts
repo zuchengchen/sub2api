@@ -984,6 +984,7 @@ export default {
       enterCustomModelName: '输入自定义模型名称',
       addModel: '填入',
       modelExists: '该模型已存在',
+      modelMappingConflict: '该模型已配置映射 {from} → {to}，请在模型映射中修改或删除后再添加白名单模型',
       modelCount: '{count} 个模型',
       poolMode: '池模式',
       poolModeHint: '上游为账号池时启用，错误不标记本地账号状态',
@@ -1077,6 +1078,20 @@ export default {
 	  autoPause5hDisabled: '禁用 5h 自动暂停',
 	  autoPause7dDisabled: '禁用 7d 自动暂停',
 	  autoPauseDisabledHint: '开启后该账号永不进入自动暂停（即使全局默认阈值已配置）。',
+	  claudeResetCredits: {
+	    count: '次数',
+	    countTooltipLoad: '点击查询 Claude 剩余重置次数（只读，不会消耗）',
+	    countTooltipRefresh: '点击刷新 Claude 剩余重置次数（只读，不会消耗）',
+	    fetched: '查询时间：{time}',
+	    error: '无法查询重置次数',
+	    ineligible: '此账号当前不可使用重置',
+	    cooldown: '冷却至 {time}',
+	    expiresAt: '到期 {time}',
+	    expiresAtFull: '重置次数到期时间：{time}',
+	    clears: '可清除窗口：{windows}',
+	    notUsableNow: '暂不可用',
+	    requiresLimit: '需达到限额后才能使用'
+	  },
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: '配额控制',

@@ -303,23 +303,24 @@ type ContentModerationModelFilter struct {
 }
 
 type ContentModerationCheckInput struct {
-	RequestID   string
-	UserID      int64
-	UserEmail   string
-	APIKeyID    int64
-	APIKeyName  string
-	GroupID     *int64
-	GroupName   string
-	Endpoint    string
-	Provider    string
-	Model       string
-	Protocol    string
-	Body        []byte
-	Scope       *ContentModerationScopeSnapshot
-	RawRequest  ContentModerationRawRequest
-	UserRole    string
-	UserIsVIP   bool
-	Reservation *ContentModerationPendingReservation
+	riskControlLogOnly bool // Captured at admission and retained by asynchronous tasks.
+	RequestID          string
+	UserID             int64
+	UserEmail          string
+	APIKeyID           int64
+	APIKeyName         string
+	GroupID            *int64
+	GroupName          string
+	Endpoint           string
+	Provider           string
+	Model              string
+	Protocol           string
+	Body               []byte
+	Scope              *ContentModerationScopeSnapshot
+	RawRequest         ContentModerationRawRequest
+	UserRole           string
+	UserIsVIP          bool
+	Reservation        *ContentModerationPendingReservation
 
 	lineageFragments []ContentModerationFragment
 }
@@ -902,6 +903,7 @@ type contentModerationFragmentDecisionLock struct {
 }
 
 type contentModerationRuntimeSnapshot struct {
+	allowlistedUsers            map[int64]struct{}
 	riskControlEnabled          bool
 	config                      *ContentModerationConfig
 	keywordMatcher              *contentModerationKeywordMatcher
@@ -1223,7 +1225,7 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	return s.configView(cfg), nil
 }
 
-func (s *ContentModerationService) Check(ctx context.Context, input ContentModerationCheckInput) (*ContentModerationDecision, error) {
+func (s *ContentModerationService) Check(ctx context.Context, input ContentModerationCheckInput) (decision *ContentModerationDecision, err error) {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
 	if s == nil || s.settingRepo == nil || s.repo == nil || input.Scope == nil {
 		return allow, nil
@@ -1238,6 +1240,15 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"error", err)
 		return allow, nil
 	}
+	_, input.riskControlLogOnly = runtimeSnapshot.allowlistedUsers[input.UserID]
+	// Keep audit evidence while ensuring all local rejection paths allow trusted users.
+	defer func() {
+		if input.riskControlLogOnly && decision != nil {
+			decision.Allowed, decision.Blocked = true, false
+			decision.Action = ContentModerationActionAllow
+			decision.Message, decision.StatusCode = "", 0
+		}
+	}()
 	return s.checkUnifiedFragments(ctx, input, runtimeSnapshot), nil
 }
 
@@ -1978,14 +1989,20 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 	values, err := s.settingRepo.GetMultiple(ctx, []string{
 		SettingKeyRiskControlEnabled,
 		SettingKeyContentModerationConfig,
+		SettingKeyCyberPolicyUserAllowlist,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get content moderation runtime settings: %w", err)
+	}
+	allowlistedUsers, err := ParseCyberPolicyUserAllowlist(values[SettingKeyCyberPolicyUserAllowlist])
+	if err != nil {
+		return nil, err
 	}
 	rawConfig := values[SettingKeyContentModerationConfig]
 	configDigest := sha256.Sum256([]byte(rawConfig))
 	if current := s.runtimeSnapshot.Load(); current != nil && current.configDigest == configDigest {
 		snapshot := &contentModerationRuntimeSnapshot{
+			allowlistedUsers:            allowlistedUsers,
 			riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
 			config:                      current.config,
 			keywordMatcher:              current.keywordMatcher,
@@ -2037,6 +2054,7 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 	}
 	keywordMatcher, unconditionalKeywordMatcher, contextualKeywordMatcher := newContentModerationRuntimeKeywordMatchers(effectiveKeywords)
 	snapshot := &contentModerationRuntimeSnapshot{
+		allowlistedUsers:            allowlistedUsers,
 		riskControlEnabled:          values[SettingKeyRiskControlEnabled] == "true",
 		config:                      cfg,
 		keywordMatcher:              keywordMatcher,
@@ -2085,6 +2103,7 @@ func (s *ContentModerationService) replaceRuntimeConfig(cfg *ContentModerationCo
 		return
 	}
 	s.runtimeSnapshot.Store(&contentModerationRuntimeSnapshot{
+		allowlistedUsers:            current.allowlistedUsers,
 		riskControlEnabled:          current.riskControlEnabled,
 		config:                      config,
 		keywordMatcher:              keywordMatcher,
@@ -2191,6 +2210,11 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 	if stage == "" {
 		stage = "http"
 	}
+	mode := cfg.Mode
+	if input.riskControlLogOnly {
+		mode = ContentModerationModeRiskControlLogOnly
+		action = ContentModerationActionAllow
+	}
 	return &ContentModerationLog{
 		RequestID:         input.RequestID,
 		UserID:            userID,
@@ -2202,7 +2226,7 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 		Endpoint:          input.Endpoint,
 		Provider:          input.Provider,
 		Model:             input.Model,
-		Mode:              cfg.Mode,
+		Mode:              mode,
 		Action:            action,
 		Flagged:           flagged,
 		HighestCategory:   highestCategory,
@@ -2240,6 +2264,9 @@ func (s *ContentModerationService) persistContentModerationLogWithInput(ctx cont
 		log.DispositionStatus = "not_counted"
 		log.AutoBanned = false
 		log.EmailSent = false
+	}
+	if log.Mode == ContentModerationModeRiskControlLogOnly {
+		recordHash, applySideEffects = false, false
 	}
 	if recordHash && s.hashCache != nil {
 		if err := s.hashCache.RecordFlaggedInputHash(ctx, hashText); err != nil {
@@ -3107,6 +3134,7 @@ func maskSecretTail(secret string) string {
 
 // CyberPolicyRecordInput 是一次 cyber_policy 硬阻断的风控记录入参。
 type CyberPolicyRecordInput struct {
+	LogOnly         bool                            `json:"log_only,omitempty"` // Trusted platform user: retain evidence without penalties or notifications.
 	RequestID       string                          `json:"request_id"`
 	UserID          int64                           `json:"user_id"`
 	UserEmail       string                          `json:"user_email"`
@@ -3184,7 +3212,17 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		RequestTarget:   in.RawRequest.Target,
 		ArchiveStatus:   ContentModerationArchiveStatusNone,
 	}
-	transitioned, dispositionErr := s.applyCyberPolicyDisposition(ctx, in, log)
+	var (
+		transitioned   bool
+		dispositionErr error
+	)
+	if in.LogOnly {
+		// Trusted platform user: keep evidence, skip session/key/user penalties and notifications.
+		log.Mode = ContentModerationModeCyberLogOnly
+		log.DispositionStatus = "not_counted"
+	} else {
+		transitioned, dispositionErr = s.applyCyberPolicyDisposition(ctx, in, log)
+	}
 	if dispositionErr != nil {
 		log.DispositionStatus = "retry_required"
 		log.Error = trimRunes(log.Error+"\ndisposition_error="+redactContentModerationSecrets(dispositionErr.Error()), maxModerationErrorRunes)
