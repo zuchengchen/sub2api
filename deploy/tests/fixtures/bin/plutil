@@ -14,6 +14,12 @@ case "${path}:${format}" in
     0.status.networks.0.ipv4Address:raw)
         jq -r '.[0].status.networks[0].ipv4Address'
         ;;
+    0.configuration.ipv4Subnet:raw)
+        jq -er '.[0].configuration.ipv4Subnet'
+        ;;
+    0.id:raw)
+        jq -er '.[0].id'
+        ;;
     *)
         printf 'unsupported fake plutil extraction: %s %s\n' "${path}" "${format}" >&2
         exit 2
