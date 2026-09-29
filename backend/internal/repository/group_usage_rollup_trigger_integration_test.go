@@ -128,7 +128,7 @@ func TestGroupUsageRollupTriggerSerializesInsertTransactionAcrossMidnight(t *tes
 	defer cancel()
 
 	// 生产中所有连接共用配置时区（DSN 的 TimeZone），水位发布、写入与断言必须按同一时区取日期。
-	const tz = "America/Los_Angeles"
+	const tz = "Asia/Shanghai"
 	schema := createGroupUsageRollupTriggerTestSchema(t, ctx, false)
 	seedTx := beginGroupUsageRollupTriggerTestTx(t, ctx, schema)
 	require.NoError(t, setGroupUsageRollupTriggerTimeZone(ctx, seedTx, tz))
