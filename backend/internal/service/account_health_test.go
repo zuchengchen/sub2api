@@ -82,9 +82,24 @@ func TestNormalizeAccountHealthSettings(t *testing.T) {
 	require.Equal(t, "50.0%", formatRate(0.5))
 }
 
+func TestAccountHealthCapacityErrorPattern(t *testing.T) {
+	re := accountHealthCapacityErrorRE
+	require.True(t, re.MatchString("Upstream service temporarily unavailable"))
+	require.True(t, re.MatchString("Upstream API request failed."))
+	require.True(t, re.MatchString(`dial tcp 127.0.0.1:8992: connect: connection refused`))
+	require.True(t, re.MatchString(`{"reason":"MODEL_TEMPORARILY_UNAVAILABLE"}`))
+	require.True(t, re.MatchString("Upstream model is temporarily overloaded. Retry later."))
+	require.True(t, re.MatchString("overloaded_error"))
+	require.False(t, re.MatchString("invalid_request_error"))
+	require.False(t, re.MatchString("Context window is full"))
+}
+
 func TestShouldSkipHealthIsolateLastLive(t *testing.T) {
-	require.False(t, shouldSkipHealthIsolateLastLive(accountHealthRow{minGroupLive: 0}))
-	require.True(t, shouldSkipHealthIsolateLastLive(accountHealthRow{minGroupLive: 1}))
+	require.Equal(t, "", healthIsolateSkipReason(accountHealthRow{minGroupLive: 0}))
+	require.Equal(t, "last_live_pool", healthIsolateSkipReason(accountHealthRow{minGroupLive: 1}))
+	require.Equal(t, "", healthIsolateSkipReason(accountHealthRow{minGroupLive: 2}))
+	require.Equal(t, "pool_mode", healthIsolateSkipReason(accountHealthRow{minGroupLive: 2, poolMode: true}))
+	require.True(t, shouldSkipHealthIsolateLastLive(accountHealthRow{poolMode: true, minGroupLive: 5}))
 	require.False(t, shouldSkipHealthIsolateLastLive(accountHealthRow{minGroupLive: 2}))
 
 	now := time.Now()
