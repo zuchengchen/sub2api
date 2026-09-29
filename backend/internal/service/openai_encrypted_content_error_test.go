@@ -89,8 +89,8 @@ func TestAccountHealthExcludesEncryptedContentErrors(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(regexp.QuoteMeta(`~* $3::text`)).
-		WithArgs(10, openAICookieWSUnavailableMessage, openAIEncryptedContentErrorPattern).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "platform", "ok", "avg_ms", "err", "until", "reason", "min_group_live"}))
+		WithArgs(10, openAICookieWSUnavailableMessage, openAIEncryptedContentErrorPattern, accountHealthCapacityErrorPattern).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "platform", "ok", "avg_ms", "err", "until", "reason", "min_group_live", "pool_mode"}))
 	svc := NewAccountHealthService(db, nil, nil)
 	_, err = svc.queryWindowStats(context.Background(), 10)
 	require.NoError(t, err)
