@@ -226,10 +226,13 @@ type accountHealthRow struct {
 	err      int64
 	until    sql.NullTime
 	reason   sql.NullString
-	// minGroupLive is the smallest number of currently schedulable accounts
-	// across groups this account belongs to. 0 means the account is not in
-	// any group. 1 means isolating it would empty at least one group.
+	// minGroupLive is the smallest number of currently schedulable upstream
+	// pools across groups this account belongs to. Accounts that share an
+	// API key (or extra.upstream_pool) count as one pool. 0 means the
+	// account is not in any group. 1 means isolating it would empty at
+	// least one group's remaining pools.
 	minGroupLive int
+	poolMode     bool
 }
 
 func (s *AccountHealthService) runOnce() {
@@ -255,14 +258,12 @@ func (s *AccountHealthService) runOnce() {
 				next[r.id] = snap
 				continue
 			}
-			// Isolating the last live account in a group turns intermittent
-			// upstream 5xx into a full outage. Keep it degraded and schedulable.
-			if shouldSkipHealthIsolateLastLive(r) {
+			if reason := healthIsolateSkipReason(r); reason != "" {
 				snap.State = "degraded"
 				snap.Isolated = false
-				slog.Info("account_health.skip_isolate_last_live",
-					"account_id", r.id, "err_rate", snap.ErrRate, "total", snap.Total,
-					"min_group_live", r.minGroupLive)
+				slog.Info("account_health.skip_isolate",
+					"account_id", r.id, "reason", reason, "err_rate", snap.ErrRate,
+					"total", snap.Total, "min_group_live", r.minGroupLive, "pool_mode", r.poolMode)
 				next[r.id] = snap
 				continue
 			}
@@ -346,11 +347,22 @@ func formatRate(v float64) string {
 	return strconv.FormatFloat(math.Round(v*1000)/10, 'f', 1, 64) + "%"
 }
 
-// shouldSkipHealthIsolateLastLive reports whether auto-isolation would empty
-// at least one group this account belongs to. minGroupLive counts currently
-// schedulable members, including this account.
+// healthIsolateSkipReason reports why auto-isolation must not run.
+// pool_mode reverse proxies already fail over internally; minGroupLive==1
+// means isolating this row would empty every remaining upstream pool in
+// one of its groups (duplicate gateways to the same API key count as one pool).
+func healthIsolateSkipReason(r accountHealthRow) string {
+	if r.poolMode {
+		return "pool_mode"
+	}
+	if r.minGroupLive == 1 {
+		return "last_live_pool"
+	}
+	return ""
+}
+
 func shouldSkipHealthIsolateLastLive(r accountHealthRow) bool {
-	return r.minGroupLive == 1
+	return healthIsolateSkipReason(r) != ""
 }
 
 func (s *AccountHealthService) queryWindowStats(ctx context.Context, windowMinutes int) ([]accountHealthRow, error) {
@@ -358,12 +370,16 @@ func (s *AccountHealthService) queryWindowStats(ctx context.Context, windowMinut
 	// back to /responses HTTP and must not isolate the account. Encrypted
 	// content that another account minted fails on every account, so it is a
 	// request problem, not account health (openai_encrypted_content_error.go).
+	// Capacity 5xx / connection-refused / model-overload are pool-wide or
+	// request-scoped; switching a duplicate gateway to the same reverse proxy
+	// cannot fix them (account_health_capacity.go).
 	q := `
 SELECT a.id, COALESCE(a.name, ''), COALESCE(a.platform, ''),
   COALESCE(u.ok_count, 0), u.avg_ms,
   COALESCE(e.err_count, 0),
   a.temp_unschedulable_until, a.temp_unschedulable_reason,
-  COALESCE(peers.min_group_live, 0)
+  COALESCE(peers.min_group_live, 0),
+  lower(COALESCE(a.credentials->>'pool_mode', '')) IN ('true', '1')
 FROM accounts a
 LEFT JOIN (
   SELECT account_id, COUNT(*) AS ok_count, AVG(duration_ms) AS avg_ms
@@ -377,23 +393,33 @@ LEFT JOIN (
   FROM ops_error_logs
   WHERE created_at >= NOW() - ($1 || ' minutes')::interval
     AND COALESCE(status_code, 0) >= 400
+    AND COALESCE(status_code, 0) NOT IN (502, 503, 529)
     AND NOT COALESCE(is_business_limited, FALSE)
     AND COALESCE(upstream_error_message, error_message, '') <> $2
     AND NOT ((COALESCE(upstream_error_message, '') || ' ' || COALESCE(error_message, '')) ~* $3::text)
+    AND NOT ((COALESCE(upstream_error_message, '') || ' ' || COALESCE(error_message, '')) ~* $4::text)
     AND account_id IS NOT NULL
   GROUP BY account_id
 ) e ON e.account_id = a.id
 LEFT JOIN (
-  SELECT ag.account_id, MIN(grp.live_count)::int AS min_group_live
+  SELECT ag.account_id, MIN(grp.live_pools)::int AS min_group_live
   FROM account_groups ag
   JOIN (
     SELECT ag2.group_id,
-           COUNT(*) FILTER (
+           COUNT(DISTINCT COALESCE(
+             NULLIF(btrim(COALESCE(a2.extra->>'upstream_pool', '')), ''),
+             CASE
+               WHEN COALESCE(a2.credentials->>'api_key', '') <> ''
+                 THEN COALESCE(a2.platform, '') || '|apikey:' || md5(a2.credentials->>'api_key')
+               ELSE COALESCE(a2.platform, '') || '|id:' || a2.id::text
+             END
+           )) FILTER (
              WHERE a2.deleted_at IS NULL
                AND a2.status = 'active'
                AND a2.schedulable IS TRUE
                AND (a2.temp_unschedulable_until IS NULL OR a2.temp_unschedulable_until <= NOW())
-           )::int AS live_count
+               AND (a2.overload_until IS NULL OR a2.overload_until <= NOW())
+           )::int AS live_pools
     FROM account_groups ag2
     JOIN accounts a2 ON a2.id = ag2.account_id
     GROUP BY ag2.group_id
@@ -403,7 +429,7 @@ LEFT JOIN (
 WHERE a.deleted_at IS NULL
   AND (u.account_id IS NOT NULL OR e.account_id IS NOT NULL
     OR COALESCE(a.temp_unschedulable_reason, '') LIKE 'health:%')`
-	rows, err := s.db.QueryContext(ctx, q, windowMinutes, openAICookieWSUnavailableMessage, openAIEncryptedContentErrorPattern)
+	rows, err := s.db.QueryContext(ctx, q, windowMinutes, openAICookieWSUnavailableMessage, openAIEncryptedContentErrorPattern, accountHealthCapacityErrorPattern)
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +437,7 @@ WHERE a.deleted_at IS NULL
 	var out []accountHealthRow
 	for rows.Next() {
 		var r accountHealthRow
-		if err := rows.Scan(&r.id, &r.name, &r.platform, &r.ok, &r.avgMs, &r.err, &r.until, &r.reason, &r.minGroupLive); err != nil {
+		if err := rows.Scan(&r.id, &r.name, &r.platform, &r.ok, &r.avgMs, &r.err, &r.until, &r.reason, &r.minGroupLive, &r.poolMode); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
