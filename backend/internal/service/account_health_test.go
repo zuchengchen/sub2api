@@ -81,3 +81,16 @@ func TestNormalizeAccountHealthSettings(t *testing.T) {
 
 	require.Equal(t, "50.0%", formatRate(0.5))
 }
+
+func TestShouldSkipHealthIsolateLastLive(t *testing.T) {
+	require.False(t, shouldSkipHealthIsolateLastLive(accountHealthRow{minGroupLive: 0}))
+	require.True(t, shouldSkipHealthIsolateLastLive(accountHealthRow{minGroupLive: 1}))
+	require.False(t, shouldSkipHealthIsolateLastLive(accountHealthRow{minGroupLive: 2}))
+
+	now := time.Now()
+	cfg := testHealthCfg()
+	r := accountHealthRow{id: 22173, ok: 4, err: 8, minGroupLive: 1}
+	snap := decideAccountHealth(r, cfg, now)
+	require.Equal(t, "isolated", snap.State)
+	require.True(t, shouldSkipHealthIsolateLastLive(r))
+}

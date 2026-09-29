@@ -226,6 +226,10 @@ type accountHealthRow struct {
 	err      int64
 	until    sql.NullTime
 	reason   sql.NullString
+	// minGroupLive is the smallest number of currently schedulable accounts
+	// across groups this account belongs to. 0 means the account is not in
+	// any group. 1 means isolating it would empty at least one group.
+	minGroupLive int
 }
 
 func (s *AccountHealthService) runOnce() {
@@ -248,6 +252,17 @@ func (s *AccountHealthService) runOnce() {
 		if snap.State == "isolated" && !r.isHealthIsolated(now) {
 			// 同列多写者（限流/刷新/传输层）：若其他子系统已设冷却且未到期，不覆盖。
 			if r.until.Valid && r.until.Time.After(now) {
+				next[r.id] = snap
+				continue
+			}
+			// Isolating the last live account in a group turns intermittent
+			// upstream 5xx into a full outage. Keep it degraded and schedulable.
+			if shouldSkipHealthIsolateLastLive(r) {
+				snap.State = "degraded"
+				snap.Isolated = false
+				slog.Info("account_health.skip_isolate_last_live",
+					"account_id", r.id, "err_rate", snap.ErrRate, "total", snap.Total,
+					"min_group_live", r.minGroupLive)
 				next[r.id] = snap
 				continue
 			}
@@ -331,6 +346,13 @@ func formatRate(v float64) string {
 	return strconv.FormatFloat(math.Round(v*1000)/10, 'f', 1, 64) + "%"
 }
 
+// shouldSkipHealthIsolateLastLive reports whether auto-isolation would empty
+// at least one group this account belongs to. minGroupLive counts currently
+// schedulable members, including this account.
+func shouldSkipHealthIsolateLastLive(r accountHealthRow) bool {
+	return r.minGroupLive == 1
+}
+
 func (s *AccountHealthService) queryWindowStats(ctx context.Context, windowMinutes int) ([]accountHealthRow, error) {
 	// Cookie websocket unavailability is an optimization miss; Forward falls
 	// back to /responses HTTP and must not isolate the account. Encrypted
@@ -340,7 +362,8 @@ func (s *AccountHealthService) queryWindowStats(ctx context.Context, windowMinut
 SELECT a.id, COALESCE(a.name, ''), COALESCE(a.platform, ''),
   COALESCE(u.ok_count, 0), u.avg_ms,
   COALESCE(e.err_count, 0),
-  a.temp_unschedulable_until, a.temp_unschedulable_reason
+  a.temp_unschedulable_until, a.temp_unschedulable_reason,
+  COALESCE(peers.min_group_live, 0)
 FROM accounts a
 LEFT JOIN (
   SELECT account_id, COUNT(*) AS ok_count, AVG(duration_ms) AS avg_ms
@@ -360,6 +383,23 @@ LEFT JOIN (
     AND account_id IS NOT NULL
   GROUP BY account_id
 ) e ON e.account_id = a.id
+LEFT JOIN (
+  SELECT ag.account_id, MIN(grp.live_count)::int AS min_group_live
+  FROM account_groups ag
+  JOIN (
+    SELECT ag2.group_id,
+           COUNT(*) FILTER (
+             WHERE a2.deleted_at IS NULL
+               AND a2.status = 'active'
+               AND a2.schedulable IS TRUE
+               AND (a2.temp_unschedulable_until IS NULL OR a2.temp_unschedulable_until <= NOW())
+           )::int AS live_count
+    FROM account_groups ag2
+    JOIN accounts a2 ON a2.id = ag2.account_id
+    GROUP BY ag2.group_id
+  ) grp ON grp.group_id = ag.group_id
+  GROUP BY ag.account_id
+) peers ON peers.account_id = a.id
 WHERE a.deleted_at IS NULL
   AND (u.account_id IS NOT NULL OR e.account_id IS NOT NULL
     OR COALESCE(a.temp_unschedulable_reason, '') LIKE 'health:%')`
@@ -371,7 +411,7 @@ WHERE a.deleted_at IS NULL
 	var out []accountHealthRow
 	for rows.Next() {
 		var r accountHealthRow
-		if err := rows.Scan(&r.id, &r.name, &r.platform, &r.ok, &r.avgMs, &r.err, &r.until, &r.reason); err != nil {
+		if err := rows.Scan(&r.id, &r.name, &r.platform, &r.ok, &r.avgMs, &r.err, &r.until, &r.reason, &r.minGroupLive); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
