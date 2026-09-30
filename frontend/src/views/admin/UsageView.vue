@@ -295,7 +295,7 @@ const exactTimeRange = ref<ExactUsageTimeRange | null>({
   start_time: defaultRange.start_time,
   end_time: defaultRange.end_time,
 })
-const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, native_compaction_v2: null, billing_type: null, start_date: startDate.value, end_date: endDate.value })
+const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, native_compaction_v2: null, billing_type: null, route_degraded: null, start_date: startDate.value, end_date: endDate.value })
 const refreshRollingRange = () => {
   if (activeDatePreset.value !== LAST_24_HOURS_PRESET) return
   const range = createLast24HoursRange()
@@ -573,7 +573,7 @@ const resetFilters = () => {
     start_time: range.start_time,
     end_time: range.end_time,
   }
-  filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, native_compaction_v2: null, billing_type: null, billing_mode: undefined }
+  filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, native_compaction_v2: null, billing_type: null, billing_mode: undefined, route_degraded: null }
   granularity.value = getGranularityForRange(startDate.value, endDate.value)
   applyFilters()
 }

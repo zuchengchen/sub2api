@@ -852,6 +852,23 @@ export default {
           runtime_blocked: '运行时保护已暂停账号',
           model_temporarily_unschedulable: '模型暂时不可调度'
         },
+        codexTiboRoutes: '线路',
+        codexTiboRouteSummary: '线路 {route}：{verdict}',
+        codexTiboRouteVerdict: {
+          healthy: '健康',
+          unknown: '未知',
+          degraded: '降智',
+          unavailable: '不可用'
+        },
+        codexTiboRouteConfirmed: '已确认：{verdict}',
+        codexTiboRouteCheckedAt: '最近检查：{time}',
+        codexTiboRouteFlippedAt: '最近切换：{time}',
+        codexTiboRouteNextProbeAt: '下次探测：{time}',
+        codexTiboRoutePendingVotes: '待确认投票：{votes}',
+        codexTiboRouteLastSample: '最近样本：{sample}',
+        codexTiboRouteHourly: '近一小时探针/切换：{probes}/{flips}',
+        codexTiboRouteVotes: '投票窗口 {windows}：确认切换 {confirmed}，否决 {rejected}（本次启动以来）',
+        codexTiboRouteShadow: '影子对比（与 HTTP 结论）：一致 {agree}，不一致 {disagree}',
         codexImageTool: 'Codex 图片桥接策略',
         codexImageToolDesc:
           '统一控制 Codex /responses 文本请求的 hosted image_generation 桥接和客户端图片工具声明。hosted 工具自动注入仅适用于非 Responses Lite 请求；账号级策略优先于渠道和全局配置，不影响独立图片生成接口。',

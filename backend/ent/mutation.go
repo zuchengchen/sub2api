@@ -38520,6 +38520,7 @@ type UsageLogMutation struct {
 	upstream_model               *string
 	upstream_response_model      *string
 	upstream_model_mismatch      *bool
+	route_degraded               *bool
 	channel_id                   *int64
 	addchannel_id                *int64
 	model_mapping_chain          *string
@@ -39065,6 +39066,55 @@ func (m *UsageLogMutation) UpstreamModelMismatchCleared() bool {
 func (m *UsageLogMutation) ResetUpstreamModelMismatch() {
 	m.upstream_model_mismatch = nil
 	delete(m.clearedFields, usagelog.FieldUpstreamModelMismatch)
+}
+
+// SetRouteDegraded sets the "route_degraded" field.
+func (m *UsageLogMutation) SetRouteDegraded(b bool) {
+	m.route_degraded = &b
+}
+
+// RouteDegraded returns the value of the "route_degraded" field in the mutation.
+func (m *UsageLogMutation) RouteDegraded() (r bool, exists bool) {
+	v := m.route_degraded
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRouteDegraded returns the old "route_degraded" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldRouteDegraded(ctx context.Context) (v *bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRouteDegraded is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRouteDegraded requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRouteDegraded: %w", err)
+	}
+	return oldValue.RouteDegraded, nil
+}
+
+// ClearRouteDegraded clears the value of the "route_degraded" field.
+func (m *UsageLogMutation) ClearRouteDegraded() {
+	m.route_degraded = nil
+	m.clearedFields[usagelog.FieldRouteDegraded] = struct{}{}
+}
+
+// RouteDegradedCleared returns if the "route_degraded" field was cleared in this mutation.
+func (m *UsageLogMutation) RouteDegradedCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldRouteDegraded]
+	return ok
+}
+
+// ResetRouteDegraded resets all changes to the "route_degraded" field.
+func (m *UsageLogMutation) ResetRouteDegraded() {
+	m.route_degraded = nil
+	delete(m.clearedFields, usagelog.FieldRouteDegraded)
 }
 
 // SetChannelID sets the "channel_id" field.
@@ -41263,7 +41313,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 47)
+	fields := make([]string, 0, 48)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -41290,6 +41340,9 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.upstream_model_mismatch != nil {
 		fields = append(fields, usagelog.FieldUpstreamModelMismatch)
+	}
+	if m.route_degraded != nil {
+		fields = append(fields, usagelog.FieldRouteDegraded)
 	}
 	if m.channel_id != nil {
 		fields = append(fields, usagelog.FieldChannelID)
@@ -41431,6 +41484,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.UpstreamResponseModel()
 	case usagelog.FieldUpstreamModelMismatch:
 		return m.UpstreamModelMismatch()
+	case usagelog.FieldRouteDegraded:
+		return m.RouteDegraded()
 	case usagelog.FieldChannelID:
 		return m.ChannelID()
 	case usagelog.FieldModelMappingChain:
@@ -41534,6 +41589,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldUpstreamResponseModel(ctx)
 	case usagelog.FieldUpstreamModelMismatch:
 		return m.OldUpstreamModelMismatch(ctx)
+	case usagelog.FieldRouteDegraded:
+		return m.OldRouteDegraded(ctx)
 	case usagelog.FieldChannelID:
 		return m.OldChannelID(ctx)
 	case usagelog.FieldModelMappingChain:
@@ -41681,6 +41738,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetUpstreamModelMismatch(v)
+		return nil
+	case usagelog.FieldRouteDegraded:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRouteDegraded(v)
 		return nil
 	case usagelog.FieldChannelID:
 		v, ok := value.(int64)
@@ -42245,6 +42309,9 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	if m.FieldCleared(usagelog.FieldUpstreamModelMismatch) {
 		fields = append(fields, usagelog.FieldUpstreamModelMismatch)
 	}
+	if m.FieldCleared(usagelog.FieldRouteDegraded) {
+		fields = append(fields, usagelog.FieldRouteDegraded)
+	}
 	if m.FieldCleared(usagelog.FieldChannelID) {
 		fields = append(fields, usagelog.FieldChannelID)
 	}
@@ -42324,6 +42391,9 @@ func (m *UsageLogMutation) ClearField(name string) error {
 		return nil
 	case usagelog.FieldUpstreamModelMismatch:
 		m.ClearUpstreamModelMismatch()
+		return nil
+	case usagelog.FieldRouteDegraded:
+		m.ClearRouteDegraded()
 		return nil
 	case usagelog.FieldChannelID:
 		m.ClearChannelID()
@@ -42413,6 +42483,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldUpstreamModelMismatch:
 		m.ResetUpstreamModelMismatch()
+		return nil
+	case usagelog.FieldRouteDegraded:
+		m.ResetRouteDegraded()
 		return nil
 	case usagelog.FieldChannelID:
 		m.ResetChannelID()

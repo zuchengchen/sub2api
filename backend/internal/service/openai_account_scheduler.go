@@ -572,6 +572,13 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		clearBinding()
 		return nil, false, nil
 	}
+	// Every Tibo route of the sticky account is degraded while another
+	// account has a healthy route: move this session (never a continuation).
+	if s.shouldReleaseOpenAITiboDegradedSticky(ctx, req, account) {
+		slog.Info("sticky_tibo_degraded_released", "account_id", accountID)
+		clearBinding()
+		return nil, false, nil
+	}
 	escapeCfg := s.service.openAIStickyEscapeConfig()
 	if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyAccount(accountID, escapeCfg); shouldEscape && !req.DisableStickyEscape {
 		slog.Info("sticky_escape_triggered",
@@ -1115,6 +1122,20 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		return append(primary, overflow...)
 	}
 
+	// Tibo route tiers soft-order candidates (healthy > unknown > degraded)
+	// without filtering; load and concurrency limits still apply per account.
+	buildTieredSelectionOrder := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+		tiers := s.partitionOpenAITiboRouteTiers(req, pool)
+		if tiers == nil {
+			return buildSelectionOrder(pool)
+		}
+		selectionOrder := make([]openAIAccountCandidateScore, 0, len(pool))
+		for _, tier := range tiers {
+			selectionOrder = append(selectionOrder, buildSelectionOrder(tier)...)
+		}
+		return selectionOrder
+	}
+
 	if req.RequireCompact {
 		supported := make([]openAIAccountCandidateScore, 0, len(plan.candidates))
 		unknown := make([]openAIAccountCandidateScore, 0, len(plan.candidates))
@@ -1127,15 +1148,84 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 			}
 		}
 		selectionOrder := make([]openAIAccountCandidateScore, 0, len(plan.allCandidates))
-		selectionOrder = append(selectionOrder, buildSelectionOrder(supported)...)
-		selectionOrder = append(selectionOrder, buildSelectionOrder(unknown)...)
+		selectionOrder = append(selectionOrder, buildTieredSelectionOrder(supported)...)
+		selectionOrder = append(selectionOrder, buildTieredSelectionOrder(unknown)...)
 		if len(plan.staleSnapshotCompactRetry) > 0 && s.service.schedulerSnapshot != nil {
 			selectionOrder = append(selectionOrder, sortOpenAICompactRetryCandidates(plan.staleSnapshotCompactRetry)...)
 		}
 		return selectionOrder
 	}
 
-	return buildSelectionOrder(plan.candidates)
+	return buildTieredSelectionOrder(plan.candidates)
+}
+
+// partitionOpenAITiboRouteTiers splits candidates by Tibo route tier when
+// scheduler_prefer_healthy_route is on. It returns nil when tiering is off or
+// every candidate is in one tier (the existing order applies unchanged). The
+// previous-response account keeps the top tier so continuations stay put.
+func (s *defaultOpenAIAccountScheduler) partitionOpenAITiboRouteTiers(req OpenAIAccountScheduleRequest, pool []openAIAccountCandidateScore) [][]openAIAccountCandidateScore {
+	if s == nil || s.service == nil || len(pool) < 2 || !s.service.openAITiboRouteConfig().preferHealthy {
+		return nil
+	}
+	now := time.Now()
+	tiers := make([][]openAIAccountCandidateScore, 3)
+	populated := 0
+	for _, candidate := range pool {
+		tier := s.service.openAITiboSchedulerTier(candidate.account, req.RequestedModel, now)
+		if strings.TrimSpace(req.PreviousResponseID) != "" && req.StickyPreviousAccountID > 0 &&
+			candidate.account != nil && candidate.account.ID == req.StickyPreviousAccountID {
+			tier = 0
+		}
+		if len(tiers[tier]) == 0 {
+			populated++
+		}
+		tiers[tier] = append(tiers[tier], candidate)
+	}
+	if populated < 2 {
+		return nil
+	}
+	return tiers
+}
+
+// shouldReleaseOpenAITiboDegradedSticky reports whether a sticky session on
+// an account whose routes are all degraded should move: only without a
+// previous_response_id, and only when a schedulable account with a healthy
+// route exists.
+func (s *defaultOpenAIAccountScheduler) shouldReleaseOpenAITiboDegradedSticky(ctx context.Context, req OpenAIAccountScheduleRequest, sticky *Account) bool {
+	if s == nil || s.service == nil || sticky == nil || strings.TrimSpace(req.PreviousResponseID) != "" || !s.service.openAITiboRouteConfig().preferHealthy {
+		return false
+	}
+	now := time.Now()
+	if s.service.openAITiboSchedulerTier(sticky, req.RequestedModel, now) != 2 {
+		return false
+	}
+	accounts, err := s.service.listSchedulableAccounts(ctx, req.GroupID, req.Platform)
+	if err != nil {
+		return false
+	}
+	for i := range accounts {
+		candidate := &accounts[i]
+		if candidate.ID == sticky.ID {
+			continue
+		}
+		if req.ExcludedIDs != nil {
+			if _, excluded := req.ExcludedIDs[candidate.ID]; excluded {
+				continue
+			}
+		}
+		if !candidate.IsSchedulable() || candidate.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !candidate.IsOpenAICompatible() {
+			continue
+		}
+		if s.service.openAITiboSchedulerTier(candidate, req.RequestedModel, now) != 0 {
+			continue
+		}
+		if s.service.isOpenAIAccountRequestRuntimeBlocked(candidate, req.RequestedModel, req.RequireCompact) ||
+			!s.isAccountRequestCompatible(ctx, candidate, req) || !s.isAccountTransportCompatible(candidate, req.RequiredTransport, req.RequestedModel) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func sortOpenAICompactRetryCandidates(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {

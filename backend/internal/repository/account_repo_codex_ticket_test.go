@@ -57,6 +57,10 @@ func TestCodexTicketExtraIsSchedulerNeutral(t *testing.T) {
 	require.True(t, isSchedulerNeutralExtraKey("codex_turn_ticket:gpt-6-astra"))
 	require.True(t, isSchedulerNeutralExtraKey("codex_turn_ticket_revoked:gpt-6-astra"))
 	require.True(t, isSchedulerNeutralExtraKey("codex_cookie_ws:gpt-6-astra"))
+	require.True(t, isSchedulerNeutralExtraKey("codex_tibo_verdict:http"))
+	require.False(t, shouldEnqueueSchedulerOutboxForExtraUpdates(map[string]any{
+		"codex_tibo_verdict:http": map[string]any{"verdict": "degraded"},
+	}), "a Tibo verdict flip is runtime state, not a bucket change")
 	// 门票续期不再开事务发 bucket 重建事件（快照仍由 UpdateExtra 单独同步）。
 	require.False(t, shouldEnqueueSchedulerOutboxForExtraUpdates(map[string]any{
 		"codex_turn_ticket:gpt-6-astra": map[string]any{"state": "x"},

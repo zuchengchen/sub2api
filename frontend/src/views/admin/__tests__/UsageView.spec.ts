@@ -349,6 +349,79 @@ describe('admin UsageView native compaction filter', () => {
   })
 })
 
+describe('admin UsageView route degradation filter', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    list.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    exportList.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockReset().mockResolvedValue({
+      total_requests: 0, total_input_tokens: 0, total_output_tokens: 0,
+      total_cache_tokens: 0, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0,
+    })
+    getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
+    getModelStats.mockReset().mockResolvedValue({ models: [] })
+    saveAs.mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const clearRequestMocks = () => {
+    list.mockClear()
+    getStats.mockClear()
+    getModelStats.mockClear()
+    getSnapshotV2.mockClear()
+  }
+
+  it.each([true, false])('sends route_degraded=%s to the usage list and stats cards only, and clears it on reset', async (value) => {
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    expect((wrapper.vm as any).filters.route_degraded).toBeNull()
+    expect(list.mock.calls[0][0].route_degraded ?? null).toBeNull()
+
+    clearRequestMocks()
+    ;(wrapper.vm as any).filters.route_degraded = value
+    ;(wrapper.vm as any).applyFilters()
+    await flushPromises()
+
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(list.mock.calls[0][0]).toEqual(expect.objectContaining({ route_degraded: value, page: 1 }))
+    expect(getStats).toHaveBeenCalledTimes(1)
+    expect(getStats.mock.calls[0][0]).toEqual(expect.objectContaining({ route_degraded: value }))
+    // Dashboard model-stats / snapshot endpoints do not support route_degraded.
+    expect(getModelStats.mock.calls[0][0]).not.toHaveProperty('route_degraded')
+    expect(getSnapshotV2.mock.calls[0][0]).not.toHaveProperty('route_degraded')
+    expect((wrapper.vm as any).breakdownFilters).not.toHaveProperty('route_degraded')
+
+    clearRequestMocks()
+    ;(wrapper.vm as any).resetFilters()
+    await flushPromises()
+
+    expect((wrapper.vm as any).filters.route_degraded).toBeNull()
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ route_degraded: null }), expect.anything())
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining({ route_degraded: null }))
+  })
+
+  it('keeps route_degraded on the paged list requests used by Excel export', async () => {
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).filters.route_degraded = true
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(exportList).toHaveBeenCalledWith(
+      expect.objectContaining({ route_degraded: true, page: 1, page_size: 100, exact_total: true }),
+      expect.anything()
+    )
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('admin UsageView distribution metric toggles', () => {
   beforeEach(() => {
     vi.useFakeTimers()

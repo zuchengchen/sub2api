@@ -64,6 +64,15 @@ func (UsageLog) Fields() []ent.Field {
 		field.Bool("upstream_model_mismatch").
 			Optional().
 			Nillable(),
+		// RouteDegraded is tri-state: NULL means Tibo route selection did not
+		// apply (non Cookie-WS accounts, other platforms, or rows written before
+		// this field); false means Tibo routing applied and a healthy/unknown
+		// route served the request; true means every route for the account was
+		// degraded/unavailable and the request was served on the plain HTTP
+		// fallback ("降智兜底").
+		field.Bool("route_degraded").
+			Optional().
+			Nillable(),
 		field.Int64("channel_id").Optional().Nillable().Comment("渠道 ID"),
 		field.String("model_mapping_chain").MaxLen(500).Optional().Nillable().Comment("模型映射链"),
 		field.String("billing_tier").MaxLen(50).Optional().Nillable().Comment("计费层级标签"),

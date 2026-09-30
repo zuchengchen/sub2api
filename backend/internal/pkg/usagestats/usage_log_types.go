@@ -284,8 +284,14 @@ type UsageLogFilters struct {
 	BillingType           *int8
 	BillingMode           string
 	UpstreamModelMismatch *bool
-	StartTime             *time.Time
-	EndTime               *time.Time
+	// RouteDegraded filters the tri-state usage_logs.route_degraded column
+	// (usage list only; stats/trend/dashboard aggregations ignore it). true keeps
+	// rows served on the plain HTTP fallback because every Tibo route was
+	// degraded; false keeps rows served on a healthy/unknown route. NULL rows
+	// (Tibo route selection not applied) match neither value.
+	RouteDegraded *bool
+	StartTime     *time.Time
+	EndTime       *time.Time
 	// ExactTotal requests exact COUNT(*) for pagination. Default false for fast large-table paging.
 	ExactTotal bool
 }
