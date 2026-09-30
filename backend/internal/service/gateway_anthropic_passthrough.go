@@ -649,17 +649,20 @@ func parseSSEUsagePassthrough(data string, usage *ClaudeUsage) {
 	case "message_delta":
 		deltaUsage := parsed.Get("usage")
 		if deltaUsage.Exists() {
-			if v := deltaUsage.Get("input_tokens").Int(); v > 0 {
-				usage.InputTokens = int(v)
+			// usage_final: upstream (kiro-rs) marks message_delta usage as the
+			// authoritative final snapshot; adopt buckets even when they are 0.
+			final := deltaUsage.Get("usage_final").Bool()
+			if v := deltaUsage.Get("input_tokens"); v.Exists() && (v.Int() > 0 || final) {
+				usage.InputTokens = int(v.Int())
 			}
-			if v := deltaUsage.Get("output_tokens").Int(); v > 0 {
-				usage.OutputTokens = int(v)
+			if v := deltaUsage.Get("output_tokens"); v.Exists() && (v.Int() > 0 || final) {
+				usage.OutputTokens = int(v.Int())
 			}
-			if v := deltaUsage.Get("cache_creation_input_tokens").Int(); v > 0 {
-				usage.CacheCreationInputTokens = int(v)
+			if v := deltaUsage.Get("cache_creation_input_tokens"); v.Exists() && (v.Int() > 0 || final) {
+				usage.CacheCreationInputTokens = int(v.Int())
 			}
-			if v := deltaUsage.Get("cache_read_input_tokens").Int(); v > 0 {
-				usage.CacheReadInputTokens = int(v)
+			if v := deltaUsage.Get("cache_read_input_tokens"); v.Exists() && (v.Int() > 0 || final) {
+				usage.CacheReadInputTokens = int(v.Int())
 			}
 
 			cc5m := deltaUsage.Get("cache_creation.ephemeral_5m_input_tokens")

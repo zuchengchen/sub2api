@@ -1244,19 +1244,23 @@ func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePat
 		}
 
 		patch := &sseUsagePatch{}
-		if v, ok := parseSSEUsageInt(usageObj["input_tokens"]); ok && v > 0 {
+		// usage_final: upstream (kiro-rs) marks message_delta usage as the
+		// authoritative final snapshot. Adopt all four buckets, including 0, so a
+		// request-time estimate from message_start cannot linger.
+		final, _ := usageObj["usage_final"].(bool)
+		if v, ok := parseSSEUsageInt(usageObj["input_tokens"]); ok && (v > 0 || final) {
 			patch.inputTokens = v
 			patch.hasInputTokens = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["output_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["output_tokens"]); ok && (v > 0 || final) {
 			patch.outputTokens = v
 			patch.hasOutputTokens = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["cache_creation_input_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["cache_creation_input_tokens"]); ok && (v > 0 || final) {
 			patch.cacheCreationInputTokens = v
 			patch.hasCacheCreationInput = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["cache_read_input_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["cache_read_input_tokens"]); ok && (v > 0 || final) {
 			patch.cacheReadInputTokens = v
 			patch.hasCacheReadInput = true
 		}
