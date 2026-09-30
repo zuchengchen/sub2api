@@ -301,6 +301,16 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		cacheReadTokens = max(*src.PromptCacheHitTokens, 0)
 	}
 
+	// usage_final (kiro-rs extension): the event carries the authoritative final
+	// snapshot, so zero buckets must override request-time estimates.
+	if src.UsageFinal {
+		dst.InputTokens = max(src.InputTokens, 0)
+		dst.CacheReadInputTokens = max(cacheReadTokens, 0)
+		dst.CacheCreationInputTokens = max(src.CacheCreationInputTokens, 0)
+		dst.OutputTokens = max(src.OutputTokens, 0)
+		return
+	}
+
 	// Some Anthropic-compatible providers retain OpenAI-style prompt/cache
 	// fields. Prefer those authoritative totals or hit/miss buckets over the
 	// overloaded input_tokens field. This covers Kimi's changing stream
