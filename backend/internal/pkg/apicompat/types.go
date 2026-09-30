@@ -176,6 +176,9 @@ type AnthropicUsage struct {
 	PromptTokensDetails   *AnthropicPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
 	PromptCacheHitTokens  *int                          `json:"prompt_cache_hit_tokens,omitempty"`
 	PromptCacheMissTokens *int                          `json:"prompt_cache_miss_tokens,omitempty"`
+	// UsageFinal marks message_delta usage as the authoritative final snapshot
+	// (kiro-rs extension). Zero buckets then override earlier estimates.
+	UsageFinal bool `json:"usage_final,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
