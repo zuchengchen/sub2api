@@ -71,9 +71,46 @@ func TestMergeAnthropicUsage_UsageFinalOverridesStart(t *testing.T) {
 	u := &ClaudeUsage{}
 	mergeAnthropicUsage(u, start.Message.Usage)
 	require.Equal(t, 828840, u.CacheCreationInputTokens)
+	require.Equal(t, 828840, u.CacheCreation1hTokens, "message_start 1h split must be kept for billing")
+	require.Equal(t, 0, u.CacheCreation5mTokens)
 	mergeAnthropicUsage(u, delta.Usage)
 	require.Equal(t, 0, u.InputTokens)
 	require.Equal(t, 0, u.CacheCreationInputTokens)
+	require.Equal(t, 0, u.CacheCreation1hTokens)
 	require.Equal(t, 828840, u.CacheReadInputTokens)
 	require.Equal(t, 387, u.OutputTokens)
+}
+
+func TestMergeAnthropicUsage_CacheCreationBreakdown(t *testing.T) {
+	var start struct {
+		Message struct {
+			Usage apicompat.AnthropicUsage `json:"usage"`
+		} `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(kiroStart), &start))
+
+	// A delta without cache_creation keeps the start split.
+	u := &ClaudeUsage{}
+	mergeAnthropicUsage(u, start.Message.Usage)
+	mergeAnthropicUsage(u, apicompat.AnthropicUsage{OutputTokens: 9})
+	require.Equal(t, 828840, u.CacheCreation1hTokens)
+	require.Equal(t, 0, u.CacheCreation5mTokens)
+
+	// A present sub-field overrides, including 0; an absent one is left alone.
+	var partial apicompat.AnthropicUsage
+	require.NoError(t, json.Unmarshal([]byte(`{"output_tokens":9,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":100}}`), &partial))
+	mergeAnthropicUsage(u, partial)
+	require.Equal(t, 100, u.CacheCreation5mTokens)
+	require.Equal(t, 828840, u.CacheCreation1hTokens)
+
+	// Upstreams that never send the object leave both at 0 (billing falls back to 5m).
+	legacy := &ClaudeUsage{}
+	mergeAnthropicUsage(legacy, apicompat.AnthropicUsage{InputTokens: 10, CacheCreationInputTokens: 50})
+	require.Equal(t, 50, legacy.CacheCreationInputTokens)
+	require.Zero(t, legacy.CacheCreation5mTokens+legacy.CacheCreation1hTokens)
+
+	// The field is not echoed when absent.
+	raw, err := json.Marshal(apicompat.AnthropicUsage{InputTokens: 1})
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "cache_creation\"")
 }

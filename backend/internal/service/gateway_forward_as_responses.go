@@ -301,6 +301,18 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		cacheReadTokens = max(*src.PromptCacheHitTokens, 0)
 	}
 
+	// cache_creation 5m/1h breakdown: same rule as the /v1/messages SSE parser
+	// (extractSSEUsagePatch) — any sub-field that is present overrides, including
+	// 0. Without it billing falls back to pricing every creation token at 5m.
+	if cc := src.CacheCreation; cc != nil {
+		if cc.Ephemeral5mInputTokens != nil {
+			dst.CacheCreation5mTokens = max(*cc.Ephemeral5mInputTokens, 0)
+		}
+		if cc.Ephemeral1hInputTokens != nil {
+			dst.CacheCreation1hTokens = max(*cc.Ephemeral1hInputTokens, 0)
+		}
+	}
+
 	// usage_final (kiro-rs extension): the event carries the authoritative final
 	// snapshot, so zero buckets must override request-time estimates.
 	if src.UsageFinal {

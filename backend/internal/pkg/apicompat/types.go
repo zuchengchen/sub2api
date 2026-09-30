@@ -179,6 +179,16 @@ type AnthropicUsage struct {
 	// UsageFinal marks message_delta usage as the authoritative final snapshot
 	// (kiro-rs extension). Zero buckets then override earlier estimates.
 	UsageFinal bool `json:"usage_final,omitempty"`
+	// CacheCreation is Anthropic's per-TTL split of cache_creation_input_tokens.
+	// Billing needs it to price 1h writes at the 1h rate.
+	CacheCreation *AnthropicCacheCreation `json:"cache_creation,omitempty"`
+}
+
+// AnthropicCacheCreation is the nested usage.cache_creation object. Pointers
+// distinguish an absent sub-field from an explicit 0.
+type AnthropicCacheCreation struct {
+	Ephemeral5mInputTokens *int `json:"ephemeral_5m_input_tokens,omitempty"`
+	Ephemeral1hInputTokens *int `json:"ephemeral_1h_input_tokens,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
