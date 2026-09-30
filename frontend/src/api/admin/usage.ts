@@ -85,6 +85,9 @@ export interface AdminUsageQueryParams extends UsageQueryParams {
   exact_total?: boolean
   billing_mode?: string
   upstream_model_mismatch?: boolean
+  // 列表与 /admin/usage/stats 支持（dashboard 模型/趋势/快照接口不支持）：
+  // true = 降智兜底，false = 未降智；两者都排除未走 Tibo 线路选择的记录
+  route_degraded?: boolean | null
   sort_by?: string
   sort_order?: 'asc' | 'desc'
   // 错误请求 tab 专属筛选(仅传给错误列表接口;共用同一 filters 对象)
@@ -126,6 +129,7 @@ export async function getStats(params: {
   stream?: boolean
   native_compaction_v2?: boolean | null
   upstream_model_mismatch?: boolean
+  route_degraded?: boolean | null
   period?: string
   start_date?: string
   end_date?: string

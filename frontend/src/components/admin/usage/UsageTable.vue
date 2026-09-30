@@ -87,6 +87,15 @@
                 {{ isLikelyModelVariant(row) ? t('usage.modelVariant') : t('usage.modelMismatch') }}
               </span>
             </div>
+            <div v-if="row.route_degraded === true">
+              <span
+                data-testid="route-degraded-badge"
+                class="inline-flex cursor-help rounded px-1 py-px text-[10px] font-medium ring-1 ring-inset bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30"
+                :title="t('usage.routeDegradedHint')"
+              >
+                {{ t('usage.routeDegraded') }}
+              </span>
+            </div>
           </div>
         </template>
 
