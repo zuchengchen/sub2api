@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -90,6 +92,9 @@ func TestTiboRouteHTTPTrueStaysOnHTTP(t *testing.T) {
 		if bps {
 			require.Equal(t, openAITiboHTTPOKReason, rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
 		}
+		require.NotNil(t, result.RouteDegraded)
+		require.False(t, *result.RouteDegraded)
+		require.Empty(t, rec.Header().Get(openAITiboRouteQualityHeader))
 	}
 }
 
@@ -128,37 +133,114 @@ func TestTiboRouteEverythingUnusableStillSendsHTTP(t *testing.T) {
 	require.Zero(t, tc.dialer.DialCount())
 	require.Equal(t, excelBPSHTTPFallbackReason, c.GetString("openai_ws_transport_reason"))
 	require.Contains(t, rec.Body.String(), "http ok")
+	require.Equal(t, "degraded", rec.Header().Get(openAITiboRouteQualityHeader), "only degraded routes remain")
+	require.NotNil(t, result.RouteDegraded)
+	require.True(t, *result.RouteDegraded)
 }
 
+// A cold account whose first probe is unknown has no confirmed verdict, so it
+// still takes the degraded-first chain (Cookie WS here), and unknown does not
+// become a verdict.
 func TestTiboRouteProbeFailureIsNotHealthy(t *testing.T) {
 	tc := newTiboRouteCase(t, false, true, tiboRouteStatusResponse(http.StatusTooManyRequests))
 	result, _, _ := tc.forward(t)
 	require.True(t, result.OpenAIWSMode, "an unknown verdict takes the degraded chain")
-	state := tc.svc.loadOpenAITiboHTTPState(tc.account.ID)
+	state := tc.svc.loadOpenAITiboAccountState(tc.account.ID)
 	require.NotNil(t, state)
-	require.Equal(t, openAITiboUnknown, state.verdict)
+	require.Empty(t, state.http.verdict, "unknown samples never become a verdict")
+	require.Equal(t, 1, state.http.unknownStreak)
+	require.Equal(t, openAITiboUnknown, tc.svc.openAITiboEffective(tc.account.ID, openAITiboRouteHTTP, time.Now()))
+	require.NotNil(t, result.RouteDegraded)
+	require.False(t, *result.RouteDegraded, "Cookie WS served, not the degraded HTTP fallback")
 }
 
+// tiboSafeUpstream serves probe and business requests from separate queues
+// and is safe for a background probe racing a business request.
+type tiboSafeUpstream struct {
+	mu         sync.Mutex
+	probeGate  chan struct{}
+	probes     int
+	businesses int
+}
+
+func (u *tiboSafeUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	body, _ := io.ReadAll(req.Body)
+	if strings.Contains(string(body), openAICookieWSProbePrompt) {
+		if u.probeGate != nil {
+			<-u.probeGate
+		}
+		u.mu.Lock()
+		u.probes++
+		u.mu.Unlock()
+		return cookieWSHTTPResponse("True"), nil
+	}
+	u.mu.Lock()
+	u.businesses++
+	u.mu.Unlock()
+	return cookieWSHTTPResponse("http ok"), nil
+}
+
+func (u *tiboSafeUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
+}
+
+// One probe serves many requests. A due verdict is served immediately while a
+// background probe refreshes it; only a never-sampled account waits.
 func TestTiboRouteVerdictIsCachedAndRefreshedWhenStale(t *testing.T) {
 	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"), cookieWSHTTPResponse("http ok"), cookieWSHTTPResponse("http ok"))
 	tc.forward(t)
 	tc.forward(t)
 	require.Len(t, tc.upstream.requests, 3, "one probe for two requests")
 	requireTiboProbe(t, tc.upstream.bodies[0])
+	state := tc.svc.loadOpenAITiboAccountState(tc.account.ID)
+	require.Equal(t, openAITiboHealthy, state.http.verdict)
+	require.WithinDuration(t, time.Now().Add(10*time.Minute), state.http.nextProbeAt, time.Minute, "healthy cadence")
 
-	// A stale verdict is served immediately while a background probe refreshes it.
-	stale := &openAITiboHTTPState{verdict: openAITiboHealthy, checkedAt: time.Now().Add(-openAITiboVerdictTTL - time.Second)}
-	require.False(t, stale.fresh(time.Now()))
-	require.True(t, (&openAITiboHTTPState{verdict: openAITiboUnknown, checkedAt: time.Now().Add(-30 * time.Second)}).fresh(time.Now()))
-	require.False(t, (&openAITiboHTTPState{verdict: openAITiboUnknown, checkedAt: time.Now().Add(-openAITiboUnknownTTL - time.Second)}).fresh(time.Now()))
+	safe := &tiboSafeUpstream{probeGate: make(chan struct{})}
+	tc.svc.httpUpstream = safe
+	state.mu.Lock()
+	state.http.nextProbeAt = time.Now().Add(-time.Second)
+	checkedBefore := state.http.checkedAt
+	state.mu.Unlock()
+	// The probe is held until the request has finished: the request must not wait for it.
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	result, err := tc.svc.Forward(context.Background(), c, tc.account, []byte(`{"model":"gpt-6-astra","input":"hello","stream":false}`))
+	require.NoError(t, err)
+	require.False(t, result.OpenAIWSMode, "served on the confirmed verdict")
+	require.NotNil(t, result.RouteDegraded)
+	require.False(t, *result.RouteDegraded, "healthy HTTP is not the degraded fallback")
+	close(safe.probeGate)
+	tc.svc.openaiTiboProbeWG.Wait()
+	safe.mu.Lock()
+	require.Equal(t, 1, safe.probes)
+	require.Equal(t, 1, safe.businesses)
+	safe.mu.Unlock()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.True(t, state.http.checkedAt.After(checkedBefore), "the agreeing probe refreshed the verdict")
 }
 
 func TestTiboRouteModelSwapIsDegraded(t *testing.T) {
 	tc := newTiboRouteCase(t, false, true)
 	body := "data: " + string(cookieWSCompletion("gpt-5.6-luna", "True")) + "\n\n"
 	tc.upstream.responses = []*http.Response{{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}}
-	verdict, status, _ := tc.svc.probeOpenAITiboHTTP(context.Background(), tc.account)
-	require.Equal(t, http.StatusOK, status)
-	require.Equal(t, openAITiboDegraded, verdict)
+	sample := tc.svc.probeOpenAITiboHTTP(context.Background(), tc.account)
+	require.Equal(t, http.StatusOK, sample.status)
+	require.Equal(t, openAITiboDegraded, sample.verdict)
 	require.Contains(t, tc.upstream.lastProxyURL, "bound-proxy.invalid", "probe uses the account's own proxy")
+}
+
+func TestTiboRouteProbeRetryAfterIsKept(t *testing.T) {
+	tc := newTiboRouteCase(t, false, true)
+	resp := tiboRouteStatusResponse(http.StatusTooManyRequests)
+	resp.Header.Set("Retry-After", "600")
+	tc.upstream.responses = []*http.Response{resp}
+	sample := tc.svc.probeOpenAITiboHTTP(context.Background(), tc.account)
+	require.Equal(t, openAITiboUnknown, sample.verdict)
+	require.Equal(t, http.StatusTooManyRequests, sample.status)
+	require.NotNil(t, sample.retryAt)
+	require.WithinDuration(t, time.Now().Add(10*time.Minute), *sample.retryAt, 5*time.Second)
 }

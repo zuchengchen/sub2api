@@ -973,6 +973,8 @@ type GatewayConfig struct {
 	// OpenAICodexTicket: ChatGPT OAuth 账号按 (账号, 模型) 捕获 292 长度
 	// x-codex-turn-state，并在住宅 IP 业务请求中注入该头。默认关闭。
 	OpenAICodexTicket OpenAICodexTicketConfig `mapstructure:"openai_codex_ticket"`
+	// OpenAITiboRoute: Cookie WS 账号按 Tibo 探针挑线路（后台探测、投票确认、调度分层）。
+	OpenAITiboRoute OpenAITiboRouteConfig `mapstructure:"openai_tibo_route"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// Live: ChatGPT Frameless Live 会话配置。
@@ -2351,6 +2353,23 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_codex_ticket.models", []string{"gpt-6-astra", "gpt-5.6-sol"})
 	viper.SetDefault("gateway.openai_codex_ticket.mode", "turn_state")
 	viper.SetDefault("gateway.openai_codex_ticket.cookie_ws_account_ids", []int64{})
+	// Tibo route selection for Cookie WS accounts (openai_tibo_route.go).
+	viper.SetDefault("gateway.openai_tibo_route.healthy_interval", 10*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.degraded_interval", 5*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.unknown_backoff", []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute})
+	viper.SetDefault("gateway.openai_tibo_route.jitter", 0.2)
+	viper.SetDefault("gateway.openai_tibo_route.confirm_samples", 3)
+	viper.SetDefault("gateway.openai_tibo_route.confirm_spacing", 20*time.Second)
+	viper.SetDefault("gateway.openai_tibo_route.min_degraded_dwell", 10*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.max_stale", 30*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.active_window", 30*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.max_probes_per_hour", 20)
+	viper.SetDefault("gateway.openai_tibo_route.probe_concurrency", 4)
+	viper.SetDefault("gateway.openai_tibo_route.bps_probe_mode", OpenAITiboBPSProbeOff)
+	viper.SetDefault("gateway.openai_tibo_route.bps_probe_interval", 10*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.scheduler_prefer_healthy_route", false)
+	viper.SetDefault("gateway.openai_tibo_route.degraded_alert_ratio", 0.5)
+	viper.SetDefault("gateway.openai_tibo_route.degraded_alert_min_requests", 20)
 	viper.SetDefault("gateway.live.max_session_duration_seconds", 3600)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
@@ -3423,6 +3442,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("gateway.openai_ws.sticky_previous_response_ttl_seconds must be non-negative")
 	}
 	if err := validateOpenAICodexTicketMode(c.Gateway.OpenAICodexTicket); err != nil {
+		return err
+	}
+	if err := validateOpenAITiboRoute(c.Gateway.OpenAITiboRoute); err != nil {
 		return err
 	}
 	if c.Gateway.OpenAIHTTP2.FallbackErrorThreshold < 0 {

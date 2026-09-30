@@ -159,6 +159,11 @@ func (h *UsageHandler) List(c *gin.Context) {
 		upstreamModelMismatch = &value
 	}
 
+	routeDegraded, ok := parseUsageRouteDegradedQuery(c)
+	if !ok {
+		return
+	}
+
 	startTime, endTime, err := parseOptionalUsageTimeRange(c)
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -185,6 +190,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		BillingType:           billingType,
 		BillingMode:           billingMode,
 		UpstreamModelMismatch: upstreamModelMismatch,
+		RouteDegraded:         routeDegraded,
 		StartTime:             startTime,
 		EndTime:               endTime,
 		ExactTotal:            exactTotal,
@@ -205,6 +211,23 @@ func (h *UsageHandler) List(c *gin.Context) {
 
 // Stats handles getting usage statistics with filters
 // GET /api/v1/admin/usage/stats
+// parseUsageRouteDegradedQuery parses the optional route_degraded filter for
+// the usage list and its stats cards: true = served on the plain HTTP fallback
+// because every Tibo route was degraded; false = a healthy/unknown route. It
+// writes a 400 and returns ok=false on an invalid value.
+func parseUsageRouteDegradedQuery(c *gin.Context) (*bool, bool) {
+	raw := strings.TrimSpace(c.Query("route_degraded"))
+	if raw == "" {
+		return nil, true
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		response.BadRequest(c, "Invalid route_degraded value, use true or false")
+		return nil, false
+	}
+	return &value, true
+}
+
 func (h *UsageHandler) Stats(c *gin.Context) {
 	// Parse filters - same as List endpoint
 	var userID, apiKeyID, accountID, groupID int64
@@ -293,6 +316,11 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		upstreamModelMismatch = &value
 	}
 
+	routeDegraded, ok := parseUsageRouteDegradedQuery(c)
+	if !ok {
+		return
+	}
+
 	// Parse exact rolling timestamps or calendar dates.
 	userTZ := c.Query("timezone")
 	now := timezone.NowInUserLocation(userTZ)
@@ -335,6 +363,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		BillingType:           billingType,
 		BillingMode:           billingMode,
 		UpstreamModelMismatch: upstreamModelMismatch,
+		RouteDegraded:         routeDegraded,
 		StartTime:             &startTime,
 		EndTime:               &endTime,
 	}

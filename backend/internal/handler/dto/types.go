@@ -692,6 +692,10 @@ type AdminUsageLog struct {
 	UpstreamResponseModel *string `json:"upstream_response_model,omitempty"`
 	// UpstreamModelMismatch is nil when the upstream did not declare a model.
 	UpstreamModelMismatch *bool `json:"upstream_model_mismatch,omitempty"`
+	// RouteDegraded is nil (omitted) when Tibo route selection did not apply;
+	// false means a healthy/unknown route served the request; true means every
+	// route was degraded and the plain HTTP fallback served it (降智兜底).
+	RouteDegraded *bool `json:"route_degraded,omitempty"`
 
 	// ChannelID 渠道 ID
 	ChannelID *int64 `json:"channel_id,omitempty"`

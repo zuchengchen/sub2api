@@ -182,6 +182,26 @@ func (_u *UsageLogUpdate) ClearUpstreamModelMismatch() *UsageLogUpdate {
 	return _u
 }
 
+// SetRouteDegraded sets the "route_degraded" field.
+func (_u *UsageLogUpdate) SetRouteDegraded(v bool) *UsageLogUpdate {
+	_u.mutation.SetRouteDegraded(v)
+	return _u
+}
+
+// SetNillableRouteDegraded sets the "route_degraded" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableRouteDegraded(v *bool) *UsageLogUpdate {
+	if v != nil {
+		_u.SetRouteDegraded(*v)
+	}
+	return _u
+}
+
+// ClearRouteDegraded clears the value of the "route_degraded" field.
+func (_u *UsageLogUpdate) ClearRouteDegraded() *UsageLogUpdate {
+	_u.mutation.ClearRouteDegraded()
+	return _u
+}
+
 // SetChannelID sets the "channel_id" field.
 func (_u *UsageLogUpdate) SetChannelID(v int64) *UsageLogUpdate {
 	_u.mutation.ResetChannelID()
@@ -1165,6 +1185,12 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.UpstreamModelMismatchCleared() {
 		_spec.ClearField(usagelog.FieldUpstreamModelMismatch, field.TypeBool)
 	}
+	if value, ok := _u.mutation.RouteDegraded(); ok {
+		_spec.SetField(usagelog.FieldRouteDegraded, field.TypeBool, value)
+	}
+	if _u.mutation.RouteDegradedCleared() {
+		_spec.ClearField(usagelog.FieldRouteDegraded, field.TypeBool)
+	}
 	if value, ok := _u.mutation.ChannelID(); ok {
 		_spec.SetField(usagelog.FieldChannelID, field.TypeInt64, value)
 	}
@@ -1693,6 +1719,26 @@ func (_u *UsageLogUpdateOne) SetNillableUpstreamModelMismatch(v *bool) *UsageLog
 // ClearUpstreamModelMismatch clears the value of the "upstream_model_mismatch" field.
 func (_u *UsageLogUpdateOne) ClearUpstreamModelMismatch() *UsageLogUpdateOne {
 	_u.mutation.ClearUpstreamModelMismatch()
+	return _u
+}
+
+// SetRouteDegraded sets the "route_degraded" field.
+func (_u *UsageLogUpdateOne) SetRouteDegraded(v bool) *UsageLogUpdateOne {
+	_u.mutation.SetRouteDegraded(v)
+	return _u
+}
+
+// SetNillableRouteDegraded sets the "route_degraded" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableRouteDegraded(v *bool) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetRouteDegraded(*v)
+	}
+	return _u
+}
+
+// ClearRouteDegraded clears the value of the "route_degraded" field.
+func (_u *UsageLogUpdateOne) ClearRouteDegraded() *UsageLogUpdateOne {
+	_u.mutation.ClearRouteDegraded()
 	return _u
 }
 
@@ -2708,6 +2754,12 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.UpstreamModelMismatchCleared() {
 		_spec.ClearField(usagelog.FieldUpstreamModelMismatch, field.TypeBool)
+	}
+	if value, ok := _u.mutation.RouteDegraded(); ok {
+		_spec.SetField(usagelog.FieldRouteDegraded, field.TypeBool, value)
+	}
+	if _u.mutation.RouteDegradedCleared() {
+		_spec.ClearField(usagelog.FieldRouteDegraded, field.TypeBool)
 	}
 	if value, ok := _u.mutation.ChannelID(); ok {
 		_spec.SetField(usagelog.FieldChannelID, field.TypeInt64, value)

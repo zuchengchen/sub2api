@@ -353,9 +353,10 @@ gateway:
     # Keep the account WS pool limit at least 4 (3 business sockets plus one refresh validation socket).
     # Cookie WS requires HTTP and direct WS Tibo probes to return True, has no
     # turn-state length gate, and sends no active periodic Ping.
-    # Cookie WS accounts first ask Tibo once over their own HTTP path (astra/low,
-    # cached 10m). True keeps requests on HTTP; otherwise try Excel/BPS (if the
-    # account enables it), then Cookie WS, then HTTP.
+    # Cookie WS accounts pick a route by Tibo probe verdicts over their own HTTP
+    # path (astra/low); see openai_tibo_route below. Healthy HTTP keeps requests
+    # on HTTP; otherwise try Excel/BPS (if the account enables it), then Cookie
+    # WS, then HTTP.
     mode: turn_state
     # Restrict cookie_ws to these upstream account IDs; [] applies to all eligible accounts.
     cookie_ws_account_ids: []
@@ -371,6 +372,35 @@ gateway:
     models:
       - gpt-6-astra
       - gpt-5.6-sol
+  # Tibo 线路选择（仅 cookie_ws 模式下的 Cookie WS 账号生效）。
+  # 后台只探最近 active_window 内有请求的账号（astra/low 的 Tibo 问题）。与当前结论一致只刷新时间；
+  # 不一致时每隔 confirm_spacing 再补探，confirm_samples 里多数同意才切换。unknown 样本（非 200、
+  # 超时、429、取 token 失败）不计票，按 unknown_backoff 退避并遵守 Retry-After；
+  # 超过 max_stale 没有新的确定样本，有效状态才变为 unknown。
+  # 线路按 healthy > unknown > degraded 分层，同层 HTTP → BPS → Cookie WS；全部降智时走普通 HTTP，
+  # 并带响应头 X-Codex2API-Route-Quality: degraded。
+  openai_tibo_route:
+    healthy_interval: 10m
+    degraded_interval: 5m
+    unknown_backoff: [1m, 2m, 4m, 8m, 15m]
+    jitter: 0.2
+    confirm_samples: 3
+    confirm_spacing: 20s
+    # degraded 切回 healthy 至少间隔多久；负数表示不限制。
+    min_degraded_dwell: 10m
+    max_stale: 30m
+    active_window: 30m
+    # 每账号每条线路每小时的探针上限（含确认探针）；全局并发上限。
+    max_probes_per_hour: 20
+    probe_concurrency: 4
+    # off/shadow：BPS 保持原有位置（视为 healthy）；shadow 额外探测并记日志；enforce：按 BPS 探针结论排序。
+    bps_probe_mode: off
+    bps_probe_interval: 10m
+    # 调度按线路健康度软排序，并在有健康账号时解除降智账号的 sticky。
+    scheduler_prefer_healthy_route: false
+    # 本小时降智兜底占比超过该值（且样本数达到下限）时打告警日志；0 关闭。
+    degraded_alert_ratio: 0.5
+    degraded_alert_min_requests: 20
   # ChatGPT Frameless Live 单会话硬上限（秒）。
   live:
     max_session_duration_seconds: 3600

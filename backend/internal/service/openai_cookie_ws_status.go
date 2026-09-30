@@ -130,6 +130,8 @@ func (s *OpenAIGatewayService) openAICookieWSRuntimeStatus(account *Account, mod
 	}
 	status.Ready = status.SkipReason == "" && status.VerifiedWS > 0
 	status.Blocked = !status.Ready
+	// Cookie WS routes on a verified ready slot, the same signal routing uses.
+	status.TiboRoutes = s.openAITiboRouteStatuses(account, status.SkipReason == "" && status.CookieGroupsReady > 0, now)
 	switch {
 	case status.SkipReason != "":
 		status.RecoveryState = "paused"

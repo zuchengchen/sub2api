@@ -800,15 +800,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
 	if cookieWS {
-		reserveCtx, reserveCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 		reservationPreference := ""
 		if firstPayload.previousResponseID != "" {
 			reservationPreference = preferredConnID
 		}
-		slot, release, reserveErr := s.reserveOpenAICookieWSSlot(reserveCtx, account, firstRoutingFields[0].String(), reservationPreference)
-		reserveCancel()
+		slot, release, reserveErr := s.reserveOpenAICookieWSSlotWithin(ctx, account, firstRoutingFields[0].String(), reservationPreference, s.openAIWSAcquireTimeout())
 		if reserveErr != nil {
-			return reserveErr
+			// Busy slots are unavailable, not an internal failure: let the
+			// handler move the session to another account.
+			return openAICookieWSUnavailableFailover(reserveErr)
 		}
 		defer release()
 		ctx = context.WithValue(ctx, openAICookieWSSlotContextKey{}, slot)
@@ -1087,6 +1087,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 			cookieProbeObserver.observe(lease, upstreamMessage, eventType)
+			if cookieWS && !cookieProbeObserver.enabled && isOpenAIWSTerminalEvent(eventType) &&
+				s.openAICookieWSTurnModelMismatch(account, mappedModel, upstreamMessage, eventType) {
+				// Served by another model: retire the socket after this turn;
+				// the next turn reconnects to a freshly verified one.
+				lease.MarkBroken()
+			}
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}
