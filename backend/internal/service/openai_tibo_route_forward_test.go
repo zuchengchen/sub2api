@@ -61,11 +61,12 @@ func TestTiboRouteSessionPinsRouteAcrossTurns(t *testing.T) {
 	result, _, _, err = tc.forwardWith(t, tiboRouteAstraBody, session)
 	require.NoError(t, err)
 	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "pinned route stays while healthy")
-	result, rec, _, err := tc.forwardWith(t, tiboRouteAstraBody, map[string]string{"session_id": "pin-session-2"})
+	result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, map[string]string{"session_id": "pin-session-2"})
 	require.NoError(t, err)
 	require.False(t, result.OpenAIWSMode)
 	require.Equal(t, []string{"bps.openai.com", "bps.openai.com", "chatgpt.com"}, tc.hosts())
-	require.Equal(t, openAITiboHTTPOKReason, rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+	require.Equal(t, openAITiboHTTPOKReason, c.GetString(openAIBPSBypassReasonKey))
+	requireNoOpenAIRoutingHeaders(t, rec.Header())
 	require.Zero(t, tc.dialer.DialCount())
 }
 
@@ -89,7 +90,7 @@ func TestTiboRoutePinSwitchesOnHardFailureAndConfirmedDegrade(t *testing.T) {
 	result, rec, _, err := tc.forwardWith(t, tiboRouteAstraBody, session)
 	require.NoError(t, err)
 	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint)
-	require.Empty(t, rec.Header().Get(openAITiboRouteQualityHeader))
+	requireNoOpenAIRoutingHeaders(t, rec.Header())
 	require.Equal(t, []string{"bps.openai.com", "bps.openai.com", "chatgpt.com", "bps.openai.com"}, tc.hosts())
 	require.Equal(t, openAITiboRouteBPS, tc.svc.loadOpenAITiboPin(tc.account.ID, openAITiboPinScopeForTest(t, session), time.Now()))
 }
@@ -106,22 +107,25 @@ func openAITiboPinScopeForTest(t *testing.T, headers map[string]string) string {
 	return scope
 }
 
-func TestTiboRouteDegradedHeaderClearedOnNextAttempt(t *testing.T) {
+func TestTiboRouteStaleRouteRecordClearedOnNextAttempt(t *testing.T) {
 	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("http ok"))
 	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
-	// A previous failed attempt on another account left routing headers.
-	c.Header(openAITiboRouteQualityHeader, "degraded")
+	// A previous failed attempt on another account left a routing record
+	// (and, from an older build, legacy routing headers).
+	setOpenAIBPSBypassReason(c, "bps_error")
+	c.Header("X-Codex2API-Route-Quality", "degraded")
+	c.Header("X-Codex2API-Upstream", "codex")
 	c.Header("X-Codex2API-Basispoints-Bypass", "bps_error")
 	tc.seed(openAITiboRouteHTTP, openAITiboHealthy)
 	result, err := tc.svc.Forward(context.Background(), c, tc.account, []byte(tiboRouteAstraBody))
 	require.NoError(t, err)
 	require.False(t, *result.RouteDegraded)
-	require.Empty(t, rec.Header().Get(openAITiboRouteQualityHeader))
-	require.Empty(t, rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+	require.Empty(t, c.GetString(openAIBPSBypassReasonKey))
+	requireNoOpenAIRoutingHeaders(t, rec.Header())
 }
 
 func TestTiboRouteAstraModelMismatchIsHardEvidence(t *testing.T) {
@@ -185,12 +189,13 @@ func TestTiboRouteLateBPSAfterCookieWSUnavailable(t *testing.T) {
 	state.mu.Lock()
 	state.bps.lastSampleAt, state.bps.nextProbeAt = time.Now(), time.Now().Add(time.Hour) // unknown, not due
 	state.mu.Unlock()
-	result, rec, _, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
+	result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
 	require.NoError(t, err)
 	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "cookie_ws -> bps -> http")
 	require.Equal(t, []string{"bps.openai.com"}, tc.hosts())
 	require.Zero(t, tc.dialer.DialCount())
-	require.Empty(t, rec.Header().Get("X-Codex2API-Basispoints-Bypass"), "BPS served; no bypass")
+	require.Empty(t, c.GetString(openAIBPSBypassReasonKey), "BPS served; no bypass")
+	requireNoOpenAIRoutingHeaders(t, rec.Header())
 	require.False(t, *result.RouteDegraded)
 	require.Contains(t, rec.Body.String(), "bps ok")
 }
@@ -211,7 +216,7 @@ func TestTiboRouteBPSFailureClassesInPlan(t *testing.T) {
 			rc.seed(openAITiboRouteHTTP, openAITiboDegraded)
 			upstream := &excelBPSTraceUpstream{steps: []excelBPSWireStep{tc.step}}
 			rc.svc.httpUpstream = upstream
-			result, rec, _, err := rc.forwardWith(t, tiboRouteAstraBody, nil)
+			result, rec, c, err := rc.forwardWith(t, tiboRouteAstraBody, nil)
 			require.Equal(t, []string{"bps.openai.com"}, upstream.hosts(), "never a second send on this account's HTTP")
 			if tc.failover {
 				var failoverErr *UpstreamFailoverError
@@ -224,7 +229,8 @@ func TestTiboRouteBPSFailureClassesInPlan(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, result.OpenAIWSMode, "next route on the same account: Cookie WS")
 			require.Equal(t, 1, rc.dialer.DialCount())
-			require.Equal(t, excelBPSHTTPFallbackReason, rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+			require.Equal(t, excelBPSHTTPFallbackReason, c.GetString(openAIBPSBypassReasonKey))
+			requireNoOpenAIRoutingHeaders(t, rec.Header())
 		})
 	}
 }

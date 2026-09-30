@@ -90,11 +90,11 @@ func TestTiboRouteHTTPTrueStaysOnHTTP(t *testing.T) {
 		require.Equal(t, openAITiboHTTPOKReason, c.GetString("openai_ws_transport_reason"))
 		require.Contains(t, rec.Body.String(), "http ok")
 		if bps {
-			require.Equal(t, openAITiboHTTPOKReason, rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+			require.Equal(t, openAITiboHTTPOKReason, c.GetString(openAIBPSBypassReasonKey))
 		}
 		require.NotNil(t, result.RouteDegraded)
 		require.False(t, *result.RouteDegraded)
-		require.Empty(t, rec.Header().Get(openAITiboRouteQualityHeader))
+		requireNoOpenAIRoutingHeaders(t, rec.Header())
 	}
 }
 
@@ -109,11 +109,12 @@ func TestTiboRouteDegradedPrefersBPS(t *testing.T) {
 
 func TestTiboRouteBPSUnusableFallsBackToCookieWS(t *testing.T) {
 	tc := newTiboRouteCase(t, true, true, cookieWSHTTPResponse("False"), tiboRouteStatusResponse(http.StatusForbidden))
-	result, rec, _ := tc.forward(t)
+	result, rec, c := tc.forward(t)
 	require.True(t, result.OpenAIWSMode)
 	require.Equal(t, []string{"chatgpt.com", "bps.openai.com"}, tc.hosts())
 	require.Equal(t, 1, tc.dialer.DialCount())
-	require.Equal(t, "bps_error", rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+	require.Equal(t, "bps_error", c.GetString(openAIBPSBypassReasonKey))
+	requireNoOpenAIRoutingHeaders(t, rec.Header())
 	require.Contains(t, rec.Body.String(), "ws ok")
 }
 
@@ -133,9 +134,9 @@ func TestTiboRouteEverythingUnusableStillSendsHTTP(t *testing.T) {
 	require.Zero(t, tc.dialer.DialCount())
 	require.Equal(t, excelBPSHTTPFallbackReason, c.GetString("openai_ws_transport_reason"))
 	require.Contains(t, rec.Body.String(), "http ok")
-	require.Equal(t, "degraded", rec.Header().Get(openAITiboRouteQualityHeader), "only degraded routes remain")
 	require.NotNil(t, result.RouteDegraded)
-	require.True(t, *result.RouteDegraded)
+	require.True(t, *result.RouteDegraded, "only degraded routes remain; recorded in usage, not headers")
+	requireNoOpenAIRoutingHeaders(t, rec.Header())
 }
 
 // A cold account whose first probe is unknown has no confirmed verdict, so it
