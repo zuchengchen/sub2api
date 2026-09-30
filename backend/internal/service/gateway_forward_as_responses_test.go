@@ -632,3 +632,70 @@ func TestClaude55BridgeUsesMappedModelBeforeThinkingConversion(t *testing.T) {
 		}
 	}
 }
+
+func anthropicThinkingThenErrorBody(errType, message string) string {
+	return strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_e","type":"message","role":"assistant","content":[],"model":"claude-opus-5.5","stop_reason":"","usage":{"input_tokens":10}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: error`,
+		`data: {"type":"error","error":{"type":"` + errType + `","message":"` + message + `"},"usage":{"input_tokens":10,"output_tokens":42}}`,
+		``,
+	}, "\n")
+}
+
+func TestHandleResponsesStreaming_UpstreamErrorEventEmitsResponseFailed(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{
+		Header: http.Header{"x-request-id": []string{"rid_resp_stream_error"}},
+		Body: io.NopCloser(strings.NewReader(anthropicThinkingThenErrorBody(
+			"overloaded_error", "Upstream model temporarily unavailable (overloaded) mid-stream. Please retry."))),
+	}
+
+	result, err := (&GatewayService{}).handleResponsesStreamingResponse(resp, c, "claude-opus-5-5", "claude-opus-5.5", nil, time.Now(), apicompat.ResponsesClientToolMapping{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 42, result.Usage.OutputTokens)
+
+	body := rec.Body.String()
+	require.Equal(t, 1, strings.Count(body, "event: response.failed"))
+	require.NotContains(t, body, "response.completed")
+	require.NotContains(t, body, "response.incomplete")
+	require.Contains(t, body, `"status":"failed"`)
+	require.Contains(t, body, `"code":"server_is_overloaded"`)
+	require.Contains(t, body, "temporarily unavailable")
+}
+
+func TestHandleResponsesBuffered_UpstreamErrorEventReturnsHTTPError(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{
+		Header: http.Header{"x-request-id": []string{"rid_resp_buffered_error"}},
+		Body: io.NopCloser(strings.NewReader(anthropicThinkingThenErrorBody(
+			"api_error", "Upstream model became unavailable. Please retry."))),
+	}
+
+	result, err := (&GatewayService{}).handleResponsesBufferedStreamingResponse(resp, c, "claude-opus-5-5", "claude-opus-5.5", nil, time.Now(), apicompat.ResponsesClientToolMapping{})
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Equal(t, "server_error", gjson.Get(rec.Body.String(), "error.code").String())
+	require.Contains(t, rec.Body.String(), "unavailable")
+	require.NotContains(t, rec.Body.String(), `"status":"completed"`)
+}
