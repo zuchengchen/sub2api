@@ -1780,6 +1780,7 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 	if rowsAffected == 0 {
 		return false, nil
 	}
+	recordAccountTempUnschedSet("SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnchanged", id, until, reason)
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
 	return true, nil
 }
@@ -2515,6 +2516,7 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 	if affected <= 0 {
 		return nil
 	}
+	recordAccountTempUnschedSet("SetTempUnschedulable", id, until, reason)
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue temp unschedulable failed: account=%d err=%v", id, err)
 	}
@@ -2563,21 +2565,41 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 	if err != nil || affected == 0 {
 		return false, err
 	}
+	recordAccountTempUnschedSet("SetGrokCredentialTempUnschedulableIfMatch", id, until, reason)
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
 	return true, nil
 }
 
 func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64) error {
-	_, err := r.sql.ExecContext(ctx, `
-		UPDATE accounts
+	// The locked CTE captures the pre-update deadline in the same statement, so
+	// the audit event is emitted only when an active pause was actually lifted.
+	// ClearRateLimit calls this unconditionally for accounts that were merely
+	// rate-limited; those must not look like an early unpause.
+	var (
+		previousUntil sql.NullTime
+		wasActive     bool
+	)
+	err := scanSingleRow(ctx, r.sql, `
+		WITH prev AS (
+			SELECT id, temp_unschedulable_until
+			FROM accounts
+			WHERE id = $1
+				AND deleted_at IS NULL
+			FOR UPDATE
+		)
+		UPDATE accounts AS a
 		SET temp_unschedulable_until = NULL,
 			temp_unschedulable_reason = NULL,
 			updated_at = NOW()
-		WHERE id = $1
-			AND deleted_at IS NULL
-	`, id)
-	if err != nil {
+		FROM prev
+		WHERE a.id = prev.id
+		RETURNING prev.temp_unschedulable_until, COALESCE(prev.temp_unschedulable_until > NOW(), FALSE)
+	`, []any{id}, &previousUntil, &wasActive)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
+	}
+	if err == nil && wasActive && previousUntil.Valid {
+		recordAccountTempUnschedCleared("ClearTempUnschedulable", id, previousUntil.Time)
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue clear temp unschedulable failed: account=%d err=%v", id, err)
