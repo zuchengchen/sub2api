@@ -1,0 +1,595 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"maps"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
+)
+
+// Background Tibo probing hangs off the harvester tick. Only accounts that
+// served a request within active_window are probed; each (account, route)
+// probes at most once at a time, within max_probes_per_hour, and the process
+// runs at most probe_concurrency probes.
+const (
+	openAITiboVerdictExtraKeyPrefix = "codex_tibo_verdict:"
+	// A probe that could not start (semaphore wait timeout, account no longer
+	// eligible) retries after this delay without counting as a sample.
+	openAITiboProbeAbortRetry = time.Minute
+	openAITiboPinPruneEvery   = time.Minute
+)
+
+func (s *OpenAIGatewayService) openAITiboProbeSem() chan struct{} {
+	s.openaiTiboProbeSemOnce.Do(func() {
+		s.openaiTiboProbeSem = make(chan struct{}, s.openAITiboRouteConfig().probeConcurrency)
+	})
+	return s.openaiTiboProbeSem
+}
+
+// startOpenAITiboProbeLocked starts one probe for route unless one is already
+// running. It returns the channel closed when the probe finishes, or nil when
+// no probe started (budget exhausted, or a non-blocking start found the
+// process-wide semaphore full). account may be nil for background probes; the
+// probe then reloads the authoritative account. Caller holds state.mu.
+func (s *OpenAIGatewayService) startOpenAITiboProbeLocked(state *openAITiboAccountState, route openAITiboRoute, account *Account, blocking bool, cfg openAITiboSettings, now time.Time) <-chan struct{} {
+	return s.startOpenAITiboProbeCtxLocked(context.Background(), state, route, account, blocking, cfg, now)
+}
+
+func (s *OpenAIGatewayService) startOpenAITiboProbeCtxLocked(parent context.Context, state *openAITiboAccountState, route openAITiboRoute, account *Account, blocking bool, cfg openAITiboSettings, now time.Time) <-chan struct{} {
+	r := state.route(route)
+	if r.inflight {
+		return r.done
+	}
+	sem := s.openAITiboProbeSem()
+	acquired := false
+	if !blocking {
+		select {
+		case sem <- struct{}{}:
+			acquired = true
+		default:
+			// The next tick retries; never block a request or the tick.
+			return nil
+		}
+	}
+	if !r.takeBudget(now, cfg) {
+		if acquired {
+			<-sem
+		}
+		return nil
+	}
+	var snapshot *Account
+	if account != nil {
+		copied := *account
+		copied.Extra = maps.Clone(account.Extra)
+		copied.Credentials = maps.Clone(account.Credentials)
+		snapshot = &copied
+	}
+	done := make(chan struct{})
+	r.inflight, r.done = true, done
+	s.openaiTiboProbeWG.Add(1)
+	go func() {
+		defer s.openaiTiboProbeWG.Done()
+		s.runOpenAITiboProbe(parent, state, route, snapshot, acquired)
+	}()
+	return done
+}
+
+// runOpenAITiboProbe runs detached from any request (a cancelled request must
+// not discard the verdict); parent is the harvester context for tick probes
+// and context.Background otherwise.
+func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state *openAITiboAccountState, route openAITiboRoute, account *Account, acquired bool) {
+	ctx, cancel := context.WithTimeout(parent, openAITiboProbeTimeout)
+	defer cancel()
+	if parent.Err() != nil {
+		if acquired {
+			<-s.openAITiboProbeSem()
+		}
+		s.abortOpenAITiboProbe(state, route)
+		return
+	}
+	sem := s.openAITiboProbeSem()
+	if !acquired {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			s.abortOpenAITiboProbe(state, route)
+			return
+		}
+	}
+	defer func() { <-sem }()
+	if account == nil {
+		latest, err := s.latestOpenAICookieWSAccount(ctx, state.accountID)
+		if err != nil || !s.openAITiboRouteApplies(latest) ||
+			(route == openAITiboRouteBPS && !latest.IsExcelBPSEnabledForModel(openAICodexTicketDefaultModel)) {
+			// Paused, rate-limited or disabled accounts are not sampled; their
+			// verdict ages toward max_stale.
+			s.abortOpenAITiboProbe(state, route)
+			return
+		}
+		account = latest
+	}
+	var sample openAITiboProbeSample
+	if route == openAITiboRouteBPS {
+		sample = s.probeOpenAITiboBPS(ctx, account)
+	} else {
+		sample = s.probeOpenAITiboHTTP(ctx, account)
+	}
+	if parent.Err() != nil {
+		// Harvester shutdown interrupted the probe; this is not a sample.
+		s.abortOpenAITiboProbe(state, route)
+		return
+	}
+	s.recordOpenAITiboSample(state, route, account, sample)
+}
+
+func (s *OpenAIGatewayService) abortOpenAITiboProbe(state *openAITiboAccountState, route openAITiboRoute) {
+	state.mu.Lock()
+	r := state.route(route)
+	if n := len(r.probes); n > 0 {
+		// Only one probe per route runs, so the last start is this one.
+		r.probes = r.probes[:n-1]
+	}
+	done := r.done
+	r.inflight, r.done = false, nil
+	if retry := time.Now().Add(openAITiboProbeAbortRetry); retry.After(r.nextProbeAt) {
+		r.nextProbeAt = retry
+	}
+	state.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
+}
+
+// recordOpenAITiboSample applies one probe sample: vote, schedule, persist a
+// changed or aging confirmed verdict, and log flips.
+func (s *OpenAIGatewayService) recordOpenAITiboSample(state *openAITiboAccountState, route openAITiboRoute, account *Account, sample openAITiboProbeSample) {
+	cfg := s.openAITiboRouteConfig()
+	now := time.Now()
+	state.mu.Lock()
+	r := state.route(route)
+	before := r.effective(now, cfg)
+	transition := r.observe(sample, now, cfg)
+	r.scheduleNext(route, now, cfg)
+	done := r.done
+	r.inflight, r.done = false, nil
+	if transition.flipped && transition.from != "" {
+		r.flips = append(pruneOpenAITiboWindow(r.flips, now), now)
+	}
+	after := r.effective(now, cfg)
+	persist := openAITiboShouldPersist(r, transition, now, cfg)
+	if persist {
+		r.persistedAt = now
+	}
+	record := openAITiboVerdictRecordFor(r)
+	httpEffective := state.http.effective(now, cfg)
+	if route == openAITiboRouteBPS && sample.verdict.definitive() && httpEffective.definitive() {
+		// Shadow calibration: does BPS reach the same conclusion as HTTP?
+		if sample.verdict == httpEffective {
+			r.shadowAgree++
+		} else {
+			r.shadowDisagree++
+		}
+	}
+	if route == openAITiboRouteHTTP && transition.flipped && transition.to == openAITiboDegraded &&
+		state.bpsEnabled && cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff {
+		// HTTP just turned degraded: sample BPS now instead of waiting.
+		state.bps.nextProbeAt = now
+		s.startOpenAITiboProbeLocked(state, openAITiboRouteBPS, account, false, cfg, now)
+	}
+	flipsHour, probesHour := countOpenAITiboWindow(r.flips, now), countOpenAITiboWindow(r.probes, now)
+	state.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
+	s.openaiTiboStats.noteProbe(transition.flipped && transition.from != "")
+	fields := []zap.Field{
+		zap.Int64("account_id", state.accountID), zap.String("route", string(route)),
+		zap.String("sample", string(sample.verdict)), zap.Int("http", sample.status), zap.String("answer_class", sample.answerClass),
+		zap.String("effective_before", string(before)), zap.String("effective_after", string(after)),
+		zap.Int("flips_hour", flipsHour), zap.Int("probes_hour", probesHour),
+	}
+	switch {
+	case transition.flipped:
+		votes := make([]string, 0, len(transition.votes))
+		for _, vote := range transition.votes {
+			votes = append(votes, string(vote))
+		}
+		logger.L().Info("openai_tibo verdict flip", append(fields,
+			zap.String("from", string(transition.from)), zap.String("to", string(transition.to)), zap.Strings("votes", votes))...)
+	case before != after:
+		logger.L().Info("openai_tibo effective verdict", fields...)
+	}
+	if route == openAITiboRouteBPS && cfg.bpsProbeMode == config.OpenAITiboBPSProbeShadow {
+		// Shadow calibration: BPS and HTTP conclusions side by side.
+		logger.L().Info("openai_tibo bps shadow", append(fields, zap.String("http_effective", string(httpEffective)))...)
+	}
+	if persist {
+		s.persistOpenAITiboVerdict(state.accountID, route, record)
+	}
+}
+
+// openAITiboShouldPersist writes confirmed flips, and refreshes an unchanged
+// verdict once it has aged half of max_stale, so a restart keeps it usable.
+func openAITiboShouldPersist(r *openAITiboRouteState, transition openAITiboTransition, now time.Time, cfg openAITiboSettings) bool {
+	if !r.verdict.definitive() {
+		return false
+	}
+	if transition.flipped {
+		return true
+	}
+	return r.checkedAt.After(r.persistedAt) && now.Sub(r.persistedAt) >= cfg.maxStale/2
+}
+
+type openAITiboVerdictRecord struct {
+	Verdict   openAITiboVerdict `json:"verdict"`
+	Model     string            `json:"model"`
+	CheckedAt time.Time         `json:"checked_at"`
+	FlippedAt time.Time         `json:"flipped_at"`
+}
+
+func openAITiboVerdictRecordFor(r *openAITiboRouteState) openAITiboVerdictRecord {
+	return openAITiboVerdictRecord{Verdict: r.verdict, Model: openAICodexTicketDefaultModel, CheckedAt: r.checkedAt, FlippedAt: r.flippedAt}
+}
+
+func openAITiboVerdictExtraKey(route openAITiboRoute) string {
+	return openAITiboVerdictExtraKeyPrefix + string(route)
+}
+
+func parseOpenAITiboVerdictRecord(raw any) (openAITiboVerdictRecord, bool) {
+	var record openAITiboVerdictRecord
+	if raw == nil {
+		return record, false
+	}
+	b, err := json.Marshal(raw)
+	if err != nil || json.Unmarshal(b, &record) != nil || !record.Verdict.definitive() || record.CheckedAt.IsZero() {
+		return openAITiboVerdictRecord{}, false
+	}
+	return record, true
+}
+
+func (s *OpenAIGatewayService) persistOpenAITiboVerdict(accountID int64, route openAITiboRoute, record openAITiboVerdictRecord) {
+	if s == nil || s.accountRepo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	value := map[string]any{
+		"verdict": string(record.Verdict), "model": record.Model,
+		"checked_at": record.CheckedAt.UTC().Format(time.RFC3339Nano), "flipped_at": record.FlippedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{openAITiboVerdictExtraKey(route): value}); err != nil {
+		logger.L().Warn("openai_tibo verdict persist failed", zap.Int64("account_id", accountID), zap.String("route", string(route)), zap.Error(err))
+	}
+}
+
+// seedOpenAITiboStateLocked adopts persisted verdicts for routes this process
+// has not sampled yet, subject to max_stale. Caller holds state.mu.
+func (s *OpenAIGatewayService) seedOpenAITiboStateLocked(state *openAITiboAccountState, extra map[string]any, now time.Time, cfg openAITiboSettings) {
+	if len(extra) == 0 {
+		return
+	}
+	for _, route := range []openAITiboRoute{openAITiboRouteHTTP, openAITiboRouteBPS} {
+		r := state.route(route)
+		if !r.cold() || r.inflight {
+			continue
+		}
+		record, ok := parseOpenAITiboVerdictRecord(extra[openAITiboVerdictExtraKey(route)])
+		if !ok || record.CheckedAt.After(now) || now.Sub(record.CheckedAt) > cfg.maxStale {
+			continue
+		}
+		r.verdict, r.checkedAt, r.flippedAt, r.persistedAt = record.Verdict, record.CheckedAt, record.FlippedAt, record.CheckedAt
+		interval := cfg.degradedInterval
+		switch {
+		case route == openAITiboRouteBPS:
+			interval = cfg.bpsProbeInterval
+		case record.Verdict == openAITiboHealthy:
+			interval = cfg.healthyInterval
+		}
+		r.nextProbeAt = record.CheckedAt.Add(openAITiboJitter(interval, cfg.jitter))
+	}
+}
+
+// loadPersistedOpenAITiboVerdicts seeds verdicts from full account rows once
+// per process (scheduler snapshots strip these keys).
+func (s *OpenAIGatewayService) loadPersistedOpenAITiboVerdicts(ctx context.Context) {
+	if s.accountRepo == nil || s.openaiTiboLoaded.Load() {
+		return
+	}
+	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
+	if err != nil {
+		return // Retried on the next tick.
+	}
+	s.openaiTiboLoaded.Store(true)
+	cfg := s.openAITiboRouteConfig()
+	now := time.Now()
+	loaded := 0
+	for i := range accounts {
+		account := &accounts[i]
+		if !s.openAITiboRouteApplies(account) {
+			continue
+		}
+		if _, ok := account.Extra[openAITiboVerdictExtraKey(openAITiboRouteHTTP)]; !ok {
+			if _, ok := account.Extra[openAITiboVerdictExtraKey(openAITiboRouteBPS)]; !ok {
+				continue
+			}
+		}
+		state := s.openAITiboAccountState(account.ID)
+		state.mu.Lock()
+		s.seedOpenAITiboStateLocked(state, account.Extra, now, cfg)
+		if state.http.verdict != "" || state.bps.verdict != "" {
+			loaded++
+		}
+		state.mu.Unlock()
+	}
+	if loaded > 0 {
+		logger.L().Info("openai_tibo verdicts loaded", zap.Int("accounts", loaded))
+	}
+}
+
+// probeOpenAITiboRoutes is the harvester-tick hook: probe due routes of
+// recently active Cookie WS accounts in the background.
+func (s *OpenAIGatewayService) probeOpenAITiboRoutes(ctx context.Context) {
+	if s == nil || s.tiboRouteDisabled || ctx.Err() != nil || !s.openAICookieWSModeConfigured() || !s.openAICodexTicketEnabledContext(ctx) {
+		return
+	}
+	s.loadPersistedOpenAITiboVerdicts(ctx)
+	cfg := s.openAITiboRouteConfig()
+	now := time.Now()
+	s.pruneOpenAITiboPins(now)
+	s.openaiTiboStats.rollover(now)
+	s.openaiTiboRoutes.Range(func(_, value any) bool {
+		state, ok := value.(*openAITiboAccountState)
+		if !ok || state == nil {
+			return true
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.lastUsedAt.IsZero() || now.Sub(state.lastUsedAt) > cfg.activeWindow {
+			return true
+		}
+		if state.http.due(now) {
+			s.startOpenAITiboProbeCtxLocked(ctx, state, openAITiboRouteHTTP, nil, false, cfg, now)
+		}
+		if state.bpsEnabled && cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff &&
+			state.http.effective(now, cfg) != openAITiboHealthy && state.bps.due(now) {
+			s.startOpenAITiboProbeCtxLocked(ctx, state, openAITiboRouteBPS, nil, false, cfg, now)
+		}
+		return true
+	})
+}
+
+// openAITiboStats counts process-wide Tibo routing activity per hour.
+type openAITiboStats struct {
+	mu          sync.Mutex
+	hour        time.Time
+	probes      int
+	flips       int
+	served      int
+	degraded    int
+	lastAlertAt time.Time
+}
+
+func (st *openAITiboStats) rolloverLocked(now time.Time) {
+	hour := now.Truncate(time.Hour)
+	if st.hour.Equal(hour) {
+		return
+	}
+	if !st.hour.IsZero() && (st.probes > 0 || st.served > 0) {
+		logger.L().Info("openai_tibo hourly summary", zap.Time("hour", st.hour), zap.Int("probes", st.probes),
+			zap.Int("flips", st.flips), zap.Int("served", st.served), zap.Int("degraded_served", st.degraded))
+	}
+	st.hour, st.probes, st.flips, st.served, st.degraded = hour, 0, 0, 0, 0
+}
+
+func (st *openAITiboStats) rollover(now time.Time) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.rolloverLocked(now)
+}
+
+func (st *openAITiboStats) noteProbe(flipped bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.rolloverLocked(time.Now())
+	st.probes++
+	if flipped {
+		st.flips++
+	}
+}
+
+func (st *openAITiboStats) noteFlip() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.rolloverLocked(time.Now())
+	st.flips++
+}
+
+// noteServed counts one Tibo-routed request and warns (at most every ten
+// minutes) when the degraded share of this hour exceeds the configured ratio.
+func (st *openAITiboStats) noteServed(degraded bool, cfg openAITiboSettings) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	now := time.Now()
+	st.rolloverLocked(now)
+	st.served++
+	if degraded {
+		st.degraded++
+	}
+	if cfg.alertRatio <= 0 || st.served < cfg.alertMinRequests {
+		return
+	}
+	ratio := float64(st.degraded) / float64(st.served)
+	if ratio <= cfg.alertRatio || now.Sub(st.lastAlertAt) < 10*time.Minute {
+		return
+	}
+	st.lastAlertAt = now
+	logger.L().Warn("openai_tibo degraded ratio high", zap.Float64("ratio", ratio), zap.Float64("threshold", cfg.alertRatio),
+		zap.Int("served", st.served), zap.Int("degraded_served", st.degraded), zap.Time("hour", st.hour))
+}
+
+// OpenAITiboRouteStatus is the admin view of one route's Tibo state.
+type OpenAITiboRouteStatus struct {
+	Route        string     `json:"route"`
+	Verdict      string     `json:"verdict"`
+	Confirmed    string     `json:"confirmed,omitempty"`
+	CheckedAt    *time.Time `json:"checked_at,omitempty"`
+	FlippedAt    *time.Time `json:"flipped_at,omitempty"`
+	NextProbeAt  *time.Time `json:"next_probe_at,omitempty"`
+	PendingVotes []string   `json:"pending_votes,omitempty"`
+	LastSample   string     `json:"last_sample,omitempty"`
+	LastHTTP     int        `json:"last_http,omitempty"`
+	LastAnswer   string     `json:"last_answer,omitempty"`
+	ProbesHour   int        `json:"probes_hour"`
+	FlipsHour    int        `json:"flips_hour"`
+	// Calibration counters since process start. A vote window opens on a
+	// sample disagreeing with the confirmed verdict; confirmed means it
+	// flipped, rejected means later samples outvoted it (sample noise).
+	VoteWindows   int `json:"vote_windows"`
+	VoteConfirmed int `json:"vote_confirmed"`
+	VoteRejected  int `json:"vote_rejected"`
+	// BPS only: definitive BPS samples that matched / differed from the HTTP
+	// effective verdict at the time (shadow comparison).
+	ShadowAgree    int `json:"shadow_agree,omitempty"`
+	ShadowDisagree int `json:"shadow_disagree,omitempty"`
+}
+
+func openAITiboTimePtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// openAITiboRouteStatuses returns HTTP/BPS verdict states plus Cookie WS
+// readiness for the admin view. It never starts probes.
+func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, cookieReady bool, now time.Time) []OpenAITiboRouteStatus {
+	if s == nil || account == nil || !s.openAITiboRouteApplies(account) {
+		return nil
+	}
+	cfg := s.openAITiboRouteConfig()
+	routes := []openAITiboRoute{openAITiboRouteHTTP}
+	if account.IsExcelBPSEnabledForModel(openAICodexTicketDefaultModel) {
+		routes = append(routes, openAITiboRouteBPS)
+	}
+	out := make([]OpenAITiboRouteStatus, 0, len(routes)+1)
+	state := s.loadOpenAITiboAccountState(account.ID)
+	for _, route := range routes {
+		item := OpenAITiboRouteStatus{Route: string(route), Verdict: string(openAITiboUnknown)}
+		if state != nil {
+			state.mu.Lock()
+			r := state.route(route)
+			item.Verdict = string(r.effective(now, cfg))
+			item.Confirmed = string(r.verdict)
+			item.CheckedAt, item.FlippedAt, item.NextProbeAt = openAITiboTimePtr(r.checkedAt), openAITiboTimePtr(r.flippedAt), openAITiboTimePtr(r.nextProbeAt)
+			for _, vote := range r.pending {
+				item.PendingVotes = append(item.PendingVotes, string(vote))
+			}
+			if !r.lastSampleAt.IsZero() {
+				item.LastSample, item.LastHTTP, item.LastAnswer = string(r.lastSample.verdict), r.lastSample.status, r.lastSample.answerClass
+			}
+			item.ProbesHour, item.FlipsHour = countOpenAITiboWindow(r.probes, now), countOpenAITiboWindow(r.flips, now)
+			item.VoteWindows, item.VoteConfirmed, item.VoteRejected = r.voteWindows, r.voteConfirmed, r.voteRejected
+			item.ShadowAgree, item.ShadowDisagree = r.shadowAgree, r.shadowDisagree
+			state.mu.Unlock()
+		}
+		out = append(out, item)
+	}
+	cookie := OpenAITiboRouteStatus{Route: string(openAITiboRouteCookieWS), Verdict: "unavailable"}
+	if cookieReady {
+		cookie.Verdict = string(openAITiboHealthy)
+	}
+	return append(out, cookie)
+}
+
+// observeOpenAITiboResponseModel is the passive model check at the end of a
+// business response. An astra request answered by another model is hard
+// evidence: the route turns degraded without a vote and a confirmation probe
+// is queued. Other models are only logged for now. It returns true for an
+// astra mismatch so Cookie WS callers can retire the socket.
+func (s *OpenAIGatewayService) observeOpenAITiboResponseModel(account *Account, route openAITiboRoute, sentModel, responseModel string) bool {
+	sentModel, responseModel = strings.TrimSpace(sentModel), strings.TrimSpace(responseModel)
+	if s == nil || account == nil || sentModel == "" || responseModel == "" || upstreamModelsMatchForAudit(sentModel, responseModel) {
+		return false
+	}
+	astra := sentModel == openAICodexTicketDefaultModel
+	s.logOpenAITiboModelMismatch(account.ID, route, sentModel, responseModel, astra)
+	if !astra {
+		return false
+	}
+	if route != openAITiboRouteCookieWS && s.openAITiboRouteApplies(account) {
+		s.forceOpenAITiboDegraded(account, route)
+	}
+	return true
+}
+
+func (s *OpenAIGatewayService) forceOpenAITiboDegraded(account *Account, route openAITiboRoute) {
+	cfg := s.openAITiboRouteConfig()
+	state := s.openAITiboAccountState(account.ID)
+	now := time.Now()
+	state.mu.Lock()
+	r := state.route(route)
+	before := r.effective(now, cfg)
+	changed := r.forceDegraded(now)
+	if changed {
+		r.flips = append(pruneOpenAITiboWindow(r.flips, now), now)
+		r.persistedAt = now
+	}
+	record := openAITiboVerdictRecordFor(r)
+	probeRoute := route == openAITiboRouteHTTP || cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff
+	if probeRoute {
+		// Confirm the evidence with a probe instead of waiting for the cadence.
+		r.nextProbeAt = now
+		s.startOpenAITiboProbeLocked(state, route, account, false, cfg, now)
+	}
+	if route == openAITiboRouteHTTP && changed && state.bpsEnabled && cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff {
+		state.bps.nextProbeAt = now
+		s.startOpenAITiboProbeLocked(state, openAITiboRouteBPS, account, false, cfg, now)
+	}
+	state.mu.Unlock()
+	if !changed {
+		return
+	}
+	s.openaiTiboStats.noteFlip()
+	logger.L().Info("openai_tibo verdict flip", zap.Int64("account_id", account.ID), zap.String("route", string(route)),
+		zap.String("from", string(before)), zap.String("to", string(openAITiboDegraded)), zap.String("cause", "response_model_mismatch"))
+	s.persistOpenAITiboVerdict(account.ID, route, record)
+}
+
+// openAICookieWSTurnModelMismatch is the Cookie WS passive check on a raw
+// upstream event (before any client-facing model rewrite): a successful
+// completion of an astra turn by another model means the caller retires this
+// socket. Only the exact Tibo probe payload is left to the probe observer.
+func (s *OpenAIGatewayService) openAICookieWSTurnModelMismatch(account *Account, sentModel string, payload []byte, eventType string) bool {
+	if !s.openAITiboRouteApplies(account) {
+		return false
+	}
+	model, success := openAICodexSuccessfulCompletionModel(payload, eventType)
+	if !success {
+		return false
+	}
+	return s.observeOpenAITiboResponseModel(account, openAITiboRouteCookieWS, sentModel, model)
+}
+
+func (s *OpenAIGatewayService) logOpenAITiboModelMismatch(accountID int64, route openAITiboRoute, sentModel, responseModel string, astra bool) {
+	every := 10 * time.Minute
+	if astra {
+		every = time.Minute
+	}
+	key := strings.Join([]string{strconv.FormatInt(accountID, 10), string(route), sentModel, responseModel}, "\x00")
+	now := time.Now()
+	if raw, ok := s.openaiTiboMismatchLog.Load(key); ok {
+		if last, ok := raw.(time.Time); ok && now.Sub(last) < every {
+			return
+		}
+	}
+	s.openaiTiboMismatchLog.Store(key, now)
+	logger.L().Info("openai_tibo response model mismatch", zap.Int64("account_id", accountID), zap.String("route", string(route)),
+		zap.String("sent_model", sentModel), zap.String("response_model", responseModel), zap.Bool("hard_evidence", astra))
+}

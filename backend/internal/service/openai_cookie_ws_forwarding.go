@@ -120,6 +120,23 @@ func (s *OpenAIGatewayService) reserveOpenAICookieWSSlot(ctx context.Context, ac
 	}
 }
 
+// errOpenAICookieWSSlotBusy means every ready Cookie slot stayed reserved
+// until the reservation deadline. The account may still serve over HTTP.
+var errOpenAICookieWSSlotBusy = errors.New("cookie websocket slots are busy")
+
+// reserveOpenAICookieWSSlotWithin bounds the slot wait. Its own deadline is
+// reported as errOpenAICookieWSSlotBusy (unavailable, falls back to HTTP);
+// cancellation of ctx is still returned as the caller's context error.
+func (s *OpenAIGatewayService) reserveOpenAICookieWSSlotWithin(ctx context.Context, account *Account, model, preferredConnID string, timeout time.Duration) (int, func(), error) {
+	reserveCtx, cancel := context.WithTimeoutCause(ctx, timeout, errOpenAICookieWSSlotBusy)
+	defer cancel()
+	slot, release, err := s.reserveOpenAICookieWSSlot(reserveCtx, account, model, preferredConnID)
+	if err != nil && ctx.Err() == nil && errors.Is(context.Cause(reserveCtx), errOpenAICookieWSSlotBusy) {
+		return 0, nil, errOpenAICookieWSSlotBusy
+	}
+	return slot, release, err
+}
+
 func openAICookieWSSlotFromContext(ctx context.Context) (int, bool) {
 	if ctx == nil {
 		return 0, false
@@ -201,7 +218,8 @@ func openAICookieWSProxyURL(account *Account, cookieWS bool) string {
 
 func openAICookieWSUnavailableFailover(err error) error {
 	if !errors.Is(err, ErrOpenAICodexTicketUnavailable) && !errors.Is(err, errOpenAIWSCookieExpired) && !errors.Is(err, errOpenAIWSCookieRetired) &&
-		!errors.Is(err, errOpenAICookieWSAccountUnavailable) && !errors.Is(err, errOpenAIWSCookieValidatorMissing) {
+		!errors.Is(err, errOpenAICookieWSAccountUnavailable) && !errors.Is(err, errOpenAIWSCookieValidatorMissing) &&
+		!errors.Is(err, errOpenAICookieWSSlotBusy) {
 		return err
 	}
 	return &UpstreamFailoverError{
@@ -220,7 +238,8 @@ func isOpenAICookieWSUnavailableError(err error) bool {
 		errors.Is(err, errOpenAIWSCookieRetired) ||
 		errors.Is(err, errOpenAICookieWSAccountUnavailable) ||
 		errors.Is(err, errOpenAIWSCookieValidatorMissing) ||
-		errors.Is(err, errOpenAIWSConnQueueFull) {
+		errors.Is(err, errOpenAIWSConnQueueFull) ||
+		errors.Is(err, errOpenAICookieWSSlotBusy) {
 		return true
 	}
 	var failoverErr *UpstreamFailoverError

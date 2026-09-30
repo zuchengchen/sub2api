@@ -354,6 +354,8 @@ export default {
 	  upstreamModelMismatch: 'Response model mismatch',
 	  modelVariant: 'Possible version variant',
 	  modelMismatch: 'Different model',
+    routeDegraded: 'Degraded fallback',
+    routeDegradedHint: 'Every Tibo route of this account was judged degraded, so this request was served on the plain HTTP fallback. Response quality may be lower.',
     reasoningEffort: 'Reasoning Effort',
     requestedReasoningEffort: 'Requested reasoning effort',
     endpoint: 'Endpoint',

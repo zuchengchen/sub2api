@@ -98,6 +98,23 @@ WHERE ns.nspname = 'public'
 	require.Contains(t, mismatchIndexDef, "created_at DESC")
 	require.Contains(t, mismatchIndexDef, "id DESC")
 	require.Contains(t, mismatchIndexDef, "WHERE (upstream_model_mismatch IS TRUE)")
+	requireColumn(t, tx, "usage_logs", "route_degraded", "boolean", 0, true)
+	requireIndex(t, tx, "usage_logs", usageLogsRouteDegradedIndex)
+
+	var routeDegradedIndexDef string
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+SELECT pg_get_indexdef(i.indexrelid)
+FROM pg_class idx
+JOIN pg_index i ON i.indexrelid = idx.oid
+JOIN pg_class tbl ON tbl.oid = i.indrelid
+JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+WHERE ns.nspname = 'public'
+  AND tbl.relname = 'usage_logs'
+  AND idx.relname = $1
+`, usageLogsRouteDegradedIndex).Scan(&routeDegradedIndexDef))
+	require.Contains(t, routeDegradedIndexDef, "created_at DESC")
+	require.Contains(t, routeDegradedIndexDef, "id DESC")
+	require.Contains(t, routeDegradedIndexDef, "WHERE (route_degraded IS TRUE)")
 	requireConstraintDefinitionContains(
 		t,
 		tx,

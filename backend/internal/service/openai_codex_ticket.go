@@ -187,6 +187,8 @@ type OpenAICodexTicketStatus struct {
 	RecoveryState     string                     `json:"recovery_state,omitempty"`
 	SkipReason        string                     `json:"skip_reason,omitempty"`
 	CookieSlots       []OpenAICookieWSSlotStatus `json:"cookie_slots,omitempty"`
+	// TiboRoutes is this process's Tibo route state (http, bps, cookie_ws).
+	TiboRoutes []OpenAITiboRouteStatus `json:"tibo_routes,omitempty"`
 }
 
 func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketConfig, now time.Time) []OpenAICodexTicketStatus {
@@ -847,6 +849,9 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestLoop(ctx context.Context)
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			// Tibo probes start in the background; run them before the slower
+			// Cookie refresh so a long harvest cannot delay route verdicts.
+			s.probeOpenAITiboRoutes(ctx)
 			s.refreshOpenAICookieWSTickets(ctx)
 			s.refreshOpenAICodexTickets(ctx)
 			timer.Reset(time.Duration(s.openAICodexTicketConfig().HarvestProbeIntervalSeconds) * time.Second)
@@ -1511,7 +1516,8 @@ func (s *OpenAIGatewayService) persistOpenAICodexTicketRevocation(accountID int6
 
 // IsOpenAICodexTicketExtraKey identifies server-managed ticket material.
 func IsOpenAICodexTicketExtraKey(key string) bool {
-	return strings.HasPrefix(key, openAICodexTicketExtraKeyPrefix) || strings.HasPrefix(key, openAICodexTicketRevokedExtraKeyPrefix) || strings.HasPrefix(key, openAICookieWSExtraKeyPrefix)
+	return strings.HasPrefix(key, openAICodexTicketExtraKeyPrefix) || strings.HasPrefix(key, openAICodexTicketRevokedExtraKeyPrefix) ||
+		strings.HasPrefix(key, openAICookieWSExtraKeyPrefix) || strings.HasPrefix(key, openAITiboVerdictExtraKeyPrefix)
 }
 
 // MergeOpenAICodexTicketExtra preserves only persisted tickets, never summaries or

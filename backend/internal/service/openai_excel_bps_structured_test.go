@@ -78,9 +78,13 @@ func TestExcelBPSStructuredOutputForwardContract(t *testing.T) {
 						require.True(t, IsResponseCommitted(c))
 						require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
 					} else {
-						require.GreaterOrEqual(t, len(upstream.requests), 2)
-						require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
-						require.Error(t, err)
+						// BPS already executed the request; the bridge rejected its
+						// output. Switch account instead of replaying it on Codex HTTP.
+						require.Len(t, upstream.requests, 1)
+						var failover *UpstreamFailoverError
+						require.ErrorAs(t, err, &failover)
+						require.Equal(t, excelBPSUncertainFailoverReason, failover.Reason)
+						require.Empty(t, rec.Body.String())
 					}
 				})
 			}

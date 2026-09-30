@@ -35,6 +35,10 @@ const messages: Record<string, string> = {
 	'admin.usage.allUpstreamModelAudit': 'All response model states',
 	'admin.usage.upstreamModelMismatchOnly': 'Mismatched only',
 	'admin.usage.upstreamModelMatchedOnly': 'Matched only',
+  'admin.usage.routeDegradedFilter': 'Route degradation',
+  'admin.usage.allRouteDegraded': 'All route states',
+  'admin.usage.routeDegradedOnly': 'Degraded fallback only',
+  'admin.usage.routeNotDegradedOnly': 'Not degraded only',
   'admin.usage.group': 'Group',
   'admin.usage.allGroups': 'All Groups',
   'common.refresh': 'Refresh',
@@ -84,6 +88,7 @@ const defaultFilters = () => ({
   billing_type: null,
   billing_mode: null,
 	upstream_model_mismatch: null,
+  route_degraded: null as boolean | null,
   group_id: null,
   start_date: '',
   end_date: '',
@@ -303,5 +308,87 @@ describe('UsageFilters — native compaction filter', () => {
 
     expect(filters.native_compaction_v2).toBe(true)
     expect(wrapper.emitted('change')).toBeTruthy()
+  })
+})
+
+describe('UsageFilters — route degradation filter', () => {
+  const SelectStub = {
+    name: 'Select',
+    props: ['modelValue', 'options'],
+    emits: ['update:modelValue', 'change'],
+    template: '<div />',
+  }
+
+  const mountWithMode = (filters: ReturnType<typeof defaultFilters>, mode?: 'usage' | 'errors' | 'ranking') =>
+    mount(UsageFilters, {
+      props: {
+        modelValue: filters,
+        exporting: false,
+        startDate: '2026-05-01',
+        endDate: '2026-05-28',
+        showActions: false,
+        modelOptions: [],
+        ...(mode ? { mode } : {}),
+      },
+      global: { stubs: { Select: SelectStub, Teleport: true } },
+    })
+
+  const findRouteSelect = (wrapper: ReturnType<typeof mountWithMode>) =>
+    wrapper.findAllComponents(SelectStub).find((select: any) =>
+      (select.props('options') as Array<{ label: string }>).some((option) => option.label === 'Degraded fallback only')
+    )
+
+  it('mirrors the upstream-model audit filter with all / degraded fallback / not degraded options', async () => {
+    const filters = defaultFilters()
+    const wrapper = mountWithMode(filters)
+
+    expect(wrapper.text()).toContain('Route degradation')
+    const routeSelect = findRouteSelect(wrapper)
+    expect(routeSelect).toBeDefined()
+    expect(routeSelect!.props('modelValue')).toBeNull()
+    expect(routeSelect!.props('options')).toEqual([
+      { value: null, label: 'All route states' },
+      { value: true, label: 'Degraded fallback only' },
+      { value: false, label: 'Not degraded only' },
+    ])
+
+    routeSelect!.vm.$emit('update:modelValue', true)
+    routeSelect!.vm.$emit('change')
+    await wrapper.vm.$nextTick()
+    expect(filters.route_degraded).toBe(true)
+    expect(wrapper.emitted('change')).toHaveLength(1)
+
+    routeSelect!.vm.$emit('update:modelValue', false)
+    routeSelect!.vm.$emit('change')
+    await wrapper.vm.$nextTick()
+    expect(filters.route_degraded).toBe(false)
+    expect(wrapper.emitted('change')).toHaveLength(2)
+  })
+
+  // The cleanup dialog reuses these filters, but cleanup tasks cannot delete by
+  // route_degraded; showing it there would misstate what gets deleted.
+  it('is hidden when hideRouteDegraded is set (usage cleanup dialog)', () => {
+    const wrapper = mount(UsageFilters, {
+      props: {
+        modelValue: defaultFilters(),
+        exporting: false,
+        startDate: '2026-05-01',
+        endDate: '2026-05-28',
+        showActions: false,
+        modelOptions: [],
+        hideRouteDegraded: true,
+      },
+      global: { stubs: { Select: SelectStub, Teleport: true } },
+    })
+    expect(findRouteSelect(wrapper)).toBeUndefined()
+    expect(wrapper.text()).not.toContain('Route degradation')
+    expect(wrapper.text()).toContain('Upstream model audit')
+  })
+
+  it.each(['errors', 'ranking'] as const)('is hidden in %s mode like the upstream-model audit filter', (mode) => {
+    const wrapper = mountWithMode(defaultFilters(), mode)
+    expect(findRouteSelect(wrapper)).toBeUndefined()
+    expect(wrapper.text()).not.toContain('Route degradation')
+    expect(wrapper.text()).not.toContain('Upstream model audit')
   })
 })

@@ -100,6 +100,11 @@ func UpstreamModelMismatch(v bool) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldUpstreamModelMismatch, v))
 }
 
+// RouteDegraded applies equality check predicate on the "route_degraded" field. It's identical to RouteDegradedEQ.
+func RouteDegraded(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRouteDegraded, v))
+}
+
 // ChannelID applies equality check predicate on the "channel_id" field. It's identical to ChannelIDEQ.
 func ChannelID(v int64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldChannelID, v))
@@ -718,6 +723,26 @@ func UpstreamModelMismatchIsNil() predicate.UsageLog {
 // UpstreamModelMismatchNotNil applies the NotNil predicate on the "upstream_model_mismatch" field.
 func UpstreamModelMismatchNotNil() predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldNotNull(FieldUpstreamModelMismatch))
+}
+
+// RouteDegradedEQ applies the EQ predicate on the "route_degraded" field.
+func RouteDegradedEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldRouteDegraded, v))
+}
+
+// RouteDegradedNEQ applies the NEQ predicate on the "route_degraded" field.
+func RouteDegradedNEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldRouteDegraded, v))
+}
+
+// RouteDegradedIsNil applies the IsNil predicate on the "route_degraded" field.
+func RouteDegradedIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldRouteDegraded))
+}
+
+// RouteDegradedNotNil applies the NotNil predicate on the "route_degraded" field.
+func RouteDegradedNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldRouteDegraded))
 }
 
 // ChannelIDEQ applies the EQ predicate on the "channel_id" field.

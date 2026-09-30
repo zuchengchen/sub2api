@@ -113,6 +113,20 @@ func (_c *UsageLogCreate) SetNillableUpstreamModelMismatch(v *bool) *UsageLogCre
 	return _c
 }
 
+// SetRouteDegraded sets the "route_degraded" field.
+func (_c *UsageLogCreate) SetRouteDegraded(v bool) *UsageLogCreate {
+	_c.mutation.SetRouteDegraded(v)
+	return _c
+}
+
+// SetNillableRouteDegraded sets the "route_degraded" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableRouteDegraded(v *bool) *UsageLogCreate {
+	if v != nil {
+		_c.SetRouteDegraded(*v)
+	}
+	return _c
+}
+
 // SetChannelID sets the "channel_id" field.
 func (_c *UsageLogCreate) SetChannelID(v int64) *UsageLogCreate {
 	_c.mutation.SetChannelID(v)
@@ -991,6 +1005,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 		_spec.SetField(usagelog.FieldUpstreamModelMismatch, field.TypeBool, value)
 		_node.UpstreamModelMismatch = &value
 	}
+	if value, ok := _c.mutation.RouteDegraded(); ok {
+		_spec.SetField(usagelog.FieldRouteDegraded, field.TypeBool, value)
+		_node.RouteDegraded = &value
+	}
 	if value, ok := _c.mutation.ChannelID(); ok {
 		_spec.SetField(usagelog.FieldChannelID, field.TypeInt64, value)
 		_node.ChannelID = &value
@@ -1401,6 +1419,24 @@ func (u *UsageLogUpsert) UpdateUpstreamModelMismatch() *UsageLogUpsert {
 // ClearUpstreamModelMismatch clears the value of the "upstream_model_mismatch" field.
 func (u *UsageLogUpsert) ClearUpstreamModelMismatch() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldUpstreamModelMismatch)
+	return u
+}
+
+// SetRouteDegraded sets the "route_degraded" field.
+func (u *UsageLogUpsert) SetRouteDegraded(v bool) *UsageLogUpsert {
+	u.Set(usagelog.FieldRouteDegraded, v)
+	return u
+}
+
+// UpdateRouteDegraded sets the "route_degraded" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateRouteDegraded() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldRouteDegraded)
+	return u
+}
+
+// ClearRouteDegraded clears the value of the "route_degraded" field.
+func (u *UsageLogUpsert) ClearRouteDegraded() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldRouteDegraded)
 	return u
 }
 
@@ -2278,6 +2314,27 @@ func (u *UsageLogUpsertOne) UpdateUpstreamModelMismatch() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearUpstreamModelMismatch() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearUpstreamModelMismatch()
+	})
+}
+
+// SetRouteDegraded sets the "route_degraded" field.
+func (u *UsageLogUpsertOne) SetRouteDegraded(v bool) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetRouteDegraded(v)
+	})
+}
+
+// UpdateRouteDegraded sets the "route_degraded" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateRouteDegraded() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateRouteDegraded()
+	})
+}
+
+// ClearRouteDegraded clears the value of the "route_degraded" field.
+func (u *UsageLogUpsertOne) ClearRouteDegraded() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearRouteDegraded()
 	})
 }
 
@@ -3434,6 +3491,27 @@ func (u *UsageLogUpsertBulk) UpdateUpstreamModelMismatch() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearUpstreamModelMismatch() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearUpstreamModelMismatch()
+	})
+}
+
+// SetRouteDegraded sets the "route_degraded" field.
+func (u *UsageLogUpsertBulk) SetRouteDegraded(v bool) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetRouteDegraded(v)
+	})
+}
+
+// UpdateRouteDegraded sets the "route_degraded" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateRouteDegraded() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateRouteDegraded()
+	})
+}
+
+// ClearRouteDegraded clears the value of the "route_degraded" field.
+func (u *UsageLogUpsertBulk) ClearRouteDegraded() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearRouteDegraded()
 	})
 }
 

@@ -164,13 +164,13 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			)
 			return nil, tooLarge
 		}
-		reserveCtx, reserveCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 		reservationPreference := ""
 		if previousResponseID != "" {
 			reservationPreference = preferredConnID
 		}
-		slot, release, reserveErr := s.reserveOpenAICookieWSSlot(reserveCtx, account, mappedModel, reservationPreference)
-		reserveCancel()
+		// All slots busy until the deadline is "unavailable": Forward falls
+		// back to HTTP instead of failing the request.
+		slot, release, reserveErr := s.reserveOpenAICookieWSSlotWithin(ctx, account, mappedModel, reservationPreference, s.openAIWSAcquireTimeout())
 		if reserveErr != nil {
 			return nil, reserveErr
 		}
@@ -648,6 +648,11 @@ readLoop:
 		}
 		responseModelObserver.ObserveOpenAI(message, eventType)
 		cookieProbeObserver.observe(lease, message, eventType)
+		if cookieWS && !cookieProbeObserver.enabled && isOpenAIWSTerminalEvent(eventType) &&
+			s.openAICookieWSTurnModelMismatch(account, mappedModel, message, eventType) {
+			// Served by another model: this socket never serves another turn.
+			lease.MarkBroken()
+		}
 		eventCount++
 		if firstEventType == "" {
 			firstEventType = eventType

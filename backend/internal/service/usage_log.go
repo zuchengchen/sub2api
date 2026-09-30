@@ -120,6 +120,15 @@ type UsageLog struct {
 	// UpstreamModelMismatch is nil when no upstream model was observed. Otherwise
 	// it compares UpstreamResponseModel with the actual model sent upstream.
 	UpstreamModelMismatch *bool
+	// RouteDegraded is tri-state:
+	//   - nil: Tibo route selection did not apply to this request (non Cookie-WS
+	//     accounts, other platforms, rows written before this column existed).
+	//   - false: Tibo routing applied and a route with a healthy/unknown verdict
+	//     served the request.
+	//   - true: Tibo routing applied, every route for the account was
+	//     degraded/unavailable, and the request was served on the plain HTTP
+	//     fallback ("降智兜底").
+	RouteDegraded *bool
 	// ChannelID 渠道 ID
 	ChannelID *int64
 	// ModelMappingChain 模型映射链，如 "a→b→c"

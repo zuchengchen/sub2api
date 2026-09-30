@@ -63,6 +63,8 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_turn_ticket:",
 	"codex_turn_ticket_revoked:",
 	"codex_cookie_ws:",
+	// Tibo 线路结论同样只是运行态观测，调度读进程内状态，不走快照投影。
+	"codex_tibo_verdict:",
 	"passive_usage_",
 	"upstream_billing_probe",
 	"upstream_billing_rate_sync",

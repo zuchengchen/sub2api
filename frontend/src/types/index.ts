@@ -1206,6 +1206,37 @@ export interface OpenAICookieWSSlotStatus {
   warmup?: OpenAICookieWSRecoveryDiagnostic
 }
 
+export type TiboRouteName = 'http' | 'bps' | 'cookie_ws'
+export type TiboRouteVerdict = 'healthy' | 'unknown' | 'degraded' | 'unavailable'
+
+// Admin view of one Tibo route of a Cookie WS account. `verdict` is the
+// effective verdict used for routing; `confirmed` is the last confirmed one and
+// may differ from it once the confirmation goes stale. Cookie WS only reports
+// healthy/unavailable with zero hourly counters.
+export interface TiboRouteStatus {
+  route: TiboRouteName
+  verdict: TiboRouteVerdict
+  confirmed?: 'healthy' | 'degraded'
+  checked_at?: string
+  flipped_at?: string
+  next_probe_at?: string
+  pending_votes?: ('healthy' | 'degraded')[]
+  last_sample?: 'healthy' | 'unknown' | 'degraded'
+  last_http?: number
+  last_answer?: string
+  probes_hour: number
+  flips_hour: number
+  // Calibration counters since the gateway process started. A vote window
+  // opens on a sample that disagrees with the confirmed verdict; confirmed =
+  // it flipped, rejected = later samples outvoted it.
+  vote_windows?: number
+  vote_confirmed?: number
+  vote_rejected?: number
+  // BPS only: definitive BPS samples matching / differing from the HTTP verdict.
+  shadow_agree?: number
+  shadow_disagree?: number
+}
+
 export interface CodexTurnTicketStatus {
   model: string
   mode?: 'turn_state' | 'cookie_ws'
@@ -1218,6 +1249,7 @@ export interface CodexTurnTicketStatus {
   recovery_state?: OpenAICookieWSRecoveryState
   skip_reason?: string
   cookie_slots?: OpenAICookieWSSlotStatus[]
+  tibo_routes?: TiboRouteStatus[]
   length?: number
   ready: boolean
   remaining_seconds: number
@@ -1849,6 +1881,10 @@ export interface AdminUsageLog extends UsageLog {
   upstream_reasoning_effort?: string | null
   upstream_response_model?: string | null
   upstream_model_mismatch?: boolean | null
+  // Tibo route outcome (admin only): null/absent = route selection did not
+  // apply; false = served on a healthy/unknown route; true = every route was
+  // degraded, so the request was served on the plain HTTP fallback.
+  route_degraded?: boolean | null
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
 

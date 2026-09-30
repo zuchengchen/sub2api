@@ -150,6 +150,11 @@
           <Select v-model="filters.upstream_model_mismatch" :options="upstreamModelMismatchOptions" @change="emitChange" />
         </div>
 
+        <div v-if="mode === 'usage' && !hideRouteDegraded" class="w-full sm:w-auto sm:min-w-[200px]">
+          <label class="input-label">{{ t('admin.usage.routeDegradedFilter') }}</label>
+          <Select v-model="filters.route_degraded" :options="routeDegradedOptions" @change="emitChange" />
+        </div>
+
         <!-- Error Phase Filter (errors only) -->
         <div v-if="mode === 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('admin.ops.errorLog.type') }}</label>
@@ -222,12 +227,15 @@ interface Props {
   mode?: 'usage' | 'errors' | 'ranking'
   /** 嵌入统一卡片内使用：去掉自身卡片外观 */
   flat?: boolean
+  /** 隐藏线路降智筛选：清理任务不支持按它删除，显示出来会误导删除范围 */
+  hideRouteDegraded?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   showActions: true,
   mode: 'usage',
-  flat: false
+  flat: false,
+  hideRouteDegraded: false
 })
 const emit = defineEmits([
   'update:modelValue',
@@ -327,6 +335,13 @@ const upstreamModelMismatchOptions = ref<SelectOption[]>([
   { value: null, label: t('admin.usage.allUpstreamModelAudit') },
   { value: true, label: t('admin.usage.upstreamModelMismatchOnly') },
   { value: false, label: t('admin.usage.upstreamModelMatchedOnly') }
+])
+
+// Tibo 线路降智：true = 降智兜底（普通 HTTP），false = 未降智；两者都排除未走线路选择的记录
+const routeDegradedOptions = ref<SelectOption[]>([
+  { value: null, label: t('admin.usage.allRouteDegraded') },
+  { value: true, label: t('admin.usage.routeDegradedOnly') },
+  { value: false, label: t('admin.usage.routeNotDegradedOnly') }
 ])
 
 const emitChange = () => emit('change')

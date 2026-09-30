@@ -760,6 +760,23 @@ export default {
           runtime_blocked: 'Runtime protection paused the account',
           model_temporarily_unschedulable: 'Model is temporarily unschedulable'
         },
+        codexTiboRoutes: 'Routes',
+        codexTiboRouteSummary: 'Route {route}: {verdict}',
+        codexTiboRouteVerdict: {
+          healthy: 'Healthy',
+          unknown: 'Unknown',
+          degraded: 'Degraded',
+          unavailable: 'Unavailable'
+        },
+        codexTiboRouteConfirmed: 'Confirmed: {verdict}',
+        codexTiboRouteCheckedAt: 'Last checked: {time}',
+        codexTiboRouteFlippedAt: 'Last flipped: {time}',
+        codexTiboRouteNextProbeAt: 'Next probe: {time}',
+        codexTiboRoutePendingVotes: 'Pending votes: {votes}',
+        codexTiboRouteLastSample: 'Last sample: {sample}',
+        codexTiboRouteHourly: 'Probes/flips in the last hour: {probes}/{flips}',
+        codexTiboRouteVotes: 'Vote windows {windows}: {confirmed} confirmed, {rejected} rejected (since start)',
+        codexTiboRouteShadow: 'Shadow vs HTTP verdict: {agree} agree, {disagree} disagree',
         codexImageTool: 'Codex image bridge policy',
         codexImageToolDesc:
           'Controls the hosted image_generation bridge and client-declared image tools on Codex /responses text requests. Hosted auto-injection applies only to non-Responses Lite requests. Account policy takes precedence over channel and global settings; standalone image-generation endpoints are unaffected.',

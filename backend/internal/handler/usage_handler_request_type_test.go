@@ -236,6 +236,7 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 	channelID := int64(99)
 	accountRateMultiplier := 1.7
 	accountStatsCost := 0.12
+	routeDegraded := true
 	repo := &userUsageRepoCapture{
 		listRows: []service.UsageLog{{
 			ID:                    1,
@@ -258,6 +259,7 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 			ChannelID:             &channelID,
 			AccountRateMultiplier: &accountRateMultiplier,
 			AccountStatsCost:      &accountStatsCost,
+			RouteDegraded:         &routeDegraded,
 		}},
 	}
 	router := newUserUsageRequestTypeTestRouter(repo)
@@ -283,6 +285,7 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 	require.NotContains(t, body, "upstream_model")
 	require.NotContains(t, body, "upstream_response_model")
 	require.NotContains(t, body, "upstream_model_mismatch")
+	require.NotContains(t, body, "route_degraded")
 	require.NotContains(t, body, "billing_tier")
 	require.NotContains(t, body, "channel_id")
 	require.NotContains(t, body, `"account":`)

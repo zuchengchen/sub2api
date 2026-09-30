@@ -32,6 +32,8 @@ const (
 	FieldUpstreamResponseModel = "upstream_response_model"
 	// FieldUpstreamModelMismatch holds the string denoting the upstream_model_mismatch field in the database.
 	FieldUpstreamModelMismatch = "upstream_model_mismatch"
+	// FieldRouteDegraded holds the string denoting the route_degraded field in the database.
+	FieldRouteDegraded = "route_degraded"
 	// FieldChannelID holds the string denoting the channel_id field in the database.
 	FieldChannelID = "channel_id"
 	// FieldModelMappingChain holds the string denoting the model_mapping_chain field in the database.
@@ -169,6 +171,7 @@ var Columns = []string{
 	FieldUpstreamModel,
 	FieldUpstreamResponseModel,
 	FieldUpstreamModelMismatch,
+	FieldRouteDegraded,
 	FieldChannelID,
 	FieldModelMappingChain,
 	FieldBillingTier,
@@ -343,6 +346,11 @@ func ByUpstreamResponseModel(opts ...sql.OrderTermOption) OrderOption {
 // ByUpstreamModelMismatch orders the results by the upstream_model_mismatch field.
 func ByUpstreamModelMismatch(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUpstreamModelMismatch, opts...).ToFunc()
+}
+
+// ByRouteDegraded orders the results by the route_degraded field.
+func ByRouteDegraded(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRouteDegraded, opts...).ToFunc()
 }
 
 // ByChannelID orders the results by the channel_id field.
