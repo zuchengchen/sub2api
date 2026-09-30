@@ -242,6 +242,15 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			continue
 		}
 
+		// 上游流内错误：缓冲路径尚未写出任何字节，直接返回真实的 502/503，
+		// 不能拼出一个 200 + finish_reason=stop 的残缺/空回答。
+		if event.Type == "error" {
+			upstreamErr := parseAnthropicStreamErrorEvent(payload)
+			logAnthropicStreamErrorEvent("forward_as_cc buffered: upstream error event", requestID, upstreamErr)
+			writeGatewayCCError(c, upstreamErr.Status, upstreamErr.Type, upstreamErr.Message)
+			return nil, fmt.Errorf("upstream stream error: %s: %s", upstreamErr.Type, upstreamErr.Message)
+		}
+
 		// message_start carries the initial response structure and cache usage
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
@@ -443,6 +452,23 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		return false
 	}
 
+	// 上游 Anthropic 流内 error 事件（kiro-rs 的 overloaded_error / api_error /
+	// upstream_tool_json_error 等）。转换器没有 error 分支，旧逻辑会静默丢弃，
+	// 再按正常完成补发 finish_reason=stop，客户端既看不到错误也不会重试。
+	// 这里改为透传一个 OpenAI 流式错误帧并结束流。
+	writeUpstreamStreamError := func(event *apicompat.AnthropicStreamEvent, payload string) {
+		upstreamErr := parseAnthropicStreamErrorEvent(payload)
+		// error 路径没有 message_delta：kiro-rs 在 error 事件顶层附带已消耗用量，这里并入计费。
+		if event.Usage != nil {
+			mergeAnthropicUsage(&usage, *event.Usage)
+		}
+		logAnthropicStreamErrorEvent("forward_as_cc stream: upstream error event", requestID, upstreamErr)
+		MarkOpsStreamFailure(c, upstreamErr.Type, upstreamErr.Type, upstreamErr.Message, upstreamErr.Status)
+		fmt.Fprint(c.Writer, buildChatStreamUpstreamErrorSSE(upstreamErr.Type, upstreamErr.Message)) //nolint:errcheck
+		fmt.Fprint(c.Writer, "data: [DONE]\n\n")                                                     //nolint:errcheck
+		c.Writer.Flush()
+	}
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		// 与缓冲路径一致：接受 SSE 紧凑格式（冒号后无空格，#4653 同根因）。
@@ -461,6 +487,13 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
+		}
+
+		// 上游流内错误：透传后立即结束，不再走 Finalize（否则会补发 finish_reason=stop）。
+		// 已消耗用量（message_start + error.usage）照常返回用于计费；失败另外计入 ops。
+		if event.Type == "error" {
+			writeUpstreamStreamError(&event, payload)
+			return resultWithUsage(), nil
 		}
 
 		// Forward received usage regardless of the client stream_options.
@@ -524,4 +557,64 @@ func anthropicChatStreamHasUsage(event *apicompat.AnthropicStreamEvent, payload 
 	default:
 		return false
 	}
+}
+
+// anthropicStreamError 是上游 Anthropic SSE 流内 `error` 事件的归一化结果。
+type anthropicStreamError struct {
+	Type    string // 上游 error.type，缺省 upstream_error
+	Message string // 已脱敏的 error.message
+	Status  int    // 语义 HTTP 状态：overloaded_error → 503，其余 502
+}
+
+// parseAnthropicStreamErrorEvent 解析 `{"type":"error","error":{type,message}}`。
+// 所有 Anthropic 上游流内错误转发路径（CC / Responses，流式与缓冲）共用，
+// 保证脱敏与状态码映射一致。
+func parseAnthropicStreamErrorEvent(payload string) anthropicStreamError {
+	errType := strings.TrimSpace(gjson.Get(payload, "error.type").String())
+	if errType == "" {
+		errType = "upstream_error"
+	}
+	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(gjson.Get(payload, "error.message").String()))
+	if message == "" {
+		message = "Upstream stream error"
+	}
+	status := http.StatusBadGateway
+	if errType == "overloaded_error" {
+		status = http.StatusServiceUnavailable
+	}
+	return anthropicStreamError{Type: errType, Message: message, Status: status}
+}
+
+func logAnthropicStreamErrorEvent(msg, requestID string, upstreamErr anthropicStreamError) {
+	logger.L().Warn(msg,
+		zap.String("request_id", requestID),
+		zap.String("error_type", upstreamErr.Type),
+		zap.String("error_message", upstreamErr.Message),
+	)
+}
+
+// responsesCode 把 Anthropic error.type 映射为 OpenAI Responses 的错误码词表，
+// 便于 Codex 等 Responses 客户端按 server_is_overloaded / server_error 判定重试。
+func (e anthropicStreamError) responsesCode() string {
+	if e.Type == "overloaded_error" {
+		return "server_is_overloaded"
+	}
+	return "server_error"
+}
+
+// buildChatStreamUpstreamErrorSSE 把上游 Anthropic 流内 error 事件转成 OpenAI chat
+// 流式错误帧。保留上游 error.type（不像 buildChatStreamErrorSSE 那样固定为
+// invalid_request_error），客户端可据此和 message 文案判断是否重试。
+func buildChatStreamUpstreamErrorSSE(errType, message string) string {
+	payload, err := json.Marshal(gin.H{
+		"error": gin.H{
+			"type":    errType,
+			"code":    errType,
+			"message": message,
+		},
+	})
+	if err != nil {
+		return "data: {\"error\":{\"type\":\"upstream_error\",\"code\":\"upstream_error\",\"message\":\"Upstream model unavailable\"}}\n\n"
+	}
+	return "data: " + string(payload) + "\n\n"
 }

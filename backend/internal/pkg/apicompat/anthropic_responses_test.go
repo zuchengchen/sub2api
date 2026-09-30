@@ -1981,3 +1981,33 @@ func TestMessageStartSSE_StopReasonIsJSONNull(t *testing.T) {
 	require.Contains(t, sse, `"stop_reason":null`)
 	require.NotContains(t, sse, `"stop_reason":""`)
 }
+
+func TestFailAnthropicResponsesStream_EmitsFailedWithAccumulatedOutput(t *testing.T) {
+	state := NewAnthropicEventToResponsesState()
+	idx := 0
+	AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "message_start", Message: &AnthropicResponse{ID: "msg_1", Model: "claude-opus-5.5"}}, state)
+	AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "content_block_start", Index: &idx, ContentBlock: &AnthropicContentBlock{Type: "text"}}, state)
+	AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "content_block_delta", Index: &idx, Delta: &AnthropicDelta{Type: "text_delta", Text: "partial"}}, state)
+
+	events := FailAnthropicResponsesStream(state, "server_is_overloaded", "overloaded, retry")
+	require.NotEmpty(t, events)
+	last := events[len(events)-1]
+	require.Equal(t, "response.failed", last.Type)
+	require.Equal(t, "failed", last.Response.Status)
+	require.Equal(t, &ResponsesError{Code: "server_is_overloaded", Message: "overloaded, retry"}, last.Response.Error)
+	require.Len(t, last.Response.Output, 1)
+	require.True(t, state.CompletedSent)
+
+	// Finalize after failure must not add a completed terminal.
+	require.Empty(t, FinalizeAnthropicResponsesStream(state))
+	require.Empty(t, FailAnthropicResponsesStream(state, "server_error", "again"))
+}
+
+func TestFailAnthropicResponsesStream_BeforeMessageStartEmitsCreated(t *testing.T) {
+	state := NewAnthropicEventToResponsesState()
+	events := FailAnthropicResponsesStream(state, "server_error", "boom")
+	require.Len(t, events, 2)
+	require.Equal(t, "response.created", events[0].Type)
+	require.Equal(t, "response.failed", events[1].Type)
+	require.NotEmpty(t, events[1].Response.ID)
+}
