@@ -55,20 +55,13 @@ func (r *openAITiboRun) advance() {
 }
 
 // commit records the route about to serve. Degraded HTTP (every route
-// degraded or unusable) is marked for the client before any byte is written.
-func (r *openAITiboRun) commit(c *gin.Context, route openAITiboRoute) {
+// degraded or unusable) reaches usage logs via finishOpenAITiboRun, never the
+// client.
+func (r *openAITiboRun) commit(_ *gin.Context, route openAITiboRoute) {
 	if r == nil {
 		return
 	}
 	r.served = route
-	if c == nil || c.Writer == nil {
-		return
-	}
-	if route == openAITiboRouteHTTP && r.tier(openAITiboRouteHTTP) == openAITiboDegraded {
-		c.Header(openAITiboRouteQualityHeader, string(openAITiboDegraded))
-	} else {
-		c.Writer.Header().Del(openAITiboRouteQualityHeader)
-	}
 }
 
 func openAITiboTierRank(verdict openAITiboVerdict) int {
@@ -150,8 +143,8 @@ func (s *OpenAIGatewayService) newOpenAITiboRun(ctx context.Context, c *gin.Cont
 	return run
 }
 
-// bpsBypassReason is the X-Codex2API-Basispoints-Bypass value when BPS is
-// enabled for the model but another route goes first.
+// bpsBypassReason is the internal BPS bypass reason (openAIBPSBypassReasonKey)
+// when BPS is enabled for the model but another route goes first.
 func (r *openAITiboRun) bpsBypassReason(body []byte) string {
 	if r.first() == openAITiboRouteHTTP && r.tier(openAITiboRouteHTTP) == openAITiboHealthy {
 		return openAITiboHTTPOKReason
@@ -190,16 +183,31 @@ func (s *OpenAIGatewayService) finishOpenAITiboRun(run *openAITiboRun, result *O
 	}
 }
 
-// clearOpenAITiboRouteHeaders removes routing headers a failed attempt on a
-// previous account may have left on the shared response writer.
-func clearOpenAITiboRouteHeaders(c *gin.Context) {
-	if c == nil || c.Writer == nil {
+// setOpenAIBPSBypassReason records internally why BPS did not serve this
+// attempt; "" clears it. Routing details are never sent to API clients.
+func setOpenAIBPSBypassReason(c *gin.Context, reason string) {
+	if c == nil {
+		return
+	}
+	c.Set(openAIBPSBypassReasonKey, reason)
+}
+
+// resetOpenAIRouteRecord clears the routing record a failed attempt on a
+// previous account may have left, since the handler reuses one context and
+// response writer across failover attempts. The legacy routing headers are
+// deleted defensively; this service no longer sets them.
+func resetOpenAIRouteRecord(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	setOpenAIBPSBypassReason(c, "")
+	if c.Writer == nil {
 		return
 	}
 	h := c.Writer.Header()
-	h.Del("X-Codex2API-Upstream")
-	h.Del("X-Codex2API-Basispoints-Bypass")
-	h.Del(openAITiboRouteQualityHeader)
+	for _, name := range [...]string{"X-Codex2API-Upstream", "X-Codex2API-Basispoints-Bypass", "X-Codex2API-Route-Quality"} {
+		h.Del(name)
+	}
 }
 
 type openAITiboPin struct {

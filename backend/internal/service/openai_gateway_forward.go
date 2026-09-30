@@ -107,9 +107,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context, c *gin.Context, account *Account, body []byte, tiboRunOut **openAITiboRun) (*OpenAIForwardResult, error) {
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
-	// The handler reuses one response writer across failover attempts; routing
-	// headers from a previous account must not describe this attempt.
-	clearOpenAITiboRouteHeaders(c)
+	// The handler reuses one context and response writer across failover
+	// attempts; routing records from a previous account must not describe
+	// this attempt.
+	resetOpenAIRouteRecord(c)
 	forceHTTPResponses := s.openAICookieWSHTTPOnlyModel(account, resolveOpenAIAccountUpstreamModelForRequest(account, gjson.GetBytes(body, "model").String(), false))
 	if !forceHTTPResponses && shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
@@ -189,12 +190,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		tiboRun.advance()
 		bpsHTTPFallback = true
 		ClearActualOpenAIUpstreamEndpoint(c)
-		c.Header("X-Codex2API-Upstream", "codex")
-		c.Header("X-Codex2API-Basispoints-Bypass", excelBPSHTTPFallbackReason)
+		setOpenAIBPSBypassReason(c, excelBPSHTTPFallbackReason)
 	case tiboRun != nil:
 		if bpsModelEnabled {
-			c.Header("X-Codex2API-Upstream", "codex")
-			c.Header("X-Codex2API-Basispoints-Bypass", tiboRun.bpsBypassReason(body))
+			setOpenAIBPSBypassReason(c, tiboRun.bpsBypassReason(body))
 		}
 	case bpsModelEnabled:
 		reason := basispoints.NativeFallbackReason(body)
@@ -207,8 +206,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			reason = excelBPSHTTPFallbackReason
 			ClearActualOpenAIUpstreamEndpoint(c)
 		}
-		c.Header("X-Codex2API-Upstream", "codex")
-		c.Header("X-Codex2API-Basispoints-Bypass", reason)
+		setOpenAIBPSBypassReason(c, reason)
 	}
 
 	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)
@@ -1253,19 +1251,15 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				// was not sent, so BPS may still take it on this account.
 				tiboRun.commit(c, openAITiboRouteBPS)
 				ClearActualOpenAIUpstreamEndpoint(c)
-				// BPS serves now: drop the bypass headers set when it was skipped.
-				if c != nil && c.Writer != nil {
-					c.Writer.Header().Del("X-Codex2API-Upstream")
-					c.Writer.Header().Del("X-Codex2API-Basispoints-Bypass")
-				}
+				// BPS serves now: drop the bypass reason recorded when it was skipped.
+				setOpenAIBPSBypassReason(c, "")
 				bpsResult, bpsErr := s.forwardExcelBPS(ctx, c, account, tiboRun.bpsBody, startTime)
 				if bpsErr == nil || !errors.Is(bpsErr, errExcelBPSHTTPFallback) {
 					return bpsResult, bpsErr
 				}
 				tiboRun.advance()
 				SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
-				c.Header("X-Codex2API-Upstream", "codex")
-				c.Header("X-Codex2API-Basispoints-Bypass", excelBPSHTTPFallbackReason)
+				setOpenAIBPSBypassReason(c, excelBPSHTTPFallbackReason)
 			}
 			tiboRun.commit(c, openAITiboRouteHTTP)
 		} else {

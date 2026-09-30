@@ -168,7 +168,8 @@ func TestExcelBPSUpstreamErrorFallsBackToHTTP(t *testing.T) {
 	require.Len(t, upstream.requests, 2)
 	require.Equal(t, "bps.openai.com", upstream.requests[0].URL.Host)
 	require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
-	require.Equal(t, "bps_error", rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+	require.Equal(t, "bps_error", c.GetString(openAIBPSBypassReasonKey))
+	requireNoOpenAIRoutingHeaders(t, rec.Header())
 	require.Contains(t, rec.Body.String(), "ok")
 	require.NotContains(t, rec.Body.String(), "SECRET_UPSTREAM")
 }
@@ -185,7 +186,8 @@ func TestExcelBPSDataImageFallsBackToHTTP(t *testing.T) {
 	require.NotNil(t, result)
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, "chatgpt.com", upstream.requests[0].URL.Host)
-	require.Equal(t, "bps_error", rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+	require.Equal(t, "bps_error", c.GetString(openAIBPSBypassReasonKey))
+	requireNoOpenAIRoutingHeaders(t, rec.Header())
 	require.Contains(t, string(upstream.lastBody), "data:image/png;base64")
 }
 

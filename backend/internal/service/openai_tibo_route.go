@@ -26,8 +26,9 @@ const (
 	openAITiboProbeTimeout     = 25 * time.Second
 	// A cold account (no sample yet) waits at most this long for its first probe.
 	openAITiboProbeWait = 8 * time.Second
-	// Response header set when every route is degraded and HTTP serves anyway.
-	openAITiboRouteQualityHeader = "X-Codex2API-Route-Quality"
+	// Gin context key holding why BPS did not serve a BPS-enabled request.
+	// Routing details stay internal; they are never sent to API clients.
+	openAIBPSBypassReasonKey = "openai_bps_bypass_reason"
 )
 
 type openAITiboVerdict string

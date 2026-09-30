@@ -378,7 +378,7 @@ gateway:
   # 超时、429、取 token 失败）不计票，按 unknown_backoff 退避并遵守 Retry-After；
   # 超过 max_stale 没有新的确定样本，有效状态才变为 unknown。
   # 线路按 healthy > unknown > degraded 分层，同层 HTTP → BPS → Cookie WS；全部降智时走普通 HTTP，
-  # 并带响应头 X-Codex2API-Route-Quality: degraded。
+  # 仅在使用记录中标记 route_degraded（不向客户端返回任何线路响应头）。
   openai_tibo_route:
     healthy_interval: 10m
     degraded_interval: 5m

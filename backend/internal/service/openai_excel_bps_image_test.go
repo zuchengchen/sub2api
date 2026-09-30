@@ -91,7 +91,8 @@ func TestExcelBPSImageRelayValidationFallsBackToHTTP(t *testing.T) {
 			require.NotNil(t, result)
 			require.NotEmpty(t, upstream.requests)
 			require.Equal(t, "chatgpt.com", upstream.requests[0].URL.Host)
-			require.Equal(t, "bps_error", rec.Header().Get("X-Codex2API-Basispoints-Bypass"))
+			require.Equal(t, "bps_error", c.GetString(openAIBPSBypassReasonKey))
+			requireNoOpenAIRoutingHeaders(t, rec.Header())
 			require.NotContains(t, rec.Body.String(), "PRIVATE_PAYLOAD")
 		})
 	}
