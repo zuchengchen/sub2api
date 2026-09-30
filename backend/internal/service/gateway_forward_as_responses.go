@@ -420,6 +420,15 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			continue
 		}
 
+		// 上游流内错误：缓冲路径尚未写出任何字节，直接返回真实的 502/503，
+		// 不能拼出一个 200 + status=completed 的残缺/空回答。
+		if event.Type == "error" {
+			upstreamErr := parseAnthropicStreamErrorEvent(payload)
+			logAnthropicStreamErrorEvent("forward_as_responses buffered: upstream error event", requestID, upstreamErr)
+			writeResponsesError(c, upstreamErr.Status, upstreamErr.responsesCode(), upstreamErr.Message)
+			return nil, fmt.Errorf("upstream stream error: %s: %s", upstreamErr.Type, upstreamErr.Message)
+		}
+
 		// message_start carries the initial response structure
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
@@ -571,6 +580,10 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		}
 	}
 
+	// writeEvents serializes converted Responses events to the client (tool name
+	// reverse mapping + client tool restoration). Returns true on client disconnect.
+	var writeEvents func(events []apicompat.ResponsesStreamEvent) bool
+
 	// processEvent handles a single parsed Anthropic SSE event.
 	processEvent := func(event *apicompat.AnthropicStreamEvent) bool {
 		if firstChunk {
@@ -595,7 +608,26 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		normalizeAnthropicEventUsageForResponses(event, usage)
 
 		// Convert to Responses events
-		events := apicompat.AnthropicEventToResponsesEvents(event, state)
+		return writeEvents(apicompat.AnthropicEventToResponsesEvents(event, state))
+	}
+
+	// 上游 Anthropic 流内 error 事件：转换器没有 error 分支，旧逻辑会静默丢弃，再由
+	// finalizeStream 补一个 response.completed，客户端看到「成功但无/残缺输出」且不会重试。
+	// 这里改为以 response.failed 结束，并计入 ops。
+	failStream := func(event *apicompat.AnthropicStreamEvent, payload string) *ForwardResult {
+		upstreamErr := parseAnthropicStreamErrorEvent(payload)
+		// error 路径没有 message_delta：kiro-rs 在 error 事件顶层附带已消耗用量，这里并入计费。
+		if event.Usage != nil {
+			mergeAnthropicUsage(&usage, *event.Usage)
+		}
+		syncAnthropicResponsesUsage(state, usage)
+		logAnthropicStreamErrorEvent("forward_as_responses stream: upstream error event", requestID, upstreamErr)
+		MarkOpsStreamFailure(c, upstreamErr.Type, upstreamErr.Type, upstreamErr.Message, upstreamErr.Status)
+		writeEvents(apicompat.FailAnthropicResponsesStream(state, upstreamErr.responsesCode(), upstreamErr.Message))
+		return resultWithUsage()
+	}
+
+	writeEvents = func(events []apicompat.ResponsesStreamEvent) bool {
 		for _, evt := range events {
 			payload, err := json.Marshal(evt)
 			if err != nil {
@@ -671,6 +703,11 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				zap.String("event_type", eventType),
 			)
 			continue
+		}
+
+		// 上游流内错误：以 response.failed 结束，不再走 finalizeStream（否则补发 completed）。
+		if event.Type == "error" {
+			return failStream(&event, payload), nil
 		}
 
 		if processEvent(&event) {

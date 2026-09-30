@@ -201,3 +201,75 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 	require.Equal(t, "medium", *result.ReasoningEffort)
 	require.Contains(t, rec.Body.String(), `[DONE]`)
 }
+
+func TestHandleCCStreamingFromAnthropic_UpstreamErrorEventEmitsErrorChunk(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	resp := &http.Response{
+		Header: http.Header{"x-request-id": []string{"rid_cc_stream_error"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_e","type":"message","role":"assistant","content":[],"model":"claude-opus-5.5","stop_reason":"","usage":{"input_tokens":10}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+			`event: error`,
+			`data: {"type":"error","error":{"type":"overloaded_error","message":"Upstream model temporarily unavailable (overloaded) mid-stream. Please retry. https://x?access_token=secret123"},"usage":{"input_tokens":10,"output_tokens":42}}`,
+			``,
+		}, "\n"))),
+	}
+
+	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(resp, c, "claude-opus-5-5", "claude-opus-5.5", nil, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	// error 事件顶层 usage 并入计费（error 路径没有 message_delta）。
+	require.Equal(t, 10, result.Usage.InputTokens)
+	require.Equal(t, 42, result.Usage.OutputTokens)
+
+	body := rec.Body.String()
+	require.Contains(t, body, `"type":"overloaded_error"`)
+	require.Contains(t, body, "temporarily unavailable")
+	require.NotContains(t, body, "secret123")
+	require.Equal(t, 1, strings.Count(body, "[DONE]"))
+	require.NotContains(t, body, `"finish_reason":"stop"`)
+	require.NotContains(t, body, `"finish_reason":"length"`)
+}
+
+func TestHandleCCBufferedFromAnthropic_UpstreamErrorEventReturnsHTTPError(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	resp := &http.Response{
+		Header: http.Header{"x-request-id": []string{"rid_cc_buffered_error"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_e","type":"message","role":"assistant","content":[],"model":"claude-opus-5.5","stop_reason":"","usage":{"input_tokens":10}}}`,
+			``,
+			`event: error`,
+			`data: {"type":"error","error":{"type":"api_error","message":"Upstream model became unavailable. Please retry."}}`,
+			``,
+		}, "\n"))),
+	}
+
+	result, err := (&GatewayService{}).handleCCBufferedFromAnthropic(resp, c, "claude-opus-5-5", "claude-opus-5.5", nil, time.Now())
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Contains(t, rec.Body.String(), `"type":"api_error"`)
+	require.Contains(t, rec.Body.String(), "unavailable")
+	require.NotContains(t, rec.Body.String(), "finish_reason")
+}

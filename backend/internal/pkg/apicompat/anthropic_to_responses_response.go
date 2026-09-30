@@ -271,6 +271,33 @@ func FinalizeAnthropicResponsesStream(state *AnthropicEventToResponsesState) []R
 	return events
 }
 
+// FailAnthropicResponsesStream terminates the stream with response.failed after
+// an upstream Anthropic `error` event. Unlike FinalizeAnthropicResponsesStream it
+// never reports completed/incomplete, so clients see (and can retry) the failure
+// instead of a truncated "successful" response. Already-streamed output items
+// are closed and carried on the terminal event, as with response.completed.
+func FailAnthropicResponsesStream(state *AnthropicEventToResponsesState, code, message string) []ResponsesStreamEvent {
+	if state.CompletedSent {
+		return nil
+	}
+
+	var events []ResponsesStreamEvent
+	if !state.CreatedSent {
+		if state.ResponseID == "" {
+			state.ResponseID = generateResponsesID()
+		}
+		state.CreatedSent = true
+		events = append(events, makeResponsesCreatedEvent(state))
+	}
+	events = append(events, closeCurrentResponsesItem(state)...)
+
+	failed := makeResponsesCompletedEvent(state, "failed", nil)
+	failed.Response.Error = &ResponsesError{Code: code, Message: message}
+	events = append(events, failed)
+	state.CompletedSent = true
+	return events
+}
+
 // ResponsesEventToSSE formats a ResponsesStreamEvent as an SSE data line.
 func ResponsesEventToSSE(evt ResponsesStreamEvent) (string, error) {
 	data, err := json.Marshal(evt)
@@ -702,8 +729,11 @@ func makeResponsesCompletedEvent(
 	}
 
 	eventType := "response.completed"
-	if status == "incomplete" {
+	switch status {
+	case "incomplete":
 		eventType = "response.incomplete"
+	case "failed":
+		eventType = "response.failed"
 	}
 
 	// Carry the output items accumulated over the stream. The SDK's
