@@ -695,6 +695,13 @@ export default {
         codexCLIOnlyAppServer: 'Allow Codex app-server clients',
         codexCLIOnlyAppServerDesc:
           "Effective only when the switch above is on. When enabled, this account also allows third-party clients that embed the Codex engine over the app-server protocol (e.g. Claude Code's codex plugin); they still pass the global engine-fingerprint gate. OR-combined with the global app-server toggle.",
+        creditsEnabled: 'Spend credits after limits',
+        creditsEnabledDesc:
+          'Off by default: once the 5h or 7d plan allowance is exhausted, this account is rate limited (429) until the window resets, so upstream never auto-spends purchased credits. When on, the account keeps serving after the allowance is exhausted and upstream spends credits.',
+        creditsEnableConfirmTitle: 'Allow spending credits?',
+        creditsEnableConfirmMessage:
+          'When enabled, requests keep going upstream after this account exhausts its plan allowance, and OpenAI automatically deducts purchased credits (Fast mode at 2x, Ultrafast at 6x). Saving also lifts the current rate limit caused by exhausted allowance. Enable?',
+        creditsEnableConfirm: 'Enable',
         codexFingerprintMode: 'Codex fingerprint convergence',
         codexFingerprintModeDesc: 'When multiple users share the same OAuth account, converge device/session identifiers to account-level stable values to reduce upstream-visible device and session count. Off by default (client identifiers pass through as-is); opt in explicitly when needed. Some accounts reported quota shrinkage after enabling convergence, so choose based on your own measurements.',
         codexFingerprintOff: 'Off (passthrough, default)',

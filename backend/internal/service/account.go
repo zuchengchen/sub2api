@@ -2254,6 +2254,30 @@ func (a *Account) IsCodexCLIOnlyEnabled() bool {
 	return ok && enabled
 }
 
+// OpenAICreditsEnabledExtraKey 是 OpenAI OAuth 账号"允许消耗 ChatGPT 点数"的开关。
+// 缺省/false：5h 或 7d 套餐额度用尽（used_percent >= 100）后，sub2api 视为 429 限流直到窗口重置，
+// 不再把请求转发给上游，避免上游在额度用尽后自动扣除购买的点数（credits）。
+// true：管理员已手动确认，额度用尽后继续转发，由上游消耗点数。
+const OpenAICreditsEnabledExtraKey = "openai_credits_enabled"
+
+// IsOpenAICreditsEnabled 返回管理员是否已确认允许该账号在额度用尽后消耗点数。
+func (a *Account) IsOpenAICreditsEnabled() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	return resolveAccountExtraBool(a.Extra, OpenAICreditsEnabledExtraKey)
+}
+
+// IsOpenAICreditsGuardActive 返回该账号是否受"额度用尽即限流、不消耗点数"保护。
+// 仅对持有 ChatGPT 凭据的 OpenAI OAuth/SetupToken 母账号生效；spark 影子账号的
+// codex_* 快照来自独立的 bengalfox 道，不参与此保护。
+func (a *Account) IsOpenAICreditsGuardActive() bool {
+	if a == nil || !a.IsOpenAIOAuthLike() || a.IsShadow() {
+		return false
+	}
+	return !a.IsOpenAICreditsEnabled()
+}
+
 // IsCodexCLIOnlyAppServerAllowed 返回 codex_cli_only 账号是否额外放行 Codex app-server
 // 第三方客户端（运行时与全局 app_server 开关 OR）。字段：accounts.extra.codex_cli_only_allow_app_server。
 // 仅在 codex_cli_only 已启用时有意义；字段缺失或类型不符按 false（不放行）处理。
