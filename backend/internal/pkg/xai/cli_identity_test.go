@@ -7,6 +7,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCLIVersionMeetsGrokResponsesAPIMinimum(t *testing.T) {
+	require.Equal(t, "1.0.13", CLIStableVersion)
+	require.Equal(t, "1.0.13", CLIClientVersion)
+}
+
 func TestResolveCLIVersionDefaultsToPinnedClientVersion(t *testing.T) {
 	t.Setenv(CLIVersionEnv, "")
 	// Default advertise pin is CLIClientVersion; CLIStableVersion is only the floor.
@@ -16,17 +21,17 @@ func TestResolveCLIVersionDefaultsToPinnedClientVersion(t *testing.T) {
 }
 
 func TestResolveCLIVersionAcceptsValidOverride(t *testing.T) {
-	t.Setenv(CLIVersionEnv, "0.2.95-alpha.1")
-	require.Equal(t, "0.2.95-alpha.1", ResolveCLIVersion())
+	t.Setenv(CLIVersionEnv, "1.0.14-alpha.1")
+	require.Equal(t, "1.0.14-alpha.1", ResolveCLIVersion())
 }
 
 func TestResolveCLIVersionRejectsUnsafeOrTooOld(t *testing.T) {
 	for _, version := range []string{
-		"0.2.92",
-		"0.2.93-beta.1",
-		"0.2.95\r\nX-Injected: true",
-		"0.2.093",
-		"0.3",
+		"1.0.12",
+		"1.0.13-beta.1",
+		"1.0.14\r\nX-Injected: true",
+		"1.0.013",
+		"1.1",
 		"1",
 	} {
 		t.Run(version, func(t *testing.T) {
@@ -52,7 +57,7 @@ func TestApplyCLIProxyHeaders(t *testing.T) {
 }
 
 func TestApplyCLIProxyHeadersLeavesAPIHostUnchanged(t *testing.T) {
-	t.Setenv(CLIVersionEnv, "0.2.95")
+	t.Setenv(CLIVersionEnv, "1.0.14")
 
 	req, err := http.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", nil)
 	require.NoError(t, err)
