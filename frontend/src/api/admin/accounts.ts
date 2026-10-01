@@ -663,6 +663,19 @@ export async function setSchedulable(id: number, schedulable: boolean): Promise<
 }
 
 /**
+ * 切换 OpenAI OAuth 账号"额度用尽后消耗点数"开关。开启时后端会解除当前限流。
+ * @param id - Account ID
+ * @param enabled - Whether the account may spend credits after its plan allowance is exhausted
+ * @returns Updated account
+ */
+export async function setOpenAICreditsEnabled(id: number, enabled: boolean): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/openai-credits`, {
+    enabled
+  })
+  return data
+}
+
+/**
  * Get available models for an account
  * @param id - Account ID
  * @returns List of available models for this account
@@ -1218,6 +1231,7 @@ export const accountsAPI = {
   getTempUnschedulableStatus,
   resetTempUnschedulable,
   setSchedulable,
+  setOpenAICreditsEnabled,
   getAvailableModels,
   syncUpstreamModels,
   syncUpstreamModelsPreview,

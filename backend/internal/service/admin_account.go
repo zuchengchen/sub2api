@@ -609,7 +609,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 	}
-	previousCreditsGuardActive := account.IsOpenAICreditsGuardActive()
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
 	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
 	previousOpenCodeUsageIdentity := openCodeGoUsageIdentity(account)
@@ -919,19 +918,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err := s.accountRepo.BindGroups(ctx, account.ID, *input.GroupIDs); err != nil {
 			return nil, err
 		}
-	}
-
-	// 管理员手动确认启用点数：解除因额度用尽而施加的限流，让账号立即恢复调度并开始消耗点数。
-	// 若上游点数也已耗尽，下一次请求的 429 会按正常路径重新限流。
-	if previousCreditsGuardActive && account.IsOpenAIOAuthLike() && !account.IsShadow() &&
-		account.IsOpenAICreditsEnabled() && account.RateLimitResetAt != nil && time.Now().Before(*account.RateLimitResetAt) {
-		if err := s.accountRepo.ClearRateLimit(ctx, account.ID); err != nil {
-			return nil, err
-		}
-		if s.runtimeBlocker != nil {
-			s.runtimeBlocker.ClearAccountSchedulingBlock(account.ID)
-		}
-		ResetOpenAI429Counter(account.ID)
 	}
 
 	// 重新查询以确保返回完整数据（包括正确的 Proxy 关联对象）
@@ -1359,6 +1345,35 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 
 func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorMsg string) error {
 	return s.accountRepo.SetError(ctx, id, errorMsg)
+}
+
+// ErrOpenAICreditsToggleUnsupported 表示账号不是可切换点数的 OpenAI OAuth/SetupToken 母账号。
+var ErrOpenAICreditsToggleUnsupported = infraerrors.New(http.StatusBadRequest, "OPENAI_CREDITS_TOGGLE_UNSUPPORTED",
+	"credits toggle only applies to OpenAI OAuth or setup-token parent accounts")
+
+func (s *adminServiceImpl) SetOpenAICreditsEnabled(ctx context.Context, id int64, enabled bool) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !account.IsOpenAIOAuthLike() || account.IsShadow() {
+		return nil, ErrOpenAICreditsToggleUnsupported
+	}
+	if err := s.accountRepo.UpdateExtra(ctx, id, map[string]any{OpenAICreditsEnabledExtraKey: enabled}); err != nil {
+		return nil, err
+	}
+	// 管理员手动确认启用点数：解除当前限流（多为额度用尽所致），账号立即恢复调度。
+	// 若上游点数也已耗尽，下一次请求的 429 会按正常路径重新限流。
+	if enabled && account.RateLimitResetAt != nil && time.Now().Before(*account.RateLimitResetAt) {
+		if err := s.accountRepo.ClearRateLimit(ctx, id); err != nil {
+			return nil, err
+		}
+		if s.runtimeBlocker != nil {
+			s.runtimeBlocker.ClearAccountSchedulingBlock(id)
+		}
+		ResetOpenAI429Counter(id)
+	}
+	return s.accountRepo.GetByID(ctx, id)
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {

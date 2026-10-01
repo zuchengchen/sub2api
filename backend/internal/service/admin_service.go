@@ -103,6 +103,9 @@ type AdminService interface {
 	// ForceOpenAIPrivacy 强制重新设置 OpenAI OAuth 账号隐私，无论当前状态。
 	ForceOpenAIPrivacy(ctx context.Context, account *Account) string
 	SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error)
+	// SetOpenAICreditsEnabled 切换 OpenAI OAuth/SetupToken 母账号"额度用尽后消耗点数"开关。
+	// 开启时解除当前限流，让账号立即恢复调度并由上游消耗点数。
+	SetOpenAICreditsEnabled(ctx context.Context, id int64, enabled bool) (*Account, error)
 	BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error)
 	CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error
 	// RevertAccountProxyFallback 将账号的 proxy_id 切回 proxy_fallback_origin_id，并清空 origin 字段。
