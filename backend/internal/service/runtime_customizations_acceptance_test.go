@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -400,7 +399,8 @@ func TestRuntimeCustomizationsAcceptance(t *testing.T) {
 		require.Equal(t, "client-provided", gjson.GetBytes(injected, "metadata.user_id").String())
 		require.Equal(t, "kept", gjson.GetBytes(injected, "metadata.other").String())
 		rewritten := rewriteMessageCacheControlBody(injected)
-		require.Equal(t, claude.DefaultCacheControlTTL, gjson.GetBytes(rewritten, "messages.0.content.0.cache_control.ttl").String())
+		require.Equal(t, "ephemeral", gjson.GetBytes(rewritten, "messages.0.content.0.cache_control.type").String())
+		require.False(t, gjson.GetBytes(rewritten, "messages.0.content.0.cache_control.ttl").Exists(), "unspecified TTL stays unspecified (5m default)")
 
 		require.True(t, isOpenAIEdgeChallenge403([]byte("<!doctype html><title>Just a moment...</title>")))
 		require.False(t, isOpenAIEdgeChallenge403([]byte(`{"error":{"message":"workspace forbidden"}}`)))
