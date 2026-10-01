@@ -457,6 +457,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 				"threshold", reason.threshold,
 				"utilization", reason.utilization,
 			)
+			if reason.reason != "" {
+				return reason.reason
+			}
 			if reason.window != "" {
 				return "quota_auto_pause_" + reason.window
 			}
@@ -568,6 +571,11 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 	if account == nil || !account.IsOpenAI() {
 		return false, openAIQuotaAutoPauseDecision{}
 	}
+	// 点数保护优先于可关闭的 auto_pause：未确认允许消耗点数时，任一窗口用尽即跳过，
+	// 不受 auto_pause_*_disabled 影响（那两个开关只控制"提前暂停"阈值）。
+	if paused, decision := openAICreditsGuardExhaustedDecision(account, time.Now()); paused {
+		return true, decision
+	}
 	// Per-account explicit-disable flags must take precedence over the global default.
 	// Without these, leaving the account threshold blank means "use global default",
 	// so an admin has no way to exempt a single account from auto-pause once a global
@@ -585,6 +593,28 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 	if !disabled7d && threshold7d > 0 {
 		if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, "7d", now); ok && utilization >= threshold7d {
 			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: threshold7d, utilization: utilization}
+		}
+	}
+	return false, openAIQuotaAutoPauseDecision{}
+}
+
+// openAICreditsGuardExhaustedReasonPrefix 是点数保护跳过账号时的过滤原因前缀。
+const openAICreditsGuardExhaustedReasonPrefix = "credits_guard_exhausted_"
+
+// openAICreditsGuardExhaustedDecision 判断未启用点数的账号是否已有窗口用尽（>= 100%）。
+// 复用 resolveOpenAIQuotaUtilization 的窗口重置与快照陈旧判定，窗口重置后自动放行。
+func openAICreditsGuardExhaustedDecision(account *Account, now time.Time) (bool, openAIQuotaAutoPauseDecision) {
+	if !account.IsOpenAICreditsGuardActive() {
+		return false, openAIQuotaAutoPauseDecision{}
+	}
+	for _, window := range []string{"7d", "5h"} {
+		if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, window, now); ok && utilization >= 1 {
+			return true, openAIQuotaAutoPauseDecision{
+				window:      window,
+				threshold:   1,
+				utilization: utilization,
+				reason:      openAICreditsGuardExhaustedReasonPrefix + window,
+			}
 		}
 	}
 	return false, openAIQuotaAutoPauseDecision{}

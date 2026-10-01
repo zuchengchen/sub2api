@@ -2340,6 +2340,40 @@
         </div>
       </div>
 
+      <!-- 额度用尽后是否允许消耗点数（仅 OpenAI OAuth/SetupToken 母账号） -->
+      <div
+        v-if="showOpenAICreditsToggle"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <label id="openai-credits-enabled-label" class="input-label mb-0">{{ t('admin.accounts.openai.creditsEnabled') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.creditsEnabledDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            data-testid="openai-credits-enabled-toggle"
+            aria-labelledby="openai-credits-enabled-label"
+            :aria-checked="openAICreditsEnabled"
+            @click="toggleOpenAICreditsEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              openAICreditsEnabled ? 'bg-amber-500' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                openAICreditsEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- Codex 门票状态（仅 OpenAI OAuth） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token') && codexTurnTickets.length"
@@ -3042,6 +3076,17 @@
     </template>
   </BaseDialog>
 
+  <ConfirmDialog
+    :show="openAICreditsConfirmOpen"
+    :title="t('admin.accounts.openai.creditsEnableConfirmTitle')"
+    :message="t('admin.accounts.openai.creditsEnableConfirmMessage')"
+    :confirm-text="t('admin.accounts.openai.creditsEnableConfirm')"
+    :cancel-text="t('common.cancel')"
+    danger
+    @cancel="openAICreditsConfirmOpen = false"
+    @confirm="confirmEnableOpenAICredits"
+  />
+
   <!-- Mixed Channel Warning Dialog -->
   <ConfirmDialog
     :show="showMixedChannelWarning"
@@ -3733,6 +3778,25 @@ const isOpenAICompatibleProviderManaged = computed(
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+// 额度用尽后允许消耗点数：默认关闭，开启需二次确认（extra.openai_credits_enabled）。
+const openAICreditsEnabled = ref(false)
+const openAICreditsConfirmOpen = ref(false)
+const showOpenAICreditsToggle = computed(() =>
+  props.account?.platform === 'openai' &&
+  (props.account?.type === 'oauth' || props.account?.type === 'setup-token') &&
+  props.account?.parent_account_id == null
+)
+const toggleOpenAICreditsEnabled = () => {
+  if (openAICreditsEnabled.value) {
+    openAICreditsEnabled.value = false
+    return
+  }
+  openAICreditsConfirmOpen.value = true
+}
+const confirmEnableOpenAICredits = () => {
+  openAICreditsEnabled.value = true
+  openAICreditsConfirmOpen.value = false
+}
 const codexCLIOnlyAppServerEnabled = ref(false)
 type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
 const codexFingerprintMode = ref<CodexFingerprintMode>('off')
@@ -4224,6 +4288,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
+  openAICreditsEnabled.value = false
+  openAICreditsConfirmOpen.value = false
   codexFingerprintMode.value = 'off'
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
@@ -4284,6 +4350,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
+      openAICreditsEnabled.value = extra?.openai_credits_enabled === true
     }
     if (newAccount.type === 'oauth') {
       const fpMode = extra?.codex_fingerprint_mode as string | undefined
@@ -5704,6 +5771,14 @@ const handleSubmit = async () => {
           newExtra.codex_cli_only_allow_app_server = true
         } else {
           delete newExtra.codex_cli_only_allow_app_server
+        }
+        // 点数开关：默认关闭不落键；从开启改为关闭时显式写 false。
+        if (showOpenAICreditsToggle.value && openAICreditsEnabled.value) {
+          newExtra.openai_credits_enabled = true
+        } else if (currentExtra.openai_credits_enabled === true) {
+          newExtra.openai_credits_enabled = false
+        } else {
+          delete newExtra.openai_credits_enabled
         }
       }
 
