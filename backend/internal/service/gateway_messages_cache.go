@@ -102,10 +102,10 @@ func addMessageCacheBreakpoints(body []byte) []byte {
 	return addMessageCacheBreakpointsWithTTL(body, claude.DefaultCacheControlTTL)
 }
 
+// addMessageCacheBreakpointsWithTTL 与 addMessageCacheBreakpoints 相同，但 ttl 为空时
+// 注入不带 ttl 的 {"type":"ephemeral"}（Anthropic 默认 5m），保留「客户端未指定 TTL」
+// 这一信息，让上游（如 kiro-rs 的 TTL 智能路由）自行决定 5m / 1h。
 func addMessageCacheBreakpointsWithTTL(body []byte, ttl string) []byte {
-	if ttl == "" {
-		ttl = claude.DefaultCacheControlTTL
-	}
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.IsArray() {
 		return body
@@ -144,6 +144,10 @@ func (s *GatewayService) rewriteMessageCacheControlIfEnabled(ctx context.Context
 
 // rewriteMessageCacheControlBody applies stable breakpoints without consulting
 // global settings. Account-scoped API key opt-ins use this path.
+//
+// The longest client TTL is carried over to the moved breakpoints. When the
+// client sent no TTL, the breakpoints carry no TTL either (Anthropic's 5m
+// default) so the upstream can still apply its own TTL routing.
 func rewriteMessageCacheControlBody(body []byte) []byte {
 	ttl := longestMessageCacheControlTTL(body)
 	body = stripMessageCacheControl(body)
@@ -165,17 +169,15 @@ func (s *GatewayService) isRewriteMessageCacheControlEnabled(ctx context.Context
 // （对齐 Parrot _inject_cache_on_msg 的行为）。
 //
 // msg 是调用方已持有的 gjson.Result 快照，用于省一次 GetBytes。
+// ttl 为空时写入不带 ttl 的 ephemeral 断点（Anthropic 默认 5m）。
 func injectCacheControlOnLastContentBlock(body []byte, idx int, msg *gjson.Result, ttl string) []byte {
-	if ttl == "" {
-		ttl = claude.DefaultCacheControlTTL
-	}
 	content := msg.Get("content")
 
 	if content.Type == gjson.String {
 		text := content.String()
 		blockRaw := fmt.Sprintf(
-			`[{"type":"text","text":%s,"cache_control":{"type":"ephemeral","ttl":%q}}]`,
-			mustJSONString(text), ttl,
+			`[{"type":"text","text":%s,"cache_control":%s}]`,
+			mustJSONString(text), ephemeralCacheControlJSON(ttl),
 		)
 		if next, err := sjson.SetRawBytes(body, fmt.Sprintf("messages.%d.content", idx), []byte(blockRaw)); err == nil {
 			body = next
@@ -200,16 +202,26 @@ func injectCacheControlOnLastContentBlock(body []byte, idx int, msg *gjson.Resul
 	pathPrefix := fmt.Sprintf("messages.%d.content.%d.cache_control", idx, lastBlockIdx)
 	existingCC := lastBlock.Get("cache_control")
 	if existingCC.Exists() {
+		if ttl == "" {
+			return body
+		}
 		if next, err := sjson.SetBytes(body, pathPrefix+".ttl", ttl); err == nil {
 			body = next
 		}
 		return body
 	}
-	raw := fmt.Sprintf(`{"type":"ephemeral","ttl":%q}`, ttl)
-	if next, err := sjson.SetRawBytes(body, pathPrefix, []byte(raw)); err == nil {
+	if next, err := sjson.SetRawBytes(body, pathPrefix, []byte(ephemeralCacheControlJSON(ttl))); err == nil {
 		body = next
 	}
 	return body
+}
+
+// ephemeralCacheControlJSON 生成 ephemeral cache_control；ttl 为空时不写 ttl 字段。
+func ephemeralCacheControlJSON(ttl string) string {
+	if ttl == "" {
+		return `{"type":"ephemeral"}`
+	}
+	return fmt.Sprintf(`{"type":"ephemeral","ttl":%q}`, ttl)
 }
 
 // mustJSONString 把一个 Go string 序列化为合法 JSON string（含引号），

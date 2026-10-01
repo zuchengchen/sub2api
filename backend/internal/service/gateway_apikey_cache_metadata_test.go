@@ -59,6 +59,13 @@ func TestRewriteMessageCacheControlBody_PreservesLongestClientTTL(t *testing.T) 
 	require.Equal(t, "1h", gjson.GetBytes(out, "messages.3.content.0.cache_control.ttl").String())
 	require.Equal(t, "1h", gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String())
 
+	// No client TTL: the moved breakpoint carries no ttl either (Anthropic 5m
+	// default), leaving TTL routing to the upstream instead of pinning 5m.
 	defaulted := rewriteMessageCacheControlBody([]byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`))
-	require.Equal(t, claude.DefaultCacheControlTTL, gjson.GetBytes(defaulted, "messages.0.content.0.cache_control.ttl").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(defaulted, "messages.0.content.0.cache_control.type").String())
+	require.False(t, gjson.GetBytes(defaulted, "messages.0.content.0.cache_control.ttl").Exists())
+
+	// The OAuth global rewrite keeps its explicit default.
+	oauth := addMessageCacheBreakpoints([]byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`))
+	require.Equal(t, claude.DefaultCacheControlTTL, gjson.GetBytes(oauth, "messages.0.content.0.cache_control.ttl").String())
 }
