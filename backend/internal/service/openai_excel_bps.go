@@ -382,6 +382,14 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	var completed, terminalPayload []byte
 	terminal := ""
 	cacheCreationAsInput := account.IsExcelBPSCacheCreationAsInputEnabled()
+	// Native remote compaction v2: hold the stream until the terminal event
+	// proves a compaction item exists. Codex treats a compaction turn without
+	// one as fatal, so a missing item must fall back to Codex HTTP instead of
+	// reaching the client as a successful empty stream.
+	var compactionHold *excelBPSNativeCompactionHold
+	if stream && isOpenAINativeCompactionV2(c) {
+		compactionHold = &excelBPSNativeCompactionHold{}
+	}
 	for scanner.Next(ctx, 0, heartbeat.C, keepalive) {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "data: ") {
@@ -408,6 +416,22 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 				result.ResponseID = gjson.GetBytes(payload, "response.id").String()
 				result.UpstreamResponseModel = gjson.GetBytes(payload, "response.model").String()
 			}
+			if compactionHold != nil {
+				compactionHold.observe(kind, payload)
+			}
+		}
+		if compactionHold != nil {
+			if compactionHold.add(line) {
+				continue
+			}
+			// Too large to be a lone compaction item: stream it unchanged.
+			if err = compactionHold.release(c); err != nil {
+				result.ClientDisconnect = true
+				result.Duration = time.Since(start)
+				return result, err
+			}
+			compactionHold = nil
+			continue
 		}
 		if stream {
 			if _, err = c.Writer.WriteString(line + "\n"); err != nil {
@@ -453,6 +477,29 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			cause += " reason=" + reason
 		}
 		return failUncertain(http.StatusBadGateway, upstreamRequestID, "basispoints_protocol_error", "Excel BPS did not complete the response", cause)
+	}
+	if compactionHold != nil {
+		if !compactionHold.foundItem {
+			// Deliberate exception to the "certainly not executed" contract of
+			// errExcelBPSHTTPFallback: a compaction turn has no tool side
+			// effects and produced nothing usable, so rerunning it on this
+			// account's Codex HTTP route is safe. Nothing but keepalive
+			// comments was written, so the client can still be served.
+			opsMessage := "Excel BPS completed a native compaction turn without a compaction item; falling back to Codex HTTP"
+			setOpsUpstreamError(c, http.StatusBadGateway, opsMessage, "")
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+				ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
+				UpstreamStatusCode: http.StatusBadGateway, UpstreamRequestID: upstreamRequestID,
+				UpstreamURL: basispoints.ResponsesURL, Kind: "retry",
+				Reason: openAINativeCompactionMissingItemCode, Message: opsMessage,
+			})
+			return fail(http.StatusBadGateway, openAINativeCompactionMissingItemCode, "Excel BPS did not return a compaction item")
+		}
+		if err = compactionHold.release(c); err != nil {
+			result.ClientDisconnect = true
+			return result, err
+		}
 	}
 	if !stream {
 		c.Data(200, "application/json", completed)

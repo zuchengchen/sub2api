@@ -264,7 +264,11 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	compactPath := isOpenAIResponsesCompactPath(c)
 	// Cookie mode is a separately validated HTTP/WS -> WS route. Its explicit
 	// account/model opt-in also overrides legacy HTTP passthrough settings.
-	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), compactPath, wsDecision)
+	// Compaction turns (legacy /compact and native v2 compaction_trigger) stay
+	// off Cookie WS: that route has no verified compaction contract, and an
+	// empty compaction stream is fatal for Codex ("expected exactly one
+	// compaction output item, got 0").
+	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), isExplicitOpenAICompactContext(c), wsDecision)
 	httpReason := ""
 	switch {
 	case tiboRun != nil && tiboRun.first() == openAITiboRouteCookieWS && cookieWS:

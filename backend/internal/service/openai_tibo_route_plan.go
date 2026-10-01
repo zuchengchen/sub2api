@@ -134,7 +134,10 @@ func (s *OpenAIGatewayService) newOpenAITiboRun(ctx context.Context, c *gin.Cont
 	bpsEnabled := account.IsExcelBPSEnabledForModel(openAICodexTicketDefaultModel)
 	httpVerdict, bpsVerdict := s.openAITiboRequestVerdicts(ctx, account, bpsEnabled)
 	run := &openAITiboRun{account: account, scope: scope, cfg: cfg, probePayload: openAICookieWSIsProbePayloadRaw(body)}
-	run.tiers = s.openAITiboRouteTiers(account, requestModel, body, isOpenAIResponsesCompactPath(c), httpVerdict, bpsVerdict, cfg)
+	// Native remote compaction v2 (bare /responses + compaction_trigger) is a
+	// compaction turn exactly like the legacy /compact path: Cookie WS has no
+	// verified compaction contract, so neither form may be planned onto it.
+	run.tiers = s.openAITiboRouteTiers(account, requestModel, body, isExplicitOpenAICompactContext(c), httpVerdict, bpsVerdict, cfg)
 	run.pinned = s.loadOpenAITiboPin(account.ID, scope, time.Now())
 	run.routes = openAITiboOrderRoutes(run.tiers, run.pinned)
 	if _, ok := run.tiers[openAITiboRouteBPS]; ok && run.first() != openAITiboRouteBPS {
