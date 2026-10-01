@@ -2011,3 +2011,18 @@ func TestFailAnthropicResponsesStream_BeforeMessageStartEmitsCreated(t *testing.
 	require.Equal(t, "response.failed", events[1].Type)
 	require.NotEmpty(t, events[1].Response.ID)
 }
+
+func TestGPT61SolCacheOptionsAndBreakpointsSurviveChatBridge(t *testing.T) {
+	sampling := 0.7
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
+		out, err := ChatCompletionsToResponses(&ChatCompletionsRequest{Model: "gpt-6.1-sol", ReasoningEffort: effort, Temperature: &sampling, TopP: &sampling, PromptCacheOptions: &PromptCacheOptions{Mode: "explicit", TTL: "30m"}, Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"prefix","prompt_cache_breakpoint":{"mode":"explicit"}}]`)}}})
+		require.NoError(t, err)
+		require.Nil(t, out.Temperature)
+		require.Nil(t, out.TopP)
+		require.Equal(t, effort, out.Reasoning.Effort)
+		cacheJSON, err := json.Marshal(out.PromptCacheOptions)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"ttl":"30m","mode":"explicit"}`, string(cacheJSON))
+		require.Contains(t, string(out.Input), "prompt_cache_breakpoint")
+	}
+}
