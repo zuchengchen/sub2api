@@ -2193,6 +2193,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
 				return resultWithUsage(), newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
 			}
+			// Native remote compaction v2 with zero output items is fatal for
+			// Codex even when usage is present; fail over before any output.
+			if !sawFailedEvent && !semanticOutputSeen && !clientOutputStarted &&
+				openAINativeCompactionTerminalMissingItem(c, eventType, dataBytes) {
+				return resultWithUsage(), newOpenAINativeCompactionMissingItemFailoverError(c, account, upstreamRequestID)
+			}
 			if firstTokenMs == nil && openAIStreamDataStartsTTFT(trimmedData, eventType, forceFlushFailedEvent, ttftMode) {
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms

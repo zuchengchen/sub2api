@@ -737,6 +737,16 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				streamEarlyErr = newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
 				return
 			}
+			// Native remote compaction v2 that completes with zero output
+			// items (usage may still be present) is fatal for Codex; fail
+			// over while nothing has reached the client.
+			if account != nil && account.Platform == PlatformOpenAI &&
+				!sawFailedEvent && !responsesSemanticOutputSeen && !clientOutputStarted &&
+				openAINativeCompactionTerminalMissingItem(c, eventType, dataBytes) {
+				sawTerminalEvent = true
+				streamEarlyErr = newOpenAINativeCompactionMissingItemFailoverError(c, account, upstreamRequestID)
+				return
+			}
 
 			// 写入客户端（客户端断开后继续 drain 上游）
 			if !clientDisconnected && !failureDelivered && !suppressCurrentEvent {
