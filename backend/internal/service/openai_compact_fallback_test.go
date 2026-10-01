@@ -395,8 +395,10 @@ func TestOpenAIGatewayForwardRetriesStreamingCompactFailureBeforeOutput(t *testi
 
 	failed := "event: response.failed\n" +
 		`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"context_length_exceeded","message":"context window exceeded"}}}` + "\n\n"
+	// A successful native v2 compaction carries exactly one compaction item;
+	// a zero-item completion is fatal for Codex and is failed over instead.
 	completed := "event: response.completed\n" +
-		`data: {"type":"response.completed","response":{"id":"resp_compact","status":"completed","model":"gpt-5.4","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"
+		`data: {"type":"response.completed","response":{"id":"resp_compact","status":"completed","model":"gpt-5.4","output":[{"type":"compaction","encrypted_content":"gAAAA"}],"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(failed))},
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(completed))},
@@ -417,6 +419,7 @@ func TestOpenAIGatewayForwardRetriesStreamingCompactFailureBeforeOutput(t *testi
 	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 2)
 	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.bodies[1], "model").String())
+	require.Contains(t, recorder.Body.String(), `"type":"compaction"`)
 	require.NotContains(t, recorder.Body.String(), "context_length_exceeded")
 	require.Contains(t, recorder.Body.String(), "response.completed")
 }
