@@ -1040,6 +1040,8 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"auto_pause_7d_threshold",
 		"auto_pause_5h_disabled",
 		"auto_pause_7d_disabled",
+		// 点数保护开关：调度层据此决定额度用尽(>=100%)的 OAuth 账号是否跳过。
+		service.OpenAICreditsEnabledExtraKey,
 		"model_rate_limits",
 		service.UpstreamBillingProbeExtraKey,
 		service.GrokMediaEligibleExtraKey,

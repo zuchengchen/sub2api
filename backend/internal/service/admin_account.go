@@ -609,6 +609,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 	}
+	previousCreditsGuardActive := account.IsOpenAICreditsGuardActive()
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
 	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
 	previousOpenCodeUsageIdentity := openCodeGoUsageIdentity(account)
@@ -918,6 +919,19 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err := s.accountRepo.BindGroups(ctx, account.ID, *input.GroupIDs); err != nil {
 			return nil, err
 		}
+	}
+
+	// 管理员手动确认启用点数：解除因额度用尽而施加的限流，让账号立即恢复调度并开始消耗点数。
+	// 若上游点数也已耗尽，下一次请求的 429 会按正常路径重新限流。
+	if previousCreditsGuardActive && account.IsOpenAIOAuthLike() && !account.IsShadow() &&
+		account.IsOpenAICreditsEnabled() && account.RateLimitResetAt != nil && time.Now().Before(*account.RateLimitResetAt) {
+		if err := s.accountRepo.ClearRateLimit(ctx, account.ID); err != nil {
+			return nil, err
+		}
+		if s.runtimeBlocker != nil {
+			s.runtimeBlocker.ClearAccountSchedulingBlock(account.ID)
+		}
+		ResetOpenAI429Counter(account.ID)
 	}
 
 	// 重新查询以确保返回完整数据（包括正确的 Proxy 关联对象）

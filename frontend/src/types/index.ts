@@ -1289,6 +1289,8 @@ export interface Account {
       fetched_at: number
     }
     codex_referral_snapshot?: import('./openaiReferrals').OpenAIReferralEligibility | null
+    // 额度用尽后是否允许上游消耗点数；缺省为 false（用尽即 429 限流）。
+    openai_credits_enabled?: boolean
   } & Record<string, unknown>)
   proxy_id: number | null
   proxy_fallback_origin_id?: number | null

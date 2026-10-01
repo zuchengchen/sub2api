@@ -1143,12 +1143,17 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 		return
 	}
 
+	// 点数保护不受快照写入节流影响：额度用尽要立即生效，否则 30s 节流窗口内的
+	// 请求都会被上游按点数计费。
+	exhausted := s.applyOpenAICreditsGuard(ctx, accountID, snapshot)
+
 	now := time.Now()
 	updates := buildCodexUsageExtraUpdates(snapshot, now)
 	if len(updates) == 0 {
 		return
 	}
-	if !s.getCodexSnapshotThrottle().Allow(accountID, now) {
+	// 用尽快照同样绕过节流落库，让调度层的点数保护尽快看到 100%。
+	if !s.getCodexSnapshotThrottle().Allow(accountID, now) && !exhausted {
 		return
 	}
 
