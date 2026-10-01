@@ -3,6 +3,7 @@ package service
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -12,6 +13,30 @@ const (
 	openAINativeCompactionMissingItemCode    = "native_compaction_missing_item"
 	openAINativeCompactionMissingItemMessage = "upstream completed a native remote compaction v2 turn without a compaction output item"
 )
+
+// openAINativeCompactionMinStreamInterval is the minimum upstream-silence
+// budget for a native remote compaction v2 stream. Summarising a large context
+// at high reasoning effort legitimately produces no SSE event between
+// response.in_progress and the compaction item for several minutes (observed
+// 110-220s on gpt-6-astra). The generic 180s stream_data_interval_timeout cut
+// those turns off and wrote a bare "error" frame that Codex ignores, so the
+// turn failed after retries. Codex itself waits 300s per SSE event
+// (stream_idle_timeout_ms) and SSE comment keepalives do not reset that, so
+// the gateway must never give up before the client does.
+var openAINativeCompactionMinStreamInterval = 600 * time.Second
+
+// openAINativeCompactionStreamInterval raises the upstream-silence timeout for
+// native v2 compaction turns. A disabled timeout (0) stays disabled, and
+// ordinary turns keep the configured value.
+func openAINativeCompactionStreamInterval(c *gin.Context, configured time.Duration) time.Duration {
+	if configured <= 0 || !isOpenAINativeCompactionV2(c) {
+		return configured
+	}
+	if configured < openAINativeCompactionMinStreamInterval {
+		return openAINativeCompactionMinStreamInterval
+	}
+	return configured
+}
 
 // openAINativeCompactionTerminalMissingItem reports whether a terminal
 // response.completed / response.done payload of a native remote compaction v2

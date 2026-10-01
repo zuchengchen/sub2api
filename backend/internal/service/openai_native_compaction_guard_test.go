@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -226,4 +227,78 @@ func TestTiboRouteTiersExcludeCookieWSForNativeCompaction(t *testing.T) {
 	_, hasWS = run.tiers[openAITiboRouteCookieWS]
 	require.False(t, hasWS, "native compaction plan must not include Cookie WS")
 	require.Equal(t, openAITiboRouteHTTP, run.first())
+}
+
+func TestOpenAINativeCompactionStreamInterval(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	native, _ := gin.CreateTestContext(httptest.NewRecorder())
+	MarkOpenAINativeCompactionV2(native)
+	plain, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	require.Equal(t, 600*time.Second, openAINativeCompactionStreamInterval(native, 180*time.Second), "compaction must outlast Codex's 300s SSE idle timeout")
+	require.Equal(t, 900*time.Second, openAINativeCompactionStreamInterval(native, 900*time.Second), "a longer configured budget is kept")
+	require.Equal(t, time.Duration(0), openAINativeCompactionStreamInterval(native, 0), "a disabled timeout stays disabled")
+	require.Equal(t, 180*time.Second, openAINativeCompactionStreamInterval(plain, 180*time.Second), "ordinary turns keep the configured timeout")
+	require.Equal(t, 180*time.Second, openAINativeCompactionStreamInterval(nil, 180*time.Second))
+	require.Greater(t, openAINativeCompactionMinStreamInterval, 300*time.Second)
+}
+
+// silentCompactionUpstream emits the response preamble, stays silent for the
+// given duration (summarising a large context emits nothing), then sends the
+// compaction item and completion.
+func silentCompactionUpstream(silence time.Duration) *http.Response {
+	pr, pw := io.Pipe()
+	wire := nativeCompactionSSE(true)
+	split := strings.Index(wire, "event: response.output_item.added")
+	go func() {
+		_, _ = io.WriteString(pw, wire[:split])
+		time.Sleep(silence)
+		_, _ = io.WriteString(pw, wire[split:])
+		_ = pw.Close()
+	}()
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: pr}
+}
+
+// Production: a 160K-token gpt-6-astra compaction stayed silent past the 180s
+// stream_data_interval_timeout; the gateway wrote a bare stream_timeout error
+// frame (ignored by Codex) and committed the response, so the turn failed.
+func TestOpenAINativeCompactionSurvivesSilenceBeyondStreamInterval(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := openAINativeCompactionMinStreamInterval
+	openAINativeCompactionMinStreamInterval = 5 * time.Second
+	t.Cleanup(func() { openAINativeCompactionMinStreamInterval = prev })
+
+	upstream := &httpUpstreamRecorder{resp: silentCompactionUpstream(2500 * time.Millisecond)}
+	svc := openAIClientToolsTestService(upstream)
+	svc.cfg.Gateway.StreamDataIntervalTimeout = 1
+	account := excelAccount()
+	account.Extra = map[string]any{"openai_passthrough": false}
+	c, rec := newNativeCompactionContext("/v1/responses")
+
+	result, err := svc.Forward(context.Background(), c, account, []byte(nativeCompactionBody))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	out := rec.Body.String()
+	require.NotContains(t, out, "stream_timeout")
+	require.Contains(t, out, "event: response.output_item.done")
+	require.Contains(t, out, `"type":"compaction"`)
+	require.Contains(t, out, "event: response.completed")
+}
+
+func TestOrdinaryTurnStillTimesOutAfterStreamInterval(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &httpUpstreamRecorder{resp: silentCompactionUpstream(2500 * time.Millisecond)}
+	svc := openAIClientToolsTestService(upstream)
+	svc.cfg.Gateway.StreamDataIntervalTimeout = 1
+	account := excelAccount()
+	account.Extra = map[string]any{"openai_passthrough": false}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","stream":true,"input":"hello"}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stream data interval timeout")
+	require.Contains(t, rec.Body.String(), "stream_timeout")
 }
