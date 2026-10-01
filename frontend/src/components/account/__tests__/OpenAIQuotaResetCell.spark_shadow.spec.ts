@@ -3,11 +3,17 @@ import { flushPromises, mount } from '@vue/test-utils'
 import OpenAIQuotaResetCell from '../OpenAIQuotaResetCell.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import type { Account } from '@/types'
-import { refreshOpenAIQuota, resetOpenAIQuota, type OpenAIQuotaRefreshResult } from '@/api/admin/accounts'
+import {
+  refreshOpenAIQuota,
+  resetOpenAIQuota,
+  setOpenAICreditsEnabled,
+  type OpenAIQuotaRefreshResult,
+} from '@/api/admin/accounts'
 
 vi.mock('@/api/admin/accounts', () => ({
   refreshOpenAIQuota: vi.fn(),
   resetOpenAIQuota: vi.fn(),
+  setOpenAICreditsEnabled: vi.fn(),
   refreshOpenAIReferrals: vi.fn(),
   sendOpenAIReferralInvite: vi.fn(),
 }))
@@ -64,14 +70,82 @@ const resetButton = (wrapper: ReturnType<typeof mount>) =>
 beforeEach(() => {
   vi.mocked(refreshOpenAIQuota).mockReset()
   vi.mocked(resetOpenAIQuota).mockReset()
+  vi.mocked(setOpenAICreditsEnabled).mockReset()
+})
+
+describe('OpenAIQuotaResetCell — 点数开关', () => {
+  const toggle = (wrapper: ReturnType<typeof mount>) => wrapper.get('[data-testid="openai-credits-enabled-toggle"]')
+  const creditsDialog = (wrapper: ReturnType<typeof mount>) => wrapper.findAllComponents(ConfirmDialog)[1]
+
+  it('defaults off and asks for confirmation before enabling', async () => {
+    const updated = makeAccount({ extra: { openai_credits_enabled: true } })
+    vi.mocked(setOpenAICreditsEnabled).mockResolvedValue(updated)
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({}) } })
+
+    expect(toggle(wrapper).attributes('aria-checked')).toBe('false')
+    await toggle(wrapper).trigger('click')
+    expect(setOpenAICreditsEnabled).not.toHaveBeenCalled()
+    expect(creditsDialog(wrapper).props('show')).toBe(true)
+
+    creditsDialog(wrapper).vm.$emit('confirm')
+    await flushPromises()
+    expect(setOpenAICreditsEnabled).toHaveBeenCalledWith(1, true)
+    expect(toggle(wrapper).attributes('aria-checked')).toBe('true')
+    expect(wrapper.emitted('account-updated')).toEqual([[updated]])
+    wrapper.unmount()
+  })
+
+  it('cancelling the confirmation keeps credits disabled', async () => {
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({}) } })
+    await toggle(wrapper).trigger('click')
+    creditsDialog(wrapper).vm.$emit('cancel')
+    await flushPromises()
+    expect(setOpenAICreditsEnabled).not.toHaveBeenCalled()
+    expect(toggle(wrapper).attributes('aria-checked')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('disables without confirmation', async () => {
+    vi.mocked(setOpenAICreditsEnabled).mockResolvedValue(makeAccount({ extra: { openai_credits_enabled: false } }))
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({ extra: { openai_credits_enabled: true } }) } })
+    expect(toggle(wrapper).attributes('aria-checked')).toBe('true')
+    await toggle(wrapper).trigger('click')
+    await flushPromises()
+    expect(setOpenAICreditsEnabled).toHaveBeenCalledWith(1, false)
+    expect(creditsDialog(wrapper).props('show')).toBe(false)
+    expect(toggle(wrapper).attributes('aria-checked')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('shows the error and keeps the state when the request fails', async () => {
+    vi.mocked(setOpenAICreditsEnabled).mockRejectedValue(new Error('toggle failed'))
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({}) } })
+    await toggle(wrapper).trigger('click')
+    creditsDialog(wrapper).vm.$emit('confirm')
+    await flushPromises()
+    expect(wrapper.text()).toContain('toggle failed')
+    expect(toggle(wrapper).attributes('aria-checked')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('hides the toggle on spark shadow accounts', () => {
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({ parent_account_id: 9 }) } })
+    expect(wrapper.find('[data-testid="openai-credits-enabled-toggle"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })
 
 describe('OpenAIQuotaResetCell — Codex 点数', () => {
   const points = (wrapper: ReturnType<typeof mount>) => wrapper.get('[data-testid="codex-credits"]')
   const balance = { has_credits: true, unlimited: false, balance: '12345678901234567890.0123' }
+  // 显示时四舍五入到整数，按字符串处理以保留大数精度
+  const balanceDisplay = '12345678901234567890'
 
   it.each([
-    { name: 'decimal precision', credits: balance, expected: balance.balance },
+    { name: 'large decimal rounds to integer', credits: balance, expected: balanceDisplay },
+    { name: 'rounds half up', credits: { has_credits: true, unlimited: false, balance: '1200.50' }, expected: '1201' },
+    { name: 'carries through nines', credits: { has_credits: true, unlimited: false, balance: '999.999999' }, expected: '1000' },
+    { name: 'integer stays unchanged', credits: { has_credits: true, unlimited: false, balance: '42' }, expected: '42' },
     { name: 'zero', credits: { has_credits: false, unlimited: false, balance: '0' }, expected: '0' },
     { name: 'unlimited takes precedence', credits: { has_credits: false, unlimited: true, balance: null }, expected: 'admin.accounts.openaiQuotaReset.pointsUnlimited' },
     { name: 'hidden balance', credits: { has_credits: true, unlimited: false, balance: null }, expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
@@ -88,6 +162,7 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     await flushPromises()
     expect(refreshOpenAIQuota).toHaveBeenCalledWith(1)
     expect(points(wrapper).text()).toContain(expected)
+    if (/^\d+$/.test(expected)) expect(points(wrapper).find('span').text()).toBe(expected)
     expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
     expect(resetOpenAIQuota).not.toHaveBeenCalled()
     wrapper.unmount()
@@ -97,7 +172,10 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({
       extra: { codex_credits_snapshot: { credits: balance, fetched_at: 1770000000 } },
     }) } })
-    expect(points(wrapper).text()).toContain(balance.balance)
+    expect(points(wrapper).text()).toContain(balanceDisplay)
+    expect(points(wrapper).text()).not.toContain(balance.balance)
+    // 悬停提示保留上游精确值
+    expect(points(wrapper).attributes('title')).toContain(balance.balance)
     expect(points(wrapper).attributes('title')).toContain('admin.accounts.openaiQuotaReset.pointsUpdatedAt:')
     expect(refreshOpenAIQuota).not.toHaveBeenCalled()
     expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
@@ -111,14 +189,14 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     vi.mocked(refreshOpenAIQuota).mockRejectedValueOnce(new Error('network unavailable'))
     await points(wrapper).trigger('click')
     await flushPromises()
-    expect(points(wrapper).text()).toContain(balance.balance)
+    expect(points(wrapper).text()).toContain(balanceDisplay)
     expect(wrapper.text()).toContain('network unavailable')
 
     vi.mocked(refreshOpenAIQuota).mockResolvedValueOnce({ fetched_at: 1770000001, cache_persisted: true, credits_cache_persisted: true })
     await points(wrapper).trigger('click')
     await flushPromises()
     expect(points(wrapper).text()).toContain('—')
-    expect(wrapper.text()).not.toContain(balance.balance)
+    expect(wrapper.text()).not.toContain(balanceDisplay)
     wrapper.unmount()
   })
 
@@ -129,7 +207,7 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({}) } })
     await points(wrapper).trigger('click')
     await flushPromises()
-    expect(points(wrapper).text()).toContain(balance.balance)
+    expect(points(wrapper).text()).toContain(balanceDisplay)
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.pointsCachePersistFailed')
     wrapper.unmount()
   })
@@ -353,7 +431,8 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
 
     expect(resetOpenAIQuota).toHaveBeenCalledWith(1)
     expect(refreshOpenAIQuota).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-testid="codex-credits"]').text()).toContain('999.25')
+    expect(wrapper.get('[data-testid="codex-credits"]').text()).toContain('999')
+    expect(wrapper.get('[data-testid="codex-credits"]').text()).not.toContain('999.25')
     expect(wrapper.text()).not.toContain('admin.accounts.openaiQuotaReset.expiresAt:')
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.resetSuccess')
     expect(wrapper.emitted('account-updated')).toEqual([[recoveredAccount]])

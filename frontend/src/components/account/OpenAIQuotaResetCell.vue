@@ -73,6 +73,29 @@
         {{ t('admin.accounts.openaiQuotaReset.points') }}
         <span class="truncate tabular-nums">{{ creditsDisplay }}</span>
       </button>
+      <!-- 额度用尽后是否允许消耗点数：默认关闭，开启需二次确认 -->
+      <button
+        v-if="showCreditsToggle"
+        type="button"
+        role="switch"
+        data-testid="openai-credits-enabled-toggle"
+        :aria-checked="creditsEnabled"
+        :aria-label="t('admin.accounts.openai.creditsEnabled')"
+        :title="creditsToggleTitle"
+        :disabled="creditsToggling"
+        :class="[
+          'relative inline-flex h-4 w-7 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50',
+          creditsEnabled ? 'bg-amber-500' : 'bg-gray-200 dark:bg-dark-600'
+        ]"
+        @click="handleCreditsToggle"
+      >
+        <span
+          :class="[
+            'pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+            creditsEnabled ? 'translate-x-3' : 'translate-x-0'
+          ]"
+        />
+      </button>
       <OpenAIReferralCell :account="account" />
     </div>
 
@@ -151,6 +174,17 @@
       @confirm="confirmReset"
       @cancel="showResetConfirm = false"
     />
+
+    <ConfirmDialog
+      :show="showCreditsConfirm"
+      :title="t('admin.accounts.openai.creditsEnableConfirmTitle')"
+      :message="t('admin.accounts.openai.creditsEnableConfirmMessage')"
+      :confirm-text="t('admin.accounts.openai.creditsEnableConfirm')"
+      :cancel-text="t('common.cancel')"
+      danger
+      @confirm="confirmEnableCredits"
+      @cancel="showCreditsConfirm = false"
+    />
   </div>
 </template>
 
@@ -161,6 +195,7 @@ import type { Account } from '@/types'
 import {
   refreshOpenAIQuota,
   resetOpenAIQuota,
+  setOpenAICreditsEnabled,
   type OpenAIQuotaUsage,
   type OpenAIQuotaResetResult
 } from '@/api/admin/accounts'
@@ -199,23 +234,57 @@ const readCachedCredits = (account: Account) => {
   return { credits, fetched_at: snapshot.fetched_at }
 }
 const creditsData = ref(readCachedCredits(props.account))
+
+// 上游余额是十进制字符串，可能超出 Number 精度；按字符串四舍五入到整数，避免大数失真。
+const roundDecimalString = (value: string): string | null => {
+  const match = /^(\d+)(?:\.(\d*))?$/.exec(value)
+  if (!match) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && parsed >= 0 ? String(Math.round(parsed)) : null
+  }
+  const integer = match[1].replace(/^0+(?=\d)/, '')
+  if (!match[2] || match[2][0] < '5') return integer
+  // 整数部分 +1（逐位进位）
+  const digits = integer.split('')
+  let i = digits.length - 1
+  while (i >= 0 && digits[i] === '9') {
+    digits[i] = '0'
+    i--
+  }
+  if (i < 0) digits.unshift('1')
+  else digits[i] = String(Number(digits[i]) + 1)
+  return digits.join('')
+}
+
+const validCreditsBalance = computed(() => {
+  const credits = creditsData.value?.credits
+  if (!credits || credits.unlimited || !credits.has_credits) return null
+  const balance = credits.balance?.trim()
+  if (balance && Number.isFinite(Number(balance)) && Number(balance) >= 0) return balance
+  return null
+})
 const creditsDisplay = computed(() => {
   const credits = creditsData.value?.credits
   if (!credits) return '—'
   if (credits.unlimited) return t('admin.accounts.openaiQuotaReset.pointsUnlimited')
   if (!credits.has_credits) return '0'
-  const balance = credits.balance?.trim()
-  // Keep the upstream decimal string intact, including fractional points.
-  if (balance && Number.isFinite(Number(balance)) && Number(balance) >= 0) return balance
+  const balance = validCreditsBalance.value
+  if (balance) return roundDecimalString(balance) ?? balance
   return t('admin.accounts.openaiQuotaReset.pointsAvailable')
 })
 const creditsButtonTitle = computed(() => {
   const fetchedAt = creditsData.value?.fetched_at
-  const refresh = t('admin.accounts.openaiQuotaReset.pointsTooltip')
-  if (!fetchedAt || !Number.isFinite(fetchedAt)) return refresh
-  return `${refresh}\n${t('admin.accounts.openaiQuotaReset.pointsUpdatedAt', {
-    time: new Date(fetchedAt * 1000).toLocaleString()
-  })}`
+  const lines = [t('admin.accounts.openaiQuotaReset.pointsTooltip')]
+  // 显示为整数，悬停时保留上游原始精确值
+  if (validCreditsBalance.value && validCreditsBalance.value !== creditsDisplay.value) {
+    lines.push(validCreditsBalance.value)
+  }
+  if (fetchedAt && Number.isFinite(fetchedAt)) {
+    lines.push(t('admin.accounts.openaiQuotaReset.pointsUpdatedAt', {
+      time: new Date(fetchedAt * 1000).toLocaleString()
+    }))
+  }
+  return lines.join('\n')
 })
 
 const updateCredits = (usage: OpenAIQuotaUsage | null) => {
@@ -401,6 +470,51 @@ const handleQuery = async () => {
   }
 }
 
+// ---- 额度用尽后消耗点数开关 ----
+// 仅 OpenAI OAuth 母账号；影子账号的额度来自独立通道，不受点数保护。
+const showCreditsToggle = computed(() => !isShadow.value)
+const creditsEnabledOverride = ref<boolean | null>(null)
+const creditsEnabled = computed(() =>
+  creditsEnabledOverride.value ?? props.account.extra?.openai_credits_enabled === true
+)
+const creditsToggling = ref(false)
+const showCreditsConfirm = ref(false)
+const creditsToggleTitle = computed(() =>
+  `${t('admin.accounts.openai.creditsEnabled')}: ${creditsEnabled.value ? t('common.enabled') : t('common.disabled')}\n${t('admin.accounts.openai.creditsEnabledDesc')}`
+)
+
+const applyCreditsEnabled = async (enabled: boolean) => {
+  if (creditsToggling.value) return
+  const accountID = props.account.id
+  creditsToggling.value = true
+  error.value = null
+  try {
+    const updated = await setOpenAICreditsEnabled(accountID, enabled)
+    if (props.account.id !== accountID) return
+    creditsEnabledOverride.value = enabled
+    emit('account-updated', updated)
+  } catch (e) {
+    if (props.account.id !== accountID) return
+    error.value = extractErrorMessage(e)
+  } finally {
+    if (props.account.id === accountID) creditsToggling.value = false
+  }
+}
+
+const handleCreditsToggle = () => {
+  if (creditsToggling.value) return
+  if (creditsEnabled.value) {
+    void applyCreditsEnabled(false)
+    return
+  }
+  showCreditsConfirm.value = true
+}
+
+const confirmEnableCredits = () => {
+  showCreditsConfirm.value = false
+  void applyCreditsEnabled(true)
+}
+
 const openResetConfirm = () => {
   if (resetting.value || loading.value) return
   if (!canReset.value) {
@@ -473,6 +587,17 @@ watch(
     resetting.value = false
     showResetConfirm.value = false
     showResetCreditDetails.value = false
+    creditsEnabledOverride.value = null
+    creditsToggling.value = false
+    showCreditsConfirm.value = false
+  }
+)
+
+// 父组件刷新账号后，以服务端状态为准
+watch(
+  () => props.account.extra?.openai_credits_enabled,
+  () => {
+    creditsEnabledOverride.value = null
   }
 )
 

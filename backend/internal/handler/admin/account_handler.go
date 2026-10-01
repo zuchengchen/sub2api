@@ -2723,6 +2723,36 @@ func (h *AccountHandler) SetSchedulable(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+// SetOpenAICreditsEnabledRequest 切换"额度用尽后消耗点数"开关。
+type SetOpenAICreditsEnabledRequest struct {
+	Enabled *bool `json:"enabled" binding:"required"`
+}
+
+// SetOpenAICreditsEnabled handles toggling whether an OpenAI OAuth account may spend credits
+// after its plan allowance is exhausted.
+// POST /api/v1/admin/accounts/:id/openai-credits
+func (h *AccountHandler) SetOpenAICreditsEnabled(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	var req SetOpenAICreditsEnabledRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	account, err := h.adminService.SetOpenAICreditsEnabled(c.Request.Context(), accountID, *req.Enabled)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
 // GetAvailableModels handles getting available models for an account
 // GET /api/v1/admin/accounts/:id/models
 func (h *AccountHandler) GetAvailableModels(c *gin.Context) {

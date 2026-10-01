@@ -790,7 +790,7 @@ export default {
         creditsEnabled: '额度用尽后消耗点数',
         creditsEnabledDesc: '默认关闭：5h 或 7d 套餐额度用尽后，本账号按 429 限流直到窗口重置，不会让上游自动扣除购买的点数（credits）。开启后额度用尽仍继续调度，由上游消耗点数。',
         creditsEnableConfirmTitle: '允许消耗点数？',
-        creditsEnableConfirmMessage: '开启后，该账号套餐额度用尽时请求会继续发往上游，OpenAI 将自动扣除账号中购买的点数（Fast 模式按 2 倍、Ultrafast 按 6 倍扣除）。保存后会解除当前因额度用尽产生的限流。确认开启？',
+        creditsEnableConfirmMessage: '开启后，该账号套餐额度用尽时请求会继续发往上游，OpenAI 将自动扣除账号中购买的点数（Fast 模式按 2 倍、Ultrafast 按 6 倍扣除）。开启后立即生效，并解除当前因额度用尽产生的限流。确认开启？',
         creditsEnableConfirm: '确认开启',
         codexFingerprintMode: 'Codex 指纹收敛',
         codexFingerprintModeDesc: '多人共享同一 OAuth 账号时，将各用户的设备/会话标识收敛为账号级恒定值，减少上游可见的设备数和会话数。默认关闭（原样透传客户端标识），需要时再显式开启；部分账号开启收敛后出现过额度缩水，请按自己的实测结果选择。',
