@@ -154,6 +154,36 @@ func rewriteMessageCacheControlBody(body []byte) []byte {
 	return addMessageCacheBreakpointsWithTTL(body, ttl)
 }
 
+func messagesHaveCacheControl(body []byte) bool {
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return false
+	}
+	found := false
+	messages.ForEach(func(_, message gjson.Result) bool {
+		content := message.Get("content")
+		if !content.IsArray() {
+			return true
+		}
+		content.ForEach(func(_, block gjson.Result) bool {
+			if block.Get("cache_control").Exists() {
+				found = true
+				return false
+			}
+			return true
+		})
+		return !found
+	})
+	return found
+}
+
+func ensureMessageCacheBreakpointsIfMissing(body []byte) []byte {
+	if messagesHaveCacheControl(body) {
+		return body
+	}
+	return addMessageCacheBreakpointsWithTTL(body, "")
+}
+
 func (s *GatewayService) isRewriteMessageCacheControlEnabled(ctx context.Context) bool {
 	if s == nil {
 		return false

@@ -223,7 +223,16 @@ func ensureClaudeOAuthMetadataUserID(body []byte, userID string) ([]byte, bool) 
 // injectAnthropicAPIKeyCacheMetadata gives opt-in API key accounts a stable
 // account/session identity while preserving an identity supplied by the client.
 func injectAnthropicAPIKeyCacheMetadata(body []byte, parsed *ParsedRequest, account *Account) []byte {
-	if len(body) == 0 || account == nil || !account.IsAnthropicAPIKeyCacheControlRewriteEnabled() {
+	if account == nil || !account.IsAnthropicAPIKeyCacheControlRewriteEnabled() {
+		return body
+	}
+	return ensureAnthropicAPIKeyCacheMetadata(body, parsed, account)
+}
+
+// ensureAnthropicAPIKeyCacheMetadata injects Claude-Code-shaped metadata.user_id
+// when the client omitted it. It does not depend on the extra rewrite flag.
+func ensureAnthropicAPIKeyCacheMetadata(body []byte, parsed *ParsedRequest, account *Account) []byte {
+	if len(body) == 0 || account == nil {
 		return body
 	}
 
