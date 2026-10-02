@@ -133,7 +133,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if account.IsAnthropicAPIKeyCacheControlRewriteEnabled() {
 			passthroughBody = injectAnthropicAPIKeyCacheMetadata(passthroughBody, parsed, account)
 			passthroughBody = rewriteMessageCacheControlBody(passthroughBody)
+		} else {
+			passthroughBody = ensureAnthropicAPIKeyCacheMetadata(passthroughBody, parsed, account)
+			passthroughBody = ensureMessageCacheBreakpointsIfMissing(passthroughBody)
 		}
+		passthroughBody = enforceCacheControlLimit(passthroughBody)
 		if passthroughModel != "" {
 			if mappedModel := account.GetMappedModel(passthroughModel); mappedModel != passthroughModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
