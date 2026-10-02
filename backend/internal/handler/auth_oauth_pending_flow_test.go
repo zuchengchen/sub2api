@@ -3380,3 +3380,20 @@ func (oauthPendingFlowTotpEncryptorStub) Decrypt(ciphertext string) (string, err
 func (r *oauthPendingFlowUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
+
+func (s *oauthPendingFlowEmailCacheStub) IncrVerificationCodeAttempts(_ context.Context, email string) (int, error) {
+	data := s.verificationCodes[email]
+	if data == nil {
+		return 0, errors.New("verification code not found")
+	}
+	data.Attempts++
+	return data.Attempts, nil
+}
+
+func (s *oauthPendingFlowEmailCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, string) (int, error) {
+	return 0, errors.New("notify verification code not found")
+}
+
+func (s *oauthPendingFlowEmailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
+	return false, nil
+}
