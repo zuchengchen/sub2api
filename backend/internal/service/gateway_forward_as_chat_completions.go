@@ -298,6 +298,15 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		return nil, fmt.Errorf("upstream stream ended without response")
 	}
 
+	if !anthropicResponseHasVisibleOutput(finalResp) {
+		logger.L().Warn("forward_as_cc buffered: empty anthropic completion",
+			zap.String("request_id", requestID),
+			zap.String("model", originalModel),
+			zap.String("mapped_model", mappedModel),
+		)
+		return nil, emptyAnthropicCompletionFailoverError()
+	}
+
 	// Update usage from accumulated delta
 	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
 		finalResp.Usage = apicompat.AnthropicUsage{
@@ -372,6 +381,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	sawVisibleOutput := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -418,6 +428,15 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if event.Type == "ping" {
 			return false
 		}
+		if anthropicStreamEventHasVisibleOutput(event) {
+			sawVisibleOutput = true
+		}
+		if (event.Type == "message_delta" || event.Type == "message_stop") && !sawVisibleOutput {
+			if event.Type == "message_delta" && event.Usage != nil {
+				mergeAnthropicUsage(&usage, *event.Usage)
+			}
+			return false
+		}
 		if firstChunk {
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
@@ -459,7 +478,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	writeUpstreamStreamError := func(event *apicompat.AnthropicStreamEvent, payload string) {
 		upstreamErr := parseAnthropicStreamErrorEvent(payload)
 		// error 路径没有 message_delta：kiro-rs 在 error 事件顶层附带已消耗用量，这里并入计费。
-		if event.Usage != nil {
+		if event != nil && event.Usage != nil {
 			mergeAnthropicUsage(&usage, *event.Usage)
 		}
 		logAnthropicStreamErrorEvent("forward_as_cc stream: upstream error event", requestID, upstreamErr)
@@ -512,6 +531,16 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 				zap.String("request_id", requestID),
 			)
 		}
+	}
+
+	if !sawVisibleOutput {
+		logger.L().Warn("forward_as_cc stream: empty anthropic completion",
+			zap.String("request_id", requestID),
+			zap.String("model", originalModel),
+			zap.String("mapped_model", mappedModel),
+		)
+		writeUpstreamStreamError(nil, emptyAnthropicCompletionErrorPayload())
+		return resultWithUsage(), nil
 	}
 
 	// Finalize both state machines
@@ -569,6 +598,80 @@ type anthropicStreamError struct {
 // parseAnthropicStreamErrorEvent 解析 `{"type":"error","error":{type,message}}`。
 // 所有 Anthropic 上游流内错误转发路径（CC / Responses，流式与缓冲）共用，
 // 保证脱敏与状态码映射一致。
+const emptyAnthropicCompletionClientMessage = "Upstream model became unavailable: the stream ended without any answer text, reasoning, or tool call. Please retry."
+
+func emptyAnthropicCompletionErrorPayload() string {
+	return `{"type":"error","error":{"type":"api_error","message":"` + emptyAnthropicCompletionClientMessage + `"}}`
+}
+
+func emptyAnthropicCompletionFailoverError() *UpstreamFailoverError {
+	return &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           []byte(emptyAnthropicCompletionErrorPayload()),
+		RetryableOnSameAccount: true,
+	}
+}
+
+func anthropicResponseHasVisibleOutput(resp *apicompat.AnthropicResponse) bool {
+	if resp == nil {
+		return false
+	}
+	for _, block := range resp.Content {
+		switch block.Type {
+		case "text":
+			if block.Text != "" {
+				return true
+			}
+		case "thinking":
+			if block.Thinking != "" {
+				return true
+			}
+		case "redacted_thinking":
+			if block.Data != "" {
+				return true
+			}
+		case "tool_use":
+			return true
+		}
+	}
+	return false
+}
+
+func anthropicStreamEventHasVisibleOutput(event *apicompat.AnthropicStreamEvent) bool {
+	if event == nil {
+		return false
+	}
+	switch event.Type {
+	case "content_block_start":
+		if event.ContentBlock == nil {
+			return false
+		}
+		switch event.ContentBlock.Type {
+		case "text":
+			return event.ContentBlock.Text != ""
+		case "thinking":
+			return event.ContentBlock.Thinking != ""
+		case "redacted_thinking":
+			return event.ContentBlock.Data != ""
+		case "tool_use":
+			return true
+		}
+	case "content_block_delta":
+		if event.Delta == nil {
+			return false
+		}
+		switch event.Delta.Type {
+		case "text_delta":
+			return event.Delta.Text != ""
+		case "thinking_delta":
+			return event.Delta.Thinking != ""
+		case "input_json_delta":
+			return true
+		}
+	}
+	return false
+}
+
 func parseAnthropicStreamErrorEvent(payload string) anthropicStreamError {
 	errType := strings.TrimSpace(gjson.Get(payload, "error.type").String())
 	if errType == "" {

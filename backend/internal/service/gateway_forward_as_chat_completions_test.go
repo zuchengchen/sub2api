@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -272,4 +273,87 @@ func TestHandleCCBufferedFromAnthropic_UpstreamErrorEventReturnsHTTPError(t *tes
 	require.Contains(t, rec.Body.String(), `"type":"api_error"`)
 	require.Contains(t, rec.Body.String(), "unavailable")
 	require.NotContains(t, rec.Body.String(), "finish_reason")
+}
+
+func TestHandleCCBufferedFromAnthropic_EmptyCompletionFailsOver(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	resp := &http.Response{
+		Header: http.Header{"x-request-id": []string{"rid_cc_buffered_empty"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_empty","type":"message","role":"assistant","content":[],"model":"claude-opus-5.5","stop_reason":"","usage":{"input_tokens":1,"output_tokens":1}}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	result, err := (&GatewayService{}).handleCCBufferedFromAnthropic(resp, c, "claude-opus-5-5", "claude-opus-5.5", nil, time.Now())
+	require.Error(t, err)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Empty(t, rec.Body.String(), "empty end_turn must not be converted into a successful Chat Completions body")
+}
+
+func TestHandleCCStreamingFromAnthropic_EmptyCompletionWritesRetryableError(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	resp := &http.Response{
+		Header: http.Header{"x-request-id": []string{"rid_cc_stream_empty"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_empty_s","type":"message","role":"assistant","content":[],"model":"claude-opus-5.5","stop_reason":"","usage":{"input_tokens":1}}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(resp, c, "claude-opus-5-5", "claude-opus-5.5", nil, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.Contains(t, body, `"type":"api_error"`)
+	require.Contains(t, body, "unavailable")
+	require.Equal(t, 1, strings.Count(body, "[DONE]"))
+	require.NotContains(t, body, `"finish_reason":"stop"`)
+}
+
+func TestAnthropicResponseHasVisibleOutput(t *testing.T) {
+	t.Parallel()
+	require.False(t, anthropicResponseHasVisibleOutput(nil))
+	require.False(t, anthropicResponseHasVisibleOutput(&apicompat.AnthropicResponse{Content: nil}))
+	require.True(t, anthropicResponseHasVisibleOutput(&apicompat.AnthropicResponse{
+		Content: []apicompat.AnthropicContentBlock{{Type: "text", Text: " "}},
+	}))
+	require.False(t, anthropicResponseHasVisibleOutput(&apicompat.AnthropicResponse{
+		Content: []apicompat.AnthropicContentBlock{{Type: "text", Text: ""}},
+	}))
+	require.True(t, anthropicResponseHasVisibleOutput(&apicompat.AnthropicResponse{
+		Content: []apicompat.AnthropicContentBlock{{Type: "text", Text: "pong"}},
+	}))
+	require.True(t, anthropicResponseHasVisibleOutput(&apicompat.AnthropicResponse{
+		Content: []apicompat.AnthropicContentBlock{{Type: "thinking", Thinking: "plan"}},
+	}))
+	require.True(t, anthropicResponseHasVisibleOutput(&apicompat.AnthropicResponse{
+		Content: []apicompat.AnthropicContentBlock{{Type: "tool_use", ID: "t1", Name: "lookup"}},
+	}))
 }
