@@ -38,6 +38,35 @@ func TestInjectAnthropicAPIKeyCacheMetadata_PreservesClientIdentity(t *testing.T
 	require.Equal(t, "kept", gjson.GetBytes(got, "metadata.other").String())
 }
 
+func TestEnsureAnthropicAPIKeyCacheMetadata_InjectsWithoutExtraFlag(t *testing.T) {
+	account := &Account{ID: 22173, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Extra: map[string]any{}}
+	require.False(t, account.IsAnthropicAPIKeyCacheControlRewriteEnabled())
+	parsed := &ParsedRequest{SessionContext: &SessionContext{
+		ClientSessionID: "5d700df1aaaaaaaaaaaaaaaaaaaaaaaa",
+	}}
+	body := []byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"hello"}]}`)
+
+	first := ensureAnthropicAPIKeyCacheMetadata(body, parsed, account)
+	second := ensureAnthropicAPIKeyCacheMetadata(body, parsed, account)
+	require.Equal(t, string(first), string(second))
+
+	parsedUserID := ParseMetadataUserID(gjson.GetBytes(first, "metadata.user_id").String())
+	require.NotNil(t, parsedUserID)
+	require.NotEmpty(t, parsedUserID.SessionID)
+	require.Contains(t, gjson.GetBytes(first, "metadata.user_id").String(), "_session_")
+
+	require.Equal(t, string(body), string(injectAnthropicAPIKeyCacheMetadata(body, parsed, account)))
+}
+
+func TestEnsureAnthropicAPIKeyCacheMetadata_PreservesClientIdentity(t *testing.T) {
+	account := &Account{ID: 22173, Platform: PlatformAnthropic, Type: AccountTypeAPIKey}
+	body := []byte(`{"metadata":{"user_id":"client-provided","other":"kept"},"messages":[{"role":"user","content":"hello"}]}`)
+
+	got := ensureAnthropicAPIKeyCacheMetadata(body, &ParsedRequest{}, account)
+	require.Equal(t, "client-provided", gjson.GetBytes(got, "metadata.user_id").String())
+	require.Equal(t, "kept", gjson.GetBytes(got, "metadata.other").String())
+}
+
 func TestAnthropicAPIKeyCacheControlRewrite_DefaultOffAndStrict(t *testing.T) {
 	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Extra: map[string]any{}}
 	require.False(t, account.IsAnthropicAPIKeyCacheControlRewriteEnabled())
