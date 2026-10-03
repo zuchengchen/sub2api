@@ -824,6 +824,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	firstChunk := true
 	lastVisibleAt := time.Now()
 	grokDeadlineWarned := false
+	lastGrokProgressMinute := 0
 	var grokAbortErr error
 	clientDisconnected := false
 	clientOutputStarted := false
@@ -1118,6 +1119,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			case strings.Contains(msg, grokChatReasoningWindowCode):
 				code = grokChatReasoningWindowCode
 				msg = grokChatReasoningWindowMsg
+			case strings.Contains(msg, grokChatReasoningUpstreamCutCode):
+				code = grokChatReasoningUpstreamCutCode
+				msg = grokChatReasoningUpstreamCutMsg
 			}
 			writeGrokChatAbort(code, grokChatAbortMessage(code, msg))
 			return resultWithUsage(), grokAbortErr
@@ -1216,6 +1220,17 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
 		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
+	failStreamRead := func(err error) (*OpenAIForwardResult, error) {
+		handleScanErr(err)
+		if clientDisconnected || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
+		}
+		if grokStream && clientOutputStarted {
+			grokAbortErr = fmt.Errorf("%s: %s", grokChatReasoningUpstreamCutCode, grokChatReasoningUpstreamCutMsg)
+			return finalizeStream()
+		}
+		return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		if strings.TrimSpace(payload) == "[DONE]" {
@@ -1247,11 +1262,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			handleScanErr(err)
-			if clientDisconnected || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
-			}
-			return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+			return failStreamRead(err)
 		}
 		if frame, ok := parser.Finish(); ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
@@ -1343,6 +1354,15 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if grokHeartbeatInterval > 0 && time.Since(lastVisibleAt) < grokHeartbeatInterval {
 			return
 		}
+		elapsed := time.Since(startTime)
+		if elapsed >= grokChatReasoningProgressInterval {
+			minute := int(elapsed / grokChatReasoningProgressInterval)
+			if minute > lastGrokProgressMinute {
+				lastGrokProgressMinute = minute
+				writeGrokChatHeartbeat(grokChatReasoningProgressText(elapsed))
+				return
+			}
+		}
 		writeGrokChatHeartbeat(grokChatReasoningHeartbeatMark)
 	}
 
@@ -1361,11 +1381,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return missingTerminalErr()
 			}
 			if ev.err != nil {
-				handleScanErr(ev.err)
-				if clientDisconnected || errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
-					return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
-				}
-				return resultWithUsage(), newOpenAIUpstreamStreamReadError(ev.err)
+				return failStreamRead(ev.err)
 			}
 			lastDataAt = time.Now()
 			line := ev.line
