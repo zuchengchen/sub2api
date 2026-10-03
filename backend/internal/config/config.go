@@ -929,6 +929,12 @@ type GatewayConfig struct {
 	// GrokResponseHeaderTimeout bounds the pre-first-byte wait for xAI/Grok.
 	// A zero value uses the provider-safe default instead of the generic gateway timeout.
 	GrokResponseHeaderTimeout int `mapstructure:"grok_response_header_timeout"`
+	// GrokStreamDataIntervalTimeout is the Grok Chat/Responses upstream-read
+	// idle timeout in seconds. 0 uses the Grok-only default (180s, or 600s for
+	// xhigh). Distinct from StreamDataIntervalTimeout so xhigh reasoning can
+	// stay silent longer than the 300s global cap without disabling idle
+	// failover for other platforms.
+	GrokStreamDataIntervalTimeout int `mapstructure:"grok_stream_data_interval_timeout"`
 	// OpenAIFirstOutputTimeoutSeconds: native HTTP Responses 首个语义输出超时（秒），0表示禁用。
 	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
 	// StreamFirstTokenTimeout: HTTP 语义首字超时（秒）。0 表示关闭。WebSocket 不使用该值。
@@ -2364,6 +2370,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
 	viper.SetDefault("gateway.openai_response_header_timeout", 0)
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
+	viper.SetDefault("gateway.grok_stream_data_interval_timeout", 0)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.stream_first_token_timeout", 60)
@@ -3264,6 +3271,13 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.GrokResponseHeaderTimeout < 0 || c.Gateway.GrokResponseHeaderTimeout > 1800 {
 		return fmt.Errorf("gateway.grok_response_header_timeout must be between 0-1800 seconds")
+	}
+	if c.Gateway.GrokStreamDataIntervalTimeout < 0 {
+		return fmt.Errorf("gateway.grok_stream_data_interval_timeout must be non-negative")
+	}
+	if c.Gateway.GrokStreamDataIntervalTimeout != 0 &&
+		(c.Gateway.GrokStreamDataIntervalTimeout < 30 || c.Gateway.GrokStreamDataIntervalTimeout > 1800) {
+		return fmt.Errorf("gateway.grok_stream_data_interval_timeout must be 0 or between 30-1800 seconds")
 	}
 	if c.Gateway.OpenAIFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIFirstOutputTimeoutSeconds > 600 ||
 		(c.Gateway.OpenAIFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIFirstOutputTimeoutSeconds < 30) {

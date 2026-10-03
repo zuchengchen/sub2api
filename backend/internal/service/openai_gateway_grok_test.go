@@ -41,6 +41,17 @@ func TestPatchGrokResponsesBodySetsMappedModelAndDropsUnsupportedFields(t *testi
 	require.False(t, gjson.GetBytes(patched, "prompt_cache_retention").Exists())
 	require.False(t, gjson.GetBytes(patched, "safety_identifier").Exists())
 	require.Equal(t, "high", gjson.GetBytes(patched, "reasoning.effort").String())
+	require.Equal(t, "auto", gjson.GetBytes(patched, "reasoning.summary").String())
+}
+
+func TestPatchGrokResponsesBodyPreservesExplicitReasoningSummary(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"grok","input":"hello","reasoning":{"effort":"xhigh","summary":"detailed"}}`)
+	patched, err := patchGrokResponsesBody(body, "grok-4.6")
+	require.NoError(t, err)
+	require.Equal(t, "xhigh", gjson.GetBytes(patched, "reasoning.effort").String())
+	require.Equal(t, "detailed", gjson.GetBytes(patched, "reasoning.summary").String())
 }
 
 func TestPatchGrokResponsesBodyDropsRedundantViewImageForCurrentInlineImage(t *testing.T) {

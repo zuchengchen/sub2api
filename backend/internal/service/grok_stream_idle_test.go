@@ -15,6 +15,13 @@ func TestResolveGrokStreamIdleTimeout(t *testing.T) {
 	require.Equal(t, defaultGrokStreamIdleTimeout, resolveGrokStreamIdleTimeout(-1))
 }
 
+func TestResolveGrokChatStreamIdleTimeout(t *testing.T) {
+	require.Equal(t, 90*time.Second, resolveGrokChatStreamIdleTimeout(90, "xhigh"))
+	require.Equal(t, defaultGrokXHighStreamIdleTimeout, resolveGrokChatStreamIdleTimeout(0, "xhigh"))
+	require.Equal(t, defaultGrokStreamIdleTimeout, resolveGrokChatStreamIdleTimeout(0, "high"))
+	require.Equal(t, defaultGrokStreamIdleTimeout, resolveGrokChatStreamIdleTimeout(-1, ""))
+}
+
 func TestGrokStreamIdleFailoverError(t *testing.T) {
 	account := &Account{ID: 1, Platform: PlatformGrok, Type: AccountTypeOAuth}
 	err := grokStreamIdleFailoverError(account, 180*time.Second)
