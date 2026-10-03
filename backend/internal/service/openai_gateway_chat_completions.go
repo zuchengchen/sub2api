@@ -98,6 +98,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	if account.Platform == PlatformGrok {
 		if account.IsGrokOAuth() {
+			cleanedBody, cleanErr := sanitizeGrokChatSyntheticReasoningHistory(body)
+			if cleanErr != nil {
+				return nil, fmt.Errorf("sanitize grok chat synthetic reasoning: %w", cleanErr)
+			}
+			body = cleanedBody
 			requestedModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 			mappedModel := account.GetMappedModel(requestedModel)
 			mustUseResponses := grokChatOAuthMustUseResponses(requestedModel) ||
@@ -817,6 +822,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	var streamedBilling strings.Builder
 	var firstTokenMs *int
 	firstChunk := true
+	lastVisibleAt := time.Now()
+	grokDeadlineWarned := false
+	var grokAbortErr error
 	clientDisconnected := false
 	clientOutputStarted := false
 	pendingSSE := make([]string, 0, 4)
@@ -838,6 +846,18 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	streamInterval := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
 		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	}
+	grokStream := account != nil && account.IsGrok()
+	grokEffort := ""
+	if grokStream {
+		if effort := extractOpenAIReasoningEffortFromBody(requestBody, upstreamModel, billingModel, originalModel); effort != nil {
+			grokEffort = *effort
+		}
+		cfgSec := 0
+		if s.cfg != nil {
+			cfgSec = s.cfg.Gateway.GrokStreamDataIntervalTimeout
+		}
+		streamInterval = resolveGrokChatStreamIdleTimeout(cfgSec, grokEffort)
 	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -875,8 +895,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 		if firstChunk {
 			firstChunk = false
-			ms := int(time.Since(startTime).Milliseconds())
-			firstTokenMs = &ms
+			if !grokStream {
+				ms := int(time.Since(startTime).Milliseconds())
+				firstTokenMs = &ms
+			}
 		}
 		if countSearch {
 			searchCount += countGrokNativeSearchCallsInSSEDataDedup([]byte(payload), streamSearchSeen)
@@ -893,6 +915,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		observer.ObserveOpenAI([]byte(payload), event.Type)
 		refusalDetector.ObservePayload([]byte(payload))
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
+		if grokStream && grokAbortErr == nil && grokChatWindowFuseExceeded(usage, []byte(payload)) {
+			grokAbortErr = fmt.Errorf("%s: %s", grokChatReasoningWindowCode, grokChatReasoningWindowMsg)
+			return true
+		}
 		if isOpenAIStreamedBillingDelta(event.Type) && event.Delta != "" {
 			_, _ = streamedBilling.WriteString(event.Delta)
 		}
@@ -1028,13 +1054,70 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				}
 			}
 		}
+		if grokStream && grokChatChunksHaveVisibleDelta(chunks) {
+			lastVisibleAt = time.Now()
+			if firstTokenMs == nil {
+				ms := int(time.Since(startTime).Milliseconds())
+				firstTokenMs = &ms
+			}
+		}
 		if len(chunks) > 0 && !clientDisconnected && clientOutputStarted {
 			c.Writer.Flush()
 		}
-		return isTerminalEvent
+		return isTerminalEvent || grokAbortErr != nil
+	}
+
+	writeGrokChatAbort := func(code, message string) {
+		if clientDisconnected || c == nil || c.Writer == nil {
+			return
+		}
+		writeStreamHeaders()
+		if _, err := fmt.Fprint(c.Writer, buildChatStreamErrorSSE(code, message)); err != nil {
+			clientDisconnected = true
+			return
+		}
+		if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
+			clientDisconnected = true
+			return
+		}
+		c.Writer.Flush()
+		clientDisconnected = true
+		clientOutputStarted = true
+	}
+	writeGrokChatHeartbeat := func(text string) {
+		if clientDisconnected || (refusalDetector.Enabled() && !clientOutputStarted) {
+			return
+		}
+		writeStreamHeaders()
+		chunk := grokChatReasoningHeartbeatChunk(state, originalModel, text)
+		sse, err := apicompat.ChatChunkToSSE(chunk)
+		if err != nil {
+			return
+		}
+		if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+			clientDisconnected = true
+			return
+		}
+		c.Writer.Flush()
+		clientOutputStarted = true
+		lastVisibleAt = time.Now()
 	}
 
 	finalizeStream := func() (*OpenAIForwardResult, error) {
+		if grokAbortErr != nil {
+			code := grokChatReasoningIdleTimeoutCode
+			msg := grokAbortErr.Error()
+			switch {
+			case strings.Contains(msg, grokChatReasoningDeadlineCode):
+				code = grokChatReasoningDeadlineCode
+				msg = grokChatReasoningDeadlineAbortMsg
+			case strings.Contains(msg, grokChatReasoningWindowCode):
+				code = grokChatReasoningWindowCode
+				msg = grokChatReasoningWindowMsg
+			}
+			writeGrokChatAbort(code, grokChatAbortMessage(code, msg))
+			return resultWithUsage(), grokAbortErr
+		}
 		if streamFailoverErr != nil {
 			if c == nil || c.Writer == nil || !c.Writer.Written() {
 				return nil, streamFailoverErr
@@ -1219,6 +1302,45 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	}
 	lastDataAt := time.Now()
 	var parser openAICompatSSEFrameParser
+	grokHeartbeatInterval := keepaliveInterval
+	if grokStream && grokHeartbeatInterval <= 0 {
+		grokHeartbeatInterval = grokChatReasoningHeartbeatInterval
+	}
+	var grokHeartbeatTicker *time.Ticker
+	var grokHeartbeatCh <-chan time.Time
+	if grokStream && keepaliveInterval <= 0 && grokHeartbeatInterval > 0 {
+		grokHeartbeatTicker = time.NewTicker(grokHeartbeatInterval)
+		defer grokHeartbeatTicker.Stop()
+		grokHeartbeatCh = grokHeartbeatTicker.C
+	}
+
+	checkGrokWallClock := func() bool {
+		if !grokStream || grokAbortErr != nil || clientDisconnected {
+			return false
+		}
+		elapsed := time.Since(startTime)
+		if elapsed >= grokChatWallClockAbort {
+			grokAbortErr = fmt.Errorf("%s: %s", grokChatReasoningDeadlineCode, grokChatReasoningDeadlineAbortMsg)
+			return true
+		}
+		if !grokDeadlineWarned && elapsed >= grokChatWallClockWarn {
+			grokDeadlineWarned = true
+			writeGrokChatHeartbeat(grokChatReasoningDeadlineWarnText)
+		}
+		return false
+	}
+	maybeWriteGrokHeartbeat := func() {
+		if !grokStream || grokAbortErr != nil || clientDisconnected {
+			return
+		}
+		if refusalDetector.Enabled() && !clientOutputStarted {
+			return
+		}
+		if grokHeartbeatInterval > 0 && time.Since(lastVisibleAt) < grokHeartbeatInterval {
+			return
+		}
+		writeGrokChatHeartbeat(grokChatReasoningHeartbeatMark)
+	}
 
 	for {
 		select {
@@ -1267,9 +1389,29 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				zap.String("model", originalModel),
 				zap.Duration("interval", streamInterval),
 			)
+			if grokStream {
+				var idleCtx context.Context
+				if c != nil && c.Request != nil {
+					idleCtx = c.Request.Context()
+				}
+				s.tempUnscheduleGrok(idleCtx, account, grokStreamIdleCooldown, "grok stream idle timeout")
+				_ = resp.Body.Close()
+				if !clientOutputStarted {
+					return resultWithUsage(), grokStreamIdleFailoverError(account, streamInterval)
+				}
+				grokAbortErr = fmt.Errorf("%s: Grok stream idle timeout after %s with no upstream data", grokChatReasoningIdleTimeoutCode, streamInterval.Round(time.Second))
+				return finalizeStream()
+			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
+			if checkGrokWallClock() {
+				return finalizeStream()
+			}
+			if grokStream {
+				maybeWriteGrokHeartbeat()
+				continue
+			}
 			if clientDisconnected {
 				continue
 			}
@@ -1289,6 +1431,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				continue
 			}
 			c.Writer.Flush()
+		case <-grokHeartbeatCh:
+			if checkGrokWallClock() {
+				return finalizeStream()
+			}
+			maybeWriteGrokHeartbeat()
 		}
 	}
 }
