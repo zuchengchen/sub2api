@@ -247,6 +247,12 @@ type AccountUsageService struct {
 	tlsFPProfileService *TLSFingerprintProfileService
 	agentIdentityTaskMu sync.Mutex
 	agentIdentityWS     agentIdentityWSConnectionInvalidator
+
+	openAI429Recovery openAI429RecoveryScheduler
+}
+
+type openAI429RecoveryScheduler interface {
+	ConsiderOpenAI429Recovery(account *Account)
 }
 
 // NewAccountUsageService 创建AccountUsageService实例
@@ -272,6 +278,13 @@ func NewAccountUsageService(
 		identityCache:       identityCache,
 		tlsFPProfileService: tlsFPProfileService,
 	}
+}
+
+func (s *AccountUsageService) SetOpenAI429RecoveryScheduler(scheduler openAI429RecoveryScheduler) {
+	if s == nil {
+		return
+	}
+	s.openAI429Recovery = scheduler
 }
 
 func supportsAnthropicPassiveUsage(account *Account) bool {
@@ -666,6 +679,10 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 				applyExtraToUsage(usage, account.Extra, now)
 			}
 		}
+	}
+
+	if s.openAI429Recovery != nil && account != nil && !account.IsShadow() {
+		s.openAI429Recovery.ConsiderOpenAI429Recovery(account)
 	}
 
 	if s.usageLogRepo == nil {

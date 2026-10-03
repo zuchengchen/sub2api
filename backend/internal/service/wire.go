@@ -215,6 +215,7 @@ func ProvideAccountUsageService(
 	identityCache IdentityCache,
 	tlsFPProfileService *TLSFingerprintProfileService,
 	openAIGatewayService *OpenAIGatewayService,
+	rateLimitService *RateLimitService,
 ) *AccountUsageService {
 	service := NewAccountUsageService(
 		accountRepo,
@@ -228,6 +229,7 @@ func ProvideAccountUsageService(
 		tlsFPProfileService,
 	)
 	service.agentIdentityWS = openAIGatewayService
+	service.SetOpenAI429RecoveryScheduler(rateLimitService)
 	return service
 }
 
