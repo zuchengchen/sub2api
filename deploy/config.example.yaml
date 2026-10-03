@@ -224,6 +224,11 @@ gateway:
   # Grok text Responses first-byte timeout (seconds, 0=disabled; default 120)
   # Grok 文本 Responses 首字节超时时间（秒，0=禁用；默认 120）
   grok_response_header_timeout: 120
+  # Grok Chat/Responses upstream-read idle timeout (seconds). 0=Grok default:
+  # 180s, or 600s when reasoning_effort is xhigh. Distinct from
+  # stream_data_interval_timeout so xhigh can stay silent longer than the
+  # 300s global cap. Synthetic reasoning heartbeats do not reset this idle.
+  grok_stream_data_interval_timeout: 0
   # Native OpenAI HTTP Responses first semantic output timeout (seconds, 0=disabled)
   # Includes response-header wait; does not apply to passthrough or WebSocket transports.
   # A timed-out request may already have incurred upstream usage; account failover can therefore duplicate upstream billing.

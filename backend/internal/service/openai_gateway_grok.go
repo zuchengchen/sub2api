@@ -613,6 +613,10 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	out, err = ensureGrokResponsesReasoningSummary(out)
+	if err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
