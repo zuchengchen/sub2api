@@ -143,6 +143,69 @@ func TestHandleChatStreamingResponse_GrokHeartbeatWithoutVisibleDelta(t *testing
 	require.Contains(t, rec.Body.String(), `"reasoning_content":"…"`)
 }
 
+func grokChatLargeRequestBody() []byte {
+	return []byte(`{"model":"grok-4.6","reasoning_effort":"xhigh","messages":[{"role":"user","content":"` + strings.Repeat("x", openAISilentRefusalMinRequestBodyBytes) + `"}]}`)
+}
+
+func TestHandleChatStreamingResponse_GrokHeartbeatWithLargeRequestBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := newGrokChatHangBody()
+	defer body.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamKeepaliveInterval:       1,
+			GrokStreamDataIntervalTimeout: 30,
+		},
+	}}
+	account := &Account{ID: 19, Name: "grok-oauth", Platform: PlatformGrok, Type: AccountTypeOAuth}
+	requestBody := grokChatLargeRequestBody()
+	require.GreaterOrEqual(t, len(requestBody), openAISilentRefusalMinRequestBodyBytes)
+	require.True(t, newOpenAIChatSilentRefusalDetector(len(requestBody)).Enabled())
+	require.False(t, newOpenAIChatSilentRefusalDetector(0).Enabled())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = svc.handleChatStreamingResponse(
+			resp, c, account, "grok-4.6", "grok-4.6", "grok-4.6", time.Now(),
+			requestBody,
+		)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if strings.Contains(rec.Body.String(), `"reasoning_content":"…"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = body.Close()
+			t.Fatalf("expected Grok reasoning heartbeat on >=64KiB request, got %q", rec.Body.String())
+		}
+		select {
+		case <-done:
+			t.Fatalf("stream returned before heartbeat, body=%q", rec.Body.String())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	_ = body.Close()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("stream did not return after closing hung body")
+	}
+	require.Contains(t, rec.Body.String(), `"reasoning_content":"…"`)
+	require.NotContains(t, rec.Body.String(), ":\n\n")
+}
+
 func TestHandleChatStreamingResponse_GrokIdleTimeoutFailoversBeforeOutput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := newGrokChatHangBody()
