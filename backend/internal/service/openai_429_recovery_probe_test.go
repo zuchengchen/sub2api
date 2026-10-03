@@ -220,6 +220,7 @@ func TestOpenAI429RecoveryDelayBackoff(t *testing.T) {
 }
 
 func TestOpenAI429RecoveryProbeModelDefault(t *testing.T) {
+	require.Equal(t, "gpt-6-luna", openai.DefaultTestModel)
 	require.Equal(t, openai.DefaultTestModel, openai429RecoveryProbeModel(nil, ""))
 	require.Equal(t, "gpt-5.3", openai429RecoveryProbeModel(nil, "gpt-5.3"))
 }
