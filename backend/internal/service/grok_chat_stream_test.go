@@ -37,6 +37,12 @@ func TestStripGrokSyntheticReasoningTextKeepsRealSpaces(t *testing.T) {
 	require.Empty(t, got)
 	got = stripGrokSyntheticReasoningText("hello world" + grokChatReasoningHeartbeatMark)
 	require.Equal(t, "hello world", got)
+	progress := grokChatReasoningProgressText(2 * time.Minute)
+	require.Equal(t, "Grok encrypted reasoning still running (2m elapsed)", progress)
+	got = stripGrokSyntheticReasoningText("hello world" + progress + grokChatReasoningHeartbeatMark)
+	require.Equal(t, "hello world", got)
+	progressDelta := grokChatReasoningProgressText(time.Minute)
+	require.False(t, grokChatDeltaIsVisible(apicompat.ChatDelta{ReasoningContent: &progressDelta}))
 }
 
 func TestGrokChatWindowFuseExceeded(t *testing.T) {
@@ -51,7 +57,7 @@ func TestGrokChatWindowFuseExceeded(t *testing.T) {
 func TestSanitizeGrokChatSyntheticReasoningHistory(t *testing.T) {
 	t.Parallel()
 
-	body := []byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"hi"},{"role":"assistant","reasoning_content":"……"},{"role":"assistant","content":"keep","reasoning_content":"real plan……"},{"role":"assistant","reasoning_content":"keep this plan"}]}`)
+	body := []byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"hi"},{"role":"assistant","reasoning_content":"……"},{"role":"assistant","content":"keep","reasoning_content":"real plan……Grok encrypted reasoning still running (12m elapsed)"},{"role":"assistant","reasoning_content":"keep this plan"}]}`)
 	cleaned, err := sanitizeGrokChatSyntheticReasoningHistory(body)
 	require.NoError(t, err)
 	messages := gjson.GetBytes(cleaned, "messages").Array()
@@ -97,6 +103,23 @@ func (b *grokChatHangBody) Close() error {
 		close(b.closed)
 	}
 	return nil
+}
+
+type grokChatHangErrBody struct {
+	*grokChatHangBody
+	err error
+}
+
+func newGrokChatHangErrBody(err error) *grokChatHangErrBody {
+	return &grokChatHangErrBody{grokChatHangBody: newGrokChatHangBody(), err: err}
+}
+
+func (b *grokChatHangErrBody) Read(p []byte) (int, error) {
+	<-b.closed
+	if b.err != nil {
+		return 0, b.err
+	}
+	return 0, io.EOF
 }
 
 func TestHandleChatStreamingResponse_GrokHeartbeatWithoutVisibleDelta(t *testing.T) {
@@ -271,6 +294,71 @@ func TestHandleChatStreamingResponse_GrokIdleTimeoutAfterHeartbeatWritesSSEError
 	require.Contains(t, rec.Body.String(), `"reasoning_content":"…"`)
 	require.Contains(t, rec.Body.String(), grokChatReasoningIdleTimeoutCode)
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
+}
+
+func TestHandleChatStreamingResponse_GrokUpstreamCutAfterHeartbeatWritesSSEError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := newGrokChatHangErrBody(io.ErrUnexpectedEOF)
+	defer body.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamKeepaliveInterval:       1,
+			GrokStreamDataIntervalTimeout: 30,
+		},
+	}}
+	account := &Account{ID: 21, Name: "grok-oauth", Platform: PlatformGrok, Type: AccountTypeOAuth}
+
+	done := make(chan struct{})
+	var result *OpenAIForwardResult
+	var err error
+	go func() {
+		defer close(done)
+		result, err = svc.handleChatStreamingResponse(
+			resp, c, account, "grok-4.6", "grok-4.6", "grok-4.6", time.Now(),
+			[]byte(`{"model":"grok-4.6","reasoning_effort":"xhigh","messages":[{"role":"user","content":"hi"}]}`),
+		)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if strings.Contains(rec.Body.String(), `"reasoning_content":"…"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = body.Close()
+			t.Fatalf("expected Grok reasoning heartbeat before upstream cut, got %q", rec.Body.String())
+		}
+		select {
+		case <-done:
+			t.Fatalf("stream returned before heartbeat, body=%q", rec.Body.String())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	_ = body.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream did not return after upstream cut")
+	}
+	require.Error(t, err)
+	require.Contains(t, err.Error(), grokChatReasoningUpstreamCutCode)
+	var failover *UpstreamFailoverError
+	require.False(t, errors.As(err, &failover))
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), `"reasoning_content":"…"`)
+	require.Contains(t, rec.Body.String(), grokChatReasoningUpstreamCutCode)
+	require.Contains(t, rec.Body.String(), grokChatReasoningUpstreamCutMsg)
+	require.Contains(t, rec.Body.String(), "data: [DONE]")
+	require.NotContains(t, rec.Body.String(), OpenAIUpstreamStreamReadErrorCode)
 }
 
 func TestHandleChatStreamingResponse_GrokWindowFuse(t *testing.T) {
