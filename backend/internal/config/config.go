@@ -966,11 +966,13 @@ type GatewayConfig struct {
 	// 用于网关未透传/改写 User-Agent 时的兼容兜底（默认关闭，避免影响其他客户端）。
 	ForceCodexCLI bool `mapstructure:"force_codex_cli"`
 	// DisableOpenAIClientLocalTimeRewrite: 关闭「把客户端注入的本地日期/时区改写成美西」。
-	// 默认开启改写：Codex `<environment_context>` 的 current_date / timezone / current_time，
-	// 以及 JSON 里的 current_date、IANA timezone、web_search user_location.timezone，
+	// 默认开启改写：仅 Codex `<environment_context>` 内的 XML 时钟
+	//（current_date / local_date / timezone / time_zone，以及 inner 为 HH:MM:SS 的 current_time），
+	// 以及 JSON 里的 current_date / current_time、IANA timezone、web_search user_location.timezone，
 	// 在出站给 OpenAI 之前固定替换为 America/Los_Angeles（含夏令时），
 	// 不用操作系统时区，也不用应用配置 timezone（默认 Asia/Shanghai）。
-	// 不改写用户正文里随口提到的日期。置 true 可回滚。
+	// 不改写用户正文里随口提到的日期，也不改写环境块外或带日期的历史 `<current_time>`。
+	// 置 true 可回滚。
 	// 取反义命名：零值（测试/未加载配置）必须落在「改写开启」这一侧。
 	DisableOpenAIClientLocalTimeRewrite bool `mapstructure:"disable_openai_client_local_time_rewrite"`
 	// DisableCodexIdentityEnforcement: 关闭「强制统一 Codex 出站身份」。上游 /backend-api/codex

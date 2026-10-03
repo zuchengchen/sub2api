@@ -22,11 +22,13 @@ var (
 	openAIOutboundTimezoneOnce sync.Once
 	openAIOutboundTimezoneLoc  *time.Location
 
+	openAILocalTimeEnvContextRe     = regexp.MustCompile(`(?s)<environment_context>.*?</environment_context>`)
 	openAILocalTimeCurrentDateTagRe = regexp.MustCompile(`(?s)<current_date>\s*[^<]*?</current_date>`)
 	openAILocalTimeTimezoneTagRe    = regexp.MustCompile(`(?s)<timezone>\s*[^<]*?</timezone>`)
-	openAILocalTimeCurrentTimeTagRe = regexp.MustCompile(`(?s)<current_time>\s*[^<]*?</current_time>`)
+	openAILocalTimeCurrentTimeTagRe = regexp.MustCompile(`(?s)<current_time>([^<]*)</current_time>`)
 	openAILocalTimeLocalDateTagRe   = regexp.MustCompile(`(?s)<local_date>\s*[^<]*?</local_date>`)
 	openAILocalTimeTimeZoneTagRe    = regexp.MustCompile(`(?s)<time_zone>\s*[^<]*?</time_zone>`)
+	openAILocalTimeHHMMSSRe         = regexp.MustCompile(`^\d{2}:\d{2}:\d{2}$`)
 
 	// 仅匹配未转义的 JSON 键，避免改写用户正文里作为字符串粘贴的 JSON。
 	openAILocalTimeJSONCurrentDateRe = regexp.MustCompile(`"current_date"\s*:\s*"[0-9]{4}-[0-9]{2}-[0-9]{2}"`)
@@ -97,15 +99,48 @@ func openAIOutboundTimezone() *time.Location {
 }
 
 func rewriteOpenAIClientLocalTimeTagsAndJSONKeys(body []byte, ctx openAILocalTimeContext) []byte {
-	out := body
+	out := openAILocalTimeEnvContextRe.ReplaceAllFunc(body, func(block []byte) []byte {
+		return rewriteOpenAILocalTimeXMLTagsInEnvContext(block, ctx)
+	})
+	out = openAILocalTimeJSONCurrentDateRe.ReplaceAll(out, []byte(`"current_date":"`+ctx.CurrentDate+`"`))
+	out = openAILocalTimeJSONCurrentTimeRe.ReplaceAll(out, []byte(`"current_time":"`+ctx.CurrentTime+`"`))
+	out = openAILocalTimeJSONTimezoneRe.ReplaceAll(out, []byte(`"timezone":"`+ctx.Timezone+`"`))
+	return out
+}
+
+func rewriteOpenAILocalTimeXMLTagsInEnvContext(block []byte, ctx openAILocalTimeContext) []byte {
+	out := block
 	out = openAILocalTimeCurrentDateTagRe.ReplaceAll(out, []byte("<current_date>"+ctx.CurrentDate+"</current_date>"))
 	out = openAILocalTimeLocalDateTagRe.ReplaceAll(out, []byte("<local_date>"+ctx.CurrentDate+"</local_date>"))
 	out = openAILocalTimeTimezoneTagRe.ReplaceAll(out, []byte("<timezone>"+ctx.Timezone+"</timezone>"))
 	out = openAILocalTimeTimeZoneTagRe.ReplaceAll(out, []byte("<time_zone>"+ctx.Timezone+"</time_zone>"))
-	out = openAILocalTimeCurrentTimeTagRe.ReplaceAll(out, []byte("<current_time>"+ctx.CurrentTime+"</current_time>"))
-	out = openAILocalTimeJSONCurrentDateRe.ReplaceAll(out, []byte(`"current_date":"`+ctx.CurrentDate+`"`))
-	out = openAILocalTimeJSONCurrentTimeRe.ReplaceAll(out, []byte(`"current_time":"`+ctx.CurrentTime+`"`))
-	out = openAILocalTimeJSONTimezoneRe.ReplaceAll(out, []byte(`"timezone":"`+ctx.Timezone+`"`))
+	out = openAILocalTimeCurrentTimeTagRe.ReplaceAllFunc(out, func(tag []byte) []byte {
+		return rewriteOpenAILocalTimeCurrentTimeTag(tag, ctx.CurrentTime)
+	})
+	return out
+}
+
+func rewriteOpenAILocalTimeCurrentTimeTag(tag []byte, currentTime string) []byte {
+	m := openAILocalTimeCurrentTimeTagRe.FindSubmatch(tag)
+	if len(m) != 2 {
+		return tag
+	}
+	inner := m[1]
+	trimmed := bytes.TrimSpace(inner)
+	if !openAILocalTimeHHMMSSRe.Match(trimmed) {
+		return tag
+	}
+	innerStart := bytes.Index(tag, inner)
+	trimmedOff := bytes.Index(inner, trimmed)
+	if innerStart < 0 || trimmedOff < 0 {
+		return tag
+	}
+	start := innerStart + trimmedOff
+	end := start + len(trimmed)
+	out := make([]byte, 0, start+len(currentTime)+len(tag)-end)
+	out = append(out, tag[:start]...)
+	out = append(out, currentTime...)
+	out = append(out, tag[end:]...)
 	return out
 }
 

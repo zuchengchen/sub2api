@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -90,7 +91,7 @@ func TestRewriteOpenAIClientLocalTimeIfEnabled_UsesPacificTime(t *testing.T) {
 	}
 
 	account := &Account{Platform: PlatformOpenAI}
-	body := []byte(`{"input":"<timezone>UTC</timezone>"}`)
+	body := []byte(`{"input":"<environment_context><timezone>UTC</timezone></environment_context>"}`)
 
 	enabled := &OpenAIGatewayService{}
 	got := enabled.rewriteOpenAIClientLocalTimeIfEnabled(account, body)
@@ -112,6 +113,42 @@ func TestRewriteOpenAIClientLocalTimeContext_EscapedJSONInUserTextUntouched(t *t
 	got, changed := rewriteOpenAIClientLocalTimeContextWith(body, ctx)
 	require.False(t, changed)
 	require.Equal(t, string(body), string(got))
+}
+
+func TestRewriteOpenAIClientLocalTimeContext_HistoricalWorkBuddyCurrentTimeUntouched(t *testing.T) {
+	ctx := pacificTestContext(t, 22)
+	historical := "<current_time>Friday, October 2, 2026 at 09:36:00 GMT+8</current_time>"
+	body := []byte(`{"input":[{"role":"user","content":"<system-reminder additional-data>` + historical + `</system-reminder>"},{"role":"user","content":"<environment_context><current_time>07:00:00</current_time></environment_context>"}]}`)
+	got, changed := rewriteOpenAIClientLocalTimeContextWith(body, ctx)
+	require.True(t, changed)
+	require.Contains(t, string(got), historical)
+	require.Contains(t, string(got), "<current_time>22:15:04</current_time>")
+	require.NotContains(t, string(got), "<current_time>07:00:00</current_time>")
+}
+
+func TestRewriteOpenAIClientLocalTimeContext_DatedCurrentTimeInsideEnvContextSkipped(t *testing.T) {
+	ctx := pacificTestContext(t, 22)
+	body := []byte(`{"input":"<environment_context><current_time>Friday, October 2, 2026 at 09:36:00 GMT+8</current_time></environment_context>"}`)
+	got, changed := rewriteOpenAIClientLocalTimeContextWith(body, ctx)
+	require.False(t, changed)
+	require.Equal(t, string(body), string(got))
+}
+
+func TestRewriteOpenAIClientLocalTimeContext_HistoricalPrefixStableAcrossTurns(t *testing.T) {
+	ctx1 := pacificTestContext(t, 10)
+	ctx2 := pacificTestContext(t, 22)
+	common := `{"input":[{"role":"user","content":"<system-reminder additional-data><current_time>Friday, October 2, 2026 at 09:36:00 GMT+8</current_time></system-reminder>"},{"role":"user","content":"first question"}`
+	body1 := []byte(common + `]}`)
+	body2 := []byte(common + `,{"role":"user","content":"<environment_context><current_time>07:00:00</current_time></environment_context>"}]}`)
+	got1, changed1 := rewriteOpenAIClientLocalTimeContextWith(body1, ctx1)
+	got2, changed2 := rewriteOpenAIClientLocalTimeContextWith(body2, ctx2)
+	require.False(t, changed1)
+	require.True(t, changed2)
+	prefix := len(common)
+	require.True(t, bytes.Equal(got1[:prefix], got2[:prefix]))
+	require.Equal(t, common, string(got2[:prefix]))
+	require.Contains(t, string(got2), "<current_time>22:15:04</current_time>")
+	require.NotContains(t, string(got2), "<current_time>07:00:00</current_time>")
 }
 
 func TestCurrentOpenAIOutboundLocalTimeContext_IsPacific(t *testing.T) {
