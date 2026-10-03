@@ -828,7 +828,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	clientDisconnected := false
 	clientOutputStarted := false
 	pendingSSE := make([]string, 0, 4)
-	refusalDetector := newOpenAIChatSilentRefusalDetector(len(requestBody))
+	refusalBodyLen := len(requestBody)
+	if account != nil && account.IsGrok() {
+		refusalBodyLen = 0
+	}
+	refusalDetector := newOpenAIChatSilentRefusalDetector(refusalBodyLen)
 	var streamFailoverErr *UpstreamFailoverError
 	var streamNonFailoverErr error
 	terminalEventType := ""
