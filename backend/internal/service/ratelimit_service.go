@@ -39,6 +39,12 @@ type RateLimitService struct {
 	// OpenAI Team 联动熔断的进程内去重：teamID → 去重窗口截止时间
 	openaiTeamLinkedMu     sync.Mutex
 	openaiTeamLinkedRecent map[string]time.Time
+
+	openai429RecoveryMu     sync.Mutex
+	openai429RecoveryStates map[int64]*openai429RecoveryState
+	openai429RecoverySlots  chan struct{}
+	openai429RecoveryAfter  func(time.Duration, func()) *time.Timer
+	openai429RecoveryProbe  openai429RecoveryProber
 }
 
 type AccountRuntimeBlocker interface {
@@ -84,10 +90,12 @@ const (
 // NewRateLimitService 创建RateLimitService实例
 func NewRateLimitService(accountRepo AccountRepository, usageRepo UsageLogRepository, cfg *config.Config, tempUnschedCache TempUnschedCache) *RateLimitService {
 	return &RateLimitService{
-		accountRepo:      accountRepo,
-		usageRepo:        usageRepo,
-		cfg:              cfg,
-		tempUnschedCache: tempUnschedCache,
+		accountRepo:             accountRepo,
+		usageRepo:               usageRepo,
+		cfg:                     cfg,
+		tempUnschedCache:        tempUnschedCache,
+		openai429RecoveryStates: map[int64]*openai429RecoveryState{},
+		openai429RecoverySlots:  make(chan struct{}, openai429RecoveryMaxConcurrency),
 	}
 }
 
@@ -535,7 +543,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		)
 		shouldDisable = s.handle403(ctx, account, upstreamMsg, responseBody)
 	case 429:
-		s.handle429(ctx, account, headers, responseBody)
+		s.handle429(ctx, account, headers, responseBody, requestedModel...)
 		shouldDisable = false
 	case 529:
 		// Handled after pool/custom-code policy gates above.
@@ -727,7 +735,7 @@ func (s *RateLimitService) handleCustomErrorCode(ctx context.Context, account *A
 
 // handle429 处理429限流错误
 // 解析响应头获取重置时间，标记账号为限流状态
-func (s *RateLimitService) handle429(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
+func (s *RateLimitService) handle429(ctx context.Context, account *Account, headers http.Header, responseBody []byte, requestedModel ...string) {
 	// OpenAI OAuth stays on the same account for the gateway's bounded retry
 	// window. Persisting a rate-limit reset on the first 429 would make the next
 	// retry ineligible and silently turn same-account recovery into a switch.
@@ -772,6 +780,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 				return
 			}
 			slog.Info("openai_account_rate_limited", "account_id", account.ID, "reset_at", *resetAt)
+			s.markOpenAIFormalCooldown(account, *resetAt, requestedModel...)
 			return
 		}
 	}
@@ -814,6 +823,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 					return
 				}
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
+				s.markOpenAIFormalCooldown(account, resetTime, requestedModel...)
 				return
 			}
 		}
@@ -832,7 +842,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		}
 
 		// 其他平台：没有重置时间，使用可配置的秒级默认回避，避免误伤长时间不可调度。
-		s.apply429FallbackRateLimit(ctx, account, "no_reset_time")
+		s.apply429FallbackRateLimit(ctx, account, "no_reset_time", requestedModel...)
 		return
 	}
 
@@ -840,7 +850,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	ts, err := strconv.ParseInt(resetTimestamp, 10, 64)
 	if err != nil {
 		slog.Warn("rate_limit_reset_parse_failed", "reset_timestamp", resetTimestamp, "error", err)
-		s.apply429FallbackRateLimit(ctx, account, "reset_parse_failed")
+		s.apply429FallbackRateLimit(ctx, account, "reset_parse_failed", requestedModel...)
 		return
 	}
 
@@ -863,7 +873,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	slog.Info("account_rate_limited", "account_id", account.ID, "reset_at", resetAt)
 }
 
-func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, account *Account, reason string) {
+func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, account *Account, reason string, requestedModel ...string) {
 	cooldown, enabled := s.get429FallbackCooldown(ctx, account)
 	if !enabled {
 		slog.Info("rate_limit_429_fallback_ignored", "account_id", account.ID, "platform", account.Platform, "reason", reason)
@@ -875,7 +885,9 @@ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, accoun
 	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+		return
 	}
+	s.markOpenAIFormalCooldown(account, resetAt, requestedModel...)
 }
 
 func (s *RateLimitService) get429FallbackCooldown(ctx context.Context, account *Account) (time.Duration, bool) {
@@ -1306,6 +1318,7 @@ func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, accou
 	if len(updates) == 0 {
 		return
 	}
+	mergeAccountExtra(account, updates)
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
 		slog.Warn("openai_codex_snapshot_persist_failed", "account_id", account.ID, "error", err)
 		return
