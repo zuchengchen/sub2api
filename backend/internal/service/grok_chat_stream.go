@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -15,11 +16,15 @@ const (
 	grokChatReasoningHeartbeatZWSP     = "\u200b"
 	grokChatReasoningDeadlineWarnText  = "Grok reasoning is approaching the 58m gateway deadline"
 	grokChatReasoningDeadlineAbortMsg  = "Grok reasoning exceeded 58m gateway deadline"
+	grokChatReasoningProgressPrefix    = "Grok encrypted reasoning still running ("
 	grokChatReasoningIdleTimeoutCode   = "grok_stream_idle"
 	grokChatReasoningDeadlineCode      = "grok_reasoning_deadline"
 	grokChatReasoningWindowCode        = "grok_reasoning_window"
 	grokChatReasoningWindowMsg         = "Grok reasoning filled the remaining context window"
+	grokChatReasoningUpstreamCutCode   = "grok_reasoning_upstream_cut"
+	grokChatReasoningUpstreamCutMsg    = "Grok encrypted reasoning was interrupted by upstream"
 	grokChatReasoningHeartbeatInterval = 15 * time.Second
+	grokChatReasoningProgressInterval  = time.Minute
 	grokChatWallClockWarn              = 3300 * time.Second
 	grokChatWallClockAbort             = 3500 * time.Second
 	grokChatReasoningWindowTokens      = 480000
@@ -54,7 +59,34 @@ func stripGrokSyntheticReasoningText(raw string) string {
 	cleaned := strings.ReplaceAll(raw, grokChatReasoningHeartbeatMark, "")
 	cleaned = strings.ReplaceAll(cleaned, grokChatReasoningHeartbeatZWSP, "")
 	cleaned = strings.ReplaceAll(cleaned, grokChatReasoningDeadlineWarnText, "")
+	cleaned = stripGrokReasoningProgressText(cleaned)
 	return strings.TrimSpace(cleaned)
+}
+
+func stripGrokReasoningProgressText(raw string) string {
+	for {
+		start := strings.Index(raw, grokChatReasoningProgressPrefix)
+		if start < 0 {
+			return raw
+		}
+		rest := raw[start+len(grokChatReasoningProgressPrefix):]
+		end := strings.Index(rest, ")")
+		if end < 0 {
+			return strings.TrimSpace(raw[:start] + rest)
+		}
+		raw = raw[:start] + rest[end+1:]
+	}
+}
+
+func grokChatReasoningProgressText(elapsed time.Duration) string {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	minutes := int(elapsed.Round(time.Minute) / time.Minute)
+	if minutes < 1 {
+		minutes = 1
+	}
+	return fmt.Sprintf("%s%dm elapsed)", grokChatReasoningProgressPrefix, minutes)
 }
 
 func grokChatReasoningHeartbeatChunk(state *apicompat.ResponsesEventToChatState, originalModel, text string) apicompat.ChatCompletionsChunk {
@@ -117,6 +149,8 @@ func grokChatAbortMessage(code, fallback string) string {
 		return grokChatReasoningWindowMsg
 	case grokChatReasoningIdleTimeoutCode:
 		return fallback
+	case grokChatReasoningUpstreamCutCode:
+		return grokChatReasoningUpstreamCutMsg
 	default:
 		if strings.TrimSpace(fallback) != "" {
 			return fallback
