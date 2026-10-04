@@ -304,6 +304,7 @@ func TestPrismBrowserInfrastructureFallsBackWithoutWriting(t *testing.T) {
 		{name: "bridge key", status: http.StatusUnauthorized, body: `{"error":{"type":"unauthorized"}}`},
 		{name: "path", status: http.StatusNotFound, body: `{"error":{"type":"not_found"}}`},
 		{name: "model entitlement", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"model_unavailable","message":"no sol"}}`},
+		{name: "encrypted history", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"unsupported_reasoning_history","message":"Encrypted reasoning cannot be replayed into Prism"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +329,50 @@ func TestPrismBrowserInfrastructureFallsBackWithoutWriting(t *testing.T) {
 	_, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(`{"model":"gpt-6.1-sol","input":"hi"}`), time.Now())
 	require.ErrorIs(t, err, errPrismBrowserHTTPFallback)
 	require.Empty(t, w.Body.String())
+}
+
+func TestPrismBrowserEncryptedReasoningFallsBackWithoutCallingAdapter(t *testing.T) {
+	serverHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverHits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, prismTerminal)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	cases := []string{
+		`{"model":"gpt-6.1-sol","input":[{"type":"reasoning","encrypted_content":"opaque"},{"role":"user","content":"go"}]}`,
+		`{"model":"gpt-6.1-sol","input":{"type":"reasoning","encrypted_content":"opaque"}}`,
+		`{"model":"gpt-6.1-sol","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":[{"type":"reasoning","encrypted_content":"opaque"},{"role":"user","content":"go"}]}`,
+	}
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			before := serverHits
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			_, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(body), time.Now())
+			require.ErrorIs(t, err, errPrismBrowserHTTPFallback)
+			require.Empty(t, w.Body.String())
+			require.False(t, IsPrismBrowserAttempt(c, account.ID))
+			require.Equal(t, before, serverHits)
+		})
+	}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	result, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(`{"model":"gpt-6.1-sol","include":["reasoning.encrypted_content"],"input":"hi"}`), time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, serverHits)
+}
+
+func TestPrismBrowserRequestHasEncryptedReasoning(t *testing.T) {
+	require.True(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"input":[{"type":"reasoning","encrypted_content":"gAAA"}]}`)))
+	require.True(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"input":{"type":"reasoning","encrypted_content":"gAAA"}}`)))
+	require.False(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"plan"}]}]}`)))
+	require.False(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"input":[{"type":"reasoning","encrypted_content":""}]}`)))
+	require.False(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"include":["reasoning.encrypted_content"],"input":"hi"}`)))
 }
 
 func TestPrismBrowserClientErrorsDoNotFallBack(t *testing.T) {
