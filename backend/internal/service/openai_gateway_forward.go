@@ -178,6 +178,13 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		tiboRun = s.newOpenAITiboRun(ctx, c, account, body, wsExecutionScope)
 		*tiboRunOut = tiboRun
 	}
+	if shouldAttemptPrismBrowser(s, c, account, gjson.GetBytes(body, "model").String()) {
+		result, prismErr := s.forwardPrismBrowser(ctx, c, account, body, startTime)
+		if prismErr == nil || !errors.Is(prismErr, errPrismBrowserHTTPFallback) {
+			return result, prismErr
+		}
+		ClearActualOpenAIUpstreamEndpoint(c)
+	}
 	bpsHTTPFallback := false
 	switch {
 	case tiboRun != nil && tiboRun.first() == openAITiboRouteBPS:
