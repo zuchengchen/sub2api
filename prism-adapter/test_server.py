@@ -174,9 +174,16 @@ class AdapterTests(unittest.TestCase):
     def test_unsupported_options_and_empty_text_do_not_dispatch(self):
         for fields in ({"additional_tools": [{"name": "shell"}]}, {"background": True},
                        {"max_output_tokens": 10}, {"input": "   "}, {"store": True},
-                       {"text": {"format": {"type": "json_schema"}}}):
+                       {"text": {"format": {"type": "json_schema"}}},
+                       {"text": {"format": {"type": "json_object"}}}):
             with self.assertRaises(adapter.AdapterError):
                 adapter.parse_prompt({"model": adapter.MODEL, "input": "hi", **fields})
+
+    def test_codex_plain_text_verbosity_is_accepted(self):
+        for text in ({"verbosity": "low"}, {"format": {"type": "text", "name": "answer"}},
+                     {"format": None, "verbosity": "medium"}):
+            self.assertEqual(adapter.parse_prompt({"model": adapter.MODEL, "input": "hi", "text": text}),
+                             ("[user]\nhi", False))
 
 
 PROJECT = "0123abcd-0000-4000-8000-00000000abcd"

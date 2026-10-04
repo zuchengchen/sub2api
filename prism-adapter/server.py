@@ -61,7 +61,12 @@ def parse_prompt(payload):
             or payload.get("include") not in (None, [], ['reasoning.encrypted_content']) or payload.get("service_tier")):
         raise AdapterError(422, "unsupported_request", "Requested response options are not supported")
     text_options = payload.get("text") or {}
-    if not isinstance(text_options, dict) or text_options.get("format", {"type": "text"}) != {"type": "text"}:
+    if not isinstance(text_options, dict):
+        raise AdapterError(422, "unsupported_request", "Only plain text output is supported")
+    text_format = text_options.get("format")
+    if text_format is None:
+        text_format = {"type": "text"}
+    if not isinstance(text_format, dict) or text_format.get("type", "text") != "text":
         raise AdapterError(422, "unsupported_request", "Only plain text output is supported")
     reasoning = payload.get("reasoning") or {}
     if (not isinstance(reasoning, dict) or not isinstance(reasoning.get("effort", "medium"), str)
