@@ -1027,6 +1027,8 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"openai_excel_bps_auto_disable_on_403",
 		"openai_excel_bps_models",
 		"openai_excel_bps_cache_creation_as_input",
+		"openai_prism_browser",
+		service.PrismBrowserModelsKey,
 		"codex_fingerprint_mode",
 		"codex_fingerprint_seed",
 		"codex_5h_used_percent",

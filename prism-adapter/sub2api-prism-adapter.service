@@ -1,0 +1,28 @@
+[Unit]
+Description=Sub2API Prism OAuth browser adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sub2api
+Group=sub2api
+WorkingDirectory=/opt/sub2api/prism-adapter
+Environment=HOME=/var/lib/sub2api-prism
+EnvironmentFile=/etc/sub2api-prism.env
+ExecStart=/opt/sub2api/prism-adapter/venv/bin/python /opt/sub2api/prism-adapter/server.py
+Restart=on-failure
+RestartSec=5
+MemoryMax=900M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=256
+TimeoutStopSec=10
+NoNewPrivileges=no
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/sub2api-prism
+
+[Install]
+WantedBy=multi-user.target
