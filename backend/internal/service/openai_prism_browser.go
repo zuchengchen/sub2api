@@ -280,7 +280,8 @@ func prismBrowserShouldHTTPFallback(err error, status int, body []byte) bool {
 	}
 	switch gjson.GetBytes(body, "error.type").String() {
 	case "prism_busy", "model_unavailable", "reasoning_unavailable", "model_catalog_unavailable",
-		"tools_disabled", "resource_pressure", "credential_rotation", "start_not_sent":
+		"tools_disabled", "resource_pressure", "credential_rotation", "start_not_sent",
+		"unsupported_reasoning_history":
 		return true
 	}
 	return false
@@ -297,6 +298,33 @@ func prismBrowserUnsupportedClientRequest(c *gin.Context, body []byte, requested
 		return "Prism adapter does not support images"
 	}
 	return ""
+}
+
+func prismBrowserRequestHasEncryptedReasoning(body []byte) bool {
+	input := gjson.GetBytes(body, "input")
+	if input.IsArray() {
+		for _, item := range input.Array() {
+			if prismBrowserItemHasEncryptedContent(item) {
+				return true
+			}
+		}
+		return false
+	}
+	if input.IsObject() {
+		return prismBrowserItemHasEncryptedContent(input)
+	}
+	return false
+}
+
+func prismBrowserItemHasEncryptedContent(item gjson.Result) bool {
+	raw := item.Get("encrypted_content")
+	if !raw.Exists() || raw.Type == gjson.Null {
+		return false
+	}
+	if raw.Type == gjson.String {
+		return strings.TrimSpace(raw.String()) != ""
+	}
+	return true
 }
 
 func prismBrowserRequestHasImages(body []byte) bool {
@@ -427,6 +455,9 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 	if reason := prismBrowserUnsupportedClientRequest(c, body, requestedModel); reason != "" {
 		fail(http.StatusUnprocessableEntity, "unsupported_request", reason)
 		return nil, errors.New(reason)
+	}
+	if prismBrowserRequestHasEncryptedReasoning(body) {
+		return fallback("encrypted_reasoning")
 	}
 	if requestedModel == "" {
 		fail(http.StatusBadRequest, "invalid_request_error", "model is required")
