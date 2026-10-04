@@ -305,6 +305,11 @@ func TestPrismBrowserInfrastructureFallsBackWithoutWriting(t *testing.T) {
 		{name: "path", status: http.StatusNotFound, body: `{"error":{"type":"not_found"}}`},
 		{name: "model entitlement", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"model_unavailable","message":"no sol"}}`},
 		{name: "encrypted history", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"unsupported_reasoning_history","message":"Encrypted reasoning cannot be replayed into Prism"}}`},
+		{name: "invalid tools", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"invalid_tools","message":"Tool description is invalid"}}`},
+		{name: "unknown tool", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"unknown_tool","message":"Tool is absent from the client catalog"}}`},
+		{name: "unsupported history item", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"unsupported_input","message":"Unsupported Responses item in tool history"}}`},
+		{name: "request too large", status: http.StatusRequestEntityTooLarge, body: `{"error":{"type":"request_too_large","message":"request body is empty or too large"}}`},
+		{name: "prompt too long", status: http.StatusBadRequest, body: `{"error":{"type":"invalid_request","message":"text input is empty or too long"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -413,6 +418,47 @@ func TestPrismBrowserRequestHasStructuredOutput(t *testing.T) {
 	require.False(t, prismBrowserRequestHasStructuredOutput([]byte(`{"input":"hi"}`)))
 }
 
+func TestPrismBrowserRemainingClientLimitsFallBackWithoutCallingAdapter(t *testing.T) {
+	serverHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverHits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, prismTerminal)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	longPrompt := strings.Repeat("x", prismBrowserMaxPromptChars+1)
+	longDesc := strings.Repeat("d", prismBrowserMaxToolChars+1)
+	cases := []string{
+		`{"model":"gpt-6.1-sol","input":[{"type":"message","content":[{"type":"input_image","image_url":"data:image/png;base64,aa"}]}]}`,
+		`{"model":"gpt-6.1-sol","input":` + `"` + longPrompt + `"` + `}`,
+		`{"model":"gpt-6.1-sol","input":"hi","tools":[{"type":"function","name":"lookup","description":` + `"` + longDesc + `"` + `,"parameters":{"type":"object"}}]}`,
+		`{"model":"gpt-6.1-sol","input":"hi","tools":[{"type":"function","name":"lookup","description":["not","text"],"parameters":{"type":"object"}}]}`,
+	}
+	for _, body := range cases {
+		t.Run(body[:min(len(body), 80)], func(t *testing.T) {
+			before := serverHits
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			_, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(body), time.Now())
+			require.ErrorIs(t, err, errPrismBrowserHTTPFallback)
+			require.Empty(t, w.Body.String())
+			require.False(t, IsPrismBrowserAttempt(c, account.ID))
+			require.Equal(t, before, serverHits)
+		})
+	}
+	oversized := []byte(`{"model":"gpt-6.1-sol","input":"` + strings.Repeat("y", prismBrowserMaxRequestBytes) + `"}`)
+	require.Greater(t, len(oversized), prismBrowserMaxRequestBytes)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_, err := s.forwardPrismBrowser(context.Background(), c, account, oversized, time.Now())
+	require.ErrorIs(t, err, errPrismBrowserHTTPFallback)
+	require.Empty(t, w.Body.String())
+	require.Equal(t, 0, serverHits)
+}
+
 func TestPrismBrowserRequestHasEncryptedReasoning(t *testing.T) {
 	require.True(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"input":[{"type":"reasoning","encrypted_content":"gAAA"}]}`)))
 	require.True(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"input":{"type":"reasoning","encrypted_content":"gAAA"}}`)))
@@ -438,7 +484,6 @@ func TestPrismBrowserClientErrorsDoNotFallBack(t *testing.T) {
 		{name: "adapter refusal", body: `{"model":"gpt-6.1-sol","input":"hi"}`},
 		{name: "compact path", path: "/v1/responses/compact", body: `{"model":"gpt-6.1-sol","input":"hi"}`},
 		{name: "compact spelling", body: `{"model":"gpt-6.1-sol-openai-compact","input":"hi"}`},
-		{name: "image", body: `{"model":"gpt-6.1-sol","input":[{"type":"message","content":[{"type":"input_image","image_url":"data:image/png;base64,aa"}]}]}`},
 		{name: "previous response", body: `{"model":"gpt-6.1-sol","input":"hi","previous_response_id":"resp_old"}`},
 	}
 	for _, tc := range cases {

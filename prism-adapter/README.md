@@ -6,12 +6,14 @@ fork enables Prism for every schedulable OpenAI OAuth account when
 `gateway.prism_browser.enabled` is true. Extra `openai_prism_browser: false`
 force-off a single account. No admin checkbox is required.
 
-`gpt-5.6-sol`, terra, luna, API Key, native WebSocket, compact, images, and
+`gpt-5.6-sol`, terra, luna, API Key, native WebSocket, compact, and
 `previous_response_id` stay on Codex / BPS / Cookie WS.
 
-Busy adapter, adapter down, timeout, and missing Prism 6.1-sol entitlement
-fall back to the same account's Tibo / BPS / Cookie WS / HTTP path. Compact,
-images, and `previous_response_id` return 422 with no fallback.
+Busy adapter, adapter down, timeout, missing Prism 6.1-sol entitlement,
+encrypted reasoning replay, structured output, images, oversized bodies,
+oversized prompts, and incompatible Codex tool history fall back to the same
+account's Tibo / BPS / Cookie WS / HTTP path. Compact and
+`previous_response_id` return 422 with no fallback.
 
 Successful turns estimate input+output tokens and bill the existing
 gpt-6.1-sol 2× official card (`X-Prism-Usage: estimated`).

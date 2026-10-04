@@ -23,6 +23,12 @@ import (
 
 const prismBrowserMaxResponseBytes = 2 << 20
 
+const prismBrowserMaxRequestBytes = 1 << 20
+
+const prismBrowserMaxPromptChars = 32000
+
+const prismBrowserMaxToolChars = 32000
+
 const prismBrowserAttemptsKey = "prism_browser_attempts"
 
 const prismBrowserUpstreamEndpoint = "/prism-adapter/v1/responses"
@@ -259,6 +265,8 @@ func prismBrowserForwardError(status int, body []byte) error {
 	case "tools_disabled", "unsupported_model", "unsupported_request", "unsupported_reasoning",
 		"unsupported_input", "unsupported_tool_model", "unsupported_tool", "invalid_tools",
 		"invalid_tool_choice", "invalid_tool_payload", "unsupported_reasoning_history",
+		"unknown_tool", "invalid_tool_call", "invalid_tool_result", "missing_tool_result",
+		"unsupported_tool_result", "conflicting_tools", "tool_call_too_large", "request_too_large",
 		"model_unavailable", "reasoning_unavailable", "model_catalog_unavailable",
 		"pending_turn", "prism_busy":
 		return fmt.Errorf("prism adapter returned HTTP %d (%s)", status, code)
@@ -278,11 +286,17 @@ func prismBrowserShouldHTTPFallback(err error, status int, body []byte) bool {
 	if prismBrowserAdapterMisconfigured(status) {
 		return true
 	}
-	switch gjson.GetBytes(body, "error.type").String() {
+	code := gjson.GetBytes(body, "error.type").String()
+	switch code {
 	case "prism_busy", "model_unavailable", "reasoning_unavailable", "model_catalog_unavailable",
 		"tools_disabled", "resource_pressure", "credential_rotation", "start_not_sent",
-		"unsupported_reasoning_history":
+		"unsupported_reasoning_history", "unsupported_input", "unsupported_tool",
+		"invalid_tools", "unknown_tool", "invalid_tool_call", "invalid_tool_result",
+		"missing_tool_result", "unsupported_tool_result", "conflicting_tools",
+		"tool_call_too_large", "request_too_large":
 		return true
+	case "invalid_request":
+		return strings.Contains(strings.ToLower(gjson.GetBytes(body, "error.message").String()), "too long")
 	}
 	return false
 }
@@ -293,9 +307,6 @@ func prismBrowserUnsupportedClientRequest(c *gin.Context, body []byte, requested
 	}
 	if strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) != "" {
 		return "Prism adapter does not support previous_response_id"
-	}
-	if prismBrowserRequestHasImages(body) {
-		return "Prism adapter does not support images"
 	}
 	return ""
 }
@@ -341,6 +352,96 @@ func prismBrowserItemHasEncryptedContent(item gjson.Result) bool {
 		return strings.TrimSpace(raw.String()) != ""
 	}
 	return true
+}
+
+func prismBrowserRequestTooLarge(body []byte) bool {
+	return len(body) > prismBrowserMaxRequestBytes
+}
+
+func prismBrowserPromptTooLong(body []byte) bool {
+	return prismBrowserEstimatedPromptChars(body) > prismBrowserMaxPromptChars
+}
+
+func prismBrowserEstimatedPromptChars(body []byte) int {
+	var parts []string
+	if instructions := strings.TrimSpace(gjson.GetBytes(body, "instructions").String()); instructions != "" {
+		parts = append(parts, "[instructions]\n"+instructions)
+	}
+	input := gjson.GetBytes(body, "input")
+	switch {
+	case input.Type == gjson.String:
+		if text := strings.TrimSpace(input.String()); text != "" {
+			parts = append(parts, "[user]\n"+text)
+		}
+	case input.IsArray():
+		for _, item := range input.Array() {
+			if text := prismBrowserInputItemText(item); text != "" {
+				role := strings.TrimSpace(item.Get("role").String())
+				if role == "" {
+					role = "user"
+				}
+				parts = append(parts, "["+role+"]\n"+text)
+			}
+		}
+	case input.IsObject():
+		if text := prismBrowserInputItemText(input); text != "" {
+			role := strings.TrimSpace(input.Get("role").String())
+			if role == "" {
+				role = "user"
+			}
+			parts = append(parts, "["+role+"]\n"+text)
+		}
+	}
+	n := 0
+	for i, part := range parts {
+		if i > 0 {
+			n += 2
+		}
+		n += len(part)
+	}
+	return n
+}
+
+func prismBrowserInputItemText(item gjson.Result) string {
+	content := item.Get("content")
+	if content.Type == gjson.String {
+		return content.String()
+	}
+	if !content.IsArray() {
+		return strings.TrimSpace(item.Get("text").String())
+	}
+	var texts []string
+	for _, part := range content.Array() {
+		if text := part.Get("text"); text.Type == gjson.String {
+			texts = append(texts, text.String())
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
+func prismBrowserToolCatalogUnsupported(body []byte) bool {
+	for _, tool := range gjson.GetBytes(body, "tools").Array() {
+		if prismBrowserToolDefinitionUnsupported(tool) {
+			return true
+		}
+	}
+	for _, tool := range gjson.GetBytes(body, "additional_tools").Array() {
+		if prismBrowserToolDefinitionUnsupported(tool) {
+			return true
+		}
+	}
+	return false
+}
+
+func prismBrowserToolDefinitionUnsupported(tool gjson.Result) bool {
+	desc := tool.Get("description")
+	if desc.Exists() && desc.Type != gjson.Null && desc.Type != gjson.String {
+		return true
+	}
+	if desc.Type == gjson.String && len(desc.String()) > prismBrowserMaxToolChars {
+		return true
+	}
+	return false
 }
 
 func prismBrowserRequestHasImages(body []byte) bool {
@@ -477,6 +578,18 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 	}
 	if prismBrowserRequestHasStructuredOutput(body) {
 		return fallback("structured_output")
+	}
+	if prismBrowserRequestHasImages(body) {
+		return fallback("images")
+	}
+	if prismBrowserRequestTooLarge(body) {
+		return fallback("request_too_large")
+	}
+	if prismBrowserPromptTooLong(body) {
+		return fallback("prompt_too_long")
+	}
+	if prismBrowserToolCatalogUnsupported(body) {
+		return fallback("invalid_tools")
 	}
 	if requestedModel == "" {
 		fail(http.StatusBadRequest, "invalid_request_error", "model is required")
