@@ -367,6 +367,52 @@ func TestPrismBrowserEncryptedReasoningFallsBackWithoutCallingAdapter(t *testing
 	require.Equal(t, 1, serverHits)
 }
 
+func TestPrismBrowserStructuredOutputFallsBackWithoutCallingAdapter(t *testing.T) {
+	serverHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverHits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, prismTerminal)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	cases := []string{
+		`{"model":"gpt-6.1-sol","input":"hi","text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}}`,
+		`{"model":"gpt-6.1-sol","input":"hi","text":{"format":{"type":"json_object"}}}`,
+		`{"model":"gpt-6.1-sol","input":"hi","response_format":{"type":"json_schema"}}`,
+	}
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			before := serverHits
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			_, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(body), time.Now())
+			require.ErrorIs(t, err, errPrismBrowserHTTPFallback)
+			require.Empty(t, w.Body.String())
+			require.False(t, IsPrismBrowserAttempt(c, account.ID))
+			require.Equal(t, before, serverHits)
+		})
+	}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	result, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(`{"model":"gpt-6.1-sol","input":"hi","text":{"verbosity":"low","format":{"type":"text"}}}`), time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, serverHits)
+}
+
+func TestPrismBrowserRequestHasStructuredOutput(t *testing.T) {
+	require.True(t, prismBrowserRequestHasStructuredOutput([]byte(`{"text":{"format":{"type":"json_schema"}}}`)))
+	require.True(t, prismBrowserRequestHasStructuredOutput([]byte(`{"text":{"format":{"type":"json_object"}}}`)))
+	require.True(t, prismBrowserRequestHasStructuredOutput([]byte(`{"response_format":{"type":"json_schema"}}`)))
+	require.False(t, prismBrowserRequestHasStructuredOutput([]byte(`{"text":{"verbosity":"low"}}`)))
+	require.False(t, prismBrowserRequestHasStructuredOutput([]byte(`{"text":{"format":{"type":"text"}}}`)))
+	require.False(t, prismBrowserRequestHasStructuredOutput([]byte(`{"text":{"format":null}}`)))
+	require.False(t, prismBrowserRequestHasStructuredOutput([]byte(`{"input":"hi"}`)))
+}
+
 func TestPrismBrowserRequestHasEncryptedReasoning(t *testing.T) {
 	require.True(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"input":[{"type":"reasoning","encrypted_content":"gAAA"}]}`)))
 	require.True(t, prismBrowserRequestHasEncryptedReasoning([]byte(`{"input":{"type":"reasoning","encrypted_content":"gAAA"}}`)))

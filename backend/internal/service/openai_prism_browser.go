@@ -300,6 +300,22 @@ func prismBrowserUnsupportedClientRequest(c *gin.Context, body []byte, requested
 	return ""
 }
 
+func prismBrowserRequestHasStructuredOutput(body []byte) bool {
+	return prismBrowserFormatRequiresStructuredOutput(gjson.GetBytes(body, "text.format")) ||
+		prismBrowserFormatRequiresStructuredOutput(gjson.GetBytes(body, "response_format"))
+}
+
+func prismBrowserFormatRequiresStructuredOutput(format gjson.Result) bool {
+	if !format.Exists() || format.Type == gjson.Null {
+		return false
+	}
+	if !format.IsObject() {
+		return true
+	}
+	kind := strings.TrimSpace(format.Get("type").String())
+	return kind != "" && !strings.EqualFold(kind, "text")
+}
+
 func prismBrowserRequestHasEncryptedReasoning(body []byte) bool {
 	input := gjson.GetBytes(body, "input")
 	if input.IsArray() {
@@ -458,6 +474,9 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 	}
 	if prismBrowserRequestHasEncryptedReasoning(body) {
 		return fallback("encrypted_reasoning")
+	}
+	if prismBrowserRequestHasStructuredOutput(body) {
+		return fallback("structured_output")
 	}
 	if requestedModel == "" {
 		fail(http.StatusBadRequest, "invalid_request_error", "model is required")
