@@ -551,35 +551,24 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown:     false,
 	}, 2.0))
 
-	// GPT-6 Sol/Luna official rates, 2026-09-22.
-	s.fallbackPrices["gpt-6.1-sol"] = &ModelPricing{
-		InputPricePerToken:                 2e-6,
-		InputPricePerTokenPriority:         4e-6,
-		OutputPricePerToken:                10e-6,
-		OutputPricePerTokenPriority:        20e-6,
-		CacheCreationPricePerToken:         2.5e-6,
-		CacheCreationPricePerTokenPriority: 5e-6,
-		CacheReadPricePerToken:             0.1e-6,
-		CacheReadPricePerTokenPriority:     0.2e-6,
-		CacheCreationPriceExplicit:         true,
-		LongContextInputThreshold:          272_000,
-		LongContextInputMultiplier:         2,
-		LongContextOutputMultiplier:        1.5,
-	}
-	s.fallbackPrices["gpt-6-sol"] = &ModelPricing{
-		InputPricePerToken:                 2e-6,
-		InputPricePerTokenPriority:         4e-6,
-		OutputPricePerToken:                10e-6,
-		OutputPricePerTokenPriority:        20e-6,
-		CacheCreationPricePerToken:         2.5e-6,
-		CacheCreationPricePerTokenPriority: 5e-6,
-		CacheReadPricePerToken:             0.2e-6,
-		CacheReadPricePerTokenPriority:     0.4e-6,
-		CacheCreationPriceExplicit:         true,
-		LongContextInputThreshold:          272_000,
-		LongContextInputMultiplier:         2,
-		LongContextOutputMultiplier:        1.5,
-	}
+	// OpenAI GPT-6.1 Sol：以官方 API 价的 2 倍为基价。缓存写入仍为输入价的 1.25 倍。
+	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
+	// Source: https://developers.openai.com/api/docs/models/gpt-6.1-sol
+	s.fallbackPrices["gpt-6.1-sol"] = applyOpenAIAPILongContextLadder("gpt-6.1-sol", pricingWithPriorityMultiplier(&ModelPricing{
+		InputPricePerToken:         gpt61SolOfficialInputPricePerToken * gpt6SolAPIBillingMultiplier,
+		OutputPricePerToken:        gpt61SolOfficialOutputPricePerToken * gpt6SolAPIBillingMultiplier,
+		CacheCreationPricePerToken: gpt61SolOfficialCacheCreationPricePerToken * gpt6SolAPIBillingMultiplier,
+		CacheReadPricePerToken:     gpt61SolOfficialCacheReadPricePerToken * gpt6SolAPIBillingMultiplier,
+	}, 2.0))
+	// OpenAI GPT-6 Sol：以官方 API 价的 2 倍为基价。缓存写入仍为输入价的 1.25 倍。
+	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
+	// Source: https://developers.openai.com/api/docs/models/gpt-6-sol
+	s.fallbackPrices["gpt-6-sol"] = applyOpenAIAPILongContextLadder("gpt-6-sol", pricingWithPriorityMultiplier(&ModelPricing{
+		InputPricePerToken:         gpt6SolOfficialInputPricePerToken * gpt6SolAPIBillingMultiplier,
+		OutputPricePerToken:        gpt6SolOfficialOutputPricePerToken * gpt6SolAPIBillingMultiplier,
+		CacheCreationPricePerToken: gpt6SolOfficialCacheCreationPricePerToken * gpt6SolAPIBillingMultiplier,
+		CacheReadPricePerToken:     gpt6SolOfficialCacheReadPricePerToken * gpt6SolAPIBillingMultiplier,
+	}, 2.0))
 	// OpenAI GPT-5.6 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
 	s.fallbackPrices["gpt-5.6-sol"] = applyOpenAIAPILongContextLadder("gpt-5.6-sol", &ModelPricing{
 		InputPricePerToken:                 5e-6,
@@ -1897,6 +1886,19 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		applyGPT56LunaAPIBillingRates(&cloned)
 		pricing = &cloned
 	}
+	// 目录里的 gpt-6.1-sol / gpt-6-sol 是官方 API 价。默认价卡强制改写成 2 倍官价；
+	// 分组/渠道自定义定价（forceDeepSeekRates=false）保持运营者配置。
+	if forceDeepSeekRates && (openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(model)) {
+		cloned := *pricing
+		applyGPT61SolAPIBillingRates(&cloned)
+		pricing = &cloned
+	}
+	if forceDeepSeekRates && (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT6SolOrLunaModelSpelling(model)) &&
+		!isOpenAIGPT6LunaModel(normalized) && !isOpenAIGPT6LunaModel(model) {
+		cloned := *pricing
+		applyGPT6SolAPIBillingRates(&cloned)
+		pricing = &cloned
+	}
 	usesCacheWritePremium := isOpenAIGPT56Model(normalized) || openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized)
 	needsCacheCreationPolicy := usesCacheWritePremium && !pricing.CacheCreationPriceExplicit && (pricing.CacheCreationPricePerToken <= 0 ||
 		(pricing.InputPricePerTokenPriority > 0 && pricing.CacheCreationPricePerTokenPriority <= 0))
@@ -1966,6 +1968,17 @@ const (
 	gpt56LunaOfficialCacheCreationPricePerToken = 0.25e-6
 	gpt56LunaOfficialCacheReadPricePerToken     = 0.02e-6
 	gpt56LunaAPIBillingMultiplier               = 2.0
+
+	gpt61SolOfficialInputPricePerToken         = 2e-6
+	gpt61SolOfficialOutputPricePerToken        = 10e-6
+	gpt61SolOfficialCacheCreationPricePerToken = 2.5e-6
+	gpt61SolOfficialCacheReadPricePerToken     = 0.1e-6
+
+	gpt6SolOfficialInputPricePerToken         = 2e-6
+	gpt6SolOfficialOutputPricePerToken        = 10e-6
+	gpt6SolOfficialCacheCreationPricePerToken = 2.5e-6
+	gpt6SolOfficialCacheReadPricePerToken     = 0.2e-6
+	gpt6SolAPIBillingMultiplier               = 2.0
 )
 
 func applyGPT6AstraAPIBillingRates(pricing *ModelPricing) {
@@ -2004,9 +2017,45 @@ func applyGPT56LunaAPIBillingRates(pricing *ModelPricing) {
 	}
 }
 
+func applyGPT61SolAPIBillingRates(pricing *ModelPricing) {
+	if pricing == nil {
+		return
+	}
+	m := gpt6SolAPIBillingMultiplier
+	pricing.InputPricePerToken = gpt61SolOfficialInputPricePerToken * m
+	pricing.OutputPricePerToken = gpt61SolOfficialOutputPricePerToken * m
+	pricing.CacheCreationPricePerToken = gpt61SolOfficialCacheCreationPricePerToken * m
+	pricing.CacheReadPricePerToken = gpt61SolOfficialCacheReadPricePerToken * m
+	// 2× 官方价是基价；目录未给出阶梯时补齐 API 272K 阶梯，已有阈值则保留。
+	if pricing.LongContextInputThreshold <= 0 {
+		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
+		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
+		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
+		pricing.LongContextThresholdInclusive = false
+	}
+}
+
+func applyGPT6SolAPIBillingRates(pricing *ModelPricing) {
+	if pricing == nil {
+		return
+	}
+	m := gpt6SolAPIBillingMultiplier
+	pricing.InputPricePerToken = gpt6SolOfficialInputPricePerToken * m
+	pricing.OutputPricePerToken = gpt6SolOfficialOutputPricePerToken * m
+	pricing.CacheCreationPricePerToken = gpt6SolOfficialCacheCreationPricePerToken * m
+	pricing.CacheReadPricePerToken = gpt6SolOfficialCacheReadPricePerToken * m
+	// 2× 官方价是基价；目录未给出阶梯时补齐 API 272K 阶梯，已有阈值则保留。
+	if pricing.LongContextInputThreshold <= 0 {
+		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
+		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
+		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
+		pricing.LongContextThresholdInclusive = false
+	}
+}
+
 func openAIModelHasAPILongContextLadder(normalized string) bool {
 	switch normalized {
-	case "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+	case "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 		"gpt-5.5", "gpt-5.5-pro", "gpt-5.4":
 		return true
 	default:
