@@ -290,7 +290,7 @@ func prismBrowserShouldHTTPFallback(err error, status int, body []byte) bool {
 	switch code {
 	case "prism_busy", "model_unavailable", "reasoning_unavailable", "model_catalog_unavailable",
 		"tools_disabled", "resource_pressure", "credential_rotation", "start_not_sent",
-		"unsupported_reasoning_history", "unsupported_input", "unsupported_tool",
+		"unsupported_reasoning", "unsupported_reasoning_history", "unsupported_input", "unsupported_tool",
 		"invalid_tools", "unknown_tool", "invalid_tool_call", "invalid_tool_result",
 		"missing_tool_result", "unsupported_tool_result", "conflicting_tools",
 		"tool_call_too_large", "request_too_large":
@@ -479,6 +479,17 @@ func prismBrowserFoldEffort(raw string) string {
 	}
 }
 
+func prismBrowserFoldSummary(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "none", "auto":
+		return strings.ToLower(strings.TrimSpace(raw))
+	case "concise", "detailed":
+		return "auto"
+	default:
+		return "auto"
+	}
+}
+
 func prismBrowserPrepareAdapterBody(account *Account, body []byte) ([]byte, string, string, error) {
 	original := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	mapped := original
@@ -504,6 +515,18 @@ func prismBrowserPrepareAdapterBody(account *Account, body []byte) ([]byte, stri
 	prepared, err = sjson.SetBytes(prepared, "reasoning.effort", effort)
 	if err != nil {
 		return nil, original, "", err
+	}
+	summary := gjson.GetBytes(prepared, "reasoning.summary")
+	if summary.Exists() && summary.Type != gjson.Null {
+		folded := prismBrowserFoldSummary(summary.String())
+		if folded == "" {
+			prepared, err = sjson.DeleteBytes(prepared, "reasoning.summary")
+		} else {
+			prepared, err = sjson.SetBytes(prepared, "reasoning.summary", folded)
+		}
+		if err != nil {
+			return nil, original, "", err
+		}
 	}
 	return prepared, original, canonical, nil
 }

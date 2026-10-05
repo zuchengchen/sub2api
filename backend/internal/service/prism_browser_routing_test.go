@@ -305,6 +305,7 @@ func TestPrismBrowserInfrastructureFallsBackWithoutWriting(t *testing.T) {
 		{name: "path", status: http.StatusNotFound, body: `{"error":{"type":"not_found"}}`},
 		{name: "model entitlement", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"model_unavailable","message":"no sol"}}`},
 		{name: "encrypted history", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"unsupported_reasoning_history","message":"Encrypted reasoning cannot be replayed into Prism"}}`},
+		{name: "unsupported reasoning", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"unsupported_reasoning","message":"Unsupported Prism reasoning effort"}}`},
 		{name: "invalid tools", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"invalid_tools","message":"Tool description is invalid"}}`},
 		{name: "unknown tool", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"unknown_tool","message":"Tool is absent from the client catalog"}}`},
 		{name: "unsupported history item", status: http.StatusUnprocessableEntity, body: `{"error":{"type":"unsupported_input","message":"Unsupported Responses item in tool history"}}`},
@@ -406,6 +407,42 @@ func TestPrismBrowserStructuredOutputFallsBackWithoutCallingAdapter(t *testing.T
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 1, serverHits)
+}
+
+func TestPrismBrowserCodexSummaryStylesReachAdapterAsAuto(t *testing.T) {
+	got := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		got <- gjson.GetBytes(raw, "reasoning.summary").String()
+		require.Equal(t, "high", gjson.GetBytes(raw, "reasoning.effort").String())
+		_, _ = io.WriteString(w, prismTerminal)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	for _, summary := range []string{"concise", "detailed", "auto", "none"} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		body := `{"model":"gpt-6.1-sol","input":"hi","reasoning":{"effort":"high","summary":"` + summary + `"}}`
+		result, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(body), time.Now())
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		want := summary
+		if summary == "concise" || summary == "detailed" {
+			want = "auto"
+		}
+		require.Equal(t, want, <-got)
+	}
+}
+
+func TestPrismBrowserFoldSummary(t *testing.T) {
+	require.Equal(t, "auto", prismBrowserFoldSummary("concise"))
+	require.Equal(t, "auto", prismBrowserFoldSummary("Detailed"))
+	require.Equal(t, "auto", prismBrowserFoldSummary("auto"))
+	require.Equal(t, "none", prismBrowserFoldSummary("none"))
+	require.Equal(t, "", prismBrowserFoldSummary(""))
+	require.Equal(t, "auto", prismBrowserFoldSummary("verbose"))
 }
 
 func TestPrismBrowserRequestHasStructuredOutput(t *testing.T) {
