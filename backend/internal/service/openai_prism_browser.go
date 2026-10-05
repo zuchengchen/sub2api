@@ -531,6 +531,25 @@ func prismBrowserPrepareAdapterBody(account *Account, body []byte) ([]byte, stri
 	return prepared, original, canonical, nil
 }
 
+func prismBrowserCompletedResponse(body []byte, stream bool) []byte {
+	if !stream {
+		return body
+	}
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if gjson.GetBytes(data, "type").String() == "response.completed" {
+			raw := strings.TrimSpace(gjson.GetBytes(data, "response").Raw)
+			if raw != "" {
+				return []byte(raw)
+			}
+		}
+	}
+	return nil
+}
+
 func prismBrowserTerminalOutputText(response []byte, stream bool) string {
 	terminal := response
 	if stream {
@@ -562,39 +581,55 @@ func prismBrowserTerminalOutputText(response []byte, stream bool) string {
 	return b.String()
 }
 
-func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.Context, account *Account, body []byte, started time.Time) (*OpenAIForwardResult, error) {
+type prismBrowserExecuteResult struct {
+	Prepared      []byte
+	OriginalModel string
+	UpstreamModel string
+	Stream        bool
+	Body          []byte
+	Headers       http.Header
+	ResponseID    string
+}
+
+type prismBrowserClientError struct {
+	Status      int
+	Code        string
+	Message     string
+	Raw         []byte
+	AdapterHTTP bool
+}
+
+func (e *prismBrowserClientError) Error() string {
+	if e == nil {
+		return "prism adapter client error"
+	}
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	if strings.TrimSpace(e.Code) != "" {
+		return e.Code
+	}
+	return fmt.Sprintf("prism adapter returned HTTP %d", e.Status)
+}
+
+func (s *OpenAIGatewayService) executePrismBrowser(ctx context.Context, c *gin.Context, account *Account, body []byte) (*prismBrowserExecuteResult, error) {
 	MarkPrismBrowserAttempt(c, account.ID)
-	defer func() {
-		if c.Writer.Written() {
-			MarkResponseCommitted(c)
-		}
-	}()
-	writeError := func(status int, raw []byte) {
-		committed := StopOpenAICompactSSEKeepaliveCommitted(c)
-		if committed || c.Writer.Written() {
-			code := gjson.GetBytes(raw, "error.type").String()
-			message := gjson.GetBytes(raw, "error.message").String()
-			writeOpenAICompactSSEFailureMessage(c, status, code, message)
-			return
-		}
-		c.Data(status, "application/json", raw)
-	}
-	fail := func(status int, code, message string) {
-		raw, _ := json.Marshal(gin.H{"error": gin.H{"type": code, "message": message}})
-		writeError(status, raw)
-	}
-	fallback := func(code string) (*OpenAIForwardResult, error) {
+	fallback := func(code string) (*prismBrowserExecuteResult, error) {
 		ClearPrismBrowserAttempt(c, account.ID)
-		ClearActualOpenAIUpstreamEndpoint(c)
 		return nil, fmt.Errorf("%w: %s", errPrismBrowserHTTPFallback, code)
+	}
+	clientErr := func(status int, code, message string, raw []byte) (*prismBrowserExecuteResult, error) {
+		if len(raw) == 0 {
+			raw, _ = json.Marshal(gin.H{"error": gin.H{"type": code, "message": message}})
+		}
+		return nil, &prismBrowserClientError{Status: status, Code: code, Message: message, Raw: raw}
 	}
 	if !accountUsesPrismBrowser(account, s.cfg) {
 		return fallback("prism_disabled")
 	}
 	requestedModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	if reason := prismBrowserUnsupportedClientRequest(c, body, requestedModel); reason != "" {
-		fail(http.StatusUnprocessableEntity, "unsupported_request", reason)
-		return nil, errors.New(reason)
+		return clientErr(http.StatusUnprocessableEntity, "unsupported_request", reason, nil)
 	}
 	if prismBrowserRequestHasEncryptedReasoning(body) {
 		return fallback("encrypted_reasoning")
@@ -615,21 +650,18 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 		return fallback("invalid_tools")
 	}
 	if requestedModel == "" {
-		fail(http.StatusBadRequest, "invalid_request_error", "model is required")
-		return nil, errors.New("prism adapter model is required")
+		return clientErr(http.StatusBadRequest, "invalid_request_error", "model is required", nil)
 	}
 	if prismBrowserCanonicalModel(account.GetMappedModel(requestedModel)) != "gpt-6.1-sol" && !prismBrowserCompactSpelling(requestedModel) {
 		return fallback("unsupported_model")
 	}
 	prepared, originalModel, upstreamModel, err := prismBrowserPrepareAdapterBody(account, body)
 	if err != nil {
-		fail(http.StatusBadRequest, "invalid_request_error", "invalid Prism request")
-		return nil, err
+		return clientErr(http.StatusBadRequest, "invalid_request_error", "invalid Prism request", nil)
 	}
 	sessionID, err := prismBrowserSessionID(c, account.ID, prepared)
 	if err != nil {
-		fail(http.StatusBadRequest, "invalid_request_error", err.Error())
-		return nil, err
+		return clientErr(http.StatusBadRequest, "invalid_request_error", err.Error(), nil)
 	}
 	stashOpenAIUsageEstimateRequestBody(c, prepared)
 	stream := gjson.GetBytes(prepared, "stream").Bool()
@@ -638,45 +670,102 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 		return fallback("prism_unavailable")
 	}
 	if err != nil {
-		fail(http.StatusBadGateway, "prism_unavailable", "Prism adapter unavailable")
-		return nil, err
+		return clientErr(http.StatusBadGateway, "prism_unavailable", "Prism adapter unavailable", nil)
 	}
 	if status != http.StatusOK {
-		writeError(status, responseBody)
-		return nil, prismBrowserForwardError(status, responseBody)
+		return nil, &prismBrowserClientError{
+			Status:      status,
+			Code:        gjson.GetBytes(responseBody, "error.type").String(),
+			Message:     gjson.GetBytes(responseBody, "error.message").String(),
+			Raw:         responseBody,
+			AdapterHTTP: true,
+		}
 	}
 	responseID, err := prismBrowserTerminal(responseBody, upstreamModel, stream)
 	if err != nil {
-		fail(http.StatusBadGateway, "invalid_prism_response", "Prism adapter returned no valid terminal response")
-		return nil, err
+		return clientErr(http.StatusBadGateway, "invalid_prism_response", "Prism adapter returned no valid terminal response", nil)
 	}
 	if err := prismBrowserValidateToolCatalog(prepared, responseBody, stream); err != nil {
-		fail(http.StatusBadGateway, "invalid_prism_response", "Prism adapter returned an undeclared client tool")
+		return clientErr(http.StatusBadGateway, "invalid_prism_response", "Prism adapter returned an undeclared client tool", nil)
+	}
+	return &prismBrowserExecuteResult{
+		Prepared:      prepared,
+		OriginalModel: originalModel,
+		UpstreamModel: upstreamModel,
+		Stream:        stream,
+		Body:          responseBody,
+		Headers:       upstreamHeaders,
+		ResponseID:    responseID,
+	}, nil
+}
+
+func writePrismBrowserResponsesError(c *gin.Context, clientErr *prismBrowserClientError) {
+	if clientErr == nil {
+		return
+	}
+	raw := clientErr.Raw
+	if len(raw) == 0 {
+		raw, _ = json.Marshal(gin.H{"error": gin.H{"type": clientErr.Code, "message": clientErr.Message}})
+	}
+	committed := StopOpenAICompactSSEKeepaliveCommitted(c)
+	if committed || c.Writer.Written() {
+		code := gjson.GetBytes(raw, "error.type").String()
+		message := gjson.GetBytes(raw, "error.message").String()
+		writeOpenAICompactSSEFailureMessage(c, clientErr.Status, code, message)
+		return
+	}
+	status := clientErr.Status
+	if status == 0 {
+		status = http.StatusBadGateway
+	}
+	c.Data(status, "application/json", raw)
+}
+
+func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.Context, account *Account, body []byte, started time.Time) (*OpenAIForwardResult, error) {
+	defer func() {
+		if c.Writer.Written() {
+			MarkResponseCommitted(c)
+		}
+	}()
+	executed, err := s.executePrismBrowser(ctx, c, account, body)
+	if err != nil {
+		if errors.Is(err, errPrismBrowserHTTPFallback) {
+			ClearActualOpenAIUpstreamEndpoint(c)
+			return nil, err
+		}
+		var clientErr *prismBrowserClientError
+		if errors.As(err, &clientErr) {
+			writePrismBrowserResponsesError(c, clientErr)
+			if clientErr.AdapterHTTP {
+				return nil, prismBrowserForwardError(clientErr.Status, clientErr.Raw)
+			}
+			return nil, err
+		}
 		return nil, err
 	}
 	contentType := "application/json"
-	if stream {
+	if executed.Stream {
 		contentType = "text/event-stream"
 	}
 	SetActualOpenAIUpstreamEndpoint(c, prismBrowserUpstreamEndpoint)
 	c.Header("X-Prism-Usage", "estimated")
-	c.Data(http.StatusOK, contentType, responseBody)
+	c.Data(http.StatusOK, contentType, executed.Body)
 	result := &OpenAIForwardResult{
-		RequestID:        responseID,
-		ResponseID:       responseID,
-		UpstreamHeaders:  upstreamHeaders,
-		Model:            originalModel,
-		UpstreamModel:    upstreamModel,
-		Stream:           stream,
+		RequestID:        executed.ResponseID,
+		ResponseID:       executed.ResponseID,
+		UpstreamHeaders:  executed.Headers,
+		Model:            executed.OriginalModel,
+		UpstreamModel:    executed.UpstreamModel,
+		Stream:           executed.Stream,
 		Duration:         time.Since(started),
 		UpstreamEndpoint: prismBrowserUpstreamEndpoint,
-		ReasoningEffort:  extractOpenAIReasoningEffortFromBody(prepared, upstreamModel, originalModel),
+		ReasoningEffort:  extractOpenAIReasoningEffortFromBody(executed.Prepared, executed.UpstreamModel, executed.OriginalModel),
 	}
-	if requested := CanonicalRequestedReasoningEffort(body, originalModel); requested != nil {
+	if requested := CanonicalRequestedReasoningEffort(body, executed.OriginalModel); requested != nil {
 		result.RequestedReasoningEffort = requested
 	}
 	usage := OpenAIUsage{}
-	applyEstimatedOpenAIUsageIfMissing(&usage, upstreamModel, prepared, prismBrowserTerminalOutputText(responseBody, stream))
+	applyEstimatedOpenAIUsageIfMissing(&usage, executed.UpstreamModel, executed.Prepared, prismBrowserTerminalOutputText(executed.Body, executed.Stream))
 	result.Usage = usage
 	return result, nil
 }

@@ -653,3 +653,199 @@ func TestPrismBrowserAccountTestExplainsAdapterRefusal(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldAttemptPrismBrowserForChatSkipsCompact(t *testing.T) {
+	s, account := prismTestService("http://127.0.0.1:8319")
+	httpCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	httpCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	SetOpenAIClientTransport(httpCtx, OpenAIClientTransportHTTP)
+	require.True(t, shouldAttemptPrismBrowserForChat(s, httpCtx, account, "gpt-6.1-sol"))
+	require.True(t, shouldAttemptPrismBrowserForChat(s, httpCtx, account, "gpt-6.1-sol-max"))
+	require.False(t, shouldAttemptPrismBrowserForChat(s, httpCtx, account, "gpt-6.1-sol-openai-compact"))
+	require.False(t, shouldAttemptPrismBrowserForChat(s, httpCtx, account, "gpt-5.6-sol"))
+	require.False(t, shouldAttemptPrismBrowserForChat(s, httpCtx, account, "gpt-6-sol"))
+}
+
+func prismChatCompletionsOAuthAccount(account *Account) *Account {
+	account.Name = "openai-oauth"
+	account.Concurrency = 1
+	if account.Credentials == nil {
+		account.Credentials = map[string]any{}
+	}
+	account.Credentials["chatgpt_account_id"] = "chatgpt-acc"
+	return account
+}
+
+func forwardPrismChatCompletions(t *testing.T, s *OpenAIGatewayService, account *Account, body string, upstream *httpUpstreamRecorder) (*httptest.ResponseRecorder, *OpenAIForwardResult, error) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	if upstream != nil {
+		s.httpUpstream = upstream
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	raw := []byte(body)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	result, err := s.ForwardAsChatCompletions(context.Background(), c, account, raw, "", "")
+	return rec, result, err
+}
+
+func TestForwardAsChatCompletionsRoutesGPT61SolThroughPrism(t *testing.T) {
+	var adapterHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		adapterHits++
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		require.Equal(t, "/v1/responses", r.URL.Path)
+		require.Equal(t, "gpt-6.1-sol", gjson.GetBytes(raw, "model").String())
+		require.False(t, gjson.GetBytes(raw, "stream").Bool())
+		require.False(t, gjson.GetBytes(raw, "max_output_tokens").Exists())
+		require.True(t, gjson.GetBytes(raw, "input").Exists())
+		_, _ = io.WriteString(w, prismTerminal)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	account = prismChatCompletionsOAuthAccount(account)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"codex should not run"}}`)),
+	}}
+
+	rec, result, err := forwardPrismChatCompletions(t, s, account,
+		`{"model":"gpt-6.1-sol","max_tokens":128,"messages":[{"role":"user","content":"2+2?"}],"stream":false}`,
+		upstream)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, adapterHits)
+	require.Nil(t, upstream.lastReq)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "application/json; charset=utf-8", rec.Header().Get("Content-Type"))
+	require.Equal(t, "estimated", rec.Header().Get("X-Prism-Usage"))
+	require.Equal(t, "chat.completion", gjson.GetBytes(rec.Body.Bytes(), "object").String())
+	require.Equal(t, "gpt-6.1-sol", gjson.GetBytes(rec.Body.Bytes(), "model").String())
+	require.Equal(t, "21", gjson.GetBytes(rec.Body.Bytes(), "choices.0.message.content").String())
+	require.Equal(t, "stop", gjson.GetBytes(rec.Body.Bytes(), "choices.0.finish_reason").String())
+	require.Greater(t, result.Usage.InputTokens, 0)
+	require.Greater(t, result.Usage.OutputTokens, 0)
+	require.Greater(t, gjson.GetBytes(rec.Body.Bytes(), "usage.prompt_tokens").Int(), int64(0))
+	require.Equal(t, prismBrowserUpstreamEndpoint, result.UpstreamEndpoint)
+}
+
+func TestForwardAsChatCompletionsStreamsGPT61SolFromPrismJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.False(t, gjson.GetBytes(raw, "stream").Bool())
+		_, _ = io.WriteString(w, prismTerminal)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	account = prismChatCompletionsOAuthAccount(account)
+	rec, result, err := forwardPrismChatCompletions(t, s, account,
+		`{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"hi"}],"stream":true}`,
+		nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Stream)
+	require.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
+	body := rec.Body.String()
+	require.Contains(t, body, `"object":"chat.completion.chunk"`)
+	require.Contains(t, body, `"content":"21"`)
+	require.Contains(t, body, `"finish_reason":"stop"`)
+	require.Contains(t, body, "data: [DONE]")
+}
+
+func TestForwardAsChatCompletionsLeavesOtherModelsOffPrism(t *testing.T) {
+	var adapterHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		adapterHits++
+		_, _ = io.WriteString(w, prismTerminal)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	account = prismChatCompletionsOAuthAccount(account)
+	codexSSE := `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.6-sol","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":3,"output_tokens":1}}}` + "\n\n"
+	for _, model := range []string{"gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol-openai-compact"} {
+		t.Run(model, func(t *testing.T) {
+			before := adapterHits
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_other"}},
+				Body:       io.NopCloser(strings.NewReader(strings.ReplaceAll(codexSSE, "gpt-5.6-sol", model))),
+			}}
+			body := `{"model":"` + model + `","messages":[{"role":"user","content":"hi"}],"stream":false}`
+			_, result, err := forwardPrismChatCompletions(t, s, account, body, upstream)
+			require.Equal(t, before, adapterHits)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.NotEqual(t, prismBrowserUpstreamEndpoint, result.UpstreamEndpoint)
+		})
+	}
+}
+
+func TestForwardAsChatCompletionsPrismBusyFallsBackToCodexHTTP(t *testing.T) {
+	var adapterHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		adapterHits++
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":{"type":"prism_busy","message":"full"}}`)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	account = prismChatCompletionsOAuthAccount(account)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_fallback"}},
+		Body:       io.NopCloser(strings.NewReader(`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-6.1-sol","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"http"}]}],"usage":{"input_tokens":4,"output_tokens":1}}}` + "\n\n")),
+	}}
+	rec, result, err := forwardPrismChatCompletions(t, s, account,
+		`{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"hi"}],"stream":false}`,
+		upstream)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, adapterHits)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "http", gjson.GetBytes(rec.Body.Bytes(), "choices.0.message.content").String())
+	require.NotEqual(t, prismBrowserUpstreamEndpoint, result.UpstreamEndpoint)
+}
+
+func TestForwardAsChatCompletionsPrismMappedAliasAndImages(t *testing.T) {
+	var adapterHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		adapterHits++
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, "gpt-6.1-sol", gjson.GetBytes(raw, "model").String())
+		_, _ = io.WriteString(w, prismTerminal)
+	}))
+	defer server.Close()
+	s, account := prismTestService(server.URL)
+	account = prismChatCompletionsOAuthAccount(account)
+	account.Credentials["model_mapping"] = map[string]any{"my-sol": "gpt-6.1-sol"}
+	rec, result, err := forwardPrismChatCompletions(t, s, account,
+		`{"model":"my-sol","messages":[{"role":"user","content":"hi"}],"stream":false}`,
+		nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, adapterHits)
+	require.Equal(t, "my-sol", result.Model)
+	require.Equal(t, "gpt-6.1-sol", result.UpstreamModel)
+	require.Equal(t, "21", gjson.GetBytes(rec.Body.Bytes(), "choices.0.message.content").String())
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_image"}},
+		Body:       io.NopCloser(strings.NewReader(`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-6.1-sol","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"img"}]}],"usage":{"input_tokens":8,"output_tokens":1}}}` + "\n\n")),
+	}}
+	_, imgResult, imgErr := forwardPrismChatCompletions(t, s, account,
+		`{"model":"gpt-6.1-sol","messages":[{"role":"user","content":[{"type":"text","text":"see"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aa"}}]}],"stream":false}`,
+		upstream)
+	require.NoError(t, imgErr)
+	require.Equal(t, 1, adapterHits)
+	require.NotNil(t, imgResult)
+	require.NotNil(t, upstream.lastReq)
+}

@@ -1098,7 +1098,8 @@ type GatewayConfig struct {
 	// 仅作用于 payg（按量付费）账号：周期探测余额，低于阈值则临时停调。
 	CNProviders GatewayCNProvidersConfig `mapstructure:"cn_providers"`
 
-	// PrismBrowser is the loopback Chromium adapter for gpt-6.1-sol HTTP Responses.
+	// PrismBrowser is the loopback Chromium adapter for gpt-6.1-sol HTTP
+	// /v1/responses and /v1/chat/completions.
 	PrismBrowser GatewayPrismBrowserConfig `mapstructure:"prism_browser"`
 }
 
