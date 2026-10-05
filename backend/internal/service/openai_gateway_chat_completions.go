@@ -356,6 +356,33 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	}
 	logger.L().Debug("openai chat_completions: model mapping applied", logFields...)
 
+	if shouldAttemptPrismBrowserForChat(s, c, account, originalModel) {
+		prismBody := responsesBody
+		var prismErr error
+		prismBody, _, prismErr = normalizeGPT6ResponsesSampling(prismBody, upstreamModel)
+		if prismErr != nil {
+			return nil, prismErr
+		}
+		prismBody, prismErr = prismBrowserPrepareChatCompletionsAdapterBody(prismBody)
+		if prismErr != nil {
+			return nil, prismErr
+		}
+		result, prismErr := s.forwardPrismBrowserAsChatCompletions(ctx, c, account, prismBody, originalModel, billingModel, upstreamModel, clientStream, startTime, body)
+		if prismErr == nil || !errors.Is(prismErr, errPrismBrowserHTTPFallback) {
+			if result != nil {
+				if tier := resolvedOpenAIUpstreamServiceTier(c, extractOpenAIServiceTierFromBody(responsesBody)); tier != nil {
+					result.ServiceTier = tier
+				}
+				if result.ReasoningEffort == nil && responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort != "" {
+					re := responsesReq.Reasoning.Effort
+					result.ReasoningEffort = &re
+				}
+			}
+			return result, prismErr
+		}
+		SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
+	}
+
 	if account.UsesOpenAICodexProtocol() {
 		var reqBody map[string]any
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {

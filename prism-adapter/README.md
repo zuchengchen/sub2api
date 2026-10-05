@@ -1,10 +1,13 @@
 # Prism OAuth adapter (gpt-6.1-sol)
 
-Loopback Chromium sidecar for HTTP `/v1/responses` whose mapped upstream model
-is `gpt-6.1-sol` (including `gpt-6.1-sol-max` → Extra high / `xhigh`). This
-fork enables Prism for every schedulable OpenAI OAuth account when
-`gateway.prism_browser.enabled` is true. Extra `openai_prism_browser: false`
-force-off a single account. No admin checkbox is required.
+Loopback Chromium sidecar for HTTP `/v1/responses` and `/v1/chat/completions`
+whose mapped upstream model is `gpt-6.1-sol` (including `gpt-6.1-sol-max` →
+Extra high / `xhigh`). Chat Completions is converted to Responses for the
+sidecar and converted back to Chat Completions for the client. Other models
+stay on Codex / BPS / Cookie WS. This fork enables Prism for every
+schedulable OpenAI OAuth account when `gateway.prism_browser.enabled` is true.
+Extra `openai_prism_browser: false` force-off a single account. No admin
+checkbox is required.
 
 `gpt-5.6-sol`, terra, luna, API Key, native WebSocket, compact, and
 `previous_response_id` stay on Codex / BPS / Cookie WS.
@@ -72,7 +75,7 @@ common path.
 ```sh
 python -m unittest discover -s prism-adapter -p 'test_*.py'
 cd backend
-go test ./internal/service -run 'TestPrismBrowser|TestAccountUsesPrism|TestPrismClient' -count=1
+go test ./internal/service -run 'TestPrismBrowser|TestAccountUsesPrism|TestPrismClient|TestForwardAsChatCompletionsRoutesGPT61|TestForwardAsChatCompletionsStreamsGPT61|TestForwardAsChatCompletionsLeavesOther|TestForwardAsChatCompletionsPrism' -count=1
 ```
 
 Browser smoke (local Chromium, synthetic pages, no OAuth):

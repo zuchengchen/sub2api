@@ -66,6 +66,19 @@ func shouldAttemptPrismBrowser(s *OpenAIGatewayService, c *gin.Context, account 
 	return account.IsPrismBrowserEnabledForModel(requestedModel)
 }
 
+func shouldAttemptPrismBrowserForChat(s *OpenAIGatewayService, c *gin.Context, account *Account, requestedModel string) bool {
+	if s == nil || !accountUsesPrismBrowser(account, s.cfg) {
+		return false
+	}
+	if GetOpenAIClientTransport(c) == OpenAIClientTransportWS {
+		return false
+	}
+	if prismBrowserCompactSpelling(requestedModel) {
+		return false
+	}
+	return account.IsPrismBrowserEnabledForModel(requestedModel)
+}
+
 func (a *Account) IsPrismBrowserEnabledForModel(requestedModel string) bool {
 	if !accountHasPrismBrowser(a) {
 		return false

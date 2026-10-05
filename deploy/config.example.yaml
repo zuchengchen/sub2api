@@ -294,7 +294,8 @@ gateway:
   # 默认 false：保持纯文本 Codex 请求不被改写；客户端显式提供 image_generation tool 时，
   # 仍会在分组允许图片生成的情况下正常转发。
   codex_image_generation_bridge_enabled: false
-  # Prism Chromium sidecar for gpt-6.1-sol HTTP /v1/responses (loopback only).
+  # Prism Chromium sidecar for gpt-6.1-sol HTTP /v1/responses and
+  # /v1/chat/completions (loopback only).
   # Kill switch. Every schedulable OpenAI OAuth account is on when enabled;
   # set accounts.extra.openai_prism_browser=false to force-off one account.
   # GATEWAY_PRISM_BROWSER_ENABLED / GATEWAY_PRISM_BROWSER_BASE_URL / GATEWAY_PRISM_BROWSER_API_KEY
