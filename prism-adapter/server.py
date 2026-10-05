@@ -70,7 +70,8 @@ def parse_prompt(payload):
         raise AdapterError(422, "unsupported_request", "Only plain text output is supported")
     reasoning = payload.get("reasoning") or {}
     if (not isinstance(reasoning, dict) or not isinstance(reasoning.get("effort", "medium"), str)
-            or reasoning.get("effort", "medium") not in EFFORTS or reasoning.get("summary") not in (None, "none", "auto")):
+            or reasoning.get("effort", "medium") not in EFFORTS
+            or reasoning.get("summary") not in (None, "none", "auto", "concise", "detailed")):
         raise AdapterError(422, "unsupported_reasoning", "Unsupported Prism reasoning effort")
     if not isinstance(payload.get("stream", False), bool):
         raise AdapterError(400, "invalid_request", "stream must be a boolean")

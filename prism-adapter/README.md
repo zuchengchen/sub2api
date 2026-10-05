@@ -11,9 +11,11 @@ force-off a single account. No admin checkbox is required.
 
 Busy adapter, adapter down, timeout, missing Prism 6.1-sol entitlement,
 encrypted reasoning replay, structured output, images, oversized bodies,
-oversized prompts, and incompatible Codex tool history fall back to the same
-account's Tibo / BPS / Cookie WS / HTTP path. Compact and
-`previous_response_id` return 422 with no fallback.
+oversized prompts, incompatible Codex tool history, and leftover
+`unsupported_reasoning` refusals fall back to the same account's Tibo / BPS /
+Cookie WS / HTTP path. Compact and `previous_response_id` return 422 with no
+fallback. Codex `reasoning.summary` values `concise` / `detailed` are folded
+to `auto` before the sidecar; Prism does not invent a summary.
 
 Successful turns estimate input+output tokens and bill the existing
 gpt-6.1-sol 2× official card (`X-Prism-Usage: estimated`).
@@ -24,7 +26,8 @@ gpt-6.1-sol 2× official card (`X-Prism-Usage: estimated`).
 - OAuth access token is sent in `X-Prism-OAuth-Token`. No proxy, redirect, or
   plugin transport.
 - Exact model ID `gpt-6.1-sol` and efforts `low` / `medium` / `high` /
-  `xhigh`. Gateway folds `max` → `xhigh` before the adapter.
+  `xhigh`. Gateway folds `max` → `xhigh` and Codex summary styles
+  `concise` / `detailed` → `auto` before the adapter.
 - 6.1-sol client tool bridge is on by default
   (`PRISM_ADAPTER_CLIENT_TOOLS_ENABLED=true`). Missing `jsonschema` / `lark`
   fails adapter startup.
