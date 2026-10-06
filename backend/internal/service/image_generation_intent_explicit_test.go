@@ -3,7 +3,6 @@ package service
 import (
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -65,8 +64,6 @@ func TestStripOpenAIImageGenerationToolsIfDisabled(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, gjson.GetBytes(stripped, `tools.#(type=="image_generation")`).Exists())
 	require.True(t, gjson.GetBytes(stripped, `tools.#(type=="function")`).Exists())
-	require.Equal(t, "image_generation", basispoints.NativeFallbackReason(body))
-	require.Empty(t, basispoints.NativeFallbackReason(stripped))
 
 	account := &Account{Platform: PlatformOpenAI, Extra: map[string]any{featureKeyCodexImageGenerationExplicitToolPolicy: "strip"}}
 	strippedByAccount, err := StripOpenAIImageGenerationToolsIfDisabled(&Group{AllowImageGeneration: true}, account, body)

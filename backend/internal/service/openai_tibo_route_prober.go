@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -106,8 +105,7 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 	defer func() { <-sem }()
 	if account == nil {
 		latest, err := s.latestOpenAITiboAccount(ctx, state.accountID)
-		if err != nil || !s.openAITiboRouteApplies(latest) ||
-			(route == openAITiboRouteBPS && !latest.IsExcelBPSEnabledForModel(openAICodexTicketDefaultModel)) {
+		if err != nil || !s.openAITiboRouteApplies(latest) {
 			// Paused, rate-limited or disabled accounts are not sampled; their
 			// verdict ages toward max_stale.
 			s.abortOpenAITiboProbe(state, route)
@@ -115,12 +113,7 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 		}
 		account = latest
 	}
-	var sample openAITiboProbeSample
-	if route == openAITiboRouteBPS {
-		sample = s.probeOpenAITiboBPS(ctx, account)
-	} else {
-		sample = s.probeOpenAITiboHTTP(ctx, account)
-	}
+	sample := s.probeOpenAITiboHTTP(ctx, account)
 	if parent.Err() != nil {
 		// Harvester shutdown interrupted the probe; this is not a sample.
 		s.abortOpenAITiboProbe(state, route)
@@ -168,21 +161,6 @@ func (s *OpenAIGatewayService) recordOpenAITiboSample(state *openAITiboAccountSt
 		r.persistedAt = now
 	}
 	record := openAITiboVerdictRecordFor(r)
-	httpEffective := state.http.effective(now, cfg)
-	if route == openAITiboRouteBPS && sample.verdict.definitive() && httpEffective.definitive() {
-		// Shadow calibration: does BPS reach the same conclusion as HTTP?
-		if sample.verdict == httpEffective {
-			r.shadowAgree++
-		} else {
-			r.shadowDisagree++
-		}
-	}
-	if route == openAITiboRouteHTTP && transition.flipped && transition.to == openAITiboDegraded &&
-		state.bpsEnabled && cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff {
-		// HTTP just turned degraded: sample BPS now instead of waiting.
-		state.bps.nextProbeAt = now
-		s.startOpenAITiboProbeLocked(state, openAITiboRouteBPS, account, false, cfg, now)
-	}
 	flipsHour, probesHour := countOpenAITiboWindow(r.flips, now), countOpenAITiboWindow(r.probes, now)
 	state.mu.Unlock()
 	if done != nil {
@@ -205,10 +183,6 @@ func (s *OpenAIGatewayService) recordOpenAITiboSample(state *openAITiboAccountSt
 			zap.String("from", string(transition.from)), zap.String("to", string(transition.to)), zap.Strings("votes", votes))...)
 	case before != after:
 		logger.L().Info("openai_tibo effective verdict", fields...)
-	}
-	if route == openAITiboRouteBPS && cfg.bpsProbeMode == config.OpenAITiboBPSProbeShadow {
-		// Shadow calibration: BPS and HTTP conclusions side by side.
-		logger.L().Info("openai_tibo bps shadow", append(fields, zap.String("http_effective", string(httpEffective)))...)
 	}
 	if persist {
 		s.persistOpenAITiboVerdict(state.accountID, route, record)
@@ -275,25 +249,21 @@ func (s *OpenAIGatewayService) seedOpenAITiboStateLocked(state *openAITiboAccoun
 	if len(extra) == 0 {
 		return
 	}
-	for _, route := range []openAITiboRoute{openAITiboRouteHTTP, openAITiboRouteBPS} {
-		r := state.route(route)
-		if !r.cold() || r.inflight {
-			continue
-		}
-		record, ok := parseOpenAITiboVerdictRecord(extra[openAITiboVerdictExtraKey(route)])
-		if !ok || record.CheckedAt.After(now) || now.Sub(record.CheckedAt) > cfg.maxStale {
-			continue
-		}
-		r.verdict, r.checkedAt, r.flippedAt, r.persistedAt = record.Verdict, record.CheckedAt, record.FlippedAt, record.CheckedAt
-		interval := cfg.degradedInterval
-		switch {
-		case route == openAITiboRouteBPS:
-			interval = cfg.bpsProbeInterval
-		case record.Verdict == openAITiboHealthy:
-			interval = cfg.healthyInterval
-		}
-		r.nextProbeAt = record.CheckedAt.Add(openAITiboJitter(interval, cfg.jitter))
+	route := openAITiboRouteHTTP
+	r := state.route(route)
+	if !r.cold() || r.inflight {
+		return
 	}
+	record, ok := parseOpenAITiboVerdictRecord(extra[openAITiboVerdictExtraKey(route)])
+	if !ok || record.CheckedAt.After(now) || now.Sub(record.CheckedAt) > cfg.maxStale {
+		return
+	}
+	r.verdict, r.checkedAt, r.flippedAt, r.persistedAt = record.Verdict, record.CheckedAt, record.FlippedAt, record.CheckedAt
+	interval := cfg.degradedInterval
+	if record.Verdict == openAITiboHealthy {
+		interval = cfg.healthyInterval
+	}
+	r.nextProbeAt = record.CheckedAt.Add(openAITiboJitter(interval, cfg.jitter))
 }
 
 // loadPersistedOpenAITiboVerdicts seeds verdicts from full account rows once
@@ -316,14 +286,12 @@ func (s *OpenAIGatewayService) loadPersistedOpenAITiboVerdicts(ctx context.Conte
 			continue
 		}
 		if _, ok := account.Extra[openAITiboVerdictExtraKey(openAITiboRouteHTTP)]; !ok {
-			if _, ok := account.Extra[openAITiboVerdictExtraKey(openAITiboRouteBPS)]; !ok {
-				continue
-			}
+			continue
 		}
 		state := s.openAITiboAccountState(account.ID)
 		state.mu.Lock()
 		s.seedOpenAITiboStateLocked(state, account.Extra, now, cfg)
-		if state.http.verdict != "" || state.bps.verdict != "" {
+		if state.http.verdict != "" {
 			loaded++
 		}
 		state.mu.Unlock()
@@ -334,8 +302,7 @@ func (s *OpenAIGatewayService) loadPersistedOpenAITiboVerdicts(ctx context.Conte
 }
 
 // latestOpenAITiboAccount reloads the account for a background probe. It
-// applies the same pause/rate-limit skip as Cookie harvest, but also covers
-// BPS-only anti-degrade accounts that are not in the Cookie WS rollout.
+// applies the same pause/rate-limit skip as Cookie harvest.
 func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, accountID int64) (*Account, error) {
 	if s == nil || s.accountRepo == nil || accountID <= 0 {
 		return nil, errOpenAICookieWSAccountUnavailable
@@ -360,8 +327,7 @@ func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, acco
 
 // probeOpenAITiboRoutes is the harvester-tick hook: probe due routes of
 // recently active Tibo-routed accounts in the background. The tick currently
-// requires Cookie WS mode because the harvester is the only caller; BPS-only
-// accounts still get request-path Tibo without this loop.
+// requires Cookie WS mode because the harvester is the only caller.
 func (s *OpenAIGatewayService) probeOpenAITiboRoutes(ctx context.Context) {
 	if s == nil || s.tiboRouteDisabled || ctx.Err() != nil || !s.openAICookieWSModeConfigured() {
 		return
@@ -383,10 +349,6 @@ func (s *OpenAIGatewayService) probeOpenAITiboRoutes(ctx context.Context) {
 		}
 		if state.http.due(now) {
 			s.startOpenAITiboProbeCtxLocked(ctx, state, openAITiboRouteHTTP, nil, false, cfg, now)
-		}
-		if state.bpsEnabled && cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff &&
-			state.http.effective(now, cfg) != openAITiboHealthy && state.bps.due(now) {
-			s.startOpenAITiboProbeCtxLocked(ctx, state, openAITiboRouteBPS, nil, false, cfg, now)
 		}
 		return true
 	})
@@ -481,10 +443,6 @@ type OpenAITiboRouteStatus struct {
 	VoteWindows   int `json:"vote_windows"`
 	VoteConfirmed int `json:"vote_confirmed"`
 	VoteRejected  int `json:"vote_rejected"`
-	// BPS only: definitive BPS samples that matched / differed from the HTTP
-	// effective verdict at the time (shadow comparison).
-	ShadowAgree    int `json:"shadow_agree,omitempty"`
-	ShadowDisagree int `json:"shadow_disagree,omitempty"`
 }
 
 func openAITiboTimePtr(t time.Time) *time.Time {
@@ -494,7 +452,7 @@ func openAITiboTimePtr(t time.Time) *time.Time {
 	return &t
 }
 
-// openAITiboRouteStatuses returns HTTP/BPS verdict states plus ticketed
+// openAITiboRouteStatuses returns HTTP verdict state plus ticketed
 // /responses readiness for the admin view. It never starts probes.
 func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, ticketReady bool, now time.Time) []OpenAITiboRouteStatus {
 	if s == nil || account == nil || !s.openAITiboRouteApplies(account) {
@@ -502,9 +460,6 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, ticketR
 	}
 	cfg := s.openAITiboRouteConfig()
 	routes := []openAITiboRoute{openAITiboRouteHTTP}
-	if account.IsExcelBPSEnabledForModel(openAICodexTicketDefaultModel) {
-		routes = append(routes, openAITiboRouteBPS)
-	}
 	out := make([]OpenAITiboRouteStatus, 0, len(routes)+1)
 	state := s.loadOpenAITiboAccountState(account.ID)
 	for _, route := range routes {
@@ -523,7 +478,6 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, ticketR
 			}
 			item.ProbesHour, item.FlipsHour = countOpenAITiboWindow(r.probes, now), countOpenAITiboWindow(r.flips, now)
 			item.VoteWindows, item.VoteConfirmed, item.VoteRejected = r.voteWindows, r.voteConfirmed, r.voteRejected
-			item.ShadowAgree, item.ShadowDisagree = r.shadowAgree, r.shadowDisagree
 			state.mu.Unlock()
 		}
 		out = append(out, item)
@@ -569,15 +523,9 @@ func (s *OpenAIGatewayService) forceOpenAITiboDegraded(account *Account, route o
 		r.persistedAt = now
 	}
 	record := openAITiboVerdictRecordFor(r)
-	probeRoute := route == openAITiboRouteHTTP || cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff
-	if probeRoute {
-		// Confirm the evidence with a probe instead of waiting for the cadence.
+	if route == openAITiboRouteHTTP {
 		r.nextProbeAt = now
 		s.startOpenAITiboProbeLocked(state, route, account, false, cfg, now)
-	}
-	if route == openAITiboRouteHTTP && changed && state.bpsEnabled && cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff {
-		state.bps.nextProbeAt = now
-		s.startOpenAITiboProbeLocked(state, openAITiboRouteBPS, account, false, cfg, now)
 	}
 	state.mu.Unlock()
 	if !changed {

@@ -1,22 +1,19 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
 // openAITiboRun is the route plan of one Forward attempt on a Tibo-routed
 // account: routes ordered by tier (healthy > unknown > degraded) and, within a
-// tier, HTTP -> BPS -> ticketed /responses. HTTP is terminal: its own failures
-// never fall through to another route, so the plan ends at HTTP.
+// tier, HTTP -> ticketed /responses. HTTP is terminal: its own failures never
+// fall through to another route, so the plan ends at HTTP.
 type openAITiboRun struct {
 	account *Account
 	scope   string
@@ -27,7 +24,6 @@ type openAITiboRun struct {
 	tiers        map[openAITiboRoute]openAITiboVerdict
 	pinned       openAITiboRoute
 	served       openAITiboRoute
-	bpsBody      []byte
 	cfg          openAITiboSettings
 }
 
@@ -77,20 +73,10 @@ func openAITiboTierRank(verdict openAITiboVerdict) int {
 }
 
 // openAITiboRouteTiers returns the tier of every route available for this
-// request. HTTP is always available. BPS is skipped for models it does not
-// serve and for requests carrying tools it cannot run (body == nil skips that
-// check for the scheduler). Ticketed /responses is a fallback hop (unknown
-// tier) so it never outranks a same-or-better BPS verdict. off/shadow BPS
-// keeps its existing position (healthy).
-func (s *OpenAIGatewayService) openAITiboRouteTiers(account *Account, requestModel string, body []byte, compact bool, httpVerdict, bpsVerdict openAITiboVerdict, cfg openAITiboSettings) map[openAITiboRoute]openAITiboVerdict {
+// request. HTTP is always available. Ticketed /responses is a fallback hop
+// (unknown tier) so it never outranks healthy HTTP.
+func (s *OpenAIGatewayService) openAITiboRouteTiers(account *Account, requestModel string, compact bool, httpVerdict openAITiboVerdict) map[openAITiboRoute]openAITiboVerdict {
 	tiers := map[openAITiboRoute]openAITiboVerdict{openAITiboRouteHTTP: httpVerdict}
-	if account.IsExcelBPSEnabledForModel(requestModel) && (body == nil || basispoints.NativeFallbackReason(body) == "") {
-		if cfg.bpsProbeMode == config.OpenAITiboBPSProbeEnforce {
-			tiers[openAITiboRouteBPS] = bpsVerdict
-		} else {
-			tiers[openAITiboRouteBPS] = openAITiboHealthy
-		}
-	}
 	if s.openAITiboTicketReady(account, requestModel, compact) {
 		tiers[openAITiboRouteTicket] = openAITiboUnknown
 	}
@@ -113,9 +99,8 @@ func (s *OpenAIGatewayService) openAITiboTicketReady(account *Account, requestMo
 	return strings.TrimSpace(s.openAICodexTicketHarvestProxyURL()) != "" && isOpenAICodexTicketAccount(account)
 }
 
-// openAITiboOrderRoutes is HTTP → BPS → ticketed /responses → HTTP.
-// Healthy HTTP is the only short-circuit. Degraded BPS is skipped; unknown
-// BPS is still tried before the ticket hop. HTTP is always the last route.
+// openAITiboOrderRoutes is HTTP → ticketed /responses → HTTP.
+// Healthy HTTP is the only short-circuit. HTTP is always the last route.
 func openAITiboOrderRoutes(tiers map[openAITiboRoute]openAITiboVerdict, pinned openAITiboRoute) []openAITiboRoute {
 	if openAITiboTierRank(tiers[openAITiboRouteHTTP]) == 0 {
 		if pinned != "" && pinned != openAITiboRouteHTTP && tiers[pinned] == openAITiboHealthy {
@@ -134,43 +119,22 @@ func openAITiboOrderRoutes(tiers map[openAITiboRoute]openAITiboVerdict, pinned o
 	if pinned != "" && pinned != openAITiboRouteHTTP && tiers[pinned] == openAITiboHealthy {
 		routes = append(routes, pinned)
 	}
-	if pinned != openAITiboRouteBPS {
-		appendIfUsable(openAITiboRouteBPS)
-	}
 	if pinned != openAITiboRouteTicket {
 		appendIfUsable(openAITiboRouteTicket)
 	}
 	return append(routes, openAITiboRouteHTTP)
 }
 
-// newOpenAITiboRun builds the route plan for one Forward attempt. body is the
-// request after group/model policy and before transport-specific rewrites; it
-// is kept for a later BPS attempt after a ticketed-/responses failure.
+// newOpenAITiboRun builds the route plan for one Forward attempt.
 func (s *OpenAIGatewayService) newOpenAITiboRun(ctx context.Context, c *gin.Context, account *Account, body []byte, scope string) *openAITiboRun {
 	cfg := s.openAITiboRouteConfig()
 	requestModel := gjson.GetBytes(body, "model").String()
-	bpsEnabled := account.IsExcelBPSEnabledForModel(openAICodexTicketDefaultModel)
-	httpVerdict, bpsVerdict := s.openAITiboRequestVerdicts(ctx, account, bpsEnabled)
+	httpVerdict := s.openAITiboRequestVerdicts(ctx, account)
 	run := &openAITiboRun{account: account, scope: scope, cfg: cfg, probePayload: openAICookieWSIsProbePayloadRaw(body)}
-	run.tiers = s.openAITiboRouteTiers(account, requestModel, body, isExplicitOpenAICompactContext(c), httpVerdict, bpsVerdict, cfg)
+	run.tiers = s.openAITiboRouteTiers(account, requestModel, isExplicitOpenAICompactContext(c), httpVerdict)
 	run.pinned = s.loadOpenAITiboPin(account.ID, scope, time.Now())
 	run.routes = openAITiboOrderRoutes(run.tiers, run.pinned)
-	if _, ok := run.tiers[openAITiboRouteBPS]; ok && run.first() != openAITiboRouteBPS {
-		run.bpsBody = bytes.Clone(body)
-	}
 	return run
-}
-
-// bpsBypassReason is the internal BPS bypass reason (openAIBPSBypassReasonKey)
-// when BPS is enabled for the model but another route goes first.
-func (r *openAITiboRun) bpsBypassReason(body []byte) string {
-	if r.first() == openAITiboRouteHTTP && r.tier(openAITiboRouteHTTP) == openAITiboHealthy {
-		return openAITiboHTTPOKReason
-	}
-	if reason := basispoints.NativeFallbackReason(body); reason != "" {
-		return reason
-	}
-	return openAITiboRouteOrderReason
 }
 
 // httpReason is the transport reason when the plan serves HTTP although a
@@ -183,7 +147,7 @@ func (r *openAITiboRun) httpReason() string {
 }
 
 // finishOpenAITiboRun stamps the degraded flag, pins the session to the
-// route that served, and runs the passive model check for HTTP, BPS, and
+// route that served, and runs the passive model check for HTTP and
 // ticketed /responses.
 func (s *OpenAIGatewayService) finishOpenAITiboRun(run *openAITiboRun, result *OpenAIForwardResult, err error) {
 	if run == nil || run.served == "" || result == nil {
@@ -205,8 +169,8 @@ func (s *OpenAIGatewayService) finishOpenAITiboRun(run *openAITiboRun, result *O
 	}
 }
 
-// setOpenAIBPSBypassReason records internally why BPS did not serve this
-// attempt; "" clears it. Routing details are never sent to API clients.
+// setOpenAIBPSBypassReason records or clears a leftover routing record.
+// Routing details are never sent to API clients.
 func setOpenAIBPSBypassReason(c *gin.Context, reason string) {
 	if c == nil {
 		return
@@ -287,17 +251,17 @@ func (s *OpenAIGatewayService) openAITiboSchedulerTier(account *Account, request
 		return 1
 	}
 	cfg := s.openAITiboRouteConfig()
-	httpVerdict, bpsVerdict := openAITiboUnknown, openAITiboUnknown
+	httpVerdict := openAITiboUnknown
 	if state := s.loadOpenAITiboAccountState(account.ID); state != nil {
 		state.mu.Lock()
-		httpVerdict, bpsVerdict = state.http.effective(now, cfg), state.bps.effective(now, cfg)
+		httpVerdict = state.http.effective(now, cfg)
 		state.mu.Unlock()
 	}
 	if httpVerdict == openAITiboHealthy {
 		return 0
 	}
 	rank := 2
-	for _, verdict := range s.openAITiboRouteTiers(account, requestModel, nil, false, httpVerdict, bpsVerdict, cfg) {
+	for _, verdict := range s.openAITiboRouteTiers(account, requestModel, false, httpVerdict) {
 		if r := openAITiboTierRank(verdict); r < rank {
 			rank = r
 		}

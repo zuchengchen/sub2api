@@ -335,44 +335,31 @@ describe('EditAccountModal', () => {
     wrapper.unmount()
   })
 
-  it('defaults OAuth outbound off and saves try-full-quality as all-model BPS extra', async () => {
+  it('strips leftover Excel BPS extra keys on OAuth save', async () => {
     const account = buildAccount()
     account.type = 'oauth'
     account.credentials = { access_token: 'test-token', chatgpt_account_id: 'test-account' }
-    account.extra = { unrelated: 'preserve', openai_oauth_responses_websockets_v2_mode: 'ctx_pool' }
+    account.extra = {
+      openai_excel_bps: true,
+      openai_excel_bps_models: ['gpt-5'],
+      openai_excel_bps_cache_creation_as_input: true,
+      openai_excel_bps_auto_disable_on_403: true,
+      unrelated: 'preserve',
+      openai_oauth_responses_websockets_v2_mode: 'ctx_pool',
+    }
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
-    expect(wrapper.get('[data-testid="excel-bps-toggle"]').attributes('aria-checked')).toBe('false')
-    await wrapper.get('[data-testid="excel-bps-toggle"]').trigger('click')
-    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-    await flushPromises()
-    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_excel_bps).toBe(true)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_excel_bps_models).toBeUndefined()
-    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.unrelated).toBe('preserve')
-  })
-
-  it('clears BPS extra when try-full-quality is turned off', async () => {
-    const account = buildAccount()
-    account.type = 'oauth'
-    account.extra = { openai_excel_bps: true, openai_excel_bps_cache_creation_as_input: true, openai_excel_bps_auto_disable_on_403: true, unrelated: 'preserve' }
-    updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
-    const wrapper = mountModal(account)
-    expect(wrapper.get('[data-testid="excel-bps-toggle"]').attributes('aria-checked')).toBe('true')
-    await wrapper.get('[data-testid="excel-bps-toggle"]').trigger('click')
-    expect(wrapper.find('[data-testid="excel-bps-cache-creation-as-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="excel-bps-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="openai-outbound-protocol"]').exists()).toBe(false)
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
     expect(extra.openai_excel_bps).toBeUndefined()
+    expect(extra.openai_excel_bps_models).toBeUndefined()
     expect(extra.openai_excel_bps_cache_creation_as_input).toBeUndefined()
     expect(extra.openai_excel_bps_auto_disable_on_403).toBeUndefined()
     expect(extra.unrelated).toBe('preserve')
-  })
-
-  it('hides Excel BPS on API Key accounts', () => {
-    expect(mountModal(buildAccount()).find('[data-testid="excel-bps-toggle"]').exists()).toBe(false)
   })
 
   it('passes existing non-identity mappings to the whitelist selector and preserves them on save', async () => {

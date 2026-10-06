@@ -2,16 +2,7 @@ package config
 
 import (
 	"fmt"
-	"strings"
 	"time"
-)
-
-// Excel BPS Tibo probe modes. off/shadow keep BPS in its existing route
-// position (treated as healthy); enforce routes by the BPS probe verdict.
-const (
-	OpenAITiboBPSProbeOff     = "off"
-	OpenAITiboBPSProbeShadow  = "shadow"
-	OpenAITiboBPSProbeEnforce = "enforce"
 )
 
 // OpenAITiboRouteConfig tunes Tibo route selection for Cookie WS accounts:
@@ -45,10 +36,6 @@ type OpenAITiboRouteConfig struct {
 	// confirmation probes). ProbeConcurrency caps probes process-wide.
 	MaxProbesPerHour int `mapstructure:"max_probes_per_hour"`
 	ProbeConcurrency int `mapstructure:"probe_concurrency"`
-	// BPSProbeMode is off, shadow or enforce. BPSProbeInterval is the BPS
-	// probe cadence while HTTP is not healthy.
-	BPSProbeMode     string        `mapstructure:"bps_probe_mode"`
-	BPSProbeInterval time.Duration `mapstructure:"bps_probe_interval"`
 	// SchedulerPreferHealthyRoute soft-orders scheduler candidates by route
 	// health tier (healthy > unknown > degraded) and releases degraded sticky
 	// sessions when a healthy account exists.
@@ -61,15 +48,10 @@ type OpenAITiboRouteConfig struct {
 }
 
 func validateOpenAITiboRoute(cfg OpenAITiboRouteConfig) error {
-	switch strings.ToLower(strings.TrimSpace(cfg.BPSProbeMode)) {
-	case "", OpenAITiboBPSProbeOff, OpenAITiboBPSProbeShadow, OpenAITiboBPSProbeEnforce:
-	default:
-		return fmt.Errorf("gateway.openai_tibo_route.bps_probe_mode must be off, shadow or enforce")
-	}
 	for name, value := range map[string]time.Duration{
 		"healthy_interval": cfg.HealthyInterval, "degraded_interval": cfg.DegradedInterval,
 		"confirm_spacing": cfg.ConfirmSpacing, "max_stale": cfg.MaxStale,
-		"active_window": cfg.ActiveWindow, "bps_probe_interval": cfg.BPSProbeInterval,
+		"active_window": cfg.ActiveWindow,
 	} {
 		if value < 0 {
 			return fmt.Errorf("gateway.openai_tibo_route.%s must be non-negative", name)

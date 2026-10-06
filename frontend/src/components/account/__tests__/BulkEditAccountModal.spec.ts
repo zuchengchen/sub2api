@@ -98,49 +98,6 @@ describe('BulkEditAccountModal', () => {
     } as any)
   })
 
-  describe('Excel / BPS bulk settings', () => {
-    const oauthProps = { selectedPlatforms: ['openai'], selectedTypes: ['oauth'] }
-    const submit = async (wrapper: ReturnType<typeof mountModal>) => {
-      await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
-      await flushPromises()
-    }
-    const enableBPS = async (wrapper: ReturnType<typeof mountModal>) => {
-      await wrapper.get('#bulk-edit-excel-bps-enabled').setValue(true)
-      await wrapper.get('[data-testid="bulk-excel-bps-toggle"]').trigger('click')
-    }
-
-    it('hides BPS for API keys', () => {
-      expect(mountModal().find('#bulk-edit-excel-bps-enabled').exists()).toBe(false)
-    })
-
-    it('enables try-full-quality for all models', async () => {
-      const wrapper = mountModal(oauthProps)
-      await enableBPS(wrapper)
-      await submit(wrapper)
-      expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-        extra: {
-          openai_excel_bps: true,
-          openai_excel_bps_models: null,
-          openai_excel_bps_cache_creation_as_input: false
-        }
-      })
-    })
-
-    it('explicitly disables BPS and clears subordinate settings', async () => {
-      const wrapper = mountModal(oauthProps)
-      await enableBPS(wrapper)
-      await wrapper.get('[data-testid="bulk-excel-bps-toggle"]').trigger('click')
-      await submit(wrapper)
-      expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-        extra: {
-          openai_excel_bps: false,
-          openai_excel_bps_models: null,
-          openai_excel_bps_cache_creation_as_input: false
-        }
-      })
-    })
-  })
-
   it('批量修改倍率时提示自动同步账号需要先关闭同步', async () => {
     const wrapper = mountModal()
 

@@ -7,11 +7,9 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -49,50 +47,49 @@ func tiboRouteModelResponse(model string) *http.Response {
 }
 
 func TestTiboRouteSessionPinsRouteAcrossTurns(t *testing.T) {
-	tc := newTiboRouteCase(t, true, true, tiboRouteBPSResponse(), tiboRouteBPSResponse(), cookieWSHTTPResponse("http ok"))
+	tc := newTiboRouteCase(t, false, true, cookieWSHTTPResponse("ticket ok"), cookieWSHTTPResponse("http ok"), cookieWSHTTPResponse("http ok"))
 	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
 	session := map[string]string{"session_id": "pin-session-1"}
-	result, _, _, err := tc.forwardWith(t, tiboRouteAstraBody, session)
+	result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, session)
 	require.NoError(t, err)
-	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "degraded HTTP: BPS first")
+	require.True(t, c.GetBool(openAITiboInjectTicketKey), "degraded HTTP: ticketed /responses first")
+	require.Contains(t, rec.Body.String(), "ticket ok")
 
-	// HTTP recovers: the pinned session keeps BPS, a new session takes HTTP.
+	// HTTP recovers: healthy HTTP short-circuits even for a session last served
+	// on ticketed /responses, because that hop is never a healthy-tier pin.
 	tc.seed(openAITiboRouteHTTP, openAITiboHealthy)
-	result, _, _, err = tc.forwardWith(t, tiboRouteAstraBody, session)
+	result, rec, c, err = tc.forwardWith(t, tiboRouteAstraBody, session)
 	require.NoError(t, err)
-	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "pinned route stays while healthy")
-	result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, map[string]string{"session_id": "pin-session-2"})
+	require.False(t, c.GetBool(openAITiboInjectTicketKey), "healthy HTTP short-circuits")
+	require.Contains(t, rec.Body.String(), "http ok")
+	result, rec, c, err = tc.forwardWith(t, tiboRouteAstraBody, map[string]string{"session_id": "pin-session-2"})
 	require.NoError(t, err)
 	require.False(t, result.OpenAIWSMode)
-	require.Equal(t, []string{"bps.openai.com", "bps.openai.com", "chatgpt.com"}, tc.hosts())
-	require.Equal(t, openAITiboHTTPOKReason, c.GetString(openAIBPSBypassReasonKey))
+	require.False(t, c.GetBool(openAITiboInjectTicketKey))
+	require.Equal(t, []string{"chatgpt.com", "chatgpt.com", "chatgpt.com"}, tc.hosts())
+	require.Equal(t, openAITiboHTTPOKReason, c.GetString("openai_ws_transport_reason"))
 	requireNoOpenAIRoutingHeaders(t, rec.Header())
 	require.Zero(t, tc.dialer.DialCount())
 }
 
-func TestTiboRoutePinSwitchesOnHardFailureAndConfirmedDegrade(t *testing.T) {
-	tc := newTiboRouteCase(t, true, false, tiboRouteBPSResponse(), tiboRouteStatusResponse(http.StatusForbidden), cookieWSHTTPResponse("http ok"), tiboRouteBPSResponse())
-	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-	session := map[string]string{"session_id": "pin-session-hard"}
-	_, _, _, err := tc.forwardWith(t, tiboRouteAstraBody, session)
-	require.NoError(t, err)
-	require.Equal(t, openAITiboRouteBPS, tc.svc.loadOpenAITiboPin(tc.account.ID, openAITiboPinScopeForTest(t, session), time.Now()))
-
-	// Hard failure on the pinned route: the next route serves and takes the pin.
+func TestTiboRoutePinSwitchesOnConfirmedDegrade(t *testing.T) {
+	tc := newTiboRouteCase(t, false, true, cookieWSHTTPResponse("http ok"), cookieWSHTTPResponse("ticket ok"))
 	tc.seed(openAITiboRouteHTTP, openAITiboHealthy)
-	result, _, _, err := tc.forwardWith(t, tiboRouteAstraBody, session)
+	session := map[string]string{"session_id": "pin-session-hard"}
+	result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, session)
 	require.NoError(t, err)
 	require.False(t, result.OpenAIWSMode)
+	require.False(t, c.GetBool(openAITiboInjectTicketKey))
+	require.Contains(t, rec.Body.String(), "http ok")
 	require.Equal(t, openAITiboRouteHTTP, tc.svc.loadOpenAITiboPin(tc.account.ID, openAITiboPinScopeForTest(t, session), time.Now()))
 
-	// The pinned HTTP route is confirmed degraded: the session moves to BPS.
 	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-	result, rec, _, err := tc.forwardWith(t, tiboRouteAstraBody, session)
+	result, rec, c, err = tc.forwardWith(t, tiboRouteAstraBody, session)
 	require.NoError(t, err)
-	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint)
+	require.True(t, c.GetBool(openAITiboInjectTicketKey))
+	require.Contains(t, rec.Body.String(), "ticket ok")
 	requireNoOpenAIRoutingHeaders(t, rec.Header())
-	require.Equal(t, []string{"bps.openai.com", "bps.openai.com", "chatgpt.com", "bps.openai.com"}, tc.hosts())
-	require.Equal(t, openAITiboRouteBPS, tc.svc.loadOpenAITiboPin(tc.account.ID, openAITiboPinScopeForTest(t, session), time.Now()))
+	require.Equal(t, openAITiboRouteTicket, tc.svc.loadOpenAITiboPin(tc.account.ID, openAITiboPinScopeForTest(t, session), time.Now()))
 }
 
 func openAITiboPinScopeForTest(t *testing.T, headers map[string]string) string {
@@ -174,87 +171,6 @@ func TestTiboRouteTicketedHTTPModelMismatchDegradesHTTP(t *testing.T) {
 	require.Equal(t, openAITiboDegraded, tc.svc.openAITiboEffective(tc.account.ID, openAITiboRouteHTTP, time.Now()))
 }
 
-func TestTiboRouteUnknownBPSStillTriedBeforeTicket(t *testing.T) {
-	tc := newTiboRouteCase(t, true, true, tiboRouteBPSResponse())
-	tc.svc.cfg.Gateway.OpenAITiboRoute.BPSProbeMode = config.OpenAITiboBPSProbeEnforce
-	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-	state := tc.svc.openAITiboAccountState(tc.account.ID)
-	state.mu.Lock()
-	state.bps.lastSampleAt, state.bps.nextProbeAt = time.Now(), time.Now().Add(time.Hour) // unknown, not due
-	state.mu.Unlock()
-	result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
-	require.NoError(t, err)
-	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "HTTP -> BPS -> ticket -> HTTP")
-	require.Equal(t, []string{"bps.openai.com"}, tc.hosts())
-	require.Zero(t, tc.dialer.DialCount())
-	require.Empty(t, c.GetString(openAIBPSBypassReasonKey), "BPS served; no bypass")
-	requireNoOpenAIRoutingHeaders(t, rec.Header())
-	require.False(t, *result.RouteDegraded)
-	require.Contains(t, rec.Body.String(), "bps ok")
-}
-
-// With BPS first in the plan, only a definitely-not-sent failure continues on
-// this account's next route; a possibly executed one switches accounts.
-func TestTiboRouteBPSFailureClassesInPlan(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		step     excelBPSWireStep
-		failover bool
-	}{
-		{"refused before send", excelBPSWireStep{err: syscall.ECONNREFUSED}, false},
-		{"reset after send", excelBPSWireStep{headersWritten: true, wrote: true, err: syscall.ECONNRESET}, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rc := newTiboRouteCase(t, true, true)
-			rc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-			upstream := &excelBPSTraceUpstream{steps: []excelBPSWireStep{tc.step, {resp: cookieWSHTTPResponse("ticket ok")}}}
-			rc.svc.httpUpstream = upstream
-			result, rec, c, err := rc.forwardWith(t, tiboRouteAstraBody, nil)
-			if tc.failover {
-				require.Equal(t, []string{"bps.openai.com"}, upstream.hosts(), "never a second send on this account's HTTP")
-				var failoverErr *UpstreamFailoverError
-				require.ErrorAs(t, err, &failoverErr)
-				require.False(t, failoverErr.RetryableOnSameAccount)
-				require.Zero(t, rc.dialer.DialCount(), "ticketed /responses is not tried after a possibly executed BPS request")
-				require.Empty(t, rec.Body.String())
-				return
-			}
-			require.NoError(t, err)
-			require.False(t, result.OpenAIWSMode, "next route on the same account: ticketed /responses")
-			require.Equal(t, []string{"bps.openai.com", "chatgpt.com"}, upstream.hosts())
-			require.Zero(t, rc.dialer.DialCount())
-			require.True(t, c.GetBool(openAITiboInjectTicketKey))
-			require.Equal(t, excelBPSHTTPFallbackReason, c.GetString(openAIBPSBypassReasonKey))
-			requireNoOpenAIRoutingHeaders(t, rec.Header())
-		})
-	}
-}
-
-func TestTiboRouteEnforceUsesBPSVerdict(t *testing.T) {
-	for _, mode := range []string{config.OpenAITiboBPSProbeShadow, config.OpenAITiboBPSProbeEnforce} {
-		t.Run(mode, func(t *testing.T) {
-			responses := []*http.Response{tiboRouteBPSResponse()}
-			if mode == config.OpenAITiboBPSProbeEnforce {
-				responses = []*http.Response{cookieWSHTTPResponse("ticket ok")}
-			}
-			tc := newTiboRouteCase(t, true, true, responses...)
-			tc.svc.cfg.Gateway.OpenAITiboRoute.BPSProbeMode = mode
-			tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-			tc.seed(openAITiboRouteBPS, openAITiboDegraded)
-			result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
-			require.NoError(t, err)
-			if mode == config.OpenAITiboBPSProbeShadow {
-				require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "shadow keeps BPS in place")
-				return
-			}
-			require.False(t, result.OpenAIWSMode, "enforce: degraded BPS drops below ticketed /responses")
-			require.True(t, c.GetBool(openAITiboInjectTicketKey))
-			require.Contains(t, rec.Body.String(), "ticket ok")
-			require.Zero(t, tc.dialer.DialCount())
-		})
-	}
-}
-
 func TestCookieWSAllSlotsBusyFallsBackToHTTP(t *testing.T) {
 	svc, account, ticket, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{events: [][]byte{[]byte(tiboRouteWSCompleted)}})
 	svc.cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 1
@@ -317,15 +233,13 @@ func TestTiboStatsDegradedRatioAlert(t *testing.T) {
 }
 
 func TestTiboRouteStatusesInRuntimeView(t *testing.T) {
-	tc := newTiboRouteCase(t, true, true)
+	tc := newTiboRouteCase(t, false, true)
 	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
 	status := tc.svc.openAICookieWSRuntimeStatus(tc.account, openAICodexTicketDefaultModel, time.Now())
-	require.Len(t, status.TiboRoutes, 3)
+	require.Len(t, status.TiboRoutes, 2)
 	require.Equal(t, "http", status.TiboRoutes[0].Route)
 	require.Equal(t, "degraded", status.TiboRoutes[0].Verdict)
-	require.Equal(t, "bps", status.TiboRoutes[1].Route)
+	require.Equal(t, "ticket", status.TiboRoutes[1].Route)
 	require.Equal(t, "unknown", status.TiboRoutes[1].Verdict)
-	require.Equal(t, "ticket", status.TiboRoutes[2].Route)
-	require.Equal(t, "unknown", status.TiboRoutes[2].Verdict)
 	require.Empty(t, tc.upstream.requests, "the admin view never probes")
 }
