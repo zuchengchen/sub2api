@@ -717,7 +717,7 @@ export default {
         codexFingerprintSession: 'Device + Session',
         codexFingerprintFull: 'Full convergence',
         codexTurnTicket: 'Codex ticket status',
-        codexTurnTicketDesc: 'Cookie WS maintains 3 Cookie groups per account, each with at most one verified business WS connection. Only Astra uses WS; other models use HTTP Responses. Readiness reflects verified connections in the current process; an unexpired Cookie does not mean its connection has recovered. Each group refreshes after 50 minutes and expires after 60 minutes. Recovery pauses while the account cannot be scheduled.',
+        codexTurnTicketDesc: 'Astra HTTP is selected by the Tibo probe (astra / low). Healthy HTTP stays on HTTP; degraded HTTP then tries BPS and 780 ticketed Responses.',
         codexTurnTicketMissing: 'No valid ticket; requests remain allowed',
         codexTurnTicketReady: '{time} left',
         codexTurnTicketPaused: 'No valid ticket; this model is paused',

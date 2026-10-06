@@ -893,14 +893,17 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestLoop(ctx context.Context)
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			// Tibo probes start in the background; run them before the slower
-			// Cookie refresh so a long harvest cannot delay route verdicts.
-			s.probeOpenAITiboRoutes(ctx)
-			s.refreshOpenAICookieWSTickets(ctx)
-			s.refreshOpenAICodexTickets(ctx)
+			s.openAICodexTicketHarvestTick(ctx)
 			timer.Reset(time.Duration(s.openAICodexTicketConfig().HarvestProbeIntervalSeconds) * time.Second)
 		}
 	}
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketHarvestTick(ctx context.Context) {
+	// Tibo probes start first so a long 292 harvest cannot delay route verdicts.
+	// Cookie WS harvest and socket warmup stay off; 780 mint is on the request path.
+	s.probeOpenAITiboRoutes(ctx)
+	s.refreshOpenAICodexTickets(ctx)
 }
 
 func (s *OpenAIGatewayService) rememberSharedOpenAICodexTicket(ticket *openAICodexTicket) {

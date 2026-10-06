@@ -18,7 +18,7 @@ const openAICookieWSMinimumConnections = 3
 // deficit. This sends a probe only on a newly created socket, never a periodic
 // ping or a request on an idle business session.
 func (s *OpenAIGatewayService) maintainOpenAICookieWSMinimum(ctx context.Context, accountID int64) {
-	if s == nil || ctx.Err() != nil {
+	if s == nil || !s.cookieWSBackgroundHarvest || ctx.Err() != nil {
 		return
 	}
 	_, _, _ = s.openaiCookieWSWarmupFlight.Do(strconv.FormatInt(accountID, 10), func() (any, error) {

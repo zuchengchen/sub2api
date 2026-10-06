@@ -543,7 +543,7 @@ func (s *OpenAIGatewayService) openAICookieWSSlotRetryWaiting(accountID int64, s
 }
 
 func (s *OpenAIGatewayService) refreshOpenAICookieWSTickets(ctx context.Context) {
-	if s == nil || s.accountRepo == nil || !s.openAICodexTicketEnabledContext(ctx) || ctx.Err() != nil || !strings.EqualFold(strings.TrimSpace(s.openAICodexTicketConfig().Mode), openAICookieWSMode) {
+	if s == nil || !s.cookieWSBackgroundHarvest || s.accountRepo == nil || !s.openAICodexTicketEnabledContext(ctx) || ctx.Err() != nil || !strings.EqualFold(strings.TrimSpace(s.openAICodexTicketConfig().Mode), openAICookieWSMode) {
 		return
 	}
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
