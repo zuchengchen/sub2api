@@ -4393,6 +4393,14 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     delete extra.openai_responses_flatten_namespaces
   }
   extra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
+  if (form.type === 'oauth') {
+    extra.openai_excel_bps = true
+  } else {
+    delete extra.openai_excel_bps
+    delete extra.openai_excel_bps_models
+    delete extra.openai_excel_bps_cache_creation_as_input
+    delete extra.openai_excel_bps_auto_disable_on_403
+  }
 
   if (accountCategory.value === 'oauth-based' && codexCLIOnlyEnabled.value) {
     extra.codex_cli_only = true
