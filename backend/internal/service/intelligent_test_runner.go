@@ -87,6 +87,18 @@ func applyIntelligentPayloadPrompt(ctx context.Context, payload map[string]any) 
 	applyIntelligentTestReasoning(payload)
 }
 
+func (s *AccountTestService) OpenAITiboHTTPVerdict(accountID int64) string {
+	if s == nil || s.openaiGatewayService == nil {
+		return ""
+	}
+	return string(s.openaiGatewayService.openAITiboEffective(accountID, openAITiboRouteHTTP, time.Now()))
+}
+
+func pelicanUsesHTTPTransport(ctx context.Context, httpHealthy bool) bool {
+	run := intelligentContext(ctx)
+	return run != nil && run.testType == "pelican" && httpHealthy
+}
+
 func applyIntelligentTestReasoning(payload map[string]any) {
 	if payload == nil {
 		return

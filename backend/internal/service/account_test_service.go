@@ -854,11 +854,16 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
 
+	httpHealthy := s.openaiGatewayService != nil &&
+		s.openaiGatewayService.openAITiboEffective(account.ID, openAITiboRouteHTTP, time.Now()) == openAITiboHealthy
+	preferHTTP := pelicanUsesHTTPTransport(ctx, httpHealthy)
+
 	// Excel/BPS accounts must use the same gateway path as user Responses
 	// requests. The legacy account-test probe hard-codes ChatGPT Codex and
 	// silently bypasses the account's protocol toggle, producing misleading
-	// quality-test results.
-	if account.IsExcelBPSEnabled() && s.openaiGatewayService != nil {
+	// quality-test results. User-page pelican runs stay on HTTP when Tibo
+	// already reports that path as healthy.
+	if account.IsExcelBPSEnabled() && s.openaiGatewayService != nil && !preferHTTP {
 		return s.testExcelBPSAccountConnection(c, account, modelID, prompt)
 	}
 
@@ -888,7 +893,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
 	}
-	if s.openaiGatewayService != nil {
+	if s.openaiGatewayService != nil && !preferHTTP {
 		upstreamModel := normalizeOpenAIModelForUpstream(account, testModelID)
 		if s.openaiGatewayService.openAICookieWSEnabledForModel(account, upstreamModel) &&
 			s.openaiGatewayService.openAICookieWSHasReadyTicket(account, upstreamModel) {

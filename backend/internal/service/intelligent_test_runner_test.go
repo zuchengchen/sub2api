@@ -21,6 +21,16 @@ func TestResolveIntelligentTestModelDefaultsChatGPTToGpt6Astra(t *testing.T) {
 	require.Equal(t, "", resolveIntelligentTestModel(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, ""))
 }
 
+func TestPelicanUsesHTTPTransport(t *testing.T) {
+	t.Parallel()
+	pelican := context.WithValue(context.Background(), intelligentRunKey{}, &intelligentRunContext{testType: "pelican"})
+	candy := context.WithValue(context.Background(), intelligentRunKey{}, &intelligentRunContext{testType: "candy"})
+	require.True(t, pelicanUsesHTTPTransport(pelican, true))
+	require.False(t, pelicanUsesHTTPTransport(pelican, false))
+	require.False(t, pelicanUsesHTTPTransport(candy, true))
+	require.False(t, pelicanUsesHTTPTransport(context.Background(), true))
+}
+
 func TestApplyIntelligentPayloadPromptPinsAstraLowReasoning(t *testing.T) {
 	t.Parallel()
 	ctx := context.WithValue(context.Background(), intelligentRunKey{}, &intelligentRunContext{prompt: "candy"})
