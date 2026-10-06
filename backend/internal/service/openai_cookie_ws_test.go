@@ -158,6 +158,7 @@ func cookieWSTestService(t *testing.T, upstream HTTPUpstream, answers ...string)
 	}, upstream)
 	s.accountRepo = &cookieWSLifecycleRepo{accounts: []Account{*ticketTestAccount(41), *ticketTestAccount(42)}}
 	s.tiboRouteDisabled = true // Cookie WS lifecycle tests; Tibo routing is tested separately.
+	s.cookieWSBackgroundHarvest = true
 	conn := &cookieWSProbeConn{}
 	for _, answer := range answers {
 		conn.answers = append(conn.answers, cookieWSCompletion(openAICodexTicketDefaultModel, answer))
@@ -374,6 +375,27 @@ func TestOpenAICookieWSModeLeavesNonselectedTrafficAndLegacyHarvesterInactive(t 
 	s.refreshOpenAICodexTickets(context.Background())
 	s.probeOnceOpenAICodexTicket(context.Background(), other, openAICodexTicketDefaultModel)
 	require.Empty(t, u.requests)
+}
+
+func TestCodexTicketHarvestTickSkipsCookieWS(t *testing.T) {
+	u := &httpUpstreamRecorder{resp: cookieWSHTTPResponse("True")}
+	s, dialer := cookieWSTestService(t, u, "True", "True")
+	s.openAICodexTicketHarvestTick(context.Background())
+	require.Empty(t, u.requests)
+	require.Zero(t, dialer.dials)
+	require.Nil(t, s.lookupOpenAICookieWSTicket(ticketTestAccount(41), openAICodexTicketDefaultModel))
+}
+
+func TestOpenAICookieWSBackgroundHarvestOffSkipsRefreshAndWarmup(t *testing.T) {
+	u := &httpUpstreamRecorder{resp: cookieWSHTTPResponse("True")}
+	s, dialer := cookieWSTestService(t, u, "True", "True")
+	s.cookieWSBackgroundHarvest = false
+	account := ticketTestAccount(41)
+	s.refreshOpenAICookieWSTickets(context.Background())
+	s.maintainOpenAICookieWSMinimum(context.Background(), account.ID)
+	require.Empty(t, u.requests)
+	require.Zero(t, dialer.dials)
+	require.Nil(t, s.lookupOpenAICookieWSTicket(account, openAICodexTicketDefaultModel))
 }
 
 func TestOpenAICookieWSConcurrentRefreshSingleflight(t *testing.T) {

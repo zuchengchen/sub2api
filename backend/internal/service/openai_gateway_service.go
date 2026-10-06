@@ -529,6 +529,9 @@ type OpenAIGatewayService struct {
 	// tiboRouteDisabled is live-test only: keep Cookie WS accounts on the
 	// pre-Tibo-routing path so Forward exercises the websocket directly.
 	tiboRouteDisabled bool
+	// cookieWSBackgroundHarvest is test-only. Production harvest no longer
+	// refreshes Cookie groups or warms verified sockets.
+	cookieWSBackgroundHarvest bool
 	// excelBPSHeartbeatInterval is test only; zero means the 15s default.
 	excelBPSHeartbeatInterval time.Duration
 	// openaiTiboRoutes: accountID → *openAITiboAccountState (openai_tibo_route.go).
