@@ -142,11 +142,19 @@ func (r *intelligentTestRepository) FirstAdminUserID(ctx context.Context) (int64
 
 func (r *intelligentTestRepository) ListPelicanCandidates(ctx context.Context) ([]service.PelicanCandidate, error) {
 	// Same schedulable gates as normal OpenAI routing, plus skip 5h/7d quota
-	// exhaustion. A valid ticket is an unexpired 292 with its harvest cookies.
+	// exhaustion. HTTP health is the persisted Tibo HTTP verdict (not stale).
+	// A valid ticket is an unexpired 292 with its harvest cookies.
 	// Candidates are GPT-PRO OAuth / setup-token accounts.
 	const astraTicket = `codex_turn_ticket:gpt-6-astra`
+	const tiboHTTP = `codex_tibo_verdict:http`
 	rows, err := r.db.QueryContext(ctx, `
 SELECT DISTINCT a.id,
+  (
+    jsonb_typeof(a.extra->$6) = 'object'
+    AND a.extra->$6->>'verdict' = 'healthy'
+    AND NULLIF(btrim(a.extra->$6->>'checked_at'),'') IS NOT NULL
+    AND (a.extra->$6->>'checked_at')::timestamptz > NOW() - INTERVAL '30 minutes'
+  ) AS has_healthy_http,
   (
     jsonb_typeof(a.extra->$5) = 'object'
     AND COALESCE((a.extra->$5->>'length')::int, 0) = 292
@@ -177,7 +185,7 @@ WHERE a.deleted_at IS NULL AND a.status=$1 AND a.platform=$2
     AND NULLIF(btrim(a.extra->>'codex_7d_reset_at'),'') IS NOT NULL
     AND (a.extra->>'codex_7d_reset_at')::timestamptz > NOW()
   )
-ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.VipDiscountedGroupName, astraTicket)
+ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.VipDiscountedGroupName, astraTicket, tiboHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +193,7 @@ ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{
 	out := []service.PelicanCandidate{}
 	for rows.Next() {
 		var item service.PelicanCandidate
-		if err := rows.Scan(&item.ID, &item.HasTicket); err != nil {
+		if err := rows.Scan(&item.ID, &item.HasHealthyHTTP, &item.HasTicket); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
