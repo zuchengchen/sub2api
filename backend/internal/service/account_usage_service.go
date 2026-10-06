@@ -248,7 +248,8 @@ type AccountUsageService struct {
 	agentIdentityTaskMu sync.Mutex
 	agentIdentityWS     agentIdentityWSConnectionInvalidator
 
-	openAI429Recovery openAI429RecoveryScheduler
+	openAI429Recovery  openAI429RecoveryScheduler
+	openaiCreditsGuard *OpenAIGatewayService
 }
 
 type openAI429RecoveryScheduler interface {
@@ -285,6 +286,13 @@ func (s *AccountUsageService) SetOpenAI429RecoveryScheduler(scheduler openAI429R
 		return
 	}
 	s.openAI429Recovery = scheduler
+}
+
+func (s *AccountUsageService) SetOpenAICreditsGuard(gateway *OpenAIGatewayService) {
+	if s == nil {
+		return
+	}
+	s.openaiCreditsGuard = gateway
 }
 
 func supportsAnthropicPassiveUsage(account *Account) bool {
@@ -662,7 +670,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 				if quotaUsage, err := s.openAIQuotaService.QueryUsage(ctx, account.ID); err == nil {
 					if updates := buildCodexSparkWindowExtraUpdates(quotaUsage, now); len(updates) > 0 {
 						mergeAccountExtra(account, updates)
-						s.persistOpenAICodexProbeSnapshot(account.ID, updates)
+						s.persistOpenAICodexProbeSnapshot(account.ID, updates, nil)
 						if usage.UpdatedAt == nil {
 							usage.UpdatedAt = &now
 						}
@@ -837,23 +845,26 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	updates, err := extractOpenAICodexProbeUpdates(resp)
+	snapshot, updates, err := extractOpenAICodexProbeSnapshot(resp)
 	if err != nil {
 		return nil, err
 	}
 	if len(updates) > 0 {
-		s.persistOpenAICodexProbeSnapshot(account.ID, updates)
+		s.persistOpenAICodexProbeSnapshot(account.ID, updates, snapshot)
 		return updates, nil
 	}
 	return nil, nil
 }
 
-func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, updates map[string]any) {
+func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, updates map[string]any, snapshot *OpenAICodexUsageSnapshot) {
 	if s == nil || s.accountRepo == nil || accountID <= 0 {
 		return
 	}
 	if len(updates) == 0 {
 		return
+	}
+	if snapshot != nil && s.openaiCreditsGuard != nil {
+		s.openaiCreditsGuard.applyOpenAICreditsGuard(context.Background(), accountID, snapshot)
 	}
 
 	go func() {
@@ -864,16 +875,21 @@ func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, u
 }
 
 func extractOpenAICodexProbeUpdates(resp *http.Response) (map[string]any, error) {
+	_, updates, err := extractOpenAICodexProbeSnapshot(resp)
+	return updates, err
+}
+
+func extractOpenAICodexProbeSnapshot(resp *http.Response) (*OpenAICodexUsageSnapshot, map[string]any, error) {
 	if resp == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
-		return buildCodexUsageExtraUpdates(snapshot, time.Now()), nil
+		return snapshot, buildCodexUsageExtraUpdates(snapshot, time.Now()), nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("openai codex probe returned status %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("openai codex probe returned status %d", resp.StatusCode)
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func mergeAccountExtra(account *Account, updates map[string]any) {
