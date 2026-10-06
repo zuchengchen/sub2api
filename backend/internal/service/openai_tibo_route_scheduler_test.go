@@ -49,9 +49,8 @@ func TestTiboSchedulerTier(t *testing.T) {
 	seedTiboSchedulerVerdict(svc, account.ID, openAITiboDegraded)
 	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, "gpt-5.1", now), "every route degraded")
 
-	svc.openaiCookieWSTickets.Store(openAICodexTicketKey(account.ID, openAICodexTicketDefaultModel), cookieWSTestTicket(account.ID, now.Add(-time.Minute)))
-	require.Equal(t, 0, svc.openAITiboSchedulerTier(&account, openAICodexTicketDefaultModel, now), "ready Cookie WS for astra")
-	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, "gpt-5.1", now), "Cookie WS serves astra only")
+	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, openAICodexTicketDefaultModel, now), "no 780 ticket and no harvest proxy")
+	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, "gpt-5.1", now), "non-astra stays on degraded HTTP")
 
 	withBPS := account
 	withBPS.Extra = map[string]any{"openai_excel_bps": true}

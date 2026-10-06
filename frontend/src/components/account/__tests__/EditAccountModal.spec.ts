@@ -335,7 +335,7 @@ describe('EditAccountModal', () => {
     wrapper.unmount()
   })
 
-  it('defaults OAuth outbound to Cookie WS and saves exclusive Excel BPS extra', async () => {
+  it('defaults OAuth outbound off and saves try-full-quality as all-model BPS extra', async () => {
     const account = buildAccount()
     account.type = 'oauth'
     account.credentials = { access_token: 'test-token', chatgpt_account_id: 'test-account' }
@@ -343,25 +343,24 @@ describe('EditAccountModal', () => {
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
-    expect((wrapper.get('[data-testid="outbound-cookie-ws"]').element as HTMLInputElement).checked).toBe(true)
-    expect((wrapper.get('[data-testid="excel-bps-toggle"]').element as HTMLInputElement).checked).toBe(false)
-    await wrapper.get('[data-testid="excel-bps-toggle"]').setValue(true)
+    expect(wrapper.get('[data-testid="excel-bps-toggle"]').attributes('aria-checked')).toBe('false')
+    await wrapper.get('[data-testid="excel-bps-toggle"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_excel_bps).toBe(true)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_excel_bps_models).toEqual(['gpt-6-astra'])
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_excel_bps_models).toBeUndefined()
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.unrelated).toBe('preserve')
   })
 
-  it('clears BPS extra when Cookie WS is selected', async () => {
+  it('clears BPS extra when try-full-quality is turned off', async () => {
     const account = buildAccount()
     account.type = 'oauth'
     account.extra = { openai_excel_bps: true, openai_excel_bps_cache_creation_as_input: true, openai_excel_bps_auto_disable_on_403: true, unrelated: 'preserve' }
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
-    expect((wrapper.get('[data-testid="excel-bps-toggle"]').element as HTMLInputElement).checked).toBe(true)
-    await wrapper.get('[data-testid="outbound-cookie-ws"]').setValue(true)
+    expect(wrapper.get('[data-testid="excel-bps-toggle"]').attributes('aria-checked')).toBe('true')
+    await wrapper.get('[data-testid="excel-bps-toggle"]').trigger('click')
     expect(wrapper.find('[data-testid="excel-bps-cache-creation-as-input"]').exists()).toBe(false)
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()

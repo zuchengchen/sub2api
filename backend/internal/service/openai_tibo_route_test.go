@@ -45,6 +45,8 @@ func newTiboRouteCase(t *testing.T, bps, wsReady bool, responses ...*http.Respon
 	}
 	if !wsReady {
 		svc.openaiCookieWSTickets.Delete(openAICodexTicketKey(account.ID, ticket.Model))
+	} else {
+		storeTestCodex780Ticket(svc, account)
 	}
 	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
 	upstream.responses = responses
@@ -78,6 +80,20 @@ func requireTiboProbe(t *testing.T, body []byte) {
 	require.Contains(t, string(body), `"effort":"low"`)
 }
 
+func TestTiboRouteAppliesForBPSWithoutCookieWS(t *testing.T) {
+	tc := newTiboRouteCase(t, true, false, cookieWSHTTPResponse("true."), cookieWSHTTPResponse("http ok"))
+	tc.svc.cfg.Gateway.OpenAICodexTicket.Mode = "turn_state"
+	tc.svc.cfg.Gateway.OpenAICodexTicket.CookieWSAccountIDs = nil
+	require.True(t, tc.svc.openAITiboRouteApplies(tc.account))
+	require.False(t, tc.svc.openAICookieWSAccountEnabled(tc.account))
+	result, rec, c := tc.forward(t)
+	require.False(t, result.OpenAIWSMode)
+	require.False(t, c.GetBool(openAITiboInjectTicketKey))
+	require.NotNil(t, result.RouteDegraded)
+	require.False(t, *result.RouteDegraded)
+	require.Contains(t, rec.Body.String(), "http ok")
+}
+
 func TestTiboRouteHTTPTrueStaysOnHTTP(t *testing.T) {
 	for _, bps := range []bool{false, true} {
 		tc := newTiboRouteCase(t, bps, true, cookieWSHTTPResponse("true."), cookieWSHTTPResponse("http ok"))
@@ -107,23 +123,30 @@ func TestTiboRouteDegradedPrefersBPS(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "bps ok")
 }
 
-func TestTiboRouteBPSUnusableFallsBackToCookieWS(t *testing.T) {
-	tc := newTiboRouteCase(t, true, true, cookieWSHTTPResponse("False"), tiboRouteStatusResponse(http.StatusForbidden))
+func TestTiboRouteBPSUnusableFallsBackToTicketedHTTP(t *testing.T) {
+	tc := newTiboRouteCase(t, true, true, cookieWSHTTPResponse("False"), tiboRouteStatusResponse(http.StatusForbidden), cookieWSHTTPResponse("ticket ok"))
 	result, rec, c := tc.forward(t)
-	require.True(t, result.OpenAIWSMode)
-	require.Equal(t, []string{"chatgpt.com", "bps.openai.com"}, tc.hosts())
-	require.Equal(t, 1, tc.dialer.DialCount())
+	require.False(t, result.OpenAIWSMode)
+	require.Equal(t, []string{"chatgpt.com", "bps.openai.com", "chatgpt.com"}, tc.hosts())
+	require.Zero(t, tc.dialer.DialCount())
 	require.Equal(t, "bps_error", c.GetString(openAIBPSBypassReasonKey))
+	require.True(t, c.GetBool(openAITiboInjectTicketKey))
+	require.Equal(t, openAICodex780Length, len(tc.upstream.requests[2].Header.Get(openAICodexTurnStateHeader)))
+	require.Contains(t, tc.upstream.requests[2].Header.Get("Cookie"), "__cflb=")
 	requireNoOpenAIRoutingHeaders(t, rec.Header())
-	require.Contains(t, rec.Body.String(), "ws ok")
+	require.Contains(t, rec.Body.String(), "ticket ok")
 }
 
-func TestTiboRouteDegradedWithoutBPSUsesCookieWS(t *testing.T) {
-	tc := newTiboRouteCase(t, false, true, cookieWSHTTPResponse("False"))
-	result, rec, _ := tc.forward(t)
-	require.True(t, result.OpenAIWSMode)
-	require.Equal(t, []string{"chatgpt.com"}, tc.hosts())
-	require.Contains(t, rec.Body.String(), "ws ok")
+func TestTiboRouteDegradedWithoutBPSUsesTicketedHTTP(t *testing.T) {
+	tc := newTiboRouteCase(t, false, true, cookieWSHTTPResponse("False"), cookieWSHTTPResponse("ticket ok"))
+	result, rec, c := tc.forward(t)
+	require.False(t, result.OpenAIWSMode)
+	require.Equal(t, []string{"chatgpt.com", "chatgpt.com"}, tc.hosts())
+	require.Zero(t, tc.dialer.DialCount())
+	require.True(t, c.GetBool(openAITiboInjectTicketKey))
+	require.Equal(t, openAICodex780Length, len(tc.upstream.requests[1].Header.Get(openAICodexTurnStateHeader)))
+	require.Contains(t, tc.upstream.requests[1].Header.Get("Cookie"), "__cflb=")
+	require.Contains(t, rec.Body.String(), "ticket ok")
 }
 
 func TestTiboRouteEverythingUnusableStillSendsHTTP(t *testing.T) {
@@ -133,6 +156,7 @@ func TestTiboRouteEverythingUnusableStillSendsHTTP(t *testing.T) {
 	require.Equal(t, []string{"chatgpt.com", "bps.openai.com", "chatgpt.com"}, tc.hosts())
 	require.Zero(t, tc.dialer.DialCount())
 	require.Equal(t, excelBPSHTTPFallbackReason, c.GetString("openai_ws_transport_reason"))
+	require.False(t, c.GetBool(openAITiboInjectTicketKey), "no harvested ticket: last hop is plain HTTP")
 	require.Contains(t, rec.Body.String(), "http ok")
 	require.NotNil(t, result.RouteDegraded)
 	require.True(t, *result.RouteDegraded, "only degraded routes remain; recorded in usage, not headers")
@@ -140,19 +164,20 @@ func TestTiboRouteEverythingUnusableStillSendsHTTP(t *testing.T) {
 }
 
 // A cold account whose first probe is unknown has no confirmed verdict, so it
-// still takes the degraded-first chain (Cookie WS here), and unknown does not
-// become a verdict.
+// still takes the degraded-first chain (ticketed /responses here), and unknown
+// does not become a verdict.
 func TestTiboRouteProbeFailureIsNotHealthy(t *testing.T) {
-	tc := newTiboRouteCase(t, false, true, tiboRouteStatusResponse(http.StatusTooManyRequests))
-	result, _, _ := tc.forward(t)
-	require.True(t, result.OpenAIWSMode, "an unknown verdict takes the degraded chain")
+	tc := newTiboRouteCase(t, false, true, tiboRouteStatusResponse(http.StatusTooManyRequests), cookieWSHTTPResponse("ticket ok"))
+	result, _, c := tc.forward(t)
+	require.False(t, result.OpenAIWSMode, "an unknown verdict takes the degraded chain")
+	require.True(t, c.GetBool(openAITiboInjectTicketKey))
 	state := tc.svc.loadOpenAITiboAccountState(tc.account.ID)
 	require.NotNil(t, state)
 	require.Empty(t, state.http.verdict, "unknown samples never become a verdict")
 	require.Equal(t, 1, state.http.unknownStreak)
 	require.Equal(t, openAITiboUnknown, tc.svc.openAITiboEffective(tc.account.ID, openAITiboRouteHTTP, time.Now()))
 	require.NotNil(t, result.RouteDegraded)
-	require.False(t, *result.RouteDegraded, "Cookie WS served, not the degraded HTTP fallback")
+	require.False(t, *result.RouteDegraded, "ticketed /responses served, not the degraded HTTP fallback")
 }
 
 // tiboSafeUpstream serves probe and business requests from separate queues

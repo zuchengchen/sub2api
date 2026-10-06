@@ -105,7 +105,7 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 	}
 	defer func() { <-sem }()
 	if account == nil {
-		latest, err := s.latestOpenAICookieWSAccount(ctx, state.accountID)
+		latest, err := s.latestOpenAITiboAccount(ctx, state.accountID)
 		if err != nil || !s.openAITiboRouteApplies(latest) ||
 			(route == openAITiboRouteBPS && !latest.IsExcelBPSEnabledForModel(openAICodexTicketDefaultModel)) {
 			// Paused, rate-limited or disabled accounts are not sampled; their
@@ -299,7 +299,7 @@ func (s *OpenAIGatewayService) seedOpenAITiboStateLocked(state *openAITiboAccoun
 // loadPersistedOpenAITiboVerdicts seeds verdicts from full account rows once
 // per process (scheduler snapshots strip these keys).
 func (s *OpenAIGatewayService) loadPersistedOpenAITiboVerdicts(ctx context.Context) {
-	if s.accountRepo == nil || s.openaiTiboLoaded.Load() {
+	if s == nil || s.accountRepo == nil || s.openaiTiboLoaded.Load() {
 		return
 	}
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
@@ -333,10 +333,37 @@ func (s *OpenAIGatewayService) loadPersistedOpenAITiboVerdicts(ctx context.Conte
 	}
 }
 
+// latestOpenAITiboAccount reloads the account for a background probe. It
+// applies the same pause/rate-limit skip as Cookie harvest, but also covers
+// BPS-only anti-degrade accounts that are not in the Cookie WS rollout.
+func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, accountID int64) (*Account, error) {
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return nil, errOpenAICookieWSAccountUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	account, err := s.accountRepo.GetByID(readCtx, accountID)
+	if err != nil || account == nil || account.ID != accountID {
+		return nil, errOpenAICookieWSAccountUnavailable
+	}
+	current := *account
+	current.Extra = maps.Clone(account.Extra)
+	current.Credentials = maps.Clone(account.Credentials)
+	if !s.openAITiboRouteApplies(&current) || openAICookieWSAccountSkipReason(&current, time.Now()) != "" {
+		return nil, errOpenAICookieWSAccountUnavailable
+	}
+	return &current, nil
+}
+
 // probeOpenAITiboRoutes is the harvester-tick hook: probe due routes of
-// recently active Cookie WS accounts in the background.
+// recently active Tibo-routed accounts in the background. The tick currently
+// requires Cookie WS mode because the harvester is the only caller; BPS-only
+// accounts still get request-path Tibo without this loop.
 func (s *OpenAIGatewayService) probeOpenAITiboRoutes(ctx context.Context) {
-	if s == nil || s.tiboRouteDisabled || ctx.Err() != nil || !s.openAICookieWSModeConfigured() || !s.openAICodexTicketEnabledContext(ctx) {
+	if s == nil || s.tiboRouteDisabled || ctx.Err() != nil || !s.openAICookieWSModeConfigured() {
 		return
 	}
 	s.loadPersistedOpenAITiboVerdicts(ctx)
@@ -467,9 +494,9 @@ func openAITiboTimePtr(t time.Time) *time.Time {
 	return &t
 }
 
-// openAITiboRouteStatuses returns HTTP/BPS verdict states plus Cookie WS
-// readiness for the admin view. It never starts probes.
-func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, cookieReady bool, now time.Time) []OpenAITiboRouteStatus {
+// openAITiboRouteStatuses returns HTTP/BPS verdict states plus ticketed
+// /responses readiness for the admin view. It never starts probes.
+func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, ticketReady bool, now time.Time) []OpenAITiboRouteStatus {
 	if s == nil || account == nil || !s.openAITiboRouteApplies(account) {
 		return nil
 	}
@@ -501,11 +528,11 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, cookieR
 		}
 		out = append(out, item)
 	}
-	cookie := OpenAITiboRouteStatus{Route: string(openAITiboRouteCookieWS), Verdict: "unavailable"}
-	if cookieReady {
-		cookie.Verdict = string(openAITiboHealthy)
+	ticket := OpenAITiboRouteStatus{Route: string(openAITiboRouteTicket), Verdict: "unavailable"}
+	if ticketReady {
+		ticket.Verdict = string(openAITiboUnknown)
 	}
-	return append(out, cookie)
+	return append(out, ticket)
 }
 
 // observeOpenAITiboResponseModel is the passive model check at the end of a

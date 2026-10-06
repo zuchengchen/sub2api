@@ -96,6 +96,25 @@ func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
 	require.Equal(t, 292, len(h.Get(openAICodexTurnStateHeader)))
 }
 
+func TestApplyOpenAICodexTicket_TiboHopInjectsDespiteBPS(t *testing.T) {
+	state := fakeCodexTicketState(292)
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled: true, TargetLength: 292, TTLSeconds: 3600, FailClosed: true,
+	}, nil)
+	account := ticketTestAccount(41)
+	account.Extra = map[string]any{"openai_excel_bps": true}
+	svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+		AccountID: 41, Model: "gpt-6-astra", State: state, Length: 292,
+		Cookies: openAICodexTicketTestCookies, CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+	})
+	h := http.Header{}
+	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", h))
+	require.Empty(t, h.Get(openAICodexTurnStateHeader), "ordinary HTTP on a BPS account does not inject")
+	h = http.Header{}
+	require.NoError(t, svc.applyOpenAICodexTicket(withOpenAITiboInjectTicket(context.Background()), account, "gpt-6-astra", h))
+	require.Empty(t, h.Get(openAICodexTurnStateHeader), "Tibo hop without a 780 ticket fail-opens")
+}
+
 func TestApplyOpenAICodexTicket_SharesAstraTicketAcrossAccountsAndSol(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled:         true,

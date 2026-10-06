@@ -113,14 +113,14 @@ describe('BulkEditAccountModal', () => {
       expect(mountModal().find('#bulk-edit-excel-bps-enabled').exists()).toBe(false)
     })
 
-    it('enables BPS for Astra by default', async () => {
+    it('enables try-full-quality for all models', async () => {
       const wrapper = mountModal(oauthProps)
       await enableBPS(wrapper)
       await submit(wrapper)
       expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
         extra: {
           openai_excel_bps: true,
-          openai_excel_bps_models: ['gpt-6-astra'],
+          openai_excel_bps_models: null,
           openai_excel_bps_cache_creation_as_input: false
         }
       })

@@ -1667,55 +1667,27 @@
         </p>
       </div>
 
-      <!-- OpenAI OAuth outbound: Cookie WS (default) vs Excel/BPS -->
+      <!-- OpenAI OAuth: try full quality (HTTP → BPS → ticketed Responses → HTTP) -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
         data-testid="openai-outbound-protocol"
       >
-        <label class="input-label">{{ t('admin.accounts.openai.outboundProtocol') }}</label>
-        <div class="mt-3 space-y-3">
-          <label class="flex cursor-pointer items-start gap-3">
-            <input
-              type="radio"
-              name="openai-outbound-protocol"
-              class="mt-1"
-              data-testid="outbound-cookie-ws"
-              :checked="!excelBPSEnabled"
-              @change="excelBPSEnabled = false"
-            />
-            <span>
-              <span class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.openai.outboundCookieWS') }}</span>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.outboundCookieWSDesc') }}</p>
-            </span>
-          </label>
-          <label class="flex cursor-pointer items-start gap-3">
-            <input
-              type="radio"
-              name="openai-outbound-protocol"
-              class="mt-1"
-              data-testid="excel-bps-toggle"
-              :checked="excelBPSEnabled"
-              @change="excelBPSEnabled = true"
-            />
-            <span>
-              <span class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.openai.excelBPS') }}</span>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.excelBPSDesc') }}</p>
-            </span>
-          </label>
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.outboundProtocol') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.outboundProtocolDesc') }}
+            </p>
+          </div>
+          <Toggle
+            :model-value="excelBPSEnabled"
+            data-testid="excel-bps-toggle"
+            :aria-label="t('admin.accounts.openai.outboundProtocol')"
+            @update:model-value="excelBPSEnabled = $event"
+          />
         </div>
         <div v-if="excelBPSEnabled" class="mt-3 space-y-3">
-          <label class="flex items-center gap-2">
-            <input v-model="excelBPSAllModels" type="checkbox" data-testid="excel-bps-all-models" />
-            <span>{{ t('admin.accounts.openai.excelBPSAllModels') }}</span>
-          </label>
-          <div v-if="!excelBPSAllModels" data-testid="excel-bps-model-selection">
-            <label class="input-label">{{ t('admin.accounts.openai.excelBPSModels') }}</label>
-            <ModelWhitelistSelector v-model="excelBPSModels" platform="openai" />
-            <button type="button" class="btn btn-secondary btn-sm mt-2" data-testid="excel-bps-astra-only"
-              @click="excelBPSModels = ['gpt-6-astra']">{{ t('admin.accounts.openai.excelBPSAstraOnly') }}</button>
-            <p class="input-hint">{{ t('admin.accounts.openai.excelBPSModelsHint') }}</p>
-          </div>
           <p class="text-xs text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.excelBPSNotice') }}</p>
           <div>
             <label class="flex items-center gap-2">
@@ -3709,8 +3681,6 @@ const customBaseUrl = ref('')
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
 const excelBPSEnabled = ref(false)
-const excelBPSAllModels = ref(false)
-const excelBPSModels = ref<string[]>(['gpt-6-astra'])
 const excelBPSCacheCreationAsInput = ref(false)
 const excelBPSAutoDisableOn403 = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
@@ -4209,8 +4179,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
   excelBPSEnabled.value = false
-  excelBPSAllModels.value = false
-  excelBPSModels.value = ['gpt-6-astra']
   excelBPSCacheCreationAsInput.value = false
   excelBPSAutoDisableOn403.value = false
   openaiFlattenNamespacesEnabled.value = false
@@ -4233,12 +4201,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     excelBPSEnabled.value = newAccount.type === 'oauth' && extra?.openai_excel_bps === true
-    excelBPSAllModels.value = excelBPSEnabled.value && !Object.prototype.hasOwnProperty.call(extra ?? {}, 'openai_excel_bps_models')
-    if (Object.prototype.hasOwnProperty.call(extra ?? {}, 'openai_excel_bps_models')) {
-      excelBPSModels.value = Array.isArray(extra?.openai_excel_bps_models)
-        ? extra.openai_excel_bps_models.filter((model): model is string => typeof model === 'string')
-        : []
-    }
     excelBPSCacheCreationAsInput.value = excelBPSEnabled.value && extra?.openai_excel_bps_cache_creation_as_input === true
     excelBPSAutoDisableOn403.value = extra?.openai_excel_bps_auto_disable_on_403 === true
     openaiFlattenNamespacesEnabled.value =
@@ -5596,11 +5558,7 @@ const handleSubmit = async () => {
       }
       if (props.account.type === 'oauth' && !isSparkShadow.value && excelBPSEnabled.value) {
         newExtra.openai_excel_bps = true
-        if (excelBPSAllModels.value) {
-          delete newExtra.openai_excel_bps_models
-        } else {
-          newExtra.openai_excel_bps_models = [...new Set(excelBPSModels.value.map(model => model.trim()).filter(Boolean))]
-        }
+        delete newExtra.openai_excel_bps_models
       } else {
         delete newExtra.openai_excel_bps
         delete newExtra.openai_excel_bps_models

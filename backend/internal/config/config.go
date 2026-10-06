@@ -1005,7 +1005,7 @@ type GatewayConfig struct {
 	// OpenAICodexTicket: ChatGPT OAuth 账号按 (账号, 模型) 捕获 292 长度
 	// x-codex-turn-state，并在住宅 IP 业务请求中注入该头。默认关闭。
 	OpenAICodexTicket OpenAICodexTicketConfig `mapstructure:"openai_codex_ticket"`
-	// OpenAITiboRoute: Cookie WS 账号按 Tibo 探针挑线路（后台探测、投票确认、调度分层）。
+	// OpenAITiboRoute: 尝试不降智账号按 Tibo 探针挑线路（后台探测、投票确认、调度分层）。
 	OpenAITiboRoute OpenAITiboRouteConfig `mapstructure:"openai_tibo_route"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
