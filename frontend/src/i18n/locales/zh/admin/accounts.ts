@@ -807,7 +807,7 @@ export default {
         codexFingerprintSession: '设备+会话',
         codexFingerprintFull: '完全收敛',
         codexTurnTicket: 'Codex 门票状态',
-        codexTurnTicketDesc: 'Cookie WS 每账号保持 3 组 Cookie，每组最多 1 条已验证业务 WS。仅 Astra 走 WS，其他模型走 HTTP Responses。就绪状态以当前进程实际已验证连接为准，Cookie 仍在有效期内不代表连接已恢复。每组在获取后第 50 分钟刷新、第 60 分钟过期；账号不可调度时暂停恢复。',
+        codexTurnTicketDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / low）。健康则直连 HTTP；降智时再试 BPS 和 780 打票 Responses。',
         codexTurnTicketMissing: '暂无有效门票，仍允许请求',
         codexTurnTicketReady: '剩余 {time}',
         codexTurnTicketPaused: '暂无有效门票，该模型已暂停',
