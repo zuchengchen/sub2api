@@ -40,7 +40,7 @@ func TestExcelBPSModelSelection(t *testing.T) {
 }
 
 func TestExcelBPSSelectedModelForwarding(t *testing.T) {
-	for _, model := range []string{"gpt-6-astra", "gpt-6-sol"} {
+	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol"} {
 		t.Run(model, func(t *testing.T) {
 			wire := fmt.Sprintf("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"model\":%q,\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", model)
 			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}}
