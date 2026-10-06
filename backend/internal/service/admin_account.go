@@ -317,6 +317,10 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err != nil {
 		return nil, fmt.Errorf("normalize duplicate account extra: %w", err)
 	}
+	accountExtra, err = normalizeOpenAIExcelBPSExtra(input.Platform, input.Type, input.Credentials, accountExtra, false)
+	if err != nil {
+		return nil, fmt.Errorf("normalize duplicate account extra: %w", err)
+	}
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
@@ -414,6 +418,70 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 	return normalized, nil
 }
 
+func excelBPSCredentialsEligible(credentials map[string]any) bool {
+	probe := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: credentials}
+	return !probe.IsOpenAIAgentIdentity() && !probe.IsOpenAIPersonalAccessToken()
+}
+
+func excelBPSSettingsEligible(platform, accountType string, credentials map[string]any, isShadow bool) bool {
+	return platform == PlatformOpenAI && accountType == AccountTypeOAuth && !isShadow && excelBPSCredentialsEligible(credentials)
+}
+
+func ValidateOpenAIExcelBPSExtra(platform string, extra map[string]any) error {
+	if platform != PlatformOpenAI {
+		return nil
+	}
+	raw, exists := extra[OpenAIExcelBPSExtraKey]
+	if !exists {
+		return nil
+	}
+	if _, ok := raw.(bool); !ok {
+		return infraerrors.BadRequest("OPENAI_EXCEL_BPS_INVALID", "openai_excel_bps must be a boolean")
+	}
+	return nil
+}
+
+func normalizeOpenAIExcelBPSExtra(platform, accountType string, credentials, extra map[string]any, isShadow bool) (map[string]any, error) {
+	if platform != PlatformOpenAI {
+		return extra, nil
+	}
+	if err := ValidateOpenAIExcelBPSExtra(platform, extra); err != nil {
+		return nil, err
+	}
+	if !excelBPSSettingsEligible(platform, accountType, credentials, isShadow) {
+		return extra, nil
+	}
+	normalized := maps.Clone(extra)
+	if normalized == nil {
+		normalized = make(map[string]any, 1)
+	}
+	if _, exists := normalized[OpenAIExcelBPSExtraKey]; !exists {
+		normalized[OpenAIExcelBPSExtraKey] = true
+	}
+	return normalized, nil
+}
+
+func normalizeOpenAIExcelBPSUpdateExtra(account *Account, input *UpdateAccountInput, extra map[string]any) (map[string]any, error) {
+	effectiveType := account.Type
+	if input.Type != "" {
+		effectiveType = input.Type
+	}
+	credentials := account.Credentials
+	if len(input.Credentials) > 0 {
+		credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+	}
+	normalized, err := normalizeOpenAIExcelBPSExtra(account.Platform, effectiveType, credentials, extra, account.IsShadow())
+	if err != nil || account.Platform != PlatformOpenAI {
+		return normalized, err
+	}
+	_, provided := input.Extra[OpenAIExcelBPSExtraKey]
+	current, hasCurrent := account.Extra[OpenAIExcelBPSExtraKey].(bool)
+	if !provided && hasCurrent {
+		normalized[OpenAIExcelBPSExtraKey] = current
+	}
+	return normalized, nil
+}
+
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
@@ -488,6 +556,10 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
+	if err != nil {
+		return nil, err
+	}
+	accountExtra, err = normalizeOpenAIExcelBPSExtra(input.Platform, input.Type, input.Credentials, accountExtra, false)
 	if err != nil {
 		return nil, err
 	}
@@ -590,6 +662,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
+		if err != nil {
+			return nil, err
+		}
+		normalizedExtra, err = normalizeOpenAIExcelBPSUpdateExtra(account, input, normalizedExtra)
 		if err != nil {
 			return nil, err
 		}

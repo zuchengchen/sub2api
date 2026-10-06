@@ -237,6 +237,11 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		}
 	}
 
+	accountExtra, err := normalizeOpenAIExcelBPSExtra(req.Platform, req.Type, req.Credentials, req.Extra, false)
+	if err != nil {
+		return nil, err
+	}
+
 	// 创建账号
 	account := &Account{
 		Name:        req.Name,
@@ -244,7 +249,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Platform:    req.Platform,
 		Type:        req.Type,
 		Credentials: SanitizeStoredCredentials(req.Platform, req.Credentials),
-		Extra:       prepareCodexFingerprintExtraForCreate(req.Platform, req.Type, req.Extra),
+		Extra:       prepareCodexFingerprintExtraForCreate(req.Platform, req.Type, accountExtra),
 		ProxyID:     req.ProxyID,
 		Concurrency: req.Concurrency,
 		Priority:    req.Priority,
