@@ -43,8 +43,9 @@ func TestExcelBPSLive(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := &excelBPSLiveHTTP{harvest: strings.TrimSpace(fixture.HarvestProxyURL)}
 	svc := &OpenAIGatewayService{
-		httpUpstream: upstream,
-		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream:      upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
 	account := ticketTestAccount(fixture.ID)
 	account.Name = fixture.Email

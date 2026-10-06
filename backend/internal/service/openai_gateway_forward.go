@@ -170,8 +170,8 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	}
 
 	// Tibo routing (openai_tibo_route*.go): routes ordered by verdict tier
-	// (healthy > unknown > degraded), within a tier HTTP -> BPS -> Cookie WS;
-	// HTTP always remains as the final route.
+	// (healthy > unknown > degraded), within a tier HTTP -> BPS -> ticketed
+	// /responses; HTTP always remains as the final route.
 	bpsModelEnabled := account.IsExcelBPSEnabledForModel(gjson.GetBytes(body, "model").String())
 	var tiboRun *openAITiboRun
 	if s.openAITiboRouteApplies(account) {
@@ -270,7 +270,11 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	// compaction output item, got 0").
 	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), isExplicitOpenAICompactContext(c), wsDecision)
 	httpReason := ""
+	injectTicket := false
 	switch {
+	case tiboRun != nil && tiboRun.first() == openAITiboRouteTicket:
+		cookieWS = false
+		injectTicket = true
 	case tiboRun != nil && tiboRun.first() == openAITiboRouteCookieWS && cookieWS:
 		// Keep the Tibo-verified Cookie WS decision (also after an unusable
 		// BPS); its own failures fall back below.
@@ -290,6 +294,11 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	}
 	if cookieWS {
 		tiboRun.commit(c, openAITiboRouteCookieWS)
+	} else if injectTicket {
+		tiboRun.commit(c, openAITiboRouteTicket)
+		if c != nil {
+			c.Set(openAITiboInjectTicketKey, true)
+		}
 	} else {
 		tiboRun.commit(c, openAITiboRouteHTTP)
 	}
@@ -1778,6 +1787,13 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if account.UsesOpenAICodexProtocol() {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 		restoreOpenAICodexTicketIdentity(c, req.Header)
+		if c != nil {
+			if raw, ok := c.Get(openAITibo780CookieKey); ok {
+				if cookie, _ := raw.(string); strings.TrimSpace(cookie) != "" {
+					req.Header.Set("Cookie", cookie)
+				}
+			}
+		}
 	}
 
 	// Ensure required headers exist

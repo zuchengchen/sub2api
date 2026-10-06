@@ -162,28 +162,21 @@ func TestTiboRouteProbePayloadBusinessRequestIsNotEvidence(t *testing.T) {
 	require.Equal(t, openAITiboHealthy, tc.svc.openAITiboEffective(tc.account.ID, openAITiboRouteHTTP, time.Now()))
 }
 
-func TestTiboRouteCookieWSModelMismatchRetiresSocket(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	conn := &openAIWSCaptureConn{events: [][]byte{cookieWSCompletion("gpt-5.6-luna", "ws ok")}}
-	svc, account, _, dialer := newCookieForwardFixture(t, conn)
-	svc.tiboRouteDisabled = false
-	tc := &tiboRouteCase{svc: svc, account: account, upstream: mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream), dialer: dialer}
+func TestTiboRouteTicketedHTTPModelMismatchDegradesHTTP(t *testing.T) {
+	body := "data: " + string(cookieWSCompletion("gpt-5.6-luna", "ticket ok")) + "\n\n"
+	tc := newTiboRouteCase(t, false, true, &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))})
 	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-	result, rec, _, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
+	result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
 	require.NoError(t, err)
-	require.True(t, result.OpenAIWSMode)
-	require.Contains(t, rec.Body.String(), "ws ok", "the turn itself is still delivered")
-	conn.mu.Lock()
-	closed := conn.closed
-	conn.mu.Unlock()
-	require.True(t, closed, "served by another model: the socket is retired")
-	require.Equal(t, [openAICookieWSSlotCount]int{}, svc.getOpenAIWSConnPool().CookieVerifiedCounts(account.ID))
+	require.False(t, result.OpenAIWSMode)
+	require.True(t, c.GetBool(openAITiboInjectTicketKey))
+	require.Contains(t, rec.Body.String(), "ticket ok")
+	require.Equal(t, openAITiboDegraded, tc.svc.openAITiboEffective(tc.account.ID, openAITiboRouteHTTP, time.Now()))
 }
 
-func TestTiboRouteLateBPSAfterCookieWSUnavailable(t *testing.T) {
+func TestTiboRouteUnknownBPSStillTriedBeforeTicket(t *testing.T) {
 	tc := newTiboRouteCase(t, true, true, tiboRouteBPSResponse())
 	tc.svc.cfg.Gateway.OpenAITiboRoute.BPSProbeMode = config.OpenAITiboBPSProbeEnforce
-	tc.svc.cfg.Gateway.OpenAIWS.CookieWSHTTPFallbackThresholdBytes = 1 // Cookie WS refuses before sending.
 	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
 	state := tc.svc.openAITiboAccountState(tc.account.ID)
 	state.mu.Lock()
@@ -191,7 +184,7 @@ func TestTiboRouteLateBPSAfterCookieWSUnavailable(t *testing.T) {
 	state.mu.Unlock()
 	result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
 	require.NoError(t, err)
-	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "cookie_ws -> bps -> http")
+	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "HTTP -> BPS -> ticket -> HTTP")
 	require.Equal(t, []string{"bps.openai.com"}, tc.hosts())
 	require.Zero(t, tc.dialer.DialCount())
 	require.Empty(t, c.GetString(openAIBPSBypassReasonKey), "BPS served; no bypass")
@@ -214,21 +207,23 @@ func TestTiboRouteBPSFailureClassesInPlan(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rc := newTiboRouteCase(t, true, true)
 			rc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-			upstream := &excelBPSTraceUpstream{steps: []excelBPSWireStep{tc.step}}
+			upstream := &excelBPSTraceUpstream{steps: []excelBPSWireStep{tc.step, {resp: cookieWSHTTPResponse("ticket ok")}}}
 			rc.svc.httpUpstream = upstream
 			result, rec, c, err := rc.forwardWith(t, tiboRouteAstraBody, nil)
-			require.Equal(t, []string{"bps.openai.com"}, upstream.hosts(), "never a second send on this account's HTTP")
 			if tc.failover {
+				require.Equal(t, []string{"bps.openai.com"}, upstream.hosts(), "never a second send on this account's HTTP")
 				var failoverErr *UpstreamFailoverError
 				require.ErrorAs(t, err, &failoverErr)
 				require.False(t, failoverErr.RetryableOnSameAccount)
-				require.Zero(t, rc.dialer.DialCount(), "Cookie WS is not tried after a possibly executed BPS request")
+				require.Zero(t, rc.dialer.DialCount(), "ticketed /responses is not tried after a possibly executed BPS request")
 				require.Empty(t, rec.Body.String())
 				return
 			}
 			require.NoError(t, err)
-			require.True(t, result.OpenAIWSMode, "next route on the same account: Cookie WS")
-			require.Equal(t, 1, rc.dialer.DialCount())
+			require.False(t, result.OpenAIWSMode, "next route on the same account: ticketed /responses")
+			require.Equal(t, []string{"bps.openai.com", "chatgpt.com"}, upstream.hosts())
+			require.Zero(t, rc.dialer.DialCount())
+			require.True(t, c.GetBool(openAITiboInjectTicketKey))
 			require.Equal(t, excelBPSHTTPFallbackReason, c.GetString(openAIBPSBypassReasonKey))
 			requireNoOpenAIRoutingHeaders(t, rec.Header())
 		})
@@ -238,18 +233,24 @@ func TestTiboRouteBPSFailureClassesInPlan(t *testing.T) {
 func TestTiboRouteEnforceUsesBPSVerdict(t *testing.T) {
 	for _, mode := range []string{config.OpenAITiboBPSProbeShadow, config.OpenAITiboBPSProbeEnforce} {
 		t.Run(mode, func(t *testing.T) {
-			tc := newTiboRouteCase(t, true, true, tiboRouteBPSResponse())
+			responses := []*http.Response{tiboRouteBPSResponse()}
+			if mode == config.OpenAITiboBPSProbeEnforce {
+				responses = []*http.Response{cookieWSHTTPResponse("ticket ok")}
+			}
+			tc := newTiboRouteCase(t, true, true, responses...)
 			tc.svc.cfg.Gateway.OpenAITiboRoute.BPSProbeMode = mode
 			tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
 			tc.seed(openAITiboRouteBPS, openAITiboDegraded)
-			result, _, _, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
+			result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
 			require.NoError(t, err)
 			if mode == config.OpenAITiboBPSProbeShadow {
 				require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint, "shadow keeps BPS in place")
 				return
 			}
-			require.True(t, result.OpenAIWSMode, "enforce: degraded BPS drops below the healthy Cookie WS")
-			require.Empty(t, tc.hosts())
+			require.False(t, result.OpenAIWSMode, "enforce: degraded BPS drops below ticketed /responses")
+			require.True(t, c.GetBool(openAITiboInjectTicketKey))
+			require.Contains(t, rec.Body.String(), "ticket ok")
+			require.Zero(t, tc.dialer.DialCount())
 		})
 	}
 }
@@ -324,7 +325,7 @@ func TestTiboRouteStatusesInRuntimeView(t *testing.T) {
 	require.Equal(t, "degraded", status.TiboRoutes[0].Verdict)
 	require.Equal(t, "bps", status.TiboRoutes[1].Route)
 	require.Equal(t, "unknown", status.TiboRoutes[1].Verdict)
-	require.Equal(t, "cookie_ws", status.TiboRoutes[2].Route)
-	require.Equal(t, "healthy", status.TiboRoutes[2].Verdict)
+	require.Equal(t, "ticket", status.TiboRoutes[2].Route)
+	require.Equal(t, "unknown", status.TiboRoutes[2].Verdict)
 	require.Empty(t, tc.upstream.requests, "the admin view never probes")
 }

@@ -76,18 +76,22 @@ func isOpenAICodexTicketHarvest(ctx context.Context) bool {
 var ErrOpenAICodexTicketUnavailable = errors.New("codex turn-state ticket unavailable")
 
 type openAICodexTicket struct {
-	AccountID  int64     `json:"account_id"`
-	Model      string    `json:"model"`
-	State      string    `json:"state"`
-	Length     int       `json:"length"`
-	Cookies    string    `json:"cookies,omitempty"`
-	SessionID  string    `json:"session_id,omitempty"`
-	Version    string    `json:"version,omitempty"`
-	UserAgent  string    `json:"user_agent,omitempty"`
-	Originator string    `json:"originator,omitempty"`
-	CapturedAt time.Time `json:"captured_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	Attempts   int       `json:"attempts"`
+	AccountID      int64     `json:"account_id"`
+	Model          string    `json:"model"`
+	State          string    `json:"state"`
+	Length         int       `json:"length"`
+	Cookies        string    `json:"cookies,omitempty"`
+	HarvestCookies []string  `json:"harvest_cookies,omitempty"`
+	Gateway        string    `json:"gateway,omitempty"`
+	Transport      string    `json:"transport,omitempty"`
+	IssuedAt       time.Time `json:"issued_at,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	Version        string    `json:"version,omitempty"`
+	UserAgent      string    `json:"user_agent,omitempty"`
+	Originator     string    `json:"originator,omitempty"`
+	CapturedAt     time.Time `json:"captured_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	Attempts       int       `json:"attempts"`
 }
 
 func openAICodexTicketKey(accountID int64, model string) string {
@@ -187,7 +191,7 @@ type OpenAICodexTicketStatus struct {
 	RecoveryState     string                     `json:"recovery_state,omitempty"`
 	SkipReason        string                     `json:"skip_reason,omitempty"`
 	CookieSlots       []OpenAICookieWSSlotStatus `json:"cookie_slots,omitempty"`
-	// TiboRoutes is this process's Tibo route state (http, bps, cookie_ws).
+	// TiboRoutes is this process's Tibo route state (http, bps, ticket).
 	TiboRoutes []OpenAITiboRouteStatus `json:"tibo_routes,omitempty"`
 }
 
@@ -581,23 +585,63 @@ func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, accou
 	}
 }
 
+type openAITiboInjectTicketCtxKey struct{}
+
+func withOpenAITiboInjectTicket(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, openAITiboInjectTicketCtxKey{}, true)
+}
+
+func openAITiboInjectTicket(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	forced, _ := ctx.Value(openAITiboInjectTicketCtxKey{}).(bool)
+	return forced
+}
+
 // applyOpenAICodexTicket 在出站请求上覆盖 x-codex-turn-state。
 // 请求路径只注入已捕获的有效门票，不现场打票；无票则返回
 // ErrOpenAICodexTicketUnavailable。打票由后台 harvester 完成。
+// Tibo 的 ticket hop 强制注入（Cookie 组或 turn-state），即使账号开了 BPS
+// 或网关是 cookie_ws；缺票时 fail-open，由计划里的最后一跳 HTTP 承接。
 func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, account *Account, model string, h http.Header) error {
 	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) {
 		return nil
 	}
-	if account.IsExcelBPSEnabledForModel(model) {
+	force := openAITiboInjectTicket(ctx)
+	if force {
+		model = normalizeOpenAICodexTicketModel(model)
+		if model == "" {
+			model = openAICodexTicketDefaultModel
+		}
+		ticket := s.ensureOpenAICodex780Ticket(ctx, account, model)
+		if ticket.usable780(time.Now()) {
+			injectOpenAICodex780(h, ticket)
+			if slot, _ := ctx.Value(openAICodexTicketInjectionSlotKey{}).(*openAICodexTicketInjectionSlot); slot != nil {
+				slot.State = ticket.State
+				slot.RequestModel = model
+				slot.TicketModel = ticket.Model
+				slot.AccountID = ticket.AccountID
+			}
+			return nil
+		}
 		return nil
 	}
-	if s.openAICookieWSEnabledForModel(account, model) {
-		// Cookie metadata is injected only on the WS header path.
-		// HTTP /responses continues without a Cookie ticket.
-		return nil
-	}
-	if s.openAICookieWSModeConfigured() {
-		return nil
+	if !force {
+		if account.IsExcelBPSEnabledForModel(model) {
+			return nil
+		}
+		if s.openAICookieWSEnabledForModel(account, model) {
+			// Cookie metadata is injected only on the WS header path.
+			// HTTP /responses continues without a Cookie ticket.
+			return nil
+		}
+		if s.openAICookieWSModeConfigured() {
+			return nil
+		}
 	}
 	model = normalizeOpenAICodexTicketModel(model)
 	if model == "" || !s.openAICodexTicketGatedModel(model) {
@@ -621,7 +665,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 		}
 		return nil
 	}
-	if !cfg.FailClosed {
+	if force || !cfg.FailClosed {
 		return nil
 	}
 	return ErrOpenAICodexTicketUnavailable
@@ -1372,16 +1416,25 @@ func openAICodexTicketCompletionKeepsTicket(requested, actual string) bool {
 
 // applyOpenAICodexTicketForRequest 注入门票，并让这条请求的响应观察器盯着这一张 state。
 func (s *OpenAIGatewayService) applyOpenAICodexTicketForRequest(ctx context.Context, c *gin.Context, account *Account, model string, h http.Header) error {
+	injectTicket := c != nil && c.GetBool(openAITiboInjectTicketKey)
 	// Cookie WS accounts may temporarily lack a process-verified websocket
 	// ticket. The gateway then intentionally uses the normal OAuth /responses
 	// path; do not fail that HTTP request closed on the WS-only ticket gate.
-	if c != nil && isOpenAICookieWSHTTPTransportReason(c.GetString("openai_ws_transport_reason")) {
+	if !injectTicket && c != nil && isOpenAICookieWSHTTPTransportReason(c.GetString("openai_ws_transport_reason")) {
 		return nil
+	}
+	if injectTicket {
+		ctx = withOpenAITiboInjectTicket(ctx)
 	}
 	slot := &openAICodexTicketInjectionSlot{}
 	err := s.applyOpenAICodexTicket(context.WithValue(ctx, openAICodexTicketInjectionSlotKey{}, slot), account, model, h)
 	if err != nil {
 		return err
+	}
+	if injectTicket && c != nil {
+		if cookie := strings.TrimSpace(h.Get("Cookie")); cookie != "" && len(h.Get(openAICodexTurnStateHeader)) == openAICodex780Length {
+			c.Set(openAITibo780CookieKey, cookie)
+		}
 	}
 	s.armOpenAICodexTicketWatch(c, slot)
 	rememberOpenAICodexTicketIdentity(c, slot)
