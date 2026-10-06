@@ -152,7 +152,7 @@ func TestAccountUsageService_PersistOpenAICodexProbeSnapshotOnlyUpdatesExtra(t *
 	svc.persistOpenAICodexProbeSnapshot(321, map[string]any{
 		"codex_7d_used_percent": 100.0,
 		"codex_7d_reset_at":     time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339),
-	})
+	}, nil)
 
 	select {
 	case updates := <-repo.updateExtraCh:
@@ -167,6 +167,69 @@ func TestAccountUsageService_PersistOpenAICodexProbeSnapshotOnlyUpdatesExtra(t *
 	case got := <-repo.rateLimitCh:
 		t.Fatalf("不应将探测快照写入运行时限流状态: %v", got)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestAccountUsageService_PersistOpenAICodexProbeSnapshotAppliesCreditsGuard(t *testing.T) {
+	t.Parallel()
+
+	account := newCreditsGuardTestAccount(322, nil)
+	repo := &accountUsageCodexProbeRepo{
+		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
+		updateExtraCh:         make(chan map[string]any, 1),
+		rateLimitCh:           make(chan time.Time, 1),
+	}
+	svc := &AccountUsageService{
+		accountRepo:        repo,
+		openaiCreditsGuard: &OpenAIGatewayService{accountRepo: repo},
+	}
+	snapshot := exhaustedWeeklySnapshot()
+	svc.persistOpenAICodexProbeSnapshot(account.ID, buildCodexUsageExtraUpdates(snapshot, time.Now()), snapshot)
+
+	select {
+	case updates := <-repo.updateExtraCh:
+		if got := updates["codex_7d_used_percent"]; got != 100.0 {
+			t.Fatalf("codex_7d_used_percent = %v, want 100", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待 codex 探测快照写入 extra 超时")
+	}
+
+	select {
+	case resetAt := <-repo.rateLimitCh:
+		if time.Until(resetAt) < 30*time.Minute {
+			t.Fatalf("额度用尽后的 429 重置时间过短: %v", resetAt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未启用点数的账号探测到额度用尽后应被写成 429 限流")
+	}
+}
+
+func TestAccountUsageService_PersistOpenAICodexProbeSnapshotCreditsEnabledSkipsRateLimit(t *testing.T) {
+	t.Parallel()
+
+	account := newCreditsGuardTestAccount(323, map[string]any{OpenAICreditsEnabledExtraKey: true})
+	repo := &accountUsageCodexProbeRepo{
+		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
+		updateExtraCh:         make(chan map[string]any, 1),
+		rateLimitCh:           make(chan time.Time, 1),
+	}
+	svc := &AccountUsageService{
+		accountRepo:        repo,
+		openaiCreditsGuard: &OpenAIGatewayService{accountRepo: repo},
+	}
+	snapshot := exhaustedWeeklySnapshot()
+	svc.persistOpenAICodexProbeSnapshot(account.ID, buildCodexUsageExtraUpdates(snapshot, time.Now()), snapshot)
+
+	select {
+	case <-repo.updateExtraCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待 codex 探测快照写入 extra 超时")
+	}
+	select {
+	case got := <-repo.rateLimitCh:
+		t.Fatalf("已启用点数的账号探测用尽后不应写成 429: %v", got)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 
