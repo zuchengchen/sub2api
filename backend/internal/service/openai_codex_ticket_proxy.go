@@ -18,11 +18,13 @@ var errOpenAICodexTicketProxySessionUnavailable = errors.New("harvest proxy sess
 var openAICodexTicketProxyTemplateEscaper = strings.NewReplacer(
 	"{session}", "%7Bsession%7D",
 	"{SESSION}", "%7BSESSION%7D",
+	"{sid}", "%7Bsid%7D",
+	"{SID}", "%7BSID%7D",
 )
 
 func parseOpenAICodexTicketHarvestProxyURL(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(openAICodexTicketProxyTemplateEscaper.Replace(strings.TrimSpace(raw)))
-	if err != nil || parsed.Hostname() == "" || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") || strings.Contains(parsed.Host, "{session}") || strings.Contains(parsed.Host, "{SESSION}") {
+	if err != nil || parsed.Hostname() == "" || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") || strings.Contains(parsed.Host, "{session}") || strings.Contains(parsed.Host, "{SESSION}") || strings.Contains(parsed.Host, "{sid}") || strings.Contains(parsed.Host, "{SID}") {
 		return nil, errors.New("harvest proxy must be an HTTP(S) or SOCKS5(h) URL with a host and no path, query or fragment; session placeholders are allowed only in credentials")
 	}
 	switch parsed.Scheme {
@@ -101,7 +103,8 @@ func resolveOpenAICodexTicketHarvestProxyURLWithRandom(raw string, random io.Rea
 	username := parsed.User.Username()
 	password, hasPassword := parsed.User.Password()
 	hasTemplate := func(value string) bool {
-		return strings.Contains(value, "{session}") || strings.Contains(value, "{SESSION}")
+		return strings.Contains(value, "{session}") || strings.Contains(value, "{SESSION}") ||
+			strings.Contains(value, "{sid}") || strings.Contains(value, "{SID}")
 	}
 	if !hasTemplate(username) && !hasTemplate(password) {
 		return raw, nil
@@ -111,7 +114,7 @@ func resolveOpenAICodexTicketHarvestProxyURLWithRandom(raw string, random io.Rea
 		return "", errOpenAICodexTicketProxySessionUnavailable
 	}
 	session := hex.EncodeToString(entropy[:])
-	replacer := strings.NewReplacer("{session}", session, "{SESSION}", session)
+	replacer := strings.NewReplacer("{session}", session, "{SESSION}", session, "{sid}", session, "{SID}", session)
 	username = replacer.Replace(username)
 	if hasPassword {
 		parsed.User = url.UserPassword(username, replacer.Replace(password))

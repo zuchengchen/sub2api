@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -14,8 +15,8 @@ import (
 
 // openAITiboRun is the route plan of one Forward attempt on a Tibo-routed
 // account: routes ordered by tier (healthy > unknown > degraded) and, within a
-// tier, HTTP -> BPS -> Cookie WS. HTTP is terminal: its own failures never
-// fall through to another route, so the plan ends at HTTP.
+// tier, HTTP -> BPS -> ticketed /responses. HTTP is terminal: its own failures
+// never fall through to another route, so the plan ends at HTTP.
 type openAITiboRun struct {
 	account *Account
 	scope   string
@@ -78,8 +79,9 @@ func openAITiboTierRank(verdict openAITiboVerdict) int {
 // openAITiboRouteTiers returns the tier of every route available for this
 // request. HTTP is always available. BPS is skipped for models it does not
 // serve and for requests carrying tools it cannot run (body == nil skips that
-// check for the scheduler). Cookie WS needs an astra upstream model and a
-// verified ready slot. off/shadow BPS keeps its existing position (healthy).
+// check for the scheduler). Ticketed /responses is a fallback hop (unknown
+// tier) so it never outranks a same-or-better BPS verdict. off/shadow BPS
+// keeps its existing position (healthy).
 func (s *OpenAIGatewayService) openAITiboRouteTiers(account *Account, requestModel string, body []byte, compact bool, httpVerdict, bpsVerdict openAITiboVerdict, cfg openAITiboSettings) map[openAITiboRoute]openAITiboVerdict {
 	tiers := map[openAITiboRoute]openAITiboVerdict{openAITiboRouteHTTP: httpVerdict}
 	if account.IsExcelBPSEnabledForModel(requestModel) && (body == nil || basispoints.NativeFallbackReason(body) == "") {
@@ -89,54 +91,67 @@ func (s *OpenAIGatewayService) openAITiboRouteTiers(account *Account, requestMod
 			tiers[openAITiboRouteBPS] = openAITiboHealthy
 		}
 	}
-	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, requestModel, false)
-	if !compact && s.openAICookieWSEnabledForModel(account, upstreamModel) && s.openAICookieWSHasReadyTicket(account, upstreamModel) {
-		tiers[openAITiboRouteCookieWS] = openAITiboHealthy
+	if s.openAITiboTicketReady(account, requestModel, compact) {
+		tiers[openAITiboRouteTicket] = openAITiboUnknown
 	}
 	return tiers
 }
 
-// openAITiboOrderRoutes orders available routes; a pinned route that is still
-// healthy goes first, and routes after HTTP are dropped.
+// openAITiboTicketReady is true when a 780 ticket is already cached, or the
+// hop can mint one through the harvest proxy during inject.
+func (s *OpenAIGatewayService) openAITiboTicketReady(account *Account, requestModel string, compact bool) bool {
+	if s == nil || account == nil || !s.openAICodexTicketEnabled() {
+		return false
+	}
+	model := resolveOpenAIAccountUpstreamModelForRequest(account, requestModel, compact)
+	if model == "" {
+		model = normalizeOpenAICodexTicketModel(requestModel)
+	}
+	if s.lookupOpenAICodex780Ticket(account, model).usable780(time.Now()) {
+		return true
+	}
+	return strings.TrimSpace(s.openAICodexTicketHarvestProxyURL()) != "" && isOpenAICodexTicketAccount(account)
+}
+
+// openAITiboOrderRoutes is HTTP → BPS → ticketed /responses → HTTP.
+// Healthy HTTP is the only short-circuit. Degraded BPS is skipped; unknown
+// BPS is still tried before the ticket hop. HTTP is always the last route.
 func openAITiboOrderRoutes(tiers map[openAITiboRoute]openAITiboVerdict, pinned openAITiboRoute) []openAITiboRoute {
-	order := []openAITiboRoute{openAITiboRouteHTTP, openAITiboRouteBPS, openAITiboRouteCookieWS}
-	routes := make([]openAITiboRoute, 0, len(order))
-	for rank := 0; rank <= 2; rank++ {
-		for _, route := range order {
-			if verdict, ok := tiers[route]; ok && openAITiboTierRank(verdict) == rank {
-				routes = append(routes, route)
-			}
+	if openAITiboTierRank(tiers[openAITiboRouteHTTP]) == 0 {
+		if pinned != "" && pinned != openAITiboRouteHTTP && tiers[pinned] == openAITiboHealthy {
+			return []openAITiboRoute{pinned, openAITiboRouteHTTP}
 		}
+		return []openAITiboRoute{openAITiboRouteHTTP}
 	}
-	if pinned != "" && tiers[pinned] == openAITiboHealthy {
-		reordered := []openAITiboRoute{pinned}
-		for _, route := range routes {
-			if route != pinned {
-				reordered = append(reordered, route)
-			}
+	routes := make([]openAITiboRoute, 0, 3)
+	appendIfUsable := func(route openAITiboRoute) {
+		verdict, ok := tiers[route]
+		if !ok || verdict == openAITiboDegraded {
+			return
 		}
-		routes = reordered
+		routes = append(routes, route)
 	}
-	for i, route := range routes {
-		if route == openAITiboRouteHTTP {
-			return routes[:i+1]
-		}
+	if pinned != "" && pinned != openAITiboRouteHTTP && tiers[pinned] == openAITiboHealthy {
+		routes = append(routes, pinned)
+	}
+	if pinned != openAITiboRouteBPS {
+		appendIfUsable(openAITiboRouteBPS)
+	}
+	if pinned != openAITiboRouteTicket {
+		appendIfUsable(openAITiboRouteTicket)
 	}
 	return append(routes, openAITiboRouteHTTP)
 }
 
 // newOpenAITiboRun builds the route plan for one Forward attempt. body is the
 // request after group/model policy and before transport-specific rewrites; it
-// is kept for a later BPS attempt after a Cookie WS failure.
+// is kept for a later BPS attempt after a ticketed-/responses failure.
 func (s *OpenAIGatewayService) newOpenAITiboRun(ctx context.Context, c *gin.Context, account *Account, body []byte, scope string) *openAITiboRun {
 	cfg := s.openAITiboRouteConfig()
 	requestModel := gjson.GetBytes(body, "model").String()
 	bpsEnabled := account.IsExcelBPSEnabledForModel(openAICodexTicketDefaultModel)
 	httpVerdict, bpsVerdict := s.openAITiboRequestVerdicts(ctx, account, bpsEnabled)
 	run := &openAITiboRun{account: account, scope: scope, cfg: cfg, probePayload: openAICookieWSIsProbePayloadRaw(body)}
-	// Native remote compaction v2 (bare /responses + compaction_trigger) is a
-	// compaction turn exactly like the legacy /compact path: Cookie WS has no
-	// verified compaction contract, so neither form may be planned onto it.
 	run.tiers = s.openAITiboRouteTiers(account, requestModel, body, isExplicitOpenAICompactContext(c), httpVerdict, bpsVerdict, cfg)
 	run.pinned = s.loadOpenAITiboPin(account.ID, scope, time.Now())
 	run.routes = openAITiboOrderRoutes(run.tiers, run.pinned)
@@ -158,8 +173,8 @@ func (r *openAITiboRun) bpsBypassReason(body []byte) string {
 	return openAITiboRouteOrderReason
 }
 
-// httpReason is the transport reason when the plan serves HTTP although the
-// resolver found a ready Cookie WS.
+// httpReason is the transport reason when the plan serves HTTP although a
+// ticketed /responses hop was available.
 func (r *openAITiboRun) httpReason() string {
 	if r.tier(openAITiboRouteHTTP) == openAITiboHealthy {
 		return openAITiboHTTPOKReason
@@ -168,8 +183,8 @@ func (r *openAITiboRun) httpReason() string {
 }
 
 // finishOpenAITiboRun stamps the degraded flag, pins the session to the
-// route that served, and runs the passive model check for HTTP and BPS
-// (Cookie WS checks inside the forwarder, where the socket is known).
+// route that served, and runs the passive model check for HTTP, BPS, and
+// ticketed /responses.
 func (s *OpenAIGatewayService) finishOpenAITiboRun(run *openAITiboRun, result *OpenAIForwardResult, err error) {
 	if run == nil || run.served == "" || result == nil {
 		return
@@ -181,8 +196,12 @@ func (s *OpenAIGatewayService) finishOpenAITiboRun(run *openAITiboRun, result *O
 	}
 	s.storeOpenAITiboPin(run.account.ID, run.scope, run.served, time.Now())
 	s.openaiTiboStats.noteServed(degraded, run.cfg)
-	if run.served != openAITiboRouteCookieWS && !run.probePayload {
-		s.observeOpenAITiboResponseModel(run.account, run.served, result.UpstreamModel, result.UpstreamResponseModel)
+	if !run.probePayload {
+		served := run.served
+		if served == openAITiboRouteTicket {
+			served = openAITiboRouteHTTP
+		}
+		s.observeOpenAITiboResponseModel(run.account, served, result.UpstreamModel, result.UpstreamResponseModel)
 	}
 }
 
@@ -261,8 +280,8 @@ func (s *OpenAIGatewayService) pruneOpenAITiboPins(now time.Time) {
 }
 
 // openAITiboSchedulerTier ranks an account for scheduling: 0 has a healthy
-// route, 1 has no verdict or an unknown one (including non Cookie WS
-// accounts), 2 has only degraded routes. It never starts probes.
+// route, 1 has no verdict or an unknown one (including accounts Tibo does
+// not apply to), 2 has only degraded routes. It never starts probes.
 func (s *OpenAIGatewayService) openAITiboSchedulerTier(account *Account, requestModel string, now time.Time) int {
 	if account == nil || !s.openAITiboRouteApplies(account) {
 		return 1

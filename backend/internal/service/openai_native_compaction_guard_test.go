@@ -215,18 +215,20 @@ func TestCookieWSOrdinaryTurnStillUsesCookieWS(t *testing.T) {
 	require.Equal(t, 1, dialer.DialCount())
 }
 
-func TestTiboRouteTiersExcludeCookieWSForNativeCompaction(t *testing.T) {
+func TestTiboRouteTiersUseTicketNotCookieWS(t *testing.T) {
 	tc := newTiboRouteCase(t, false, true)
 	cfg := tc.svc.openAITiboRouteConfig()
 	tiers := tc.svc.openAITiboRouteTiers(tc.account, "gpt-6-astra", []byte(nativeCompactionBody), false, openAITiboDegraded, openAITiboUnknown, cfg)
 	_, hasWS := tiers[openAITiboRouteCookieWS]
-	require.True(t, hasWS, "ordinary plan keeps the ready Cookie WS route")
+	require.False(t, hasWS, "Cookie WS is not a Tibo plan hop")
+	_, hasTicket := tiers[openAITiboRouteTicket]
+	require.True(t, hasTicket, "ordinary plan keeps the ticketed /responses hop")
 
 	c, _ := newNativeCompactionContext("/v1/responses")
 	run := tc.svc.newOpenAITiboRun(context.Background(), c, tc.account, []byte(nativeCompactionBody), "scope-native-compaction")
 	_, hasWS = run.tiers[openAITiboRouteCookieWS]
-	require.False(t, hasWS, "native compaction plan must not include Cookie WS")
-	require.Equal(t, openAITiboRouteHTTP, run.first())
+	require.False(t, hasWS)
+	require.NotEqual(t, openAITiboRouteCookieWS, run.first())
 }
 
 func TestOpenAINativeCompactionStreamInterval(t *testing.T) {

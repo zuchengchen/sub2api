@@ -228,14 +228,15 @@ func TestTiboRouteOrderByTier(t *testing.T) {
 		pinned openAITiboRoute
 		want   []openAITiboRoute
 	}{
-		{"healthy http wins", tiers{"http": H, "bps": H, "cookie_ws": H}, "", []openAITiboRoute{"http"}},
-		{"degraded http", tiers{"http": D, "bps": H, "cookie_ws": H}, "", []openAITiboRoute{"bps", "cookie_ws", "http"}},
-		{"unknown http below healthy", tiers{"http": U, "cookie_ws": H}, "", []openAITiboRoute{"cookie_ws", "http"}},
-		{"enforce bps unknown", tiers{"http": D, "bps": U, "cookie_ws": H}, "", []openAITiboRoute{"cookie_ws", "bps", "http"}},
+		{"healthy http wins", tiers{"http": H, "bps": H, "ticket": U}, "", []openAITiboRoute{"http"}},
+		{"degraded http", tiers{"http": D, "bps": H, "ticket": U}, "", []openAITiboRoute{"bps", "ticket", "http"}},
+		{"unknown http still tries bps then ticket", tiers{"http": U, "bps": H, "ticket": U}, "", []openAITiboRoute{"bps", "ticket", "http"}},
+		{"enforce bps unknown before ticket", tiers{"http": D, "bps": U, "ticket": U}, "", []openAITiboRoute{"bps", "ticket", "http"}},
 		{"everything degraded", tiers{"http": D, "bps": D}, "", []openAITiboRoute{"http"}},
-		{"pin keeps healthy route", tiers{"http": H, "cookie_ws": H}, "cookie_ws", []openAITiboRoute{"cookie_ws", "http"}},
-		{"pin ignored when not healthy", tiers{"http": D, "bps": D, "cookie_ws": H}, "bps", []openAITiboRoute{"cookie_ws", "http"}},
+		{"pin keeps healthy route", tiers{"http": H, "bps": H}, "bps", []openAITiboRoute{"bps", "http"}},
+		{"pin ignored when not healthy", tiers{"http": D, "bps": D, "ticket": U}, "bps", []openAITiboRoute{"ticket", "http"}},
 		{"http only", tiers{"http": U}, "", []openAITiboRoute{"http"}},
+		{"cold http uses ticket", tiers{"http": U, "ticket": U}, "", []openAITiboRoute{"ticket", "http"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, openAITiboOrderRoutes(tc.tiers, tc.pinned))

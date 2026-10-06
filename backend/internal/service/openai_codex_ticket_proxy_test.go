@@ -20,6 +20,7 @@ func TestCodexTicketProxySessionTemplateResolvesOnlyCredentials(t *testing.T) {
 		hasPassword                   bool
 	}{
 		{"raw lowercase", "socks5h://user-sid-{session}:secret@proxy.example:1080", "user-sid-1234abcd", "secret", true},
+		{"cliproxy sid", "socks5h://user-sid-{sid}:secret@proxy.example:1080", "user-sid-1234abcd", "secret", true},
 		{"raw uppercase", "socks5://user-sid-{SESSION}:secret@proxy.example:1080", "user-sid-1234abcd", "secret", true},
 		{"encoded lowercase", "http://user-sid-%7bsession%7d:secret@proxy.example:8080", "user-sid-1234abcd", "secret", true},
 		{"encoded uppercase", "https://user-sid-%7BSESSION%7D:secret@proxy.example:443", "user-sid-1234abcd", "secret", true},

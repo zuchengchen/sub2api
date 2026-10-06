@@ -14,12 +14,13 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
-// Tibo routing for Cookie WS accounts. Each (account, route) keeps a confirmed
+// Tibo routing for anti-degrade accounts (Excel BPS switch, and Cookie WS
+// accounts that still share the probe). Each (account, route) keeps a confirmed
 // Tibo verdict that only flips when a majority of a small vote window agrees;
 // unknown samples never vote. Requests pick routes by effective tier
-// (healthy > unknown > degraded) and, within a tier, HTTP -> BPS -> Cookie WS
-// (openai_tibo_route_plan.go). Background probes run on the harvester tick for
-// recently active accounts (openai_tibo_route_prober.go).
+// (healthy > unknown > degraded) and, within a tier, HTTP -> BPS -> ticketed
+// /responses (openai_tibo_route_plan.go). Background probes run on the
+// harvester tick for recently active accounts (openai_tibo_route_prober.go).
 const (
 	openAITiboHTTPOKReason     = "tibo_http_ok"
 	openAITiboRouteOrderReason = "tibo_route_order"
@@ -29,6 +30,10 @@ const (
 	// Gin context key holding why BPS did not serve a BPS-enabled request.
 	// Routing details stay internal; they are never sent to API clients.
 	openAIBPSBypassReasonKey = "openai_bps_bypass_reason"
+	// Gin context key: this Forward attempt should inject a harvested ticket
+	// (turn-state or Cookie) on HTTP /responses. Empty means skip injection
+	// even when the gateway is in turn_state mode.
+	openAITiboInjectTicketKey = "openai_tibo_inject_ticket"
 )
 
 type openAITiboVerdict string
@@ -48,7 +53,8 @@ type openAITiboRoute string
 const (
 	openAITiboRouteHTTP     openAITiboRoute = "http"
 	openAITiboRouteBPS      openAITiboRoute = "bps"
-	openAITiboRouteCookieWS openAITiboRoute = "cookie_ws"
+	openAITiboRouteTicket   openAITiboRoute = "ticket"
+	openAITiboRouteCookieWS openAITiboRoute = "cookie_ws" // retained for persisted pins / old admin views
 )
 
 // openAITiboProbeSample is one Tibo probe observation for a route.
@@ -389,7 +395,13 @@ func pruneOpenAITiboWindow(times []time.Time, now time.Time) []time.Time {
 }
 
 func (s *OpenAIGatewayService) openAITiboRouteApplies(account *Account) bool {
-	return s != nil && !s.tiboRouteDisabled && s.openAICookieWSAccountEnabled(account)
+	if s == nil || s.tiboRouteDisabled || account == nil {
+		return false
+	}
+	if account.IsExcelBPSEnabled() && isOpenAICodexTicketAccount(account) {
+		return true
+	}
+	return s.openAICookieWSAccountEnabled(account)
 }
 
 func (s *OpenAIGatewayService) loadOpenAITiboAccountState(accountID int64) *openAITiboAccountState {

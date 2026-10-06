@@ -67,17 +67,6 @@
             <span :class="['pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition', excelBPSEnabled ? 'translate-x-5' : 'translate-x-0']" />
           </button>
           <div v-if="excelBPSEnabled" class="mt-3 space-y-3">
-            <label class="flex items-center gap-2">
-              <input v-model="excelBPSAllModels" type="checkbox" data-testid="bulk-excel-bps-all-models" />
-              <span>{{ t('admin.accounts.openai.excelBPSAllModels') }}</span>
-            </label>
-            <div v-if="!excelBPSAllModels" data-testid="bulk-excel-bps-model-selection">
-              <label class="input-label">{{ t('admin.accounts.openai.excelBPSModels') }}</label>
-              <ModelWhitelistSelector v-model="excelBPSModels" platform="openai" />
-              <button type="button" class="btn btn-secondary btn-sm mt-2" data-testid="bulk-excel-bps-astra-only"
-                @click="excelBPSModels = ['gpt-6-astra']">{{ t('admin.accounts.openai.excelBPSAstraOnly') }}</button>
-              <p class="input-hint">{{ t('admin.accounts.openai.excelBPSModelsHint') }}</p>
-            </div>
             <p class="text-xs text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.excelBPSNotice') }}</p>
             <div>
               <label class="flex items-center gap-2">
@@ -1721,8 +1710,6 @@ const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
 const enableExcelBPS = ref(false)
 const excelBPSEnabled = ref(false)
-const excelBPSAllModels = ref(false)
-const excelBPSModels = ref<string[]>(['gpt-6-astra'])
 const excelBPSCacheCreationAsInput = ref(false)
 const enableOpenAIFlattenNamespaces = ref(false)
 const enableOpenAILongContextBilling = ref(false)
@@ -2053,9 +2040,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   if (enableExcelBPS.value && allOpenAIOAuthOnly.value) {
     const extra = ensureExtra()
     extra.openai_excel_bps = excelBPSEnabled.value
-    extra.openai_excel_bps_models = excelBPSEnabled.value && !excelBPSAllModels.value
-      ? [...new Set(excelBPSModels.value.map(model => model.trim()).filter(Boolean))]
-      : null
+    extra.openai_excel_bps_models = null
     extra.openai_excel_bps_cache_creation_as_input =
       excelBPSEnabled.value && excelBPSCacheCreationAsInput.value
   }
@@ -2444,8 +2429,6 @@ watch(
       enableOpenAIPassthrough.value = false
       enableExcelBPS.value = false
       excelBPSEnabled.value = false
-      excelBPSAllModels.value = false
-      excelBPSModels.value = ['gpt-6-astra']
       excelBPSCacheCreationAsInput.value = false
       enableOpenAIFlattenNamespaces.value = false
       enableOpenAILongContextBilling.value = false

@@ -37,7 +37,8 @@ func assertOpenAIClientToolsLowered(t *testing.T, body []byte) {
 
 func openAIClientToolsTestService(upstream *httpUpstreamRecorder) *OpenAIGatewayService {
 	return &OpenAIGatewayService{
-		httpUpstream: upstream,
+		httpUpstream:      upstream,
+		tiboRouteDisabled: true,
 		cfg: &config.Config{Security: config.SecurityConfig{
 			URLAllowlist: config.URLAllowlistConfig{Enabled: false},
 		}},
