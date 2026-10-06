@@ -352,9 +352,12 @@ func pickPelicanAccountID(cands []PelicanCandidate, used map[int64]struct{}) int
 	if len(cands) == 0 {
 		return 0
 	}
-	var unusedWS, unusedTicketed, unused, liveWS, ticketed, all []int64
+	var unusedHTTP, unusedWS, unusedTicketed, unused, healthyHTTP, liveWS, ticketed, all []int64
 	for _, cand := range cands {
 		all = append(all, cand.ID)
+		if cand.HasHealthyHTTP {
+			healthyHTTP = append(healthyHTTP, cand.ID)
+		}
 		if cand.HasWS {
 			liveWS = append(liveWS, cand.ID)
 		}
@@ -365,6 +368,9 @@ func pickPelicanAccountID(cands []PelicanCandidate, used map[int64]struct{}) int
 			continue
 		}
 		unused = append(unused, cand.ID)
+		if cand.HasHealthyHTTP {
+			unusedHTTP = append(unusedHTTP, cand.ID)
+		}
 		if cand.HasWS {
 			unusedWS = append(unusedWS, cand.ID)
 		}
@@ -373,12 +379,16 @@ func pickPelicanAccountID(cands []PelicanCandidate, used map[int64]struct{}) int
 		}
 	}
 	switch {
+	case len(unusedHTTP) > 0:
+		return unusedHTTP[randIntN(len(unusedHTTP))]
 	case len(unusedWS) > 0:
 		return unusedWS[randIntN(len(unusedWS))]
 	case len(unusedTicketed) > 0:
 		return unusedTicketed[randIntN(len(unusedTicketed))]
 	case len(unused) > 0:
 		return unused[randIntN(len(unused))]
+	case len(healthyHTTP) > 0:
+		return healthyHTTP[randIntN(len(healthyHTTP))]
 	case len(liveWS) > 0:
 		return liveWS[randIntN(len(liveWS))]
 	case len(ticketed) > 0:
@@ -392,7 +402,10 @@ type pelicanCookieWSCounter interface {
 	OpenAICookieWSVerifiedCounts(int64) [openAICookieWSSlotCount]int
 }
 
-var _ pelicanCookieWSCounter = (*AccountTestService)(nil)
+var (
+	_ pelicanCookieWSCounter  = (*AccountTestService)(nil)
+	_ pelicanHTTPHealthReader = (*AccountTestService)(nil)
+)
 
 func pelicanHasLiveCookieWS(counts [openAICookieWSSlotCount]int) bool {
 	for _, n := range counts {
@@ -414,6 +427,28 @@ func (s *IntelligentTestService) markPelicanLiveWS(cands []PelicanCandidate) {
 	for i := range cands {
 		if pelicanHasLiveCookieWS(counter.OpenAICookieWSVerifiedCounts(cands[i].ID)) {
 			cands[i].HasWS = true
+		}
+	}
+}
+
+type pelicanHTTPHealthReader interface {
+	OpenAITiboHTTPVerdict(int64) string
+}
+
+func (s *IntelligentTestService) markPelicanHealthyHTTP(cands []PelicanCandidate) {
+	if s == nil || len(cands) == 0 {
+		return
+	}
+	reader, ok := s.runner.(pelicanHTTPHealthReader)
+	if !ok {
+		return
+	}
+	for i := range cands {
+		switch reader.OpenAITiboHTTPVerdict(cands[i].ID) {
+		case string(openAITiboHealthy):
+			cands[i].HasHealthyHTTP = true
+		case string(openAITiboDegraded):
+			cands[i].HasHealthyHTTP = false
 		}
 	}
 }
@@ -529,6 +564,7 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 		return
 	}
 	s.markPelicanLiveWS(cands)
+	s.markPelicanHealthyHTTP(cands)
 	slotKey := pelicanSlotKey(now)
 	attempts, err := s.repo.ListPelicanSlotAttempts(ctx, slotKey)
 	if err != nil {

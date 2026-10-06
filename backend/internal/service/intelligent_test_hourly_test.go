@@ -132,6 +132,17 @@ func TestRunScheduledPelicanUsesOnlyListedTicketedAccounts(t *testing.T) {
 	require.Equal(t, []int64{42}, repo.enqueued[0].AccountIDs)
 }
 
+func TestPickPelicanAccountIDPrefersHealthyHTTP(t *testing.T) {
+	t.Parallel()
+	cands := []PelicanCandidate{
+		{ID: 11, HasTicket: true, HasWS: true},
+		{ID: 12, HasHealthyHTTP: true},
+		{ID: 13, HasWS: true},
+	}
+	require.Equal(t, int64(12), pickPelicanAccountID(cands, nil))
+	require.Equal(t, int64(11), pickPelicanAccountID(cands, map[int64]struct{}{12: {}}))
+}
+
 func TestPickPelicanAccountIDPrefersLiveWS(t *testing.T) {
 	t.Parallel()
 	cands := []PelicanCandidate{
@@ -152,6 +163,20 @@ func TestPickPelicanAccountIDPrefersUnusedTicket(t *testing.T) {
 	require.Equal(t, int64(12), pickPelicanAccountID(cands, nil))
 	got := pickPelicanAccountID(cands, map[int64]struct{}{12: {}})
 	require.Contains(t, []int64{11, 13}, got)
+}
+
+func TestRunScheduledPelicanPrefersHTTPHealthyAccount(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID: 3,
+		candidates: []PelicanCandidate{
+			{ID: 11, HasTicket: true, HasWS: true},
+			{ID: 12, HasHealthyHTTP: true},
+			{ID: 13, HasWS: true},
+		},
+	}
+	svc := &IntelligentTestService{repo: repo}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Equal(t, []int64{12}, repo.enqueued[0].AccountIDs)
 }
 
 func TestRunScheduledPelicanPrefersTicketedAccount(t *testing.T) {
@@ -191,6 +216,38 @@ func (pelicanLiveWSRunner) RunIntelligentTest(context.Context, *IntelligentTestR
 
 func (r pelicanLiveWSRunner) OpenAICookieWSVerifiedCounts(id int64) [openAICookieWSSlotCount]int {
 	return r.counts[id]
+}
+
+type pelicanHTTPHealthRunner struct {
+	verdicts map[int64]string
+}
+
+func (pelicanHTTPHealthRunner) RunIntelligentTest(context.Context, *IntelligentTestRecord) error {
+	return nil
+}
+
+func (r pelicanHTTPHealthRunner) OpenAITiboHTTPVerdict(id int64) string {
+	return r.verdicts[id]
+}
+
+func TestRunScheduledPelicanMarksHealthyHTTPFromRunner(t *testing.T) {
+	repo := &hourlyPelicanRepo{
+		adminID: 3,
+		candidates: []PelicanCandidate{
+			{ID: 11, HasTicket: true, HasWS: true},
+			{ID: 12},
+			{ID: 13, HasHealthyHTTP: true},
+		},
+	}
+	svc := &IntelligentTestService{
+		repo: repo,
+		runner: pelicanHTTPHealthRunner{verdicts: map[int64]string{
+			12: string(openAITiboHealthy),
+			13: string(openAITiboDegraded),
+		}},
+	}
+	svc.runScheduledPelicanAt(context.Background(), pelicanNoonBeijing(t))
+	require.Equal(t, []int64{12}, repo.enqueued[0].AccountIDs)
 }
 
 func TestRunScheduledPelicanMarksLiveWSFromRunner(t *testing.T) {
