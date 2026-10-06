@@ -165,6 +165,8 @@ func TestCookieWSRouteScopeAndLegacyBoundaries(t *testing.T) {
 	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
 	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress, "gpt-6-sol"), "non-Astra WS clients use the HTTP Responses bridge")
 	require.False(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2, "gpt-6-sol"))
+	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress, "gpt-6.1-sol"), "non-Astra WS clients use the HTTP Responses bridge")
+	require.False(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2, "gpt-6.1-sol"))
 	svc.cfg.Gateway.OpenAICodexTicket.Mode = "turn_state"
 	decision, enabled = svc.resolveOpenAICookieWSDecision(account, "gpt-6-astra", false, legacy)
 	require.False(t, enabled)
