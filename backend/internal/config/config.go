@@ -2415,8 +2415,6 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_tibo_route.active_window", 30*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.max_probes_per_hour", 20)
 	viper.SetDefault("gateway.openai_tibo_route.probe_concurrency", 4)
-	viper.SetDefault("gateway.openai_tibo_route.bps_probe_mode", OpenAITiboBPSProbeOff)
-	viper.SetDefault("gateway.openai_tibo_route.bps_probe_interval", 10*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.scheduler_prefer_healthy_route", false)
 	viper.SetDefault("gateway.openai_tibo_route.degraded_alert_ratio", 0.5)
 	viper.SetDefault("gateway.openai_tibo_route.degraded_alert_min_requests", 20)

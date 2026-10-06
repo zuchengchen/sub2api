@@ -24,6 +24,14 @@ import (
 
 const nativeCompactionBody = `{"model":"gpt-6-astra","stream":true,"instructions":"compact-test","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},{"type":"compaction_trigger"}]}`
 
+func excelAccount() *Account {
+	return &Account{
+		ID: 300, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 10,
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"},
+		Extra:       map[string]any{"openai_passthrough": true},
+	}
+}
+
 func nativeCompactionSSE(withItem bool) string {
 	created := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cmp\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
 	usage := `"usage":{"input_tokens":120,"output_tokens":30,"total_tokens":150}`
@@ -130,57 +138,6 @@ func TestOpenAINativeCompactionGuardIgnoresOrdinaryTurns(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "response.completed")
 }
 
-// gpt-6-sol on Excel BPS: a BPS compaction stream without an item is held
-// back and the same account serves the turn on Codex HTTP.
-func TestExcelBPSNativeCompactionWithoutItemFallsBackToHTTP(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	upstream := &httpUpstreamRecorder{responses: []*http.Response{nativeCompactionSSEResponse(false), nativeCompactionSSEResponse(true)}}
-	svc := openAIClientToolsTestService(upstream)
-	c, rec := newNativeCompactionContext("/v1/responses")
-	body := []byte(strings.Replace(nativeCompactionBody, "gpt-6-astra", "gpt-6-sol", 1))
-
-	result, err := svc.Forward(context.Background(), c, excelAccount(), body)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Len(t, upstream.requests, 2)
-	require.Equal(t, "bps.openai.com", upstream.requests[0].URL.Host)
-	require.Equal(t, "compaction_trigger", gjson.GetBytes(upstream.bodies[0], "input.@reverse.0.type").String())
-	require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
-	require.Equal(t, excelBPSHTTPFallbackReason, c.GetString(openAIBPSBypassReasonKey))
-	out := rec.Body.String()
-	require.Equal(t, 1, strings.Count(out, "event: response.completed"), "only the HTTP stream may reach the client")
-	require.Contains(t, out, `"type":"compaction"`)
-	require.NotEqual(t, "/basispoints/api/responses", result.UpstreamEndpoint)
-}
-
-func TestExcelBPSNativeCompactionWithItemStaysOnBPS(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	upstream := &httpUpstreamRecorder{responses: []*http.Response{nativeCompactionSSEResponse(true)}}
-	svc := openAIClientToolsTestService(upstream)
-	c, rec := newNativeCompactionContext("/v1/responses")
-	body := []byte(strings.Replace(nativeCompactionBody, "gpt-6-astra", "gpt-6-sol", 1))
-
-	result, err := svc.Forward(context.Background(), c, excelAccount(), body)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Len(t, upstream.requests, 1)
-	require.Equal(t, "/basispoints/api/responses", result.UpstreamEndpoint)
-	out := rec.Body.String()
-	require.Contains(t, out, `"type":"compaction"`)
-	require.Less(t, strings.Index(out, "response.created"), strings.Index(out, "response.completed"), "held lines are released in order")
-}
-
-func TestExcelBPSNativeCompactionHoldReleasesOversizedStream(t *testing.T) {
-	hold := &excelBPSNativeCompactionHold{}
-	require.True(t, hold.add("data: small"))
-	require.False(t, hold.add(strings.Repeat("x", excelBPSNativeCompactionHoldLimit)))
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	require.NoError(t, hold.release(c))
-	require.True(t, strings.HasPrefix(rec.Body.String(), "data: small\n"))
-	require.Nil(t, hold.lines)
-}
-
 // gpt-6-astra with a ready Cookie WS ticket: native v2 compaction must use the
 // HTTP Responses route, like the legacy /compact path already does.
 func TestCookieWSNativeCompactionUsesHTTP(t *testing.T) {
@@ -217,8 +174,7 @@ func TestCookieWSOrdinaryTurnStillUsesCookieWS(t *testing.T) {
 
 func TestTiboRouteTiersUseTicketNotCookieWS(t *testing.T) {
 	tc := newTiboRouteCase(t, false, true)
-	cfg := tc.svc.openAITiboRouteConfig()
-	tiers := tc.svc.openAITiboRouteTiers(tc.account, "gpt-6-astra", []byte(nativeCompactionBody), false, openAITiboDegraded, openAITiboUnknown, cfg)
+	tiers := tc.svc.openAITiboRouteTiers(tc.account, "gpt-6-astra", false, openAITiboDegraded)
 	_, hasWS := tiers[openAITiboRouteCookieWS]
 	require.False(t, hasWS, "Cookie WS is not a Tibo plan hop")
 	_, hasTicket := tiers[openAITiboRouteTicket]

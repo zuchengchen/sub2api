@@ -20,7 +20,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
-	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
@@ -475,8 +474,6 @@ type OpenAIGatewayService struct {
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	billingOutboxRepo     BillingOutboxRepository
-	excelBPSImagesMu      sync.Mutex
-	excelBPSImages        *basispoints.ImageRelay
 	supportDecisionReader SupportDecisionReader
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
@@ -526,14 +523,12 @@ type OpenAIGatewayService struct {
 	// cookieWSSkipBusinessProbe is live-test only: new sockets skip the Tibo
 	// candy check so Forward can be exercised when upstream answers False.
 	cookieWSSkipBusinessProbe bool
-	// tiboRouteDisabled is live-test only: keep Cookie WS accounts on the
-	// pre-Tibo-routing path so Forward exercises the websocket directly.
+	// tiboRouteDisabled is test only: keep Cookie WS / failover fixtures on the
+	// pre-Tibo-routing path so they can pin exact upstream attempt counts.
 	tiboRouteDisabled bool
 	// cookieWSBackgroundHarvest is test-only. Production harvest no longer
 	// refreshes Cookie groups or warms verified sockets.
 	cookieWSBackgroundHarvest bool
-	// excelBPSHeartbeatInterval is test only; zero means the 15s default.
-	excelBPSHeartbeatInterval time.Duration
 	// openaiTiboRoutes: accountID → *openAITiboAccountState (openai_tibo_route.go).
 	openaiTiboRoutes       sync.Map
 	openaiTiboProbeSem     chan struct{}

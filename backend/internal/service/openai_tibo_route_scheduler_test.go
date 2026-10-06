@@ -52,12 +52,6 @@ func TestTiboSchedulerTier(t *testing.T) {
 	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, openAICodexTicketDefaultModel, now), "no 780 ticket and no harvest proxy")
 	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, "gpt-5.1", now), "non-astra stays on degraded HTTP")
 
-	withBPS := account
-	withBPS.Extra = map[string]any{"openai_excel_bps": true}
-	require.Equal(t, 0, svc.openAITiboSchedulerTier(&withBPS, "gpt-5.1", now), "off/shadow BPS counts as healthy")
-	svc.cfg.Gateway.OpenAITiboRoute.BPSProbeMode = config.OpenAITiboBPSProbeEnforce
-	require.Equal(t, 1, svc.openAITiboSchedulerTier(&withBPS, "gpt-5.1", now), "enforce uses the BPS verdict (none yet)")
-
 	apiKey := Account{ID: 7199, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	require.Equal(t, 1, svc.openAITiboSchedulerTier(&apiKey, "gpt-5.1", now), "non Cookie WS accounts are unknown")
 }

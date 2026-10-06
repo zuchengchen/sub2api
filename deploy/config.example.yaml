@@ -349,7 +349,7 @@ gateway:
   openai_codex_ticket:
     enabled: false
     # turn_state: legacy 292 ticket harvest. cookie_ws: Tibo background probes
-    # and anti-degrade routing (HTTP → BPS → ticketed 780 /responses → HTTP).
+    # and anti-degrade routing (HTTP → ticketed 780 /responses → HTTP).
     # Cookie group harvest and verified-socket warmup are off; harvest_proxy_url
     # is still used to mint 780 on the request path.
     # Anti-degrade accounts pick a route by Tibo probe verdicts over their own
@@ -374,7 +374,7 @@ gateway:
   # 不一致时每隔 confirm_spacing 再补探，confirm_samples 里多数同意才切换。unknown 样本（非 200、
   # 超时、429、取 token 失败）不计票，按 unknown_backoff 退避并遵守 Retry-After；
   # 超过 max_stale 没有新的确定样本，有效状态才变为 unknown。
-  # 线路按 healthy > unknown > degraded 分层，同层 HTTP → BPS → ticketed /responses；全部降智时走普通 HTTP，
+  # 线路按 healthy > unknown > degraded 分层，同层 HTTP → ticketed /responses；全部降智时走普通 HTTP，
   # 仅在使用记录中标记 route_degraded（不向客户端返回任何线路响应头）。
   openai_tibo_route:
     healthy_interval: 10m
@@ -390,9 +390,6 @@ gateway:
     # 每账号每条线路每小时的探针上限（含确认探针）；全局并发上限。
     max_probes_per_hour: 20
     probe_concurrency: 4
-    # off/shadow：BPS 保持原有位置（视为 healthy）；shadow 额外探测并记日志；enforce：按 BPS 探针结论排序。
-    bps_probe_mode: off
-    bps_probe_interval: 10m
     # 调度按线路健康度软排序，并在有健康账号时解除降智账号的 sticky。
     scheduler_prefer_healthy_route: false
     # 本小时降智兜底占比超过该值（且样本数达到下限）时打告警日志；0 关闭。

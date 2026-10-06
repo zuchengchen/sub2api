@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,7 +22,6 @@ func requireNoOpenAIRoutingHeaders(t *testing.T, header http.Header) {
 }
 
 func TestForwardNeverSendsRoutingHeaders(t *testing.T) {
-	forbidden := func() *http.Response { return tiboRouteStatusResponse(http.StatusForbidden) }
 	for _, tt := range []struct {
 		name     string
 		run      func(t *testing.T) (*OpenAIForwardResult, *httptest.ResponseRecorder, *gin.Context)
@@ -31,30 +29,17 @@ func TestForwardNeverSendsRoutingHeaders(t *testing.T) {
 		degraded *bool
 	}{
 		{
-			name: "healthy HTTP with BPS enabled",
+			name: "healthy HTTP",
 			run: func(t *testing.T) (*OpenAIForwardResult, *httptest.ResponseRecorder, *gin.Context) {
-				tc := newTiboRouteCase(t, true, false, cookieWSHTTPResponse("http ok"))
+				tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("http ok"))
 				tc.seed(openAITiboRouteHTTP, openAITiboHealthy)
 				result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
 				require.NoError(t, err)
 				require.Equal(t, []string{"chatgpt.com"}, tc.hosts())
 				return result, rec, c
 			},
-			reason:   openAITiboHTTPOKReason,
+			reason:   "",
 			degraded: new(bool),
-		},
-		{
-			name: "BPS 403 falls back to HTTP",
-			run: func(t *testing.T) (*OpenAIForwardResult, *httptest.ResponseRecorder, *gin.Context) {
-				tc := newTiboRouteCase(t, true, false, forbidden(), cookieWSHTTPResponse("http ok"))
-				tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-				result, rec, c, err := tc.forwardWith(t, tiboRouteAstraBody, nil)
-				require.NoError(t, err)
-				require.Equal(t, []string{"bps.openai.com", "chatgpt.com"}, tc.hosts())
-				return result, rec, c
-			},
-			reason:   excelBPSHTTPFallbackReason,
-			degraded: boolPtrForRoutingHeadersTest(true),
 		},
 		{
 			name: "everything degraded serves HTTP",
@@ -68,22 +53,6 @@ func TestForwardNeverSendsRoutingHeaders(t *testing.T) {
 			},
 			reason:   "",
 			degraded: boolPtrForRoutingHeadersTest(true),
-		},
-		{
-			name: "non-Tibo BPS account falls back",
-			run: func(t *testing.T) (*OpenAIForwardResult, *httptest.ResponseRecorder, *gin.Context) {
-				upstream := &httpUpstreamRecorder{responses: []*http.Response{forbidden(), excelBPSCodexHTTPSuccessResponse()}}
-				svc := openAIClientToolsTestService(upstream)
-				rec := httptest.NewRecorder()
-				c, _ := gin.CreateTestContext(rec)
-				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-				result, err := svc.Forward(context.Background(), c, excelAccount(), []byte(`{"model":"gpt-5.6-sol","input":"x"}`))
-				require.NoError(t, err)
-				require.Len(t, upstream.requests, 2)
-				require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
-				return result, rec, c
-			},
-			reason: excelBPSHTTPFallbackReason,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
