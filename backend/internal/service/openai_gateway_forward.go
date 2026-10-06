@@ -14,7 +14,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
-	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -170,43 +169,12 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	}
 
 	// Tibo routing (openai_tibo_route*.go): routes ordered by verdict tier
-	// (healthy > unknown > degraded), within a tier HTTP -> BPS -> ticketed
+	// (healthy > unknown > degraded), within a tier HTTP -> ticketed
 	// /responses; HTTP always remains as the final route.
-	bpsModelEnabled := account.IsExcelBPSEnabledForModel(gjson.GetBytes(body, "model").String())
 	var tiboRun *openAITiboRun
 	if s.openAITiboRouteApplies(account) {
 		tiboRun = s.newOpenAITiboRun(ctx, c, account, body, wsExecutionScope)
 		*tiboRunOut = tiboRun
-	}
-	bpsHTTPFallback := false
-	switch {
-	case tiboRun != nil && tiboRun.first() == openAITiboRouteBPS:
-		tiboRun.commit(c, openAITiboRouteBPS)
-		result, bpsErr := s.forwardExcelBPS(ctx, c, account, body, startTime)
-		if bpsErr == nil || !errors.Is(bpsErr, errExcelBPSHTTPFallback) {
-			return result, bpsErr
-		}
-		// Definitely not executed on BPS: continue on this account's next route.
-		tiboRun.advance()
-		bpsHTTPFallback = true
-		ClearActualOpenAIUpstreamEndpoint(c)
-		setOpenAIBPSBypassReason(c, excelBPSHTTPFallbackReason)
-	case tiboRun != nil:
-		if bpsModelEnabled {
-			setOpenAIBPSBypassReason(c, tiboRun.bpsBypassReason(body))
-		}
-	case bpsModelEnabled:
-		reason := basispoints.NativeFallbackReason(body)
-		if reason == "" {
-			result, bpsErr := s.forwardExcelBPS(ctx, c, account, body, startTime)
-			if bpsErr == nil || !errors.Is(bpsErr, errExcelBPSHTTPFallback) {
-				return result, bpsErr
-			}
-			bpsHTTPFallback = true
-			reason = excelBPSHTTPFallbackReason
-			ClearActualOpenAIUpstreamEndpoint(c)
-		}
-		setOpenAIBPSBypassReason(c, reason)
 	}
 
 	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)
@@ -276,10 +244,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		cookieWS = false
 		injectTicket = true
 	case tiboRun != nil && tiboRun.first() == openAITiboRouteCookieWS && cookieWS:
-		// Keep the Tibo-verified Cookie WS decision (also after an unusable
-		// BPS); its own failures fall back below.
-	case bpsHTTPFallback:
-		httpReason = excelBPSHTTPFallbackReason
+		// Keep the Tibo-verified Cookie WS decision; its own failures fall back below.
 	case tiboRun != nil && cookieWS:
 		// The plan serves HTTP ahead of a ready Cookie WS.
 		httpReason = tiboRun.httpReason()
@@ -1259,21 +1224,6 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				normalizeOpenAIWSLogValue(wsErr.Error()),
 			)
 			tiboRun.advance()
-			if tiboRun != nil && tiboRun.first() == openAITiboRouteBPS && len(tiboRun.bpsBody) > 0 {
-				// The plan ranked BPS between Cookie WS and HTTP. The Cookie turn
-				// was not sent, so BPS may still take it on this account.
-				tiboRun.commit(c, openAITiboRouteBPS)
-				ClearActualOpenAIUpstreamEndpoint(c)
-				// BPS serves now: drop the bypass reason recorded when it was skipped.
-				setOpenAIBPSBypassReason(c, "")
-				bpsResult, bpsErr := s.forwardExcelBPS(ctx, c, account, tiboRun.bpsBody, startTime)
-				if bpsErr == nil || !errors.Is(bpsErr, errExcelBPSHTTPFallback) {
-					return bpsResult, bpsErr
-				}
-				tiboRun.advance()
-				SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
-				setOpenAIBPSBypassReason(c, excelBPSHTTPFallbackReason)
-			}
 			tiboRun.commit(c, openAITiboRouteHTTP)
 		} else {
 			var failoverErr *UpstreamFailoverError

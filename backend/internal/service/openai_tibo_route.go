@@ -7,27 +7,26 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
-// Tibo routing for anti-degrade accounts (Excel BPS switch, and Cookie WS
-// accounts that still share the probe). Each (account, route) keeps a confirmed
-// Tibo verdict that only flips when a majority of a small vote window agrees;
-// unknown samples never vote. Requests pick routes by effective tier
-// (healthy > unknown > degraded) and, within a tier, HTTP -> BPS -> ticketed
-// /responses (openai_tibo_route_plan.go). Background probes run on the
-// harvester tick for recently active accounts (openai_tibo_route_prober.go).
+// Tibo routing for anti-degrade Codex ticket and Cookie WS accounts. Each
+// (account, route) keeps a confirmed Tibo verdict that only flips when a
+// majority of a small vote window agrees; unknown samples never vote. Requests
+// pick routes by effective tier (healthy > unknown > degraded) and, within a
+// tier, HTTP -> ticketed /responses (openai_tibo_route_plan.go). Background
+// probes run on the harvester tick for recently active accounts
+// (openai_tibo_route_prober.go).
 const (
 	openAITiboHTTPOKReason     = "tibo_http_ok"
 	openAITiboRouteOrderReason = "tibo_route_order"
 	openAITiboProbeTimeout     = 25 * time.Second
 	// A cold account (no sample yet) waits at most this long for its first probe.
 	openAITiboProbeWait = 8 * time.Second
-	// Gin context key holding why BPS did not serve a BPS-enabled request.
+	// Gin context key for a leftover routing record from a previous attempt.
 	// Routing details stay internal; they are never sent to API clients.
 	openAIBPSBypassReasonKey = "openai_bps_bypass_reason"
 	// Gin context key: this Forward attempt should inject a harvested ticket
@@ -52,7 +51,6 @@ type openAITiboRoute string
 
 const (
 	openAITiboRouteHTTP     openAITiboRoute = "http"
-	openAITiboRouteBPS      openAITiboRoute = "bps"
 	openAITiboRouteTicket   openAITiboRoute = "ticket"
 	openAITiboRouteCookieWS openAITiboRoute = "cookie_ws" // retained for persisted pins / old admin views
 )
@@ -78,8 +76,6 @@ type openAITiboSettings struct {
 	activeWindow     time.Duration
 	maxProbesPerHour int
 	probeConcurrency int
-	bpsProbeMode     string
-	bpsProbeInterval time.Duration
 	preferHealthy    bool
 	alertRatio       float64
 	alertMinRequests int
@@ -113,8 +109,6 @@ func (s *OpenAIGatewayService) openAITiboRouteConfig() openAITiboSettings {
 		activeWindow:     pick(raw.ActiveWindow, 30*time.Minute),
 		maxProbesPerHour: raw.MaxProbesPerHour,
 		probeConcurrency: raw.ProbeConcurrency,
-		bpsProbeMode:     strings.ToLower(strings.TrimSpace(raw.BPSProbeMode)),
-		bpsProbeInterval: pick(raw.BPSProbeInterval, 10*time.Minute),
 		preferHealthy:    raw.SchedulerPreferHealthyRoute,
 		alertRatio:       raw.DegradedAlertRatio,
 		alertMinRequests: raw.DegradedAlertMinRequests,
@@ -139,11 +133,6 @@ func (s *OpenAIGatewayService) openAITiboRouteConfig() openAITiboSettings {
 	}
 	if cfg.probeConcurrency <= 0 {
 		cfg.probeConcurrency = 4
-	}
-	switch cfg.bpsProbeMode {
-	case config.OpenAITiboBPSProbeShadow, config.OpenAITiboBPSProbeEnforce:
-	default:
-		cfg.bpsProbeMode = config.OpenAITiboBPSProbeOff
 	}
 	if cfg.alertMinRequests <= 0 {
 		cfg.alertMinRequests = 20
@@ -175,28 +164,20 @@ type openAITiboRouteState struct {
 	done          chan struct{}
 	persistedAt   time.Time
 	// Calibration counters (process lifetime): vote windows opened by a
-	// disagreeing sample and how they ended; for BPS in shadow/enforce, how
-	// its definitive samples compared with the HTTP effective verdict.
-	voteWindows    int
-	voteConfirmed  int
-	voteRejected   int
-	shadowAgree    int
-	shadowDisagree int
+	// disagreeing sample and how they ended.
+	voteWindows   int
+	voteConfirmed int
+	voteRejected  int
 }
 
 type openAITiboAccountState struct {
 	mu         sync.Mutex
 	accountID  int64
 	lastUsedAt time.Time
-	bpsEnabled bool
 	http       openAITiboRouteState
-	bps        openAITiboRouteState
 }
 
-func (st *openAITiboAccountState) route(route openAITiboRoute) *openAITiboRouteState {
-	if route == openAITiboRouteBPS {
-		return &st.bps
-	}
+func (st *openAITiboAccountState) route(_ openAITiboRoute) *openAITiboRouteState {
 	return &st.http
 }
 
@@ -312,7 +293,7 @@ func (r *openAITiboRouteState) due(now time.Time) bool {
 }
 
 // scheduleNext sets nextProbeAt after a sample.
-func (r *openAITiboRouteState) scheduleNext(route openAITiboRoute, now time.Time, cfg openAITiboSettings) {
+func (r *openAITiboRouteState) scheduleNext(_ openAITiboRoute, now time.Time, cfg openAITiboSettings) {
 	if r.dwellDeferred && r.lastSample.verdict.definitive() {
 		// Recheck right after the dwell ends; jitter only delays.
 		at := r.flippedAt.Add(cfg.minDegradedDwell)
@@ -335,8 +316,6 @@ func (r *openAITiboRouteState) scheduleNext(route openAITiboRoute, now time.Time
 		delay = cfg.unknownBackoff[index]
 	case len(r.pending) > 0:
 		delay = cfg.confirmSpacing
-	case route == openAITiboRouteBPS:
-		delay = cfg.bpsProbeInterval
 	case r.verdict == openAITiboHealthy:
 		delay = cfg.healthyInterval
 	default:
@@ -394,14 +373,21 @@ func pruneOpenAITiboWindow(times []time.Time, now time.Time) []time.Time {
 	return append(times[:0], times[cut:]...)
 }
 
+// DisableOpenAITiboRouteForTest keeps unit fixtures on the pre-Tibo path.
+func (s *OpenAIGatewayService) DisableOpenAITiboRouteForTest() {
+	if s != nil {
+		s.tiboRouteDisabled = true
+	}
+}
+
 func (s *OpenAIGatewayService) openAITiboRouteApplies(account *Account) bool {
 	if s == nil || s.tiboRouteDisabled || account == nil {
 		return false
 	}
-	if account.IsExcelBPSEnabled() && isOpenAICodexTicketAccount(account) {
+	if s.openAICookieWSAccountEnabled(account) {
 		return true
 	}
-	return s.openAICookieWSAccountEnabled(account)
+	return isOpenAICodexTicketAccount(account) && s.openAICodexTicketEnabled()
 }
 
 func (s *OpenAIGatewayService) loadOpenAITiboAccountState(accountID int64) *openAITiboAccountState {
@@ -438,13 +424,12 @@ func (s *OpenAIGatewayService) openAITiboEffective(accountID int64, route openAI
 // openAITiboRequestVerdicts is the request-path read: it marks the account
 // active, seeds persisted verdicts, waits (bounded) only for an account whose
 // HTTP route has never been sampled, and queues due probes without blocking.
-func (s *OpenAIGatewayService) openAITiboRequestVerdicts(ctx context.Context, account *Account, bpsEnabled bool) (httpVerdict, bpsVerdict openAITiboVerdict) {
+func (s *OpenAIGatewayService) openAITiboRequestVerdicts(ctx context.Context, account *Account) openAITiboVerdict {
 	cfg := s.openAITiboRouteConfig()
 	state := s.openAITiboAccountState(account.ID)
 	now := time.Now()
 	state.mu.Lock()
 	state.lastUsedAt = now
-	state.bpsEnabled = bpsEnabled
 	s.seedOpenAITiboStateLocked(state, account.Extra, now, cfg)
 	var wait <-chan struct{}
 	if state.http.cold() {
@@ -469,12 +454,7 @@ func (s *OpenAIGatewayService) openAITiboRequestVerdicts(ctx context.Context, ac
 	now = time.Now()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	httpVerdict = state.http.effective(now, cfg)
-	bpsVerdict = state.bps.effective(now, cfg)
-	if bpsEnabled && cfg.bpsProbeMode != config.OpenAITiboBPSProbeOff && httpVerdict != openAITiboHealthy && state.bps.due(now) {
-		s.startOpenAITiboProbeLocked(state, openAITiboRouteBPS, account, false, cfg, now)
-	}
-	return httpVerdict, bpsVerdict
+	return state.http.effective(now, cfg)
 }
 
 // probeOpenAITiboHTTP sends the Tibo probe once over the account's own proxy

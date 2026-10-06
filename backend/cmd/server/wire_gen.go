@@ -592,12 +592,6 @@ func provideCleanup(
 				}
 				return nil
 			}},
-			{"ExcelBPSImages", func() error {
-				if openAIGateway != nil {
-					return openAIGateway.CloseExcelBPSImages()
-				}
-				return nil
-			}},
 			{"OpenAICodexTicketHarvester", func() error {
 				if openAIGateway != nil {
 					openAIGateway.StopOpenAICodexTicketHarvester()

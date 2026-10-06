@@ -95,7 +95,6 @@ func TestCodex780MintProbe(t *testing.T) {
 func TestApplyOpenAICodexTicket_TiboHopInjects780(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TargetLength: 292}, nil)
 	account := ticketTestAccount(41)
-	account.Extra = map[string]any{"openai_excel_bps": true}
 	ticket := storeTestCodex780Ticket(svc, account)
 	h := http.Header{}
 	require.NoError(t, svc.applyOpenAICodexTicket(withOpenAITiboInjectTicket(context.Background()), account, "gpt-6-astra", h))

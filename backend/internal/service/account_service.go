@@ -127,12 +127,6 @@ type AccountRepository interface {
 	ListShadowsByParent(ctx context.Context, parentID int64) ([]*Account, error)
 }
 
-// AccountExcelBPSRepository disables only BPS, provided the account credentials
-// and both opt-in switches still match at the time of the write.
-type AccountExcelBPSRepository interface {
-	DisableExcelBPSOn403(ctx context.Context, account *Account) (bool, error)
-}
-
 type AccountDuplicateRepository interface {
 	// CreateWithAccountGroups atomically persists an account, its exact group priorities,
 	// and the scheduler outbox event for the new routing snapshot.
@@ -237,11 +231,6 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		}
 	}
 
-	accountExtra, err := normalizeOpenAIExcelBPSExtra(req.Platform, req.Type, req.Credentials, req.Extra, false)
-	if err != nil {
-		return nil, err
-	}
-
 	// 创建账号
 	account := &Account{
 		Name:        req.Name,
@@ -249,7 +238,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Platform:    req.Platform,
 		Type:        req.Type,
 		Credentials: SanitizeStoredCredentials(req.Platform, req.Credentials),
-		Extra:       prepareCodexFingerprintExtraForCreate(req.Platform, req.Type, accountExtra),
+		Extra:       prepareCodexFingerprintExtraForCreate(req.Platform, req.Type, req.Extra),
 		ProxyID:     req.ProxyID,
 		Concurrency: req.Concurrency,
 		Priority:    req.Priority,

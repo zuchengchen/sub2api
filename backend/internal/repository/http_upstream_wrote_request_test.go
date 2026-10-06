@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests pin the transport behavior forwardExcelBPS relies on to decide
+// These tests pin the transport behavior HTTP upstream uses to decide
 // whether a failed BPS request may already have executed: httptrace's
 // WroteRequest must survive the real stack (account traffic wrapper,
 // per-attempt context, per-account client, long-stream HTTP/1.1 and HTTP/2
@@ -94,7 +94,7 @@ func trustLongStreamClient(t *testing.T, s *httpUpstreamService, srv *httptest.S
 	t.Cleanup(transport.CloseIdleConnections)
 }
 
-// newWroteRequestRequest mirrors newExcelBPSRequest's context wrappers.
+// newWroteRequestRequest mirrors the gateway HTTP request context wrappers.
 func newWroteRequestRequest(t *testing.T, ctx context.Context, target string, controlled bool) *http.Request {
 	t.Helper()
 	ctx = service.WithHTTPUpstreamRedirectsDisabled(service.WithHTTPUpstreamProfile(ctx, service.HTTPUpstreamProfileLongStream))

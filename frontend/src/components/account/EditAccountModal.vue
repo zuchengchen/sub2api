@@ -1667,45 +1667,6 @@
         </p>
       </div>
 
-      <!-- OpenAI OAuth: try full quality (HTTP → BPS → ticketed Responses → HTTP) -->
-      <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
-        class="border-t border-gray-200 pt-4 dark:border-dark-600"
-        data-testid="openai-outbound-protocol"
-      >
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="input-label mb-0">{{ t('admin.accounts.openai.outboundProtocol') }}</label>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.openai.outboundProtocolDesc') }}
-            </p>
-          </div>
-          <Toggle
-            :model-value="excelBPSEnabled"
-            data-testid="excel-bps-toggle"
-            :aria-label="t('admin.accounts.openai.outboundProtocol')"
-            @update:model-value="excelBPSEnabled = $event"
-          />
-        </div>
-        <div v-if="excelBPSEnabled" class="mt-3 space-y-3">
-          <p class="text-xs text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.excelBPSNotice') }}</p>
-          <div>
-            <label class="flex items-center gap-2">
-              <input v-model="excelBPSAutoDisableOn403" type="checkbox" data-testid="excel-bps-auto-disable-on-403" />
-              <span class="text-sm">{{ t('admin.accounts.openai.excelBPSAutoDisableOn403') }}</span>
-            </label>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.excelBPSAutoDisableOn403Desc') }}</p>
-          </div>
-          <div>
-            <label class="flex items-center gap-2">
-              <input v-model="excelBPSCacheCreationAsInput" type="checkbox" data-testid="excel-bps-cache-creation-as-input" />
-              <span class="text-sm">{{ t('admin.accounts.openai.excelBPSCacheCreationAsInput') }}</span>
-            </label>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.excelBPSCacheCreationAsInputDesc') }}</p>
-          </div>
-        </div>
-      </div>
-
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -3680,9 +3641,6 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
-const excelBPSEnabled = ref(false)
-const excelBPSCacheCreationAsInput = ref(false)
-const excelBPSAutoDisableOn403 = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -4178,9 +4136,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
-  excelBPSEnabled.value = false
-  excelBPSCacheCreationAsInput.value = false
-  excelBPSAutoDisableOn403.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
   editPlanType.value = ''
@@ -4200,9 +4155,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
-    excelBPSEnabled.value = newAccount.type === 'oauth' && extra?.openai_excel_bps === true
-    excelBPSCacheCreationAsInput.value = excelBPSEnabled.value && extra?.openai_excel_bps_cache_creation_as_input === true
-    excelBPSAutoDisableOn403.value = extra?.openai_excel_bps_auto_disable_on_403 === true
     openaiFlattenNamespacesEnabled.value =
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
@@ -5556,23 +5508,10 @@ const handleSubmit = async () => {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
       }
-      if (props.account.type === 'oauth' && !isSparkShadow.value && excelBPSEnabled.value) {
-        newExtra.openai_excel_bps = true
-        delete newExtra.openai_excel_bps_models
-      } else {
-        delete newExtra.openai_excel_bps
-        delete newExtra.openai_excel_bps_models
-      }
-      if (newExtra.openai_excel_bps === true && excelBPSCacheCreationAsInput.value) {
-        newExtra.openai_excel_bps_cache_creation_as_input = true
-      } else {
-        delete newExtra.openai_excel_bps_cache_creation_as_input
-      }
-      if (newExtra.openai_excel_bps === true && excelBPSAutoDisableOn403.value) {
-        newExtra.openai_excel_bps_auto_disable_on_403 = true
-      } else {
-        delete newExtra.openai_excel_bps_auto_disable_on_403
-      }
+      delete newExtra.openai_excel_bps
+      delete newExtra.openai_excel_bps_models
+      delete newExtra.openai_excel_bps_cache_creation_as_input
+      delete newExtra.openai_excel_bps_auto_disable_on_403
       // 缺省即保留 namespace，不写空值，避免 extra 里堆积默认项
       if (props.account.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {
         newExtra.openai_responses_flatten_namespaces = true

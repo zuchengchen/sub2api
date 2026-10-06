@@ -138,11 +138,6 @@ func TestTiboScheduleCadenceBackoffAndRetryAfter(t *testing.T) {
 	r.observe(openAITiboProbeSample{verdict: openAITiboUnknown, status: 429, retryAt: &retryAt}, now, cfg)
 	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
 	require.Equal(t, retryAt, r.nextProbeAt, "Retry-After wins when later")
-
-	var bps openAITiboRouteState
-	bps.observe(tiboSample(openAITiboDegraded), now, cfg)
-	bps.scheduleNext(openAITiboRouteBPS, now, cfg)
-	require.Equal(t, now.Add(cfg.bpsProbeInterval), bps.nextProbeAt)
 }
 
 func TestTiboJitterBounds(t *testing.T) {
@@ -205,18 +200,6 @@ func TestTiboCalibrationCounters(t *testing.T) {
 	require.Equal(t, 2, r.voteWindows)
 	require.Equal(t, 1, r.voteConfirmed)
 	require.Equal(t, 1, r.voteRejected)
-
-	tc := newTiboRouteCase(t, true, false)
-	tc.svc.cfg.Gateway.OpenAITiboRoute.BPSProbeMode = "shadow"
-	tc.seed(openAITiboRouteHTTP, openAITiboDegraded)
-	state := tc.svc.openAITiboAccountState(tc.account.ID)
-	tc.svc.recordOpenAITiboSample(state, openAITiboRouteBPS, tc.account, tiboSample(openAITiboDegraded))
-	tc.svc.recordOpenAITiboSample(state, openAITiboRouteBPS, tc.account, tiboSample(openAITiboHealthy))
-	tc.svc.recordOpenAITiboSample(state, openAITiboRouteBPS, tc.account, openAITiboProbeSample{verdict: openAITiboUnknown})
-	status := tc.svc.openAITiboRouteStatuses(tc.account, false, time.Now())
-	require.Equal(t, "bps", status[1].Route)
-	require.Equal(t, 1, status[1].ShadowAgree)
-	require.Equal(t, 1, status[1].ShadowDisagree, "unknown samples are not compared")
 }
 
 func TestTiboRouteOrderByTier(t *testing.T) {
@@ -228,13 +211,12 @@ func TestTiboRouteOrderByTier(t *testing.T) {
 		pinned openAITiboRoute
 		want   []openAITiboRoute
 	}{
-		{"healthy http wins", tiers{"http": H, "bps": H, "ticket": U}, "", []openAITiboRoute{"http"}},
-		{"degraded http", tiers{"http": D, "bps": H, "ticket": U}, "", []openAITiboRoute{"bps", "ticket", "http"}},
-		{"unknown http still tries bps then ticket", tiers{"http": U, "bps": H, "ticket": U}, "", []openAITiboRoute{"bps", "ticket", "http"}},
-		{"enforce bps unknown before ticket", tiers{"http": D, "bps": U, "ticket": U}, "", []openAITiboRoute{"bps", "ticket", "http"}},
-		{"everything degraded", tiers{"http": D, "bps": D}, "", []openAITiboRoute{"http"}},
-		{"pin keeps healthy route", tiers{"http": H, "bps": H}, "bps", []openAITiboRoute{"bps", "http"}},
-		{"pin ignored when not healthy", tiers{"http": D, "bps": D, "ticket": U}, "bps", []openAITiboRoute{"ticket", "http"}},
+		{"healthy http wins", tiers{"http": H, "ticket": U}, "", []openAITiboRoute{"http"}},
+		{"degraded http", tiers{"http": D, "ticket": U}, "", []openAITiboRoute{"ticket", "http"}},
+		{"unknown http still tries ticket", tiers{"http": U, "ticket": U}, "", []openAITiboRoute{"ticket", "http"}},
+		{"everything degraded", tiers{"http": D}, "", []openAITiboRoute{"http"}},
+		{"pin keeps healthy ticket", tiers{"http": H, "ticket": H}, "ticket", []openAITiboRoute{"ticket", "http"}},
+		{"pin ignored when not healthy", tiers{"http": D, "ticket": U}, "http", []openAITiboRoute{"ticket", "http"}},
 		{"http only", tiers{"http": U}, "", []openAITiboRoute{"http"}},
 		{"cold http uses ticket", tiers{"http": U, "ticket": U}, "", []openAITiboRoute{"ticket", "http"}},
 	} {
@@ -355,23 +337,4 @@ func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
 	require.False(t, state.http.inflight)
 }
 
-func TestTiboHTTPDegradedTriggersBPSProbeInShadow(t *testing.T) {
-	tc := newTiboRouteCase(t, true, false, cookieWSHTTPResponse("False"))
-	tc.svc.cfg.Gateway.OpenAITiboRoute.BPSProbeMode = config.OpenAITiboBPSProbeShadow
-	tc.svc.openaiTiboLoaded.Store(true)
-	now := time.Now()
-	state := tc.svc.openAITiboAccountState(tc.account.ID)
-	state.mu.Lock()
-	state.lastUsedAt, state.bpsEnabled = now, true
-	state.http = openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now, flippedAt: now.Add(-time.Hour),
-		pending: []openAITiboVerdict{openAITiboDegraded}, pendingSince: now, lastSampleAt: now}
-	state.bps.nextProbeAt = now.Add(time.Hour)
-	state.mu.Unlock()
-	tc.svc.recordOpenAITiboSample(state, openAITiboRouteHTTP, tc.account, tiboSample(openAITiboDegraded))
-	tc.svc.openaiTiboProbeWG.Wait()
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	require.Equal(t, openAITiboDegraded, state.http.verdict)
-	require.Len(t, state.bps.probes, 1, "HTTP turning degraded samples BPS immediately")
-	require.False(t, state.bps.lastSampleAt.IsZero())
-}
+
