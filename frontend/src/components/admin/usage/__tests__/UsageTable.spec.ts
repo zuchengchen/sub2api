@@ -71,8 +71,6 @@ const messages: Record<string, string> = {
 	'usage.upstreamResponseModel': 'Upstream response',
 	'usage.modelVariant': 'Possible version variant',
 	'usage.modelMismatch': 'Different model',
-  'usage.routeDegraded': 'Degraded',
-  'usage.routeDegradedHint': 'Every Tibo route was degraded; served on the plain HTTP fallback.',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -484,7 +482,7 @@ describe('admin UsageTable tooltip', () => {
 		expect(text).toContain(expectedBadge)
 	})
 
-  it('shows the degraded-fallback badge in the model cell only when route_degraded is true', () => {
+  it('does not render a degraded-route badge in the model cell', () => {
     const wrapper = mount(UsageTable, {
       props: {
         data: [
@@ -496,8 +494,6 @@ describe('admin UsageTable tooltip', () => {
             route_degraded: true,
           },
           { request_id: 'req-route-healthy', model: 'gpt-6-astra', route_degraded: false },
-          { request_id: 'req-route-null', model: 'gpt-6-astra', route_degraded: null },
-          { request_id: 'req-route-absent', model: 'gpt-6-astra' },
         ],
         loading: false,
         columns: [],
@@ -512,15 +508,10 @@ describe('admin UsageTable tooltip', () => {
       },
     })
 
-    const badges = wrapper.findAll('[data-testid="route-degraded-badge"]')
-    expect(badges).toHaveLength(1)
-    expect(badges[0].text()).toBe('Degraded')
-    expect(badges[0].attributes('title')).toBe('Every Tibo route was degraded; served on the plain HTTP fallback.')
-    // Rendered inside the model cell, next to the upstream-response mismatch marker.
-    const modelCell = badges[0].element.parentElement!.parentElement!
-    expect(modelCell.textContent).toContain('gpt-6-astra')
-    expect(modelCell.textContent).toContain('Upstream response')
-    expect(modelCell.textContent).toContain('Different model')
+    expect(wrapper.findAll('[data-testid="route-degraded-badge"]')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('Degraded')
+    expect(wrapper.text()).toContain('gpt-6-astra')
+    expect(wrapper.text()).toContain('Upstream response')
   })
 
   it.each([
