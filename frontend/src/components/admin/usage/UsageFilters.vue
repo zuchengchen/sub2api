@@ -337,7 +337,7 @@ const upstreamModelMismatchOptions = ref<SelectOption[]>([
   { value: false, label: t('admin.usage.upstreamModelMatchedOnly') }
 ])
 
-// Tibo 线路降智：true = 降智兜底（普通 HTTP），false = 未降智；两者都排除未走线路选择的记录
+// Tibo 线路降智：true = 降智（普通 HTTP），false = 未降智；两者都排除未走线路选择的记录
 const routeDegradedOptions = ref<SelectOption[]>([
   { value: null, label: t('admin.usage.allRouteDegraded') },
   { value: true, label: t('admin.usage.routeDegradedOnly') },

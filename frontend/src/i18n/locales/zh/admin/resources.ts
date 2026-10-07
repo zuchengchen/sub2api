@@ -493,7 +493,7 @@ export default {
 	  upstreamModelMatchedOnly: '仅一致',
       routeDegradedFilter: '线路降智',
       allRouteDegraded: '全部线路状态',
-      routeDegradedOnly: '仅降智兜底',
+      routeDegradedOnly: '仅降智',
       routeNotDegradedOnly: '仅未降智',
       ipAddress: 'IP',
       clickToViewBalance: '点击查看充值记录',

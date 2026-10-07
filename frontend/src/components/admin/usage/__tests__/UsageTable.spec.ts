@@ -71,7 +71,7 @@ const messages: Record<string, string> = {
 	'usage.upstreamResponseModel': 'Upstream response',
 	'usage.modelVariant': 'Possible version variant',
 	'usage.modelMismatch': 'Different model',
-  'usage.routeDegraded': 'Degraded fallback',
+  'usage.routeDegraded': 'Degraded',
   'usage.routeDegradedHint': 'Every Tibo route was degraded; served on the plain HTTP fallback.',
 }
 
@@ -514,7 +514,7 @@ describe('admin UsageTable tooltip', () => {
 
     const badges = wrapper.findAll('[data-testid="route-degraded-badge"]')
     expect(badges).toHaveLength(1)
-    expect(badges[0].text()).toBe('Degraded fallback')
+    expect(badges[0].text()).toBe('Degraded')
     expect(badges[0].attributes('title')).toBe('Every Tibo route was degraded; served on the plain HTTP fallback.')
     // Rendered inside the model cell, next to the upstream-response mismatch marker.
     const modelCell = badges[0].element.parentElement!.parentElement!
