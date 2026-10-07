@@ -1209,10 +1209,9 @@ export interface OpenAICookieWSSlotStatus {
 export type TiboRouteName = 'http' | 'bps' | 'cookie_ws'
 export type TiboRouteVerdict = 'healthy' | 'unknown' | 'degraded' | 'unavailable'
 
-// Admin view of one Tibo route of a Cookie WS account. `verdict` is the
-// effective verdict used for routing; `confirmed` is the last confirmed one and
-// may differ from it once the confirmation goes stale. Cookie WS only reports
-// healthy/unavailable with zero hourly counters.
+// Admin view of one Tibo HTTP route. `verdict` is the effective verdict used
+// for routing; `confirmed` is the last confirmed one and may differ from it
+// once the confirmation goes stale.
 export interface TiboRouteStatus {
   route: TiboRouteName
   verdict: TiboRouteVerdict
@@ -1251,9 +1250,9 @@ export interface CodexTurnTicketStatus {
   cookie_slots?: OpenAICookieWSSlotStatus[]
   tibo_routes?: TiboRouteStatus[]
   length?: number
-  ready: boolean
-  remaining_seconds: number
-  blocked: boolean
+  ready?: boolean
+  remaining_seconds?: number
+  blocked?: boolean
   expires_at?: string
   captured_at?: string
   refresh_at?: string

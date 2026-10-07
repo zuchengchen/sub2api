@@ -142,6 +142,17 @@ func TestTiboRouteAppliesForTicketAccountWithoutCookieWS(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "http ok")
 }
 
+func TestOpenAICodexTicketStatusesOmitsRowsWithoutTiboRoutes(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	require.Nil(t, (&AccountTestService{}).OpenAICodexTicketStatuses(account, config.OpenAICodexTicketConfig{}, time.Now()))
+
+	tc := newTiboRouteCase(t, false, false)
+	got := (&AccountTestService{openaiGatewayService: tc.svc}).OpenAICodexTicketStatuses(tc.account, config.OpenAICodexTicketConfig{}, time.Now())
+	require.Len(t, got, 1)
+	require.Equal(t, openAICodexTicketDefaultModel, got[0].Model)
+	require.Equal(t, "http", got[0].TiboRoutes[0].Route)
+}
+
 func TestTiboRouteHTTPTrueStaysOnHTTP(t *testing.T) {
 	tc := newTiboRouteCase(t, false, true, cookieWSHTTPResponse("true."), cookieWSHTTPResponse("http ok"))
 	result, rec, _ := tc.forward(t)
