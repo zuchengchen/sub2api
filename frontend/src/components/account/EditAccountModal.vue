@@ -2274,27 +2274,30 @@
       </div>
 
 
-      <!-- Codex 门票状态（仅 OpenAI OAuth） -->
+      <!-- Tibo HTTP 线路（仅 OpenAI OAuth / setup-token） -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token') && codexTurnTickets.length"
+        v-if="codexTiboRoutes.length"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="tibo-routes"
       >
-        <label class="input-label mb-0">{{ t('admin.accounts.openai.codexTurnTicket') }}</label>
+        <label class="input-label mb-0">{{ t('admin.accounts.openai.codexTiboRoutes') }}</label>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          {{ t('admin.accounts.openai.codexTurnTicketDesc') }}
+          {{ t('admin.accounts.openai.codexTiboRouteDesc') }}
         </p>
         <div class="mt-3 space-y-1.5">
-          <div v-for="ticket in codexTurnTickets" :key="ticket.model" class="text-sm">
-            <div class="flex items-center justify-between">
-              <span class="font-medium">{{ ticket.model }}</span>
-              <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">
-                {{ t('admin.accounts.openai.codexTurnTicketReady', { time: formatCodexTicketRemaining(ticket.remaining_seconds) }) }}
+          <div v-for="route in codexTiboRoutes" :key="`${route.model}:${route.route}`" class="text-sm">
+            <div class="flex items-center justify-between gap-3">
+              <span class="font-medium">{{ shortCodexTicketModel(route.model) }}</span>
+              <span :class="tiboVerdictClass(route.verdict)">
+                {{ t('admin.accounts.openai.codexTiboRouteSummary', {
+                  route: route.route,
+                  verdict: t(`admin.accounts.openai.codexTiboRouteVerdict.${route.verdict}`)
+                }) }}
               </span>
-              <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">
-                {{ t('admin.accounts.openai.codexTurnTicketPaused') }}
-              </span>
-              <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
             </div>
+            <p v-if="route.checked_at" class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexTiboRouteCheckedAt', { time: formatDateTime(new Date(route.checked_at)) }) }}
+            </p>
           </div>
         </div>
       </div>
@@ -3196,13 +3199,28 @@ const selectableGroups = computed(() => {
 // 故隐藏代理选择器。
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
 
-const codexTurnTickets = computed(() => props.account?.codex_turn_tickets ?? [])
+const codexTiboRoutes = computed(() =>
+  (props.account?.codex_turn_tickets ?? []).flatMap((ticket) =>
+    (ticket.tibo_routes ?? []).map((route) => ({
+      model: ticket.model,
+      route: route.route,
+      verdict: route.verdict,
+      checked_at: route.checked_at
+    }))
+  )
+)
 
-function formatCodexTicketRemaining(seconds: number) {
-  const total = Math.max(0, Math.floor(seconds || 0))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}m${String(s).padStart(2, '0')}s`
+function shortCodexTicketModel(model: string) {
+  if (model === 'gpt-6-astra') return 'astra'
+  if (model === 'gpt-5.6-sol') return 'sol'
+  return model
+}
+
+function tiboVerdictClass(verdict: string) {
+  if (verdict === 'healthy') return 'text-emerald-600 dark:text-emerald-400'
+  if (verdict === 'degraded') return 'text-amber-600 dark:text-amber-400'
+  if (verdict === 'unavailable') return 'text-red-600 dark:text-red-400'
+  return 'text-gray-500'
 }
 
 const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {

@@ -318,12 +318,16 @@ describe('EditAccountModal', () => {
     account.type = 'oauth'
     account.credentials = {}
     account.codex_turn_tickets = [{
-      model: 'gpt-6-astra', ready: false, blocked: false, remaining_seconds: 0,
-      tibo_routes: [{ route: 'http', verdict: 'degraded' }]
+      model: 'gpt-6-astra',
+      tibo_routes: [{ route: 'http', verdict: 'degraded', probes_hour: 0, flips_hour: 0 }]
     }]
     const wrapper = mountModal(account)
     expect(wrapper.find('[data-testid="cookie-ws-summary"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="cookie-ws-route"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="tibo-routes"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('astra')
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexTiboRouteSummary')
+    expect(wrapper.text()).not.toContain('codexTurnTicket')
     wrapper.unmount()
   })
 

@@ -122,18 +122,16 @@
       </ClaudeResetCreditsCell>
     </template>
 
-    <!-- OpenAI Codex accounts: ticket status; usage querying remains OAuth-only. -->
+    <!-- OpenAI Codex accounts: Tibo HTTP route; usage querying remains OAuth-only. -->
     <template v-else-if="account.platform === 'openai' && (account.type === 'oauth' || account.type === 'setup-token')">
-      <div v-if="codexTurnTickets.length" class="mb-1 space-y-0.5">
+      <div v-if="codexTiboRoutes.length" class="mb-1 space-y-0.5" data-testid="tibo-routes">
         <div
-          v-for="ticket in codexTurnTickets"
-          :key="ticket.model"
+          v-for="route in codexTiboRoutes"
+          :key="`${route.model}:${route.route}`"
           class="flex items-center gap-1 text-[10px] leading-4"
         >
-          <span class="truncate font-medium text-gray-500 dark:text-gray-400" :title="ticket.model">{{ shortCodexTicketModel(ticket.model) }}</span>
-          <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">{{ formatCodexTicketRemaining(ticket.remaining_seconds) }}</span>
-          <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.codexTurnTicketPaused') }}</span>
-          <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
+          <span class="truncate font-medium text-gray-500 dark:text-gray-400" :title="route.model">{{ shortCodexTicketModel(route.model) }}</span>
+          <span :class="tiboVerdictClass(route.verdict)">{{ t(`admin.accounts.openai.codexTiboRouteVerdict.${route.verdict}`) }}</span>
         </div>
       </div>
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
@@ -550,7 +548,15 @@ const hasOpenAIUsageFallback = computed(() => {
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
 })
 
-const codexTurnTickets = computed(() => props.account.codex_turn_tickets ?? [])
+const codexTiboRoutes = computed(() =>
+  (props.account.codex_turn_tickets ?? []).flatMap((ticket) =>
+    (ticket.tibo_routes ?? []).map((route) => ({
+      model: ticket.model,
+      route: route.route,
+      verdict: route.verdict
+    }))
+  )
+)
 
 function shortCodexTicketModel(model: string) {
   if (model === 'gpt-6-astra') return 'astra'
@@ -558,11 +564,11 @@ function shortCodexTicketModel(model: string) {
   return model
 }
 
-function formatCodexTicketRemaining(seconds: number) {
-  const total = Math.max(0, Math.floor(seconds || 0))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}m${String(s).padStart(2, '0')}s`
+function tiboVerdictClass(verdict: string) {
+  if (verdict === 'healthy') return 'text-emerald-600 dark:text-emerald-400'
+  if (verdict === 'degraded') return 'text-amber-600 dark:text-amber-400'
+  if (verdict === 'unavailable') return 'text-red-600 dark:text-red-400'
+  return 'text-gray-500'
 }
 
 const openAISevenDayEstimatedTotalCost = computed(() => {

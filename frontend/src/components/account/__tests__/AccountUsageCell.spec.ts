@@ -130,7 +130,7 @@ describe('AccountUsageCell', () => {
     })
   })
 
-  it.each(['oauth', 'setup-token'] as const)('renders Codex ticket status for OpenAI %s accounts', async (type) => {
+  it.each(['oauth', 'setup-token'] as const)('renders Tibo HTTP verdict for OpenAI %s accounts', async (type) => {
     getUsage.mockResolvedValue({})
     const wrapper = mount(AccountUsageCell, {
       props: {
@@ -139,9 +139,9 @@ describe('AccountUsageCell', () => {
           platform: 'openai',
           type,
           codex_turn_tickets: [
-            { model: 'gpt-6-astra', ready: true, remaining_seconds: 2520, blocked: false },
-            { model: 'gpt-5.6-sol', ready: false, remaining_seconds: 0, blocked: true },
-            { model: 'custom-model', ready: false, remaining_seconds: 0, blocked: false },
+            { model: 'gpt-6-astra', tibo_routes: [{ route: 'http', verdict: 'healthy', probes_hour: 0, flips_hour: 0 }] },
+            { model: 'gpt-5.6-sol', tibo_routes: [{ route: 'http', verdict: 'degraded', probes_hour: 0, flips_hour: 0 }] },
+            { model: 'custom-model' },
           ],
         }),
       },
@@ -152,16 +152,16 @@ describe('AccountUsageCell', () => {
       } },
     })
     await flushPromises()
-    expect(wrapper.text()).toContain('42m00s')
-    expect(wrapper.text()).toContain('admin.accounts.openai.codexTurnTicketPaused')
-    expect(wrapper.text()).toContain('admin.accounts.openai.codexTurnTicketMissing')
+    expect(wrapper.text()).toContain('astra')
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexTiboRouteVerdict.healthy')
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexTiboRouteVerdict.degraded')
+    expect(wrapper.text()).not.toContain('codexTurnTicket')
     if (type === 'setup-token') {
       expect(getUsage).not.toHaveBeenCalled()
       expect(wrapper.find('[data-test="quota-reset"]').exists()).toBe(false)
     }
     await wrapper.setProps({ account: { ...wrapper.props('account'), codex_turn_tickets: [] } })
-    expect(wrapper.text()).not.toContain('codexTurnTicket')
-    expect(wrapper.text()).not.toContain('42m00s')
+    expect(wrapper.find('[data-testid="tibo-routes"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -171,7 +171,7 @@ describe('AccountUsageCell', () => {
       id: 9703, platform: 'openai', type: 'oauth',
       codex_turn_tickets: [{
         model: 'gpt-6-astra', ready: false, remaining_seconds: 0, blocked: false,
-        tibo_routes: [{ route: 'http', verdict: 'degraded' }]
+        tibo_routes: [{ route: 'http', verdict: 'degraded', probes_hour: 0, flips_hour: 0 }]
       }]
     })
     const wrapper = mount(AccountUsageCell, {
@@ -181,7 +181,8 @@ describe('AccountUsageCell', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="cookie-ws-summary"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="cookie-ws-route"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('codexTurnTicketMissing')
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexTiboRouteVerdict.degraded')
+    expect(wrapper.text()).not.toContain('codexTurnTicket')
     expect(wrapper.find('[data-testid="cookie-ws-slot-0"]').exists()).toBe(false)
     wrapper.unmount()
   })

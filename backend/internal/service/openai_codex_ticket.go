@@ -149,9 +149,12 @@ func OpenAICodexTicketStatuses(account *Account, _ config.OpenAICodexTicketConfi
 func (s *AccountTestService) OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketConfig, now time.Time) []OpenAICodexTicketStatus {
 	statuses := OpenAICodexTicketStatuses(account, cfg, now)
 	if s == nil || s.openaiGatewayService == nil || len(statuses) == 0 {
-		return statuses
+		return nil
 	}
 	statuses[0].TiboRoutes = s.openaiGatewayService.openAITiboRouteStatuses(account, now)
+	if len(statuses[0].TiboRoutes) == 0 {
+		return nil
+	}
 	return statuses
 }
 

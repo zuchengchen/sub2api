@@ -702,11 +702,6 @@ export default {
         codexFingerprintDevice: 'Device only',
         codexFingerprintSession: 'Device + Session',
         codexFingerprintFull: 'Full convergence',
-        codexTurnTicket: 'Codex ticket status',
-        codexTurnTicketDesc: 'Astra HTTP is selected by the Tibo probe (astra / low). Healthy HTTP stays on HTTP; degraded HTTP still uses ordinary HTTP.',
-        codexTurnTicketMissing: 'No valid ticket; requests remain allowed',
-        codexTurnTicketReady: '{time} left',
-        codexTurnTicketPaused: 'No valid ticket; this model is paused',
         codexCookieWS: 'Cookie WS',
         codexCookieGroups: 'Cookie {ready}/{total} × {sockets} WS',
         codexCookieVerifiedWS: 'Verified WS {count} / minimum {minimum}',
@@ -762,6 +757,7 @@ export default {
           model_temporarily_unschedulable: 'Model is temporarily unschedulable'
         },
         codexTiboRoutes: 'Routes',
+        codexTiboRouteDesc: 'Astra HTTP is selected by the Tibo probe (astra / low). Healthy HTTP stays on HTTP; degraded HTTP still uses ordinary HTTP.',
         codexTiboRouteSummary: 'Route {route}: {verdict}',
         codexTiboRouteVerdict: {
           healthy: 'Healthy',
