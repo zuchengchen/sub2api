@@ -13,13 +13,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
-// Tibo routing for anti-degrade Codex ticket and Cookie WS accounts. Each
-// (account, route) keeps a confirmed Tibo verdict that only flips when a
-// majority of a small vote window agrees; unknown samples never vote. Requests
-// pick routes by effective tier (healthy > unknown > degraded) and, within a
-// tier, HTTP -> ticketed /responses (openai_tibo_route_plan.go). Background
-// probes run on the harvester tick for recently active accounts
-// (openai_tibo_route_prober.go).
+// Tibo routing for ChatGPT OAuth accounts. Each account keeps a confirmed HTTP
+// Tibo verdict that only flips when a majority of a small vote window agrees;
+// unknown samples never vote. Requests stay on HTTP. Background probes run on
+// the harvester tick for recently active accounts.
 const (
 	openAITiboHTTPOKReason     = "tibo_http_ok"
 	openAITiboRouteOrderReason = "tibo_route_order"
@@ -29,10 +26,6 @@ const (
 	// Gin context key for a leftover routing record from a previous attempt.
 	// Routing details stay internal; they are never sent to API clients.
 	openAIBPSBypassReasonKey = "openai_bps_bypass_reason"
-	// Gin context key: this Forward attempt should inject a harvested ticket
-	// (turn-state or Cookie) on HTTP /responses. Empty means skip injection
-	// even when the gateway is in turn_state mode.
-	openAITiboInjectTicketKey = "openai_tibo_inject_ticket"
 )
 
 type openAITiboVerdict string
@@ -51,7 +44,6 @@ type openAITiboRoute string
 
 const (
 	openAITiboRouteHTTP     openAITiboRoute = "http"
-	openAITiboRouteTicket   openAITiboRoute = "ticket"
 	openAITiboRouteCookieWS openAITiboRoute = "cookie_ws" // retained for persisted pins / old admin views
 )
 
@@ -384,10 +376,7 @@ func (s *OpenAIGatewayService) openAITiboRouteApplies(account *Account) bool {
 	if s == nil || s.tiboRouteDisabled || account == nil {
 		return false
 	}
-	if s.openAICookieWSAccountEnabled(account) {
-		return true
-	}
-	return isOpenAICodexTicketAccount(account) && s.openAICodexTicketEnabled()
+	return isOpenAICodexTicketAccount(account)
 }
 
 func (s *OpenAIGatewayService) loadOpenAITiboAccountState(accountID int64) *openAITiboAccountState {
@@ -468,7 +457,7 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 	if err != nil || token == "" {
 		return unknown
 	}
-	body, err := json.Marshal(openAICookieWSProbePayload(false))
+	body, err := json.Marshal(openAITiboProbePayload())
 	if err != nil {
 		return unknown
 	}
@@ -481,11 +470,11 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	newOpenAICookieWSIdentity().apply(req.Header)
+	applyOpenAITiboProbeIdentity(req.Header)
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
 		return unknown
 	}
-	resp, err := s.httpUpstream.Do(req, openAICookieWSProxyURL(account, false), account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.Do(req, openAITiboAccountProxyURL(account), account.ID, account.Concurrency)
 	if resp != nil && resp.Body != nil {
 		defer func() { _ = resp.Body.Close() }()
 	}
@@ -500,17 +489,17 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 		unknown.retryAt = parseRetryAfterResetTime(resp.Header, time.Now())
 		return unknown
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, openAICodexTicketProbeBodyLimit+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, openAITiboProbeBodyLimit+1))
 	if err != nil {
 		return unknown
 	}
-	return openAITiboSampleFromObservation(resp.StatusCode, observeOpenAICookieWSHTTPProbe(data))
+	return openAITiboSampleFromObservation(resp.StatusCode, observeOpenAITiboHTTPProbe(data))
 }
 
 // openAITiboSampleFromObservation classifies a completed probe stream: True
 // from astra is healthy; any other successful completion (False, "不知道",
 // refusal or another model) is degraded; everything else is unknown.
-func openAITiboSampleFromObservation(status int, observation *openAICookieWSObservation) openAITiboProbeSample {
+func openAITiboSampleFromObservation(status int, observation *openAITiboHTTPObservation) openAITiboProbeSample {
 	sample := openAITiboProbeSample{verdict: openAITiboUnknown, status: status, answerClass: observation.answerClass}
 	switch {
 	case observation.completed && observation.modelMatch && observation.trueAnswer && !observation.failed:

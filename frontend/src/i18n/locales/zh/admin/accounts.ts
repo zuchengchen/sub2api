@@ -793,7 +793,7 @@ export default {
         codexFingerprintSession: '设备+会话',
         codexFingerprintFull: '完全收敛',
         codexTurnTicket: 'Codex 门票状态',
-        codexTurnTicketDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / low）。HTTP 健康则直连 HTTP；降智时再试 780 打票 Responses。',
+        codexTurnTicketDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / low）。健康则直连 HTTP；降智时仍走普通 HTTP。',
         codexTurnTicketMissing: '暂无有效门票，仍允许请求',
         codexTurnTicketReady: '剩余 {time}',
         codexTurnTicketPaused: '暂无有效门票，该模型已暂停',

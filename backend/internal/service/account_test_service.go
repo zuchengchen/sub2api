@@ -854,9 +854,8 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
 
-	httpHealthy := s.openaiGatewayService != nil &&
+	_ = s.openaiGatewayService != nil &&
 		s.openaiGatewayService.openAITiboEffective(account.ID, openAITiboRouteHTTP, time.Now()) == openAITiboHealthy
-	preferHTTP := pelicanUsesHTTPTransport(ctx, httpHealthy)
 
 	// Default to openai.DefaultTestModel for OpenAI testing
 	testModelID := modelID
@@ -884,20 +883,6 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
 	}
-	if s.openaiGatewayService != nil && !preferHTTP {
-		upstreamModel := normalizeOpenAIModelForUpstream(account, testModelID)
-		if s.openaiGatewayService.openAICookieWSEnabledForModel(account, upstreamModel) &&
-			s.openaiGatewayService.openAICookieWSHasReadyTicket(account, upstreamModel) {
-			err := s.testOpenAICookieWSAccountConnection(c, account, upstreamModel, prompt)
-			if err == nil || !errors.Is(err, errAccountTestCookieWSHTTPFallback) {
-				return err
-			}
-		}
-		if s.openaiGatewayService.openAICookieWSEnabledForModel(account, upstreamModel) {
-			c.Set(accountTestCookieWSHTTPFallbackKey, true)
-		}
-	}
-
 	credentialAccount := account
 	if account.IsCredentialShadow() {
 		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
@@ -975,9 +960,6 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// restart this probe after registering a replacement task.
 	if !agentIdentityTaskRecoveryWasTried(ctx) {
 		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
-		if fallback, ok := c.Get(accountTestCookieWSHTTPFallbackKey); ok && fallback == true {
-			s.sendEvent(c, TestEvent{Type: "status", Text: accountTestCookieWSHTTPFallbackMessage})
-		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))

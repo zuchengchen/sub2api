@@ -17,8 +17,6 @@ func tiboSchedulerAccount(id int64, priority int, groupID int64) Account {
 
 func newTiboSchedulerService(accounts []Account, cache *schedulerTestGatewayCache, prefer bool) *OpenAIGatewayService {
 	cfg := &config.Config{}
-	cfg.Gateway.OpenAICodexTicket.Enabled = true
-	cfg.Gateway.OpenAICodexTicket.Mode = openAICookieWSMode
 	cfg.Gateway.OpenAITiboRoute.SchedulerPreferHealthyRoute = prefer
 	cfg.Gateway.OpenAIWS.LBTopK = 3
 	return &OpenAIGatewayService{
@@ -49,7 +47,7 @@ func TestTiboSchedulerTier(t *testing.T) {
 	seedTiboSchedulerVerdict(svc, account.ID, openAITiboDegraded)
 	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, "gpt-5.1", now), "every route degraded")
 
-	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, openAICodexTicketDefaultModel, now), "no 780 ticket and no harvest proxy")
+	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, openAICodexTicketDefaultModel, now), "degraded HTTP is the only hop")
 	require.Equal(t, 2, svc.openAITiboSchedulerTier(&account, "gpt-5.1", now), "non-astra stays on degraded HTTP")
 
 	apiKey := Account{ID: 7199, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}

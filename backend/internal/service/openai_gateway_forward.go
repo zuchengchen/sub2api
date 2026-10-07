@@ -110,7 +110,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	// attempts; routing records from a previous account must not describe
 	// this attempt.
 	resetOpenAIRouteRecord(c)
-	forceHTTPResponses := s.openAICookieWSHTTPOnlyModel(account, resolveOpenAIAccountUpstreamModelForRequest(account, gjson.GetBytes(body, "model").String(), false))
+	forceHTTPResponses := false
 	if !forceHTTPResponses && shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
 	}
@@ -168,9 +168,8 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		body = managedBody
 	}
 
-	// Tibo routing (openai_tibo_route*.go): routes ordered by verdict tier
-	// (healthy > unknown > degraded), within a tier HTTP -> ticketed
-	// /responses; HTTP always remains as the final route.
+	// Tibo routing (openai_tibo_route*.go): HTTP is selected by Tibo verdict.
+	// Healthy HTTP stays on HTTP; otherwise the request still uses plain HTTP.
 	var tiboRun *openAITiboRun
 	if s.openAITiboRouteApplies(account) {
 		tiboRun = s.newOpenAITiboRun(ctx, c, account, body, wsExecutionScope)
@@ -236,38 +235,11 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	// off Cookie WS: that route has no verified compaction contract, and an
 	// empty compaction stream is fatal for Codex ("expected exactly one
 	// compaction output item, got 0").
-	wsDecision, cookieWS := s.resolveOpenAICookieWSDecision(account, gjson.GetBytes(body, "model").String(), isExplicitOpenAICompactContext(c), wsDecision)
-	httpReason := ""
-	injectTicket := false
-	switch {
-	case tiboRun != nil && tiboRun.first() == openAITiboRouteTicket:
-		cookieWS = false
-		injectTicket = true
-	case tiboRun != nil && tiboRun.first() == openAITiboRouteCookieWS && cookieWS:
-		// Keep the Tibo-verified Cookie WS decision; its own failures fall back below.
-	case tiboRun != nil && cookieWS:
-		// The plan serves HTTP ahead of a ready Cookie WS.
-		httpReason = tiboRun.httpReason()
-	}
-	if httpReason != "" {
-		cookieWS = false
-		wsDecision = openAIWSHTTPDecision(httpReason)
-		if c != nil {
-			c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
-			c.Set("openai_ws_transport_reason", wsDecision.Reason)
-		}
-	}
-	if cookieWS {
-		tiboRun.commit(c, openAITiboRouteCookieWS)
-	} else if injectTicket {
-		tiboRun.commit(c, openAITiboRouteTicket)
-		if c != nil {
-			c.Set(openAITiboInjectTicketKey, true)
-		}
-	} else {
+	cookieWS := false
+	if tiboRun != nil {
 		tiboRun.commit(c, openAITiboRouteHTTP)
 	}
-	cookieWSHTTPFallback := isOpenAICookieWSHTTPTransportReason(wsDecision.Reason)
+	cookieWSHTTPFallback := false
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled() && !cookieWS && !cookieWSHTTPFallback
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
@@ -1205,7 +1177,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		// fall through to OAuth HTTP /responses instead of failing the caller.
 		// Keepalive comments from an earlier attempt are not output, so a
 		// Cookie WS turn that was never sent may still move to HTTP.
-		if cookieWS && shouldOpenAICookieWSHTTPFallback(wsErr) && !openAIStreamClientOutputStarted(c, false) {
+		if false && cookieWS && !openAIStreamClientOutputStarted(c, false) {
 			fallbackReason := cookieWSHTTPFallbackReasonFor(wsErr)
 			wsDecision = openAIWSHTTPDecision(fallbackReason)
 			cookieWS = false
@@ -1737,13 +1709,6 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if account.UsesOpenAICodexProtocol() {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 		restoreOpenAICodexTicketIdentity(c, req.Header)
-		if c != nil {
-			if raw, ok := c.Get(openAITibo780CookieKey); ok {
-				if cookie, _ := raw.(string); strings.TrimSpace(cookie) != "" {
-					req.Header.Set("Cookie", cookie)
-				}
-			}
-		}
 	}
 
 	// Ensure required headers exist
