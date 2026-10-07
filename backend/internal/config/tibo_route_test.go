@@ -14,15 +14,12 @@ func TestLoadOpenAITiboRouteDefaults(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	got := cfg.Gateway.OpenAITiboRoute
-	require.Equal(t, 10*time.Minute, got.HealthyInterval)
-	require.Equal(t, 5*time.Minute, got.DegradedInterval)
-	require.Equal(t, []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute}, got.UnknownBackoff)
-	require.InDelta(t, 0.2, got.Jitter, 1e-9)
+	require.Equal(t, 10*time.Minute, got.Interval)
+	require.Equal(t, 5*time.Minute, got.Spread)
 	require.Equal(t, 3, got.ConfirmSamples)
 	require.Equal(t, 20*time.Second, got.ConfirmSpacing)
 	require.Equal(t, 10*time.Minute, got.MinDegradedDwell)
-	require.Equal(t, 30*time.Minute, got.MaxStale)
-	require.Equal(t, 30*time.Minute, got.ActiveWindow)
+	require.Equal(t, 45*time.Minute, got.MaxStale)
 	require.Equal(t, 20, got.MaxProbesPerHour)
 	require.Equal(t, 4, got.ProbeConcurrency)
 	require.False(t, got.SchedulerPreferHealthyRoute)
@@ -48,7 +45,9 @@ func TestValidateOpenAITiboRoute(t *testing.T) {
 	require.NoError(t, validateOpenAITiboRoute(OpenAITiboRouteConfig{}))
 	require.NoError(t, validateOpenAITiboRoute(OpenAITiboRouteConfig{Jitter: 0.2, ConfirmSamples: 3, DegradedAlertRatio: 0.5, MinDegradedDwell: -time.Second}))
 	for name, cfg := range map[string]OpenAITiboRouteConfig{
-		"interval":    {HealthyInterval: -time.Second},
+		"interval":    {Interval: -time.Second},
+		"spread":      {Spread: -time.Second},
+		"legacy":      {HealthyInterval: -time.Second},
 		"backoff":     {UnknownBackoff: []time.Duration{time.Minute, 0}},
 		"jitter":      {Jitter: 1},
 		"samples":     {ConfirmSamples: 10},
