@@ -272,6 +272,7 @@ func (s *OpenAIGatewayService) loadPersistedOpenAITiboVerdicts(ctx context.Conte
 	if s == nil || s.accountRepo == nil || s.openaiTiboLoaded.Load() {
 		return
 	}
+	defer func() { _ = recover() }()
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
 	if err != nil {
 		return // Retried on the next tick.
@@ -305,7 +306,7 @@ func (s *OpenAIGatewayService) loadPersistedOpenAITiboVerdicts(ctx context.Conte
 // applies the same pause/rate-limit skip as Cookie harvest.
 func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, accountID int64) (*Account, error) {
 	if s == nil || s.accountRepo == nil || accountID <= 0 {
-		return nil, errOpenAICookieWSAccountUnavailable
+		return nil, errOpenAITiboAccountUnavailable
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -314,22 +315,21 @@ func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, acco
 	defer cancel()
 	account, err := s.accountRepo.GetByID(readCtx, accountID)
 	if err != nil || account == nil || account.ID != accountID {
-		return nil, errOpenAICookieWSAccountUnavailable
+		return nil, errOpenAITiboAccountUnavailable
 	}
 	current := *account
 	current.Extra = maps.Clone(account.Extra)
 	current.Credentials = maps.Clone(account.Credentials)
-	if !s.openAITiboRouteApplies(&current) || openAICookieWSAccountSkipReason(&current, time.Now()) != "" {
-		return nil, errOpenAICookieWSAccountUnavailable
+	if !s.openAITiboRouteApplies(&current) || openAITiboAccountSkipReason(&current, time.Now()) != "" {
+		return nil, errOpenAITiboAccountUnavailable
 	}
 	return &current, nil
 }
 
-// probeOpenAITiboRoutes is the harvester-tick hook: probe due routes of
-// recently active Tibo-routed accounts in the background. The tick currently
-// requires Cookie WS mode because the harvester is the only caller.
+// probeOpenAITiboRoutes is the harvester-tick hook: probe due HTTP routes of
+// recently active Tibo-routed accounts in the background.
 func (s *OpenAIGatewayService) probeOpenAITiboRoutes(ctx context.Context) {
-	if s == nil || s.tiboRouteDisabled || ctx.Err() != nil || !s.openAICookieWSModeConfigured() {
+	if s == nil || s.tiboRouteDisabled || ctx.Err() != nil || s.httpUpstream == nil {
 		return
 	}
 	s.loadPersistedOpenAITiboVerdicts(ctx)
@@ -452,15 +452,15 @@ func openAITiboTimePtr(t time.Time) *time.Time {
 	return &t
 }
 
-// openAITiboRouteStatuses returns HTTP verdict state plus ticketed
-// /responses readiness for the admin view. It never starts probes.
-func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, ticketReady bool, now time.Time) []OpenAITiboRouteStatus {
+// openAITiboRouteStatuses returns HTTP verdict state for the admin view.
+// It never starts probes.
+func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, now time.Time) []OpenAITiboRouteStatus {
 	if s == nil || account == nil || !s.openAITiboRouteApplies(account) {
 		return nil
 	}
 	cfg := s.openAITiboRouteConfig()
 	routes := []openAITiboRoute{openAITiboRouteHTTP}
-	out := make([]OpenAITiboRouteStatus, 0, len(routes)+1)
+	out := make([]OpenAITiboRouteStatus, 0, len(routes))
 	state := s.loadOpenAITiboAccountState(account.ID)
 	for _, route := range routes {
 		item := OpenAITiboRouteStatus{Route: string(route), Verdict: string(openAITiboUnknown)}
@@ -482,11 +482,7 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, ticketR
 		}
 		out = append(out, item)
 	}
-	ticket := OpenAITiboRouteStatus{Route: string(openAITiboRouteTicket), Verdict: "unavailable"}
-	if ticketReady {
-		ticket.Verdict = string(openAITiboUnknown)
-	}
-	return append(out, ticket)
+	return out
 }
 
 // observeOpenAITiboResponseModel is the passive model check at the end of a

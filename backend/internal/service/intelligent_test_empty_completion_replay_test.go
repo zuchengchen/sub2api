@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var emptyCompletionReplayPaths = []string{"capture", "http-intelligent", "http-live", "ws-intelligent", "ws-live"}
+var emptyCompletionReplayPaths = []string{"capture", "http-intelligent", "http-live"}
 
 func emptyCompletionReplayFixture(t *testing.T) []map[string]any {
 	t.Helper()
@@ -39,11 +39,9 @@ func emptyCompletionReplayFixture(t *testing.T) []map[string]any {
 func replayEmptyCompletion(t *testing.T, path string, events []map[string]any) (*IntelligentTestRecord, *intelligentCapture, []TestEvent, error) {
 	t.Helper()
 	var stream strings.Builder
-	var wsEvents [][]byte
 	for _, event := range events {
 		raw, err := json.Marshal(event)
 		require.NoError(t, err)
-		wsEvents = append(wsEvents, raw)
 		_, _ = stream.WriteString("data: " + string(raw) + "\n\n")
 	}
 	// Exercise the valid EOF tail in both capture and HTTP replay.
@@ -80,14 +78,7 @@ func replayEmptyCompletion(t *testing.T, path string, events []map[string]any) (
 		body := io.TeeReader(strings.NewReader(sse), capture)
 		adapterErr = (&AccountTestService{}).processOpenAIStream(c, body)
 	} else {
-		conn := &openAIWSCaptureConn{events: wsEvents}
-		gateway, account, _, _ := newCookieForwardFixture(t, conn)
-		svc := &AccountTestService{openaiGatewayService: gateway, httpUpstream: gateway.httpUpstream}
-		adapterErr = svc.testOpenAICookieWSAccountConnection(c, account, openAICodexTicketDefaultModel, "Count the candies")
-		if !intelligent {
-			// Normal live tests expose TestEvents without a shared capture.
-			capture = nil
-		}
+		t.Fatalf("unsupported replay path %q", path)
 	}
 	err := finalizeIntelligentTestRun(record, capture, writer, "", "", "", adapterErr)
 	return record, capture, accountOpenAIStreamTestEvents(t, writer.body.String()), err
@@ -191,7 +182,7 @@ func TestIntelligentEmptyCompletionRejectsUnfinishedOrInvalidItems(t *testing.T)
 		{"fractional_index", func(t *testing.T, event map[string]any) { event["output_index"] = 1.5 }},
 		{"string_index", func(t *testing.T, event map[string]any) { event["output_index"] = "1" }},
 	} {
-		for _, path := range []string{"capture", "http-intelligent", "ws-intelligent"} {
+		for _, path := range []string{"capture", "http-intelligent"} {
 			t.Run(tc.name+"/"+path, func(t *testing.T) {
 				item := emptyCompletionMessageDone(1, "unverified text")
 				tc.mutate(t, item)
@@ -201,7 +192,7 @@ func TestIntelligentEmptyCompletionRejectsUnfinishedOrInvalidItems(t *testing.T)
 			})
 		}
 	}
-	for _, path := range []string{"capture", "http-intelligent", "ws-intelligent"} {
+	for _, path := range []string{"capture", "http-intelligent"} {
 		t.Run("pending_message/"+path, func(t *testing.T) {
 			pending := emptyCompletionMessageDone(3, "unfinished")
 			pending["type"] = "response.output_item.added"
@@ -216,7 +207,7 @@ func TestIntelligentEmptyCompletionRejectsUnfinishedOrInvalidItems(t *testing.T)
 }
 
 func TestIntelligentEmptyCompletionRequiresItemDoneOnlyForExplicitEmptyOutput(t *testing.T) {
-	for _, path := range []string{"capture", "http-intelligent", "ws-intelligent"} {
+	for _, path := range []string{"capture", "http-intelligent"} {
 		t.Run("text_and_part_done_are_insufficient/"+path, func(t *testing.T) {
 			fixture := emptyCompletionReplayFixture(t)
 			var events []map[string]any
@@ -282,7 +273,7 @@ func TestIntelligentEmptyCompletionRecoveryIsBounded(t *testing.T) {
 		require.True(t, capture.truncated, "text recovery must not depend on retained raw diagnostics")
 		require.False(t, capture.textTruncated)
 	})
-	for _, path := range []string{"capture", "http-intelligent", "ws-intelligent"} {
+	for _, path := range []string{"capture", "http-intelligent"} {
 		t.Run("text_overflow/"+path, func(t *testing.T) {
 			_, capture, _, err := replayEmptyCompletion(t, path, []map[string]any{
 				emptyCompletionMessageDone(1, strings.Repeat("x", intelligentCaptureTextLimit+1)), emptyCompletionTerminal([]any{}),

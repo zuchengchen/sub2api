@@ -2285,11 +2285,7 @@
         </p>
         <div class="mt-3 space-y-1.5">
           <div v-for="ticket in codexTurnTickets" :key="ticket.model" class="text-sm">
-            <template v-if="ticket.mode === 'cookie_ws'">
-              <p class="mb-1 font-medium">{{ ticket.model }}</p>
-              <CookieWSStatus :ticket="ticket" />
-            </template>
-            <div v-else class="flex items-center justify-between">
+            <div class="flex items-center justify-between">
               <span class="font-medium">{{ ticket.model }}</span>
               <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">
                 {{ t('admin.accounts.openai.codexTurnTicketReady', { time: formatCodexTicketRemaining(ticket.remaining_seconds) }) }}
@@ -3030,7 +3026,6 @@ import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import OpenAICompatibleProviderPresetSelector from '@/components/account/OpenAICompatibleProviderPresetSelector.vue'
 import AccountTrafficControls from '@/components/account/AccountTrafficControls.vue'
-import CookieWSStatus from '@/components/account/CookieWSStatus.vue'
 import {
   accountTrafficAPI,
   defaultTrafficPolicy,

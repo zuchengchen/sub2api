@@ -703,7 +703,7 @@ export default {
         codexFingerprintSession: 'Device + Session',
         codexFingerprintFull: 'Full convergence',
         codexTurnTicket: 'Codex ticket status',
-        codexTurnTicketDesc: 'Astra HTTP is selected by the Tibo probe (astra / low). Healthy HTTP stays on HTTP; degraded HTTP then tries 780 ticketed Responses.',
+        codexTurnTicketDesc: 'Astra HTTP is selected by the Tibo probe (astra / low). Healthy HTTP stays on HTTP; degraded HTTP still uses ordinary HTTP.',
         codexTurnTicketMissing: 'No valid ticket; requests remain allowed',
         codexTurnTicketReady: '{time} left',
         codexTurnTicketPaused: 'No valid ticket; this model is paused',

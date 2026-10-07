@@ -3,11 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"testing"
-	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,113 +69,5 @@ func TestClassifyIntelligentErrorTreatsCodexPlanGateAsModelError(t *testing.T) {
 	require.Equal(t, "model_error", classifyIntelligentError(400, msg))
 	require.Equal(t, "model_error", classifyIntelligentError(0, msg))
 	require.Equal(t, "request_error", classifyIntelligentError(400, "API returned 400: invalid json"))
-	require.Equal(t, "account_error", classifyIntelligentError(0, ErrOpenAICodexTicketUnavailable.Error()))
-}
-
-func TestApplyIntelligentTestOpenAICodexTicketMatchesGatewayInjection(t *testing.T) {
-	t.Parallel()
-	state := fakeCodexTicketState(292)
-	gateway := ticketTestService(t, config.OpenAICodexTicketConfig{
-		Enabled:      true,
-		TargetLength: 292,
-		TTLSeconds:   3600,
-		FailClosed:   true,
-	}, nil)
-	account := ticketTestAccount(41)
-	gateway.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
-		AccountID:  41,
-		Model:      "gpt-6-astra",
-		State:      state,
-		Length:     292,
-		Cookies:    "__cf_bm=bm; __cflb=lb; __oailb=ol",
-		CapturedAt: time.Now(),
-		ExpiresAt:  time.Now().Add(time.Hour),
-	})
-	svc := &AccountTestService{openaiGatewayService: gateway}
-	body := []byte(`{"model":"gpt-6-astra"}`)
-	intelligentCtx := context.WithValue(context.Background(), intelligentRunKey{}, &intelligentRunContext{prompt: "pelican"})
-
-	injected := http.Header{}
-	require.NoError(t, svc.applyIntelligentTestOpenAICodexTicket(intelligentCtx, account, body, injected))
-	require.Equal(t, state, injected.Get(openAICodexTurnStateHeader))
-	require.Equal(t, 292, len(injected.Get(openAICodexTurnStateHeader)))
-	require.Equal(t, "__cf_bm=bm; __cflb=lb; __oailb=ol", injected.Get("Cookie"))
-
-	plain := http.Header{}
-	require.NoError(t, svc.applyIntelligentTestOpenAICodexTicket(context.Background(), account, body, plain))
-	require.Empty(t, plain.Get(openAICodexTurnStateHeader))
-}
-
-func TestPelicanBorrows292TicketAndCookies(t *testing.T) {
-	t.Parallel()
-	state := fakeCodexTicketState(292)
-	gateway := ticketTestService(t, config.OpenAICodexTicketConfig{
-		Enabled: true, TargetLength: 292, TTLSeconds: 180, FailClosed: true,
-	}, nil)
-	donor := ticketTestAccount(12)
-	donor.Extra = map[string]any{
-		openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
-			"state": state, "length": 292, "model": "gpt-6-astra",
-			"cookies":     "__cf_bm=bm; __cflb=lb; __oailb=ol",
-			"captured_at": time.Now().Add(-time.Minute),
-			"expires_at":  time.Now().Add(time.Minute),
-		},
-	}
-	gateway.accountRepo = &codexTicketRefreshRepo{accounts: []Account{*donor}}
-	svc := &AccountTestService{openaiGatewayService: gateway}
-	ctx := context.WithValue(context.Background(), intelligentRunKey{}, &intelligentRunContext{prompt: "pelican", testType: "pelican"})
-	h := http.Header{}
-	require.NoError(t, svc.applyIntelligentTestOpenAICodexTicket(ctx, ticketTestAccount(41), []byte(`{"model":"gpt-6-astra"}`), h))
-	require.Equal(t, state, h.Get(openAICodexTurnStateHeader))
-	require.Equal(t, "__cf_bm=bm; __cflb=lb; __oailb=ol", h.Get("Cookie"))
-}
-
-func TestPelicanKeepsOwnExpiredTicketInsteadOfBorrowing(t *testing.T) {
-	t.Parallel()
-	own := fakeCodexTicketState(292)
-	other := fakeCodexTicketState(292)
-	if other == own {
-		other = own[:len(own)-1] + "C"
-	}
-	gateway := ticketTestService(t, config.OpenAICodexTicketConfig{
-		Enabled: true, TargetLength: 292, TTLSeconds: 180, FailClosed: true,
-	}, nil)
-	account := ticketTestAccount(41)
-	account.Extra = map[string]any{
-		openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
-			"state": own, "length": 292, "model": "gpt-6-astra",
-			"cookies":     "__cf_bm=own; __cflb=lb; __oailb=ol",
-			"captured_at": time.Now().Add(-10 * time.Minute),
-			"expires_at":  time.Now().Add(-time.Minute),
-		},
-	}
-	donor := ticketTestAccount(12)
-	donor.Extra = map[string]any{
-		openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
-			"state": other, "length": 292, "model": "gpt-6-astra",
-			"cookies":     "__cf_bm=other; __cflb=lb; __oailb=ol",
-			"captured_at": time.Now(),
-			"expires_at":  time.Now().Add(time.Minute),
-		},
-	}
-	gateway.accountRepo = &codexTicketRefreshRepo{accounts: []Account{*account, *donor}}
-	svc := &AccountTestService{openaiGatewayService: gateway}
-	ctx := context.WithValue(context.Background(), intelligentRunKey{}, &intelligentRunContext{prompt: "pelican", testType: "pelican"})
-	h := http.Header{}
-	require.NoError(t, svc.applyIntelligentTestOpenAICodexTicket(ctx, account, []byte(`{"model":"gpt-6-astra"}`), h))
-	require.Equal(t, own, h.Get(openAICodexTurnStateHeader))
-	require.Contains(t, h.Get("Cookie"), "__cf_bm=own")
-}
-
-func TestApplyIntelligentTestOpenAICodexTicketFailClosedWithoutTicket(t *testing.T) {
-	t.Parallel()
-	gateway := ticketTestService(t, config.OpenAICodexTicketConfig{
-		Enabled:      true,
-		TargetLength: 292,
-		FailClosed:   true,
-	}, nil)
-	svc := &AccountTestService{openaiGatewayService: gateway}
-	ctx := context.WithValue(context.Background(), intelligentRunKey{}, &intelligentRunContext{prompt: "pelican"})
-	err := svc.applyIntelligentTestOpenAICodexTicket(ctx, ticketTestAccount(41), []byte(`{"model":"gpt-6-astra"}`), http.Header{})
-	require.ErrorIs(t, err, ErrOpenAICodexTicketUnavailable)
+	require.Equal(t, "account_error", classifyIntelligentError(0, "account not found"))
 }
