@@ -13,8 +13,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// Background Tibo probing hangs off the harvester tick. Only accounts that
-// served a request within active_window are probed; each (account, route)
+// Background Tibo probing hangs off the harvester tick. Eligible ChatGPT
+// OAuth accounts are enrolled and probed when due; each (account, route)
 // probes at most once at a time, within max_probes_per_hour, and the process
 // runs at most probe_concurrency probes.
 const (
@@ -259,46 +259,52 @@ func (s *OpenAIGatewayService) seedOpenAITiboStateLocked(state *openAITiboAccoun
 		return
 	}
 	r.verdict, r.checkedAt, r.flippedAt, r.persistedAt = record.Verdict, record.CheckedAt, record.FlippedAt, record.CheckedAt
-	interval := cfg.degradedInterval
-	if record.Verdict == openAITiboHealthy {
-		interval = cfg.healthyInterval
-	}
-	r.nextProbeAt = record.CheckedAt.Add(openAITiboJitter(interval, cfg.jitter))
+	r.nextProbeAt = record.CheckedAt.Add(openAITiboCadenceDelay(cfg))
 }
 
-// loadPersistedOpenAITiboVerdicts seeds verdicts from full account rows once
-// per process (scheduler snapshots strip these keys).
-func (s *OpenAIGatewayService) loadPersistedOpenAITiboVerdicts(ctx context.Context) {
+const openAITiboEnrollInterval = time.Minute
+
+// enrollOpenAITiboAccounts loads eligible ChatGPT OAuth accounts into the
+// probe map, seeds persisted verdicts, and staggers first nextProbeAt so a
+// restart does not fire every account at once. Tests that set
+// openaiTiboLoaded skip the listing path and inject state themselves.
+func (s *OpenAIGatewayService) enrollOpenAITiboAccounts(ctx context.Context) {
 	if s == nil || s.accountRepo == nil || s.openaiTiboLoaded.Load() {
+		return
+	}
+	now := time.Now()
+	last := s.openaiTiboEnrolledAt.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < openAITiboEnrollInterval {
+		return
+	}
+	if !s.openaiTiboEnrolledAt.CompareAndSwap(last, now.UnixNano()) {
 		return
 	}
 	defer func() { _ = recover() }()
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
 	if err != nil {
-		return // Retried on the next tick.
+		s.openaiTiboEnrolledAt.Store(last)
+		return
 	}
-	s.openaiTiboLoaded.Store(true)
 	cfg := s.openAITiboRouteConfig()
-	now := time.Now()
-	loaded := 0
+	enrolled := 0
 	for i := range accounts {
 		account := &accounts[i]
-		if !s.openAITiboRouteApplies(account) {
-			continue
-		}
-		if _, ok := account.Extra[openAITiboVerdictExtraKey(openAITiboRouteHTTP)]; !ok {
+		if !s.openAITiboRouteApplies(account) || openAITiboAccountSkipReason(account, now) != "" {
 			continue
 		}
 		state := s.openAITiboAccountState(account.ID)
 		state.mu.Lock()
+		firstSeen := state.http.nextProbeAt.IsZero() && state.http.lastSampleAt.IsZero() && state.http.verdict == ""
 		s.seedOpenAITiboStateLocked(state, account.Extra, now, cfg)
-		if state.http.verdict != "" {
-			loaded++
+		if firstSeen && (state.http.nextProbeAt.IsZero() || !state.http.nextProbeAt.After(now)) {
+			state.http.nextProbeAt = now.Add(openAITiboStartupDelay(cfg))
 		}
+		enrolled++
 		state.mu.Unlock()
 	}
-	if loaded > 0 {
-		logger.L().Info("openai_tibo verdicts loaded", zap.Int("accounts", loaded))
+	if enrolled > 0 {
+		logger.L().Info("openai_tibo accounts enrolled", zap.Int("accounts", enrolled))
 	}
 }
 
@@ -327,12 +333,12 @@ func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, acco
 }
 
 // probeOpenAITiboRoutes is the harvester-tick hook: probe due HTTP routes of
-// recently active Tibo-routed accounts in the background.
+// enrolled Tibo-routed accounts in the background, including idle ones.
 func (s *OpenAIGatewayService) probeOpenAITiboRoutes(ctx context.Context) {
 	if s == nil || s.tiboRouteDisabled || ctx.Err() != nil || s.httpUpstream == nil {
 		return
 	}
-	s.loadPersistedOpenAITiboVerdicts(ctx)
+	s.enrollOpenAITiboAccounts(ctx)
 	cfg := s.openAITiboRouteConfig()
 	now := time.Now()
 	s.pruneOpenAITiboPins(now)
@@ -344,9 +350,6 @@ func (s *OpenAIGatewayService) probeOpenAITiboRoutes(ctx context.Context) {
 		}
 		state.mu.Lock()
 		defer state.mu.Unlock()
-		if state.lastUsedAt.IsZero() || now.Sub(state.lastUsedAt) > cfg.activeWindow {
-			return true
-		}
 		if state.http.due(now) {
 			s.startOpenAITiboProbeCtxLocked(ctx, state, openAITiboRouteHTTP, nil, false, cfg, now)
 		}

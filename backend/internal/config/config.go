@@ -2403,7 +2403,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_codex_ticket.models", []string{"gpt-6-astra", "gpt-5.6-sol"})
 	viper.SetDefault("gateway.openai_codex_ticket.mode", "turn_state")
 	viper.SetDefault("gateway.openai_codex_ticket.cookie_ws_account_ids", []int64{})
-	// Tibo route selection for Cookie WS accounts (openai_tibo_route.go).
+	// Tibo HTTP probing (openai_tibo_route.go): ~10m ± up to 5m per account.
+	viper.SetDefault("gateway.openai_tibo_route.interval", 10*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.spread", 5*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.healthy_interval", 10*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.degraded_interval", 5*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.unknown_backoff", []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute})
@@ -2411,7 +2413,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_tibo_route.confirm_samples", 3)
 	viper.SetDefault("gateway.openai_tibo_route.confirm_spacing", 20*time.Second)
 	viper.SetDefault("gateway.openai_tibo_route.min_degraded_dwell", 10*time.Minute)
-	viper.SetDefault("gateway.openai_tibo_route.max_stale", 30*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.max_stale", 45*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.active_window", 30*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.max_probes_per_hour", 20)
 	viper.SetDefault("gateway.openai_tibo_route.probe_concurrency", 4)

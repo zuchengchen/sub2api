@@ -120,33 +120,45 @@ func TestTiboScheduleCadenceBackoffAndRetryAfter(t *testing.T) {
 	r := openAITiboRouteState{}
 	r.observe(tiboSample(openAITiboHealthy), now, cfg)
 	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
-	require.Equal(t, now.Add(cfg.healthyInterval), r.nextProbeAt, "zero jitter in tests")
+	require.Equal(t, now.Add(cfg.interval), r.nextProbeAt, "zero spread in tests")
 
 	r.observe(tiboSample(openAITiboDegraded), now, cfg)
 	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
 	require.Equal(t, now.Add(cfg.confirmSpacing), r.nextProbeAt, "confirmation probes are spaced")
 	r.observe(tiboSample(openAITiboDegraded), now, cfg)
 	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
-	require.Equal(t, now.Add(cfg.degradedInterval), r.nextProbeAt)
+	require.Equal(t, now.Add(cfg.interval), r.nextProbeAt, "degraded uses the same cadence")
 
-	for i, want := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute} {
-		r.observe(openAITiboProbeSample{verdict: openAITiboUnknown}, now, cfg)
-		r.scheduleNext(openAITiboRouteHTTP, now, cfg)
-		require.Equal(t, now.Add(want), r.nextProbeAt, "unknown step %d", i)
-	}
+	r.observe(openAITiboProbeSample{verdict: openAITiboUnknown}, now, cfg)
+	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
+	require.Equal(t, now.Add(cfg.interval), r.nextProbeAt, "unknown uses the same cadence")
 	retryAt := now.Add(time.Hour)
 	r.observe(openAITiboProbeSample{verdict: openAITiboUnknown, status: 429, retryAt: &retryAt}, now, cfg)
 	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
 	require.Equal(t, retryAt, r.nextProbeAt, "Retry-After wins when later")
 }
 
-func TestTiboJitterBounds(t *testing.T) {
-	for i := 0; i < 200; i++ {
-		got := openAITiboJitter(10*time.Minute, 0.2)
-		require.GreaterOrEqual(t, got, 8*time.Minute)
-		require.LessOrEqual(t, got, 12*time.Minute)
+func TestTiboCadenceSpreadBounds(t *testing.T) {
+	cfg := tiboTestSettings()
+	cfg.interval = 10 * time.Minute
+	cfg.spread = 5 * time.Minute
+	for i := 0; i < 400; i++ {
+		got := openAITiboCadenceDelay(cfg)
+		require.GreaterOrEqual(t, got, 5*time.Minute)
+		require.LessOrEqual(t, got, 15*time.Minute)
 	}
-	require.Equal(t, time.Minute, openAITiboJitter(time.Minute, 0))
+	cfg.spread = 0
+	require.Equal(t, 10*time.Minute, openAITiboCadenceDelay(cfg))
+}
+
+func TestTiboConfirmSpacingIgnoresSpread(t *testing.T) {
+	cfg := tiboTestSettings()
+	cfg.spread = 5 * time.Minute
+	now := time.Now()
+	r := openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now, flippedAt: now}
+	r.observe(tiboSample(openAITiboDegraded), now, cfg)
+	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
+	require.Equal(t, now.Add(cfg.confirmSpacing), r.nextProbeAt)
 }
 
 func TestTiboProbeBudget(t *testing.T) {
@@ -265,34 +277,39 @@ func TestTiboStartupLoadSeedsFromFullRows(t *testing.T) {
 	tc.svc.probeOpenAITiboRoutes(context.Background())
 	tc.svc.openaiTiboProbeWG.Wait()
 	require.Equal(t, openAITiboDegraded, tc.svc.openAITiboEffective(tc.account.ID, openAITiboRouteHTTP, time.Now()))
-	require.Empty(t, tc.upstream.requests, "loaded accounts are idle until they serve a request")
+	require.Empty(t, tc.upstream.requests, "seeded next probe stays in the future")
 }
 
-func TestTiboTickProbesOnlyActiveDueAccounts(t *testing.T) {
+func TestTiboTickProbesIdleDueAccounts(t *testing.T) {
 	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("False"))
 	tc.svc.openaiTiboLoaded.Store(true)
 	now := time.Now()
-	active := tc.svc.openAITiboAccountState(tc.account.ID)
-	active.mu.Lock()
-	active.lastUsedAt = now.Add(-time.Minute)
-	active.http = openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now.Add(-11 * time.Minute), flippedAt: now.Add(-time.Hour), nextProbeAt: now.Add(-time.Second), lastSampleAt: now.Add(-11 * time.Minute)}
-	active.mu.Unlock()
-	idle := tc.svc.openAITiboAccountState(99)
-	idle.mu.Lock()
-	idle.lastUsedAt = now.Add(-31 * time.Minute)
-	idle.http = openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now.Add(-40 * time.Minute), nextProbeAt: now.Add(-time.Minute), lastSampleAt: now.Add(-40 * time.Minute)}
-	idle.mu.Unlock()
+	state := tc.svc.openAITiboAccountState(tc.account.ID)
+	state.mu.Lock()
+	state.lastUsedAt = time.Time{}
+	state.http = openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now.Add(-11 * time.Minute), flippedAt: now.Add(-time.Hour), nextProbeAt: now.Add(-time.Second), lastSampleAt: now.Add(-11 * time.Minute)}
+	state.mu.Unlock()
 
 	tc.svc.probeOpenAITiboRoutes(context.Background())
 	tc.svc.openaiTiboProbeWG.Wait()
-	require.Len(t, tc.upstream.requests, 1, "only the recently active account is probed")
+	require.Len(t, tc.upstream.requests, 1, "idle due accounts are probed")
 	requireTiboProbe(t, tc.upstream.bodies[0])
-	active.mu.Lock()
-	defer active.mu.Unlock()
-	require.Equal(t, openAITiboHealthy, active.http.verdict, "one False opens a vote, no flip")
-	require.Equal(t, []openAITiboVerdict{openAITiboDegraded}, active.http.pending)
-	require.WithinDuration(t, time.Now().Add(20*time.Second), active.http.nextProbeAt, 5*time.Second, "confirmation spacing")
-	require.Len(t, active.http.probes, 1)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Equal(t, openAITiboHealthy, state.http.verdict, "one False opens a vote, no flip")
+	require.Equal(t, []openAITiboVerdict{openAITiboDegraded}, state.http.pending)
+	require.WithinDuration(t, time.Now().Add(20*time.Second), state.http.nextProbeAt, 5*time.Second, "confirmation spacing")
+	require.Len(t, state.http.probes, 1)
+}
+
+func TestTiboStartupDelayStaggersFirstProbe(t *testing.T) {
+	cfg := tiboTestSettings()
+	cfg.interval = 10 * time.Minute
+	for i := 0; i < 400; i++ {
+		got := openAITiboStartupDelay(cfg)
+		require.GreaterOrEqual(t, got, time.Duration(0))
+		require.LessOrEqual(t, got, 10*time.Minute)
+	}
 }
 
 func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
@@ -328,5 +345,3 @@ func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
 	require.True(t, state.http.nextProbeAt.After(time.Now()), "retried later")
 	require.False(t, state.http.inflight)
 }
-
-

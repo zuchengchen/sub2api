@@ -5,20 +5,21 @@ import (
 	"time"
 )
 
-// OpenAITiboRouteConfig tunes Tibo route selection for Cookie WS accounts:
-// background probing, vote-confirmed verdict flips and route tiering.
-// Zero durations/counts fall back to the built-in defaults; see
-// OpenAIGatewayService.openAITiboRouteConfig.
+// OpenAITiboRouteConfig tunes Tibo HTTP probing, vote-confirmed verdict
+// flips and scheduler tiering. Zero durations/counts fall back to the
+// built-in defaults; see OpenAIGatewayService.openAITiboRouteConfig.
 type OpenAITiboRouteConfig struct {
-	// Probe cadence per confirmed verdict. Each interval gets ±Jitter.
-	HealthyInterval  time.Duration `mapstructure:"healthy_interval"`
-	DegradedInterval time.Duration `mapstructure:"degraded_interval"`
-	// UnknownBackoff is the retry ladder after unknown samples (non-200,
-	// timeout, 429, token failure). The last step repeats; Retry-After wins
-	// when it is later.
-	UnknownBackoff []time.Duration `mapstructure:"unknown_backoff"`
-	// Jitter is the ± fraction applied to every probe delay (0 disables).
-	Jitter float64 `mapstructure:"jitter"`
+	// Interval is the base delay between regular probes. Spread is the
+	// absolute ± window (uniform). Regular probes land in
+	// [Interval-Spread, Interval+Spread]. ConfirmSpacing is not spread.
+	Interval time.Duration `mapstructure:"interval"`
+	Spread   time.Duration `mapstructure:"spread"`
+	// HealthyInterval / DegradedInterval / UnknownBackoff / Jitter are
+	// accepted for older configs; regular cadence uses Interval and Spread.
+	HealthyInterval  time.Duration   `mapstructure:"healthy_interval"`
+	DegradedInterval time.Duration   `mapstructure:"degraded_interval"`
+	UnknownBackoff   []time.Duration `mapstructure:"unknown_backoff"`
+	Jitter           float64         `mapstructure:"jitter"`
 	// ConfirmSamples is the vote window for a verdict flip; a majority of it
 	// must agree. ConfirmSpacing separates the confirmation probes.
 	ConfirmSamples int           `mapstructure:"confirm_samples"`
@@ -29,8 +30,8 @@ type OpenAITiboRouteConfig struct {
 	// MaxStale keeps the last confirmed verdict while samples are unknown or
 	// missing; after it the effective state is unknown.
 	MaxStale time.Duration `mapstructure:"max_stale"`
-	// ActiveWindow limits background probes to accounts that served a request
-	// within this window, so idle accounts cost nothing.
+	// ActiveWindow is accepted for older configs. Background probes cover
+	// every eligible ChatGPT OAuth account, including idle ones.
 	ActiveWindow time.Duration `mapstructure:"active_window"`
 	// MaxProbesPerHour caps probes per account and route (including
 	// confirmation probes). ProbeConcurrency caps probes process-wide.
@@ -49,6 +50,7 @@ type OpenAITiboRouteConfig struct {
 
 func validateOpenAITiboRoute(cfg OpenAITiboRouteConfig) error {
 	for name, value := range map[string]time.Duration{
+		"interval": cfg.Interval, "spread": cfg.Spread,
 		"healthy_interval": cfg.HealthyInterval, "degraded_interval": cfg.DegradedInterval,
 		"confirm_spacing": cfg.ConfirmSpacing, "max_stale": cfg.MaxStale,
 		"active_window": cfg.ActiveWindow,

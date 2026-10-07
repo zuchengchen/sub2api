@@ -536,6 +536,7 @@ type OpenAIGatewayService struct {
 	// openaiTiboProbeWG tracks background Tibo probes (tests wait on it).
 	openaiTiboProbeWG          sync.WaitGroup
 	openaiTiboLoaded           atomic.Bool
+	openaiTiboEnrolledAt       atomic.Int64
 	openaiTiboStats            openAITiboStats
 	openaiTiboPins             sync.Map // accountID\x00scope → openAITiboPin
 	openaiTiboPinPrunedAt      atomic.Int64

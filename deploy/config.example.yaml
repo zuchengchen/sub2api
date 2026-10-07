@@ -366,24 +366,20 @@ gateway:
     models:
       - gpt-6-astra
       - gpt-5.6-sol
-  # Tibo 线路选择（仅 cookie_ws 模式下的 Cookie WS 账号生效）。
-  # 后台只探最近 active_window 内有请求的账号（astra/low 的 Tibo 问题）。与当前结论一致只刷新时间；
-  # 不一致时每隔 confirm_spacing 再补探，confirm_samples 里多数同意才切换。unknown 样本（非 200、
-  # 超时、429、取 token 失败）不计票，按 unknown_backoff 退避并遵守 Retry-After；
+  # Tibo HTTP 探测（ChatGPT OAuth / setup-token）。
+  # 每个可调度 ChatGPT OAuth 账号约每 interval 探一次，实际间隔在 ±spread 内均匀随机
+  # （默认 10m ± 5m）。确认翻结论时仍按 confirm_spacing 补探。unknown 样本不计票。
   # 超过 max_stale 没有新的确定样本，有效状态才变为 unknown。
   # 线路按 healthy > unknown > degraded 分层；HTTP 是唯一跳，全部降智时仍走普通 HTTP，
   # 仅在使用记录中标记 route_degraded（不向客户端返回任何线路响应头）。
   openai_tibo_route:
-    healthy_interval: 10m
-    degraded_interval: 5m
-    unknown_backoff: [1m, 2m, 4m, 8m, 15m]
-    jitter: 0.2
+    interval: 10m
+    spread: 5m
     confirm_samples: 3
     confirm_spacing: 20s
     # degraded 切回 healthy 至少间隔多久；负数表示不限制。
     min_degraded_dwell: 10m
-    max_stale: 30m
-    active_window: 30m
+    max_stale: 45m
     # 每账号每条线路每小时的探针上限（含确认探针）；全局并发上限。
     max_probes_per_hour: 20
     probe_concurrency: 4

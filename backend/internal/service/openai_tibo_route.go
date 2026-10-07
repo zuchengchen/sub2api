@@ -16,7 +16,7 @@ import (
 // Tibo routing for ChatGPT OAuth accounts. Each account keeps a confirmed HTTP
 // Tibo verdict that only flips when a majority of a small vote window agrees;
 // unknown samples never vote. Requests stay on HTTP. Background probes run on
-// the harvester tick for recently active accounts.
+// the harvester tick for enrolled ChatGPT OAuth accounts.
 const (
 	openAITiboHTTPOKReason     = "tibo_http_ok"
 	openAITiboRouteOrderReason = "tibo_route_order"
@@ -57,15 +57,12 @@ type openAITiboProbeSample struct {
 
 // openAITiboSettings is the resolved gateway.openai_tibo_route configuration.
 type openAITiboSettings struct {
-	healthyInterval  time.Duration
-	degradedInterval time.Duration
-	unknownBackoff   []time.Duration
-	jitter           float64
+	interval         time.Duration
+	spread           time.Duration
 	confirmSamples   int
 	confirmSpacing   time.Duration
 	minDegradedDwell time.Duration
 	maxStale         time.Duration
-	activeWindow     time.Duration
 	maxProbesPerHour int
 	probeConcurrency int
 	preferHealthy    bool
@@ -73,10 +70,8 @@ type openAITiboSettings struct {
 	alertMinRequests int
 }
 
-var openAITiboDefaultUnknownBackoff = []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute}
-
 // openAITiboRouteConfig applies built-in defaults to zero values, so tests and
-// partial configs keep the documented behavior. Jitter and the alert ratio
+// partial configs keep the documented behavior. Spread and the alert ratio
 // honor an explicit zero; config.go registers their production defaults.
 func (s *OpenAIGatewayService) openAITiboRouteConfig() openAITiboSettings {
 	var raw config.OpenAITiboRouteConfig
@@ -90,26 +85,23 @@ func (s *OpenAIGatewayService) openAITiboRouteConfig() openAITiboSettings {
 		return fallback
 	}
 	cfg := openAITiboSettings{
-		healthyInterval:  pick(raw.HealthyInterval, 10*time.Minute),
-		degradedInterval: pick(raw.DegradedInterval, 5*time.Minute),
-		unknownBackoff:   raw.UnknownBackoff,
-		jitter:           raw.Jitter,
+		interval:         pick(raw.Interval, 10*time.Minute),
+		spread:           raw.Spread,
 		confirmSamples:   raw.ConfirmSamples,
 		confirmSpacing:   pick(raw.ConfirmSpacing, 20*time.Second),
 		minDegradedDwell: raw.MinDegradedDwell,
-		maxStale:         pick(raw.MaxStale, 30*time.Minute),
-		activeWindow:     pick(raw.ActiveWindow, 30*time.Minute),
+		maxStale:         pick(raw.MaxStale, 45*time.Minute),
 		maxProbesPerHour: raw.MaxProbesPerHour,
 		probeConcurrency: raw.ProbeConcurrency,
 		preferHealthy:    raw.SchedulerPreferHealthyRoute,
 		alertRatio:       raw.DegradedAlertRatio,
 		alertMinRequests: raw.DegradedAlertMinRequests,
 	}
-	if len(cfg.unknownBackoff) == 0 {
-		cfg.unknownBackoff = openAITiboDefaultUnknownBackoff
+	if cfg.spread < 0 {
+		cfg.spread = 0
 	}
-	if cfg.jitter < 0 || cfg.jitter >= 1 {
-		cfg.jitter = 0
+	if cfg.spread > cfg.interval {
+		cfg.spread = cfg.interval
 	}
 	if cfg.confirmSamples <= 0 {
 		cfg.confirmSamples = 3
@@ -287,43 +279,50 @@ func (r *openAITiboRouteState) due(now time.Time) bool {
 // scheduleNext sets nextProbeAt after a sample.
 func (r *openAITiboRouteState) scheduleNext(_ openAITiboRoute, now time.Time, cfg openAITiboSettings) {
 	if r.dwellDeferred && r.lastSample.verdict.definitive() {
-		// Recheck right after the dwell ends; jitter only delays.
 		at := r.flippedAt.Add(cfg.minDegradedDwell)
 		if at.Before(now) {
 			at = now
 		}
-		r.nextProbeAt = at.Add(time.Duration(float64(cfg.confirmSpacing) * cfg.jitter * rand.Float64()))
+		r.nextProbeAt = at
 		return
 	}
-	var delay time.Duration
-	switch {
-	case !r.lastSample.verdict.definitive():
-		index := r.unknownStreak - 1
-		if index < 0 {
-			index = 0
-		}
-		if index >= len(cfg.unknownBackoff) {
-			index = len(cfg.unknownBackoff) - 1
-		}
-		delay = cfg.unknownBackoff[index]
-	case len(r.pending) > 0:
+	delay := openAITiboCadenceDelay(cfg)
+	if len(r.pending) > 0 {
 		delay = cfg.confirmSpacing
-	case r.verdict == openAITiboHealthy:
-		delay = cfg.healthyInterval
-	default:
-		delay = cfg.degradedInterval
 	}
-	r.nextProbeAt = now.Add(openAITiboJitter(delay, cfg.jitter))
+	r.nextProbeAt = now.Add(delay)
 	if at := r.lastSample.retryAt; at != nil && at.After(r.nextProbeAt) {
 		r.nextProbeAt = *at
 	}
 }
 
-func openAITiboJitter(delay time.Duration, jitter float64) time.Duration {
-	if jitter <= 0 || delay <= 0 {
-		return delay
+// openAITiboCadenceDelay returns Interval ± Spread, uniform and inclusive.
+func openAITiboCadenceDelay(cfg openAITiboSettings) time.Duration {
+	base := cfg.interval
+	if base <= 0 {
+		base = 10 * time.Minute
 	}
-	return time.Duration(float64(delay) * (1 + jitter*(2*rand.Float64()-1)))
+	spread := cfg.spread
+	if spread < 0 {
+		spread = 0
+	}
+	if spread > base {
+		spread = base
+	}
+	if spread == 0 {
+		return base
+	}
+	spanSec := int64((2 * spread) / time.Second)
+	return base - spread + time.Duration(rand.Int64N(spanSec+1))*time.Second
+}
+
+func openAITiboStartupDelay(cfg openAITiboSettings) time.Duration {
+	base := cfg.interval
+	if base <= 0 {
+		base = 10 * time.Minute
+	}
+	secs := int64(base / time.Second)
+	return time.Duration(rand.Int64N(secs+1)) * time.Second
 }
 
 // takeBudget records a probe start when this route is under
