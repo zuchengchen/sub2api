@@ -13,6 +13,8 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('gpt-6-astra')
     expect(models).toContain('gpt-image-2')
     expect(models).toContain('gpt-image-2.5')
+    expect(models).not.toContain('gpt-image-1')
+    expect(models).not.toContain('gpt-image-1.5')
     expect(models).toContain('gpt-6.1-sol')
     expect(models).toContain('gpt-6-sol')
     expect(models).toContain('gpt-6-luna')
