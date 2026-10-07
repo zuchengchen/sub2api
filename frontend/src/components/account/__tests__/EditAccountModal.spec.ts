@@ -313,25 +313,17 @@ describe('EditAccountModal', () => {
 
   afterEach(() => vi.useRealTimers())
 
-  it('shows only the HTTP Tibo chip in the edit dialog', async () => {
+  it('does not render Cookie WS recovery in the edit dialog', async () => {
     const account = buildAccount()
     account.type = 'oauth'
     account.credentials = {}
     account.codex_turn_tickets = [{
-      model: 'gpt-6-astra', mode: 'cookie_ws', ready: true, blocked: false, remaining_seconds: 2520,
-      verified_ws: 0, minimum_ws: 3, cookie_groups_ready: 0, cookie_groups_valid: 3, recovery_state: 'recovering',
-      tibo_routes: [
-        { route: 'http', verdict: 'degraded' },
-        { route: 'bps', verdict: 'unknown' },
-        { route: 'ticket', verdict: 'unknown' }
-      ]
+      model: 'gpt-6-astra', ready: false, blocked: false, remaining_seconds: 0,
+      tibo_routes: [{ route: 'http', verdict: 'degraded' }]
     }]
     const wrapper = mountModal(account)
     expect(wrapper.find('[data-testid="cookie-ws-summary"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid^="cookie-ws-slot-"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="cookie-ws-route"]').attributes('data-route')).toBe('http')
-    expect(wrapper.get('[data-testid="cookie-ws-route"]').text()).toContain('HTTP')
-    expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTurnTicketReady')
+    expect(wrapper.find('[data-testid="cookie-ws-route"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

@@ -138,53 +138,19 @@ func TestOpenAINativeCompactionGuardIgnoresOrdinaryTurns(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "response.completed")
 }
 
-// gpt-6-astra with a ready Cookie WS ticket: native v2 compaction must use the
-// HTTP Responses route, like the legacy /compact path already does.
-func TestCookieWSNativeCompactionUsesHTTP(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{events: [][]byte{[]byte(tiboRouteWSCompleted)}})
-	upstream := mustTestValue[*httpUpstreamRecorder](t, svc.httpUpstream)
-	upstream.resp = nativeCompactionSSEResponse(true)
-	c, rec := newNativeCompactionContext("/v1/responses")
-
-	result, err := svc.Forward(context.Background(), c, account, []byte(nativeCompactionBody))
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.False(t, result.OpenAIWSMode)
-	require.Zero(t, dialer.DialCount(), "native compaction must not dial Cookie WS")
-	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, "/backend-api/codex/responses", upstream.lastReq.URL.Path)
-	require.Contains(t, upstream.lastReq.Header.Get("x-codex-beta-features"), "remote_compaction_v2")
-	require.Contains(t, rec.Body.String(), `"type":"compaction"`)
-}
-
-// Ordinary Astra turns on the same fixture still use Cookie WS.
-func TestCookieWSOrdinaryTurnStillUsesCookieWS(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	svc, account, _, dialer := newCookieForwardFixture(t, &openAIWSCaptureConn{events: [][]byte{[]byte(tiboRouteWSCompleted)}})
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
-	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","input":"hello","stream":false}`))
-	require.NoError(t, err)
-	require.True(t, result.OpenAIWSMode)
-	require.Equal(t, 1, dialer.DialCount())
-}
-
-func TestTiboRouteTiersUseTicketNotCookieWS(t *testing.T) {
+func TestTiboRouteTiersStayOnHTTP(t *testing.T) {
 	tc := newTiboRouteCase(t, false, true)
 	tiers := tc.svc.openAITiboRouteTiers(tc.account, "gpt-6-astra", false, openAITiboDegraded)
 	_, hasWS := tiers[openAITiboRouteCookieWS]
 	require.False(t, hasWS, "Cookie WS is not a Tibo plan hop")
-	_, hasTicket := tiers[openAITiboRouteTicket]
-	require.True(t, hasTicket, "ordinary plan keeps the ticketed /responses hop")
+	_, hasHTTP := tiers[openAITiboRouteHTTP]
+	require.True(t, hasHTTP)
 
 	c, _ := newNativeCompactionContext("/v1/responses")
 	run := tc.svc.newOpenAITiboRun(context.Background(), c, tc.account, []byte(nativeCompactionBody), "scope-native-compaction")
 	_, hasWS = run.tiers[openAITiboRouteCookieWS]
 	require.False(t, hasWS)
-	require.NotEqual(t, openAITiboRouteCookieWS, run.first())
+	require.Equal(t, openAITiboRouteHTTP, run.first())
 }
 
 func TestOpenAINativeCompactionStreamInterval(t *testing.T) {

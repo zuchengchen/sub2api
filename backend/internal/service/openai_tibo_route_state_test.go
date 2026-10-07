@@ -177,7 +177,7 @@ func TestTiboWindowCountDoesNotMutate(t *testing.T) {
 	state.http.probes = append([]time.Time(nil), times...)
 	state.http.flips = append([]time.Time(nil), times...)
 	state.mu.Unlock()
-	status := tc.svc.openAITiboRouteStatuses(tc.account, false, now)
+	status := tc.svc.openAITiboRouteStatuses(tc.account, now)
 	require.Equal(t, 2, status[0].ProbesHour)
 	require.Equal(t, 2, status[0].FlipsHour)
 	state.mu.Lock()
@@ -211,14 +211,10 @@ func TestTiboRouteOrderByTier(t *testing.T) {
 		pinned openAITiboRoute
 		want   []openAITiboRoute
 	}{
-		{"healthy http wins", tiers{"http": H, "ticket": U}, "", []openAITiboRoute{"http"}},
-		{"degraded http", tiers{"http": D, "ticket": U}, "", []openAITiboRoute{"ticket", "http"}},
-		{"unknown http still tries ticket", tiers{"http": U, "ticket": U}, "", []openAITiboRoute{"ticket", "http"}},
-		{"everything degraded", tiers{"http": D}, "", []openAITiboRoute{"http"}},
-		{"pin keeps healthy ticket", tiers{"http": H, "ticket": H}, "ticket", []openAITiboRoute{"ticket", "http"}},
-		{"pin ignored when not healthy", tiers{"http": D, "ticket": U}, "http", []openAITiboRoute{"ticket", "http"}},
-		{"http only", tiers{"http": U}, "", []openAITiboRoute{"http"}},
-		{"cold http uses ticket", tiers{"http": U, "ticket": U}, "", []openAITiboRoute{"ticket", "http"}},
+		{"healthy http", tiers{"http": H}, "", []openAITiboRoute{"http"}},
+		{"degraded http", tiers{"http": D}, "", []openAITiboRoute{"http"}},
+		{"unknown http", tiers{"http": U}, "", []openAITiboRoute{"http"}},
+		{"pin ignored", tiers{"http": H}, "http", []openAITiboRoute{"http"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, openAITiboOrderRoutes(tc.tiers, tc.pinned))
@@ -231,10 +227,8 @@ func TestTiboRouteOrderByTier(t *testing.T) {
 func TestTiboVerdictPersistsAndWarmStarts(t *testing.T) {
 	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"), cookieWSHTTPResponse("http ok"))
 	tc.forward(t)
-	repo := mustTestValue[*cookieWSLifecycleRepo](t, tc.svc.accountRepo)
-	repo.mu.Lock()
+	repo := mustTestValue[*tiboAccountRepo](t, tc.svc.accountRepo)
 	persisted := repo.updates[tc.account.ID][openAITiboVerdictExtraKey(openAITiboRouteHTTP)]
-	repo.mu.Unlock()
 	record, ok := parseOpenAITiboVerdictRecord(persisted)
 	require.True(t, ok, "flip persisted to Extra")
 	require.Equal(t, openAITiboHealthy, record.Verdict)
@@ -249,7 +243,7 @@ func TestTiboVerdictPersistsAndWarmStarts(t *testing.T) {
 	result, _, _ := warm.forward(t)
 	require.False(t, result.OpenAIWSMode)
 	require.Len(t, warm.upstream.requests, 1, "no probe: the persisted verdict is fresh")
-	require.NotContains(t, string(warm.upstream.bodies[0]), openAICookieWSProbePrompt)
+	require.NotContains(t, string(warm.upstream.bodies[0]), openAITiboProbePrompt)
 
 	stale := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"), cookieWSHTTPResponse("http ok"))
 	stale.account.Extra[openAITiboVerdictExtraKey(openAITiboRouteHTTP)] = map[string]any{
@@ -263,7 +257,7 @@ func TestTiboVerdictPersistsAndWarmStarts(t *testing.T) {
 
 func TestTiboStartupLoadSeedsFromFullRows(t *testing.T) {
 	tc := newTiboRouteCase(t, false, false)
-	repo := mustTestValue[*cookieWSLifecycleRepo](t, tc.svc.accountRepo)
+	repo := mustTestValue[*tiboAccountRepo](t, tc.svc.accountRepo)
 	require.NoError(t, repo.UpdateExtra(context.Background(), tc.account.ID, map[string]any{
 		openAITiboVerdictExtraKey(openAITiboRouteHTTP): map[string]any{"verdict": "degraded", "model": openAICodexTicketDefaultModel,
 			"checked_at": time.Now().Add(-time.Minute).Format(time.RFC3339Nano), "flipped_at": time.Now().Add(-time.Minute).Format(time.RFC3339Nano)},
@@ -319,10 +313,8 @@ func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
 	require.Empty(t, tc.upstream.requests, "hourly budget exhausted")
 
 	// A paused account is not sampled and its budget is refunded.
-	repo := mustTestValue[*cookieWSLifecycleRepo](t, tc.svc.accountRepo)
-	repo.mu.Lock()
-	repo.accounts[0].Schedulable = false
-	repo.mu.Unlock()
+	repo := mustTestValue[*tiboAccountRepo](t, tc.svc.accountRepo)
+	repo.account.Schedulable = false
 	state.mu.Lock()
 	state.http.probes = nil
 	state.http.nextProbeAt = time.Time{}

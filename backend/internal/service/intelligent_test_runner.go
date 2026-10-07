@@ -118,34 +118,8 @@ func applyIntelligentTestReasoning(payload map[string]any) {
 // applyIntelligentTestOpenAICodexTicket 让 GPT OAuth 智能测试走和生产转发相同的
 // 292 门票注入。普通「测试连接」不含 intelligent 上下文，仍发不带门票的探测。
 // 鹈鹕测试在本号没有可用票时，借用其他号上带 Cookie 的 292，出站仍同时带上头和 Cookie。
-func (s *AccountTestService) applyIntelligentTestOpenAICodexTicket(ctx context.Context, account *Account, body []byte, h http.Header) error {
-	if s == nil || s.openaiGatewayService == nil || intelligentContext(ctx) == nil {
-		return nil
-	}
-	model := extractOpenAICodexTicketModel(body)
-	err := s.openaiGatewayService.applyOpenAICodexTicket(ctx, account, model, h)
-	if s.openaiGatewayService.openAICookieWSModeConfigured() {
-		// Cookie mode owns its direct WS adapter. Never borrow legacy material
-		// or fall back to an unvalidated HTTP probe for this mode.
-		return err
-	}
-	if openAICodexTicketInjected(h, s.openaiGatewayService.openAICodexTicketConfig().TargetLength) {
-		return nil
-	}
-	if intelligentContext(ctx).testType != "pelican" {
-		return err
-	}
-	exceptID := int64(0)
-	if account != nil {
-		exceptID = account.ID
-	}
-	borrowed := s.openaiGatewayService.lookupBorrowedOpenAICodexTicket(ctx, exceptID, model)
-	if borrowed.usable(s.openaiGatewayService.openAICodexTicketConfig().TargetLength) {
-		h.Set(openAICodexTurnStateHeader, borrowed.State)
-		applyOpenAICodexTicketCookies(h, borrowed.Cookies)
-		return nil
-	}
-	return err
+func (s *AccountTestService) applyIntelligentTestOpenAICodexTicket(context.Context, *Account, []byte, http.Header) error {
+	return nil
 }
 
 // RunIntelligentTest uses the existing authenticated outbound protocol adapters.
@@ -296,10 +270,6 @@ func finalizeIntelligentTestRun(r *IntelligentTestRecord, capture *intelligentCa
 			status = capture.status
 		}
 		r.Status = classifyIntelligentError(status, r.ErrorMessage)
-		var cookieErr *openAICookieWSTestError
-		if errors.As(err, &cookieErr) {
-			r.Status = cookieErr.Category
-		}
 		return err
 	}
 	return nil

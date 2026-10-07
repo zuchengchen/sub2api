@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,9 +10,7 @@ import (
 )
 
 // openAITiboRun is the route plan of one Forward attempt on a Tibo-routed
-// account: routes ordered by tier (healthy > unknown > degraded) and, within a
-// tier, HTTP -> ticketed /responses. HTTP is terminal: its own failures never
-// fall through to another route, so the plan ends at HTTP.
+// account. HTTP is the only remaining hop.
 type openAITiboRun struct {
 	account *Account
 	scope   string
@@ -73,56 +70,14 @@ func openAITiboTierRank(verdict openAITiboVerdict) int {
 }
 
 // openAITiboRouteTiers returns the tier of every route available for this
-// request. HTTP is always available. Ticketed /responses is a fallback hop
-// (unknown tier) so it never outranks healthy HTTP.
-func (s *OpenAIGatewayService) openAITiboRouteTiers(account *Account, requestModel string, compact bool, httpVerdict openAITiboVerdict) map[openAITiboRoute]openAITiboVerdict {
-	tiers := map[openAITiboRoute]openAITiboVerdict{openAITiboRouteHTTP: httpVerdict}
-	if s.openAITiboTicketReady(account, requestModel, compact) {
-		tiers[openAITiboRouteTicket] = openAITiboUnknown
-	}
-	return tiers
+// request. HTTP is the only remaining hop.
+func (s *OpenAIGatewayService) openAITiboRouteTiers(_ *Account, _ string, _ bool, httpVerdict openAITiboVerdict) map[openAITiboRoute]openAITiboVerdict {
+	return map[openAITiboRoute]openAITiboVerdict{openAITiboRouteHTTP: httpVerdict}
 }
 
-// openAITiboTicketReady is true when a 780 ticket is already cached, or the
-// hop can mint one through the harvest proxy during inject.
-func (s *OpenAIGatewayService) openAITiboTicketReady(account *Account, requestModel string, compact bool) bool {
-	if s == nil || account == nil || !s.openAICodexTicketEnabled() {
-		return false
-	}
-	model := resolveOpenAIAccountUpstreamModelForRequest(account, requestModel, compact)
-	if model == "" {
-		model = normalizeOpenAICodexTicketModel(requestModel)
-	}
-	if s.lookupOpenAICodex780Ticket(account, model).usable780(time.Now()) {
-		return true
-	}
-	return strings.TrimSpace(s.openAICodexTicketHarvestProxyURL()) != "" && isOpenAICodexTicketAccount(account)
-}
-
-// openAITiboOrderRoutes is HTTP → ticketed /responses → HTTP.
-// Healthy HTTP is the only short-circuit. HTTP is always the last route.
-func openAITiboOrderRoutes(tiers map[openAITiboRoute]openAITiboVerdict, pinned openAITiboRoute) []openAITiboRoute {
-	if openAITiboTierRank(tiers[openAITiboRouteHTTP]) == 0 {
-		if pinned != "" && pinned != openAITiboRouteHTTP && tiers[pinned] == openAITiboHealthy {
-			return []openAITiboRoute{pinned, openAITiboRouteHTTP}
-		}
-		return []openAITiboRoute{openAITiboRouteHTTP}
-	}
-	routes := make([]openAITiboRoute, 0, 3)
-	appendIfUsable := func(route openAITiboRoute) {
-		verdict, ok := tiers[route]
-		if !ok || verdict == openAITiboDegraded {
-			return
-		}
-		routes = append(routes, route)
-	}
-	if pinned != "" && pinned != openAITiboRouteHTTP && tiers[pinned] == openAITiboHealthy {
-		routes = append(routes, pinned)
-	}
-	if pinned != openAITiboRouteTicket {
-		appendIfUsable(openAITiboRouteTicket)
-	}
-	return append(routes, openAITiboRouteHTTP)
+// openAITiboOrderRoutes always ends on HTTP.
+func openAITiboOrderRoutes(_ map[openAITiboRoute]openAITiboVerdict, _ openAITiboRoute) []openAITiboRoute {
+	return []openAITiboRoute{openAITiboRouteHTTP}
 }
 
 // newOpenAITiboRun builds the route plan for one Forward attempt.
@@ -137,8 +92,7 @@ func (s *OpenAIGatewayService) newOpenAITiboRun(ctx context.Context, c *gin.Cont
 	return run
 }
 
-// httpReason is the transport reason when the plan serves HTTP although a
-// ticketed /responses hop was available.
+// httpReason is the transport reason when the plan serves HTTP.
 func (r *openAITiboRun) httpReason() string {
 	if r.tier(openAITiboRouteHTTP) == openAITiboHealthy {
 		return openAITiboHTTPOKReason
@@ -147,8 +101,7 @@ func (r *openAITiboRun) httpReason() string {
 }
 
 // finishOpenAITiboRun stamps the degraded flag, pins the session to the
-// route that served, and runs the passive model check for HTTP and
-// ticketed /responses.
+// route that served, and runs the passive model check for HTTP.
 func (s *OpenAIGatewayService) finishOpenAITiboRun(run *openAITiboRun, result *OpenAIForwardResult, err error) {
 	if run == nil || run.served == "" || result == nil {
 		return
@@ -161,11 +114,7 @@ func (s *OpenAIGatewayService) finishOpenAITiboRun(run *openAITiboRun, result *O
 	s.storeOpenAITiboPin(run.account.ID, run.scope, run.served, time.Now())
 	s.openaiTiboStats.noteServed(degraded, run.cfg)
 	if !run.probePayload {
-		served := run.served
-		if served == openAITiboRouteTicket {
-			served = openAITiboRouteHTTP
-		}
-		s.observeOpenAITiboResponseModel(run.account, served, result.UpstreamModel, result.UpstreamResponseModel)
+		s.observeOpenAITiboResponseModel(run.account, run.served, result.UpstreamModel, result.UpstreamResponseModel)
 	}
 }
 

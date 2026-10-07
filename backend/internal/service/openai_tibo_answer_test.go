@@ -36,11 +36,13 @@ func TestClassifyTiboAnswer(t *testing.T) {
 	}
 }
 
-func TestOpenAICookieWSProbePassedAcceptsDecoratedTrue(t *testing.T) {
+func TestOpenAITiboHTTPProbeAcceptsDecoratedTrue(t *testing.T) {
 	for _, answer := range []string{"true", "True.", "**True**", "Answer: true"} {
 		body := "data: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, answer)) + "\n\n"
-		require.True(t, openAICookieWSProbePassed([]byte(body)), "answer %q", answer)
+		obs := observeOpenAITiboHTTPProbe([]byte(body))
+		require.True(t, obs.completed && obs.trueAnswer && !obs.failed, "answer %q", answer)
 	}
 	body := "data: " + string(cookieWSCompletion(openAICodexTicketDefaultModel, "false.")) + "\n\n"
-	require.False(t, openAICookieWSProbePassed([]byte(body)))
+	obs := observeOpenAITiboHTTPProbe([]byte(body))
+	require.False(t, obs.trueAnswer)
 }
