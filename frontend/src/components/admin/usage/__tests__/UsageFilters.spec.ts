@@ -37,7 +37,7 @@ const messages: Record<string, string> = {
 	'admin.usage.upstreamModelMatchedOnly': 'Matched only',
   'admin.usage.routeDegradedFilter': 'Route degradation',
   'admin.usage.allRouteDegraded': 'All route states',
-  'admin.usage.routeDegradedOnly': 'Degraded fallback only',
+  'admin.usage.routeDegradedOnly': 'Degraded only',
   'admin.usage.routeNotDegradedOnly': 'Not degraded only',
   'admin.usage.group': 'Group',
   'admin.usage.allGroups': 'All Groups',
@@ -335,7 +335,7 @@ describe('UsageFilters — route degradation filter', () => {
 
   const findRouteSelect = (wrapper: ReturnType<typeof mountWithMode>) =>
     wrapper.findAllComponents(SelectStub).find((select: any) =>
-      (select.props('options') as Array<{ label: string }>).some((option) => option.label === 'Degraded fallback only')
+      (select.props('options') as Array<{ label: string }>).some((option) => option.label === 'Degraded only')
     )
 
   it('mirrors the upstream-model audit filter with all / degraded fallback / not degraded options', async () => {
@@ -348,7 +348,7 @@ describe('UsageFilters — route degradation filter', () => {
     expect(routeSelect!.props('modelValue')).toBeNull()
     expect(routeSelect!.props('options')).toEqual([
       { value: null, label: 'All route states' },
-      { value: true, label: 'Degraded fallback only' },
+      { value: true, label: 'Degraded only' },
       { value: false, label: 'Not degraded only' },
     ])
 

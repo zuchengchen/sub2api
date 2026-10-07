@@ -361,7 +361,7 @@ export default {
 	  upstreamModelMismatch: '上游响应模型不一致',
 	  modelVariant: '疑似版本变体',
 	  modelMismatch: '模型不一致',
-    routeDegraded: '降智兜底',
+    routeDegraded: '降智',
     routeDegradedHint: '该账号的所有 Tibo 线路均被判定为降智，本次请求改走普通 HTTP 兜底，响应质量可能下降。',
     reasoningEffort: '推理强度',
     requestedReasoningEffort: '请求推理强度',

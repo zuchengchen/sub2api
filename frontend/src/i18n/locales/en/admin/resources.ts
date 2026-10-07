@@ -496,7 +496,7 @@ export default {
 	  upstreamModelMatchedOnly: 'Matched only',
       routeDegradedFilter: 'Route degradation',
       allRouteDegraded: 'All route states',
-      routeDegradedOnly: 'Degraded fallback only',
+      routeDegradedOnly: 'Degraded only',
       routeNotDegradedOnly: 'Not degraded only',
       ipAddress: 'IP',
       clickToViewBalance: 'Click to view balance history',
