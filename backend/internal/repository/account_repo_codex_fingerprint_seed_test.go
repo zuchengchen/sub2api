@@ -32,7 +32,7 @@ func TestBulkUpdateEnsuresCodexFingerprintSeedWithPerRowSQL(t *testing.T) {
 	query := normalizeSQLWhitespace(exec.execQueries[0])
 	require.Contains(t, query, "jsonb_set")
 	require.Contains(t, query, "gen_random_uuid()::text")
-	require.Contains(t, query, "platform = 'openai' AND type = 'oauth'")
+	require.Contains(t, query, "platform = 'openai' AND type IN ('oauth', 'setup-token')")
 	require.Contains(t, query, "to_jsonb(extra ->> 'codex_fingerprint_seed')")
 	require.Contains(t, query, codexFingerprintSeedCanonicalPattern)
 	require.NotContains(t, query, "22222222-2222-4222-8222-222222222222")

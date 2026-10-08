@@ -87,6 +87,72 @@ RETURNING id
 	}
 }
 
+func TestMigration267BackfillsDefaultFullOpenAIOAuthLikeMissingSeeds(t *testing.T) {
+	tx := testTx(t)
+	ctx := context.Background()
+	migrationSQL, err := dbmigrations.FS.ReadFile("267_backfill_codex_fingerprint_default_full.sql")
+	require.NoError(t, err)
+
+	var missingID, setupTokenID, invalidModeID, offID, validID, apiKeyID int64
+	require.NoError(t, tx.QueryRowContext(ctx, `
+INSERT INTO accounts (name, platform, type, extra)
+VALUES ('migration-267-missing', 'openai', 'oauth', '{}'::jsonb)
+RETURNING id
+`).Scan(&missingID))
+	require.NoError(t, tx.QueryRowContext(ctx, `
+INSERT INTO accounts (name, platform, type, extra)
+VALUES ('migration-267-setup-token', 'openai', 'setup-token', '{"codex_fingerprint_mode":"full"}'::jsonb)
+RETURNING id
+`).Scan(&setupTokenID))
+	require.NoError(t, tx.QueryRowContext(ctx, `
+INSERT INTO accounts (name, platform, type, extra)
+VALUES ('migration-267-invalid', 'openai', 'oauth', '{"codex_fingerprint_mode":"invalid"}'::jsonb)
+RETURNING id
+`).Scan(&invalidModeID))
+	require.NoError(t, tx.QueryRowContext(ctx, `
+INSERT INTO accounts (name, platform, type, extra)
+VALUES ('migration-267-off', 'openai', 'oauth', '{"codex_fingerprint_mode":"off"}'::jsonb)
+RETURNING id
+`).Scan(&offID))
+	require.NoError(t, tx.QueryRowContext(ctx, `
+INSERT INTO accounts (name, platform, type, extra)
+VALUES ('migration-267-valid', 'openai', 'oauth', '{"codex_fingerprint_seed":"11111111-1111-4111-8111-111111111111"}'::jsonb)
+RETURNING id
+`).Scan(&validID))
+	require.NoError(t, tx.QueryRowContext(ctx, `
+INSERT INTO accounts (name, platform, type, extra)
+VALUES ('migration-267-apikey', 'openai', 'apikey', '{}'::jsonb)
+RETURNING id
+`).Scan(&apiKeyID))
+
+	_, err = tx.ExecContext(ctx, string(migrationSQL))
+	require.NoError(t, err)
+
+	seedsAfterFirst := map[int64]string{}
+	for _, id := range []int64{missingID, setupTokenID, invalidModeID, validID} {
+		var seed string
+		require.NoError(t, tx.QueryRowContext(ctx, `SELECT extra->>'codex_fingerprint_seed' FROM accounts WHERE id = $1`, id).Scan(&seed))
+		requireCanonicalUUIDString(t, seed)
+		seedsAfterFirst[id] = seed
+	}
+	require.Equal(t, "11111111-1111-4111-8111-111111111111", seedsAfterFirst[validID])
+
+	for _, id := range []int64{offID, apiKeyID} {
+		var hasSeed bool
+		require.NoError(t, tx.QueryRowContext(ctx, `SELECT extra ? 'codex_fingerprint_seed' FROM accounts WHERE id = $1`, id).Scan(&hasSeed))
+		require.False(t, hasSeed)
+	}
+
+	_, err = tx.ExecContext(ctx, string(migrationSQL))
+	require.NoError(t, err)
+
+	for id, want := range seedsAfterFirst {
+		var got string
+		require.NoError(t, tx.QueryRowContext(ctx, `SELECT extra->>'codex_fingerprint_seed' FROM accounts WHERE id = $1`, id).Scan(&got))
+		require.Equal(t, want, got)
+	}
+}
+
 func TestBulkUpdateGeneratesDistinctStableCodexFingerprintSeedsPerEligibleRow(t *testing.T) {
 	ctx := context.Background()
 	testName := "bulk-codex-seed-" + uuid.NewString()

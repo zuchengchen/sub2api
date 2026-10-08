@@ -261,8 +261,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if codexResult.PromptCacheKey != "" {
 			promptCacheKey = codexResult.PromptCacheKey
 		}
+		restoreBridge, _ := s.injectOpenAICompatBridgeIdentity(c, account, reqBody, promptCacheKey)
+		defer restoreBridge()
 		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), apiKeyID)
-		delete(reqBody, "prompt_cache_key")
+		if !codexDeviceWireProfileEnabled(c, account) {
+			delete(reqBody, "prompt_cache_key")
+		}
 		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey)
 		}

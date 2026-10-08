@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -96,14 +97,21 @@ func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw 
 	if raw == "" || namespace == "" {
 		return raw
 	}
-	return deriveStableUUIDv4(fmt.Sprintf(
+	if derived, ok := deriveCodexIdentityCompositeValue(account, apiKeyID, kind, raw); ok {
+		return derived
+	}
+	seed := fmt.Sprintf(
 		"sub2api:codex-account-identity:%s:user:%d:account:%s:kind:%s:value:%s",
 		codexAccountIdentityNamespaceVersion,
 		apiKeyID,
 		namespace,
-		kind,
+		codexIdentitySeedKind(kind),
 		raw,
-	))
+	)
+	if derived, ok := deriveCodexConvergenceIdentityValue(account, seed, raw); ok {
+		return derived
+	}
+	return deriveStableUUIDv4(seed)
 }
 
 var codexAccountIdentityFields = []struct {
@@ -139,6 +147,9 @@ func applyCodexAccountIdentityFields(values map[string]any, account *Account, ap
 			changed = true
 		}
 	}
+	if applyCodexConvergenceIdentityFields(values, account, apiKeyID) {
+		changed = true
+	}
 	return changed
 }
 
@@ -147,19 +158,28 @@ func applyCodexAccountIdentityEmbeddedMetadata(values map[string]any, account *A
 	if !ok || strings.TrimSpace(raw) == "" {
 		return false
 	}
-	metadata := map[string]any{}
-	if err := json.Unmarshal([]byte(raw), &metadata); err != nil || metadata == nil {
+	next := scopeCodexAccountTurnMetadata(raw, account, apiKeyID)
+	if next == raw {
 		return false
 	}
-	if !applyCodexAccountIdentityFields(metadata, account, apiKeyID) {
-		return false
-	}
-	rebuilt, err := marshalCodexTurnMetadata(metadata)
-	if err != nil {
-		return false
-	}
-	values[openAIWSTurnMetadataHeader] = string(rebuilt)
+	values[openAIWSTurnMetadataHeader] = next
 	return true
+}
+
+func scopeCodexAccountTurnMetadata(raw string, account *Account, apiKeyID int64) string {
+	return rewriteCodexTurnMetadataJSON(raw, false, func(metadata map[string]any) map[string]any {
+		before := maps.Clone(metadata)
+		if !applyCodexAccountIdentityFields(metadata, account, apiKeyID) {
+			return nil
+		}
+		fields := make(map[string]any)
+		for name, value := range metadata {
+			if text, ok := value.(string); ok && text != before[name] {
+				fields[name] = text
+			}
+		}
+		return fields
+	})
 }
 
 func applyCodexAccountIdentityClientMetadataMap(requestBody map[string]any, account *Account, apiKeyID int64) bool {
@@ -264,12 +284,7 @@ func applyCodexAccountIdentityHeaders(headers http.Header, account *Account, api
 			headers.Set(field.name, scopeCodexAccountIdentityValue(account, apiKeyID, field.kind, raw))
 		}
 	}
-	if raw := strings.TrimSpace(headers.Get(openAIWSTurnMetadataHeader)); raw != "" {
-		metadata := map[string]any{}
-		if err := json.Unmarshal([]byte(raw), &metadata); err == nil && metadata != nil && applyCodexAccountIdentityFields(metadata, account, apiKeyID) {
-			if rebuilt, err := marshalCodexTurnMetadata(metadata); err == nil {
-				headers.Set(openAIWSTurnMetadataHeader, string(rebuilt))
-			}
-		}
+	if raw := headers.Get(openAIWSTurnMetadataHeader); strings.TrimSpace(raw) != "" {
+		headers.Set(openAIWSTurnMetadataHeader, scopeCodexAccountTurnMetadata(raw, account, apiKeyID))
 	}
 }

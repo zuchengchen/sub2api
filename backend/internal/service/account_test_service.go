@@ -2379,6 +2379,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		// 形态暴露在上游眼里。账号关闭收敛（off）时返回 nil，探测保持原样。
 		if fpIDs := resolveCodexFingerprintIDsFromRequest(account, req.Header); fpIDs != nil {
 			applyCodexFingerprintHeaders(req.Header, fpIDs)
+			applyCodexFingerprintConvergenceHeaders(c, account, req.Header)
 		}
 	}
 
