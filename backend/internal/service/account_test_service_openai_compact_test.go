@@ -283,7 +283,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactProbeIdentityMatc
 			"access_token":       "oauth-token",
 			"chatgpt_account_id": "chatgpt-acc",
 		},
-		// 收敛是显式 opt-in（#5610），这里显式开启以验证探测身份与真实流量同构。
+		// 显式 session 收敛，验证探测身份与真实流量同构。
 		Extra: map[string]any{
 			"codex_fingerprint_mode":     "session",
 			codexFingerprintSeedExtraKey: testCodexFingerprintSeed,
@@ -311,7 +311,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactProbeIdentityMatc
 	require.True(t, ok)
 	converged := resolveConvergedSessionID(seed)
 	require.Equal(t, converged, upstream.lastReq.Header.Get("session-id"))
-	require.Equal(t, converged, upstream.lastReq.Header.Get("session_id"))
+	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.Equal(t, resolveConvergedInstallationID(&account, seed), upstream.lastReq.Header.Get("x-codex-installation-id"),
 		"真实 Codex 每个请求必带 installation-id，探测不得缺失")
 	require.NotContains(t, upstream.lastReq.Header.Get("session-id"), "probe_compact",

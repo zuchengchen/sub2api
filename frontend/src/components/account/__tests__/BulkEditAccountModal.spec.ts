@@ -921,8 +921,10 @@ describe('BulkEditAccountModal', () => {
       selectedTypes: ['oauth']
     })
 
-    // 下拉框默认就是 off，用户只勾选「编辑该项」即提交——正是 issue 描述的操作路径。
     await wrapper.get('#bulk-edit-openai-codex-fingerprint-mode-enabled').setValue(true)
+    await wrapper
+      .get('[data-testid="bulk-codex-fingerprint-mode-select"]')
+      .setValue('off')
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
@@ -938,6 +940,23 @@ describe('BulkEditAccountModal', () => {
       extra: Record<string, unknown>
     }
     expect(Object.keys(payload.extra).length).toBeGreaterThan(0)
+  })
+
+  it('OpenAI OAuth 批量编辑只勾选该项时提交默认完全收敛', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+
+    await wrapper.get('#bulk-edit-openai-codex-fingerprint-mode-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: {
+        codex_fingerprint_mode: 'full'
+      }
+    })
   })
 
   // 与兄弟字段 codex_cli_only 的写法对齐：关闭态同样落显式值，不靠省略表达。

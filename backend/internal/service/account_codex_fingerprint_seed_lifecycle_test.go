@@ -16,6 +16,22 @@ func requireValidCodexFingerprintSeed(t *testing.T, extra map[string]any) string
 	return seed
 }
 
+func TestAdminCreateAccountMintsSeedWhenModeDefaultsToFull(t *testing.T) {
+	repo := &upstreamBillingProbeAccountRepo{}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	created, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
+		Name:                 "codex-oauth-default-full",
+		Platform:             PlatformOpenAI,
+		Type:                 AccountTypeOAuth,
+		SkipDefaultGroupBind: true,
+	})
+
+	require.NoError(t, err)
+	requireValidCodexFingerprintSeed(t, created.Extra)
+	require.Equal(t, codexFingerprintFull, created.GetCodexFingerprintMode())
+}
+
 func TestAdminCreateAccountStripsUserSeedAndCreatesFreshSeedWhenEnabled(t *testing.T) {
 	repo := &upstreamBillingProbeAccountRepo{}
 	svc := &adminServiceImpl{accountRepo: repo}

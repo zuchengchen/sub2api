@@ -152,6 +152,8 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	}
 	applyCodexAccountIdentityHeaders(headers, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 	applyStagedCodexFingerprintHeaders(c, account, headers)
+	applyCodexFingerprintConvergenceHeaders(c, codexAccountIdentitySource(c, account), headers)
+	applyCodexDeviceWireProfile(c, account, headers, true)
 
 	if account != nil && account.UsesOpenAICodexProtocol() {
 		if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {

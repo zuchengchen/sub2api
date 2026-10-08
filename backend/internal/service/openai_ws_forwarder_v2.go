@@ -72,6 +72,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
 	applyStagedCodexFingerprintClientMetadata(c, account, payload)
+	if encoded, err := json.Marshal(payload); err == nil {
+		stageCodexConvergenceBodyIdentityRaw(c, codexAccountIdentitySource(c, account), encoded)
+	}
 	previousResponseID := openAIWSPayloadString(payload, "previous_response_id")
 	previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 	promptCacheKey := strings.TrimSpace(clientPromptCacheKey)

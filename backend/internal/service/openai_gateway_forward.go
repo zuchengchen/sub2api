@@ -698,7 +698,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			if c != nil && c.Request != nil {
 				clientHeaders = c.Request.Header
 			}
-			fpIDs := resolveCodexFingerprintIDsFromRequest(account, clientHeaders)
+			fpIDs := resolveCodexFingerprintIDsWithBody(c, account, clientHeaders, decoded["client_metadata"])
 			if fpIDs != nil {
 				if applyCodexFingerprintClientMetadata(decoded, fpIDs) {
 					markDecodedModified()
@@ -708,6 +708,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			// 无条件覆写（含 nil）：failover 从收敛账号切到 off 账号时，上一
 			// 账号的 IDs 不得残留（stageCodexFingerprintIDs 注释）。
 			stageCodexFingerprintIDs(c, fpIDs)
+			source := codexAccountIdentitySource(c, account)
+			stageCodexConvergenceBodyIdentityMap(c, source, decoded)
+		} else if applyCodexCompactPromptCacheKey(c, account, decoded) {
+			markDecodedModified()
 		}
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel
@@ -1703,6 +1707,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 
 	// 指纹收敛：使用 Forward() 中预计算的收敛 ID 改写出站头，与请求体使用同一份 IDs。
 	applyStagedCodexFingerprintHeaders(c, account, req.Header)
+	applyCodexFingerprintConvergenceHeaders(c, codexAccountIdentitySource(c, account), req.Header)
+	applyCodexDeviceWireProfile(c, account, req.Header, false)
 
 	// 终态收口：强制统一 OAuth 出站身份（User-Agent / originator / version 同源自洽）。
 	// 客户端自报身份不参与构造，浏览器型 UA 也因此不会再到达上游（原浏览器 UA 兜底已被吸收）。

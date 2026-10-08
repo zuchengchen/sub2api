@@ -2318,6 +2318,32 @@
             <Select v-model="codexFingerprintMode" data-testid="edit-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" />
           </div>
         </div>
+        <div class="mt-4 flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexFingerprintConvergence') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexFingerprintConvergenceDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="edit-codex-fingerprint-convergence-toggle"
+            role="switch"
+            :aria-checked="codexFingerprintConvergence"
+            @click="codexFingerprintConvergence = !codexFingerprintConvergence"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              codexFingerprintConvergence ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                codexFingerprintConvergence ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
       </div>
 
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
@@ -3677,7 +3703,8 @@ const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OF
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
-const codexFingerprintMode = ref<CodexFingerprintMode>('off')
+const codexFingerprintMode = ref<CodexFingerprintMode>('full')
+const codexFingerprintConvergence = ref(true)
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
@@ -4161,7 +4188,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
-  codexFingerprintMode.value = 'off'
+  codexFingerprintMode.value = 'full'
+  codexFingerprintConvergence.value = true
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -4215,10 +4243,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     }
     if (newAccount.type === 'oauth') {
       const fpMode = extra?.codex_fingerprint_mode as string | undefined
-      // 缺省/非法值按 off 呈现，与后端 GetCodexFingerprintMode 的 opt-in 语义一致（#5610）
+      // 缺省/非法值按 full 呈现，与后端 GetCodexFingerprintMode 一致。
       codexFingerprintMode.value = (['off', 'device', 'session', 'full'].includes(fpMode || '')
         ? fpMode as CodexFingerprintMode
-        : 'off')
+        : 'full')
+      const conv = extra?.codex_experimental_fingerprint_convergence
+      codexFingerprintConvergence.value = conv !== false && conv !== 'false' && conv !== '0' && conv !== 0
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -5618,14 +5648,11 @@ const handleSubmit = async () => {
         }
       }
 
-      // 指纹收敛模式：默认 off（不写入）；device/session/full 是显式 opt-in，
-      // 必须落键，否则管理员的选择会被后端当作"未设置"而回落到 off（#5610）。
+      // 指纹收敛模式：默认 full + 实验投影开启。off / false 必须显式落键，
+      // 删键会被后端当成缺省全收敛。
       if (props.account.type === 'oauth') {
-        if (codexFingerprintMode.value !== 'off') {
-          newExtra.codex_fingerprint_mode = codexFingerprintMode.value
-        } else {
-          delete newExtra.codex_fingerprint_mode
-        }
+        newExtra.codex_fingerprint_mode = codexFingerprintMode.value
+        newExtra.codex_experimental_fingerprint_convergence = codexFingerprintConvergence.value
       }
 
       updatePayload.extra = newExtra
