@@ -227,7 +227,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -283,6 +283,8 @@ const providerTabs = computed<{ value: Provider; label: string }[]>(() => [
 const activeProvider = ref<Provider>(PROVIDER_ANTHROPIC)
 const templates = ref<ChannelMonitorTemplate[]>([])
 const loading = ref(false)
+let listRequestId = 0
+onBeforeUnmount(() => { listRequestId++ })
 
 const templatesForActiveProvider = computed(() =>
   templates.value.filter((t) => t.provider === activeProvider.value),
@@ -350,14 +352,17 @@ function backToList() {
 
 // --- data fetch ---
 async function fetchTemplates() {
+  const requestId = ++listRequestId
   loading.value = true
   try {
     const { items } = await adminAPI.channelMonitorTemplate.list()
+    if (requestId !== listRequestId) return
     templates.value = items
   } catch (err: unknown) {
+    if (requestId !== listRequestId) return
     appStore.showError(extractApiErrorMessage(err, t('common.error')))
   } finally {
-    loading.value = false
+    if (requestId === listRequestId) loading.value = false
   }
 }
 
@@ -367,6 +372,9 @@ watch(
     if (show) {
       editing.value = null
       fetchTemplates()
+    } else {
+      listRequestId++
+      loading.value = false
     }
   },
   { immediate: true },

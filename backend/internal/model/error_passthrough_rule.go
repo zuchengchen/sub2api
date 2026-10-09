@@ -46,18 +46,9 @@ const (
 	PlatformOpenCodeGo = domain.PlatformOpenCodeGo
 )
 
-// AllPlatforms 返回所有支持的平台列表
+// AllPlatforms 返回所有支持的平台列表（平台清单，按展示顺序）。
 func AllPlatforms() []string {
-	return []string{
-		PlatformAnthropic,
-		PlatformOpenAI,
-		PlatformGrok,
-		PlatformKimi,
-		PlatformZhipu,
-		PlatformDeepseek,
-		PlatformMiniMax,
-		PlatformOpenCodeGo,
-	}
+	return domain.ConcretePlatformIDs()
 }
 
 // Validate 验证规则配置的有效性
