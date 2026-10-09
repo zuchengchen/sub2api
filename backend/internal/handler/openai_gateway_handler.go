@@ -429,6 +429,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", userfacing.RequestBodyEmpty)
 		return
 	}
+	service.TraceOpenAIRequestIngress(c, body)
 
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body

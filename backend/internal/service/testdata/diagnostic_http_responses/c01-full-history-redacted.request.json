@@ -1,0 +1,13 @@
+{
+  "model": "gpt-6-astra",
+  "instructions": "You are a helpful assistant.",
+  "input": [
+    {"role":"user","content":[{"type":"input_text","text":"Remember the fixture decision: retain alpha and beta."}]},
+    {"id":"msg_fixture_c01","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"Acknowledged."}],"phase":"final_answer","role":"assistant"},
+    {"role":"user","content":[{"type":"input_text","text":"Repeat the fixture decision from the previous turn."}]}
+  ],
+  "reasoning": {"effort":"xhigh"},
+  "store": false,
+  "stream": true,
+  "include": ["reasoning.encrypted_content"]
+}
