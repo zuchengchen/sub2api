@@ -104,6 +104,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 // route selection applies it stores the route plan in *tiboRunOut so Forward
 // can stamp the result after any return path.
 func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context, c *gin.Context, account *Account, body []byte, tiboRunOut **openAITiboRun) (*OpenAIForwardResult, error) {
+	traceOpenAIInbound(ctx, c, account, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	// The handler reuses one context and response writer across failover
@@ -1233,6 +1234,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	compactModelFallbackRetried := false
 	agentTaskRecoveryTried := false
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, body)
+	diagnosticUpstreamAttempt := 0
 	for {
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
@@ -1260,8 +1262,11 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		}
 
 		// Send request
+		diagnosticUpstreamAttempt++
+		traceOpenAIUpstream(ctx, c, account, diagnosticUpstreamAttempt, upstreamReq)
 		upstreamStart := time.Now()
 		resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		traceOpenAIUpstreamResult(c, account, diagnosticUpstreamAttempt, resp, err)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
 			if resp != nil && resp.Body != nil {
