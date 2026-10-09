@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +60,167 @@ func TestPrepareOpenAIWSHTTPBridgeBodyStripsNoneReasoningForCompatibleEndpoint(t
 	officialBody, err := prepareOpenAIWSHTTPBridgeBody(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, payload)
 	require.NoError(t, err)
 	require.Equal(t, "none", gjson.GetBytes(officialBody, "reasoning.effort").String())
+}
+
+func TestOpenAIWSHTTPBridgeReplayOutputItemsFiltersIDOnlyReasoning(t *testing.T) {
+	items := []json.RawMessage{
+		json.RawMessage(`{"type":"reasoning","id":"rs_id_only","summary":[]}`),
+		json.RawMessage(`{"type":"reasoning","id":"rs_encrypted","encrypted_content":"fixture-ciphertext"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"keep this decision"}]}`),
+		json.RawMessage(`{"type":"function_call","call_id":"call_fixture","name":"inspect","arguments":"{}"}`),
+	}
+	replayable := openAIWSHTTPBridgeReplayOutputItems(items)
+	require.Equal(t, items[1:], replayable)
+	require.Len(t, items, 4)
+	require.Equal(t, "rs_id_only", gjson.GetBytes(items[0], "id").String())
+}
+
+func TestProxyOpenAIWSHTTPBridgeTurnReplaysAssistantAndEncryptedReasoning(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	output := `[{"type":"reasoning","id":"rs_encrypted","summary":[],"encrypted_content":"fixture-ciphertext"},{"type":"message","id":"msg_decision","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Chosen invariant: preserve every prior decision."}]},{"type":"function_call","id":"fc_inspect","call_id":"call_inspect","name":"inspect","arguments":"{}"},{"type":"reasoning","id":"rs_id_only","summary":[]}]`
+	var events strings.Builder
+	for _, item := range gjson.Parse(output).Array() {
+		events.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
+	}
+	events.WriteString(`data: {"type":"response.completed","response":{"id":"resp_bridge_replay","model":"gpt-5.4","status":"completed","output":` + output + `,"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(events.String())),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream: upstream,
+	}
+	account := &Account{ID: 7799, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	payload := []byte(`{"type":"response.create","model":"gpt-5.4","stream":true,"reasoning":{"effort":"xhigh"},"input":[{"role":"user","content":"Inspect the fixture."}]}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(), c, account, "fixture-token", payload, len(payload),
+		"gpt-5.4", "", "", "", "", 1,
+		func([]byte) error { return nil },
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.wsReplayInputExists)
+	require.Len(t, result.wsReplayInput, 3)
+	require.Equal(t, "reasoning", gjson.GetBytes(result.wsReplayInput[0], "type").String())
+	require.Equal(t, "fixture-ciphertext", gjson.GetBytes(result.wsReplayInput[0], "encrypted_content").String())
+	require.Equal(t, "message", gjson.GetBytes(result.wsReplayInput[1], "type").String())
+	require.Equal(t, "commentary", gjson.GetBytes(result.wsReplayInput[1], "phase").String())
+	require.Contains(t, string(result.wsReplayInput[1]), "Chosen invariant: preserve every prior decision.")
+	require.Equal(t, "function_call", gjson.GetBytes(result.wsReplayInput[2], "type").String())
+	require.Len(t, result.wsAccountFailoverReplayInput, 4)
+	require.Equal(t, "rs_id_only", gjson.GetBytes(result.wsAccountFailoverReplayInput[3], "id").String())
+}
+
+func TestOpenAIWSHTTPBridgeContinuationPreservesAssistantAndEncryptedReasoning(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	output := `[{"type":"reasoning","id":"rs_encrypted","summary":[],"encrypted_content":"fixture-ciphertext"},{"type":"message","id":"msg_decision","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Chosen invariant: preserve every prior decision."}]},{"type":"function_call","id":"fc_inspect","call_id":"call_inspect","name":"inspect","arguments":"{}"},{"type":"reasoning","id":"rs_id_only","summary":[]}]`
+	var firstEvents strings.Builder
+	for _, item := range gjson.Parse(output).Array() {
+		firstEvents.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
+	}
+	firstEvents.WriteString(`data: {"type":"response.completed","response":{"id":"resp_first","model":"gpt-5.4","status":"completed","output":` + output + `,"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n")
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(firstEvents.String()))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(`data: {"type":"response.completed","response":{"id":"resp_second","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"))},
+	}}
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+	cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModeHTTPBridge
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+	svc := &OpenAIGatewayService{
+		cfg: cfg, httpUpstream: upstream, cache: &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID: 7800, Name: "oauth-http-bridge-continuation", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "fixture-token", "chatgpt_account_id": "fixture-account"},
+		Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
+		Concurrency: 1, Status: StatusActive, Schedulable: true,
+	}
+
+	errCh := make(chan error, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
+		_, firstMessage, err := conn.Read(readCtx)
+		cancelRead()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		ginCtx.Request = r.Clone(r.Context())
+		errCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "fixture-token", firstMessage, nil)
+	}))
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 10*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	writeAndReadCompleted := func(payload string) {
+		writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+		require.NoError(t, clientConn.Write(writeCtx, coderws.MessageText, []byte(payload)))
+		cancelWrite()
+		for {
+			readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+			_, event, readErr := clientConn.Read(readCtx)
+			cancelRead()
+			require.NoError(t, readErr)
+			if gjson.GetBytes(event, "type").String() == "response.completed" {
+				return
+			}
+		}
+	}
+
+	writeAndReadCompleted(`{"type":"response.create","model":"gpt-5.4","instructions":"Follow the supplied request.","reasoning":{"effort":"xhigh"},"input":[{"role":"user","content":"Inspect the fixture."}]}`)
+	writeAndReadCompleted(`{"type":"response.create","model":"gpt-5.4","previous_response_id":"resp_first","input":[{"type":"function_call_output","call_id":"call_inspect","output":"fixture result"}]}`)
+
+	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+	select {
+	case proxyErr := <-errCh:
+		require.NoError(t, proxyErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for websocket bridge proxy to finish")
+	}
+
+	require.Len(t, upstream.bodies, 2)
+	second := upstream.bodies[1]
+	require.False(t, gjson.GetBytes(second, "previous_response_id").Exists())
+	require.Contains(t, string(second), "fixture-ciphertext")
+	require.Contains(t, string(second), "Chosen invariant: preserve every prior decision.")
+	require.NotContains(t, string(second), "rs_id_only")
+	items := gjson.GetBytes(second, "input").Array()
+	require.Len(t, items, 5)
+	require.Equal(t, "user", items[0].Get("role").String())
+	require.Equal(t, "reasoning", items[1].Get("type").String())
+	require.Equal(t, "message", items[2].Get("type").String())
+	require.Equal(t, "commentary", items[2].Get("phase").String())
+	require.Equal(t, "function_call", items[3].Get("type").String())
+	require.Equal(t, "function_call_output", items[4].Get("type").String())
 }
 
 func TestProxyOpenAIWSHTTPBridgeTurn_KeepsOutboundAndObservedServiceTiersSeparate(t *testing.T) {
