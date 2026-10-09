@@ -292,6 +292,20 @@ func (c *openAIWSToolCallReplayCollector) AllItems() []json.RawMessage {
 	return slices.Clone(c.allItems)
 }
 
+func openAIWSHTTPBridgeReplayOutputItems(items []json.RawMessage) []json.RawMessage {
+	replayable := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		// Stateless HTTP replay needs the reasoning ciphertext; an ID alone
+		// refers to upstream state that store=false does not retain.
+		if gjson.GetBytes(item, "type").String() == "reasoning" &&
+			strings.TrimSpace(gjson.GetBytes(item, "encrypted_content").String()) == "" {
+			continue
+		}
+		replayable = append(replayable, item)
+	}
+	return replayable
+}
+
 func (c *openAIWSToolCallReplayCollector) addAllItem(item gjson.Result) {
 	if !item.Exists() || item.Type != gjson.JSON {
 		return
@@ -675,11 +689,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			Duration:                      time.Since(turnStart),
 			FirstTokenMs:                  firstTokenMs,
 		}
-		if replayInput := replayCollector.Items(); len(replayInput) > 0 {
+		allItems := replayCollector.AllItems()
+		// previous_response_id is removed by the HTTP bridge, so same-account
+		// replay must carry assistant messages and encrypted reasoning as well
+		// as tool calls. Failover keeps the unfiltered history.
+		if replayInput := openAIWSHTTPBridgeReplayOutputItems(allItems); len(replayInput) > 0 {
 			result.wsReplayInput = replayInput
 			result.wsReplayInputExists = true
 		}
-		result.wsAccountFailoverReplayInput = replayCollector.AllItems()
+		result.wsAccountFailoverReplayInput = allItems
 		if imageCount > 0 {
 			result.ImageCount = imageCount
 			result.ImageSize = imageSizeTier
