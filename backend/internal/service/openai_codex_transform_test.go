@@ -614,6 +614,190 @@ func TestApplyCodexOAuthTransform_DowngradesMissingFunctionToolChoice(t *testing
 	require.Equal(t, "auto", reqBody["tool_choice"])
 }
 
+func requireExplicitFunctionToolChoice(t *testing.T, toolChoice any, name string) {
+	t.Helper()
+	choice, ok := toolChoice.(map[string]any)
+	require.True(t, ok, "tool_choice must stay a function object, got %T %[1]v", toolChoice)
+	require.Equal(t, "function", choice["type"])
+	require.Equal(t, name, choice["name"])
+}
+
+func TestApplyCodexOAuthTransform_KeepsLegalFunctionToolChoiceFromAdditionalTools(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"input": []any{
+			map[string]any{
+				"type": "additional_tools",
+				"tools": []any{
+					map[string]any{"type": "function", "name": "lookup"},
+				},
+			},
+			map[string]any{"type": "message", "role": "user", "content": "hi"},
+		},
+		"tool_choice": map[string]any{"type": "function", "name": "lookup"},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, true, false)
+
+	require.NoError(t, result.Error)
+	requireExplicitFunctionToolChoice(t, reqBody["tool_choice"], "lookup")
+}
+
+func TestNormalizeCodexToolChoice_KeepsLegalFunctionFromAdditionalTools(t *testing.T) {
+	reqBody := map[string]any{
+		"input": []any{
+			map[string]any{
+				"type": "additional_tools",
+				"tools": []any{
+					map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}},
+				},
+			},
+		},
+		"tool_choice": map[string]any{"type": "function", "name": "lookup"},
+	}
+
+	require.False(t, normalizeCodexToolChoice(reqBody))
+	requireExplicitFunctionToolChoice(t, reqBody["tool_choice"], "lookup")
+}
+
+func TestApplyCodexOAuthTransform_KeepsLegalFunctionToolChoiceFromTopLevelTools(t *testing.T) {
+	reqBody := map[string]any{
+		"model":       "gpt-5.4",
+		"tools":       []any{map[string]any{"type": "function", "name": "lookup"}},
+		"tool_choice": map[string]any{"type": "function", "name": "lookup"},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, true, false)
+
+	require.NoError(t, result.Error)
+	requireExplicitFunctionToolChoice(t, reqBody["tool_choice"], "lookup")
+}
+
+func TestApplyCodexOAuthTransform_DowngradesUnknownFunctionToolChoiceFromAdditionalTools(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"input": []any{
+			map[string]any{
+				"type": "additional_tools",
+				"tools": []any{
+					map[string]any{"type": "function", "name": "lookup"},
+				},
+			},
+		},
+		"tool_choice": map[string]any{"type": "function", "name": "missing"},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, true, false)
+
+	require.NoError(t, result.Error)
+	require.Equal(t, "auto", reqBody["tool_choice"])
+}
+
+func TestApplyCodexOAuthTransform_KeepsLegalNamespaceAndAliasFunctionToolChoice(t *testing.T) {
+	t.Run("namespace_child_name", func(t *testing.T) {
+		reqBody := map[string]any{
+			"model": "gpt-5.4",
+			"tools": []any{
+				map[string]any{
+					"type": "namespace",
+					"name": "collaboration",
+					"tools": []any{
+						map[string]any{"type": "function", "name": "spawn_agent"},
+					},
+				},
+			},
+			"tool_choice": map[string]any{"type": "function", "name": "spawn_agent"},
+		}
+
+		result := applyCodexOAuthTransform(reqBody, true, false)
+
+		require.NoError(t, result.Error)
+		requireExplicitFunctionToolChoice(t, reqBody["tool_choice"], "spawn_agent")
+	})
+
+	t.Run("namespace_flattened_name", func(t *testing.T) {
+		reqBody := map[string]any{
+			"model": "gpt-5.4",
+			"tools": []any{
+				map[string]any{
+					"type": "namespace",
+					"name": "collaboration",
+					"tools": []any{
+						map[string]any{"type": "function", "name": "spawn_agent"},
+					},
+				},
+			},
+			"tool_choice": map[string]any{"type": "function", "name": "collaboration__spawn_agent"},
+		}
+
+		result := applyCodexOAuthTransform(reqBody, true, false)
+
+		require.NoError(t, result.Error)
+		requireExplicitFunctionToolChoice(t, reqBody["tool_choice"], "collaboration__spawn_agent")
+	})
+
+	t.Run("additional_tools_namespace_child", func(t *testing.T) {
+		reqBody := map[string]any{
+			"model": "gpt-5.4",
+			"input": []any{
+				map[string]any{
+					"type": "additional_tools",
+					"tools": []any{
+						map[string]any{
+							"type": "namespace",
+							"name": "collaboration",
+							"tools": []any{
+								map[string]any{"type": "function", "name": "spawn_agent"},
+							},
+						},
+					},
+				},
+			},
+			"tool_choice": map[string]any{"type": "function", "name": "spawn_agent"},
+		}
+
+		result := applyCodexOAuthTransform(reqBody, true, false)
+
+		require.NoError(t, result.Error)
+		requireExplicitFunctionToolChoice(t, reqBody["tool_choice"], "spawn_agent")
+	})
+
+	t.Run("reserved_python_alias", func(t *testing.T) {
+		reqBody := map[string]any{
+			"model":       "gpt-5.4",
+			"tools":       []any{map[string]any{"type": "function", "name": "python"}},
+			"tool_choice": map[string]any{"type": "function", "name": "python"},
+		}
+
+		result := applyCodexOAuthTransform(reqBody, true, false)
+
+		require.NoError(t, result.Error)
+		requireExplicitFunctionToolChoice(t, reqBody["tool_choice"], codexPythonToolAlias)
+		require.Equal(t, "python", result.ToolNameReverse[codexPythonToolAlias])
+	})
+
+	t.Run("additional_tools_python_alias", func(t *testing.T) {
+		reqBody := map[string]any{
+			"model": "gpt-5.4",
+			"input": []any{
+				map[string]any{
+					"type": "additional_tools",
+					"tools": []any{
+						map[string]any{"type": "function", "name": "python"},
+					},
+				},
+			},
+			"tool_choice": map[string]any{"type": "function", "name": "python"},
+		}
+
+		result := applyCodexOAuthTransform(reqBody, true, false)
+
+		require.NoError(t, result.Error)
+		requireExplicitFunctionToolChoice(t, reqBody["tool_choice"], codexPythonToolAlias)
+		require.Equal(t, "python", result.ToolNameReverse[codexPythonToolAlias])
+	})
+}
+
 func TestApplyCodexOAuthTransform_AddsFallbackNameForFunctionCallInput(t *testing.T) {
 	reqBody := map[string]any{
 		"model": "gpt-5.4",

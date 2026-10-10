@@ -404,7 +404,7 @@ func normalizeCodexToolChoice(reqBody map[string]any) bool {
 			delete(choiceMap, "function")
 			modified = true
 		}
-		if !codexToolsContainFunctionName(reqBody["tools"], name) {
+		if !codexRequestContainsFunctionName(reqBody, name) {
 			reqBody["tool_choice"] = "auto"
 			return true
 		}
@@ -451,31 +451,109 @@ func codexToolsContainType(rawTools any, toolType string) bool {
 	return false
 }
 
+func codexRequestContainsFunctionName(reqBody map[string]any, name string) bool {
+	if reqBody == nil {
+		return false
+	}
+	if codexToolsContainFunctionName(reqBody["tools"], name) {
+		return true
+	}
+	return codexInputAdditionalToolsContainFunctionName(reqBody["input"], name)
+}
+
+func codexInputAdditionalToolsContainFunctionName(rawInput any, name string) bool {
+	input, ok := rawInput.([]any)
+	if !ok || strings.TrimSpace(name) == "" {
+		return false
+	}
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok || strings.TrimSpace(firstNonEmptyString(item["type"])) != "additional_tools" {
+			continue
+		}
+		if codexToolsContainFunctionName(item["tools"], name) {
+			return true
+		}
+	}
+	return false
+}
+
 func codexToolsContainFunctionName(rawTools any, name string) bool {
+	return codexToolsContainFunctionNameInNamespace(rawTools, name, "")
+}
+
+func codexToolsContainFunctionNameInNamespace(rawTools any, name, namespace string) bool {
 	tools, ok := rawTools.([]any)
 	if !ok || strings.TrimSpace(name) == "" {
 		return false
 	}
 	normalizedName := strings.TrimSpace(name)
+	namespace = strings.TrimSpace(namespace)
 	for _, rawTool := range tools {
 		tool, ok := rawTool.(map[string]any)
 		if !ok {
 			continue
 		}
-		if strings.TrimSpace(firstNonEmptyString(tool["type"])) != "function" {
-			continue
-		}
-		toolName := strings.TrimSpace(firstNonEmptyString(tool["name"]))
-		if toolName == "" {
-			if function, ok := tool["function"].(map[string]any); ok {
-				toolName = strings.TrimSpace(firstNonEmptyString(function["name"]))
+		toolType := strings.TrimSpace(firstNonEmptyString(tool["type"]))
+		switch toolType {
+		case "function":
+			toolName := codexFunctionToolName(tool)
+			if toolName == normalizedName {
+				return true
 			}
-		}
-		if toolName == normalizedName {
-			return true
+			if namespace != "" && flattenCodexNamespaceFunctionName(namespace, toolName) == normalizedName {
+				return true
+			}
+		case "namespace":
+			childNamespace := strings.TrimSpace(firstNonEmptyString(tool["name"]))
+			if namespace != "" && childNamespace != "" {
+				childNamespace = flattenCodexNamespaceFunctionName(namespace, childNamespace)
+			} else if childNamespace == "" {
+				childNamespace = namespace
+			}
+			if codexToolsContainFunctionNameInNamespace(codexNamespaceChildTools(tool), name, childNamespace) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func codexFunctionToolName(tool map[string]any) string {
+	if tool == nil {
+		return ""
+	}
+	name := strings.TrimSpace(firstNonEmptyString(tool["name"]))
+	if name != "" {
+		return name
+	}
+	function, ok := tool["function"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(firstNonEmptyString(function["name"]))
+}
+
+func codexNamespaceChildTools(tool map[string]any) any {
+	if tool == nil {
+		return nil
+	}
+	if children, ok := tool["tools"]; ok && children != nil {
+		return children
+	}
+	return tool["children"]
+}
+
+func flattenCodexNamespaceFunctionName(namespace, name string) string {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" {
+		return name
+	}
+	if name == "" {
+		return namespace
+	}
+	return namespace + "__" + name
 }
 
 func normalizeCodexToolRoleMessages(input []any) ([]any, bool) {
