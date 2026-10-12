@@ -567,6 +567,8 @@ export default {
       isolate: 'Isolate',
       resume: 'Resume',
       noData: 'No account activity in the window.',
+      noDataForPlatform: 'No account activity for this platform in the window.',
+      allPlatforms: 'All platforms',
       errorCount: '{count} errors',
       enableAuto: 'Enable automatic isolation',
       windowMinutes: 'Window (minutes)',
