@@ -564,6 +564,8 @@ export default {
       isolate: '隔离',
       resume: '恢复',
       noData: '窗口内暂无账号活动。',
+      noDataForPlatform: '该平台窗口内暂无账号活动。',
+      allPlatforms: '全部平台',
       errorCount: '错误 {count}',
       enableAuto: '启用自动隔离',
       windowMinutes: '窗口（分钟）',

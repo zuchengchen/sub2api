@@ -18,6 +18,21 @@
         </div>
       </div>
 
+      <div class="tabs flex-wrap" role="group" :aria-label="t('admin.accountHealth.platform')">
+        <button
+          v-for="option in platformButtons"
+          :key="option.value || 'all'"
+          type="button"
+          class="tab"
+          :class="selectedPlatform === option.value ? 'tab-active' : ''"
+          :data-testid="`platform-filter-${option.value || 'all'}`"
+          @click="selectedPlatform = option.value"
+        >
+          {{ option.label }}
+          <span class="ml-1 text-xs tabular-nums text-gray-400">{{ option.count }}</span>
+        </button>
+      </div>
+
       <div v-if="loading" class="flex items-center justify-center py-16">
         <div class="h-8 w-8 animate-spin rounded-full border-b-2 border-primary-600"></div>
       </div>
@@ -26,27 +41,42 @@
         <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.accountHealth.noData') }}</p>
       </div>
 
+      <div v-else-if="visibleItems.length === 0" class="rounded-lg border border-dashed border-gray-300 bg-white px-6 py-12 text-center dark:border-dark-600 dark:bg-dark-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.accountHealth.noDataForPlatform') }}</p>
+      </div>
+
       <div v-else class="overflow-x-auto rounded-lg border border-gray-100 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-800">
         <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-dark-700">
           <thead class="bg-gray-50 dark:bg-dark-700">
             <tr>
-              <th class="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">{{ t('admin.accountHealth.account') }}</th>
-              <th class="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">{{ t('admin.accountHealth.platform') }}</th>
-              <th class="px-4 py-3 text-right font-medium text-gray-500 dark:text-gray-300">{{ t('admin.accountHealth.score') }}</th>
-              <th class="px-4 py-3 text-right font-medium text-gray-500 dark:text-gray-300">{{ t('admin.accountHealth.errRate') }}</th>
-              <th class="px-4 py-3 text-right font-medium text-gray-500 dark:text-gray-300">{{ t('admin.accountHealth.latency') }}</th>
-              <th class="px-4 py-3 text-right font-medium text-gray-500 dark:text-gray-300">{{ t('admin.accountHealth.samples') }}</th>
-              <th class="px-4 py-3 text-center font-medium text-gray-500 dark:text-gray-300">{{ t('admin.accountHealth.state') }}</th>
+              <th
+                v-for="column in columns"
+                :key="column.key"
+                class="px-4 py-3 font-medium"
+                :class="column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'"
+                :aria-sort="sortKey === column.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'"
+              >
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 select-none hover:text-gray-900 dark:hover:text-white"
+                  :class="sortKey === column.key ? 'text-primary-600 dark:text-primary-400' : 'text-gray-500 dark:text-gray-300'"
+                  :data-testid="`sort-${column.key}`"
+                  @click="setSort(column.key)"
+                >
+                  {{ column.label }}
+                  <span v-if="sortKey === column.key" aria-hidden="true">{{ sortDir === 'asc' ? '↑' : '↓' }}</span>
+                </button>
+              </th>
               <th class="px-4 py-3 text-right font-medium text-gray-500 dark:text-gray-300">{{ t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-            <tr v-for="item in items" :key="item.account_id" class="hover:bg-gray-50 dark:hover:bg-dark-700/50">
+            <tr v-for="item in visibleItems" :key="item.account_id" class="hover:bg-gray-50 dark:hover:bg-dark-700/50">
               <td class="px-4 py-3 text-gray-900 dark:text-white">
                 <span class="font-medium">{{ item.name || ('#' + item.account_id) }}</span>
                 <span class="ml-2 text-xs text-gray-400">#{{ item.account_id }}</span>
               </td>
-              <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ item.platform }}</td>
+              <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ platformLabel(item.platform) }}</td>
               <td class="px-4 py-3 text-right font-semibold tabular-nums" :class="scoreClass(item.score)">{{ item.score }}</td>
               <td class="px-4 py-3 text-right tabular-nums text-gray-900 dark:text-white">{{ pct(item.err_rate) }}</td>
               <td class="px-4 py-3 text-right tabular-nums text-gray-900 dark:text-white">{{ item.avg_latency_ms ?? '-' }}{{ item.avg_latency_ms != null ? ' ms' : '' }}</td>
@@ -116,7 +146,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -124,16 +154,47 @@ import Icon from '@/components/icons/Icon.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import { adminAPI } from '@/api/admin'
 import type { AccountHealthSettings, AccountHealthSnapshot } from '@/types'
+import { CONCRETE_PLATFORM_OPTIONS } from '@/constants/platforms'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import { type HealthSortDir, type HealthSortKey, nextHealthSort, visibleHealthItems } from './accountHealthTable'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 
 const items = ref<AccountHealthSnapshot[]>([])
+const selectedPlatform = ref('')
+const sortKey = ref<HealthSortKey>('score')
+const sortDir = ref<HealthSortDir>('asc')
 const loading = ref(false)
 const saving = ref(false)
 const showSettings = ref(false)
+const platformLabel = (platform: string): string => CONCRETE_PLATFORM_OPTIONS.find(option => option.value === platform)?.label || platform
+const platformCount = (platform: string): number => items.value.filter(item => item.platform === platform).length
+const platformButtons = computed(() => {
+  const catalog = new Set(CONCRETE_PLATFORM_OPTIONS.map(option => option.value as string))
+  const extras = [...new Set(items.value.map(item => item.platform).filter(platform => !catalog.has(platform)))].sort()
+  return [
+    { value: '', label: t('admin.accountHealth.allPlatforms'), count: items.value.length },
+    ...CONCRETE_PLATFORM_OPTIONS.map(option => ({ value: option.value, label: option.label, count: platformCount(option.value) })),
+    ...extras.map(platform => ({ value: platform, label: platform, count: platformCount(platform) }))
+  ]
+})
+const columns = computed(() => [
+  { key: 'account' as const, label: t('admin.accountHealth.account'), align: 'left' },
+  { key: 'platform' as const, label: t('admin.accountHealth.platform'), align: 'left' },
+  { key: 'score' as const, label: t('admin.accountHealth.score'), align: 'right' },
+  { key: 'err_rate' as const, label: t('admin.accountHealth.errRate'), align: 'right' },
+  { key: 'latency' as const, label: t('admin.accountHealth.latency'), align: 'right' },
+  { key: 'samples' as const, label: t('admin.accountHealth.samples'), align: 'right' },
+  { key: 'state' as const, label: t('admin.accountHealth.state'), align: 'center' }
+])
+const visibleItems = computed(() => visibleHealthItems(items.value, selectedPlatform.value, sortKey.value, sortDir.value))
+const setSort = (key: HealthSortKey) => {
+  const next = nextHealthSort(sortKey.value, sortDir.value, key)
+  sortKey.value = next.key
+  sortDir.value = next.dir
+}
 const form = reactive<AccountHealthSettings>({
   enabled: true,
   window_minutes: 10,
