@@ -3,7 +3,7 @@
     <AccountManagementTabs :active="mode" />
     <div class="space-y-5">
       <div class="flex flex-wrap items-start justify-between gap-4">
-        <div><h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">{{ titles[mode] }}</h1><p class="mt-2 text-sm text-gray-500">{{ mode === 'settings' ? '按测试类型管理题目、答案判定和可见范围。本页不会自动发起测试。' : '本页只显示管理员手动发起的测试，不会自动跑。用户页鹈鹕动画是独立定时任务。分别查看执行状态、答案与格式；单次测试不足以判断模型能力下降。' }}</p></div>
+        <div><h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">{{ titles[mode] }}</h1><p class="mt-2 text-sm text-gray-500">{{ mode === 'settings' ? '按测试类型管理题目、答案判定和可见范围。本页不会自动发起测试。' : '本页只显示管理员手动发起的测试，不会自动跑。用户页鹈鹕动画是独立定时任务。' }}</p></div>
         <button class="btn btn-secondary" :disabled="loading || metadataLoading" @click="refresh"><Icon name="refresh" size="sm" :class="loading || metadataLoading ? 'animate-spin' : ''" /> 刷新</button>
       </div>
       <div v-if="error" role="alert" class="flex items-center justify-between gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300"><span>{{ error }}</span><button class="shrink-0 underline" @click="load(false)">重试</button></div>
@@ -45,7 +45,7 @@
           <div v-else class="grid gap-5 xl:grid-cols-2">
             <section v-for="account in accounts" :key="account.account_id" class="space-y-3">
               <label class="flex items-center gap-2 text-xs text-gray-500"><input v-model="selected" type="checkbox" :value="account.account_id" class="rounded text-primary-600" />{{ account.platform }} · #{{ account.account_id }} · {{ account.name }}</label>
-              <div class="grid gap-4 sm:grid-cols-2"><TestResultCard v-for="summary in account.tests" :key="summary.test_type" :account="account" :summary="summary" :now="now" :disabled="running || !enabledTypes.includes(summary.test_type)" @detail="detailId = $event" @history="showHistory" @run="(id, type) => run([id], [type])" @cancel="cancel" /></div>
+              <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"><TestResultCard v-for="summary in account.tests" :key="summary.test_type" :account="account" :summary="summary" :now="now" :disabled="running || !enabledTypes.includes(summary.test_type)" @detail="detailId = $event" @history="showHistory" @run="(id, type) => run([id], [type])" @cancel="cancel" /></div>
             </section>
           </div>
         </template>
@@ -147,7 +147,7 @@ function defaultGroupId() {
   return group ? String(group.id) : ''
 }
 function testPageDefaults() {
-  return { ...defaults, account_status: 'schedulable', test_type: 'pelican', group_id: defaultGroupId() }
+  return { ...defaults, account_status: 'schedulable', group_id: defaultGroupId() }
 }
 function resetFilters() {
   Object.assign(filters, props.mode === 'tests' ? testPageDefaults() : defaults)

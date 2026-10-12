@@ -102,9 +102,10 @@ describe('IntelligentTestsView router modes', () => {
     const wrapper = mount(AppLayoutHost, { global: { plugins: [i18n, router] } })
     await flushPromises()
     expect(intelligentTestsAPI.accounts).toHaveBeenCalledWith(
-      expect.objectContaining({ group_id: '9', account_status: 'schedulable', test_type: 'pelican', page: 1 }),
+      expect.objectContaining({ group_id: '9', account_status: 'schedulable', page: 1 }),
       expect.anything()
     )
+    expect(vi.mocked(intelligentTestsAPI.accounts).mock.calls[0][0]).not.toHaveProperty('test_type')
     const historyButton = wrapper.findAll('button').find(button => button.text().includes('历史'))
     expect(historyButton).toBeTruthy()
     await historyButton!.trigger('click')

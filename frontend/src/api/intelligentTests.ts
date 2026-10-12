@@ -41,7 +41,7 @@ export interface TestConfig {
   answer_unit?: string
   answer_unit_mode?: 'legacy' | 'none' | 'configured'
   answer_format?: 'answer_line' | 'free_text'
-  prompt: string; model: string; evaluator: 'svg_structure' | 'exact_answer'
+  prompt: string; model: string; evaluator: 'svg_structure' | 'exact_answer' | 'tibo_answer'
   expected_answer?: string; timeout_seconds: number
 }
 export interface TestSetting {

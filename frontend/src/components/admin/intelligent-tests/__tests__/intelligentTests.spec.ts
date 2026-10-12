@@ -171,9 +171,25 @@ describe('independent settings and persisted status', () => {
     expect(wrapper.find('iframe').attributes('srcdoc')).toContain('<animate')
     expect(intelligentTestsAPI.animation).toHaveBeenCalledWith(7, expect.any(AbortSignal))
     expect(wrapper.text()).toContain('最近完成的结果 · #7')
-    expect(wrapper.text()).toContain('内容未自动评估')
+    expect(wrapper.text()).not.toContain('内容未自动评估')
+    expect(wrapper.text()).not.toContain('格式未评估')
+    expect(wrapper.text()).not.toContain('格式有差异')
+    expect(wrapper.text()).not.toContain('单次测试不足以判断模型能力下降')
     expect(wrapper.text()).not.toContain('100')
     expect(wrapper.text()).toContain('取消排队')
+    wrapper.unmount()
+  })
+  it('shows a tibo True/False answer without review notes', async () => {
+    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], anti_degradation: true, tests: [] }
+    const completed: TestRecord = { ...record, id: 9, test_type: 'tibo', status: 'completed', result: 'True', evaluation: { evaluator_version: 3, answer_verdict: 'correct', format_verdict: 'not_required', actual_answer: 'True' } }
+    const wrapper = mount(TestResultCard, { props: { account, summary: { test_type: 'tibo', latest: completed, latest_completed: completed, history_count: 1, consecutive_anomalies: 0, risk: '' }, now: Date.now() }, global })
+    expect(wrapper.text()).toContain('tibo题')
+    expect(wrapper.text()).toContain('True')
+    expect(wrapper.get('[data-testid=answer-verdict]').text()).toBe('最终答案正确')
+    expect(wrapper.find('[data-testid=format-verdict]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('内容未自动评估')
+    expect(wrapper.text()).not.toContain('格式未评估')
+    expect(wrapper.text()).not.toContain('单次测试不足以判断模型能力下降')
     wrapper.unmount()
   })
   it('shows a correct answer independently of a format difference and preserves original judgment', async () => {

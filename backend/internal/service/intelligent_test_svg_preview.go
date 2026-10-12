@@ -328,15 +328,14 @@ func svgBasicDrawable(name string, values map[string]string) bool {
 func evaluateIntelligentSVG(output string) IntelligentTestEvaluation {
 	detail := newIntelligentAssessment("svg_structure")
 	detail["answer_verdict"] = "not_evaluated"
-	detail["limitation"] = "图像已按安全 SVG 展示；鹈鹕、自行车和画面质量需要内容复核，结构检查不提供模型能力分数。"
 	svg, adjusted, err := PrepareIntelligentSVGPreview(output)
 	if err != nil {
 		detail["reason"], detail["format_reason"], detail["image_state"] = err.Error(), err.Error(), "unavailable"
 		return IntelligentTestEvaluation{Status: "completed", Detail: detail}
 	}
-	detail["image_state"], detail["format_verdict"], detail["reason"] = "ready", "compliant", "SVG 结构可显示，图像内容尚未评估"
+	detail["image_state"], detail["format_verdict"] = "ready", "compliant"
 	if adjusted {
-		detail["image_state"], detail["format_verdict"], detail["format_reason"] = "sanitized", "non_compliant", "已将静态样式转换为安全属性，并移除不支持的内容；预览不执行原始 SVG 代码"
+		detail["image_state"], detail["format_verdict"] = "sanitized", "non_compliant"
 	}
 	return IntelligentTestEvaluation{Status: "completed", Image: svg, Detail: detail}
 }

@@ -14,7 +14,7 @@ export function testSubmissionMessage(data: TestSubmission) {
   return reused ? `已开始 ${created} 个测试，另有 ${reused} 个已在执行` : `已开始执行 ${created} 个测试`
 }
 export const isTextTestModel = (model: string) => !/^(?:gpt-image|dall-e|grok-imagine|tts-|whisper|sora)/i.test(model)
-export const testNames: Record<string, string> = { pelican: '鹈鹕测试', candy: '糖果测试' }
+export const testNames: Record<string, string> = { pelican: '鹈鹕测试', candy: '糖果测试', tibo: 'tibo题' }
 export const testName = (type: string) => testNames[type] ?? type
 export const isPending = (status?: string) => status === 'queued' || status === 'running'
 export const currentEvaluatorVersion = 3
