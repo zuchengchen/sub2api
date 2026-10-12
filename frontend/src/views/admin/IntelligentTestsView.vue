@@ -45,7 +45,7 @@
           <div v-else class="grid gap-5 xl:grid-cols-2">
             <section v-for="account in accounts" :key="account.account_id" class="space-y-3">
               <label class="flex items-center gap-2 text-xs text-gray-500"><input v-model="selected" type="checkbox" :value="account.account_id" class="rounded text-primary-600" />{{ account.platform }} · #{{ account.account_id }} · {{ account.name }}</label>
-              <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"><TestResultCard v-for="summary in account.tests" :key="summary.test_type" :account="account" :summary="summary" :now="now" :disabled="running || !enabledTypes.includes(summary.test_type)" @detail="detailId = $event" @history="showHistory" @run="(id, type) => run([id], [type])" @cancel="cancel" /></div>
+              <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"><TestResultCard v-for="summary in sortTestSettings(account.tests)" :key="summary.test_type" :account="account" :summary="summary" :now="now" :disabled="running || !enabledTypes.includes(summary.test_type)" @detail="detailId = $event" @history="showHistory" @run="(id, type) => run([id], [type])" @cancel="cancel" /></div>
             </section>
           </div>
         </template>
@@ -69,7 +69,7 @@ import TestResultCard from '@/components/admin/intelligent-tests/TestResultCard.
 import TestDetailDialog from '@/components/admin/intelligent-tests/TestDetailDialog.vue'
 import TestSettingsPanel from '@/components/admin/intelligent-tests/TestSettingsPanel.vue'
 import TestHistoryTable from '@/components/admin/intelligent-tests/TestHistoryTable.vue'
-import { statusLabels, testName, testSubmissionMessage } from '@/components/admin/intelligent-tests/display'
+import { statusLabels, testName, testSubmissionMessage, sortTestSettings } from '@/components/admin/intelligent-tests/display'
 import { intelligentTestsAPI, newTestRequestKey, type TestAccount, type TestRecord, type TestSetting, type TestOverview, type TestFilters } from '@/api/intelligentTests'
 import { getAllIncludingInactive } from '@/api/admin/groups'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -120,7 +120,7 @@ async function loadMetadata() {
   const results = await Promise.allSettled([intelligentTestsAPI.settings(), getAllIncludingInactive()])
   if (current !== metadataVersion) return
   const messages: string[] = []
-  if (results[0].status === 'fulfilled') settings.value = results[0].value
+  if (results[0].status === 'fulfilled') settings.value = sortTestSettings(results[0].value)
   else messages.push(extractApiErrorMessage(results[0].reason, '无法加载测试类型'))
   if (results[1].status === 'fulfilled') groups.value = results[1].value
   else messages.push(extractApiErrorMessage(results[1].reason, '无法加载账号池筛选'))

@@ -1,7 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { defineComponent } from 'vue'
-import { testImageURL } from '../display'
+import { testImageURL, sortTestSettings } from '../display'
 import QuickTestDialog from '../QuickTestDialog.vue'
 import TestSettingsPanel from '../TestSettingsPanel.vue'
 import TestResultCard from '../TestResultCard.vue'
@@ -68,7 +68,14 @@ describe('model-generated image isolation', () => {
   })
 })
 
+function quickTestButton(wrapper: ReturnType<typeof mount>, label: string) {
+  return wrapper.findAll('button').find(button => button.text().includes(label))!
+}
+
 describe('asynchronous quick tests', () => {
+  it('orders tibo then candy then pelican', () => {
+    expect(sortTestSettings([{ test_type: 'pelican' }, { test_type: 'candy' }, { test_type: 'tibo' }]).map(item => item.test_type)).toEqual(['tibo', 'candy', 'pelican'])
+  })
   it('changes the retry key when the selected model changes and filters media models', async () => {
     vi.mocked(newTestRequestKey).mockReturnValueOnce('request-for-model-1').mockReturnValueOnce('request-for-model-2')
     vi.mocked(getAvailableModels).mockResolvedValue([{ id: 'gpt-image-1' }, { id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }])
@@ -76,9 +83,9 @@ describe('asynchronous quick tests', () => {
     const wrapper = mount(QuickTestDialog, { props: { accountId: 42 }, global }); await flushPromises()
     expect(wrapper.find('select').text()).not.toContain('gpt-image-1')
     await wrapper.find('select').setValue('gpt-5.4')
-    await wrapper.findAll('button')[0].trigger('click'); await flushPromises()
+    await quickTestButton(wrapper, '鹈鹕').trigger('click'); await flushPromises()
     await wrapper.find('select').setValue('gpt-5.4-mini')
-    await wrapper.findAll('button')[0].trigger('click'); await flushPromises()
+    await quickTestButton(wrapper, '鹈鹕').trigger('click'); await flushPromises()
     const calls = vi.mocked(intelligentTestsAPI.run).mock.calls
     expect(calls[0][2]).not.toBe(calls[1][2])
     expect(calls[1][3]).toEqual({ pelican: 'gpt-5.4-mini' })
@@ -89,9 +96,10 @@ describe('asynchronous quick tests', () => {
     vi.mocked(intelligentTestsAPI.run).mockImplementation(() => new Promise(done => { resolve = done }))
     const wrapper = mount(QuickTestDialog, { props: { accountId: null }, global })
     await wrapper.setProps({ accountId: 42 }); await flushPromises()
-    const buttons = wrapper.findAll('button')
-    expect(buttons[1].attributes('disabled')).toBeDefined()
-    await buttons[2].trigger('click'); await buttons[2].trigger('click')
+    expect(quickTestButton(wrapper, '糖果').attributes('disabled')).toBeDefined()
+    const runAll = quickTestButton(wrapper, '运行全部测试')
+    await runAll.trigger('click')
+    await runAll.trigger('click')
     expect(intelligentTestsAPI.run).toHaveBeenCalledTimes(1)
     expect(intelligentTestsAPI.run).toHaveBeenCalledWith([42], ['pelican'], 'fixed-request-key')
     resolve({ records: [record], reused: false }); await flushPromises()
@@ -102,9 +110,9 @@ describe('asynchronous quick tests', () => {
     vi.mocked(intelligentTestsAPI.run).mockRejectedValueOnce(new Error('network')).mockResolvedValue({ records: [record], reused: true })
     const wrapper = mount(QuickTestDialog, { props: { accountId: null }, global })
     await wrapper.setProps({ accountId: 42 }); await flushPromises()
-    await wrapper.findAll('button')[0].trigger('click'); await flushPromises()
+    await quickTestButton(wrapper, '鹈鹕').trigger('click'); await flushPromises()
     expect(wrapper.text()).toContain('network')
-    await wrapper.findAll('button')[0].trigger('click'); await flushPromises()
+    await quickTestButton(wrapper, '鹈鹕').trigger('click'); await flushPromises()
     expect(vi.mocked(intelligentTestsAPI.run).mock.calls[0][2]).toBe(vi.mocked(intelligentTestsAPI.run).mock.calls[1][2])
     wrapper.unmount()
   })
@@ -113,7 +121,7 @@ describe('asynchronous quick tests', () => {
     const wrapper = mount(QuickTestDialog, { props: { accountId: null }, global })
     await wrapper.setProps({ accountId: 42 }); await flushPromises()
     await wrapper.find('select').setValue('gpt-5.5')
-    await wrapper.findAll('button')[0].trigger('click'); await flushPromises()
+    await quickTestButton(wrapper, '鹈鹕').trigger('click'); await flushPromises()
     expect(intelligentTestsAPI.run).toHaveBeenCalledWith([42], ['pelican'], 'fixed-request-key', { pelican: 'gpt-5.5' })
     wrapper.unmount()
   })
