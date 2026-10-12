@@ -27,7 +27,6 @@ func newIntelligentAssessment(method string) map[string]any {
 		"evaluator_version": IntelligentEvaluatorVersion, "method": method,
 		"execution_status": "completed", "answer_verdict": "undetermined",
 		"format_verdict": "non_compliant", "capability_verdict": "insufficient_evidence",
-		"limitation": "仅评价本次最终答案与输出格式，未验证完整推导；单次测试不足以判断模型能力下降。",
 	}
 }
 
@@ -253,6 +252,33 @@ func evaluateIntelligentAnswer(output string, cfg IntelligentTestConfig) Intelli
 		detail["answer_verdict"], detail["reason"] = "incorrect", "最终答案与标准答案不一致；单次结果不作为能力下降结论"
 	}
 	return IntelligentTestEvaluation{Status: "completed", Score: &score, Detail: detail}
+}
+
+func evaluateIntelligentTibo(output string, cfg IntelligentTestConfig) IntelligentTestEvaluation {
+	detail := newIntelligentAssessment("tibo_answer")
+	detail["format_verdict"] = "not_required"
+	expected := tiboAnswerTrue
+	if want := strings.TrimSpace(cfg.ExpectedAnswer); want != "" {
+		expected = want
+	}
+	detail["expected_answer"] = expected
+	class := classifyTiboAnswer(output)
+	detail["actual_answer"] = class
+	switch class {
+	case tiboAnswerTrue, tiboAnswerFalse:
+		score := 0.0
+		if class == expected {
+			score = 100
+			detail["answer_verdict"] = "correct"
+		} else {
+			detail["answer_verdict"] = "incorrect"
+		}
+		return IntelligentTestEvaluation{Status: "completed", Score: &score, Detail: detail}
+	case tiboAnswerNone:
+		return IntelligentTestEvaluation{Status: "completed", Detail: detail}
+	default:
+		return IntelligentTestEvaluation{Status: "completed", Detail: detail}
+	}
 }
 
 func SameIntelligentTestConfig(a, b IntelligentTestConfig) bool {

@@ -17,7 +17,7 @@
         </label>
         <label class="block text-sm">超时（秒）<input v-model.number="setting.config.timeout_seconds" type="number" class="input mt-2" min="30" max="600" required /></label>
         <label class="block text-sm sm:col-span-2">测试题目<textarea v-model="setting.config.prompt" class="input mt-2 min-h-32" maxlength="16000" required /></label>
-        <label class="block text-sm">评分规则<select v-model="setting.config.evaluator" class="input mt-2"><option value="svg_structure">SVG 结构校验</option><option value="exact_answer">标准答案校验</option></select></label>
+        <label class="block text-sm">评分规则<select v-model="setting.config.evaluator" class="input mt-2"><option value="svg_structure">SVG 结构校验</option><option value="exact_answer">标准答案校验</option><option value="tibo_answer">tibo True/False</option></select></label>
         <template v-if="setting.config.evaluator === 'exact_answer'">
           <label class="block text-sm">标准答案<input v-model="setting.config.expected_answer" class="input mt-2" maxlength="200" required /></label>
           <label class="block text-sm">答案类型<select v-model="setting.config.answer_type" class="input mt-2"><option value="auto">自动识别数值或文本</option><option value="number">数值等价比较</option><option value="text">文本比较</option></select></label>
@@ -26,7 +26,7 @@
           <label class="block text-sm">独立格式要求<select v-model="setting.config.answer_format" class="input mt-2"><option value="answer_line">唯一末行 ANSWER: 答案</option><option value="free_text">不要求固定格式</option></select></label>
         </template>
       </div>
-      <p class="mt-3 text-xs leading-relaxed text-gray-500">{{ setting.config.evaluator === 'svg_structure' ? '安全展示生成的 SVG，检查基本结构，不为图像内容或模型能力打分。' : 'B 方案分别判断答案和格式。12、12.0、全角数字及允许单位可数值等价；Markdown 和格式差异不扣答案分。多个冲突答案显示无法判定。仅检查最终答案，不验证完整推导。修改题目时请同步标准答案与单位。' }}</p>
+      <p class="mt-3 text-xs leading-relaxed text-gray-500">{{ evaluatorHint(setting.config.evaluator) }}</p>
       <details class="mt-4 rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
         <summary class="cursor-pointer text-sm">粘贴答复试判（使用当前草稿，不调用模型）</summary>
         <textarea v-model="trialOutputs[setting.test_type]" class="input mt-3 min-h-24" maxlength="131072" placeholder="粘贴模型答复或 SVG" />
@@ -49,6 +49,11 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { testName } from './display'
 import TestAssessment from './TestAssessment.vue'
 import TestGeneratedImage from './TestGeneratedImage.vue'
+function evaluatorHint(evaluator?: string) {
+  if (evaluator === 'svg_structure') return '安全展示生成的 SVG，检查基本结构，不为图像内容或模型能力打分。'
+  if (evaluator === 'tibo_answer') return '与路由探测同一道题，只看 True / False 答案。'
+  return 'B 方案分别判断答案和格式。12、12.0、全角数字及允许单位可数值等价；Markdown 和格式差异不扣答案分。多个冲突答案显示无法判定。仅检查最终答案，不验证完整推导。修改题目时请同步标准答案与单位。'
+}
 const props = defineProps<{ settings: TestSetting[] }>()
 const emit = defineEmits<{ saved: [setting: TestSetting] }>()
 const drafts = ref<TestSetting[]>([]), saving = ref(''), saved = ref(''), errors = ref<Record<string, string>>({})

@@ -26,7 +26,6 @@
         <div><dt class="text-xs text-gray-500">标准答案</dt><dd class="break-words">{{ record.evaluation.expected_answer }}</dd></div>
         <div><dt class="text-xs text-gray-500">抽取答案</dt><dd class="break-words">{{ record.evaluation.actual_answer || '无法唯一确定' }}</dd></div>
       </dl>
-      <p v-if="!publicView && record.evaluation?.limitation" class="text-xs leading-relaxed text-gray-500">{{ record.evaluation.limitation }}</p>
       <p v-if="record.queue_reason" class="text-sm text-gray-500">{{ record.queue_reason }}</p>
       <p v-if="record.status === 'queued' && record.queue_reason && record.available_at" class="text-xs text-gray-500">下次检查：{{ testTime(record.available_at) }}</p>
       <div v-if="record.test_type === 'pelican' && !isPending(record.status)" class="rounded-xl border border-gray-200 p-3 dark:border-dark-700">

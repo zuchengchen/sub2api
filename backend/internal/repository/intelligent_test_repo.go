@@ -107,6 +107,8 @@ func (r *intelligentTestRepository) Settings(ctx context.Context) ([]service.Int
 			s.Name = "鹈鹕测试"
 		case "candy":
 			s.Name = "糖果测试"
+		case "tibo":
+			s.Name = "tibo题"
 		}
 		out = append(out, s)
 	}

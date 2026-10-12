@@ -21,7 +21,11 @@ type IntelligentTestEvaluator interface {
 
 // Evaluators are registered independently of test names. New test types can reuse them.
 func DefaultIntelligentTestEvaluators() map[string]IntelligentTestEvaluator {
-	return map[string]IntelligentTestEvaluator{"svg_structure": svgStructureEvaluator{}, "exact_answer": exactAnswerEvaluator{}}
+	return map[string]IntelligentTestEvaluator{
+		"svg_structure": svgStructureEvaluator{},
+		"exact_answer":  exactAnswerEvaluator{},
+		"tibo_answer":   tiboAnswerEvaluator{},
+	}
 }
 
 type svgStructureEvaluator struct{}
@@ -36,6 +40,12 @@ type exactAnswerEvaluator struct{}
 
 func (exactAnswerEvaluator) Evaluate(output string, cfg IntelligentTestConfig) IntelligentTestEvaluation {
 	return evaluateIntelligentAnswer(output, cfg)
+}
+
+type tiboAnswerEvaluator struct{}
+
+func (tiboAnswerEvaluator) Evaluate(output string, cfg IntelligentTestConfig) IntelligentTestEvaluation {
+	return evaluateIntelligentTibo(output, cfg)
 }
 
 // SVG is never trusted HTML. Only a static SVG vocabulary is accepted, then re-encoded.
