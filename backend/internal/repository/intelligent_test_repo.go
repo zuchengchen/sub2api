@@ -112,7 +112,11 @@ func (r *intelligentTestRepository) Settings(ctx context.Context) ([]service.Int
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	service.SortIntelligentTestSettings(out)
+	return out, nil
 }
 func insertIntelligentAudit(ctx context.Context, tx *sql.Tx, actor int64, action string, extra any) error {
 	encoded, err := json.Marshal(extra)

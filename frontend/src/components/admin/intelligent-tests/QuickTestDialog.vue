@@ -22,7 +22,7 @@ import { intelligentTestsAPI, newTestRequestKey, type TestSetting } from '@/api/
 import { getAvailableModels } from '@/api/admin/accounts'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { useAppStore } from '@/stores/app'
-import { testName, isTextTestModel, testSubmissionMessage } from './display'
+import { testName, isTextTestModel, testSubmissionMessage, sortTestSettings } from './display'
 const props = defineProps<{ accountId: number | null }>()
 const emit = defineEmits<{ close: []; queued: [] }>()
 const settings = ref<TestSetting[]>([]), busy = ref(false), error = ref('')
@@ -40,7 +40,7 @@ watch(() => props.accountId, async id => {
     // only a convenience and must never block the dialog when an upstream
     // catalog is slow or unavailable.
     const settingsPromise = intelligentTestsAPI.settings().then(result => {
-      if (current === generation) settings.value = result
+      if (current === generation) settings.value = sortTestSettings(result)
     })
     const modelsPromise = getAvailableModels(id)
       .then(result => { if (current === generation) models.value = result.filter(model => isTextTestModel(model.id)) })

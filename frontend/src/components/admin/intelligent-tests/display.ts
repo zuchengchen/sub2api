@@ -16,6 +16,14 @@ export function testSubmissionMessage(data: TestSubmission) {
 export const isTextTestModel = (model: string) => !/^(?:gpt-image|dall-e|grok-imagine|tts-|whisper|sora)/i.test(model)
 export const testNames: Record<string, string> = { pelican: '鹈鹕测试', candy: '糖果测试', tibo: 'tibo题' }
 export const testName = (type: string) => testNames[type] ?? type
+const testDisplayRank: Record<string, number> = { tibo: 0, candy: 1, pelican: 2 }
+export function sortTestSettings<T extends { test_type: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const ra = testDisplayRank[a.test_type] ?? 100
+    const rb = testDisplayRank[b.test_type] ?? 100
+    return ra !== rb ? ra - rb : a.test_type.localeCompare(b.test_type)
+  })
+}
 export const isPending = (status?: string) => status === 'queued' || status === 'running'
 export const currentEvaluatorVersion = 3
 export const isModernAssessment = (version?: number) => version !== undefined && version >= 2 && version <= currentEvaluatorVersion
