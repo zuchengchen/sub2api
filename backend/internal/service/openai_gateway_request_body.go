@@ -29,7 +29,11 @@ func (s *OpenAIGatewayService) validateUpstreamBaseURL(raw string) (string, erro
 }
 
 // validateOutboundURL 按 security.url_allowlist 策略校验网关主动连接的出站 URL。
+// 回环 http(s)（127.0.0.1 / ::1 / localhost）视为同机 hop，不走全局 allowlist。
 func (s *OpenAIGatewayService) validateOutboundURL(raw string) (string, error) {
+	if normalized, handled, err := urlvalidator.TrySameHostLoopbackURL(raw); handled {
+		return normalized, err
+	}
 	if s.cfg == nil {
 		return urlvalidator.ValidateURLFormat(raw, false)
 	}

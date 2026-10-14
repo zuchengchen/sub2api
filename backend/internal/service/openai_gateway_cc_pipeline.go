@@ -207,14 +207,8 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	}
 
 	// 透传白名单中的客户端 header。详见 openaiCCRawAllowedHeaders 的设计说明。
-	for key, values := range c.Request.Header {
-		lowerKey := strings.ToLower(key)
-		if openaiCCRawAllowedHeaders[lowerKey] {
-			for _, v := range values {
-				upstreamReq.Header.Add(key, v)
-			}
-		}
-	}
+	copyAllowedOpenAIClientHeaders(upstreamReq.Header, c.Request.Header, openaiCCRawAllowedHeaders, account)
+	rewriteClaudeClientUAForCustomOpenAIHop(upstreamReq.Header, account)
 	if userAgent != "" {
 		upstreamReq.Header.Set("user-agent", userAgent)
 	}
