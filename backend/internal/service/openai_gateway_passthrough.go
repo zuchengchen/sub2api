@@ -627,13 +627,15 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if c != nil && c.Request != nil {
 		for key, values := range c.Request.Header {
 			lower := strings.ToLower(strings.TrimSpace(key))
-			if !isOpenAIPassthroughAllowedRequestHeader(lower, allowTimeoutHeaders) {
+			if !isOpenAIPassthroughAllowedRequestHeader(lower, allowTimeoutHeaders) &&
+				!(usesCustomOpenAICompatibleUpstream(account) && openaiCompatibleSessionHeaders[lower]) {
 				continue
 			}
 			for _, v := range values {
 				req.Header.Add(key, v)
 			}
 		}
+		rewriteClaudeClientUAForCustomOpenAIHop(req.Header, account)
 	}
 
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），

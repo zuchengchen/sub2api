@@ -356,6 +356,9 @@ func NewAccountTestService(
 }
 
 func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error) {
+	if normalized, handled, err := urlvalidator.TrySameHostLoopbackURL(raw); handled {
+		return normalized, err
+	}
 	if s.cfg == nil {
 		return "", errors.New("config is not available")
 	}

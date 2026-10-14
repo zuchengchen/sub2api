@@ -162,6 +162,36 @@ func isAllowedHost(host string, allowlist []string) bool {
 	return false
 }
 
+// IsLoopbackHost 报告 host 是否为 localhost、*.localhost，或回环字面量 IP（127.0.0.1 / ::1）。
+// 不含 RFC1918 私网。同机网关 hop（如 sub2api → 本机 vm2api）用这个判定。
+func IsLoopbackHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// TrySameHostLoopbackURL 接受 host 为回环的 http(s) URL。
+// 不是回环 hop 时 handled=false，调用方继续走全局 allowlist。
+// 同机 HTTP（例如 http://127.0.0.1:18083）不要求打开全局 allow_insecure_http / allow_private_hosts。
+func TrySameHostLoopbackURL(raw string) (string, bool, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false, nil
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", false, nil
+	}
+	if !IsLoopbackHost(parsed.Hostname()) {
+		return "", false, nil
+	}
+	normalized, err := ValidateURLFormat(trimmed, true)
+	return normalized, true, err
+}
+
 // IsBlockedHost 报告 host 是否为 localhost、*.localhost，或回环、私网、链路本地、未指定地址的字面量 IP。
 // 只判断字面量，域名的解析结果由 ValidateResolvedIP 校验。
 func IsBlockedHost(host string) bool {
