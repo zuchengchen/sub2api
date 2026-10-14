@@ -31,6 +31,7 @@ func TestIsForcedUsageBillingRequestID(t *testing.T) {
 	require.True(t, isForcedUsageBillingRequestID("grok-video:task-1"))
 	require.True(t, isForcedUsageBillingRequestID("grok_audio:up-1"))
 	require.True(t, isForcedUsageBillingRequestID("grok_realtime:sess-1"))
+	require.True(t, isForcedUsageBillingRequestID("gcache:create:abc"))
 	require.False(t, isForcedUsageBillingRequestID("resp_abc"))
 }
 

@@ -618,6 +618,8 @@ var monitorAPIKeyPatterns = []struct {
 	{regexp.MustCompile(`xai-[A-Za-z0-9_-]{6,}`), "xai-***REDACTED***"},
 	// Google API Key：固定前缀 + 35 位（用户可能误把 Google key 填进 OpenAI 兼容端点）
 	{regexp.MustCompile(`AIza[A-Za-z0-9_-]{35}`), "AIza***REDACTED***"},
+	// Gemini auth key：AQ.Ab 前缀 + 48 位，长度放宽以覆盖格式变体
+	{regexp.MustCompile(`AQ\.Ab[A-Za-z0-9_-]{40,}`), "AQ.***REDACTED***"},
 	// JWT 三段式（Bearer 后常出现）：eyJxxx.eyJxxx.signature
 	{regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), "eyJ***REDACTED.JWT***"},
 }
@@ -625,7 +627,7 @@ var monitorAPIKeyPatterns = []struct {
 // sanitizeErrorMessage 擦除错误/响应文本中可能泄露的 API key。
 // 处理两类来源：
 //  1. URL query 中的 ?key= / ?api_key= 等（Go *url.Error 会回填完整 URL）
-//  2. 上游 HTTP body 文本里直接出现的 sk-* / xai-* / AIza* / JWT 等密钥碎片
+//  2. 上游 HTTP body 文本里直接出现的 sk-* / xai-* / AIza* / AQ.* / JWT 等密钥碎片
 //
 // 监控模块独立维护此逻辑，避免与网关侧的错误脱敏耦合。
 func sanitizeErrorMessage(msg string) string {

@@ -943,3 +943,12 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createOpenAICodexPATMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(true)
   })
 })
+
+describe('CreateAccountModal Vertex service account', () => {
+  it('keeps Anthropic Vertex accounts on Service Account JSON only', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'admin.accounts.vertexLabel')
+    expect(wrapper.find('[data-testid="vertex-auth-mode-apikey"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="vertex-api-key-input"]').exists()).toBe(false)
+  })
+})
