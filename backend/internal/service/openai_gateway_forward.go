@@ -1643,15 +1643,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		}
 	}
 
-	// Whitelist passthrough headers
-	for key, values := range c.Request.Header {
-		lowerKey := strings.ToLower(key)
-		if openaiAllowedHeaders[lowerKey] {
-			for _, v := range values {
-				req.Header.Add(key, v)
-			}
-		}
-	}
+	// Whitelist passthrough headers. Custom OpenAI-compatible base_url also
+	// copies session-id / x-session-id so a same-host hop (vm2api) can pin a slot.
+	copyAllowedOpenAIClientHeaders(req.Header, c.Request.Header, openaiAllowedHeaders, account)
+	rewriteClaudeClientUAForCustomOpenAIHop(req.Header, account)
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站——异账号 blob 与本账号的（指纹收敛后）出站身份自相矛盾。
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)

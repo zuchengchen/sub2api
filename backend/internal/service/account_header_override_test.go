@@ -287,6 +287,7 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 		for _, name := range []string{
 			"Authorization", "x-api-key", "Host", "content-length", "Transfer-Encoding",
 			"connection", "accept-encoding", "Sec-WebSocket-Key", "session_id",
+			"session-id", "x-session-id", "x-conversation-id", "thread-id",
 			"conversation_id", "x-codex-turn-state", "chatgpt-account-id",
 			"Content-Type", "Cookie", "x-goog-api-key",
 			"X-Claude-Code-Session-Id", "x-client-request-id",
