@@ -297,7 +297,7 @@ describe('GuideView', () => {
     expect(guideMarkdown).toContain('购买兑换码')
     expect(guideMarkdown).toContain('[兑换余额](/redeem)')
     expect(guideMarkdown).toContain('$goal-workflow 清理内存')
-    expect(guideMarkdown).toContain('必须**严格大于 100 元**')
+    expect(guideMarkdown).toContain('必须**大于等于 100 元**')
     expect(guideMarkdown).toContain('只会更换当前 Codex 配置中的网址域名')
     expect(guideMarkdown).toContain('可以把它理解为“软件专用密码”')
     expect(guideMarkdown).toContain('可以把 hosts 理解成电脑自己的“网址通讯录”')

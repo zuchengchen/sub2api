@@ -1034,8 +1034,8 @@ type vipUpgradeExecutorProvider interface {
 }
 
 // checkBalanceEligibility 检查余额模式资格。
-// VIP 用户的冻结金额不参与消费：可用余额 = 总余额 - VipFrozenReserve；
-// 同时惰性触发 VIP 升级检查，兜底覆盖充值/兑换等所有加余额路径。
+// SVIP 无保证金，可用余额等于总余额；同时惰性触发 VIP 升级检查，
+// 兜底覆盖充值/兑换等所有加余额路径。
 func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user *User) error {
 	balance, err := s.GetUserBalance(ctx, user.ID)
 	if err != nil {
@@ -1049,14 +1049,11 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user 
 		s.circuitBreaker.OnSuccess()
 	}
 
-	effectiveBalance := balance
-	if user.IsVIP {
-		effectiveBalance -= VipFrozenReserve
-	} else if balance > VipBalanceThreshold && s.vipUpgrade != nil {
+	if !user.IsVIP && balance >= VipBalanceThreshold && s.vipUpgrade != nil {
 		s.triggerVipUpgrade(user.ID)
 	}
 
-	if s.balanceBelowEligibilityThreshold(effectiveBalance) {
+	if s.balanceBelowEligibilityThreshold(balance) {
 		return ErrInsufficientBalance
 	}
 

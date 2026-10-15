@@ -55,8 +55,8 @@ type User struct {
 	BalanceNotifyExtraEmails   []NotifyEmailEntry
 	TotalRecharged             float64
 
-	// IsVIP VIP 用户标记：总余额超过 VipBalanceThreshold 时自动升级，永久生效。
-	// 冻结 VipFrozenReserve 金额、风控跳过第二层审核、指定分组倍率减免。
+	// IsVIP VIP 用户标记：总余额达到 VipBalanceThreshold 时自动升级，永久生效。
+	// 无保证金；风控跳过第二层审核、指定分组倍率减免。
 	IsVIP bool
 
 	// RPMLimit 用户级每分钟请求数上限（0 = 不限制）。仅在所用分组未设置 rpm_limit

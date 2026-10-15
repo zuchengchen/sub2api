@@ -167,11 +167,21 @@ func TestVipEnsureUpgrade(t *testing.T) {
 		require.Equal(t, []int64{7}, invalidator.invalidated)
 	})
 
-	t.Run("skips at exactly the threshold", func(t *testing.T) {
+	t.Run("upgrades at exactly the threshold", func(t *testing.T) {
 		repo := &vipExecutorUserRepoStub{user: &User{ID: 8, Balance: VipBalanceThreshold}}
+		invalidator := &vipExecutorInvalidatorStub{}
+		executor := NewVipUpgradeExecutor(repo, invalidator)
+
+		require.True(t, executor.EnsureUpgrade(context.Background(), 8))
+		require.Equal(t, []int64{8}, repo.setVIPCalls)
+		require.Equal(t, []int64{8}, invalidator.invalidated)
+	})
+
+	t.Run("skips below the threshold", func(t *testing.T) {
+		repo := &vipExecutorUserRepoStub{user: &User{ID: 10, Balance: 99.99}}
 		executor := NewVipUpgradeExecutor(repo, &vipExecutorInvalidatorStub{})
 
-		require.False(t, executor.EnsureUpgrade(context.Background(), 8))
+		require.False(t, executor.EnsureUpgrade(context.Background(), 10))
 		require.Empty(t, repo.setVIPCalls)
 	})
 
@@ -224,7 +234,7 @@ func newVipEligibilityService(t *testing.T, balances map[int64]float64, executor
 	return svc
 }
 
-func TestCheckBalanceEligibilityVipFrozenReserve(t *testing.T) {
+func TestCheckBalanceEligibilityTreatsVipLikeRegularBalance(t *testing.T) {
 	tests := []struct {
 		name    string
 		isVIP   bool
@@ -234,10 +244,10 @@ func TestCheckBalanceEligibilityVipFrozenReserve(t *testing.T) {
 		{name: "non-vip positive balance passes", isVIP: false, balance: 5},
 		{name: "non-vip zero balance rejected", isVIP: false, balance: 0, wantErr: true},
 		{name: "non-vip negative balance rejected", isVIP: false, balance: -1, wantErr: true},
-		{name: "vip above reserve passes", isVIP: true, balance: 150},
-		{name: "vip just above frozen amount passes", isVIP: true, balance: 50.01},
-		{name: "vip at exactly frozen amount rejected", isVIP: true, balance: 50, wantErr: true},
-		{name: "vip below frozen amount rejected", isVIP: true, balance: 49.99, wantErr: true},
+		{name: "vip positive balance passes", isVIP: true, balance: 150},
+		{name: "vip former reserve amount still passes", isVIP: true, balance: 50},
+		{name: "vip small positive balance passes", isVIP: true, balance: 0.01},
+		{name: "vip zero balance rejected", isVIP: true, balance: 0, wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -260,7 +270,7 @@ func TestCheckBalanceEligibilityTriggersVipUpgrade(t *testing.T) {
 		calls <- userID
 		return true
 	})
-	svc := newVipEligibilityService(t, map[int64]float64{42: 150, 43: 50}, executor)
+	svc := newVipEligibilityService(t, map[int64]float64{42: 150, 43: 50, 44: 100}, executor)
 
 	require.NoError(t, svc.checkBalanceEligibility(context.Background(), &User{ID: 42}))
 	select {
@@ -268,6 +278,14 @@ func TestCheckBalanceEligibilityTriggersVipUpgrade(t *testing.T) {
 		require.Equal(t, int64(42), got)
 	case <-time.After(time.Second):
 		t.Fatal("expected a vip upgrade trigger")
+	}
+
+	require.NoError(t, svc.checkBalanceEligibility(context.Background(), &User{ID: 44}))
+	select {
+	case got := <-calls:
+		require.Equal(t, int64(44), got)
+	case <-time.After(time.Second):
+		t.Fatal("expected a vip upgrade trigger at the threshold")
 	}
 
 	require.NoError(t, svc.checkBalanceEligibility(context.Background(), &User{ID: 43}))

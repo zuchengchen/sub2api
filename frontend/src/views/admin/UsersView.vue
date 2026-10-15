@@ -1397,7 +1397,7 @@ const vipConfirmMessage = computed(() => {
     return t('admin.users.grantSvipConfirm', { email })
   }
   const base = t('admin.users.revokeSvipConfirm', { email })
-  if (Number(vipTarget.value?.balance || 0) > VIP_BALANCE_THRESHOLD) {
+  if (Number(vipTarget.value?.balance || 0) >= VIP_BALANCE_THRESHOLD) {
     return `${base}\n${t('admin.users.revokeSvipConfirmAutoUpgrade')}`
   }
   return base
