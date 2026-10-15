@@ -589,7 +589,7 @@ export default {
         rpmLimitPlaceholder: '0 = unlimited',
         rpmLimitHint: 'Max requests per minute for this user; 0 = unlimited. Acts as a fallback only when the group has no rpm_limit set.',
         svipLabel: 'SVIP',
-        svipHint: 'Check to grant SVIP immediately. Uncheck to revoke. If total balance stays above 100, they may be auto-upgraded to SVIP again.'
+        svipHint: 'Check to grant SVIP immediately. Uncheck to revoke. If total balance stays at least 100, they may be auto-upgraded to SVIP again.'
       },
       columns: {
         user: 'User',
@@ -649,9 +649,9 @@ export default {
       revokeSvip: 'Revoke SVIP',
       grantSvipTitle: 'Grant SVIP',
       revokeSvipTitle: 'Revoke SVIP',
-      grantSvipConfirm: "Grant SVIP to '{email}'? This takes effect even if total balance is 100 or less.",
+      grantSvipConfirm: "Grant SVIP to '{email}'? This takes effect even if total balance is below 100.",
       revokeSvipConfirm: "Revoke SVIP from '{email}'? They will lose the gpt-pro rate discount.",
-      revokeSvipConfirmAutoUpgrade: 'Total balance is still above 100, so they may be auto-upgraded to SVIP again. Lower the balance to 100 or less to keep them as a regular user.',
+      revokeSvipConfirmAutoUpgrade: 'Total balance is still at least 100, so they may be auto-upgraded to SVIP again. Lower the balance below 100 to keep them as a regular user.',
       svipGranted: 'SVIP granted',
       svipRevoked: 'SVIP revoked',
       failedToToggleSvip: 'Failed to update SVIP',

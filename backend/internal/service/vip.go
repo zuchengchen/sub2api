@@ -13,11 +13,8 @@ import (
 
 // VIP 用户策略常量。
 const (
-	// VipBalanceThreshold 总余额（含赠送）超过该值时自动升级为 VIP。
+	// VipBalanceThreshold 总余额（含赠送）达到该值时自动升级为 VIP。
 	VipBalanceThreshold = 100.0
-	// VipFrozenReserve VIP 冻结金额：可用余额 = balance - VipFrozenReserve。
-	// 逻辑冻结，不占用 users.frozen_balance（该列被批量图片余额暂扣使用）。
-	VipFrozenReserve = 50.0
 	// VipRateDiscount VIP 在指定分组的计费倍率减免额（显示倍率 - 0.05）。
 	VipRateDiscount = 0.05
 	// VipDiscountedGroupName 享受倍率减免的分组名（大小写不敏感）。
@@ -135,7 +132,7 @@ func NewVipUpgradeExecutor(userRepo UserRepository, invalidator APIKeyAuthCacheI
 	return &vipUpgradeExecutor{userRepo: userRepo, invalidator: invalidator}
 }
 
-// EnsureUpgrade 惰性升级：余额超过阈值且未升级时原子置位 vip 并失效认证缓存。
+// EnsureUpgrade 惰性升级：余额达到阈值且未升级时原子置位 vip 并失效认证缓存。
 // 返回本次调用是否实际完成了升级。自动升级仍是单向的；管理员可手动取消 SVIP。
 func (e *vipUpgradeExecutor) EnsureUpgrade(ctx context.Context, userID int64) bool {
 	if e == nil || e.userRepo == nil || userID <= 0 {
@@ -145,7 +142,7 @@ func (e *vipUpgradeExecutor) EnsureUpgrade(ctx context.Context, userID int64) bo
 	if err != nil {
 		return false
 	}
-	if user == nil || user.IsVIP || user.Balance <= VipBalanceThreshold {
+	if user == nil || user.IsVIP || user.Balance < VipBalanceThreshold {
 		return false
 	}
 	upgraded, err := e.userRepo.SetVIPIfNotSet(ctx, userID)

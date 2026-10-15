@@ -1,28 +1,14 @@
 import type { User } from '@/types'
 
-/**
- * VIP 冻结准备金（与后端 service.VipFrozenReserve 同源）。
- * VIP 的冻结是逻辑冻结：计费资格按「总余额 - 准备金」判定，
- * 不写入 users.frozen_balance（该字段属于批量图片余额暂扣台账）。
- */
-export const VIP_FROZEN_RESERVE = 50
-/** 自动升级阈值（与后端 service.VipBalanceThreshold 同源）：总余额必须严格大于该值。 */
+/** 自动升级阈值（与后端 service.VipBalanceThreshold 同源）：总余额达到该值即升级。 */
 export const VIP_BALANCE_THRESHOLD = 100
 
-/** 展示用冻结金额：VIP = 准备金 + 在途暂扣；普通用户 = 在途暂扣。 */
+/** 展示用冻结金额：仅批量图片等在途暂扣。SVIP 无保证金。 */
 export function displayFrozenBalance(user: Pick<User, 'balance' | 'frozen_balance' | 'is_vip'> | null | undefined): number {
-  const holds = Number(user?.frozen_balance || 0)
-  if (!user?.is_vip) {
-    return holds
-  }
-  return VIP_FROZEN_RESERVE + holds
+  return Number(user?.frozen_balance || 0)
 }
 
-/** 展示用可用余额：VIP 扣除准备金，且不为负。 */
+/** 展示用可用余额：等于总余额。图片暂扣仍单独显示在冻结金额里。 */
 export function displayAvailableBalance(user: Pick<User, 'balance' | 'frozen_balance' | 'is_vip'> | null | undefined): number {
-  const balance = Number(user?.balance || 0)
-  if (!user?.is_vip) {
-    return balance
-  }
-  return Math.max(balance - VIP_FROZEN_RESERVE, 0)
+  return Number(user?.balance || 0)
 }
