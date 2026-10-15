@@ -198,6 +198,45 @@ func TestTiboWindowCountDoesNotMutate(t *testing.T) {
 	require.Equal(t, times, state.http.flips)
 }
 
+func TestTiboRecentSamplesRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	samples := []openAITiboRecentSample{
+		{Verdict: openAITiboHealthy, At: now},
+		{Verdict: openAITiboUnknown, At: now.Add(time.Second)},
+		{Verdict: openAITiboDegraded, At: now.Add(2 * time.Second)},
+	}
+	got := parseOpenAITiboRecentSamples(encodeOpenAITiboRecentSamples(samples))
+	require.Equal(t, samples, got)
+}
+
+func TestTiboRecentSamplesKeepLastTen(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	var r openAITiboRouteState
+	for i := 0; i < 12; i++ {
+		verdict := openAITiboHealthy
+		if i%3 == 0 {
+			verdict = openAITiboUnknown
+		} else if i%2 == 0 {
+			verdict = openAITiboDegraded
+		}
+		r.observe(tiboSample(verdict), now.Add(time.Duration(i)*time.Second), cfg)
+	}
+	require.Len(t, r.recent, openAITiboRecentSampleLimit)
+	require.Equal(t, openAITiboDegraded, r.recent[0].Verdict, "oldest kept sample is probe 2")
+	require.Equal(t, openAITiboHealthy, r.recent[len(r.recent)-1].Verdict)
+
+	tc := newTiboRouteCase(t, false, false)
+	state := tc.svc.openAITiboAccountState(tc.account.ID)
+	state.mu.Lock()
+	state.http = r
+	state.mu.Unlock()
+	status := tc.svc.openAITiboRouteStatuses(tc.account, now.Add(20*time.Second))
+	require.Len(t, status[0].RecentSamples, openAITiboRecentSampleLimit)
+	require.Equal(t, string(r.recent[0].Verdict), status[0].RecentSamples[0].Verdict)
+	require.Equal(t, string(r.recent[9].Verdict), status[0].RecentSamples[9].Verdict)
+}
+
 func TestTiboCalibrationCounters(t *testing.T) {
 	cfg := tiboTestSettings()
 	now := time.Now()
