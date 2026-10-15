@@ -1252,6 +1252,7 @@ export interface TiboRouteStatus {
   last_sample?: 'healthy' | 'unknown' | 'degraded'
   last_http?: number
   last_answer?: string
+  recent_samples?: { verdict: TiboRouteVerdict; at?: string }[]
   probes_hour: number
   flips_hour: number
   // Calibration counters since the gateway process started. A vote window
