@@ -496,7 +496,7 @@ func (s *UserRepoSuite) TestUpgradeUsersAboveBalanceThreshold() {
 	upgraded, err := s.repo.UpgradeUsersAboveBalanceThreshold(s.ctx, service.VipBalanceThreshold)
 	s.Require().NoError(err)
 	s.Require().Contains(upgraded, over.ID)
-	s.Require().NotContains(upgraded, exact.ID, "balance equal to the threshold must not upgrade")
+	s.Require().Contains(upgraded, exact.ID, "balance equal to the threshold must upgrade")
 	s.Require().NotContains(upgraded, vipAlready.ID, "existing vip users must stay untouched")
 
 	gotOver, err := s.repo.GetByID(s.ctx, over.ID)
@@ -509,7 +509,7 @@ func (s *UserRepoSuite) TestUpgradeUsersAboveBalanceThreshold() {
 
 	gotExact, err := s.repo.GetByID(s.ctx, exact.ID)
 	s.Require().NoError(err)
-	s.Require().False(gotExact.IsVIP)
+	s.Require().True(gotExact.IsVIP)
 }
 
 func (s *UserRepoSuite) TestUpdateBalance_Negative() {

@@ -162,7 +162,7 @@ type UserRepository interface {
 	SetVIPIfNotSet(ctx context.Context, id int64) (bool, error)
 	// SetVIP 将 vip 设为指定值，已是该值时返回 false。管理员手动开通/取消 SVIP 使用。
 	SetVIP(ctx context.Context, id int64, vip bool) (bool, error)
-	// UpgradeUsersAboveBalanceThreshold 将总余额超过 threshold 的非 VIP 用户
+	// UpgradeUsersAboveBalanceThreshold 将总余额达到 threshold 的非 VIP 用户
 	// 批量升级为 VIP，返回完成升级的用户 ID 列表。用于启动扫描兜底。
 	UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error)
 	// AdjustBalance 原子地把 delta 累加到余额上，并返回变更前后的值。结果为负时

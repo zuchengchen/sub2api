@@ -575,7 +575,7 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 	if s.authCacheInvalidator != nil && balanceDiff != 0 {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
-	if change.New > VipBalanceThreshold {
+	if change.New >= VipBalanceThreshold {
 		s.vipUpgradeExecutor().EnsureUpgrade(ctx, userID)
 	}
 	s.tryAccrueAffiliateRebateForAdminRecharge(ctx, userID, operation, balance)

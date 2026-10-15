@@ -918,13 +918,13 @@ func (r *userRepository) SetVIPIfNotSet(ctx context.Context, id int64) (bool, er
 	return affected > 0, nil
 }
 
-// UpgradeUsersAboveBalanceThreshold 将总余额超过 threshold 的非 VIP 用户批量升级为
+// UpgradeUsersAboveBalanceThreshold 将总余额达到 threshold 的非 VIP 用户批量升级为
 // VIP，返回完成升级的用户 ID 列表。自动升级仍是单向的；管理员可通过 SetVIP 取消。
 func (r *userRepository) UpgradeUsersAboveBalanceThreshold(ctx context.Context, threshold float64) ([]int64, error) {
 	const updateSQL = `
 		UPDATE users
 		SET vip = true, updated_at = NOW()
-		WHERE deleted_at IS NULL AND vip = false AND balance > $1
+		WHERE deleted_at IS NULL AND vip = false AND balance >= $1
 		RETURNING id
 	`
 	client := clientFromContext(ctx, r.client)
