@@ -23,6 +23,8 @@ const (
 	openAITiboProbeTimeout     = 25 * time.Second
 	// A cold account (no sample yet) waits at most this long for its first probe.
 	openAITiboProbeWait = 8 * time.Second
+	// Admin sparkline: last N Tibo probe outcomes, oldest first.
+	openAITiboRecentSampleLimit = 10
 	// Gin context key for a leftover routing record from a previous attempt.
 	// Routing details stay internal; they are never sent to API clients.
 	openAIBPSBypassReasonKey = "openai_bps_bypass_reason"
@@ -142,8 +144,9 @@ type openAITiboRouteState struct {
 	nextProbeAt   time.Time
 	lastSampleAt  time.Time
 	lastSample    openAITiboProbeSample
-	probes        []time.Time // probe starts within the last hour
-	flips         []time.Time // confirmed flips within the last hour
+	recent        []openAITiboRecentSample // last openAITiboRecentSampleLimit probes, oldest first
+	probes        []time.Time              // probe starts within the last hour
+	flips         []time.Time              // confirmed flips within the last hour
 	inflight      bool
 	done          chan struct{}
 	persistedAt   time.Time
@@ -173,11 +176,24 @@ type openAITiboTransition struct {
 	votes   []openAITiboVerdict
 }
 
+type openAITiboRecentSample struct {
+	Verdict openAITiboVerdict
+	At      time.Time
+}
+
+func (r *openAITiboRouteState) rememberSample(sample openAITiboProbeSample, now time.Time) {
+	r.recent = append(r.recent, openAITiboRecentSample{Verdict: sample.verdict, At: now})
+	if extra := len(r.recent) - openAITiboRecentSampleLimit; extra > 0 {
+		r.recent = append([]openAITiboRecentSample(nil), r.recent[extra:]...)
+	}
+}
+
 // observe applies one sample using the vote rules. It never touches probe
 // scheduling; see scheduleNext.
 func (r *openAITiboRouteState) observe(sample openAITiboProbeSample, now time.Time, cfg openAITiboSettings) openAITiboTransition {
 	r.lastSampleAt = now
 	r.lastSample = sample
+	r.rememberSample(sample, now)
 	if !sample.verdict.definitive() {
 		// Unknown samples never vote; the confirmed verdict ages toward max_stale.
 		r.unknownStreak++
@@ -255,6 +271,9 @@ func (r *openAITiboRouteState) forceDegraded(now time.Time) bool {
 	// rejected in the calibration counters).
 	r.verdict, r.checkedAt = openAITiboDegraded, now
 	r.pending, r.dwellDeferred = nil, false
+	r.lastSampleAt = now
+	r.lastSample = openAITiboProbeSample{verdict: openAITiboDegraded}
+	r.rememberSample(r.lastSample, now)
 	return changed
 }
 

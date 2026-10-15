@@ -125,14 +125,14 @@
     <!-- OpenAI Codex accounts: Tibo HTTP route; usage querying remains OAuth-only. -->
     <template v-else-if="account.platform === 'openai' && (account.type === 'oauth' || account.type === 'setup-token')">
       <div v-if="codexTiboRoutes.length" class="mb-1 space-y-0.5" data-testid="tibo-routes">
-        <div
+        <TiboRouteSpark
           v-for="route in codexTiboRoutes"
           :key="`${route.model}:${route.route}`"
-          class="flex items-center gap-1 text-[10px] leading-4"
-        >
-          <span class="truncate font-medium text-gray-500 dark:text-gray-400" :title="route.model">{{ shortCodexTicketModel(route.model) }}</span>
-          <span :class="tiboVerdictClass(route.verdict)">{{ t(`admin.accounts.openai.codexTiboRouteVerdict.${route.verdict}`) }}</span>
-        </div>
+          :model="route.model"
+          :verdict="route.verdict"
+          :samples="route.recent_samples"
+          compact
+        />
       </div>
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
         <UsageProgressBar
@@ -439,6 +439,7 @@ import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
+import TiboRouteSpark from './TiboRouteSpark.vue'
 import ClaudeResetCreditsCell from './ClaudeResetCreditsCell.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
 import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
@@ -548,23 +549,11 @@ const codexTiboRoutes = computed(() =>
     (ticket.tibo_routes ?? []).map((route) => ({
       model: ticket.model,
       route: route.route,
-      verdict: route.verdict
+      verdict: route.verdict,
+      recent_samples: route.recent_samples
     }))
   )
 )
-
-function shortCodexTicketModel(model: string) {
-  if (model === 'gpt-6-astra') return 'astra'
-  if (model === 'gpt-5.6-sol') return 'sol'
-  return model
-}
-
-function tiboVerdictClass(verdict: string) {
-  if (verdict === 'healthy') return 'text-emerald-600 dark:text-emerald-400'
-  if (verdict === 'degraded') return 'text-amber-600 dark:text-amber-400'
-  if (verdict === 'unavailable') return 'text-red-600 dark:text-red-400'
-  return 'text-gray-500'
-}
 
 const openAISevenDayEstimatedTotalCost = computed(() => {
   const sevenDay = usageInfo.value?.seven_day

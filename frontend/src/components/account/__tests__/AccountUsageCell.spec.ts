@@ -153,6 +153,7 @@ describe('AccountUsageCell', () => {
     })
     await flushPromises()
     expect(wrapper.text()).toContain('astra')
+    expect(wrapper.findAll('[data-testid="tibo-dot"]').length).toBeGreaterThan(0)
     expect(wrapper.text()).toContain('admin.accounts.openai.codexTiboRouteVerdict.healthy')
     expect(wrapper.text()).toContain('admin.accounts.openai.codexTiboRouteVerdict.degraded')
     expect(wrapper.text()).not.toContain('codexTurnTicket')

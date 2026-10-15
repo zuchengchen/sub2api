@@ -780,6 +780,8 @@ export default {
           degraded: 'Degraded',
           unavailable: 'Unavailable'
         },
+        codexTiboRecentSamples: 'Last 10 Tibo probes',
+        codexTiboSampleEmpty: 'No probe yet',
         codexTiboRouteConfirmed: 'Confirmed: {verdict}',
         codexTiboRouteCheckedAt: 'Last checked: {time}',
         codexTiboRouteFlippedAt: 'Last flipped: {time}',

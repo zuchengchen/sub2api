@@ -870,6 +870,8 @@ export default {
           degraded: '降智',
           unavailable: '不可用'
         },
+        codexTiboRecentSamples: '最近 10 次 Tibo 探测',
+        codexTiboSampleEmpty: '尚无探测',
         codexTiboRouteConfirmed: '已确认：{verdict}',
         codexTiboRouteCheckedAt: '最近检查：{time}',
         codexTiboRouteFlippedAt: '最近切换：{time}',

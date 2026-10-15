@@ -2344,16 +2344,13 @@
           {{ t('admin.accounts.openai.codexTiboRouteDesc') }}
         </p>
         <div class="mt-3 space-y-1.5">
-          <div v-for="route in codexTiboRoutes" :key="`${route.model}:${route.route}`" class="text-sm">
-            <div class="flex items-center justify-between gap-3">
-              <span class="font-medium">{{ shortCodexTicketModel(route.model) }}</span>
-              <span :class="tiboVerdictClass(route.verdict)">
-                {{ t('admin.accounts.openai.codexTiboRouteSummary', {
-                  route: route.route,
-                  verdict: t(`admin.accounts.openai.codexTiboRouteVerdict.${route.verdict}`)
-                }) }}
-              </span>
-            </div>
+          <div v-for="route in codexTiboRoutes" :key="`${route.model}:${route.route}`">
+            <TiboRouteSpark
+              :model="route.model"
+              :verdict="route.verdict"
+              :samples="route.recent_samples"
+              :compact="false"
+            />
             <p v-if="route.checked_at" class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.openai.codexTiboRouteCheckedAt', { time: formatDateTime(new Date(route.checked_at)) }) }}
             </p>
@@ -3113,6 +3110,7 @@ import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
+import TiboRouteSpark from '@/components/account/TiboRouteSpark.vue'
 import OpenAICompatibleProviderPresetSelector from '@/components/account/OpenAICompatibleProviderPresetSelector.vue'
 import AccountTrafficControls from '@/components/account/AccountTrafficControls.vue'
 import {
@@ -3298,23 +3296,11 @@ const codexTiboRoutes = computed(() =>
       model: ticket.model,
       route: route.route,
       verdict: route.verdict,
-      checked_at: route.checked_at
+      checked_at: route.checked_at,
+      recent_samples: route.recent_samples
     }))
   )
 )
-
-function shortCodexTicketModel(model: string) {
-  if (model === 'gpt-6-astra') return 'astra'
-  if (model === 'gpt-5.6-sol') return 'sol'
-  return model
-}
-
-function tiboVerdictClass(verdict: string) {
-  if (verdict === 'healthy') return 'text-emerald-600 dark:text-emerald-400'
-  if (verdict === 'degraded') return 'text-amber-600 dark:text-amber-400'
-  if (verdict === 'unavailable') return 'text-red-600 dark:text-red-400'
-  return 'text-gray-500'
-}
 
 const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
   if (props.account) emit('updated', { ...props.account, ollama_cloud_usage: state })
