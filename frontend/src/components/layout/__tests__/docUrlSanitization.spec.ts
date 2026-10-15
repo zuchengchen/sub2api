@@ -15,6 +15,12 @@ describe('doc_url sanitization', () => {
     expect(headerSource).toContain('resolveDocumentationUrl(appStore.docUrl)')
   })
 
+  it('AppHeader does not show a frozen-balance breakdown', () => {
+    expect(headerSource).not.toContain('frozenBalance')
+    expect(headerSource).not.toContain('displayFrozenBalance')
+    expect(headerSource).not.toContain('冻结金额')
+  })
+
   it('HomeView uses the shared documentation URL resolver', () => {
     expect(homeViewSource).toContain("import { resolveDocumentationUrl } from '@/utils/docUrl'")
     expect(homeViewSource).toContain(
