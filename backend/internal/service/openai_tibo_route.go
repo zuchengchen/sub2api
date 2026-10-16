@@ -182,6 +182,9 @@ type openAITiboRecentSample struct {
 }
 
 func (r *openAITiboRouteState) rememberSample(sample openAITiboProbeSample, now time.Time) {
+	if !sample.verdict.definitive() {
+		return
+	}
 	r.recent = append(r.recent, openAITiboRecentSample{Verdict: sample.verdict, At: now})
 	if extra := len(r.recent) - openAITiboRecentSampleLimit; extra > 0 {
 		r.recent = append([]openAITiboRecentSample(nil), r.recent[extra:]...)
@@ -439,14 +442,18 @@ func (s *OpenAIGatewayService) openAITiboRequestVerdicts(ctx context.Context, ac
 	state.lastUsedAt = now
 	s.seedOpenAITiboStateLocked(state, account.Extra, now, cfg)
 	var wait <-chan struct{}
-	if state.http.cold() {
-		if state.http.inflight {
-			wait = state.http.done
-		} else {
-			wait = s.startOpenAITiboProbeLocked(state, openAITiboRouteHTTP, account, true, cfg, now)
+	if skip := openAITiboAccountSkipReason(account, now); skip == "" {
+		if state.http.cold() {
+			if state.http.inflight {
+				wait = state.http.done
+			} else {
+				wait = s.startOpenAITiboProbeLocked(state, openAITiboRouteHTTP, account, true, cfg, now)
+			}
+		} else if state.http.due(now) {
+			s.startOpenAITiboProbeLocked(state, openAITiboRouteHTTP, account, false, cfg, now)
 		}
-	} else if state.http.due(now) {
-		s.startOpenAITiboProbeLocked(state, openAITiboRouteHTTP, account, false, cfg, now)
+	} else if at := account.RateLimitResetAt; at != nil && at.After(state.http.nextProbeAt) {
+		state.http.nextProbeAt = *at
 	}
 	state.mu.Unlock()
 	if wait != nil {

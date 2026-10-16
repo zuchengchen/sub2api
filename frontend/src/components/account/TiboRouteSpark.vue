@@ -16,7 +16,6 @@
         :title="slotTitle(slot)"
       />
     </span>
-    <span :class="verdictClass">{{ verdictLabel }}</span>
   </div>
 </template>
 
@@ -44,16 +43,8 @@ const shortName = computed(() => {
   return props.model
 })
 
-const verdictLabel = computed(() => t(`admin.accounts.openai.codexTiboRouteVerdict.${props.verdict}`))
-const verdictClass = computed(() => {
-  if (props.verdict === 'healthy') return 'text-emerald-600 dark:text-emerald-400'
-  if (props.verdict === 'degraded') return 'text-amber-600 dark:text-amber-400'
-  if (props.verdict === 'unavailable') return 'text-red-600 dark:text-red-400'
-  return 'text-gray-500'
-})
-
 const slots = computed(() => {
-  const samples = props.samples ?? []
+  const samples = (props.samples ?? []).filter((sample) => sample.verdict === 'healthy' || sample.verdict === 'degraded')
   const missing = Math.max(0, sampleLimit - samples.length)
   return [
     ...Array.from({ length: missing }, () => null),

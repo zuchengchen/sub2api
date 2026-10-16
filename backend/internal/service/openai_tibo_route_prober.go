@@ -106,12 +106,17 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 	if account == nil {
 		latest, err := s.latestOpenAITiboAccount(ctx, state.accountID)
 		if err != nil || !s.openAITiboRouteApplies(latest) {
-			// Paused, rate-limited or disabled accounts are not sampled; their
-			// verdict ages toward max_stale.
+			// Paused, rate-limited or disabled accounts are not sampled; keep
+			// the last definitive sparkline until they are eligible again.
 			s.abortOpenAITiboProbe(state, route)
+			s.deferOpenAITiboProbeUntilReset(state.accountID, route)
 			return
 		}
 		account = latest
+	} else if skip := openAITiboAccountSkipReason(account, time.Now()); skip != "" {
+		s.abortOpenAITiboProbe(state, route)
+		s.deferOpenAITiboProbeUntilReset(state.accountID, route)
+		return
 	}
 	sample := s.probeOpenAITiboHTTP(ctx, account)
 	if parent.Err() != nil {
@@ -120,6 +125,36 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 		return
 	}
 	s.recordOpenAITiboSample(state, route, account, sample)
+}
+
+func (s *OpenAIGatewayService) deferOpenAITiboProbeUntilReset(accountID int64, route openAITiboRoute) {
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		return
+	}
+	now := time.Now()
+	reset := account.RateLimitResetAt
+	if model := account.modelRateLimitResetAt(openAICodexTicketDefaultModel); model != nil && (reset == nil || model.After(*reset)) {
+		reset = model
+	}
+	if reset == nil || !reset.After(now) {
+		return
+	}
+	state := s.loadOpenAITiboAccountState(accountID)
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	r := state.route(route)
+	if reset.After(r.nextProbeAt) {
+		r.nextProbeAt = *reset
+	}
 }
 
 func (s *OpenAIGatewayService) abortOpenAITiboProbe(state *openAITiboAccountState, route openAITiboRoute) {
@@ -555,6 +590,9 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, now tim
 				item.LastSample, item.LastHTTP, item.LastAnswer = string(r.lastSample.verdict), r.lastSample.status, r.lastSample.answerClass
 			}
 			for _, sample := range r.recent {
+				if !sample.Verdict.definitive() {
+					continue
+				}
 				item.RecentSamples = append(item.RecentSamples, OpenAITiboSampleStatus{Verdict: string(sample.Verdict), At: openAITiboTimePtr(sample.At)})
 			}
 			item.ProbesHour, item.FlipsHour = countOpenAITiboWindow(r.probes, now), countOpenAITiboWindow(r.flips, now)
