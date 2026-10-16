@@ -13,7 +13,7 @@ vi.mock('vue-i18n', async () => {
 })
 
 describe('TiboRouteSpark', () => {
-  it('renders astra, ten dots, and the health verdict', () => {
+  it('renders astra and ten dots without a verdict word', () => {
     const wrapper = mount(TiboRouteSpark, {
       props: {
         model: 'gpt-6-astra',
@@ -26,15 +26,15 @@ describe('TiboRouteSpark', () => {
       },
     })
     expect(wrapper.text()).toContain('astra')
-    expect(wrapper.text()).toContain('admin.accounts.openai.codexTiboRouteVerdict.healthy')
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTiboRouteVerdict.healthy')
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTiboRouteVerdict.unknown')
     const dots = wrapper.findAll('[data-testid="tibo-dot"]')
     expect(dots).toHaveLength(10)
     expect(dots.map(dot => dot.attributes('data-verdict'))).toEqual([
-      'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty',
-      'healthy', 'degraded', 'unknown',
+      'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty',
+      'healthy', 'degraded',
     ])
-    expect(dots[7].classes().join(' ')).toContain('bg-emerald-500')
-    expect(dots[8].classes().join(' ')).toContain('bg-red-500')
+    expect(dots[8].classes().join(' ')).toContain('bg-emerald-500')
     expect(dots[9].classes().join(' ')).toContain('bg-red-500')
   })
 })
