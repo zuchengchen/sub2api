@@ -2333,7 +2333,7 @@
       </div>
 
 
-      <!-- Tibo HTTP 线路（仅 OpenAI OAuth / setup-token） -->
+      <!-- Tibo HTTP 线路（OpenAI OAuth / setup-token / API Key） -->
       <div
         v-if="codexTiboRoutes.length"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"

@@ -13,10 +13,11 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
-// Tibo routing for ChatGPT OAuth accounts. Each account keeps a confirmed HTTP
-// Tibo verdict that only flips when a majority of a small vote window agrees;
-// unknown samples never vote. Requests stay on HTTP. Background probes run on
-// the harvester tick for enrolled ChatGPT OAuth accounts.
+// Tibo routing for OpenAI accounts that can answer the Astra probe (ChatGPT
+// OAuth / setup-token, and API-key including compatible gateways). Each
+// account keeps a confirmed HTTP Tibo verdict that only flips when a majority
+// of a small vote window agrees; unknown samples never vote. Requests stay on
+// HTTP. Background probes run on the harvester tick for enrolled accounts.
 const (
 	openAITiboHTTPOKReason     = "tibo_http_ok"
 	openAITiboRouteOrderReason = "tibo_route_order"
@@ -397,7 +398,7 @@ func (s *OpenAIGatewayService) openAITiboRouteApplies(account *Account) bool {
 	if s == nil || s.tiboRouteDisabled || account == nil {
 		return false
 	}
-	return isOpenAICodexTicketAccount(account)
+	return isOpenAITiboAccount(account)
 }
 
 func (s *OpenAIGatewayService) loadOpenAITiboAccountState(accountID int64) *openAITiboAccountState {
@@ -486,18 +487,26 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 	if err != nil {
 		return unknown
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
+	targetURL := chatgptCodexURL
+	if account.IsOpenAIApiKey() {
+		targetURL = buildOpenAIResponsesURL(account.GetOpenAIBaseURL())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return unknown
 	}
-	req.Host = "chatgpt.com"
+	if !account.IsOpenAIApiKey() {
+		req.Host = "chatgpt.com"
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 	applyOpenAITiboProbeIdentity(req.Header)
-	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
-		return unknown
+	if !account.IsOpenAIApiKey() {
+		if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
+			return unknown
+		}
 	}
 	resp, err := s.httpUpstream.Do(req, openAITiboAccountProxyURL(account), account.ID, account.Concurrency)
 	if resp != nil && resp.Body != nil {

@@ -367,7 +367,7 @@ func openAITiboExtraField(raw any, key string) any {
 
 const openAITiboEnrollInterval = time.Minute
 
-// enrollOpenAITiboAccounts loads eligible ChatGPT OAuth accounts into the
+// enrollOpenAITiboAccounts loads eligible OpenAI Tibo accounts into the
 // probe map, seeds persisted verdicts, and staggers first nextProbeAt so a
 // restart does not fire every account at once. Tests that set
 // openaiTiboLoaded skip the listing path and inject state themselves.
