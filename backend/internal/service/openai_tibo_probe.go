@@ -143,7 +143,7 @@ func openAITiboAccountProxyURL(account *Account) string {
 }
 
 func openAITiboAccountSkipReason(account *Account, now time.Time) string {
-	if account == nil || account.ID <= 0 || !isOpenAICodexTicketAccount(account) {
+	if account == nil || account.ID <= 0 || !isOpenAITiboAccount(account) {
 		return "not_tibo_account"
 	}
 	if account.Status != StatusActive {

@@ -140,7 +140,7 @@ type OpenAICodexTicketStatus struct {
 }
 
 func OpenAICodexTicketStatuses(account *Account, _ config.OpenAICodexTicketConfig, _ time.Time) []OpenAICodexTicketStatus {
-	if !isOpenAICodexTicketAccount(account) {
+	if !isOpenAITiboAccount(account) {
 		return nil
 	}
 	return []OpenAICodexTicketStatus{{Model: openAICodexTicketDefaultModel}}
@@ -281,6 +281,16 @@ func isOpenAICodexTicketAccount(account *Account) bool {
 	return account != nil && account.IsOpenAIOAuthLike() && !account.IsShadow()
 }
 
+// isOpenAITiboAccount is any non-shadow OpenAI credential that can answer the
+// Astra Tibo probe: ChatGPT OAuth / setup-token, and API-key (including
+// compatible gateways with a custom base_url).
+func isOpenAITiboAccount(account *Account) bool {
+	if account == nil || account.IsShadow() || !account.IsOpenAI() {
+		return false
+	}
+	return account.IsOpenAIOAuthLike() || account.Type == AccountTypeAPIKey
+}
+
 func IsOpenAICodexTicketPrivateExtraKey(key string) bool {
 	return IsOpenAICodexTicketExtraKey(key) || key == "codex_harvest_proxy_url"
 }
@@ -305,5 +315,3 @@ func RedactOpenAICodexTicketExtra(extra map[string]any) map[string]any {
 	}
 	return redacted
 }
-
-
