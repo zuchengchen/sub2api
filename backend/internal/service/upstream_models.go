@@ -1118,6 +1118,12 @@ type upstreamModelCapabilityEntry struct {
 	MaxContextWindow         int64                      `json:"max_context_window"`
 	MaxOutputTokens          int64                      `json:"max_output_tokens"`
 	Limit                    modelsDevLimit             `json:"limit"`
+	DisplayNameCamel         string                     `json:"displayName"`
+	SupportsImages           *bool                      `json:"supportsImages"`
+	SupportsThinking         *bool                      `json:"supportsThinking"`
+	ThinkingBudget           *int64                     `json:"thinkingBudget"`
+	MaxTokens                int64                      `json:"maxTokens"`
+	MaxOutputTokensCamel     int64                      `json:"maxOutputTokens"`
 }
 
 func extractUpstreamModelIDs(body []byte) ([]string, error) {
@@ -1166,12 +1172,33 @@ func extractUpstreamModelCatalog(body []byte, grok bool) ([]string, map[string]U
 func extractUpstreamModelRawEntries(body []byte) ([]json.RawMessage, error) {
 	var response struct {
 		Data   []json.RawMessage `json:"data"`
-		Models []json.RawMessage `json:"models"`
+		Models json.RawMessage   `json:"models"`
 	}
 	if err := json.Unmarshal(body, &response); err == nil && (response.Data != nil || response.Models != nil) {
-		entries := make([]json.RawMessage, 0, len(response.Data)+len(response.Models))
-		entries = append(entries, response.Data...)
-		entries = append(entries, response.Models...)
+		entries := append([]json.RawMessage{}, response.Data...)
+		if len(response.Models) > 0 && string(response.Models) != "null" {
+			var list []json.RawMessage
+			if err := json.Unmarshal(response.Models, &list); err == nil {
+				entries = append(entries, list...)
+			} else {
+				// Antigravity keys its model catalog by the exact generation model ID.
+				var models map[string]map[string]json.RawMessage
+				if err := json.Unmarshal(response.Models, &models); err != nil {
+					return nil, fmt.Errorf("parse upstream model catalog: %w", err)
+				}
+				for modelID, fields := range models {
+					if fields == nil {
+						fields = make(map[string]json.RawMessage)
+					}
+					fields["id"], _ = json.Marshal(modelID)
+					raw, err := json.Marshal(fields)
+					if err != nil {
+						return nil, fmt.Errorf("parse upstream model metadata: %w", err)
+					}
+					entries = append(entries, raw)
+				}
+			}
+		}
 		return entries, nil
 	}
 	var entries []json.RawMessage
@@ -1187,6 +1214,34 @@ func upstreamMetadataFromCapabilityEntry(modelID string, entry upstreamModelCapa
 		levels = reasoningLevelsFromModelsDevOptions(entry.ReasoningOptions)
 	}
 	reasoning := entry.Reasoning
+	if reasoning == nil {
+		reasoning = entry.SupportsThinking
+	}
+	if len(levels) == 0 && entry.SupportsThinking != nil && *entry.SupportsThinking {
+		level := "high"
+		fixedLevel := normalizeReasoningLevel(modelID[strings.LastIndex(modelID, "-")+1:])
+		if fixedLevel != "" && fixedLevel != "none" {
+			level = fixedLevel
+		} else if entry.ThinkingBudget != nil {
+			switch budget := *entry.ThinkingBudget; {
+			case budget < 0:
+			case budget <= 1024:
+				level = "low"
+			case budget <= 8192:
+				level = "medium"
+			}
+		}
+		if fixedLevel == "" || fixedLevel == "none" {
+			// Bare and tiered AGY models accept configurable budgets. The fetched
+			// thinkingBudget is their default, not the only supported budget.
+			levels = []string{"low", "medium", "high"}
+			if entry.DefaultReasoningLevel == "" {
+				entry.DefaultReasoningLevel = level
+			}
+		} else {
+			levels = []string{level}
+		}
+	}
 	if reasoning == nil && len(levels) > 0 {
 		inferred := len(levels) != 1 || levels[0] != "none"
 		reasoning = &inferred
@@ -1195,6 +1250,13 @@ func upstreamMetadataFromCapabilityEntry(modelID string, entry upstreamModelCapa
 	if len(modalities) == 0 {
 		modalities = entry.Modalities.Input
 	}
+	if len(modalities) == 0 && (entry.SupportsImages != nil || entry.SupportsThinking != nil || entry.MaxTokens > 0) {
+		// AGY models accept text; image input requires an explicit capability.
+		modalities = []string{"text"}
+		if entry.SupportsImages != nil && *entry.SupportsImages {
+			modalities = append(modalities, "image")
+		}
+	}
 	contextWindow := entry.ContextWindow
 	if contextWindow <= 0 {
 		contextWindow = entry.MaxContextWindow
@@ -1202,15 +1264,24 @@ func upstreamMetadataFromCapabilityEntry(modelID string, entry upstreamModelCapa
 	if contextWindow <= 0 {
 		contextWindow = entry.Limit.Context
 	}
+	if contextWindow <= 0 {
+		contextWindow = entry.MaxTokens
+	}
 	maxOutputTokens := entry.MaxOutputTokens
 	if maxOutputTokens <= 0 {
 		maxOutputTokens = entry.Limit.Output
+	}
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = entry.MaxOutputTokensCamel
 	}
 	defaultReasoningLevel := normalizeReasoningLevel(entry.DefaultReasoningLevel)
 	if defaultReasoningLevel == "" && len(levels) > 0 {
 		defaultReasoningLevel = levels[0]
 	}
 	displayName := strings.TrimSpace(entry.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(entry.DisplayNameCamel)
+	}
 	if displayName == "" && strings.TrimSpace(entry.Name) != "" && strings.TrimSpace(entry.Name) != modelID {
 		displayName = strings.TrimSpace(entry.Name)
 	}

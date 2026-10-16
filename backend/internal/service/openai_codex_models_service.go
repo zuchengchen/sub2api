@@ -186,13 +186,13 @@ func (s *OpenAIGatewayService) MergeGroupConfiguredCodexModels(
 		return nil
 	}
 
+	visible, accounts, err := loadCodexGroupCatalogAccounts(ctx, s.accountRepo, group.ID)
+	if err != nil {
+		return fmt.Errorf("load group configured Codex models: %w", err)
+	}
 	var configuredModels []string
 	if !group.CodexModelsManifestConfig.Enabled {
-		var err error
-		configuredModels, err = s.groupConfiguredCodexModelIDs(ctx, group)
-		if err != nil {
-			return fmt.Errorf("load group configured Codex models: %w", err)
-		}
+		configuredModels = openAIConfiguredCodexModelIDsForGroup(visible, group)
 	}
 	body, changed, err := mergeConfiguredCodexModelsManifest(
 		manifest.Body,
@@ -210,7 +210,12 @@ func (s *OpenAIGatewayService) MergeGroupConfiguredCodexModels(
 		}
 		changed = true
 	}
-	if changed {
+	filtered, retired, err := filterRetiredOpenAIPublicModelsBody(body, accounts, true)
+	if err != nil {
+		return fmt.Errorf("filter retired Codex models: %w", err)
+	}
+	body = filtered
+	if changed || retired {
 		manifest.Body = body
 		manifest.ETag = codexModelsManifestBodyETag(body)
 	}
@@ -219,17 +224,6 @@ func (s *OpenAIGatewayService) MergeGroupConfiguredCodexModels(
 		manifest.NotModified = true
 	}
 	return nil
-}
-
-func (s *OpenAIGatewayService) groupConfiguredCodexModelIDs(ctx context.Context, group *Group) ([]string, error) {
-	if group == nil {
-		return nil, nil
-	}
-	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, group.ID)
-	if err != nil {
-		return nil, err
-	}
-	return openAIConfiguredCodexModelIDsForGroup(accounts, group), nil
 }
 
 // loadCodexGroupCatalogAccounts separates picker membership from capability
@@ -297,7 +291,7 @@ func openAIConfiguredCodexModelIDs(accounts []Account) []string {
 func openAIConfiguredCodexModelIDsForGroup(accounts []Account, group *Group) []string {
 	models := supplementUnmappedOpenAIModels(accounts, openAIConfiguredCodexModelIDs(accounts))
 	if group == nil || !group.ModelAllowlistEnabled() {
-		return models
+		return filterRetiredOpenAIModelIDs(accounts, models)
 	}
 
 	seen := make(map[string]struct{}, len(models)+len(group.ModelAllowlist.Models))
@@ -326,7 +320,7 @@ func openAIConfiguredCodexModelIDsForGroup(accounts []Account, group *Group) []s
 		}
 	}
 	sort.Strings(models)
-	return models
+	return filterRetiredOpenAIModelIDs(accounts, models)
 }
 
 const (
@@ -905,6 +899,19 @@ func buildCodexModelsManifestForAccounts(
 	compositeRoutes []CompositeModelRoute,
 	compositeRoutesAvailable bool,
 ) ([]byte, error) {
+	if effectivePlatform == PlatformOpenAI {
+		modelIDs = filterRetiredOpenAIModelIDs(accounts, modelIDs)
+	} else if effectivePlatform == PlatformComposite {
+		filtered := make([]string, 0, len(modelIDs))
+		for _, modelID := range modelIDs {
+			platform, target, resolved := resolveCodexCompositeModelTarget(modelID, accounts, compositeRoutes, compositeRoutesAvailable)
+			if resolved && platform == PlatformOpenAI && openAIModelRetiredForAccounts(accounts, target) {
+				continue
+			}
+			filtered = append(filtered, modelID)
+		}
+		modelIDs = filtered
+	}
 	imageInputModels := make(map[string]bool, len(modelIDs))
 	searchToolModels := make(map[string]bool, len(modelIDs))
 	metadataModels := codexCatalogMetadataModels(
@@ -1091,7 +1098,7 @@ func uniqueCodexMappedModel(accounts []Account, platform string, modelID string)
 	targets := make(map[string]struct{})
 	for i := range accounts {
 		account := &accounts[i]
-		if account.Platform != platform {
+		if !codexAccountServesPlatformModel(account, platform, modelID) {
 			continue
 		}
 		mappedModel, matched := account.ResolveMappedModel(modelID)
