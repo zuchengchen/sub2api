@@ -101,6 +101,13 @@ func ModelNotSupportedByGroup(model string) string {
 	)
 }
 
+func ModelRetiredGPT55(model string) string {
+	return ZHEN(
+		"模型 "+model+" 指向 GPT-5.5，该模型已于 2026-10-14 从 ChatGPT 登录的 Codex 下线。请改用 GPT-6.1 Sol 或 GPT-6 Luna，或配置仍支持 GPT-5.5 的 API Key 上游。",
+		`Model "`+model+`" targets GPT-5.5, which retired from Codex with ChatGPT sign-in on October 14, 2026. Select an available replacement such as GPT-6.1 Sol or GPT-6 Luna, or configure an API-key upstream that supports GPT-5.5.`,
+	)
+}
+
 func TimeoutWaitingConcurrency(slotType string) string {
 	return ZHEN("等待"+slotLabelZH(slotType)+"并发名额超时", "timeout waiting for "+slotType+" concurrency slot")
 }
