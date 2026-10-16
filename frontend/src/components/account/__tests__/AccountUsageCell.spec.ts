@@ -130,12 +130,12 @@ describe('AccountUsageCell', () => {
     })
   })
 
-  it.each(['oauth', 'setup-token'] as const)('renders Tibo HTTP verdict for OpenAI %s accounts', async (type) => {
+  it.each(['oauth', 'setup-token', 'apikey'] as const)('renders Tibo HTTP verdict for OpenAI %s accounts', async (type) => {
     getUsage.mockResolvedValue({})
     const wrapper = mount(AccountUsageCell, {
       props: {
         account: makeAccount({
-          id: type === 'oauth' ? 9701 : 9702,
+          id: type === 'oauth' ? 9701 : type === 'setup-token' ? 9702 : 9704,
           platform: 'openai',
           type,
           codex_turn_tickets: [
@@ -157,7 +157,7 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTiboRouteVerdict.healthy')
     expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTiboRouteVerdict.degraded')
     expect(wrapper.text()).not.toContain('codexTurnTicket')
-    if (type === 'setup-token') {
+    if (type === 'setup-token' || type === 'apikey') {
       expect(getUsage).not.toHaveBeenCalled()
       expect(wrapper.find('[data-test="quota-reset"]').exists()).toBe(false)
     }

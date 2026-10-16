@@ -122,7 +122,7 @@
       </ClaudeResetCreditsCell>
     </template>
 
-    <!-- OpenAI Codex accounts: Tibo HTTP route; usage querying remains OAuth-only. -->
+    <!-- OpenAI OAuth / setup-token: Tibo HTTP route; usage querying remains OAuth-only. -->
     <template v-else-if="account.platform === 'openai' && (account.type === 'oauth' || account.type === 'setup-token')">
       <div v-if="codexTiboRoutes.length" class="mb-1 space-y-0.5" data-testid="tibo-routes">
         <TiboRouteSpark
@@ -208,6 +208,31 @@
           @account-updated="handleQuotaResetAccountUpdated"
         />
       </div>
+    </template>
+
+    <!-- OpenAI API-key: Tibo sparkline plus any attached usage cells. -->
+    <template v-else-if="account.platform === 'openai' && account.type === 'apikey'">
+      <div v-if="codexTiboRoutes.length" class="mb-1 space-y-0.5" data-testid="tibo-routes">
+        <TiboRouteSpark
+          v-for="route in codexTiboRoutes"
+          :key="`${route.model}:${route.route}`"
+          :model="route.model"
+          :verdict="route.verdict"
+          :samples="route.recent_samples"
+          compact
+        />
+      </div>
+      <OllamaCloudUsageCell
+        v-if="account.ollama_cloud_usage?.eligible"
+        :account="account"
+        @updated="handleOllamaCloudUsageUpdated"
+      />
+      <OpenCodeGoUsageCell
+        v-else-if="account.opencode_go_usage?.eligible"
+        :account="account"
+        @updated="handleOpenCodeGoUsageUpdated"
+      />
+      <div v-else-if="!codexTiboRoutes.length" class="text-xs text-gray-400">-</div>
     </template>
 
     <!-- Grok OAuth accounts: passive xAI quota headers + local Sub2API usage -->
@@ -514,6 +539,9 @@ const showUsageWindows = computed(() => {
   // 多协议 API Key 供应商：apikey 账号也有滚动用量窗口（coding plan / 订阅）或余额，
   // 由 CNProviderQuotaCell / CNProviderBalanceCell 自行探测与展示。
   if (isMultiProtocolApiKeyPlatform(props.account.platform)) {
+    return true
+  }
+  if (props.account.platform === 'openai' && props.account.type === 'apikey') {
     return true
   }
   return props.account.type === 'oauth' || props.account.type === 'setup-token'

@@ -860,7 +860,7 @@ export default {
           model_temporarily_unschedulable: '模型暂时不可调度'
         },
         codexTiboRoutes: '线路',
-        codexTiboRouteDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / low）。健康则直连 HTTP；降智时仍走普通 HTTP。',
+        codexTiboRouteDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / low）。OAuth / Setup Token 打 chatgpt.com；API Key 打账号自己的 Responses 地址。',
         codexTiboRouteSummary: '线路 {route}：{verdict}',
         codexTiboRouteVerdict: {
           healthy: '健康',

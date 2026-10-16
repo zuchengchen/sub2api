@@ -153,6 +153,34 @@ func TestOpenAICodexTicketStatusesOmitsRowsWithoutTiboRoutes(t *testing.T) {
 	require.Equal(t, "http", got[0].TiboRoutes[0].Route)
 }
 
+func TestTiboRouteAppliesForOpenAIAPIKey(t *testing.T) {
+	tc := newTiboRouteCase(t, false, false)
+	tc.account.Type = AccountTypeAPIKey
+	tc.account.Credentials = map[string]any{"api_key": "sk-test", "base_url": "http://127.0.0.1:18083"}
+	require.True(t, tc.svc.openAITiboRouteApplies(tc.account))
+	require.Equal(t, "", openAITiboAccountSkipReason(tc.account, time.Now()))
+	got := (&AccountTestService{openaiGatewayService: tc.svc}).OpenAICodexTicketStatuses(tc.account, config.OpenAICodexTicketConfig{}, time.Now())
+	require.Len(t, got, 1)
+	require.Equal(t, "http", got[0].TiboRoutes[0].Route)
+}
+
+func TestTiboProbeAPIKeyUsesResponsesBaseURL(t *testing.T) {
+	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"))
+	tc.account.Type = AccountTypeAPIKey
+	tc.account.Credentials = map[string]any{"api_key": "sk-test", "base_url": "http://127.0.0.1:18083"}
+	now := time.Now()
+	state := tc.svc.openAITiboAccountState(tc.account.ID)
+	state.mu.Lock()
+	started := tc.svc.startOpenAITiboProbeLocked(state, openAITiboRouteHTTP, tc.account, true, tc.svc.openAITiboRouteConfig(), now)
+	state.mu.Unlock()
+	require.NotNil(t, started)
+	tc.svc.openaiTiboProbeWG.Wait()
+	require.NotEmpty(t, tc.upstream.requests)
+	require.Equal(t, "http://127.0.0.1:18083/v1/responses", tc.upstream.requests[0].URL.String())
+	require.Equal(t, "Bearer sk-test", tc.upstream.requests[0].Header.Get("Authorization"))
+	require.NotEqual(t, "chatgpt.com", tc.upstream.requests[0].Host)
+}
+
 func TestTiboRouteHTTPTrueStaysOnHTTP(t *testing.T) {
 	tc := newTiboRouteCase(t, false, true, cookieWSHTTPResponse("true."), cookieWSHTTPResponse("http ok"))
 	result, rec, _ := tc.forward(t)
