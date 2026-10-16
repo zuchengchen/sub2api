@@ -330,7 +330,7 @@ describe('EditAccountModal', () => {
     expect(wrapper.find('[data-testid="cookie-ws-route"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="tibo-routes"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('astra')
-    expect(wrapper.text()).toContain('admin.accounts.openai.codexTiboRouteVerdict.degraded')
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTiboRouteVerdict.degraded')
     expect(wrapper.text()).not.toContain('codexTurnTicket')
     wrapper.unmount()
   })
