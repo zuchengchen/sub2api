@@ -121,6 +121,7 @@ func (s *GatewayService) ForwardAsResponses(
 		anthropicBody = injectAnthropicAPIKeyCacheMetadata(anthropicBody, parsed, account)
 		anthropicBody = rewriteMessageCacheControlBody(anthropicBody)
 	}
+	anthropicBody = ensureConvertedAnthropicCacheBreakpoints(anthropicBody)
 
 	// 7. Enforce cache_control block limit
 	anthropicBody = enforceCacheControlLimit(anthropicBody)

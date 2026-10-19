@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -182,6 +183,81 @@ func ensureMessageCacheBreakpointsIfMissing(body []byte) []byte {
 		return body
 	}
 	return addMessageCacheBreakpointsWithTTL(body, "")
+}
+
+// ensureConvertedAnthropicCacheBreakpoints adds stable Anthropic cache
+// breakpoints to OpenAI→Anthropic converted bodies that have none.
+//
+// Claude CLI /v1/messages already ships its own breakpoints; this helper is
+// only for conversion exits. Existing cache_control is left in place.
+func ensureConvertedAnthropicCacheBreakpoints(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	body = ensureSystemCacheBreakpointIfMissing(body)
+	body = ensureToolsCacheBreakpointIfMissing(body)
+	return ensureMessageCacheBreakpointsIfMissing(body)
+}
+
+func ensureSystemCacheBreakpointIfMissing(body []byte) []byte {
+	sys := gjson.GetBytes(body, "system")
+	if !sys.Exists() {
+		return body
+	}
+	if sys.Type == gjson.String {
+		text := sys.String()
+		if strings.TrimSpace(text) == "" {
+			return body
+		}
+		blockRaw := fmt.Sprintf(
+			`[{"type":"text","text":%s,"cache_control":{"type":"ephemeral"}}]`,
+			mustJSONString(text),
+		)
+		next, err := sjson.SetRawBytes(body, "system", []byte(blockRaw))
+		if err != nil {
+			return body
+		}
+		return next
+	}
+	if !sys.IsArray() {
+		return body
+	}
+	arr := sys.Array()
+	lastTextIdx := -1
+	for i, block := range arr {
+		typ := block.Get("type").String()
+		if typ == "text" || typ == "" {
+			lastTextIdx = i
+		}
+	}
+	if lastTextIdx < 0 || arr[lastTextIdx].Get("cache_control").Exists() {
+		return body
+	}
+	path := fmt.Sprintf("system.%d.cache_control", lastTextIdx)
+	next, err := sjson.SetRawBytes(body, path, []byte(`{"type":"ephemeral"}`))
+	if err != nil {
+		return body
+	}
+	return next
+}
+
+func ensureToolsCacheBreakpointIfMissing(body []byte) []byte {
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return body
+	}
+	arr := tools.Array()
+	lastIdx := -1
+	for i, tool := range arr {
+		if isDeferredLoadingTool(tool) {
+			continue
+		}
+		lastIdx = i
+	}
+	if lastIdx < 0 || arr[lastIdx].Get("cache_control").Exists() {
+		return body
+	}
+	return applyToolsLastCacheBreakpoint(body)
 }
 
 func (s *GatewayService) isRewriteMessageCacheControlEnabled(ctx context.Context) bool {
