@@ -17,7 +17,12 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 	isOpus55 := claude.IsOpus55(req.Model)
 	isSonnet55 := claude.IsSonnet55(req.Model)
 	isHaiku55 := claude.IsHaiku55(req.Model)
-	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input, isOpus55 || isSonnet55 || isHaiku55)
+	system, messages, err := convertResponsesInputToAnthropicWithCache(
+		req.Instructions,
+		req.Input,
+		isOpus55 || isSonnet55 || isHaiku55,
+		anthropicCacheTTLFromPromptCacheOptions(req.PromptCacheOptions),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -180,6 +185,10 @@ func mapResponsesEffortToAnthropic(effort string) string {
 // a Responses API instructions + input array. Returns the system as raw JSON
 // (for Anthropic's polymorphic system field) and a list of Anthropic messages.
 func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMessage, preserveThinking bool) (json.RawMessage, []AnthropicMessage, error) {
+	return convertResponsesInputToAnthropicWithCache(instructions, inputRaw, preserveThinking, "")
+}
+
+func convertResponsesInputToAnthropicWithCache(instructions string, inputRaw json.RawMessage, preserveThinking bool, cacheTTL string) (json.RawMessage, []AnthropicMessage, error) {
 	var systemParts []string
 	if strings.TrimSpace(instructions) != "" {
 		systemParts = append(systemParts, strings.TrimSpace(instructions))
@@ -218,10 +227,11 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 				input = json.RawMessage(item.Arguments)
 			}
 			block := AnthropicContentBlock{
-				Type:  "tool_use",
-				ID:    fromResponsesCallIDToAnthropic(item.CallID),
-				Name:  item.Name,
-				Input: input,
+				Type:         "tool_use",
+				ID:           fromResponsesCallIDToAnthropic(item.CallID),
+				Name:         item.Name,
+				Input:        input,
+				CacheControl: cacheControlFromBreakpoint(item.PromptCacheBreakpoint, cacheTTL),
 			}
 			blockJSON, _ := json.Marshal([]AnthropicContentBlock{block})
 			messages = append(messages, AnthropicMessage{
@@ -233,9 +243,10 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			// function_call_output → user message with tool_result block
 			contentJSON := responsesFunctionOutputToAnthropicContent(item)
 			block := AnthropicContentBlock{
-				Type:      "tool_result",
-				ToolUseID: fromResponsesCallIDToAnthropic(item.CallID),
-				Content:   contentJSON,
+				Type:         "tool_result",
+				ToolUseID:    fromResponsesCallIDToAnthropic(item.CallID),
+				Content:      contentJSON,
+				CacheControl: cacheControlFromBreakpoint(item.PromptCacheBreakpoint, cacheTTL),
 			}
 			blockJSON, _ := json.Marshal([]AnthropicContentBlock{block})
 			messages = append(messages, AnthropicMessage{
@@ -266,7 +277,7 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			}
 
 		case item.Role == "user":
-			content, err := convertResponsesUserToAnthropicContent(item.Content)
+			content, err := convertResponsesUserToAnthropicContent(item.Content, cacheTTL)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -276,13 +287,14 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			if anthropicContentIsEmpty(content) {
 				continue
 			}
+			content = applyItemCacheControl(content, item.PromptCacheBreakpoint, cacheTTL)
 			messages = append(messages, AnthropicMessage{
 				Role:    "user",
 				Content: content,
 			})
 
 		case item.Role == "assistant":
-			content, err := convertResponsesAssistantToAnthropicContent(item.Content)
+			content, err := convertResponsesAssistantToAnthropicContent(item.Content, cacheTTL)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -291,6 +303,7 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			if anthropicContentIsEmpty(content) || anthropicContentIsOnlyBlankText(content) {
 				continue
 			}
+			content = applyItemCacheControl(content, item.PromptCacheBreakpoint, cacheTTL)
 			messages = append(messages, AnthropicMessage{
 				Role:    "assistant",
 				Content: content,
@@ -304,13 +317,14 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			if item.Content == nil {
 				continue
 			}
-			content, err := convertResponsesUserToAnthropicContent(item.Content)
+			content, err := convertResponsesUserToAnthropicContent(item.Content, cacheTTL)
 			if err != nil {
 				return nil, nil, err
 			}
 			if anthropicContentIsEmpty(content) {
 				continue
 			}
+			content = applyItemCacheControl(content, item.PromptCacheBreakpoint, cacheTTL)
 			messages = append(messages, AnthropicMessage{
 				Role:    "user",
 				Content: content,
@@ -542,7 +556,7 @@ func anthropicContentIsOnlyBlankText(content json.RawMessage) bool {
 	return true
 }
 
-func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessage, error) {
+func convertResponsesUserToAnthropicContent(raw json.RawMessage, cacheTTL string) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return json.Marshal("") // empty string content
 	}
@@ -566,24 +580,27 @@ func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessag
 		case "input_text", "text":
 			if p.Text != "" {
 				blocks = append(blocks, AnthropicContentBlock{
-					Type: "text",
-					Text: p.Text,
+					Type:         "text",
+					Text:         p.Text,
+					CacheControl: cacheControlFromBreakpoint(p.PromptCacheBreakpoint, cacheTTL),
 				})
 			}
 		case "input_image":
 			src := dataURIToAnthropicImageSource(p.ImageURL)
 			if src != nil {
 				blocks = append(blocks, AnthropicContentBlock{
-					Type:   "image",
-					Source: src,
+					Type:         "image",
+					Source:       src,
+					CacheControl: cacheControlFromBreakpoint(p.PromptCacheBreakpoint, cacheTTL),
 				})
 			}
 		case "input_file":
 			src := dataURIToAnthropicFileSource(p.FileData)
 			if src != nil {
 				blocks = append(blocks, AnthropicContentBlock{
-					Type:   "document",
-					Source: src,
+					Type:         "document",
+					Source:       src,
+					CacheControl: cacheControlFromBreakpoint(p.PromptCacheBreakpoint, cacheTTL),
 				})
 			}
 		}
@@ -597,7 +614,7 @@ func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessag
 
 // convertResponsesAssistantToAnthropicContent converts a Responses assistant
 // message content field into Anthropic content blocks JSON.
-func convertResponsesAssistantToAnthropicContent(raw json.RawMessage) (json.RawMessage, error) {
+func convertResponsesAssistantToAnthropicContent(raw json.RawMessage, cacheTTL string) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return json.Marshal([]AnthropicContentBlock{{Type: "text", Text: ""}})
 	}
@@ -620,8 +637,9 @@ func convertResponsesAssistantToAnthropicContent(raw json.RawMessage) (json.RawM
 		case "output_text", "text":
 			if p.Text != "" {
 				blocks = append(blocks, AnthropicContentBlock{
-					Type: "text",
-					Text: p.Text,
+					Type:         "text",
+					Text:         p.Text,
+					CacheControl: cacheControlFromBreakpoint(p.PromptCacheBreakpoint, cacheTTL),
 				})
 			}
 		}
@@ -715,6 +733,58 @@ func parseContentBlocks(raw json.RawMessage) []AnthropicContentBlock {
 		return []AnthropicContentBlock{{Type: "text", Text: s}}
 	}
 	return nil
+}
+
+func anthropicCacheTTLFromPromptCacheOptions(options *PromptCacheOptions) string {
+	if options == nil {
+		return ""
+	}
+	switch options.TTL {
+	case "5m", "1h":
+		return options.TTL
+	default:
+		return ""
+	}
+}
+
+func cacheControlFromBreakpoint(bp *PromptCacheBreakpoint, ttl string) *AnthropicCacheControl {
+	if bp == nil {
+		return nil
+	}
+	cc := &AnthropicCacheControl{Type: "ephemeral"}
+	if ttl != "" {
+		cc.TTL = ttl
+	}
+	return cc
+}
+
+func applyItemCacheControl(content json.RawMessage, bp *PromptCacheBreakpoint, ttl string) json.RawMessage {
+	cc := cacheControlFromBreakpoint(bp, ttl)
+	if cc == nil {
+		return content
+	}
+	return applyCacheControlToLastBlock(content, cc)
+}
+
+func applyCacheControlToLastBlock(content json.RawMessage, cc *AnthropicCacheControl) json.RawMessage {
+	if cc == nil {
+		return content
+	}
+	blocks := parseContentBlocks(content)
+	if len(blocks) == 0 {
+		return content
+	}
+	last := &blocks[len(blocks)-1]
+	if last.CacheControl == nil {
+		last.CacheControl = cc
+	} else if last.CacheControl.TTL == "" && cc.TTL != "" {
+		last.CacheControl.TTL = cc.TTL
+	}
+	out, err := json.Marshal(blocks)
+	if err != nil {
+		return content
+	}
+	return out
 }
 
 // convertResponsesToAnthropicTools maps Responses API tools to Anthropic format.
