@@ -518,6 +518,8 @@ var codexResponsesOfficialTopLevelKeyOrder = []string{
 //
 // Anything unexpected (non-object, unparseable) returns `encoded` unchanged:
 // the request must stay valid even if the cosmetic rewrite cannot be applied.
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func restoreOpenAIUpstreamJSONTopLevelOrder(original, encoded []byte) []byte {
 	originalOrder := openAIUpstreamJSONTopLevelKeys(original)
 	if len(originalOrder) == 0 {
