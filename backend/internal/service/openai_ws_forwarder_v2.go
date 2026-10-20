@@ -80,7 +80,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
-	setOpenAIWSTurnMetadata(payload, turnMetadata)
+	clientMetadata, _ := payload["client_metadata"].(map[string]any)
+	if !account.IsOpenAIOAuthLike() {
+		setOpenAIWSTurnMetadata(payload, turnMetadata)
+	} else if _, exists := clientMetadata[openAIWSTurnMetadataHeader]; !exists && turnMetadata != "" {
+		// The original HTTP header has not yet received account projection.
+		fallback := map[string]any{openAIWSTurnMetadataHeader: turnMetadata}
+		applyCodexAccountIdentityEmbeddedMetadata(fallback, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+		setOpenAIWSTurnMetadata(payload, fallback[openAIWSTurnMetadataHeader].(string))
+	}
 	applyStagedCodexFingerprintClientMetadata(c, account, payload)
 	if encoded, err := json.Marshal(payload); err == nil {
 		stageCodexConvergenceBodyIdentityRaw(c, codexAccountIdentitySource(c, account), encoded)
@@ -205,6 +213,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 	if buildHdrErr != nil {
 		return nil, fmt.Errorf("build ws headers: %w", buildHdrErr)
+	}
+	if err := normalizeCodexRequestMetadataMap(payload, wsHeaders, account); err != nil {
+		return nil, fmt.Errorf("normalize websocket metadata: %w", err)
+	}
+	// normalizeCodexRequestMetadataMap 会按旧习惯把 session_id / x-codex-installation-id
+	// 重新写回头部（legacy compact 依赖它们，不能从源头删除），因此 WS 握手同样
+	// 必须在归一化之后重新执行终态线序收口，与 HTTP 路径同一规则。
+	if account.UsesOpenAICodexProtocol() {
+		projectCodexOutboundHeaders(wsHeaders, true)
 	}
 	if cookieWS {
 		delete(payload, "stream")

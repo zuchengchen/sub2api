@@ -61,6 +61,9 @@ type ProxyWithAccountCount struct {
 	CountryCode    string
 	Region         string
 	City           string
+	// Timezone 该代理出口 IP 的 IANA 时区（ip-api 探测写入）；管理端据此
+	// 标记按出口自动确定的请求时区来源，空串表示还没探测到时区。
+	Timezone       string
 	QualityStatus  string
 	QualityScore   *int
 	QualityGrade   string

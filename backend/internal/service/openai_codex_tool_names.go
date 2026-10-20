@@ -12,7 +12,7 @@ import (
 
 const (
 	codexReservedPythonToolName = "python"
-	codexPythonToolAlias        = "python__sub2api"
+	codexPythonToolAlias        = "python__custom"
 	codexToolNameReverseKey     = "openai_codex_tool_name_reverse"
 	codexToolNameSessionKey     = "openai_codex_tool_name_session_reverse"
 )
@@ -158,11 +158,11 @@ func aliasOpenAIOAuthReservedToolNamesBody(body []byte) ([]byte, map[string]stri
 	if err != nil || !changed {
 		return body, reverse, false, err
 	}
-	normalized, err := json.Marshal(reqBody)
+	normalized, err := marshalOpenAIUpstreamJSON(reqBody)
 	if err != nil {
 		return body, nil, false, fmt.Errorf("encode OAuth reserved tool names: %w", err)
 	}
-	return normalized, reverse, true, nil
+	return restoreOpenAIUpstreamJSONTopLevelOrder(body, normalized), reverse, true, nil
 }
 
 func containsASCIIFold(haystack, needle []byte) bool {

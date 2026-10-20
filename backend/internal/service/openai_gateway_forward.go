@@ -1749,6 +1749,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
 		return nil, err
 	}
+	// HTTP 出站线序收口：所有改写（指纹收敛、账号 namespace、client_metadata 投影、
+	// 账号级覆写、beta-features、routing hint）完成后，删官方不发的头并把 session_id/
+	// conversation_id 的隔离值挪到官方 session-id/thread-id。与 WS 握手同一道收口。
+	if account.UsesOpenAICodexProtocol() {
+		projectCodexOutboundHeaders(req.Header, false)
+	}
 	return req, nil
 }
 
