@@ -31,10 +31,18 @@ func TestDiagnosticOAuthHTTPAcceptanceRequestPreservation(t *testing.T) {
 					require.JSONEq(t, string(value), string(after[key]), "modified input field %s", key)
 				}
 				require.JSONEq(t, `["reasoning.encrypted_content"]`, string(after["include"]))
+				// 官方 builder 总会序列化这几个字段（ensureCodexResponsesDefaults）；
+				// 缺省时按官方值补，不改变已显式给定的值。
+				allowedAdded := map[string]bool{
+					"include":             true,
+					"tool_choice":         true,
+					"parallel_tool_calls": true,
+					"reasoning":           true,
+				}
 				var added []string
 				for key := range after {
 					if _, exists := before[key]; !exists {
-						require.Equal(t, "include", key, "unexpected injected field")
+						require.True(t, allowedAdded[key], "unexpected injected field %s", key)
 						added = append(added, key)
 					}
 				}
@@ -75,6 +83,21 @@ func TestDiagnosticOAuthHTTPC01FullHistoryOnlyRemovesAssistantID(t *testing.T) {
 			require.Equal(t, "completed", assistant["status"])
 			require.Contains(t, assistant, "id")
 			delete(assistant, "id")
+			// 官方 builder 总会序列化这些字段（ensureCodexResponsesDefaults），
+			// 缺省时按官方值补齐；把它们并进 expected，让「除 id 与这些官方默认外
+			// 逐字节相等」仍然成立。
+			if _, ok := expected["tool_choice"]; !ok {
+				expected["tool_choice"] = "auto"
+			}
+			if _, ok := expected["parallel_tool_calls"]; !ok {
+				expected["parallel_tool_calls"] = openAIRequestBodyHasToolsMap(expected)
+			}
+			if _, ok := expected["reasoning"]; !ok {
+				expected["reasoning"] = map[string]any{}
+			}
+			if _, ok := expected["include"]; !ok {
+				expected["include"] = []any{"reasoning.encrypted_content"}
+			}
 			expectedBody, err := json.Marshal(expected)
 			require.NoError(t, err)
 			// Whole-body equality after deleting this single key proves that all

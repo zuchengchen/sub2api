@@ -752,6 +752,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
 		return nil, err
 	}
+	// 透传 HTTP 出站同样按官方线序收口（与非透传 buildUpstreamRequest 一致）。
+	if account.UsesOpenAICodexProtocol() {
+		projectCodexOutboundHeaders(req.Header, false)
+	}
 	return req, nil
 }
 

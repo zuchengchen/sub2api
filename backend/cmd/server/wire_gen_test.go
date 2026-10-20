@@ -64,6 +64,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		codexVersionSyncSvc,
 		claudeCodeVersionSyncSvc,
 		proxyExpirySvc,
+		nil, // openAIRequestTimezoneRefreshWorker
 		&service.UsageCleanupService{},
 		pricingSvc,
 		billingCacheSvc,

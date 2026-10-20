@@ -619,6 +619,9 @@ type ProxyExitInfo struct {
 	Region      string
 	Country     string
 	CountryCode string
+	// Timezone 是 ip-api 在出口 IP 上报告的 IANA 时区（如 America/Los_Angeles）。
+	// 只有 ip-api 解析器会填它；ipify/chatgpt-trace 拿不到时区，此字段为空。
+	Timezone string
 }
 
 // ProxyExitInfoProber tests proxy connectivity and retrieves exit information

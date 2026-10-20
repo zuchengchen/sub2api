@@ -248,3 +248,83 @@ func pairCodexIdentityHeaders(h http.Header) {
 		h.Set("version", resolveCodexOutboundIdentity("").version)
 	}
 }
+
+// codexHTTPNonOfficialHeaders 是官方 Codex 客户端在 ChatGPT 业务 HTTP 路径
+// （POST /backend-api/codex/responses）上**从不发送**的请求头。逐项依据
+// codex-rs HEAD f4e18a95bb 源码：
+//
+//   - session_id、conversation_id：官方会话头只有连字符形式
+//     session-id / thread-id（codex-api/src/requests/headers.rs:5-11）；下划线
+//     形式在 7c7b4861d8（fix: drop underscored id headers #22193）中已删除。
+//   - x-codex-installation-id：官方仅作为 client_metadata 键发送
+//     （core/src/responses_metadata.rs:325-334），从不作为 HTTP 头。
+//   - OpenAI-Beta：只在 client.rs:1314-1330 build_websocket_headers 写入，
+//     属 WS 握手专有；HTTP 业务头集合仅由 client.rs:2325-2343
+//     build_responses_headers 产生（x-codex-beta-features / x-codex-turn-state）。
+//   - accept-language：reqwest 不写该头，官方业务请求里不存在。
+//
+// 反例（官方确实发送，不得删）：version 来自内置 openai provider 的
+// http_headers（model-provider-info/src/lib.rs:533-535，经
+// built_in_model_providers:656 进入所有出站请求）；x-client-request-id 由
+// codex-api/src/endpoint/responses.rs:87-89 在 HTTP 上写为 thread_id。
+//
+// 这些名字「缺失」对上游完全无感（官方自己就不发），但「存在」是本代理独有的
+// 可判别特征，因此出站前按官方线序削平，而不是继续按代理习惯补齐。
+var codexHTTPNonOfficialHeaders = [...]string{
+	"OpenAI-Beta",
+	"session_id",
+	"conversation_id",
+	"x-codex-installation-id",
+	"accept-language",
+}
+
+// codexWSNonOfficialHeaders 是 WS 握手上官方不发的同名子集。WS 与 HTTP 的差异
+// 必须保留：OpenAI-Beta 与 x-client-request-id 是官方 WS 握手**确实发送**的
+// （client.rs:1314-1330），故不在 WS 列表内。
+var codexWSNonOfficialHeaders = [...]string{
+	"session_id",
+	"conversation_id",
+	"x-codex-installation-id",
+	"accept-language",
+}
+
+// projectCodexOutboundHeaders 把出站头收口成官方线序：删除官方在该传输上不发的
+// 头，并保证连字符会话头确实存在（官方总是同时发 session-id 与 thread-id）。
+//
+// 必须在所有其它头改写（指纹收敛、账号 namespace、client_metadata 投影、账号级
+// 覆写）之后调用——它是最后一道收口，任何更早的补齐都可能被后续步骤重新引入。
+//
+// 与强制统一身份共用 gateway.disable_codex_identity_enforcement：该开关的语义就是
+// 「上游策略变动时退回旧线序」，因此关闭后这里保持原样不动。
+func projectCodexOutboundHeaders(h http.Header, websocket bool) {
+	if h == nil || !codexIdentityEnforcement.Load() {
+		return
+	}
+	// 删下划线头之前，先把隔离值挪到官方连字符名：网关把多用户隔离值写在
+	// session_id 上，直接删会丢掉它；官方只发 session-id。conversation_id 同理
+	// 挪到 thread-id（官方对 conversation 的称呼就是 thread）。
+	if strings.TrimSpace(h.Get("session-id")) == "" {
+		if isolated := strings.TrimSpace(h.Get("session_id")); isolated != "" {
+			h.Set("session-id", isolated)
+		}
+	}
+	if strings.TrimSpace(h.Get("thread-id")) == "" {
+		if isolated := strings.TrimSpace(h.Get("conversation_id")); isolated != "" {
+			h.Set("thread-id", isolated)
+		}
+	}
+	// HTTP 与 WS 名单长度不同，这里按切片遍历，保留各自完整集合。
+	var nonOfficial []string
+	if websocket {
+		nonOfficial = codexWSNonOfficialHeaders[:]
+	} else {
+		nonOfficial = codexHTTPNonOfficialHeaders[:]
+	}
+	for _, name := range nonOfficial {
+		deleteHeaderAllForms(h, name)
+	}
+	// 不补 session-id/thread-id 成对：官方只在客户端真正持有这两个 ID 时才同时
+	// 发送（build_session_headers），配对缺失的另一半属于凭空造 ID，会让
+	// messages-bridge 这类「只有 session、没有 conversation」的场景错误地带上
+	// thread-id。造 ID 是上游派生层的职责，收口只负责删非官方名。
+}

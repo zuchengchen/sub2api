@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -12,8 +13,10 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// 出站给 OpenAI 的本地日期/时区固定为美西太平洋时区，不跟操作系统或应用 timezone 走。
-const openAIOutboundTimezoneName = "America/Los_Angeles"
+// 出站给 OpenAI 的默认本地日期/时区是美西太平洋时区。
+// 决定 4 之后它只是回退值：实际请求按账号出口 IP（代理/直连）自动确定，
+// 仅在拿不到出口时区时才回到这里，与引入动态时区之前的硬编码行为保持一致。
+const openAIOutboundTimezoneName = DefaultOpenAIRequestTimezone
 
 // openAIOutboundLocalTimeContextFn 可在测试中替换。
 var openAIOutboundLocalTimeContextFn = currentOpenAIOutboundLocalTimeContext
@@ -53,8 +56,18 @@ func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeIfEnabled(account *Ac
 	if len(body) == 0 || account == nil || !account.IsOpenAI() || !s.openaiClientLocalTimeRewriteEnabled() {
 		return body
 	}
-	next, _ := rewriteOpenAIClientLocalTimeContext(body)
+	resolution := s.resolveOpenAIRequestTimezone(context.Background(), account)
+	next, _ := rewriteOpenAIClientLocalTimeContextWith(body, openAILocalTimeContextFor(resolution.Timezone))
 	return next
+}
+
+// resolveOpenAIRequestTimezone 返回账号本次请求应使用的时区。
+// 解析器未注入（测试、未连线）时退回历史默认美西，保证零值安全。
+func (s *OpenAIGatewayService) resolveOpenAIRequestTimezone(ctx context.Context, account *Account) OpenAIRequestTimezoneResolution {
+	if s != nil && s.requestTimezoneResolver != nil {
+		return s.requestTimezoneResolver.Resolve(ctx, account)
+	}
+	return OpenAIRequestTimezoneResolution{Timezone: openAIOutboundTimezoneName, Source: "fallback", Fallback: true}
 }
 
 func rewriteOpenAIClientLocalTimeContext(body []byte) ([]byte, bool) {
@@ -78,13 +91,34 @@ func rewriteOpenAIClientLocalTimeContextWith(body []byte, ctx openAILocalTimeCon
 }
 
 func currentOpenAIOutboundLocalTimeContext() openAILocalTimeContext {
-	loc := openAIOutboundTimezone()
+	return openAILocalTimeContextFor(openAIOutboundTimezoneName)
+}
+
+// openAILocalTimeContextFor 按目标时区名生成改写上下文（日期/时间取该时区的当前值）。
+// 时区非法或加载失败时回落到 UTC，并保留原名（调用方负责把合法名传进来）。
+func openAILocalTimeContextFor(tzName string) openAILocalTimeContext {
+	loc := openAIRequestLocation(tzName)
 	now := time.Now().In(loc)
 	return openAILocalTimeContext{
-		Timezone:    openAIOutboundTimezoneName,
+		Timezone:    tzName,
 		CurrentDate: now.Format("2006-01-02"),
 		CurrentTime: now.Format("15:04:05"),
 	}
+}
+
+func openAIRequestLocation(name string) *time.Location {
+	if name == "" {
+		name = openAIOutboundTimezoneName
+	}
+	if loc, err := time.LoadLocation(name); err == nil {
+		return loc
+	}
+	// 固定兜底：默认名加载失败时用固定偏移构造一个同名区，避免落到 UTC
+	// 与美西相差 7/8 小时而悄悄改变「当前日期」。
+	if name == openAIOutboundTimezoneName {
+		return time.FixedZone(openAIOutboundTimezoneName, -8*3600)
+	}
+	return time.UTC
 }
 
 func openAIOutboundTimezone() *time.Location {
