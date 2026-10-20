@@ -1873,6 +1873,18 @@
         </div>
       </div>
 
+      <!-- OpenAI 请求时区：手动覆盖优先，留空按账号出口 IP 自动确定 -->
+      <div
+        v-if="account?.platform === 'openai'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <OpenAIRequestTimezoneField
+          v-model="openaiRequestTimezone"
+          :proxy-timezone="selectedProxyTimezone"
+          :disabled="isOpenAICompatibleProviderManaged"
+        />
+      </div>
+
       <!-- OpenAI APIKey Responses API support mode -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'apikey'"
@@ -3098,6 +3110,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
+import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezoneField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
@@ -3837,6 +3850,14 @@ const openaiResponsesWebSocketV2Mode = computed({
 const openAIWSModeHintKey = computed(() =>
   resolveOpenAIWSModeHintKey(openaiResponsesWebSocketV2Mode.value)
 )
+// openai_request_timezone：账号级 IANA 时区覆盖。空串 = 按账号出口 IP 自动确定。
+const openaiRequestTimezone = ref('')
+const openaiRequestTimezoneInitial = ref('')
+// 当前选中代理探测到的出口时区，用于在弹窗里展示自动解析的来源。
+const selectedProxyTimezone = computed(() => {
+  if (!form.proxy_id) return undefined
+  return props.proxies.find((p) => p.id === form.proxy_id)?.timezone || undefined
+})
 const codexImageToolOptions = computed<Array<{
   value: CodexImageToolMode
   label: string
@@ -4275,6 +4296,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
+  openaiRequestTimezone.value = ''
+  openaiRequestTimezoneInitial.value = ''
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     openaiFlattenNamespacesEnabled.value =
@@ -4317,6 +4340,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       fallbackEnabledKeys: ['responses_websockets_v2_enabled', 'openai_ws_enabled'],
       defaultMode: OPENAI_WS_MODE_OFF
     })
+    openaiRequestTimezone.value = (extra?.openai_request_timezone as string) || ''
+    openaiRequestTimezoneInitial.value = openaiRequestTimezone.value
     if (newAccount.type === 'oauth' || newAccount.type === 'setup-token') {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
       codexCLIOnlyAppServerEnabled.value =
@@ -5821,6 +5846,20 @@ const handleSubmit = async () => {
       }
       // Quota notify config
       writeQuotaNotifyToExtra(newExtra, 'update')
+      updatePayload.extra = newExtra
+    }
+
+    // openai_request_timezone 只在改动时写回 extra：覆盖优先于按出口 IP 自动确定；
+    // 清空即删除该键，回到自动解析。
+    const nextOpenAIRequestTimezone = openaiRequestTimezone.value.trim()
+    if (nextOpenAIRequestTimezone !== openaiRequestTimezoneInitial.value) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (nextOpenAIRequestTimezone) {
+        newExtra.openai_request_timezone = nextOpenAIRequestTimezone
+      } else {
+        delete newExtra.openai_request_timezone
+      }
       updatePayload.extra = newExtra
     }
 

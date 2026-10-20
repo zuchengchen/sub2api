@@ -982,6 +982,7 @@ export interface Proxy {
   country_code?: string
   region?: string
   city?: string
+  timezone?: string
   quality_status?: 'healthy' | 'warn' | 'challenge' | 'failed'
   quality_score?: number
   quality_grade?: string
