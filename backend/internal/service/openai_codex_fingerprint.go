@@ -758,17 +758,6 @@ func deriveCodexStableTimestampMs(seed string) int64 {
 	return codexStableUUIDv7BaseMs - int64(binary.BigEndian.Uint16(h[0:2]))*codexStableUUIDv7SpanMs/65536
 }
 
-// codexV7TimestampMs 取出 UUIDv7 字符串高 48 位承载的毫秒时间戳。
-// 非 v7（旧客户端、v4 或非法值）时返回 false，调用方自行退回派生锚点。
-func codexV7TimestampMs(raw string) (int64, bool) {
-	parsed, err := uuid.Parse(raw)
-	if err != nil || parsed.Version() != 7 {
-		return 0, false
-	}
-	id := parsed
-	return int64(binary.BigEndian.Uint16(id[0:2]))<<32 | int64(binary.BigEndian.Uint32(id[2:6])), true
-}
-
 func formatCodexUUID(b []byte) string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		binary.BigEndian.Uint32(b[0:4]),

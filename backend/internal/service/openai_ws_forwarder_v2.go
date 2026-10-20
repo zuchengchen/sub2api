@@ -87,7 +87,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		// The original HTTP header has not yet received account projection.
 		fallback := map[string]any{openAIWSTurnMetadataHeader: turnMetadata}
 		applyCodexAccountIdentityEmbeddedMetadata(fallback, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
-		setOpenAIWSTurnMetadata(payload, fallback[openAIWSTurnMetadataHeader].(string))
+		if tm, ok := fallback[openAIWSTurnMetadataHeader].(string); ok {
+			setOpenAIWSTurnMetadata(payload, tm)
+		}
 	}
 	applyStagedCodexFingerprintClientMetadata(c, account, payload)
 	if encoded, err := json.Marshal(payload); err == nil {

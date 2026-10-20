@@ -270,7 +270,7 @@ func responsesSearchTranslateChoice(raw json.RawMessage, name string) (json.RawM
 	if responsesSearchString(object["type"]) == "allowed_tools" {
 		var tools []json.RawMessage
 		if err := json.Unmarshal(object["tools"], &tools); err != nil {
-			return nil, fmt.Errorf("Responses allowed_tools tool_choice.tools must be an array")
+			return nil, fmt.Errorf("responses allowed_tools tool_choice.tools must be an array")
 		}
 		for i, tool := range tools {
 			translated, err := responsesSearchTranslateChoice(tool, name)
@@ -596,7 +596,7 @@ func responsesSearchLiftAdditionalTools(root map[string]json.RawMessage, tools [
 		}
 		var declarations []json.RawMessage
 		if json.Unmarshal(item["tools"], &declarations) != nil {
-			return nil, fmt.Errorf("Responses input additional_tools.tools must be an array")
+			return nil, fmt.Errorf("responses input additional_tools.tools must be an array")
 		}
 		kept := make([]json.RawMessage, 0, len(declarations))
 		removed := false

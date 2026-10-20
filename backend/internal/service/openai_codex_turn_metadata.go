@@ -118,6 +118,8 @@ func orderedCodexJSONKeys(object map[string]any, order []string) []string {
 // writeCodexJSONString 只转义 JSON 语法必需的字节；非 ASCII 留给
 // escapeCodexNonASCII 统一处理（官方 AsciiJsonFormatter 也是两层语义）。
 // 与官方一致：& < > 不转义。
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func writeCodexJSONString(buf *bytes.Buffer, value string) {
 	buf.WriteByte('"')
 	start := 0
@@ -153,6 +155,8 @@ func writeCodexJSONString(buf *bytes.Buffer, value string) {
 }
 
 // writeCodexJSONLeaf 用关闭 HTML 转义的编码器输出标量与数组。
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func writeCodexJSONLeaf(buf *bytes.Buffer, value any) error {
 	var encoded bytes.Buffer
 	encoder := json.NewEncoder(&encoded)
@@ -168,6 +172,7 @@ func writeCodexJSONLeaf(buf *bytes.Buffer, value any) error {
 	return nil
 }
 
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func writeCodexJSONObject(buf *bytes.Buffer, object map[string]any, kind string) error {
 	shape := codexJSONShapes[kind]
 	keys := orderedCodexJSONKeys(object, shape.order)
@@ -261,19 +266,6 @@ func decodeCodexTurnMetadata(raw string) (map[string]any, error) {
 	var metadata map[string]any
 	err := decodeCodexMetadataObject(raw, &metadata)
 	return metadata, err
-}
-
-func splitCodexWindowID(value string) (string, string, bool) {
-	thread, ordinal, found := strings.Cut(value, ":")
-	if !found || thread == "" || ordinal == "" {
-		return "", "", false
-	}
-	for _, digit := range ordinal {
-		if digit < '0' || digit > '9' {
-			return "", "", false
-		}
-	}
-	return thread, ordinal, true
 }
 
 // normalizeCodexRequestMetadata runs after account/fingerprint projection. It
