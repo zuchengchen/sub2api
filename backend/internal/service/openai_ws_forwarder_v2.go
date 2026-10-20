@@ -32,6 +32,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	c *gin.Context,
 	account *Account,
 	reqBody map[string]any,
+	bodyRaw []byte,
 	clientPromptCacheKey string,
 	executionScope string,
 	token string,
@@ -159,6 +160,55 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			turnState = savedTurnState
 		}
 	}
+
+	// 增量上下文（官方 Codex CLI delta 协议）：会话内已有完整链快照且当前请求
+	// 是其严格前缀扩展时，仅发送尾部新增 items + previous_response_id 锚定。
+	// 客户端自己发送 previous_response_id 时按客户端的链走，不覆盖。
+	deltaEnabled := account.UsesOpenAICodexProtocol() && s.isOpenAIWSDeltaContextEnabled() && stateStore != nil && sessionHash != ""
+	deltaFieldsFP := ""
+	var deltaLogicalItems []json.RawMessage
+	var deltaLogicalHashes []string
+	var deltaRecorder *openAIWSDeltaRecorder
+	deltaApplied := false
+	if deltaEnabled {
+		deltaFieldsFP = openAIWSDeltaFieldsFingerprint(payload)
+		deltaLogicalItems = openAIWSDeltaWireItems(bodyRaw, payload["input"])
+		deltaLogicalHashes = openAIWSDeltaItemsHash(deltaLogicalItems)
+		deltaRecorder = &openAIWSDeltaRecorder{}
+		if previousResponseID == "" {
+			if chain, ok := stateStore.GetSessionDeltaChain(groupID, sessionHash); ok {
+				if chain != nil && chain.AccountID != 0 && chain.AccountID != account.ID {
+					logOpenAIWSModeInfo(
+						"delta_skip account_id=%d reason=account_mismatch chain_account_id=%d",
+						account.ID, chain.AccountID,
+					)
+				} else if decision := resolveOpenAIWSDelta(chain, account.ID, deltaFieldsFP, deltaLogicalItems); decision.Delta {
+					payload["input"] = decision.TailItems
+					payload["previous_response_id"] = decision.PreviousResponse
+					previousResponseID = decision.PreviousResponse
+					previousResponseIDKind = ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
+					deltaApplied = true
+					logOpenAIWSModeInfo(
+						"delta_applied account_id=%d session_hash=%s previous_response_id=%s tail_items=%d baseline_items=%d",
+						account.ID,
+						truncateOpenAIWSLogValue(sessionHash, 12),
+						truncateOpenAIWSLogValue(decision.PreviousResponse, openAIWSIDValueMaxLen),
+						len(decision.TailItems),
+						len(chain.BaselineHashes),
+					)
+				} else {
+					logOpenAIWSModeInfo(
+						"delta_skip account_id=%d session_hash=%s reason=%s baseline_items=%d current_items=%d",
+						account.ID,
+						truncateOpenAIWSLogValue(sessionHash, 12),
+						normalizeOpenAIWSLogValue(decision.Reason),
+						len(chain.BaselineHashes),
+						len(deltaLogicalItems),
+					)
+				}
+			}
+		}
+	}
 	preferredConnID := ""
 	if stateStore != nil && previousResponseID != "" {
 		if connID, ok := stateStore.GetResponseConn(previousResponseID); ok {
@@ -222,6 +272,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// normalizeCodexRequestMetadataMap 会按旧习惯把 session_id / x-codex-installation-id
 	// 重新写回头部（legacy compact 依赖它们，不能从源头删除），因此 WS 握手同样
 	// 必须在归一化之后重新执行终态线序收口，与 HTTP 路径同一规则。
+	if account.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
+		// 精确保真：turn-state 挪进 client_metadata（真实客户端不在握手上发），
+		// 再补齐官方 turn-metadata/client_metadata 的行为字段全集。
+		relocateCodexWSTurnState(wsHeaders, payload)
+		applyCodexWireLaneMetadata(payload, wsHeaders, account, "turn")
+	}
 	if account.UsesOpenAICodexProtocol() {
 		projectCodexOutboundHeaders(wsHeaders, true)
 	}
@@ -392,30 +448,80 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 
-	if err := s.performOpenAIWSGeneratePrewarm(
+	prewarmResult, err := s.performOpenAIWSGeneratePrewarm(
 		ctx,
 		lease,
 		decision,
 		payload,
 		previousResponseID,
 		reqBody,
+		bodyRaw,
 		account,
 		stateStore,
 		groupID,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
 	}
+	// 官方行为（from_untraced_warmup）：预热响应成为最新的 last_response，
+	// 真实请求以它为 previous_response_id 锚点。预热 input 与真实请求 input
+	// 一致时，增量尾为空——即抓包里第二帧只有 previous_response_id 的形态。
+	if deltaRecorder != nil && prewarmResult != nil && prewarmResult.ResponseID != "" {
+		baseline := openAIWSDeltaItemsHash(prewarmResult.SentItems)
+		baseline = append(baseline, openAIWSDeltaItemsHash(prewarmResult.ItemsAdded)...)
+		warmChain := &openAIWSDeltaChainState{
+			ResponseID:     prewarmResult.ResponseID,
+			AccountID:      account.ID,
+			FieldsFP:       deltaFieldsFP,
+			BaselineHashes: baseline,
+		}
+		currentItems := openAIWSDeltaWireItems(bodyRaw, payload["input"])
+		if decision := resolveOpenAIWSDelta(warmChain, account.ID, deltaFieldsFP, currentItems); decision.Delta {
+			payload["input"] = decision.TailItems
+			payload["previous_response_id"] = decision.PreviousResponse
+			previousResponseID = decision.PreviousResponse
+			previousResponseIDKind = ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
+			deltaApplied = true
+			logOpenAIWSModeInfo(
+				"delta_applied_prewarm account_id=%d conn_id=%s previous_response_id=%s tail_items=%d baseline_items=%d",
+				account.ID,
+				connID,
+				truncateOpenAIWSLogValue(decision.PreviousResponse, openAIWSIDValueMaxLen),
+				len(decision.TailItems),
+				len(baseline),
+			)
+		}
+	}
 
-	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
+	// codex lane 按官方 ResponseCreateWsRequest serde 序输出帧字节；未改写字段
+	// 透传原始请求体字节，保持与真实客户端逐字节一致。其余账号走通用 marshal。
+	var frameBytes []byte
+	if account.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
+		if encoded, marshalErr := marshalCodexWSCreateFrame(bodyRaw, payload); marshalErr == nil {
+			frameBytes = encoded
+		} else {
+			logOpenAIWSModeInfo(
+				"frame_marshal_fail account_id=%d conn_id=%s cause=%s",
+				account.ID, connID, truncateOpenAIWSLogValue(marshalErr.Error(), openAIWSLogValueMaxLen),
+			)
+		}
+	}
+	var writeErr error
+	if len(frameBytes) > 0 {
+		writeErr = lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(frameBytes), s.openAIWSWriteTimeout())
+	} else {
+		writeErr = lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout())
+	}
+	if writeErr != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
 			"write_request_fail account_id=%d conn_id=%s cause=%s payload_bytes=%d",
 			account.ID,
 			connID,
-			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
+			truncateOpenAIWSLogValue(writeErr.Error(), openAIWSLogValueMaxLen),
 			resolvePayloadBytes(),
 		)
-		return nil, wrapOpenAIWSFallback("write_request", err)
+		return nil, wrapOpenAIWSFallback("write_request", writeErr)
 	}
 	if debugEnabled {
 		logOpenAIWSModeDebug(
@@ -754,12 +860,21 @@ readLoop:
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
 		}
 		imageCounter.AddSSEData(message)
+		if deltaRecorder != nil {
+			deltaRecorder.observe(message)
+		}
 
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
 		}
 
 		if eventType == "error" {
+			if deltaApplied && stateStore != nil && sessionHash != "" {
+				// 注入的增量锚点被上游拒绝（如 previous_response_not_found）
+				// 时链已失效；删除后重试回到完整上下文发送。
+				stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+				deltaApplied = false
+			}
 			s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
 			s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
@@ -915,6 +1030,18 @@ readLoop:
 	}
 	if stateStore != nil && sessionHash != "" {
 		stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
+	}
+	if deltaRecorder != nil && stateStore != nil && sessionHash != "" {
+		if next, ok := deltaRecorder.finalize(account.ID, deltaFieldsFP, deltaLogicalHashes, nil); ok {
+			stateStore.BindSessionDeltaChain(groupID, sessionHash, next, s.openAIWSSessionStickyTTL())
+			logOpenAIWSModeInfo(
+				"delta_chain_updated account_id=%d session_hash=%s response_id=%s baseline_items=%d",
+				account.ID,
+				truncateOpenAIWSLogValue(sessionHash, 12),
+				truncateOpenAIWSLogValue(next.ResponseID, openAIWSIDValueMaxLen),
+				len(next.BaselineHashes),
+			)
+		}
 	}
 	firstTokenMsValue := -1
 	if firstTokenMs != nil {
