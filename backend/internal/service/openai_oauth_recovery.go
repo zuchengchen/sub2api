@@ -42,8 +42,8 @@ func (api *OAuthRefreshAPI) openAIRefreshFailure(account *Account) *openai.Refre
 	if !ok {
 		return nil
 	}
-	failure := value.(openAIRefreshRejection)
-	if failure.credentials == openAIRefreshFingerprint(account) {
+	failure, ok := value.(openAIRefreshRejection)
+	if ok && failure.credentials == openAIRefreshFingerprint(account) {
 		return failure.err
 	}
 	return nil
