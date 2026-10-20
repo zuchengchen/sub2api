@@ -77,7 +77,7 @@ func TestOpenAIResponsesPreoutputWire(t *testing.T) {
 					if scenario == "partial_event" {
 						w.Header().Set("Content-Type", "text/event-stream")
 						_, _ = io.WriteString(w, "event: response.created\n")
-						w.(http.Flusher).Flush()
+						w.(http.Flusher).Flush() //nolint:errcheck // test fixture
 					}
 					if scenario != "early_error" {
 						gate := release
@@ -108,7 +108,7 @@ func TestOpenAIResponsesPreoutputWire(t *testing.T) {
 					}
 					_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"+
 						"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_wire\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4}}}\n\n")
-					w.(http.Flusher).Flush()
+					w.(http.Flusher).Flush() //nolint:errcheck // test fixture
 					// Completion must not depend on upstream EOF.
 					select {
 					case <-r.Context().Done():
@@ -164,7 +164,7 @@ func TestOpenAIResponsesPreoutputWire(t *testing.T) {
 				req.Header.Set("Content-Type", "application/json")
 				resp, err := gateway.Client().Do(req)
 				require.NoError(t, err, "downstream headers must not wait for upstream semantic output")
-				defer resp.Body.Close()
+				defer func() { _ = resp.Body.Close() }()
 				reader := bufio.NewReader(resp.Body)
 				if scenario != "early_error" {
 					require.Equal(t, http.StatusOK, resp.StatusCode)
