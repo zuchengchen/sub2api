@@ -13,9 +13,19 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
+	"github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
+
+func isOpenAIWSGracefulClose(err error) bool {
+	switch websocket.CloseStatus(err) {
+	case websocket.StatusNormalClosure, websocket.StatusGoingAway, websocket.StatusServiceRestart:
+		return true
+	default:
+		return false
+	}
+}
 
 func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	ctx context.Context,
@@ -134,7 +144,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if executionScope = strings.TrimSpace(executionScope); executionScope != "" {
 		sessionHash = executionScope
 	}
-	if turnState == "" && stateStore != nil && sessionHash != "" {
+	if !account.IsOpenAIOAuthLike() && turnState == "" && stateStore != nil && sessionHash != "" {
 		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 			turnState = savedTurnState
 		}
@@ -146,7 +156,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 	storeDisabled := s.isOpenAIWSStoreDisabledInRequest(reqBody, account)
-	if stateStore != nil && storeDisabled && previousResponseID == "" && sessionHash != "" {
+	if stateStore != nil && previousResponseID == "" && sessionHash != "" {
 		if connID, ok := stateStore.GetSessionConn(groupID, sessionHash); ok {
 			preferredConnID = connID
 		}
@@ -240,18 +250,19 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	acquireCtx, acquireCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 	defer acquireCancel()
 
-	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
+	acquireRequest := openAIWSAcquireRequest{
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
-			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
+			return s.refreshOpenAIWSAuthHeaders(factoryCtx, account, headers)
 		},
 		PreferredConnID:    preferredConnID,
 		ForcePreferredConn: cookieWS && previousResponseID != "" && preferredConnID != "",
 		ForceNewConn:       forceNewConn,
 		ProxyURL:           proxyURL,
-	})
+	}
+	lease, err := s.acquireOpenAIWSWithAuthRecovery(acquireCtx, s.getOpenAIWSConnPool(), &acquireRequest)
 	if err != nil {
 		var agentDialErr *openAIWSDialError
 		if s.isAgentIdentityAccount(ctx, account) && errors.As(err, &agentDialErr) && isAgentIdentityTaskInvalidWSDialError(agentDialErr) && agentTaskRecoveryTried != nil && !*agentTaskRecoveryTried {
@@ -635,6 +646,23 @@ readLoop:
 				}
 				break
 			}
+			if wroteDownstream && reqStream && isOpenAIWSGracefulClose(readErr) {
+				incomplete := map[string]any{
+					"type": "response.incomplete",
+					"response": map[string]any{
+						"id":                 responseID,
+						"object":             "response",
+						"status":             "incomplete",
+						"incomplete_details": map[string]any{"reason": "server_error"},
+					},
+				}
+				if eventBytes, marshalErr := json.Marshal(incomplete); marshalErr == nil {
+					upstreamTerminalEvent = "response.incomplete"
+					terminalEventCount++
+					emitStreamMessage(eventBytes, true)
+					break readLoop
+				}
+			}
 			if !wroteDownstream {
 				return nil, wrapOpenAIWSFallback(classifyOpenAIWSReadFallbackReason(readErr), readErr)
 			}
@@ -866,7 +894,7 @@ readLoop:
 		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 		stateStore.BindResponseConn(responseID, lease.ConnID(), ttl)
 	}
-	if stateStore != nil && storeDisabled && sessionHash != "" {
+	if stateStore != nil && sessionHash != "" {
 		stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
 	}
 	firstTokenMsValue := -1

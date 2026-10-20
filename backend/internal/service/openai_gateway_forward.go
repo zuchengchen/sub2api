@@ -228,8 +228,17 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	// Only OpenAI OAuth accounts opt HTTP clients into the account-controlled WS bridge.
+	// Custom API-key relays keep their HTTP upstream contract.
+	if GetOpenAIClientTransport(c) == OpenAIClientTransportHTTP &&
+		(!account.IsOpenAI() || !account.IsOpenAIOAuthLike()) {
+		wsDecision = openAIWSHTTPDecision("http_relay_preserved")
+	}
 	compactPath := isOpenAIResponsesCompactPath(c)
+	if compactPath {
+		// The compact endpoint is unary HTTP, not a WS response.create turn.
+		wsDecision = openAIWSHTTPDecision("compact_http")
+	}
 	// Cookie mode is a separately validated HTTP/WS -> WS route. Its explicit
 	// account/model opt-in also overrides legacy HTTP passthrough settings.
 	// Compaction turns (legacy /compact and native v2 compaction_trigger) stay

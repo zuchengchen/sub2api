@@ -163,7 +163,10 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	}
 
 	betaValue := openAIWSBetaV2Value
-	if decision.Transport == OpenAIUpstreamTransportResponsesWebsocket {
+	// Official Codex currently uses the V2 Responses WebSocket contract for
+	// ChatGPT OAuth/SetupToken accounts. Keep API-key compatibility transports
+	// on their negotiated beta value, but never downgrade the Codex lane.
+	if (account == nil || !account.UsesOpenAICodexProtocol()) && decision.Transport == OpenAIUpstreamTransportResponsesWebsocket {
 		betaValue = openAIWSBetaV1Value
 	}
 	headers.Set("OpenAI-Beta", betaValue)

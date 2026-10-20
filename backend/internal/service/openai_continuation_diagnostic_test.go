@@ -67,7 +67,7 @@ func TestDiagnosticOAuthHTTPExplicitHistoryPreservesAssistantAndReasoning(t *tes
 	decision, _ := c.Get("openai_ws_transport_decision")
 	reason, _ := c.Get("openai_ws_transport_reason")
 	require.Equal(t, string(OpenAIUpstreamTransportHTTPSSE), decision)
-	require.Equal(t, "client_protocol_http", reason)
+	require.Equal(t, "ws_v2_mode_http_bridge", reason)
 }
 
 func TestDiagnosticOAuthWSHTTPBridgeIncrementalHistoryPreservesAssistantAndReasoning(t *testing.T) {
