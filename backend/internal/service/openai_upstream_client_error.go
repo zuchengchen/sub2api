@@ -53,7 +53,7 @@ func writeOpenAIUpstreamClientError(c *gin.Context, statusCode int, body []byte,
 	}
 	errorPayload["message"] = message
 
-	c.JSON(statusCode, gin.H{"error": errorPayload})
+	writeOpenAIResponsesErrorJSON(c, statusCode, gin.H{"error": errorPayload})
 }
 
 // WriteOpenAIUpstreamClientError preserves a structured deterministic upstream
