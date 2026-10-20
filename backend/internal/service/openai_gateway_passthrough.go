@@ -751,17 +751,20 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 
-	body, err = applyCodexRequestMetadata(req, body, account, isOpenAIResponsesCompactPath(c) && !isOpenAINativeCompactionV2(c))
+	legacyCompactRequest := isOpenAIResponsesCompactPath(c) && !isOpenAINativeCompactionV2(c)
+	body, err = applyCodexRequestMetadata(req, body, account, legacyCompactRequest)
 	if err != nil {
 		return nil, err
 	}
-
+	// 透传 HTTP 出站同样按官方线序收口（与非透传 buildUpstreamRequest 一致）。
+	// legacy /responses/compact 与 messages 桥是不同上游契约，不参与收口。
+	if account.UsesOpenAICodexProtocol() &&
+		!isOpenAICompatMessagesBridgeContext(c) && !isOpenAICompatMessagesBridgeBody(body) &&
+		!legacyCompactRequest {
+		projectCodexOutboundHeaders(req.Header, false)
+	}
 	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
 		return nil, err
-	}
-	// 透传 HTTP 出站同样按官方线序收口（与非透传 buildUpstreamRequest 一致）。
-	if account.UsesOpenAICodexProtocol() {
-		projectCodexOutboundHeaders(req.Header, false)
 	}
 	return req, nil
 }

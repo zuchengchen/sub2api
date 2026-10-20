@@ -1774,19 +1774,22 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 
-	body, err = applyCodexRequestMetadata(req, body, account, isOpenAIResponsesCompactPath(c) && !isOpenAINativeCompactionV2(c))
+	legacyCompactRequest := isOpenAIResponsesCompactPath(c) && !isOpenAINativeCompactionV2(c)
+	body, err = applyCodexRequestMetadata(req, body, account, legacyCompactRequest)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
 		return nil, err
 	}
 	// HTTP 出站线序收口：所有改写（指纹收敛、账号 namespace、client_metadata 投影、
 	// 账号级覆写、beta-features、routing hint）完成后，删官方不发的头并把 session_id/
 	// conversation_id 的隔离值挪到官方 session-id/thread-id。与 WS 握手同一道收口。
-	if account.UsesOpenAICodexProtocol() {
+	// legacy /responses/compact 与 messages 桥是不同上游契约，不参与收口。
+	if account.UsesOpenAICodexProtocol() &&
+		!isOpenAICompatMessagesBridgeContext(c) && !isOpenAICompatMessagesBridgeBody(body) &&
+		!legacyCompactRequest {
 		projectCodexOutboundHeaders(req.Header, false)
+	}
+	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
+		return nil, err
 	}
 	return req, nil
 }

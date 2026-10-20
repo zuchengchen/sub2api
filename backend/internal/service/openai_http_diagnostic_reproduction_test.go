@@ -32,12 +32,14 @@ func TestDiagnosticOAuthHTTPAcceptanceRequestPreservation(t *testing.T) {
 				}
 				require.JSONEq(t, `["reasoning.encrypted_content"]`, string(after["include"]))
 				// 官方 builder 总会序列化这几个字段（ensureCodexResponsesDefaults）；
-				// 缺省时按官方值补，不改变已显式给定的值。
+				// 缺省时按官方值补，不改变已显式给定的值。client_metadata 由
+				// Codex turn-metadata 投影注入（OAuth 账号的规范出线字段）。
 				allowedAdded := map[string]bool{
 					"include":             true,
 					"tool_choice":         true,
 					"parallel_tool_calls": true,
 					"reasoning":           true,
+					"client_metadata":     true,
 				}
 				var added []string
 				for key := range after {
@@ -100,9 +102,19 @@ func TestDiagnosticOAuthHTTPC01FullHistoryOnlyRemovesAssistantID(t *testing.T) {
 			}
 			expectedBody, err := json.Marshal(expected)
 			require.NoError(t, err)
+			// client_metadata 是运行时派生的 Codex turn-metadata 投影（OAuth 规范
+			// 出线字段）：断言它已注入为对象，然后从整包对比中剔除。
+			var actual map[string]any
+			require.NoError(t, decodeOpenAIJSONUseNumber(sent, &actual))
+			injected, ok := actual["client_metadata"].(map[string]any)
+			require.True(t, ok, "client_metadata must be injected for OAuth codex lane")
+			require.NotEmpty(t, injected)
+			delete(actual, "client_metadata")
+			actualBody, err := json.Marshal(actual)
+			require.NoError(t, err)
 			// Whole-body equality after deleting this single key proves that all
 			// messages, content, phase, status, and unrelated fields are intact.
-			require.JSONEq(t, string(expectedBody), string(sent))
+			require.JSONEq(t, string(expectedBody), string(actualBody))
 			t.Log("only changed JSON path: /input/1/id (removed); all 3 input items and complete contents preserved")
 		})
 	}

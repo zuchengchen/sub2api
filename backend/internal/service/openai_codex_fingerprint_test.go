@@ -949,11 +949,13 @@ func TestBuildUpstreamRequestOpenAIPassthrough_OffModeKeepsIsolatedSession(t *te
 	req, err := svc.buildUpstreamRequestOpenAIPassthrough(context.Background(), c, account, body, "test-token")
 	require.NoError(t, err)
 
-	// off 模式不做指纹收敛，但官方线序仍把 session 落在 session-id（下划线别名删除）。
+	// off 模式仍走隔离：会话值落在官方 session-id 头上，且不得等于账号级收敛值；
+	// 官方从不发的 session_id / x-codex-installation-id 头由线序收口削平。
 	assert.NotEmpty(t, req.Header.Get("session-id"))
 	assert.NotEqual(t, resolveConvergedSessionID(testCodexFingerprintSeed), req.Header.Get("session-id"), "off 模式不得收敛 session-id")
 	assert.Empty(t, req.Header.Get("session_id"))
-	assert.Empty(t, req.Header.Get("x-codex-window-id"))
+	assert.Empty(t, req.Header.Get("x-codex-installation-id"))
+	assert.NotEmpty(t, req.Header.Get("x-codex-window-id"), "Codex metadata defaults should include a context window")
 }
 
 func TestApplyCodexFingerprintClientMetadataRaw_NonObjectBodyUntouched(t *testing.T) {
