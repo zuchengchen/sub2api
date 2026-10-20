@@ -31,7 +31,7 @@ func (c *identityCache) UpdateClaudeCodeHeaders(ctx context.Context, accountID i
 	if len(headers) == 0 {
 		return nil
 	}
-	fields := make(map[string]interface{}, len(headers))
+	fields := make(map[string]any, len(headers))
 	for name, values := range headers {
 		encoded, err := json.Marshal(values)
 		if err != nil {

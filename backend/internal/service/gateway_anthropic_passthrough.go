@@ -505,7 +505,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			return false
 		}
 		restored := reverseToolNamesIfPresent(c, []byte(block))
-		if _, err := io.WriteString(w, string(restored)); err != nil {
+		if _, err := w.Write(restored); err != nil {
 			clientDisconnected = true
 			logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
 			return false
@@ -541,7 +541,6 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				// header without data still cannot mark the stream terminal.
 				if len(pendingEventLines) > 0 {
 					processCompleteEvent(pendingEventLines)
-					pendingEventLines = pendingEventLines[:0]
 				}
 				if !clientDisconnected {
 					flusher.Flush()
@@ -671,9 +670,7 @@ func parseAnthropicSSELine(line string) (field, value string, ok bool) {
 	field = line[:colon]
 	value = line[colon+1:]
 	// SSE removes one optional U+0020 after the field separator.
-	if strings.HasPrefix(value, " ") {
-		value = value[1:]
-	}
+	value = strings.TrimPrefix(value, " ")
 	return field, value, true
 }
 

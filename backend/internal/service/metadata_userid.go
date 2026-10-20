@@ -42,15 +42,15 @@ type jsonUserID struct {
 // 跳过无效写回）。
 func formatJSONMetadataUserID(deviceID, accountUUID, sessionID string, extraFields map[string]json.RawMessage) string {
 	var out bytes.Buffer
-	out.WriteByte('{')
+	out.WriteByte('{') //nolint:errcheck // bytes.Buffer 写入不会失败
 	writeField := func(key string, value []byte, comma *bool) {
 		if *comma {
-			out.WriteByte(',')
+			out.WriteByte(',') //nolint:errcheck // bytes.Buffer 写入不会失败
 		}
 		encodedKey, _ := json.Marshal(key)
-		out.Write(encodedKey)
-		out.WriteByte(':')
-		out.Write(value)
+		out.Write(encodedKey) //nolint:errcheck // bytes.Buffer 写入不会失败
+		out.WriteByte(':')    //nolint:errcheck // bytes.Buffer 写入不会失败
+		out.Write(value)      //nolint:errcheck // bytes.Buffer 写入不会失败
 		*comma = true
 	}
 
@@ -72,7 +72,7 @@ func formatJSONMetadataUserID(deviceID, accountUUID, sessionID string, extraFiel
 	for _, key := range keys {
 		writeField(key, extraFields[key], &comma)
 	}
-	out.WriteByte('}')
+	out.WriteByte('}') //nolint:errcheck // bytes.Buffer 写入不会失败
 	return out.String()
 }
 
