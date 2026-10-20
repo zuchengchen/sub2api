@@ -57,6 +57,8 @@ func adaptOpenAIResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesCl
 	if err != nil {
 		return body, apicompat.ResponsesClientToolMapping{}, fmt.Errorf("encode OpenAI Responses client tools: %w", err)
 	}
+	// 客户端工具改写走 map 重编码；还原客户端原始顶层顺序。
+	rebuilt = restoreOpenAIUpstreamJSONTopLevelOrder(body, rebuilt)
 	return rebuilt, mapping, nil
 }
 
@@ -748,6 +750,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
+
+	body, err = applyCodexRequestMetadata(req, body, account, isOpenAIResponsesCompactPath(c) && !isOpenAINativeCompactionV2(c))
+	if err != nil {
+		return nil, err
+	}
 
 	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
 		return nil, err

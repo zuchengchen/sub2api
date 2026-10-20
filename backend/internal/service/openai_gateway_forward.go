@@ -889,10 +889,17 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			if decodeErr != nil {
 				return nil, decodeErr
 			}
+			previousBody := body
 			var marshalErr error
 			body, marshalErr = marshalOpenAIUpstreamJSON(decoded)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
+			}
+			if account.UsesOpenAICodexProtocol() {
+				// 全 map 重编码会把顶层键排成字母序；官方 Codex 客户端按 serde
+				// 声明序输出，且上游会在解析完大 input 之前增量读取路由前缀。
+				// 还原原始顶层顺序，网关新增字段按官方声明序落位。
+				body = restoreOpenAIUpstreamJSONTopLevelOrder(previousBody, body)
 			}
 			requestView = newOpenAIRequestView(body)
 		}
@@ -1358,9 +1365,13 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				}
 				invalidDigests := collectOpenAIEncryptedContentDigestsRaw(lineageEntryBody)
 				if trimOpenAIEncryptedReasoningItems(decoded) {
+					previousBody := body
 					body, err = marshalOpenAIUpstreamJSON(decoded)
 					if err != nil {
 						return nil, fmt.Errorf("serialize invalid_encrypted_content retry body: %w", err)
+					}
+					if account.UsesOpenAICodexProtocol() {
+						body = restoreOpenAIUpstreamJSONTopLevelOrder(previousBody, body)
 					}
 					if len(invalidDigests) > 0 {
 						if lineageSessionHash == "" {
@@ -1762,6 +1773,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
+
+	body, err = applyCodexRequestMetadata(req, body, account, isOpenAIResponsesCompactPath(c) && !isOpenAINativeCompactionV2(c))
+	if err != nil {
+		return nil, err
+	}
 
 	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
 		return nil, err

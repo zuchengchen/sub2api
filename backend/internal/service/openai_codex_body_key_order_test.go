@@ -88,7 +88,7 @@ func TestOpenAIForwardCodexLanePreservesTopLevelKeyOrder(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-order"}},
 		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_1","status":"completed","model":"gpt-5.4","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 	}}
-	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	svc := &OpenAIGatewayService{httpUpstream: upstream, tiboRouteDisabled: true}
 	account := openAIFailoverCachedBodyTestAccount(91, "codex-order", nil)
 
 	// Orphan tool output forces the decoded-map re-encode path

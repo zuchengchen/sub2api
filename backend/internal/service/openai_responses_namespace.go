@@ -181,7 +181,7 @@ func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, erro
 		return body, fmt.Errorf("encode OpenAI namespace body: %w", err)
 	}
 	setOpenAIResponsesNamespaceNames(c, names)
-	return rebuilt, nil
+	return restoreOpenAIUpstreamJSONTopLevelOrder(body, rebuilt), nil
 }
 
 // stripOpenAIResponsesInputNamespaces removes namespace only from direct input
