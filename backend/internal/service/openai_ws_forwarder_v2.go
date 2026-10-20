@@ -277,6 +277,27 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		// 再补齐官方 turn-metadata/client_metadata 的行为字段全集。
 		relocateCodexWSTurnState(wsHeaders, payload)
 		applyCodexWireLaneMetadata(payload, wsHeaders, account, "turn")
+		// 官方 WS 连接为 prewarm 而建：握手头的 turn-metadata 是 prewarm 画像
+		// （request_kind=prewarm、turn_id 空、无 turn 专属键）。仅当本连接接下来
+		// 确实会发 prewarm 帧时才投影——新拨的连接 IsPrewarmed=false，必然走
+		// performOpenAIWSGeneratePrewarm 的同组门槛。
+		if s.isOpenAIWSGeneratePrewarmEnabled() &&
+			decision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 &&
+			strings.TrimSpace(previousResponseID) == "" {
+			shadow := map[string]any{
+				"model":     payload["model"],
+				"reasoning": payload["reasoning"],
+				"client_metadata": map[string]any{
+					openAIWSTurnMetadataHeader: func() any {
+						if cm, ok := payload["client_metadata"].(map[string]any); ok {
+							return cm[openAIWSTurnMetadataHeader]
+						}
+						return nil
+					}(),
+				},
+			}
+			applyCodexWireLaneMetadata(shadow, wsHeaders, account, "prewarm")
+		}
 	}
 	if account.UsesOpenAICodexProtocol() {
 		projectCodexOutboundHeaders(wsHeaders, true)
