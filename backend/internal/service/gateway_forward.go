@@ -426,6 +426,18 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			})
 		}
 
+		// 内容审核拦截的 403 按 400 处理：不重试、不切号、不处罚账号，原样透传给客户端。
+		if resp.StatusCode == http.StatusForbidden {
+			respBody, readErr := s.readUpstreamErrorBody(resp)
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			if readErr == nil && isUpstreamContentPolicy403(resp.StatusCode, respBody) {
+				logger.LegacyPrintf("service.gateway", "Account %d: upstream 403 is a content policy rejection, returning as 400 without failover", account.ID)
+				resp.StatusCode = http.StatusBadRequest
+				break
+			}
+		}
+
 		// 优先检测thinking block签名错误（400）并重试一次
 		if resp.StatusCode == 400 {
 			respBody, readErr := s.readUpstreamErrorBody(resp)
