@@ -48,8 +48,9 @@ func newAstraOAuthSetup(t *testing.T, passthrough bool) *astraForwardSetup {
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
 	upstream := &httpUpstreamRecorder{}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
+		tiboRouteDisabled: true,
 	}
 	account := &Account{
 		ID:             888,

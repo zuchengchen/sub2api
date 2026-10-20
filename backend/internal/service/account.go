@@ -2125,8 +2125,10 @@ const (
 func (a *Account) GetWebSearchEmulationMode() string {
 	// OpenAI API Key accounts reach this via /v1/messages; their upstreams
 	// (DeepSeek etc. over Chat Completions) have no web_search tool.
-	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil ||
-		(a.Platform != PlatformAnthropic && a.Platform != PlatformOpenAI) {
+	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil {
+		return WebSearchModeDefault
+	}
+	if !a.IsOpenAICompatible() && a.Platform != PlatformAnthropic && a.Platform != PlatformAntigravity {
 		return WebSearchModeDefault
 	}
 	raw := a.Extra[featureKeyWebSearchEmulation]

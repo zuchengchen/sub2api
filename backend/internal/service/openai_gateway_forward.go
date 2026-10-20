@@ -94,6 +94,20 @@ func isOpenAIGPT56OrLaterModel(model string) bool {
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	if responsesWebSearchEnabled(ctx, c, account, s.settingService, s.channelService) {
+		return forwardHostedResponsesWebSearch(ctx, c, account, body, func(next []byte) (*OpenAIForwardResult, error) {
+			return s.forwardWithoutHostedWebSearch(ctx, c, account, next)
+		}, mergeOpenAIWebSearchResult, executeResponsesWebSearch)
+	}
+	next, err := normalizeResponsesWebSearchHistory(c, body)
+	if err != nil {
+		writeResponsesWebSearchRequestError(c, err)
+		return nil, err
+	}
+	return s.forwardWithoutHostedWebSearch(ctx, c, account, next)
+}
+
+func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	var tiboRun *openAITiboRun
 	result, err := s.forwardOpenAIResponsesAttempt(ctx, c, account, body, &tiboRun)
 	s.finishOpenAITiboRun(tiboRun, result, err)
