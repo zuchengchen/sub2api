@@ -210,25 +210,38 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 	firstAgain := build(11, "chatgpt-account-11")
 	second := build(19, "chatgpt-account-19")
 
+	// 官方 /responses 线序只携带连字符会话头 + window/request/turn-metadata；
+	// session_id、conversation_id、x-codex-installation-id 官方从不发，必须缺席
+	// （隔离与安装 ID 仍通过官方头与 body client_metadata 传递）。
 	identityHeaders := []string{
-		"x-codex-installation-id",
 		"x-codex-window-id",
 		"session-id",
-		"session_id",
-		"conversation_id",
 		"thread-id",
 		"x-client-request-id",
-		"x-codex-turn-metadata",
 	}
 	checked := 0
 	for _, header := range identityHeaders {
-		if first.Get(header) == "" && second.Get(header) == "" {
-			continue
-		}
-		checked++
 		require.NotEmpty(t, first.Get(header), header)
 		require.Equal(t, first.Get(header), firstAgain.Get(header), "same account must retain stable identity: %s", header)
 		require.NotEqual(t, first.Get(header), second.Get(header), "account failover must rotate upstream identity: %s", header)
+		checked++
 	}
-	require.GreaterOrEqual(t, checked, 5, "test must exercise the real outbound identity surface")
+	for _, header := range []string{"session_id", "conversation_id", "x-codex-installation-id"} {
+		require.Empty(t, first.Get(header), "official /responses never sends %s", header)
+	}
+
+	// turn-metadata 含逐请求生成的 turn_started_at_unix_ms，只能比较身份字段，
+	// 否则时间戳跨毫秒抖动会让断言随机失败。
+	metadataIdentity := func(h http.Header) map[string]any {
+		t.Helper()
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal([]byte(h.Get(openAIWSTurnMetadataHeader)), &decoded))
+		delete(decoded, "turn_started_at_unix_ms")
+		return decoded
+	}
+	firstMeta, repeatMeta, secondMeta := metadataIdentity(first), metadataIdentity(firstAgain), metadataIdentity(second)
+	require.Equal(t, firstMeta, repeatMeta, "same account must retain stable identity: x-codex-turn-metadata")
+	require.NotEqual(t, firstMeta, secondMeta, "account failover must rotate upstream identity: x-codex-turn-metadata")
+	require.Equal(t, first.Get("session-id"), firstMeta["session_id"], "session identity must agree between header and body metadata")
+	require.GreaterOrEqual(t, checked, 4, "test must exercise the real outbound identity surface")
 }
