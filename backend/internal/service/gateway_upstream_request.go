@@ -121,9 +121,17 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 避免运行期版本缓存翻转瞬间头/体版本自相矛盾（会被判非正版客户端）。
 	mimicUserAgent := claude.DefaultUserAgent()
 
-	// Mimicry may override the cached User-Agent later, even without a fingerprint.
-	if billingUA := effectiveBillingUserAgent(mimicUserAgent, tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
-		body = syncBillingHeaderVersion(body, billingUA)
+	// 真实 Claude Code 用自身 CLI 版本（指纹 UA 优先、客户端 UA 兜底）；
+	// mimicry 用抓包对齐的兼容版本。两条路径都不再以账号缓存 UA 为唯一来源。
+	clientBillingUserAgent := ""
+	if clientHeaders != nil {
+		clientBillingUserAgent = clientHeaders.Get("User-Agent")
+	}
+	if billingUserAgent := effectiveRequestBillingUserAgent(mimicUserAgent, clientBillingUserAgent, tokenType, mimicClaudeCode, fingerprint); billingUserAgent != "" {
+		if !mimicClaudeCode {
+			body = ensureClaudeCodeBillingBlock(body, billingUserAgent, c)
+		}
+		body = syncBillingHeaderVersion(body, billingUserAgent, c)
 	}
 
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
@@ -175,10 +183,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	}
 
 	// 白名单透传 headers
-	// OAuth mimicry 路径：跳过客户端 header 透传，与 Parrot 对齐。
-	// Parrot 的 build_upstream_headers 只发 9 个精确 header，不透传任何客户端 header。
-	// 透传客户端 header 会引入不一致的 x-stainless-* / anthropic-beta / user-agent /
-	// x-claude-code-session-id 等值，和我们注入的伪装 header 冲突，被 Anthropic 判 third-party。
+	// OAuth mimicry 跳过普通客户端 header，保留注入的指纹与身份头。例外是
+	// 可选的 Claude Code 网关提示头：客户端显式携带时原样透传——它们由真实
+	// CLI 发出，缺失不会被合成，带了也不应被丢弃。
 	if tokenType != "oauth" || !mimicClaudeCode {
 		for key, values := range clientHeaders {
 			lowerKey := strings.ToLower(key)
@@ -189,7 +196,19 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 				}
 			}
 		}
+	} else {
+		for key, values := range clientHeaders {
+			lowerKey := strings.ToLower(key)
+			if !claudeCodeOptionalHeaders[lowerKey] {
+				continue
+			}
+			wireKey := resolveWireCasing(key)
+			for _, v := range values {
+				addHeaderRaw(req.Header, wireKey, v)
+			}
+		}
 	}
+	s.applyClaudeCodeControlHeaders(ctx, req, clientHeaders, account, tokenType, mimicClaudeCode)
 
 	// OAuth账号：应用缓存的指纹到请求头（覆盖白名单透传的头）
 	if fingerprint != nil {
@@ -221,8 +240,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
 	}
 
-	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
-	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
+	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的
+	// session_id 覆盖。OAuth mimic 路径无条件补写（真实 CLI 始终携带该头），
+	// 其余路径仅在客户端或上游已带入时同步。
+	shouldSetSessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id") != "" || (tokenType == "oauth" && mimicClaudeCode)
+	if shouldSetSessionHeader {
 		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
 			if parsed := ParseMetadataUserID(uid); parsed != nil {
 				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)

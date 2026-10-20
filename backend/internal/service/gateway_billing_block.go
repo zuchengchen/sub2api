@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
@@ -17,29 +19,74 @@ const fingerprintSalt = "59cf53e54c78"
 
 // computeClaudeCodeFingerprint 复刻真实 Claude Code CLI 的 cc_version 指纹算法：
 //
-//  1. 取 messages 中第一条 role=user 的纯文本（首块 text）
-//  2. 取该文本的第 4、7、20 字符（不足以 '0' 补齐）
-//  3. SHA256(SALT + chars + cc_version) 取 hex 前 3 字符
+//  1. 取 messages 中第一条 role=user（且非 isMeta/is_meta）的纯文本（首块 text）
+//  2. 取该文本的第 4、7、20 个 UTF-16 code unit（不足以 '0' 补齐）
+//  3. SHA256(SALT + UTF-8(采样单元) + cc_version) 取 hex 前 3 字符
 //
-// 算法来自 Parrot src/transform/cc_mimicry.py:compute_fingerprint，与官方 CLI 字节对齐。
-// 任何偏差都会导致 cc_version=X.Y.Z.{fp} 在上游侧与真实 CLI 不一致。
+// 官方 JavaScript 以 UTF-16 code unit 访问 text[4], text[7], text[20]；Go
+// 字符串下标是 UTF-8 byte，直接用 firstText[i] 在多字节字符场景下采样错位。
 func computeClaudeCodeFingerprint(body []byte, version string) string {
-	firstText := extractFirstUserText(body)
-	indices := []int{4, 7, 20}
-	chars := make([]byte, 0, 3)
-	for _, i := range indices {
-		if i < len(firstText) {
-			chars = append(chars, firstText[i])
-		} else {
-			chars = append(chars, '0')
+	return computeClaudeCodeFingerprintFromText(extractFirstUserText(body), version)
+}
+
+func computeClaudeCodeFingerprintFromText(firstText, version string) string {
+	var units [3]uint16
+	for n, index := range [...]int{4, 7, 20} {
+		unit, ok := javascriptUTF16CodeUnitAt(firstText, index)
+		if !ok {
+			unit = '0'
 		}
+		units[n] = unit
 	}
-	sum := sha256.Sum256([]byte(fingerprintSalt + string(chars) + version))
+	input := make([]byte, 0, len(fingerprintSalt)+len(version)+12)
+	input = append(input, fingerprintSalt...)
+	// JS joins sampled code units before UTF-8 encoding: adjacent sampled
+	// surrogate halves can form a pair even if separated in the source text.
+	for i := 0; i < len(units); i++ {
+		r := rune(units[i])
+		if r >= 0xD800 && r <= 0xDBFF && i+1 < len(units) && units[i+1] >= 0xDC00 && units[i+1] <= 0xDFFF {
+			r = utf16.DecodeRune(r, rune(units[i+1]))
+			i++
+		} else if utf16.IsSurrogate(r) {
+			r = utf8.RuneError
+		}
+		input = utf8.AppendRune(input, r)
+	}
+	input = append(input, version...)
+	sum := sha256.Sum256(input)
 	return hex.EncodeToString(sum[:])[:3]
 }
 
-// extractFirstUserText 提取 messages 中第一条 user 消息的首段 text 内容。
-// 兼容 string 和 []block 两种 content 格式。
+func javascriptUTF16CodeUnitAt(text string, index int) (uint16, bool) {
+	if index < 0 {
+		return 0, false
+	}
+	position := 0
+	for _, r := range text {
+		if r <= 0xFFFF {
+			if position == index {
+				return uint16(r), true
+			}
+			position++
+			continue
+		}
+		value := r - 0x10000
+		high := uint16(0xD800 + (value >> 10))
+		low := uint16(0xDC00 + (value & 0x3FF))
+		if position == index {
+			return high, true
+		}
+		position++
+		if position == index {
+			return low, true
+		}
+		position++
+	}
+	return 0, false
+}
+
+// extractFirstUserText 提取 messages 中第一条非 meta user 消息的首段 text 内容。
+// 兼容 string 和 []block 两种 content 格式；isMeta/is_meta 消息与官方 CLI 一样跳过。
 func extractFirstUserText(body []byte) string {
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.IsArray() {
@@ -47,7 +94,7 @@ func extractFirstUserText(body []byte) string {
 	}
 	first := ""
 	messages.ForEach(func(_, msg gjson.Result) bool {
-		if msg.Get("role").String() != "user" {
+		if msg.Get("role").String() != "user" || msg.Get("isMeta").Bool() || msg.Get("is_meta").Bool() {
 			return true
 		}
 		content := msg.Get("content")
@@ -72,14 +119,9 @@ func extractFirstUserText(body []byte) string {
 
 // buildBillingAttributionText 构造 system 数组的 billing attribution 文本。
 //
-// 形态对齐真实 Claude Code CLI：
-//
-//	x-anthropic-billing-header: cc_version=2.1.161.{fp}; cc_entrypoint=cli;
-//
-// 注意：新版 Claude Code CLI 已不再发送 cch=... 签名字段（见 issue #3358）。我们
-// 随之去掉了 cch 段——继续注入它反而会让伪装请求偏离真实 CLI 流量。cc_version +
-// cc_entrypoint=cli 仍保留：它们是客户端识别（claude_code_validator）与 Anthropic
-// 第一方判定都依赖的稳定信号。
+// Claude Code 2.1.x 的 first-party 请求包含条件性的 cch=00000 字段；
+// OAuth mimic 是向 Anthropic first-party 发送的兼容路径，因此保留该
+// 字段以避免生成缺失字段的非对称 billing block。这里不生成遥测或设备标识。
 //
 // 此 block 不带 cache_control（与真实 CLI 一致；cache breakpoint 由后续的
 // Claude Code prompt block 承担）。
@@ -89,7 +131,7 @@ func buildBillingAttributionText(body []byte, cliVersion string) (string, error)
 	}
 	fp := computeClaudeCodeFingerprint(body, cliVersion)
 	return fmt.Sprintf(
-		"x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=cli;",
+		"x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=cli; cch=00000;",
 		cliVersion, fp,
 	), nil
 }

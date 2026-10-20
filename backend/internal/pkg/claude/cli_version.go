@@ -27,9 +27,21 @@ var resolvedCLIVersion = resolveCLIVersion(os.Getenv(CLIVersionEnv))
 
 // CLIVersion 返回对外伪装的 Claude Code CLI 版本号（三段 semver）。
 //
+// 回退链：SUB2API_CLAUDE_CLI_VERSION 环境变量 → config.yaml 的
+// gateway.claude_mimic.user_agent_version → 内置基线 CLICurrentVersion。
+// 配置画像注入发生在 wire 装配时（晚于包 init），故本函数每次现取——
+// 配置值在进程生命周期内恒定，不破坏"同一进程版本恒定"约束。
+//
 // 所有需要该版本号的位置都必须走本函数，不要直接引用 CLICurrentVersion——
 // 后者只是"没有覆盖时的内置基线"。
 func CLIVersion() string {
+	if resolvedCLIVersion == CLICurrentVersion {
+		// 环境变量未生效（未配置或非法回落）时才让 config.yaml 画像介入，
+		// 保证显式运维环境变量优先于配置文件。
+		if v := EffectiveMimicProfile().UserAgentVersion; IsSupportedCLIVersion(v) {
+			return v
+		}
+	}
 	return resolvedCLIVersion
 }
 
