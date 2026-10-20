@@ -62,7 +62,7 @@ func prepareResponsesWebSearch(body []byte) (*responsesWebSearchPlan, error) {
 	var tools []json.RawMessage
 	if raw := root["tools"]; len(raw) > 0 {
 		if err := json.Unmarshal(raw, &tools); err != nil {
-			return nil, fmt.Errorf("Responses tools must be an array")
+			return nil, fmt.Errorf("responses tools must be an array")
 		}
 	}
 	var liftErr error
@@ -91,7 +91,7 @@ func prepareResponsesWebSearch(body []byte) (*responsesWebSearchPlan, error) {
 	plan := &responsesWebSearchPlan{MaxCalls: 8, MaxResults: 5, OriginalTools: root["tools"], OriginalToolChoice: root["tool_choice"]}
 	if raw := root["stream"]; len(raw) > 0 {
 		if err := json.Unmarshal(raw, &plan.OriginalStream); err != nil {
-			return nil, fmt.Errorf("Responses stream must be a boolean")
+			return nil, fmt.Errorf("responses stream must be a boolean")
 		}
 	}
 	if raw := root["max_tool_calls"]; len(raw) > 0 {
@@ -200,7 +200,7 @@ func prepareResponsesWebSearch(body []byte) (*responsesWebSearchPlan, error) {
 	if raw := root["include"]; len(raw) > 0 {
 		var includes []json.RawMessage
 		if err := json.Unmarshal(raw, &includes); err != nil {
-			return nil, fmt.Errorf("Responses include must be an array")
+			return nil, fmt.Errorf("responses include must be an array")
 		}
 		kept := make([]json.RawMessage, 0, len(includes))
 		for _, entry := range includes {

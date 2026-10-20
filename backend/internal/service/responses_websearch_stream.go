@@ -182,7 +182,7 @@ type responsesWebSearchRoundRelay struct {
 	pending     []byte
 	event       []byte
 	streamed    bool
-	opening     bool // this round opens the client stream (created/in_progress)
+	opening     bool           // this round opens the client stream (created/in_progress)
 	hidden      map[int]string // round-local output_index -> public web_search_call id
 	hiddenItems map[string]bool
 }
