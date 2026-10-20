@@ -571,9 +571,8 @@ func ensureCodexClientMetadataDefaults(cm map[string]any, headers http.Header, b
 // prompt_cache_key、无 metadata）的客户端合成 session_id。旧实现只按
 // account.ID 派生，同一账号下所有互不相干的对话塌缩成同一个 session_id，
 // 上游一眼看出「一个会话跑遍所有话题」。
-// 关联键 = 账号 + 会话判别信号，优先级与内容审计的分组规则一致
-// （repository/user_request_audit_conversations.go:50-58：先 join
-// ResponseID/PreviousResponseID 的 'r' 链，再 join 's' 会话哈希）：
+// 关联键 = 账号 + 会话判别信号，优先级与已删除的内容审计分组规则一致
+// （先 join ResponseID/PreviousResponseID 的 'r' 链，再 join 's' 会话哈希）：
 // 先真实响应链的 previous_response_id，再退到带用户锚点的 system+首条
 // user 内容哈希，两者皆无才退回纯账号键。不同账号即便内容相同也不共享
 // session_id——满足「会话+账号」关联。
