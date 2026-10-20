@@ -13,9 +13,19 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
+	"github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
+
+func isOpenAIWSGracefulClose(err error) bool {
+	switch websocket.CloseStatus(err) {
+	case websocket.StatusNormalClosure, websocket.StatusGoingAway, websocket.StatusServiceRestart:
+		return true
+	default:
+		return false
+	}
+}
 
 func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	ctx context.Context,
@@ -70,7 +80,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
-	setOpenAIWSTurnMetadata(payload, turnMetadata)
+	clientMetadata, _ := payload["client_metadata"].(map[string]any)
+	if !account.IsOpenAIOAuthLike() {
+		setOpenAIWSTurnMetadata(payload, turnMetadata)
+	} else if _, exists := clientMetadata[openAIWSTurnMetadataHeader]; !exists && turnMetadata != "" {
+		// The original HTTP header has not yet received account projection.
+		fallback := map[string]any{openAIWSTurnMetadataHeader: turnMetadata}
+		applyCodexAccountIdentityEmbeddedMetadata(fallback, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+		if tm, ok := fallback[openAIWSTurnMetadataHeader].(string); ok {
+			setOpenAIWSTurnMetadata(payload, tm)
+		}
+	}
 	applyStagedCodexFingerprintClientMetadata(c, account, payload)
 	if encoded, err := json.Marshal(payload); err == nil {
 		stageCodexConvergenceBodyIdentityRaw(c, codexAccountIdentitySource(c, account), encoded)
@@ -134,7 +154,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if executionScope = strings.TrimSpace(executionScope); executionScope != "" {
 		sessionHash = executionScope
 	}
-	if turnState == "" && stateStore != nil && sessionHash != "" {
+	if !account.IsOpenAIOAuthLike() && turnState == "" && stateStore != nil && sessionHash != "" {
 		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 			turnState = savedTurnState
 		}
@@ -146,7 +166,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 	storeDisabled := s.isOpenAIWSStoreDisabledInRequest(reqBody, account)
-	if stateStore != nil && storeDisabled && previousResponseID == "" && sessionHash != "" {
+	if stateStore != nil && previousResponseID == "" && sessionHash != "" {
 		if connID, ok := stateStore.GetSessionConn(groupID, sessionHash); ok {
 			preferredConnID = connID
 		}
@@ -196,6 +216,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if buildHdrErr != nil {
 		return nil, fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
+	if err := normalizeCodexRequestMetadataMap(payload, wsHeaders, account); err != nil {
+		return nil, fmt.Errorf("normalize websocket metadata: %w", err)
+	}
+	// normalizeCodexRequestMetadataMap 会按旧习惯把 session_id / x-codex-installation-id
+	// 重新写回头部（legacy compact 依赖它们，不能从源头删除），因此 WS 握手同样
+	// 必须在归一化之后重新执行终态线序收口，与 HTTP 路径同一规则。
+	if account.UsesOpenAICodexProtocol() {
+		projectCodexOutboundHeaders(wsHeaders, true)
+	}
 	if cookieWS {
 		delete(payload, "stream")
 		setOpenAICookieWSExecutionScope(wsHeaders, c, sessionHash)
@@ -203,7 +232,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		// A continuation may use the previous generation only on its own
 		// still-valid connection; the pool keeps this binding scope isolated.
 	}
-	proxyURL := openAICookieWSProxyURL(account, cookieWS)
+	proxyURL := resolveAccountProxyURL(account)
 	responseModelObserver.adoptOpenAICodexTicketWatch(c)
 	logOpenAIWSModeDebug(
 		"acquire_start account_id=%d account_type=%s transport=%s preferred_conn_id=%s has_previous_response_id=%v session_hash=%s has_turn_state=%v turn_state_len=%d has_turn_metadata=%v turn_metadata_len=%d store_disabled=%v store_disabled_conn_mode=%s retry_last_reason=%s force_new_conn=%v header_user_agent=%s header_openai_beta=%s header_originator=%s header_accept_language=%s header_session_id=%s header_conversation_id=%s session_id_source=%s conversation_id_source=%s has_prompt_cache_key=%v has_chatgpt_account_id=%v has_authorization=%v has_session_id=%v has_conversation_id=%v proxy_enabled=%v",
@@ -240,18 +269,19 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	acquireCtx, acquireCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 	defer acquireCancel()
 
-	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
+	acquireRequest := openAIWSAcquireRequest{
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
-			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
+			return s.refreshOpenAIWSAuthHeaders(factoryCtx, account, headers)
 		},
 		PreferredConnID:    preferredConnID,
 		ForcePreferredConn: cookieWS && previousResponseID != "" && preferredConnID != "",
 		ForceNewConn:       forceNewConn,
 		ProxyURL:           proxyURL,
-	})
+	}
+	lease, err := s.acquireOpenAIWSWithAuthRecovery(acquireCtx, s.getOpenAIWSConnPool(), &acquireRequest)
 	if err != nil {
 		var agentDialErr *openAIWSDialError
 		if s.isAgentIdentityAccount(ctx, account) && errors.As(err, &agentDialErr) && isAgentIdentityTaskInvalidWSDialError(agentDialErr) && agentTaskRecoveryTried != nil && !*agentTaskRecoveryTried {
@@ -635,6 +665,23 @@ readLoop:
 				}
 				break
 			}
+			if wroteDownstream && reqStream && isOpenAIWSGracefulClose(readErr) {
+				incomplete := map[string]any{
+					"type": "response.incomplete",
+					"response": map[string]any{
+						"id":                 responseID,
+						"object":             "response",
+						"status":             "incomplete",
+						"incomplete_details": map[string]any{"reason": "server_error"},
+					},
+				}
+				if eventBytes, marshalErr := json.Marshal(incomplete); marshalErr == nil {
+					upstreamTerminalEvent = "response.incomplete"
+					terminalEventCount++
+					emitStreamMessage(eventBytes, true)
+					break readLoop
+				}
+			}
 			if !wroteDownstream {
 				return nil, wrapOpenAIWSFallback(classifyOpenAIWSReadFallbackReason(readErr), readErr)
 			}
@@ -866,7 +913,7 @@ readLoop:
 		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 		stateStore.BindResponseConn(responseID, lease.ConnID(), ttl)
 	}
-	if stateStore != nil && storeDisabled && sessionHash != "" {
+	if stateStore != nil && sessionHash != "" {
 		stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
 	}
 	firstTokenMsValue := -1

@@ -495,6 +495,134 @@ func marshalOpenAIUpstreamJSON(v any) ([]byte, error) {
 	return out, nil
 }
 
+// codexResponsesOfficialTopLevelKeyOrder mirrors the declaration order of
+// ResponsesApiRequest in codex-rs (codex-api/src/common.rs). serde emits struct
+// fields in declaration order and the upstream comment states gateways inspect
+// bodies incrementally before the multi-megabyte `input`, so the first ~200
+// bytes of the body are a client signature. Re-serializing a decoded Go map
+// emits keys alphabetically, which is not what a Codex client produces.
+var codexResponsesOfficialTopLevelKeyOrder = []string{
+	"model", "stream", "service_tier", "instructions", "input", "tools",
+	"tool_choice", "parallel_tool_calls", "reasoning", "store",
+	"stream_options", "include", "prompt_cache_key", "text",
+	"client_metadata", "access_programs",
+}
+
+// restoreOpenAIUpstreamJSONTopLevelOrder rebuilds the top level of `encoded`
+// (the product of re-serializing a decoded body) so its key order follows
+// `original`. Keys present in both keep the position they had in `original`;
+// keys the gateway added are placed by the official declaration order when
+// known, otherwise appended in encoded order. Nested objects keep the
+// re-encoder's ordering — the observable signature is the routing prefix that
+// is read before the body is fully parsed.
+//
+// Anything unexpected (non-object, unparseable) returns `encoded` unchanged:
+// the request must stay valid even if the cosmetic rewrite cannot be applied.
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
+func restoreOpenAIUpstreamJSONTopLevelOrder(original, encoded []byte) []byte {
+	originalOrder := openAIUpstreamJSONTopLevelKeys(original)
+	if len(originalOrder) == 0 {
+		return encoded
+	}
+	type member struct {
+		keyToken string
+		raw      string
+	}
+	encodedMembers := make(map[string]member)
+	encodedOrder := make([]string, 0, 16)
+	root := gjson.ParseBytes(encoded)
+	if root.Type != gjson.JSON || !root.IsObject() {
+		return encoded
+	}
+	root.ForEach(func(key, value gjson.Result) bool {
+		if key.Type != gjson.String {
+			return false
+		}
+		token := key.Raw
+		if !strings.HasPrefix(token, `"`) {
+			marshaled, err := json.Marshal(key.String())
+			if err != nil {
+				return false
+			}
+			token = string(marshaled)
+		}
+		if _, duplicate := encodedMembers[key.String()]; duplicate {
+			return false
+		}
+		encodedMembers[key.String()] = member{keyToken: token, raw: value.Raw}
+		encodedOrder = append(encodedOrder, key.String())
+		return true
+	})
+	if len(encodedMembers) == 0 {
+		return encoded
+	}
+
+	ordered := make([]string, 0, len(encodedOrder))
+	placed := make(map[string]bool, len(encodedOrder))
+	appendKey := func(name string) {
+		if placed[name] {
+			return
+		}
+		if _, ok := encodedMembers[name]; !ok {
+			return
+		}
+		placed[name] = true
+		ordered = append(ordered, name)
+	}
+	for _, name := range originalOrder {
+		appendKey(name)
+	}
+	for _, name := range codexResponsesOfficialTopLevelKeyOrder {
+		appendKey(name)
+	}
+	for _, name := range encodedOrder {
+		appendKey(name)
+	}
+	if len(ordered) != len(encodedOrder) {
+		return encoded
+	}
+
+	var buf bytes.Buffer
+	buf.Grow(len(encoded) + 16)
+	buf.WriteByte('{')
+	for i, name := range ordered {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		item := encodedMembers[name]
+		buf.WriteString(item.keyToken)
+		buf.WriteByte(':')
+		buf.WriteString(item.raw)
+	}
+	buf.WriteByte('}')
+	out := buf.Bytes()
+	if !gjson.ValidBytes(out) {
+		return encoded
+	}
+	return out
+}
+
+// openAIUpstreamJSONTopLevelKeys lists the top-level object keys in document
+// order (first occurrence only). Returns nil for non-objects.
+func openAIUpstreamJSONTopLevelKeys(body []byte) []string {
+	root := gjson.ParseBytes(body)
+	if root.Type != gjson.JSON || !root.IsObject() {
+		return nil
+	}
+	seen := make(map[string]bool, 16)
+	keys := make([]string, 0, 16)
+	root.ForEach(func(key, _ gjson.Result) bool {
+		if key.Type != gjson.String || seen[key.String()] {
+			return true
+		}
+		seen[key.String()] = true
+		keys = append(keys, key.String())
+		return true
+	})
+	return keys
+}
+
 func openAIUpstreamErrorBodyReadLimitForConfig(cfg *config.Config) int64 {
 	limit := openAIUpstreamErrorBodyReadLimit
 	if cfg != nil && cfg.Gateway.LogUpstreamErrorBody && cfg.Gateway.LogUpstreamErrorBodyMaxBytes > int(limit) {
@@ -544,12 +672,14 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			UpstreamStatus: resp.StatusCode,
 		})
 		setOpsUpstreamError(c, resp.StatusCode, cyberMsg, truncateString(string(body), 2048))
-		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-		contentType := resp.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "application/json"
+		if !writeOpenAIResponsesErrorAfterKeepalive(c, resp.StatusCode, body) {
+			writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+			contentType := resp.Header.Get("Content-Type")
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			c.Data(resp.StatusCode, contentType, body)
 		}
-		c.Data(resp.StatusCode, contentType, body)
 		if cyberMsg == "" {
 			return nil, fmt.Errorf("openai cyber_policy: %d", resp.StatusCode)
 		}
@@ -626,7 +756,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		"Upstream request failed",
 	); matched {
 		MarkResponseCommitted(c)
-		c.JSON(status, gin.H{
+		writeOpenAIResponsesErrorJSON(c, status, gin.H{
 			"error": gin.H{
 				"type":    errType,
 				"message": errMsg,
@@ -656,7 +786,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			Detail:             upstreamDetail,
 		})
 		MarkResponseCommitted(c)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeOpenAIResponsesErrorJSON(c, http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"type":    "upstream_error",
 				"message": "Upstream gateway error",
@@ -752,7 +882,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		errMsg = upstreamMsg
 	}
 
-	c.JSON(statusCode, gin.H{
+	writeOpenAIResponsesErrorJSON(c, statusCode, gin.H{
 		"error": gin.H{
 			"type":    errType,
 			"message": errMsg,

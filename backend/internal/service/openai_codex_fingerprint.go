@@ -722,3 +722,47 @@ func rewriteClientMetadataEmbeddedTurnMetadata(clientMetadata map[string]any, fi
 	}
 	clientMetadata["x-codex-turn-metadata"] = rewriteCodexFingerprintTurnMetadata(raw, fields, ids)
 }
+
+// codexStableUUIDv7BaseMs 是确定性 v7 时间戳的锚点（2026-06-01T00:00:00Z）。
+// 官方 thread_id/session_id/window_id 都是 Uuid::now_v7()（codex-rs
+// protocol/src/thread_id.rs:30、core/src/state/auto_compact_window.rs:13），
+// 高 48 位是创建时刻的毫秒时间戳。收敛 ID 必须跨重启稳定，不能用当前时间，
+// 故以固定锚点为上界、由种子哈希向前散列 200 天——时间戳恒为过去的合法
+// 「创建时刻」。官方 Uuid::now_v7() 永不产生未来时间戳，落在未来的 v7 与
+// turn_started_at / 请求到达时间交叉验证即可被识别为合成 ID。
+const codexStableUUIDv7BaseMs = 1780272000000 // 2026-06-01T00:00:00Z
+const codexStableUUIDv7SpanMs = 200 * 24 * 60 * 60 * 1000
+
+// deriveStableCodexUUIDv7 从种子确定性派生一个 UUIDv7 格式的字符串，
+// 时间戳位精确取 anchorMs（调用方保证是合理的过去创建时刻）。唯一性由
+// 种子哈希的低 62 位随机字段保证，不靠散列时间戳——散列时间戳会让
+// turn_id 的时刻偏离同一请求里的 turn_started_at_unix_ms，反而造出官方
+// 不存在的「turn 创建时刻早于开始时刻数月」的矛盾。
+func deriveStableCodexUUIDv7(seed string, anchorMs int64) string {
+	h := sha256.Sum256([]byte(seed))
+	ms := uint64(anchorMs)
+	b := make([]byte, 16)
+	binary.BigEndian.PutUint64(b[0:8], ms<<16)
+	copy(b[6:], h[6:8])
+	b[6] = (b[6] & 0x0f) | 0x70 // version 7
+	copy(b[8:], h[8:16])
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 1
+	return formatCodexUUID(b)
+}
+
+// deriveCodexStableTimestampMs 由种子确定一个稳定的毫秒时间戳，
+// 供 session/thread/window 这类跨重启恒定的 v7 ID 使用。散列方向朝锚点
+// 之前（base − [0,200d)），结果恒在过去。
+func deriveCodexStableTimestampMs(seed string) int64 {
+	h := sha256.Sum256([]byte("sub2api:codex-v7-ts:v1:" + seed))
+	return codexStableUUIDv7BaseMs - int64(binary.BigEndian.Uint16(h[0:2]))*codexStableUUIDv7SpanMs/65536
+}
+
+func formatCodexUUID(b []byte) string {
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		binary.BigEndian.Uint32(b[0:4]),
+		binary.BigEndian.Uint16(b[4:6]),
+		binary.BigEndian.Uint16(b[6:8]),
+		binary.BigEndian.Uint16(b[8:10]),
+		b[10:16])
+}

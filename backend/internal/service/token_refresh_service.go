@@ -11,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 )
 
@@ -1321,6 +1322,10 @@ func isSharedProviderRefreshError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var openAIError *openai.RefreshTokenError
+	if errors.As(err, &openAIError) {
+		return !openAIError.Permanent && (openAIError.Code == "invalid_client" || openAIError.Code == "unauthorized_client" || openAIError.Code == "invalid_scope")
+	}
 	msg := strings.ToLower(err.Error())
 	for _, needle := range []string{
 		"invalid_client",
@@ -1341,6 +1346,10 @@ func isSharedProviderRefreshError(err error) bool {
 func isNonRetryableRefreshError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var openAIError *openai.RefreshTokenError
+	if errors.As(err, &openAIError) {
+		return openAIError.Permanent
 	}
 	msg := strings.ToLower(err.Error())
 	nonRetryable := []string{

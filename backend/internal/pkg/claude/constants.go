@@ -1,6 +1,11 @@
 // Package claude provides constants and helpers for Claude API integration.
 package claude
 
+import (
+	"strings"
+	"sync/atomic"
+)
+
 // Claude Code 客户端相关常量
 
 // Beta header 常量
@@ -121,22 +126,103 @@ func FullClaudeCodeMimicryBetas() []string {
 	}
 }
 
+// Mimic defaults captured from the deployment host's local Node runtime. These
+// are a fixed compatibility profile, not a claim about the Go server's runtime.
+// Operators can override the whole set via gateway.claude_mimic in config.yaml
+// (validated at startup); see SetMimicProfileResolver.
+const (
+	StainlessOS             = "Linux"
+	StainlessArch           = "x64"
+	StainlessLang           = "js"
+	StainlessRuntime        = "node"
+	StainlessRuntimeVersion = "v26.3.0"
+	StainlessPackageVersion = "0.128.0"
+)
+
+// MimicProfile describes the client identity the gateway presents to Anthropic
+// when mimicking Claude Code. Empty fields fall back to the built-in constants
+// above; UserAgentVersion participates in the version resolver chain below the
+// synced value (see cli_version_runtime.go).
+type MimicProfile struct {
+	UserAgentVersion        string
+	StainlessOS             string
+	StainlessArch           string
+	StainlessLang           string
+	StainlessRuntime        string
+	StainlessRuntimeVersion string
+	StainlessPackageVersion string
+}
+
+// mimicProfileResolver 返回配置文件注入的伪装画像；由 wire.go 在装配时注入。
+// 未注入时（所有不经过 wire 的单元测试）EffectiveMimicProfile() 返回内置基线。
+type mimicProfileResolverFunc func() *MimicProfile
+
+var mimicProfileResolver atomic.Pointer[mimicProfileResolverFunc]
+
+// SetMimicProfileResolver 注入配置画像解析器；传 nil 可撤销注入。
+func SetMimicProfileResolver(resolver func() *MimicProfile) {
+	if resolver == nil {
+		mimicProfileResolver.Store(nil)
+		return
+	}
+	r := mimicProfileResolverFunc(resolver)
+	mimicProfileResolver.Store(&r)
+}
+
+// EffectiveMimicProfile 返回当前生效的伪装画像：配置值覆盖内置基线，
+// 未配置字段回落到本文件的 Stainless* 常量。
+func EffectiveMimicProfile() MimicProfile {
+	p := MimicProfile{
+		StainlessOS:             StainlessOS,
+		StainlessArch:           StainlessArch,
+		StainlessLang:           StainlessLang,
+		StainlessRuntime:        StainlessRuntime,
+		StainlessRuntimeVersion: StainlessRuntimeVersion,
+		StainlessPackageVersion: StainlessPackageVersion,
+	}
+	if r := mimicProfileResolver.Load(); r != nil {
+		if cfg := (*r)(); cfg != nil {
+			p.UserAgentVersion = strings.TrimSpace(cfg.UserAgentVersion)
+			if v := strings.TrimSpace(cfg.StainlessOS); v != "" {
+				p.StainlessOS = v
+			}
+			if v := strings.TrimSpace(cfg.StainlessArch); v != "" {
+				p.StainlessArch = v
+			}
+			if v := strings.TrimSpace(cfg.StainlessLang); v != "" {
+				p.StainlessLang = v
+			}
+			if v := strings.TrimSpace(cfg.StainlessRuntime); v != "" {
+				p.StainlessRuntime = v
+			}
+			if v := strings.TrimSpace(cfg.StainlessRuntimeVersion); v != "" {
+				p.StainlessRuntimeVersion = v
+			}
+			if v := strings.TrimSpace(cfg.StainlessPackageVersion); v != "" {
+				p.StainlessPackageVersion = v
+			}
+		}
+	}
+	return p
+}
+
 // DefaultHeaders 是 Claude Code 客户端默认请求头。
 // 每次调用现构造：User-Agent 走 DefaultUserAgent()（运行期可变版本号），
 // 不再在包 init 时固化。同一次请求内应只取一次 UA 字符串并在出站头与
 // billing 两条路径间复用，避免版本缓存翻转瞬间头/体不一致。
 func DefaultHeaders() map[string]string {
+	profile := EffectiveMimicProfile()
 	return map[string]string{
 		// Keep these in sync with recent Claude CLI traffic to reduce the chance
 		// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
 		// 版本参考：对齐 Parrot (src/transform/cc_mimicry.py:49) 的 CLI_USER_AGENT。
 		"User-Agent":                                DefaultUserAgent(),
-		"X-Stainless-Lang":                          "js",
-		"X-Stainless-Package-Version":               "0.94.0",
-		"X-Stainless-OS":                            "Linux",
-		"X-Stainless-Arch":                          "arm64",
-		"X-Stainless-Runtime":                       "node",
-		"X-Stainless-Runtime-Version":               "v24.3.0",
+		"X-Stainless-Lang":                          profile.StainlessLang,
+		"X-Stainless-Package-Version":               profile.StainlessPackageVersion,
+		"X-Stainless-OS":                            profile.StainlessOS,
+		"X-Stainless-Arch":                          profile.StainlessArch,
+		"X-Stainless-Runtime":                       profile.StainlessRuntime,
+		"X-Stainless-Runtime-Version":               profile.StainlessRuntimeVersion,
 		"X-Stainless-Retry-Count":                   "0",
 		"X-Stainless-Timeout":                       "600",
 		"X-App":                                     "cli",

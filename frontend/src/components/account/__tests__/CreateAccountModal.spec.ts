@@ -902,6 +902,25 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBeUndefined()
   })
 
+  it('defaults new OpenAI OAuth accounts to the ctx_pool WS v2 mode', async () => {
+    const wrapper = await openCodexImportStep()
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+
+    const extra = importCodexSessionMock.mock.calls[0]?.[0]?.extra
+    expect(extra?.openai_oauth_responses_websockets_v2_mode).toBe('ctx_pool')
+    expect(extra?.openai_oauth_responses_websockets_v2_enabled).toBe(true)
+  })
+
+  it('keeps new OpenAI API key accounts on the off WS v2 mode', async () => {
+    await submitApiKeyAccount('openai')
+
+    const extra = createAccountMock.mock.calls[0]?.[0]?.extra
+    expect(extra?.openai_apikey_responses_websockets_v2_mode).toBe('off')
+    expect(extra?.openai_apikey_responses_websockets_v2_enabled).toBe(false)
+    expect(extra?.openai_oauth_responses_websockets_v2_mode).toBeUndefined()
+  })
+
   it('leaves Codex PAT import billing ownership to the backend', async () => {
     const wrapper = await openCodexImportStep()
     await wrapper.get('[data-testid="import-codex-pat"]').trigger('click')

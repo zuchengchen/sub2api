@@ -1885,9 +1885,13 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 // 优先级：
 // 1. 按账号类型读取分类型字段
 // 2. 分类型字段缺失时，回退兼容字段
+// 3. 全部缺失时：OAuth/SetupToken 默认开启，API Key 默认关闭
 func (a *Account) IsOpenAIResponsesWebSocketV2Enabled() bool {
-	if a == nil || !a.IsOpenAI() || a.Extra == nil {
+	if a == nil || !a.IsOpenAI() {
 		return false
+	}
+	if a.Extra == nil {
+		return a.IsOpenAIOAuthLike()
 	}
 	if a.IsOpenAIOAuthLike() {
 		if enabled, ok := a.Extra["openai_oauth_responses_websockets_v2_enabled"].(bool); ok {
@@ -1905,7 +1909,18 @@ func (a *Account) IsOpenAIResponsesWebSocketV2Enabled() bool {
 	if enabled, ok := a.Extra["openai_ws_enabled"].(bool); ok {
 		return enabled
 	}
-	return false
+	// OAuth accounts default to the WS v2 upstream; an explicit false above, or an
+	// explicit non-WS mode string, still opts out.
+	if !a.IsOpenAIOAuthLike() {
+		return false
+	}
+	if raw, ok := a.Extra["openai_oauth_responses_websockets_v2_mode"].(string); ok {
+		switch normalizeOpenAIWSIngressMode(raw) {
+		case OpenAIWSIngressModeOff, OpenAIWSIngressModeHTTPBridge:
+			return false
+		}
+	}
+	return true
 }
 
 const (
@@ -2047,6 +2062,20 @@ func (a *Account) IsOpenAIResponsesFlattenNamespacesEnabled() bool {
 	return ok && enabled
 }
 
+// IsCancelUpstreamOnClientDisconnectEnabled 返回账号级"客户端断开即取消上游"开关。
+// 字段：accounts.extra.cancel_upstream_on_client_disconnect，缺省 false。
+//
+// 默认上游请求与客户端连接脱钩（detachUpstreamContext），让按量计费的上游在
+// 客户端断开后仍跑完并结算用量。按算力付费的自建推理上游应打开：断开的请求
+// 立刻取消，不再为无人接收的响应占用 GPU（一个 15 万 token 的轮次可长达数分钟）。
+func (a *Account) IsCancelUpstreamOnClientDisconnectEnabled() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["cancel_upstream_on_client_disconnect"].(bool)
+	return ok && enabled
+}
+
 // IsOpenAIWSAllowStoreRecoveryEnabled 返回账号级 store 恢复开关。
 // 字段：accounts.extra.openai_ws_allow_store_recovery。
 func (a *Account) IsOpenAIWSAllowStoreRecoveryEnabled() bool {
@@ -2096,8 +2125,10 @@ const (
 func (a *Account) GetWebSearchEmulationMode() string {
 	// OpenAI API Key accounts reach this via /v1/messages; their upstreams
 	// (DeepSeek etc. over Chat Completions) have no web_search tool.
-	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil ||
-		(a.Platform != PlatformAnthropic && a.Platform != PlatformOpenAI) {
+	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil {
+		return WebSearchModeDefault
+	}
+	if !a.IsOpenAICompatible() && a.Platform != PlatformAnthropic && a.Platform != PlatformAntigravity {
 		return WebSearchModeDefault
 	}
 	raw := a.Extra[featureKeyWebSearchEmulation]

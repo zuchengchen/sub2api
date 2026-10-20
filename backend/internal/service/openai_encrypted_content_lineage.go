@@ -258,7 +258,7 @@ func stripOpenAIInvalidEncryptedContentRaw(payload []byte, invalid map[string]st
 	if err != nil {
 		return payload, 0, err
 	}
-	return rebuilt, stripped, nil
+	return restoreOpenAIUpstreamJSONTopLevelOrder(payload, rebuilt), stripped, nil
 }
 
 // markOpenAIWSInvalidEncryptedContentLineage 把本次被上游拒绝的密文摘要写入

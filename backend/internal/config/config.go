@@ -16,6 +16,8 @@ import (
 
 	"github.com/spf13/viper"
 	"golang.org/x/net/http/httpguts"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 )
 
 const (
@@ -978,6 +980,10 @@ type GatewayConfig struct {
 	// 置 true 可回滚。
 	// 取反义命名：零值（测试/未加载配置）必须落在「改写开启」这一侧。
 	DisableOpenAIClientLocalTimeRewrite bool `mapstructure:"disable_openai_client_local_time_rewrite"`
+	// OpenAIRequestTimezoneFallback 是「按出口 IP 自动确定请求时区」拿不到时
+	// 的回退值（决定 4）。空串回落到代码内置默认 America/Los_Angeles，
+	// 与引入动态时区之前的硬编码行为一致。非法值在校验阶段报出来。
+	OpenAIRequestTimezoneFallback string `mapstructure:"openai_request_timezone_fallback"`
 	// DisableCodexIdentityEnforcement: 关闭「强制统一 Codex 出站身份」。上游 /backend-api/codex
 	// 在容量紧张时按客户端身份分优先级降载，被降载的请求会拿到 HTTP 200 + 流内
 	// server_is_overloaded，该次请求失败。默认强制统一出口：所有 OAuth 出站的
@@ -1005,6 +1011,9 @@ type GatewayConfig struct {
 	// OpenAICompactModel: /responses/compact 上游使用的模型。
 	// compact 端点支持模型滞后于普通 /responses 时，可用该配置降级规避上游错误。
 	OpenAICompactModel string `mapstructure:"openai_compact_model"`
+	// ClaudeMimic: Claude Code 伪装画像覆盖（UA 版本与 x-stainless-* 默认值）。
+	// 覆盖要么整组给出、要么全部缺省；启动时校验自洽性。
+	ClaudeMimic ClaudeMimicConfig `mapstructure:"claude_mimic"`
 	// OpenAICodexTicket: ChatGPT OAuth 账号按 (账号, 模型) 捕获 292 长度
 	// x-codex-turn-state，并在住宅 IP 业务请求中注入该头。默认关闭。
 	OpenAICodexTicket OpenAICodexTicketConfig `mapstructure:"openai_codex_ticket"`
@@ -1217,6 +1226,68 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 		return UMQModeSerialize // 向后兼容
 	}
 	return ""
+}
+
+// ClaudeMimicConfig 覆盖 Claude Code 伪装画像（User-Agent 版本与 x-stainless-*
+// 默认头）。所有字段要么整组给出、要么全部留空；启动时校验自洽性：
+//   - user_agent_version 必须满足 claude.IsSupportedCLIVersion（严格三段 semver，
+//     不低于内置基线）；
+//   - stainless_lang 必须为 "js"（真实 CLI 抓包值，改成别的没有合法场景）；
+//   - 所有字段不得含空白或换行，避免污染出站 header。
+//
+// 该配置只作为版本解析器的回落层（低于面板手动值与后台同步值，高于内置基线），
+// 不绕过 claude_code 版本同步服务。
+type ClaudeMimicConfig struct {
+	UserAgentVersion        string `mapstructure:"user_agent_version"`
+	StainlessOS             string `mapstructure:"stainless_os"`
+	StainlessArch           string `mapstructure:"stainless_arch"`
+	StainlessLang           string `mapstructure:"stainless_lang"`
+	StainlessRuntime        string `mapstructure:"stainless_runtime"`
+	StainlessRuntimeVersion string `mapstructure:"stainless_runtime_version"`
+	StainlessPackageVersion string `mapstructure:"stainless_package_version"`
+}
+
+// IsZero 报告整组配置是否为空（未配置是正常状态）。
+func (c ClaudeMimicConfig) IsZero() bool {
+	return c.UserAgentVersion == "" &&
+		c.StainlessOS == "" &&
+		c.StainlessArch == "" &&
+		c.StainlessLang == "" &&
+		c.StainlessRuntime == "" &&
+		c.StainlessRuntimeVersion == "" &&
+		c.StainlessPackageVersion == ""
+}
+
+// validateClaudeMimicConfig 校验 gateway.claude_mimic 的自洽性。
+// 全空合法（使用内置画像）；部分填写要求整组给出，防止"半个身份"出站。
+func validateClaudeMimicConfig(m ClaudeMimicConfig) error {
+	if m.IsZero() {
+		return nil
+	}
+	fields := map[string]string{
+		"user_agent_version":        m.UserAgentVersion,
+		"stainless_os":              m.StainlessOS,
+		"stainless_arch":            m.StainlessArch,
+		"stainless_lang":            m.StainlessLang,
+		"stainless_runtime":         m.StainlessRuntime,
+		"stainless_runtime_version": m.StainlessRuntimeVersion,
+		"stainless_package_version": m.StainlessPackageVersion,
+	}
+	for name, value := range fields {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("gateway.claude_mimic.%s is required when claude_mimic is configured", name)
+		}
+		if value != strings.TrimSpace(value) || strings.ContainsAny(value, " \t\r\n") {
+			return fmt.Errorf("gateway.claude_mimic.%s must not contain whitespace", name)
+		}
+	}
+	if !claude.IsSupportedCLIVersion(m.UserAgentVersion) {
+		return fmt.Errorf("gateway.claude_mimic.user_agent_version %q is not a supported Claude Code CLI version (strict three-part semver, not older than %s)", m.UserAgentVersion, claude.CLICurrentVersion)
+	}
+	if m.StainlessLang != "js" {
+		return fmt.Errorf("gateway.claude_mimic.stainless_lang must be \"js\"")
+	}
+	return nil
 }
 
 // OpenAICodexTicketConfig 控制 ChatGPT OAuth 的 x-codex-turn-state 门票。
@@ -2392,6 +2463,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.disable_openai_client_local_time_rewrite", false)
+	viper.SetDefault("gateway.openai_request_timezone_fallback", "")
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
@@ -2635,6 +2707,16 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.openai_scheduler.sticky_escape_error_rate", 0.0)
 	viper.SetDefault("gateway.openai_scheduler.sticky_escape_ttft_ms", 0)
 
+	// gateway.claude_mimic 默认空画像（使用内置兼容值）。注册零值默认让
+	// GATEWAY_CLAUDE_MIMIC_* 环境变量可达；all-or-none 规则在 Validate() 强制。
+	viper.SetDefault("gateway.claude_mimic.user_agent_version", "")
+	viper.SetDefault("gateway.claude_mimic.stainless_os", "")
+	viper.SetDefault("gateway.claude_mimic.stainless_arch", "")
+	viper.SetDefault("gateway.claude_mimic.stainless_lang", "")
+	viper.SetDefault("gateway.claude_mimic.stainless_runtime", "")
+	viper.SetDefault("gateway.claude_mimic.stainless_runtime_version", "")
+	viper.SetDefault("gateway.claude_mimic.stainless_package_version", "")
+
 	// server.trusted_proxies and security.forwarded_client_ip_headers are the
 	// other exception: load() distinguishes explicit configuration from absence
 	// (issue #4600), and viper.IsSet also reports registered defaults, so a
@@ -2687,6 +2769,9 @@ func setEnvReachableDefaults() {
 func (c *Config) Validate() error {
 	if c.Gateway.MinOutputTokens < 16 {
 		return fmt.Errorf("gateway.min_output_tokens must be at least 16")
+	}
+	if err := validateClaudeMimicConfig(c.Gateway.ClaudeMimic); err != nil {
+		return err
 	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {

@@ -3322,18 +3322,21 @@ func TestOpenAIBuildUpstreamRequestOAuthResponsesPreservesCallerBeta(t *testing.
 	oauth := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "chatgpt-acc"}}
 	apiKey := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "test-api-key"}}
 
-	t.Run("preserves caller multi-agent beta", func(t *testing.T) {
+	// OAuth Codex HTTP 出站按官方线序收口：OpenAI-Beta 是 WS 握手专有头，
+	// 官方 HTTP 业务头集合（build_responses_headers）不含它——caller 透传的
+	// beta 能力标志也被削平。apikey 不经 Codex 收口，仍保留 caller 值。
+	t.Run("oauth caller multi-agent beta is stripped", func(t *testing.T) {
 		c := makeRequest("responses_multi_agent=v1")
 		req, err := svc.buildUpstreamRequest(c.Request.Context(), c, oauth, []byte(`{"model":"gpt-5.5","input":"hello"}`), "token", true, "", false)
 		require.NoError(t, err)
-		require.Equal(t, "responses_multi_agent=v1", req.Header.Get("OpenAI-Beta"))
+		require.Empty(t, req.Header.Values("OpenAI-Beta"))
 	})
 
-	t.Run("preserves mixed beta tokens and removes legacy token", func(t *testing.T) {
+	t.Run("oauth mixed beta tokens are stripped", func(t *testing.T) {
 		c := makeRequest("responses_multi_agent=v1, responses=experimental", "future_feature=v2")
 		req, err := svc.buildUpstreamRequest(c.Request.Context(), c, oauth, []byte(`{"model":"gpt-5.5","input":"hello"}`), "token", true, "", false)
 		require.NoError(t, err)
-		require.Equal(t, []string{"responses_multi_agent=v1", "future_feature=v2"}, req.Header.Values("OpenAI-Beta"))
+		require.Empty(t, req.Header.Values("OpenAI-Beta"))
 	})
 
 	t.Run("absent beta remains absent", func(t *testing.T) {
@@ -3350,12 +3353,15 @@ func TestOpenAIBuildUpstreamRequestOAuthResponsesPreservesCallerBeta(t *testing.
 		require.Equal(t, []string{"responses=experimental, responses_multi_agent=v1"}, req.Header.Values("OpenAI-Beta"))
 	})
 
-	t.Run("compact OAuth removes legacy token and preserves independent beta", func(t *testing.T) {
+	// legacy /responses/compact 是不同上游契约，不参与官方线序收口（同
+	// sub4api）：caller 的非 responses=experimental beta 令牌保留；旧版
+	// responses=experimental 仍由 stripOpenAILegacyResponsesBeta 摘除。
+	t.Run("compact OAuth keeps caller beta", func(t *testing.T) {
 		c := makeRequest("responses=experimental, future_feature=v1")
 		c.Request.URL.Path = "/v1/responses/compact"
 		req, err := svc.buildUpstreamRequest(c.Request.Context(), c, oauth, []byte(`{"model":"gpt-5.5","input":"hello"}`), "token", false, "", false)
 		require.NoError(t, err)
-		require.Equal(t, "future_feature=v1", req.Header.Get("OpenAI-Beta"))
+		require.Equal(t, []string{"future_feature=v1"}, req.Header.Values("OpenAI-Beta"))
 	})
 }
 

@@ -108,7 +108,7 @@ func TestShouldRefreshOpenAICodexSnapshot_SparkShadowIgnoresWSv2(t *testing.T) {
 	normalNoWS := &Account{
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
-		Extra:    map[string]any{"codex_usage_updated_at": staleAt},
+		Extra:    map[string]any{"codex_usage_updated_at": staleAt, "openai_oauth_responses_websockets_v2_enabled": false},
 	}
 	if shouldRefreshOpenAICodexSnapshot(normalNoWS, usage, now) {
 		t.Fatal("expected non-WSv2 normal account to skip codex probe refresh")

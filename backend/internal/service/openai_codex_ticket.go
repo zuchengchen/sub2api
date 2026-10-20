@@ -88,8 +88,6 @@ func (o *openAICookieWSProbeObserver) observe(*openAIWSConnLease, []byte, string
 
 func setOpenAICookieWSExecutionScope(http.Header, *gin.Context, string) {}
 
-func openAICookieWSProxyURL(*Account, bool) string { return "" }
-
 func applyOpenAICookieWSMetadataRaw(http.Header, []byte) ([]byte, error) {
 	return nil, nil
 }

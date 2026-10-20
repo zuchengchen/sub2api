@@ -363,6 +363,33 @@ func ProvideProxyExpiryService(proxyRepo ProxyRepository) *ProxyExpiryService {
 	return svc
 }
 
+// ProvideOpenAIRequestTimezoneResolver 构造按出口 IP 决定请求时区的解析器（决定 4）。
+// 它只读 proxy:latency 缓存，不探测；探测由 refresh worker 和代理质检负责。
+func ProvideOpenAIRequestTimezoneResolver(
+	latencyCache ProxyLatencyCache,
+	cfg *config.Config,
+) *OpenAIRequestTimezoneResolver {
+	defaultTZ := DefaultOpenAIRequestTimezone
+	if cfg != nil {
+		if tz := NormalizeOpenAIRequestTimezone(cfg.Gateway.OpenAIRequestTimezoneFallback); tz != "" {
+			defaultTZ = tz
+		}
+	}
+	return NewOpenAIRequestTimezoneResolver(latencyCache, defaultTZ)
+}
+
+// ProvideOpenAIRequestTimezoneRefreshWorker creates and starts the egress
+// timezone refresh worker（决定 4 的「定时刷新」）。
+func ProvideOpenAIRequestTimezoneRefreshWorker(
+	prober ProxyExitInfoProber,
+	proxyRepo ProxyRepository,
+	latencyCache ProxyLatencyCache,
+) *OpenAIRequestTimezoneRefreshWorker {
+	w := NewOpenAIRequestTimezoneRefreshWorker(prober, proxyRepo, latencyCache, openAIRequestTimezoneRefreshInterval)
+	w.Start()
+	return w
+}
+
 // ProvideSubscriptionExpiryService configures SubscriptionExpiryService.
 // Its lifecycle is owned by the server worker runtime.
 func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, settingRepo SettingRepository, notificationEmailService *NotificationEmailService, lockCache LeaderLockCache, db *sql.DB) *SubscriptionExpiryService {
@@ -786,6 +813,24 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	// 解析器内部自带 60s TTL 缓存，热路径不触库。
 	claude.SetCLIVersionResolver(func() string {
 		return svc.GetClaudeCodeClientVersion(context.Background())
+	})
+	// config.yaml 的 gateway.claude_mimic 画像在启动时已通过 Config.Validate()
+	// 校验自洽性，这里直接喂给 claude 包的画像解析器；user_agent_version 只作为
+	// 版本回落层（低于面板手动值/同步值、高于内置基线），不绕过版本同步服务。
+	claude.SetMimicProfileResolver(func() *claude.MimicProfile {
+		m := cfg.Gateway.ClaudeMimic
+		if m.IsZero() {
+			return nil
+		}
+		return &claude.MimicProfile{
+			UserAgentVersion:        m.UserAgentVersion,
+			StainlessOS:             m.StainlessOS,
+			StainlessArch:           m.StainlessArch,
+			StainlessLang:           m.StainlessLang,
+			StainlessRuntime:        m.StainlessRuntime,
+			StainlessRuntimeVersion: m.StainlessRuntimeVersion,
+			StainlessPackageVersion: m.StainlessPackageVersion,
+		}
 	})
 	return svc
 }

@@ -340,6 +340,25 @@ gateway:
   # GPT-5.5 is API-only after its ChatGPT Codex retirement; subscription
   # requests skip this retired fallback and keep their selected model.
   openai_compact_model: "gpt-5.5"
+  # Claude Code mimic profile override: replace the built-in compatibility
+  # identity (User-Agent version + x-stainless-* headers) sent on OAuth mimic
+  # requests. Either set the whole group or leave it all unset — partial
+  # profiles fail startup validation. user_agent_version only acts as the
+  # resolver fallback layer (below the admin panel value and the synced
+  # upstream version, above the built-in pin); it does not bypass version sync.
+  # Claude Code 伪装画像覆盖：替换 OAuth 伪装请求内置的兼容身份
+  # （UA 版本 + x-stainless-* 头）。整组给全或全部留空，只填一半会启动校验失败。
+  # user_agent_version 仅作为版本回落层（低于面板手动值与后台同步值、
+  # 高于内置基线），不会绕过 claude code 版本同步服务。
+  # Env: GATEWAY_CLAUDE_MIMIC_USER_AGENT_VERSION=2.1.283
+  # claude_mimic:
+  #   user_agent_version: "2.1.283"
+  #   stainless_os: "Linux"
+  #   stainless_arch: "x64"
+  #   stainless_lang: "js"
+  #   stainless_runtime: "node"
+  #   stainless_runtime_version: "v26.3.0"
+  #   stainless_package_version: "0.128.0"
   # ChatGPT OAuth x-codex-turn-state ticket: harvest a 292-length header via a
   # dedicated HTTP(S)/SOCKS proxy, store it for ttl_seconds (default 180), then inject
   # it on residential-IP production requests. Off by default.

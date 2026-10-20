@@ -117,11 +117,19 @@ func TestOpenAIWSProtocolResolver_Resolve(t *testing.T) {
 	t.Run("OAuth账号不会读取API Key专用开关", func(t *testing.T) {
 		account := *openAIOAuthEnabled
 		account.Extra = map[string]any{
-			"openai_apikey_responses_websockets_v2_enabled": true,
+			"openai_apikey_responses_websockets_v2_enabled": false,
 		}
 		decision := NewOpenAIWSProtocolResolver(baseCfg).Resolve(&account)
-		require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
-		require.Equal(t, "account_disabled", decision.Reason)
+		require.Equal(t, OpenAIUpstreamTransportResponsesWebsocketV2, decision.Transport)
+		require.Equal(t, "ws_v2_enabled", decision.Reason)
+	})
+
+	t.Run("OAuth账号未设置时默认走WSv2", func(t *testing.T) {
+		account := *openAIOAuthEnabled
+		account.Extra = nil
+		decision := NewOpenAIWSProtocolResolver(baseCfg).Resolve(&account)
+		require.Equal(t, OpenAIUpstreamTransportResponsesWebsocketV2, decision.Transport)
+		require.Equal(t, "ws_v2_enabled", decision.Reason)
 	})
 
 	t.Run("兼容旧键openai_ws_enabled", func(t *testing.T) {

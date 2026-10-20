@@ -99,6 +99,7 @@ func provideCleanup(
 	codexVersionSync *service.OpenAICodexVersionSyncService,
 	claudeCodeVersionSync *service.ClaudeCodeVersionSyncService,
 	proxyExpiry *service.ProxyExpiryService,
+	openAIRequestTimezoneRefreshWorker *service.OpenAIRequestTimezoneRefreshWorker,
 	usageCleanup *service.UsageCleanupService,
 	pricing *service.PricingService,
 	billingCache *service.BillingCacheService,
@@ -249,6 +250,12 @@ func provideCleanup(
 			}},
 			{"ProxyExpiryService", func() error {
 				proxyExpiry.Stop()
+				return nil
+			}},
+			{"OpenAIRequestTimezoneRefreshWorker", func() error {
+				if openAIRequestTimezoneRefreshWorker != nil {
+					openAIRequestTimezoneRefreshWorker.Stop()
+				}
 				return nil
 			}},
 

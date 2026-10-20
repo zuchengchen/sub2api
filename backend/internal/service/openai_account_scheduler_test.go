@@ -3168,6 +3168,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_RequiredWSV2_NoAvailabl
 			Status:      StatusActive,
 			Schedulable: true,
 			Concurrency: 1,
+			Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff},
 		},
 	}
 
