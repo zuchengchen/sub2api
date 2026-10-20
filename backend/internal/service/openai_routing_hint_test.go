@@ -170,12 +170,13 @@ func TestOpenAIHTTPPassthroughStripsOnlyOAuthLegacyResponsesBeta(t *testing.T) {
 		require.Empty(t, headers.Values("OpenAI-Beta"))
 	})
 
-	t.Run("oauth mixed beta preserves independent tokens", func(t *testing.T) {
+	t.Run("oauth mixed beta is stripped on the codex wire", func(t *testing.T) {
 		headers := build(t, oauth, []string{
 			"responses=experimental, future_feature=v1",
 			"another_feature=v2, RESPONSES=EXPERIMENTAL",
 		}, false)
-		require.Equal(t, []string{"future_feature=v1", "another_feature=v2"}, headers.Values("OpenAI-Beta"))
+		// OAuth Codex HTTP 官方线序不含 OpenAI-Beta（WS 握手专有），独立 token 一并削平。
+		require.Empty(t, headers.Values("OpenAI-Beta"))
 	})
 
 	t.Run("api key explicit beta remains caller controlled", func(t *testing.T) {
