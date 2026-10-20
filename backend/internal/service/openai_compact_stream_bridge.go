@@ -56,7 +56,13 @@ func openAICompactClientWantsStream(c *gin.Context) bool {
 // 必须接管一切写回：非 2xx 或不可合成的响应降级为 response.failed 终止事件，
 // 不能再返回 false（否则调用方的 JSON 写回会与已提交的 SSE 流交错）。
 func writeOpenAICompactSSEBridge(c *gin.Context, statusCode int, finalResponse []byte) bool {
-	if c == nil || !openAICompactClientWantsStream(c) {
+	if c == nil {
+		return false
+	}
+	if !openAICompactClientWantsStream(c) {
+		if statusCode >= 400 {
+			return writeOpenAIResponsesErrorAfterKeepalive(c, statusCode, finalResponse)
+		}
 		return false
 	}
 	// 先停心跳再写回，避免注释行与最终事件交错；停止后经互斥锁与心跳
@@ -109,10 +115,56 @@ func writeOpenAICompactSSEFailure(c *gin.Context, statusCode int, errorBody []by
 // 不被识别，会退化为 "stream closed before response.completed" 盲重连）。
 // 同时标记流内错误，保证挂在 200 流上的失败仍进入 ops 错误看板。
 func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType, message string) {
+	writeOpenAIResponsesSSEFailure(c, statusCode, gin.H{"code": errType, "message": message})
+}
+
+// writeOpenAIResponsesErrorJSON preserves early HTTP errors, but never appends
+// JSON to an SSE response already committed by a transport heartbeat.
+func writeOpenAIResponsesErrorJSON(c *gin.Context, statusCode int, envelope gin.H) {
+	if StopOpenAICompactSSEKeepaliveCommitted(c) {
+		errorBody, _ := envelope["error"].(gin.H)
+		writeOpenAIResponsesSSEFailure(c, statusCode, errorBody)
+		return
+	}
+	c.JSON(statusCode, envelope)
+}
+
+func writeOpenAIResponsesErrorAfterKeepalive(c *gin.Context, statusCode int, body []byte) bool {
+	if !StopOpenAICompactSSEKeepaliveCommitted(c) {
+		return false
+	}
+	errorBody := gin.H{"message": sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))}
+	for _, field := range []string{"type", "code", "param"} {
+		if value := gjson.GetBytes(body, "error."+field); value.Type == gjson.String {
+			errorBody[field] = value.String()
+		}
+	}
+	writeOpenAIResponsesSSEFailure(c, statusCode, errorBody)
+	return true
+}
+
+func writeOpenAIResponsesSSEFailure(c *gin.Context, statusCode int, errorBody gin.H) {
 	if c == nil {
 		return
 	}
-	MarkOpsStreamError(c, errType, message, statusCode)
+	if errorBody == nil {
+		errorBody = gin.H{}
+	}
+	code, _ := errorBody["code"].(string)
+	if code == "" {
+		code, _ = errorBody["type"].(string)
+		if code == "" {
+			code = "upstream_error"
+		}
+		errorBody["code"] = code
+	}
+	message, _ := errorBody["message"].(string)
+	if message == "" {
+		message = "Upstream request failed with HTTP " + strconv.Itoa(statusCode)
+		errorBody["message"] = message
+	}
+	MarkResponseCommitted(c)
+	MarkOpsStreamError(c, code, message, statusCode)
 	payload, err := json.Marshal(map[string]any{
 		"type":            "response.failed",
 		"sequence_number": 0,
@@ -124,10 +176,7 @@ func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType
 			"created_at": time.Now().Unix(),
 			"status":     "failed",
 			"output":     []any{},
-			"error": map[string]any{
-				"code":    errType,
-				"message": message,
-			},
+			"error":      errorBody,
 		},
 	})
 	if err != nil {

@@ -35,6 +35,18 @@ func (s *GatewayService) ForwardAsResponses(
 	body []byte,
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
+	return s.ForwardResponsesWithWebSearch(ctx, c, account, body, func(next []byte) (*ForwardResult, error) {
+		return s.forwardAsResponsesWithoutHostedWebSearch(ctx, c, account, next, parsed)
+	})
+}
+
+func (s *GatewayService) forwardAsResponsesWithoutHostedWebSearch(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	parsed *ParsedRequest,
+) (*ForwardResult, error) {
 	startTime := time.Now()
 
 	normalizedBody, normalized, err := normalizeOpenAIResponsesLegacyIngressWithConfig(s.cfg, body)
@@ -766,7 +778,7 @@ func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
 // writeResponsesError writes an error response in OpenAI Responses API format.
 func writeResponsesError(c *gin.Context, statusCode int, code, message string) {
 	MarkResponseCommitted(c)
-	c.JSON(statusCode, gin.H{
+	writeOpenAIResponsesErrorJSON(c, statusCode, gin.H{
 		"error": gin.H{
 			"code":    code,
 			"message": message,
