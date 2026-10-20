@@ -628,6 +628,14 @@ func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody 
 
 // handle403 处理 403 Forbidden 错误
 func (s *RateLimitService) handle403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	// 内容审核拦截是请求级拒绝，换号也会被同样拦截：不处罚账号，也不触发切号。
+	if isUpstreamContentPolicy403(http.StatusForbidden, responseBody) {
+		slog.Warn("upstream_403_content_policy_skips_account_penalty",
+			"account_id", account.ID,
+			"platform", account.Platform,
+		)
+		return false
+	}
 	// Kimi reports its transient per-account concurrency/business limit as a 403.
 	// Keep the normal 403 failover signal (true), but never feed this exact message
 	// into the escalating 403 counter that can permanently mark the account error.
