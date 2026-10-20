@@ -129,13 +129,13 @@ func TestOpenAIWSDeltaRecorder_NoCompleteNoChain(t *testing.T) {
 
 func TestOpenAIWSDeltaFieldsFingerprint(t *testing.T) {
 	payload := map[string]any{
-		"model":    "gpt-5",
-		"stream":   true,
-		"store":    false,
-		"tools":    []any{map[string]any{"type": "function"}},
-		"reasoning": map[string]any{"effort": "low"},
-		"input":    []any{map[string]any{"type": "message"}},
-		"client_metadata": map[string]any{"a": "b"},
+		"model":                "gpt-5",
+		"stream":               true,
+		"store":                false,
+		"tools":                []any{map[string]any{"type": "function"}},
+		"reasoning":            map[string]any{"effort": "low"},
+		"input":                []any{map[string]any{"type": "message"}},
+		"client_metadata":      map[string]any{"a": "b"},
 		"previous_response_id": "resp_x",
 		"stream_options":       map[string]any{"include_obfuscation": true},
 	}

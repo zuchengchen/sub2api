@@ -49,8 +49,8 @@ func BuiltinProfile(name string) *Profile {
 			ALPNProtocols:     []string{},
 			SupportedVersions: []uint16{0x0304, 0x0303},
 			KeyShareGroups:    []uint16{0x11ec, 29},
-			PSKModes:         []uint16{1},
-			Extensions:       []uint16{0, 11, 10, 35, 13, 51, 45, 43},
+			PSKModes:          []uint16{1},
+			Extensions:        []uint16{0, 11, 10, 35, 13, 51, 45, 43},
 		}
 	default:
 		return nil

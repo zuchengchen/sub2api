@@ -894,7 +894,6 @@ readLoop:
 				// 注入的增量锚点被上游拒绝（如 previous_response_not_found）
 				// 时链已失效；删除后重试回到完整上下文发送。
 				stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
-				deltaApplied = false
 			}
 			s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)

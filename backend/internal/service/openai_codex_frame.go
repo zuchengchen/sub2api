@@ -90,6 +90,8 @@ var codexWSStreamOptionsOrder = [...]string{"reasoning_summary_delivery"}
 //   - input 为 []json.RawMessage / RawMessage 混合时逐条透传；
 //   - client_metadata 用固定 HashMap 样本序；
 //   - 非 ASCII 走 escapeCodexNonASCII（与官方 to_ascii_json_string 一致）。
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func marshalCodexWSCreateFrame(body []byte, payload map[string]any) ([]byte, error) {
 	if payload == nil {
 		return []byte("null"), nil
@@ -135,6 +137,7 @@ func marshalCodexWSCreateFrame(body []byte, payload map[string]any) ([]byte, err
 	return escapeCodexNonASCII(buf.Bytes()), nil
 }
 
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func writeCodexWSFrameFieldValue(buf *bytes.Buffer, body []byte, key string, value any) error {
 	switch key {
 	case "input":
@@ -157,6 +160,8 @@ func writeCodexWSFrameFieldValue(buf *bytes.Buffer, body []byte, key string, val
 }
 
 // writeCodexWSInputField 输出 input：RawMessage 项逐条透传原始字节。
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func writeCodexWSInputField(buf *bytes.Buffer, value any) error {
 	switch items := value.(type) {
 	case json.RawMessage:
@@ -200,6 +205,8 @@ func writeCodexWSInputField(buf *bytes.Buffer, value any) error {
 
 // writeCodexWSClientMetadata 输出 client_metadata：固定 HashMap 样本序，
 // 值统一为字符串（官方 HashMap<String,String>）。
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func writeCodexWSClientMetadata(buf *bytes.Buffer, value any) error {
 	metadata, ok := value.(map[string]any)
 	if !ok {
@@ -222,6 +229,8 @@ func writeCodexWSClientMetadata(buf *bytes.Buffer, value any) error {
 }
 
 // writeCodexWSShapedValue 输出带固定键序的小型对象（reasoning/text 等）。
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func writeCodexWSShapedValue(buf *bytes.Buffer, key string, value any) error {
 	object, ok := value.(map[string]any)
 	if !ok {
@@ -260,6 +269,8 @@ func writeCodexWSShapedValue(buf *bytes.Buffer, key string, value any) error {
 }
 
 // writeCodexWSOrderedObject 用固定键序输出一个对象（嵌套 struct）。
+//
+//nolint:errcheck // bytes.Buffer 写入不会失败
 func writeCodexWSOrderedObject(buf *bytes.Buffer, value any, order []string) error {
 	object, ok := value.(map[string]any)
 	if !ok {
