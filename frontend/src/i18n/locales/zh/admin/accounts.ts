@@ -753,6 +753,18 @@ export default {
         wsModeCtxPoolHint: '网关从连接池获取并复用上游 WS 连接，连接池上限由网关配置决定。',
         wsModePassthroughHint: '网关为每个客户端会话单独建立上游 WS 连接，不使用连接池。',
         wsModeHttpBridgeHint: '网关将客户端 WS 请求转换为上游 HTTP 请求，再将 SSE 流式响应转换为 WS 消息返回。',
+        requestTimezone: '请求时区',
+        requestTimezonePlaceholder: 'IANA 时区名，例如 Asia/Shanghai（留空 = 按出口自动确定）',
+        requestTimezoneSource: '当前生效时区：{timezone} · 来源：{source}',
+        requestTimezoneSourceOverride: '手动覆盖',
+        requestTimezoneSourceProxy: '代理出口',
+        requestTimezoneSourceDirect: '直连出口',
+        requestTimezoneSourceFallback: '回退默认值',
+        requestTimezoneHelp: {
+          intro: '发送给上游 environment_context 的 IANA 时区（timezone 与 current_date），以及 web_search 的 user_location。',
+          order: '解析顺序：此手动覆盖 → 账号代理的出口缓存时区 → 直连出口的缓存时区。',
+          fallback: '拿不到出口时区时使用可配置默认值（内置：America/Los_Angeles），并在日志与管理端标记为回退。'
+        },
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
         oauthResponsesWebsocketsV2Desc:
           '仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
