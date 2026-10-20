@@ -85,16 +85,24 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		logOpenAIWSModeInfo("prewarm_skip account_id=%d conn_id=%s reason=already_prewarmed", account.ID, connID)
 		return nil, nil
 	}
-	if NeedsToolContinuation(reqBody) {
-		logOpenAIWSModeInfo("prewarm_skip account_id=%d conn_id=%s reason=tool_continuation", account.ID, connID)
-		return nil, nil
-	}
+	// 官方 Codex 客户端在新连接上无条件发送 generate=false 预热帧（包含完整
+	// 工具声明），不在 tools/tool_choice 处设门槛；previous_response_id 锚定的
+	// 续链请求仍跳过预热（上方 gate），避免预热帧携带上游不认的锚点。
 	prewarmStart := time.Now()
 	logOpenAIWSModeInfo("prewarm_start account_id=%d conn_id=%s", account.ID, connID)
 
 	prewarmPayload := make(map[string]any, len(payload)+1)
 	for k, v := range payload {
 		prewarmPayload[k] = v
+	}
+	// client_metadata 是嵌套 map：浅拷贝会在 applyCodexWireLaneMetadata("prewarm")
+	// 时把 prewarm 画像写回业务 payload 的同一 map。克隆后再改。
+	if cm, ok := prewarmPayload["client_metadata"].(map[string]any); ok {
+		cloned := make(map[string]any, len(cm)+1)
+		for k, v := range cm {
+			cloned[k] = v
+		}
+		prewarmPayload["client_metadata"] = cloned
 	}
 	prewarmPayload["generate"] = false
 	// 官方 prewarm 画像：request_kind=prewarm、turn_id 空串、无 turn 专属键。

@@ -78,6 +78,12 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 		if _, exists := metadata["request_kind"]; !exists {
 			metadata["request_kind"] = "turn"
 		}
+		// 官方 root_turn_id：新线程首回合时等于 turn_id（抓包 frame1 证实两值相同）。
+		if _, exists := metadata["root_turn_id"]; !exists {
+			if turnID, ok := metadata["turn_id"].(string); ok && turnID != "" {
+				metadata["root_turn_id"] = turnID
+			}
+		}
 		setStr(metadata, "turn_trigger", codexWireAccountExtra(account, "codex_turn_trigger", "user"))
 		if _, exists := metadata["workspaces"]; !exists {
 			cwd := codexWireAccountExtra(account, "codex_workspace_cwd", "/root")
@@ -98,13 +104,19 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 		}
 	}
 	// 平铺身份键与 metadata 同步（官方 client_metadata 同时携带两份投影）。
-	for _, pair := range [][2]string{
+	flatPairs := [][2]string{
 		{"session_id", "session_id"},
 		{"thread_id", "thread_id"},
 		{"turn_id", "turn_id"},
 		{"x-codex-window-id", "window_id"},
 		{"x-codex-installation-id", "installation_id"},
-	} {
+	}
+	if kind == "turn" {
+		// 官方 turn 帧在 client_metadata 平铺层也带 root_turn_id（与 md 同值）；
+		// prewarm 画像不带。
+		flatPairs = append(flatPairs, [2]string{"root_turn_id", "root_turn_id"})
+	}
+	for _, pair := range flatPairs {
 		if v, ok := metadata[pair[1]].(string); ok {
 			cm[pair[0]] = v
 		}
