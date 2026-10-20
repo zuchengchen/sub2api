@@ -241,7 +241,7 @@ func TestGatewayAdmissionError_MessagesStreamingIncludesGatewayCode(t *testing.T
 		gatewayConcurrencyLimitCode, "Concurrency limit exceeded for account, please retry later", true)
 
 	body := w.Body.String()
-	assert.True(t, strings.HasPrefix(body, `data: {"type":"error"`))
+	assert.True(t, strings.HasPrefix(body, "event: error\ndata: {\"type\":\"error\""), "got: %q", body)
 	payload := body[strings.Index(body, "{"):]
 	assert.Equal(t, "rate_limit_error", gjson.Get(payload, "error.type").String())
 	assert.Equal(t, gatewayConcurrencyLimitCode, gjson.Get(payload, "error.code").String())
@@ -257,15 +257,21 @@ func TestGatewayAdmissionError_BareResponsesFailedIncludesGatewayCode(t *testing
 	assert.Equal(t, gatewayQueueFullCode, errObj["code"])
 }
 
-// Gateway handler: /v1/messages preserves the legacy data:{type:error,...} format
-// (Anthropic spec accepts a type:"error" stream event).
-func TestGatewayHandleStreamingAwareError_MessagesStreamingKeepsLegacy(t *testing.T) {
+// Gateway handler: /v1/messages must name the SSE event. The Anthropic SDK
+// (Claude Code) dispatches by event name and silently drops nameless data
+// frames, so a bare data:{type:error} frame surfaces as "Connection lost
+// before a response was produced" instead of the actual error.
+func TestGatewayHandleStreamingAwareError_MessagesStreamingEmitsNamedErrorEvent(t *testing.T) {
 	c, w := newGinContextForEndpoint(t, EndpointMessages)
 	h := &GatewayHandler{}
 	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "boom", true)
 
 	body := w.Body.String()
-	assert.True(t, strings.HasPrefix(body, `data: {"type":"error"`), "got: %q", body)
+	assert.True(t, strings.HasPrefix(body, "event: error\ndata: {\"type\":\"error\""), "got: %q", body)
+	assert.True(t, strings.HasSuffix(body, "\n\n"), "got: %q", body)
+	payload := body[strings.Index(body, "{"):]
+	assert.Equal(t, "upstream_error", gjson.Get(payload, "error.type").String())
+	assert.Equal(t, "boom", gjson.Get(payload, "error.message").String())
 }
 
 // 项目里 /responses 注册在多组路由：/v1/responses（gateway）、裸 /responses（top-level）、

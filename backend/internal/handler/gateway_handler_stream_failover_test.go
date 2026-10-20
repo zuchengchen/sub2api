@@ -60,6 +60,8 @@ func TestStreamWrittenGuard_MessagesPath_AbortFailoverOnSSEContentWritten(t *tes
 	require.True(t, strings.HasSuffix(strings.TrimRight(body, "\n"), "}"),
 		"响应体应以 JSON 对象结尾（SSE error event 的 data 字段）")
 	require.Contains(t, body, `"type":"error"`, "响应体末尾必须包含 SSE 错误事件")
+	// 错误帧必须带事件名，否则 Anthropic SDK 会丢弃它，Claude Code 只报 "Connection lost"
+	require.Contains(t, body, "\n\nevent: error\ndata: {\"type\":\"error\"", "流中途错误必须以 event: error 帧下发")
 
 	// 断言 C：SSE event 行 "event: message_start" 只出现一次（防止双 message_start 拼接腐化）
 	firstIdx := strings.Index(body, "event: message_start")
