@@ -1350,6 +1350,14 @@ type GatewayOpenAIWSConfig struct {
 	StoreDisabledForceNewConn bool `mapstructure:"store_disabled_force_new_conn"`
 	// PrewarmGenerateEnabled: 是否启用 WSv2 generate=false 预热（默认 false）
 	PrewarmGenerateEnabled bool `mapstructure:"prewarm_generate_enabled"`
+	// DeltaContextEnabled: OAuth codex lane 的增量上下文传输（官方 Codex CLI 协议：
+	// input 仅发尾部新增 items + previous_response_id 锚定上轮响应）。默认 true，
+	// 仅对没有自己发送 previous_response_id 的客户端生效。
+	DeltaContextEnabled bool `mapstructure:"delta_context_enabled"`
+	// ExactFidelityEnabled: codex lane 字节级线序保真（serde 声明序帧 +
+	// client_metadata 固定序 + 未改字段原始字节透传）。默认 true；
+	// 关闭后回退到通用 map 序列化。
+	ExactFidelityEnabled bool `mapstructure:"exact_fidelity_enabled"`
 	// ClientReadLimitBytes: 入站客户端 WS 单帧读取上限。
 	ClientReadLimitBytes int64 `mapstructure:"client_read_limit_bytes"`
 	// HTTPBridgeEnabled: 首包过大时，保持客户端 WS，改用 HTTP Responses 上游。
@@ -2513,6 +2521,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.store_disabled_conn_mode", "strict")
 	viper.SetDefault("gateway.openai_ws.store_disabled_force_new_conn", true)
 	viper.SetDefault("gateway.openai_ws.prewarm_generate_enabled", false)
+	viper.SetDefault("gateway.openai_ws.delta_context_enabled", true)
+	viper.SetDefault("gateway.openai_ws.exact_fidelity_enabled", true)
 	viper.SetDefault("gateway.openai_ws.client_read_limit_bytes", 64*1024*1024)
 	viper.SetDefault("gateway.openai_ws.http_bridge_enabled", true)
 	viper.SetDefault("gateway.openai_ws.http_bridge_threshold_bytes", 15*1024*1024)

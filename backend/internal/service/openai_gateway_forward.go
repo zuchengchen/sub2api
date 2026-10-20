@@ -1002,6 +1002,29 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 			previousResponseID := openAIWSPayloadString(wsReqBody, "previous_response_id")
 			if previousResponseID == "" {
+				// 客户端未自带锚点时，可能是网关注入的 delta 链锚点被上游
+				// 拒绝：删掉链快照让下一尝试回退到完整上下文。
+				if account.UsesOpenAICodexProtocol() && s.isOpenAIWSDeltaContextEnabled() {
+					if store := s.getOpenAIWSStateStore(); store != nil {
+						scope := strings.TrimSpace(wsExecutionScope)
+						if scope == "" {
+							scope = s.GenerateSessionHash(c, nil)
+						}
+						if scope == "" && clientPromptCacheKey != "" {
+							scope, _ = openAIWSSessionHashesFromID(clientPromptCacheKey)
+						}
+						if scope != "" {
+							store.DeleteSessionDeltaChain(lineageGroupID, scope)
+							wsPrevResponseRecoveryTried = true
+							logOpenAIWSModeInfo(
+								"reconnect_prev_response_recovery account_id=%d attempt=%d action=drop_delta_chain retry=1",
+								account.ID,
+								attempt,
+							)
+							return true
+						}
+					}
+				}
 				logOpenAIWSModeInfo(
 					"reconnect_prev_response_recovery_skip account_id=%d attempt=%d reason=missing_previous_response_id previous_response_id_present=false",
 					account.ID,
@@ -1079,6 +1102,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				c,
 				account,
 				wsReqBody,
+				body,
 				clientPromptCacheKey,
 				wsExecutionScope,
 				token,
