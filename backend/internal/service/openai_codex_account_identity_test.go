@@ -153,11 +153,15 @@ func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 	first := build(account11)
 	firstAgain := build(account11)
 	second := build(account19)
-	for _, header := range []string{"session_id", "x-codex-installation-id", "thread-id", "x-codex-window-id", "x-client-request-id"} {
+	// 官方线序：session_id/x-codex-installation-id 是网关旧习惯头，projectCodexOutboundHeaders
+	// 会在出站收口删掉；身份隔离落在官方字段 session-id/thread-id 上。
+	for _, header := range []string{"session-id", "thread-id", "x-codex-window-id", "x-client-request-id"} {
 		require.NotEmpty(t, first.Get(header), header)
 		require.Equal(t, first.Get(header), firstAgain.Get(header), header)
 		require.NotEqual(t, first.Get(header), second.Get(header), header)
 	}
+	require.Empty(t, first.Get("session_id"), "underscored session_id is stripped from the official wire")
+	require.Empty(t, first.Get("x-codex-installation-id"), "x-codex-installation-id is not a WS handshake header upstream")
 
 	httpRequest, err := service.buildUpstreamRequest(
 		context.Background(), c, account11,
@@ -165,7 +169,7 @@ func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 		"token", true, "client-session", true,
 	)
 	require.NoError(t, err)
-	require.Equal(t, httpRequest.Header.Get("session_id"), first.Get("session_id"), "HTTP and WS must derive the same identity from the raw client key")
+	require.Equal(t, httpRequest.Header.Get("session-id"), first.Get("session-id"), "HTTP and WS must derive the same identity from the raw client key")
 }
 
 func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T) {

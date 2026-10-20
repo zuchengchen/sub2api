@@ -300,6 +300,19 @@ func projectCodexOutboundHeaders(h http.Header, websocket bool) {
 	if h == nil || !codexIdentityEnforcement.Load() {
 		return
 	}
+	// 删下划线头之前，先把隔离值挪到官方连字符名：网关把多用户隔离值写在
+	// session_id 上，直接删会丢掉它；官方只发 session-id。conversation_id 同理
+	// 挪到 thread-id（官方对 conversation 的称呼就是 thread）。
+	if strings.TrimSpace(h.Get("session-id")) == "" {
+		if isolated := strings.TrimSpace(h.Get("session_id")); isolated != "" {
+			h.Set("session-id", isolated)
+		}
+	}
+	if strings.TrimSpace(h.Get("thread-id")) == "" {
+		if isolated := strings.TrimSpace(h.Get("conversation_id")); isolated != "" {
+			h.Set("thread-id", isolated)
+		}
+	}
 	// HTTP 与 WS 名单长度不同，这里按切片遍历，保留各自完整集合。
 	var nonOfficial []string
 	if websocket {
