@@ -439,6 +439,9 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 		return body
 	}
 
+	// 在任何 system/messages 改写之前保存指纹采样源文本，后续 billing
+	// version sync 与注入 billing block 都需要对未改写的 user 文本采样。
+	captureClaudeBillingSource(c, body)
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
 	if systemPromptInjectionEnabled {
 		systemPromptBlocks = claudeOAuthSystemPromptBlocksForModel(model, systemPromptBlocks)

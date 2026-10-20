@@ -426,7 +426,8 @@ var ErrNoAvailableAccounts = errors.New("no available accounts")
 // ErrClaudeCodeOnly 表示分组仅允许 Claude Code 客户端访问
 var ErrClaudeCodeOnly = errors.New(userfacing.ClaudeCodeOnly)
 
-// allowedHeaders 白名单headers（参考CRS项目）
+// allowedHeaders 是客户端 header 透传白名单。可选的 Claude Code 网关提示头
+// 只在客户端显式携带时透传；网关从不合成这些身份/路由提示。
 var allowedHeaders = map[string]bool{
 	"accept":                                    true,
 	"x-stainless-retry-count":                   true,
@@ -448,7 +449,58 @@ var allowedHeaders = map[string]bool{
 	"content-type":                              true,
 	"accept-encoding":                           true,
 	"x-claude-code-session-id":                  true,
+	"x-claude-code-agent-id":                    true,
+	"x-claude-code-parent-agent-id":             true,
+	"x-claude-code-request-class":               true,
+	"x-claude-code-agent-type":                  true,
+	"x-claude-code-prompt-id":                   true,
+	"anthropic-usage-limit":                     true,
+	"x-claude-code-prev-tool-durations":         true,
+	"x-claude-code-context-compacted":           true,
+	"x-cc-context-compacted":                    true,
+	"x-claude-code-compaction":                  true,
+	"x-cc-compaction-request":                   true,
+	"x-anthropic-additional-protection":         true,
 	"x-client-request-id":                       true,
+	"x-client-app":                              true,
+	"x-claude-remote-container-id":              true,
+	"x-claude-remote-session-id":                true,
+	"anthropic-client-platform":                 true,
+	"anthropic-client-version":                  true,
+	"x-cc-fallback-category":                    true,
+	"x-cc-fallback-from-model":                  true,
+	"x-cc-fallback-latched-by":                  true,
+	"x-cc-fallback-trigger":                     true,
+	"x-cc-original-request-id":                  true,
+	"x-is-refusal-fallback":                     true,
+}
+
+// claudeCodeOptionalHeaders 是 OAuth mimicry 路径上仍允许透传的 Claude Code
+// 可选提示头子集（allowedHeaders 的超集语义由调用点组合保证）。
+var claudeCodeOptionalHeaders = map[string]bool{
+	"x-claude-code-agent-id":            true,
+	"x-claude-code-parent-agent-id":     true,
+	"x-claude-code-request-class":       true,
+	"x-claude-code-agent-type":          true,
+	"x-claude-code-prompt-id":           true,
+	"anthropic-usage-limit":             true,
+	"x-claude-code-prev-tool-durations": true,
+	"x-claude-code-context-compacted":   true,
+	"x-cc-context-compacted":            true,
+	"x-claude-code-compaction":          true,
+	"x-cc-compaction-request":           true,
+	"x-anthropic-additional-protection": true,
+	"x-client-app":                      true,
+	"x-claude-remote-container-id":      true,
+	"x-claude-remote-session-id":        true,
+	"anthropic-client-platform":         true,
+	"anthropic-client-version":          true,
+	"x-cc-fallback-category":            true,
+	"x-cc-fallback-from-model":          true,
+	"x-cc-fallback-latched-by":          true,
+	"x-cc-fallback-trigger":             true,
+	"x-cc-original-request-id":          true,
+	"x-is-refusal-fallback":             true,
 }
 
 // ErrStickySessionNotFound is returned by GatewayCache.GetSessionAccountID

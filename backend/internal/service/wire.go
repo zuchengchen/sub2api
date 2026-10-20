@@ -787,6 +787,24 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	claude.SetCLIVersionResolver(func() string {
 		return svc.GetClaudeCodeClientVersion(context.Background())
 	})
+	// config.yaml 的 gateway.claude_mimic 画像在启动时已通过 Config.Validate()
+	// 校验自洽性，这里直接喂给 claude 包的画像解析器；user_agent_version 只作为
+	// 版本回落层（低于面板手动值/同步值、高于内置基线），不绕过版本同步服务。
+	claude.SetMimicProfileResolver(func() *claude.MimicProfile {
+		m := cfg.Gateway.ClaudeMimic
+		if m.IsZero() {
+			return nil
+		}
+		return &claude.MimicProfile{
+			UserAgentVersion:        m.UserAgentVersion,
+			StainlessOS:             m.StainlessOS,
+			StainlessArch:           m.StainlessArch,
+			StainlessLang:           m.StainlessLang,
+			StainlessRuntime:        m.StainlessRuntime,
+			StainlessRuntimeVersion: m.StainlessRuntimeVersion,
+			StainlessPackageVersion: m.StainlessPackageVersion,
+		}
+	})
 	return svc
 }
 

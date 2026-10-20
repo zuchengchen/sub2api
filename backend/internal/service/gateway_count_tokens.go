@@ -82,9 +82,21 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	isClaudeCodeCT := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
+	if !isClaudeCodeCT && parsed.MetadataUserID != "" {
+		isClaudeCodeCT = systemHasBillingAttributionBlock(body)
+	}
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCodeCT
 
 	if shouldMimicClaudeCode {
+		captureClaudeBillingSource(c, body)
+		systemRaw, _ := parsed.SystemValue()
+		systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
+		if systemPromptInjectionEnabled {
+			if err := replaceBody(rewriteSystemForNonClaudeCodeWithPromptBlocks(body, systemRaw, systemPrompt, systemPromptBlocks)); err != nil {
+				return err
+			}
+		}
+
 		var normalizedBody []byte
 		normalizedBody, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, claudeOAuthNormalizeOptions{})
 		if err := replaceBody(normalizedBody); err != nil {
@@ -167,7 +179,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 发送请求
-	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	resp, err := s.doClaudeUpstreamRequest(ctx, upstreamReq, proxyURL, account, s.tlsFPProfileService.ResolveTLSProfile(account))
 	if err != nil {
 		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(err.Error()), "")
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
@@ -194,7 +206,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		filteredBody := FilterThinkingBlocksForRetry(body, reqModel)
 		retryReq, retryWireBody, buildErr := s.buildCountTokensRequest(ctx, c, account, filteredBody, token, tokenType, reqModel, shouldMimicClaudeCode)
 		if buildErr == nil {
-			retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+			retryResp, retryErr := s.doClaudeUpstreamRequest(ctx, retryReq, proxyURL, account, s.tlsFPProfileService.ResolveTLSProfile(account))
 			if retryErr == nil {
 				if retryResp.StatusCode < 400 {
 					// count_tokens 签名重试成功后记录最终 wire body，错误响应仍保留原 body 便于后续处理。
@@ -517,15 +529,22 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	}
 
 	// Disabled fingerprint unification does not disable forced mimicry headers.
-	var billingFingerprint *Fingerprint
-	if ctEnableFP {
-		billingFingerprint = ctFingerprint
+	billingFingerprint := ctFingerprint
+	if !ctEnableFP {
+		billingFingerprint = nil
 	}
 	// 一致性铁律：同一次请求内只取一次 mimic UA，billing cc_version 与出站
 	// User-Agent 头共用这一个字符串（同 buildUpstreamRequest）。
 	ctMimicUserAgent := claude.DefaultUserAgent()
-	if billingUA := effectiveBillingUserAgent(ctMimicUserAgent, tokenType, mimicClaudeCode, billingFingerprint); billingUA != "" {
-		body = syncBillingHeaderVersion(body, billingUA)
+	clientBillingUserAgent := ""
+	if clientHeaders != nil {
+		clientBillingUserAgent = clientHeaders.Get("User-Agent")
+	}
+	if billingUserAgent := effectiveRequestBillingUserAgent(ctMimicUserAgent, clientBillingUserAgent, tokenType, mimicClaudeCode, billingFingerprint); billingUserAgent != "" {
+		if !mimicClaudeCode {
+			body = ensureClaudeCodeBillingBlock(body, billingUserAgent, c)
+		}
+		body = syncBillingHeaderVersion(body, billingUserAgent, c)
 	}
 
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
@@ -572,6 +591,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			}
 		}
 	}
+	s.applyClaudeCodeControlHeaders(ctx, req, clientHeaders, account, tokenType, mimicClaudeCode)
 
 	// OAuth 账号：应用指纹到请求头（受设置开关控制）
 	if ctEnableFP && ctFingerprint != nil {
@@ -601,7 +621,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	}
 
 	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
-	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
+	shouldSetSessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id") != "" || (tokenType == "oauth" && mimicClaudeCode)
+	if shouldSetSessionHeader {
 		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
 			if parsed := ParseMetadataUserID(uid); parsed != nil {
 				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)
