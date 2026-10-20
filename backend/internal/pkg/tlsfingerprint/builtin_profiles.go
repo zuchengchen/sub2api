@@ -24,6 +24,34 @@ func BuiltinProfile(name string) *Profile {
 			SupportedVersions: []uint16{0x0304, 0x0303}, KeyShareGroups: []uint16{29}, PSKModes: []uint16{1},
 			Extensions: []uint16{0, 11, 10, 35, 16, 22, 23, 13, 43, 45, 51},
 		}
+	case "rustls":
+		// rustls 0.23.x + aws-lc-rs 默认 ClientHello（Codex CLI websocket-client
+		// 走 build_rustls_client_config_with_custom_ca → rustls::ClientConfig 默认）：
+		//   cipher order: TLS13 AES256/AES128/CHACHA, then ECDHE_ECDSA AES256/AES128/CHACHA,
+		//   then ECDHE_RSA AES256/AES128/CHACHA（rustls DEFAULT_CIPHER_SUITES 序）。
+		//   supported_groups 首项 X25519MLKEM768（aws-lc-rs 默认开后量子 kx），
+		//   key_share 只投前两个组。
+		//   ws 场景 rustls 配置不发 ALPN（alpn_protocols 为空 → 无 16 扩展）。
+		p = Profile{
+			Name: "rustls 0.23 aws-lc (Codex CLI)",
+			CipherSuites: []uint16{
+				0x1302, 0x1301, 0x1303,
+				0xc02c, 0xc02b, 0xcca9,
+				0xc030, 0xc02f, 0xcca8,
+			},
+			Curves:       []uint16{0x11ec, 29, 23, 24},
+			PointFormats: []uint16{0},
+			SignatureAlgorithms: []uint16{
+				0x0403, 0x0807, 0x0503, 0x0603,
+				0x0804, 0x0805, 0x0806,
+				0x0401, 0x0501, 0x0601,
+			},
+			ALPNProtocols:     []string{},
+			SupportedVersions: []uint16{0x0304, 0x0303},
+			KeyShareGroups:    []uint16{0x11ec, 29},
+			PSKModes:          []uint16{1},
+			Extensions:        []uint16{0, 11, 10, 35, 13, 51, 45, 43},
+		}
 	default:
 		return nil
 	}

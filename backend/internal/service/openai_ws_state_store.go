@@ -59,6 +59,12 @@ type openAIWSInvalidEncryptedBinding struct {
 // 不影响正确性。
 const openAIWSInvalidEncryptedDigestsPerSession = 512
 
+// openAIWSDeltaChainBinding 是 delta 链快照的进程内绑定。
+type openAIWSDeltaChainBinding struct {
+	state     *openAIWSDeltaChainState
+	expiresAt time.Time
+}
+
 // OpenAIWSStateStore 管理 WSv2 的粘连状态。
 // - response_id -> account_id 用于续链路由
 // - response_id -> conn_id 用于连接内上下文复用
@@ -92,6 +98,13 @@ type OpenAIWSStateStore interface {
 	// HasAnySessionInvalidEncryptedContent 是热路径快速探测：全局无记录时
 	// 调用方可跳过会话哈希计算与摘要匹配。
 	HasAnySessionInvalidEncryptedContent() bool
+
+	// delta chain：按会话记录"上游侧已知的逻辑上下文"（逻辑 input 哈希 +
+	// 上轮 output item 哈希 + 锚点 response_id）。命中时请求只需发送尾部
+	// 新增 items + previous_response_id——官方 Codex CLI 的增量传输协议。
+	BindSessionDeltaChain(groupID int64, sessionHash string, state *openAIWSDeltaChainState, ttl time.Duration)
+	GetSessionDeltaChain(groupID int64, sessionHash string) (*openAIWSDeltaChainState, bool)
+	DeleteSessionDeltaChain(groupID int64, sessionHash string)
 }
 
 type defaultOpenAIWSStateStore struct {
@@ -111,6 +124,9 @@ type defaultOpenAIWSStateStore struct {
 	sessionInvalidEncryptedMu sync.RWMutex
 	sessionInvalidEncrypted   map[string]openAIWSInvalidEncryptedBinding
 
+	sessionDeltaChainMu sync.RWMutex
+	sessionDeltaChain   map[string]openAIWSDeltaChainBinding
+
 	lastCleanupUnixNano atomic.Int64
 }
 
@@ -124,6 +140,7 @@ func NewOpenAIWSStateStore(cache GatewayCache) OpenAIWSStateStore {
 		sessionToTurnState:      make(map[string]openAIWSTurnStateBinding, 256),
 		sessionToConn:           make(map[string]openAIWSSessionConnBinding, 256),
 		sessionInvalidEncrypted: make(map[string]openAIWSInvalidEncryptedBinding),
+		sessionDeltaChain:       make(map[string]openAIWSDeltaChainBinding, 128),
 	}
 	store.lastCleanupUnixNano.Store(time.Now().UnixNano())
 	return store
@@ -491,6 +508,50 @@ func (s *defaultOpenAIWSStateStore) HasAnySessionInvalidEncryptedContent() bool 
 	return len(s.sessionInvalidEncrypted) > 0
 }
 
+func (s *defaultOpenAIWSStateStore) BindSessionDeltaChain(groupID int64, sessionHash string, state *openAIWSDeltaChainState, ttl time.Duration) {
+	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	if key == "" || state == nil || strings.TrimSpace(state.ResponseID) == "" {
+		return
+	}
+	ttl = normalizeOpenAIWSTTL(ttl)
+	s.maybeCleanup()
+
+	s.sessionDeltaChainMu.Lock()
+	ensureBindingCapacity(s.sessionDeltaChain, key, openAIWSStateStoreMaxEntriesPerMap)
+	s.sessionDeltaChain[key] = openAIWSDeltaChainBinding{
+		state:     state,
+		expiresAt: time.Now().Add(ttl),
+	}
+	s.sessionDeltaChainMu.Unlock()
+}
+
+func (s *defaultOpenAIWSStateStore) GetSessionDeltaChain(groupID int64, sessionHash string) (*openAIWSDeltaChainState, bool) {
+	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	if key == "" {
+		return nil, false
+	}
+	s.maybeCleanup()
+
+	now := time.Now()
+	s.sessionDeltaChainMu.RLock()
+	binding, ok := s.sessionDeltaChain[key]
+	s.sessionDeltaChainMu.RUnlock()
+	if !ok || now.After(binding.expiresAt) || binding.state == nil {
+		return nil, false
+	}
+	return binding.state, true
+}
+
+func (s *defaultOpenAIWSStateStore) DeleteSessionDeltaChain(groupID int64, sessionHash string) {
+	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	if key == "" {
+		return
+	}
+	s.sessionDeltaChainMu.Lock()
+	delete(s.sessionDeltaChain, key)
+	s.sessionDeltaChainMu.Unlock()
+}
+
 func (s *defaultOpenAIWSStateStore) maybeCleanup() {
 	if s == nil {
 		return
@@ -528,6 +589,26 @@ func (s *defaultOpenAIWSStateStore) maybeCleanup() {
 	s.sessionInvalidEncryptedMu.Lock()
 	cleanupExpiredInvalidEncryptedBindings(s.sessionInvalidEncrypted, now, openAIWSStateStoreCleanupMaxPerMap)
 	s.sessionInvalidEncryptedMu.Unlock()
+
+	s.sessionDeltaChainMu.Lock()
+	cleanupExpiredDeltaChainBindings(s.sessionDeltaChain, now, openAIWSStateStoreCleanupMaxPerMap)
+	s.sessionDeltaChainMu.Unlock()
+}
+
+func cleanupExpiredDeltaChainBindings(bindings map[string]openAIWSDeltaChainBinding, now time.Time, maxScan int) {
+	if len(bindings) == 0 || maxScan <= 0 {
+		return
+	}
+	scanned := 0
+	for key, binding := range bindings {
+		if now.After(binding.expiresAt) {
+			delete(bindings, key)
+		}
+		scanned++
+		if scanned >= maxScan {
+			break
+		}
+	}
 }
 
 func cleanupExpiredInvalidEncryptedBindings(bindings map[string]openAIWSInvalidEncryptedBinding, now time.Time, maxScan int) {

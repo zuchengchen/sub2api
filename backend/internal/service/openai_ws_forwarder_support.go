@@ -18,8 +18,28 @@ func (s *OpenAIGatewayService) isOpenAIWSGeneratePrewarmEnabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled
 }
 
+func (s *OpenAIGatewayService) isOpenAIWSDeltaContextEnabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.DeltaContextEnabled
+}
+
+func (s *OpenAIGatewayService) isOpenAIWSExactFidelityEnabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ExactFidelityEnabled
+}
+
+// openAIWSPrewarmResult 记录预热交换里入链所需的信息：官方把预热响应当作
+// last_response（from_untraced_warmup），真实请求以它为 previous_response_id
+// 锚点发送增量（通常为空尾）。
+type openAIWSPrewarmResult struct {
+	ResponseID string
+	// SentItems 是预热帧 input 的逻辑项（按线序原始字节）。
+	SentItems []json.RawMessage
+	// ItemsAdded 是预热响应流里 response.output_item.done 收集的项。
+	ItemsAdded []json.RawMessage
+}
+
 // performOpenAIWSGeneratePrewarm 在 WSv2 下执行可选的 generate=false 预热。
 // 预热默认关闭，仅在配置开启后生效；失败时按可恢复错误回退到 HTTP。
+// 返回预热结果供增量链锚定（未执行或失败时 result 为 nil）。
 func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	ctx context.Context,
 	lease *openAIWSConnLease,
@@ -27,20 +47,21 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	payload map[string]any,
 	previousResponseID string,
 	reqBody map[string]any,
+	bodyRaw []byte,
 	account *Account,
 	stateStore OpenAIWSStateStore,
 	groupID int64,
-) error {
+) (*openAIWSPrewarmResult, error) {
 	if s == nil {
-		return nil
+		return nil, nil
 	}
 	if lease == nil || account == nil {
 		logOpenAIWSModeInfo("prewarm_skip reason=invalid_state has_lease=%v has_account=%v", lease != nil, account != nil)
-		return nil
+		return nil, nil
 	}
 	connID := strings.TrimSpace(lease.ConnID())
 	if !s.isOpenAIWSGeneratePrewarmEnabled() {
-		return nil
+		return nil, nil
 	}
 	if decision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 		logOpenAIWSModeInfo(
@@ -49,7 +70,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			connID,
 			normalizeOpenAIWSLogValue(string(decision.Transport)),
 		)
-		return nil
+		return nil, nil
 	}
 	if strings.TrimSpace(previousResponseID) != "" {
 		logOpenAIWSModeInfo(
@@ -58,16 +79,15 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			connID,
 			truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen),
 		)
-		return nil
+		return nil, nil
 	}
 	if lease.IsPrewarmed() {
 		logOpenAIWSModeInfo("prewarm_skip account_id=%d conn_id=%s reason=already_prewarmed", account.ID, connID)
-		return nil
+		return nil, nil
 	}
-	if NeedsToolContinuation(reqBody) {
-		logOpenAIWSModeInfo("prewarm_skip account_id=%d conn_id=%s reason=tool_continuation", account.ID, connID)
-		return nil
-	}
+	// 官方 Codex 客户端在新连接上无条件发送 generate=false 预热帧（包含完整
+	// 工具声明），不在 tools/tool_choice 处设门槛；previous_response_id 锚定的
+	// 续链请求仍跳过预热（上方 gate），避免预热帧携带上游不认的锚点。
 	prewarmStart := time.Now()
 	logOpenAIWSModeInfo("prewarm_start account_id=%d conn_id=%s", account.ID, connID)
 
@@ -75,22 +95,49 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	for k, v := range payload {
 		prewarmPayload[k] = v
 	}
+	// client_metadata 是嵌套 map：浅拷贝会在 applyCodexWireLaneMetadata("prewarm")
+	// 时把 prewarm 画像写回业务 payload 的同一 map。克隆后再改。
+	if cm, ok := prewarmPayload["client_metadata"].(map[string]any); ok {
+		cloned := make(map[string]any, len(cm)+1)
+		for k, v := range cm {
+			cloned[k] = v
+		}
+		prewarmPayload["client_metadata"] = cloned
+	}
 	prewarmPayload["generate"] = false
+	// 官方 prewarm 画像：request_kind=prewarm、turn_id 空串、无 turn 专属键。
+	if account.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
+		applyCodexWireLaneMetadata(prewarmPayload, nil, account, "prewarm")
+	}
+	// 预热帧的 input 就是将要发送的逻辑项——记录下来作为增量链 baseline。
+	prewarmSentItems := openAIWSDeltaWireItems(bodyRaw, prewarmPayload["input"])
 	prewarmPayloadJSON := payloadAsJSONBytes(prewarmPayload)
+	var prewarmFrame []byte
+	if account.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
+		if encoded, marshalErr := marshalCodexWSCreateFrame(bodyRaw, prewarmPayload); marshalErr == nil {
+			prewarmFrame = encoded
+		}
+	}
 
-	if err := lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeout()); err != nil {
+	var prewarmWriteErr error
+	if len(prewarmFrame) > 0 {
+		prewarmWriteErr = lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(prewarmFrame), s.openAIWSWriteTimeout())
+	} else {
+		prewarmWriteErr = lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeout())
+	}
+	if prewarmWriteErr != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
 			"prewarm_write_fail account_id=%d conn_id=%s cause=%s",
 			account.ID,
 			connID,
-			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
+			truncateOpenAIWSLogValue(prewarmWriteErr.Error(), openAIWSLogValueMaxLen),
 		)
-		return wrapOpenAIWSFallback("prewarm_write", err)
+		return nil, wrapOpenAIWSFallback("prewarm_write", prewarmWriteErr)
 	}
 	logOpenAIWSModeInfo("prewarm_write_sent account_id=%d conn_id=%s payload_bytes=%d", account.ID, connID, len(prewarmPayloadJSON))
 
-	prewarmResponseID := ""
+	result := &openAIWSPrewarmResult{SentItems: prewarmSentItems}
 	prewarmEventCount := 0
 	prewarmTerminalCount := 0
 	for {
@@ -107,7 +154,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 				truncateOpenAIWSLogValue(readErr.Error(), openAIWSLogValueMaxLen),
 				prewarmEventCount,
 			)
-			return wrapOpenAIWSFallback("prewarm_"+classifyOpenAIWSReadFallbackReason(readErr), readErr)
+			return nil, wrapOpenAIWSFallback("prewarm_"+classifyOpenAIWSReadFallbackReason(readErr), readErr)
 		}
 
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(message)
@@ -115,8 +162,13 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			continue
 		}
 		prewarmEventCount++
-		if prewarmResponseID == "" && eventResponseID != "" {
-			prewarmResponseID = eventResponseID
+		if result.ResponseID == "" && eventResponseID != "" {
+			result.ResponseID = eventResponseID
+		}
+		if eventType == "response.output_item.done" {
+			if item := gjson.GetBytes(message, "item"); item.Exists() {
+				result.ItemsAdded = append(result.ItemsAdded, openAIWSRawMessageFromResult(message, item))
+			}
 		}
 		if prewarmEventCount <= openAIWSPrewarmEventLogHead || eventType == "error" || isOpenAIWSTerminalEvent(eventType) {
 			logOpenAIWSModeInfo(
@@ -152,9 +204,9 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			)
 			lease.MarkBroken()
 			if canFallback {
-				return wrapOpenAIWSFallback("prewarm_"+fallbackReason, errors.New(errMsg))
+				return nil, wrapOpenAIWSFallback("prewarm_"+fallbackReason, errors.New(errMsg))
 			}
-			return wrapOpenAIWSFallback("prewarm_error_event", errors.New(errMsg))
+			return nil, wrapOpenAIWSFallback("prewarm_error_event", errors.New(errMsg))
 		}
 
 		if isOpenAIWSTerminalEvent(eventType) {
@@ -164,21 +216,21 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	}
 
 	lease.MarkPrewarmed()
-	if prewarmResponseID != "" && stateStore != nil {
+	if result.ResponseID != "" && stateStore != nil {
 		ttl := s.openAIWSResponseStickyTTL()
-		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, prewarmResponseID, stateStore.BindResponseAccount(ctx, groupID, prewarmResponseID, account.ID, ttl))
-		stateStore.BindResponseConn(prewarmResponseID, lease.ConnID(), ttl)
+		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, result.ResponseID, stateStore.BindResponseAccount(ctx, groupID, result.ResponseID, account.ID, ttl))
+		stateStore.BindResponseConn(result.ResponseID, lease.ConnID(), ttl)
 	}
 	logOpenAIWSModeInfo(
 		"prewarm_done account_id=%d conn_id=%s response_id=%s events=%d terminal_events=%d duration_ms=%d",
 		account.ID,
 		connID,
-		truncateOpenAIWSLogValue(prewarmResponseID, openAIWSIDValueMaxLen),
+		truncateOpenAIWSLogValue(result.ResponseID, openAIWSIDValueMaxLen),
 		prewarmEventCount,
 		prewarmTerminalCount,
 		time.Since(prewarmStart).Milliseconds(),
 	)
-	return nil
+	return result, nil
 }
 
 func payloadAsJSON(payload map[string]any) string {
