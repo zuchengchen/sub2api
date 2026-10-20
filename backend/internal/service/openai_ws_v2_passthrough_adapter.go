@@ -868,15 +868,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	agentTaskRecoveryTried := false
+	oauthRecoveryTried := false
+	var oauthCredentialOwner *Account
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
 	var handshakeHeaders http.Header
 	for {
-		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
+		headers, err = s.refreshOpenAIWSAuthHeaders(ctx, account, headers)
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
+		sentHeaders := cloneHeader(headers)
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
 		if err == nil {
@@ -894,6 +897,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				return fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
 			}
 			continue
+		}
+		if statusCode == http.StatusUnauthorized {
+			if !oauthRecoveryTried {
+				oauthRecoveryTried = true
+				var recovered bool
+				headers, oauthCredentialOwner, recovered = s.recoverOpenAIOAuthHeaders(ctx, account, sentHeaders)
+				if recovered {
+					continue
+				}
+			} else if oauthCredentialOwner != nil && s.openAITokenProvider != nil {
+				s.openAITokenProvider.RecordUnauthorizedAfterRefresh(ctx, oauthCredentialOwner, strings.TrimPrefix(sentHeaders.Get("Authorization"), "Bearer "))
+			}
 		}
 		logOpenAIWSV2Passthrough(
 			"relay_dial_failed account_id=%d status_code=%d err=%s",

@@ -163,10 +163,39 @@ func TestAccount_IsOpenAIResponsesWebSocketV2Enabled(t *testing.T) {
 			Platform: PlatformOpenAI,
 			Type:     AccountTypeOAuth,
 			Extra: map[string]any{
-				"openai_apikey_responses_websockets_v2_enabled": true,
+				"openai_apikey_responses_websockets_v2_enabled": false,
+			},
+		}
+		require.True(t, account.IsOpenAIResponsesWebSocketV2Enabled())
+	})
+
+	t.Run("OAuth账号未设置时默认开启", func(t *testing.T) {
+		require.True(t, (&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}).IsOpenAIResponsesWebSocketV2Enabled())
+		require.True(t, (&Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Extra: map[string]any{}}).IsOpenAIResponsesWebSocketV2Enabled())
+	})
+
+	t.Run("OAuth账号显式关闭保持关闭", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				"openai_oauth_responses_websockets_v2_enabled": false,
 			},
 		}
 		require.False(t, account.IsOpenAIResponsesWebSocketV2Enabled())
+	})
+
+	t.Run("OAuth账号显式off或http_bridge模式保持关闭", func(t *testing.T) {
+		for _, mode := range []string{OpenAIWSIngressModeOff, OpenAIWSIngressModeHTTPBridge} {
+			account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"openai_oauth_responses_websockets_v2_mode": mode}}
+			require.False(t, account.IsOpenAIResponsesWebSocketV2Enabled(), mode)
+		}
+		ctxPool := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeCtxPool}}
+		require.True(t, ctxPool.IsOpenAIResponsesWebSocketV2Enabled())
+	})
+
+	t.Run("API Key账号未设置时默认关闭", func(t *testing.T) {
+		require.False(t, (&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}).IsOpenAIResponsesWebSocketV2Enabled())
 	})
 
 	t.Run("分类型新键优先于兼容键", func(t *testing.T) {
