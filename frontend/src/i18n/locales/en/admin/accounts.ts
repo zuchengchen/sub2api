@@ -656,6 +656,21 @@ export default {
           'The gateway opens a separate upstream WS connection for each client session, without using a connection pool.',
         wsModeHttpBridgeHint:
           'The gateway converts client WS requests to upstream HTTP requests, then converts SSE streaming responses back into WS messages.',
+        requestTimezone: 'Request timezone',
+        requestTimezonePlaceholder: 'IANA name, e.g. America/Los_Angeles (empty = auto)',
+        requestTimezoneSource: 'Effective timezone: {timezone} · Source: {source}',
+        requestTimezoneSourceOverride: 'manual override',
+        requestTimezoneSourceProxy: 'proxy egress',
+        requestTimezoneSourceDirect: 'direct egress',
+        requestTimezoneSourceFallback: 'fallback default',
+        requestTimezoneHelp: {
+          intro:
+            'The IANA timezone sent to the upstream inside environment_context (timezone and current_date) and web_search user_location.',
+          order:
+            'Resolution order: this manual override → cached egress timezone of the account proxy → cached direct-egress timezone.',
+          fallback:
+            'When no egress timezone is known the gateway falls back to the configured default (built-in: America/Los_Angeles) and marks it as fallback.'
+        },
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
         oauthResponsesWebsocketsV2Desc:
           'Only applies to OpenAI OAuth. This account can use OpenAI WebSocket Mode only when enabled.',
