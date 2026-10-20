@@ -323,9 +323,8 @@ func projectCodexOutboundHeaders(h http.Header, websocket bool) {
 	for _, name := range nonOfficial {
 		deleteHeaderAllForms(h, name)
 	}
-	// 官方 build_session_headers 在 session_id 与 thread_id 均存在时必然同时写出
-	// 两个连字符头；这里只把已有的值补成对，不凭空造 ID（造 ID 是上游派生层的职责）。
-	if session := strings.TrimSpace(h.Get("session-id")); session != "" && strings.TrimSpace(h.Get("thread-id")) == "" {
-		h.Set("thread-id", session)
-	}
+	// 不补 session-id/thread-id 成对：官方只在客户端真正持有这两个 ID 时才同时
+	// 发送（build_session_headers），配对缺失的另一半属于凭空造 ID，会让
+	// messages-bridge 这类「只有 session、没有 conversation」的场景错误地带上
+	// thread-id。造 ID 是上游派生层的职责，收口只负责删非官方名。
 }
