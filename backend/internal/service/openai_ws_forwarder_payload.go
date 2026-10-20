@@ -95,9 +95,8 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 
 	sessionResolution := resolveOpenAIWSSessionHeaders(c, promptCacheKey)
 	if c != nil && c.Request != nil {
-		if v := strings.TrimSpace(c.Request.Header.Get("accept-language")); v != "" {
-			headers.Set("accept-language", v)
-		}
+		// accept-language 不透传：官方 Codex WS 握手不发该头（reqwest 不写它），
+		// projectCodexOutboundHeaders 的收口也会删掉它；这里从源头就不再引入。
 		for _, value := range c.Request.Header.Values("x-codex-beta-features") {
 			if value = strings.TrimSpace(value); value != "" {
 				headers.Add("x-codex-beta-features", value)

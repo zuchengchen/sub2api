@@ -558,11 +558,23 @@ type OpenAIGatewayService struct {
 	openaiCodexTicketCancel      context.CancelFunc
 	openaiCodexTicketDone        chan struct{}
 	openaiCodexTicketStopped     bool
+
+	// requestTimezoneResolver 按出口 IP 决定 OpenAI 请求时区（决定 4）。
+	// 由 wire 在构造后注入；nil 时回退历史默认美西。
+	requestTimezoneResolver *OpenAIRequestTimezoneResolver
 }
 
 func (s *OpenAIGatewayService) SetBillingOutboxRepository(repo BillingOutboxRepository) {
 	if s != nil {
 		s.billingOutboxRepo = repo
+	}
+}
+
+// SetRequestTimezoneResolver 注入按出口 IP 决定请求时区的解析器。
+// wire 在构造期调用；保留 nil 容错供测试/手工构造跳过动态时区。
+func (s *OpenAIGatewayService) SetRequestTimezoneResolver(r *OpenAIRequestTimezoneResolver) {
+	if s != nil {
+		s.requestTimezoneResolver = r
 	}
 }
 
