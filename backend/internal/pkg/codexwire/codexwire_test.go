@@ -150,7 +150,7 @@ func TestPMDRoundTrip_NoContextTakeover(t *testing.T) {
 // wsPipeServer 是一个最小的 WS 服务端：完成 101 握手（不带扩展），
 // 回显一条 text 消息、发一条 ping、再发 close。
 func wsPipeServer(t *testing.T, conn net.Conn, deflate bool) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	br := bufio.NewReader(conn)
 	// 读握手请求到空行。
 	for {
@@ -216,15 +216,15 @@ func wsPipeServer(t *testing.T, conn net.Conn, deflate bool) {
 		default:
 			return
 		}
-		conn.Write(head[:n])
-		conn.Write(p)
+		_, _ = conn.Write(head[:n])
+		_, _ = conn.Write(p)
 	}
 	echoPayload := payload
 	if deflate {
 		var cbuf bytes.Buffer
 		w, _ := flate.NewWriter(&cbuf, flate.DefaultCompression)
-		w.Write(payload)
-		w.Flush()
+		_, _ = w.Write(payload)
+		_ = w.Flush()
 		echoPayload = cbuf.Bytes()
 		if len(echoPayload) >= 4 && bytes.Equal(echoPayload[len(echoPayload)-4:], pmdTail) {
 			echoPayload = echoPayload[:len(echoPayload)-4]
@@ -235,12 +235,12 @@ func wsPipeServer(t *testing.T, conn net.Conn, deflate bool) {
 	// 读掉客户端对 ping 的自动 pong（net.Pipe 无缓冲，必须消费客户端写）。
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if ph, err := readFrameHeader(br); err == nil && ph.opcode == opcodePong {
-		io.CopyN(io.Discard, br, int64(ph.length))
+		_, _ = io.CopyN(io.Discard, br, int64(ph.length))
 	}
 	writeServerFrame(opcodeClose, []byte{0x03, 0xe8}, false)
 	// 客户端会回 close echo，读掉即可。
 	if ch, err := readFrameHeader(br); err == nil {
-		io.CopyN(io.Discard, br, int64(ch.length))
+		_, _ = io.CopyN(io.Discard, br, int64(ch.length))
 	}
 }
 
@@ -321,7 +321,7 @@ func TestWSConnRoundTrip_Deflate(t *testing.T) {
 
 func TestWSConnClose_WritesCloseFrame(t *testing.T) {
 	client, server := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	go func() {
 		br := bufio.NewReader(server)
 		h, err := readFrameHeader(br)

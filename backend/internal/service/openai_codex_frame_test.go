@@ -9,19 +9,19 @@ import (
 func TestMarshalCodexWSCreateFrame_KeyOrder(t *testing.T) {
 	body := []byte(`{"model":"gpt-5","instructions":"hi","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}],"tools":[{"type":"web_search","filters":{"allowed_domains":["a.com"]}}],"reasoning":{"context":"all_turns","effort":"low"},"store":false,"include":["reasoning.encrypted_content"],"prompt_cache_key":"k"}`)
 	payload := map[string]any{
-		"type":             "response.create",
-		"model":            "gpt-5",
-		"instructions":     "hi",
-		"stream":           true,
-		"input":            []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}`)},
-		"tools":            []any{map[string]any{"type": "web_search"}},
-		"tool_choice":      "auto",
+		"type":                "response.create",
+		"model":               "gpt-5",
+		"instructions":        "hi",
+		"stream":              true,
+		"input":               []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}`)},
+		"tools":               []any{map[string]any{"type": "web_search"}},
+		"tool_choice":         "auto",
 		"parallel_tool_calls": true,
-		"reasoning":        map[string]any{"effort": "low", "context": "all_turns"},
-		"store":            false,
-		"include":          []any{"reasoning.encrypted_content"},
-		"prompt_cache_key": "k",
-		"client_metadata":  map[string]any{"turn_id": "t1", "session_id": "s1", "x-codex-turn-state": "abc"},
+		"reasoning":           map[string]any{"effort": "low", "context": "all_turns"},
+		"store":               false,
+		"include":             []any{"reasoning.encrypted_content"},
+		"prompt_cache_key":    "k",
+		"client_metadata":     map[string]any{"turn_id": "t1", "session_id": "s1", "x-codex-turn-state": "abc"},
 	}
 	out, err := marshalCodexWSCreateFrame(body, payload)
 	if err != nil {
@@ -75,10 +75,10 @@ func TestMarshalCodexWSCreateFrame_RawPassthrough(t *testing.T) {
 	// 字段（tools）直接引用原始请求体字节。
 	body := []byte(`{"model":"m","input":[{"type":"x"}],"reasoning":{"z":1,"a":2},"text":{"format":{"type":"text"},"verbosity":"low"},"tools":[{"type":"web_search","filters":{"allowed_domains":["b.com","a.com"]}}]}`)
 	payload := map[string]any{
-		"type":   "response.create",
-		"model":  "m",
-		"stream": true,
-		"input":  []json.RawMessage{json.RawMessage(`{"type":"x"}`)},
+		"type":      "response.create",
+		"model":     "m",
+		"stream":    true,
+		"input":     []json.RawMessage{json.RawMessage(`{"type":"x"}`)},
 		"reasoning": map[string]any{"z": 1, "a": 2},
 		"text":      map[string]any{"format": map[string]any{"type": "text"}, "verbosity": "low"},
 		"tools":     []any{map[string]any{"type": "web_search"}},

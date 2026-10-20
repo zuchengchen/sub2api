@@ -1,11 +1,9 @@
 package service
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -252,39 +250,4 @@ func openAIWSDeltaWireItems(body []byte, payloadInput any) []json.RawMessage {
 		}
 		return []json.RawMessage{rawItem}
 	}
-}
-
-// openAIWSDeltaChainStore 为 delta 链提供进程内存储（跨副本共享走 GatewayCache）。
-type openAIWSDeltaChainStore interface {
-	BindSessionDeltaChain(groupID int64, sessionHash string, state *openAIWSDeltaChainState, ttl time.Duration)
-	GetSessionDeltaChain(groupID int64, sessionHash string) (*openAIWSDeltaChainState, bool)
-	DeleteSessionDeltaChain(groupID int64, sessionHash string)
-}
-
-// 序列化（cache 后端可复用）
-func (s *openAIWSDeltaChainState) encode() ([]byte, error) {
-	return json.Marshal(s)
-}
-
-func decodeOpenAIWSDeltaChainState(raw []byte) (*openAIWSDeltaChainState, error) {
-	var state openAIWSDeltaChainState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		return nil, err
-	}
-	return &state, nil
-}
-
-// openAIWSDeltaChainBindingKey 复用会话粘滞键空间。
-func openAIWSDeltaChainBindingKey(groupID int64, sessionHash string) string {
-	return openAIWSSessionDeltaChainKeyPrefix + strconv.FormatInt(groupID, 10) + ":" + sessionHash
-}
-
-const openAIWSSessionDeltaChainKeyPrefix = "oa_dlt:"
-
-// equalRawMessageNormalized 供 delta 比较复用现有规范化。
-func equalRawMessageNormalized(a, b json.RawMessage) bool {
-	if bytes.Equal(bytes.TrimSpace(a), bytes.TrimSpace(b)) {
-		return true
-	}
-	return bytes.Equal(normalizeOpenAIWSJSONForCompareOrRaw(a), normalizeOpenAIWSJSONForCompareOrRaw(b))
 }

@@ -122,15 +122,16 @@ func DoHTTP1(ctx context.Context, method, rawURL string, ordered []HeaderKV, bod
 	defer cancel()
 
 	var conn net.Conn
-	if scheme == "http" {
+	switch scheme {
+	case "http":
 		base := opts.BaseDialer
 		if base == nil {
 			base = (&net.Dialer{}).DialContext
 		}
 		conn, err = base(dialCtx, "tcp", addr)
-	} else if scheme == "https" {
+	case "https":
 		conn, err = tlsConn(dialCtx, addr, proxyURL, opts.TLSProfile, opts.BaseDialer)
-	} else {
+	default:
 		return nil, fmt.Errorf("unsupported scheme %q", scheme)
 	}
 	if err != nil {
@@ -138,12 +139,7 @@ func DoHTTP1(ctx context.Context, method, rawURL string, ordered []HeaderKV, bod
 	}
 
 	var req strings.Builder
-	req.WriteString(method)
-	req.WriteString(" ")
-	req.WriteString(path)
-	req.WriteString(" HTTP/1.1\r\nHost: ")
-	req.WriteString(host)
-	req.WriteString("\r\n")
+	fmt.Fprintf(&req, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, host)
 	hasCL := false
 	for _, kv := range ordered {
 		if strings.ContainsAny(kv.Name, "\r\n:") || strings.ContainsAny(kv.Value, "\r\n") {
@@ -153,18 +149,13 @@ func DoHTTP1(ctx context.Context, method, rawURL string, ordered []HeaderKV, bod
 		if strings.EqualFold(kv.Name, "content-length") || strings.EqualFold(kv.Name, "transfer-encoding") {
 			hasCL = true
 		}
-		req.WriteString(kv.Name)
-		req.WriteString(": ")
-		req.WriteString(kv.Value)
-		req.WriteString("\r\n")
+		fmt.Fprintf(&req, "%s: %s\r\n", kv.Name, kv.Value)
 	}
 	// hyper appends the framing header after user headers.
 	if !hasCL {
-		req.WriteString("content-length: ")
-		req.WriteString(fmtInt(len(body)))
-		req.WriteString("\r\n")
+		fmt.Fprintf(&req, "content-length: %d\r\n", len(body))
 	}
-	req.WriteString("\r\n")
+	fmt.Fprint(&req, "\r\n")
 	if deadline, ok := dialCtx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
@@ -203,18 +194,4 @@ func (b *connBoundBody) Read(p []byte) (int, error) { return b.ReadCloser.Read(p
 func (b *connBoundBody) Close() error {
 	_ = b.ReadCloser.Close()
 	return b.conn.Close()
-}
-
-func fmtInt(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }

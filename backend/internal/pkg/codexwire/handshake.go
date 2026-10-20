@@ -51,32 +51,18 @@ func BuildWSUpgradeRequest(wsURL string, ordered []HeaderKV, secKey string) ([]b
 		secKey = base64.StdEncoding.EncodeToString(nonce[:])
 	}
 	var buf bytes.Buffer
-	buf.WriteString("GET ")
-	buf.WriteString(path)
-	buf.WriteString(" HTTP/1.1\r\nHost: ")
-	buf.WriteString(host)
-	buf.WriteString("\r\n")
+	fmt.Fprintf(&buf, "GET %s HTTP/1.1\r\nHost: %s\r\n", path, host)
 	for _, kv := range wsUpgradeGeneratedNames {
-		buf.WriteString(kv.Name)
-		buf.WriteString(": ")
-		buf.WriteString(kv.Value)
-		buf.WriteString("\r\n")
+		fmt.Fprintf(&buf, "%s: %s\r\n", kv.Name, kv.Value)
 	}
-	buf.WriteString("Sec-WebSocket-Key: ")
-	buf.WriteString(secKey)
-	buf.WriteString("\r\n")
+	fmt.Fprintf(&buf, "Sec-WebSocket-Key: %s\r\n", secKey)
 	for _, kv := range ordered {
 		if strings.ContainsAny(kv.Name, "\r\n:") || strings.ContainsAny(kv.Value, "\r\n") {
 			return nil, "", fmt.Errorf("invalid header %q", kv.Name)
 		}
-		buf.WriteString(kv.Name)
-		buf.WriteString(": ")
-		buf.WriteString(kv.Value)
-		buf.WriteString("\r\n")
+		fmt.Fprintf(&buf, "%s: %s\r\n", kv.Name, kv.Value)
 	}
-	buf.WriteString("sec-websocket-extensions: ")
-	buf.WriteString(WSUpgradeOffer)
-	buf.WriteString("\r\n\r\n")
+	fmt.Fprintf(&buf, "sec-websocket-extensions: %s\r\n\r\n", WSUpgradeOffer)
 	return buf.Bytes(), secKey, nil
 }
 
