@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	coderws "github.com/coder/websocket"
@@ -260,4 +261,97 @@ func TestOpenAIWSErrorEventPolicySignal(t *testing.T) {
 	reason, retryable := classifyOpenAIWSErrorEventFromRaw("server_err", "server_err", "boom")
 	require.Equal(t, "upstream_error_event", reason)
 	require.True(t, retryable)
+}
+
+type openAIWSProxyRecordingDialer struct {
+	*openAIWSCaptureDialer
+	proxyURLs []string
+}
+
+func (d *openAIWSProxyRecordingDialer) Dial(ctx context.Context, wsURL string, headers http.Header, proxyURL string) (openAIWSClientConn, int, http.Header, error) {
+	d.proxyURLs = append(d.proxyURLs, proxyURL)
+	return d.openAIWSCaptureDialer.Dial(ctx, wsURL, headers, proxyURL)
+}
+
+func TestOpenAIWSHTTPUpstream_WSDialUsesAccountProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := newOpenAIWSHTTPUpstreamTestConfig(true)
+	h := newOpenAIWSHTTPUpstreamHarness(cfg, openAIWSHTTPUpstreamCompleted)
+	recording := &openAIWSProxyRecordingDialer{openAIWSCaptureDialer: h.dialer}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(recording)
+	h.svc.openaiWSPool = pool
+
+	proxyID := int64(77)
+	account := newOpenAIWSHTTPUpstreamOAuthAccount(nil)
+	account.ProxyID = &proxyID
+	account.Proxy = &Proxy{ID: proxyID, Protocol: "http", Host: "127.0.0.1", Port: 18080}
+
+	c, _ := newOpenAIWSHTTPUpstreamContext("/openai/v1/responses")
+	result, err := h.svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.5","stream":true,"instructions":"test","input":[{"type":"input_text","text":"hi"}]}`))
+	require.NoError(t, err)
+	require.True(t, result.OpenAIWSMode)
+	require.Equal(t, []string{"http://127.0.0.1:18080"}, recording.proxyURLs, "the WS upstream dial must use the account proxy, never a direct connection")
+}
+
+func TestOpenAIWSIngress_UpstreamDialUsesAccountProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := newOpenAIWSHTTPUpstreamTestConfig(true)
+	h := newOpenAIWSHTTPUpstreamHarness(cfg, openAIWSHTTPUpstreamCompleted)
+	recording := &openAIWSProxyRecordingDialer{openAIWSCaptureDialer: h.dialer}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(recording)
+	h.svc.openaiWSPool = pool
+
+	proxyID := int64(78)
+	account := newOpenAIWSHTTPUpstreamOAuthAccount(map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeCtxPool})
+	account.ProxyID = &proxyID
+	account.Proxy = &Proxy{ID: proxyID, Protocol: "http", Host: "127.0.0.1", Port: 18081}
+
+	serverErrCh := make(chan error, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		ginCtx.Request = r.Clone(r.Context())
+		ginCtx.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
+		readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		_, first, readErr := conn.Read(readCtx)
+		cancel()
+		if readErr != nil {
+			serverErrCh <- readErr
+			return
+		}
+		serverErrCh <- h.svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "oauth-token", first, nil)
+	}))
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = clientConn.CloseNow() }()
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	require.NoError(t, clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.5","stream":true}`)))
+	cancelWrite()
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+	_, event, readErr := clientConn.Read(readCtx)
+	cancelRead()
+	require.NoError(t, readErr)
+	require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
+	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+	select {
+	case <-serverErrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ingress websocket did not finish")
+	}
+	require.NotEmpty(t, recording.proxyURLs)
+	for _, got := range recording.proxyURLs {
+		require.Equal(t, "http://127.0.0.1:18081", got, "ingress upstream dial must use the account proxy")
+	}
 }
