@@ -348,24 +348,27 @@ func TestOpenAIResponseFlush_KeepaliveDoesNotSplitOpenEvent(t *testing.T) {
 	select {
 	case count := <-recorder.flushEvents:
 		timer.Stop()
-		t.Fatalf("keepalive flushed open event before its blank boundary: flush %d", count)
+		body, _ := recorder.snapshot()
+		require.Equal(t, 1, count)
+		require.Equal(t, ":\n\n", body, "heartbeat must not flush the staged partial event")
 	case <-timer.C:
+		t.Fatal("expected pre-output transport heartbeat")
 	}
 
 	close(allowBlank)
-	waitOpenAIResponseFlushSignal(t, terminalWaiting)
-	waitOpenAIResponseFlushCount(t, recorder, 1)
+	waitOpenAIResponseFlushCount(t, recorder, 2)
 	gotBody, flushes := recorder.snapshot()
-	require.Equal(t, completeEvent, gotBody)
-	require.Equal(t, []string{completeEvent}, flushes)
+	require.Equal(t, ":\n\n"+completeEvent, gotBody)
+	require.Len(t, flushes, 2)
+	require.Equal(t, ":\n\n"+completeEvent, flushes[1])
 
 	close(allowTerminal)
 	require.NoError(t, <-errCh)
 	require.NotNil(t, <-resultCh)
 	gotBody, flushes = recorder.snapshot()
-	require.Equal(t, completeEvent+terminal, gotBody)
-	require.Len(t, flushes, 2)
-	require.Equal(t, completeEvent+terminal, flushes[1])
+	require.Equal(t, ":\n\n"+completeEvent+terminal, gotBody)
+	require.Len(t, flushes, 3)
+	require.Equal(t, ":\n\n"+completeEvent+terminal, flushes[2])
 }
 
 func TestOpenAIResponseFlush_FailedAndErrorEventsFlushAtBoundaries(t *testing.T) {

@@ -49,6 +49,23 @@ func StartOpenAICompactSSEKeepalive(c *gin.Context, interval time.Duration) func
 	return startOpenAISSEKeepalive(c, interval)
 }
 
+// doOpenAIResponsesUpstream covers the otherwise silent HTTP-header wait.
+// Stop before response processing touches headers or starts its own stream
+// pump. HTTP errors after a heartbeat use response.failed, not a second HTTP
+// response; the existing adjusted-size accounting still permits failover.
+func (s *OpenAIGatewayService) doOpenAIResponsesUpstream(c *gin.Context, request *http.Request, proxyURL string, account *Account, stream bool) (*http.Response, error) {
+	timing := newOpenAIForwardTiming(c, request, account)
+	request = request.WithContext(timing.context(request.Context()))
+	if stream && account != nil && account.Platform == PlatformOpenAI &&
+		!openAICompactClientWantsStream(c) && s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+		stop := startOpenAISSEKeepalive(c, time.Duration(s.cfg.Gateway.StreamKeepaliveInterval)*time.Second)
+		defer stop()
+	}
+	response, err := s.doOpenAIUpstream(request, proxyURL, account)
+	timing.markResponse(response, err)
+	return response, err
+}
+
 // startOpenAISSEKeepalive 是不检查 compact 标记的内部入口，供【已经确定处于
 // SSE 流式上下文】的调用方使用（例如 /v1/responses 透传：进入流式循环时上游
 // 已返回 text/event-stream，SSE 响应头也已设好）。
@@ -63,6 +80,17 @@ func startOpenAISSEKeepalive(c *gin.Context, interval time.Duration) func() {
 	k := &openAICompactSSEKeepalive{
 		writer: originalWriter,
 		stop:   make(chan struct{}),
+	}
+	// Header waits, stream pumps, and account retries share one downstream
+	// response. Preserve all prior comment bytes when restarting the pump.
+	if previous, ok := c.Get(openAICompactSSEKeepaliveKey); ok {
+		if prior, valid := previous.(*openAICompactSSEKeepalive); valid && prior != nil {
+			prior.mu.Lock()
+			prior.markStoppedLocked()
+			k.bytes = prior.bytes
+			k.started = prior.started
+			prior.mu.Unlock()
+		}
 	}
 	c.Set(openAICompactSSEKeepaliveKey, k)
 	wrappedWriter := &openAICompactKeepaliveWriter{ResponseWriter: originalWriter, k: k}
@@ -149,19 +177,21 @@ func StopOpenAICompactSSEKeepaliveCommitted(c *gin.Context) bool {
 	if c == nil {
 		return false
 	}
+	streamBytes, _ := c.Get(openAIStreamKeepaliveBytesKey)
+	streamWritten, _ := streamBytes.(int)
 	value, ok := c.Get(openAICompactSSEKeepaliveKey)
 	if !ok {
-		return false
+		return streamWritten > 0
 	}
 	k, ok := value.(*openAICompactSSEKeepalive)
 	if !ok || k == nil {
-		return false
+		return streamWritten > 0
 	}
 	k.mu.Lock()
 	k.markStoppedLocked()
 	committed := k.started
 	k.mu.Unlock()
-	return committed
+	return committed || streamWritten > 0
 }
 
 // OpenAICompactKeepaliveAdjustedWrittenSize 返回排除 compact 心跳注释字节后
