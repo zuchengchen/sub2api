@@ -38,7 +38,12 @@ func TestUpdateExtraCodexDisplaySnapshotsAvoidSchedulerOutbox(t *testing.T) {
 				}
 				payload, err := json.Marshal(updates)
 				require.NoError(t, err)
-				mock.ExpectExec(regexp.QuoteMeta("UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL")).
+				// 未显式关闭 codex_fingerprint_mode 的 extra 补丁都会原子保留/补铸
+				// 指纹种子（缺失按 full 处理），UpdateExtra 因而走带 CASE 的 SQL。
+				updateSQL := "UPDATE accounts SET extra = " +
+					ensureCodexFingerprintSeedSQL("COALESCE(extra, '{}'::jsonb) || $1::jsonb") +
+					", updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL"
+				mock.ExpectExec(regexp.QuoteMeta(updateSQL)).
 					WithArgs(string(payload), int64(27)).WillReturnResult(sqlmock.NewResult(0, 1))
 				if tc.schedulingChange {
 					mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).

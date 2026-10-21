@@ -28,7 +28,7 @@ func TestAstraForwardPreservesMaxInPayloadAndUsage(t *testing.T) {
 				}
 				upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK,
 					Header: http.Header{"Content-Type": []string{contentType}}, Body: io.NopCloser(strings.NewReader(response))}}
-				svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+				svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 				account := rawGPT56ResponsesAPIKeyAccount(requestedModel, "gpt-6-astra")
 				body, err := json.Marshal(map[string]any{"model": requestedModel, "stream": stream, "input": "hello", "reasoning": map[string]string{"effort": "max"}})
 				require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestOpenAIGatewayServiceForwardPreservesGPT56MaxEffort(t *testing.T) {
 	}
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
-	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, httpUpstream: upstream}
 	account := &Account{
 		ID:          7,
 		Name:        "openai-apikey",
@@ -195,7 +195,7 @@ func TestOpenAIGatewayServiceForwardPreservesMappedGPT56MaxEffort(t *testing.T) 
 	}
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
-	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, httpUpstream: upstream}
 	account := &Account{
 		ID:          9,
 		Name:        "openai-apikey-mapped",
@@ -238,7 +238,7 @@ func TestOpenAIGatewayServiceForwardOAuthCompactDowngradesMaxEffort(t *testing.T
 	}
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
-	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, httpUpstream: upstream}
 	account := &Account{
 		ID:          8,
 		Name:        "openai-oauth",
@@ -284,7 +284,7 @@ func TestOpenAIGatewayServiceForwardOAuthRemoteCompactV2PreservesResponsesWire(t
 	}
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
-	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, httpUpstream: upstream}
 	account := &Account{
 		ID:          10,
 		Name:        "openai-oauth-responses",
@@ -341,7 +341,7 @@ func TestOpenAIGatewayServiceForwardAPIKeyRemoteCompactV2PreservesResponsesWire(
 	}
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
-	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, httpUpstream: upstream}
 	account := &Account{
 		ID:          11,
 		Name:        "openai-apikey-responses",

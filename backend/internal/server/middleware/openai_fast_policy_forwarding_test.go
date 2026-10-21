@@ -64,6 +64,9 @@ func TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream(t *testing.T) {
 		nil, nil, nil, nil, nil, &openAIFastPolicyForwardingHTTPUpstream{client: upstreamServer.Client()},
 		nil, nil, nil, nil, nil, nil, settingService, nil,
 	)
+	// API-key 账号的 Tibo 探测也会向上游发请求，多出的请求体会塞满上游
+	// channel 造成死锁；本测试只关心转发体内容。
+	gatewayService.DisableOpenAITiboRouteForTest()
 
 	groupID := int64(101)
 	group := &service.Group{

@@ -55,6 +55,7 @@ func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T)
 	gin.SetMode(gin.TestMode)
 	upstream := &blockingOpenAIResponseHeaderUpstream{canceled: make(chan struct{})}
 	svc := &OpenAIGatewayService{
+		tiboRouteDisabled: true,
 		cfg: &config.Config{Gateway: config.GatewayConfig{
 			OpenAIFirstOutputTimeoutSeconds: 1,
 			MaxLineSize:                     defaultMaxLineSize,
@@ -90,7 +91,7 @@ func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T)
 }
 
 func TestOpenAINativeFirstOutputTimeoutDisabledPreservesSynchronousStream(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{
 		OpenAIFirstOutputTimeoutSeconds: 0,
 		MaxLineSize:                     defaultMaxLineSize,
 	}}}
@@ -112,7 +113,7 @@ func TestOpenAINativeFirstOutputTimeoutDisabledPreservesSynchronousStream(t *tes
 }
 
 func TestOpenAINativeFirstOutputTimeoutIgnoresPreambleAndCleansReader(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{
 		OpenAIFirstOutputTimeoutSeconds: 1,
 		MaxLineSize:                     defaultMaxLineSize,
 	}}}
@@ -155,7 +156,7 @@ func TestOpenAINativeFirstOutputTimeoutIgnoresPreambleAndCleansReader(t *testing
 func TestNewOpenAIFirstOutputTimeoutErrorRecordsCallerProxyAttribution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	svc := &OpenAIGatewayService{}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true}
 	proxyID := int64(10060)
 	account := &Account{ID: 1, Name: "acc", Platform: PlatformOpenAI, ProxyID: &proxyID, Proxy: &Proxy{ID: proxyID, Name: "ws-proxy"}}
 
@@ -180,7 +181,7 @@ func TestNewOpenAIFirstOutputTimeoutErrorRecordsCallerProxyAttribution(t *testin
 }
 
 func TestOpenAIFirstOutputTimeoutForReasoningEffort(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{
 		OpenAIFirstOutputTimeoutSeconds:           120,
 		OpenAIHighEffortFirstOutputTimeoutSeconds: 300,
 	}}}
@@ -332,7 +333,7 @@ func TestOpenAINativeFirstOutputTimeoutDisarmsAfterSemanticOutput(t *testing.T) 
 		OpenAIFirstOutputTimeoutSeconds: 1,
 		MaxLineSize:                     defaultMaxLineSize,
 	}}
-	svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
 	pr, pw := io.Pipe()
 	go func() {
 		defer func() { _ = pw.Close() }()
@@ -385,7 +386,7 @@ func assertOpenAINativeLargeOpenEventTimesOutWithoutLeak(t *testing.T, line stri
 		StreamKeepaliveInterval:         1,
 		MaxLineSize:                     defaultMaxLineSize,
 	}}
-	svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
 	pr, pw := io.Pipe()
 	body := &firstOutputCloseTrackingBody{ReadCloser: pr, closed: make(chan struct{})}
 	writerDone := make(chan struct{})
@@ -444,7 +445,7 @@ func TestOpenAINativeFirstOutputEOFDispatchesTerminalEventWithoutBlankLine(t *te
 		OpenAIFirstOutputTimeoutSeconds: 1,
 		MaxLineSize:                     defaultMaxLineSize,
 	}}
-	svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
 	payload := `data: {"type":"response.completed","response":{"id":"resp_eof","usage":{"input_tokens":3,"output_tokens":2}}}`
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -479,7 +480,7 @@ func TestOpenAINativeFirstOutputStageOverflowFailsOverWithoutAttemptBytes(t *tes
 		OpenAIFirstOutputTimeoutSeconds: 30,
 		MaxLineSize:                     2 * 1024 * 1024,
 	}}
-	svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
 	const lineSize = 1024*1024 - 256
 	prefix := `data: {"type":"response.output_text.delta","delta":"`
 	suffix := `"}`
@@ -516,7 +517,7 @@ func TestOpenAINativeFirstOutputScannerRejectsOversizedLineWithoutLeak(t *testin
 		OpenAIFirstOutputTimeoutSeconds: 30,
 		MaxLineSize:                     defaultMaxLineSize,
 	}}
-	svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
 	oversizedLine := "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+openAIFirstOutputScannerFramingAllowance+1024)
 	body := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_private\"}}\n\n" + oversizedLine + "\n"
 	rec := httptest.NewRecorder()
@@ -548,7 +549,7 @@ func TestOpenAINativeFirstOutputScannerAllowsLargeEventAfterSemanticBoundary(t *
 		OpenAIFirstOutputTimeoutSeconds: 30,
 		MaxLineSize:                     defaultMaxLineSize,
 	}}
-	svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
 	largeDelta := strings.Repeat("i", openAIFirstOutputStageMaxBytes+openAIFirstOutputScannerFramingAllowance+1024)
 	body := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"ready"}`,
@@ -582,7 +583,7 @@ func TestOpenAINativeFirstOutputScannerAllowsLargeEventAfterSemanticBoundary(t *
 }
 
 func TestOpenAINativeFirstOutputTimeoutDisabledKeepsPreamblePrivateAcrossKeepalive(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{
 		StreamKeepaliveInterval: 1,
 		MaxLineSize:             defaultMaxLineSize,
 	}}}
@@ -614,6 +615,7 @@ func TestOpenAINativeFirstOutputFailoverKeepsAttemptHeadersPrivateAfterKeepalive
 		MaxLineSize:                     defaultMaxLineSize,
 	}}
 	svc := &OpenAIGatewayService{
+		tiboRouteDisabled:    true,
 		cfg:                  cfg,
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
 	}

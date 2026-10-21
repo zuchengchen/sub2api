@@ -106,8 +106,9 @@ func TestOpenAIGatewayService_ResponsesUnknownModelDoesNotFallbackToGPT54(t *tes
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID:          123,
@@ -145,7 +146,7 @@ func TestOpenAIGatewayService_OAuthResponsesPromotesSystemMessageWithoutDuplicat
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 	account := &Account{
 		ID:          124,
 		Name:        "openai-oauth",
@@ -187,6 +188,7 @@ func TestOpenAIGatewayService_NativeResponsesBodyModificationPreservesHTMLChars(
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"stop after capture"}}`)),
 	}}
 	svc := &OpenAIGatewayService{
+		tiboRouteDisabled: true,
 		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
 			Enabled:           false,
 			AllowInsecureHTTP: true,
@@ -237,8 +239,9 @@ func TestOpenAIGatewayService_OAuthMessagesBridgeDoesNotInjectDefaultInstruction
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"bridge stop"}}`)),
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID:          123,
@@ -416,8 +419,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamKeepsToolNameAndBodyNormali
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 		openAITokenProvider: &OpenAITokenProvider{ // minimal: will be bypassed by nil cache/service, but GetAccessToken uses provider only if non-nil
 			accountRepo: nil,
 		},
@@ -486,7 +490,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_GroupForceOpenAIFastInjectsMissin
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 	}}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 	account := &Account{
 		ID: 123, Name: "oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
@@ -545,7 +549,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_PreservesNamespaceRequest(t *test
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_preserve"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 	account := &Account{
 		ID: 125, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
@@ -614,7 +618,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_FlattenEnabledNamespaceRequestAnd
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_namespace"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 	account := &Account{
 		ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
@@ -674,7 +678,7 @@ func TestOpenAIGatewayService_NativeOAuth_FlattenEnabledNamespaceRequestAndStrea
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_native_namespace"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 	account := &Account{
 		ID: 124, Name: "native", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
@@ -711,7 +715,7 @@ func TestOpenAIGatewayService_NativeOAuth_NamespaceNonStreamingResponse(t *testi
 		}`)),
 	}
 
-	result, err := (&OpenAIGatewayService{cfg: &config.Config{}}).handleNonStreamingResponse(
+	result, err := (&OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}}).handleNonStreamingResponse(
 		context.Background(), resp, c, &Account{Type: AccountTypeOAuth}, "gpt-5.5", "gpt-5.5",
 	)
 	require.NoError(t, err)
@@ -736,7 +740,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NamespaceNonStreamingResponse(t *
 	}
 	setOpenAIResponsesNamespaceNames(c, names)
 
-	result, err := (&OpenAIGatewayService{cfg: &config.Config{}}).handleNonStreamingResponsePassthrough(
+	result, err := (&OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}}).handleNonStreamingResponsePassthrough(
 		context.Background(), resp, c, &Account{ID: 91}, "gpt-5.5", "",
 	)
 	require.NoError(t, err)
@@ -761,7 +765,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_FlattenEnabledNamespaceCollisionR
 		],"input":"hi"
 	}`)
 	upstream := &httpUpstreamRecorder{}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 	account := &Account{
 		ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
@@ -801,8 +805,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -835,6 +840,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	require.Equal(t, "local-test-instructions", strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
+	t.Logf("headers: %+v", upstream.lastReq.Header)
 	require.NotEmpty(t, upstream.lastReq.Header.Get("Session-Id"))
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, "chatgpt-acc", upstream.lastReq.Header.Get("chatgpt-account-id"))
@@ -864,8 +870,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamRequestIgnoresClientCance
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID:             123,
@@ -914,7 +921,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsGetsDefau
 				Header:     http.Header{"Content-Type": []string{responseContentType}, "x-request-id": []string{"rid"}},
 				Body:       io.NopCloser(strings.NewReader(responseBody)),
 			}}
-			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 			account := &Account{
 				ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
@@ -951,7 +958,7 @@ func TestOpenAIGatewayService_Forward_MissingInstructionsUsesMappedModelTemplate
 			"", "data: [DONE]", "",
 		}, "\n"))),
 	}}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 	account := &Account{
 		ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{
@@ -993,8 +1000,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *te
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -1109,8 +1117,9 @@ func TestOpenAIGatewayService_OAuthLegacy_UpstreamRequestIgnoresClientCancel(t *
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID:             123,
@@ -1151,8 +1160,9 @@ func TestOpenAIGatewayService_OAuthLegacy_CompositeCodexUAUsesCodexOriginator(t 
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -1212,8 +1222,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_ResponseHeadersAllowXCodex(t *tes
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -1254,8 +1265,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamErrorIncludesPassthroughF
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -1378,8 +1390,9 @@ func TestOpenAIGatewayService_APIKeyPassthrough_RebuildsUpstreamErrors(t *testin
 				Body: io.NopCloser(strings.NewReader(tt.responseBody)),
 			}}
 			svc := &OpenAIGatewayService{
-				cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-				httpUpstream: upstream,
+				tiboRouteDisabled: true,
+				cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				httpUpstream:      upstream,
 			}
 			account := &Account{
 				ID:          124,
@@ -1473,7 +1486,8 @@ func TestOpenAIGatewayService_APIKeyPassthrough_CompactErrorBeforeKeepaliveIsSin
 	defer stop()
 
 	svc := &OpenAIGatewayService{
-		cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
 			StatusCode: http.StatusBadRequest,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -1508,7 +1522,8 @@ func TestOpenAIGatewayService_APIKeyPassthrough_CompactErrorAfterKeepaliveIsFail
 	waitForKeepaliveBeats()
 
 	svc := &OpenAIGatewayService{
-		cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
 			StatusCode: http.StatusBadRequest,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -1680,9 +1695,10 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 			}
 
 			svc := &OpenAIGatewayService{
-				cfg:              &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-				httpUpstream:     upstream,
-				rateLimitService: rateSvc,
+				tiboRouteDisabled: true,
+				cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				httpUpstream:      upstream,
+				rateLimitService:  rateSvc,
 			}
 
 			account := newAccount(tc.accountType)
@@ -1747,8 +1763,9 @@ func TestOpenAIGatewayService_APIKeyPassthrough_Transient5xxTriggersFailover(t *
 				Body: body,
 			}}
 			svc := &OpenAIGatewayService{
-				cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-				httpUpstream: upstream,
+				tiboRouteDisabled: true,
+				cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				httpUpstream:      upstream,
 			}
 			account := &Account{
 				ID:          124,
@@ -1797,7 +1814,8 @@ func TestOpenAIGatewayService_APIKeyPassthrough_ContextWindow502DoesNotFailover(
 	const upstreamBody = `{"error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again.","type":"upstream_error"}}`
 	body := &passthroughCloseTrackingReadCloser{Reader: strings.NewReader(upstreamBody)}
 	svc := &OpenAIGatewayService{
-		cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -1829,7 +1847,8 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeConfigured5xxRetriesSame
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 
 	svc := &OpenAIGatewayService{
-		cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
 			StatusCode: http.StatusBadGateway,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -1884,8 +1903,9 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailove
 
 			upstreamBody := `{"error":{"message":"upstream credential rejected"}}`
 			svc := &OpenAIGatewayService{
-				cfg:              &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-				rateLimitService: NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil),
+				tiboRouteDisabled: true,
+				cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				rateLimitService:  NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil),
 				httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
 					StatusCode: tt.statusCode,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -1952,8 +1972,9 @@ func TestOpenAIGatewayService_OpenAIPassthrough_CompactNetworkErrorsTriggerFailo
 
 			upstream := &httpUpstreamRecorder{resp: tt.resp, err: tt.err}
 			svc := &OpenAIGatewayService{
-				cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-				httpUpstream: upstream,
+				tiboRouteDisabled: true,
+				cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				httpUpstream:      upstream,
 			}
 			account := &Account{
 				ID:             123,
@@ -2004,8 +2025,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -2053,8 +2075,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_OfficialIdentityUnified(t *testin
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -2097,8 +2120,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexTuiIdentityUnified(t *testin
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -2141,9 +2165,10 @@ func TestOpenAIGatewayService_CodexFingerprintHTTPTransformedHeaderBodyParityAnd
 		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:           &config.Config{},
-		httpUpstream:  upstream,
-		toolCorrector: NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{},
+		httpUpstream:      upstream,
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 	account := newTestOAuthAccount(4401, map[string]any{codexFingerprintModeExtraKey: "session"})
 	account.Name = "oauth-transformed"
@@ -2202,8 +2227,9 @@ func TestOpenAIGatewayService_CodexFingerprintHTTPRawPassthroughHeaderBodyParity
 		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{},
+		httpUpstream:      upstream,
 	}
 	account := newTestOAuthAccount(4402, map[string]any{
 		codexFingerprintModeExtraKey: "session",
@@ -2263,9 +2289,10 @@ func TestOpenAIGatewayService_CodexFingerprintCompactDoesNotRewriteBodyCacheKeyO
 		Body:       io.NopCloser(strings.NewReader(compactProbeSSESuccessBody)),
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:           &config.Config{},
-		httpUpstream:  upstream,
-		toolCorrector: NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{},
+		httpUpstream:      upstream,
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 	account := newTestOAuthAccount(4403, map[string]any{codexFingerprintModeExtraKey: "session"})
 	account.Name = "oauth-compact"
@@ -2307,9 +2334,10 @@ func TestOpenAIGatewayService_CodexFingerprintMessagesBridgeDoesNotInjectBodyPro
 		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:           &config.Config{},
-		httpUpstream:  upstream,
-		toolCorrector: NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{},
+		httpUpstream:      upstream,
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 	account := newTestOAuthAccount(4404, map[string]any{codexFingerprintModeExtraKey: "session"})
 	account.Name = "oauth-messages-bridge"
@@ -2325,6 +2353,7 @@ func TestOpenAIGatewayService_CodexFingerprintMessagesBridgeDoesNotInjectBodyPro
 	seed, ok := codexFingerprintSeed(account.Extra)
 	require.True(t, ok)
 	wantSession := resolveConvergedSessionID(seed)
+	t.Logf("upstream body: %s", string(upstream.lastBody))
 	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
 	require.Equal(t, wantSession, gjson.GetBytes(upstream.lastBody, "client_metadata.session_id").String())
 	require.Equal(t, wantSession, upstream.lastReq.Header.Get("session-id"))
@@ -2342,7 +2371,8 @@ func TestOpenAIGatewayService_CodexCLIOnly_RejectsNonCodexClient(t *testing.T) {
 	inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
 
 	svc := &OpenAIGatewayService{
-		cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 	}
 
 	account := &Account{
@@ -2403,8 +2433,9 @@ func TestOpenAIGatewayService_CodexCLIOnly_AllowOfficialClientFamilies(t *testin
 			upstream := &httpUpstreamRecorder{resp: resp}
 
 			svc := &OpenAIGatewayService{
-				cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-				httpUpstream: upstream,
+				tiboRouteDisabled: true,
+				cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				httpUpstream:      upstream,
 			}
 
 			account := &Account{
@@ -2451,8 +2482,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamingSetsFirstTokenMs(t *test
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -2507,8 +2539,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamClientDisconnectStillCollec
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -2555,8 +2588,9 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEnd
 	upstream := &httpUpstreamRecorder{resp: resp}
 
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 
 	account := &Account{
@@ -2612,8 +2646,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID:             321,
@@ -2653,8 +2688,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_InfoWhenStreamEndsWithoutDone(t *
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID:             654,
@@ -2699,8 +2735,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_DefaultFiltersTimeoutHeaders(t *t
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID:             111,
@@ -2745,6 +2782,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_AllowTimeoutHeadersWhenConfigured
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	svc := &OpenAIGatewayService{
+		tiboRouteDisabled: true,
 		cfg: &config.Config{Gateway: config.GatewayConfig{
 			ForceCodexCLI:                        false,
 			OpenAIPassthroughAllowTimeoutHeaders: true,
