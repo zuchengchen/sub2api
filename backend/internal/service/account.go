@@ -1165,8 +1165,23 @@ func (a *Account) IsOpenAIOAuthLike() bool {
 
 // UsesOpenAICodexProtocol preserves legacy OpenAI gateway OAuth routing for
 // accounts whose platform is implicit, while adding OpenAI SetupToken.
+//
+// 需排除已知非 openai 的 OAuth 平台:此前只判 Type==OAuth,把 grok/gemini/
+// anthropic 等平台的 OAuth 账号误判为 Codex,进而走 codex 专有处理(zstd 压缩、
+// codexwire 模板化头的 TLS/h2 通道——后者丢弃 x-grok-client-version,使
+// cli-chat-proxy 报 "version (none)" 426)。Codex 保真仅适用 openai(或
+// platform 缺省视为 openai 的 legacy 账号);其余 OAuth 平台一律排除。
 func (a *Account) UsesOpenAICodexProtocol() bool {
-	return a != nil && (a.Type == AccountTypeOAuth || a.IsOpenAIOAuthLike())
+	if a == nil {
+		return false
+	}
+	switch a.Platform {
+	case PlatformOpenAI, "":
+		// openai 显式或缺省(legacy)平台按 Codex 协议处理
+	default:
+		return false
+	}
+	return a.Type == AccountTypeOAuth || a.IsOpenAIOAuthLike()
 }
 
 func (a *Account) IsOpenAIChatGPTSubscription() bool {
