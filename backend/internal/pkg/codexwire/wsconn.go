@@ -56,8 +56,8 @@ func NewWSConn(conn net.Conn, br *bufio.Reader, negotiated *UpgradeResult) *WSCo
 	}
 	c := &WSConn{conn: conn, br: br, readLimit: 16 << 20}
 	if negotiated != nil && negotiated.PerMessageDeflate {
-		c.compress = newPMDCompressor(!negotiated.ClientNoContextTakeover)
-		c.inflate = newPMDDecompressor(!negotiated.ServerNoContextTakeover)
+		c.compress = newPMDCompressor(!negotiated.ClientNoContextTakeover, negotiated.ClientMaxWindowBits)
+		c.inflate = newPMDDecompressor(!negotiated.ServerNoContextTakeover, negotiated.ServerMaxWindowBits)
 	}
 	return c
 }

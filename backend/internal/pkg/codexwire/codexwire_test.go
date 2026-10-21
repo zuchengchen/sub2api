@@ -98,8 +98,8 @@ func TestFrameRoundTrip_MaskedClientFrame(t *testing.T) {
 }
 
 func TestPMDRoundTrip_ContextTakeover(t *testing.T) {
-	comp := newPMDCompressor(true)
-	decomp := newPMDDecompressor(true)
+	comp := newPMDCompressor(true, 0)
+	decomp := newPMDDecompressor(true, 0)
 	msgs := []string{
 		`{"type":"response.create","input":[{"type":"message","content":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}`,
 		`{"type":"response.create","input":[{"type":"message","content":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}`,
@@ -129,8 +129,8 @@ func TestPMDRoundTrip_ContextTakeover(t *testing.T) {
 }
 
 func TestPMDRoundTrip_NoContextTakeover(t *testing.T) {
-	comp := newPMDCompressor(false)
-	decomp := newPMDDecompressor(false)
+	comp := newPMDCompressor(false, 0)
+	decomp := newPMDDecompressor(false, 0)
 	msg := `{"a":1,"b":"xyz"}`
 	for i := 0; i < 2; i++ {
 		wire, err := comp.Compress([]byte(msg))
