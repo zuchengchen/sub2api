@@ -219,20 +219,62 @@ func TestOpsUpstreamWSProxyAttributionNeverReportsDirect(t *testing.T) {
 	require.Equal(t, "ws-proxy", name)
 }
 
-func TestOpenAIWSFallbackCooling(t *testing.T) {
+func TestOpenAIWSSessionDisableRegistry(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
-	svc.cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
+	svc.cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	svc.cfg.Gateway.OpenAIWS.SessionDisableRetryTTLMS = 40
+	svc.cfg.Gateway.OpenAIWS.SessionDisableCapabilityTTLMS = 86400000
 
-	require.False(t, svc.isOpenAIWSFallbackCooling(1))
-	svc.markOpenAIWSFallbackCooling(1, "upgrade_required")
-	require.True(t, svc.isOpenAIWSFallbackCooling(1))
+	require.Empty(t, svc.openAIWSSessionDisabledReason(1))
+	svc.markOpenAIWSSessionDisabled(1, "dial_failed", false)
+	require.Equal(t, "dial_failed", svc.openAIWSSessionDisabledReason(1))
 
-	svc.clearOpenAIWSFallbackCooling(1)
-	require.False(t, svc.isOpenAIWSFallbackCooling(1))
+	svc.clearOpenAIWSSessionDisabled(1)
+	require.Empty(t, svc.openAIWSSessionDisabledReason(1))
 
-	svc.markOpenAIWSFallbackCooling(2, "x")
-	time.Sleep(1200 * time.Millisecond)
-	require.False(t, svc.isOpenAIWSFallbackCooling(2))
+	// 到期条目惰性清除，之后恢复未禁用状态（自动重探窗口）。
+	svc.markOpenAIWSSessionDisabled(2, "read_event", false)
+	time.Sleep(60 * time.Millisecond)
+	require.Empty(t, svc.openAIWSSessionDisabledReason(2))
+
+	// 特性关闭时标记与查询均不生效。
+	svc.cfg.Gateway.OpenAIWS.SessionDisableEnabled = false
+	svc.markOpenAIWSSessionDisabled(3, "upgrade_required", true)
+	require.Empty(t, svc.openAIWSSessionDisabledReason(3))
+}
+
+func TestOpenAIWSSessionFallbackActionFor(t *testing.T) {
+	// 能力信号：回退 + 标记（长 TTL 档）。
+	a := openAIWSSessionFallbackActionFor("upgrade_required")
+	require.True(t, a.fallbackHTTP)
+	require.True(t, a.markDisable)
+	require.True(t, a.capability)
+
+	// 重试耗尽类：回退 + 标记（短 TTL 档）。
+	a = openAIWSSessionFallbackActionFor("read_event")
+	require.True(t, a.fallbackHTTP)
+	require.True(t, a.markDisable)
+	require.False(t, a.capability)
+
+	// 本地池争用：仅本请求回退，不标记。
+	a = openAIWSSessionFallbackActionFor("acquire_timeout")
+	require.True(t, a.fallbackHTTP)
+	require.False(t, a.markDisable)
+
+	// 超大帧：HTTP 无帧上限，本请求回退但不标记。
+	a = openAIWSSessionFallbackActionFor("message_too_big")
+	require.True(t, a.fallbackHTTP)
+	require.False(t, a.markDisable)
+
+	// 请求/凭据级：不回退不标记。
+	for _, reason := range []string{
+		"auth_failed", "policy_violation", "previous_response_not_found",
+		"invalid_encrypted_content", "retry_backoff_canceled", "",
+	} {
+		a = openAIWSSessionFallbackActionFor(reason)
+		require.False(t, a.fallbackHTTP, reason)
+		require.False(t, a.markDisable, reason)
+	}
 }
 
 func TestOpenAIWSRetryBackoff(t *testing.T) {

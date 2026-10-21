@@ -2626,6 +2626,15 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 	if s == nil || account == nil {
 		return false
 	}
+	if requiredTransport == OpenAIUpstreamTransportResponsesWebsocket ||
+		requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2 ||
+		requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress {
+		if s.openAIWSSessionDisabledReason(account.ID) != "" {
+			// 官方 Codex disable_websockets 语义：账号 WS 被会话级禁用期间
+			// 不承接新的 WS 需求；HTTP 需求已在上方放行。
+			return false
+		}
+	}
 	if (requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress || requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2) && len(requestedModel) > 0 {
 		_ = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestedModel[0]))
 	}
