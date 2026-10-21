@@ -73,6 +73,14 @@ func (s *OpenAIGatewayService) maybeCompressCodexUpstreamRequest(request *http.R
 	if s == nil || request == nil || account == nil {
 		return
 	}
+	// zstd 压缩只面向真正的 OpenAI Codex(ChatGPT OAuth/SetupToken)账号。
+	// UsesOpenAICodexProtocol 只看 account.Type==OAuth,会把 grok/gemini/anthropic
+	// 等其它平台的 OAuth 账号也判真;而 xAI 对带 content-encoding:zstd 的请求要求
+	// 额外的 x-grok-model-override 头,缺头会以 400 拒绝。这里显式限定 openai 平台,
+	// 避免把 Codex 专有压缩错误套到非 openai 的 OAuth 上游。
+	if account.Platform != PlatformOpenAI {
+		return
+	}
 	if !account.UsesOpenAICodexProtocol() || !s.isOpenAIWSExactFidelityEnabled() {
 		return
 	}
