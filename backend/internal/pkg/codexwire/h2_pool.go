@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -103,10 +104,11 @@ func (p *H2Pool) Do(ctx context.Context, method, rawURL string, ordered []Header
 	poolKey := key + "|" + proxyURL + "|" + host
 
 	for attempt := 0; attempt < 2; attempt++ {
-		conn, err := p.acquire(ctx, poolKey, addr, proxyURL, profile)
+		conn, err := p.acquire(ctx, poolKey, key, addr, proxyURL, profile)
 		if err != nil {
 			var h1c *h1FallbackConn
 			if errors.As(err, &h1c) {
+				slog.Info("codex_h2_alpn_fallback", "key", key, "host", host, "alpn", h1c.alpn)
 				return doHTTP1OnConn(ctx, method, path, host, ordered, body, func(context.Context) (net.Conn, error) {
 					return h1c.conn, nil
 				}, 0)
@@ -132,7 +134,7 @@ func (p *H2Pool) Do(ctx context.Context, method, rawURL string, ordered []Header
 	return nil, errors.New("h2: request failed after connection retry")
 }
 
-func (p *H2Pool) acquire(ctx context.Context, poolKey, addr, proxyURL string, profile *tlsfingerprint.Profile) (*h2Conn, error) {
+func (p *H2Pool) acquire(ctx context.Context, poolKey, key, addr, proxyURL string, profile *tlsfingerprint.Profile) (*h2Conn, error) {
 	p.mu.Lock()
 	if c := p.conns[poolKey]; c != nil {
 		if c.CanTake() {
@@ -150,6 +152,9 @@ func (p *H2Pool) acquire(ctx context.Context, poolKey, addr, proxyURL string, pr
 	if err != nil {
 		return nil, err
 	}
+	// Per-connection evidence of the negotiated transport; poolKey embeds the
+	// proxy URL (possibly with credentials) so log key/host separately.
+	slog.Info("codex_h2_dial", "key", key, "host", addr, "alpn", "h2")
 	p.mu.Lock()
 	// Someone may have won the race; use the existing conn if it has room.
 	if existing := p.conns[poolKey]; existing != nil && existing.CanTake() {
