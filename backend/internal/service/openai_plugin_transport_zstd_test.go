@@ -111,6 +111,18 @@ func TestMaybeCompressCodexUpstreamRequest_SkipsNonCodexAndDisabled(t *testing.T
 		t.Fatalf("api-key account Content-Encoding = %q", got)
 	}
 
+	// 非 openai 平台的 OAuth 账号（如 grok）：UsesOpenAICodexProtocol 只按 Type 判真，
+	// 但 zstd 是 Codex 专有压缩，xAI 等上游会 400 拒绝带它的请求。
+	grokOAuth := &Account{ID: 2, Type: AccountTypeOAuth, Platform: PlatformGrok, Extra: map[string]any{}}
+	reqGrok, err := http.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", bytes.NewReader(plain))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	svc.maybeCompressCodexUpstreamRequest(reqGrok, grokOAuth)
+	if got := reqGrok.Header.Get("Content-Encoding"); got != "" {
+		t.Fatalf("grok oauth account Content-Encoding = %q, want empty", got)
+	}
+
 	// exact fidelity 关闭时，codex 账号也不压缩。
 	svcOff := &OpenAIGatewayService{cfg: codexExactFidelityOffTestConfig(t)}
 	req2, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", bytes.NewReader(plain))

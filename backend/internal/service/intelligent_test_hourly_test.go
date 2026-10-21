@@ -140,7 +140,9 @@ func TestPickPelicanAccountIDPrefersHealthyHTTP(t *testing.T) {
 		{ID: 13, HasWS: true},
 	}
 	require.Equal(t, int64(12), pickPelicanAccountID(cands, nil))
-	require.Equal(t, int64(11), pickPelicanAccountID(cands, map[int64]struct{}{12: {}}))
+	// 排除 12 后 11 与 13 同属 unusedWS 层级，函数按设计随机挑选其一。
+	got := pickPelicanAccountID(cands, map[int64]struct{}{12: {}})
+	require.Contains(t, []int64{11, 13}, got)
 }
 
 func TestPickPelicanAccountIDPrefersLiveWS(t *testing.T) {

@@ -28,7 +28,7 @@ func newOpenAICompactFallbackTestContext(t *testing.T, path string) *gin.Context
 
 func TestPrepareOpenAICompactFallbackRetryRequiresExplicitCompact(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
 	c := newOpenAICompactFallbackTestContext(t, "/v1/responses")
 	body := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":"hello"}]}`)
 	errorBody := []byte(`{"error":{"code":"context_length_exceeded","message":"maximum context length exceeded"}}`)
@@ -44,7 +44,7 @@ func TestPrepareOpenAICompactFallbackRetryRequiresExplicitCompact(t *testing.T) 
 
 func TestPrepareOpenAICompactFallbackRetryPreservesNativeTriggerAndContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
 	c := newOpenAICompactFallbackTestContext(t, "/v1/responses")
 	MarkOpenAINativeCompactionV2(c)
 	body := []byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
@@ -64,7 +64,7 @@ func TestPrepareOpenAICompactFallbackRetryPreservesNativeTriggerAndContext(t *te
 }
 
 func TestResolveOpenAICompactFallbackModelPrefersAccountMapping(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}}}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}}}
 	account := &Account{Credentials: map[string]any{
 		"compact_model_mapping": map[string]any{"gpt-5.5": "account-compact"},
 	}}
@@ -85,8 +85,9 @@ func TestOpenAIGatewayForwardUsesGlobalCompactModelOnInitialLegacyRequest(t *tes
 		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","status":"completed","model":"global-compact","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
@@ -105,7 +106,7 @@ func TestOpenAIGatewayForwardUsesGlobalCompactModelOnInitialLegacyRequest(t *tes
 
 func TestPrepareOpenAICompactFallbackRetryLegacyPathAndSingleAttemptGuard(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
 	c := newOpenAICompactFallbackTestContext(t, "/v1/responses/compact")
 	body := []byte(`{"model":"gpt-5.5","input":[]}`)
 	errorBody := []byte(`{"response":{"status":"failed","error":null}}`)
@@ -127,7 +128,7 @@ func TestPrepareOpenAICompactFallbackRetryLegacyPathAndSingleAttemptGuard(t *tes
 
 func TestPrepareOpenAICompactFallbackRetryDoesNotHideSpecificBusinessFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
 	c := newOpenAICompactFallbackTestContext(t, "/v1/responses/compact")
 	body := []byte(`{"model":"gpt-5.5","input":[]}`)
 	errorBody := []byte(`{"response":{"status":"failed","error":{"type":"permission_error","message":"workspace denied"}}}`)
@@ -166,7 +167,7 @@ func TestIsOpenAICompactModelFailureRequiresExplicitModelAvailabilityMessage(t *
 
 func TestPrepareOpenAICompactFallbackRetrySkipsSameModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.5"}}}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.5"}}}
 	c := newOpenAICompactFallbackTestContext(t, "/v1/responses/compact")
 	body := []byte(`{"model":"gpt-5.5","input":[]}`)
 	errorBody := []byte(`{"error":{"code":"model_not_found","message":"model not found"}}`)
@@ -198,8 +199,9 @@ func TestOpenAIGatewayForwardRetriesExplicitNativeCompactHTTPFailureOnce(t *test
 		},
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
@@ -273,8 +275,9 @@ func TestOpenAIGatewayForwardNonStreamCompactRetryRecordsAttemptWithManagedProxy
 		},
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
+		httpUpstream:      upstream,
 	}
 	account, proxy := compactFallbackManagedProxyAccount()
 
@@ -318,8 +321,9 @@ func TestOpenAIGatewayForwardCompactFailoverEventCarriesManagedProxy(t *testing.
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(workspaceFailed))},
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
+		httpUpstream:      upstream,
 	}
 	account, proxy := compactFallbackManagedProxyAccount()
 
@@ -363,8 +367,9 @@ func TestOpenAIGatewayForwardRetriesExplicitNativeCompactSSEFailureBeforeOutput(
 		},
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
@@ -404,8 +409,9 @@ func TestOpenAIGatewayForwardRetriesStreamingCompactFailureBeforeOutput(t *testi
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(completed))},
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
@@ -444,8 +450,9 @@ func TestOpenAIGatewayForwardDoesNotRecurseWhenCompactFallbackAlsoFails(t *testi
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(failed))},
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
+		httpUpstream:      upstream,
 	}
 	account := &Account{
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
@@ -494,8 +501,9 @@ func TestOpenAIPassthroughCompactFallbackSecondStreamFailureUsesStandardErrorPat
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(failed))},
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
+		httpUpstream:      upstream,
 	}
 	account, proxy := compactFallbackManagedProxyAccount()
 

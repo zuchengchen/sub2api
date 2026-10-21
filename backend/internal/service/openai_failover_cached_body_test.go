@@ -88,7 +88,7 @@ func TestOpenAIGatewayService_Forward_FailoverReparsesCachedBodyForNextAccount(t
 					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_123","status":"completed","model":"ok","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 				},
 			}}
-			svc := &OpenAIGatewayService{httpUpstream: upstream}
+			svc := &OpenAIGatewayService{tiboRouteDisabled: true, httpUpstream: upstream}
 
 			firstAccount := openAIFailoverCachedBodyTestAccount(1, "account-a", tt.firstMapping)
 			secondAccount := openAIFailoverCachedBodyTestAccount(2, "account-b", tt.secondMapping)
@@ -111,7 +111,7 @@ func TestOpenAIGatewayService_Forward_FailoverReparsesCachedBodyForNextAccount(t
 }
 
 func TestOpenAIGatewayService_HandleFailoverSideEffects_DoesNotRereadResponseBody(t *testing.T) {
-	svc := &OpenAIGatewayService{}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true}
 	account := &Account{
 		ID:       88,
 		Platform: PlatformOpenAI,

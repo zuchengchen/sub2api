@@ -149,13 +149,14 @@ func TestOpenAIGatewayService_Forward_WSv2ErrorEventUsageLimitPersistsRateLimit(
 	repo := &openAIWSRateLimitSignalRepo{stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}}}
 	rateSvc := &RateLimitService{accountRepo: repo}
 	svc := &OpenAIGatewayService{
-		accountRepo:      repo,
-		rateLimitService: rateSvc,
-		httpUpstream:     upstream,
-		cache:            &stubGatewayCache{},
-		cfg:              cfg,
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		accountRepo:       repo,
+		rateLimitService:  rateSvc,
+		httpUpstream:      upstream,
+		cache:             &stubGatewayCache{},
+		cfg:               cfg,
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
 	}
 
 	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
@@ -218,13 +219,14 @@ func TestOpenAIGatewayService_Forward_WSv2Handshake429PersistsRateLimit(t *testi
 	repo := &openAIWSRateLimitSignalRepo{stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}}}
 	rateSvc := &RateLimitService{accountRepo: repo}
 	svc := &OpenAIGatewayService{
-		accountRepo:      repo,
-		rateLimitService: rateSvc,
-		httpUpstream:     upstream,
-		cache:            &stubGatewayCache{},
-		cfg:              cfg,
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		accountRepo:       repo,
+		rateLimitService:  rateSvc,
+		httpUpstream:      upstream,
+		cache:             &stubGatewayCache{},
+		cfg:               cfg,
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
 	}
 
 	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)

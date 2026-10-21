@@ -202,8 +202,9 @@ func TestForwardResponses_DeepSeekChatFallbackInjectsReasoningPlaceholderOnCache
 	c := newDeepSeekChatFallbackContext(t, body)
 	upstream := newOKChatCompletionsUpstream("rid_ds_rc_placeholder", deepSeekChatFallbackOKBody)
 	svc := &OpenAIGatewayService{
-		cfg:          deepSeekChatFallbackTestConfig(),
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               deepSeekChatFallbackTestConfig(),
+		httpUpstream:      upstream,
 	}
 
 	result, err := svc.Forward(deepSeekChatFallbackUserContext(42), c, openaiPlatformDeepSeekAccount(), body)
@@ -221,9 +222,10 @@ func TestForwardResponses_DeepSeekChatFallbackKeepsCachedReasoningContent(t *tes
 	// Local fork scopes reasoning cache keys by authenticated user. Upstream's
 	// unscoped "item_enc1" key would miss and get the DeepSeek placeholder.
 	svc := &OpenAIGatewayService{
-		cfg:          deepSeekChatFallbackTestConfig(),
-		httpUpstream: upstream,
-		cache:        &reasoningHitCache{values: map[string]string{"user:42:item_enc1": "cached thinking"}},
+		tiboRouteDisabled: true,
+		cfg:               deepSeekChatFallbackTestConfig(),
+		httpUpstream:      upstream,
+		cache:             &reasoningHitCache{values: map[string]string{"user:42:item_enc1": "cached thinking"}},
 	}
 
 	result, err := svc.Forward(deepSeekChatFallbackUserContext(42), c, openaiPlatformDeepSeekAccount(), body)
@@ -249,8 +251,9 @@ func TestForwardResponses_NonDeepSeekChatFallbackDoesNotInjectReasoningPlacehold
 		},
 	}
 	svc := &OpenAIGatewayService{
-		cfg:          deepSeekChatFallbackTestConfig(),
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               deepSeekChatFallbackTestConfig(),
+		httpUpstream:      upstream,
 	}
 
 	result, err := svc.Forward(deepSeekChatFallbackUserContext(42), c, account, body)

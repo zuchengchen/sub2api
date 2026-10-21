@@ -119,11 +119,12 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 
 	cache := &stubGatewayCache{}
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     upstream,
-		cache:            cache,
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		cfg:               cfg,
+		httpUpstream:      upstream,
+		cache:             cache,
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
 	}
 
 	account := &Account{
@@ -227,9 +228,10 @@ func TestOpenAIGatewayService_Forward_WSv2_UsesPatchedBodyAfterValidationDecode(
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 10
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 
 	account := &Account{
@@ -342,11 +344,12 @@ func TestOpenAIGatewayService_Forward_WSv2_ImageGenerationCountsOutputs(t *testi
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 
 	account := &Account{
@@ -405,7 +408,7 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersPreservesCodexIdentity(t *test
 	c.Request.Header.Set("x-client-request-id", "client-request-ws")
 	c.Request.Header.Set("X-Test", "blocked")
 
-	svc := &OpenAIGatewayService{}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true}
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	headers, _, err := svc.buildOpenAIWSHeaders(
 		context.Background(),
@@ -447,7 +450,7 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersDeviceModePreservesNamespacedC
 	require.NotNil(t, ids)
 	stageCodexFingerprintIDs(c, ids)
 
-	svc := &OpenAIGatewayService{}
+	svc := &OpenAIGatewayService{tiboRouteDisabled: true}
 	headers, _, err := svc.buildOpenAIWSHeaders(
 		context.Background(),
 		c,
@@ -469,7 +472,10 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersDeviceModePreservesNamespacedC
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "window", "client-window"), headers.Get("x-codex-window-id"))
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "session", "client-session"), headers.Get("session-id"))
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "thread", "client-thread"), headers.Get("thread-id"))
-	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "request", "client-request"), headers.Get("x-client-request-id"))
+	// 官方契约：x-client-request-id 恒等于 thread-id（codex-rs client.rs 的
+	// build_websocket_headers 与 endpoint/responses.rs 都把 request-id 设为
+	// responses_metadata.thread_id）。收敛阶段据此覆写，客户端原值不独立透传。
+	require.Equal(t, headers.Get("thread-id"), headers.Get("x-client-request-id"))
 }
 
 func TestLogOpenAIWSBindResponseAccountWarn(t *testing.T) {
@@ -516,12 +522,13 @@ func TestOpenAIGatewayService_Forward_WSv2_RewriteModelAndToolCallsOnCompletedEv
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 
 	account := &Account{
@@ -574,13 +581,14 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedIsNotSchedulingSuccess(
 	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		rateLimitService: NewRateLimitService(transientCooldownAccountRepo{}, nil, cfg, nil),
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		rateLimitService:  NewRateLimitService(transientCooldownAccountRepo{}, nil, cfg, nil),
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := &Account{
 		ID:          1302,
@@ -683,11 +691,12 @@ func TestOpenAIGatewayService_Forward_WSv2_PoolReuseNotOneToOne(t *testing.T) {
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 10
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 	account := &Account{
 		ID:          19,
@@ -761,12 +770,13 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := &Account{
 		ID:          29,
@@ -796,7 +806,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.False(t, gjson.Get(requestJSON, "store").Bool(), "默认策略应将 OAuth store 置为 false")
 	require.True(t, gjson.Get(requestJSON, "stream").Exists(), "WSv2 payload 应保留 stream 字段")
 	require.True(t, gjson.Get(requestJSON, "stream").Bool(), "OAuth Codex 规范化后应强制 stream=true")
-	require.Equal(t, "native-wsv2", gjson.Get(requestJSON, "input.0.namespace").String(), "OAuth WSv2 应保留原生 namespace")
+	require.Equal(t, "native-wsv2", gjson.Get(requestJSON, `input.#(type=="input_text").namespace`).String(), "OAuth WSv2 应保留原生 namespace")
 	require.Equal(t, openAIWSBetaV2Value, captureDialer.lastHeaders.Get("OpenAI-Beta"))
 	require.Equal(t, "remote_compaction_v2", captureDialer.lastHeaders.Get("x-codex-beta-features"))
 	// OAuth 账号的 session/conversation 隔离值落在官方连字符头 session-id/thread-id
@@ -837,12 +847,13 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 
 	account := &Account{
@@ -869,10 +880,12 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID
 	captureConn.mu.Unlock()
 	requestJSON := requestToJSONString(requestPayload)
 	require.Equal(t, "response.create", gjson.Get(requestJSON, "type").String())
-	require.False(t, gjson.Get(requestJSON, "input.0.id").Exists(), "stale fc_* ID must not be replayed as a native custom_tool_call ID")
-	require.Equal(t, "ctc_hotfix", gjson.Get(requestJSON, "input.0.call_id").String())
-	require.Equal(t, "custom_tool_call_output", gjson.Get(requestJSON, "input.1.type").String())
-	require.Equal(t, "ctc_hotfix", gjson.Get(requestJSON, "input.1.call_id").String())
+	toolCall := gjson.Get(requestJSON, `input.#(type=="custom_tool_call")`)
+	require.False(t, toolCall.Get("id").Exists(), "stale fc_* ID must not be replayed as a native custom_tool_call ID")
+	require.Equal(t, "ctc_hotfix", toolCall.Get("call_id").String())
+	toolOutput := gjson.Get(requestJSON, `input.#(type=="custom_tool_call_output")`)
+	require.True(t, toolOutput.Exists())
+	require.Equal(t, "ctc_hotfix", toolOutput.Get("call_id").String())
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testing.T) {
@@ -933,12 +946,13 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 			pool.setClientDialerForTest(captureDialer)
 
 			svc := &OpenAIGatewayService{
-				cfg:              cfg,
-				httpUpstream:     &httpUpstreamRecorder{},
-				cache:            &stubGatewayCache{},
-				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-				toolCorrector:    NewCodexToolCorrector(),
-				openaiWSPool:     pool,
+				tiboRouteDisabled: true,
+				cfg:               cfg,
+				httpUpstream:      &httpUpstreamRecorder{},
+				cache:             &stubGatewayCache{},
+				openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+				toolCorrector:     NewCodexToolCorrector(),
+				openaiWSPool:      pool,
 			}
 			account := &Account{
 				ID:          129,
@@ -999,12 +1013,13 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testin
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := &Account{
 		ID:          130,
@@ -1065,12 +1080,13 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := &Account{
 		ID:          31,
@@ -1135,12 +1151,13 @@ func TestOpenAIGatewayService_Forward_WSv2_CodexFingerprintHandshakeBodyParityAn
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := newTestOAuthAccount(4405, map[string]any{
 		codexFingerprintModeExtraKey:      "session",
@@ -1223,12 +1240,13 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseDoneUsageParsed(t *testing.T)
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := &Account{
 		ID:          32,
@@ -1284,11 +1302,12 @@ func TestOpenAIGatewayService_Forward_WSv1_Unsupported(t *testing.T) {
 	}
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     upstream,
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      upstream,
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 
 	account := &Account{
@@ -1376,11 +1395,12 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 0
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 
 	account := &Account{
@@ -1470,12 +1490,13 @@ func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 
 	account := &Account{
@@ -1515,8 +1536,9 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 
 	svc := &OpenAIGatewayService{
-		cfg:           cfg,
-		toolCorrector: NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 	account := &Account{
 		ID:          601,
@@ -1584,12 +1606,13 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnMetadataInPayloadOnConnReuse(t *t
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 
 	account := &Account{
@@ -1696,11 +1719,12 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseSessionConnIsolation(t *test
 	cfg.Gateway.OpenAIWS.StoreDisabledForceNewConn = true
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 
 	account := &Account{
@@ -1803,11 +1827,12 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseDisableForceNewConnAllowsReu
 	cfg.Gateway.OpenAIWS.StoreDisabledForceNewConn = false
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 
 	account := &Account{
@@ -1894,12 +1919,13 @@ func TestOpenAIGatewayService_Forward_WSv2ReadTimeoutAppliesPerRead(t *testing.T
 	}
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     upstream,
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      upstream,
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 
 	account := &Account{
@@ -2149,12 +2175,13 @@ func TestOpenAIGatewayService_Forward_WSv2_ReleasesPreambleAtClientOutput(t *tes
 	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := &Account{
 		ID:          82,
@@ -2235,12 +2262,13 @@ func TestOpenAIGatewayService_Forward_WSv2_CapacityShedErrorAfterCommitSanitized
 	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := &Account{
 		ID:          83,
@@ -2304,12 +2332,13 @@ func TestOpenAIGatewayService_Forward_WSv2_ErrorBeforeCommitStillFailsOver(t *te
 	pool.setClientDialerForTest(&openAIWSQueueDialer{conns: []openAIWSClientConn{failingConn, healthyConn}})
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      &httpUpstreamRecorder{},
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
+		openaiWSPool:      pool,
 	}
 	account := &Account{
 		ID:          84,

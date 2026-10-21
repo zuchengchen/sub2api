@@ -832,11 +832,12 @@ func TestHandleStreamingResponse_CyberPolicyCapturesRealUpstreamTokens(t *testin
 func newOpenAIImageGenerationControlTestService(upstream *httpUpstreamRecorder) *OpenAIGatewayService {
 	cfg := &config.Config{}
 	return &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     upstream,
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		tiboRouteDisabled: true,
+		cfg:               cfg,
+		httpUpstream:      upstream,
+		cache:             &stubGatewayCache{},
+		openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:     NewCodexToolCorrector(),
 	}
 }
 

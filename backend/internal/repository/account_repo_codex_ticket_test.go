@@ -11,7 +11,11 @@ import (
 	"testing"
 )
 
-func TestLockAndMergeAccountExtraPreservesLatestCodexTicket(t *testing.T) {
+// 门票打捞下线后（migration 266 清除 codex_turn_ticket* / codex_cookie_ws* 残留），
+// 行锁下仍要从库内回填的活运行态只剩 codex_tibo_verdict:* —— Tibo 探测仍在写它，
+// 管理端编辑既不能用陈旧快照覆盖库内最新结论，也不能注入任何保护键；库内残留的
+// 门票键不再回填，随编辑自然清除。
+func TestLockAndMergeAccountExtraPreservesLatestTiboVerdict(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -21,19 +25,20 @@ func TestLockAndMergeAccountExtraPreservesLatestCodexTicket(t *testing.T) {
 		WithArgs(int64(41), service.PlatformOpenAI, service.AccountTypeOAuth, `{"access_token":"test"}`, nil).
 		WillReturnRows(sqlmock.NewRows(accountProbeExtraMockColumns()).
 			AddRow(true, false, true, nil, nil, nil, nil, nil, nil, false, nil, nil,
-				[]byte(`{"codex_turn_ticket:model":{"state":"latest-database-ticket"},"old_admin_setting":true}`)))
-	account := &service.Account{ID: 41, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: map[string]any{"access_token": "test"}, Extra: map[string]any{"codex_turn_ticket:model": map[string]any{"state": "stale"}, "codex_turn_ticket:injected": map[string]any{"state": "spoofed"}, "new_admin_setting": true}}
+				[]byte(`{"codex_tibo_verdict:http":{"state":"latest-database-verdict"},"codex_turn_ticket:model":{"state":"stale-leftover"},"old_admin_setting":true}`)))
+	account := &service.Account{ID: 41, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: map[string]any{"access_token": "test"}, Extra: map[string]any{"codex_tibo_verdict:http": map[string]any{"state": "stale"}, "codex_turn_ticket:injected": map[string]any{"state": "spoofed"}, "new_admin_setting": true}}
 	extra, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil)
 	require.NoError(t, err)
-	require.Equal(t, map[string]any{"state": "latest-database-ticket"}, extra["codex_turn_ticket:model"])
+	require.Equal(t, map[string]any{"state": "latest-database-verdict"}, extra["codex_tibo_verdict:http"])
 	require.NotContains(t, extra, "codex_turn_ticket:injected")
+	require.NotContains(t, extra, "codex_turn_ticket:model")
 	require.NotContains(t, extra, "old_admin_setting")
 	require.Equal(t, true, extra["new_admin_setting"])
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // 这条路径覆盖所有平台的账号更新：extra 若是非对象 JSON，解析失败不得让整个
-// 账号编辑失败，只降级放弃「保留库内门票」这一件事。
+// 账号编辑失败，只降级放弃「保留库内运行态键」这一件事。
 func TestLockAndMergeAccountExtraDegradesOnUnparsableExtra(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
