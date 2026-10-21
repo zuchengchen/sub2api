@@ -160,8 +160,9 @@ func doHTTP1OnConn(ctx context.Context, method, path, host string, ordered []Hea
 // streaming response.
 func writeHTTP1Request(ctx context.Context, conn net.Conn, method, path, host string, ordered []HeaderKV, body []byte) (*http.Response, error) {
 	var req strings.Builder
-	fmt.Fprintf(&req, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, host)
+	fmt.Fprintf(&req, "%s %s HTTP/1.1\r\n", method, path)
 	hasCL := false
+	hasHost := false
 	for _, kv := range ordered {
 		if strings.ContainsAny(kv.Name, "\r\n:") || strings.ContainsAny(kv.Value, "\r\n") {
 			_ = conn.Close()
@@ -170,9 +171,16 @@ func writeHTTP1Request(ctx context.Context, conn net.Conn, method, path, host st
 		if strings.EqualFold(kv.Name, "content-length") || strings.EqualFold(kv.Name, "transfer-encoding") {
 			hasCL = true
 		}
+		if strings.EqualFold(kv.Name, "host") {
+			hasHost = true
+		}
 		fmt.Fprintf(&req, "%s: %s\r\n", kv.Name, kv.Value)
 	}
-	// hyper appends the framing header after user headers.
+	// hyper emits transport framing headers AFTER user headers, lowercase:
+	// host then content-length (observed on real codex captures).
+	if !hasHost {
+		fmt.Fprintf(&req, "host: %s\r\n", host)
+	}
 	if !hasCL {
 		fmt.Fprintf(&req, "content-length: %d\r\n", len(body))
 	}
