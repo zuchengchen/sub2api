@@ -277,7 +277,14 @@ func normalizeCodexRequestMetadata(body []byte, headers http.Header, account *Ac
 		return body, false, nil
 	}
 	if isCompact {
-		// Legacy CompactionInput has no client_metadata field.
+		// Legacy CompactionInput has no client_metadata field. compact 走独立上游契约、
+		// 不过 projectCodexOutboundHeaders：这里的 session 隔离值只写下划线 session_id，
+		// 按同一迁移规则挪到官方连字符 session-id 再归一化。
+		if headers != nil && strings.TrimSpace(headers.Get("session-id")) == "" {
+			if isolated := strings.TrimSpace(headers.Get("session_id")); isolated != "" {
+				headers.Set("session-id", isolated)
+			}
+		}
 		_, err := normalizeCodexClientMetadata(map[string]any{}, headers, true)
 		return body, false, err
 	}

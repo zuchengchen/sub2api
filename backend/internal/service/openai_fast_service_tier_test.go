@@ -351,9 +351,10 @@ func TestForwardAsChatCompletions_ServiceTierFastNormalizedToPriorityUpstream(t 
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
 	}
 	account := &Account{
 		ID:          21,
@@ -388,9 +389,10 @@ func TestForwardAsChatCompletions_ServiceTierPriorityPreservedUpstream(t *testin
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
 	}
 	account := &Account{
 		ID:          2,
@@ -426,9 +428,10 @@ func TestForward_ResponsesServiceTierFastNormalizedToPriorityUpstream(t *testing
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
 	}
 	account := &Account{
 		ID:          7,
@@ -471,9 +474,10 @@ func TestForward_ResponsesServiceTierOmittedStaysOmitted(t *testing.T) {
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
 	}
 	account := &Account{
 		ID:          7,
@@ -521,9 +525,10 @@ func TestForwardStreaming_ServiceTierPropagatedToResult(t *testing.T) {
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
 	}
 	account := &Account{
 		ID:          7,
@@ -571,9 +576,10 @@ func TestForward_ResponsesKeepsOutboundAndObservedServiceTiersSeparate(t *testin
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
 	}
 	account := &Account{
 		ID:          7,
@@ -618,9 +624,10 @@ func TestForwardStreaming_KeepsOutboundAndObservedServiceTiersSeparate(t *testin
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
 	}
 	account := &Account{
 		ID:          7,
@@ -665,9 +672,10 @@ func TestForwardAsChatCompletions_KeepsOutboundAndObservedServiceTiersSeparate(t
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(&openAIFastPolicyRepoStub{values: map[string]string{}}, &config.Config{}),
 	}
 	account := &Account{
 		ID:          21,
@@ -724,9 +732,10 @@ func TestForward_ServiceTierFilteredByPolicyBillsStandard(t *testing.T) {
 	}}
 
 	svc := &OpenAIGatewayService{
-		cfg:            &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-		httpUpstream:   upstream,
-		settingService: NewSettingService(repo, &config.Config{}),
+		tiboRouteDisabled: true,
+		cfg:               &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream:      upstream,
+		settingService:    NewSettingService(repo, &config.Config{}),
 	}
 	account := &Account{
 		ID:          7,

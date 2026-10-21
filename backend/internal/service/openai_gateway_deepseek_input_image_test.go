@@ -135,8 +135,9 @@ func TestForwardResponses_OpenAIMappedDeepSeekAliasesInputImageURL(t *testing.T)
 		))),
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          deepSeekChatFallbackTestConfig(),
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               deepSeekChatFallbackTestConfig(),
+		httpUpstream:      upstream,
 	}
 
 	result, err := svc.Forward(context.Background(), c, openaiMappedDeepSeekResponsesImageAccount(), body)
@@ -158,8 +159,9 @@ func TestForwardResponses_NativeDeepSeekAliasesInputImageURL(t *testing.T) {
 		))),
 	}}
 	svc := &OpenAIGatewayService{
-		cfg:          deepSeekChatFallbackTestConfig(),
-		httpUpstream: upstream,
+		tiboRouteDisabled: true,
+		cfg:               deepSeekChatFallbackTestConfig(),
+		httpUpstream:      upstream,
 	}
 
 	result, err := svc.Forward(context.Background(), c, deepSeekNativeResponsesImageAccount(), body)

@@ -16,55 +16,64 @@ func TestCompositeRouteResolverCodexFilteringMatchesProductionPriority(t *testin
 	for _, scenario := range []struct {
 		name   string
 		routes []CompositeModelRoute
-		want   []string
+		// TypeSafe 在本 fork 未注册，matchCompositeRoute 会跳过其路由；
+		// Anthropic 作为已注册的非 codex 平台承载同样的优先级竞争语义。
+		want         []string
+		wantPlatform string
 	}{
 		{
 			name: "endpoint beats priority",
 			routes: []CompositeModelRoute{
 				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchExact, Endpoint: CompositeRouteEndpointAny, TargetPlatform: PlatformOpenAI, Priority: 1},
-				{ID: 2, PublicModel: "alias", MatchType: CompositeRouteMatchExact, Endpoint: CompositeRouteEndpointResponses, TargetPlatform: PlatformTypeSafe, Priority: 100},
+				{ID: 2, PublicModel: "alias", MatchType: CompositeRouteMatchExact, Endpoint: CompositeRouteEndpointResponses, TargetPlatform: PlatformAnthropic, Priority: 100},
 			},
-			want: []string{"unrouted"},
+			want:         []string{"alias", "unrouted"},
+			wantPlatform: PlatformAnthropic,
 		},
 		{
-			name: "Responses OpenAI overrides any TypeSafe",
+			name: "Responses OpenAI overrides any Anthropic",
 			routes: []CompositeModelRoute{
-				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchExact, Endpoint: CompositeRouteEndpointAny, TargetPlatform: PlatformTypeSafe, Priority: 1},
+				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchExact, Endpoint: CompositeRouteEndpointAny, TargetPlatform: PlatformAnthropic, Priority: 1},
 				{ID: 2, PublicModel: "alias", MatchType: CompositeRouteMatchExact, Endpoint: CompositeRouteEndpointResponses, TargetPlatform: PlatformOpenAI, Priority: 100},
 			},
-			want: []string{"alias", "unrouted"},
+			want:         []string{"alias", "unrouted"},
+			wantPlatform: PlatformOpenAI,
 		},
 		{
 			name: "longer prefix beats priority",
 			routes: []CompositeModelRoute{
 				{ID: 1, PublicModel: "a", MatchType: CompositeRouteMatchPrefix, TargetPlatform: PlatformOpenAI, Priority: 1},
-				{ID: 2, PublicModel: "ali", MatchType: CompositeRouteMatchPrefix, TargetPlatform: PlatformTypeSafe, Priority: 100},
+				{ID: 2, PublicModel: "ali", MatchType: CompositeRouteMatchPrefix, TargetPlatform: PlatformAnthropic, Priority: 100},
 			},
-			want: []string{"unrouted"},
+			want:         []string{"alias", "unrouted"},
+			wantPlatform: PlatformAnthropic,
 		},
 		{
 			name: "exact beats endpoint prefix",
 			routes: []CompositeModelRoute{
-				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchPrefix, Endpoint: CompositeRouteEndpointResponses, TargetPlatform: PlatformTypeSafe},
+				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchPrefix, Endpoint: CompositeRouteEndpointResponses, TargetPlatform: PlatformAnthropic},
 				{ID: 2, PublicModel: "alias", MatchType: CompositeRouteMatchExact, Endpoint: CompositeRouteEndpointAny, TargetPlatform: PlatformOpenAI},
 			},
-			want: []string{"alias", "unrouted"},
+			want:         []string{"alias", "unrouted"},
+			wantPlatform: PlatformOpenAI,
 		},
 		{
 			name: "lower priority wins",
 			routes: []CompositeModelRoute{
-				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformTypeSafe, Priority: 100},
+				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformAnthropic, Priority: 100},
 				{ID: 2, PublicModel: "alias", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformOpenAI, Priority: 1},
 			},
-			want: []string{"alias", "unrouted"},
+			want:         []string{"alias", "unrouted"},
+			wantPlatform: PlatformOpenAI,
 		},
 		{
 			name: "lower ID breaks tie",
 			routes: []CompositeModelRoute{
 				{ID: 2, PublicModel: "alias", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformOpenAI},
-				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformTypeSafe},
+				{ID: 1, PublicModel: "alias", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformAnthropic},
 			},
-			want: []string{"unrouted"},
+			want:         []string{"alias", "unrouted"},
+			wantPlatform: PlatformAnthropic,
 		},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -79,13 +88,17 @@ func TestCompositeRouteResolverCodexFilteringMatchesProductionPriority(t *testin
 			decision, err := resolver.Resolve(context.Background(), 7, "alias", CompositeRouteEndpointResponses)
 			require.NoError(t, err)
 			require.True(t, decision.Matched)
+			require.Equal(t, scenario.wantPlatform, decision.TargetPlatform)
 			require.Equal(t, decision.TargetPlatform != PlatformTypeSafe, len(models) == 2)
 			exactModels, err := resolver.ListExactPublicModels(context.Background(), 7, CompositeRouteEndpointResponses, false)
 			require.NoError(t, err)
-			if decision.TargetPlatform == PlatformTypeSafe {
-				require.Empty(t, exactModels)
-			} else {
+			// ListExactPublicModels 只收 exact 路由：获胜路由是 prefix 时目录不含该模型。
+			winningExact := decision.Route != nil &&
+				normalizeCompositeRouteMatchType(decision.Route.MatchType) == CompositeRouteMatchExact
+			if winningExact && decision.TargetPlatform != PlatformTypeSafe {
 				require.Contains(t, exactModels, "alias")
+			} else {
+				require.NotContains(t, exactModels, "alias")
 			}
 		})
 	}

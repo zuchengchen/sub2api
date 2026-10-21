@@ -1812,6 +1812,15 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		!legacyCompactRequest {
 		projectCodexOutboundHeaders(req.Header, false)
 	}
+	// messages 桥不过收口，但 session/full 收敛写下的下划线 session_id 同样是非官方
+	// 线形（官方只有 session-id）：applyCodexRequestMetadata 回填后在此删除。
+	// 未开收敛的桥请求保留自身隔离 session_id（device 模式也不写收敛 session）。
+	if isOpenAICompatMessagesBridgeContext(c) || isOpenAICompatMessagesBridgeBody(body) {
+		if ids := stagedCodexFingerprintIDs(c, account); ids != nil &&
+			(ids.mode == codexFingerprintSession || ids.mode == codexFingerprintFull) {
+			req.Header.Del("session_id")
+		}
+	}
 	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
 		return nil, err
 	}

@@ -10,6 +10,8 @@ import (
 )
 
 func TestCodexCatalogUsesAntigravityCapabilitiesInGeminiMixedGroup(t *testing.T) {
+	t.Skip("gemini/antigravity 平台在本 fork 已下线：平台常量未注册，" +
+		"mixedListing* 桩函数恒为 false，无法到达该能力合并路径")
 	const groupID int64 = 93
 	account := Account{
 		ID: 25, Platform: PlatformAntigravity, Type: AccountTypeOAuth,
@@ -45,6 +47,8 @@ func TestCodexCatalogUsesAntigravityCapabilitiesInGeminiMixedGroup(t *testing.T)
 }
 
 func TestCodexCatalogGeminiCapabilitiesExcludeNonMixedAntigravityAccounts(t *testing.T) {
+	t.Skip("gemini/antigravity 平台在本 fork 已下线：分组平台非 concrete，" +
+		"BuildCodexModelsManifestForGroup 直接走独立 manifest，能力合并路径不可达")
 	const groupID int64 = 94
 	reasoning := true
 	native := Account{ID: 1, Platform: PlatformGemini, Type: AccountTypeAPIKey,
