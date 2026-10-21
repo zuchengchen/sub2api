@@ -61,17 +61,33 @@ func orderByTemplate(h http.Header, template []string) []HeaderKV {
 		return nil
 	}
 	out := make([]HeaderKV, 0, len(h))
+	matched := make(map[string]bool, len(h))
 	for _, name := range template {
 		for key, values := range h {
 			if !strings.EqualFold(key, name) {
 				continue
 			}
+			matched[key] = true
 			for _, value := range values {
 				if strings.TrimSpace(value) == "" {
 					continue
 				}
 				out = append(out, HeaderKV{Name: name, Value: value})
 			}
+		}
+	}
+	// 模板外头原样透传（reqwest 也发送 HeaderMap 里全部头）；http crate 线序
+	// 恒定小写名，Go 的 Canonical-Case 键需要降写。
+	for key, values := range h {
+		if matched[key] {
+			continue
+		}
+		name := strings.ToLower(key)
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			out = append(out, HeaderKV{Name: name, Value: value})
 		}
 	}
 	return out

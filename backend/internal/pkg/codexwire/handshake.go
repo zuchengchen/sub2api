@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -76,6 +77,11 @@ type UpgradeResult struct {
 	ServerNoContextTakeover bool
 	// ClientNoContextTakeover disables our compressor's sliding window.
 	ClientNoContextTakeover bool
+	// ClientMaxWindowBits is the negotiated compressor LZ77 window (8-15,
+	// 0 = negotiated default 15). RFC 7692 client_max_window_bits.
+	ClientMaxWindowBits int
+	// ServerMaxWindowBits is the negotiated decompressor window hint.
+	ServerMaxWindowBits int
 	// Body carries the non-101 response body (bounded).
 	Body []byte
 }
@@ -105,7 +111,8 @@ func ReadUpgradeResponse(br *bufio.Reader, maxBodyBytes int64) (*UpgradeResult, 
 	}
 	res := &UpgradeResult{StatusCode: statusCode, Headers: http.Header(mimeHeaders)}
 	if statusCode == http.StatusSwitchingProtocols {
-		res.PerMessageDeflate, res.ServerNoContextTakeover, res.ClientNoContextTakeover =
+		res.PerMessageDeflate, res.ServerNoContextTakeover, res.ClientNoContextTakeover,
+			res.ClientMaxWindowBits, res.ServerMaxWindowBits =
 			parseExtensionNegotiation(res.Headers.Get("Sec-WebSocket-Extensions"))
 		return res, nil
 	}
@@ -116,7 +123,7 @@ func ReadUpgradeResponse(br *bufio.Reader, maxBodyBytes int64) (*UpgradeResult, 
 
 // parseExtensionNegotiation interprets the server's Sec-WebSocket-Extensions
 // accept value for permessage-deflate parameters.
-func parseExtensionNegotiation(value string) (pmd, serverNoTakeover, clientNoTakeover bool) {
+func parseExtensionNegotiation(value string) (pmd, serverNoTakeover, clientNoTakeover bool, clientBits, serverBits int) {
 	for _, part := range strings.Split(value, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -128,13 +135,33 @@ func parseExtensionNegotiation(value string) (pmd, serverNoTakeover, clientNoTak
 		}
 		pmd = true
 		for _, p := range params[1:] {
-			switch strings.ToLower(strings.TrimSpace(strings.SplitN(p, "=", 2)[0])) {
+			kv := strings.SplitN(p, "=", 2)
+			key := strings.ToLower(strings.TrimSpace(kv[0]))
+			switch key {
 			case "server_no_context_takeover":
 				serverNoTakeover = true
 			case "client_no_context_takeover":
 				clientNoTakeover = true
+			case "client_max_window_bits":
+				if len(kv) == 2 {
+					clientBits = parsePMDWindowBits(kv[1])
+				}
+			case "server_max_window_bits":
+				if len(kv) == 2 {
+					serverBits = parsePMDWindowBits(kv[1])
+				}
 			}
 		}
 	}
-	return pmd, serverNoTakeover, clientNoTakeover
+	return pmd, serverNoTakeover, clientNoTakeover, clientBits, serverBits
+}
+
+// parsePMDWindowBits parses an RFC 7692 *_max_window_bits value; out-of-range
+// values yield 0 (treated as the 15-bit default).
+func parsePMDWindowBits(s string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n < 8 || n > 15 {
+		return 0
+	}
+	return n
 }
