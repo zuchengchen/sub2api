@@ -2066,3 +2066,271 @@ func cloneMapStringAny(src map[string]any) map[string]any {
 	}
 	return dst
 }
+
+// lockedTestResponseWriter 串行化下游写入，供测试在转发进行中安全地
+// 快照 recorder 响应体（转发 goroutine 与断言 goroutine 并发访问）。
+type lockedTestResponseWriter struct {
+	http.ResponseWriter
+	mu sync.Mutex
+}
+
+func (w *lockedTestResponseWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *lockedTestResponseWriter) WriteString(s string) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if sw, ok := w.ResponseWriter.(interface{ WriteString(string) (int, error) }); ok {
+		return sw.WriteString(s)
+	}
+	return w.ResponseWriter.Write([]byte(s))
+}
+
+func (w *lockedTestResponseWriter) WriteHeader(code int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *lockedTestResponseWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *lockedTestResponseWriter) snapshotBody() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if rec, ok := w.ResponseWriter.(*httptest.ResponseRecorder); ok {
+		return rec.Body.String()
+	}
+	return ""
+}
+
+// 首个客户端可见事件（reasoning item.added 等结构性输出）到达时，前置缓冲
+// 应立刻放行——与 HTTP firstOutputStage 提交点同口径。此前缓冲会压到首个
+// token 事件，推理思考期客户端看不到 response.created / output_item.added。
+// first_token_ms 口径不变（仍记首个 .delta / response.output* 事件）。
+func TestOpenAIGatewayService_Forward_WSv2_ReleasesPreambleAtClientOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	writer := &lockedTestResponseWriter{ResponseWriter: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(writer)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	captureConn := &openAIWSCaptureConn{
+		events: [][]byte{
+			[]byte(`{"type":"response.created","response":{"id":"resp_preamble","model":"gpt-5.1","status":"in_progress"}}`),
+			[]byte(`{"type":"response.in_progress","response":{"id":"resp_preamble","status":"in_progress"}}`),
+			[]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[],"encrypted_content":"enc_blob"}}`),
+			[]byte(`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"hi"}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_preamble","model":"gpt-5.1","status":"completed","usage":{"input_tokens":3,"output_tokens":1},"output":[{"id":"rs_1","type":"reasoning"},{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}}`),
+		},
+		readDelays: []time.Duration{0, 0, 0, 600 * time.Millisecond, 0},
+	}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+		openaiWSPool:     pool,
+	}
+	account := &Account{
+		ID:          82,
+		Name:        "openai-preamble-release",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"hi"}]}`)
+	type forwardResult struct {
+		res *OpenAIForwardResult
+		err error
+	}
+	doneCh := make(chan forwardResult, 1)
+	go func() {
+		res, fwdErr := svc.Forward(context.Background(), c, account, body)
+		doneCh <- forwardResult{res: res, err: fwdErr}
+	}()
+
+	// delta 延迟 600ms：在其到达之前，前置事件（含触发提交的
+	// reasoning item.added）必须已经下发给客户端。
+	require.Eventually(t, func() bool {
+		snap := writer.snapshotBody()
+		return strings.Contains(snap, "response.output_item.added") &&
+			strings.Contains(snap, "response.created") &&
+			!strings.Contains(snap, "response.output_text.delta")
+	}, 1500*time.Millisecond, 20*time.Millisecond,
+		"首个客户端可见事件到达时应立即放行前置缓冲，而不是压到首个 token 事件")
+
+	out := <-doneCh
+	require.NoError(t, out.err)
+	require.NotNil(t, out.res)
+	require.Equal(t, "resp_preamble", out.res.RequestID)
+	finalBody := writer.snapshotBody()
+	require.Contains(t, finalBody, "response.output_text.delta")
+	require.Contains(t, finalBody, "response.completed")
+	// first_token_ms 仍按首个 delta 记录（delta 延迟了 600ms）。
+	require.NotNil(t, out.res.FirstTokenMs)
+	require.GreaterOrEqual(t, *out.res.FirstTokenMs, 400)
+}
+
+// 提交点（客户端可见事件）之后到达的容量降载错误：无法干净 failover，
+// 应把错误下发客户端并把 server_is_overloaded 改写为可重试的 server_error，
+// 与 HTTP/ingress 路径一致（原码会让 Codex 客户端直接终止会话）。
+func TestOpenAIGatewayService_Forward_WSv2_CapacityShedErrorAfterCommitSanitized(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	captureConn := &openAIWSCaptureConn{
+		events: [][]byte{
+			[]byte(`{"type":"response.created","response":{"id":"resp_shed","model":"gpt-5.1","status":"in_progress"}}`),
+			[]byte(`{"type":"response.in_progress","response":{"id":"resp_shed","status":"in_progress"}}`),
+			[]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[],"encrypted_content":"enc_blob"}}`),
+			[]byte(`{"type":"error","error":{"type":"service_unavailable_err","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}`),
+		},
+	}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+		openaiWSPool:     pool,
+	}
+	account := &Account{
+		ID:          83,
+		Name:        "openai-shed-after-commit",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"hi"}]}`)
+	_, err := svc.Forward(context.Background(), c, account, body)
+	require.Error(t, err)
+
+	finalBody := rec.Body.String()
+	require.Contains(t, finalBody, "response.output_item.added", "已提交的客户端可见事件应先于错误下发")
+	require.Contains(t, finalBody, `"type":"error"`)
+	require.Contains(t, finalBody, "server_error", "容量降载码应改写为客户端可重试的错误码")
+	require.NotContains(t, finalBody, "server_is_overloaded", "致命降载原码不得透传给客户端")
+}
+
+// 提交点之前到达的错误仍应静默 failover：只缓冲过 metadata 事件时
+// wroteDownstream=false，重试换连接成功，客户端不感知第一次失败。
+func TestOpenAIGatewayService_Forward_WSv2_ErrorBeforeCommitStillFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	failingConn := &openAIWSCaptureConn{
+		events: [][]byte{
+			[]byte(`{"type":"response.created","response":{"id":"resp_shed_1","model":"gpt-5.1","status":"in_progress"}}`),
+			[]byte(`{"type":"response.in_progress","response":{"id":"resp_shed_1","status":"in_progress"}}`),
+			[]byte(`{"type":"error","error":{"type":"server_error","code":"server_error","message":"internal upstream failure"}}`),
+		},
+	}
+	healthyConn := &openAIWSCaptureConn{
+		events: [][]byte{
+			[]byte(`{"type":"response.created","response":{"id":"resp_shed_2","model":"gpt-5.1","status":"in_progress"}}`),
+			[]byte(`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"ok"}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_shed_2","model":"gpt-5.1","status":"completed","usage":{"input_tokens":3,"output_tokens":1},"output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`),
+		},
+	}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(&openAIWSQueueDialer{conns: []openAIWSClientConn{failingConn, healthyConn}})
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+		openaiWSPool:     pool,
+	}
+	account := &Account{
+		ID:          84,
+		Name:        "openai-shed-before-commit",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"hi"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "resp_shed_2", result.RequestID, "提交点前的错误应换连接重试成功")
+
+	finalBody := rec.Body.String()
+	require.Contains(t, finalBody, "resp_shed_2")
+	require.NotContains(t, finalBody, "server_is_overloaded")
+	require.NotContains(t, finalBody, "resp_shed_1", "第一次失败尝试的缓冲事件不得泄漏给客户端")
+}

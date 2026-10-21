@@ -570,6 +570,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	responseID := ""
 	var finalResponse []byte
 	wroteDownstream := false
+	// clientOutputStarted 与 HTTP firstOutputStage 的提交点同口径：首个对
+	// 客户端可见的事件（含 reasoning item.added 等结构性输出）到达后，
+	// 前置缓冲放行、本次尝试提交，错误事件改为下发客户端而不再静默 failover。
+	clientOutputStarted := false
 	needModelReplace := originalModel != mappedModel
 	var mappedModelBytes []byte
 	if needModelReplace && mappedModel != "" {
@@ -892,6 +896,15 @@ readLoop:
 		if deltaRecorder != nil {
 			deltaRecorder.observe(message)
 		}
+		// 下发客户端的副本单独改写容量降载码（server_is_overloaded/slow_down →
+		// server_error）：Codex 对原码判致命并终止会话，改写后走客户端内置退避
+		// 重试。policy/账号状态判定仍用未改写的 message，与 ingress 路径一致。
+		clientMessage := message
+		if eventType == "error" || eventType == "response.failed" {
+			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
+				clientMessage = rewritten
+			}
+		}
 
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
@@ -958,7 +971,7 @@ readLoop:
 			setOpsUpstreamError(c, statusCode, errMsg, "")
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
-				emitStreamMessage(message, true)
+				emitStreamMessage(clientMessage, true)
 			}
 			if !reqStream {
 				c.JSON(statusCode, gin.H{
@@ -972,12 +985,20 @@ readLoop:
 		}
 
 		if reqStream {
-			// 在首个 token 前先缓冲事件（如 response.created），
-			// 以便上游早期断连时仍可安全回退到 HTTP，不给下游发送半截流。
-			shouldBuffer := firstTokenMs == nil && !isTokenEvent && !isTerminalEvent
+			// 与 HTTP firstOutputStage 同口径的提交点：首个客户端可见事件
+			// （delta/可见输出/reasoning item.added 等）到达即放行缓冲并提交
+			// 本次尝试；此前仅首个 token 事件放行，推理思考期客户端看不到
+			// response.created / output_item.added 等前置事件。
+			if !clientOutputStarted && !isTerminalEvent &&
+				(isTokenEvent ||
+					openAIStreamDataStartsClientOutput(string(clientMessage), eventType) ||
+					openAIStreamDataStartsVisibleOutput(string(clientMessage), eventType)) {
+				clientOutputStarted = true
+			}
+			shouldBuffer := !clientOutputStarted && !isTerminalEvent
 			if shouldBuffer {
-				buffered := make([]byte, len(message))
-				copy(buffered, message)
+				buffered := make([]byte, len(clientMessage))
+				copy(buffered, clientMessage)
 				bufferedStreamEvents = append(bufferedStreamEvents, buffered)
 				bufferedEventCount++
 				if debugEnabled && shouldLogOpenAIWSBufferedEvent(bufferedEventCount) {
@@ -993,7 +1014,7 @@ readLoop:
 				}
 			} else {
 				flushBufferedStreamEvents(eventType)
-				emitStreamMessage(message, isTerminalEvent)
+				emitStreamMessage(clientMessage, isTerminalEvent)
 			}
 		} else {
 			if responseField.Exists() && responseField.Type == gjson.JSON {
