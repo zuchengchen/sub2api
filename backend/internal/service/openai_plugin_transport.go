@@ -146,8 +146,9 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxy
 }
 
 // resolveCodexHTTPSTLSProfile 为 codex lane 的 HTTP 请求解析 TLS 指纹：
-// 账号 extra 的 tls_fingerprint_builtin 优先，否则默认 rustls（官方客户端
-// 的 TLS 栈）；显式 "none" 返回 nil 走 Go 默认栈。
+// 账号 extra 的 tls_fingerprint_builtin 优先，否则默认 rustls-h2（官方客户端
+// 的 reqwest/h2 TLS 栈 + ALPN）；显式 "none" 返回 nil 走 Go 默认栈。
+// codex_http_h2_enabled=false 时默认档退回 rustls（紧急回滚到 net/http h1）。
 func (s *OpenAIGatewayService) resolveCodexHTTPSTLSProfile(account *Account) *tlsfingerprint.Profile {
 	if account != nil {
 		if name := strings.TrimSpace(firstNonEmpty(account.GetExtraString("codex_tls_profile"), account.GetExtraString("tls_fingerprint_builtin"))); name != "" {
@@ -159,7 +160,16 @@ func (s *OpenAIGatewayService) resolveCodexHTTPSTLSProfile(account *Account) *tl
 			}
 		}
 	}
+	if s.isCodexHTTPH2Enabled() {
+		return tlsfingerprint.BuiltinProfile("rustls-h2")
+	}
 	return tlsfingerprint.BuiltinProfile("rustls")
+}
+
+// isCodexHTTPH2Enabled 报告 Codex HTTP 出站是否走 codexwire 的 hyper/h2
+// 保真客户端（默认开启；false 为紧急回滚开关）。
+func (s *OpenAIGatewayService) isCodexHTTPH2Enabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.CodexHTTPH2Enabled
 }
 
 // doOpenAIAccountTestUpstream 让 OpenAI OAuth 账号测试与真实转发使用同一插件路径。
