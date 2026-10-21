@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/codexwire"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
@@ -170,6 +172,10 @@ type httpUpstreamService struct {
 	clients map[string]*upstreamClientEntry // 客户端缓存池，key 由隔离策略决定
 	// OpenAI 直连或走 HTTP/HTTPS 代理时的 H2->H1 回退状态（key=标准化 proxyKey）
 	openAIHTTP2Fallbacks sync.Map
+	// Codex HTTP/2 保真客户端池（hyper/h2 线级复刻）；仅 profile.H2 的请求
+	// 路由到这里，按需懒初始化。
+	codexH2Once sync.Once
+	codexH2Pool *codexwire.H2Pool
 }
 
 // NewHTTPUpstream 创建通用 HTTP 上游服务
@@ -320,6 +326,10 @@ func (s *httpUpstreamService) doWithTLSUncontrolled(req *http.Request, proxyURL 
 
 	if err := s.validateRequestHost(req); err != nil {
 		return nil, err
+	}
+
+	if profile.H2 {
+		return s.doCodexH2Uncontrolled(req, proxyURL, accountID, profile)
 	}
 
 	entry, err := s.acquireClientWithTLS(proxyURL, accountID, accountConcurrency, profile, upstreamProfile)
@@ -1702,4 +1712,59 @@ func (d *decompressedBody) Close() error {
 		_ = rc.Close()
 	}
 	return d.closer.Close()
+}
+
+// codexH2 懒初始化 Codex HTTP/2 保真客户端池。
+func (s *httpUpstreamService) codexH2() *codexwire.H2Pool {
+	s.codexH2Once.Do(func() {
+		s.codexH2Pool = codexwire.NewH2Pool(codexwire.H2Options{
+			Timeout: defaultUpstreamDialTimeout + 5*time.Second,
+		})
+	})
+	return s.codexH2Pool
+}
+
+// doCodexH2Uncontrolled routes a codex-lane request through the hyper/h2
+// faithful client: rustls-h2 ClientHello, h2 preface/SETTINGS, hpack encoding
+// and stream multiplexing matching the official Codex reqwest+hyper stack.
+func (s *httpUpstreamService) doCodexH2Uncontrolled(req *http.Request, proxyURL string, accountID int64, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	var body []byte
+	if req.Body != nil {
+		if req.GetBody != nil {
+			rc, err := req.GetBody()
+			if err == nil {
+				body, _ = io.ReadAll(rc)
+				_ = rc.Close()
+			}
+		}
+		if body == nil {
+			b, err := io.ReadAll(req.Body)
+			if err != nil {
+				return nil, err
+			}
+			body = b
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+	}
+	ordered := codexwire.OrderCodexHTTPHeaders(req.Header)
+	// Framing headers are owned by the transport; content-length is emitted
+	// from the actual body length (skip_value_index → literal-not-indexed).
+	filtered := ordered[:0]
+	for _, kv := range ordered {
+		if strings.EqualFold(kv.Name, "content-length") || strings.EqualFold(kv.Name, "transfer-encoding") || strings.EqualFold(kv.Name, "host") {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	ordered = append(filtered, codexwire.HeaderKV{Name: "content-length", Value: strconv.Itoa(len(body))})
+
+	ctx, cancel := context.WithCancel(req.Context())
+	resp, err := s.codexH2().Do(ctx, req.Method, req.URL.String(), ordered, body, proxyURL, strconv.FormatInt(accountID, 10), profile)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	decompressResponseBody(resp)
+	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
 }

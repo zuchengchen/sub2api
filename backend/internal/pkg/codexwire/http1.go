@@ -137,7 +137,28 @@ func DoHTTP1(ctx context.Context, method, rawURL string, ordered []HeaderKV, bod
 	if err != nil {
 		return nil, err
 	}
+	return writeHTTP1Request(dialCtx, conn, method, path, host, ordered, body)
+}
 
+// doHTTP1OnConn runs a raw HTTP/1.1 request over an already-established
+// connection (used when the h2 dialer negotiated a non-h2 ALPN).
+func doHTTP1OnConn(ctx context.Context, method, path, host string, ordered []HeaderKV, body []byte, dial func(context.Context) (net.Conn, error), timeout time.Duration) (*http.Response, error) {
+	dialCtx := ctx
+	cancel := func() {}
+	if timeout > 0 {
+		dialCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
+	defer cancel()
+	conn, err := dial(dialCtx)
+	if err != nil {
+		return nil, err
+	}
+	return writeHTTP1Request(dialCtx, conn, method, path, host, ordered, body)
+}
+
+// writeHTTP1Request writes the byte-exact request on conn and reads the
+// streaming response.
+func writeHTTP1Request(ctx context.Context, conn net.Conn, method, path, host string, ordered []HeaderKV, body []byte) (*http.Response, error) {
 	var req strings.Builder
 	fmt.Fprintf(&req, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, host)
 	hasCL := false
@@ -156,7 +177,7 @@ func DoHTTP1(ctx context.Context, method, rawURL string, ordered []HeaderKV, bod
 		fmt.Fprintf(&req, "content-length: %d\r\n", len(body))
 	}
 	fmt.Fprint(&req, "\r\n")
-	if deadline, ok := dialCtx.Deadline(); ok {
+	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
 	if _, err := conn.Write([]byte(req.String())); err != nil {

@@ -24,14 +24,26 @@ func BuiltinProfile(name string) *Profile {
 			SupportedVersions: []uint16{0x0304, 0x0303}, KeyShareGroups: []uint16{29}, PSKModes: []uint16{1},
 			Extensions: []uint16{0, 11, 10, 35, 16, 22, 23, 13, 43, 45, 51},
 		}
-	case "rustls":
-		// rustls 0.23.x + aws-lc-rs 默认 ClientHello（Codex CLI websocket-client
-		// 走 build_rustls_client_config_with_custom_ca → rustls::ClientConfig 默认）：
+	case "rustls", "rustls-h2":
+		// rustls 0.23.x + aws-lc-rs 默认 ClientHello（Codex CLI：WS 走
+		// websocket-client 的 build_rustls_client_config_with_custom_ca，HTTP 走
+		// reqwest 的 rustls connector，同一 TLS 栈）：
 		//   cipher order: TLS13 AES256/AES128/CHACHA, then ECDHE_ECDSA AES256/AES128/CHACHA,
 		//   then ECDHE_RSA AES256/AES128/CHACHA（rustls DEFAULT_CIPHER_SUITES 序）。
 		//   supported_groups 首项 X25519MLKEM768（aws-lc-rs 默认开后量子 kx），
 		//   key_share 只投前两个组。
-		//   ws 场景 rustls 配置不发 ALPN（alpn_protocols 为空 → 无 16 扩展）。
+		//   WS 场景不发 ALPN（alpn_protocols 为空 → 无 16 扩展）；HTTP 场景
+		//   reqwest 发 ALPN [h2, http/1.1]。
+		//   extended_master_secret(23) 与 session_ticket(35) 由 rustls 默认开启
+		//   （hs.rs emit_client_hello_for_retry 无条件 EMS；session_storage 默认开）。
+		//   扩展集合在每次握手按 rustls 0.23 的 order_seed 机制随机排序——
+		//   Extensions 列表只是无序集合，真实线序由 ShuffleExtensions 产生。
+		exts := []uint16{0, 11, 10, 35, 13, 23, 51, 45, 43}
+		alpn := []string{}
+		if name == "rustls-h2" {
+			exts = append(exts, 16)
+			alpn = []string{"h2", "http/1.1"}
+		}
 		p = Profile{
 			Name: "rustls 0.23 aws-lc (Codex CLI)",
 			CipherSuites: []uint16{
@@ -46,11 +58,16 @@ func BuiltinProfile(name string) *Profile {
 				0x0804, 0x0805, 0x0806,
 				0x0401, 0x0501, 0x0601,
 			},
-			ALPNProtocols:     []string{},
+			ALPNProtocols:     alpn,
 			SupportedVersions: []uint16{0x0304, 0x0303},
 			KeyShareGroups:    []uint16{0x11ec, 29},
 			PSKModes:          []uint16{1},
-			Extensions:        []uint16{0, 11, 10, 35, 13, 51, 45, 43},
+			Extensions:        exts,
+			ShuffleExtensions: true,
+		}
+		if name == "rustls-h2" {
+			p.Name = "rustls 0.23 aws-lc h2 (Codex CLI HTTP)"
+			p.H2 = true
 		}
 	default:
 		return nil
