@@ -38,6 +38,30 @@ func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testi
 	assert.Equal(t, userfacing.UpstreamRequestFailed, errorObj["message"])
 }
 
+// 转发失败兜底响应应优先携带记录的真实上游错误消息，
+// 而不是泛化的 "Upstream request failed"（上游容量风暴时客户端需要看到真实原因）。
+func TestGatewayEnsureForwardErrorResponse_PrefersRecordedUpstreamMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Set(service.OpsUpstreamStatusCodeKey, http.StatusTooManyRequests)
+	c.Set(service.OpsUpstreamErrorMessageKey, "Codex is at capacity, please try again later")
+
+	h := &GatewayHandler{}
+	wrote := h.ensureForwardErrorResponse(c, false)
+
+	require.True(t, wrote)
+	require.Equal(t, http.StatusBadGateway, w.Code)
+
+	var parsed map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &parsed)
+	require.NoError(t, err)
+	errorObj, ok := parsed["error"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Codex is at capacity, please try again later", errorObj["message"])
+}
+
 // Writer 已写后 ensureForwardErrorResponse 必须把错误以 SSE 形式追加，
 // 而不是 silent EOF。非 /responses 路径走 legacy data:{"type":"error"} 分支。
 func TestGatewayEnsureForwardErrorResponse_AppendsSSEAfterWritten(t *testing.T) {
