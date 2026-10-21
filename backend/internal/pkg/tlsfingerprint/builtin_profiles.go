@@ -1,8 +1,13 @@
 package tlsfingerprint
 
 // BuiltinProfile returns a complete ClientHello template for the named
-// compatibility preset. The names describe template families, not verified
-// captures of an official client.
+// compatibility preset.
+//
+// The codex-lane presets ("openssl36", "rustls", "rustls-h2") are calibrated
+// against ClientHellos captured from the official Codex CLI 0.163.0 Linux
+// build by backend/tools/codexgolden (see
+// internal/pkg/codexwire/testdata/golden/0.163.0/tls_clienthellos*.json) and
+// are pinned by golden tests in this package.
 func BuiltinProfile(name string) *Profile {
 	var p Profile
 	switch name {
@@ -24,21 +29,58 @@ func BuiltinProfile(name string) *Profile {
 			SupportedVersions: []uint16{0x0304, 0x0303}, KeyShareGroups: []uint16{29}, PSKModes: []uint16{1},
 			Extensions: []uint16{0, 11, 10, 35, 16, 22, 23, 13, 43, 45, 51},
 		}
+	case "openssl36", "openssl36-linux":
+		// Official Codex CLI HTTP lane on Linux: reqwest default-tls →
+		// native-tls → statically linked OpenSSL 3.6.x. native-tls-alpn is not
+		// enabled, so no ALPN is offered and every request runs HTTP/1.1. The
+		// extension order is fixed (OpenSSL does not shuffle), status_request is
+		// not requested, and the X25519 key share is generated independently of
+		// the X25519MLKEM768 hybrid share.
+		p = Profile{
+			Name: "OpenSSL 3.6 (Codex CLI HTTP, Linux)",
+			CipherSuites: []uint16{
+				0x1302, 0x1303, 0x1301,
+				0xc02c, 0xc030, 0x009f, 0xcca9, 0xcca8, 0xccaa,
+				0xc02b, 0xc02f, 0x009e,
+				0xc024, 0xc028, 0x006b, 0xc023, 0xc027, 0x0067,
+				0xc00a, 0xc014, 0x0039, 0xc009, 0xc013, 0x0033,
+				0x009d, 0x009c, 0x003d, 0x003c, 0x0035, 0x002f,
+			},
+			Curves:       []uint16{0x11ec, 0x001d, 0x0017, 0x001e, 0x0018, 0x0019, 0x0100, 0x0101},
+			PointFormats: []uint16{0},
+			SignatureAlgorithms: []uint16{
+				0x0905, 0x0906, 0x0904,
+				0x0403, 0x0503, 0x0603,
+				0x0807, 0x0808,
+				0x081a, 0x081b, 0x081c,
+				0x0809, 0x080a, 0x080b,
+				0x0804, 0x0805, 0x0806,
+				0x0401, 0x0501, 0x0601,
+				0x0303, 0x0301, 0x0302, 0x0402, 0x0502, 0x0602,
+			},
+			SupportedVersions: []uint16{0x0304, 0x0303},
+			KeyShareGroups:    []uint16{0x11ec, 0x001d},
+			PSKModes:          []uint16{1},
+			// renegotiation_info, server_name, ec_point_formats,
+			// supported_groups, session_ticket, encrypt_then_mac,
+			// extended_master_secret, signature_algorithms, supported_versions,
+			// psk_key_exchange_modes, key_share.
+			Extensions: []uint16{0xff01, 0, 11, 10, 35, 22, 23, 13, 43, 45, 51},
+			H1:         true,
+		}
 	case "rustls", "rustls-h2":
-		// rustls 0.23.x + aws-lc-rs 默认 ClientHello（Codex CLI：WS 走
-		// websocket-client 的 build_rustls_client_config_with_custom_ca，HTTP 走
-		// reqwest 的 rustls connector，同一 TLS 栈）：
-		//   cipher order: TLS13 AES256/AES128/CHACHA, then ECDHE_ECDSA AES256/AES128/CHACHA,
-		//   then ECDHE_RSA AES256/AES128/CHACHA（rustls DEFAULT_CIPHER_SUITES 序）。
-		//   supported_groups 首项 X25519MLKEM768（aws-lc-rs 默认开后量子 kx），
-		//   key_share 只投前两个组。
-		//   WS 场景不发 ALPN（alpn_protocols 为空 → 无 16 扩展）；HTTP 场景
-		//   reqwest 发 ALPN [h2, http/1.1]。
-		//   extended_master_secret(23)、status_request/OCSP(5) 与 session_ticket(35)
-		//   由 rustls 默认开启（hs.rs emit_client_hello_for_retry 无条件发 EMS 与
-		//   CertificateStatusRequest::build_ocsp；session_storage 默认开）。
-		//   扩展集合在每次握手按 rustls 0.23 的 order_seed 机制随机排序——
-		//   Extensions 列表只是无序集合，真实线序由 ShuffleExtensions 产生。
+		// Official Codex CLI rustls 0.23.x + aws-lc-rs ClientHello. The WS lane
+		// always uses it (websocket-client builds a rustls config); the HTTP lane
+		// only switches to rustls when a custom CA bundle is configured
+		// (CODEX_CA_CERTIFICATE / SSL_CERT_FILE), in which case reqwest offers
+		// ALPN [h2, http/1.1] — that is the "rustls-h2" variant.
+		//   - cipher suites end with TLS_EMPTY_RENEGOTIATION_INFO_SCSV (0x00ff);
+		//     rustls never sends renegotiation_info.
+		//   - signature algorithms follow aws-lc-rs' verifier order and include
+		//     ML-DSA-44/65/87 (0x0904-0x0906).
+		//   - the X25519 key share is the classical half of the
+		//     X25519MLKEM768 share (rustls hybrid key reuse).
+		//   - extensions are shuffled per connection (order_seed).
 		exts := []uint16{0, 11, 10, 35, 5, 13, 23, 51, 45, 43}
 		alpn := []string{}
 		if name == "rustls-h2" {
@@ -51,13 +93,16 @@ func BuiltinProfile(name string) *Profile {
 				0x1302, 0x1301, 0x1303,
 				0xc02c, 0xc02b, 0xcca9,
 				0xc030, 0xc02f, 0xcca8,
+				0x00ff,
 			},
 			Curves:       []uint16{0x11ec, 29, 23, 24},
 			PointFormats: []uint16{0},
 			SignatureAlgorithms: []uint16{
-				0x0403, 0x0807, 0x0503, 0x0603,
-				0x0804, 0x0805, 0x0806,
-				0x0401, 0x0501, 0x0601,
+				0x0503, 0x0403, 0x0603,
+				0x0807,
+				0x0806, 0x0805, 0x0804,
+				0x0601, 0x0501, 0x0401,
+				0x0904, 0x0905, 0x0906,
 			},
 			ALPNProtocols:     alpn,
 			SupportedVersions: []uint16{0x0304, 0x0303},
@@ -65,9 +110,10 @@ func BuiltinProfile(name string) *Profile {
 			PSKModes:          []uint16{1},
 			Extensions:        exts,
 			ShuffleExtensions: true,
+			ReuseHybridX25519: true,
 		}
 		if name == "rustls-h2" {
-			p.Name = "rustls 0.23 aws-lc h2 (Codex CLI HTTP)"
+			p.Name = "rustls 0.23 aws-lc h2 (Codex CLI HTTP, custom CA)"
 			p.H2 = true
 		}
 	default:

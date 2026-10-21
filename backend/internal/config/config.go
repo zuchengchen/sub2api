@@ -1431,9 +1431,10 @@ type GatewayOpenAIWSConfig struct {
 	// 开启后，账号的 WS 失败按原因分类把该账号临时标记为 WS 禁用，
 	// 期间新请求直接走 HTTP；TTL 到期后自动重探（下个 WS 请求即探测）。
 	SessionDisableEnabled bool `mapstructure:"session_disable_enabled"`
-	// CodexHTTPEnabledH2: Codex OAuth 的 HTTP 出站走 codexwire hyper/h2 保真
-	// 客户端（rustls-h2 TLS profile + h2 帧/HPack 复刻官方 reqwest/hyper 栈）。
-	// false → 退回旧 net/http+uTLS h1 路径（紧急回滚开关）。
+	// CodexHTTPH2Enabled: Codex OAuth 的 HTTP 出站模拟「自定义 CA」部署的官方
+	// 客户端（rustls-h2 TLS profile + codexwire h2 多路复用）。默认 false：官方
+	// Linux 客户端默认走 native-tls/OpenSSL、无 ALPN、HTTP/1.1、每请求新连接
+	// （openssl36 profile + codexwire 原始 h1，codexgolden 实抓校准）。
 	CodexHTTPH2Enabled bool `mapstructure:"codex_http_h2_enabled"`
 	// SessionDisableRetryTTLMS: 可重试类故障（dial/read/write/upstream 5xx/
 	// error_event 等）耗尽重试预算后的账号 WS 禁用时长（毫秒）。
@@ -2577,7 +2578,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.session_disable_enabled", true)
 	viper.SetDefault("gateway.openai_ws.session_disable_retry_ttl_ms", 900000)
 	viper.SetDefault("gateway.openai_ws.session_disable_capability_ttl_ms", 86400000)
-	viper.SetDefault("gateway.openai_ws.codex_http_h2_enabled", true)
+	viper.SetDefault("gateway.openai_ws.codex_http_h2_enabled", false)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.priority", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.load", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.queue", 0.7)

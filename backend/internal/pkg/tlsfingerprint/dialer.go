@@ -43,6 +43,15 @@ type Profile struct {
 	// H2 marks profiles whose HTTP transport must run over the codexwire HTTP/2
 	// client (hyper/h2-faithful) instead of net/http.
 	H2 bool
+	// H1 marks profiles whose HTTP transport must run over the codexwire raw
+	// HTTP/1.1 client (hyper h1 header order, one connection per request)
+	// instead of net/http.
+	H1 bool
+	// ReuseHybridX25519 makes the standalone X25519 key share reuse the
+	// classical half of the X25519MLKEM768 share, as rustls does. uTLS (and
+	// OpenSSL) generate the two X25519 keys independently, which is passively
+	// distinguishable from a rustls client.
+	ReuseHybridX25519 bool
 	// InsecureSkipVerify disables upstream certificate verification. Only used
 	// by tests against self-signed local servers; never set in built-in
 	// profiles.
@@ -295,9 +304,28 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 	spec := buildClientHelloSpecFromProfile(profile)
 	tlsConn := utls.UClient(conn, &utls.Config{ServerName: host, InsecureSkipVerify: profile.InsecureSkipVerify}, utls.HelloCustom)
 
+	var hybrid *hybridKeyShare
+	if profile != nil && profile.ReuseHybridX25519 {
+		var err error
+		if hybrid, err = prefillHybridKeyShares(spec); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
 	if err := tlsConn.ApplyPreset(spec); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("apply TLS preset: %w", err)
+	}
+	if hybrid != nil {
+		// uTLS only records private keys for shares it generated itself; the
+		// prefilled shares need their keys installed explicitly. Both the
+		// hybrid and the standalone X25519 share use the same X25519 key.
+		tlsConn.HandshakeState.State13.KeyShareKeys = &utls.KeySharePrivateKeys{
+			CurveID:    utls.X25519,
+			Ecdhe:      hybrid.x25519,
+			Mlkem:      hybrid.mlkem,
+			MlkemEcdhe: hybrid.x25519,
+		}
 	}
 
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
