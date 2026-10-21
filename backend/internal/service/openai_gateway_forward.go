@@ -253,6 +253,16 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		// The compact endpoint is unary HTTP, not a WS response.create turn.
 		wsDecision = openAIWSHTTPDecision("compact_http")
 	}
+	if disabledReason := s.openAIWSSessionDisabledReason(account.ID); disabledReason != "" &&
+		(wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocket ||
+			wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2) {
+		// 官方 Codex disable_websockets 语义：该账号 WS 已因能力信号或重试
+		// 预算耗尽被会话级禁用，本请求直接走 HTTP；TTL 到期清除后重探。
+		wsDecision = openAIWSHTTPDecision("ws_session_disabled:" + disabledReason)
+		if c != nil {
+			c.Set("openai_ws_session_disabled_reason", disabledReason)
+		}
+	}
 	// Cookie mode is a separately validated HTTP/WS -> WS route. Its explicit
 	// account/model opt-in also overrides legacy HTTP passthrough settings.
 	// Compaction turns (legacy /compact and native v2 compaction_trigger) stay
@@ -1198,6 +1208,8 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			break
 		}
 		if wsErr == nil {
+			// WS 成功即清除遗留的会话级禁用标记（重探成功）。
+			s.clearOpenAIWSSessionDisabled(account.ID)
 			firstTokenMs := int64(0)
 			hasFirstTokenMs := wsResult != nil && wsResult.FirstTokenMs != nil
 			if hasFirstTokenMs {
@@ -1227,32 +1239,63 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 			return wsResult, nil
 		}
-		// Cookie websocket is an optimization. Unavailable tickets, failed
-		// validation probes, oversized frames, and upstream 1009 MessageTooBig
-		// fall through to OAuth HTTP /responses instead of failing the caller.
-		// Keepalive comments from an earlier attempt are not output, so a
-		// Cookie WS turn that was never sent may still move to HTTP.
-		if false && cookieWS && !openAIStreamClientOutputStarted(c, false) {
-			fallbackReason := cookieWSHTTPFallbackReasonFor(wsErr)
-			wsDecision = openAIWSHTTPDecision(fallbackReason)
-			cookieWS = false
-			if c != nil {
-				c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
-				c.Set("openai_ws_transport_reason", wsDecision.Reason)
+		// 官方 Codex FallbackToHttp 语义：WS 失败先按原因分类——能力信号与
+		// 重试预算耗尽把账号会话级标记为 WS 禁用；随后在下游尚未开始接收
+		// 输出时，把同一请求透明改走 HTTP（同账号、含 WS 恢复路径对请求体
+		// 的合法变异）。本地池争用与超大帧只回本请求，不标记账号。
+		// Cookie WS 保留既有语义：不可用即 failover 到其他账号，不走本路径。
+		wsHTTPFallback := false
+		if !cookieWS && s.openAIWSSessionDisableEnabled() {
+			action := openAIWSSessionFallbackActionFor(openAIWSSessionFallbackReason(wsErr))
+			if action.markDisable {
+				s.markOpenAIWSSessionDisabled(account.ID, action.reason, action.capability)
 			}
-			payloadBytes, thresholdBytes := cookieWSFallbackPayloadStats(wsErr)
-			logOpenAIWSModeInfo(
-				"cookie_ws_http_fallback account_id=%d model=%s reason=%s payload_bytes=%d threshold_bytes=%d cause=%s",
-				account.ID,
-				upstreamModel,
-				normalizeOpenAIWSLogValue(fallbackReason),
-				payloadBytes,
-				thresholdBytes,
-				normalizeOpenAIWSLogValue(wsErr.Error()),
-			)
-			tiboRun.advance()
-			tiboRun.commit(c, openAITiboRouteHTTP)
-		} else {
+			if action.fallbackHTTP && !openAIStreamClientOutputStarted(c, false) {
+				if marshaled, marshalErr := marshalOpenAIUpstreamJSON(wsReqBody); marshalErr == nil {
+					if account.UsesOpenAICodexProtocol() {
+						// 全 map 重编码会按字母序重排顶层键；还原为官方声明序。
+						marshaled = restoreOpenAIUpstreamJSONTopLevelOrder(body, marshaled)
+					}
+					body = marshaled
+					requestView = newOpenAIRequestView(body)
+					wsDecision = openAIWSHTTPDecision("ws_session_fallback:" + action.reason)
+					if c != nil {
+						c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
+						c.Set("openai_ws_transport_reason", wsDecision.Reason)
+						c.Set("openai_ws_session_fallback_reason", action.reason)
+					}
+					logOpenAIWSModeInfo(
+						"ws_http_fallback account_id=%d model=%s reason=%s session_marked=%v cause=%s",
+						account.ID,
+						upstreamModel,
+						normalizeOpenAIWSLogValue(action.reason),
+						action.markDisable,
+						normalizeOpenAIWSLogValue(wsErr.Error()),
+					)
+					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+						Kind:           "ws_session_fallback",
+						Stage:          "forward",
+						AccountID:      account.ID,
+						AccountName:    account.Name,
+						Reason:         action.reason,
+						Message:        sanitizeUpstreamErrorMessage(wsErr.Error()),
+						SkipMonitoring: true,
+					})
+					if tiboRun != nil {
+						tiboRun.advance()
+						tiboRun.commit(c, openAITiboRouteHTTP)
+					}
+					wsHTTPFallback = true
+				} else {
+					logOpenAIWSModeInfo(
+						"ws_http_fallback_skipped account_id=%d reason=marshal_failed cause=%s",
+						account.ID,
+						normalizeOpenAIWSLogValue(marshalErr.Error()),
+					)
+				}
+			}
+		}
+		if !wsHTTPFallback {
 			var failoverErr *UpstreamFailoverError
 			if cookieWS {
 				wsErr = openAICookieWSUnavailableFailover(wsErr)

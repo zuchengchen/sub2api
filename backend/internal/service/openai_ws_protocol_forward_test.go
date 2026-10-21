@@ -442,7 +442,6 @@ func TestOpenAIGatewayService_Forward_WSv2Dial426FallbackHTTP(t *testing.T) {
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -475,7 +474,7 @@ func TestOpenAIGatewayService_Forward_WSv2Dial426FallbackHTTP(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "426")
 }
 
-func TestOpenAIGatewayService_Forward_WSv2FallbackCoolingSkipWS(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSSessionDisabledUsesHTTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -504,7 +503,8 @@ func TestOpenAIGatewayService_Forward_WSv2FallbackCoolingSkipWS(t *testing.T) {
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 30
+	cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	cfg.Gateway.OpenAIWS.SessionDisableCapabilityTTLMS = 86400000
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -527,15 +527,326 @@ func TestOpenAIGatewayService_Forward_WSv2FallbackCoolingSkipWS(t *testing.T) {
 		},
 	}
 
-	svc.markOpenAIWSFallbackCooling(account.ID, "upgrade_required")
+	// 会话级禁用（官方 disable_websockets 语义）：解析覆盖为 HTTP，
+	// 同请求直接走 HTTP 上游而不再尝试 WS。
+	svc.markOpenAIWSSessionDisabled(account.ID, "upgrade_required", true)
 	body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_cooling","input":[{"type":"input_text","text":"hello"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq, "会话禁用期间应落穿 HTTP 上游")
+
+	transport, _ := c.Get("openai_ws_transport_decision")
+	require.Equal(t, string(OpenAIUpstreamTransportHTTPSSE), transport)
+	reason, _ := c.Get("openai_ws_transport_reason")
+	require.Equal(t, "ws_session_disabled:upgrade_required", reason)
+}
+
+// 官方 Codex FallbackToHttp：426 能力信号 → 账号标记会话禁用 +
+// 同请求透明改走 HTTP（官方行为为会话级回退，此处为账号级模拟）。
+func TestOpenAIGatewayService_Forward_WSv2Dial426TransparentFallbackHTTP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ws426Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUpgradeRequired)
+		_, _ = w.Write([]byte(`upgrade required`))
+	}))
+	defer ws426Server.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"usage":{"input_tokens":8,"output_tokens":9,"input_tokens_details":{"cached_tokens":1}}}`,
+			)),
+		},
+	}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	cfg.Gateway.OpenAIWS.SessionDisableRetryTTLMS = 900000
+	cfg.Gateway.OpenAIWS.SessionDisableCapabilityTTLMS = 86400000
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+	}
+
+	account := &Account{
+		ID:          12,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": ws426Server.URL,
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq, "426 后应透明落穿 HTTP 上游")
+	require.Equal(t, "upgrade_required", svc.openAIWSSessionDisabledReason(account.ID))
+
+	reason, _ := c.Get("openai_ws_transport_reason")
+	require.Equal(t, "ws_session_fallback:upgrade_required", reason)
+}
+
+// 重试预算耗尽（read_event）：标记会话禁用 + 同请求透明回退 HTTP。
+func TestOpenAIGatewayService_Forward_WSv2EarlyCloseExhaustedTransparentFallbackHTTP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		var req map[string]any
+		if err := conn.ReadJSON(&req); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{
+			"type":     "response.created",
+			"response": map[string]any{"id": "resp_ws_early", "model": "gpt-5.1"},
+		})
+		closePayload := websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "")
+		_ = conn.WriteControl(websocket.CloseMessage, closePayload, time.Now().Add(time.Second))
+	}))
+	defer wsServer.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"usage":{"input_tokens":2,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`,
+			)),
+		},
+	}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.RetryBackoffInitialMS = 0
+	cfg.Gateway.OpenAIWS.RetryBackoffMaxMS = 0
+	cfg.Gateway.OpenAIWS.RetryTotalBudgetMS = 0
+	cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	cfg.Gateway.OpenAIWS.SessionDisableRetryTTLMS = 900000
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+
+	account := &Account{
+		ID:          89,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": wsServer.URL,
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq, "WS 重试耗尽后应透明落穿 HTTP 上游")
+	require.NotEmpty(t, svc.openAIWSSessionDisabledReason(account.ID), "重试耗尽应标记会话禁用")
+}
+
+// 凭据级失败（401 auth_failed）：不回退、不标记。
+func TestOpenAIGatewayService_Forward_WSv2Dial401NoFallbackNoMark(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ws401Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`unauthorized`))
+	}))
+	defer ws401Server.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+
+	upstream := &httpUpstreamRecorder{}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	cfg.Gateway.OpenAIWS.SessionDisableRetryTTLMS = 900000
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+	}
+
+	account := &Account{
+		ID:          90,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": ws401Server.URL,
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.Error(t, err)
 	require.Nil(t, result)
-	require.Nil(t, upstream.lastReq, "WS 模式下不应再回退 HTTP")
+	require.Nil(t, upstream.lastReq, "auth_failed 不应回退 HTTP")
+	require.Empty(t, svc.openAIWSSessionDisabledReason(account.ID), "auth_failed 不应标记会话禁用")
+}
 
-	_, ok := c.Get("openai_ws_fallback_cooling")
-	require.False(t, ok, "已移除 fallback cooling 快捷回退路径")
+// WS close 1009（message_too_big）：HTTP 无帧上限，本请求回退但不标记账号。
+func TestOpenAIGatewayService_Forward_WSv2MessageTooBigFallbackNoMark(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		var req map[string]any
+		if err := conn.ReadJSON(&req); err != nil {
+			return
+		}
+		closePayload := websocket.FormatCloseMessage(websocket.CloseMessageTooBig, "")
+		_ = conn.WriteControl(websocket.CloseMessage, closePayload, time.Now().Add(time.Second))
+	}))
+	defer wsServer.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"usage":{"input_tokens":2,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`,
+			)),
+		},
+	}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	cfg.Gateway.OpenAIWS.SessionDisableRetryTTLMS = 900000
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+	}
+
+	account := &Account{
+		ID:          91,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": wsServer.URL,
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq, "message_too_big 应回退 HTTP（无帧上限）")
+	require.Empty(t, svc.openAIWSSessionDisabledReason(account.ID), "message_too_big 不应标记会话禁用")
+}
+
+// 调度器：会话禁用的账号不承接 WS 需求，HTTP 需求不受影响。
+func TestOpenAIWSSessionDisabledAccountTransportCompatibility(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	cfg.Gateway.OpenAIWS.SessionDisableRetryTTLMS = 900000
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+	}
+	account := &Account{
+		ID:       92,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
+	svc.markOpenAIWSSessionDisabled(account.ID, "dial_failed", false)
+	require.False(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
+	require.False(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportHTTPSSE))
+	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportAny))
 }
 
 func TestOpenAIGatewayService_Forward_ReturnErrorWhenOnlyWSv1Enabled(t *testing.T) {
@@ -657,7 +968,6 @@ func TestOpenAIGatewayService_Forward_WSv2FallbackWhenResponseAlreadyWrittenRetu
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -749,7 +1059,6 @@ func TestOpenAIGatewayService_Forward_WSv2StreamEarlyCloseFallbackHTTP(t *testin
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -831,7 +1140,6 @@ func TestOpenAIGatewayService_Forward_WSv2RetryFiveTimesThenFallbackHTTP(t *test
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -909,7 +1217,6 @@ func TestOpenAIGatewayService_Forward_WSv2PolicyViolationFastFallbackHTTP(t *tes
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 	cfg.Gateway.OpenAIWS.RetryBackoffInitialMS = 1
 	cfg.Gateway.OpenAIWS.RetryBackoffMaxMS = 2
 	cfg.Gateway.OpenAIWS.RetryJitterRatio = 0
@@ -996,7 +1303,6 @@ func TestOpenAIGatewayService_Forward_WSv2ConnectionLimitReachedRetryThenFallbac
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1103,7 +1409,6 @@ func TestOpenAIGatewayService_Forward_WSv2PreviousResponseNotFoundRecoversByDrop
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1203,7 +1508,6 @@ func TestOpenAIGatewayService_Forward_WSv2PreviousResponseNotFoundSkipsRecoveryF
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1301,7 +1605,6 @@ func TestOpenAIGatewayService_Forward_WSv2PreviousResponseNotFoundSkipsRecoveryW
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1398,7 +1701,6 @@ func TestOpenAIGatewayService_Forward_WSv2PreviousResponseNotFoundOnlyRecoversOn
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1513,7 +1815,6 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentRecoversOnce(t 
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1617,7 +1918,6 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentSkipsRecoveryWi
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1733,7 +2033,6 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentRecoversSingleO
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1851,7 +2150,6 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentKeepsPreviousRe
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.FallbackCooldownSeconds = 1
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
