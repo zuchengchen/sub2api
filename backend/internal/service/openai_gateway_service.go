@@ -997,7 +997,9 @@ func (s *OpenAIGatewayService) writeOpenAIWSFallbackErrorResponse(c *gin.Context
 	if !ok {
 		return false
 	}
-	if strings.TrimSpace(clientMessage) == "" {
+	if recorded := OpsRecordedUpstreamMessageForClient(c); recorded != "" {
+		clientMessage = recorded
+	} else if strings.TrimSpace(clientMessage) == "" {
 		clientMessage = "Upstream request failed"
 	}
 	if strings.TrimSpace(upstreamMessage) == "" {

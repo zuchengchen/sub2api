@@ -419,6 +419,25 @@ func setOpsUpstreamError(c *gin.Context, upstreamStatusCode int, upstreamMessage
 	}
 }
 
+// OpsRecordedUpstreamMessageForClient returns the sanitized upstream error
+// message recorded during this request's upstream attempts, or "" when no real
+// upstream detail exists. Fallback writers use it to surface the true failure
+// reason instead of a generic "Upstream request failed".
+func OpsRecordedUpstreamMessageForClient(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	raw, ok := c.Get(OpsUpstreamErrorMessageKey)
+	if !ok {
+		return ""
+	}
+	msg, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(SanitizeUpstreamErrorMessage(msg))
+}
+
 // OpsUpstreamErrorEvent describes one upstream error attempt during a single gateway request.
 // It is stored in ops_error_logs.upstream_errors as a JSON array.
 type OpsUpstreamErrorEvent struct {
