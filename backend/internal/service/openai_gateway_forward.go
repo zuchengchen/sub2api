@@ -259,6 +259,11 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		// 官方 Codex disable_websockets 语义：该账号 WS 已因能力信号或重试
 		// 预算耗尽被会话级禁用，本请求直接走 HTTP；TTL 到期清除后重探。
 		wsDecision = openAIWSHTTPDecision("ws_session_disabled:" + disabledReason)
+		logOpenAIWSModeInfo(
+			"ws_session_disabled_skip account_id=%d reason=%s",
+			account.ID,
+			normalizeOpenAIWSLogValue(disabledReason),
+		)
 		if c != nil {
 			c.Set("openai_ws_session_disabled_reason", disabledReason)
 		}
