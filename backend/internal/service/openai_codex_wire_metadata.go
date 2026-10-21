@@ -129,9 +129,30 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 	if _, exists := cm["guardian_credits_requested"]; !exists {
 		cm["guardian_credits_requested"] = "true"
 	}
-	if codexWireAccountExtra(account, "codex_responses_lite", "true") != "false" {
+	// 官方 use_responses_lite 是模型级属性（models-manager catalog）：lite
+	// 标记与 reasoning.context=all_turns 必须同现，上游强制配对。网关感知不到
+	// 模型目录，默认以请求是否已带 context=all_turns 近似；账号 extra
+	// codex_responses_lite=true 强制开启（缺 context 时补齐）、=false 关闭。
+	liteCtx := strings.EqualFold(
+		gjson.GetBytes(payloadAsJSONBytes(payload), "reasoning.context").String(), "all_turns")
+	switch codexWireAccountExtra(account, "codex_responses_lite", "") {
+	case "true":
+		if !liteCtx {
+			if r, ok := payload["reasoning"].(map[string]any); ok {
+				r["context"] = "all_turns"
+			} else {
+				payload["reasoning"] = map[string]any{"context": "all_turns"}
+			}
+		}
 		if _, exists := cm["ws_request_header_x_openai_internal_codex_responses_lite"]; !exists {
 			cm["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
+		}
+	case "false":
+	default:
+		if liteCtx {
+			if _, exists := cm["ws_request_header_x_openai_internal_codex_responses_lite"]; !exists {
+				cm["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
+			}
 		}
 	}
 	if _, exists := cm["x-codex-ws-stream-request-start-ms"]; !exists {
