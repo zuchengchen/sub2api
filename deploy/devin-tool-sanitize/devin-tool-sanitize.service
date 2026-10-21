@@ -5,8 +5,10 @@ Wants=cliproxyapi-devin.service
 
 [Service]
 Type=simple
-# DEVIN_SANITIZE_DUMP=1 writes raw/sanitized bodies to /tmp/devin-sanitize-*
-Environment=DEVIN_SANITIZE_DUMP=1
+# DEVIN_SANITIZE_DUMP=1 writes raw/sanitized bodies to /tmp/devin-sanitize-*.
+# Keep it off in normal operation: every sanitized request persists its full
+# body and fills /tmp quickly. Enable temporarily when diffing payloads.
+# Environment=DEVIN_SANITIZE_DUMP=1
 ExecStart=/usr/bin/python3 /home/czc/.local/opt/devin-tool-sanitize/proxy.py
 Restart=on-failure
 RestartSec=2
