@@ -105,6 +105,7 @@ func main() {
 	scenarios := []scenario{
 		{Name: "ws_tool_loop", ToolLoop: true},
 		{Name: "http_fallback_tool_loop", RejectWebSocket: true, ToolLoop: true},
+		{Name: "http_unauthorized_refresh", RejectWebSocket: true, UnauthorizedUntilRefresh: true},
 	}
 	var names []string
 	var customCAHellos []map[string]any
@@ -427,7 +428,10 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
 		return nil, nil, nil, err
 	}
-	sb.extraEnv = []string{"CODEX_CA_CERTIFICATE=" + caPath}
+	sb.extraEnv = []string{
+		"CODEX_CA_CERTIFICATE=" + caPath,
+		"CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + origin + "/oauth/token",
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	traceFile, runErr := runCodex(ctx, codexBin, tracer, sb, "Reply with ok.")

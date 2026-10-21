@@ -1,14 +1,15 @@
 {
   "blocked_outbound_requests": {
-    "CONNECT ab.chatgpt.com:443": 2
+    "CONNECT ab.chatgpt.com:443": 3
   },
   "codex_version": "codex-cli 0.163.0",
   "outbound_leaks": null,
-  "recorded_at": "2026-10-21T16:27:33Z",
+  "recorded_at": "2026-10-21T16:46:05Z",
   "recorder": "backend/tools/codexgolden",
   "scenarios": [
     "ws_tool_loop",
-    "http_fallback_tool_loop"
+    "http_fallback_tool_loop",
+    "http_unauthorized_refresh"
   ],
   "strace_guard": true,
   "tls_lanes": 2

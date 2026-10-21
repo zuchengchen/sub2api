@@ -121,6 +121,10 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 }
 
 func createOpenAIReqClient(proxyURL string) (*req.Client, error) {
+	if !codexDeviceClientDisabled() {
+		// auth.openai.com token calls use the Codex CLI device lane.
+		return newCodexDeviceReqClient(proxyURL, 120*time.Second)
+	}
 	return getSharedReqClient(reqClientOptions{
 		ProxyURL: proxyURL,
 		Timeout:  120 * time.Second,

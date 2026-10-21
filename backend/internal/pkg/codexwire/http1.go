@@ -211,11 +211,13 @@ func writeHTTP1Request(ctx context.Context, conn net.Conn, method, path, host st
 		fmt.Fprintf(&req, "%s: %s\r\n", kv.Name, kv.Value)
 	}
 	// hyper emits transport framing headers AFTER user headers, lowercase:
-	// host then content-length (golden http_fallback_tool_loop.jsonl).
+	// host then content-length (golden http_fallback_tool_loop.jsonl). An
+	// empty reqwest body is end-of-stream, so hyper's set_length writes no
+	// content-length at all (golden GET wham/accounts/check, codex/models).
 	if !hasHost {
 		fmt.Fprintf(&req, "host: %s\r\n", host)
 	}
-	if !hasCL {
+	if !hasCL && len(body) > 0 {
 		fmt.Fprintf(&req, "content-length: %d\r\n", len(body))
 	}
 	fmt.Fprint(&req, "\r\n")

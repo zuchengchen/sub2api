@@ -32,6 +32,10 @@ type scenario struct {
 	// ToolLoop makes the first real turn return an exec_command function call
 	// so the recording includes the in-turn follow-up request.
 	ToolLoop bool
+	// UnauthorizedUntilRefresh answers 401 to Responses requests until Codex
+	// has refreshed its token against POST /oauth/token, so the recording
+	// includes the unauthorized-recovery refresh request.
+	UnauthorizedUntilRefresh bool
 }
 
 // headerKV preserves the exact wire name casing and order.
@@ -91,6 +95,8 @@ type fakeUpstream struct {
 	connSeq  atomic.Int64
 	respSeq  atomic.Int64
 	wg       sync.WaitGroup
+	// refreshedAccess is the access token issued by /oauth/token.
+	refreshedAccess atomic.Value
 }
 
 func newFakeUpstream(sc scenario, opts upstreamOptions) (*fakeUpstream, error) {
@@ -226,6 +232,17 @@ func (f *fakeUpstream) handleConn(c net.Conn, connID int) {
 			path = path[:i]
 		}
 		switch {
+		case method == "POST" && strings.HasSuffix(path, "/oauth/token"):
+			access := fakeJWT(map[string]any{"exp": 4102444800, "golden_refreshed": true, "https://api.openai.com/auth": goldenAuthClaims()})
+			f.refreshedAccess.Store(access)
+			tok, _ := json.Marshal(map[string]any{
+				"id_token":      fakeJWT(map[string]any{"email": "golden@example.com", "exp": 4102444800, "https://api.openai.com/auth": goldenAuthClaims()}),
+				"access_token":  access,
+				"refresh_token": "rt-golden-2",
+			})
+			writeJSONResponse(c, 200, tok)
+		case method == "POST" && strings.HasSuffix(path, "/responses") && f.scenario.UnauthorizedUntilRefresh && !f.authorizedAfterRefresh(get("authorization")):
+			writeJSONResponse(c, 401, []byte(`{"error":{"message":"token expired","type":"invalid_request_error","code":"token_expired"}}`))
 		case method == "POST" && strings.HasSuffix(path, "/responses"):
 			f.writeSSE(c, f.scriptedEvents(body))
 		case method == "GET" && strings.HasSuffix(path, "/wham/accounts/check"):
@@ -238,8 +255,13 @@ func (f *fakeUpstream) handleConn(c net.Conn, connID int) {
 	}
 }
 
+func (f *fakeUpstream) authorizedAfterRefresh(authorization string) bool {
+	access, _ := f.refreshedAccess.Load().(string)
+	return access != "" && authorization == "Bearer "+access
+}
+
 func writeJSONResponse(c net.Conn, status int, body []byte) {
-	text := map[int]string{200: "OK", 404: "Not Found"}[status]
+	text := map[int]string{200: "OK", 401: "Unauthorized", 404: "Not Found"}[status]
 	_, _ = fmt.Fprintf(c, "HTTP/1.1 %d %s\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n", status, text, len(body))
 	_, _ = c.Write(body)
 }
