@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
 func TestMarshalCodexWSCreateFrame_KeyOrder(t *testing.T) {
@@ -30,7 +32,8 @@ func TestMarshalCodexWSCreateFrame_KeyOrder(t *testing.T) {
 	s := string(out)
 	// serde 序：type,model,stream,...,previous_response_id(缺),input,tools,tool_choice,
 	// parallel_tool_calls,reasoning,store,stream_options,include,prompt_cache_key,
-	// text,generate,client_metadata — instructions 不是官方字段应排在末尾未知键区。
+	// text,generate,client_metadata — 直接调用 marshal 时 instructions 落在未知键
+	// 区；真实路径在 buildOpenAIWSCreatePayload 已把它下沉为 input developer item。
 	wantOrder := []string{
 		`"type":"response.create"`,
 		`"model":"gpt-5"`,
@@ -147,6 +150,131 @@ func TestMarshalCodexWSCreateFrame_Prewarm(t *testing.T) {
 	posInput := strings.Index(s, `"input"`)
 	if posGen < posInput {
 		t.Fatalf("generate must follow input: %s", s)
+	}
+}
+
+func TestMarshalCodexWSCreateFrame_OfficialDefaults(t *testing.T) {
+	// 官方 ResponseCreateWsRequest 的恒发字段：stream 恒 true、tool_choice 恒
+	// "auto"、store 恒 false、input/include/parallel_tool_calls/reasoning 恒
+	// 序列化——客户端缺省时由序列化层补齐（client.rs build_responses_request）。
+	payload := map[string]any{
+		"type":  "response.create",
+		"model": "m",
+	}
+	out, err := marshalCodexWSCreateFrame(nil, payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(out)
+	for _, frag := range []string{
+		`"stream":true`, `"input":[]`, `"tool_choice":"auto"`,
+		`"parallel_tool_calls":false`, `"reasoning":{}`, `"store":false`, `"include":[]`,
+	} {
+		if !strings.Contains(s, frag) {
+			t.Fatalf("official default missing %q in %s", frag, s)
+		}
+	}
+	// 缺省字段按 serde 序插入各自位置而非堆到尾部队列。
+	if strings.Index(s, `"tool_choice"`) <= strings.Index(s, `"input"`) ||
+		strings.Index(s, `"tool_choice"`) >= strings.Index(s, `"parallel_tool_calls"`) ||
+		strings.Index(s, `"reasoning"`) >= strings.Index(s, `"store"`) ||
+		strings.Index(s, `"store"`) >= strings.Index(s, `"include"`) {
+		t.Fatalf("defaults must land at serde positions: %s", s)
+	}
+	// stream 官方恒 true：客户端显式 false 也按 true 发（该端点总是回事件流）。
+	payload["stream"] = false
+	out, err = marshalCodexWSCreateFrame(nil, payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(out), `"stream":true`) {
+		t.Fatalf("stream must be forced true: %s", out)
+	}
+	// 客户端显式值不被覆盖。
+	payload["tool_choice"] = "required"
+	out, err = marshalCodexWSCreateFrame(nil, payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(out), `"tool_choice":"required"`) {
+		t.Fatalf("explicit tool_choice must be preserved: %s", out)
+	}
+	// 不污染调用方 payload。
+	if _, ok := payload["tool_choice"]; !ok || payload["tool_choice"] != "required" {
+		t.Fatalf("caller payload mutated: %v", payload)
+	}
+	if _, ok := payload["include"]; ok {
+		t.Fatalf("caller payload got injected include")
+	}
+}
+
+func TestCodexWSInstructionsBecomesDeveloperItem(t *testing.T) {
+	// 官方 WS 帧无 instructions 字段：buildOpenAIWSCreatePayload 把它下沉为
+	// input 首位 developer message（形态对齐基线 model.base_instructions）。
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":       "tok",
+			"chatgpt_account_id": "acc",
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	payload := svc.buildOpenAIWSCreatePayload(map[string]any{
+		"model":        "m",
+		"instructions": "SYS PROMPT",
+		"input":        []any{map[string]any{"type": "message", "role": "user"}},
+	}, account)
+	if _, ok := payload["instructions"]; ok {
+		t.Fatalf("top-level instructions must be removed for codex WS lane: %v", payload)
+	}
+	input, ok := payload["input"].([]any)
+	if !ok || len(input) != 2 {
+		t.Fatalf("input must be [devItem, original]: %v", payload["input"])
+	}
+	rawItem, _ := input[0].(json.RawMessage)
+	if len(rawItem) == 0 {
+		t.Fatalf("instructions item must be ordered raw message: %v", input[0])
+	}
+	// serde 声明序：type,id,role,content,internal_chat_message_metadata_passthrough。
+	if !strings.HasPrefix(string(rawItem), `{"type":"message","id":"msg_`) ||
+		!strings.Contains(string(rawItem), `","role":"developer","content":[{"type":"input_text","text":"SYS PROMPT"}]`) {
+		t.Fatalf("instructions item must be developer message in serde order: %s", rawItem)
+	}
+	var item map[string]any
+	if err := json.Unmarshal(rawItem, &item); err != nil {
+		t.Fatalf("item unmarshal: %v", err)
+	}
+	id, _ := item["id"].(string)
+	meta, _ := item["internal_chat_message_metadata_passthrough"].(map[string]any)
+	kinds, _ := meta["content_item_kinds"].([]any)
+	if len(kinds) != 1 || kinds[0] != "model.base_instructions" {
+		t.Fatalf("metadata passthrough must mark model.base_instructions: %v", meta)
+	}
+	// id 确定性：同一 instructions 两次注入得同一逻辑 item（delta 前缀命中）。
+	payload2 := svc.buildOpenAIWSCreatePayload(map[string]any{
+		"model": "m", "instructions": "SYS PROMPT",
+	}, account)
+	input2, _ := payload2["input"].([]any)
+	if len(input2) == 0 {
+		t.Fatalf("second payload input must contain dev item")
+	}
+	rawItem2, _ := input2[0].(json.RawMessage)
+	if !strings.Contains(string(rawItem2), `"id":"`+id+`"`) {
+		t.Fatalf("item id must be deterministic per content: %s vs %s", rawItem2, id)
+	}
+	// 端到端：marshal 后帧内不得出现顶层 instructions。
+	out, err := marshalCodexWSCreateFrame(nil, payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), `"instructions"`) {
+		t.Fatalf("frame must not carry top-level instructions: %s", out)
+	}
+	// 非 codex 账号不受影响。
+	plain := svc.buildOpenAIWSCreatePayload(map[string]any{"instructions": "SYS"}, nil)
+	if plain["instructions"] != "SYS" {
+		t.Fatalf("non-codex lane must keep top-level instructions: %v", plain)
 	}
 }
 

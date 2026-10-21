@@ -96,6 +96,7 @@ func marshalCodexWSCreateFrame(body []byte, payload map[string]any) ([]byte, err
 	if payload == nil {
 		return []byte("null"), nil
 	}
+	payload = applyCodexWSFrameDefaults(payload)
 	var buf bytes.Buffer
 	buf.WriteByte('{')
 	emitted := make(map[string]struct{}, len(codexWSCreateFrameOrder))
@@ -135,6 +136,39 @@ func marshalCodexWSCreateFrame(body []byte, payload map[string]any) ([]byte, err
 	}
 	buf.WriteByte('}')
 	return escapeCodexNonASCII(buf.Bytes()), nil
+}
+
+// applyCodexWSFrameDefaults 在序列化副本上补齐官方 ResponseCreateWsRequest 的恒发
+// 字段（codex-rs/core/src/client.rs build_responses_request：stream 恒 true、
+// tool_choice 恒 "auto"、store 恒 false、include/parallel_tool_calls/input 按
+// struct 字段恒序列化、reasoning 恒 Some——不支持推理的模型官方也会发出 {}）。
+// 只在缺省时注入，客户端显式给的值（除 stream 外）保持原样；stream 强制 true 与
+// 官方一致（上游在该端点总是回事件流）。返回副本避免污染调用方共享的 payload。
+func applyCodexWSFrameDefaults(payload map[string]any) map[string]any {
+	next := make(map[string]any, len(payload)+6)
+	for k, v := range payload {
+		next[k] = v
+	}
+	if _, ok := next["input"]; !ok {
+		next["input"] = []any{}
+	}
+	if _, ok := next["tool_choice"]; !ok {
+		next["tool_choice"] = "auto"
+	}
+	if _, ok := next["parallel_tool_calls"]; !ok {
+		next["parallel_tool_calls"] = false
+	}
+	if _, ok := next["reasoning"]; !ok {
+		next["reasoning"] = map[string]any{}
+	}
+	if _, ok := next["store"]; !ok {
+		next["store"] = false
+	}
+	if _, ok := next["include"]; !ok {
+		next["include"] = []any{}
+	}
+	next["stream"] = true
+	return next
 }
 
 //nolint:errcheck // bytes.Buffer 写入不会失败
