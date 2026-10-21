@@ -3,11 +3,13 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -269,7 +271,59 @@ func (s *OpenAIGatewayService) buildOpenAIWSCreatePayload(reqBody map[string]any
 	if account != nil && account.UsesOpenAICodexProtocol() && !s.isOpenAIWSStoreRecoveryAllowed(account) {
 		payload["store"] = false
 	}
+	// 官方 Codex 的 WS 帧（ResponseCreateWsRequest，codex-rs/codex-api/src/common.rs）
+	// 没有 instructions 字段：系统提示在官方客户端由 prompt 装配为 input 首位的
+	// developer message。把顶层 instructions 下沉成同形态 item，既保住语义（官方
+	// 也靠这条 input 路径下达 instructions），又避免多出一个官方帧里不存在的尾字段。
+	// item 形态对齐基线抓包：internal_chat_message_metadata_passthrough 只带
+	// content_item_kinds=model.base_instructions。
+	if account != nil && account.UsesOpenAICodexProtocol() {
+		prependCodexWSInstructionsItem(payload)
+	}
 	return payload
+}
+
+// prependCodexWSInstructionsItem 把顶层 instructions 转成首位 developer message
+// 并从顶层删除。非字符串 instructions、或 input 不是消息数组形态时不改写——保持
+// 客户端原始意图透传，避免吞掉无法保真的请求结构。
+func prependCodexWSInstructionsItem(payload map[string]any) {
+	instructions, ok := payload["instructions"].(string)
+	if !ok || strings.TrimSpace(instructions) == "" {
+		return
+	}
+	// item 必须按官方 serde 声明序（type,id,role,content,metadata）逐字节构造：
+	// map 序列化会字典化键序，与基线 item 的字段序不符。RawMessage 挂在
+	// []any input 首位时 writer 原样透传。id 按内容确定性派生而非随机：
+	// 同一 instructions 在相邻请求里生成同一逻辑 item，delta 链的前缀哈希
+	// 才能稳定命中（官方客户端在 prompt 装配期生成并复用该 item id）。
+	var item bytes.Buffer
+	item.WriteString(`{"type":"message","id":`)                                                                             //nolint:errcheck // bytes.Buffer 写入不会失败
+	item.WriteString(strconv.Quote(codexWSInstructionsItemID(instructions)))                                                //nolint:errcheck // bytes.Buffer 写入不会失败
+	item.WriteString(`,"role":"developer","content":[{"type":"input_text","text":`)                                         //nolint:errcheck // bytes.Buffer 写入不会失败
+	item.WriteString(strconv.Quote(instructions))                                                                           //nolint:errcheck // bytes.Buffer 写入不会失败
+	item.WriteString(`}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["model.base_instructions"]}}`) //nolint:errcheck // bytes.Buffer 写入不会失败
+	raw := json.RawMessage(item.Bytes())
+	switch input := payload["input"].(type) {
+	case []any:
+		payload["input"] = append([]any{raw}, input...)
+	case []json.RawMessage:
+		payload["input"] = append([]json.RawMessage{raw}, input...)
+	case nil:
+		payload["input"] = []any{raw}
+	default:
+		return // 字符串等其它 input 形态不规整，顶层 instructions 原样透传
+	}
+	delete(payload, "instructions")
+}
+
+// codexWSInstructionsItemID 按 instructions 内容派生确定性 msg_ id：
+// sha256 前 16 字节格式化为 uuid v5 形态（版本/变体位与官方 uuid 形状一致）。
+func codexWSInstructionsItemID(instructions string) string {
+	sum := sha256.Sum256([]byte(instructions))
+	sum[6] = (sum[6] & 0x0f) | 0x50 // version 5
+	sum[8] = (sum[8] & 0x3f) | 0x80 // variant 10
+	return "msg_" + fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
 }
 
 func setOpenAIWSTurnMetadata(payload map[string]any, turnMetadata string) {
