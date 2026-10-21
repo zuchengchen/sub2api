@@ -1,0 +1,16 @@
+[Unit]
+Description=Sanitize Codex tool descriptions before CLIProxyAPI Devin
+After=network.target cliproxyapi-devin.service
+Wants=cliproxyapi-devin.service
+
+[Service]
+Type=simple
+# DEVIN_SANITIZE_DUMP=1 writes raw/sanitized bodies to /tmp/devin-sanitize-*
+Environment=DEVIN_SANITIZE_DUMP=1
+ExecStart=/usr/bin/python3 /home/czc/.local/opt/devin-tool-sanitize/proxy.py
+Restart=on-failure
+RestartSec=2
+WorkingDirectory=/home/czc/.local/opt/devin-tool-sanitize
+
+[Install]
+WantedBy=default.target
