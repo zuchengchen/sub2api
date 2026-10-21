@@ -64,10 +64,6 @@ func (s *OpenAIGatewayService) observeOpenAICodexTicketEvent(*gin.Context, strin
 
 func openAICookieWSUnavailableFailover(err error) error { return err }
 
-func cookieWSHTTPFallbackReasonFor(error) string { return "" }
-
-func cookieWSFallbackPayloadStats(error) (int, int64) { return 0, 0 }
-
 func restoreOpenAICodexTicketIdentity(*gin.Context, http.Header) {}
 
 func isOpenAICodexTicketHarvest(context.Context) bool { return false }

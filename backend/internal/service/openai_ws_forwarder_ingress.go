@@ -933,12 +933,21 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			canonicalModel := canonicalOpenAIAccountSchedulingModel(account, ingressSessionOriginalModel)
 			s.handleOpenAIWSDialTransientFailure(ctx, account, canonicalModel, acquireErr)
+			acquireReason := classifyOpenAIWSAcquireError(acquireErr)
+			if !cookieWS {
+				// 官方 Codex disable_websockets 语义：入向 turn 的 acquire 能力
+				// 信号（426/ws_unsupported）与传输级失败同样标记账号会话禁用；
+				// 本地池争用（acquire/queue/preferred）不标记。
+				if action := openAIWSSessionFallbackActionFor(acquireReason); action.markDisable {
+					s.markOpenAIWSSessionDisabled(account.ID, action.reason, action.capability)
+				}
+			}
 			dialStatus, dialClass, dialCloseStatus, dialCloseReason, dialRespServer, dialRespVia, dialRespCFRay, dialRespReqID := summarizeOpenAIWSDialError(acquireErr)
 			logOpenAIWSModeInfo(
 				"ingress_ws_upstream_acquire_fail account_id=%d turn=%d reason=%s dial_status=%d dial_class=%s dial_close_status=%s dial_close_reason=%s dial_resp_server=%s dial_resp_via=%s dial_resp_cf_ray=%s dial_resp_x_request_id=%s cause=%s preferred_conn_id=%s force_preferred_conn=%v ws_host=%s ws_path=%s proxy_enabled=%v",
 				account.ID,
 				turn,
-				normalizeOpenAIWSLogValue(classifyOpenAIWSAcquireError(acquireErr)),
+				normalizeOpenAIWSLogValue(acquireReason),
 				dialStatus,
 				dialClass,
 				dialCloseStatus,

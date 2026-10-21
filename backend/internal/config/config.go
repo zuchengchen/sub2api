@@ -1398,7 +1398,8 @@ type GatewayOpenAIWSConfig struct {
 	EventFlushIntervalMS int `mapstructure:"event_flush_interval_ms"`
 	// PrewarmCooldownMS: 连接池预热触发冷却时间（毫秒）
 	PrewarmCooldownMS int `mapstructure:"prewarm_cooldown_ms"`
-	// FallbackCooldownSeconds: WS 回退冷却窗口，避免 WS/HTTP 抖动；0 表示关闭冷却
+	// FallbackCooldownSeconds: 已废弃。旧的 WS 快捷回退冷却已由会话级禁用
+	// （session_disable_*）取代；保留字段仅为配置兼容。
 	FallbackCooldownSeconds int `mapstructure:"fallback_cooldown_seconds"`
 	// RetryBackoffInitialMS: WS 重试初始退避（毫秒）；<=0 表示关闭退避
 	RetryBackoffInitialMS int `mapstructure:"retry_backoff_initial_ms"`
@@ -1425,6 +1426,18 @@ type GatewayOpenAIWSConfig struct {
 	StickyResponseIDTTLSeconds int `mapstructure:"sticky_response_id_ttl_seconds"`
 	// StickyPreviousResponseTTLSeconds: 兼容旧键（当新键未设置时回退）
 	StickyPreviousResponseTTLSeconds int `mapstructure:"sticky_previous_response_ttl_seconds"`
+
+	// SessionDisableEnabled: 官方 Codex CLI 会话级传输回退的账号级模拟。
+	// 开启后，账号的 WS 失败按原因分类把该账号临时标记为 WS 禁用，
+	// 期间新请求直接走 HTTP；TTL 到期后自动重探（下个 WS 请求即探测）。
+	SessionDisableEnabled bool `mapstructure:"session_disable_enabled"`
+	// SessionDisableRetryTTLMS: 可重试类故障（dial/read/write/upstream 5xx/
+	// error_event 等）耗尽重试预算后的账号 WS 禁用时长（毫秒）。
+	SessionDisableRetryTTLMS int `mapstructure:"session_disable_retry_ttl_ms"`
+	// SessionDisableCapabilityTTLMS: 能力信号类故障（426 upgrade_required /
+	// ws_unsupported）的账号 WS 禁用时长（毫秒）；此类故障非瞬时，
+	// 默认比重试类显著更长。
+	SessionDisableCapabilityTTLMS int `mapstructure:"session_disable_capability_ttl_ms"`
 
 	SchedulerScoreWeights GatewayOpenAIWSSchedulerScoreWeights `mapstructure:"scheduler_score_weights"`
 }
@@ -2556,6 +2569,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.metadata_bridge_enabled", true)
 	viper.SetDefault("gateway.openai_ws.sticky_response_id_ttl_seconds", 3600)
 	viper.SetDefault("gateway.openai_ws.sticky_previous_response_ttl_seconds", 3600)
+	viper.SetDefault("gateway.openai_ws.session_disable_enabled", true)
+	viper.SetDefault("gateway.openai_ws.session_disable_retry_ttl_ms", 900000)
+	viper.SetDefault("gateway.openai_ws.session_disable_capability_ttl_ms", 86400000)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.priority", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.load", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.queue", 0.7)
@@ -3580,6 +3596,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIWS.RetryTotalBudgetMS < 0 {
 		return fmt.Errorf("gateway.openai_ws.retry_total_budget_ms must be non-negative")
+	}
+	if c.Gateway.OpenAIWS.SessionDisableRetryTTLMS < 0 {
+		return fmt.Errorf("gateway.openai_ws.session_disable_retry_ttl_ms must be non-negative")
+	}
+	if c.Gateway.OpenAIWS.SessionDisableCapabilityTTLMS < 0 {
+		return fmt.Errorf("gateway.openai_ws.session_disable_capability_ttl_ms must be non-negative")
 	}
 	if mode := strings.ToLower(strings.TrimSpace(c.Gateway.OpenAIWS.IngressModeDefault)); mode != "" {
 		switch mode {
