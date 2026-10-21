@@ -838,6 +838,10 @@ export default {
         testModeCompact: 'Compact probe',
         modelRestrictionDisabledByPassthrough: 'Automatic passthrough is enabled: model whitelist/mapping will not take effect.',
       },
+      gemini: {
+        apiKeyHint:
+          'New AI Studio keys start with AQ. (legacy keys start with AIza); for a third-party upstream, use the key it provides',
+      },
       grok: {
         baseUrlHint: 'Grok OAuth accounts forward to the official xAI API base URL.',
         apiKeyHint: 'Grok subscription support uses OAuth refresh tokens; API keys are out of scope for this account type.',
