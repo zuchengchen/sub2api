@@ -1624,8 +1624,18 @@ func (h *GatewayHandler) ensureForwardErrorResponse(c *gin.Context, streamStarte
 	if c.Writer.Written() {
 		streamStarted = true
 	}
-	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed, streamStarted)
+	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", upstreamErrorMessageForClient(c), streamStarted)
 	return true
+}
+
+// upstreamErrorMessageForClient prefers the recorded upstream error message for
+// client-facing fallback responses, falling back to the generic copy when no
+// upstream detail was recorded (e.g. local connectivity failures).
+func upstreamErrorMessageForClient(c *gin.Context) string {
+	if msg := service.OpsRecordedUpstreamMessageForClient(c); msg != "" {
+		return msg
+	}
+	return userfacing.UpstreamRequestFailed
 }
 
 // gatewayForwardErrorAlreadyCommunicated reports whether a Forward implementation

@@ -1359,7 +1359,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				if lastFailoverErr != nil {
 					h.handleAnthropicFailoverExhausted(c, lastFailoverErr, streamStarted)
 				} else {
-					h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", userfacing.UpstreamRequestFailed, streamStarted)
+					h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", upstreamErrorMessageForClient(c), streamStarted)
 				}
 				return
 			}
@@ -1665,7 +1665,7 @@ func (h *OpenAIGatewayHandler) ensureAnthropicErrorResponse(c *gin.Context, stre
 	if c == nil || c.Writer == nil || c.Writer.Written() {
 		return false
 	}
-	h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", userfacing.UpstreamRequestFailed, streamStarted)
+	h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", upstreamErrorMessageForClient(c), streamStarted)
 	return true
 }
 
@@ -3889,7 +3889,7 @@ func (h *OpenAIGatewayHandler) ensureForwardErrorResponse(c *gin.Context, stream
 	if c.Writer.Written() && !imageKeepalivePaddingOnly {
 		streamStarted = true
 	}
-	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", userfacing.UpstreamRequestFailed, streamStarted)
+	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", upstreamErrorMessageForClient(c), streamStarted)
 	return true
 }
 
