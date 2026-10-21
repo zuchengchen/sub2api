@@ -1726,7 +1726,7 @@ func (s *httpUpstreamService) doCodexH1Uncontrolled(req *http.Request, proxyURL 
 	if err != nil {
 		return nil, err
 	}
-	ordered := codexwire.OrderCodexHTTPHeaders(req.Header)
+	ordered := codexwire.OrderCodexHTTPHeadersForPath(req.URL.Path, req.Header)
 	filtered := ordered[:0]
 	for _, kv := range ordered {
 		// Framing headers are written by the transport after the user headers.

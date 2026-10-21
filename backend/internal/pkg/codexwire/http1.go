@@ -58,8 +58,29 @@ var codexHTTPHeaderOrder = []string{
 	"cookie",
 }
 
-// OrderCodexHTTPHeaders flattens h into the official Codex HTTP request order.
+// codexModelsHeaderOrder is GET {base}/codex/models (golden 0.163.0): provider
+// default headers only, reqwest's default accept last.
+var codexModelsHeaderOrder = []string{
+	"version", "authorization", "chatgpt-account-id", "x-openai-fedramp", "originator", "user-agent", "accept",
+}
+
+// OrderCodexHTTPHeaders flattens h into the official Codex HTTP request order
+// for POST /responses.
 func OrderCodexHTTPHeaders(h http.Header) []HeaderKV {
+	return orderByTemplate(h, codexHTTPHeaderOrder)
+}
+
+// OrderCodexHTTPHeadersForPath picks the captured template for the request
+// path (models manifest vs Responses). reqwest's default accept (*/*) is
+// added for the models GET when the caller did not set one.
+func OrderCodexHTTPHeadersForPath(path string, h http.Header) []HeaderKV {
+	if strings.HasSuffix(strings.TrimRight(path, "/"), "/codex/models") {
+		if h.Get("Accept") == "" {
+			h = h.Clone()
+			h.Set("Accept", "*/*")
+		}
+		return orderByTemplate(h, codexModelsHeaderOrder)
+	}
 	return orderByTemplate(h, codexHTTPHeaderOrder)
 }
 

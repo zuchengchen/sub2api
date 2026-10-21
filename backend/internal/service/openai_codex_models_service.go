@@ -1923,7 +1923,10 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_REQUEST_FAILED", "create codex models request: %v", err)
 	}
 	req.Header = request.headers.Clone()
-	if ifNoneMatch = strings.TrimSpace(ifNoneMatch); ifNoneMatch != "" {
+	// The Codex CLI never sends If-None-Match on GET /codex/models (golden
+	// 0.163.0); it refetches when /responses reports a new X-Models-Etag. Keep
+	// conditional requests for API-key upstreams only.
+	if ifNoneMatch = strings.TrimSpace(ifNoneMatch); ifNoneMatch != "" && request.useAPIKeyUpstream {
 		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
 
@@ -1938,6 +1941,14 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 		handled := false
 		if s.pluginManager != nil {
 			resp, handled, err = s.pluginManager.RoundTripOpenAIOAuth(reqCtx, req, request.proxyURL, request.credentialAccount)
+		}
+		if !handled && s.httpUpstream != nil && request.credentialAccount != nil {
+			// Same device lane as /responses: OpenSSL ClientHello, h1, codex
+			// header order (version … user-agent, accept: */*).
+			req.Header.Del("Accept")
+			req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+			resp, err = s.httpUpstream.DoWithTLS(WithAccountTrafficRequest(req, request.credentialAccount), request.proxyURL, request.accountID, request.accountConcurrency, s.resolveCodexHTTPSTLSProfile(request.credentialAccount))
+			handled = true
 		}
 		if !handled {
 			client, clientErr := httpclient.GetClient(httpclient.Options{
