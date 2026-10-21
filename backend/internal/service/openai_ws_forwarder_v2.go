@@ -298,6 +298,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			applyCodexWireLaneMetadata(shadow, wsHeaders, account, "prewarm")
 		}
+		// 官方 ResponseCreateWsRequest 恒发 prompt_cache_key（client.rs
+		// prompt_cache_key_policy：SessionDerived——root 会话即握手 session-id）。
+		// 客户端没给时按握手 session-id 补齐，prewarm 帧同形。
+		if _, has := payload["prompt_cache_key"]; !has {
+			if sid := strings.TrimSpace(wsHeaders.Get("session-id")); sid != "" {
+				payload["prompt_cache_key"] = sid
+			}
+		}
 	}
 	if account.UsesOpenAICodexProtocol() {
 		projectCodexOutboundHeaders(wsHeaders, true)
