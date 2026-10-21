@@ -2552,7 +2552,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.dynamic_max_conns_by_account_concurrency_enabled", true)
 	viper.SetDefault("gateway.openai_ws.oauth_max_conns_factor", 5.0)
 	viper.SetDefault("gateway.openai_ws.apikey_max_conns_factor", 5.0)
-	viper.SetDefault("gateway.openai_ws.dial_timeout_seconds", 10)
+	// codex-rs model-provider-info DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 15s
+	viper.SetDefault("gateway.openai_ws.dial_timeout_seconds", 15)
 	viper.SetDefault("gateway.openai_ws.read_timeout_seconds", 900)
 	viper.SetDefault("gateway.openai_ws.write_timeout_seconds", 120)
 	viper.SetDefault("gateway.openai_ws.pool_target_utilization", 0.7)

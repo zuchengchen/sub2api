@@ -179,7 +179,8 @@ func (p *openAIWSConnPool) openAIWSDialTimeoutForDial() time.Duration {
 	if p != nil && p.cfg != nil && p.cfg.Gateway.OpenAIWS.DialTimeoutSeconds > 0 {
 		return time.Duration(p.cfg.Gateway.OpenAIWS.DialTimeoutSeconds) * time.Second
 	}
-	return 10 * time.Second
+	// 官方 codex-rs model-provider-info DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 15s
+	return 15 * time.Second
 }
 
 // useCodexWireLane reports whether the pool should route this acquire through

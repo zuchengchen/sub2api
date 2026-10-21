@@ -420,13 +420,14 @@ func TestRustlsProfileEMSAndShuffle(t *testing.T) {
 	if !profile.ShuffleExtensions {
 		t.Fatal("rustls profile must shuffle extensions")
 	}
-	// Extension set must contain EMS(23), no ALPN(16); shuffle must produce
+	// Extension set must contain EMS(23) and status_request/OCSP(5) — rustls
+	// sends both unconditionally — and no ALPN(16); shuffle must produce
 	// varying orders while preserving the set.
 	seenOrders := map[string]bool{}
 	for i := 0; i < 40; i++ {
 		spec := buildClientHelloSpecFromProfile(profile)
 		var names []string
-		var hasEMS, hasALPN bool
+		var hasEMS, hasALPN, hasStatusReq bool
 		for _, ext := range spec.Extensions {
 			n := fmt.Sprintf("%T", ext)
 			names = append(names, n)
@@ -435,10 +436,15 @@ func TestRustlsProfileEMSAndShuffle(t *testing.T) {
 				hasEMS = true
 			case *utls.ALPNExtension:
 				hasALPN = true
+			case *utls.StatusRequestExtension:
+				hasStatusReq = true
 			}
 		}
 		if !hasEMS {
 			t.Fatal("rustls spec missing extended_master_secret")
+		}
+		if !hasStatusReq {
+			t.Fatal("rustls spec missing status_request (OCSP)")
 		}
 		if hasALPN {
 			t.Fatal("rustls (ws) spec must not carry ALPN")
@@ -460,17 +466,22 @@ func TestRustlsH2ProfileALPN(t *testing.T) {
 	}
 	spec := buildClientHelloSpecFromProfile(profile)
 	var alpn *utls.ALPNExtension
-	var hasEMS bool
+	var hasEMS, hasStatusReq bool
 	for _, ext := range spec.Extensions {
 		switch e := ext.(type) {
 		case *utls.ALPNExtension:
 			alpn = e
 		case *utls.ExtendedMasterSecretExtension:
 			hasEMS = true
+		case *utls.StatusRequestExtension:
+			hasStatusReq = true
 		}
 	}
 	if !hasEMS {
 		t.Fatal("rustls-h2 missing EMS")
+	}
+	if !hasStatusReq {
+		t.Fatal("rustls-h2 missing status_request (OCSP)")
 	}
 	if alpn == nil {
 		t.Fatal("rustls-h2 missing ALPN extension")

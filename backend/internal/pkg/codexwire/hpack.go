@@ -3,6 +3,7 @@ package codexwire
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
 	"golang.org/x/net/http2/hpack"
 )
@@ -230,8 +231,9 @@ func (e *hpackEncoder) EncodeBlock(method, scheme, authority, path string, field
 	dst = e.encodeField(dst, ":authority", authority, true)
 	dst = e.encodeField(dst, ":path", path, true)
 	for _, kv := range fields {
-		name := kv.Name
-		// HPACK requires lowercase; codex template already emits lowercase.
+		// HPACK/h2 require lowercase header names; hyper lowercases every name
+		// unconditionally, so force it here rather than trusting callers.
+		name := strings.ToLower(kv.Name)
 		dst = e.encodeField(dst, name, kv.Value, false)
 	}
 	return dst, nil

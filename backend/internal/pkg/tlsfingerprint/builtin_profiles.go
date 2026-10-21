@@ -34,11 +34,12 @@ func BuiltinProfile(name string) *Profile {
 		//   key_share 只投前两个组。
 		//   WS 场景不发 ALPN（alpn_protocols 为空 → 无 16 扩展）；HTTP 场景
 		//   reqwest 发 ALPN [h2, http/1.1]。
-		//   extended_master_secret(23) 与 session_ticket(35) 由 rustls 默认开启
-		//   （hs.rs emit_client_hello_for_retry 无条件 EMS；session_storage 默认开）。
+		//   extended_master_secret(23)、status_request/OCSP(5) 与 session_ticket(35)
+		//   由 rustls 默认开启（hs.rs emit_client_hello_for_retry 无条件发 EMS 与
+		//   CertificateStatusRequest::build_ocsp；session_storage 默认开）。
 		//   扩展集合在每次握手按 rustls 0.23 的 order_seed 机制随机排序——
 		//   Extensions 列表只是无序集合，真实线序由 ShuffleExtensions 产生。
-		exts := []uint16{0, 11, 10, 35, 13, 23, 51, 45, 43}
+		exts := []uint16{0, 11, 10, 35, 5, 13, 23, 51, 45, 43}
 		alpn := []string{}
 		if name == "rustls-h2" {
 			exts = append(exts, 16)

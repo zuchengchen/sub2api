@@ -11,25 +11,33 @@ import (
 // pmdTail is the permessage-deflate trailing bytes stripped from each message.
 var pmdTail = []byte{0x00, 0x00, 0xff, 0xff}
 
-const pmdWindowSize = 32 * 1024
+// pmdDefaultWindowSize is the LZ77 window for the default 15-bit negotiation.
+const pmdDefaultWindowSize = 32 * 1024
 
 // pmdCompressor compresses outgoing messages. Context takeover keeps the last
-// 32 KiB of plaintext as the preset dictionary for each message — matching
-// zlib's persistent-stream semantics. klauspost/flate is used because its
-// NewWriterDict emits real backreferences into the preset dictionary (Go's
-// stdlib dict only engages once the window slides, ~64KB in).
-// Every message is Z_SYNC_FLUSH terminated with the 00 00 ff ff tail stripped,
-// matching the permessage-deflate wire format tungstenite emits.
+// window bytes of plaintext as the preset dictionary for each message —
+// matching zlib's persistent-stream semantics. klauspost/flate is used
+// because its NewWriterDict emits real backreferences into the preset
+// dictionary (Go's stdlib dict only engages once the window slides, ~64KB
+// in). Every message is Z_SYNC_FLUSH terminated with the 00 00 ff ff tail
+// stripped, matching the permessage-deflate wire format tungstenite emits.
 type pmdCompressor struct {
 	contextTakeover bool
 	level           int
+	windowSize      int
 	dict            []byte
 }
 
-func newPMDCompressor(contextTakeover bool) *pmdCompressor {
+// newPMDCompressor builds the outbound compressor. windowBits is the
+// negotiated client_max_window_bits (0 = RFC 7692 default 15).
+func newPMDCompressor(contextTakeover bool, windowBits int) *pmdCompressor {
 	// klauspost level ≥7 走真 deflate 窗口算法，才会对 preset dict 产生 backref；
 	// 低等级是 stateless 快路径，dict 不生效。
-	return &pmdCompressor{contextTakeover: contextTakeover, level: 7}
+	ws := pmdDefaultWindowSize
+	if windowBits >= 8 && windowBits <= 15 {
+		ws = 1 << windowBits
+	}
+	return &pmdCompressor{contextTakeover: contextTakeover, level: 7, windowSize: ws}
 }
 
 // Compress returns the wire bytes for one message (RSV1 payload).
@@ -63,22 +71,30 @@ func (c *pmdCompressor) Compress(payload []byte) ([]byte, error) {
 	}
 	if c.contextTakeover {
 		c.dict = append(c.dict, payload...)
-		if len(c.dict) > pmdWindowSize {
-			c.dict = c.dict[len(c.dict)-pmdWindowSize:]
+		if len(c.dict) > c.windowSize {
+			c.dict = c.dict[len(c.dict)-c.windowSize:]
 		}
 	}
 	return out, nil
 }
 
-// pmdDecompressor inflates incoming messages, retaining the prior 32 KiB of
-// decompressed output as the dictionary when server context takeover is on.
+// pmdDecompressor inflates incoming messages, retaining the prior window
+// bytes of decompressed output as the dictionary when server context
+// takeover is on.
 type pmdDecompressor struct {
 	contextTakeover bool
+	windowSize      int
 	dict            []byte
 }
 
-func newPMDDecompressor(contextTakeover bool) *pmdDecompressor {
-	return &pmdDecompressor{contextTakeover: contextTakeover}
+// newPMDDecompressor builds the inbound decompressor. windowBits is the
+// negotiated server_max_window_bits (0 = default 15).
+func newPMDDecompressor(contextTakeover bool, windowBits int) *pmdDecompressor {
+	ws := pmdDefaultWindowSize
+	if windowBits >= 8 && windowBits <= 15 {
+		ws = 1 << windowBits
+	}
+	return &pmdDecompressor{contextTakeover: contextTakeover, windowSize: ws}
 }
 
 // pmdReadTail 追加在接收到的 PMD 载荷后，让 flate reader 读到合法块边界：
@@ -106,8 +122,8 @@ func (d *pmdDecompressor) Decompress(payload []byte) ([]byte, error) {
 	}
 	if d.contextTakeover {
 		d.dict = append(d.dict, out...)
-		if len(d.dict) > pmdWindowSize {
-			d.dict = d.dict[len(d.dict)-pmdWindowSize:]
+		if len(d.dict) > d.windowSize {
+			d.dict = d.dict[len(d.dict)-d.windowSize:]
 		}
 	}
 	return out, nil

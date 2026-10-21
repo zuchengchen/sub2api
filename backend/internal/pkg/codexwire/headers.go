@@ -87,8 +87,11 @@ func SplitCodexWSHeaders(h http.Header) (ordered, leftover []HeaderKV) {
 		if matched[key] {
 			continue
 		}
+		// http::HeaderMap lowercases every name on iteration — Go's canonical
+		// Title-Case keys would differ on the wire.
+		name := strings.ToLower(key)
 		for _, value := range values {
-			leftover = append(leftover, HeaderKV{Name: key, Value: value})
+			leftover = append(leftover, HeaderKV{Name: name, Value: value})
 		}
 	}
 	return out, leftover
