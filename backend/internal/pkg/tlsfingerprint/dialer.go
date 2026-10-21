@@ -5,12 +5,15 @@ package tlsfingerprint
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/proxy"
@@ -25,11 +28,25 @@ type Profile struct {
 	PointFormats        []uint16
 	EnableGREASE        bool
 	SignatureAlgorithms []uint16 // Empty uses defaultSignatureAlgorithms
-	ALPNProtocols       []string // Empty uses ["http/1.1"]
+	ALPNProtocols       []string // Empty uses ["http/1.1"]; extension 16 is only emitted when listed in Extensions
 	SupportedVersions   []uint16 // Empty uses [TLS1.3, TLS1.2]
 	KeyShareGroups      []uint16 // Empty uses [X25519]
 	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
 	Extensions          []uint16 // Extension type IDs in order; empty uses default Node.js 24.x order
+	// ShuffleExtensions reorders Extensions per handshake using the rustls 0.23
+	// scheme (msgs/handshake.rs order_insensitive_extensions_in_random_order):
+	// a random u16 order_seed, extensions sorted ascending by
+	// low_quality_integer_hash(seed<<16 | ext_id). Official Codex's rustls
+	// stack emits ClientHello extensions in this per-connection random order;
+	// a fixed order is itself a distinguishing fingerprint.
+	ShuffleExtensions bool
+	// H2 marks profiles whose HTTP transport must run over the codexwire HTTP/2
+	// client (hyper/h2-faithful) instead of net/http.
+	H2 bool
+	// InsecureSkipVerify disables upstream certificate verification. Only used
+	// by tests against self-signed local servers; never set in built-in
+	// profiles.
+	InsecureSkipVerify bool
 }
 
 // Dialer creates TLS connections with custom fingerprints.
@@ -276,7 +293,7 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 	}
 
 	spec := buildClientHelloSpecFromProfile(profile)
-	tlsConn := utls.UClient(conn, &utls.Config{ServerName: host}, utls.HelloCustom)
+	tlsConn := utls.UClient(conn, &utls.Config{ServerName: host, InsecureSkipVerify: profile.InsecureSkipVerify}, utls.HelloCustom)
 
 	if err := tlsConn.ApplyPreset(spec); err != nil {
 		_ = conn.Close()
@@ -389,7 +406,10 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 	// Determine extension order
 	extOrder := defaultExtensionOrder
 	if profile != nil && len(profile.Extensions) > 0 {
-		extOrder = profile.Extensions
+		extOrder = slices.Clone(profile.Extensions)
+	}
+	if profile != nil && profile.ShuffleExtensions {
+		shuffleExtensionOrderRustls(extOrder)
 	}
 
 	// Build extensions list from the ordered IDs.
@@ -463,4 +483,44 @@ func toUint8s(vals []uint16) []uint8 {
 		out[i] = uint8(v)
 	}
 	return out
+}
+
+// lowQualityIntegerHash reproduces rustls msgs/handshake.rs
+// low_quality_integer_hash (0.23.x): used to map (order_seed<<16 | ext_id) to a
+// sortable key so ClientHello extensions are emitted in a per-connection
+// pseudo-random order.
+func lowQualityIntegerHash(x uint32) uint32 {
+	x = x + 0x7ed55d16 + (x << 12)
+	x = (x ^ 0xc761c23c) ^ (x >> 19)
+	x = x + 0x165667b1 + (x << 5)
+	x = x + 0xd3a2646c + (x << 9)
+	x = (x ^ 0xb55a4f09) ^ (x >> 16)
+	return x
+}
+
+// shuffleExtensionOrderRustls reorders extIDs in place exactly like rustls
+// ClientExtensions::order_insensitive_extensions_in_random_order: draw a random
+// u16 order_seed, sort by low_quality_integer_hash(seed<<16 | id). PSK/ECH
+// ordering constraints don't apply — codex-lane profiles never send them.
+func shuffleExtensionOrderRustls(extIDs []uint16) {
+	if len(extIDs) < 2 {
+		return
+	}
+	var seedBuf [2]byte
+	if _, err := rand.Read(seedBuf[:]); err != nil {
+		return
+	}
+	seed := uint32(binary.BigEndian.Uint16(seedBuf[:]))
+	slices.SortFunc(extIDs, func(a, b uint16) int {
+		ka := lowQualityIntegerHash((seed << 16) | uint32(a))
+		kb := lowQualityIntegerHash((seed << 16) | uint32(b))
+		switch {
+		case ka < kb:
+			return -1
+		case ka > kb:
+			return 1
+		default:
+			return 0
+		}
+	})
 }

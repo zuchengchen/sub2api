@@ -13,6 +13,7 @@ package tlsfingerprint
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -20,6 +21,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // TestDialerBasicConnection tests that the dialer can establish TLS connections.
@@ -407,4 +410,72 @@ func fetchFingerprint(t *testing.T, profile *Profile) *TLSInfo {
 	}
 
 	return &fpResp.TLS
+}
+
+func TestRustlsProfileEMSAndShuffle(t *testing.T) {
+	profile := BuiltinProfile("rustls")
+	if profile == nil {
+		t.Fatal("rustls profile missing")
+	}
+	if !profile.ShuffleExtensions {
+		t.Fatal("rustls profile must shuffle extensions")
+	}
+	// Extension set must contain EMS(23), no ALPN(16); shuffle must produce
+	// varying orders while preserving the set.
+	seenOrders := map[string]bool{}
+	for i := 0; i < 40; i++ {
+		spec := buildClientHelloSpecFromProfile(profile)
+		var names []string
+		var hasEMS, hasALPN bool
+		for _, ext := range spec.Extensions {
+			n := fmt.Sprintf("%T", ext)
+			names = append(names, n)
+			switch ext.(type) {
+			case *utls.ExtendedMasterSecretExtension:
+				hasEMS = true
+			case *utls.ALPNExtension:
+				hasALPN = true
+			}
+		}
+		if !hasEMS {
+			t.Fatal("rustls spec missing extended_master_secret")
+		}
+		if hasALPN {
+			t.Fatal("rustls (ws) spec must not carry ALPN")
+		}
+		seenOrders[strings.Join(names, ",")] = true
+	}
+	if len(seenOrders) < 2 {
+		t.Fatalf("extension order never varied over 40 builds")
+	}
+}
+
+func TestRustlsH2ProfileALPN(t *testing.T) {
+	profile := BuiltinProfile("rustls-h2")
+	if profile == nil {
+		t.Fatal("rustls-h2 profile missing")
+	}
+	if !profile.H2 || !profile.ShuffleExtensions {
+		t.Fatal("rustls-h2 must set H2 and ShuffleExtensions")
+	}
+	spec := buildClientHelloSpecFromProfile(profile)
+	var alpn *utls.ALPNExtension
+	var hasEMS bool
+	for _, ext := range spec.Extensions {
+		switch e := ext.(type) {
+		case *utls.ALPNExtension:
+			alpn = e
+		case *utls.ExtendedMasterSecretExtension:
+			hasEMS = true
+		}
+	}
+	if !hasEMS {
+		t.Fatal("rustls-h2 missing EMS")
+	}
+	if alpn == nil {
+		t.Fatal("rustls-h2 missing ALPN extension")
+	}
+	if len(alpn.AlpnProtocols) != 2 || alpn.AlpnProtocols[0] != "h2" || alpn.AlpnProtocols[1] != "http/1.1" {
+		t.Fatalf("alpn = %v, want [h2 http/1.1]", alpn.AlpnProtocols)
+	}
 }
