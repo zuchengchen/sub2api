@@ -140,6 +140,10 @@ func deleteOpenAIResponsesNoneReasoningEffortFromObject(account *Account, body m
 // DeepSeek 另需把 Codex/OpenAI 的 input_image.image_url 写成线上 serde
 // 要求的 url 字段；openai 平台但 base_url 指向 api.deepseek.com 的映射
 // 账号同样走这条出站改写（Codex 贴图会 422 missing field url）。
+//
+// DeepSeek 平台原生 Responses 还会剥掉 Chat 路由不认的 hosted 工具
+// （web_search / image_generation 等）。OpenDesign / OpenCode 把 DeepSeek
+// 模型落到内部 Chat 端点，原样转发会 400 unsupported Responses tool type。
 // 非 CN / 非 DeepSeek 上游原样返回。
 func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte {
 	if account == nil {
@@ -147,7 +151,8 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 	}
 	applyStateless := account.UsesNativeCNResponses()
 	applyImages := shouldAliasDeepSeekResponsesInputImages(account)
-	if !applyStateless && !applyImages {
+	applyHostedTools := shouldStripDeepSeekResponsesHostedTools(account)
+	if !applyStateless && !applyImages && !applyHostedTools {
 		return body
 	}
 
@@ -167,22 +172,23 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 	if err := decodeOpenAIJSONUseNumber(normalized, &requestBody); err != nil {
 		return normalized
 	}
-	input, exists := requestBody["input"]
-	if !exists {
-		return normalized
-	}
 
 	changed := false
-	if liftedInput, lifted := apicompat.LiftResponsesToolOutputMedia(input); lifted {
-		requestBody["input"] = liftedInput
-		input = liftedInput
-		changed = true
-	}
-	if applyImages {
-		if aliased, aliasedChanged := aliasDeepSeekResponsesInputImages(input); aliasedChanged {
-			requestBody["input"] = aliased
+	if input, exists := requestBody["input"]; exists {
+		if liftedInput, lifted := apicompat.LiftResponsesToolOutputMedia(input); lifted {
+			requestBody["input"] = liftedInput
+			input = liftedInput
 			changed = true
 		}
+		if applyImages {
+			if aliased, aliasedChanged := aliasDeepSeekResponsesInputImages(input); aliasedChanged {
+				requestBody["input"] = aliased
+				changed = true
+			}
+		}
+	}
+	if applyHostedTools && stripDeepSeekResponsesHostedTools(requestBody) {
+		changed = true
 	}
 	if !changed {
 		return normalized
@@ -192,6 +198,92 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 		return normalized
 	}
 	return restoreOpenAIUpstreamJSONTopLevelOrder(normalized, rebuilt)
+}
+
+func shouldStripDeepSeekResponsesHostedTools(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	if account.Platform == PlatformDeepseek {
+		return account.UsesNativeCNResponses()
+	}
+	// openai 平台但 base_url 指向 api.deepseek.com 的映射账号走同一上游。
+	return targetsDeepSeekAPIHost(account)
+}
+
+// stripDeepSeekResponsesHostedTools 丢掉 Chat 桥接同样不会转发的 hosted
+// Responses 工具，并清掉指向它们的 tool_choice。function / custom /
+// tool_search / namespace / x_search 保留。
+func stripDeepSeekResponsesHostedTools(requestBody map[string]any) bool {
+	if requestBody == nil {
+		return false
+	}
+	rawTools, hasTools := requestBody["tools"]
+	if !hasTools {
+		return stripDeepSeekResponsesHostedToolChoice(requestBody, false)
+	}
+	tools, ok := rawTools.([]any)
+	if !ok {
+		return false
+	}
+	kept := make([]any, 0, len(tools))
+	stripped := false
+	for _, raw := range tools {
+		tool, isMap := raw.(map[string]any)
+		if !isMap {
+			kept = append(kept, raw)
+			continue
+		}
+		typ := strings.TrimSpace(stringValue(tool["type"]))
+		if typ != "" && !isDeepSeekResponsesClientToolType(typ) {
+			stripped = true
+			continue
+		}
+		kept = append(kept, raw)
+	}
+	changed := stripped
+	if stripped {
+		if len(kept) == 0 {
+			delete(requestBody, "tools")
+		} else {
+			requestBody["tools"] = kept
+		}
+	}
+	if stripDeepSeekResponsesHostedToolChoice(requestBody, stripped && len(kept) == 0) {
+		changed = true
+	}
+	return changed
+}
+
+func isDeepSeekResponsesClientToolType(typ string) bool {
+	switch typ {
+	case "function", "custom", "tool_search", "namespace", "x_search":
+		return true
+	default:
+		return false
+	}
+}
+
+func stripDeepSeekResponsesHostedToolChoice(requestBody map[string]any, toolsEmptied bool) bool {
+	raw, exists := requestBody["tool_choice"]
+	if !exists {
+		return false
+	}
+	if toolsEmptied {
+		delete(requestBody, "tool_choice")
+		return true
+	}
+	choice, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	typ := strings.TrimSpace(stringValue(choice["type"]))
+	if typ == "" || isDeepSeekResponsesClientToolType(typ) ||
+		typ == "auto" || typ == "none" || typ == "required" || typ == "any" {
+		return false
+	}
+	delete(requestBody, "tool_choice")
+	return true
 }
 
 func shouldAliasDeepSeekResponsesInputImages(account *Account) bool {
