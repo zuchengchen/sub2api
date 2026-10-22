@@ -715,6 +715,8 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				Device:        deviceProfile,
 				Now:           time.Now(),
 				Strict:        s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
+				OfficialClient: openai.IsCodexOfficialClientByHeaders(
+					c.GetHeader("User-Agent"), c.GetHeader("originator")),
 			}
 			if attemptFingerprintIDs != nil {
 				synthOptions.TurnID = attemptFingerprintIDs.turnID
@@ -723,9 +725,15 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			result, synthErr := synthesizeCodexOAuthRequest(decoded, account, upstreamModel, synthOptions)
 			if synthErr != nil {
 				setOpsUpstreamError(c, http.StatusBadRequest, synthErr.Error(), "")
-				writeOpenAIResponsesErrorJSON(c, http.StatusBadRequest, gin.H{"error": gin.H{
-					"type": "invalid_request_error", "message": synthErr.Error(), "param": "input",
-				}})
+				errBody := gin.H{"type": "invalid_request_error", "message": synthErr.Error(), "param": "input"}
+				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
+					errBody["code"] = "context_length_exceeded"
+					errBody["message"] = codexSynthContextLengthMessage
+				}
+				// The handler must not append a second fallback error
+				// (response.failed/upstream_error) after this JSON body.
+				MarkResponseCommitted(c)
+				writeOpenAIResponsesErrorJSON(c, http.StatusBadRequest, gin.H{"error": errBody})
 				return nil, synthErr
 			}
 			if result.Modified {

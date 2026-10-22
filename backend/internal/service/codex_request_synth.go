@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/tidwall/gjson"
 )
 
 // codexOfficialTools0163JSON is the official tool array captured from
@@ -41,7 +43,23 @@ type codexSynthOptions struct {
 	TurnStartedMs int64
 	Now           time.Time
 	Strict        bool
+	// OfficialClient reports that the inbound User-Agent/originator belongs to
+	// an official Codex client. Such clients already build the full Codex
+	// request themselves; with a custom model_provider (is_openai()==false)
+	// they strip internal_chat_message_metadata_passthrough, so the
+	// model.base_instructions marker alone cannot identify them.
+	OfficialClient bool
 }
+
+// ErrCodexSynthContextWindowExceeded is returned when a synthesized request is
+// certainly larger than the model's hard context limit. Callers surface it as
+// the standard context_length_exceeded error so clients can compact.
+var ErrCodexSynthContextWindowExceeded = errors.New("codex synthesis: request exceeds the model context window")
+
+// codexSynthContextLengthMessage is the client-facing text for
+// ErrCodexSynthContextWindowExceeded, aligned with OpenAI's
+// context_length_exceeded wording so client compaction heuristics match.
+const codexSynthContextLengthMessage = "Your input exceeds the context window of this model. Please adjust your input and try again."
 
 type codexSynthResult struct {
 	Capability codexCapability
@@ -58,10 +76,14 @@ type codexSynthResult struct {
 	Injected bool
 }
 
-const (
-	codexSynthReserveRatio     = 0.25
-	codexSynthMinReserveTokens = 4096
-)
+// The client compacts against the advertised window (see /models), so the
+// gateway only trims optional synthesized context past that window and only
+// rejects past the hard maximum. No extra reserve: the estimate already
+// over-counts JSON framing and escapes.
+type codexSynthContextLimits struct {
+	Advertised int
+	Hard       int
+}
 
 var (
 	codexOfficialToolsOnce sync.Once
@@ -163,7 +185,7 @@ func synthesizeCodexOAuthRequest(reqBody map[string]any, account *Account, upstr
 			return result, fmt.Errorf("codex synthesis: unknown Codex version %q (gateway.codex_wire.strict=true)", opts.WireVersion)
 		}
 	}
-	capability := classifyCodexCapability(reqBody, account)
+	capability := classifyCodexCapability(reqBody, account, opts.OfficialClient)
 	result.Capability = capability
 	if capability == codexCapabilityNative {
 		return result, nil
@@ -192,10 +214,18 @@ func synthesizeCodexOAuthRequest(reqBody map[string]any, account *Account, upstr
 	input := make([]any, 0, len(prefix)+len(original))
 	input = append(input, prefix...)
 	input = append(input, original...)
-	budget := codexSynthesisTokenBudget(descriptor, hasDescriptor)
-	input, truncated, budgetErr := codexSynthesisTrimToBudget(input, budget, skillsItem)
+	limits := codexSynthesisContextLimitsFor(account, upstreamModel, descriptor, hasDescriptor)
+	input, truncated, budgetErr := codexSynthesisTrimToBudget(input, limits, skillsItem)
 	if budgetErr != nil {
+		logger.LegacyPrintf("service.openai_codex",
+			"[Codex] synthesis rejected: model=%s account=%d estimated=%d advertised=%d hard=%d",
+			upstreamModel, accountIDForLog(account), codexSynthesisEstimatedTokens(input), limits.Advertised, limits.Hard)
 		return result, budgetErr
+	}
+	if truncated {
+		logger.LegacyPrintf("service.openai_codex",
+			"[Codex] synthesis trimmed optional context: model=%s account=%d advertised=%d hard=%d",
+			upstreamModel, accountIDForLog(account), limits.Advertised, limits.Hard)
 	}
 	result.Truncated = truncated
 	reqBody["input"] = input
@@ -209,14 +239,14 @@ func synthesizeCodexOAuthRequest(reqBody map[string]any, account *Account, upstr
 	return result, nil
 }
 
-func classifyCodexCapability(reqBody map[string]any, account *Account) codexCapability {
+func classifyCodexCapability(reqBody map[string]any, account *Account, officialClient bool) codexCapability {
 	switch strings.ToLower(strings.TrimSpace(account.GetExtraString(codexClientCapabilityExtraKey))) {
 	case string(codexCapabilityNative):
 		return codexCapabilityNative
 	case string(codexCapabilityCompatible):
 		return codexCapabilityCompatible
 	}
-	if codexInputMapCarriesBaseInstructions(reqBody) {
+	if officialClient || codexInputMapCarriesBaseInstructions(reqBody) {
 		return codexCapabilityNative
 	}
 	declaresOfficialTool := false
@@ -406,7 +436,9 @@ func removeCodexSynthItem(items []any, target json.RawMessage) []any {
 // codexSynthesisEstimatedTokens approximates input tokens with the ~4 bytes per
 // token heuristic. Inline images are charged by pixel area instead of their
 // base64 length: a ~600 KB base64 screenshot would otherwise count as ~150k
-// tokens while the upstream bills it at roughly a thousand.
+// tokens while the upstream bills it at roughly a thousand. Opaque
+// encrypted_content blobs (reasoning/compaction replay) are excluded: their
+// base64 size has no stable relation to prompt tokens.
 func codexSynthesisEstimatedTokens(input []any) int {
 	estimate := 0
 	for _, item := range input {
@@ -420,19 +452,52 @@ func codexSynthesisEstimatedTokens(input []any) int {
 			}
 		}
 		estimate += estimateJSONTokensWithImages(raw)
+		estimate -= codexSynthesisEncryptedContentBytes(raw) / estimateBytesPerToken
+	}
+	if estimate < 0 {
+		estimate = 0
 	}
 	return estimate + 1
 }
 
+func codexSynthesisEncryptedContentBytes(raw []byte) int {
+	if len(raw) == 0 || !bytes.Contains(raw, []byte(`"encrypted_content"`)) {
+		return 0
+	}
+	total := 0
+	var walk func(node gjson.Result)
+	walk = func(node gjson.Result) {
+		if !node.IsObject() && !node.IsArray() {
+			return
+		}
+		node.ForEach(func(key, child gjson.Result) bool {
+			if child.Type == gjson.String && key.String() == "encrypted_content" {
+				total += len(child.Raw)
+				return true
+			}
+			walk(child)
+			return true
+		})
+	}
+	walk(gjson.ParseBytes(raw))
+	return total
+}
+
 // codexSynthesisTrimToBudget drops optional synthesized context (skills, then
-// permissions) before failing. The base prompt and client messages are never
-// truncated.
-func codexSynthesisTrimToBudget(input []any, budget int, skillsItem json.RawMessage) ([]any, bool, error) {
-	if budget <= 0 {
+// permissions) once the estimate passes the advertised window, then still
+// forwards the request so the upstream decides with its real tokenizer. It
+// rejects only when the estimate passes the hard maximum. The base prompt and
+// client messages are never truncated.
+func codexSynthesisTrimToBudget(input []any, limits codexSynthContextLimits, skillsItem json.RawMessage) ([]any, bool, error) {
+	if limits.Advertised <= 0 && limits.Hard <= 0 {
 		return input, false, nil
 	}
+	soft := limits.Advertised
+	if soft <= 0 || (limits.Hard > 0 && soft > limits.Hard) {
+		soft = limits.Hard
+	}
 	truncated := false
-	for codexSynthesisEstimatedTokens(input) > budget {
+	for codexSynthesisEstimatedTokens(input) > soft {
 		if skillsItem != nil {
 			input = removeCodexSynthItem(input, skillsItem)
 			skillsItem = nil
@@ -450,25 +515,71 @@ func codexSynthesisTrimToBudget(input []any, budget int, skillsItem json.RawMess
 			}
 		}
 		if !removed {
-			return input, true, fmt.Errorf("codex synthesis: request exceeds the model context window")
+			break
 		}
+	}
+	if limits.Hard > 0 && codexSynthesisEstimatedTokens(input) > limits.Hard {
+		return input, true, ErrCodexSynthContextWindowExceeded
 	}
 	return input, truncated, nil
 }
 
-func codexSynthesisTokenBudget(descriptor openai.CodexCatalogModel, hasDescriptor bool) int {
-	contextWindow := descriptor.ContextWindow
-	if !hasDescriptor || contextWindow <= 0 {
-		contextWindow = configuredCodexFallbackContext
+var codexSynthConfiguredLimitsCache sync.Map // model -> codexSynthContextLimits
+
+// codexSynthesisContextLimitsFor resolves the same window the gateway
+// advertises on /models: synced account metadata, then the configured Codex
+// descriptor, then the pinned catalog, then the generic fallback.
+func codexSynthesisContextLimitsFor(account *Account, upstreamModel string, descriptor openai.CodexCatalogModel, hasDescriptor bool) codexSynthContextLimits {
+	limits := codexSynthConfiguredContextLimits(upstreamModel)
+	if hasDescriptor {
+		if limits.Advertised <= 0 && descriptor.ContextWindow > 0 {
+			limits.Advertised = int(descriptor.ContextWindow)
+		}
+		if int(descriptor.MaxContextWindow) > limits.Hard {
+			limits.Hard = int(descriptor.MaxContextWindow)
+		}
 	}
-	reserve := int(float64(contextWindow) * codexSynthReserveRatio)
-	if reserve < codexSynthMinReserveTokens {
-		reserve = codexSynthMinReserveTokens
+	if account != nil {
+		if metadata, ok := account.GetUpstreamModelMetadata(upstreamModel); ok {
+			if metadata.ContextWindow > 0 {
+				limits.Advertised = int(metadata.ContextWindow)
+			}
+			if metadata.MaxContextWindow > 0 {
+				limits.Hard = int(metadata.MaxContextWindow)
+			}
+		}
 	}
-	if int64(reserve) >= contextWindow {
+	if limits.Advertised <= 0 {
+		limits.Advertised = configuredCodexFallbackContext
+	}
+	if limits.Hard < limits.Advertised {
+		limits.Hard = limits.Advertised
+	}
+	return limits
+}
+
+func codexSynthConfiguredContextLimits(model string) codexSynthContextLimits {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return codexSynthContextLimits{}
+	}
+	if cached, ok := codexSynthConfiguredLimitsCache.Load(model); ok {
+		return cached.(codexSynthContextLimits)
+	}
+	configured := newConfiguredCodexModelDescriptor(model)
+	limits := codexSynthContextLimits{
+		Advertised: int(configured.ContextWindow),
+		Hard:       int(configured.MaxContextWindow),
+	}
+	codexSynthConfiguredLimitsCache.Store(model, limits)
+	return limits
+}
+
+func accountIDForLog(account *Account) int64 {
+	if account == nil {
 		return 0
 	}
-	return int(contextWindow) - reserve
+	return account.ID
 }
 
 func codexCatalogDefaultReasoningLevel(descriptor openai.CodexCatalogModel) string {

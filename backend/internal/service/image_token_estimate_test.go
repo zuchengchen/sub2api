@@ -52,7 +52,7 @@ func TestCodexSynthesisEstimatedTokensChargesImagesByPixels(t *testing.T) {
 	require.Greater(t, got, 1680)
 
 	// Context-window budget no longer rejects a small conversation with screenshots.
-	_, _, err := codexSynthesisTrimToBudget([]any{responsesItem, claudeItem}, 200_000, nil)
+	_, _, err := codexSynthesisTrimToBudget([]any{responsesItem, claudeItem}, codexSynthContextLimits{Advertised: 200_000, Hard: 200_000}, nil)
 	require.NoError(t, err)
 
 	text := map[string]any{"type": "message", "role": "user", "content": "data: plain text"}
