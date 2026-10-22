@@ -1986,7 +1986,10 @@ func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string
 	if !isFailedEvent {
 		return updated, !bytes.Equal(updated, payload)
 	}
-	if clientOutputStarted && isOpenAIContextWindowError(extractOpenAISSEErrorMessage(payload), payload) {
+	// Codex only compacts on code=context_length_exceeded. Before output starts
+	// the upstream type is kept (passthrough diagnostics) but a missing code is
+	// still filled in; after output starts the whole error is normalized.
+	if isOpenAIContextWindowError(extractOpenAISSEErrorMessage(payload), payload) {
 		errorPath := ""
 		switch {
 		case gjson.GetBytes(updated, "response.error").Exists():
@@ -1995,12 +1998,14 @@ func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string
 			errorPath = "error"
 		}
 		if errorPath != "" {
-			next, err := sjson.SetBytes(updated, errorPath+".type", "invalid_request_error")
-			if err != nil {
-				return payload, false
+			if clientOutputStarted {
+				next, err := sjson.SetBytes(updated, errorPath+".type", "invalid_request_error")
+				if err != nil {
+					return payload, false
+				}
+				updated = next
 			}
-			updated = next
-			next, err = sjson.SetBytes(updated, errorPath+".code", "context_length_exceeded")
+			next, err := sjson.SetBytes(updated, errorPath+".code", "context_length_exceeded")
 			if err != nil {
 				return payload, false
 			}

@@ -321,6 +321,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+	MarkOpenAIResponsesClientStream(c, reqStream)
 
 	if account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
@@ -392,7 +393,12 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	// the only marker of that input item.
 	inputCarriesBaseInstructions := codexInputCarriesBaseInstructions(body)
 
-	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+	officialCodexClient := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
+	// An official client with a custom model_provider strips the
+	// model.base_instructions marker but still sends its base prompt as a
+	// leading developer message; that request already owns its prompt.
+	officialClientOwnsPrompt := officialCodexClient && codexInputLeadsWithDeveloperMessage(body)
+	isCodexCLI := officialCodexClient || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
 	if isCodexCLI {
 		codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
@@ -566,8 +572,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	// (codex-api/src/common.rs, core/src/client.rs; golden 0.163.0). Injecting a
 	// synthetic prompt there would send the base prompt twice plus a key the
 	// official request never carries.
+	// Official clients with a custom model_provider strip the marker but still
+	// carry their own base prompt as input[0]; treat them like the marker case.
 	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeCNResponses && !cookieWS &&
-		!inputCarriesBaseInstructions && !(isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() && !compactPath) {
+		!inputCarriesBaseInstructions && !officialClientOwnsPrompt && !(isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() && !compactPath) {
 		markPatchSet("instructions", defaultCodexSynthInstructions(upstreamModel))
 	}
 	if billingModel != requestedModel {
@@ -708,15 +716,14 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 			deviceProfile, _ := codexDeviceProfileForRequest(account)
 			synthOptions := codexSynthOptions{
-				ResponsesLite: responsesLite,
-				IsCompact:     isCompactRequest,
-				WireProfile:   requestWireProfile,
-				WireVersion:   CodexCanonicalClientVersion(),
-				Device:        deviceProfile,
-				Now:           time.Now(),
-				Strict:        s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
-				OfficialClient: openai.IsCodexOfficialClientByHeaders(
-					c.GetHeader("User-Agent"), c.GetHeader("originator")),
+				ResponsesLite:  responsesLite,
+				IsCompact:      isCompactRequest,
+				WireProfile:    requestWireProfile,
+				WireVersion:    CodexCanonicalClientVersion(),
+				Device:         deviceProfile,
+				Now:            time.Now(),
+				Strict:         s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
+				OfficialClient: officialCodexClient,
 			}
 			if attemptFingerprintIDs != nil {
 				synthOptions.TurnID = attemptFingerprintIDs.turnID
@@ -725,15 +732,16 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			result, synthErr := synthesizeCodexOAuthRequest(decoded, account, upstreamModel, synthOptions)
 			if synthErr != nil {
 				setOpsUpstreamError(c, http.StatusBadRequest, synthErr.Error(), "")
-				errBody := gin.H{"type": "invalid_request_error", "message": synthErr.Error(), "param": "input"}
 				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
-					errBody["code"] = "context_length_exceeded"
-					errBody["message"] = codexSynthContextLengthMessage
+					WriteOpenAIResponsesContextLengthExceeded(c, codexSynthContextLengthMessage)
+					return nil, synthErr
 				}
 				// The handler must not append a second fallback error
 				// (response.failed/upstream_error) after this JSON body.
 				MarkResponseCommitted(c)
-				writeOpenAIResponsesErrorJSON(c, http.StatusBadRequest, gin.H{"error": errBody})
+				writeOpenAIResponsesErrorJSON(c, http.StatusBadRequest, gin.H{"error": gin.H{
+					"type": "invalid_request_error", "message": synthErr.Error(), "param": "input",
+				}})
 				return nil, synthErr
 			}
 			if result.Modified {
@@ -768,7 +776,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                          isCodexCLI,
 				IsCompact:                           isCompactRequest,
-				SkipDefaultInstructions:             synthesized || cookieWS || inputCarriesBaseInstructions,
+				SkipDefaultInstructions:             synthesized || cookieWS || inputCarriesBaseInstructions || officialClientOwnsPrompt,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 				ResponsesLite:                       responsesLite,
 				WireProfile:                         wireProfilePtr,

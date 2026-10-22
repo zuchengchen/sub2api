@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/base64"
 	"image"
 	_ "image/gif"  // register GIF header decoder for image.DecodeConfig
@@ -90,12 +91,22 @@ func scanJSONInlineImages(node gjson.Result) (imageBytes, imageTokens int64) {
 			}
 		}
 	}
+	sourceIsBase64 := node.IsObject() && node.Get("type").String() == "base64"
 	node.ForEach(func(key, child gjson.Result) bool {
 		if child.Type == gjson.String {
 			value := child.String()
 			if strings.HasPrefix(value, "data:image/") || (key.String() == "data" && strings.HasPrefix(mediaType, "image/") && value != "") {
 				imageBytes += int64(len(child.Raw))
 				imageTokens += estimateInlineImageTokens(value)
+				return true
+			}
+			// Other inline base64 payloads (PDF input_file.file_data, data:
+			// URLs of any type, Anthropic base64 document sources) are billed
+			// by their decoded content, not their base64 length. Charge a
+			// capped flat estimate so a large PDF cannot trip the budget.
+			if isInlineBase64Blob(key.String(), value, sourceIsBase64) {
+				imageBytes += int64(len(child.Raw))
+				imageTokens += inlineBlobTokens(len(value))
 			}
 			return true
 		}
@@ -105,4 +116,56 @@ func scanJSONInlineImages(node gjson.Result) (imageBytes, imageTokens int64) {
 		return true
 	})
 	return imageBytes, imageTokens
+}
+
+const inlineBlobTokenCap int64 = imageTokenFallback
+
+func isInlineBase64Blob(key, value string, sourceIsBase64 bool) bool {
+	if len(value) < 256 {
+		return false
+	}
+	if strings.HasPrefix(value, "data:") && strings.Contains(value[:min(len(value), 128)], ";base64,") {
+		return true
+	}
+	switch key {
+	case "file_data":
+		return true
+	case "data":
+		return sourceIsBase64
+	}
+	return false
+}
+
+func inlineBlobTokens(size int) int64 {
+	tokens := int64(size / estimateBytesPerToken)
+	if tokens > inlineBlobTokenCap {
+		return inlineBlobTokenCap
+	}
+	return tokens
+}
+
+// InflightEffectiveBodyBytes converts a request body into the byte count the
+// in-flight balance reservation should charge at 4 bytes/token: inline images
+// count by pixel area, other inline base64 files are capped, and opaque
+// encrypted_content replay blobs are excluded. Bodies without such payloads
+// are returned unchanged without parsing.
+func InflightEffectiveBodyBytes(body []byte) int {
+	if len(body) == 0 {
+		return 0
+	}
+	if !bytes.Contains(body, []byte(";base64,")) &&
+		!bytes.Contains(body, []byte(`"encrypted_content"`)) &&
+		!bytes.Contains(body, []byte(`"file_data"`)) &&
+		!bytes.Contains(body, []byte(`"base64"`)) {
+		return len(body)
+	}
+	if !gjson.ValidBytes(body) {
+		return len(body)
+	}
+	tokens := int64(estimateJSONTokensWithImages(body))
+	tokens -= int64(codexSynthesisEncryptedContentBytes(body) / estimateBytesPerToken)
+	if tokens < 0 {
+		tokens = 0
+	}
+	return int(tokens * estimateBytesPerToken)
 }

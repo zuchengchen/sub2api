@@ -246,7 +246,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				message := synthErr.Error()
 				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
 					// Claude Code compacts on Anthropic's "prompt is too long" wording.
-					message = "prompt is too long: " + codexSynthContextLengthMessage
+					message = AnthropicPromptTooLongMessage(codexSynthContextLengthMessage)
 				}
 				writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", message)
 				return nil, synthErr
@@ -657,7 +657,7 @@ func (s *OpenAIGatewayService) handleAnthropicErrorResponse(
 	account *Account,
 	requestedModel ...string,
 ) (*OpenAIForwardResult, error) {
-	return s.handleCompatErrorResponse(resp, c, account, writeAnthropicError, requestedModel...)
+	return s.handleCompatErrorResponse(resp, c, account, writeAnthropicCompatError, requestedModel...)
 }
 
 // handleAnthropicBufferedStreamingResponse reads all Responses SSE events from
@@ -731,6 +731,11 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			MarkResponseCommitted(c)
 			writeAnthropicError(c, status, errType, errMsg)
 			return nil, fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
+		}
+		if isOpenAIContextWindowError(message, payload) {
+			MarkResponseCommitted(c)
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", AnthropicPromptTooLongMessage(message))
+			return nil, fmt.Errorf("upstream response failed: %s", message)
 		}
 		writeAnthropicError(c, http.StatusBadGateway, "api_error", message)
 		return nil, fmt.Errorf("upstream response failed: %s", message)
@@ -1156,6 +1161,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 				message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 				errStatus, errType, errMsg := http.StatusBadGateway, "api_error", message
+				if isOpenAIContextWindowError(message, payloadBytes) {
+					errStatus, errType, errMsg = http.StatusBadRequest, "invalid_request_error", AnthropicPromptTooLongMessage(message)
+				}
 				// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
 				// 使按错误码配置的透传规则可命中。
 				if status, et, em, matched := applyOpenAIStreamFailedErrorPassthroughRule(

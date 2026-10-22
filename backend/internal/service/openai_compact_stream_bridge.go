@@ -121,6 +121,9 @@ func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType
 // writeOpenAIResponsesErrorJSON preserves early HTTP errors, but never appends
 // JSON to an SSE response already committed by a transport heartbeat.
 func writeOpenAIResponsesErrorJSON(c *gin.Context, statusCode int, envelope gin.H) {
+	// Every caller returns a terminal (non-failover) error after this write;
+	// mark it so the handler does not append a fallback response.failed.
+	MarkResponseCommitted(c)
 	if StopOpenAICompactSSEKeepaliveCommitted(c) {
 		errorBody, _ := envelope["error"].(gin.H)
 		writeOpenAIResponsesSSEFailure(c, statusCode, errorBody)

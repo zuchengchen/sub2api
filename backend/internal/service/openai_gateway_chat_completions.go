@@ -89,6 +89,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	logCodexCLIOnlyDetection(ctx, c, account, getAPIKeyIDFromContext(c), restrictionResult, body)
 	if restrictionResult.Enabled && !restrictionResult.Matched {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		MarkResponseCommitted(c)
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
 				"type":    "forbidden_error",
@@ -344,13 +345,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			result, synthErr := synthesizeCodexOAuthRequest(reqBody, account, upstreamModel, synthOptions)
 			if synthErr != nil {
 				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
-					MarkResponseCommitted(c)
-					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-						"type":    "invalid_request_error",
-						"code":    "context_length_exceeded",
-						"param":   "messages",
-						"message": codexSynthContextLengthMessage,
-					}})
+					WriteChatCompletionsContextLengthExceeded(c, codexSynthContextLengthMessage)
 					return nil, synthErr
 				}
 				writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", synthErr.Error())
@@ -368,7 +363,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			WireProfile:                         wireProfilePtr,
 		})
 		if codexResult.Error != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": codexResult.Error.Error()}})
+			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", codexResult.Error.Error())
 			return nil, codexResult.Error
 		}
 		reverse := codexResult.ToolNameReverse
@@ -815,7 +810,7 @@ func (s *OpenAIGatewayService) handleChatCompletionsErrorResponse(
 	account *Account,
 	requestedModel ...string,
 ) (*OpenAIForwardResult, error) {
-	return s.handleCompatErrorResponse(resp, c, account, writeChatCompletionsError, requestedModel...)
+	return s.handleCompatErrorResponse(resp, c, account, writeChatCompletionsCompatError, requestedModel...)
 }
 
 // handleChatBufferedStreamingResponse reads all Responses SSE events from the
@@ -883,6 +878,10 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 			MarkResponseCommitted(c)
 			writeChatCompletionsError(c, status, errType, errMsg)
 			return nil, fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
+		}
+		if isOpenAIContextWindowError(message, payload) {
+			WriteChatCompletionsContextLengthExceeded(c, message)
+			return nil, fmt.Errorf("upstream response failed: %s", message)
 		}
 		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", message)
 		return nil, fmt.Errorf("upstream response failed: %s", message)
@@ -1159,6 +1158,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 			defaultStatus, defaultErrType, defaultMsg := http.StatusBadGateway, "upstream_error", message
+			defaultCode := ""
+			if isOpenAIContextWindowError(message, payloadBytes) {
+				defaultStatus, defaultErrType, defaultCode = http.StatusBadRequest, "invalid_request_error", OpenAIContextLengthExceededCode
+			}
 			// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
 			// 使按错误码配置的透传规则可命中。
 			if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(
@@ -1170,14 +1173,20 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				defaultStatus, defaultErrType, defaultMsg = status, errType, errMsg
 				MarkResponseCommitted(c)
 			}
-			errorPayload, _ := json.Marshal(gin.H{
-				"error": gin.H{
-					"type":    defaultErrType,
-					"message": defaultMsg,
-				},
-			})
+			errorObject := gin.H{
+				"type":    defaultErrType,
+				"message": defaultMsg,
+			}
+			if defaultCode != "" {
+				errorObject["code"] = defaultCode
+			}
+			errorPayload, _ := json.Marshal(gin.H{"error": errorObject})
 			if c != nil && c.Writer != nil && !c.Writer.Written() {
-				writeChatCompletionsError(c, defaultStatus, defaultErrType, defaultMsg)
+				if defaultCode == OpenAIContextLengthExceededCode {
+					WriteChatCompletionsContextLengthExceeded(c, defaultMsg)
+				} else {
+					writeChatCompletionsError(c, defaultStatus, defaultErrType, defaultMsg)
+				}
 				clientOutputStarted = true
 			} else if c != nil && c.Writer != nil && !clientDisconnected {
 				if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", errorPayload); err != nil {

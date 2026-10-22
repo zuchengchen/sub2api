@@ -107,8 +107,25 @@ func TestCodexSynthesisContextOverflowReturnsContextLengthExceeded(t *testing.T)
 
 	_, err := svc.Forward(context.Background(), c, account, body)
 	require.ErrorIs(t, err, ErrCodexSynthContextWindowExceeded)
+	// Codex only compacts on a streamed response.failed with this code.
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Header().Get("Content-Type"), "text/event-stream")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
+	data := strings.TrimSpace(strings.SplitN(strings.SplitN(rec.Body.String(), "data: ", 2)[1], "\n", 2)[0])
+	require.Equal(t, "response.failed", gjson.Get(data, "type").String())
+	require.Equal(t, "context_length_exceeded", gjson.Get(data, "response.error.code").String())
+	require.Equal(t, OpenAIContextLengthExceededMessage, gjson.Get(data, "response.error.message").String())
+	require.True(t, IsResponseCommitted(c), "handler must not append a fallback response.failed")
+
+	// Non-streamed requests get HTTP 400 JSON with the same code.
+	bodyNoStream := []byte(`{"model":"gpt-5.5","stream":false,"input":[{"type":"message","role":"user","content":"` + huge + `"}]}`)
+	rec = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(bodyNoStream))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "opencode/1.0")
+	_, err = svc.Forward(context.Background(), c, account, bodyNoStream)
+	require.ErrorIs(t, err, ErrCodexSynthContextWindowExceeded)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Equal(t, "context_length_exceeded", gjson.Get(rec.Body.String(), "error.code").String())
-	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
-	require.True(t, IsResponseCommitted(c), "handler must not append a fallback response.failed")
 }
