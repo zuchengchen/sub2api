@@ -937,7 +937,9 @@ func TestBuildUpstreamRequestOpenAIPassthrough_AppliesStagedFingerprint(t *testi
 	turnMetadata := req.Header.Get("x-codex-turn-metadata")
 	require.NotEmpty(t, turnMetadata)
 	assert.Contains(t, turnMetadata, ids.sessionID, "turn-metadata JSON 中的 session_id 应被收敛")
-	assert.Contains(t, turnMetadata, `"sandbox":"seatbelt"`, "turn-metadata 未指定字段应原样保留")
+	// 出站 UA 是 Linux（canonical codex-tui Ubuntu）：macOS 的 seatbelt 与之矛盾，
+	// 随设备平台改写为 seccomp。
+	assert.Contains(t, turnMetadata, `"sandbox":"seccomp"`, "sandbox 跟随出站 UA 平台")
 }
 
 func TestBuildUpstreamRequestOpenAIPassthrough_OffModeKeepsIsolatedSession(t *testing.T) {

@@ -520,9 +520,40 @@ func rewriteCodexTurnMetadataFields(h http.Header, fields map[string]any, ids *c
 	h.Set(openAIWSTurnMetadataHeader, rewriteCodexFingerprintTurnMetadata(raw, fields, ids))
 }
 
+// codexSandboxTagForOutboundPlatform maps a client sandbox tag to the one the
+// outbound identity's platform would report (codex-rs protocol/src/sandbox.rs:
+// seatbelt = macOS, seccomp = Linux, windows_* = Windows). Converged accounts
+// present one device; a macOS client's "seatbelt" next to a Linux User-Agent
+// is a combination no real client sends. "none"/"external" are kept.
+func codexSandboxTagForOutboundPlatform(tag string) (string, bool) {
+	tag = strings.TrimSpace(tag)
+	if tag == "" || tag == "none" || tag == "external" {
+		return "", false
+	}
+	ua := strings.ToLower(resolveCodexOutboundIdentity("").userAgent)
+	want := ""
+	switch {
+	case strings.Contains(ua, "mac os"):
+		want = "seatbelt"
+	case strings.Contains(ua, "windows"):
+		return "", false // several Windows tags exist; keep the client's
+	default:
+		want = "seccomp"
+	}
+	if tag == want {
+		return "", false
+	}
+	return want, true
+}
+
 func rewriteCodexFingerprintTurnMetadata(raw string, fields map[string]any, ids *codexFingerprintIDs) string {
 	return rewriteCodexTurnMetadataJSON(raw, true, func(metadata map[string]any) map[string]any {
 		updates := maps.Clone(fields)
+		if tag, ok := metadata["sandbox"].(string); ok {
+			if next, changed := codexSandboxTagForOutboundPlatform(tag); changed {
+				updates["sandbox"] = next
+			}
+		}
 		root, _ := metadata["root_turn_id"].(string)
 		preserveCodexConvergenceRootTurn(metadata, ids)
 		if next, _ := metadata["root_turn_id"].(string); next != root {

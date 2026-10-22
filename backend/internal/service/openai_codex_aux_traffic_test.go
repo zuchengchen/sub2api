@@ -40,3 +40,17 @@ func TestOpenAITiboRoute_DisabledByShippedDefault(t *testing.T) {
 	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "t"}}
 	require.False(t, svc.openAITiboRouteApplies(account), "Tibo probes are synthetic traffic; off unless enabled")
 }
+
+func TestCodexSandboxTagForOutboundPlatform_LinuxUA(t *testing.T) {
+	// Canonical outbound UA is codex-tui on Ubuntu/x86_64.
+	next, changed := codexSandboxTagForOutboundPlatform("seatbelt")
+	require.True(t, changed)
+	require.Equal(t, "seccomp", next)
+	_, changed = codexSandboxTagForOutboundPlatform("seccomp")
+	require.False(t, changed)
+	_, changed = codexSandboxTagForOutboundPlatform("none")
+	require.False(t, changed)
+	next, changed = codexSandboxTagForOutboundPlatform("windows_sandbox")
+	require.True(t, changed)
+	require.Equal(t, "seccomp", next)
+}
