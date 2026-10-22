@@ -90,12 +90,22 @@ func scanJSONInlineImages(node gjson.Result) (imageBytes, imageTokens int64) {
 			}
 		}
 	}
+	sourceIsBase64 := node.IsObject() && node.Get("type").String() == "base64"
 	node.ForEach(func(key, child gjson.Result) bool {
 		if child.Type == gjson.String {
 			value := child.String()
 			if strings.HasPrefix(value, "data:image/") || (key.String() == "data" && strings.HasPrefix(mediaType, "image/") && value != "") {
 				imageBytes += int64(len(child.Raw))
 				imageTokens += estimateInlineImageTokens(value)
+				return true
+			}
+			// Other inline base64 payloads (PDF input_file.file_data, data:
+			// URLs of any type, Anthropic base64 document sources) are billed
+			// by their decoded content, not their base64 length. Charge a
+			// capped flat estimate so a large PDF cannot trip the budget.
+			if isInlineBase64Blob(key.String(), value, sourceIsBase64) {
+				imageBytes += int64(len(child.Raw))
+				imageTokens += inlineBlobTokens(len(value))
 			}
 			return true
 		}
@@ -105,4 +115,30 @@ func scanJSONInlineImages(node gjson.Result) (imageBytes, imageTokens int64) {
 		return true
 	})
 	return imageBytes, imageTokens
+}
+
+const inlineBlobTokenCap int64 = imageTokenFallback
+
+func isInlineBase64Blob(key, value string, sourceIsBase64 bool) bool {
+	if len(value) < 256 {
+		return false
+	}
+	if strings.HasPrefix(value, "data:") && strings.Contains(value[:min(len(value), 128)], ";base64,") {
+		return true
+	}
+	switch key {
+	case "file_data":
+		return true
+	case "data":
+		return sourceIsBase64
+	}
+	return false
+}
+
+func inlineBlobTokens(size int) int64 {
+	tokens := int64(size / estimateBytesPerToken)
+	if tokens > inlineBlobTokenCap {
+		return inlineBlobTokenCap
+	}
+	return tokens
 }

@@ -339,6 +339,14 @@ func codexInputCarriesBaseInstructions(body []byte) bool {
 	return found
 }
 
+// codexInputLeadsWithDeveloperMessage reports whether input[0] is a developer
+// message, which is where Codex >= 0.162 places its base prompt.
+func codexInputLeadsWithDeveloperMessage(body []byte) bool {
+	first := gjson.GetBytes(body, "input.0")
+	return first.IsObject() && first.Get("role").String() == "developer" &&
+		first.Get("type").String() != "additional_tools"
+}
+
 // codexInputMapCarriesBaseInstructions is codexInputCarriesBaseInstructions
 // for a decoded body.
 func codexInputMapCarriesBaseInstructions(reqBody map[string]any) bool {

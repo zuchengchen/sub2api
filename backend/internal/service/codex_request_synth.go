@@ -240,13 +240,19 @@ func synthesizeCodexOAuthRequest(reqBody map[string]any, account *Account, upstr
 }
 
 func classifyCodexCapability(reqBody map[string]any, account *Account, officialClient bool) codexCapability {
+	// Official clients already send their own base prompt (possibly without
+	// the marker), and isCodexBaseInstructionsItem cannot strip an unmarked
+	// one, so even a forced "compatible" account would double the prompt.
+	if officialClient {
+		return codexCapabilityNative
+	}
 	switch strings.ToLower(strings.TrimSpace(account.GetExtraString(codexClientCapabilityExtraKey))) {
 	case string(codexCapabilityNative):
 		return codexCapabilityNative
 	case string(codexCapabilityCompatible):
 		return codexCapabilityCompatible
 	}
-	if officialClient || codexInputMapCarriesBaseInstructions(reqBody) {
+	if codexInputMapCarriesBaseInstructions(reqBody) {
 		return codexCapabilityNative
 	}
 	declaresOfficialTool := false
