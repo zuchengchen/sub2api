@@ -1790,6 +1790,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 	}()
 
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -2874,6 +2875,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PreflightPingFai
 	}()
 
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -3016,6 +3018,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledStr
 	}()
 
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -3168,6 +3171,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 	}()
 
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -3323,6 +3327,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 	}()
 
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -3469,6 +3474,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 	}()
 
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true

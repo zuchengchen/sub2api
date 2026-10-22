@@ -1375,8 +1375,15 @@ type GatewayOpenAIWSConfig struct {
 
 	// 连接池参数
 	MaxConnsPerAccount int `mapstructure:"max_conns_per_account"`
-	MinIdlePerAccount  int `mapstructure:"min_idle_per_account"`
-	MaxIdlePerAccount  int `mapstructure:"max_idle_per_account"`
+	// MinIdlePerAccount: 每账号预拨的空闲连接数。官方客户端一个线程只开一条连接、
+	// 从不预拨备用连接，默认 0。
+	MinIdlePerAccount int `mapstructure:"min_idle_per_account"`
+	MaxIdlePerAccount int `mapstructure:"max_idle_per_account"`
+	// ClientPingEnabled: 是否由网关主动向上游 WS 发 ping（空闲连接 30s 后台探活、
+	// ingress 轮次间 preflight ping）。官方 Codex 客户端从不主动 ping，只回 pong
+	// （codex-api responses_websocket.rs）。默认 false；断开的连接在下一次写入时
+	// 失败并按既有重试路径重连。
+	ClientPingEnabled bool `mapstructure:"client_ping_enabled"`
 	// DynamicMaxConnsByAccountConcurrencyEnabled: 是否按账号并发动态计算连接池上限。
 	// 旧版及 mode_router_v2 的 ctx_pool 共用此开关和类型系数；关闭后使用 max_conns_per_account。
 	// mode_router_v2 下并发数 <= 0 的账号仍不可调度。
@@ -2548,7 +2555,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.responses_websockets", false)
 	viper.SetDefault("gateway.openai_ws.responses_websockets_v2", true)
 	viper.SetDefault("gateway.openai_ws.max_conns_per_account", 128)
-	viper.SetDefault("gateway.openai_ws.min_idle_per_account", 4)
+	viper.SetDefault("gateway.openai_ws.min_idle_per_account", 0)
+	viper.SetDefault("gateway.openai_ws.client_ping_enabled", false)
 	viper.SetDefault("gateway.openai_ws.max_idle_per_account", 12)
 	viper.SetDefault("gateway.openai_ws.dynamic_max_conns_by_account_concurrency_enabled", true)
 	viper.SetDefault("gateway.openai_ws.oauth_max_conns_factor", 5.0)

@@ -45,6 +45,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PreflightPingTol
 	}()
 
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true

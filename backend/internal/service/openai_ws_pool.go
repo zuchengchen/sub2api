@@ -1080,6 +1080,20 @@ type openAIWSIdlePingCandidate struct {
 	conn      *openAIWSConn
 }
 
+// clientPingEnabled reports whether the gateway may send client-initiated WS
+// pings upstream. The official Codex client never does (it only answers server
+// pings), so this is off unless gateway.openai_ws.client_ping_enabled is set.
+// A nil cfg (unit tests constructing pools directly) keeps the legacy behavior.
+func (p *openAIWSConnPool) clientPingEnabled() bool {
+	if p == nil {
+		return false
+	}
+	if p.cfg == nil {
+		return true
+	}
+	return p.cfg.Gateway.OpenAIWS.ClientPingEnabled
+}
+
 func (p *openAIWSConnPool) runBackgroundPingWorker() {
 	if p == nil {
 		return
@@ -1097,7 +1111,7 @@ func (p *openAIWSConnPool) runBackgroundPingWorker() {
 }
 
 func (p *openAIWSConnPool) runBackgroundPingSweep() {
-	if p == nil {
+	if p == nil || !p.clientPingEnabled() {
 		return
 	}
 	candidates := p.snapshotIdleConnsForPing()

@@ -444,6 +444,7 @@ func newSweepTestPool(conn *openAIWSConn, accountID int64) (*openAIWSConnPool, *
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // sweep tests exercise the opt-in ping
 	pool := &openAIWSConnPool{cfg: cfg}
 	ap := &openAIWSAccountPool{conns: map[string]*openAIWSConn{conn.id: conn}}
 	pool.accounts.Store(accountID, ap)
@@ -662,6 +663,7 @@ func TestOpenAIWSConnPool_ReaderLoopConnNotIdleRecycled(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // sweep tests exercise the opt-in ping
 	pool := &openAIWSConnPool{cfg: cfg}
 
 	accountID := int64(304)
@@ -791,4 +793,20 @@ func TestOpenAIWSConnPool_AcquireSkipsDirtyIdleConn(t *testing.T) {
 	require.NotEqual(t, firstID, second.ConnID(), "脏连接不应再被借出")
 	require.Len(t, dialer.dialed(), 2)
 	requireConnClosed(t, first.conn)
+}
+
+// The official Codex client never pings upstream; with the default config the
+// background sweep must not either.
+func TestOpenAIWSConnPool_BackgroundPingSweepDisabledByDefault(t *testing.T) {
+	fake := newOpenAIWSReaderLoopFakeConn()
+	conn := newOpenAIWSConn("rl_no_ping_default", 313, fake, nil)
+	defer conn.close()
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	pool := &openAIWSConnPool{cfg: cfg}
+	ap := &openAIWSAccountPool{conns: map[string]*openAIWSConn{conn.id: conn}}
+	pool.accounts.Store(int64(313), ap)
+	pool.runBackgroundPingSweep()
+	require.Zero(t, fake.pings.Load(), "no client-initiated ping by default")
 }
