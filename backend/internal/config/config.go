@@ -2514,6 +2514,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_codex_ticket.mode", "turn_state")
 	viper.SetDefault("gateway.openai_codex_ticket.cookie_ws_account_ids", []int64{})
 	// Tibo HTTP probing (openai_tibo_route.go): ~10m ± up to 5m per account.
+	viper.SetDefault("gateway.openai_tibo_route.enabled", false)
 	viper.SetDefault("gateway.openai_tibo_route.interval", 10*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.spread", 5*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.healthy_interval", 10*time.Minute)

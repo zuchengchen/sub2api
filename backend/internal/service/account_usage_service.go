@@ -771,10 +771,73 @@ func (s *AccountUsageService) shouldProbeOpenAICodexSnapshot(accountID int64, no
 	return true
 }
 
+// codexUsageSnapshotFromQuota converts a /wham/usage rate_limit envelope into
+// the snapshot shape the /responses x-codex-* headers produce.
+func codexUsageSnapshotFromQuota(usage *OpenAIQuotaUsage, now time.Time) *OpenAICodexUsageSnapshot {
+	if usage == nil || usage.RateLimit == nil {
+		return nil
+	}
+	snapshot := &OpenAICodexUsageSnapshot{UpdatedAt: now.UTC().Format(time.RFC3339)}
+	set := func(w *OpenAIRateLimitWindow, used **float64, reset, minutes **int) bool {
+		if w == nil {
+			return false
+		}
+		u := w.UsedPercent
+		*used = &u
+		r := int(w.ResetAfterSeconds)
+		if r <= 0 && w.ResetAt > 0 {
+			r = int(w.ResetAt - now.Unix())
+		}
+		if r >= 0 {
+			*reset = &r
+		}
+		if w.LimitWindowSeconds > 0 {
+			m := int(w.LimitWindowSeconds / 60)
+			*minutes = &m
+		}
+		return true
+	}
+	hasPrimary := set(usage.RateLimit.PrimaryWindow, &snapshot.PrimaryUsedPercent, &snapshot.PrimaryResetAfterSeconds, &snapshot.PrimaryWindowMinutes)
+	hasSecondary := set(usage.RateLimit.SecondaryWindow, &snapshot.SecondaryUsedPercent, &snapshot.SecondaryResetAfterSeconds, &snapshot.SecondaryWindowMinutes)
+	if !hasPrimary && !hasSecondary {
+		return nil
+	}
+	return snapshot
+}
+
+// probeOpenAICodexSnapshot refreshes an OAuth account's Codex usage windows.
+//
+// The official Codex CLI reads them from GET /backend-api/wham/usage
+// (backend-client/src/client/rate_limit_resets.rs); it never sends a
+// throwaway /responses turn for that. The /wham/usage path (device lane,
+// Codex backend-client headers) is used whenever the quota service is wired;
+// the legacy synthetic probe remains only as a fallback without it.
 func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, account *Account) (map[string]any, error) {
 	if account == nil || !account.IsOAuth() {
 		return nil, nil
 	}
+	if s.openAIQuotaService != nil && !account.IsOpenAIAgentIdentity() {
+		quotaUsage, err := s.openAIQuotaService.QueryUsage(ctx, account.ID)
+		if err != nil {
+			return nil, fmt.Errorf("openai wham/usage request failed: %w", err)
+		}
+		snapshot := codexUsageSnapshotFromQuota(quotaUsage, time.Now())
+		if snapshot == nil {
+			return nil, nil
+		}
+		updates := buildCodexUsageExtraUpdates(snapshot, time.Now())
+		if len(updates) > 0 {
+			s.persistOpenAICodexProbeSnapshot(account.ID, updates, snapshot)
+			return updates, nil
+		}
+		return nil, nil
+	}
+	return s.probeOpenAICodexSnapshotLegacy(ctx, account)
+}
+
+// probeOpenAICodexSnapshotLegacy sends a minimal /responses turn and reads the
+// x-codex-* usage headers. Only used when no quota service is available.
+func (s *AccountUsageService) probeOpenAICodexSnapshotLegacy(ctx context.Context, account *Account) (map[string]any, error) {
 	accessToken := ""
 	if !account.IsOpenAIAgentIdentity() {
 		accessToken = account.GetOpenAIAccessToken()

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -251,9 +252,39 @@ func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 		tokenInfo.PlanType = userInfo.PlanType
 	}
 
-	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+	// Refresh happens on every token expiry; the official CLI sends nothing
+	// besides POST /oauth/token. The web accounts/check + subscriptions +
+	// training calls run at most once a day per ChatGPT account here.
+	if shouldEnrichOpenAITokenOnRefresh(tokenInfo, time.Now()) {
+		s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+	}
 
 	return tokenInfo, nil
+}
+
+// openAIRefreshEnrichInterval bounds how often a token refresh also runs the
+// chatgpt.com web calls in enrichTokenInfo.
+const openAIRefreshEnrichInterval = 24 * time.Hour
+
+var openAIRefreshEnrichLast sync.Map // enrich key -> time.Time
+
+// shouldEnrichOpenAITokenOnRefresh reports whether this refresh should run the
+// web enrichment calls, recording the attempt.
+func shouldEnrichOpenAITokenOnRefresh(tokenInfo *OpenAITokenInfo, now time.Time) bool {
+	if tokenInfo == nil {
+		return false
+	}
+	key := strings.TrimSpace(tokenInfo.ChatGPTAccountID) + "|" + strings.TrimSpace(tokenInfo.ChatGPTUserID)
+	if key == "|" {
+		return true
+	}
+	if last, ok := openAIRefreshEnrichLast.Load(key); ok {
+		if t, ok := last.(time.Time); ok && now.Sub(t) < openAIRefreshEnrichInterval {
+			return false
+		}
+	}
+	openAIRefreshEnrichLast.Store(key, now)
+	return true
 }
 
 // JWT claims are used only as a refresh scheduling hint, never as proof of
