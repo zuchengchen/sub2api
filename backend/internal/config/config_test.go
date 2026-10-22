@@ -2765,7 +2765,7 @@ func TestLoadDefaultCodexWireConfig(t *testing.T) {
 	require.False(t, cfg.Gateway.CodexWire.Strict)
 	require.NotNil(t, cfg.Gateway.CodexWire.MapOrderJitter)
 	require.True(t, *cfg.Gateway.CodexWire.MapOrderJitter)
-	require.Zero(t, cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds)
+	require.Equal(t, 300, cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds)
 	require.True(t, cfg.Gateway.CodexFullSynthesisEnabled())
 	require.True(t, cfg.Gateway.CodexWireMapOrderJitterEnabled())
 }

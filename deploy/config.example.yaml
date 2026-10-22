@@ -298,11 +298,11 @@ gateway:
     # 在合法键集合内打乱 client_metadata 键序（官方客户端是 Rust HashMap）；
     # 同一 turn/session 保持稳定，避免打断 delta 链。
     map_order_jitter: true
-    # OAuth Codex SSE idle timeout (seconds). 0 uses the Codex default 300s;
-    # other accounts keep gateway.stream_data_interval_timeout.
-    # OpenAI OAuth Codex 流空闲超时（秒）。0 使用 Codex 默认 300s；其他账号仍用
-    # gateway.stream_data_interval_timeout。
-    stream_idle_timeout_seconds: 0
+    # OAuth Codex SSE idle timeout (seconds). Default 300. 0 falls back to
+    # gateway.stream_data_interval_timeout. Other accounts always use that key.
+    # OpenAI OAuth Codex 流空闲超时（秒），默认 300。0 回退到
+    # gateway.stream_data_interval_timeout；其他账号始终用那个键。
+    stream_idle_timeout_seconds: 300
   # Stop rewriting load-shed Codex originators to the official CLI identity.
   # 关闭「把落在上游降载桶的 Codex originator 改写为官方 CLI 身份（codex_cli_rs）」。
   #

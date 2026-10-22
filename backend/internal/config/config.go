@@ -935,8 +935,8 @@ type GatewayCodexWireConfig struct {
 	// legacy fixed order.
 	MapOrderJitter *bool `mapstructure:"map_order_jitter"`
 	// StreamIdleTimeoutSeconds overrides the upstream SSE idle timeout for the
-	// OAuth Codex lane. 0 uses the Codex default (300s); other accounts keep
-	// gateway.stream_data_interval_timeout.
+	// OAuth Codex lane. Production viper defaults to 300; 0 (hand-built Config
+	// or an explicit yaml 0) falls back to gateway.stream_data_interval_timeout.
 	StreamIdleTimeoutSeconds int `mapstructure:"stream_idle_timeout_seconds"`
 }
 
@@ -2540,7 +2540,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.codex_wire.profile", "auto")
 	viper.SetDefault("gateway.codex_wire.strict", false)
 	viper.SetDefault("gateway.codex_wire.map_order_jitter", true)
-	viper.SetDefault("gateway.codex_wire.stream_idle_timeout_seconds", 0)
+	viper.SetDefault("gateway.codex_wire.stream_idle_timeout_seconds", 300)
 	viper.SetDefault("gateway.disable_openai_client_local_time_rewrite", false)
 	viper.SetDefault("gateway.openai_request_timezone_fallback", "")
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)

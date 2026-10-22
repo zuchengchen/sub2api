@@ -453,7 +453,9 @@ func TestCodexStreamIdleTimeoutScope(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
 	svc.cfg.Gateway.StreamDataIntervalTimeout = 180
 	oauth := newCodexSynthTestAccount(7601, AccountTypeOAuth)
-	require.Equal(t, 300*time.Second, svc.codexStreamIdleTimeout(oauth))
+	require.Equal(t, 180*time.Second, svc.codexStreamIdleTimeout(oauth), "hand-built Config falls back to stream_data_interval_timeout")
+	svc.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds = 300
+	require.Equal(t, 300*time.Second, svc.codexStreamIdleTimeout(oauth), "production viper default")
 	svc.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds = 420
 	require.Equal(t, 420*time.Second, svc.codexStreamIdleTimeout(oauth))
 	setup := newCodexSynthTestAccount(7602, AccountTypeSetupToken)

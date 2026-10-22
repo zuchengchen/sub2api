@@ -153,14 +153,12 @@ func (s *OpenAIGatewayService) codexMapOrderJitterEnabled() bool {
 }
 
 // codexStreamIdleTimeout is the upstream SSE idle timeout for this account.
-// The OAuth Codex lane defaults to the official 300s; every other account
-// keeps gateway.stream_data_interval_timeout unchanged.
+// The OAuth Codex lane uses gateway.codex_wire.stream_idle_timeout_seconds
+// (production viper default 300). A hand-built zero Config, or an explicit 0,
+// falls back to gateway.stream_data_interval_timeout like every other account.
 func (s *OpenAIGatewayService) codexStreamIdleTimeout(account *Account) time.Duration {
-	if isCodexOAuthAccount(account) {
-		if s != nil && s.cfg != nil && s.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds > 0 {
-			return time.Duration(s.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds) * time.Second
-		}
-		return 300 * time.Second
+	if isCodexOAuthAccount(account) && s != nil && s.cfg != nil && s.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds > 0 {
+		return time.Duration(s.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds) * time.Second
 	}
 	if s != nil && s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
 		return time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
