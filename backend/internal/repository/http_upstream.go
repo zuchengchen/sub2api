@@ -331,6 +331,9 @@ func (s *httpUpstreamService) doWithTLSUncontrolled(req *http.Request, proxyURL 
 	if profile.H2 {
 		return s.doCodexH2Uncontrolled(req, proxyURL, accountID, profile)
 	}
+	if profile.H1 {
+		return s.doCodexH1Uncontrolled(req, proxyURL, profile, upstreamProfile)
+	}
 
 	entry, err := s.acquireClientWithTLS(proxyURL, accountID, accountConcurrency, profile, upstreamProfile)
 	if err != nil {
@@ -1712,6 +1715,69 @@ func (d *decompressedBody) Close() error {
 		_ = rc.Close()
 	}
 	return d.closer.Close()
+}
+
+// doCodexH1Uncontrolled routes a codex-lane request through the raw HTTP/1.1
+// client: OpenSSL-profile ClientHello without ALPN, hyper h1 header order and
+// casing, and one fresh connection per request — the official Codex CLI's
+// default (native-tls) HTTP lane.
+func (s *httpUpstreamService) doCodexH1Uncontrolled(req *http.Request, proxyURL string, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile) (*http.Response, error) {
+	body, err := readReplayableBody(req)
+	if err != nil {
+		return nil, err
+	}
+	ordered := codexwire.OrderCodexHTTPHeadersForPath(req.URL.Path, req.Header)
+	filtered := ordered[:0]
+	for _, kv := range ordered {
+		// Framing headers are written by the transport after the user headers.
+		if strings.EqualFold(kv.Name, "content-length") || strings.EqualFold(kv.Name, "transfer-encoding") || strings.EqualFold(kv.Name, "host") {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	headerTimeout := defaultResponseHeaderTimeout
+	if upstreamProfile == service.HTTPUpstreamProfileOpenAI {
+		headerTimeout = 0
+		if s.cfg != nil && s.cfg.Gateway.OpenAIResponseHeaderTimeout > 0 {
+			headerTimeout = time.Duration(s.cfg.Gateway.OpenAIResponseHeaderTimeout) * time.Second
+		}
+	}
+	ctx, cancel := context.WithCancel(req.Context())
+	resp, err := codexwire.DoHTTP1(ctx, req.Method, req.URL.String(), filtered, body, proxyURL, codexwire.HTTP1Options{
+		TLSProfile:            profile,
+		DialTimeout:           defaultUpstreamDialTimeout + 5*time.Second,
+		ResponseHeaderTimeout: headerTimeout,
+	})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	decompressResponseBody(resp)
+	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// readReplayableBody reads req's body, preferring GetBody so a retry can
+// replay the same bytes, and restores req.Body.
+func readReplayableBody(req *http.Request) ([]byte, error) {
+	if req.Body == nil || req.Body == http.NoBody {
+		return nil, nil
+	}
+	if req.GetBody != nil {
+		if rc, err := req.GetBody(); err == nil {
+			body, rerr := io.ReadAll(rc)
+			_ = rc.Close()
+			if rerr == nil {
+				return body, nil
+			}
+		}
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
 }
 
 // codexH2 懒初始化 Codex HTTP/2 保真客户端池。

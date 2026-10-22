@@ -96,6 +96,12 @@ func buildReqClientKey(opts reqClientOptions) string {
 // This is exported for use by OpenAIPrivacyService
 // Uses Chrome TLS fingerprint impersonation to bypass Cloudflare checks
 func CreatePrivacyReqClient(proxyURL string) (*req.Client, error) {
+	if !codexDeviceClientDisabled() {
+		// chatgpt.com backend-api calls go out exactly like the Codex CLI's
+		// backend-client (OpenSSL ClientHello, h1, codex header order) so the
+		// account presents one client identity on every endpoint.
+		return newCodexDeviceReqClient(proxyURL, 30*time.Second)
+	}
 	return getSharedReqClient(reqClientOptions{
 		ProxyURL:    proxyURL,
 		Timeout:     30 * time.Second,

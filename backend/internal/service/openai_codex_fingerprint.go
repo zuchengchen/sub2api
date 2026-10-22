@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -239,22 +238,25 @@ func resolveConvergedInstallationID(account *Account, seed string) string {
 	return deriveStableUUIDv4("sub2api:codex-install-id:v2:" + seed)
 }
 
-// resolveConvergedSessionID 返回账号级恒定的 session_id。
+// resolveConvergedSessionID 返回账号级恒定的 session_id（session 模式的根会话，
+// 以及 full 模式下完全没有会话信号时的兜底）。官方 session/thread id 是
+// Uuid::now_v7()（protocol/src/session_id.rs、thread_id.rs），因此派生 v7，
+// 时间戳取由种子确定的过去时刻。
 func resolveConvergedSessionID(seed string) string {
 	if seed == "" {
 		return ""
 	}
-	return deriveStableUUIDv4("sub2api:codex-session-id:v2:" + seed)
+	key := "sub2api:codex-session-id:v3:" + seed
+	return deriveStableCodexUUIDv7(key, deriveCodexStableTimestampMs(key))
 }
 
-// resolveConvergedThreadID 按客户端原始 session-id 确定性派生 thread_id。
-// 每个真实 Codex 会话（不同客户端启动实例）获得一个独立线程，
-// 模拟正常用户 spawn 子代理或开多窗口的模式。
+// resolveConvergedThreadID 按客户端会话键确定性派生 thread_id（v7）。
+// 每个下游会话获得一个独立线程，模拟正常用户开多窗口的模式。
 func resolveConvergedThreadID(seed, clientSessionID string) string {
 	if seed == "" || clientSessionID == "" {
 		return ""
 	}
-	return deriveStableUUIDv4("sub2api:codex-thread-id:v2:" + seed + ":" + clientSessionID)
+	return resolveCodexSessionIdentity(defaultCodexTurnClock, seed+":thread", clientSessionID)
 }
 
 // codexFingerprintIDs 收敛后的完整 ID 集合。
@@ -275,6 +277,10 @@ type codexFingerprintIDs struct {
 	originalBodySessionIDCaptured bool
 	convergence                   bool
 	scopedClientSessionID         string
+	// sessionPromptCacheKey is the body prompt_cache_key the session id was
+	// derived from (full mode, no client session id). Official Codex sends
+	// prompt_cache_key == session_id, so that key is rewritten to sessionID.
+	sessionPromptCacheKey string
 }
 
 // resolveCodexFingerprintIDs 按收敛模式计算出站 ID 集合。
@@ -283,10 +289,17 @@ type codexFingerprintIDs struct {
 // 返回 nil 表示 off 模式，不需要改写。
 // 注意：包含随机生成的 turn_id，调用方必须只调用一次并共享结果给头改写和体改写。
 func resolveCodexFingerprintIDs(account *Account, clientSessionID string, mode codexFingerprintMode) *codexFingerprintIDs {
-	return resolveCodexFingerprintIDsWithWindow(account, clientSessionID, mode, "")
+	return resolveCodexFingerprintIDsWithWindow(account, clientSessionID, mode, "", codexTurnEvidence{})
 }
 
-func resolveCodexFingerprintIDsWithWindow(account *Account, clientSessionID string, mode codexFingerprintMode, clientWindowNumber string) *codexFingerprintIDs {
+// resolveCodexFingerprintIDsWithWindow 计算一次请求的出站身份。
+//
+// 多用户中转的映射：一个 OAuth 账号 = 一台设备（installation_id 恒定），一个下游
+// 会话 = 该设备上的一个 Codex 线程（session_id = thread_id，v7，按会话稳定），一个
+// 用户回合 = 一个 turn（turn_id / turn_started_at 在工具循环内不变）。旧 full 模式把
+// 账号下所有用户压成同一个 session/thread 并给每个请求新 turn_id——多条并发连接
+// 带同一线程 id、同一回合里 turn_id 变化，都是官方客户端不可能产生的形态。
+func resolveCodexFingerprintIDsWithWindow(account *Account, clientSessionID string, mode codexFingerprintMode, clientWindowNumber string, ev codexTurnEvidence) *codexFingerprintIDs {
 	if account == nil || mode == codexFingerprintOff {
 		return nil
 	}
@@ -296,10 +309,9 @@ func resolveCodexFingerprintIDsWithWindow(account *Account, clientSessionID stri
 	}
 
 	ids := &codexFingerprintIDs{
-		accountID:           account.ID,
-		mode:                mode,
-		turnStartedAtUnixMs: time.Now().UnixMilli(),
-		convergence:         codexFingerprintConvergenceEnabled(account),
+		accountID:   account.ID,
+		mode:        mode,
+		convergence: codexFingerprintConvergenceEnabled(account),
 	}
 
 	ids.installationID = resolveConvergedInstallationID(account, seed)
@@ -309,24 +321,40 @@ func resolveCodexFingerprintIDsWithWindow(account *Account, clientSessionID stri
 	ids.windowNumber, _ = strconv.ParseUint(codexWindowNumberOrDefault(clientWindowNumber), 10, 64)
 	windowNumber := strconv.FormatUint(ids.windowNumber, 10)
 
+	// Conversation key: the client's own session id, else its prompt_cache_key.
+	sessionKey := strings.TrimSpace(clientSessionID)
+	fromPromptCacheKey := false
+	if sessionKey == "" && ev.PromptCacheKey != "" && !codexConvergencePromptCacheKeyPattern.MatchString(ev.PromptCacheKey) {
+		sessionKey = ev.PromptCacheKey
+		fromPromptCacheKey = true
+	}
+
 	switch mode {
 	case codexFingerprintDevice:
 		return ids
 
 	case codexFingerprintSession:
 		ids.sessionID = resolveConvergedSessionID(seed)
-		ids.threadID = resolveConvergedThreadID(seed, clientSessionID)
+		ids.threadID = resolveConvergedThreadID(seed, sessionKey)
 		if ids.threadID == "" {
 			ids.threadID = ids.sessionID
 		}
-		ids.turnID = uuid.Must(uuid.NewV7()).String()
+		ids.turnID, ids.turnStartedAtUnixMs = resolveCodexTurnIdentity(defaultCodexTurnClock, seed, ids.threadID, ev)
 		ids.windowID = ids.threadID + ":" + windowNumber
 		return ids
 
 	case codexFingerprintFull:
-		ids.sessionID = resolveConvergedSessionID(seed)
+		if sessionKey != "" {
+			ids.sessionID = resolveCodexSessionIdentity(defaultCodexTurnClock, seed, sessionKey)
+			if fromPromptCacheKey {
+				ids.sessionPromptCacheKey = sessionKey
+			}
+		} else {
+			ids.sessionID = resolveConvergedSessionID(seed)
+		}
+		// Root threads: thread_id == session_id (golden 0.163.0).
 		ids.threadID = ids.sessionID
-		ids.turnID = uuid.Must(uuid.NewV7()).String()
+		ids.turnID, ids.turnStartedAtUnixMs = resolveCodexTurnIdentity(defaultCodexTurnClock, seed, ids.threadID, ev)
 		ids.windowID = ids.threadID + ":" + windowNumber
 		return ids
 	}
@@ -352,6 +380,37 @@ func resolveCodexFingerprintIDsFromRequest(account *Account, clientHeaders http.
 }
 
 func resolveCodexFingerprintIDsWithBody(c *gin.Context, account *Account, clientHeaders http.Header, rawClientMetadata any) *codexFingerprintIDs {
+	if clientHeaders == nil && c != nil && c.Request != nil {
+		clientHeaders = c.Request.Header
+	}
+	return resolveCodexFingerprintIDsWithEvidence(c, account, clientHeaders, rawClientMetadata, collectCodexTurnEvidence(rawClientMetadata, clientHeaders, gjson.Result{}))
+}
+
+// resolveCodexFingerprintIDsForRawBody resolves IDs for a raw JSON body
+// (passthrough / WS frames), with turn evidence from client_metadata,
+// prompt_cache_key and input.
+func resolveCodexFingerprintIDsForRawBody(c *gin.Context, account *Account, clientHeaders http.Header, body []byte) *codexFingerprintIDs {
+	if clientHeaders == nil && c != nil && c.Request != nil {
+		clientHeaders = c.Request.Header
+	}
+	parsed := gjson.ParseBytes(body)
+	cm := parsed.Get("client_metadata")
+	return resolveCodexFingerprintIDsWithEvidence(c, account, clientHeaders, cm, collectCodexTurnEvidence(cm, clientHeaders, parsed))
+}
+
+// resolveCodexFingerprintIDsForDecodedBody resolves IDs for a decoded body.
+func resolveCodexFingerprintIDsForDecodedBody(c *gin.Context, account *Account, clientHeaders http.Header, decoded map[string]any) *codexFingerprintIDs {
+	if clientHeaders == nil && c != nil && c.Request != nil {
+		clientHeaders = c.Request.Header
+	}
+	var cm any
+	if decoded != nil {
+		cm = decoded["client_metadata"]
+	}
+	return resolveCodexFingerprintIDsWithEvidence(c, account, clientHeaders, cm, collectCodexTurnEvidenceFromMap(decoded, clientHeaders))
+}
+
+func resolveCodexFingerprintIDsWithEvidence(c *gin.Context, account *Account, clientHeaders http.Header, rawClientMetadata any, ev codexTurnEvidence) *codexFingerprintIDs {
 	if account == nil {
 		return nil
 	}
@@ -378,7 +437,7 @@ func resolveCodexFingerprintIDsWithBody(c *gin.Context, account *Account, client
 	if clientWindowNumber == "" && clientHeaders != nil {
 		clientWindowNumber = extractClientWindowNumber(clientHeaders)
 	}
-	ids := resolveCodexFingerprintIDsWithWindow(account, clientSessionID, mode, clientWindowNumber)
+	ids := resolveCodexFingerprintIDsWithWindow(account, clientSessionID, mode, clientWindowNumber, ev)
 	if ids == nil {
 		return nil
 	}
@@ -461,9 +520,40 @@ func rewriteCodexTurnMetadataFields(h http.Header, fields map[string]any, ids *c
 	h.Set(openAIWSTurnMetadataHeader, rewriteCodexFingerprintTurnMetadata(raw, fields, ids))
 }
 
+// codexSandboxTagForOutboundPlatform maps a client sandbox tag to the one the
+// outbound identity's platform would report (codex-rs protocol/src/sandbox.rs:
+// seatbelt = macOS, seccomp = Linux, windows_* = Windows). Converged accounts
+// present one device; a macOS client's "seatbelt" next to a Linux User-Agent
+// is a combination no real client sends. "none"/"external" are kept.
+func codexSandboxTagForOutboundPlatform(tag string) (string, bool) {
+	tag = strings.TrimSpace(tag)
+	if tag == "" || tag == "none" || tag == "external" {
+		return "", false
+	}
+	ua := strings.ToLower(resolveCodexOutboundIdentity("").userAgent)
+	want := ""
+	switch {
+	case strings.Contains(ua, "mac os"):
+		want = "seatbelt"
+	case strings.Contains(ua, "windows"):
+		return "", false // several Windows tags exist; keep the client's
+	default:
+		want = "seccomp"
+	}
+	if tag == want {
+		return "", false
+	}
+	return want, true
+}
+
 func rewriteCodexFingerprintTurnMetadata(raw string, fields map[string]any, ids *codexFingerprintIDs) string {
 	return rewriteCodexTurnMetadataJSON(raw, true, func(metadata map[string]any) map[string]any {
 		updates := maps.Clone(fields)
+		if tag, ok := metadata["sandbox"].(string); ok {
+			if next, changed := codexSandboxTagForOutboundPlatform(tag); changed {
+				updates["sandbox"] = next
+			}
+		}
 		root, _ := metadata["root_turn_id"].(string)
 		preserveCodexConvergenceRootTurn(metadata, ids)
 		if next, _ := metadata["root_turn_id"].(string); next != root {
@@ -629,6 +719,11 @@ func shouldRewriteCodexFingerprintPromptCacheKey(ids *codexFingerprintIDs, promp
 	}
 	if ids.convergence && codexConvergencePromptCacheKeyPattern.MatchString(strings.TrimSpace(promptCacheKey)) {
 		return false
+	}
+	// The session id was derived from this very key: official Codex sends
+	// prompt_cache_key == session_id.
+	if ids.sessionPromptCacheKey != "" && strings.TrimSpace(promptCacheKey) == ids.sessionPromptCacheKey {
+		return true
 	}
 	if ids.originalBodySessionIDCaptured && ids.originalBodySessionID != "" {
 		return promptCacheKey == ids.originalBodySessionID

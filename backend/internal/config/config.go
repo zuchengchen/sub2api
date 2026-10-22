@@ -1375,8 +1375,15 @@ type GatewayOpenAIWSConfig struct {
 
 	// 连接池参数
 	MaxConnsPerAccount int `mapstructure:"max_conns_per_account"`
-	MinIdlePerAccount  int `mapstructure:"min_idle_per_account"`
-	MaxIdlePerAccount  int `mapstructure:"max_idle_per_account"`
+	// MinIdlePerAccount: 每账号预拨的空闲连接数。官方客户端一个线程只开一条连接、
+	// 从不预拨备用连接，默认 0。
+	MinIdlePerAccount int `mapstructure:"min_idle_per_account"`
+	MaxIdlePerAccount int `mapstructure:"max_idle_per_account"`
+	// ClientPingEnabled: 是否由网关主动向上游 WS 发 ping（空闲连接 30s 后台探活、
+	// ingress 轮次间 preflight ping）。官方 Codex 客户端从不主动 ping，只回 pong
+	// （codex-api responses_websocket.rs）。默认 false；断开的连接在下一次写入时
+	// 失败并按既有重试路径重连。
+	ClientPingEnabled bool `mapstructure:"client_ping_enabled"`
 	// DynamicMaxConnsByAccountConcurrencyEnabled: 是否按账号并发动态计算连接池上限。
 	// 旧版及 mode_router_v2 的 ctx_pool 共用此开关和类型系数；关闭后使用 max_conns_per_account。
 	// mode_router_v2 下并发数 <= 0 的账号仍不可调度。
@@ -1431,9 +1438,10 @@ type GatewayOpenAIWSConfig struct {
 	// 开启后，账号的 WS 失败按原因分类把该账号临时标记为 WS 禁用，
 	// 期间新请求直接走 HTTP；TTL 到期后自动重探（下个 WS 请求即探测）。
 	SessionDisableEnabled bool `mapstructure:"session_disable_enabled"`
-	// CodexHTTPEnabledH2: Codex OAuth 的 HTTP 出站走 codexwire hyper/h2 保真
-	// 客户端（rustls-h2 TLS profile + h2 帧/HPack 复刻官方 reqwest/hyper 栈）。
-	// false → 退回旧 net/http+uTLS h1 路径（紧急回滚开关）。
+	// CodexHTTPH2Enabled: Codex OAuth 的 HTTP 出站模拟「自定义 CA」部署的官方
+	// 客户端（rustls-h2 TLS profile + codexwire h2 多路复用）。默认 false：官方
+	// Linux 客户端默认走 native-tls/OpenSSL、无 ALPN、HTTP/1.1、每请求新连接
+	// （openssl36 profile + codexwire 原始 h1，codexgolden 实抓校准）。
 	CodexHTTPH2Enabled bool `mapstructure:"codex_http_h2_enabled"`
 	// SessionDisableRetryTTLMS: 可重试类故障（dial/read/write/upstream 5xx/
 	// error_event 等）耗尽重试预算后的账号 WS 禁用时长（毫秒）。
@@ -2506,6 +2514,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_codex_ticket.mode", "turn_state")
 	viper.SetDefault("gateway.openai_codex_ticket.cookie_ws_account_ids", []int64{})
 	// Tibo HTTP probing (openai_tibo_route.go): ~10m ± up to 5m per account.
+	viper.SetDefault("gateway.openai_tibo_route.enabled", false)
 	viper.SetDefault("gateway.openai_tibo_route.interval", 10*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.spread", 5*time.Minute)
 	viper.SetDefault("gateway.openai_tibo_route.healthy_interval", 10*time.Minute)
@@ -2547,7 +2556,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.responses_websockets", false)
 	viper.SetDefault("gateway.openai_ws.responses_websockets_v2", true)
 	viper.SetDefault("gateway.openai_ws.max_conns_per_account", 128)
-	viper.SetDefault("gateway.openai_ws.min_idle_per_account", 4)
+	viper.SetDefault("gateway.openai_ws.min_idle_per_account", 0)
+	viper.SetDefault("gateway.openai_ws.client_ping_enabled", false)
 	viper.SetDefault("gateway.openai_ws.max_idle_per_account", 12)
 	viper.SetDefault("gateway.openai_ws.dynamic_max_conns_by_account_concurrency_enabled", true)
 	viper.SetDefault("gateway.openai_ws.oauth_max_conns_factor", 5.0)
@@ -2577,7 +2587,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.session_disable_enabled", true)
 	viper.SetDefault("gateway.openai_ws.session_disable_retry_ttl_ms", 900000)
 	viper.SetDefault("gateway.openai_ws.session_disable_capability_ttl_ms", 86400000)
-	viper.SetDefault("gateway.openai_ws.codex_http_h2_enabled", true)
+	viper.SetDefault("gateway.openai_ws.codex_http_h2_enabled", false)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.priority", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.load", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.queue", 0.7)

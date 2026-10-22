@@ -1514,6 +1514,7 @@ func TestOpenAIWSConn_ReadAndWriteCanProceedConcurrently(t *testing.T) {
 
 func TestOpenAIWSConnPool_BackgroundPingSweep_EvictsDeadIdleConn(t *testing.T) {
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
 	pool := newOpenAIWSConnPool(cfg)
 
@@ -1887,6 +1888,7 @@ func TestOpenAIWSConnPool_Close_ClosesOnlyIdleConnections(t *testing.T) {
 
 func TestOpenAIWSConnPool_RunBackgroundPingSweep_ConcurrencyLimit(t *testing.T) {
 	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.ClientPingEnabled = true // exercises the opt-in client ping
 	pool := newOpenAIWSConnPool(cfg)
 	accountID := int64(505)
 	ap := pool.getOrCreateAccountPool(accountID)

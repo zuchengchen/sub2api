@@ -175,3 +175,18 @@ func TestDeltaChainStoreRoundtrip(t *testing.T) {
 		t.Fatal("expected chain deleted")
 	}
 }
+
+func TestOpenAIWSResponseProducedOnConn(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	store.BindResponseConn("resp_1", "conn_a", time.Hour)
+	if _, same := openAIWSResponseProducedOnConn(store, "resp_1", "conn_a"); !same {
+		t.Fatal("producing socket must continue its own response")
+	}
+	producer, same := openAIWSResponseProducedOnConn(store, "resp_1", "conn_b")
+	if same || producer != "conn_a" {
+		t.Fatalf("another socket cannot continue resp_1: producer=%q same=%v", producer, same)
+	}
+	if _, same := openAIWSResponseProducedOnConn(store, "resp_unknown", "conn_a"); same {
+		t.Fatal("unknown producer must fall back to a full request")
+	}
+}

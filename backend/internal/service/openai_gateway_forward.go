@@ -387,6 +387,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 
 	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
 	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
+	// Detect Codex ≥ 0.162 base instructions on the original body: later
+	// normalization strips internal_chat_message_metadata_passthrough, which is
+	// the only marker of that input item.
+	inputCarriesBaseInstructions := codexInputCarriesBaseInstructions(body)
 
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
@@ -557,7 +561,13 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	}
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
-	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeCNResponses && !cookieWS {
+	// Codex ≥ 0.162 has no top-level instructions: the base instructions are the
+	// first input item, a developer message tagged model.base_instructions
+	// (codex-api/src/common.rs, core/src/client.rs; golden 0.163.0). Injecting a
+	// synthetic prompt there would send the base prompt twice plus a key the
+	// official request never carries.
+	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeCNResponses && !cookieWS &&
+		!inputCarriesBaseInstructions {
 		markPatchSet("instructions", defaultCodexSynthInstructions(upstreamModel))
 	}
 	if billingModel != requestedModel {
@@ -693,7 +703,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                          isCodexCLI,
 				IsCompact:                           isCompactRequest,
-				SkipDefaultInstructions:             cookieWS,
+				SkipDefaultInstructions:             cookieWS || inputCarriesBaseInstructions,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 				ResponsesLite:                       responsesLite,
 			})
@@ -733,7 +743,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			if c != nil && c.Request != nil {
 				clientHeaders = c.Request.Header
 			}
-			fpIDs := resolveCodexFingerprintIDsWithBody(c, account, clientHeaders, decoded["client_metadata"])
+			fpIDs := resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, decoded)
 			if fpIDs != nil {
 				if applyCodexFingerprintClientMetadata(decoded, fpIDs) {
 					markDecodedModified()
