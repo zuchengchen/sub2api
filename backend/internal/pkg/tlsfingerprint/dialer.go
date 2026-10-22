@@ -6,14 +6,17 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/proxy"
@@ -52,6 +55,11 @@ type Profile struct {
 	// OpenSSL) generate the two X25519 keys independently, which is passively
 	// distinguishable from a rustls client.
 	ReuseHybridX25519 bool
+	// ProxyConnectKeepAlive adds "Proxy-Connection: Keep-Alive" to the HTTP
+	// proxy CONNECT request, as the Codex CLI's tungstenite fork does on the
+	// WebSocket lane (src/proxy.rs build_http_connect_request). hyper-util
+	// (HTTP lane) does not send it.
+	ProxyConnectKeepAlive bool
 	// InsecureSkipVerify disables upstream certificate verification. Only used
 	// by tests against self-signed local servers; never set in built-in
 	// profiles.
@@ -224,31 +232,33 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	}
 
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+	rawConn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
 		slog.Debug("tls_fingerprint_http_proxy_connect_failed", "error", err)
 		return nil, fmt.Errorf("connect to proxy: %w", err)
 	}
 	slog.Debug("tls_fingerprint_http_proxy_connected", "proxy_addr", proxyAddr)
-
-	// Step 2: Send CONNECT request to establish tunnel
-	req := &http.Request{
-		Method: "CONNECT",
-		URL:    &url.URL{Opaque: addr},
-		Host:   addr,
-		Header: make(http.Header),
+	conn := rawConn
+	// An https:// proxy speaks TLS before CONNECT. Sending CONNECT (and the
+	// Proxy-Authorization credentials) in plaintext to it fails and leaks them.
+	if strings.EqualFold(d.proxyURL.Scheme, "https") {
+		tlsConn := tls.Client(rawConn, &tls.Config{ServerName: d.proxyURL.Hostname(), MinVersion: tls.VersionTLS12})
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = rawConn.Close()
+			return nil, fmt.Errorf("tls handshake with https proxy: %w", err)
+		}
+		conn = tlsConn
 	}
 
-	// Add proxy authentication if present
-	if d.proxyURL.User != nil {
-		username := d.proxyURL.User.Username()
-		password, _ := d.proxyURL.User.Password()
-		auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
-		req.Header.Set("Proxy-Authorization", "Basic "+auth)
-	}
+	// Step 2: Send CONNECT request to establish tunnel. Written by hand:
+	// http.Request.Write adds "User-Agent: Go-http-client/1.1", which no
+	// reqwest/hyper client sends (hyper-util tunnel: CONNECT, Host, optional
+	// Proxy-Authorization).
+	req := &http.Request{Method: "CONNECT", URL: &url.URL{Opaque: addr}, Host: addr, Header: make(http.Header)}
+	connectReq := buildProxyConnectRequest(addr, d.proxyURL, d.profile != nil && d.profile.ProxyConnectKeepAlive)
 
 	slog.Debug("tls_fingerprint_http_proxy_sending_connect", "target", addr)
-	if err := req.Write(conn); err != nil {
+	if _, err := io.WriteString(conn, connectReq); err != nil {
 		_ = conn.Close()
 		slog.Debug("tls_fingerprint_http_proxy_write_failed", "error", err)
 		return nil, fmt.Errorf("write CONNECT request: %w", err)
@@ -274,6 +284,24 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 
 	// Step 4: Perform TLS handshake on the tunnel with utls fingerprint
 	return performTLSHandshake(ctx, conn, d.profile, addr)
+}
+
+// buildProxyConnectRequest returns the CONNECT request bytes the Codex CLI
+// writes: request line, Host, [Proxy-Connection: Keep-Alive on the WS lane],
+// optional Proxy-Authorization.
+func buildProxyConnectRequest(addr string, proxyURL *url.URL, keepAlive bool) string {
+	var b strings.Builder
+	b.WriteString("CONNECT " + addr + " HTTP/1.1\r\nHost: " + addr + "\r\n")
+	if keepAlive {
+		b.WriteString("Proxy-Connection: Keep-Alive\r\n")
+	}
+	if proxyURL != nil && proxyURL.User != nil {
+		username := proxyURL.User.Username()
+		password, _ := proxyURL.User.Password()
+		b.WriteString("Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password)) + "\r\n")
+	}
+	b.WriteString("\r\n")
+	return b.String()
 }
 
 // DialTLSContext establishes a TLS connection with the configured fingerprint.

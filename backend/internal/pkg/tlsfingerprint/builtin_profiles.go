@@ -115,6 +115,9 @@ func BuiltinProfile(name string) *Profile {
 		if name == "rustls-h2" {
 			p.Name = "rustls 0.23 aws-lc h2 (Codex CLI HTTP, custom CA)"
 			p.H2 = true
+		} else {
+			// WS lane: the tungstenite fork's CONNECT carries Proxy-Connection.
+			p.ProxyConnectKeepAlive = true
 		}
 	default:
 		return nil

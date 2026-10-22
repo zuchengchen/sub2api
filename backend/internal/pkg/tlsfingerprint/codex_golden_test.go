@@ -15,9 +15,11 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -343,4 +345,72 @@ func parseHelloForTest(rec []byte) (goldenHello, error) {
 		h.HybridReusesX25519 = &reused
 	}
 	return h, nil
+}
+
+// The CONNECT request must match hyper-util's tunnel connector: no
+// User-Agent (Go's http.Request.Write adds Go-http-client/1.1).
+func TestBuildProxyConnectRequest_NoUserAgent(t *testing.T) {
+	u, _ := url.Parse("http://user:pass@proxy.example:8080")
+	got := buildProxyConnectRequest("chatgpt.com:443", u, false)
+	want := "CONNECT chatgpt.com:443 HTTP/1.1\r\nHost: chatgpt.com:443\r\nProxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\n"
+	if got != want {
+		t.Fatalf("CONNECT bytes:\n got %q\nwant %q", got, want)
+	}
+	if got := buildProxyConnectRequest("chatgpt.com:443", &url.URL{Scheme: "http", Host: "p:1"}, false); strings.Contains(got, "User-Agent") || strings.Contains(got, "Proxy-Authorization") {
+		t.Fatalf("unexpected headers: %q", got)
+	}
+}
+
+func TestBuildProxyConnectRequest_WSLaneKeepAlive(t *testing.T) {
+	u, _ := url.Parse("http://user:pass@proxy.example:8080")
+	want := "CONNECT chatgpt.com:443 HTTP/1.1\r\nHost: chatgpt.com:443\r\nProxy-Connection: Keep-Alive\r\nProxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\n"
+	if got := buildProxyConnectRequest("chatgpt.com:443", u, BuiltinProfile("rustls").ProxyConnectKeepAlive); got != want {
+		t.Fatalf("ws CONNECT:\n got %q\nwant %q", got, want)
+	}
+	if BuiltinProfile("openssl36").ProxyConnectKeepAlive || BuiltinProfile("rustls-h2").ProxyConnectKeepAlive {
+		t.Fatal("HTTP lanes (hyper-util) send no Proxy-Connection")
+	}
+}
+
+// End to end: the proxy receives exactly the CONNECT head, without Go's UA.
+func TestHTTPProxyDialer_SendsExactConnect(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	got := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			got <- ""
+			return
+		}
+		defer func() { _ = c.Close() }()
+		br := bufio.NewReader(c)
+		var head strings.Builder
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				break
+			}
+			head.WriteString(line)
+			if line == "\r\n" {
+				break
+			}
+		}
+		got <- head.String()
+		_, _ = io.WriteString(c, "HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
+	}()
+	proxyURL, _ := url.Parse("http://u:p@" + ln.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err = NewHTTPProxyDialer(BuiltinProfile("openssl36"), proxyURL).DialTLSContext(ctx, "tcp", "chatgpt.com:443")
+	if err == nil {
+		t.Fatal("expected CONNECT failure from 403 proxy")
+	}
+	want := "CONNECT chatgpt.com:443 HTTP/1.1\r\nHost: chatgpt.com:443\r\nProxy-Authorization: Basic dTpw\r\n\r\n"
+	if head := <-got; head != want {
+		t.Fatalf("proxy saw:\n%q\nwant:\n%q", head, want)
+	}
 }
