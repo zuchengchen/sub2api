@@ -1163,6 +1163,15 @@ func (a *Account) IsOpenAIOAuthLike() bool {
 	return a != nil && a.IsOpenAI() && (a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken)
 }
 
+// isCodexOAuthAccount is the single scope guard for Codex wire synthesis.
+//
+// It intentionally requires Type==OAuth: SetupToken shares the Codex protocol
+// but keeps the legacy path byte-for-byte, and non-OpenAI OAuth platforms
+// (grok/gemini/anthropic/...) are excluded by UsesOpenAICodexProtocol.
+func isCodexOAuthAccount(a *Account) bool {
+	return a != nil && a.Type == AccountTypeOAuth && a.UsesOpenAICodexProtocol()
+}
+
 // UsesOpenAICodexProtocol preserves legacy OpenAI gateway OAuth routing for
 // accounts whose platform is implicit, while adding OpenAI SetupToken.
 //

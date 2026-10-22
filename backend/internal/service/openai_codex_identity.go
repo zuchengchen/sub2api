@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"regexp"
 	"strings"
@@ -94,12 +95,34 @@ func CodexCanonicalAuthIdentity() (userAgent, originator string) {
 	return identity.userAgent, identity.originator
 }
 
+// CodexAuthIdentityForContext returns the credential-plane identity for a
+// request. An account-level device profile (tui/exec/vscode) carried in ctx
+// wins over the global canonical TUI identity, so token refresh and whoami use
+// the same family/platform as inference.
+func CodexAuthIdentityForContext(ctx context.Context) (userAgent, originator string) {
+	if candidate := strings.TrimSpace(openai.CodexClientUserAgentFromContext(ctx)); candidate != "" {
+		identity := resolveCodexOutboundIdentity(candidate)
+		return identity.userAgent, identity.originator
+	}
+	return CodexCanonicalAuthIdentity()
+}
+
 // ApplyCodexCanonicalAuthIdentity 为凭据面出站请求写入身份对（不含 version）。
 func ApplyCodexCanonicalAuthIdentity(h http.Header) {
 	if h == nil {
 		return
 	}
 	userAgent, originator := CodexCanonicalAuthIdentity()
+	h.Set("user-agent", userAgent)
+	h.Set("originator", originator)
+}
+
+// ApplyCodexAuthIdentityForContext writes the account-aware identity pair.
+func ApplyCodexAuthIdentityForContext(ctx context.Context, h http.Header) {
+	if h == nil {
+		return
+	}
+	userAgent, originator := CodexAuthIdentityForContext(ctx)
 	h.Set("user-agent", userAgent)
 	h.Set("originator", originator)
 }

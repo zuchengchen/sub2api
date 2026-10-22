@@ -47,13 +47,22 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 	}
 
 	// 行为字段（官方 CodexTurnMetadataPayload 非身份部分）。
+	profile, hasProfile := codexDeviceProfileForRequest(account)
 	setStr(metadata, "agent_name", "/root")
 	setStr(metadata, "history_initialization", "new")
 	setStr(metadata, "thread_source", "user")
-	setStr(metadata, "sandbox", codexWireAccountExtra(account, "codex_sandbox", "seccomp"))
-	setStr(metadata, "sandbox_mode", codexWireAccountExtra(account, "codex_sandbox_mode", "workspace-write"))
+	sandbox := codexDefaultSandbox
+	sandboxMode := codexDefaultWorkspaceMode
+	cwd := codexDefaultWorkspaceCWD
+	if hasProfile {
+		sandbox = profile.Sandbox
+		sandboxMode = profile.SandboxMode
+		cwd = profile.WorkspaceCWD
+	}
+	setStr(metadata, "sandbox", sandbox)
+	setStr(metadata, "sandbox_mode", sandboxMode)
 	setBool(metadata, "auto_review_enabled", false)
-	setBool(metadata, "node_repl_auto_review_required", true)
+	setBool(metadata, "node_repl_auto_review_required", codexAccountNodeReplAutoReviewRequired(account))
 	setBool(metadata, "node_repl_disabled", false)
 	setBool(metadata, "analytics_enabled", true)
 	setStr(metadata, "model", openAIWSPayloadString(payload, "model"))
@@ -86,7 +95,6 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 		}
 		setStr(metadata, "turn_trigger", codexWireAccountExtra(account, "codex_turn_trigger", "user"))
 		if _, exists := metadata["workspaces"]; !exists {
-			cwd := codexWireAccountExtra(account, "codex_workspace_cwd", "/root")
 			metadata["workspaces"] = map[string]any{cwd: map[string]any{}}
 		}
 		if _, exists := metadata["turn_started_at_unix_ms"]; !exists {

@@ -25,7 +25,7 @@ func TestMarshalCodexWSCreateFrame_KeyOrder(t *testing.T) {
 		"prompt_cache_key":    "k",
 		"client_metadata":     map[string]any{"turn_id": "t1", "session_id": "s1", "x-codex-turn-state": "abc"},
 	}
-	out, err := marshalCodexWSCreateFrame(body, payload)
+	out, err := marshalCodexWSCreateFrame(body, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMarshalCodexWSCreateFrame_RawPassthrough(t *testing.T) {
 		"text":      map[string]any{"format": map[string]any{"type": "text"}, "verbosity": "low"},
 		"tools":     []any{map[string]any{"type": "web_search"}},
 	}
-	out, err := marshalCodexWSCreateFrame(body, payload)
+	out, err := marshalCodexWSCreateFrame(body, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestMarshalCodexWSCreateFrame_DeltaShape(t *testing.T) {
 		"previous_response_id": "resp_9",
 		"input":                []json.RawMessage{json.RawMessage(`{"type":"c"}`)},
 	}
-	out, err := marshalCodexWSCreateFrame(body, payload)
+	out, err := marshalCodexWSCreateFrame(body, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestMarshalCodexWSCreateFrame_Prewarm(t *testing.T) {
 		"input":    []json.RawMessage{},
 		"generate": false,
 	}
-	out, err := marshalCodexWSCreateFrame(nil, payload)
+	out, err := marshalCodexWSCreateFrame(nil, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestMarshalCodexWSCreateFrame_OfficialDefaults(t *testing.T) {
 		"type":  "response.create",
 		"model": "m",
 	}
-	out, err := marshalCodexWSCreateFrame(nil, payload)
+	out, err := marshalCodexWSCreateFrame(nil, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestMarshalCodexWSCreateFrame_OfficialDefaults(t *testing.T) {
 	}
 	// stream 官方恒 true：客户端显式 false 也按 true 发（该端点总是回事件流）。
 	payload["stream"] = false
-	out, err = marshalCodexWSCreateFrame(nil, payload)
+	out, err = marshalCodexWSCreateFrame(nil, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestMarshalCodexWSCreateFrame_OfficialDefaults(t *testing.T) {
 	}
 	// 客户端显式值不被覆盖。
 	payload["tool_choice"] = "required"
-	out, err = marshalCodexWSCreateFrame(nil, payload)
+	out, err = marshalCodexWSCreateFrame(nil, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestCodexWSInstructionsBecomesDeveloperItem(t *testing.T) {
 		t.Fatalf("item id must be deterministic per content: %s vs %s", rawItem2, id)
 	}
 	// 端到端：marshal 后帧内不得出现顶层 instructions。
-	out, err := marshalCodexWSCreateFrame(nil, payload)
+	out, err := marshalCodexWSCreateFrame(nil, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestMarshalCodexWSCreateFrame_NonASCIIEscape(t *testing.T) {
 		"model": "m",
 		"input": []json.RawMessage{json.RawMessage(`{"type":"message","content":[{"type":"input_text","text":"\u4f60\u597d"}]}`)},
 	}
-	out, err := marshalCodexWSCreateFrame(nil, payload)
+	out, err := marshalCodexWSCreateFrame(nil, payload, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

@@ -279,6 +279,30 @@ gateway:
   #
   # 注意：开启后会影响所有客户端的行为（不仅限于 VS Code / Codex CLI），请谨慎开启。
   force_codex_cli: false
+  # Rebuild generic requests into the full Codex CLI request shape when the
+  # selected account is OpenAI OAuth. SetupToken/API-key/non-OpenAI accounts
+  # are never affected. Default true; set false for the legacy pass-through.
+  # 对 OpenAI OAuth 账号把通用请求补齐为完整 Codex 请求（base prompt/context/
+  # tools/身份字段）。SetupToken、API Key、非 OpenAI 平台账号不受影响，默认 true。
+  codex_full_synthesis: true
+  codex_wire:
+    # Wire profile: auto follows the synced Codex version (>=0.164 uses main),
+    # stable pins the 0.163 behavior, main pins the 0.164 behavior.
+    # auto 按同步的 Codex 版本选择（>=0.164 用 main）；stable/main 可固定档位。
+    profile: auto
+    # Reject unknown/future versions instead of warning and using main.
+    # 未知/未来版本直接拒绝，而不是告警后按 main 处理。
+    strict: false
+    # Shuffle client_metadata key order within the legal key set (the official
+    # client serializes a Rust HashMap). Same turn/session keeps a stable order.
+    # 在合法键集合内打乱 client_metadata 键序（官方客户端是 Rust HashMap）；
+    # 同一 turn/session 保持稳定，避免打断 delta 链。
+    map_order_jitter: true
+    # OAuth Codex SSE idle timeout (seconds). Default 300. 0 falls back to
+    # gateway.stream_data_interval_timeout. Other accounts always use that key.
+    # OpenAI OAuth Codex 流空闲超时（秒），默认 300。0 回退到
+    # gateway.stream_data_interval_timeout；其他账号始终用那个键。
+    stream_idle_timeout_seconds: 300
   # Stop rewriting load-shed Codex originators to the official CLI identity.
   # 关闭「把落在上游降载桶的 Codex originator 改写为官方 CLI 身份（codex_cli_rs）」。
   #

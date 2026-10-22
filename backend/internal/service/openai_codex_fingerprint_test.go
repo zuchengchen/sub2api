@@ -673,17 +673,18 @@ func TestApplyCodexFingerprintPromptCacheKey_Negatives(t *testing.T) {
 		wantRawString string
 	}{
 		{
-			name:       "missing key is not injected",
-			body:       []byte(`{"client_metadata":{"session_id":"body-session"}}`),
-			ids:        sessionIDs,
-			wantExists: false,
+			name:         "missing key gets the session default",
+			body:         []byte(`{"client_metadata":{"session_id":"body-session"}}`),
+			ids:          sessionIDs,
+			wantExists:   true,
+			wantCacheKey: sessionIDs.sessionID,
 		},
 		{
-			name:         "empty key preserved",
+			name:         "empty key gets the session default",
 			body:         []byte(`{"prompt_cache_key":"","client_metadata":{"session_id":"body-session"}}`),
 			ids:          sessionIDs,
 			wantExists:   true,
-			wantCacheKey: "",
+			wantCacheKey: sessionIDs.sessionID,
 		},
 		{
 			name:         "whitespace-different key is an explicit override",

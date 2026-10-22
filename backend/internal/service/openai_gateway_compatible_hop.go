@@ -31,7 +31,21 @@ func allowOpenAIClientHeader(lowerKey string, allow map[string]bool, account *Ac
 	if allow[lowerKey] {
 		return true
 	}
+	// Subagent/memgen/timing headers are part of the Codex CLI HTTP request
+	// surface. They are copied only on the OAuth Codex lane and only when the
+	// client actually sent them; API-key/SetupToken/non-OpenAI accounts keep
+	// the legacy whitelist byte-for-byte.
+	if isCodexOAuthAccount(account) && codexOAuthExtraClientHeaders[lowerKey] {
+		return true
+	}
 	return usesCustomOpenAICompatibleUpstream(account) && openaiCompatibleSessionHeaders[lowerKey]
+}
+
+var codexOAuthExtraClientHeaders = map[string]bool{
+	"x-openai-subagent":                     true,
+	"x-codex-parent-thread-id":              true,
+	"x-openai-memgen-request":               true,
+	"x-responsesapi-include-timing-metrics": true,
 }
 
 func copyAllowedOpenAIClientHeaders(dst http.Header, src http.Header, allow map[string]bool, account *Account) {

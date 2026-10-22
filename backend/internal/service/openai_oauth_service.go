@@ -445,6 +445,9 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
 	}
 
+	if profile, ok := resolveCodexDeviceProfile(account); ok {
+		ctx = openai.WithCodexClientUserAgent(ctx, profile.UserAgent)
+	}
 	clientID := account.GetCredential("client_id")
 	return s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
 }

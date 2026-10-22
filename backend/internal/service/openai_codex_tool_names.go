@@ -338,7 +338,11 @@ func restoreCodexToolNameFields(value any, reverse map[string]string) bool {
 	changed := false
 	restoreItem := func(raw any) {
 		item, ok := raw.(map[string]any)
-		if !ok || !strings.EqualFold(strings.TrimSpace(firstNonEmptyString(item["type"])), "function_call") {
+		if !ok {
+			return
+		}
+		itemType := strings.ToLower(strings.TrimSpace(firstNonEmptyString(item["type"])))
+		if itemType != "function_call" && itemType != "custom_tool_call" {
 			return
 		}
 		name, _ := item["name"].(string)
@@ -406,7 +410,7 @@ func restoreCodexToolNameFields(value any, reverse map[string]string) bool {
 				continue
 			}
 			toolType := strings.ToLower(strings.TrimSpace(firstNonEmptyString(tool["type"])))
-			if toolType == "function" {
+			if toolType == "function" || toolType == "custom" {
 				name, _ := tool["name"].(string)
 				if original, exists := reverse[name]; exists {
 					tool["name"] = original

@@ -77,6 +77,14 @@ var instructionsGPT52 string
 //go:embed instructions_gpt5_5.txt
 var instructionsGPT55 string
 
+// instructionsGPT55_0_163 is the base prompt captured from the official
+// codex-cli 0.163.0 golden (backend/internal/pkg/codexwire/testdata/golden).
+// It is used only by the stable-profile synthesizer; the catalog prompt stays
+// authoritative for the 0.164/main profile.
+//
+//go:embed instructions_gpt5_5_0_163.txt
+var instructionsGPT55_0_163 string
+
 // Source: openai/codex codex-rs/models-manager/models.json at 121f91fd5d9d.
 //
 //go:embed instructions_gpt6_astra.txt
@@ -147,6 +155,12 @@ func CanonicalizeOpenAIModelAliasSpelling(model string) string {
 //   - 其它（含 gpt-5.3 / gpt-5.4 / 裸 gpt-5 / 未知模型）→ 回退到最新版本（当前 GPT-5.5）
 //
 // 任一专用 prompt 意外为空时回退链最终落到 DefaultInstructions，保证返回非空。
+// CodexStableGPT55Instructions returns the base prompt captured from the
+// official codex-cli 0.163.0 golden. Only the stable wire profile uses it.
+func CodexStableGPT55Instructions() string {
+	return strings.TrimSpace(instructionsGPT55_0_163)
+}
+
 func CodexBaseInstructionsForModel(model string) string {
 	canonical := CanonicalizeOpenAIModelAliasSpelling(model)
 	switch {
@@ -163,6 +177,16 @@ func CodexBaseInstructionsForModel(model string) string {
 	case canonical == "gpt-6" || canonical == "gpt-6-astra" || strings.HasPrefix(canonical, "gpt-6-astra-"):
 		if v := strings.TrimSpace(instructionsGPT6Astra); v != "" {
 			return instructionsGPT6Astra
+		}
+	case canonical == "gpt-6-sol" || canonical == "gpt-6-luna" ||
+		strings.HasPrefix(canonical, "gpt-5.6") ||
+		strings.HasPrefix(canonical, "gpt-daybreak-"):
+		if v := CodexCatalogInstructionsForSlug(canonical); v != "" {
+			return v
+		}
+	case canonical == "codex-auto-review":
+		if v := CodexCatalogInstructionsForSlug(canonical); v != "" {
+			return v
 		}
 	case strings.Contains(canonical, "codex"):
 		return DefaultInstructions

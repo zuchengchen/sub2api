@@ -90,6 +90,7 @@ func TestOpenAIForwardCodexLanePreservesTopLevelKeyOrder(t *testing.T) {
 	}}
 	svc := &OpenAIGatewayService{httpUpstream: upstream, tiboRouteDisabled: true}
 	account := openAIFailoverCachedBodyTestAccount(91, "codex-order", nil)
+	account.Extra = map[string]any{"codex_client_capability": "native"}
 
 	// Orphan tool output forces the decoded-map re-encode path
 	// (markDecodedModified disables byte patches); without restoration the

@@ -195,6 +195,7 @@ func TestOpenAINativeCompactionSurvivesSilenceBeyondStreamInterval(t *testing.T)
 	upstream := &httpUpstreamRecorder{resp: silentCompactionUpstream(2500 * time.Millisecond)}
 	svc := openAIClientToolsTestService(upstream)
 	svc.cfg.Gateway.StreamDataIntervalTimeout = 1
+	svc.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds = 1
 	account := excelAccount()
 	account.Extra = map[string]any{"openai_passthrough": false}
 	c, rec := newNativeCompactionContext("/v1/responses")
@@ -214,6 +215,7 @@ func TestOrdinaryTurnStillTimesOutAfterStreamInterval(t *testing.T) {
 	upstream := &httpUpstreamRecorder{resp: silentCompactionUpstream(2500 * time.Millisecond)}
 	svc := openAIClientToolsTestService(upstream)
 	svc.cfg.Gateway.StreamDataIntervalTimeout = 1
+	svc.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds = 1
 	account := excelAccount()
 	account.Extra = map[string]any{"openai_passthrough": false}
 	rec := httptest.NewRecorder()
