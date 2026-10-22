@@ -1746,6 +1746,10 @@ func (s *ContentModerationService) checkUnifiedCandidateEvidence(
 	return allow
 }
 
+// errContentModerationEvidenceCapacity marks an outcome whose reviewer verdict
+// is real but covers only part of the evidence.
+var errContentModerationEvidenceCapacity = errors.New("contextual review evidence exceeds the configured review capacity")
+
 type contentModerationCandidateReviewWork struct {
 	bundle                 contentModerationEvidenceBundle
 	primary                ContentModerationFragment
@@ -1919,7 +1923,7 @@ func (s *ContentModerationService) reviewUnifiedCandidateEvidenceBundleUncached(
 			parserStatus = "evidence_capacity_exceeded"
 		}
 		return contentModerationCandidateReviewOutcome{
-			result: result, parserStatus: parserStatus, err: errors.New("contextual review evidence exceeds the configured review capacity"),
+			result: result, parserStatus: parserStatus, err: errContentModerationEvidenceCapacity,
 		}
 	}
 	return contentModerationCandidateReviewOutcome{result: result}
@@ -2364,6 +2368,31 @@ func contentModerationContextualReviewFailureStatus(err error, attempted bool) s
 	}
 }
 
+// contentModerationCapacityNarrowPassEligible: candidate-tier keyword only,
+// the reviewer returned a verdict (the error is the capacity signal, not a
+// reviewer failure) and that verdict did not block.
+func contentModerationCapacityNarrowPassEligible(
+	bundle contentModerationEvidenceBundle,
+	reviewErr error,
+	reviewResults []contentModerationSecondLayerResult,
+) bool {
+	if defaultContentModerationString(bundle.PrimaryTier, "candidate") != "candidate" {
+		return false
+	}
+	if reviewErr == nil || !errors.Is(reviewErr, errContentModerationEvidenceCapacity) {
+		return false
+	}
+	if len(reviewResults) == 0 {
+		return false
+	}
+	for _, result := range reviewResults {
+		if result.Blocked {
+			return false
+		}
+	}
+	return true
+}
+
 func contentModerationEvidenceCapacityFailure(parserStatus string) bool {
 	switch strings.TrimSpace(parserStatus) {
 	case "evidence_truncated", "evidence_capacity_exceeded":
@@ -2422,6 +2451,14 @@ func (s *ContentModerationService) handleContextualEvidenceCapacityExceeded(
 	}
 	if cfg.SecondLayerStage == ContentModerationSecondLayerStageShadow {
 		audit.DecisionSource += "_shadow"
+		s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionEvidenceCapacityExceeded, "", bundle.PrimaryKeyword, audit)
+		return &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow, InputHash: bundle.CacheHash}
+	}
+	if contentModerationCapacityNarrowPassEligible(bundle, reviewErr, reviewResults) {
+		// Owner policy (narrow pass): a low-tier keyword whose reviewed
+		// evidence came back safe is allowed when the only problem is that the
+		// text is longer than the review capacity. Still audited.
+		audit.DecisionSource += "_narrow_pass"
 		s.persistUnifiedShadowAudit(persistCtx, input, cfg, primary, ContentModerationActionEvidenceCapacityExceeded, "", bundle.PrimaryKeyword, audit)
 		return &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow, InputHash: bundle.CacheHash}
 	}

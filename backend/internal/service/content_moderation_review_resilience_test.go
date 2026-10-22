@@ -247,7 +247,10 @@ func TestContentModerationRiskTieredTransientOutageAllowsAndAuditsWithoutCaching
 	require.False(t, logs[0].Flagged)
 }
 
-func TestContentModerationOversizedCandidateContextReturnsCapacityErrorWithoutReviewUnavailableMetric(t *testing.T) {
+// Owner policy (narrow pass): a candidate-tier keyword whose reviewed evidence
+// is safe is allowed when the text only exceeds the review capacity. It is
+// still reviewed every time (never cached) and audited as a capacity event.
+func TestContentModerationOversizedCandidateContextSafeReviewNarrowPass(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -273,10 +276,9 @@ func TestContentModerationOversizedCandidateContextReturnsCapacityErrorWithoutRe
 			context.Background(), ContentModerationCheckInput{RequestID: "oversized-safe-" + strconv.Itoa(attempt)},
 			cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{candidate},
 		)
-		require.False(t, decision.Allowed)
+		require.True(t, decision.Allowed)
 		require.False(t, decision.Blocked)
-		require.Equal(t, http.StatusRequestEntityTooLarge, decision.StatusCode)
-		require.Equal(t, ContentModerationActionEvidenceCapacityExceeded, decision.Action)
+		require.Equal(t, ContentModerationActionAllow, decision.Action)
 	}
 	require.Equal(t, int64(2), calls.Load(), "oversized evidence must be reviewed again instead of cached")
 	require.Zero(t, contextualRoutingCacheEntryCount(cache))
@@ -286,7 +288,7 @@ func TestContentModerationOversizedCandidateContextReturnsCapacityErrorWithoutRe
 	require.Len(t, logs, 2)
 	for _, log := range logs {
 		require.Equal(t, ContentModerationActionEvidenceCapacityExceeded, log.Action)
-		require.Equal(t, ContentModerationActionEvidenceCapacityExceeded, log.DecisionSource)
+		require.Equal(t, ContentModerationActionEvidenceCapacityExceeded+"_narrow_pass", log.DecisionSource)
 		require.Equal(t, ContentModerationLogResultEvidenceCapacityExceeded, log.ReviewOutcome)
 		require.Equal(t, "evidence_capacity_exceeded", log.ParserStatus)
 		require.True(t, log.EvidenceTruncated)
@@ -294,6 +296,40 @@ func TestContentModerationOversizedCandidateContextReturnsCapacityErrorWithoutRe
 		require.Equal(t, "success", log.ReviewAttempts[0].Outcome)
 		require.Equal(t, "safe", log.ReviewAttempts[0].Verdict)
 	}
+}
+
+func TestContentModerationOversizedCandidateContextUnsafeReviewStillBlocks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentModerationDeepSeekRuntimeWriteEnvelope(
+			t, w, `{"disposition":"block","confidence":0.97,"category":"malware","reason":"exploit"}`, "stop",
+		)
+	}))
+	defer server.Close()
+
+	cfg := contentModerationCandidateDeliveryConfig(server.URL, ContentModerationSecondLayerStageEnforce)
+	cfg.RemoteUnavailablePolicy = ContentModerationRemoteUnavailableRiskTiered
+	cfg.normalize()
+	svc := NewContentModerationService(nil, &contentModerationReplayRepo{}, &contentModerationReplayCache{}, nil, nil, nil, nil, nil)
+	contentModerationCandidateDeliveryMarkReviewReady(svc, cfg)
+	candidate := contentModerationResilienceCandidate(
+		t, "exploit "+strings.Repeat("ordinary tool context ", 4000), "exploit", "candidate", true,
+	)
+	decision := svc.checkUnifiedCandidateEvidence(
+		context.Background(), ContentModerationCheckInput{RequestID: "oversized-unsafe"},
+		cfg, cfg.fragmentCacheNamespace(), []contentModerationCandidateFragment{candidate},
+	)
+	require.False(t, decision.Allowed)
+}
+
+func TestContentModerationCapacityNarrowPassEligibility(t *testing.T) {
+	safe := []contentModerationSecondLayerResult{{}}
+	candidate := contentModerationEvidenceBundle{PrimaryTier: "candidate"}
+	require.True(t, contentModerationCapacityNarrowPassEligible(candidate, errContentModerationEvidenceCapacity, safe))
+	require.False(t, contentModerationCapacityNarrowPassEligible(contentModerationEvidenceBundle{PrimaryTier: "high_confidence"}, errContentModerationEvidenceCapacity, safe))
+	require.False(t, contentModerationCapacityNarrowPassEligible(contentModerationEvidenceBundle{PrimaryTier: "contextual_review"}, errContentModerationEvidenceCapacity, safe))
+	require.False(t, contentModerationCapacityNarrowPassEligible(candidate, errors.New("reviewer timeout"), safe), "reviewer failures are not a verdict")
+	require.False(t, contentModerationCapacityNarrowPassEligible(candidate, errContentModerationEvidenceCapacity, nil))
+	require.False(t, contentModerationCapacityNarrowPassEligible(candidate, errContentModerationEvidenceCapacity, []contentModerationSecondLayerResult{{Blocked: true}}))
 }
 
 func TestContentModerationRiskTieredEligibilityMatrix(t *testing.T) {
