@@ -403,23 +403,25 @@ func removeCodexSynthItem(items []any, target json.RawMessage) []any {
 	return out
 }
 
+// codexSynthesisEstimatedTokens approximates input tokens with the ~4 bytes per
+// token heuristic. Inline images are charged by pixel area instead of their
+// base64 length: a ~600 KB base64 screenshot would otherwise count as ~150k
+// tokens while the upstream bills it at roughly a thousand.
 func codexSynthesisEstimatedTokens(input []any) int {
 	estimate := 0
 	for _, item := range input {
+		var raw []byte
 		switch v := item.(type) {
 		case json.RawMessage:
-			estimate += len(v)
-		case map[string]any:
-			if raw, err := json.Marshal(v); err == nil {
-				estimate += len(raw)
-			}
+			raw = v
 		default:
-			if raw, err := json.Marshal(v); err == nil {
-				estimate += len(raw)
+			if encoded, err := json.Marshal(v); err == nil {
+				raw = encoded
 			}
 		}
+		estimate += estimateJSONTokensWithImages(raw)
 	}
-	return estimate/4 + 1
+	return estimate + 1
 }
 
 // codexSynthesisTrimToBudget drops optional synthesized context (skills, then
