@@ -2375,7 +2375,10 @@ func TestOpenAIGatewayService_CodexCLIOnly_RejectsNonCodexClient(t *testing.T) {
 
 	svc := &OpenAIGatewayService{
 		tiboRouteDisabled: true,
-		cfg:               &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			ForceCodexCLI:      false,
+			CodexFullSynthesis: boolPtrForTest(true),
+		}},
 	}
 
 	account := &Account{

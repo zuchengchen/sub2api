@@ -314,16 +314,59 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
 		isJSONObjectFormat := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(responsesBody, "text.format.type").String()), "json_object")
+		var synthResult *codexSynthResult
+		var fpIDs *codexFingerprintIDs
+		var wireProfile codexWireProfile
+		var wireProfilePtr *codexWireProfile
+		if isCodexOAuthAccount(account) {
+			wireProfile, _ = codexWireProfileForAccount(account, s.cfg)
+			wireProfilePtr = &wireProfile
+		}
+		if isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() {
+			var clientHeaders http.Header
+			if c != nil && c.Request != nil {
+				clientHeaders = c.Request.Header
+			}
+			fpIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, reqBody)
+			deviceProfile, _ := codexDeviceProfileForRequest(account)
+			synthOptions := codexSynthOptions{
+				ResponsesLite: false,
+				WireProfile:   wireProfile,
+				WireVersion:   CodexCanonicalClientVersion(),
+				Device:        deviceProfile,
+				Now:           time.Now(),
+				Strict:        s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
+			}
+			if fpIDs != nil {
+				synthOptions.TurnID = fpIDs.turnID
+				synthOptions.TurnStartedMs = fpIDs.turnStartedAtUnixMs
+			}
+			result, synthErr := synthesizeCodexOAuthRequest(reqBody, account, upstreamModel, synthOptions)
+			if synthErr != nil {
+				writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", synthErr.Error())
+				return nil, synthErr
+			}
+			if result.Modified {
+				synthResult = &result
+				markCodexSynthesized(c)
+			}
+		}
+		synthesized := synthResult != nil && synthResult.Modified
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
-			SkipDefaultInstructions:             !isResponsesShape,
+			SkipDefaultInstructions:             !isResponsesShape || synthesized,
 			OmitPromotedSystemMessagesFromInput: !isResponsesShape && !isJSONObjectFormat,
+			WireProfile:                         wireProfilePtr,
 		})
 		if codexResult.Error != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": codexResult.Error.Error()}})
 			return nil, codexResult.Error
 		}
-		setCodexToolNameReverse(c, codexResult.ToolNameReverse)
-		if !isResponsesShape {
+		reverse := codexResult.ToolNameReverse
+		if synthResult != nil && len(synthResult.ToolNameReverse) > 0 {
+			reverse = mergeCodexToolNameReverseMaps(synthResult.ToolNameReverse, reverse)
+		}
+		setCodexToolNameReverse(c, reverse)
+		if !isResponsesShape && !synthesized {
 			ensureCodexOAuthInstructionsField(reqBody)
 		}
 		if codexResult.NormalizedModel != "" {
@@ -335,6 +378,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			reqBody["prompt_cache_key"] = promptCacheKey
 		}
 		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+		if isCodexOAuthAccount(account) {
+			if fpIDs != nil {
+				applyCodexFingerprintClientMetadata(reqBody, fpIDs)
+			}
+			stageCodexFingerprintIDs(c, fpIDs)
+		}
 		responsesBody, err = json.Marshal(reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("remarshal after codex transform: %w", err)
@@ -969,10 +1018,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 
-	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
-	}
+	streamInterval := s.codexStreamIdleTimeout(account)
 	grokStream := account != nil && account.IsGrok()
 	grokEffort := ""
 	if grokStream {

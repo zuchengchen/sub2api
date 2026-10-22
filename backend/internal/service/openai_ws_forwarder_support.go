@@ -114,7 +114,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	prewarmPayloadJSON := payloadAsJSONBytes(prewarmPayload)
 	var prewarmFrame []byte
 	if account.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
-		if encoded, marshalErr := marshalCodexWSCreateFrame(bodyRaw, prewarmPayload); marshalErr == nil {
+		if encoded, marshalErr := marshalCodexWSCreateFrame(bodyRaw, prewarmPayload, s.codexMapOrderJitterEnabled()); marshalErr == nil {
 			prewarmFrame = encoded
 		}
 	}

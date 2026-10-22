@@ -142,6 +142,9 @@ func codexFingerprintSeed(extra map[string]any) (string, bool) {
 
 func prepareCodexFingerprintExtraForCreate(platform, accountType string, extra map[string]any) map[string]any {
 	prepared := stripCodexFingerprintSeed(extra)
+	if platform == PlatformOpenAI && accountType == AccountTypeOAuth {
+		prepared = sanitizeCodexDeviceProfileExtra(prepared)
+	}
 	if platform != PlatformOpenAI || (accountType != AccountTypeOAuth && accountType != AccountTypeSetupToken) || !codexFingerprintModeRequiresSeed(codexFingerprintModeFromExtra(prepared)) {
 		return prepared
 	}
@@ -154,6 +157,9 @@ func prepareCodexFingerprintExtraForCreate(platform, accountType string, extra m
 
 func prepareCodexFingerprintExtraForUpdate(account *Account, extra map[string]any) map[string]any {
 	prepared := stripCodexFingerprintSeed(extra)
+	if account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
+		prepared = sanitizeCodexDeviceProfileExtra(prepared)
+	}
 	if account == nil || !account.IsOpenAIOAuthLike() {
 		return prepared
 	}
@@ -281,6 +287,10 @@ type codexFingerprintIDs struct {
 	// derived from (full mode, no client session id). Official Codex sends
 	// prompt_cache_key == session_id, so that key is rewritten to sessionID.
 	sessionPromptCacheKey string
+	// promptCacheKeyPolicy is the only profile knob that can suppress the
+	// official `prompt_cache_key == session_id` default. Account Extra may
+	// override it; otherwise session-derived keys are emitted.
+	promptCacheKeyPolicy codexPromptCacheKeyPolicy
 }
 
 // resolveCodexFingerprintIDs 按收敛模式计算出站 ID 集合。
@@ -309,9 +319,16 @@ func resolveCodexFingerprintIDsWithWindow(account *Account, clientSessionID stri
 	}
 
 	ids := &codexFingerprintIDs{
-		accountID:   account.ID,
-		mode:        mode,
-		convergence: codexFingerprintConvergenceEnabled(account),
+		accountID:            account.ID,
+		mode:                 mode,
+		convergence:          codexFingerprintConvergenceEnabled(account),
+		promptCacheKeyPolicy: codexPromptCacheKeySessionDerived,
+	}
+	switch strings.ToLower(strings.TrimSpace(account.GetExtraString(codexPromptCacheKeyExtraKey))) {
+	case string(codexPromptCacheKeyOmit):
+		ids.promptCacheKeyPolicy = codexPromptCacheKeyOmit
+	case string(codexPromptCacheKeyCustom):
+		ids.promptCacheKeyPolicy = codexPromptCacheKeyCustom
 	}
 
 	ids.installationID = resolveConvergedInstallationID(account, seed)
@@ -584,6 +601,15 @@ func applyCodexFingerprintClientMetadata(reqBody map[string]any, ids *codexFinge
 	if applyCodexFingerprintPromptCacheKey(reqBody, ids) {
 		modified = true
 	}
+	if ids != nil && ids.promptCacheKeyPolicy == codexPromptCacheKeyOmit {
+		if _, ok := reqBody["prompt_cache_key"]; ok {
+			delete(reqBody, "prompt_cache_key")
+			modified = true
+		}
+	}
+	if ensureCodexFingerprintPromptCacheKey(reqBody, ids) {
+		modified = true
+	}
 	return modified
 }
 
@@ -752,6 +778,36 @@ func applyCodexFingerprintPromptCacheKey(reqBody map[string]any, ids *codexFinge
 	return true
 }
 
+// ensureCodexFingerprintPromptCacheKey injects the official default
+// `prompt_cache_key == session_id` when the client sent none. Official Codex
+// always sends it; omitting it makes the request look like a third-party
+// client and disables prefix caching. Profiles/accounts that explicitly choose
+// Omit are respected.
+func ensureCodexFingerprintPromptCacheKey(reqBody map[string]any, ids *codexFingerprintIDs) bool {
+	if reqBody == nil || ids == nil || ids.sessionID == "" {
+		return false
+	}
+	if ids.mode != codexFingerprintSession && ids.mode != codexFingerprintFull {
+		return false
+	}
+	if ids.promptCacheKeyPolicy == codexPromptCacheKeyOmit {
+		return false
+	}
+	// The Anthropic/chat compatibility bridge has its own body contract: Codex
+	// rejects prompt_cache_key there, and the transform already removed it.
+	if isOpenAICompatMessagesBridgeRequestBody(reqBody) {
+		return false
+	}
+	if existing, exists := reqBody["prompt_cache_key"]; exists {
+		text, ok := existing.(string)
+		if !ok || strings.TrimSpace(text) != "" {
+			return false
+		}
+	}
+	reqBody["prompt_cache_key"] = ids.sessionID
+	return true
+}
+
 // applyCodexFingerprintClientMetadataRaw 在原始 JSON 字节上改写 client_metadata，
 // 供透传路径使用——透传是热路径，禁止对可能高达数十 MB 的 body 做全量
 // Unmarshal（见 forwardOpenAIPassthrough 的轻量提取注释）。实现为：gjson 提取
@@ -800,6 +856,26 @@ func applyCodexFingerprintClientMetadataRaw(body []byte, ids *codexFingerprintID
 		rewritten, err := sjson.SetBytes(next, "prompt_cache_key", ids.sessionID)
 		if err != nil {
 			return body, false, fmt.Errorf("splice converged prompt_cache_key: %w", err)
+		}
+		next = rewritten
+		modified = true
+	}
+	missingOrEmptyPromptCacheKey := !promptCacheKey.Exists() ||
+		(promptCacheKey.Type == gjson.String && strings.TrimSpace(promptCacheKey.String()) == "")
+	if ids.promptCacheKeyPolicy == codexPromptCacheKeyOmit && promptCacheKey.Exists() {
+		rewritten, err := sjson.DeleteBytes(next, "prompt_cache_key")
+		if err != nil {
+			return body, false, fmt.Errorf("splice omitted prompt_cache_key: %w", err)
+		}
+		next = rewritten
+		modified = true
+	}
+	if (ids.mode == codexFingerprintSession || ids.mode == codexFingerprintFull) &&
+		ids.sessionID != "" && ids.promptCacheKeyPolicy != codexPromptCacheKeyOmit &&
+		!isOpenAICompatMessagesBridgeBody(body) && missingOrEmptyPromptCacheKey {
+		rewritten, err := sjson.SetBytes(next, "prompt_cache_key", ids.sessionID)
+		if err != nil {
+			return body, false, fmt.Errorf("splice default prompt_cache_key: %w", err)
 		}
 		next = rewritten
 		modified = true

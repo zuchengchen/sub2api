@@ -2,11 +2,15 @@ package service
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
+	"math/rand"
 	"sort"
 	"strings"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // codexWSCreateFrameOrder 复刻 codex-rs `ResponseCreateWsRequest` 的 serde
@@ -47,9 +51,9 @@ var codexWSRewrittenKeys = map[string]struct{}{
 	"background":           {},
 }
 
-// codexWSClientMetadataOrder 是真实客户端 client_metadata 的一组规范键序。
-// 官方用 Rust HashMap（每请求随机序），这里固定为首帧抓包序——任何一个固定
-// 顺序都是官方分布内的合法样本。
+// codexWSClientMetadataOrder 是 client_metadata 的合法键集合（抓包并集）。
+// 官方用 Rust HashMap（每请求随机序）；本网关在完整集合上按 turn/session 做
+// 确定性洗牌，保证 HTTP body 与 WS 帧的相对顺序一致。
 var codexWSClientMetadataOrder = [...]string{
 	"x-codex-ws-stream-request-start-ms",
 	"guardian_credits_requested",
@@ -92,7 +96,7 @@ var codexWSStreamOptionsOrder = [...]string{"reasoning_summary_delivery"}
 //   - 非 ASCII 走 escapeCodexNonASCII（与官方 to_ascii_json_string 一致）。
 //
 //nolint:errcheck // bytes.Buffer 写入不会失败
-func marshalCodexWSCreateFrame(body []byte, payload map[string]any) ([]byte, error) {
+func marshalCodexWSCreateFrame(body []byte, payload map[string]any, jitter bool) ([]byte, error) {
 	if payload == nil {
 		return []byte("null"), nil
 	}
@@ -113,7 +117,7 @@ func marshalCodexWSCreateFrame(body []byte, payload map[string]any) ([]byte, err
 		emitted[key] = struct{}{}
 		writeCodexJSONString(&buf, key)
 		buf.WriteByte(':')
-		return writeCodexWSFrameFieldValue(&buf, body, key, value)
+		return writeCodexWSFrameFieldValue(&buf, body, key, value, jitter)
 	}
 	for _, key := range codexWSCreateFrameOrder[:] {
 		if err := writeField(key); err != nil {
@@ -172,12 +176,12 @@ func applyCodexWSFrameDefaults(payload map[string]any) map[string]any {
 }
 
 //nolint:errcheck // bytes.Buffer 写入不会失败
-func writeCodexWSFrameFieldValue(buf *bytes.Buffer, body []byte, key string, value any) error {
+func writeCodexWSFrameFieldValue(buf *bytes.Buffer, body []byte, key string, value any, jitter bool) error {
 	switch key {
 	case "input":
 		return writeCodexWSInputField(buf, value)
 	case "client_metadata":
-		return writeCodexWSClientMetadata(buf, value)
+		return writeCodexWSClientMetadata(buf, value, jitter)
 	// reasoning/text/stream_options 在官方是强类型 struct，客户端不可能发出
 	// 任意字节——始终归一到 serde 声明序而非透传。
 	case "reasoning", "text", "stream_options":
@@ -237,16 +241,19 @@ func writeCodexWSInputField(buf *bytes.Buffer, value any) error {
 	return writeCodexJSONLeaf(buf, value)
 }
 
-// writeCodexWSClientMetadata 输出 client_metadata：固定 HashMap 样本序，
-// 值统一为字符串（官方 HashMap<String,String>）。
+// writeCodexWSClientMetadata 输出 client_metadata：键序按请求在合法键集合内
+// 打乱（官方客户端是 Rust HashMap，每次请求顺序随机），值统一为字符串。
 //
 //nolint:errcheck // bytes.Buffer 写入不会失败
-func writeCodexWSClientMetadata(buf *bytes.Buffer, value any) error {
+func writeCodexWSClientMetadata(buf *bytes.Buffer, value any, jitter bool) error {
 	metadata, ok := value.(map[string]any)
 	if !ok {
 		return writeCodexJSONLeaf(buf, value)
 	}
 	keys := orderedCodexJSONKeys(metadata, codexWSClientMetadataOrder[:])
+	if jitter {
+		keys = codexShuffledClientMetadataKeys(metadata)
+	}
 	buf.WriteByte('{')
 	for i, key := range keys {
 		if i > 0 {
@@ -324,4 +331,230 @@ func writeCodexWSOrderedObject(buf *bytes.Buffer, value any, order []string) err
 	}
 	buf.WriteByte('}')
 	return nil
+}
+
+// codexShuffledClientMetadataKeys returns a per-request permutation of the
+// client_metadata keys. The official client serializes a Rust HashMap, so any
+// permutation is legal; deriving it from the turn/session id keeps retries of
+// the same turn stable while different turns get different orders.
+func codexShuffledClientMetadataKeys(metadata map[string]any) []string {
+	present := make(map[string]struct{}, len(metadata))
+	values := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		present[key] = struct{}{}
+		values[key] = codexClientMetadataOrderValue(value)
+	}
+	return codexShuffledClientMetadataKeySet(present, codexClientMetadataOrderSeed(values))
+}
+
+// codexShuffledClientMetadataKeySet shuffles the full legal key order, then
+// filters to the keys present. Shuffling the full list keeps the relative order
+// of shared keys identical between the HTTP body and WS frame even when one
+// lane carries an extra key (for example x-codex-turn-state).
+func codexShuffledClientMetadataKeySet(present map[string]struct{}, seed string) []string {
+	candidates := make([]string, 0, len(codexWSClientMetadataOrder)+len(present))
+	seen := make(map[string]bool, len(codexWSClientMetadataOrder))
+	for _, key := range codexWSClientMetadataOrder {
+		if !seen[key] {
+			candidates = append(candidates, key)
+			seen[key] = true
+		}
+	}
+	candidates = codexShuffleKeys(candidates, seed)
+	keys := make([]string, 0, len(present))
+	for _, key := range candidates {
+		if _, ok := present[key]; ok {
+			keys = append(keys, key)
+		}
+	}
+	extra := make([]string, 0, len(present))
+	for key := range present {
+		if !seen[key] {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	return append(keys, extra...)
+}
+
+func codexClientMetadataOrderValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case nil:
+		return ""
+	default:
+		raw, _ := json.Marshal(v)
+		return string(raw)
+	}
+}
+
+func codexClientMetadataOrderSeed(values map[string]string) string {
+	for _, key := range []string{"turn_id", "session_id"} {
+		if value := strings.TrimSpace(values[key]); value != "" {
+			return key + ":" + value
+		}
+	}
+	if raw := strings.TrimSpace(values[openAIWSTurnMetadataHeader]); raw != "" {
+		if turn := strings.TrimSpace(gjson.Get(raw, "turn_id").String()); turn != "" {
+			return "turn_id:" + turn
+		}
+		if session := strings.TrimSpace(gjson.Get(raw, "session_id").String()); session != "" {
+			return "session_id:" + session
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, key := range keys {
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(values[key])
+		b.WriteByte(0)
+	}
+	return b.String()
+}
+
+func codexShuffleKeys(keys []string, seed string) []string {
+	sort.Strings(keys)
+	h := sha256.Sum256([]byte(seed))
+	r := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(h[:8]))))
+	r.Shuffle(len(keys), func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
+	return keys
+}
+
+// reorderCodexClientMetadataJSON applies the same per-request HashMap order to
+// the HTTP body lane so both transports expose one consistent ordering.
+func reorderCodexClientMetadataJSON(body []byte) ([]byte, bool) {
+	if len(body) == 0 {
+		return body, false
+	}
+	cm := gjson.GetBytes(body, "client_metadata")
+	if !cm.IsObject() {
+		return body, false
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(cm.Raw), &members); err != nil || len(members) == 0 {
+		return body, false
+	}
+	present := make(map[string]struct{}, len(members))
+	values := make(map[string]string, len(members))
+	for key, raw := range members {
+		present[key] = struct{}{}
+		var text string
+		if err := json.Unmarshal(raw, &text); err == nil {
+			values[key] = text
+		} else {
+			values[key] = string(raw)
+		}
+	}
+	keys := codexShuffledClientMetadataKeySet(present, codexClientMetadataOrderSeed(values))
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, key := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		writeCodexJSONString(&buf, key)
+		buf.WriteByte(':')
+		buf.Write(members[key])
+	}
+	buf.WriteByte('}')
+	next, err := sjson.SetRawBytes(body, "client_metadata", buf.Bytes())
+	if err != nil {
+		return body, false
+	}
+	return next, !bytes.Equal(next, body)
+}
+
+// codexHTTPRequestTopLevelOrder mirrors codex-rs ResponsesApiRequest serde
+// declaration order (codex-api/src/common.rs:279-304). HTTP bodies must put
+// routing fields first for the same reason the official client does.
+var codexHTTPRequestTopLevelOrder = [...]string{
+	"model",
+	"stream",
+	"service_tier",
+	"input",
+	"tools",
+	"tool_choice",
+	"parallel_tool_calls",
+	"reasoning",
+	"store",
+	"stream_options",
+	"include",
+	"prompt_cache_key",
+	"text",
+	"client_metadata",
+	"access_programs",
+}
+
+// reorderCodexRequestTopLevelJSON rewrites the top-level key order to the
+// official struct order. Values are copied verbatim, so nested item ordering
+// and integer formatting are untouched.
+func reorderCodexRequestTopLevelJSON(body []byte) ([]byte, bool) {
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() {
+		return body, false
+	}
+	type member struct {
+		key string
+		raw string
+	}
+	members := make(map[string]member, 16)
+	original := make([]string, 0, 16)
+	root.ForEach(func(key, value gjson.Result) bool {
+		name := key.String()
+		if _, exists := members[name]; exists {
+			return false
+		}
+		members[name] = member{key: key.Raw, raw: value.Raw}
+		original = append(original, name)
+		return true
+	})
+	if len(members) == 0 {
+		return body, false
+	}
+	order := make([]string, 0, len(members))
+	seen := make(map[string]bool, len(members))
+	for _, name := range codexHTTPRequestTopLevelOrder {
+		if _, ok := members[name]; ok {
+			order = append(order, name)
+			seen[name] = true
+		}
+	}
+	rest := make([]string, 0, len(members))
+	for name := range members {
+		if !seen[name] {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	order = append(order, rest...)
+	changed := len(order) != len(original)
+	if !changed {
+		for i := range order {
+			if order[i] != original[i] {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		return body, false
+	}
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, name := range order {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteString(members[name].key)
+		buf.WriteByte(':')
+		buf.WriteString(members[name].raw)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), true
 }

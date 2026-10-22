@@ -548,7 +548,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// 透传原始请求体字节，保持与真实客户端逐字节一致。其余账号走通用 marshal。
 	var frameBytes []byte
 	if account.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
-		if encoded, marshalErr := marshalCodexWSCreateFrame(bodyRaw, payload); marshalErr == nil {
+		if encoded, marshalErr := marshalCodexWSCreateFrame(bodyRaw, payload, s.codexMapOrderJitterEnabled()); marshalErr == nil {
 			frameBytes = encoded
 		} else {
 			logOpenAIWSModeInfo(

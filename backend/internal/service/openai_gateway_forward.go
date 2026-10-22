@@ -567,7 +567,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	// synthetic prompt there would send the base prompt twice plus a key the
 	// official request never carries.
 	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeCNResponses && !cookieWS &&
-		!inputCarriesBaseInstructions {
+		!inputCarriesBaseInstructions && !(isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() && !compactPath) {
 		markPatchSet("instructions", defaultCodexSynthInstructions(upstreamModel))
 	}
 	if billingModel != requestedModel {
@@ -681,6 +681,60 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
+		// Codex OAuth scope: generic clients are rebuilt into the full Codex
+		// request shape. The guard is the per-attempt account, so a failover to
+		// an API-key/SetupToken account re-enters with the original body.
+		var synthResult *codexSynthResult
+		var attemptFingerprintIDs *codexFingerprintIDs
+		fingerprintPreResolved := false
+		var requestWireProfile codexWireProfile
+		var wireProfilePtr *codexWireProfile
+		if isCodexOAuthAccount(account) {
+			requestWireProfile, _ = codexWireProfileForAccount(account, s.cfg)
+			wireProfilePtr = &requestWireProfile
+		}
+		if isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() && !isCompactRequest {
+			var clientHeaders http.Header
+			if c != nil && c.Request != nil {
+				clientHeaders = c.Request.Header
+			}
+			// The compat messages bridge deletes prompt_cache_key inside the
+			// transform, so resolve its IDs after the transform (header based)
+			// like before. Native/generic lanes can share the pre-transform
+			// evidence, which is what the synthesized item metadata uses.
+			if !compatMessagesBridge {
+				attemptFingerprintIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, decoded)
+				fingerprintPreResolved = true
+			}
+			deviceProfile, _ := codexDeviceProfileForRequest(account)
+			synthOptions := codexSynthOptions{
+				ResponsesLite: responsesLite,
+				IsCompact:     isCompactRequest,
+				WireProfile:   requestWireProfile,
+				WireVersion:   CodexCanonicalClientVersion(),
+				Device:        deviceProfile,
+				Now:           time.Now(),
+				Strict:        s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
+			}
+			if attemptFingerprintIDs != nil {
+				synthOptions.TurnID = attemptFingerprintIDs.turnID
+				synthOptions.TurnStartedMs = attemptFingerprintIDs.turnStartedAtUnixMs
+			}
+			result, synthErr := synthesizeCodexOAuthRequest(decoded, account, upstreamModel, synthOptions)
+			if synthErr != nil {
+				setOpsUpstreamError(c, http.StatusBadRequest, synthErr.Error(), "")
+				writeOpenAIResponsesErrorJSON(c, http.StatusBadRequest, gin.H{"error": gin.H{
+					"type": "invalid_request_error", "message": synthErr.Error(), "param": "input",
+				}})
+				return nil, synthErr
+			}
+			if result.Modified {
+				synthResult = &result
+				markDecodedModified()
+				markCodexSynthesized(c)
+			}
+		}
+		synthesized := synthResult != nil && synthResult.Modified
 		// Responses OAuth 与 Chat 兼容入口保持一致：纯文本 system 可以无损提升后删除，
 		// JSON object 模式仍需在 input 中保留 JSON 指令供上游兼容校验。
 		omitPromotedSystemMessages := !strings.EqualFold(
@@ -696,18 +750,22 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				PreserveToolCallIDs:                 true,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 				ResponsesLite:                       responsesLite,
+				WireProfile:                         wireProfilePtr,
 			})
-			ensureCodexOAuthInstructionsField(decoded)
+			if !synthesized {
+				ensureCodexOAuthInstructionsField(decoded)
+			}
 			markDecodedModified()
 		} else {
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                          isCodexCLI,
 				IsCompact:                           isCompactRequest,
-				SkipDefaultInstructions:             cookieWS || inputCarriesBaseInstructions,
+				SkipDefaultInstructions:             synthesized || cookieWS || inputCarriesBaseInstructions,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 				ResponsesLite:                       responsesLite,
+				WireProfile:                         wireProfilePtr,
 			})
-			if cookieWS {
+			if cookieWS && !synthesized {
 				// Keep the caller's instructions, including an intentionally
 				// empty string, as in the validated HTTP/WS Cookie request.
 				ensureCodexOAuthInstructionsField(decoded)
@@ -718,7 +776,11 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			writeOpenAIResponsesErrorJSON(c, http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": codexResult.Error.Error()}})
 			return nil, codexResult.Error
 		}
-		setCodexToolNameReverse(c, codexResult.ToolNameReverse)
+		reverse := codexResult.ToolNameReverse
+		if synthResult != nil && len(synthResult.ToolNameReverse) > 0 {
+			reverse = mergeCodexToolNameReverseMaps(synthResult.ToolNameReverse, reverse)
+		}
+		setCodexToolNameReverse(c, reverse)
 		if codexResult.Modified {
 			markDecodedModified()
 		}
@@ -743,8 +805,14 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			if c != nil && c.Request != nil {
 				clientHeaders = c.Request.Header
 			}
-			fpIDs := resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, decoded)
+			fpIDs := attemptFingerprintIDs
+			if !fingerprintPreResolved {
+				fpIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, decoded)
+			}
 			if fpIDs != nil {
+				if compatMessagesBridge {
+					fpIDs.promptCacheKeyPolicy = codexPromptCacheKeyOmit
+				}
 				if applyCodexFingerprintClientMetadata(decoded, fpIDs) {
 					markDecodedModified()
 				}
@@ -1861,6 +1929,36 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if err != nil {
 		return nil, err
 	}
+	// HTTP 顶层字段按官方 ResponsesApiRequest 声明序输出；合成路径原本是
+	// Go map 的字母序，必须收口，否则上游可逐字节识别。
+	if isCodexOAuthAccount(account) && !legacyCompactRequest && codexRequestSynthesized(c) {
+		if reordered, changed := reorderCodexRequestTopLevelJSON(body); changed {
+			body = reordered
+			if req.Body != nil {
+				_ = req.Body.Close()
+			}
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			req.ContentLength = int64(len(body))
+			req.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			}
+		}
+	}
+	// client_metadata 是官方 Rust HashMap：按键序随机。HTTP body 与 WS 帧使用
+	// 同一份 seed（turn/session id），同一 turn 的重试保持同序，delta 链不被打断。
+	if isCodexOAuthAccount(account) && s.codexMapOrderJitterEnabled() && !legacyCompactRequest {
+		if reordered, changed := reorderCodexClientMetadataJSON(body); changed {
+			body = reordered
+			if req.Body != nil {
+				_ = req.Body.Close()
+			}
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			req.ContentLength = int64(len(body))
+			req.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			}
+		}
+	}
 	// HTTP 出站线序收口：所有改写（指纹收敛、账号 namespace、client_metadata 投影、
 	// 账号级覆写、beta-features、routing hint）完成后，删官方不发的头并把 session_id/
 	// conversation_id 的隔离值挪到官方 session-id/thread-id。与 WS 握手同一道收口。
@@ -1892,5 +1990,16 @@ func (s *OpenAIGatewayService) codexIdentityOverrideUA(account *Account) string 
 	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		return ""
 	}
-	return account.GetOpenAIUserAgent()
+	if !isCodexOAuthAccount(account) {
+		return account.GetOpenAIUserAgent()
+	}
+	// Administrator-specified UA still wins; otherwise the account family
+	// (tui/exec/vscode) + platform profile define the outbound identity.
+	if ua := strings.TrimSpace(account.GetOpenAIUserAgent()); ua != "" {
+		return ua
+	}
+	if profile, ok := resolveCodexDeviceProfile(account); ok {
+		return profile.UserAgent
+	}
+	return ""
 }
