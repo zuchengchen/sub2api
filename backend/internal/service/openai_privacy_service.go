@@ -53,13 +53,8 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 
 	resp, err := client.R().
 		SetContext(ctx).
+		SetHeader("User-Agent", CodexCanonicalUserAgent()).
 		SetHeader("Authorization", "Bearer "+accessToken).
-		SetHeader("Origin", "https://chatgpt.com").
-		SetHeader("Referer", "https://chatgpt.com/").
-		SetHeader("Accept", "application/json").
-		SetHeader("sec-fetch-mode", "cors").
-		SetHeader("sec-fetch-site", "same-origin").
-		SetHeader("sec-fetch-dest", "empty").
 		SetQueryParam("feature", "training_allowed").
 		SetQueryParam("value", "false").
 		Patch(openAISettingsURL)
@@ -132,10 +127,8 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 	var result map[string]any
 	resp, err := client.R().
 		SetContext(ctx).
+		SetHeader("User-Agent", CodexCanonicalUserAgent()).
 		SetHeader("Authorization", "Bearer "+accessToken).
-		SetHeader("Origin", "https://chatgpt.com").
-		SetHeader("Referer", "https://chatgpt.com/").
-		SetHeader("Accept", "application/json").
 		SetSuccessResult(&result).
 		Get(chatGPTAccountsCheckURL)
 
@@ -248,10 +241,8 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 	}
 	resp, err := client.R().
 		SetContext(ctx).
+		SetHeader("User-Agent", CodexCanonicalUserAgent()).
 		SetHeader("Authorization", "Bearer "+accessToken).
-		SetHeader("Origin", "https://chatgpt.com").
-		SetHeader("Referer", "https://chatgpt.com/").
-		SetHeader("Accept", "application/json").
 		SetSuccessResult(&result).
 		SetQueryParam("account_id", accountID).
 		Get(chatGPTSubscriptionsURL)

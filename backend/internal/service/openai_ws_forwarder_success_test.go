@@ -812,8 +812,8 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	// OAuth 账号的 session/conversation 隔离值落在官方连字符头 session-id/thread-id
 	// 上（下划线 session_id/conversation_id 是官方不发的旧习惯头，收口删除）。
 	// 测试中未设置 api_key 到 context，apiKeyID=0。
-	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "sess-oauth-1"), captureDialer.lastHeaders.Get("session-id"))
-	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "conv-oauth-1"), captureDialer.lastHeaders.Get("thread-id"))
+	require.Equal(t, canonicalCodexSessionHeaderValue(isolateOpenAIUpstreamSessionID(0, account, "sess-oauth-1")), captureDialer.lastHeaders.Get("session-id"))
+	require.Equal(t, canonicalCodexSessionHeaderValue(isolateOpenAIUpstreamSessionID(0, account, "conv-oauth-1")), captureDialer.lastHeaders.Get("thread-id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 }
@@ -1112,7 +1112,9 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 
 	// OAuth 账号的 session-id 应同时按 API key 和上游账号隔离（apiKeyID=0）；
 	// 下划线 session_id/conversation_id 是官方不发的头，收口删除。
-	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "pcache_123"), captureDialer.lastHeaders.Get("session-id"))
+	// session-id is the official UUIDv7 form of the isolated key, identical to
+	// what the HTTP lane derives (canonicalCodexSessionHeaderValue).
+	require.Equal(t, canonicalCodexSessionHeaderValue(isolateOpenAIUpstreamSessionID(0, account, "pcache_123")), captureDialer.lastHeaders.Get("session-id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 	require.NotNil(t, captureConn.lastWrite)

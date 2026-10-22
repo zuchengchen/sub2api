@@ -134,7 +134,7 @@ func TestOpenAIAgentIdentityPassthroughKeepsSessionAndPromptCacheHeaders(t *test
 	require.Equal(t, "account-agent-passthrough", req.Header.Get("chatgpt-account-id"))
 	// 收口后的官方线序：会话隔离值只出现在 session-id（及 body client_metadata/
 	// prompt_cache_key），conversation_id / session_id 头官方从不发送，必须缺席。
-	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "client-session"), req.Header.Get("session-id"))
+	require.Equal(t, canonicalCodexSessionHeaderValue(isolateOpenAIUpstreamSessionID(0, account, "client-session")), req.Header.Get("session-id"))
 	require.NotEqual(t, "client-session", req.Header.Get("session-id"))
 	require.Empty(t, req.Header.Get("session_id"))
 	require.Empty(t, req.Header.Get("conversation_id"))
@@ -485,8 +485,11 @@ func TestOpenAIAgentIdentityChatRecoveryKeepsAutoDerivedSessionIsolationStable(t
 	secondKey := gjson.GetBytes(upstream.bodies[1], "prompt_cache_key").String()
 	require.NotEmpty(t, firstKey)
 	require.Equal(t, firstKey, secondKey)
-	require.Equal(t, generateSessionUUID(isolateOpenAIUpstreamSessionID(99, codexAccountIdentitySource(c, account), firstKey)), upstream.requests[0].Header.Get("session_id"))
-	require.Equal(t, upstream.requests[0].Header.Get("session_id"), upstream.requests[1].Header.Get("session_id"))
+	// Codex OAuth: no underscored session_id; the stable per-conversation
+	// identity rides on the official session-id (UUIDv7).
+	require.Empty(t, upstream.requests[0].Header.Get("session_id"))
+	require.NotEmpty(t, upstream.requests[0].Header.Get("session-id"))
+	require.Equal(t, upstream.requests[0].Header.Get("session-id"), upstream.requests[1].Header.Get("session-id"))
 }
 
 func decodeAgentAssertionTask(t *testing.T, header string) string {

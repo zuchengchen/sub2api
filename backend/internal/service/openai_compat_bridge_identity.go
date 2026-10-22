@@ -135,7 +135,10 @@ func (s *OpenAIGatewayService) injectOpenAICompatBridgeIdentity(c *gin.Context, 
 	if ids := resolveCodexFingerprintIDsWithBody(c, account, nil, nil); ids != nil {
 		installationID = ids.installationID
 	}
-	turnID := uuid.Must(uuid.NewV7()).String()
+	// One turn per user message: tool-loop follow-ups reuse turn_id and
+	// turn_started_at like the official client (golden 0.163.0).
+	turnID, turnStartedAt := resolveCodexTurnIdentity(defaultCodexTurnClock, codexIdentityClockSeed(account), session.SessionID,
+		codexTurnEvidence{InputTurnSeed: collectCodexTurnEvidenceFromMap(reqBody, nil).InputTurnSeed})
 	windowID := session.SessionID + ":0"
 	model, _ := reqBody["model"].(string)
 	effort := ""
@@ -152,7 +155,7 @@ func (s *OpenAIGatewayService) injectOpenAICompatBridgeIdentity(c *gin.Context, 
 		WindowNumber:        0,
 		ContextWindowID:     session.ContextWindowID,
 		RequestKind:         "turn",
-		TurnStartedAtUnixMs: time.Now().UnixMilli(),
+		TurnStartedAtUnixMs: turnStartedAt,
 		Model:               model,
 		ReasoningEffort:     effort,
 	})

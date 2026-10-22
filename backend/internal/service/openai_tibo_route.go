@@ -398,6 +398,9 @@ func (s *OpenAIGatewayService) openAITiboRouteApplies(account *Account) bool {
 	if s == nil || s.tiboRouteDisabled || account == nil {
 		return false
 	}
+	if s.cfg != nil && s.cfg.Gateway.OpenAITiboRoute.Enabled != nil && !*s.cfg.Gateway.OpenAITiboRoute.Enabled {
+		return false
+	}
 	return isOpenAITiboAccount(account)
 }
 

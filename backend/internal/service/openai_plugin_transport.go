@@ -145,10 +145,17 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxy
 	return s.httpUpstream.Do(WithAccountTrafficRequest(request, account), proxyURL, account.ID, account.Concurrency)
 }
 
-// resolveCodexHTTPSTLSProfile 为 codex lane 的 HTTP 请求解析 TLS 指纹：
-// 账号 extra 的 tls_fingerprint_builtin 优先，否则默认 rustls-h2（官方客户端
-// 的 reqwest/h2 TLS 栈 + ALPN）；显式 "none" 返回 nil 走 Go 默认栈。
-// codex_http_h2_enabled=false 时默认档退回 rustls（紧急回滚到 net/http h1）。
+// resolveCodexHTTPSTLSProfile 为 codex lane 的 HTTP 请求解析 TLS 指纹。
+//
+// 官方 Codex CLI（Linux）的 HTTP 出站走 reqwest default-tls → native-tls →
+// 静态链接的 OpenSSL 3.6：不发 ALPN、走 HTTP/1.1、每个请求新建连接
+// （codexgolden 实抓，testdata/golden/0.163.0）。因此默认档是 openssl36
+// （codexwire 原始 h1 客户端）。
+//
+// 只有配置了自定义 CA（CODEX_CA_CERTIFICATE / SSL_CERT_FILE）时官方才切到
+// rustls + ALPN [h2, http/1.1]；codex_http_h2_enabled=true 模拟这种部署
+// （rustls-h2 + codexwire h2 多路复用）。账号 extra 的 codex_tls_profile /
+// tls_fingerprint_builtin 优先；显式 "none" 返回 nil 走 Go 默认栈。
 func (s *OpenAIGatewayService) resolveCodexHTTPSTLSProfile(account *Account) *tlsfingerprint.Profile {
 	if account != nil {
 		if name := strings.TrimSpace(firstNonEmpty(account.GetExtraString("codex_tls_profile"), account.GetExtraString("tls_fingerprint_builtin"))); name != "" {
@@ -163,11 +170,12 @@ func (s *OpenAIGatewayService) resolveCodexHTTPSTLSProfile(account *Account) *tl
 	if s.isCodexHTTPH2Enabled() {
 		return tlsfingerprint.BuiltinProfile("rustls-h2")
 	}
-	return tlsfingerprint.BuiltinProfile("rustls")
+	return tlsfingerprint.BuiltinProfile("openssl36")
 }
 
-// isCodexHTTPH2Enabled 报告 Codex HTTP 出站是否走 codexwire 的 hyper/h2
-// 保真客户端（默认开启；false 为紧急回滚开关）。
+// isCodexHTTPH2Enabled 报告 Codex HTTP 出站是否模拟「自定义 CA」部署：
+// rustls-h2 ClientHello + codexwire h2 多路复用。默认关闭（官方默认是
+// OpenSSL + HTTP/1.1）。
 func (s *OpenAIGatewayService) isCodexHTTPH2Enabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.CodexHTTPH2Enabled
 }

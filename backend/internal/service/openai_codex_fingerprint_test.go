@@ -320,9 +320,16 @@ func TestApplyCodexFingerprintHeaders_FullMode(t *testing.T) {
 	hB.Set("x-codex-turn-metadata", `{"installation_id":"x","session_id":"x","thread_id":"x","turn_id":"x","window_id":"x:0"}`)
 	applyCodexFingerprintHeaders(hB, idsB)
 
-	assert.Equal(t, hA.Get("thread-id"), hB.Get("thread-id"), "full 模式 thread_id 应相同")
-	assert.Equal(t, convergedSession, hA.Get("thread-id"), "full 模式 thread_id 应等于 session_id")
-	assert.Equal(t, hA.Get("x-codex-window-id"), hB.Get("x-codex-window-id"), "full 模式 window_id 应相同")
+	// 多用户中转：一个账号一台设备，每个下游会话一个独立线程（v7），根线程
+	// thread_id == session_id；不同会话不再塌缩成同一线程。
+	_ = convergedSession
+	assert.NotEqual(t, hA.Get("thread-id"), hB.Get("thread-id"), "full 模式不同会话应是不同线程")
+	assert.Equal(t, hA.Get("session-id"), hA.Get("thread-id"), "full 模式 thread_id 应等于 session_id")
+	assert.Equal(t, hA.Get("thread-id")+":0", hA.Get("x-codex-window-id"))
+	assert.Equal(t, idsA.installationID, idsB.installationID, "full 模式 installation_id 应相同")
+	parsed, err := uuid.Parse(hA.Get("session-id"))
+	require.NoError(t, err)
+	assert.EqualValues(t, 7, parsed.Version(), "session-id 应为 UUIDv7")
 }
 
 // --- H1 修复验证：头和体的 turn_id 一致性 ---
@@ -529,8 +536,11 @@ func TestApplyCodexFingerprintClientMetadata_FullMode(t *testing.T) {
 	require.True(t, ok)
 	convergedSession := resolveConvergedSessionID(seed)
 
-	assert.Equal(t, convergedSession, cm["session_id"])
-	assert.Equal(t, convergedSession, cm["thread_id"], "full 模式 thread_id 应等于 session_id")
+	// 客户端带了会话 id：派生该会话专属的 v7 线程，与头改写同一份 ids；
+	// thread_id == session_id，且不再是账号级共享会话。
+	assert.Equal(t, ids.sessionID, cm["session_id"])
+	assert.Equal(t, ids.sessionID, cm["thread_id"], "full 模式 thread_id 应等于 session_id")
+	assert.NotEqual(t, convergedSession, cm["session_id"], "有会话信号时不塌缩到账号级会话")
 }
 
 // --- extractClientSessionID ---
@@ -927,7 +937,9 @@ func TestBuildUpstreamRequestOpenAIPassthrough_AppliesStagedFingerprint(t *testi
 	turnMetadata := req.Header.Get("x-codex-turn-metadata")
 	require.NotEmpty(t, turnMetadata)
 	assert.Contains(t, turnMetadata, ids.sessionID, "turn-metadata JSON 中的 session_id 应被收敛")
-	assert.Contains(t, turnMetadata, `"sandbox":"seatbelt"`, "turn-metadata 未指定字段应原样保留")
+	// 出站 UA 是 Linux（canonical codex-tui Ubuntu）：macOS 的 seatbelt 与之矛盾，
+	// 随设备平台改写为 seccomp。
+	assert.Contains(t, turnMetadata, `"sandbox":"seccomp"`, "sandbox 跟随出站 UA 平台")
 }
 
 func TestBuildUpstreamRequestOpenAIPassthrough_OffModeKeepsIsolatedSession(t *testing.T) {

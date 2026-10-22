@@ -128,6 +128,86 @@ func TestPMDRoundTrip_ContextTakeover(t *testing.T) {
 	}
 }
 
+// TestPMDWindow_DoesNotPinLargeMessages guards the idle-socket memory bug: the
+// context-takeover dictionary must never retain more than the window, even
+// after a message far larger than the window.
+func TestPMDWindow_DoesNotPinLargeMessages(t *testing.T) {
+	comp := newPMDCompressor(true, 0)
+	decomp := newPMDDecompressor(true, 0)
+	big := bytes.Repeat([]byte(`{"type":"message","content":"0123456789abcdef"}`), 100_000) // ~4.6MB
+	wire, err := comp.Compress(big)
+	if err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	out, err := decomp.Decompress(wire)
+	if err != nil {
+		t.Fatalf("decompress: %v", err)
+	}
+	if !bytes.Equal(out, big) {
+		t.Fatalf("roundtrip mismatch")
+	}
+	for name, w := range map[string]*pmdWindow{"compress": &comp.window, "inflate": &decomp.window} {
+		if cap(w.buf) > pmdDefaultWindowSize {
+			t.Fatalf("%s window retains %d bytes, want <= %d", name, cap(w.buf), pmdDefaultWindowSize)
+		}
+		if !bytes.Equal(w.buf, big[len(big)-pmdDefaultWindowSize:]) {
+			t.Fatalf("%s window does not hold the message tail", name)
+		}
+	}
+	// The dictionary must still work after the big message.
+	next := []byte(`{"type":"message","content":"0123456789abcdef"}`)
+	wire, err = comp.Compress(next)
+	if err != nil {
+		t.Fatalf("compress next: %v", err)
+	}
+	if out, err = decomp.Decompress(wire); err != nil || !bytes.Equal(out, next) {
+		t.Fatalf("roundtrip after big message: %q %v", out, err)
+	}
+}
+
+// TestPMDWindow_PushSlides checks the sliding window across many small pushes.
+func TestPMDWindow_PushSlides(t *testing.T) {
+	w := pmdWindow{size: 8}
+	var all []byte
+	for i := 0; i < 50; i++ {
+		chunk := []byte{byte('a' + i%26), byte('A' + i%26), byte('0' + i%10)}
+		all = append(all, chunk...)
+		w.push(chunk)
+		want := all
+		if len(want) > 8 {
+			want = want[len(want)-8:]
+		}
+		if !bytes.Equal(w.buf, want) || cap(w.buf) != 8 {
+			t.Fatalf("step %d: window=%q cap=%d want %q", i, w.buf, cap(w.buf), want)
+		}
+	}
+}
+
+// TestPMDPooledWriters_IndependentStreams interleaves two connections so a
+// pooled writer/reader serves both; state must not leak between them.
+func TestPMDPooledWriters_IndependentStreams(t *testing.T) {
+	ca, da := newPMDCompressor(true, 0), newPMDDecompressor(true, 0)
+	cb, db := newPMDCompressor(true, 0), newPMDDecompressor(true, 0)
+	for i := 0; i < 20; i++ {
+		ma := []byte(strings.Repeat("alpha-stream ", 10+i))
+		mb := []byte(strings.Repeat("BRAVO|stream ", 7+i))
+		wa, err := ca.Compress(ma)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wb, err := cb.Compress(mb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out, err := db.Decompress(wb); err != nil || !bytes.Equal(out, mb) {
+			t.Fatalf("stream b msg %d: %q %v", i, out, err)
+		}
+		if out, err := da.Decompress(wa); err != nil || !bytes.Equal(out, ma) {
+			t.Fatalf("stream a msg %d: %q %v", i, out, err)
+		}
+	}
+}
+
 func TestPMDRoundTrip_NoContextTakeover(t *testing.T) {
 	comp := newPMDCompressor(false, 0)
 	decomp := newPMDDecompressor(false, 0)

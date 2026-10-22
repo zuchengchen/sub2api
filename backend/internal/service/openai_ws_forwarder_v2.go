@@ -416,6 +416,28 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		lease.Release()
 	}()
 	connID := strings.TrimSpace(lease.ConnID())
+	// previous_response_id is socket-scoped in the official client: a reconnect
+	// clears last_request and the first frame on a new socket is a full request
+	// (core/src/client.rs). The per-session delta chain may have picked a
+	// response from another (or a closed) socket; with store=false that
+	// response cannot be continued here, so revert to the full input.
+	if deltaApplied && stateStore != nil && previousResponseID != "" {
+		producerConn, sameSocket := openAIWSResponseProducedOnConn(stateStore, previousResponseID, connID)
+		if !sameSocket {
+			logOpenAIWSModeInfo(
+				"delta_revert account_id=%d reason=socket_mismatch conn_id=%s producer_conn_id=%s previous_response_id=%s",
+				account.ID,
+				truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+				truncateOpenAIWSLogValue(producerConn, openAIWSIDValueMaxLen),
+				truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen),
+			)
+			payload["input"] = append([]json.RawMessage(nil), deltaLogicalItems...)
+			delete(payload, "previous_response_id")
+			previousResponseID = ""
+			previousResponseIDKind = ""
+			deltaApplied = false
+		}
+	}
 	logOpenAIWSModeDebug(
 		"connected account_id=%d account_type=%s transport=%s conn_id=%s conn_reused=%v conn_idle_ms=%d conn_age_ms=%d upstream_pings=%d conn_pick_ms=%d queue_wait_ms=%d has_previous_response_id=%v",
 		account.ID,

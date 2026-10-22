@@ -384,8 +384,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	// Override session_id with a deterministic UUID derived from the isolated
-	// session key, ensuring different API keys produce different upstream sessions.
-	if account.Platform != PlatformGrok && promptCacheKey != "" {
+	// session key, ensuring different API keys produce different upstream
+	// sessions. Codex OAuth accounts carry the official session-id/thread-id
+	// pair instead (set by buildUpstreamRequest), so they skip this.
+	if account.Platform != PlatformGrok && promptCacheKey != "" && !account.UsesOpenAICodexProtocol() {
 		isolatedSessionID := generateSessionUUID(isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), promptCacheKey))
 		upstreamReq.Header.Set("session_id", isolatedSessionID)
 		if upstreamReq.Header.Get("conversation_id") != "" {
@@ -393,11 +395,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 	}
 	if account.UsesOpenAICodexProtocol() && account.Platform != PlatformGrok {
-		// buildUpstreamRequest 保留 Messages bridge 的 body/session 兼容行为，并会先
-		// 清除身份头。真正发送前恢复完整 Codex 身份，避免 ChatGPT Codex 上游因缺失
-		// originator/OpenAI-Beta 返回 404（issue #3901）。
+		// buildUpstreamRequest 保留 Messages bridge 的 body 兼容行为，并会先清除
+		// 身份头。发送前恢复配对的 originator/User-Agent/version（issue #3901 是
+		// 这三者的配对与版本门槛，不是 OpenAI-Beta），再按官方 HTTP 线序收口：
+		// 官方 HTTP 请求从不带 OpenAI-Beta / session_id / conversation_id /
+		// x-codex-installation-id 头（golden 0.163.0）。
 		ensureCodexIdentityHeaders(upstreamReq.Header)
 		enforceCodexIdentityHeaders(upstreamReq.Header)
+		projectCodexOutboundHeaders(upstreamReq.Header, false)
 		logger.L().Debug("openai messages: upstream identity restored",
 			zap.Int64("account_id", account.ID),
 			zap.String("upstream_model", upstreamModel),

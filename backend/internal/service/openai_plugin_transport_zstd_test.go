@@ -158,8 +158,16 @@ func TestMaybeCompressCodexUpstreamRequest_PreservesExistingEncoding(t *testing.
 func TestResolveCodexHTTPSTLSProfile_DefaultsAndOverrides(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 
-	if p := svc.resolveCodexHTTPSTLSProfile(zstdTestCodexAccount(t)); p == nil || !strings.Contains(strings.ToLower(p.Name), "rustls") {
-		t.Fatalf("default profile = %+v, want rustls", p)
+	// Official Linux Codex CLI HTTP lane: OpenSSL, no ALPN, raw HTTP/1.1.
+	if p := svc.resolveCodexHTTPSTLSProfile(zstdTestCodexAccount(t)); p == nil || !p.H1 || p.H2 || len(p.ALPNProtocols) != 0 || !strings.Contains(p.Name, "OpenSSL") {
+		t.Fatalf("default profile = %+v, want openssl36 h1", p)
+	}
+
+	// Custom-CA deployment emulation: rustls + h2.
+	h2Svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	h2Svc.cfg.Gateway.OpenAIWS.CodexHTTPH2Enabled = true
+	if p := h2Svc.resolveCodexHTTPSTLSProfile(zstdTestCodexAccount(t)); p == nil || !p.H2 || !strings.Contains(strings.ToLower(p.Name), "rustls") {
+		t.Fatalf("h2 profile = %+v, want rustls-h2", p)
 	}
 
 	withProfile := zstdTestCodexAccount(t)

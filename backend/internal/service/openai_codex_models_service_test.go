@@ -1572,7 +1572,14 @@ func (s *codexModelsHTTPUpstreamStub) Do(req *http.Request, proxyURL string, acc
 	return s.do(req, proxyURL, accountID, accountConcurrency)
 }
 
+// DoWithTLS mirrors the repository: plain-http targets carry no TLS
+// fingerprint and use the normal transport, so OAuth requests aimed at the
+// local httptest manifest server (chatgptCodexModelsURL override) really hit
+// it, exercising the device-lane code path end to end.
 func (s *codexModelsHTTPUpstreamStub) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	if req != nil && req.URL != nil && req.URL.Scheme == "http" {
+		return http.DefaultTransport.RoundTrip(req)
+	}
 	return s.Do(req, proxyURL, accountID, accountConcurrency)
 }
 

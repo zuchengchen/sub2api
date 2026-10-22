@@ -1782,7 +1782,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				unpinSessionConn(sessionConnID)
 			}
 		}
-		shouldPreflightPing := turn > 1 && sessionLease != nil && sessionLease.SupportsIdlePingWithoutReader() && turnRetry == 0
+		// Official Codex never pings upstream between turns; a dead socket shows
+		// up on the next write and goes through the normal retry path.
+		shouldPreflightPing := turn > 1 && sessionLease != nil && sessionLease.SupportsIdlePingWithoutReader() && turnRetry == 0 &&
+			(s.cfg == nil || s.cfg.Gateway.OpenAIWS.ClientPingEnabled)
 		if shouldPreflightPing && openAIWSIngressPreflightPingIdle > 0 && !lastTurnFinishedAt.IsZero() {
 			if time.Since(lastTurnFinishedAt) < openAIWSIngressPreflightPingIdle {
 				shouldPreflightPing = false

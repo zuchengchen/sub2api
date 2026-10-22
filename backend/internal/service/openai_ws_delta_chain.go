@@ -251,3 +251,15 @@ func openAIWSDeltaWireItems(body []byte, payloadInput any) []json.RawMessage {
 		return []json.RawMessage{rawItem}
 	}
 }
+
+// openAIWSResponseProducedOnConn reports whether responseID was produced on
+// connID. previous_response_id is only valid on the socket that produced it
+// (store=false; the official client resends full input after any reconnect).
+func openAIWSResponseProducedOnConn(store OpenAIWSStateStore, responseID, connID string) (string, bool) {
+	if store == nil || strings.TrimSpace(responseID) == "" || strings.TrimSpace(connID) == "" {
+		return "", false
+	}
+	producer, ok := store.GetResponseConn(responseID)
+	producer = strings.TrimSpace(producer)
+	return producer, ok && producer == strings.TrimSpace(connID)
+}

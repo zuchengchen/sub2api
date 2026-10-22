@@ -2,8 +2,6 @@ package service
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +15,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -460,12 +459,19 @@ func ensureCodexClientMetadataDefaults(cm map[string]any, headers http.Header, b
 	if sessionID == "" && headers != nil {
 		sessionID = from(headers.Get("session-id"), headers.Get("session_id"), headers.Get("conversation_id"))
 	}
+	identitySeed := codexIdentityClockSeed(account)
 	if sessionID == "" {
-		sessionID = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
+		// Raw body key: isolate per credential before it becomes an identity.
+		if key := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()); key != "" {
+			sessionID = isolateOpenAIUpstreamSessionID(0, account, key)
+		}
 	}
 	if sessionID == "" {
 		sessionID = deriveCodexFallbackSessionID(account, body)
 	}
+	// Official session ids are UUIDv7. Isolated cache keys (16 hex) or custom
+	// keys must not reach the wire as session-id; map them to a stable v7.
+	sessionID = canonicalCodexSessionHeaderValue(sessionID)
 	threadID := from(metadata["thread_id"], cm["thread_id"])
 	if threadID == "" && headers != nil {
 		threadID = from(headers.Get("thread-id"), headers.Get("thread_id"), headers.Get("x-client-request-id"))
@@ -473,15 +479,18 @@ func ensureCodexClientMetadataDefaults(cm map[string]any, headers http.Header, b
 	if threadID == "" {
 		threadID = sessionID
 	}
-	bodyDigest := sha256.Sum256(body)
+	threadID = canonicalCodexSessionHeaderValue(threadID)
 	turnID := from(metadata["turn_id"], cm["turn_id"])
 	if turnID == "" && headers != nil {
 		turnID = strings.TrimSpace(headers.Get("turn-id"))
 	}
+	var turnStartedAt int64
 	if turnID == "" {
-		// 官方 turn_id 是每回合新生成的 Uuid::now_v7()（core/src/turn_metadata.rs:134），
-		// 时间戳位取当前时刻，与 v7 语义自洽。
-		turnID = deriveStableCodexUUIDv7("sub2api:codex-turn:v1:"+sessionID+":"+hex.EncodeToString(bodyDigest[:]), time.Now().UnixMilli())
+		// 官方 turn_id 是每回合一个 Uuid::now_v7()，同一回合的工具循环请求复用
+		// 同一 turn_id 与 turn_started_at（golden 0.163.0）。按最后一条 user
+		// 消息派生回合，而不是按整个请求体——后者每个工具循环请求都不同。
+		turnID, turnStartedAt = resolveCodexTurnIdentity(defaultCodexTurnClock, identitySeed, threadID,
+			codexTurnEvidence{InputTurnSeed: codexInputTurnSeed(gjson.GetBytes(body, "input"))})
 	}
 	windowID := from(metadata["window_id"], cm["x-codex-window-id"], cm["window_id"])
 	if windowID == "" && headers != nil {
@@ -539,7 +548,13 @@ func ensureCodexClientMetadataDefaults(cm map[string]any, headers http.Header, b
 		changed = true
 	}
 	if _, exists := metadata["turn_started_at_unix_ms"]; !exists {
-		metadata["turn_started_at_unix_ms"] = time.Now().UnixMilli()
+		if turnStartedAt <= 0 {
+			turnStartedAt = codexUUIDv7Millis(turnID)
+		}
+		if turnStartedAt <= 0 {
+			turnStartedAt = time.Now().UnixMilli()
+		}
+		metadata["turn_started_at_unix_ms"] = turnStartedAt
 		changed = true
 	}
 	raw, err := marshalCodexTurnMetadata(metadata)
@@ -556,7 +571,10 @@ func ensureCodexClientMetadataDefaults(cm map[string]any, headers http.Header, b
 		headers.Set("thread-id", threadID)
 		headers.Set("x-client-request-id", threadID)
 		headers.Set("x-codex-window-id", windowID)
-		headers.Set("session_id", sessionID)
+		// Official HTTP traffic has no underscored session_id (golden 0.163.0);
+		// projectCodexOutboundHeaders strips it on the normal paths, and the
+		// compat bridges no longer depend on it.
+		headers.Del("session_id")
 		headerRaw, err := sjson.DeleteBytes(raw, "tool_namespaces_info")
 		if err != nil {
 			return false, err
@@ -564,6 +582,40 @@ func ensureCodexClientMetadataDefaults(cm map[string]any, headers http.Header, b
 		headers.Set(openAIWSTurnMetadataHeader, string(headerRaw))
 	}
 	return changed, nil
+}
+
+// codexIdentityClockSeed namespaces derived session/turn ids per account:
+// the account's fingerprint seed when present, else its id.
+func codexIdentityClockSeed(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	if seed, ok := codexFingerprintSeed(account.Extra); ok {
+		return seed
+	}
+	return "account:" + strconv.FormatInt(account.ID, 10)
+}
+
+// canonicalCodexSessionHeaderValue maps an isolated session key to the value
+// sent as session-id. Official session ids are UUIDv7; the 16-hex isolation
+// keys must not reach the wire. HTTP (ensureCodexClientMetadataDefaults) and
+// WS handshakes apply the same mapping so both lanes agree.
+//
+// Callers pass an already-isolated key (isolateOpenAIUpstreamSessionID mixes in
+// the API key and the credential account), so the mapping itself uses a fixed
+// seed: shadow/agent-identity/OAuth views of one credential and the HTTP/WS
+// lanes then agree byte for byte.
+func canonicalCodexSessionHeaderValue(sessionKey string) string {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" || isCanonicalUUID(sessionKey) {
+		return sessionKey
+	}
+	return resolveCodexSessionIdentity(defaultCodexTurnClock, "sub2api:codex-session-canon:v1", sessionKey)
+}
+
+func isCanonicalUUID(raw string) bool {
+	parsed, err := uuid.Parse(strings.TrimSpace(raw))
+	return err == nil && parsed.String() == strings.TrimSpace(raw)
 }
 
 // deriveCodexFallbackSessionID 为完全未携带会话信号（无 header、无
