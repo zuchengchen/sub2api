@@ -566,7 +566,7 @@ func applyCodexIdentityToWSPayload(c *gin.Context, account *Account, payload []b
 	stageCodexConvergenceBodyIdentity(c, source, nil)
 	var ids *codexFingerprintIDs
 	if codexFingerprintConvergenceEnabled(source) {
-		ids = resolveCodexFingerprintIDsWithBody(c, account, nil, gjson.GetBytes(payload, "client_metadata"))
+		ids = resolveCodexFingerprintIDsForRawBody(c, account, nil, payload)
 	}
 	next, _, err := applyCodexAccountIdentityClientMetadataRaw(payload, source, getAPIKeyIDFromContext(c))
 	if err != nil {

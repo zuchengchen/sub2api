@@ -429,7 +429,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			return nil, fmt.Errorf("build upstream request: %w", buildErr)
 		}
 
-		if promptCacheKey != "" {
+		// Codex OAuth accounts already carry the official session-id/thread-id
+		// pair from buildUpstreamRequest (a UUIDv7 per conversation); an extra
+		// underscored session_id is a header the Codex CLI never sends.
+		if promptCacheKey != "" && !account.UsesOpenAICodexProtocol() {
 			apiKeyID := getAPIKeyIDFromContext(c)
 			sessionKey := promptCacheKey
 			if !compatPromptCacheTenantIsolated {

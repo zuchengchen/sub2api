@@ -314,6 +314,14 @@ func projectCodexOutboundHeaders(h http.Header, websocket bool) {
 			h.Set("thread-id", isolated)
 		}
 	}
+	// 官方 session-id / thread-id / x-client-request-id 恒为 UUID（v7）。隔离键
+	// （16 hex）或客户端自造的非 UUID 值映射成稳定 v7；与 client_metadata 侧
+	// （ensureCodexClientMetadataDefaults）同一函数，两侧逐字节一致。
+	for _, name := range [...]string{"session-id", "thread-id", "x-client-request-id"} {
+		if v := strings.TrimSpace(h.Get(name)); v != "" {
+			h.Set(name, canonicalCodexSessionHeaderValue(v))
+		}
+	}
 	// HTTP 与 WS 名单长度不同，这里按切片遍历，保留各自完整集合。
 	var nonOfficial []string
 	if websocket {

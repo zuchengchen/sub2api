@@ -166,7 +166,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	// 的单次作用域不一致），再交给后面的收口删除非官方名。
 	if account != nil && account.UsesOpenAICodexProtocol() && strings.TrimSpace(headers.Get("session-id")) == "" {
 		if isolated := strings.TrimSpace(headers.Get("session_id")); isolated != "" {
-			headers.Set("session-id", isolated)
+			headers.Set("session-id", canonicalCodexSessionHeaderValue(isolated))
 		}
 	}
 	applyStagedCodexFingerprintHeaders(c, account, headers)
