@@ -439,14 +439,21 @@ func TestCodexSynthesisTrimsOptionalContextBeforeFailing(t *testing.T) {
 	input := []any{base, permissions, skills, env, user}
 	// Budget fits base + env + user but not the two optional blocks.
 	budget := codexSynthesisEstimatedTokens([]any{base, permissions, env, user}) + 8
-	input, truncated, err := codexSynthesisTrimToBudget(input, budget, skills)
+	input, truncated, err := codexSynthesisTrimToBudget(input, codexSynthContextLimits{Advertised: budget, Hard: budget}, skills)
 	require.NoError(t, err)
 	require.True(t, truncated)
 	require.Len(t, input, 4, "skills first, then permissions")
 	require.Equal(t, json.RawMessage(permissions), input[1], "permissions survive when the budget allows")
 
-	_, _, err = codexSynthesisTrimToBudget(input, 1, nil)
-	require.Error(t, err, "untrimmed base/client input is never silently truncated")
+	// Past the advertised window but under the hard maximum: trim optional
+	// context and still forward.
+	trimmed, truncated, err := codexSynthesisTrimToBudget(append([]any(nil), input...), codexSynthContextLimits{Advertised: 1, Hard: 1_000_000}, nil)
+	require.NoError(t, err)
+	require.True(t, truncated)
+	require.Len(t, trimmed, 3, "permissions dropped, base/env/user kept")
+
+	_, _, err = codexSynthesisTrimToBudget(input, codexSynthContextLimits{Advertised: 1, Hard: 1}, nil)
+	require.ErrorIs(t, err, ErrCodexSynthContextWindowExceeded, "untrimmed base/client input is never silently truncated")
 }
 
 func TestCodexStreamIdleTimeoutScope(t *testing.T) {

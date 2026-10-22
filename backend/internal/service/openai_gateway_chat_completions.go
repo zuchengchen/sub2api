@@ -343,6 +343,16 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			}
 			result, synthErr := synthesizeCodexOAuthRequest(reqBody, account, upstreamModel, synthOptions)
 			if synthErr != nil {
+				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
+					MarkResponseCommitted(c)
+					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+						"type":    "invalid_request_error",
+						"code":    "context_length_exceeded",
+						"param":   "messages",
+						"message": codexSynthContextLengthMessage,
+					}})
+					return nil, synthErr
+				}
 				writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", synthErr.Error())
 				return nil, synthErr
 			}
