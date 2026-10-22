@@ -243,7 +243,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			}
 			result, synthErr := synthesizeCodexOAuthRequest(reqBody, account, upstreamModel, synthOptions)
 			if synthErr != nil {
-				writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", synthErr.Error())
+				message := synthErr.Error()
+				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
+					// Claude Code compacts on Anthropic's "prompt is too long" wording.
+					message = "prompt is too long: " + codexSynthContextLengthMessage
+				}
+				writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", message)
 				return nil, synthErr
 			}
 			if result.Modified {
