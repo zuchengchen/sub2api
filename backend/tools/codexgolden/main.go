@@ -47,6 +47,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "compare" {
+		os.Exit(compareMain(os.Args[2:]))
+	}
 	codexBin := flag.String("codex", "codex", "path to the Codex CLI binary to record")
 	outDir := flag.String("out", "", "output directory for golden files (required)")
 	timeout := flag.Duration("timeout", 90*time.Second, "per-run timeout")

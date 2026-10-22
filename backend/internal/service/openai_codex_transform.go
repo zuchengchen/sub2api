@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 var codexModelMap = map[string]string{
@@ -96,6 +99,9 @@ type codexOAuthTransformOptions struct {
 	OmitPromotedSystemMessagesFromInput bool
 	// ResponsesLite selects where an injected hosted tool is declared.
 	ResponsesLite bool
+	// WireProfile applies version-specific 0.164 behavior. Nil means the
+	// stable 0.163 shape (zero-value behavior for tests and non-OAuth paths).
+	WireProfile *codexWireProfile
 }
 
 const (
@@ -337,6 +343,9 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			PreserveReferences: needsToolContinuation,
 			PreserveCallIDs:    opts.PreserveToolCallIDs,
 		})
+		if reordered, moved := ensureCodexBaseInstructionsFirst(input); moved {
+			input = reordered
+		}
 		reqBody["input"] = input
 		result.Modified = true
 	} else if inputStr, ok := reqBody["input"].(string); ok {
@@ -363,10 +372,82 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		result.Modified = true
 	}
 
+	if opts.WireProfile != nil && applyCodexWireProfileInputRules(reqBody, *opts.WireProfile, opts.ResponsesLite) {
+		result.Modified = true
+	}
+
 	if !opts.IsCompact && ensureCodexResponsesDefaults(reqBody) {
 		result.Modified = true
 	}
 	return result
+}
+
+// applyCodexWireProfileInputRules applies version-scoped input transformations
+// from the 0.164 profiles: clear content_item_metadata for non-lite models,
+// dedupe adjacent configuration_update items (keeping the latest), and honor
+// the prompt_cache_key policy.
+func applyCodexWireProfileInputRules(reqBody map[string]any, profile codexWireProfile, responsesLite bool) bool {
+	if reqBody == nil {
+		return false
+	}
+	modified := false
+	if profile.PromptCacheKeyPolicy == codexPromptCacheKeyOmit {
+		if _, ok := reqBody["prompt_cache_key"]; ok {
+			delete(reqBody, "prompt_cache_key")
+			modified = true
+		}
+	}
+	if !profile.ClearContentItemMetadata && !profile.DedupeConfigurationUpdates {
+		return modified
+	}
+	input, ok := reqBody["input"].([]any)
+	if !ok || len(input) == 0 {
+		return modified
+	}
+	next := make([]any, 0, len(input))
+	previousConfigurationUpdate := -1
+	for _, raw := range input {
+		item, isMap := raw.(map[string]any)
+		itemType := ""
+		if isMap {
+			itemType, _ = item["type"].(string)
+		} else if rawMessage, ok := raw.(json.RawMessage); ok {
+			itemType = gjson.GetBytes(rawMessage, "type").String()
+		}
+		if profile.DedupeConfigurationUpdates && itemType == "configuration_update" {
+			if previousConfigurationUpdate >= 0 {
+				// Keep the latest adjacent update only.
+				next = append(next[:previousConfigurationUpdate], next[previousConfigurationUpdate+1:]...)
+				modified = true
+			}
+			previousConfigurationUpdate = len(next)
+			next = append(next, raw)
+			continue
+		}
+		previousConfigurationUpdate = -1
+		if profile.ClearContentItemMetadata && !responsesLite {
+			switch v := raw.(type) {
+			case map[string]any:
+				if meta, ok := v["internal_chat_message_metadata_passthrough"].(map[string]any); ok {
+					if _, exists := meta["content_item_metadata"]; exists {
+						delete(meta, "content_item_metadata")
+						modified = true
+					}
+				}
+			case json.RawMessage:
+				if updated, err := sjson.DeleteBytes(v, "internal_chat_message_metadata_passthrough.content_item_metadata"); err == nil && !bytes.Equal(updated, v) {
+					next = append(next, json.RawMessage(updated))
+					modified = true
+					continue
+				}
+			}
+		}
+		next = append(next, raw)
+	}
+	if modified {
+		reqBody["input"] = next
+	}
+	return modified
 }
 
 func normalizeCodexToolChoice(reqBody map[string]any) bool {
@@ -2013,4 +2094,62 @@ func normalizeCodexTools(reqBody map[string]any) bool {
 	}
 
 	return modified
+}
+
+// ensureCodexBaseInstructionsFirst moves the model.base_instructions developer
+// message to input[0]. The official client always sends it first; bridge paths
+// (for example the Claude Code todo guard) may prepend another developer item
+// after synthesis, which would otherwise change the prefix the model sees.
+func ensureCodexBaseInstructionsFirst(input []any) ([]any, bool) {
+	if len(input) < 2 {
+		return input, false
+	}
+	baseIndex := -1
+	for i, raw := range input {
+		item, ok := raw.(map[string]any)
+		if ok {
+			if isCodexBaseInstructionsItem(item) {
+				baseIndex = i
+				break
+			}
+			continue
+		}
+		rawMessage, ok := raw.(json.RawMessage)
+		if !ok {
+			continue
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(rawMessage, &decoded); err != nil {
+			continue
+		}
+		if isCodexBaseInstructionsItem(decoded) {
+			baseIndex = i
+			break
+		}
+	}
+	if baseIndex <= 0 {
+		return input, false
+	}
+	reordered := make([]any, 0, len(input))
+	reordered = append(reordered, input[baseIndex])
+	reordered = append(reordered, input[:baseIndex]...)
+	reordered = append(reordered, input[baseIndex+1:]...)
+	return reordered, true
+}
+
+// ensureCodexBaseInstructionsFirstInBody re-applies the input[0] invariant
+// after bridge-specific prepends (for example the Claude Code todo guard).
+func ensureCodexBaseInstructionsFirstInBody(reqBody map[string]any) bool {
+	if reqBody == nil {
+		return false
+	}
+	input, ok := reqBody["input"].([]any)
+	if !ok {
+		return false
+	}
+	reordered, moved := ensureCodexBaseInstructionsFirst(input)
+	if moved {
+		reqBody["input"] = reordered
+	}
+	return moved
 }

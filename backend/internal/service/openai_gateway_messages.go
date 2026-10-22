@@ -223,15 +223,49 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
+		var synthResult *codexSynthResult
+		var fpIDs *codexFingerprintIDs
+		var wireProfile codexWireProfile
+		var wireProfilePtr *codexWireProfile
+		if isCodexOAuthAccount(account) {
+			wireProfile, _ = codexWireProfileForAccount(account, s.cfg)
+			wireProfilePtr = &wireProfile
+		}
+		if isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() {
+			deviceProfile, _ := codexDeviceProfileForRequest(account)
+			synthOptions := codexSynthOptions{
+				ResponsesLite: false,
+				WireProfile:   wireProfile,
+				WireVersion:   CodexCanonicalClientVersion(),
+				Device:        deviceProfile,
+				Now:           time.Now(),
+				Strict:        s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
+			}
+			result, synthErr := synthesizeCodexOAuthRequest(reqBody, account, upstreamModel, synthOptions)
+			if synthErr != nil {
+				writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", synthErr.Error())
+				return nil, synthErr
+			}
+			if result.Modified {
+				synthResult = &result
+				markCodexSynthesized(c)
+			}
+		}
+		synthesized := synthResult != nil && synthResult.Modified
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
 			SkipDefaultInstructions: true,
 			PreserveToolCallIDs:     true,
+			WireProfile:             wireProfilePtr,
 		})
 		if codexResult.Error != nil {
 			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", codexResult.Error.Error())
 			return nil, codexResult.Error
 		}
-		setCodexToolNameReverse(c, codexResult.ToolNameReverse)
+		reverse := codexResult.ToolNameReverse
+		if synthResult != nil && len(synthResult.ToolNameReverse) > 0 {
+			reverse = mergeCodexToolNameReverseMaps(synthResult.ToolNameReverse, reverse)
+		}
+		setCodexToolNameReverse(c, reverse)
 		forcedTemplateText := ""
 		if s.cfg != nil {
 			forcedTemplateText = s.cfg.Gateway.ForcedCodexInstructionsTemplate
@@ -253,9 +287,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}); err != nil {
 			return nil, err
 		}
-		ensureCodexOAuthInstructionsField(reqBody)
+		if !synthesized {
+			ensureCodexOAuthInstructionsField(reqBody)
+		}
 		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 			appendOpenAICompatClaudeCodeTodoGuardToRequestBody(reqBody)
+		}
+		if synthesized {
+			ensureCodexBaseInstructionsFirstInBody(reqBody)
 		}
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel
@@ -266,6 +305,18 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		restoreBridge, _ := s.injectOpenAICompatBridgeIdentity(c, account, reqBody, promptCacheKey)
 		defer restoreBridge()
 		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), apiKeyID)
+		if isCodexOAuthAccount(account) {
+			var clientHeaders http.Header
+			if c != nil && c.Request != nil {
+				clientHeaders = c.Request.Header
+			}
+			fpIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, reqBody)
+			if fpIDs != nil {
+				fpIDs.promptCacheKeyPolicy = codexPromptCacheKeyOmit
+				applyCodexFingerprintClientMetadata(reqBody, fpIDs)
+			}
+			stageCodexFingerprintIDs(c, fpIDs)
+		}
 		if !codexDeviceWireProfileEnabled(c, account) {
 			delete(reqBody, "prompt_cache_key")
 		}
@@ -982,10 +1033,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 
-	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
-	}
+	streamInterval := s.codexStreamIdleTimeout(account)
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
 		intervalTicker = time.NewTicker(streamInterval)

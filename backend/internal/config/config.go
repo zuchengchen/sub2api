@@ -920,6 +920,40 @@ const (
 	ImageConcurrencyOverflowModeWait   = "wait"
 )
 
+// GatewayCodexWireConfig controls Codex CLI wire-profile emulation. Every key
+// here is read only for OpenAI OAuth accounts (isCodexOAuthAccount); SetupToken,
+// API-key, and non-OpenAI platform accounts ignore the whole section.
+type GatewayCodexWireConfig struct {
+	// Profile pins the wire profile: auto (default), stable, or main.
+	// auto follows the synced Codex version (>=0.164 uses main).
+	Profile string `mapstructure:"profile"`
+	// Strict rejects unknown/future versions instead of warning and using the
+	// newest known profile.
+	Strict bool `mapstructure:"strict"`
+	// MapOrderJitter shuffles client_metadata keys within the legal key set.
+	// Production viper defaults to true; a hand-built zero Config keeps the
+	// legacy fixed order.
+	MapOrderJitter *bool `mapstructure:"map_order_jitter"`
+	// StreamIdleTimeoutSeconds overrides the upstream SSE idle timeout for the
+	// OAuth Codex lane. 0 uses the Codex default (300s); other accounts keep
+	// gateway.stream_data_interval_timeout.
+	StreamIdleTimeoutSeconds int `mapstructure:"stream_idle_timeout_seconds"`
+}
+
+// CodexWireMapOrderJitterEnabled reports whether client_metadata key order is
+// jittered. A hand-built Config (tests/tools) keeps the legacy fixed order;
+// viper sets gateway.codex_wire.map_order_jitter=true in production.
+func (c GatewayConfig) CodexWireMapOrderJitterEnabled() bool {
+	return c.CodexWire.MapOrderJitter != nil && *c.CodexWire.MapOrderJitter
+}
+
+// CodexFullSynthesisEnabled reports whether generic clients on OAuth Codex
+// accounts are rebuilt into the full Codex request shape. A hand-built Config
+// keeps legacy behavior; viper sets gateway.codex_full_synthesis=true.
+func (c GatewayConfig) CodexFullSynthesisEnabled() bool {
+	return c.CodexFullSynthesis != nil && *c.CodexFullSynthesis
+}
+
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
 	// MinOutputTokens is the minimum max_output_tokens used when
@@ -970,6 +1004,13 @@ type GatewayConfig struct {
 	// ForceCodexCLI: 强制将 OpenAI `/v1/responses` 请求按 Codex CLI 处理。
 	// 用于网关未透传/改写 User-Agent 时的兼容兜底（默认关闭，避免影响其他客户端）。
 	ForceCodexCLI bool `mapstructure:"force_codex_cli"`
+	// CodexFullSynthesis rebuilds non-native requests into the full Codex CLI
+	// request shape when the selected account is OpenAI OAuth. Production viper
+	// defaults to true; a hand-built zero Config keeps the legacy path.
+	// SetupToken/API-key/non-OpenAI accounts never read this switch.
+	CodexFullSynthesis *bool `mapstructure:"codex_full_synthesis"`
+	// CodexWire: Codex CLI wire profile emulation (OAuth-only).
+	CodexWire GatewayCodexWireConfig `mapstructure:"codex_wire"`
 	// DisableOpenAIClientLocalTimeRewrite: 关闭「把客户端注入的本地日期/时区改写成美西」。
 	// 默认开启改写：仅 Codex `<environment_context>` 内的 XML 时钟
 	//（current_date / local_date / timezone / time_zone，以及 inner 为 HH:MM:SS 的 current_time），
@@ -2495,6 +2536,11 @@ func setDefaults() {
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.force_codex_cli", false)
+	viper.SetDefault("gateway.codex_full_synthesis", true)
+	viper.SetDefault("gateway.codex_wire.profile", "auto")
+	viper.SetDefault("gateway.codex_wire.strict", false)
+	viper.SetDefault("gateway.codex_wire.map_order_jitter", true)
+	viper.SetDefault("gateway.codex_wire.stream_idle_timeout_seconds", 0)
 	viper.SetDefault("gateway.disable_openai_client_local_time_rewrite", false)
 	viper.SetDefault("gateway.openai_request_timezone_fallback", "")
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
@@ -3495,6 +3541,18 @@ func (c *Config) Validate() error {
 	if c.Gateway.StreamDataIntervalTimeout != 0 &&
 		(c.Gateway.StreamDataIntervalTimeout < 30 || c.Gateway.StreamDataIntervalTimeout > 300) {
 		return fmt.Errorf("gateway.stream_data_interval_timeout must be 0 or between 30-300 seconds")
+	}
+	switch strings.TrimSpace(c.Gateway.CodexWire.Profile) {
+	case "", "auto", "stable", "main":
+	default:
+		return fmt.Errorf("gateway.codex_wire.profile must be one of: auto/stable/main")
+	}
+	if c.Gateway.CodexWire.StreamIdleTimeoutSeconds < 0 {
+		return fmt.Errorf("gateway.codex_wire.stream_idle_timeout_seconds must be non-negative")
+	}
+	if c.Gateway.CodexWire.StreamIdleTimeoutSeconds != 0 &&
+		(c.Gateway.CodexWire.StreamIdleTimeoutSeconds < 30 || c.Gateway.CodexWire.StreamIdleTimeoutSeconds > 1800) {
+		return fmt.Errorf("gateway.codex_wire.stream_idle_timeout_seconds must be 0 or between 30-1800 seconds")
 	}
 	if c.Gateway.StreamKeepaliveInterval < 0 {
 		return fmt.Errorf("gateway.stream_keepalive_interval must be non-negative")

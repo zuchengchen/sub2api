@@ -2753,3 +2753,19 @@ func TestLoadDefaultCodexFidelitySwitches(t *testing.T) {
 	require.Zero(t, cfg.Gateway.OpenAIWS.MinIdlePerAccount, "official client keeps no spare sockets")
 	require.False(t, cfg.Gateway.OpenAIWS.CodexHTTPH2Enabled, "official Linux HTTP lane is OpenSSL h1")
 }
+
+func TestLoadDefaultCodexWireConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Gateway.CodexFullSynthesis)
+	require.True(t, *cfg.Gateway.CodexFullSynthesis)
+	require.Equal(t, "auto", cfg.Gateway.CodexWire.Profile)
+	require.False(t, cfg.Gateway.CodexWire.Strict)
+	require.NotNil(t, cfg.Gateway.CodexWire.MapOrderJitter)
+	require.True(t, *cfg.Gateway.CodexWire.MapOrderJitter)
+	require.Zero(t, cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds)
+	require.True(t, cfg.Gateway.CodexFullSynthesisEnabled())
+	require.True(t, cfg.Gateway.CodexWireMapOrderJitterEnabled())
+}
