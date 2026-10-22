@@ -316,6 +316,62 @@ func prependCodexWSInstructionsItem(payload map[string]any) {
 	delete(payload, "instructions")
 }
 
+// codexInputCarriesBaseInstructions reports whether the request already
+// carries Codex base instructions as an input item (the shape Codex ≥ 0.162
+// sends instead of top-level instructions): a developer message whose
+// internal_chat_message_metadata_passthrough.content_item_kinds contains
+// "model.base_instructions".
+func codexInputCarriesBaseInstructions(body []byte) bool {
+	found := false
+	gjson.GetBytes(body, "input").ForEach(func(_, item gjson.Result) bool {
+		if item.Get("role").String() != "developer" {
+			return true
+		}
+		item.Get("internal_chat_message_metadata_passthrough.content_item_kinds").ForEach(func(_, kind gjson.Result) bool {
+			if kind.String() == "model.base_instructions" {
+				found = true
+				return false
+			}
+			return true
+		})
+		return !found
+	})
+	return found
+}
+
+// codexInputMapCarriesBaseInstructions is codexInputCarriesBaseInstructions
+// for a decoded body.
+func codexInputMapCarriesBaseInstructions(reqBody map[string]any) bool {
+	input, ok := reqBody["input"].([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range input {
+		var item map[string]any
+		switch v := raw.(type) {
+		case map[string]any:
+			item = v
+		case json.RawMessage:
+			if err := json.Unmarshal(v, &item); err != nil {
+				continue
+			}
+		default:
+			continue
+		}
+		if item["role"] != "developer" {
+			continue
+		}
+		meta, _ := item["internal_chat_message_metadata_passthrough"].(map[string]any)
+		kinds, _ := meta["content_item_kinds"].([]any)
+		for _, k := range kinds {
+			if k == "model.base_instructions" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // codexWSInstructionsItemID 按 instructions 内容派生确定性 msg_ id：
 // sha256 前 16 字节格式化为 uuid v5 形态（版本/变体位与官方 uuid 形状一致）。
 func codexWSInstructionsItemID(instructions string) string {

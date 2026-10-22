@@ -501,6 +501,13 @@ func marshalOpenAIUpstreamJSON(v any) ([]byte, error) {
 // bodies incrementally before the multi-megabyte `input`, so the first ~200
 // bytes of the body are a client signature. Re-serializing a decoded Go map
 // emits keys alphabetically, which is not what a Codex client produces.
+//
+// Since Codex 0.162 (commit c9253c4977) ResponsesApiRequest has no
+// `instructions` field (golden 0.163.0 bodies: model, stream, input, tools,
+// tool_choice, parallel_tool_calls, reasoning, store, include,
+// prompt_cache_key, text, client_metadata). When a gateway-added
+// instructions key is still present (non-Codex clients) it is placed right
+// before input, where pre-0.162 clients put it.
 var codexResponsesOfficialTopLevelKeyOrder = []string{
 	"model", "stream", "service_tier", "instructions", "input", "tools",
 	"tool_choice", "parallel_tool_calls", "reasoning", "store",

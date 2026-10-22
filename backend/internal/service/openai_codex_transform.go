@@ -1634,8 +1634,11 @@ func applyCodexClientMetadata(reqBody map[string]any, account *Account) bool {
 }
 
 // applyInstructions 处理 instructions 字段：仅在 instructions 为空时填充默认值。
+// Codex ≥ 0.162 把基础指令放在 input 首位的 developer 消息
+// （content_item_kinds=["model.base_instructions"]），不发顶层 instructions；
+// 此时补默认值会让上游收到两份基础 prompt，故跳过。
 func applyInstructions(reqBody map[string]any, isCodexCLI bool) bool {
-	if !isInstructionsEmpty(reqBody) {
+	if !isInstructionsEmpty(reqBody) || codexInputMapCarriesBaseInstructions(reqBody) {
 		return false
 	}
 	model, _ := reqBody["model"].(string)
