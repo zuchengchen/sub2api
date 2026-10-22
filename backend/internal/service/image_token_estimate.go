@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/base64"
 	"image"
 	_ "image/gif"  // register GIF header decoder for image.DecodeConfig
@@ -141,4 +142,30 @@ func inlineBlobTokens(size int) int64 {
 		return inlineBlobTokenCap
 	}
 	return tokens
+}
+
+// InflightEffectiveBodyBytes converts a request body into the byte count the
+// in-flight balance reservation should charge at 4 bytes/token: inline images
+// count by pixel area, other inline base64 files are capped, and opaque
+// encrypted_content replay blobs are excluded. Bodies without such payloads
+// are returned unchanged without parsing.
+func InflightEffectiveBodyBytes(body []byte) int {
+	if len(body) == 0 {
+		return 0
+	}
+	if !bytes.Contains(body, []byte(";base64,")) &&
+		!bytes.Contains(body, []byte(`"encrypted_content"`)) &&
+		!bytes.Contains(body, []byte(`"file_data"`)) &&
+		!bytes.Contains(body, []byte(`"base64"`)) {
+		return len(body)
+	}
+	if !gjson.ValidBytes(body) {
+		return len(body)
+	}
+	tokens := int64(estimateJSONTokensWithImages(body))
+	tokens -= int64(codexSynthesisEncryptedContentBytes(body) / estimateBytesPerToken)
+	if tokens < 0 {
+		tokens = 0
+	}
+	return int(tokens * estimateBytesPerToken)
 }

@@ -108,3 +108,25 @@ func TestOfficialClientDefaultInstructionsOnlyWithoutOwnPrompt(t *testing.T) {
 	require.False(t, codexInputLeadsWithDeveloperMessage([]byte(`{"input":[{"type":"text","text":"hi"}]}`)))
 	require.False(t, codexInputLeadsWithDeveloperMessage([]byte(`{"input":[{"type":"additional_tools","role":"developer","tools":[]}]}`)))
 }
+
+// In-flight balance reservation: Codex bodies carry reasoning
+// encrypted_content and screenshots that cost far fewer tokens than their
+// base64 size. Plain bodies are untouched.
+func TestInflightEffectiveBodyBytes(t *testing.T) {
+	plain := []byte(`{"model":"gpt-6-astra","input":[{"type":"message","role":"user","content":"` + strings.Repeat("a", 40_000) + `"}]}`)
+	require.Equal(t, len(plain), InflightEffectiveBodyBytes(plain))
+
+	blob := strings.Repeat("Z", 300_000)
+	codex := []byte(`{"model":"gpt-6-astra","input":[` +
+		`{"type":"reasoning","summary":[],"encrypted_content":"` + blob + `"},` +
+		`{"type":"message","role":"user","content":"` + strings.Repeat("a", 40_000) + `"}]}`)
+	got := InflightEffectiveBodyBytes(codex)
+	require.Less(t, got, 45_000, "encrypted_content must not be reserved as ~75k input tokens")
+	require.Greater(t, got, 40_000)
+
+	pdf := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("%PDF"), 200_000))
+	withFile := []byte(`{"input":[{"type":"message","role":"user","content":[{"type":"input_file","file_data":"data:application/pdf;base64,` + pdf + `"}]}]}`)
+	require.Less(t, InflightEffectiveBodyBytes(withFile), 10_000)
+
+	require.Equal(t, 12, InflightEffectiveBodyBytes([]byte(`not json ;base64,`)[:12]))
+}

@@ -27,7 +27,7 @@ func requestMaxOutputTokens(body []byte) int {
 func tokenInflightEstimate(model string, body []byte) service.InflightEstimateRequest {
 	return service.InflightEstimateRequest{
 		Model:     model,
-		BodyBytes: len(body),
+		BodyBytes: service.InflightEffectiveBodyBytes(body),
 		MaxTokens: requestMaxOutputTokens(body),
 		Kind:      service.InflightEstimateToken,
 	}
