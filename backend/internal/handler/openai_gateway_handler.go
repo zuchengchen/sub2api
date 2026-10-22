@@ -1643,6 +1643,12 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 // handleAnthropicFailoverExhausted maps upstream failover errors to Anthropic format.
 func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
 	applyFailoverRetryAfter(c, failoverErr)
+	if failoverErr != nil && failoverErr.IsOpenAIRequestBodyTooLarge() {
+		service.SetOpsUpstreamError(c, http.StatusRequestEntityTooLarge, service.OpenAIRequestBodyTooLargeClientMessage, "")
+		h.anthropicStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error",
+			service.AnthropicPromptTooLongMessage(""), streamStarted)
+		return
+	}
 	if failoverErr != nil && failoverErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(failoverErr)
 		h.anthropicStreamingAwareError(c, status, "api_error", message, streamStarted)
@@ -3593,14 +3599,27 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	}
 	copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
 	if failoverErr.IsOpenAIRequestBodyTooLarge() {
+		// Every eligible account refused the body size. The only client-side
+		// remedy is a shorter conversation, so signal it as context overflow:
+		// Codex compacts only on a streamed response.failed with
+		// code=context_length_exceeded, chat clients on the same code.
 		service.SetOpsUpstreamError(c, http.StatusRequestEntityTooLarge, service.OpenAIRequestBodyTooLargeClientMessage, "")
-		h.handleStreamingAwareError(
-			c,
-			http.StatusRequestEntityTooLarge,
-			"invalid_request_error",
-			service.OpenAIRequestBodyTooLargeClientMessage,
-			streamStarted,
-		)
+		switch {
+		case inboundIsResponses(c) && !streamStarted:
+			service.WriteOpenAIResponsesContextLengthExceeded(c, "")
+		case !streamStarted:
+			service.WriteChatCompletionsContextLengthExceeded(c, "")
+		default:
+			h.handleStreamingAwareErrorWithCode(
+				c,
+				http.StatusBadRequest,
+				"invalid_request_error",
+				service.OpenAIContextLengthExceededCode,
+				service.OpenAIContextLengthExceededMessage,
+				streamStarted,
+				false,
+			)
+		}
 		return
 	}
 	if failoverErr.Reason == service.OpenAIHTTPContinuationUnsupportedReason {

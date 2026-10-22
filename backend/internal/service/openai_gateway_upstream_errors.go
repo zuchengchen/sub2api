@@ -205,6 +205,11 @@ func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 		if strings.Contains(lower, "maximum context length") || strings.Contains(lower, "max context length") {
 			return true
 		}
+		// Anthropic-native upstreams (Responses/Chat bridges) report overflow
+		// as "prompt is too long: N tokens > M maximum".
+		if strings.Contains(lower, "prompt is too long") {
+			return true
+		}
 		hasExceeded := strings.Contains(lower, "exceed") || strings.Contains(lower, "too large") || strings.Contains(lower, "too long")
 		if strings.Contains(lower, "context window") && hasExceeded {
 			return true
@@ -841,6 +846,17 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 
 	MarkResponseCommitted(c)
 
+	// Context overflow must reach Codex as a streamed response.failed with
+	// code context_length_exceeded, whatever HTTP status the upstream used
+	// (400, 413, 5xx). Anything else is a generic error and never compacts.
+	if isOpenAIContextWindowError(upstreamMsg, body) {
+		WriteOpenAIResponsesContextLengthExceeded(c, upstreamMsg)
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
+
 	// 上游 400 是确定性的请求错误：同一份请求体换账号、重试多少次都会失败。归一成
 	// 502 upstream_error 会让下游网关把它当成可重试的上游故障反复重放（#5479 实测
 	// 30 个失败请求被放大成 60 次上游调用），同时抹掉客户端定位问题所需的 code/param。
@@ -885,10 +901,6 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		errType = "upstream_error"
 		errMsg = "Upstream request failed"
 	}
-	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
-		errMsg = upstreamMsg
-	}
-
 	writeOpenAIResponsesErrorJSON(c, statusCode, gin.H{
 		"error": gin.H{
 			"type":    errType,
@@ -966,6 +978,19 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+
+	// Context overflow (any status, also code-only bodies) maps to the
+	// protocol's overflow error so the client compacts. Account state is not
+	// touched: this is request-scoped.
+	if isOpenAIContextWindowError(upstreamMsg, body) {
+		overflowMsg := upstreamMsg
+		if !isOpenAIContextWindowError(overflowMsg, nil) {
+			overflowMsg = OpenAIContextLengthExceededMessage
+		}
+		MarkResponseCommitted(c)
+		writeError(c, http.StatusBadRequest, "invalid_request_error", overflowMsg)
+		return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
 
 	// Apply error passthrough rules
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(

@@ -991,11 +991,25 @@ readLoop:
 			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			setOpsUpstreamError(c, statusCode, errMsg, "")
+			// Codex ignores bare `error` events (only flex-unavailable is
+			// parsed) and the handler would append response.failed with
+			// code=upstream_error, so overflow must become the terminal
+			// response.failed with code=context_length_exceeded.
+			if isOpenAIContextWindowError(errMsg, message) {
+				if !clientDisconnected {
+					if reqStream {
+						flushBufferedStreamEvents("error_event")
+					}
+					WriteOpenAIResponsesContextLengthExceeded(c, errMsg)
+				}
+				return nil, fmt.Errorf("openai ws error event: %s", errMsg)
+			}
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
 				emitStreamMessage(clientMessage, true)
 			}
 			if !reqStream {
+				MarkResponseCommitted(c)
 				c.JSON(statusCode, gin.H{
 					"error": gin.H{
 						"type":    "upstream_error",

@@ -214,7 +214,9 @@ func TestForwardAsAnthropic_ResponseFailed_PassthroughRule(t *testing.T) {
 	require.NotEmpty(t, errMsg, "passthrough should preserve error message")
 }
 
-func TestForwardAsChatCompletions_ResponseFailed_NoRule_Still502(t *testing.T) {
+// Without a passthrough rule a context overflow is still reported as the
+// standard 400 context_length_exceeded so chat clients can compact.
+func TestForwardAsChatCompletions_ResponseFailed_NoRule_ContextOverflowIs400(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":false}`)
@@ -237,7 +239,8 @@ func TestForwardAsChatCompletions_ResponseFailed_NoRule_Still502(t *testing.T) {
 	_, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 
 	require.Error(t, err)
-	require.Equal(t, http.StatusBadGateway, rec.Code, "without passthrough rule should still be 502")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), `"code":"context_length_exceeded"`)
 }
 
 // bindStatusCodePassthroughRule 绑定一条按错误码+关键词双条件(MatchModeAll)匹配的规则。
