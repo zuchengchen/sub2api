@@ -2748,7 +2748,7 @@ func TestLoadDefaultCodexFidelitySwitches(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg.Gateway.OpenAITiboRoute.Enabled)
-	require.False(t, *cfg.Gateway.OpenAITiboRoute.Enabled, "Tibo probes off by default")
+	require.True(t, *cfg.Gateway.OpenAITiboRoute.Enabled, "Tibo probes on by default so admin astra health dots render")
 	require.False(t, cfg.Gateway.OpenAIWS.ClientPingEnabled, "official client never pings")
 	require.Zero(t, cfg.Gateway.OpenAIWS.MinIdlePerAccount, "official client keeps no spare sockets")
 	require.False(t, cfg.Gateway.OpenAIWS.CodexHTTPH2Enabled, "official Linux HTTP lane is OpenSSL h1")

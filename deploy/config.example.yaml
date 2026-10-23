@@ -421,6 +421,9 @@ gateway:
   # 线路按 healthy > unknown > degraded 分层；HTTP 是唯一跳，全部降智时仍走普通 HTTP，
   # 仅在使用记录中标记 route_degraded（不向客户端返回任何线路响应头）。
   openai_tibo_route:
+    # 默认开启：后台账号列表 GPT 账号的 astra 健康度圆点依赖此探测。
+    # 设为 false 可停止合成探针（官方 Codex CLI 不会发送），圆点随之消失。
+    enabled: true
     interval: 10m
     spread: 5m
     confirm_samples: 3
