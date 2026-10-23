@@ -125,8 +125,7 @@ func (s *AccountTestService) applyIntelligentTestOpenAICodexTicket(context.Conte
 // RunIntelligentTest uses the existing authenticated outbound protocol adapters.
 // A per-run service avoids mutating shared service state. Runtime health writes
 // are suppressed: an observation never changes account policy or scheduling.
-// ChatGPT OAuth 出站复用网关 applyOpenAICodexTicket：有票则覆盖 x-codex-turn-state，
-// 并带上打票时保存的 Cookie。fail-closed 无票则与业务请求一样拒绝，不裸打门控模型。
+// ChatGPT OAuth 出站与业务请求走同一出站构造；292 门票注入已随 46998185d 移除。
 func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *IntelligentTestRecord) error {
 	account, err := s.accountRepo.GetByID(ctx, r.AccountID)
 	if err != nil {
