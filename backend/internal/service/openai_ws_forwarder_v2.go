@@ -588,6 +588,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	usage := &OpenAIUsage{}
 	cookieProbeObserver := openAICookieWSProbeObserver{enabled: cookieWS && openAICookieWSIsProbePayload(payload)}
 	imageCounter := newOpenAIImageOutputCounter()
+	// 部分上游（ChatGPT Codex WS）的 response.completed 只带 output:[]，正文仅在
+	// output_item.done / delta 事件里。与 HTTP SSE 路径共用同一套补全逻辑。
+	terminalOutput := newResponsesTerminalOutputCollector()
 	var firstTokenMs *int
 	responseID := ""
 	var finalResponse []byte
@@ -917,6 +920,15 @@ readLoop:
 		imageCounter.AddSSEData(message)
 		if deltaRecorder != nil {
 			deltaRecorder.observe(message)
+		}
+		// 放在用量/图片计数之后：补进 terminal 的 item 已由 output_item.done 计过，
+		// 不能再被计一次。补全后重取 responseField，非流式 finalResponse 才拿得到正文。
+		terminalOutput.Observe(message, eventType)
+		if isTerminalEvent {
+			if normalized, changed := terminalOutput.Normalize(message); changed {
+				message = normalized
+				responseField = gjson.GetBytes(message, "response")
+			}
 		}
 		// 下发客户端的副本单独改写容量降载码（server_is_overloaded/slow_down →
 		// server_error）：Codex 对原码判致命并终止会话，改写后走客户端内置退避

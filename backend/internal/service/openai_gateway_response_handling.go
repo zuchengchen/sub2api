@@ -379,10 +379,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 
 	needModelReplace := originalModel != mappedModel
 	var createdAtStamper responsesCreatedAtStamper
-	streamOutputAccumulator := apicompat.NewBufferedResponseAccumulator()
-	streamDoneItems := newResponsesStreamOutputItems()
-	streamImageOutputs := make([]json.RawMessage, 0, 1)
-	streamSeenImages := make(map[string]struct{})
+	streamTerminalOutput := newResponsesTerminalOutputCollector()
 	searchCounter := 0
 	// Dedup search tool calls across SSE events (item.done + response.completed
 	// both list the same call_id — counting both would ~2× the surcharge).
@@ -671,17 +668,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				line = "data: " + data
 				eventType = effectiveOpenAISSEEventType(dataBytes, eventType)
 			}
-			if imageOutput, ok := extractImageGenerationOutputFromSSEData(dataBytes, streamSeenImages); ok {
-				streamImageOutputs = append(streamImageOutputs, imageOutput)
-			}
-			streamDoneItems.Observe(dataBytes)
-			if responsesStreamEventMayContributeToOutput(eventType) {
-				var streamEvent apicompat.ResponsesStreamEvent
-				if err := json.Unmarshal(dataBytes, &streamEvent); err == nil {
-					streamOutputAccumulator.ProcessEvent(&streamEvent)
-				}
-			}
-			if normalizedData, normalized := normalizeResponsesStreamingTerminalOutput(dataBytes, streamOutputAccumulator, streamDoneItems, streamImageOutputs); normalized {
+			streamTerminalOutput.Observe(dataBytes, eventType)
+			if normalizedData, normalized := streamTerminalOutput.Normalize(dataBytes); normalized {
 				dataBytes = normalizedData
 				data = string(normalizedData)
 				line = "data: " + data
@@ -2201,6 +2189,58 @@ func (r *responsesStreamOutputItems) BuildOutput() ([]byte, bool) {
 		return nil, false
 	}
 	return encoded, true
+}
+
+// responsesTerminalOutputCollector bundles the per-turn state needed to repair a
+// Responses terminal event whose output is empty or incomplete: raw
+// output_item.done items, delta accumulation, and image generation results.
+//
+// Both the HTTP SSE stream path and the WS v2 forwarder (stream and non-stream)
+// feed every upstream event through Observe and then Normalize, so the two
+// transports share one repair implementation.
+type responsesTerminalOutputCollector struct {
+	acc          *apicompat.BufferedResponseAccumulator
+	doneItems    *responsesStreamOutputItems
+	imageOutputs []json.RawMessage
+	seenImages   map[string]struct{}
+}
+
+func newResponsesTerminalOutputCollector() *responsesTerminalOutputCollector {
+	return &responsesTerminalOutputCollector{
+		acc:          apicompat.NewBufferedResponseAccumulator(),
+		doneItems:    newResponsesStreamOutputItems(),
+		imageOutputs: make([]json.RawMessage, 0, 1),
+		seenImages:   make(map[string]struct{}),
+	}
+}
+
+// Observe records one Responses event payload. eventType is the effective
+// event type (SSE "event:" name or the payload's own "type").
+func (r *responsesTerminalOutputCollector) Observe(data []byte, eventType string) {
+	if r == nil || len(data) == 0 {
+		return
+	}
+	if imageOutput, ok := extractImageGenerationOutputFromSSEData(data, r.seenImages); ok {
+		r.imageOutputs = append(r.imageOutputs, imageOutput)
+	}
+	r.doneItems.Observe(data)
+	if responsesStreamEventMayContributeToOutput(eventType) {
+		var event apicompat.ResponsesStreamEvent
+		if err := json.Unmarshal(data, &event); err == nil {
+			r.acc.ProcessEvent(&event)
+		}
+	}
+}
+
+// Normalize rebuilds response.output of a terminal event from the observed
+// events when the terminal output is empty or carries fewer items than the
+// stream reported. Non-terminal events and complete terminals are returned
+// unchanged with false.
+func (r *responsesTerminalOutputCollector) Normalize(data []byte) ([]byte, bool) {
+	if r == nil {
+		return data, false
+	}
+	return normalizeResponsesStreamingTerminalOutput(data, r.acc, r.doneItems, r.imageOutputs)
 }
 
 func normalizeResponsesStreamingTerminalOutput(data []byte, acc *apicompat.BufferedResponseAccumulator, doneItems *responsesStreamOutputItems, imageOutputs []json.RawMessage) ([]byte, bool) {
