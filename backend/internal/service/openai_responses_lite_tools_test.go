@@ -420,7 +420,8 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 						"data: [DONE]\n\n",
 				)),
 			}}
-			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			// Tibo 路由探测会消耗 recorder 的单个响应（见 ff759d17c），固定在非 Tibo 路径。
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream, tiboRouteDisabled: true}
 			account := &Account{
 				ID: 501, Name: "responses-lite", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 				Concurrency: 1, Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),
@@ -540,7 +541,8 @@ func TestOpenAIGatewayServiceForward_PinsParallelToolCallsForToollessResponsesLi
 								"data: [DONE]\n\n",
 						)),
 					}}
-					svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+					// Tibo 路由探测会消耗 recorder 的单个响应（见 ff759d17c），固定在非 Tibo 路径。
+					svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream, tiboRouteDisabled: true}
 					account := &Account{
 						ID: 502, Name: "responses-lite-no-tools", Platform: PlatformOpenAI, Type: accountCase.accountType,
 						Concurrency: 1, Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),
@@ -587,7 +589,8 @@ func TestOpenAIGatewayServiceForward_DisablesParallelToolCallsForResponsesLiteAP
 						"data: [DONE]\n\n",
 				)),
 			}}
-			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			// Tibo 路由探测会消耗 recorder 的单个响应（见 ff759d17c），固定在非 Tibo 路径。
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream, tiboRouteDisabled: true}
 			account := &Account{
 				ID: 503, Name: "responses-lite-api-key", Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
 				Concurrency: 1, Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),
