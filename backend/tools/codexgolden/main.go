@@ -281,7 +281,7 @@ func startBlackholeProxy() {
 		if err != nil {
 			fatal(err)
 		}
-		blackhole.port = ln.Addr().(*net.TCPAddr).Port
+		blackhole.port = tcpPort(ln.Addr())
 		blackhole.targets = map[string]int{}
 		go func() {
 			for {
@@ -506,7 +506,7 @@ func recordTLS(codexBin, tracer string, timeout time.Duration) ([]map[string]any
 			}(c)
 		}
 	}()
-	tlsOrigin := fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.TCPAddr).Port)
+	tlsOrigin := fmt.Sprintf("https://localhost:%d", tcpPort(ln.Addr()))
 	bootstrap, err := newFakeUpstream(scenario{Name: "tls"}, upstreamOptions{WorkspaceOrigin: tlsOrigin, ModelsJSON: modelsJSON})
 	if err != nil {
 		return nil, nil, err
