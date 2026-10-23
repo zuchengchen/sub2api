@@ -51,7 +51,10 @@ func TestAnthropicChatCompletionsKeepsCacheCreationTTLBreakdown(t *testing.T) {
 				name = tc.name + "/stream"
 			}
 			t.Run(name, func(t *testing.T) {
+				// Visible text is required: an empty completion now fails over
+				// (buffered) or ends in an api_error frame (stream) since 68cdcd9bb.
 				sse := "event: message_start\ndata: " + start + "\n\n" +
+					anthropicChatUsageTestTextBlock +
 					"event: message_delta\ndata: " + tc.delta + "\n\n" +
 					"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 				upstream := &httpUpstreamRecorder{resp: &http.Response{

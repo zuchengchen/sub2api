@@ -219,7 +219,8 @@ func TestOpenAIFailoverSideEffects_401FollowsTempUnschedScope(t *testing.T) {
 		{name: "显式模型级 token_revoked 走认证错误处理", scopes: []string{TempUnschedScopeModel}, body: tempUnschedScopeRevoked401Body, wantSetError: true, wantBlocked: true},
 		{name: "显式模型级 detail Unauthorized 走认证错误处理", scopes: []string{TempUnschedScopeModel}, body: tempUnschedScopeDetail401Body, wantSetError: true, wantBlocked: true},
 		{name: "显式模型级 token_revoked 池模式 保持跳过", scopes: []string{TempUnschedScopeModel}, body: tempUnschedScopeRevoked401Body, poolMode: true},
-		{name: "显式模型级 OAuth 走刷新窗口", scopes: []string{TempUnschedScopeModel}, oauth: true, wantTemp: true, wantBlocked: true},
+		// ChatGPT Codex 401 只让本请求换号，不冻结整号（3b035cf4a）。
+		{name: "显式模型级 OpenAI OAuth 只换号不冻结", scopes: []string{TempUnschedScopeModel}, oauth: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
