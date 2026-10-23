@@ -271,4 +271,3 @@ func (s *stubUserRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*se
 func (s *stubUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
-

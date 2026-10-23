@@ -193,7 +193,7 @@ func TestClaudeMessagesWithComplexTools(t *testing.T) {
 	claudeKey := requireClaudeAPIKey(t)
 	// 测试模型列表（只测试几个代表性模型）
 	models := []string{
-		"claude-opus-4-5-20251101",  // Claude 模型
+		"claude-opus-4-5-20251101", // Claude 模型
 		"claude-haiku-4-5-20251001",
 	}
 

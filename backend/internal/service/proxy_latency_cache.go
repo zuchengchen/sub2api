@@ -6,14 +6,14 @@ import (
 )
 
 type ProxyLatencyInfo struct {
-	Success          bool      `json:"success"`
-	LatencyMs        *int64    `json:"latency_ms,omitempty"`
-	Message          string    `json:"message,omitempty"`
-	IPAddress        string    `json:"ip_address,omitempty"`
-	Country          string    `json:"country,omitempty"`
-	CountryCode      string    `json:"country_code,omitempty"`
-	Region           string    `json:"region,omitempty"`
-	City             string    `json:"city,omitempty"`
+	Success     bool   `json:"success"`
+	LatencyMs   *int64 `json:"latency_ms,omitempty"`
+	Message     string `json:"message,omitempty"`
+	IPAddress   string `json:"ip_address,omitempty"`
+	Country     string `json:"country,omitempty"`
+	CountryCode string `json:"country_code,omitempty"`
+	Region      string `json:"region,omitempty"`
+	City        string `json:"city,omitempty"`
 	// Timezone 是该代理出口 IP 对应的 IANA 时区，由 ip-api 探测顺带写入。
 	// 决定 4 的「按出口 IP 自动确定请求时区」直接读这个缓存值；空串表示
 	// 探测源没给时区（比如命中了 ipify/chatgpt-trace 兜底）或从未探测成功。

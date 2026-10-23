@@ -1184,5 +1184,3 @@ func TestBuildSchedulerMetadataAccount_KeepsRPMFieldsForRPMGate(t *testing.T) {
 			"投影裁掉 rpm_strategy 会让粘性豁免账号退回三区判定")
 	})
 }
-
-
