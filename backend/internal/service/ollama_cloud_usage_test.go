@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,62 +36,6 @@ type ollamaUsageTestRepo struct {
 	disableAutoAttempts atomic.Int64
 	disableAutoCalls    atomic.Int64
 	groupResolveCalls   atomic.Int64
-}
-
-// ollamaUsageSingleflightFollowers counts goroutines that have joined an
-// in-flight OllamaCloudUsageService.refreshGroup call as duplicates.
-//
-// singleflight.Group exposes no "a duplicate is waiting" signal, and every
-// observable side effect in refreshAccount (the anchor GetByID, the group key)
-// happens before the caller enters Group.Do. A follower is only provably joined
-// once it is parked in the WaitGroup.Wait inside Group.Do, which singleflight
-// reaches strictly after registering the duplicate (c.dups++) under its mutex.
-// Once there, the follower is guaranteed to receive the leader's result no
-// matter how soon the leader is released. The leader itself blocks in the
-// upstream stub, so it never matches.
-func ollamaUsageSingleflightFollowers() int {
-	buf := make([]byte, 1<<20)
-	for {
-		n := runtime.Stack(buf, true)
-		if n < len(buf) {
-			buf = buf[:n]
-			break
-		}
-		buf = make([]byte, 2*len(buf))
-	}
-	followers := 0
-	for _, goroutine := range strings.Split(string(buf), "\n\n") {
-		if !strings.Contains(goroutine, "(*OllamaCloudUsageService).refreshAccount") {
-			continue
-		}
-		var frames []string
-		for _, line := range strings.Split(goroutine, "\n") {
-			if line != "" && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "goroutine ") {
-				frames = append(frames, line)
-			}
-		}
-		for i := 0; i+1 < len(frames); i++ {
-			if strings.HasPrefix(frames[i], "sync.(*WaitGroup).Wait(") &&
-				strings.HasPrefix(frames[i+1], "golang.org/x/sync/singleflight.(*Group).Do(") {
-				followers++
-				break
-			}
-		}
-	}
-	return followers
-}
-
-// waitForOllamaUsageSingleflightFollowers blocks until want callers are parked
-// as duplicates inside the refresh singleflight group.
-func waitForOllamaUsageSingleflightFollowers(t *testing.T, want int) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for ollamaUsageSingleflightFollowers() < want {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %d caller(s) to join the in-flight Ollama usage refresh; got %d", want, ollamaUsageSingleflightFollowers())
-		}
-		time.Sleep(time.Millisecond)
-	}
 }
 
 func (r *ollamaUsageTestRepo) ListOllamaCloudUsageGroupAccounts(_ context.Context, anchors []*Account) ([]Account, error) {
@@ -884,7 +827,7 @@ func TestOllamaCloudUsageRefreshSingleflightAndRunnerDeduplicateSharedGroup(t *t
 	// precedes Group.Do, so under load the leader could finish first; the second
 	// caller then ran as a fresh execution, re-read the account, saw the
 	// LastAttemptAt just written, and failed with the 30s manual-refresh 429.
-	waitForOllamaUsageSingleflightFollowers(t, 1)
+	waitForSingleflightFollowers(t, "(*OllamaCloudUsageService).refreshAccount", 1)
 	close(release)
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)
@@ -1146,7 +1089,7 @@ func TestOllamaCloudUsageSingleflightConcurrencyAndRunnerSwitches(t *testing.T) 
 	// Release only after the other caller has joined the in-flight call;
 	// otherwise it may run afterwards as a fresh execution and be rejected by
 	// the manual-refresh interval, which would not exercise deduplication.
-	waitForOllamaUsageSingleflightFollowers(t, 1)
+	waitForSingleflightFollowers(t, "(*OllamaCloudUsageService).refreshAccount", 1)
 	close(unblock)
 	require.NoError(t, <-singleflightErrs)
 	require.NoError(t, <-singleflightErrs)
