@@ -9,11 +9,12 @@ import (
 // flips and scheduler tiering. Zero durations/counts fall back to the
 // built-in defaults; see OpenAIGatewayService.openAITiboRouteConfig.
 type OpenAITiboRouteConfig struct {
-	// Enabled turns on Tibo route probing and tiered routing. The probes are
-	// synthetic /responses turns the official Codex CLI never sends (fixed
-	// prompt, ~every 10 min per account), so the shipped default is false.
-	// nil (struct built without viper, e.g. unit fixtures) keeps the legacy
-	// enabled behavior.
+	// Enabled turns on Tibo route probing and tiered routing. The admin
+	// account list shows the astra health dots only while it is on, so the
+	// shipped default is true. Set false to stop the synthetic /responses
+	// probes (fixed prompt, ~every 10 min per account) the official Codex CLI
+	// never sends; the dots then disappear. nil (struct built without viper,
+	// e.g. unit fixtures) is also enabled.
 	Enabled *bool `mapstructure:"enabled"`
 	// Interval is the base delay between regular probes. Spread is the
 	// absolute ± window (uniform). Regular probes land in

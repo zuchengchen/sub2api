@@ -599,6 +599,17 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, now tim
 			item.VoteWindows, item.VoteConfirmed, item.VoteRejected = r.voteWindows, r.voteConfirmed, r.voteRejected
 			state.mu.Unlock()
 		}
+		if len(item.RecentSamples) == 0 {
+			// Not yet seeded in this process (restart, or skipped while
+			// rate-limited/paused): show the persisted sparkline instead of
+			// empty dots. Read-only; never seeds state or starts probes.
+			raw := account.Extra[openAITiboVerdictExtraKey(route)]
+			for _, sample := range parseOpenAITiboRecentSamples(openAITiboExtraField(raw, "recent_samples")) {
+				if sample.Verdict.definitive() {
+					item.RecentSamples = append(item.RecentSamples, OpenAITiboSampleStatus{Verdict: string(sample.Verdict), At: openAITiboTimePtr(sample.At)})
+				}
+			}
+		}
 		out = append(out, item)
 	}
 	return out
