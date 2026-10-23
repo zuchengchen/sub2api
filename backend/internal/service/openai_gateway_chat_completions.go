@@ -1263,15 +1263,24 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return
 		}
 		writeStreamHeaders()
-		if _, err := fmt.Fprint(c.Writer, buildChatStreamErrorSSE(code, message)); err != nil {
-			clientDisconnected = true
-			return
+		for _, chunk := range grokChatAbortTerminalChunks(state, originalModel, message, grokChatAbortFinishReason(code)) {
+			sse, err := apicompat.ChatChunkToSSE(chunk)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+				clientDisconnected = true
+				return
+			}
 		}
 		if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
 			clientDisconnected = true
 			return
 		}
 		c.Writer.Flush()
+		// The turn is closed; the handler must not append event: error
+		// after [DONE].
+		MarkResponseCommitted(c)
 		clientDisconnected = true
 		clientOutputStarted = true
 	}
@@ -1308,8 +1317,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			case strings.Contains(msg, grokChatReasoningUpstreamCutCode):
 				code = grokChatReasoningUpstreamCutCode
 				msg = grokChatReasoningUpstreamCutMsg
+			case strings.Contains(msg, grokChatGatewayRestartCode):
+				code = grokChatGatewayRestartCode
+				msg = grokChatGatewayRestartMsg
 			}
-			writeGrokChatAbort(code, grokChatAbortMessage(code, msg))
+			writeGrokChatAbort(code, grokChatAbortUserMessage(code, msg))
 			return resultWithUsage(), grokAbortErr
 		}
 		if streamFailoverErr != nil {
@@ -1515,6 +1527,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		grokHeartbeatCh = grokHeartbeatTicker.C
 	}
 
+	var grokDrainCh <-chan struct{}
+	if grokStream {
+		grokDrainCh = GatewayDraining()
+	}
+
 	checkGrokWallClock := func() bool {
 		if !grokStream || grokAbortErr != nil || clientDisconnected {
 			return false
@@ -1642,6 +1659,18 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return finalizeStream()
 			}
 			maybeWriteGrokHeartbeat()
+
+		case <-grokDrainCh:
+			// Server shutdown: end the turn with a normal terminal chunk so
+			// the client finishes instead of seeing ECONNRESET. Before any
+			// output the client gets an ordinary retryable error.
+			grokDrainCh = nil
+			_ = resp.Body.Close()
+			if !clientOutputStarted {
+				return resultWithUsage(), fmt.Errorf("%s: %s", grokChatGatewayRestartCode, grokChatGatewayRestartMsg)
+			}
+			grokAbortErr = fmt.Errorf("%s: %s", grokChatGatewayRestartCode, grokChatGatewayRestartMsg)
+			return finalizeStream()
 		}
 	}
 }

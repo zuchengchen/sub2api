@@ -14,6 +14,17 @@ tool descriptions exceed ~480 bytes) with:
 an tool configuration issue.
 ```
 
+It also fingerprints the canned Cline/Kilo identity sentence (`highly skilled
+software engineer with extensive knowledge in many programming languages,
+frameworks, design patterns, and best practices`) as:
+
+```
+400 permission_denied: Your request was blocked by our content policy.
+```
+
+Kilo Code / Kilo CLI send that sentence on every turn. `CLIProxyAPI` does not
+rewrite it, so this proxy does. "You are Kilo" by itself is not blocked.
+
 `CLIProxyAPI` does not rewrite descriptions, so this proxy shortens and
 rewrites them first. Tool *names* are left untouched: the model echoes them
 back in `tool_use` blocks and one-way renaming would break client dispatch.

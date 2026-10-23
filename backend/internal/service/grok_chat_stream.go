@@ -23,6 +23,8 @@ const (
 	grokChatReasoningWindowMsg         = "Grok reasoning filled the remaining context window"
 	grokChatReasoningUpstreamCutCode   = "grok_reasoning_upstream_cut"
 	grokChatReasoningUpstreamCutMsg    = "Grok encrypted reasoning was interrupted by upstream"
+	grokChatGatewayRestartCode         = "grok_gateway_restart"
+	grokChatGatewayRestartMsg          = "Gateway restarted and interrupted this Grok turn; please resend"
 	grokChatReasoningHeartbeatInterval = 15 * time.Second
 	grokChatReasoningProgressInterval  = time.Minute
 	grokChatWallClockWarn              = 3300 * time.Second
@@ -156,6 +158,82 @@ func grokChatAbortMessage(code, fallback string) string {
 			return fallback
 		}
 		return "Grok stream aborted"
+	}
+}
+
+func grokChatAbortUserMessage(code, fallback string) string {
+	msg := grokChatAbortMessage(code, fallback)
+	if code != "" {
+		if rest, ok := strings.CutPrefix(msg, code+": "); ok {
+			msg = rest
+		}
+	}
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return "Grok stream aborted"
+	}
+	return msg
+}
+
+func grokChatAbortFinishReason(code string) string {
+	switch code {
+	case grokChatReasoningDeadlineCode, grokChatReasoningWindowCode:
+		return "length"
+	default:
+		return "stop"
+	}
+}
+
+func grokChatAbortTerminalChunks(state *apicompat.ResponsesEventToChatState, originalModel, message, finishReason string) []apicompat.ChatCompletionsChunk {
+	if strings.TrimSpace(message) == "" {
+		message = "Grok stream aborted"
+	}
+	if strings.TrimSpace(finishReason) == "" {
+		finishReason = "stop"
+	}
+	created := time.Now().Unix()
+	id := ""
+	model := originalModel
+	serviceTier := ""
+	if state != nil {
+		id = state.ID
+		if state.Created != 0 {
+			created = state.Created
+		}
+		if strings.TrimSpace(state.Model) != "" {
+			model = state.Model
+		}
+		serviceTier = state.ServiceTier
+	}
+	empty := ""
+	content := message
+	return []apicompat.ChatCompletionsChunk{
+		{
+			ID:          id,
+			Object:      "chat.completion.chunk",
+			Created:     created,
+			Model:       model,
+			ServiceTier: serviceTier,
+			Choices: []apicompat.ChatChunkChoice{{
+				Index: 0,
+				Delta: apicompat.ChatDelta{
+					Role:    "assistant",
+					Content: &content,
+				},
+			}},
+		},
+		{
+			ID:          id,
+			Object:      "chat.completion.chunk",
+			Created:     created,
+			Model:       model,
+			ServiceTier: serviceTier,
+			Choices: []apicompat.ChatChunkChoice{{
+				Index:        0,
+				Delta:        apicompat.ChatDelta{Content: &empty},
+				FinishReason: &finishReason,
+			}},
+		},
 	}
 }
 
