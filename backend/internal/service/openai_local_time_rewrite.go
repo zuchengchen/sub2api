@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -18,13 +17,7 @@ import (
 // 仅在拿不到出口时区时才回到这里，与引入动态时区之前的硬编码行为保持一致。
 const openAIOutboundTimezoneName = DefaultOpenAIRequestTimezone
 
-// openAIOutboundLocalTimeContextFn 可在测试中替换。
-var openAIOutboundLocalTimeContextFn = currentOpenAIOutboundLocalTimeContext
-
 var (
-	openAIOutboundTimezoneOnce sync.Once
-	openAIOutboundTimezoneLoc  *time.Location
-
 	openAILocalTimeEnvContextRe     = regexp.MustCompile(`(?s)<environment_context>.*?</environment_context>`)
 	openAILocalTimeCurrentDateTagRe = regexp.MustCompile(`(?s)<current_date>\s*[^<]*?</current_date>`)
 	openAILocalTimeTimezoneTagRe    = regexp.MustCompile(`(?s)<timezone>\s*[^<]*?</timezone>`)
@@ -68,10 +61,6 @@ func (s *OpenAIGatewayService) resolveOpenAIRequestTimezone(ctx context.Context,
 		return s.requestTimezoneResolver.Resolve(ctx, account)
 	}
 	return OpenAIRequestTimezoneResolution{Timezone: openAIOutboundTimezoneName, Source: "fallback", Fallback: true}
-}
-
-func rewriteOpenAIClientLocalTimeContext(body []byte) ([]byte, bool) {
-	return rewriteOpenAIClientLocalTimeContextWith(body, openAIOutboundLocalTimeContextFn())
 }
 
 func rewriteOpenAIClientLocalTimeContextWith(body []byte, ctx openAILocalTimeContext) ([]byte, bool) {
@@ -119,17 +108,6 @@ func openAIRequestLocation(name string) *time.Location {
 		return time.FixedZone(openAIOutboundTimezoneName, -8*3600)
 	}
 	return time.UTC
-}
-
-func openAIOutboundTimezone() *time.Location {
-	openAIOutboundTimezoneOnce.Do(func() {
-		loc, err := time.LoadLocation(openAIOutboundTimezoneName)
-		if err != nil {
-			loc = time.FixedZone(openAIOutboundTimezoneName, -8*3600)
-		}
-		openAIOutboundTimezoneLoc = loc
-	})
-	return openAIOutboundTimezoneLoc
 }
 
 func rewriteOpenAIClientLocalTimeTagsAndJSONKeys(body []byte, ctx openAILocalTimeContext) []byte {

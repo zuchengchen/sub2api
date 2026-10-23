@@ -92,14 +92,6 @@ func (s *OpenAIGatewayService) newOpenAITiboRun(ctx context.Context, c *gin.Cont
 	return run
 }
 
-// httpReason is the transport reason when the plan serves HTTP.
-func (r *openAITiboRun) httpReason() string {
-	if r.tier(openAITiboRouteHTTP) == openAITiboHealthy {
-		return openAITiboHTTPOKReason
-	}
-	return openAITiboRouteOrderReason
-}
-
 // finishOpenAITiboRun stamps the degraded flag, pins the session to the
 // route that served, and runs the passive model check for HTTP.
 func (s *OpenAIGatewayService) finishOpenAITiboRun(run *openAITiboRun, result *OpenAIForwardResult, err error) {

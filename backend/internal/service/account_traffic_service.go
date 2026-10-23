@@ -33,32 +33,6 @@ func accountTrafficController(upstream HTTPUpstream) *AccountTrafficService {
 	}
 	return nil
 }
-func beginAccountTrafficTurn(ctx context.Context, upstream HTTPUpstream, a *Account) (context.Context, *AccountTrafficPermit, error) {
-	plan, err := AccountTrafficPlanFor(a)
-	if err != nil {
-		return ctx, nil, err
-	}
-	ctx, permit, err := accountTrafficController(upstream).Begin(ctx, plan)
-	if limited := AccountTrafficFailover(err); limited != nil {
-		return ctx, nil, limited
-	}
-	return ctx, permit, err
-}
-func finishAccountTrafficTurn(permit *AccountTrafficPermit, err error) {
-	if permit == nil {
-		return
-	}
-	status := 0
-	if err == nil {
-		status = 200
-	} else {
-		var upstream *UpstreamFailoverError
-		if errors.As(err, &upstream) && upstream.Reason != "account_traffic_limit" {
-			status = upstream.StatusCode
-		}
-	}
-	permit.Finish(status)
-}
 
 type AccountTrafficPermit struct {
 	service *AccountTrafficService

@@ -129,35 +129,6 @@ func applyCodexCompactPromptCacheKey(c *gin.Context, account *Account, body map[
 	return true
 }
 
-// stripCodexCompactPromptCacheKeyWhenProfileOff 是透传热路径的字节版：投影未开时
-// 删除 compact 请求体的 prompt_cache_key，维持既有出站形态。开启时不动，由随后的
-// applyCodexAccountIdentityClientMetadataRaw 做账号隔离。
-func stripCodexCompactPromptCacheKeyWhenProfileOff(c *gin.Context, account *Account, body []byte) ([]byte, bool) {
-	if codexDeviceWireProfileEnabled(c, account) || !gjson.GetBytes(body, "prompt_cache_key").Exists() {
-		return body, false
-	}
-	next, err := sjson.DeleteBytes(body, "prompt_cache_key")
-	if err != nil {
-		return body, false
-	}
-	return next, true
-}
-
-// The handler preserves the explicit optional CompactionInput.access_programs
-// until account selection. Only the device wire profile opts in; never synthesize
-// a program, and keep API-key / opt-out / failover requests on their prior schema.
-//
-// 投影已开时保留，与 /responses 上的既有行为一致——那条路径没有任何字段裁剪，
-// access_programs 一路原样出站，双开账号两个端点因此给出同一个准入等级。
-// 未开投影的账号维持既有的 compact 裁剪（opt-out 字节不变），这是有意保留的差异。
-func filterCodexCompactAccessPrograms(c *gin.Context, account *Account, body []byte) ([]byte, error) {
-	if !isOpenAIResponsesCompactPath(c) || codexDeviceWireProfileEnabled(c, account) ||
-		!gjson.GetBytes(body, "access_programs").Exists() {
-		return body, nil
-	}
-	return sjson.DeleteBytes(body, "access_programs")
-}
-
 // compactPromptCacheSessionEvidence 取 compact 请求可用的会话旁证，顺序与出站会话头一致。
 func compactPromptCacheSessionEvidence(c *gin.Context) string {
 	if c == nil || c.Request == nil {

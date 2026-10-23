@@ -171,22 +171,6 @@ func isCodexBaseInstructionsItemMustParse(t *testing.T, body []byte, index int) 
 
 func itoaForTest(v int) string { return strconv.Itoa(v) }
 
-func codexInputHasBaseInstructions(t *testing.T, body []byte) bool {
-	t.Helper()
-	input := gjson.GetBytes(body, "input").Array()
-	for i := range input {
-		raw := input[i].Raw
-		var item map[string]any
-		if err := json.Unmarshal([]byte(raw), &item); err != nil {
-			continue
-		}
-		if isCodexBaseInstructionsItem(item) {
-			return true
-		}
-	}
-	return false
-}
-
 func TestCodexSynthesisCompatibleClientMapsOfficialToolNames(t *testing.T) {
 	pinCodexTestVersion(t, "0.163.0")
 	svc := &OpenAIGatewayService{cfg: codexSynthEnabledConfig()}

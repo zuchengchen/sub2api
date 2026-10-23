@@ -166,7 +166,6 @@ var (
 	errH2GoAway      = errors.New("h2: goaway received")
 	errH2StreamsFull = errors.New("h2: max concurrent streams reached")
 	errH2StreamReset = errors.New("h2: stream reset by peer")
-	errH2BadALPN     = errors.New("h2: ALPN did not negotiate h2")
 )
 
 // writeFrame serializes frame writes through the framer. The write itself runs

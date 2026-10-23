@@ -87,7 +87,6 @@ type codexSynthContextLimits struct {
 
 var (
 	codexOfficialToolsOnce sync.Once
-	codexOfficialTools     []map[string]any
 	codexOfficialToolIndex map[string]map[string]any
 
 	codexSynthDescriptorWarned sync.Map
@@ -97,7 +96,6 @@ func loadCodexOfficialTools() {
 	codexOfficialToolsOnce.Do(func() {
 		var tools []map[string]any
 		if err := json.Unmarshal(codexOfficialTools0163JSON, &tools); err != nil {
-			codexOfficialTools = nil
 			codexOfficialToolIndex = map[string]map[string]any{}
 			return
 		}
@@ -107,7 +105,6 @@ func loadCodexOfficialTools() {
 				index[name] = tool
 			}
 		}
-		codexOfficialTools = tools
 		codexOfficialToolIndex = index
 	})
 }

@@ -84,11 +84,7 @@ func TestRewriteOpenAIClientLocalTimeIfEnabled_UsesPacificTime(t *testing.T) {
 			require.NoError(t, timezone.Init(prevName))
 		}
 		time.Local = prevLocal
-		openAIOutboundLocalTimeContextFn = currentOpenAIOutboundLocalTimeContext
 	})
-	openAIOutboundLocalTimeContextFn = func() openAILocalTimeContext {
-		return openAILocalTimeContext{Timezone: openAIOutboundTimezoneName, CurrentDate: "2026-09-16", CurrentTime: "23:21:00"}
-	}
 
 	account := &Account{Platform: PlatformOpenAI}
 	body := []byte(`{"input":"<environment_context><timezone>UTC</timezone></environment_context>"}`)
