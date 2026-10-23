@@ -1664,7 +1664,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			// Server shutdown: end the turn with a normal terminal chunk so
 			// the client finishes instead of seeing ECONNRESET. Before any
 			// output the client gets an ordinary retryable error.
-			grokDrainCh = nil
 			_ = resp.Body.Close()
 			if !clientOutputStarted {
 				return resultWithUsage(), fmt.Errorf("%s: %s", grokChatGatewayRestartCode, grokChatGatewayRestartMsg)

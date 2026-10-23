@@ -635,7 +635,7 @@ func (c *h2Conn) RoundTrip(ctx context.Context, method, scheme, authority, path 
 			}
 			continue
 		}
-		resp.Header.Add(http.CanonicalHeaderKey(kv.Name), kv.Value)
+		resp.Header.Add(kv.Name, kv.Value) // Add canonicalizes the key
 	}
 	return resp, nil
 }

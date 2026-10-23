@@ -131,10 +131,7 @@ func (c *pmdCompressor) Compress(payload []byte) ([]byte, error) {
 	if err := w.Flush(); err != nil {
 		return nil, err
 	}
-	out := buf.Bytes()
-	if bytes.HasSuffix(out, pmdTail) {
-		out = out[:len(out)-len(pmdTail)]
-	}
+	out := bytes.TrimSuffix(buf.Bytes(), pmdTail)
 	if c.contextTakeover {
 		c.window.push(payload)
 	}

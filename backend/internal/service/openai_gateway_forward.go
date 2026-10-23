@@ -575,7 +575,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	// Official clients with a custom model_provider strip the marker but still
 	// carry their own base prompt as input[0]; treat them like the marker case.
 	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeCNResponses && !cookieWS &&
-		!inputCarriesBaseInstructions && !officialClientOwnsPrompt && !(isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() && !compactPath) {
+		!inputCarriesBaseInstructions && !officialClientOwnsPrompt && (!isCodexOAuthAccount(account) || !s.codexFullSynthesisEnabled() || compactPath) {
 		markPatchSet("instructions", defaultCodexSynthInstructions(upstreamModel))
 	}
 	if billingModel != requestedModel {
