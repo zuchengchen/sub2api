@@ -54,6 +54,48 @@ func TestGrokChatWindowFuseExceeded(t *testing.T) {
 	require.True(t, grokChatWindowFuseExceeded(OpenAIUsage{InputTokens: 10, OutputTokens: 10}, payload))
 }
 
+func TestGrokChatAbortTerminalChunks(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		code   string
+		msg    string
+		finish string
+	}{
+		{grokChatReasoningDeadlineCode, grokChatReasoningDeadlineAbortMsg, "length"},
+		{grokChatReasoningWindowCode, grokChatReasoningWindowMsg, "length"},
+		{grokChatReasoningIdleTimeoutCode, "Grok stream idle timeout after 2s with no upstream data", "stop"},
+		{grokChatReasoningUpstreamCutCode, grokChatReasoningUpstreamCutMsg, "stop"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.code, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.msg, grokChatAbortUserMessage(tc.code, tc.code+": "+tc.msg))
+			require.Equal(t, tc.finish, grokChatAbortFinishReason(tc.code))
+			chunks := grokChatAbortTerminalChunks(&apicompat.ResponsesEventToChatState{
+				ID:    "chatcmpl_abort",
+				Model: "grok-4.6",
+			}, "grok-4.6", grokChatAbortUserMessage(tc.code, tc.code+": "+tc.msg), grokChatAbortFinishReason(tc.code))
+			require.Len(t, chunks, 2)
+			require.Equal(t, "assistant", chunks[0].Choices[0].Delta.Role)
+			require.NotNil(t, chunks[0].Choices[0].Delta.Content)
+			require.Equal(t, tc.msg, *chunks[0].Choices[0].Delta.Content)
+			require.Nil(t, chunks[0].Choices[0].FinishReason)
+			require.NotNil(t, chunks[1].Choices[0].FinishReason)
+			require.Equal(t, tc.finish, *chunks[1].Choices[0].FinishReason)
+		})
+	}
+}
+
+func requireGrokChatAbortTerminal(t *testing.T, body, message, finishReason string) {
+	t.Helper()
+	require.Contains(t, body, `"content":"`+message+`"`)
+	require.Contains(t, body, `"finish_reason":"`+finishReason+`"`)
+	require.Contains(t, body, "data: [DONE]")
+	require.NotContains(t, body, `"error"`)
+	require.NotContains(t, body, `"type":"invalid_request_error"`)
+}
+
 func TestSanitizeGrokChatSyntheticReasoningHistory(t *testing.T) {
 	t.Parallel()
 
@@ -261,7 +303,7 @@ func TestHandleChatStreamingResponse_GrokIdleTimeoutFailoversBeforeOutput(t *tes
 	require.False(t, c.Writer.Written())
 }
 
-func TestHandleChatStreamingResponse_GrokIdleTimeoutAfterHeartbeatWritesSSEError(t *testing.T) {
+func TestHandleChatStreamingResponse_GrokIdleTimeoutAfterHeartbeatWritesChatTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := newGrokChatHangBody()
 	defer body.Close()
@@ -292,11 +334,10 @@ func TestHandleChatStreamingResponse_GrokIdleTimeoutAfterHeartbeatWritesSSEError
 	require.False(t, errors.As(err, &failover))
 	require.NotNil(t, result)
 	require.Contains(t, rec.Body.String(), `"reasoning_content":"…"`)
-	require.Contains(t, rec.Body.String(), grokChatReasoningIdleTimeoutCode)
-	require.Contains(t, rec.Body.String(), "data: [DONE]")
+	requireGrokChatAbortTerminal(t, rec.Body.String(), "Grok stream idle timeout after 2s with no upstream data", "stop")
 }
 
-func TestHandleChatStreamingResponse_GrokUpstreamCutAfterHeartbeatWritesSSEError(t *testing.T) {
+func TestHandleChatStreamingResponse_GrokUpstreamCutAfterHeartbeatWritesChatTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := newGrokChatHangErrBody(io.ErrUnexpectedEOF)
 	defer body.Close()
@@ -355,9 +396,8 @@ func TestHandleChatStreamingResponse_GrokUpstreamCutAfterHeartbeatWritesSSEError
 	require.False(t, errors.As(err, &failover))
 	require.NotNil(t, result)
 	require.Contains(t, rec.Body.String(), `"reasoning_content":"…"`)
-	require.Contains(t, rec.Body.String(), grokChatReasoningUpstreamCutCode)
-	require.Contains(t, rec.Body.String(), grokChatReasoningUpstreamCutMsg)
-	require.Contains(t, rec.Body.String(), "data: [DONE]")
+	requireGrokChatAbortTerminal(t, rec.Body.String(), grokChatReasoningUpstreamCutMsg, "stop")
+	require.NotContains(t, rec.Body.String(), grokChatReasoningUpstreamCutCode)
 	require.NotContains(t, rec.Body.String(), OpenAIUpstreamStreamReadErrorCode)
 }
 
@@ -381,6 +421,75 @@ func TestHandleChatStreamingResponse_GrokWindowFuse(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), grokChatReasoningWindowCode)
-	require.Contains(t, rec.Body.String(), grokChatReasoningWindowCode)
-	require.Contains(t, rec.Body.String(), "data: [DONE]")
+	requireGrokChatAbortTerminal(t, rec.Body.String(), grokChatReasoningWindowMsg, "length")
+	require.NotContains(t, rec.Body.String(), grokChatReasoningWindowCode)
+	require.True(t, IsResponseCommitted(c), "handler must not append event: error after [DONE]")
+}
+
+// resetGatewayDrainForTest installs a fresh drain signal and restores the
+// previous one afterwards, so draining in one test cannot leak into others.
+func resetGatewayDrainForTest(t *testing.T) {
+	t.Helper()
+	previous := gatewayDrain.Load()
+	gatewayDrain.Store(&gatewayDrainState{ch: make(chan struct{})})
+	t.Cleanup(func() { gatewayDrain.Store(previous) })
+}
+
+// On server shutdown a running Grok reasoning stream must end with a normal
+// terminal chunk + [DONE] (no ECONNRESET, no trailing event: error), and the
+// response is marked committed so the handler appends nothing.
+func TestHandleChatStreamingResponse_GrokGatewayDrainWritesChatTerminal(t *testing.T) {
+	resetGatewayDrainForTest(t)
+	gin.SetMode(gin.TestMode)
+	body := newGrokChatHangBody()
+	defer body.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamKeepaliveInterval:       1,
+			GrokStreamDataIntervalTimeout: 60,
+		},
+	}}
+	account := &Account{ID: 14, Name: "grok-oauth", Platform: PlatformGrok, Type: AccountTypeOAuth}
+
+	go func() {
+		time.Sleep(1500 * time.Millisecond) // after the first heartbeat
+		BeginGatewayDrain()
+	}()
+	started := time.Now()
+	result, err := svc.handleChatStreamingResponse(
+		resp, c, account, "grok-4.6", "grok-4.6", "grok-4.6", time.Now(),
+		[]byte(`{"model":"grok-4.6","reasoning_effort":"xhigh","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	require.Less(t, time.Since(started), 10*time.Second, "drain must end the stream promptly")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), grokChatGatewayRestartCode)
+	require.NotNil(t, result)
+	requireGrokChatAbortTerminal(t, rec.Body.String(), grokChatGatewayRestartMsg, "stop")
+	require.NotContains(t, rec.Body.String(), grokChatGatewayRestartCode)
+	require.True(t, IsResponseCommitted(c))
+}
+
+func TestBeginGatewayDrainIsIdempotent(t *testing.T) {
+	resetGatewayDrainForTest(t)
+	select {
+	case <-GatewayDraining():
+		t.Fatal("must not be draining before BeginGatewayDrain")
+	default:
+	}
+	BeginGatewayDrain()
+	BeginGatewayDrain()
+	select {
+	case <-GatewayDraining():
+	default:
+		t.Fatal("must be draining after BeginGatewayDrain")
+	}
 }
