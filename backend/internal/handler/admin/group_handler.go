@@ -262,7 +262,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name                       string                         `json:"name"`
 	Description                *string                        `json:"description"`
-	I18n                      *service.GroupI18n             `json:"i18n"` // 缺省不修改，传入则整体替换
+	I18n                       *service.GroupI18n             `json:"i18n"` // 缺省不修改，传入则整体替换
 	Platform                   string                         `json:"platform" binding:"omitempty,group_platform"`
 	RateMultiplier             *float64                       `json:"rate_multiplier"`
 	IsExclusive                *bool                          `json:"is_exclusive"`

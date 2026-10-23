@@ -7,7 +7,10 @@ const mocks = vi.hoisted(() => ({ updateProfile: vi.fn(), state: { user: { usern
 vi.mock('@/api', () => ({ userAPI: { updateProfile: mocks.updateProfile } }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => reactive(mocks.state) }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError: vi.fn(), showSuccess: vi.fn() }) }))
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('vue-i18n', async () => ({
+  ...await vi.importActual<typeof import('vue-i18n')>('vue-i18n'),
+  useI18n: () => ({ t: (key: string) => key })
+}))
 enableAutoUnmount(afterEach)
 beforeEach(() => {
   vi.resetAllMocks()

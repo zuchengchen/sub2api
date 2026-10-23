@@ -128,9 +128,9 @@ func collectCodexTurnEvidenceFromMap(decoded map[string]any, headers http.Header
 
 func codexTurnSeedDigest(userCount int, canonicalContent []byte) string {
 	h := sha256.New()
-	h.Write([]byte(strconv.Itoa(userCount)))
-	h.Write([]byte{0})
-	h.Write(canonicalContent)
+	_, _ = h.Write([]byte(strconv.Itoa(userCount)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(canonicalContent)
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
@@ -198,7 +198,12 @@ func (c *codexTurnClock) StartedAt(key string) int64 {
 	fresh := &codexTurnClockEntry{startedAtMs: nowMs}
 	fresh.lastSeen.Store(nowMs)
 	raw, loaded := c.entries.LoadOrStore(key, fresh)
-	entry := raw.(*codexTurnClockEntry)
+	entry, ok := raw.(*codexTurnClockEntry)
+	if !ok {
+		// Only *codexTurnClockEntry is ever stored; replace anything else.
+		c.entries.Store(key, fresh)
+		return nowMs
+	}
 	if loaded {
 		entry.lastSeen.Store(nowMs)
 		return entry.startedAtMs
@@ -212,7 +217,7 @@ func (c *codexTurnClock) StartedAt(key string) int64 {
 func (c *codexTurnClock) prune(now time.Time) {
 	cutoff := now.Add(-c.ttl).UnixMilli()
 	c.entries.Range(func(k, v any) bool {
-		if v.(*codexTurnClockEntry).lastSeen.Load() < cutoff {
+		if entry, ok := v.(*codexTurnClockEntry); !ok || entry.lastSeen.Load() < cutoff {
 			c.entries.Delete(k)
 		}
 		return true

@@ -36,14 +36,6 @@ type ollamaUsageTestRepo struct {
 	disableAutoAttempts atomic.Int64
 	disableAutoCalls    atomic.Int64
 	groupResolveCalls   atomic.Int64
-	getByIDCalls        atomic.Int64
-}
-
-// GetByID counts loads so a test can wait for a caller to reach the point just
-// before the singleflight group, instead of guessing with a sleep.
-func (r *ollamaUsageTestRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
-	r.getByIDCalls.Add(1)
-	return r.upstreamBillingProbeAccountRepo.GetByID(ctx, id)
 }
 
 func (r *ollamaUsageTestRepo) ListOllamaCloudUsageGroupAccounts(_ context.Context, anchors []*Account) ([]Account, error) {
@@ -828,19 +820,14 @@ func TestOllamaCloudUsageRefreshSingleflightAndRunnerDeduplicateSharedGroup(t *t
 	errs := make(chan error, 2)
 	go func() { _, err := svc.Refresh(context.Background(), first.ID); errs <- err }()
 	<-started
-	// The first caller is now parked in the stub, having loaded the account twice
-	// (once to build the group key, once inside the singleflight function).
-	loadsBeforeSecond := repo.getByIDCalls.Load()
+	// The first caller is now the singleflight leader, parked in the stub.
 	go func() { _, err := svc.Refresh(context.Background(), second.ID); errs <- err }()
-	// Only release the first caller once the second one has loaded its own
-	// account, which happens immediately before it joins the singleflight group.
-	// Releasing right after starting the goroutine raced: if the first refresh
-	// finished first, the second became a fresh singleflight execution, re-read
-	// the account, saw the LastAttemptAt just written, and failed with the 30s
-	// manual-refresh 429 instead of sharing the in-flight result.
-	require.Eventually(t, func() bool {
-		return repo.getByIDCalls.Load() > loadsBeforeSecond
-	}, 5*time.Second, time.Millisecond, "the second caller must reach the singleflight group before the first is released")
+	// Only release the leader once the second caller is provably waiting inside
+	// the singleflight group. Any earlier signal (e.g. its anchor GetByID) still
+	// precedes Group.Do, so under load the leader could finish first; the second
+	// caller then ran as a fresh execution, re-read the account, saw the
+	// LastAttemptAt just written, and failed with the 30s manual-refresh 429.
+	waitForSingleflightFollowers(t, "(*OllamaCloudUsageService).refreshAccount", 1)
 	close(release)
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)
@@ -1091,17 +1078,21 @@ func TestOllamaCloudUsageSingleflightConcurrencyAndRunnerSwitches(t *testing.T) 
 	require.Zero(t, upstream.calls.Load())
 
 	settingsRepo.values[SettingKeyOllamaCloudUsageSettings] = `{"enabled":true,"interval_minutes":60}`
-	var singleflight sync.WaitGroup
-	singleflight.Add(2)
+	singleflightErrs := make(chan error, 2)
 	for range 2 {
 		go func() {
-			defer singleflight.Done()
-			_, _ = svc.Refresh(context.Background(), 1)
+			_, err := svc.Refresh(context.Background(), 1)
+			singleflightErrs <- err
 		}()
 	}
 	<-entered
+	// Release only after the other caller has joined the in-flight call;
+	// otherwise it may run afterwards as a fresh execution and be rejected by
+	// the manual-refresh interval, which would not exercise deduplication.
+	waitForSingleflightFollowers(t, "(*OllamaCloudUsageService).refreshAccount", 1)
 	close(unblock)
-	singleflight.Wait()
+	require.NoError(t, <-singleflightErrs)
+	require.NoError(t, <-singleflightErrs)
 	require.Equal(t, int64(1), upstream.calls.Load())
 
 	// Clear snapshots so all accounts are due, then verify the shared four-slot bound.

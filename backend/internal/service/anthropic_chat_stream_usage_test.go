@@ -17,6 +17,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// anthropicChatUsageTestTextBlock is a minimal visible text block for usage
+// fixtures that would otherwise be empty completions.
+const anthropicChatUsageTestTextBlock = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+	"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+	"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+
 func TestAnthropicChatStreamAuthoritativeUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, adapter := range []string{"anthropic", "native"} {
@@ -41,7 +47,9 @@ func TestAnthropicChatStreamAuthoritativeUsage(t *testing.T) {
 			} {
 				for _, terminal := range []string{"stop", "eof"} {
 					t.Run(adapter+"/"+options+"/"+tc.name+"/"+terminal, func(t *testing.T) {
-						sse := fmt.Sprintf("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"k3\",\"content\":[]%s}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}%s}\n\n", tc.start, tc.delta)
+						// Visible text is required: the Anthropic adapter turns an empty
+						// completion into an api_error frame (68cdcd9bb).
+						sse := fmt.Sprintf("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"k3\",\"content\":[]%s}}\n\n%sevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}%s}\n\n", tc.start, anthropicChatUsageTestTextBlock, tc.delta)
 						if tc.repeatDelta != "" {
 							sse += fmt.Sprintf("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}%s}\n\n", tc.repeatDelta)
 						}

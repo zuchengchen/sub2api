@@ -410,10 +410,10 @@ func codexClientMetadataOrderSeed(values map[string]string) string {
 	sort.Strings(keys)
 	var b strings.Builder
 	for _, key := range keys {
-		b.WriteString(key)
-		b.WriteByte('=')
-		b.WriteString(values[key])
-		b.WriteByte(0)
+		_, _ = b.WriteString(key)
+		_ = b.WriteByte('=')
+		_, _ = b.WriteString(values[key])
+		_ = b.WriteByte(0)
 	}
 	return b.String()
 }
@@ -453,16 +453,16 @@ func reorderCodexClientMetadataJSON(body []byte) ([]byte, bool) {
 	}
 	keys := codexShuffledClientMetadataKeySet(present, codexClientMetadataOrderSeed(values))
 	var buf bytes.Buffer
-	buf.WriteByte('{')
+	_ = buf.WriteByte('{')
 	for i, key := range keys {
 		if i > 0 {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
 		writeCodexJSONString(&buf, key)
-		buf.WriteByte(':')
-		buf.Write(members[key])
+		_ = buf.WriteByte(':')
+		_, _ = buf.Write(members[key])
 	}
-	buf.WriteByte('}')
+	_ = buf.WriteByte('}')
 	next, err := sjson.SetRawBytes(body, "client_metadata", buf.Bytes())
 	if err != nil {
 		return body, false
@@ -546,15 +546,15 @@ func reorderCodexRequestTopLevelJSON(body []byte) ([]byte, bool) {
 		return body, false
 	}
 	var buf bytes.Buffer
-	buf.WriteByte('{')
+	_ = buf.WriteByte('{')
 	for i, name := range order {
 		if i > 0 {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
-		buf.WriteString(members[name].key)
-		buf.WriteByte(':')
-		buf.WriteString(members[name].raw)
+		_, _ = buf.WriteString(members[name].key)
+		_ = buf.WriteByte(':')
+		_, _ = buf.WriteString(members[name].raw)
 	}
-	buf.WriteByte('}')
+	_ = buf.WriteByte('}')
 	return buf.Bytes(), true
 }

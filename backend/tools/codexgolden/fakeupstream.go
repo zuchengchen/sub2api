@@ -109,7 +109,17 @@ func newFakeUpstream(sc scenario, opts upstreamOptions) (*fakeUpstream, error) {
 	return f, nil
 }
 
-func (f *fakeUpstream) port() int { return f.ln.Addr().(*net.TCPAddr).Port }
+func (f *fakeUpstream) port() int { return tcpPort(f.ln.Addr()) }
+
+// tcpPort returns the port of a TCP listener address, or 0 for other address
+// types (every listener here is opened with net.Listen("tcp", ...)).
+func tcpPort(addr net.Addr) int {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return 0
+	}
+	return tcp.Port
+}
 
 func (f *fakeUpstream) close() []record {
 	_ = f.ln.Close()
@@ -433,7 +443,7 @@ func (f *fakeUpstream) scriptedEvents(body []byte) []map[string]any {
 
 func (f *fakeUpstream) writeSSE(c net.Conn, events []map[string]any) {
 	var head strings.Builder
-	head.WriteString("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nx-codex-turn-state: golden-turn-state\r\n\r\n")
+	_, _ = head.WriteString("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nx-codex-turn-state: golden-turn-state\r\n\r\n")
 	_, _ = io.WriteString(c, head.String())
 	for _, ev := range events {
 		data, _ := json.Marshal(ev)

@@ -76,9 +76,11 @@ func TestDiagnosticOAuthHTTPC01FullHistoryOnlyRemovesAssistantID(t *testing.T) {
 			sent := diagnosticForwardHTTPFixture(t, body, client)
 			var expected map[string]any
 			require.NoError(t, decodeOpenAIJSONUseNumber(body, &expected))
-			input := expected["input"].([]any)
+			input, ok := expected["input"].([]any)
+			require.True(t, ok)
 			require.Len(t, input, 3)
-			assistant := input[1].(map[string]any)
+			assistant, ok := input[1].(map[string]any)
+			require.True(t, ok)
 			require.Equal(t, "message", assistant["type"])
 			require.Equal(t, "assistant", assistant["role"])
 			require.Equal(t, "final_answer", assistant["phase"])
