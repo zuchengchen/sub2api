@@ -168,8 +168,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		if isOpenAICodexModel(reqModel) && !gjson.GetBytes(body, "instructions").Exists() &&
 			!codexInputCarriesBaseInstructions(body) &&
-			!(openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) &&
-				codexInputLeadsWithDeveloperMessage(body)) {
+			(!openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) ||
+				!codexInputLeadsWithDeveloperMessage(body)) {
 			nextBody, setErr := sjson.SetBytes(body, "instructions", defaultCodexSynthInstructions(reqModel))
 			if setErr != nil {
 				return nil, fmt.Errorf("set passthrough codex instructions: %w", setErr)
@@ -635,7 +635,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		for key, values := range c.Request.Header {
 			lower := strings.ToLower(strings.TrimSpace(key))
 			if !isOpenAIPassthroughAllowedRequestHeader(lower, allowTimeoutHeaders) &&
-				!(usesCustomOpenAICompatibleUpstream(account) && openaiCompatibleSessionHeaders[lower]) {
+				(!usesCustomOpenAICompatibleUpstream(account) || !openaiCompatibleSessionHeaders[lower]) {
 				continue
 			}
 			for _, v := range values {

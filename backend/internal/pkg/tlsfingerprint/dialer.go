@@ -291,16 +291,16 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 // optional Proxy-Authorization.
 func buildProxyConnectRequest(addr string, proxyURL *url.URL, keepAlive bool) string {
 	var b strings.Builder
-	b.WriteString("CONNECT " + addr + " HTTP/1.1\r\nHost: " + addr + "\r\n")
+	_, _ = b.WriteString("CONNECT " + addr + " HTTP/1.1\r\nHost: " + addr + "\r\n")
 	if keepAlive {
-		b.WriteString("Proxy-Connection: Keep-Alive\r\n")
+		_, _ = b.WriteString("Proxy-Connection: Keep-Alive\r\n")
 	}
 	if proxyURL != nil && proxyURL.User != nil {
 		username := proxyURL.User.Username()
 		password, _ := proxyURL.User.Password()
-		b.WriteString("Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password)) + "\r\n")
+		_, _ = b.WriteString("Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password)) + "\r\n")
 	}
-	b.WriteString("\r\n")
+	_, _ = b.WriteString("\r\n")
 	return b.String()
 }
 

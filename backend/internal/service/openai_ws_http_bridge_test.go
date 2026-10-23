@@ -81,9 +81,9 @@ func TestProxyOpenAIWSHTTPBridgeTurnReplaysAssistantAndEncryptedReasoning(t *tes
 	output := `[{"type":"reasoning","id":"rs_encrypted","summary":[],"encrypted_content":"fixture-ciphertext"},{"type":"message","id":"msg_decision","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Chosen invariant: preserve every prior decision."}]},{"type":"function_call","id":"fc_inspect","call_id":"call_inspect","name":"inspect","arguments":"{}"},{"type":"reasoning","id":"rs_id_only","summary":[]}]`
 	var events strings.Builder
 	for _, item := range gjson.Parse(output).Array() {
-		events.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
+		_, _ = events.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
 	}
-	events.WriteString(`data: {"type":"response.completed","response":{"id":"resp_bridge_replay","model":"gpt-5.4","status":"completed","output":` + output + `,"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n")
+	_, _ = events.WriteString(`data: {"type":"response.completed","response":{"id":"resp_bridge_replay","model":"gpt-5.4","status":"completed","output":` + output + `,"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -124,9 +124,9 @@ func TestOpenAIWSHTTPBridgeContinuationPreservesAssistantAndEncryptedReasoning(t
 	output := `[{"type":"reasoning","id":"rs_encrypted","summary":[],"encrypted_content":"fixture-ciphertext"},{"type":"message","id":"msg_decision","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Chosen invariant: preserve every prior decision."}]},{"type":"function_call","id":"fc_inspect","call_id":"call_inspect","name":"inspect","arguments":"{}"},{"type":"reasoning","id":"rs_id_only","summary":[]}]`
 	var firstEvents strings.Builder
 	for _, item := range gjson.Parse(output).Array() {
-		firstEvents.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
+		_, _ = firstEvents.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
 	}
-	firstEvents.WriteString(`data: {"type":"response.completed","response":{"id":"resp_first","model":"gpt-5.4","status":"completed","output":` + output + `,"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n")
+	_, _ = firstEvents.WriteString(`data: {"type":"response.completed","response":{"id":"resp_first","model":"gpt-5.4","status":"completed","output":` + output + `,"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n")
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(firstEvents.String()))},
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(`data: {"type":"response.completed","response":{"id":"resp_second","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"))},

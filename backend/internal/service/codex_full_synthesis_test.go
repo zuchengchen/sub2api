@@ -171,22 +171,6 @@ func isCodexBaseInstructionsItemMustParse(t *testing.T, body []byte, index int) 
 
 func itoaForTest(v int) string { return strconv.Itoa(v) }
 
-func codexInputHasBaseInstructions(t *testing.T, body []byte) bool {
-	t.Helper()
-	input := gjson.GetBytes(body, "input").Array()
-	for i := range input {
-		raw := input[i].Raw
-		var item map[string]any
-		if err := json.Unmarshal([]byte(raw), &item); err != nil {
-			continue
-		}
-		if isCodexBaseInstructionsItem(item) {
-			return true
-		}
-	}
-	return false
-}
-
 func TestCodexSynthesisCompatibleClientMapsOfficialToolNames(t *testing.T) {
 	pinCodexTestVersion(t, "0.163.0")
 	svc := &OpenAIGatewayService{cfg: codexSynthEnabledConfig()}
@@ -255,12 +239,17 @@ func TestCodexWireProfileMainClearsContentItemMetadataAndDedupesConfigurationUpd
 		},
 	}
 	require.True(t, applyCodexWireProfileInputRules(body, profile, false))
-	input := body["input"].([]any)
+	input, ok := body["input"].([]any)
+	require.True(t, ok)
 	require.Len(t, input, 3, "adjacent configuration_update keeps the latest only")
-	first := input[0].(map[string]any)
-	meta := first["internal_chat_message_metadata_passthrough"].(map[string]any)
+	first, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	meta, ok := first["internal_chat_message_metadata_passthrough"].(map[string]any)
+	require.True(t, ok)
 	require.NotContains(t, meta, "content_item_metadata")
-	require.Equal(t, 2, input[1].(map[string]any)["value"])
+	second, ok := input[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, 2, second["value"])
 }
 
 func TestCodexCatalogModelPrompts(t *testing.T) {
@@ -289,12 +278,21 @@ func TestRestoreCodexToolNameFieldsCustomToolCall(t *testing.T) {
 	}
 	changed := restoreCodexToolNameFields(event, map[string]string{"apply_patch": "edit"})
 	require.True(t, changed)
-	require.Equal(t, "edit", event["item"].(map[string]any)["name"])
+	item, ok := event["item"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "edit", item["name"])
 
 	tools := map[string]any{"type": "session.updated", "session": map[string]any{"tools": []any{map[string]any{"type": "custom", "name": "apply_patch"}}}}
 	changed = restoreCodexToolNameFields(tools, map[string]string{"apply_patch": "edit"})
 	require.True(t, changed)
-	require.Equal(t, "edit", tools["session"].(map[string]any)["tools"].([]any)[0].(map[string]any)["name"])
+	session, ok := tools["session"].(map[string]any)
+	require.True(t, ok)
+	sessionTools, ok := session["tools"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, sessionTools)
+	tool, ok := sessionTools[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "edit", tool["name"])
 }
 
 func TestCodexSynthesisChatCompletionsBridge(t *testing.T) {

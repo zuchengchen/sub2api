@@ -87,7 +87,6 @@ type codexSynthContextLimits struct {
 
 var (
 	codexOfficialToolsOnce sync.Once
-	codexOfficialTools     []map[string]any
 	codexOfficialToolIndex map[string]map[string]any
 
 	codexSynthDescriptorWarned sync.Map
@@ -97,7 +96,6 @@ func loadCodexOfficialTools() {
 	codexOfficialToolsOnce.Do(func() {
 		var tools []map[string]any
 		if err := json.Unmarshal(codexOfficialTools0163JSON, &tools); err != nil {
-			codexOfficialTools = nil
 			codexOfficialToolIndex = map[string]map[string]any{}
 			return
 		}
@@ -107,7 +105,6 @@ func loadCodexOfficialTools() {
 				index[name] = tool
 			}
 		}
-		codexOfficialTools = tools
 		codexOfficialToolIndex = index
 	})
 }
@@ -570,7 +567,9 @@ func codexSynthConfiguredContextLimits(model string) codexSynthContextLimits {
 		return codexSynthContextLimits{}
 	}
 	if cached, ok := codexSynthConfiguredLimitsCache.Load(model); ok {
-		return cached.(codexSynthContextLimits)
+		if limits, ok := cached.(codexSynthContextLimits); ok {
+			return limits
+		}
 	}
 	configured := newConfiguredCodexModelDescriptor(model)
 	limits := codexSynthContextLimits{
@@ -669,48 +668,48 @@ func codexSynthItemID(kind, text string) string {
 // order. RawMessage keeps this order through json.Marshal of the body.
 func codexSynthMessageRaw(id, role string, texts, kinds []string, turnID string, createTime float64) json.RawMessage {
 	var buf bytes.Buffer
-	buf.WriteString(`{"type":"message","id":`)
+	_, _ = buf.WriteString(`{"type":"message","id":`)
 	writeCodexJSONString(&buf, id)
-	buf.WriteString(`,"role":`)
+	_, _ = buf.WriteString(`,"role":`)
 	writeCodexJSONString(&buf, role)
-	buf.WriteString(`,"content":[`)
+	_, _ = buf.WriteString(`,"content":[`)
 	for i, text := range texts {
 		if i > 0 {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
-		buf.WriteString(`{"type":"input_text","text":`)
+		_, _ = buf.WriteString(`{"type":"input_text","text":`)
 		writeCodexJSONString(&buf, text)
-		buf.WriteByte('}')
+		_ = buf.WriteByte('}')
 	}
-	buf.WriteString(`],"internal_chat_message_metadata_passthrough":{`)
+	_, _ = buf.WriteString(`],"internal_chat_message_metadata_passthrough":{`)
 	first := true
 	if turnID != "" {
-		buf.WriteString(`"turn_id":`)
+		_, _ = buf.WriteString(`"turn_id":`)
 		writeCodexJSONString(&buf, turnID)
 		first = false
 	}
 	if createTime > 0 {
 		if !first {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
-		buf.WriteString(`"create_time":`)
-		buf.WriteString(strconv.FormatFloat(createTime, 'f', -1, 64))
+		_, _ = buf.WriteString(`"create_time":`)
+		_, _ = buf.WriteString(strconv.FormatFloat(createTime, 'f', -1, 64))
 		first = false
 	}
 	if len(kinds) > 0 {
 		if !first {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
-		buf.WriteString(`"content_item_kinds":[`)
+		_, _ = buf.WriteString(`"content_item_kinds":[`)
 		for i, kind := range kinds {
 			if i > 0 {
-				buf.WriteByte(',')
+				_ = buf.WriteByte(',')
 			}
 			writeCodexJSONString(&buf, kind)
 		}
-		buf.WriteByte(']')
+		_ = buf.WriteByte(']')
 	}
-	buf.WriteString(`}}`)
+	_, _ = buf.WriteString(`}}`)
 	return json.RawMessage(escapeCodexNonASCII(buf.Bytes()))
 }
 

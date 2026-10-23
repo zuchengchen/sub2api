@@ -22,7 +22,7 @@ func h2TestPair(t *testing.T) (*h2Conn, net.Conn) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	type res struct {
 		c   net.Conn
 		err error
@@ -41,8 +41,8 @@ func h2TestPair(t *testing.T) (*h2Conn, net.Conn) {
 		t.Fatal(srv.err)
 	}
 	t.Cleanup(func() {
-		cli.Close()
-		srv.c.Close()
+		_ = cli.Close()
+		_ = srv.c.Close()
 	})
 	return newH2ConnForTest(cli), srv.c
 }
@@ -385,7 +385,7 @@ func TestH2H1FallbackOnALPN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	type res struct {
 		c   net.Conn
 		err error
@@ -403,7 +403,7 @@ func TestH2H1FallbackOnALPN(t *testing.T) {
 	if srv.err != nil {
 		t.Fatal(srv.err)
 	}
-	defer srv.c.Close()
+	defer func() { _ = srv.c.Close() }()
 
 	go func() {
 		br := bufio.NewReader(srv.c)

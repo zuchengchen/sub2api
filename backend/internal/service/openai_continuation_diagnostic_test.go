@@ -77,7 +77,7 @@ func TestDiagnosticOAuthWSHTTPBridgeIncrementalHistoryPreservesAssistantAndReaso
 	first := diagnosticContinuationSSE("resp_first", output)
 	var outputEvents strings.Builder
 	for _, item := range gjson.Parse(output).Array() {
-		outputEvents.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
+		_, _ = outputEvents.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
 	}
 	first.Body = io.NopCloser(io.MultiReader(strings.NewReader(outputEvents.String()), first.Body))
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
@@ -96,7 +96,7 @@ func TestDiagnosticOAuthWSHTTPBridgeIncrementalHistoryPreservesAssistantAndReaso
 			errCh <- err
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		_, first, err := conn.Read(readCtx)
 		cancel()
@@ -113,7 +113,7 @@ func TestDiagnosticOAuthWSHTTPBridgeIncrementalHistoryPreservesAssistantAndReaso
 	defer cancel()
 	client, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	for _, payload := range []string{
 		`{"type":"response.create","model":"gpt-6-astra","instructions":"Follow the supplied request.","reasoning":{"effort":"xhigh"},"input":[{"role":"user","content":"Inspect the fixture."}]}`,
 		`{"type":"response.create","model":"gpt-6-astra","previous_response_id":"resp_first","input":[{"type":"function_call_output","call_id":"call_diagnostic","output":"fixture result"}]}`,

@@ -6,7 +6,6 @@ import (
 	"maps"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -29,13 +28,6 @@ const (
 	openAICookieWSScopeHeader              = "x-sub2api-cookie-ws-scope"
 )
 
-type openAICodexSharedTicketState struct {
-	mu      sync.Mutex
-	tickets []*struct{}
-}
-
-type openAICodexTicketWatch struct{}
-
 func (o *upstreamResponseModelObserver) noteOpenAICodexTicketCompletion([]byte, string) {}
 
 func (o *upstreamResponseModelObserver) adoptOpenAICodexTicketWatch(*gin.Context) {}
@@ -53,8 +45,6 @@ const openAICookieWSUnavailableMessage = "No verified Cookie websocket is availa
 func extractOpenAICodexTicketModel(body []byte) string {
 	return strings.TrimSpace(gjson.GetBytes(body, "model").String())
 }
-
-func openAICodexTicketInjected(http.Header, int) bool { return false }
 
 func (s *OpenAIGatewayService) openAICookieWSModeConfigured() bool { return false }
 
@@ -115,10 +105,6 @@ func (s *OpenAIGatewayService) cookieWSPayloadTooLargeError(int) *openAICookieWS
 	return nil
 }
 
-func normalizeOpenAICodexTicketModel(model string) string {
-	return strings.TrimSpace(model)
-}
-
 func (s *OpenAIGatewayService) openAICodexTicketConfig() config.OpenAICodexTicketConfig {
 	if s == nil || s.cfg == nil {
 		return config.OpenAICodexTicketConfig{}
@@ -150,10 +136,6 @@ func (s *AccountTestService) OpenAICodexTicketStatuses(account *Account, cfg con
 		return nil
 	}
 	return statuses
-}
-
-func (s *OpenAIGatewayService) applyOpenAICodexTicket(_ context.Context, _ *Account, _ string, _ http.Header) error {
-	return nil
 }
 
 func (s *OpenAIGatewayService) applyOpenAICodexTicketForRequest(_ context.Context, _ *gin.Context, _ *Account, _ string, _ http.Header) error {
@@ -269,10 +251,6 @@ func MergeOpenAICodexTicketExtra(extra, current map[string]any) map[string]any {
 		}
 	}
 	return result
-}
-
-func isOpenAICodexTicketAccount(account *Account) bool {
-	return account != nil && account.IsOpenAIOAuthLike() && !account.IsShadow()
 }
 
 // isOpenAITiboAccount is any non-shadow OpenAI credential that can answer the

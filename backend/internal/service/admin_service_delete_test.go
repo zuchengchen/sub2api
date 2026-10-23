@@ -824,4 +824,3 @@ func TestAdminService_BatchDeleteRedeemCodes_PartialFailures(t *testing.T) {
 func (s *userRepoStub) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
-

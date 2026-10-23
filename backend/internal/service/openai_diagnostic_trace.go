@@ -375,7 +375,7 @@ func writeDiagnosticTrace(event diagnosticTraceEvent) {
 	if err != nil {
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	_, _ = file.Write(append(encoded, '\n'))
 }
 

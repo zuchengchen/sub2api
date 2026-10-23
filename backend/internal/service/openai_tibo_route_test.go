@@ -18,8 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const tiboRouteWSCompleted = `{"type":"response.completed","response":{"id":"resp_ws","model":"gpt-6-astra","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ws ok"}]}],"usage":{"input_tokens":3,"output_tokens":2}}}`
-
 func tiboRouteStatusResponse(status int) *http.Response {
 	return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"denied"}}`))}
 }

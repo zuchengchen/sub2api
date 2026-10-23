@@ -36,9 +36,6 @@ type upstreamResponseModelObserver struct {
 	firstTier         string
 	firstTierConflict bool
 	terminalTier      string
-
-	// ticketWatch 是本次出站注入的 292 票。完成模型不符或响应头出现 312 时作废这一张。
-	ticketWatch *openAICodexTicketWatch
 }
 
 func (o *upstreamResponseModelObserver) Observe(model string, terminal bool) {
