@@ -166,7 +166,6 @@ var (
 	errH2GoAway      = errors.New("h2: goaway received")
 	errH2StreamsFull = errors.New("h2: max concurrent streams reached")
 	errH2StreamReset = errors.New("h2: stream reset by peer")
-	errH2BadALPN     = errors.New("h2: ALPN did not negotiate h2")
 )
 
 // writeFrame serializes frame writes through the framer. The write itself runs
@@ -636,7 +635,7 @@ func (c *h2Conn) RoundTrip(ctx context.Context, method, scheme, authority, path 
 			}
 			continue
 		}
-		resp.Header.Add(http.CanonicalHeaderKey(kv.Name), kv.Value)
+		resp.Header.Add(kv.Name, kv.Value) // Add canonicalizes the key
 	}
 	return resp, nil
 }

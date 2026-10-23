@@ -65,7 +65,7 @@ func main() {
 		return
 	}
 	target := filepath.Join("internal", "pkg", "openai", "codex_catalog_models.json")
-	if err := os.WriteFile(target, data, 0o644); err != nil {
+	if err := os.WriteFile(target, data, 0o644); err != nil { //nolint:gosec // G703: target 是硬编码的仓库内相对路径；data 只是写入内容，不参与路径
 		fmt.Fprintln(os.Stderr, "codexprompts: write:", err)
 		os.Exit(1)
 	}

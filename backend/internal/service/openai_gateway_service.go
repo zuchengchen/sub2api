@@ -24,7 +24,6 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -529,44 +528,21 @@ type OpenAIGatewayService struct {
 	// 剥离跨账号回带（openai_codex_turn_state.go）。
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
-	// openaiCodexTickets: accountID\x00model → *openAICodexTicket，292 长度门票。
-	openaiCodexTickets      sync.Map
-	openaiCodexTicketFlight singleflight.Group
-	// Cookie WS generations are isolated from legacy turn-state tickets.
-	openaiCookieWSTickets sync.Map
-	// cookieWSSkipBusinessProbe is live-test only: new sockets skip the Tibo
-	// candy check so Forward can be exercised when upstream answers False.
-	cookieWSSkipBusinessProbe bool
 	// tiboRouteDisabled is test only: keep Cookie WS / failover fixtures on the
 	// pre-Tibo-routing path so they can pin exact upstream attempt counts.
 	tiboRouteDisabled bool
-	// cookieWSBackgroundHarvest is test-only. Production harvest no longer
-	// refreshes Cookie groups or warms verified sockets.
-	cookieWSBackgroundHarvest bool
 	// openaiTiboRoutes: accountID → *openAITiboAccountState (openai_tibo_route.go).
 	openaiTiboRoutes       sync.Map
 	openaiTiboProbeSem     chan struct{}
 	openaiTiboProbeSemOnce sync.Once
 	// openaiTiboProbeWG tracks background Tibo probes (tests wait on it).
-	openaiTiboProbeWG          sync.WaitGroup
-	openaiTiboLoaded           atomic.Bool
-	openaiTiboEnrolledAt       atomic.Int64
-	openaiTiboStats            openAITiboStats
-	openaiTiboPins             sync.Map // accountID\x00scope → openAITiboPin
-	openaiTiboPinPrunedAt      atomic.Int64
-	openaiTiboMismatchLog      sync.Map
-	openaiCookieWSFlight       singleflight.Group
-	openaiCookieWSRetry        sync.Map
-	openaiCookieWSSlots        sync.Map
-	openaiCookieWSWarmupFlight singleflight.Group
-	openaiCookieWSWarmupRetry  sync.Map
-	openaiCookieWSRecovery     sync.Map
-	// openaiCodexTicketHarvestBackoff: accountID\x00model → *openAICodexTicketHarvestBackoff。
-	// 保留给单账号探测的测试节奏。共享票池的轮换在 openaiCodexShared。
-	openaiCodexTicketHarvestBackoff sync.Map
-	openaiCodexShared               openAICodexSharedTicketState
-	// openaiCodexTicketRevoked: state blob → 作废时间。只挡住这一张票，池里其它票继续用。
-	openaiCodexTicketRevoked     sync.Map
+	openaiTiboProbeWG            sync.WaitGroup
+	openaiTiboLoaded             atomic.Bool
+	openaiTiboEnrolledAt         atomic.Int64
+	openaiTiboStats              openAITiboStats
+	openaiTiboPins               sync.Map // accountID\x00scope → openAITiboPin
+	openaiTiboPinPrunedAt        atomic.Int64
+	openaiTiboMismatchLog        sync.Map
 	openaiCodexTicketLifecycleMu sync.Mutex
 	openaiCodexTicketCancel      context.CancelFunc
 	openaiCodexTicketDone        chan struct{}

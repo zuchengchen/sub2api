@@ -3,6 +3,7 @@ package codexwire
 import (
 	"bytes"
 	"compress/flate"
+	"errors"
 	"io"
 	"sync"
 
@@ -35,6 +36,10 @@ var pmdWriterPool = sync.Pool{
 		return w
 	},
 }
+
+// errPMDPoolType reports a pool entry of an unexpected type. The pools only
+// ever hold values built by their own New funcs, so this is unreachable.
+var errPMDPoolType = errors.New("codexwire: unexpected permessage-deflate pool entry type")
 
 // pmdReaderPool reuses stdlib inflaters; Reset re-arms them with a new
 // source and preset dictionary.
@@ -103,7 +108,10 @@ func newPMDCompressor(contextTakeover bool, windowBits int) *pmdCompressor {
 // Compress returns the wire bytes for one message (RSV1 payload).
 func (c *pmdCompressor) Compress(payload []byte) ([]byte, error) {
 	var buf bytes.Buffer
-	w := pmdWriterPool.Get().(*kflate.Writer)
+	w, ok := pmdWriterPool.Get().(*kflate.Writer)
+	if !ok {
+		return nil, errPMDPoolType
+	}
 	defer func() {
 		// Drop references to this message before pooling.
 		w.ResetDict(io.Discard, nil)
@@ -123,10 +131,7 @@ func (c *pmdCompressor) Compress(payload []byte) ([]byte, error) {
 	if err := w.Flush(); err != nil {
 		return nil, err
 	}
-	out := buf.Bytes()
-	if bytes.HasSuffix(out, pmdTail) {
-		out = out[:len(out)-len(pmdTail)]
-	}
+	out := bytes.TrimSuffix(buf.Bytes(), pmdTail)
 	if c.contextTakeover {
 		c.window.push(payload)
 	}
@@ -159,16 +164,23 @@ func (d *pmdDecompressor) Decompress(payload []byte) ([]byte, error) {
 	src := make([]byte, 0, len(payload)+len(pmdReadTail))
 	src = append(src, payload...)
 	src = append(src, pmdReadTail...)
-	r := pmdReaderPool.Get().(io.ReadCloser)
+	r, ok := pmdReaderPool.Get().(io.ReadCloser)
+	if !ok {
+		return nil, errPMDPoolType
+	}
+	resetter, ok := r.(flate.Resetter)
+	if !ok {
+		return nil, errPMDPoolType
+	}
 	defer func() {
-		_ = r.(flate.Resetter).Reset(bytes.NewReader(nil), nil)
+		_ = resetter.Reset(bytes.NewReader(nil), nil)
 		pmdReaderPool.Put(r)
 	}()
 	var dict []byte
 	if d.contextTakeover {
 		dict = d.window.bytes()
 	}
-	if err := r.(flate.Resetter).Reset(bytes.NewReader(src), dict); err != nil {
+	if err := resetter.Reset(bytes.NewReader(src), dict); err != nil {
 		return nil, err
 	}
 	out, err := io.ReadAll(r)

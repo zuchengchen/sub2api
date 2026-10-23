@@ -27,13 +27,11 @@ type openCodeGoUsageTestRepo struct {
 	accounts           map[int64]*Account
 	due                []Account
 	groupResolveCalls  atomic.Int64
-	getByIDCalls       atomic.Int64
 	disableAutoCalls   atomic.Int64
 	disableAutoAttempt atomic.Int64
 }
 
 func (r *openCodeGoUsageTestRepo) GetByID(_ context.Context, id int64) (*Account, error) {
-	r.getByIDCalls.Add(1)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	account := r.accounts[id]
@@ -659,15 +657,13 @@ func TestOpenCodeGoUsageRefreshSingleflightAndRunnerDeduplicateSharedGroup(t *te
 	errs := make(chan error, 2)
 	go func() { _, err := svc.Refresh(context.Background(), first.ID); errs <- err }()
 	<-started
-	// The first caller is now parked in the stub, having loaded the account twice
-	// (once to build the group key, once inside the singleflight function).
-	loadsBeforeSecond := repo.getByIDCalls.Load()
+	// The first caller is now the singleflight leader, parked in the stub.
 	go func() { _, err := svc.Refresh(context.Background(), second.ID); errs <- err }()
-	// Only release the first caller once the second one has loaded its own
-	// account, which happens immediately before it joins the singleflight group.
-	require.Eventually(t, func() bool {
-		return repo.getByIDCalls.Load() > loadsBeforeSecond
-	}, 5*time.Second, time.Millisecond, "the second caller must reach the singleflight group before the first is released")
+	// Release the leader only once the second caller is provably waiting inside
+	// the singleflight group. Its anchor GetByID precedes Group.Do, so waiting on
+	// that let the leader finish first under load and the second caller ran as
+	// a fresh execution.
+	waitForSingleflightFollowers(t, "(*OpenCodeGoUsageService).refreshAccount", 1)
 	close(release)
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)

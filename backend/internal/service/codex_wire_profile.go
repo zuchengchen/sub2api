@@ -127,13 +127,6 @@ func codexWireProfileForAccount(account *Account, cfg *config.Config) (codexWire
 	return profile, true
 }
 
-// codexWireProfileUsesSessionPromptCacheKey 返回是否允许注入 session 派生的
-// 缺省 prompt_cache_key。Omit profile 不生成；Custom 只保留客户端显式值。
-func codexWireProfileUsesSessionPromptCacheKey(profile codexWireProfile) bool {
-	return profile.PromptCacheKeyPolicy == "" ||
-		profile.PromptCacheKeyPolicy == codexPromptCacheKeySessionDerived
-}
-
 // codexFullSynthesisEnabled is the service-level switch. A nil config (tests,
 // tools) keeps the legacy OAuth path; production viper defaults enable it.
 func (s *OpenAIGatewayService) codexFullSynthesisEnabled() bool {

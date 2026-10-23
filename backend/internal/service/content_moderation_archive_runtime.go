@@ -191,13 +191,13 @@ func newContentModerationArchiveRuntime(repo ContentModerationArchiveRepository,
 }
 
 func ensurePrivateModerationDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
+	if err := os.MkdirAll(path, 0o700); err != nil { //nolint:gosec // G703: path 仅来自启动配置 content_moderation_archive.*_dir（运维配置），非请求输入
 		return fmt.Errorf("create content moderation archive directory: %w", err)
 	}
-	if err := os.Chmod(path, 0o700); err != nil {
+	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // G703: 同上
 		return fmt.Errorf("restrict content moderation archive directory: %w", err)
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) //nolint:gosec // G703: 同上
 	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
 		return errors.New("content moderation archive directory is not private")
 	}

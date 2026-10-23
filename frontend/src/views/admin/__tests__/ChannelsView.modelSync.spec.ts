@@ -96,7 +96,8 @@ describe('ChannelsView pricing model sync', () => {
   it.each([
     ['openai', true],
     ['opencode_go', true],
-    ['typesafe', true],
+    // typesafe is not registered in this fork's platform catalog (c37d4b680); grok covers a non-openai litellm provider.
+    ['grok', true],
     ['command_code', false],
     ['cline', false]
   ] as const)('offers pricing model sync for %s only when its pricing catalog exists', async (platform, expected) => {

@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -198,7 +199,12 @@ func TestHybridKeyShareHandshake(t *testing.T) {
 						return
 					}
 					defer func() { _ = c.Close() }()
-					if err := c.(*tls.Conn).Handshake(); err != nil {
+					tlsConn, ok := c.(*tls.Conn)
+					if !ok {
+						errc <- fmt.Errorf("accepted conn is %T, want *tls.Conn", c)
+						return
+					}
+					if err := tlsConn.Handshake(); err != nil {
 						errc <- err
 						return
 					}
@@ -394,7 +400,7 @@ func TestHTTPProxyDialer_SendsExactConnect(t *testing.T) {
 			if err != nil {
 				break
 			}
-			head.WriteString(line)
+			_, _ = head.WriteString(line)
 			if line == "\r\n" {
 				break
 			}

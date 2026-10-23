@@ -113,7 +113,9 @@ func TestDiagnosticTraceJSONLRedaction(t *testing.T) {
 	if err != nil || !bytes.Equal(remaining, body) {
 		t.Fatalf("trace consumed or changed the request body: %v", err)
 	}
-	if diagnosticHeaderValueDigest("SESSION_SECRET") != diagnosticHeaderValueDigest("SESSION_SECRET") || diagnosticHeaderValueDigest("SESSION_SECRET") == diagnosticHeaderValueDigest("OTHER_SESSION") {
+	firstDigest := diagnosticHeaderValueDigest("SESSION_SECRET")
+	secondDigest := diagnosticHeaderValueDigest("SESSION_SECRET")
+	if firstDigest != secondDigest || firstDigest == diagnosticHeaderValueDigest("OTHER_SESSION") {
 		t.Fatal("header digest is not stable and value-specific in this process")
 	}
 }

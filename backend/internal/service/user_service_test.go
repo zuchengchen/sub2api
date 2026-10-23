@@ -926,4 +926,3 @@ func TestGetProfile_HydratesAvatarFromRepository(t *testing.T) {
 func (m *mockUserRepo) SetVIP(ctx context.Context, id int64, vip bool) (bool, error) {
 	return false, nil
 }
-
