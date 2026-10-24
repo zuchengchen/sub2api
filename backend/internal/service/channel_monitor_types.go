@@ -144,12 +144,33 @@ type CheckResult struct {
 	Quota *domain.MonitorQuotaSnapshot
 }
 
+// ChannelMonitorGroupRate 渠道状态卡片按分组名称 join 的展示倍率。
+type ChannelMonitorGroupRate struct {
+	ID                 int64
+	Name               string
+	Platform           string
+	SubscriptionType   string
+	RateMultiplier     float64
+	PeakRateEnabled    bool
+	PeakStart          string
+	PeakEnd            string
+	PeakRateMultiplier float64
+}
+
 // UserMonitorView 用户只读视图：监控概览（含主模型最近状态 + 7d 可用率 + 附加模型最近状态）。
 type UserMonitorView struct {
 	ID                   int64
 	Name                 string
 	Provider             string
 	GroupName            string
+	GroupID              *int64
+	GroupPlatform        string
+	SubscriptionType     string
+	RateMultiplier       *float64
+	PeakRateEnabled      bool
+	PeakStart            string
+	PeakEnd              string
+	PeakRateMultiplier   float64
 	PrimaryModel         string
 	PrimaryStatus        string
 	PrimaryLatencyMs     *int

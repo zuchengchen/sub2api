@@ -591,7 +591,7 @@ const groupOptions = computed(() =>
     )
     .map((item) => ({
       value: String(item.id),
-      label: item.platform ? `${item.platform} / ${item.name || `#${item.id}`}` : item.name || `#${item.id}`,
+      label: groupOptionLabel(item),
     }))
 )
 const modelOptions = computed(() =>
@@ -661,6 +661,13 @@ const matrixRows = computed(() => {
   return items
 })
 
+function groupOptionLabel(item: { id: number; name: string; platform?: string; rate_multiplier?: number | null }) {
+  const name = item.name || `#${item.id}`
+  const rate = item.rate_multiplier == null || Number.isNaN(Number(item.rate_multiplier))
+    ? ''
+    : ` ×${item.rate_multiplier}`
+  return item.platform ? `${item.platform} / ${name}${rate}` : `${name}${rate}`
+}
 function csv(value: unknown) {
   return typeof value === 'string' ? value.split(',').filter(Boolean) : []
 }

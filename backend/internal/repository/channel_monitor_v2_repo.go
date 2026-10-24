@@ -151,9 +151,14 @@ func (r *channelMonitorV2Repository) GetDimensions(ctx context.Context, filter s
 	// different upstream models and must not share counts.
 	modelCounts := map[string]modelValue{}
 	type groupValue struct {
-		name     string
-		platform string
-		count    int64
+		name               string
+		platform           string
+		count              int64
+		rateMultiplier     *float64
+		peakRateEnabled    bool
+		peakStart          string
+		peakEnd            string
+		peakRateMultiplier float64
 	}
 	groupCounts := map[int64]groupValue{}
 	for _, platform := range channelMonitorV2EnabledPlatforms(cfg) {
@@ -172,7 +177,15 @@ func (r *channelMonitorV2Repository) GetDimensions(ctx context.Context, filter s
 		return nil, err
 	}
 	for groupID, info := range groupInfo {
-		groupCounts[groupID] = groupValue{name: info.name, platform: info.platform, count: 0}
+		groupCounts[groupID] = groupValue{
+			name:               info.name,
+			platform:           info.platform,
+			rateMultiplier:     info.rateMultiplier,
+			peakRateEnabled:    info.peakRateEnabled,
+			peakStart:          info.peakStart,
+			peakEnd:            info.peakEnd,
+			peakRateMultiplier: info.peakRateMultiplier,
+		}
 	}
 	for rows.Next() {
 		var platform, groupName, groupPlatform, model string
@@ -194,6 +207,13 @@ func (r *channelMonitorV2Repository) GetDimensions(ctx context.Context, filter s
 			current.name = groupName
 			current.platform = groupPlatform
 			current.count += count
+			if info, ok := groupInfo[groupID]; ok {
+				current.rateMultiplier = info.rateMultiplier
+				current.peakRateEnabled = info.peakRateEnabled
+				current.peakStart = info.peakStart
+				current.peakEnd = info.peakEnd
+				current.peakRateMultiplier = info.peakRateMultiplier
+			}
 			groupCounts[groupID] = current
 		}
 	}
@@ -209,7 +229,17 @@ func (r *channelMonitorV2Repository) GetDimensions(ctx context.Context, filter s
 		result.Models = append(result.Models, service.ChannelMonitorV2Dimension{Value: value, Label: channelMonitorV2ModelLabel(value), Platform: meta.platform, RequestCount: meta.count})
 	}
 	for id, value := range groupCounts {
-		result.Groups = append(result.Groups, service.ChannelMonitorV2GroupDimension{ID: id, Name: value.name, Platform: value.platform, RequestCount: value.count})
+		result.Groups = append(result.Groups, service.ChannelMonitorV2GroupDimension{
+			ID:                 id,
+			Name:               value.name,
+			Platform:           value.platform,
+			RequestCount:       value.count,
+			RateMultiplier:     value.rateMultiplier,
+			PeakRateEnabled:    value.peakRateEnabled,
+			PeakStart:          value.peakStart,
+			PeakEnd:            value.peakEnd,
+			PeakRateMultiplier: value.peakRateMultiplier,
+		})
 	}
 	sort.Slice(result.Platforms, func(i, j int) bool { return result.Platforms[i].RequestCount > result.Platforms[j].RequestCount })
 	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].RequestCount > result.Models[j].RequestCount })
@@ -360,9 +390,14 @@ type channelMonitorV2MatrixKey struct {
 }
 
 type channelMonitorV2MatrixAccumulator struct {
-	groupName string
-	total     *metricAccumulator
-	buckets   map[string]*metricAccumulator
+	groupName          string
+	rateMultiplier     *float64
+	peakRateEnabled    bool
+	peakStart          string
+	peakEnd            string
+	peakRateMultiplier float64
+	total              *metricAccumulator
+	buckets            map[string]*metricAccumulator
 }
 
 func (r *channelMonitorV2Repository) GetMatrix(ctx context.Context, filter service.ChannelMonitorV2Filter, cfg service.ChannelMonitorV2Config, groupBy service.ChannelMonitorV2GroupBy, admin bool) (*service.ChannelMonitorV2Matrix, error) {
@@ -416,6 +451,13 @@ func (r *channelMonitorV2Repository) GetMatrix(ctx context.Context, filter servi
 		}
 		if key.groupID > 0 {
 			acc.groupName = fact.GroupName
+			if info, ok := groupInfo[key.groupID]; ok {
+				acc.rateMultiplier = info.rateMultiplier
+				acc.peakRateEnabled = info.peakRateEnabled
+				acc.peakStart = info.peakStart
+				acc.peakEnd = info.peakEnd
+				acc.peakRateMultiplier = info.peakRateMultiplier
+			}
 		}
 		bucket := acc.buckets[fact.BucketStart]
 		if bucket == nil {
@@ -458,10 +500,32 @@ func (r *channelMonitorV2Repository) GetMatrix(ctx context.Context, filter servi
 		}
 		metrics := acc.total.metric(minutes, admin)
 		applyIgnoredErrors(&metrics, ignoredByDim[key])
-		row := service.ChannelMonitorV2MatrixRow{Platform: key.platform, GroupName: acc.groupName, Model: key.model, Metrics: metrics, Health: service.ChannelMonitorV2HealthForWithThresholds(metrics, cfg.HealthThresholds), Buckets: []service.ChannelMonitorV2TrendPoint{}}
+		row := service.ChannelMonitorV2MatrixRow{
+			Platform:           key.platform,
+			GroupName:          acc.groupName,
+			RateMultiplier:     acc.rateMultiplier,
+			PeakRateEnabled:    acc.peakRateEnabled,
+			PeakStart:          acc.peakStart,
+			PeakEnd:            acc.peakEnd,
+			PeakRateMultiplier: acc.peakRateMultiplier,
+			Model:              key.model,
+			Metrics:            metrics,
+			Health:             service.ChannelMonitorV2HealthForWithThresholds(metrics, cfg.HealthThresholds),
+			Buckets:            []service.ChannelMonitorV2TrendPoint{},
+		}
 		if key.groupID > 0 {
 			groupID := key.groupID
 			row.GroupID = &groupID
+			if info, ok := groupInfo[groupID]; ok {
+				row.RateMultiplier = info.rateMultiplier
+				row.PeakRateEnabled = info.peakRateEnabled
+				row.PeakStart = info.peakStart
+				row.PeakEnd = info.peakEnd
+				row.PeakRateMultiplier = info.peakRateMultiplier
+				if row.GroupName == "" {
+					row.GroupName = info.name
+				}
+			}
 		}
 		bucketKeys := make([]string, 0, len(acc.buckets))
 		for bucket := range acc.buckets {
@@ -558,7 +622,16 @@ func seedChannelMonitorV2MatrixAccumulators(filter service.ChannelMonitorV2Filte
 					key.model = model
 				}
 				if accs[key] == nil {
-					accs[key] = &channelMonitorV2MatrixAccumulator{groupName: info.name, total: newMetricAccumulator(), buckets: make(map[string]*metricAccumulator)}
+					accs[key] = &channelMonitorV2MatrixAccumulator{
+						groupName:          info.name,
+						rateMultiplier:     info.rateMultiplier,
+						peakRateEnabled:    info.peakRateEnabled,
+						peakStart:          info.peakStart,
+						peakEnd:            info.peakEnd,
+						peakRateMultiplier: info.peakRateMultiplier,
+						total:              newMetricAccumulator(),
+						buckets:            make(map[string]*metricAccumulator),
+					}
 				}
 			}
 		}
@@ -638,8 +711,13 @@ func channelMonitorV2RestrictedGroupScopeEmpty(filter service.ChannelMonitorV2Fi
 }
 
 type channelMonitorV2GroupInfo struct {
-	name     string
-	platform string
+	name               string
+	platform           string
+	rateMultiplier     *float64
+	peakRateEnabled    bool
+	peakStart          string
+	peakEnd            string
+	peakRateMultiplier float64
 }
 
 func (r *channelMonitorV2Repository) listActiveGroupIDs(ctx context.Context) ([]int64, error) {
@@ -664,7 +742,15 @@ func (r *channelMonitorV2Repository) loadChannelMonitorV2GroupInfo(ctx context.C
 	if len(groupIDs) == 0 {
 		return out, nil
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, COALESCE(name, ''), lower(COALESCE(NULLIF(TRIM(platform), ''), 'unknown')) FROM groups WHERE id = ANY($1) AND deleted_at IS NULL AND status = 'active'`, pq.Array(groupIDs))
+	rows, err := r.db.QueryContext(ctx, `SELECT id,
+		COALESCE(name, ''),
+		lower(COALESCE(NULLIF(TRIM(platform), ''), 'unknown')),
+		rate_multiplier,
+		COALESCE(peak_rate_enabled, false),
+		COALESCE(peak_start, ''),
+		COALESCE(peak_end, ''),
+		COALESCE(peak_rate_multiplier, 1)
+		FROM groups WHERE id = ANY($1) AND deleted_at IS NULL AND status = 'active'`, pq.Array(groupIDs))
 	if err != nil {
 		return nil, err
 	}
@@ -672,10 +758,24 @@ func (r *channelMonitorV2Repository) loadChannelMonitorV2GroupInfo(ctx context.C
 	for rows.Next() {
 		var id int64
 		var name, platform string
-		if err := rows.Scan(&id, &name, &platform); err != nil {
+		var multiplier float64
+		var info channelMonitorV2GroupInfo
+		if err := rows.Scan(
+			&id,
+			&name,
+			&platform,
+			&multiplier,
+			&info.peakRateEnabled,
+			&info.peakStart,
+			&info.peakEnd,
+			&info.peakRateMultiplier,
+		); err != nil {
 			return nil, err
 		}
-		out[id] = channelMonitorV2GroupInfo{name: name, platform: platform}
+		info.name = name
+		info.platform = platform
+		info.rateMultiplier = &multiplier
+		out[id] = info
 	}
 	return out, rows.Err()
 }

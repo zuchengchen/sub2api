@@ -100,4 +100,37 @@ describe('MonitorCard quota snapshot visibility', () => {
     expect(wrapper.text()).toContain('claude-sonnet-4-5')
     expect(wrapper.text()).not.toContain('monitorCommon.checkMode.quota')
   })
+
+  it('renders the group rate badge for public channel groups', () => {
+    const wrapper = mount(MonitorCard, {
+      props: {
+        item: makeItem({
+          name: 'DeepSeek',
+          provider: 'openai',
+          group_name: 'DeepSeek',
+          group_id: 84,
+          group_platform: 'deepseek',
+          subscription_type: 'standard',
+          rate_multiplier: 1,
+          primary_model: 'deepseek-chat',
+        }),
+        window: '7d',
+        availabilityValue: 100,
+        countdownSeconds: 0,
+        userGroupRates: { 84: 0.8 },
+      },
+      global: {
+        stubs: {
+          MonitorMetricPair: true,
+          MonitorAvailabilityRow: true,
+          MonitorTimeline: true,
+          GroupBadge: {
+            props: ['name', 'rateMultiplier', 'userRateMultiplier', 'alwaysShowRate'],
+            template: '<span>{{ name }} {{ rateMultiplier }}x {{ userRateMultiplier }}x</span>',
+          },
+        },
+      },
+    })
+    expect(wrapper.text()).toContain('DeepSeek 1x 0.8x')
+  })
 })

@@ -220,6 +220,48 @@ func (r *channelMonitorRepository) ListEnabled(ctx context.Context) ([]*service.
 	return out, nil
 }
 
+func (r *channelMonitorRepository) ListActiveGroupRates(ctx context.Context) ([]service.ChannelMonitorGroupRate, error) {
+	if r.db == nil {
+		return []service.ChannelMonitorGroupRate{}, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id,
+		       COALESCE(name, ''),
+		       lower(COALESCE(NULLIF(TRIM(platform), ''), 'unknown')),
+		       COALESCE(NULLIF(TRIM(subscription_type), ''), 'standard'),
+		       rate_multiplier,
+		       COALESCE(peak_rate_enabled, false),
+		       COALESCE(peak_start, ''),
+		       COALESCE(peak_end, ''),
+		       COALESCE(peak_rate_multiplier, 1)
+		FROM groups
+		WHERE deleted_at IS NULL AND status = 'active'
+		ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list active group rates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []service.ChannelMonitorGroupRate{}
+	for rows.Next() {
+		var row service.ChannelMonitorGroupRate
+		if err := rows.Scan(
+			&row.ID,
+			&row.Name,
+			&row.Platform,
+			&row.SubscriptionType,
+			&row.RateMultiplier,
+			&row.PeakRateEnabled,
+			&row.PeakStart,
+			&row.PeakEnd,
+			&row.PeakRateMultiplier,
+		); err != nil {
+			return nil, fmt.Errorf("scan active group rates: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (r *channelMonitorRepository) MarkChecked(ctx context.Context, id int64, checkedAt time.Time) error {
 	client := clientFromContext(ctx, r.client)
 	if err := client.ChannelMonitor.UpdateOneID(id).

@@ -56,6 +56,14 @@ type channelMonitorUserListItem struct {
 	Name                 string                               `json:"name"`
 	Provider             string                               `json:"provider"`
 	GroupName            string                               `json:"group_name"`
+	GroupID              *int64                               `json:"group_id,omitempty"`
+	GroupPlatform        string                               `json:"group_platform,omitempty"`
+	SubscriptionType     string                               `json:"subscription_type,omitempty"`
+	RateMultiplier       *float64                             `json:"rate_multiplier,omitempty"`
+	PeakRateEnabled      bool                                 `json:"peak_rate_enabled,omitempty"`
+	PeakStart            string                               `json:"peak_start,omitempty"`
+	PeakEnd              string                               `json:"peak_end,omitempty"`
+	PeakRateMultiplier   float64                              `json:"peak_rate_multiplier,omitempty"`
 	PrimaryModel         string                               `json:"primary_model"`
 	PrimaryStatus        string                               `json:"primary_status"`
 	PrimaryLatencyMs     *int                                 `json:"primary_latency_ms"`
@@ -118,6 +126,14 @@ func userMonitorViewToItem(v *service.UserMonitorView, includeQuota bool) channe
 		Name:                 v.Name,
 		Provider:             v.Provider,
 		GroupName:            v.GroupName,
+		GroupID:              v.GroupID,
+		GroupPlatform:        v.GroupPlatform,
+		SubscriptionType:     v.SubscriptionType,
+		RateMultiplier:       v.RateMultiplier,
+		PeakRateEnabled:      v.PeakRateEnabled,
+		PeakStart:            v.PeakStart,
+		PeakEnd:              v.PeakEnd,
+		PeakRateMultiplier:   v.PeakRateMultiplier,
 		PrimaryModel:         v.PrimaryModel,
 		PrimaryStatus:        v.PrimaryStatus,
 		PrimaryLatencyMs:     v.PrimaryLatencyMs,

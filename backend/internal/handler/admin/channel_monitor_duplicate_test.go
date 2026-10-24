@@ -22,6 +22,10 @@ type duplicateChannelMonitorHandlerRepoStub struct {
 	createCalls int
 }
 
+func (r *duplicateChannelMonitorHandlerRepoStub) ListActiveGroupRates(_ context.Context) ([]service.ChannelMonitorGroupRate, error) {
+	return []service.ChannelMonitorGroupRate{}, nil
+}
+
 func (r *duplicateChannelMonitorHandlerRepoStub) GetByID(_ context.Context, id int64) (*service.ChannelMonitor, error) {
 	if r.source == nil || r.source.ID != id {
 		return nil, service.ErrChannelMonitorNotFound

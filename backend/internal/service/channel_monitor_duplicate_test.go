@@ -52,6 +52,10 @@ func (r *duplicateChannelMonitorRepoStub) Create(_ context.Context, monitor *Cha
 	return nil
 }
 
+func (r *duplicateChannelMonitorRepoStub) ListActiveGroupRates(_ context.Context) ([]ChannelMonitorGroupRate, error) {
+	return []ChannelMonitorGroupRate{}, nil
+}
+
 func (r *duplicateChannelMonitorRepoStub) FindByDuplicateOperationID(_ context.Context, operationID string) (*ChannelMonitor, error) {
 	monitor := r.byOperation[operationID]
 	if monitor == nil {
