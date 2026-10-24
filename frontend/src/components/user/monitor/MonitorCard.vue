@@ -28,12 +28,12 @@
           <span
             v-if="hasCustomRate"
             class="shrink-0 text-xs tabular-nums text-gray-400 line-through"
-          >×{{ formattedDefaultRate }}</span>
+          >{{ formattedDefaultRate }}</span>
           <span
             v-if="hasRate"
             data-testid="monitor-card-rate"
-            class="shrink-0 text-lg font-extrabold leading-none tabular-nums text-primary-600 dark:text-primary-400"
-          >×{{ formattedEffectiveRate }}</span>
+            class="shrink-0 text-lg font-extrabold leading-none tabular-nums text-red-600 dark:text-red-400"
+          >{{ formattedEffectiveRate }}</span>
           <span
             v-if="hasPeakRate"
             class="min-w-0 text-[11px] font-medium text-amber-600 dark:text-amber-400"
@@ -92,7 +92,6 @@ import {
 } from '@/composables/useChannelMonitorFormat'
 import { isChannelMonitorQuotaVisible } from '@/utils/featureFlags'
 import { useAppStore } from '@/stores/app'
-import { formatMultiplier } from '@/utils/formatters'
 import { formatPeakRateWindow, hasPeakRate as groupHasPeakRate, serverTimezoneLabel } from '@/utils/peak-rate'
 import ProviderIcon from './ProviderIcon.vue'
 import MonitorMetricPair from './MonitorMetricPair.vue'
@@ -166,7 +165,7 @@ const formattedEffectiveRate = computed(() => formatRateValue(effectiveRate.valu
 
 function formatRateValue(value: number | null | undefined): string {
   if (value == null || Number.isNaN(Number(value))) return ''
-  return formatMultiplier(Number(value))
+  return `${Number(Number(value).toFixed(6))}x`
 }
 
 const hasPeakRate = computed(() => groupHasPeakRate(props.item))
