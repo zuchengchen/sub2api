@@ -162,6 +162,11 @@ export interface MonitorMatrixRow {
   platform: string
   group_id?: number
   group_name?: string
+  rate_multiplier?: number | null
+  peak_rate_enabled?: boolean
+  peak_start?: string
+  peak_end?: string
+  peak_rate_multiplier?: number
   model?: string
   metrics: MonitorMetric
   health: MonitorHealth
@@ -176,7 +181,17 @@ export interface MonitorMatrixResponse {
 
 export interface MonitorDimensions {
   platforms: Array<{ value: string; label: string; request_count: number }>
-  groups: Array<{ id: number; name: string; platform?: string; request_count: number }>
+  groups: Array<{
+    id: number
+    name: string
+    platform?: string
+    request_count: number
+    rate_multiplier?: number | null
+    peak_rate_enabled?: boolean
+    peak_start?: string
+    peak_end?: string
+    peak_rate_multiplier?: number
+  }>
   models: Array<{ value: string; label: string; platform?: string; request_count: number }>
 }
 

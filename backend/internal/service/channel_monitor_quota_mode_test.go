@@ -40,6 +40,10 @@ func (r *quotaModeRepoStub) MarkChecked(_ context.Context, id int64, _ time.Time
 	return nil
 }
 
+func (r *quotaModeRepoStub) ListActiveGroupRates(_ context.Context) ([]ChannelMonitorGroupRate, error) {
+	return []ChannelMonitorGroupRate{}, nil
+}
+
 func (r *quotaModeRepoStub) Update(_ context.Context, m *ChannelMonitor) error {
 	clone := *m
 	r.updated = append(r.updated, &clone)

@@ -140,6 +140,48 @@ describe('RelayPulseMatrix', () => {
     await cells[0].trigger('click')
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
   })
+
+  it('appends group rate multipliers to matrix row labels', () => {
+    const wrapper = mount(RelayPulseMatrix, {
+      props: {
+        rows: [{
+          platform: 'deepseek',
+          group_id: 84,
+          group_name: 'DeepSeek',
+          rate_multiplier: 1,
+          model: 'deepseek-chat',
+          metrics: metrics(10),
+          health,
+          buckets: [],
+        }, {
+          platform: 'anthropic',
+          group_id: 41,
+          group_name: 'Kiro2Claude',
+          rate_multiplier: 0.5,
+          peak_rate_enabled: true,
+          peak_rate_multiplier: 0.8,
+          model: 'claude-sonnet-4-5',
+          metrics: metrics(4),
+          health,
+          buckets: [],
+        }],
+        coverage: {
+          requested_start: '2026-08-01T00:00:00Z',
+          requested_end: '2026-08-01T00:03:00Z',
+          coverage_start: '2026-08-01T00:00:00Z',
+          data_through: '2026-08-01T00:03:00Z',
+          computed_at: '2026-08-01T00:03:00Z',
+          aggregation_lag_seconds: 0,
+          coverage_complete: true,
+          bucket_seconds: 60,
+        },
+        healthMode: 'overall',
+      },
+    })
+    const labels = wrapper.findAll('.dimension-cell').map((cell) => cell.text())
+    expect(labels[0]).toContain('DeepSeek ×1')
+    expect(labels[1]).toContain('Kiro2Claude ×0.5 (peak ×0.8)')
+  })
 })
 
 describe('RelayPulseMatrix axis range', () => {

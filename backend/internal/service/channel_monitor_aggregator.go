@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // 渠道监控聚合层：把 latest + availability 拼成 admin/user 视图所需的 summary / detail。
@@ -74,7 +75,65 @@ func (s *ChannelMonitorService) ListUserView(ctx context.Context) ([]*UserMonito
 		primaryLatest := pickLatest(latestMap[m.ID], m.PrimaryModel)
 		views = append(views, buildUserViewFromSummary(m, summaries[m.ID], primaryLatest, timelineMap[m.ID]))
 	}
+	rates, err := s.repo.ListActiveGroupRates(ctx)
+	if err != nil {
+		slog.Warn("channel_monitor: list active group rates failed", "error", err)
+		return views, nil
+	}
+	attachGroupRates(views, rates)
 	return views, nil
+}
+
+func attachGroupRates(views []*UserMonitorView, rates []ChannelMonitorGroupRate) {
+	if len(views) == 0 || len(rates) == 0 {
+		return
+	}
+	byName := make(map[string]ChannelMonitorGroupRate, len(rates))
+	for _, rate := range rates {
+		key := strings.ToLower(strings.TrimSpace(rate.Name))
+		if key == "" {
+			continue
+		}
+		if _, exists := byName[key]; !exists {
+			byName[key] = rate
+		}
+	}
+	for _, view := range views {
+		if view == nil {
+			continue
+		}
+		rate, ok := lookupGroupRate(byName, view.GroupName, view.Name)
+		if !ok {
+			continue
+		}
+		id := rate.ID
+		multiplier := rate.RateMultiplier
+		view.GroupID = &id
+		view.GroupPlatform = rate.Platform
+		view.SubscriptionType = rate.SubscriptionType
+		view.RateMultiplier = &multiplier
+		view.PeakRateEnabled = rate.PeakRateEnabled
+		view.PeakStart = rate.PeakStart
+		view.PeakEnd = rate.PeakEnd
+		view.PeakRateMultiplier = rate.PeakRateMultiplier
+		if strings.TrimSpace(view.GroupName) == "" {
+			view.GroupName = rate.Name
+		}
+	}
+}
+
+func lookupGroupRate(byName map[string]ChannelMonitorGroupRate, names ...string) (ChannelMonitorGroupRate, bool) {
+	for _, name := range names {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			continue
+		}
+		rate, ok := byName[key]
+		if ok {
+			return rate, true
+		}
+	}
+	return ChannelMonitorGroupRate{}, false
 }
 
 // collectMonitorIndexes 把 monitors 列表按 ID 展开为聚合查询所需的三个索引结构。
