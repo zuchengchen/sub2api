@@ -12,11 +12,18 @@ vi.mock('@/utils/featureFlags', () => ({
   isChannelMonitorQuotaVisible: () => isQuotaVisible(),
 }))
 
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => ({ cachedPublicSettings: { server_utc_offset: '+08:00' } }),
+}))
+
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   return {
     ...actual,
-    useI18n: () => ({ t: (key: string) => key, te: () => true }),
+    useI18n: () => ({ t: (key: string, params?: Record<string, unknown>) => {
+      if (key === 'common.peakRateTooltip') return `peak:${params?.window ?? ''}`
+      return key
+    }, te: () => true }),
   }
 })
 
@@ -89,19 +96,39 @@ describe('MonitorCard quota snapshot visibility', () => {
     expect(wrapper.find('[data-testid="monitor-quota-view"]').exists()).toBe(false)
   })
 
-  // 占位符 "quota" 是主模型存储值，不得作为假模型名直接透出到用户端。
-  it('shows the localized quota label instead of the raw placeholder model', () => {
+  // 卡片第二行不再展示模型名，占位符 "quota" 不得作为假模型名漏出。
+  it('does not leak the quota placeholder model on the card', () => {
     const wrapper = mountCard(makeItem())
-    expect(wrapper.text()).toContain('monitorCommon.checkMode.quota')
-  })
-
-  it('keeps the real model name for probe monitors', () => {
-    const wrapper = mountCard(makeItem({ primary_model: 'claude-sonnet-4-5' }))
-    expect(wrapper.text()).toContain('claude-sonnet-4-5')
+    expect(wrapper.text()).not.toContain('quota')
     expect(wrapper.text()).not.toContain('monitorCommon.checkMode.quota')
   })
 
-  it('renders the group rate badge for public channel groups', () => {
+  it('keeps the primary model off the card header', () => {
+    const wrapper = mountCard(makeItem({ primary_model: 'claude-sonnet-4-5' }))
+    expect(wrapper.text()).not.toContain('claude-sonnet-4-5')
+  })
+
+  it('shows only the group name and a highlighted rate on the second line', () => {
+    const wrapper = mountCard(
+      makeItem({
+        name: 'DeepSeek',
+        provider: 'openai',
+        group_name: 'DeepSeek',
+        group_id: 84,
+        rate_multiplier: 1,
+        primary_model: 'deepseek-chat',
+      }),
+    )
+    expect(wrapper.text()).toContain('DeepSeek')
+    expect(wrapper.text()).not.toContain('deepseek-chat')
+    expect(wrapper.text()).not.toContain('monitorCommon.providers.openai')
+    const rate = wrapper.get('[data-testid="monitor-card-rate"]')
+    expect(rate.text()).toBe('×1.00')
+    expect(rate.classes()).toContain('text-lg')
+    expect(rate.classes()).toContain('font-extrabold')
+  })
+
+  it('highlights a user-specific rate and strikes through the group default', () => {
     const wrapper = mount(MonitorCard, {
       props: {
         item: makeItem({
@@ -109,8 +136,6 @@ describe('MonitorCard quota snapshot visibility', () => {
           provider: 'openai',
           group_name: 'DeepSeek',
           group_id: 84,
-          group_platform: 'deepseek',
-          subscription_type: 'standard',
           rate_multiplier: 1,
           primary_model: 'deepseek-chat',
         }),
@@ -124,13 +149,27 @@ describe('MonitorCard quota snapshot visibility', () => {
           MonitorMetricPair: true,
           MonitorAvailabilityRow: true,
           MonitorTimeline: true,
-          GroupBadge: {
-            props: ['name', 'rateMultiplier', 'userRateMultiplier', 'alwaysShowRate'],
-            template: '<span>{{ name }} {{ rateMultiplier }}x {{ userRateMultiplier }}x</span>',
-          },
         },
       },
     })
-    expect(wrapper.text()).toContain('DeepSeek 1x 0.8x')
+    expect(wrapper.get('[data-testid="monitor-card-rate"]').text()).toBe('×0.80')
+    expect(wrapper.text()).toContain('×1.00')
+    expect(wrapper.text()).not.toContain('deepseek-chat')
+  })
+
+  it('keeps peak-rate details next to the highlighted multiplier', () => {
+    const wrapper = mountCard(
+      makeItem({
+        name: 'Kiro2Claude',
+        group_name: 'Kiro2Claude',
+        rate_multiplier: 0.5,
+        peak_rate_enabled: true,
+        peak_start: '09:00',
+        peak_end: '18:00',
+        peak_rate_multiplier: 0.8,
+      }),
+    )
+    expect(wrapper.get('[data-testid="monitor-card-rate"]').text()).toBe('×0.50')
+    expect(wrapper.text()).toContain('09:00-18:00 ×0.8 (UTC+08:00)')
   })
 })
