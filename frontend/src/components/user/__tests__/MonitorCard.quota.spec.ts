@@ -123,9 +123,21 @@ describe('MonitorCard quota snapshot visibility', () => {
     expect(wrapper.text()).not.toContain('deepseek-chat')
     expect(wrapper.text()).not.toContain('monitorCommon.providers.openai')
     const rate = wrapper.get('[data-testid="monitor-card-rate"]')
-    expect(rate.text()).toBe('×1.00')
+    expect(rate.text()).toBe('1x')
     expect(rate.classes()).toContain('text-lg')
     expect(rate.classes()).toContain('font-extrabold')
+    expect(rate.classes()).toContain('text-red-600')
+  })
+
+  it('formats the highlighted multiplier with a trailing x', () => {
+    const wrapper = mountCard(
+      makeItem({
+        name: 'GPT',
+        group_name: 'GPT',
+        rate_multiplier: 1.2,
+      }),
+    )
+    expect(wrapper.get('[data-testid="monitor-card-rate"]').text()).toBe('1.2x')
   })
 
   it('highlights a user-specific rate and strikes through the group default', () => {
@@ -152,8 +164,8 @@ describe('MonitorCard quota snapshot visibility', () => {
         },
       },
     })
-    expect(wrapper.get('[data-testid="monitor-card-rate"]').text()).toBe('×0.80')
-    expect(wrapper.text()).toContain('×1.00')
+    expect(wrapper.get('[data-testid="monitor-card-rate"]').text()).toBe('0.8x')
+    expect(wrapper.text()).toContain('1x')
     expect(wrapper.text()).not.toContain('deepseek-chat')
   })
 
@@ -169,7 +181,7 @@ describe('MonitorCard quota snapshot visibility', () => {
         peak_rate_multiplier: 0.8,
       }),
     )
-    expect(wrapper.get('[data-testid="monitor-card-rate"]').text()).toBe('×0.50')
+    expect(wrapper.get('[data-testid="monitor-card-rate"]').text()).toBe('0.5x')
     expect(wrapper.text()).toContain('09:00-18:00 ×0.8 (UTC+08:00)')
   })
 })
