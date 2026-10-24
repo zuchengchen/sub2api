@@ -26,6 +26,14 @@ export interface UserMonitorView {
   name: string
   provider: Provider
   group_name: string
+  group_id?: number | null
+  group_platform?: string
+  subscription_type?: string
+  rate_multiplier?: number | null
+  peak_rate_enabled?: boolean
+  peak_start?: string
+  peak_end?: string
+  peak_rate_multiplier?: number
   primary_model: string
   primary_status: MonitorStatus
   primary_latency_ms: number | null

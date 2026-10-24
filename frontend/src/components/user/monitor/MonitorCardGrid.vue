@@ -42,6 +42,7 @@
         :window="window"
         :availability-value="resolveAvailability(item)"
         :countdown-seconds="countdownSeconds"
+        :user-group-rates="userGroupRates"
         @click="emit('cardClick', item)"
       />
     </div>
@@ -60,6 +61,7 @@ const props = defineProps<{
   countdownSeconds: number
   loading: boolean
   detailCache: Record<number, UserMonitorDetail>
+  userGroupRates?: Record<number, number>
 }>()
 
 const emit = defineEmits<{

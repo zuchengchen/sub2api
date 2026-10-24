@@ -347,9 +347,21 @@ function cellClass(health: MonitorHealth, requestCount: number): string {
   return healthScoreClass(health, props.healthMode, requestCount)
 }
 
+function formatRateSuffix(row: MonitorMatrixRow): string {
+  if (row.rate_multiplier == null || Number.isNaN(Number(row.rate_multiplier))) return ''
+  const rate = Number(row.rate_multiplier)
+  const text = Number.isInteger(rate) ? String(rate) : String(rate)
+  if (row.peak_rate_enabled && row.peak_rate_multiplier != null && Number(row.peak_rate_multiplier) !== rate) {
+    return ` ×${text} (peak ×${row.peak_rate_multiplier})`
+  }
+  return ` ×${text}`
+}
+
 function rowLabel(row: MonitorMatrixRow): string {
   const parts = [row.platform]
-  if (row.group_name || row.group_id) parts.push(row.group_name || `#${row.group_id}`)
+  if (row.group_name || row.group_id) {
+    parts.push(`${row.group_name || `#${row.group_id}`}${formatRateSuffix(row)}`)
+  }
   if (row.model) parts.push(row.model === '__other__' ? t('channelMonitorV2.otherModels') : row.model)
   return parts.join(' / ')
 }

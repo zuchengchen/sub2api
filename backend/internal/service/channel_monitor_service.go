@@ -47,6 +47,9 @@ type ChannelMonitorRepository interface {
 	// 返回的 entry 已按 checked_at DESC 排序（最新在前），不含 message 字段。
 	ListRecentHistoryForMonitors(ctx context.Context, ids []int64, primaryModels map[int64]string, perMonitorLimit int) (map[int64][]*ChannelMonitorHistoryEntry, error)
 
+	// ListActiveGroupRates 读活跃分组的展示倍率（用户渠道状态卡片按名称 join）。
+	ListActiveGroupRates(ctx context.Context) ([]ChannelMonitorGroupRate, error)
+
 	// ---------- 聚合维护（OpsCleanupService 调用） ----------
 
 	// UpsertDailyRollupsFor 把 targetDate 当天的明细按 (monitor_id, model, bucket_date)

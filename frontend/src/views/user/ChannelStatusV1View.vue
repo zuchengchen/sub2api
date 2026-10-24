@@ -16,6 +16,7 @@
       :countdown-seconds="countdown"
       :loading="loading"
       :detail-cache="detailCache"
+      :user-group-rates="userGroupRates"
       @card-click="openDetail"
     />
 
@@ -39,6 +40,7 @@ import {
   type UserMonitorView,
   type UserMonitorDetail,
 } from '@/api/channelMonitor'
+import userGroupsAPI from '@/api/groups'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import MonitorHero, {
   type MonitorWindow,
@@ -54,6 +56,7 @@ const appStore = useAppStore()
 
 // ── State ──
 const items = ref<UserMonitorView[]>([])
+const userGroupRates = ref<Record<number, number>>({})
 const loading = ref(false)
 const currentWindow = ref<MonitorWindow>('7d')
 const detailCache = reactive<Record<number, UserMonitorDetail>>({})
@@ -93,9 +96,16 @@ async function reload(silent = false) {
   abortController = ctrl
   if (!silent) loading.value = true
   try {
-    const res = await listChannelMonitorViews({ signal: ctrl.signal })
+    const [res, rates] = await Promise.all([
+      listChannelMonitorViews({ signal: ctrl.signal }),
+      userGroupsAPI.getUserGroupRates().catch((err: unknown) => {
+        console.error('Failed to load user group rates:', err)
+        return {} as Record<number, number>
+      }),
+    ])
     if (ctrl.signal.aborted || abortController !== ctrl) return
     items.value = res.items || []
+    userGroupRates.value = rates
   } catch (err: unknown) {
     const e = err as { name?: string; code?: string }
     if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return

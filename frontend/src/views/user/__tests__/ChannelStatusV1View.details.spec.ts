@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, shallowMount } from '@vue/test-utils'
 import ChannelStatusV1View from '../ChannelStatusV1View.vue'
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), status: vi.fn() }))
+const mocks = vi.hoisted(() => ({ list: vi.fn(), status: vi.fn(), getUserGroupRates: vi.fn() }))
 vi.mock('@/api/channelMonitor', () => mocks)
+vi.mock('@/api/groups', () => ({ default: { getUserGroupRates: mocks.getUserGroupRates } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ cachedPublicSettings: { channel_monitor_enabled: true }, showError: vi.fn() }) }))
 vi.mock('vue-i18n', async () => ({
   ...await vi.importActual<typeof import('vue-i18n')>('vue-i18n'),
@@ -22,6 +23,7 @@ beforeEach(() => {
   localStorage.setItem('channel-status-auto-refresh', JSON.stringify({ enabled: true, interval_seconds: 30 }))
   mocks.list.mockImplementation(async () => ({ items: [{ id: 1, name: 'Monitor', primary_model: 'model', primary_status: 'operational', availability_7d: 99 }] }))
   mocks.status.mockResolvedValue(detail(90))
+  mocks.getUserGroupRates.mockResolvedValue({})
 })
 
 function mountView() {
