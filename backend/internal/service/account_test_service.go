@@ -45,6 +45,12 @@ var sseDataPrefix = regexp.MustCompile(`^data:\s*`)
 const (
 	testClaudeAPIURL   = "https://api.anthropic.com/v1/messages?beta=true"
 	chatgptCodexAPIURL = "https://chatgpt.com/backend-api/codex/responses"
+
+	// kiro2ClaudeGroupName is the production group that fronts kiro-rs.
+	// Connectivity tests for accounts in this group omit Claude Code identity
+	// because kiro-rs injects its own Kiro system prompt; a second "You are
+	// Claude Code" claim makes Opus leak that conflict into visible text.
+	kiro2ClaudeGroupName = "Kiro2Claude"
 )
 
 // TestEvent represents a SSE event for account testing
@@ -392,12 +398,16 @@ func generateSessionString() (string, error) {
 
 // createTestPayload creates a Claude Code style test request payload
 func createTestPayload(modelID string) (map[string]any, error) {
+	return createTestPayloadForAccount(modelID, nil)
+}
+
+func createTestPayloadForAccount(modelID string, account *Account) (map[string]any, error) {
 	sessionID, err := generateSessionString()
 	if err != nil {
 		return nil, err
 	}
 
-	return map[string]any{
+	payload := map[string]any{
 		"model": modelID,
 		"messages": []map[string]any{
 			{
@@ -413,7 +423,15 @@ func createTestPayload(modelID string) (map[string]any, error) {
 				},
 			},
 		},
-		"system": []map[string]any{
+		"metadata": map[string]string{
+			"user_id": sessionID,
+		},
+		"max_tokens":  1024,
+		"temperature": 1,
+		"stream":      true,
+	}
+	if !omitClaudeCodeIdentityInAccountTest(account) {
+		payload["system"] = []map[string]any{
 			{
 				"type": "text",
 				"text": claudeCodeSystemPrompt,
@@ -421,18 +439,54 @@ func createTestPayload(modelID string) (map[string]any, error) {
 					"type": "ephemeral",
 				},
 			},
-		},
-		"metadata": map[string]string{
-			"user_id": sessionID,
-		},
-		"max_tokens":  1024,
-		"temperature": 1,
-		"stream":      true,
-	}, nil
+		}
+	}
+	return payload, nil
 }
 
-// TestAccountConnection tests an account's connection by sending a test request
-// All account types use full Claude Code client characteristics, only auth header differs
+func omitClaudeCodeIdentityInAccountTest(account *Account) bool {
+	return accountInNamedGroup(account, kiro2ClaudeGroupName)
+}
+
+func accountInNamedGroup(account *Account, name string) bool {
+	if account == nil {
+		return false
+	}
+	want := strings.TrimSpace(name)
+	if want == "" {
+		return false
+	}
+	for _, g := range account.Groups {
+		if g != nil && strings.EqualFold(strings.TrimSpace(g.Name), want) {
+			return true
+		}
+	}
+	for _, ag := range account.AccountGroups {
+		if ag.Group != nil && strings.EqualFold(strings.TrimSpace(ag.Group.Name), want) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyClaudeAccountTestMimicHeaders adds Claude Code client headers used by
+// connectivity tests. Accounts in Kiro2Claude skip them so the probe does not
+// claim Claude Code identity against kiro-rs.
+func applyClaudeAccountTestMimicHeaders(req *http.Request, account *Account, beta string) {
+	if req == nil || omitClaudeCodeIdentityInAccountTest(account) {
+		return
+	}
+	for key, value := range claude.DefaultHeaders() {
+		req.Header.Set(key, value)
+	}
+	if beta != "" {
+		req.Header.Set("anthropic-beta", beta)
+	}
+}
+
+// TestAccountConnection tests an account's connection by sending a test request.
+// Claude tests mimic Claude Code clients except for accounts in Kiro2Claude,
+// which omit that identity so kiro-rs does not see a conflicting system prompt.
 // modelID is optional - if empty, defaults to claude.DefaultTestModel
 // mode is optional - "compact" routes OpenAI accounts to the /responses/compact probe path
 // opts is optional media (image/audio data URLs for real generation / STT).
@@ -625,8 +679,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	// Create Claude Code style payload (same for all account types)
-	payload, err := createTestPayload(testModelID)
+	payload, err := createTestPayloadForAccount(testModelID, account)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
 	}
@@ -645,17 +698,11 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	// Apply Claude Code client headers
-	for key, value := range claude.DefaultHeaders() {
-		req.Header.Set(key, value)
-	}
-
-	// Set authentication header
 	if account.IsOAuth() {
-		req.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
+		applyClaudeAccountTestMimicHeaders(req, account, claude.DefaultBetaHeader)
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	} else {
-		req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
+		applyClaudeAccountTestMimicHeaders(req, account, claude.APIKeyBetaHeader)
 		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer，
 		// 其余保持 extra/default 行为。
 		setAnthropicAPIKeyAuthHeader(req.Header, account, authToken, account.GetBaseURL())
@@ -705,7 +752,7 @@ func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Con
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	payload, err := createTestPayload(testModelID)
+	payload, err := createTestPayloadForAccount(testModelID, account)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
 	}
