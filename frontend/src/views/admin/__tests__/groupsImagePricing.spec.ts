@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultAllowImageGenerationForPlatform,
   getDefaultImagePreviewPrice,
   getDefaultVideoPreviewPrice,
   getImagePricePlaceholder,
@@ -25,6 +26,13 @@ describe("groups image pricing platform support", () => {
 
   it("keeps non-media group platforms out of the image pricing controls", () => {
     expect(supportsImagePricingPlatform("anthropic")).toBe(false);
+  });
+
+  it("defaults image generation on for Grok groups only", () => {
+    expect(defaultAllowImageGenerationForPlatform("grok")).toBe(true);
+    expect(defaultAllowImageGenerationForPlatform("composite")).toBe(false);
+    expect(defaultAllowImageGenerationForPlatform("openai")).toBe(false);
+    expect(defaultAllowImageGenerationForPlatform("anthropic")).toBe(false);
   });
 
   it("includes Composite groups in image pricing controls", () => {

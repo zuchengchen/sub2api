@@ -1627,6 +1627,71 @@ describe('AccountUsageCell', () => {
 		expect(wrapper.text().trim()).toBe('-')
   })
 
+  it('service_account 账号不设上限时不显示配额进度条', async () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 4011,
+          platform: 'anthropic',
+          type: 'service_account',
+          credentials: {},
+          extra: {}
+        }),
+        todayStats: {
+          requests: 3,
+          tokens: 1200,
+          cost: 0.42,
+          standard_cost: 0.42,
+          user_cost: 0.5
+        }
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('A $0.42')
+    expect(wrapper.findAll('usage-progress-bar-stub')).toHaveLength(0)
+    expect(getUsage).not.toHaveBeenCalled()
+  })
+
+  it('service_account 账号设置了配额上限时显示配额进度条', async () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 4012,
+          platform: 'anthropic',
+          type: 'service_account',
+          credentials: {},
+          extra: { quota_daily_start: new Date().toISOString() },
+          quota_used: 123.456,
+          quota_limit: 500,
+          quota_daily_limit: 50,
+          quota_daily_used: 12.5
+        }),
+        todayStats: null,
+        todayStatsLoading: false
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    const bars = wrapper.findAll('usage-progress-bar-stub')
+    expect(bars.map((bar) => bar.attributes('label'))).toEqual(['1d', 'total'])
+    expect(getUsage).not.toHaveBeenCalled()
+  })
+
   it('Anthropic OAuth 会渲染 7d F (Fable) 进度条，且 7d S 逻辑保留', async () => {
     getUsage.mockResolvedValue({
       source: 'passive',
