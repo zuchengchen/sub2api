@@ -202,6 +202,7 @@ type CreateGroupRequest struct {
 	ModelPricing               []service.ChannelModelPricing `json:"model_pricing"`
 	// 图片生成计费配置（负数表示清除配置）
 	AllowImageGeneration            bool                          `json:"allow_image_generation"`
+	ImageCountBilling               bool                          `json:"image_count_billing"`
 	ImageRateIndependent            bool                          `json:"image_rate_independent"`
 	ImageRateMultiplier             *float64                      `json:"image_rate_multiplier"`
 	VideoRateIndependent            bool                          `json:"video_rate_independent"`
@@ -278,6 +279,7 @@ type UpdateGroupRequest struct {
 	ModelPricing               *[]service.ChannelModelPricing `json:"model_pricing"`
 	// 图片生成计费配置（负数表示清除配置）
 	AllowImageGeneration            *bool                         `json:"allow_image_generation"`
+	ImageCountBilling               *bool                         `json:"image_count_billing"`
 	ImageRateIndependent            *bool                         `json:"image_rate_independent"`
 	ImageRateMultiplier             *float64                      `json:"image_rate_multiplier"`
 	VideoRateIndependent            *bool                         `json:"video_rate_independent"`
@@ -683,6 +685,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		LongContextPricingEnabled:       req.LongContextPricingEnabled,
 		ModelPricing:                    req.ModelPricing,
 		AllowImageGeneration:            req.AllowImageGeneration,
+		ImageCountBilling:               req.ImageCountBilling,
 		ImageRateIndependent:            req.ImageRateIndependent,
 		ImageRateMultiplier:             req.ImageRateMultiplier,
 		VideoRateIndependent:            req.VideoRateIndependent,
@@ -830,6 +833,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		LongContextPricingEnabled:       req.LongContextPricingEnabled,
 		ModelPricing:                    req.ModelPricing,
 		AllowImageGeneration:            req.AllowImageGeneration,
+		ImageCountBilling:               req.ImageCountBilling,
 		ImageRateIndependent:            req.ImageRateIndependent,
 		ImageRateMultiplier:             req.ImageRateMultiplier,
 		VideoRateIndependent:            req.VideoRateIndependent,

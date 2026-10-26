@@ -609,6 +609,7 @@ export interface Group {
   long_context_pricing_enabled: boolean
   // 图片生成计费配置
   allow_image_generation: boolean
+  image_count_billing: boolean
   image_rate_independent: boolean
   image_rate_multiplier: number
   image_price_1k: number | null
@@ -830,6 +831,7 @@ export interface CreateGroupRequest {
   free_openai_fast?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
+  image_count_billing?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
   image_price_1k?: number | null
@@ -897,6 +899,7 @@ export interface UpdateGroupRequest {
   free_openai_fast?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
+  image_count_billing?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
   image_price_1k?: number | null

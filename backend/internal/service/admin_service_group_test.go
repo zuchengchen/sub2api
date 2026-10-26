@@ -593,21 +593,83 @@ func TestAdminService_CreateGroup_DefaultsGrokMediaGenerationEnabled(t *testing.
 	require.True(t, group.AllowImageGeneration)
 }
 
-func TestAdminService_CreateGroup_PreservesNonGrokImageGenerationDisabled(t *testing.T) {
-	repo := &groupRepoStubForAdmin{}
-	svc := &adminServiceImpl{groupRepo: repo}
+func TestAdminService_CreateGroup_PreservesImageGenerationDisabledWithoutPlatformDefault(t *testing.T) {
+	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI, PlatformComposite} {
+		t.Run(platform, func(t *testing.T) {
+			repo := &groupRepoStubForAdmin{}
+			svc := &adminServiceImpl{groupRepo: repo}
 
-	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
-		Name:           "anthropic-text",
-		Description:    "Anthropic text group",
-		Platform:       PlatformAnthropic,
-		RateMultiplier: 1.0,
+			group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+				Name:           platform + "-text",
+				Description:    "Group without image default",
+				Platform:       platform,
+				RateMultiplier: 1.0,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, group)
+			require.NotNil(t, repo.created)
+			require.False(t, repo.created.AllowImageGeneration)
+			require.False(t, group.AllowImageGeneration)
+		})
+	}
+}
+
+func TestAdminService_CreateGroup_ImageCountBillingPlatformRestriction(t *testing.T) {
+	cases := []struct {
+		name                 string
+		platform             string
+		allowImageGeneration bool
+		want                 bool
+	}{
+		{name: "openai image group keeps per-image billing", platform: PlatformOpenAI, allowImageGeneration: true, want: true},
+		{name: "composite image group keeps per-image billing", platform: PlatformComposite, allowImageGeneration: true, want: true},
+		{name: "openai without image generation clears", platform: PlatformOpenAI, allowImageGeneration: false, want: false},
+		{name: "anthropic clears per-image billing", platform: PlatformAnthropic, allowImageGeneration: true, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &groupRepoStubForAdmin{}
+			svc := &adminServiceImpl{groupRepo: repo}
+
+			group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+				Name:                 tc.platform + "-image-count",
+				Description:          "per-image billing group",
+				Platform:             tc.platform,
+				RateMultiplier:       1.0,
+				AllowImageGeneration: tc.allowImageGeneration,
+				ImageCountBilling:    true,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, group)
+			require.NotNil(t, repo.created)
+			require.Equal(t, tc.want, repo.created.ImageCountBilling)
+			require.Equal(t, tc.want, group.ImageCountBilling)
+		})
+	}
+}
+
+func TestAdminService_UpdateGroup_ImageCountBillingPlatformRestriction(t *testing.T) {
+	enabled := true
+	t.Run("openai image group keeps per-image billing", func(t *testing.T) {
+		repo := &groupRepoStubForAdmin{getByID: &Group{
+			ID: 1, Name: "g", Platform: PlatformOpenAI, Status: StatusActive, AllowImageGeneration: true,
+		}}
+		svc := &adminServiceImpl{groupRepo: repo}
+		_, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{ImageCountBilling: &enabled})
+		require.NoError(t, err)
+		require.NotNil(t, repo.updated)
+		require.True(t, repo.updated.ImageCountBilling)
 	})
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.created)
-	require.False(t, repo.created.AllowImageGeneration)
-	require.False(t, group.AllowImageGeneration)
+	t.Run("switching to anthropic clears per-image billing", func(t *testing.T) {
+		repo := &groupRepoStubForAdmin{getByID: &Group{
+			ID: 1, Name: "g", Platform: PlatformOpenAI, Status: StatusActive, AllowImageGeneration: true, ImageCountBilling: true,
+		}}
+		svc := &adminServiceImpl{groupRepo: repo}
+		_, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{Platform: PlatformAnthropic})
+		require.NoError(t, err)
+		require.NotNil(t, repo.updated)
+		require.False(t, repo.updated.ImageCountBilling)
+	})
 }
 
 // TestAdminService_UpdateGroup_WithImagePricing 测试更新分组时 ImagePrice 字段正确更新

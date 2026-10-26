@@ -116,6 +116,7 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
 		MonthlyLimitUSD:                 cloneGroupValuePointer(source.MonthlyLimitUSD),
 		DefaultValidityDays:             source.DefaultValidityDays,
 		AllowImageGeneration:            source.AllowImageGeneration,
+		ImageCountBilling:               source.ImageCountBilling,
 		ImageRateIndependent:            source.ImageRateIndependent,
 		ImageRateMultiplier:             source.ImageRateMultiplier,
 		ImagePrice1K:                    cloneGroupValuePointer(source.ImagePrice1K),
