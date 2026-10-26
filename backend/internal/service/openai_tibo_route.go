@@ -142,15 +142,29 @@ type openAITiboRouteState struct {
 	pendingSince  time.Time
 	dwellDeferred bool
 	unknownStreak int
-	nextProbeAt   time.Time
-	lastSampleAt  time.Time
-	lastSample    openAITiboProbeSample
-	recent        []openAITiboRecentSample // last openAITiboRecentSampleLimit probes, oldest first
-	probes        []time.Time              // probe starts within the last hour
-	flips         []time.Time              // confirmed flips within the last hour
-	inflight      bool
-	done          chan struct{}
-	persistedAt   time.Time
+	// clientErrorStreak counts consecutive probe rejections (4xx other than
+	// 408/429): a free plan without astra, a relay refusing the probe. They
+	// back off instead of repeating every cadence.
+	clientErrorStreak int
+	// nextProbeAt is the probe's own schedule (cadence, confirmation,
+	// Retry-After, budget, client-error backoff). Account availability is
+	// tracked separately in holdUntil/parked, re-synced from the database
+	// on every enrollment, so a lifted rate limit can never leave a probe
+	// stranded days in the future.
+	nextProbeAt time.Time
+	// holdUntil defers probes while the account is rate-limited, overloaded
+	// or temporarily unschedulable; parked stops them while it is paused,
+	// disabled or expired (no known end time).
+	holdUntil    time.Time
+	parked       bool
+	lastSampleAt time.Time
+	lastSample   openAITiboProbeSample
+	recent       []openAITiboRecentSample // last openAITiboRecentSampleLimit probes, oldest first
+	probes       []time.Time              // probe starts within the last hour
+	flips        []time.Time              // confirmed flips within the last hour
+	inflight     bool
+	done         chan struct{}
+	persistedAt  time.Time
 	// Calibration counters (process lifetime): vote windows opened by a
 	// disagreeing sample and how they ended.
 	voteWindows   int
@@ -296,15 +310,76 @@ func (r *openAITiboRouteState) cold() bool {
 }
 
 func (r *openAITiboRouteState) due(now time.Time) bool {
-	return !r.inflight && !now.Before(r.nextProbeAt)
+	return !r.inflight && !r.parked && !now.Before(r.nextProbeAt) && !now.Before(r.holdUntil)
+}
+
+// nextDue is when the route can next probe (nextProbeAt or the account hold,
+// whichever is later); zero while parked.
+func (r *openAITiboRouteState) nextDue() time.Time {
+	if r.parked {
+		return time.Time{}
+	}
+	if r.holdUntil.After(r.nextProbeAt) {
+		return r.holdUntil
+	}
+	return r.nextProbeAt
+}
+
+// openAITiboHold is the account-side availability of a route.
+type openAITiboHold struct {
+	until  time.Time
+	parked bool
+}
+
+func (r *openAITiboRouteState) applyHold(hold openAITiboHold) {
+	r.holdUntil, r.parked = hold.until, hold.parked
+}
+
+// openAITiboAccountHold derives the hold from an authoritative account row:
+// parked when it is paused, disabled, expired or no longer a Tibo account;
+// held until the latest active rate-limit/overload/unschedulable window;
+// zero when it can be probed now.
+func openAITiboAccountHold(account *Account, now time.Time) openAITiboHold {
+	if account == nil || !isOpenAITiboAccount(account) || account.Status != StatusActive || !account.Schedulable ||
+		(account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt)) {
+		return openAITiboHold{parked: true}
+	}
+	var until time.Time
+	for _, at := range []*time.Time{account.RateLimitResetAt, account.OverloadUntil, account.TempUnschedulableUntil, account.modelRateLimitResetAt(openAICodexTicketDefaultModel)} {
+		if at != nil && at.After(now) && at.After(until) {
+			until = *at
+		}
+	}
+	return openAITiboHold{until: until}
+}
+
+const (
+	// A probe Retry-After beyond this is treated as a quota reset that the
+	// account state (rate_limit_reset_at) tracks; the probe retries sooner.
+	openAITiboProbeRetryAfterCap = time.Hour
+	// Consecutive client rejections double the cadence up to this cap.
+	openAITiboClientErrorBackoffCap = 2 * time.Hour
+)
+
+// openAITiboClientError reports a probe rejection that repeating soon cannot
+// fix (400/401/403/404...). 408 and 429 are transient and excluded.
+func openAITiboClientError(status int) bool {
+	return status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests
 }
 
 // scheduleNext sets nextProbeAt after a sample.
 func (r *openAITiboRouteState) scheduleNext(_ openAITiboRoute, now time.Time, cfg openAITiboSettings) {
+	if r.lastSample.verdict == openAITiboUnknown && openAITiboClientError(r.lastSample.status) {
+		r.clientErrorStreak++
+	} else {
+		r.clientErrorStreak = 0
+	}
 	if r.dwellDeferred && r.lastSample.verdict.definitive() {
 		at := r.flippedAt.Add(cfg.minDegradedDwell)
-		if at.Before(now) {
-			at = now
+		if !at.After(now) {
+			// The dwell is over but this sample did not complete the flip:
+			// the next confirmation keeps the normal spacing.
+			at = now.Add(cfg.confirmSpacing)
 		}
 		r.nextProbeAt = at
 		return
@@ -313,9 +388,28 @@ func (r *openAITiboRouteState) scheduleNext(_ openAITiboRoute, now time.Time, cf
 	if len(r.pending) > 0 {
 		delay = cfg.confirmSpacing
 	}
+	if r.clientErrorStreak > 1 {
+		// 1st rejection: normal cadence; then 2x, 4x, ... up to the cap.
+		backoff := cfg.interval
+		for i := 1; i < r.clientErrorStreak && backoff < openAITiboClientErrorBackoffCap; i++ {
+			backoff *= 2
+		}
+		if backoff > openAITiboClientErrorBackoffCap {
+			backoff = openAITiboClientErrorBackoffCap
+		}
+		if backoff > delay {
+			delay = backoff
+		}
+	}
 	r.nextProbeAt = now.Add(delay)
 	if at := r.lastSample.retryAt; at != nil && at.After(r.nextProbeAt) {
-		r.nextProbeAt = *at
+		retry := *at
+		if limit := now.Add(openAITiboProbeRetryAfterCap); retry.After(limit) {
+			retry = limit
+		}
+		if retry.After(r.nextProbeAt) {
+			r.nextProbeAt = retry
+		}
 	}
 }
 
@@ -456,9 +550,10 @@ func (s *OpenAIGatewayService) openAITiboRequestVerdicts(ctx context.Context, ac
 		} else if state.http.due(now) {
 			s.startOpenAITiboProbeLocked(state, openAITiboRouteHTTP, account, false, cfg, now)
 		}
-	} else if at := account.RateLimitResetAt; at != nil && at.After(state.http.nextProbeAt) {
-		state.http.nextProbeAt = *at
 	}
+	// A skipped request snapshot (possibly a stale scheduler copy) only skips
+	// the probe; holds come from the database via enrollment and the
+	// background probe reload, never from this copy.
 	state.mu.Unlock()
 	if wait != nil {
 		timer := time.NewTimer(openAITiboProbeWait)

@@ -90,7 +90,7 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 		if acquired {
 			<-s.openAITiboProbeSem()
 		}
-		s.abortOpenAITiboProbe(state, route)
+		s.abortOpenAITiboProbe(state, route, nil)
 		return
 	}
 	sem := s.openAITiboProbeSem()
@@ -98,66 +98,55 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
-			s.abortOpenAITiboProbe(state, route)
+			s.abortOpenAITiboProbe(state, route, nil)
 			return
 		}
 	}
 	defer func() { <-sem }()
 	if account == nil {
 		latest, err := s.latestOpenAITiboAccount(ctx, state.accountID)
-		if err != nil || !s.openAITiboRouteApplies(latest) {
+		if err != nil {
+			// Read failure or deleted row: retry shortly; enrollment drops
+			// accounts that are gone.
+			s.abortOpenAITiboProbe(state, route, nil)
+			return
+		}
+		if hold := s.openAITiboHoldFor(latest, time.Now()); hold.parked || !hold.until.IsZero() {
 			// Paused, rate-limited or disabled accounts are not sampled; keep
 			// the last definitive sparkline until they are eligible again.
-			s.abortOpenAITiboProbe(state, route)
-			s.deferOpenAITiboProbeUntilReset(state.accountID, route)
+			s.abortOpenAITiboProbe(state, route, &hold)
 			return
 		}
 		account = latest
 	} else if skip := openAITiboAccountSkipReason(account, time.Now()); skip != "" {
-		s.abortOpenAITiboProbe(state, route)
-		s.deferOpenAITiboProbeUntilReset(state.accountID, route)
+		// Request-path snapshot: it may be stale, so it only aborts this
+		// probe; the next enrollment applies the authoritative hold.
+		s.abortOpenAITiboProbe(state, route, nil)
 		return
 	}
 	sample := s.probeOpenAITiboHTTP(ctx, account)
 	if parent.Err() != nil {
 		// Harvester shutdown interrupted the probe; this is not a sample.
-		s.abortOpenAITiboProbe(state, route)
+		s.abortOpenAITiboProbe(state, route, nil)
 		return
 	}
 	s.recordOpenAITiboSample(state, route, account, sample)
 }
 
-func (s *OpenAIGatewayService) deferOpenAITiboProbeUntilReset(accountID int64, route openAITiboRoute) {
-	if s == nil || s.accountRepo == nil || accountID <= 0 {
-		return
+// openAITiboHoldFor is openAITiboAccountHold plus the gateway switch: an
+// account Tibo no longer applies to is parked.
+func (s *OpenAIGatewayService) openAITiboHoldFor(account *Account, now time.Time) openAITiboHold {
+	if !s.openAITiboRouteApplies(account) {
+		return openAITiboHold{parked: true}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	account, err := s.accountRepo.GetByID(ctx, accountID)
-	if err != nil || account == nil {
-		return
-	}
-	now := time.Now()
-	reset := account.RateLimitResetAt
-	if model := account.modelRateLimitResetAt(openAICodexTicketDefaultModel); model != nil && (reset == nil || model.After(*reset)) {
-		reset = model
-	}
-	if reset == nil || !reset.After(now) {
-		return
-	}
-	state := s.loadOpenAITiboAccountState(accountID)
-	if state == nil {
-		return
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	r := state.route(route)
-	if reset.After(r.nextProbeAt) {
-		r.nextProbeAt = *reset
-	}
+	return openAITiboAccountHold(account, now)
 }
 
-func (s *OpenAIGatewayService) abortOpenAITiboProbe(state *openAITiboAccountState, route openAITiboRoute) {
+// abortOpenAITiboProbe ends a probe that produced no sample and refunds its
+// budget. With an authoritative hold, the route waits for the hold (re-synced
+// every enrollment) instead of retrying every minute; without one (read
+// error, stale snapshot, shutdown) it retries after openAITiboProbeAbortRetry.
+func (s *OpenAIGatewayService) abortOpenAITiboProbe(state *openAITiboAccountState, route openAITiboRoute, hold *openAITiboHold) {
 	state.mu.Lock()
 	r := state.route(route)
 	if n := len(r.probes); n > 0 {
@@ -166,7 +155,9 @@ func (s *OpenAIGatewayService) abortOpenAITiboProbe(state *openAITiboAccountStat
 	}
 	done := r.done
 	r.inflight, r.done = false, nil
-	if retry := time.Now().Add(openAITiboProbeAbortRetry); retry.After(r.nextProbeAt) {
+	if hold != nil {
+		r.applyHold(*hold)
+	} else if retry := time.Now().Add(openAITiboProbeAbortRetry); retry.After(r.nextProbeAt) {
 		r.nextProbeAt = retry
 	}
 	state.mu.Unlock()
@@ -220,7 +211,9 @@ func (s *OpenAIGatewayService) recordOpenAITiboSample(state *openAITiboAccountSt
 	case before != after:
 		logger.L().Info("openai_tibo effective verdict", fields...)
 	}
-	if persist || len(samples) > 0 {
+	// Unknown samples change neither the verdict nor the sparkline; skip the
+	// write so a failing account does not rewrite the same row every probe.
+	if persist || (sample.verdict.definitive() && len(samples) > 0) {
 		s.persistOpenAITiboVerdict(state.accountID, route, record, samples)
 	}
 }
@@ -367,10 +360,17 @@ func openAITiboExtraField(raw any, key string) any {
 
 const openAITiboEnrollInterval = time.Minute
 
-// enrollOpenAITiboAccounts loads eligible OpenAI Tibo accounts into the
-// probe map, seeds persisted verdicts, and staggers first nextProbeAt so a
-// restart does not fire every account at once. Tests that set
-// openaiTiboLoaded skip the listing path and inject state themselves.
+// enrollOpenAITiboAccounts runs at most once a minute. From the active
+// OpenAI account list it:
+//   - enrolls eligible Tibo accounts, seeds persisted verdicts and staggers
+//     the first nextProbeAt so a restart does not fire every account at once;
+//   - re-syncs every tracked account's hold (rate limit, overload, pause)
+//     from the database, so a lifted limit resumes probing within a minute;
+//   - drops state for accounts no longer listed (deleted, disabled, error,
+//     moved off OpenAI) so they stop costing a database read every minute.
+//
+// Tests that set openaiTiboLoaded skip the listing path and inject state
+// themselves.
 func (s *OpenAIGatewayService) enrollOpenAITiboAccounts(ctx context.Context) {
 	if s == nil || s.accountRepo == nil || s.openaiTiboLoaded.Load() {
 		return
@@ -390,14 +390,29 @@ func (s *OpenAIGatewayService) enrollOpenAITiboAccounts(ctx context.Context) {
 		return
 	}
 	cfg := s.openAITiboRouteConfig()
-	enrolled := 0
+	enrolled, held := 0, 0
+	listed := make(map[int64]struct{}, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
-		if !s.openAITiboRouteApplies(account) || openAITiboAccountSkipReason(account, now) != "" {
+		if !s.openAITiboRouteApplies(account) {
+			continue
+		}
+		listed[account.ID] = struct{}{}
+		hold := openAITiboAccountHold(account, now)
+		if hold.parked || !hold.until.IsZero() {
+			// Not probed now. Only existing state is updated; an account
+			// first seen while held is enrolled once it is eligible.
+			if state := s.loadOpenAITiboAccountState(account.ID); state != nil {
+				state.mu.Lock()
+				state.http.applyHold(hold)
+				state.mu.Unlock()
+				held++
+			}
 			continue
 		}
 		state := s.openAITiboAccountState(account.ID)
 		state.mu.Lock()
+		state.http.applyHold(hold)
 		firstSeen := state.http.nextProbeAt.IsZero() && state.http.lastSampleAt.IsZero() && state.http.verdict == ""
 		s.seedOpenAITiboStateLocked(state, account.Extra, now, cfg)
 		if firstSeen && (state.http.nextProbeAt.IsZero() || !state.http.nextProbeAt.After(now)) {
@@ -406,13 +421,45 @@ func (s *OpenAIGatewayService) enrollOpenAITiboAccounts(ctx context.Context) {
 		enrolled++
 		state.mu.Unlock()
 	}
-	if enrolled > 0 {
-		logger.L().Info("openai_tibo accounts enrolled", zap.Int("accounts", enrolled))
+	dropped := s.pruneOpenAITiboAccounts(listed, now)
+	if enrolled > 0 || dropped > 0 {
+		logger.L().Info("openai_tibo accounts enrolled", zap.Int("accounts", enrolled), zap.Int("held", held), zap.Int("dropped", dropped))
 	}
 }
 
-// latestOpenAITiboAccount reloads the account for a background probe. It
-// applies the same pause/rate-limit skip as Cookie harvest.
+// pruneOpenAITiboAccounts drops probe state for accounts missing from the
+// latest listing. A route with a probe in flight or a request after the
+// listing started is kept for the next pass. The admin view then shows the
+// persisted sparkline for those accounts.
+func (s *OpenAIGatewayService) pruneOpenAITiboAccounts(listed map[int64]struct{}, listedAt time.Time) int {
+	dropped := 0
+	s.openaiTiboRoutes.Range(func(key, value any) bool {
+		id, ok := key.(int64)
+		if !ok {
+			return true
+		}
+		if _, keep := listed[id]; keep {
+			return true
+		}
+		state, ok := value.(*openAITiboAccountState)
+		if !ok || state == nil {
+			s.openaiTiboRoutes.Delete(key)
+			return true
+		}
+		state.mu.Lock()
+		busy := state.http.inflight || state.lastUsedAt.After(listedAt)
+		state.mu.Unlock()
+		if !busy {
+			s.openaiTiboRoutes.CompareAndDelete(key, value)
+			dropped++
+		}
+		return true
+	})
+	return dropped
+}
+
+// latestOpenAITiboAccount reloads the authoritative account row for a
+// background probe. Eligibility is the caller's openAITiboHoldFor.
 func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, accountID int64) (*Account, error) {
 	if s == nil || s.accountRepo == nil || accountID <= 0 {
 		return nil, errOpenAITiboAccountUnavailable
@@ -429,9 +476,6 @@ func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, acco
 	current := *account
 	current.Extra = maps.Clone(account.Extra)
 	current.Credentials = maps.Clone(account.Credentials)
-	if !s.openAITiboRouteApplies(&current) || openAITiboAccountSkipReason(&current, time.Now()) != "" {
-		return nil, errOpenAITiboAccountUnavailable
-	}
 	return &current, nil
 }
 
@@ -531,16 +575,22 @@ func (st *openAITiboStats) noteServed(degraded bool, cfg openAITiboSettings) {
 
 // OpenAITiboRouteStatus is the admin view of one route's Tibo state.
 type OpenAITiboRouteStatus struct {
-	Route        string     `json:"route"`
-	Verdict      string     `json:"verdict"`
-	Confirmed    string     `json:"confirmed,omitempty"`
-	CheckedAt    *time.Time `json:"checked_at,omitempty"`
-	FlippedAt    *time.Time `json:"flipped_at,omitempty"`
-	NextProbeAt  *time.Time `json:"next_probe_at,omitempty"`
-	PendingVotes []string   `json:"pending_votes,omitempty"`
-	LastSample   string     `json:"last_sample,omitempty"`
-	LastHTTP     int        `json:"last_http,omitempty"`
-	LastAnswer   string     `json:"last_answer,omitempty"`
+	Route     string     `json:"route"`
+	Verdict   string     `json:"verdict"`
+	Confirmed string     `json:"confirmed,omitempty"`
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
+	FlippedAt *time.Time `json:"flipped_at,omitempty"`
+	// NextProbeAt is when the route next probes, including any account hold;
+	// absent while parked.
+	NextProbeAt *time.Time `json:"next_probe_at,omitempty"`
+	HeldUntil   *time.Time `json:"held_until,omitempty"`
+	Parked      bool       `json:"parked,omitempty"`
+	// ClientErrorStreak counts consecutive 4xx probe rejections (backoff).
+	ClientErrorStreak int      `json:"client_error_streak,omitempty"`
+	PendingVotes      []string `json:"pending_votes,omitempty"`
+	LastSample        string   `json:"last_sample,omitempty"`
+	LastHTTP          int      `json:"last_http,omitempty"`
+	LastAnswer        string   `json:"last_answer,omitempty"`
 	// Oldest-first Tibo probe outcomes for the admin sparkline.
 	RecentSamples []OpenAITiboSampleStatus `json:"recent_samples,omitempty"`
 	ProbesHour    int                      `json:"probes_hour"`
@@ -582,7 +632,11 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, now tim
 			r := state.route(route)
 			item.Verdict = string(r.effective(now, cfg))
 			item.Confirmed = string(r.verdict)
-			item.CheckedAt, item.FlippedAt, item.NextProbeAt = openAITiboTimePtr(r.checkedAt), openAITiboTimePtr(r.flippedAt), openAITiboTimePtr(r.nextProbeAt)
+			item.CheckedAt, item.FlippedAt, item.NextProbeAt = openAITiboTimePtr(r.checkedAt), openAITiboTimePtr(r.flippedAt), openAITiboTimePtr(r.nextDue())
+			if r.holdUntil.After(now) {
+				item.HeldUntil = openAITiboTimePtr(r.holdUntil)
+			}
+			item.Parked, item.ClientErrorStreak = r.parked, r.clientErrorStreak
 			for _, vote := range r.pending {
 				item.PendingVotes = append(item.PendingVotes, string(vote))
 			}

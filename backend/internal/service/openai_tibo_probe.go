@@ -100,7 +100,8 @@ func (o *openAITiboHTTPObservation) event(payload []byte, eventType string) {
 		o.completed = true
 		model, success := openAICodexSuccessfulCompletionModel(payload, eventType)
 		o.successfulCompletion = success
-		o.modelMatch = success && model == openAICodexTicketDefaultModel
+		// Same rule as the passive business-response check.
+		o.modelMatch = success && upstreamModelsMatchForAudit(openAICodexTicketDefaultModel, model)
 		if !o.modelMatch {
 			o.failed = true
 			return
