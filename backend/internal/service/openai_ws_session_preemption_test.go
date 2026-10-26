@@ -215,6 +215,7 @@ func TestOpenAIWSIngressSessionPreemptionSurvivesNestedForwardCleanup(t *testing
 	newContext := func() *gin.Context {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+		c.Request.Header.Set("session-id", "nested-cleanup-session")
 		c.Set("api_key", &APIKey{ID: 11, GroupID: &groupID})
 		return c
 	}
@@ -253,6 +254,7 @@ func TestOpenAIWSIngressSessionPreemptionRespectsResolvedMode(t *testing.T) {
 	newContext := func() *gin.Context {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+		c.Request.Header.Set("session-id", "resolved-mode-session")
 		c.Set("api_key", &APIKey{ID: 11, GroupID: &groupID})
 		return c
 	}
@@ -298,6 +300,20 @@ func TestOpenAIWSIngressSessionPreemptionRespectsResolvedMode(t *testing.T) {
 	require.True(t, armed)
 	defer replacementCleanup()
 	require.True(t, IsOpenAIWSSessionPreemptedError(context.Cause(sharedCtx)), "ctx_pool must retain shared-session preemption")
+}
+
+func TestOpenAIWSIngressCacheKeyAloneDoesNotPreempt(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	message := []byte(`{"type":"response.create","prompt_cache_key":"shared-cache","input":"same prompt"}`)
+	for range 2 {
+		c := newOpenAIWSExecutionScopeTestContext(nil)
+		c.Set("api_key", &APIKey{ID: 11})
+		ctx, cleanup, armed := svc.BeginOpenAIWSIngressSessionPreemption(context.Background(), c, account, message)
+		require.False(t, armed)
+		require.NoError(t, ctx.Err())
+		cleanup()
+	}
 }
 
 func TestOpenAIWSSessionPreemptRemoteClaimAndStaleReleaseAreAtomic(t *testing.T) {

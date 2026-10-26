@@ -173,16 +173,6 @@ func codexDeviceProfileForRequest(account *Account) (codexDeviceProfile, bool) {
 	return resolveCodexDeviceProfile(account)
 }
 
-// codexAccountNodeReplAutoReviewRequired mirrors the account family: `codex
-// exec` turns node-repl review off, while the interactive TUI keeps it on.
-func codexAccountNodeReplAutoReviewRequired(account *Account) bool {
-	profile, ok := resolveCodexDeviceProfile(account)
-	if !ok {
-		return true
-	}
-	return profile.Family != codexClientFamilyExec
-}
-
 // sanitizeCodexDeviceProfileExtra keeps only values the wire layer can honor.
 // Invalid keys are removed (the request path then uses the canonical default)
 // so a typo cannot silently produce a mismatched platform/TLS fingerprint.

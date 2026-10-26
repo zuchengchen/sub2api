@@ -146,15 +146,32 @@ func isOpenAICompatPreviousResponseUnsupported(statusCode int, upstreamMsg strin
 
 func openAICompatSessionResponseKey(c *gin.Context, account *Account, promptCacheKey string) string {
 	key := strings.TrimSpace(promptCacheKey)
+	namespace := ""
+	if account != nil && account.IsOpenAIOAuthLike() && c != nil && c.Request != nil {
+		// OAuth turn state belongs to the actual client session, not a shared
+		// prefix-cache key inferred from message content.
+		key = c.GetString("codex_http_session_scope")
+		if key == "" {
+			ev := collectCodexTurnEvidence(nil, c.Request.Header, gjson.Result{})
+			session := firstNonEmptyString(ev.ClientSessionID, ev.ClientThreadID)
+			if session != "" {
+				key = session + "\x00" + firstNonEmptyString(ev.ClientThreadID, session)
+			}
+		}
+		namespace = codexAccountIdentityNamespace(codexAccountIdentitySource(c, account))
+	}
 	if account == nil || key == "" {
 		return ""
+	}
+	if namespace == "" {
+		namespace = strconv.FormatInt(account.ID, 10)
 	}
 	apiKeyID := int64(0)
 	if c != nil {
 		apiKeyID = getAPIKeyIDFromContext(c)
 	}
 	return strings.Join([]string{
-		strconv.FormatInt(account.ID, 10),
+		namespace,
 		strconv.FormatInt(apiKeyID, 10),
 		key,
 	}, "\x00")

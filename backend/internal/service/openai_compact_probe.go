@@ -45,6 +45,7 @@ func createOpenAICompactProbePayload(model string, isOAuth bool) map[string]any 
 	// ChatGPT internal API 要求 store: false，与真实转发一致。
 	if isOAuth {
 		payload["store"] = false
+		delete(payload, "instructions")
 	}
 	return payload
 }

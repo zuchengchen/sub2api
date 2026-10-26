@@ -32,6 +32,14 @@ import (
 
 // codexTurnEvidence is what a request tells us about its turn.
 type codexTurnEvidence struct {
+	ClientSessionID string
+	ClientThreadID  string
+	ParentThreadID  string
+	ForkedThreadID  string
+	RootTurnID      string
+	ParentTurnID    string
+	// RequestID is generated once per request context, never from prompt text.
+	RequestID string
 	// ClientTurnID is the client's own turn_id (client_metadata, embedded or
 	// header x-codex-turn-metadata).
 	ClientTurnID string
@@ -40,8 +48,7 @@ type codexTurnEvidence struct {
 	// InputTurnSeed fingerprints the last user message and its ordinal, so
 	// tool-loop follow-ups (which only append after it) map to the same turn.
 	InputTurnSeed string
-	// PromptCacheKey is the body prompt_cache_key, used as session evidence
-	// when the client sends no session id.
+	// PromptCacheKey is a cache hint, not proof of a conversation identity.
 	PromptCacheKey string
 }
 
@@ -54,12 +61,31 @@ func codexTurnEvidenceFromMetadataString(raw string, ev *codexTurnEvidence) {
 	if !meta.IsObject() {
 		return
 	}
-	if ev.ClientTurnID == "" {
-		ev.ClientTurnID = strings.TrimSpace(meta.Get("turn_id").String())
+	for _, field := range []struct {
+		name string
+		dst  *string
+	}{
+		{"session_id", &ev.ClientSessionID},
+		{"thread_id", &ev.ClientThreadID},
+		{"parent_thread_id", &ev.ParentThreadID},
+		{"x-codex-parent-thread-id", &ev.ParentThreadID},
+		{"forked_from_thread_id", &ev.ForkedThreadID},
+		{"root_turn_id", &ev.RootTurnID},
+		{"parent_turn_id", &ev.ParentTurnID},
+	} {
+		if *field.dst == "" {
+			*field.dst = codexConvergenceMetadataString(meta, field.name)
+		}
 	}
-	if ev.ClientTurnStartedAtMs == 0 {
-		if v := meta.Get("turn_started_at_unix_ms"); v.Type == gjson.Number && v.Int() > 0 {
-			ev.ClientTurnStartedAtMs = v.Int()
+	turn := codexConvergenceMetadataString(meta, "turn_id")
+	if ev.ClientTurnID == "" {
+		ev.ClientTurnID = turn
+	}
+	if ev.ClientTurnStartedAtMs == 0 && (turn == "" || turn == ev.ClientTurnID) {
+		if v := meta.Get("turn_started_at_unix_ms"); v.Type == gjson.Number || v.Type == gjson.String {
+			if ms, err := strconv.ParseInt(v.String(), 10, 64); err == nil && ms > 0 {
+				ev.ClientTurnStartedAtMs = ms
+			}
 		}
 	}
 }
@@ -70,20 +96,37 @@ func collectCodexTurnEvidence(clientMetadata any, headers http.Header, body gjso
 	var ev codexTurnEvidence
 	switch cm := clientMetadata.(type) {
 	case map[string]any:
-		if v, ok := cm["turn_id"].(string); ok {
-			ev.ClientTurnID = strings.TrimSpace(v)
-		}
 		if v, ok := cm[openAIWSTurnMetadataHeader].(string); ok {
 			codexTurnEvidenceFromMetadataString(v, &ev)
 		}
+		if raw, err := json.Marshal(cm); err == nil {
+			codexTurnEvidenceFromMetadataString(string(raw), &ev)
+		}
+	case map[string]string:
+		codexTurnEvidenceFromMetadataString(cm[openAIWSTurnMetadataHeader], &ev)
+		if raw, err := json.Marshal(cm); err == nil {
+			codexTurnEvidenceFromMetadataString(string(raw), &ev)
+		}
 	case gjson.Result:
 		if cm.IsObject() {
-			ev.ClientTurnID = strings.TrimSpace(cm.Get("turn_id").String())
 			codexTurnEvidenceFromMetadataString(cm.Get(gjsonEscapeKey(openAIWSTurnMetadataHeader)).String(), &ev)
+			codexTurnEvidenceFromMetadataString(cm.Raw, &ev)
 		}
 	}
 	if headers != nil {
 		codexTurnEvidenceFromMetadataString(headers.Get(openAIWSTurnMetadataHeader), &ev)
+		if ev.ClientSessionID == "" {
+			ev.ClientSessionID = extractClientSessionID(headers)
+		}
+		if ev.ClientThreadID == "" {
+			ev.ClientThreadID = strings.TrimSpace(headers.Get("thread-id"))
+		}
+		if ev.ParentThreadID == "" {
+			ev.ParentThreadID = strings.TrimSpace(headers.Get("x-codex-parent-thread-id"))
+		}
+		if ev.ClientTurnID == "" {
+			ev.ClientTurnID = strings.TrimSpace(headers.Get("turn-id"))
+		}
 	}
 	if body.Exists() {
 		ev.PromptCacheKey = strings.TrimSpace(body.Get("prompt_cache_key").String())
@@ -256,13 +299,26 @@ func resolveCodexTurnIdentity(clock *codexTurnClock, seed, threadID string, ev c
 	}
 	turnKey := ev.InputTurnSeed
 	if turnKey == "" {
+		if ev.RequestID != "" {
+			started := ev.ClientTurnStartedAtMs
+			if started <= 0 {
+				started = codexUUIDv7Millis(ev.RequestID)
+			}
+			if started <= 0 {
+				started = clock.StartedAt("request-turn:" + seed + ":" + ev.RequestID)
+			}
+			return deriveStableCodexUUIDv7("sub2api:codex-request-turn:v1:"+seed+":"+threadID+":"+ev.RequestID, started), started
+		}
 		// No conversation to anchor on: every request is its own turn, as the
 		// official client does for a single submission.
 		started := clock.now().UnixMilli()
 		return uuid.Must(uuid.NewV7()).String(), started
 	}
 	key := "derived-turn:" + seed + ":" + threadID + ":" + turnKey
-	started := clock.StartedAt(key)
+	started := ev.ClientTurnStartedAtMs
+	if started <= 0 {
+		started = clock.StartedAt(key)
+	}
 	return deriveStableCodexUUIDv7("sub2api:codex-turn-id:v3:"+key, started), started
 }
 

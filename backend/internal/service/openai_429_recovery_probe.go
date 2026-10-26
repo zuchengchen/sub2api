@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	httppool "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
@@ -372,15 +371,10 @@ func (s *RateLimitService) probeOpenAI429RecoveryHTTP(ctx context.Context, accou
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	client, err := httppool.GetClient(httppool.Options{
-		ProxyURL:              proxyURL,
-		Timeout:               openai429RecoveryProbeTimeout,
-		ResponseHeaderTimeout: 10 * time.Second,
-	})
-	if err != nil {
-		return openai429RecoveryProbeResult{Err: fmt.Errorf("build openai recovery probe client: %w", err)}
+	if s.codexProbeSender == nil {
+		return openai429RecoveryProbeResult{Stop: true, Err: fmt.Errorf("codex recovery probe transport is unavailable")}
 	}
-	resp, err := client.Do(req)
+	resp, err := s.codexProbeSender.doOpenAICodexProbe(req, proxyURL, account)
 	if err != nil {
 		return openai429RecoveryProbeResult{Err: fmt.Errorf("openai recovery probe request failed: %w", err)}
 	}

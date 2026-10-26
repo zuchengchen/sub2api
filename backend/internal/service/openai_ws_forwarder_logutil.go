@@ -378,10 +378,6 @@ func openAIWSPayloadBoolFromRaw(payload []byte, key string, defaultValue bool) b
 	return value.Bool()
 }
 
-func openAIWSSessionHashesFromID(sessionID string) (string, string) {
-	return deriveOpenAISessionHashes(sessionID)
-}
-
 func extractOpenAIWSImageURL(value any) string {
 	switch v := value.(type) {
 	case string:

@@ -89,8 +89,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return err
 	}
+	restoreClientSession := stageCodexHTTPClientSession(c, account, firstClientMessage)
+	defer restoreClientSession()
+	s.codexWireProfileForRequest(c, account, firstClientMessage)
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
+	}
+	wsSessionScope := resolveOpenAIWSSessionScope(c, account, firstClientMessage)
+	nativeTurnState := account.UsesOpenAICodexProtocol() || openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
+	if wsSessionScope.Ephemeral {
+		defer s.clearOpenAIWSSessionDisabled(wsSessionScope)
 	}
 
 	// 预取一次 OpenAI Fast Policy settings，绑定到 ctx，让该 WS session
@@ -136,6 +144,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		s.openAICookieWSHTTPOnlyModel(account, normalizeOpenAIModelForUpstream(account, account.GetMappedModel(firstRoutingModel)))
 	if cookieWS {
 		forceHTTPBridge = false
+	} else if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 && s.openAIWSSessionDisabledReason(wsSessionScope) != "" {
+		forceHTTPBridge = true
 	}
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
 	ingressMode := OpenAIWSIngressModeCtxPool
@@ -557,10 +567,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	storeDisabled := false
 	refreshIngressRouteState := func(payload openAIWSClientPayload) {
 		// 会话级状态按执行作用域隔离：codex 多智能体共用 session-id，只有线程标识能把
-		// 父线程与子智能体区分开；没有声明身份时沿用原会话哈希。账号粘性仍由 handler 决定。
-		sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
-		if scope, _ := resolveOpenAIWSExecutionScope(c, payload.rawForHash, apiKeyID); scope != "" {
-			sessionHash = scope
+		// 父线程与子智能体区分开；匿名状态仅在当前连接内共享。账号粘性仍由 handler 决定。
+		sessionHash, _ = resolveOpenAIWSExecutionScope(c, payload.rawForHash, apiKeyID)
+		if sessionHash == "" {
+			sessionHash = openAIWSLocalStateScope(c, apiKeyID)
 		}
 		preferredConnID = ""
 		storeDisabled = s.isOpenAIWSStoreDisabledInRequestRaw(payload.payloadRaw, account)
@@ -827,6 +837,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if buildHdrErr != nil {
 		return fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
+	if nativeTurnState && !cookieWS {
+		wsHeaders.Del(openAIWSTurnStateHeader)
+	}
 	if cookieWS {
 		setOpenAICookieWSExecutionScope(wsHeaders, c, sessionHash)
 	}
@@ -935,11 +948,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			s.handleOpenAIWSDialTransientFailure(ctx, account, canonicalModel, acquireErr)
 			acquireReason := classifyOpenAIWSAcquireError(acquireErr)
 			if !cookieWS {
-				// 官方 Codex disable_websockets 语义：入向 turn 的 acquire 能力
-				// 信号（426/ws_unsupported）与传输级失败同样标记账号会话禁用；
-				// 本地池争用（acquire/queue/preferred）不标记。
-				if action := openAIWSSessionFallbackActionFor(acquireReason); action.markDisable {
-					s.markOpenAIWSSessionDisabled(account.ID, action.reason, action.capability)
+				// Capability failures need no retry budget; ordinary transport
+				// failures are marked only after the turn retries are exhausted.
+				if action := openAIWSSessionFallbackActionFor(acquireReason); action.capability {
+					s.markOpenAIWSSessionDisabled(wsSessionScope, action.reason)
 				}
 			}
 			dialStatus, dialClass, dialCloseStatus, dialCloseReason, dialRespServer, dialRespVia, dialRespCFRay, dialRespReqID := summarizeOpenAIWSDialError(acquireErr)
@@ -994,7 +1006,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if updatedHeaders == nil {
 				updatedHeaders = make(http.Header)
 			}
-			updatedHeaders.Set(openAIWSTurnStateHeader, handshakeTurnState)
+			if nativeTurnState {
+				updatedHeaders.Del(openAIWSTurnStateHeader)
+			} else {
+				updatedHeaders.Set(openAIWSTurnStateHeader, handshakeTurnState)
+			}
 			baseAcquireReq.Headers = updatedHeaders
 		}
 		logOpenAIWSModeInfo(
@@ -1025,6 +1041,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			payload, metadataErr = applyOpenAICookieWSMetadataRaw(baseAcquireReq.Headers, payload)
 			if metadataErr != nil {
 				return nil, metadataErr
+			}
+			payloadBytes = len(payload)
+		} else if nativeTurnState {
+			var stateErr error
+			payload, stateErr = applyOpenAIWSNativeTurnState(payload, turnState)
+			if stateErr != nil {
+				return nil, stateErr
 			}
 			payloadBytes = len(payload)
 		}
@@ -1935,6 +1958,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if retryIngressTurn(relayErr, turn, connID) {
 				continue
 			}
+			if !cookieWS && turnRetry >= 1 && isOpenAIWSIngressTurnRetryable(relayErr) {
+				s.markOpenAIWSSessionDisabled(wsSessionScope, "read_event")
+			}
 			finalErr := relayErr
 			if unwrapped := errors.Unwrap(relayErr); unwrapped != nil {
 				finalErr = unwrapped
@@ -2052,6 +2078,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			} else {
 				if cookieWS {
 					setOpenAICookieWSExecutionScope(updatedHeaders, c, sessionHash)
+				} else if nativeTurnState {
+					updatedHeaders.Del(openAIWSTurnStateHeader)
 				}
 				baseAcquireReq.Headers = updatedHeaders
 			}

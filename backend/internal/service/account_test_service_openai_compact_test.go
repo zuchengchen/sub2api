@@ -64,15 +64,17 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
 	require.Contains(t, upstream.lastReq.Header.Get("x-codex-beta-features"), "remote_compaction_v2")
-	require.NotEmpty(t, upstream.lastReq.Header.Get("Session_Id"))
+	require.Empty(t, upstream.lastReq.Header.Get("Session_Id"))
+	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "chatgpt-acc", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	require.Equal(t, "true", upstream.lastReq.Header.Get("x-openai-fedramp"))
-	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
-	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
-	inputItems := gjson.GetBytes(upstream.lastBody, "input").Array()
+	body := decodeCodexProbeTestBody(t, upstream.lastReq)
+	require.Equal(t, "gpt-5.4", gjson.GetBytes(body, "model").String())
+	require.True(t, gjson.GetBytes(body, "stream").Bool())
+	require.False(t, gjson.GetBytes(body, "store").Bool())
+	inputItems := gjson.GetBytes(body, "input").Array()
 	require.NotEmpty(t, inputItems)
 	require.Equal(t, "compaction_trigger", inputItems[len(inputItems)-1].Get("type").String())
 
@@ -266,7 +268,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompact2xxWithoutItemMar
 }
 
 // 探测与真实转发走同一 /responses 端点，出站身份必须与真实 Codex 同构：
-// session/thread 为 UUID、携带 x-codex-installation-id（收敛账号用收敛值）。
+// session/thread 为 UUID，安装标识只存在于请求元数据。
 func TestAccountTestService_TestAccountConnection_OpenAICompactProbeIdentityMatchesRealTraffic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -306,14 +308,16 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactProbeIdentityMatc
 
 	require.NoError(t, svc.TestAccountConnection(c, account.ID, "gpt-5.4", "", AccountTestModeCompact))
 
-	// 显式 session 收敛模式：出站身份 = 账号级收敛值
+	// 独立探测使用新会话，安装身份仍来自相同的持久化账号种子。
 	seed, ok := codexFingerprintSeed(account.Extra)
 	require.True(t, ok)
-	converged := resolveConvergedSessionID(seed)
-	require.Equal(t, converged, upstream.lastReq.Header.Get("session-id"))
+	session, err := uuid.Parse(upstream.lastReq.Header.Get("session-id"))
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(7), session.Version())
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
-	require.Equal(t, resolveConvergedInstallationID(&account, seed), upstream.lastReq.Header.Get("x-codex-installation-id"),
-		"真实 Codex 每个请求必带 installation-id，探测不得缺失")
+	require.Empty(t, upstream.lastReq.Header.Get("x-codex-installation-id"))
+	body := decodeCodexProbeTestBody(t, upstream.lastReq)
+	require.Equal(t, resolveConvergedInstallationID(&account, seed), gjson.GetBytes(body, "client_metadata.x-codex-installation-id").String())
 	require.NotContains(t, upstream.lastReq.Header.Get("session-id"), "probe_compact",
 		"探测标识不得是可被上游一眼识别的字面量")
 	<-updateCalls

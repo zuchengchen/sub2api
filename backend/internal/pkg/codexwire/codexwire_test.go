@@ -47,6 +47,43 @@ func TestBuildWSUpgradeRequest_ByteLayout(t *testing.T) {
 	}
 }
 
+func TestDialWSFailedUpgradeClosesConnection(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = server.Close() }()
+	closed := make(chan error, 1)
+	go func() {
+		_ = server.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := http.ReadRequest(bufio.NewReader(server)); err != nil {
+			closed <- err
+			return
+		}
+		_, _ = io.WriteString(server, "HTTP/1.1 426 Upgrade Required\r\nContent-Length: 7\r\nX-Request-ID: failed\r\n\r\nupgrade")
+		_, err := server.Read(make([]byte, 1))
+		closed <- err
+	}()
+	conn, response, err := DialWS(context.Background(), "ws://example.invalid/responses", nil, "", DialOptions{
+		BaseDialer: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+	})
+	if err == nil || conn != nil || response == nil || response.StatusCode != 426 || string(response.Body) != "upgrade" {
+		t.Fatalf("unexpected handshake result: conn=%v response=%+v err=%v", conn, response, err)
+	}
+	if err := <-closed; !errors.Is(err, io.EOF) {
+		t.Fatalf("failed upgrade left connection open: %v", err)
+	}
+}
+
+func TestDialWSPlaintextProxyNeverDialsDirect(t *testing.T) {
+	_, _, err := DialWS(context.Background(), "ws://example.invalid/responses", nil, "http://proxy.invalid:8080", DialOptions{
+		BaseDialer: func(context.Context, string, string) (net.Conn, error) {
+			t.Fatal("must not dial destination directly")
+			return nil, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "plaintext proxy") {
+		t.Fatalf("expected unsupported plaintext proxy error, got %v", err)
+	}
+}
+
 func TestOrderCodexWSHeaders_TemplateOrder(t *testing.T) {
 	h := http.Header{
 		"User-Agent":            {"codex/1.0"},

@@ -225,22 +225,79 @@ func TestOpenAIWSSessionDisableRegistry(t *testing.T) {
 	svc.cfg.Gateway.OpenAIWS.SessionDisableRetryTTLMS = 40
 	svc.cfg.Gateway.OpenAIWS.SessionDisableCapabilityTTLMS = 86400000
 
-	require.Empty(t, svc.openAIWSSessionDisabledReason(1))
-	svc.markOpenAIWSSessionDisabled(1, "dial_failed", false)
-	require.Equal(t, "dial_failed", svc.openAIWSSessionDisabledReason(1))
+	scope := openAIWSSessionScope{AccountID: 1, CredentialOwnerID: 1, Session: "thread-a"}
+	require.Empty(t, svc.openAIWSSessionDisabledReason(scope))
+	svc.markOpenAIWSSessionDisabled(scope, "dial_failed")
+	require.Equal(t, "dial_failed", svc.openAIWSSessionDisabledReason(scope))
 
-	svc.clearOpenAIWSSessionDisabled(1)
-	require.Empty(t, svc.openAIWSSessionDisabledReason(1))
+	svc.clearOpenAIWSSessionDisabled(scope)
+	require.Empty(t, svc.openAIWSSessionDisabledReason(scope))
 
-	// 到期条目惰性清除，之后恢复未禁用状态（自动重探窗口）。
-	svc.markOpenAIWSSessionDisabled(2, "read_event", false)
-	time.Sleep(60 * time.Millisecond)
-	require.Empty(t, svc.openAIWSSessionDisabledReason(2))
+	// Even an old marker survives the former retry/capability TTLs.
+	svc.openaiWSSessionDisabled.Store(scope, openAIWSSessionDisableState{reason: "read_event", since: time.Now().Add(-48 * time.Hour)})
+	require.Equal(t, "read_event", svc.openAIWSSessionDisabledReason(scope))
+	otherSession := scope
+	otherSession.Session = "thread-b"
+	require.Empty(t, svc.openAIWSSessionDisabledReason(otherSession))
+	otherAccount := scope
+	otherAccount.AccountID++
+	require.Empty(t, svc.openAIWSSessionDisabledReason(otherAccount))
+	otherCredential := scope
+	otherCredential.CredentialOwnerID++
+	require.Empty(t, svc.openAIWSSessionDisabledReason(otherCredential))
 
 	// 特性关闭时标记与查询均不生效。
 	svc.cfg.Gateway.OpenAIWS.SessionDisableEnabled = false
-	svc.markOpenAIWSSessionDisabled(3, "upgrade_required", true)
-	require.Empty(t, svc.openAIWSSessionDisabledReason(3))
+	svc.markOpenAIWSSessionDisabled(scope, "upgrade_required")
+	require.Empty(t, svc.openAIWSSessionDisabledReason(scope))
+}
+
+func TestOpenAIWSSessionScopeIsolation(t *testing.T) {
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	contextFor := func(keyID int64, session, thread string) *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		c.Request.Header.Set("session-id", session)
+		c.Request.Header.Set("thread-id", thread)
+		c.Set("api_key", &APIKey{ID: keyID})
+		return c
+	}
+	first := contextFor(1, "session", "root")
+	scope := resolveOpenAIWSSessionScope(first, account, nil)
+	require.Equal(t, scope, resolveOpenAIWSSessionScope(contextFor(1, "session", "root"), account, []byte(`{"input":["next"]}`)))
+	require.NotEqual(t, scope, resolveOpenAIWSSessionScope(contextFor(2, "session", "root"), account, nil))
+	require.NotEqual(t, scope, resolveOpenAIWSSessionScope(contextFor(1, "session", "child"), account, nil))
+	anonymous := contextFor(1, "", "")
+	anonymousScope := resolveOpenAIWSSessionScope(anonymous, account, []byte(`{"prompt_cache_key":"shared"}`))
+	require.True(t, anonymousScope.Ephemeral)
+	require.Equal(t, anonymousScope, resolveOpenAIWSSessionScope(anonymous, account, nil))
+	require.NotEqual(t, anonymousScope, resolveOpenAIWSSessionScope(contextFor(1, "", ""), account, []byte(`{"prompt_cache_key":"shared"}`)))
+}
+
+func TestOpenAIWSSessionPrewarmOnceAcrossReconnect(t *testing.T) {
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	svc.cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	scope := openAIWSSessionScope{AccountID: 1, CredentialOwnerID: 1, Session: "thread-a"}
+	require.True(t, svc.beginOpenAIWSSessionPrewarm(scope))
+	require.False(t, svc.beginOpenAIWSSessionPrewarm(scope))
+	svc.markOpenAIWSSessionDisabled(scope, "upgrade_required")
+	require.Equal(t, "upgrade_required", svc.openAIWSSessionDisabledReason(scope))
+	require.False(t, svc.beginOpenAIWSSessionPrewarm(scope))
+	other := scope
+	other.Session = "thread-b"
+	require.True(t, svc.beginOpenAIWSSessionPrewarm(other))
+	require.Empty(t, svc.openAIWSSessionDisabledReason(other))
+}
+
+func TestOpenAIWSSessionRegistryLifetime(t *testing.T) {
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	svc.cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	active := openAIWSSessionScope{AccountID: 1, Session: "active"}
+	old := openAIWSSessionScope{AccountID: 1, Session: "old"}
+	svc.openaiWSSessionDisabled.Store(active, openAIWSSessionDisableState{reason: "read_event", since: time.Now().Add(-7 * 24 * time.Hour), lastUsed: time.Now()})
+	svc.openaiWSSessionDisabled.Store(old, openAIWSSessionDisableState{reason: "read_event", lastUsed: time.Now().Add(-openAIWSSessionIdleLifetime - time.Second)})
+	require.Equal(t, "read_event", svc.openAIWSSessionDisabledReason(active), "an active session never retries due to age of the failure")
+	require.Empty(t, svc.openAIWSSessionDisabledReason(old), "idle retention ends the local session")
 }
 
 func TestOpenAIWSSessionFallbackActionFor(t *testing.T) {

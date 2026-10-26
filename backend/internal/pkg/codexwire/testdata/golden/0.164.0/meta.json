@@ -1,0 +1,26 @@
+{
+  "binary_sha256": "b93f6811d3f653f0fb83be4050d857fb9abbb111dfa2ce160563327daff7f306",
+  "release_url": "https://github.com/openai/codex/releases/tag/rust-v0.164.0",
+  "release_asset_url": "https://github.com/openai/codex/releases/download/rust-v0.164.0/codex-x86_64-unknown-linux-musl.tar.gz",
+  "release_asset_sha256": "90dd0b03b28afcb7fa733a4f73b413db2916a47347efd43fb669cc1c774ee8e4",
+  "model_catalog_url": "https://raw.githubusercontent.com/openai/codex/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/models-manager/models.json",
+  "models_sha256": "943ca7fe1d19ed019054158303f0dbbd80b3bef43b3aa425a71aa7cb3fb52c2b",
+  "blocked_outbound_requests": {
+    "CONNECT ab.chatgpt.com:443": 6
+  },
+  "codex_version": "codex-cli 0.164.0",
+  "outbound_leaks": null,
+  "recorded_at": "2026-10-26T13:15:07Z",
+  "recorder": "backend/tools/codexgolden",
+  "scenarios": [
+    "ws_initial",
+    "ws_tool_loop",
+    "http_fallback_tool_loop",
+    "http_unauthorized_refresh",
+    "ws_unauthorized_refresh",
+    "ws_compaction"
+  ],
+  "source_commit": "6aaac694803004a63c6f393d153c96d22521a6b9",
+  "strace_guard": true,
+  "tls_lanes": 2
+}

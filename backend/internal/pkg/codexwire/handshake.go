@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -93,30 +92,20 @@ func ReadUpgradeResponse(br *bufio.Reader, maxBodyBytes int64) (*UpgradeResult, 
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = 1 << 20
 	}
-	tp := textproto.NewReader(br)
-	statusLine, err := tp.ReadLine()
+	response, err := http.ReadResponse(br, &http.Request{Method: http.MethodGet})
 	if err != nil {
-		return nil, fmt.Errorf("read status line: %w", err)
+		return nil, fmt.Errorf("read upgrade response: %w", err)
 	}
-	if !strings.HasPrefix(statusLine, "HTTP/1.1 ") && !strings.HasPrefix(statusLine, "HTTP/1.0 ") {
-		return nil, fmt.Errorf("malformed status line %q", statusLine)
-	}
-	var statusCode int
-	if _, err := fmt.Sscanf(statusLine[len("HTTP/1.1 "):], "%d", &statusCode); err != nil {
-		return nil, fmt.Errorf("parse status line %q: %w", statusLine, err)
-	}
-	mimeHeaders, err := tp.ReadMIMEHeader()
-	if err != nil {
-		return nil, fmt.Errorf("read response headers: %w", err)
-	}
-	res := &UpgradeResult{StatusCode: statusCode, Headers: http.Header(mimeHeaders)}
-	if statusCode == http.StatusSwitchingProtocols {
+	res := &UpgradeResult{StatusCode: response.StatusCode, Headers: response.Header}
+	if response.StatusCode == http.StatusSwitchingProtocols {
 		res.PerMessageDeflate, res.ServerNoContextTakeover, res.ClientNoContextTakeover,
 			res.ClientMaxWindowBits, res.ServerMaxWindowBits =
 			parseExtensionNegotiation(res.Headers.Get("Sec-WebSocket-Extensions"))
 		return res, nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(br, maxBodyBytes))
+	// Honor Content-Length/chunked framing. Waiting for socket EOF on a rejected
+	// persistent HTTP connection would consume the entire handshake timeout.
+	body, _ := io.ReadAll(io.LimitReader(response.Body, maxBodyBytes))
 	res.Body = body
 	return res, nil
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -33,28 +34,33 @@ const (
 
 // resolveOpenAIWSClientThreadID 提取 codex 客户端的线程标识。codex 多智能体会话里
 // 父线程与全部子智能体共用同一个 session-id 头，只有线程标识能把它们区分开。
-// 优先级：thread-id 头 → x-codex-turn-metadata 头 → x-codex-window-id 头 → 请求体 client_metadata。
+// Use the same canonical embedded metadata > flat metadata > headers precedence
+// as the identity projection. A window ID or cache key alone is not a thread.
 func resolveOpenAIWSClientThreadID(c *gin.Context, body []byte) string {
+	return openAIWSExecutionIdentity(c, body).ClientThreadID
+}
+
+func openAIWSExecutionIdentity(c *gin.Context, body []byte) codexTurnEvidence {
+	var headers http.Header
 	if c != nil && c.Request != nil {
-		if id := strings.TrimSpace(c.GetHeader(openAIWSThreadIDHeader)); id != "" {
-			return id
-		}
-		if id := codexTurnMetadataThreadID(c.GetHeader(openAIWSTurnMetadataHeader)); id != "" {
-			return id
-		}
-		if window := strings.TrimSpace(c.GetHeader(openAIWSWindowIDHeader)); window != "" {
-			if id := strings.TrimSpace(strings.SplitN(window, ":", 2)[0]); id != "" {
-				return id
+		headers = c.Request.Header
+	}
+	// No input or cache-key evidence: these keys are for scheduling affinity only.
+	evidence := collectCodexTurnEvidence(gjson.GetBytes(body, "client_metadata"), headers, gjson.Result{})
+	if evidence.ClientSessionID == "" {
+		evidence.ClientSessionID = explicitOpenAIHeaderSessionID(c)
+	}
+	if c != nil {
+		if anonymous := c.GetString("codex_anonymous_http_session"); anonymous != "" {
+			if evidence.ClientSessionID == anonymous {
+				evidence.ClientSessionID = ""
+			}
+			if evidence.ClientThreadID == anonymous {
+				evidence.ClientThreadID = ""
 			}
 		}
 	}
-	if len(body) == 0 {
-		return ""
-	}
-	if id := strings.TrimSpace(gjson.GetBytes(body, "client_metadata.thread_id").String()); id != "" {
-		return id
-	}
-	return codexTurnMetadataThreadID(gjson.GetBytes(body, "client_metadata."+openAIWSTurnMetadataHeader).String())
+	return evidence
 }
 
 // codexTurnMetadata 是 x-codex-turn-metadata JSON 里执行作用域用到的字段。
@@ -77,36 +83,31 @@ func parseCodexTurnMetadata(raw string) (codexTurnMetadata, bool) {
 	return metadata, true
 }
 
-func codexTurnMetadataThreadID(raw string) string {
-	metadata, _ := parseCodexTurnMetadata(raw)
-	return metadata.ThreadID
-}
-
-// openAIWSExecutionTurnMetadata 取本次连接的 turn 元数据：x-codex-turn-metadata 头优先，
-// 其次请求体 client_metadata 内嵌的同名 JSON（Desktop 走 HTTP 时只有后者）。
+// Canonical embedded metadata wins over flat metadata and compatibility headers.
 func openAIWSExecutionTurnMetadata(c *gin.Context, body []byte) codexTurnMetadata {
+	metadata, _ := parseCodexTurnMetadata(gjson.GetBytes(body, "client_metadata."+openAIWSTurnMetadataHeader).String())
+	flat, _ := parseCodexTurnMetadata(gjson.GetBytes(body, "client_metadata").Raw)
+	metadata.ThreadID = firstNonEmptyString(metadata.ThreadID, flat.ThreadID)
+	metadata.RequestKind = firstNonEmptyString(metadata.RequestKind, flat.RequestKind)
 	if c != nil && c.Request != nil {
-		if metadata, ok := parseCodexTurnMetadata(c.GetHeader(openAIWSTurnMetadataHeader)); ok {
-			return metadata
+		if header, ok := parseCodexTurnMetadata(c.GetHeader(openAIWSTurnMetadataHeader)); ok {
+			metadata.ThreadID = firstNonEmptyString(metadata.ThreadID, header.ThreadID)
+			metadata.RequestKind = firstNonEmptyString(metadata.RequestKind, header.RequestKind)
 		}
 	}
-	if len(body) == 0 {
-		return codexTurnMetadata{}
-	}
-	metadata, _ := parseCodexTurnMetadata(gjson.GetBytes(body, "client_metadata."+openAIWSTurnMetadataHeader).String())
 	return metadata
 }
 
 func openAIWSExecutionSubagent(c *gin.Context, body []byte) string {
+	if subagent := strings.TrimSpace(gjson.GetBytes(body, "client_metadata."+openAISubagentHeader).String()); subagent != "" {
+		return strings.ToLower(subagent)
+	}
 	if c != nil && c.Request != nil {
 		if subagent := strings.TrimSpace(c.GetHeader(openAISubagentHeader)); subagent != "" {
 			return strings.ToLower(subagent)
 		}
 	}
-	if len(body) == 0 {
-		return ""
-	}
-	return strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "client_metadata."+openAISubagentHeader).String()))
+	return ""
 }
 
 // resolveOpenAIWSExecutionLane 派生执行作用域里的“道”，同道才互相抢占、共享会话级状态。
@@ -144,13 +145,21 @@ func openAIWSExecutionScopeSeed(apiKeyID int64, identity, value, lane string) st
 // 不是可靠身份，不参与抢占。
 func resolveOpenAIWSExecutionScope(c *gin.Context, body []byte, apiKeyID int64) (scope, threadID string) {
 	lane := resolveOpenAIWSExecutionLane(c, body)
-	if threadID = resolveOpenAIWSClientThreadID(c, body); threadID != "" {
+	evidence := openAIWSExecutionIdentity(c, body)
+	if threadID = evidence.ClientThreadID; threadID != "" {
 		scope, _ = deriveOpenAISessionHashes(openAIWSExecutionScopeSeed(apiKeyID, "thread", threadID, lane))
 		return scope, threadID
 	}
-	if sessionID := strings.TrimSpace(explicitOpenAIRequestSessionID(c, body)); sessionID != "" {
+	if sessionID := evidence.ClientSessionID; sessionID != "" {
 		scope, _ = deriveOpenAISessionHashes(openAIWSExecutionScopeSeed(apiKeyID, "session", sessionID, lane))
 		return scope, ""
 	}
 	return "", ""
+}
+
+// State needs a key even when preemption is deliberately disabled. Anonymous
+// state lives only in this request/WS connection's context, never in a cache key.
+func openAIWSLocalStateScope(c *gin.Context, apiKeyID int64) string {
+	scope, _ := deriveOpenAISessionHashes(openAIWSExecutionScopeSeed(apiKeyID, "request", codexAnonymousRequestSession(c), ""))
+	return scope
 }

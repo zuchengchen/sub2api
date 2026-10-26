@@ -618,15 +618,8 @@ func isCanonicalUUID(raw string) bool {
 	return err == nil && parsed.String() == strings.TrimSpace(raw)
 }
 
-// deriveCodexFallbackSessionID 为完全未携带会话信号（无 header、无
-// prompt_cache_key、无 metadata）的客户端合成 session_id。旧实现只按
-// account.ID 派生，同一账号下所有互不相干的对话塌缩成同一个 session_id，
-// 上游一眼看出「一个会话跑遍所有话题」。
-// 关联键 = 账号 + 会话判别信号，优先级与已删除的内容审计分组规则一致
-// （先 join ResponseID/PreviousResponseID 的 'r' 链，再 join 's' 会话哈希）：
-// 先真实响应链的 previous_response_id，再退到带用户锚点的 system+首条
-// user 内容哈希，两者皆无才退回纯账号键。不同账号即便内容相同也不共享
-// session_id——满足「会话+账号」关联。
+// Without an explicit identity, equal prompts do not establish a conversation.
+// A prepared request retains this fresh identity in its metadata for retries.
 func deriveCodexFallbackSessionID(account *Account, body []byte) string {
 	// 先真实响应链：只认上游签发的 resp_* 形态（ClassifyOpenAIPreviousResponseIDKind），
 	// 客户端自造的 id 不得成为关联键。
@@ -634,11 +627,8 @@ func deriveCodexFallbackSessionID(account *Account, body []byte) string {
 	if respID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()); respID != "" &&
 		ClassifyOpenAIPreviousResponseIDKind(respID) == OpenAIPreviousResponseIDKindResponseID {
 		discriminator = "resp:" + respID
-	} else if anchor := deriveOpenAIAnchoredContentSessionSeed(body); anchor != "" {
-		// anchored 变体必需：无用户锚点时它返回空。deriveOpenAIContentSessionSeed
-		// 会把 model+tools 当成会话身份，同模型同工具的所有对话又会塌缩回同一个
-		// session_id——正是本函数要修的重复问题。
-		discriminator = anchor
+	} else {
+		return uuid.Must(uuid.NewV7()).String()
 	}
 	seed := fmt.Sprintf("sub2api:codex-session:v2:%d:%s", account.ID, discriminator)
 	return deriveStableCodexUUIDv7(seed, deriveCodexStableTimestampMs(seed))

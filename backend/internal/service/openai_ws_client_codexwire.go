@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/codexwire"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
@@ -141,10 +144,17 @@ func codexWireTLSProfileName(account *Account) string {
 	return "rustls"
 }
 
-// dialOpenAIWSCodexWire performs the byte-exact WS dial for codex-lane accounts.
+// dialOpenAIWSForAccount shares the exact Codex lane across pool and passthrough.
 // Returns conn + status + handshake response headers, matching the signature of
 // openAIWSClientDialer.Dial.
-func (p *openAIWSConnPool) dialOpenAIWSCodexWire(ctx context.Context, req openAIWSAcquireRequest, headers http.Header) (openAIWSClientConn, int, http.Header, error) {
+func dialOpenAIWSForAccount(ctx context.Context, cfg *config.Config, req openAIWSAcquireRequest, headers http.Header, fallback openAIWSClientDialer) (openAIWSClientConn, int, http.Header, error) {
+	target, _ := url.Parse(req.WSURL)
+	// The raw lane tunnels TLS only. Keep explicit plaintext proxy routes on
+	// the existing dialer rather than silently bypassing their configured proxy.
+	plaintextProxy := target != nil && (target.Scheme == "ws" || target.Scheme == "http") && strings.TrimSpace(req.ProxyURL) != ""
+	if plaintextProxy || cfg == nil || !cfg.Gateway.OpenAIWS.ExactFidelityEnabled || req.Account == nil || !req.Account.UsesOpenAICodexProtocol() {
+		return fallback.Dial(ctx, req.WSURL, headers, req.ProxyURL)
+	}
 	ordered, leftover := codexwire.SplitCodexWSHeaders(headers)
 	// 未命中模板头（如 x-codex-turn-state 已挪进 client_metadata 后不应再出现；
 	// cookie/attestation 等模板外注入头）按出现顺序附在官方头之后。
@@ -157,9 +167,13 @@ func (p *openAIWSConnPool) dialOpenAIWSCodexWire(ctx context.Context, req openAI
 			profile = tlsfingerprint.BuiltinProfile("rustls")
 		}
 	}
+	timeout := 15 * time.Second
+	if cfg.Gateway.OpenAIWS.DialTimeoutSeconds > 0 {
+		timeout = time.Duration(cfg.Gateway.OpenAIWS.DialTimeoutSeconds) * time.Second
+	}
 	wsConn, res, err := codexwire.DialWS(ctx, req.WSURL, ordered, req.ProxyURL, codexwire.DialOptions{
 		TLSProfile:       profile,
-		HandshakeTimeout: p.openAIWSDialTimeoutForDial(),
+		HandshakeTimeout: timeout,
 	})
 	if err != nil {
 		status := 0
@@ -173,24 +187,4 @@ func (p *openAIWSConnPool) dialOpenAIWSCodexWire(ctx context.Context, req openAI
 		return nil, status, respHeaders, &openAIWSHandshakeError{Body: body, Err: err}
 	}
 	return &codexWireClientConn{conn: wsConn}, 0, res.Headers, nil
-}
-
-func (p *openAIWSConnPool) openAIWSDialTimeoutForDial() time.Duration {
-	if p != nil && p.cfg != nil && p.cfg.Gateway.OpenAIWS.DialTimeoutSeconds > 0 {
-		return time.Duration(p.cfg.Gateway.OpenAIWS.DialTimeoutSeconds) * time.Second
-	}
-	// 官方 codex-rs model-provider-info DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 15s
-	return 15 * time.Second
-}
-
-// useCodexWireLane reports whether the pool should route this acquire through
-// the byte-exact codex transport instead of the generic coder/websocket dialer.
-func (p *openAIWSConnPool) useCodexWireLane(account *Account) bool {
-	if p == nil || p.cfg == nil || account == nil {
-		return false
-	}
-	if !p.cfg.Gateway.OpenAIWS.ExactFidelityEnabled {
-		return false
-	}
-	return account.UsesOpenAICodexProtocol()
 }

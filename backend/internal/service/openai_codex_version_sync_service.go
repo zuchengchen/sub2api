@@ -26,8 +26,9 @@ const (
 	openAICodexVersionTagPrefix = "rust-v"
 )
 
-// OpenAICodexVersionSyncService 周期性把官方 Codex 客户端的最新稳定版版本号同步到设置，
-// 供出站规范身份使用，避免为了跟上游版本而发新版本。
+// OpenAICodexVersionSyncService syncs only official stable releases with an
+// exact, verified wire profile. A newly published release cannot change the UA
+// independently of the tested request and transport behavior.
 //
 // 同步值写入 SettingKeyOpenAICodexClientVersionSynced（本服务独占写入）；管理员在面板填写的
 // SettingKeyOpenAICodexClientVersion 优先级更高，因此手工固定版本不会被同步覆盖。
@@ -112,7 +113,7 @@ func (s *OpenAICodexVersionSyncService) syncedWithinInterval() bool {
 	if err != nil || setting == nil || setting.UpdatedAt.IsZero() {
 		return false
 	}
-	if NormalizeCodexClientVersion(setting.Value) == "" {
+	if _, verified := verifiedCodexWireProfile(setting.Value); !verified {
 		return false
 	}
 	return time.Since(setting.UpdatedAt) < s.interval
@@ -132,8 +133,10 @@ func (s *OpenAICodexVersionSyncService) runOnce() {
 	}
 
 	current := NormalizeCodexClientVersion(s.currentSyncedVersion(ctx))
-	// 只向前推进：上游偶发返回旧数据或重新发布历史 tag 时不把已同步的版本号降级。
-	if current != "" && CompareVersions(latest, current) <= 0 {
+	// Preserve a newer verified pin, but repair values written by older builds
+	// that followed unverified releases automatically.
+	_, currentVerified := verifiedCodexWireProfile(current)
+	if currentVerified && CompareVersions(latest, current) <= 0 {
 		return
 	}
 	if err := s.settingRepo.Set(ctx, SettingKeyOpenAICodexClientVersionSynced, latest); err != nil {
@@ -144,7 +147,7 @@ func (s *OpenAICodexVersionSyncService) runOnce() {
 	slog.Info("openai_codex_version_synced", "previous", current, "version", latest)
 }
 
-// fetchLatestStableVersion 取官方最新稳定版客户端版本号；取不到时返回空串，
+// fetchLatestStableVersion 取已有已验证 wire profile 的官方稳定版本；取不到时返回空串，
 // 由调用方保持既有值（不清空、不降级），各失败分支自行落日志。
 //
 // 主路径 /releases/latest：该端点本身就排除 draft 与 prerelease，直接给出最新正式发布，
@@ -198,7 +201,7 @@ func (s *OpenAICodexVersionSyncService) currentSyncedVersion(ctx context.Context
 }
 
 // latestCodexStableReleaseVersion 从 release 列表里挑出最大的稳定版客户端版本号。
-// 过滤条件：tag 前缀为 rust-v（排除同仓库其他组件的 tag）、非草稿、非预发布、
+// 过滤条件：已有精确版本 wire profile、tag 前缀为 rust-v、非草稿、非预发布、
 // 版本号不带 -alpha/-beta 之类后缀。取最大值而非最新发布，避免重新发布历史 tag 造成回退。
 // 主路径的单条 /releases/latest 结果也走本函数（单元素切片），保证两条取数路径的过滤语义一致。
 func latestCodexStableReleaseVersion(releases []*GitHubRelease) string {
@@ -213,6 +216,9 @@ func latestCodexStableReleaseVersion(releases []*GitHubRelease) string {
 		}
 		version := NormalizeCodexClientVersion(strings.TrimPrefix(tag, openAICodexVersionTagPrefix))
 		if version == "" || strings.Contains(version, "-") {
+			continue
+		}
+		if _, verified := verifiedCodexWireProfile(version); !verified {
 			continue
 		}
 		if best == "" || CompareVersions(version, best) > 0 {

@@ -157,3 +157,15 @@ func TestCodexDeviceWireProfileRequiresDualOpen(t *testing.T) {
 	dual.Extra[codexFingerprintModeExtraKey] = string(codexFingerprintDevice)
 	require.True(t, codexDeviceWireProfileEnabledFor(dual, dual))
 }
+
+func TestCodexDeviceWireProfile_PreservesExplicitInferenceIdentity(t *testing.T) {
+	account := newTestOAuthAccount(58, map[string]any{codexFingerprintModeExtraKey: "device"})
+	c := newFingerprintStageTestContext(t)
+	c.Request.Header.Set("x-codex-inference-call-id", convTestInstallation)
+	headers := c.Request.Header.Clone()
+	applyCodexDeviceWireProfile(c, account, headers, false)
+	require.Equal(t, convTestInstallation, headers.Get("x-codex-inference-call-id"))
+	headers.Del("x-codex-inference-call-id")
+	applyCodexDeviceWireProfile(c, account, headers, false)
+	require.Empty(t, headers.Get("x-codex-inference-call-id"), "do not invent a trace association")
+}

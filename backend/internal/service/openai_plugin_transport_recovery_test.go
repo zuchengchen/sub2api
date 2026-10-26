@@ -159,3 +159,22 @@ func TestOpenAIUpstream_DoesNotReplaySuccessOrNonRewindableBodies(t *testing.T) 
 		require.Zero(t, executor.calls.Load())
 	}
 }
+
+func TestCodexProbeUnauthorizedDoesNotRecordBusinessAuthFailure(t *testing.T) {
+	account, repo, executor, provider := newOpenAIRecoveryFixture()
+	upstream := &codexProbeUpstream{httpUpstreamRecorder: httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusUnauthorized, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"unauthorized"}`)),
+	}}}
+	svc := &OpenAIGatewayService{cfg: codexProbeConfig(nil), accountRepo: repo, httpUpstream: upstream, openAITokenProvider: provider}
+	req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, strings.NewReader(`{"model":"gpt-5.5","input":[]}`))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rejected-access")
+	resp, err := svc.doOpenAICodexProbe(req, "", account)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	require.Len(t, upstream.requests, 1)
+	require.Zero(t, executor.calls.Load())
+	require.Zero(t, repo.setError)
+	require.Nil(t, provider.refreshAPI.openAIRefreshFailure(account))
+}

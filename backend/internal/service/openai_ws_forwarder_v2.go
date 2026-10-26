@@ -74,6 +74,25 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
+	if c != nil && c.Request != nil && account.UsesOpenAICodexProtocol() {
+		traceHeaders := make(http.Header)
+		copyOpenAICodexTraceHeaders(traceHeaders, c.Request.Header, account)
+		if len(traceHeaders) > 0 {
+			metadata, _ := payload["client_metadata"].(map[string]any)
+			if metadata == nil {
+				metadata = make(map[string]any)
+				payload["client_metadata"] = metadata
+			}
+			for _, name := range []string{"traceparent", "tracestate"} {
+				key := "ws_request_header_" + name
+				if value := traceHeaders.Get(name); value != "" {
+					if _, exists := metadata[key]; !exists {
+						metadata[key] = value
+					}
+				}
+			}
+		}
+	}
 	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
 	turnState := ""
 	turnMetadata := ""
@@ -143,17 +162,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
-	sessionHash := s.GenerateSessionHash(c, nil)
-	if sessionHash == "" {
-		var legacySessionHash string
-		sessionHash, legacySessionHash = openAIWSSessionHashesFromID(promptCacheKey)
-		attachOpenAILegacySessionHashToGin(c, legacySessionHash)
-	}
 	// 与 WS 接入路径共用执行作用域：codex 多智能体共用 session-id，turn state 与
 	// store=false 的连接绑定必须按线程隔离，同一线程在两条路径之间也才能共享状态。
 	// 作用域由 Forward 从改写前的原始请求算出后传入，reqBody 此时已带账号 namespace。
-	if executionScope = strings.TrimSpace(executionScope); executionScope != "" {
-		sessionHash = executionScope
+	sessionHash := strings.TrimSpace(executionScope)
+	if sessionHash == "" {
+		sessionHash = openAIWSLocalStateScope(c, getAPIKeyIDFromContext(c))
 	}
 	if !account.IsOpenAIOAuthLike() && turnState == "" && stateStore != nil && sessionHash != "" {
 		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
@@ -173,8 +187,22 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if deltaEnabled {
 		deltaFieldsFP = openAIWSDeltaFieldsFingerprint(payload)
 		deltaLogicalItems = openAIWSDeltaWireItems(bodyRaw, payload["input"])
+		if len(deltaLogicalItems) > openAIWSDeltaChainMaxBaseline {
+			stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+			deltaEnabled = false
+		}
+	}
+	if deltaEnabled {
 		deltaLogicalHashes = openAIWSDeltaItemsHash(deltaLogicalItems)
 		deltaRecorder = &openAIWSDeltaRecorder{}
+		defer func() {
+			deltaRecorder.mu.Lock()
+			overflow := deltaRecorder.overflow || len(deltaLogicalHashes)+len(deltaRecorder.itemsAddedHashes) > openAIWSDeltaChainMaxBaseline
+			deltaRecorder.mu.Unlock()
+			if overflow {
+				stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+			}
+		}()
 		if previousResponseID == "" {
 			if chain, ok := stateStore.GetSessionDeltaChain(groupID, sessionHash); ok {
 				if chain != nil && chain.AccountID != 0 && chain.AccountID != account.ID {
@@ -197,6 +225,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 						len(chain.BaselineHashes),
 					)
 				} else {
+					if decision.Reason == "baseline_too_large" {
+						stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+					}
 					logOpenAIWSModeInfo(
 						"delta_skip account_id=%d session_hash=%s reason=%s baseline_items=%d current_items=%d",
 						account.ID,
@@ -281,9 +312,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		// （request_kind=prewarm、turn_id 空、无 turn 专属键）。仅当本连接接下来
 		// 确实会发 prewarm 帧时才投影——新拨的连接 IsPrewarmed=false，必然走
 		// performOpenAIWSGeneratePrewarm 的同组门槛。
-		if s.isOpenAIWSGeneratePrewarmEnabled() &&
+		if attempt == 1 && s.shouldPrewarmOpenAIWS(c, account, payload) &&
 			decision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 &&
-			strings.TrimSpace(previousResponseID) == "" {
+			strings.TrimSpace(previousResponseID) == "" &&
+			s.openAIWSSessionPrewarmPending(resolveOpenAIWSSessionScope(c, account, bodyRaw)) {
 			shadow := map[string]any{
 				"model":     payload["model"],
 				"reasoning": payload["reasoning"],
@@ -499,18 +531,22 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 
-	prewarmResult, err := s.performOpenAIWSGeneratePrewarm(
-		ctx,
-		lease,
-		decision,
-		payload,
-		previousResponseID,
-		reqBody,
-		bodyRaw,
-		account,
-		stateStore,
-		groupID,
-	)
+	var prewarmResult *openAIWSPrewarmResult
+	if attempt == 1 {
+		prewarmResult, err = s.performOpenAIWSGeneratePrewarm(
+			ctx,
+			c,
+			lease,
+			decision,
+			payload,
+			previousResponseID,
+			reqBody,
+			bodyRaw,
+			account,
+			stateStore,
+			groupID,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -520,6 +556,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if deltaRecorder != nil && prewarmResult != nil && prewarmResult.ResponseID != "" {
 		baseline := openAIWSDeltaItemsHash(prewarmResult.SentItems)
 		baseline = append(baseline, openAIWSDeltaItemsHash(prewarmResult.ItemsAdded)...)
+		if len(baseline) > openAIWSDeltaChainMaxBaseline {
+			stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+		}
 		warmChain := &openAIWSDeltaChainState{
 			ResponseID:     prewarmResult.ResponseID,
 			AccountID:      account.ID,
@@ -1130,14 +1169,18 @@ readLoop:
 	}
 	if deltaRecorder != nil && stateStore != nil && sessionHash != "" {
 		if next, ok := deltaRecorder.finalize(account.ID, deltaFieldsFP, deltaLogicalHashes, nil); ok {
-			stateStore.BindSessionDeltaChain(groupID, sessionHash, next, s.openAIWSSessionStickyTTL())
-			logOpenAIWSModeInfo(
-				"delta_chain_updated account_id=%d session_hash=%s response_id=%s baseline_items=%d",
-				account.ID,
-				truncateOpenAIWSLogValue(sessionHash, 12),
-				truncateOpenAIWSLogValue(next.ResponseID, openAIWSIDValueMaxLen),
-				len(next.BaselineHashes),
-			)
+			if next == nil {
+				stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+			} else {
+				stateStore.BindSessionDeltaChain(groupID, sessionHash, next, s.openAIWSSessionStickyTTL())
+				logOpenAIWSModeInfo(
+					"delta_chain_updated account_id=%d session_hash=%s response_id=%s baseline_items=%d",
+					account.ID,
+					truncateOpenAIWSLogValue(sessionHash, 12),
+					truncateOpenAIWSLogValue(next.ResponseID, openAIWSIDValueMaxLen),
+					len(next.BaselineHashes),
+				)
+			}
 		}
 	}
 	firstTokenMsValue := -1

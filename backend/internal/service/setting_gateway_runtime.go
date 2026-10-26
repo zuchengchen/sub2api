@@ -421,9 +421,8 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 }
 
 // GetOpenAICodexClientVersion 返回出站声明的 Codex 客户端版本号。
-// 优先级：管理员在面板覆写的版本 → 自动同步到的官方最新稳定版 → 内置常量。
-// 上游在容量紧张时按客户端身份分优先级降载，陈旧版本会被优先丢弃，故该值需保持跟随官方发布；
-// 自动同步让运维不必为了跟版本而发新版本。
+// Priority: explicit administrator pin, verified automatic version, built-in
+// baseline. Recheck persisted automatic values written by older builds too.
 func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string {
 	fallback := codexCLIVersion
 	if s == nil || s.settingRepo == nil {
@@ -461,6 +460,9 @@ func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string
 		version := NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersion])
 		if version == "" {
 			version = NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersionSynced])
+			if _, verified := verifiedCodexWireProfile(version); !verified {
+				version = ""
+			}
 		}
 		if version == "" {
 			version = fallback

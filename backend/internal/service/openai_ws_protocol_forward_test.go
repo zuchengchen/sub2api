@@ -529,8 +529,9 @@ func TestOpenAIGatewayService_Forward_WSSessionDisabledUsesHTTP(t *testing.T) {
 
 	// 会话级禁用（官方 disable_websockets 语义）：解析覆盖为 HTTP，
 	// 同请求直接走 HTTP 上游而不再尝试 WS。
-	svc.markOpenAIWSSessionDisabled(account.ID, "upgrade_required", true)
 	body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_cooling","input":[{"type":"input_text","text":"hello"}]}`)
+	c.Request.Header.Set("session-id", "session-disabled")
+	svc.markOpenAIWSSessionDisabled(resolveOpenAIWSSessionScope(c, account, body), "upgrade_required")
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -546,7 +547,9 @@ func TestOpenAIGatewayService_Forward_WSSessionDisabledUsesHTTP(t *testing.T) {
 // 同请求透明改走 HTTP（官方行为为会话级回退，此处为账号级模拟）。
 func TestOpenAIGatewayService_Forward_WSv2Dial426TransparentFallbackHTTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	var wsAttempts atomic.Int32
 	ws426Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wsAttempts.Add(1)
 		w.WriteHeader(http.StatusUpgradeRequired)
 		_, _ = w.Write([]byte(`upgrade required`))
 	}))
@@ -556,6 +559,7 @@ func TestOpenAIGatewayService_Forward_WSv2Dial426TransparentFallbackHTTP(t *test
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+	c.Request.Header.Set("session-id", "fallback-session")
 
 	upstream := &httpUpstreamRecorder{
 		resp: &http.Response{
@@ -604,10 +608,21 @@ func TestOpenAIGatewayService_Forward_WSv2Dial426TransparentFallbackHTTP(t *test
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq, "426 后应透明落穿 HTTP 上游")
-	require.Equal(t, "upgrade_required", svc.openAIWSSessionDisabledReason(account.ID))
+	require.Equal(t, "upgrade_required", svc.openAIWSSessionDisabledReason(resolveOpenAIWSSessionScope(c, account, body)))
 
 	reason, _ := c.Get("openai_ws_transport_reason")
 	require.Equal(t, "ws_session_fallback:upgrade_required", reason)
+	second, _ := gin.CreateTestContext(httptest.NewRecorder())
+	second.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	second.Request.Header.Set("session-id", "fallback-session")
+	upstream.resp.Body = io.NopCloser(strings.NewReader(`{"id":"resp_http","usage":{"input_tokens":1,"output_tokens":1}}`))
+	_, err = svc.Forward(context.Background(), second, account, body)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), wsAttempts.Load(), "the same logical session stays on HTTP")
+	other, _ := gin.CreateTestContext(httptest.NewRecorder())
+	other.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	other.Request.Header.Set("session-id", "other-session")
+	require.Empty(t, svc.openAIWSSessionDisabledReason(resolveOpenAIWSSessionScope(other, account, body)))
 }
 
 // 重试预算耗尽（read_event）：标记会话禁用 + 同请求透明回退 HTTP。
@@ -689,7 +704,7 @@ func TestOpenAIGatewayService_Forward_WSv2EarlyCloseExhaustedTransparentFallback
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq, "WS 重试耗尽后应透明落穿 HTTP 上游")
-	require.NotEmpty(t, svc.openAIWSSessionDisabledReason(account.ID), "重试耗尽应标记会话禁用")
+	require.Empty(t, svc.openAIWSSessionDisabledReason(resolveOpenAIWSSessionScope(c, account, body)), "anonymous fallback must not disable the account")
 }
 
 // 凭据级失败（401 auth_failed）：不回退、不标记。
@@ -744,7 +759,7 @@ func TestOpenAIGatewayService_Forward_WSv2Dial401NoFallbackNoMark(t *testing.T) 
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Nil(t, upstream.lastReq, "auth_failed 不应回退 HTTP")
-	require.Empty(t, svc.openAIWSSessionDisabledReason(account.ID), "auth_failed 不应标记会话禁用")
+	require.Empty(t, svc.openAIWSSessionDisabledReason(resolveOpenAIWSSessionScope(c, account, body)), "auth_failed 不应标记会话禁用")
 }
 
 // WS close 1009（message_too_big）：HTTP 无帧上限，本请求回退但不标记账号。
@@ -818,10 +833,10 @@ func TestOpenAIGatewayService_Forward_WSv2MessageTooBigFallbackNoMark(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq, "message_too_big 应回退 HTTP（无帧上限）")
-	require.Empty(t, svc.openAIWSSessionDisabledReason(account.ID), "message_too_big 不应标记会话禁用")
+	require.Empty(t, svc.openAIWSSessionDisabledReason(resolveOpenAIWSSessionScope(c, account, body)), "message_too_big 不应标记会话禁用")
 }
 
-// 调度器：会话禁用的账号不承接 WS 需求，HTTP 需求不受影响。
+// The scheduler has no session context: one fallback must not exclude the account.
 func TestOpenAIWSSessionDisabledAccountTransportCompatibility(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -842,9 +857,9 @@ func TestOpenAIWSSessionDisabledAccountTransportCompatibility(t *testing.T) {
 	}
 
 	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
-	svc.markOpenAIWSSessionDisabled(account.ID, "dial_failed", false)
-	require.False(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
-	require.False(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+	svc.markOpenAIWSSessionDisabled(openAIWSSessionScope{AccountID: account.ID, Session: "one-session"}, "dial_failed")
+	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
+	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
 	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportHTTPSSE))
 	require.True(t, svc.isOpenAIAccountTransportCompatible(account, OpenAIUpstreamTransportAny))
 }

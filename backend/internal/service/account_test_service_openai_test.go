@@ -160,8 +160,7 @@ func TestAccountTestService_OpenAIOAuthTestNormalizesGPT56Alias(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
 
-	body, err := io.ReadAll(upstream.requests[0].Body)
-	require.NoError(t, err)
+	body := decodeCodexProbeTestBody(t, upstream.requests[0])
 	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(body, "model").String())
 }
 
@@ -217,8 +216,7 @@ func TestAccountTestService_OpenAIShadowUsesParentCredentialsAndShadowModel(t *t
 	req := upstream.requests[0]
 	require.Equal(t, "Bearer parent-token", req.Header.Get("Authorization"))
 	require.Equal(t, "org-parent", req.Header.Get("chatgpt-account-id"))
-	body, err := io.ReadAll(req.Body)
-	require.NoError(t, err)
+	body := decodeCodexProbeTestBody(t, req)
 	require.Equal(t, "gpt-5.3-codex-spark", gjson.GetBytes(body, "model").String())
 	require.Contains(t, recorder.Body.String(), `"success":true`)
 }
