@@ -19,7 +19,8 @@ import (
 // v23 (upstream 0.2.1): group codex_models_manifest_config field.
 // v24: superset of local+upstream snapshots so cached v21-v23 entries refresh.
 // v25 (upstream 0.2.2): group model_allowlist field (renamed from models_list_config, enforcing semantics).
-const apiKeyAuthSnapshotVersion = 25
+// v26: group image_count_billing (upstream per-image billing)
+const apiKeyAuthSnapshotVersion = 26
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -396,6 +397,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			WeeklyLimitUSD:                  apiKey.Group.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 apiKey.Group.MonthlyLimitUSD,
 			AllowImageGeneration:            apiKey.Group.AllowImageGeneration,
+			ImageCountBilling:               apiKey.Group.ImageCountBilling,
 			ImageRateIndependent:            apiKey.Group.ImageRateIndependent,
 			ImageRateMultiplier:             apiKey.Group.ImageRateMultiplier,
 			ImagePrice1K:                    apiKey.Group.ImagePrice1K,
@@ -498,6 +500,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			WeeklyLimitUSD:                  snapshot.Group.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 snapshot.Group.MonthlyLimitUSD,
 			AllowImageGeneration:            snapshot.Group.AllowImageGeneration,
+			ImageCountBilling:               snapshot.Group.ImageCountBilling,
 			ImageRateIndependent:            snapshot.Group.ImageRateIndependent,
 			ImageRateMultiplier:             snapshot.Group.ImageRateMultiplier,
 			ImagePrice1K:                    snapshot.Group.ImagePrice1K,

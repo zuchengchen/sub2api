@@ -145,6 +145,7 @@ docs/*
 !docs/runtime-risk-cutover-runbook.md
 !docs/runtime-risk-rehearsal-evidence.md
 !docs/runtime-customizations-release-notes.md
+!docs/admin-api-keys.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md

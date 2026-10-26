@@ -1088,6 +1088,7 @@ export default {
         title: 'Image Generation Pricing',
         description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
         allowImageGeneration: 'Allow image generation for this group',
+        perImageBilling: 'Bill per generated image',
         independentMultiplier: 'Use independent image multiplier',
         imageMultiplier: 'Image multiplier',
         modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',

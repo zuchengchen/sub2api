@@ -176,6 +176,37 @@ func TestHostedResponsesSearchFailureAndLimitNeverFabricateAnswer(t *testing.T) 
 	}
 }
 
+// 后续轮次在尚未输出时换号失败（UpstreamFailoverError、result=nil）：前面轮次已付费的
+// usage 必须随结果返回，且错误不再是 UpstreamFailoverError，handler 不会整单换号重放，
+// 而是在错误路径按已观测 usage 计费一次。
+func TestHostedResponsesSearchLaterRoundFailoverKeepsEarlierRoundUsage(t *testing.T) {
+	body := `{"model":"test-model","input":"find latest"}`
+	c, recorder := hostedSearchTestContext(t, body, 305)
+	modelRounds := 0
+	result, err := forwardHostedResponsesWebSearch(context.Background(), c, &Account{}, []byte(body), func(next []byte) (*ForwardResult, error) {
+		modelRounds++
+		if modelRounds == 1 {
+			call := hostedSearchTestCall(next, "search_failover")
+			c.Data(http.StatusOK, "application/json", rawResponsesSearchJSON(map[string]any{
+				"id": "resp_round1", "object": "response", "created_at": 1700000000, "model": "test-model", "status": "completed",
+				"output": []json.RawMessage{call}, "usage": map[string]any{"input_tokens": 11, "output_tokens": 3, "total_tokens": 14},
+			}))
+			return &ForwardResult{Model: "test-model", Usage: ClaudeUsage{InputTokens: 11, OutputTokens: 3}}, nil
+		}
+		return nil, &UpstreamFailoverError{StatusCode: 529, ResponseBody: []byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`)}
+	}, mergeClaudeWebSearchResult, func(context.Context, *Account, string, *responsesWebSearchPlan) (*websearch.SearchResponse, error) {
+		return &websearch.SearchResponse{Results: []websearch.SearchResult{{URL: "https://example.org", Title: "t", Snippet: "s"}}}, nil
+	})
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr), "a paid earlier round must not be replayed through account failover")
+	require.Equal(t, 2, modelRounds)
+	require.NotNil(t, result)
+	require.Equal(t, 11, result.Usage.InputTokens)
+	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.Equal(t, "failed", gjson.Get(recorder.Body.String(), "status").String())
+}
+
 func TestHostedResponsesSearchIncompleteCallIsNotExecuted(t *testing.T) {
 	body := `{"model":"test-model","input":"find latest"}`
 	c, recorder := hostedSearchTestContext(t, body, 304)

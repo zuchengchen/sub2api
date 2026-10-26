@@ -46,6 +46,7 @@ type Group struct {
 
 	// 图片生成计费配置
 	AllowImageGeneration bool
+	ImageCountBilling    bool
 	ImageRateIndependent bool
 	ImageRateMultiplier  float64
 	ImagePrice1K         *float64

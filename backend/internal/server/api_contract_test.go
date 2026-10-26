@@ -380,6 +380,7 @@ func TestAPIContracts(t *testing.T) {
 						"audio_stt_price_per_hour": null,
 						"audio_realtime_price_per_min": null,
 						"allow_image_generation": false,
+						"image_count_billing": false,
 						"image_rate_independent": false,
 						"image_rate_multiplier": 0,
 						"video_rate_independent": false,
