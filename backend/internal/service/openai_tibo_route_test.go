@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,44 +34,71 @@ type tiboRouteCase struct {
 	dialer   tiboZeroDialer
 }
 
+// tiboAccountRepo is a fake database row. Like the real repository it owns
+// its row and hands out copies, so a background probe persisting a verdict
+// never writes the Extra map a request is reading. Tests change the row with
+// setAccount and read writes with updateFor.
 type tiboAccountRepo struct {
 	AccountRepository
+	mu      sync.Mutex
 	account *Account
 	updates map[int64]map[string]any
+	gets    atomic.Int32
+}
+
+func cloneTiboAccount(account *Account) *Account {
+	copied := *account
+	copied.Extra = maps.Clone(account.Extra)
+	copied.Credentials = maps.Clone(account.Credentials)
+	return &copied
+}
+
+func (r *tiboAccountRepo) setAccount(mutate func(*Account)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	mutate(r.account)
+}
+
+func (r *tiboAccountRepo) updateFor(id int64) (map[string]any, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	update, ok := r.updates[id]
+	return update, ok
 }
 
 func (r *tiboAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	r.gets.Add(1)
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.account == nil || r.account.ID != id {
 		return nil, errOpenAITiboAccountUnavailable
 	}
-	copy := *r.account
-	copy.Extra = maps.Clone(r.account.Extra)
-	copy.Credentials = maps.Clone(r.account.Credentials)
-	return &copy, nil
+	return cloneTiboAccount(r.account), nil
 }
 
 func (r *tiboAccountRepo) ListByPlatform(_ context.Context, _ string) ([]Account, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.account == nil {
 		return nil, nil
 	}
-	copy := *r.account
-	copy.Extra = maps.Clone(r.account.Extra)
-	copy.Credentials = maps.Clone(r.account.Credentials)
-	return []Account{copy}, nil
+	return []Account{*cloneTiboAccount(r.account)}, nil
 }
 
 func (r *tiboAccountRepo) UpdateExtra(_ context.Context, id int64, extra map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.updates == nil {
 		r.updates = map[int64]map[string]any{}
 	}
 	r.updates[id] = extra
 	if r.account != nil && r.account.ID == id {
-		if r.account.Extra == nil {
-			r.account.Extra = map[string]any{}
+		next := maps.Clone(r.account.Extra)
+		if next == nil {
+			next = map[string]any{}
 		}
-		for k, v := range extra {
-			r.account.Extra[k] = v
-		}
+		maps.Copy(next, extra)
+		r.account.Extra = next
 	}
 	return nil
 }
@@ -97,7 +125,7 @@ func newTiboRouteCase(t *testing.T, _, _ bool, responses ...*http.Response) *tib
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-chatgpt"},
 		Extra:       map[string]any{"openai_passthrough": true},
 	}
-	svc.accountRepo = &tiboAccountRepo{account: account, updates: map[int64]map[string]any{}}
+	svc.accountRepo = &tiboAccountRepo{account: cloneTiboAccount(account), updates: map[int64]map[string]any{}}
 	return &tiboRouteCase{svc: svc, account: account, upstream: upstream}
 }
 

@@ -298,7 +298,8 @@ func TestTiboVerdictPersistsAndWarmStarts(t *testing.T) {
 	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"), cookieWSHTTPResponse("http ok"))
 	tc.forward(t)
 	repo := mustTestValue[*tiboAccountRepo](t, tc.svc.accountRepo)
-	persisted := repo.updates[tc.account.ID][openAITiboVerdictExtraKey(openAITiboRouteHTTP)]
+	update, _ := repo.updateFor(tc.account.ID)
+	persisted := update[openAITiboVerdictExtraKey(openAITiboRouteHTTP)]
 	record, ok := parseOpenAITiboVerdictRecord(persisted)
 	require.True(t, ok, "flip persisted to Extra")
 	require.Equal(t, openAITiboHealthy, record.Verdict)
@@ -341,7 +342,7 @@ func TestTiboStartupLoadSeedsFromFullRows(t *testing.T) {
 func TestTiboTickSkipsRateLimitedAccount(t *testing.T) {
 	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"))
 	reset := time.Now().Add(time.Hour)
-	tc.account.RateLimitResetAt = &reset
+	mustTestValue[*tiboAccountRepo](t, tc.svc.accountRepo).setAccount(func(a *Account) { a.RateLimitResetAt = &reset })
 	tc.svc.openaiTiboLoaded.Store(true)
 	now := time.Now()
 	state := tc.svc.openAITiboAccountState(tc.account.ID)
@@ -359,7 +360,9 @@ func TestTiboTickSkipsRateLimitedAccount(t *testing.T) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	require.Equal(t, []openAITiboVerdict{openAITiboHealthy}, recentVerdicts(state.http.recent))
-	require.WithinDuration(t, reset, state.http.nextProbeAt, time.Second)
+	require.WithinDuration(t, reset, state.http.holdUntil, time.Second, "held until the reset")
+	require.WithinDuration(t, reset, state.http.nextDue(), time.Second)
+	require.True(t, state.http.nextProbeAt.Before(now), "the probe's own schedule is not pushed out")
 }
 
 func TestTiboTickProbesIdleDueAccounts(t *testing.T) {
@@ -413,7 +416,7 @@ func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
 
 	// A paused account is not sampled and its budget is refunded.
 	repo := mustTestValue[*tiboAccountRepo](t, tc.svc.accountRepo)
-	repo.account.Schedulable = false
+	repo.setAccount(func(a *Account) { a.Schedulable = false })
 	state.mu.Lock()
 	state.http.probes = nil
 	state.http.nextProbeAt = time.Time{}
@@ -422,8 +425,16 @@ func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
 	tc.svc.openaiTiboProbeWG.Wait()
 	require.Empty(t, tc.upstream.requests)
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	require.Empty(t, state.http.probes)
-	require.True(t, state.http.nextProbeAt.After(time.Now()), "retried later")
+	require.True(t, state.http.parked, "paused accounts are parked")
+	require.False(t, state.http.due(time.Now().Add(time.Hour)))
 	require.False(t, state.http.inflight)
+	state.mu.Unlock()
+
+	// Parked: later ticks neither probe nor reload the account every minute.
+	gets := repo.gets.Load()
+	tc.svc.probeOpenAITiboRoutes(context.Background())
+	tc.svc.openaiTiboProbeWG.Wait()
+	require.Equal(t, gets, repo.gets.Load(), "no per-tick database reload for a parked account")
+	require.Empty(t, tc.upstream.requests)
 }
