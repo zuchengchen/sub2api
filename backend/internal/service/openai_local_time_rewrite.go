@@ -49,6 +49,11 @@ func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeIfEnabled(account *Ac
 	if len(body) == 0 || account == nil || !account.IsOpenAI() || !s.openaiClientLocalTimeRewriteEnabled() {
 		return body
 	}
+	if codexInputCarriesBaseInstructions(body) {
+		// Native CLI environment facts describe the user's machine, not the
+		// gateway or its exit proxy. Keep them intact across retries and turns.
+		return body
+	}
 	resolution := s.resolveOpenAIRequestTimezone(context.Background(), account)
 	next, _ := rewriteOpenAIClientLocalTimeContextWith(body, openAILocalTimeContextFor(resolution.Timezone))
 	return next

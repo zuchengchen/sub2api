@@ -2,7 +2,10 @@ package service
 
 import (
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // 官方 Codex CLI 的传输回退语义（codex-rs core/src/client.rs）：
@@ -11,30 +14,133 @@ import (
 //   1. WS 握手收到 426 Upgrade Required（能力信号）
 //   2. 流式重试预算耗尽（stream_max_retries=5）
 //
-// 网关中「会话」没有直接的进程对应物：本文件把它映射为账号级内存标记 +
-// 分档 TTL 的自动重探。标记到期后下一个请求重新尝试 WS（正常 acquire +
-// prewarm 即探测）；探测失败按新原因重新标记，成功则清除。
+// 网关按凭据归属、账号、分组和隔离后的客户端执行会话保存标记。
+// 活跃会话不会因故障 TTL 到期重新探测；24h 空闲或容量淘汰结束本地会话。
+// 匿名请求仅共享本次请求的状态。
 //
-// 分类原则与官方一致：能力信号与「重试预算耗尽的可重试错误」说明该账号
-// 的 WS 传输当前不可用，标记禁用；本地连接池争用（acquire/queue）不是
-// 上游健康问题，只让本请求透明回退、不污染账号状态；请求内容级与凭据级
+// 分类原则与官方一致：能力信号与「重试预算耗尽的可重试错误」禁用本会话
+// 的 WS 传输；本地连接池争用（acquire/queue）只让本请求透明回退；请求内容级与凭据级
 // 错误（policy/auth/dead-anchor/invalid-encrypted）在 HTTP 上会以同形失败，
 // 不触发回退也不标记。
 
-// openAIWSSessionDisableState 记录一次账号级 WS 禁用。
+type openAIWSSessionScope struct {
+	AccountID           int64
+	CredentialOwnerID   int64
+	CredentialNamespace string
+	GroupID             int64
+	Session             string
+	Ephemeral           bool
+}
+
+// Resolve from the original client identity, before account namespace projection.
+// Access tokens are deliberately excluded: OAuth refresh must not reset fallback.
+func resolveOpenAIWSSessionScope(c *gin.Context, account *Account, body []byte) openAIWSSessionScope {
+	if account == nil {
+		return openAIWSSessionScope{}
+	}
+	scope := openAIWSSessionScope{AccountID: account.ID, CredentialOwnerID: account.ID, GroupID: getOpenAIGroupIDFromContext(c)}
+	if owner := codexAccountIdentitySource(c, account); owner != nil {
+		scope.CredentialOwnerID = owner.ID
+		scope.CredentialNamespace = codexAccountIdentityNamespace(owner)
+	}
+	const scopeKey = "openai_ws_session_scope"
+	if c != nil {
+		if cached, ok := c.Get(scopeKey); ok {
+			if frozen, ok := cached.(openAIWSSessionScope); ok && frozen.AccountID == scope.AccountID && frozen.CredentialOwnerID == scope.CredentialOwnerID && frozen.CredentialNamespace == scope.CredentialNamespace && frozen.GroupID == scope.GroupID {
+				return frozen
+			}
+		}
+	}
+	apiKeyID := getAPIKeyIDFromContext(c)
+	scope.Session, _ = resolveOpenAIWSExecutionScope(c, body, apiKeyID)
+	if scope.Session == "" {
+		scope.Ephemeral = true
+		scope.Session = openAIWSLocalStateScope(c, apiKeyID)
+	}
+	if c != nil {
+		c.Set(scopeKey, scope)
+	}
+	return scope
+}
+
+// openAIWSSessionDisableState lasts for the logical session, not a retry TTL.
 type openAIWSSessionDisableState struct {
-	reason string
-	since  time.Time
-	until  time.Time
+	reason         string
+	since          time.Time
+	prewarmStarted bool
+	lastUsed       time.Time
+}
+
+const openAIWSSessionRegistryLimit = 8192
+const openAIWSSessionIdleLifetime = 24 * time.Hour
+
+// Serializes insertions and eviction, without changing the service's shared map.
+var openAIWSSessionRegistryMu sync.Mutex
+
+func (s *OpenAIGatewayService) openAIWSSessionStateLocked(scope openAIWSSessionScope) openAIWSSessionDisableState {
+	if raw, ok := s.openaiWSSessionDisabled.Load(scope); ok {
+		if state, ok := raw.(openAIWSSessionDisableState); ok && (state.lastUsed.IsZero() || time.Since(state.lastUsed) < openAIWSSessionIdleLifetime) {
+			return state
+		}
+		s.openaiWSSessionDisabled.Delete(scope)
+	}
+	return openAIWSSessionDisableState{}
+}
+
+func (s *OpenAIGatewayService) storeOpenAIWSSessionStateLocked(scope openAIWSSessionScope, state openAIWSSessionDisableState) {
+	now := time.Now()
+	if _, exists := s.openaiWSSessionDisabled.Load(scope); !exists {
+		count := 0
+		var oldest any
+		oldestAt := now
+		s.openaiWSSessionDisabled.Range(func(key, value any) bool {
+			entry, ok := value.(openAIWSSessionDisableState)
+			if !ok || (!entry.lastUsed.IsZero() && now.Sub(entry.lastUsed) >= openAIWSSessionIdleLifetime) {
+				s.openaiWSSessionDisabled.Delete(key)
+				return true
+			}
+			count++
+			if oldest == nil || entry.lastUsed.Before(oldestAt) {
+				oldest, oldestAt = key, entry.lastUsed
+			}
+			return true
+		})
+		if count >= openAIWSSessionRegistryLimit && oldest != nil {
+			s.openaiWSSessionDisabled.Delete(oldest)
+		}
+	}
+	state.lastUsed = now
+	s.openaiWSSessionDisabled.Store(scope, state)
+}
+
+// Reserve before writing so a reconnect or a concurrent turn cannot prewarm twice.
+func (s *OpenAIGatewayService) openAIWSSessionPrewarmPending(scope openAIWSSessionScope) bool {
+	openAIWSSessionRegistryMu.Lock()
+	defer openAIWSSessionRegistryMu.Unlock()
+	state := s.openAIWSSessionStateLocked(scope)
+	return !state.prewarmStarted && state.reason == ""
+}
+
+func (s *OpenAIGatewayService) beginOpenAIWSSessionPrewarm(scope openAIWSSessionScope) bool {
+	if s == nil || scope.Session == "" {
+		return false
+	}
+	openAIWSSessionRegistryMu.Lock()
+	defer openAIWSSessionRegistryMu.Unlock()
+	state := s.openAIWSSessionStateLocked(scope)
+	allowed := !state.prewarmStarted && state.reason == ""
+	state.prewarmStarted = true
+	s.storeOpenAIWSSessionStateLocked(scope, state)
+	return allowed
 }
 
 // openAIWSSessionFallbackAction 描述一次 WS 失败应采取的会话级动作。
 type openAIWSSessionFallbackAction struct {
 	// fallbackHTTP: 本请求可在未写下游的前提下透明改走 HTTP 重试。
 	fallbackHTTP bool
-	// markDisable: 该失败说明账号 WS 传输当前不健康，标记会话级禁用。
+	// markDisable: 标记当前逻辑会话，账号健康由独立策略维护。
 	markDisable bool
-	// capability: 能力信号（426/ws_unsupported），使用更长的禁用 TTL。
+	// capability: 能力信号（426/ws_unsupported）无需耗尽传输重试。
 	capability bool
 	reason     string
 }
@@ -83,64 +189,38 @@ func (s *OpenAIGatewayService) openAIWSSessionDisableEnabled() bool {
 	return s.cfg.Gateway.OpenAIWS.SessionDisableEnabled
 }
 
-// openAIWSSessionDisableTTL 按禁用类别返回 TTL；<=0 的配置回落到内置默认。
-func (s *OpenAIGatewayService) openAIWSSessionDisableTTL(capability bool) time.Duration {
-	ms := 0
-	if s != nil && s.cfg != nil {
-		if capability {
-			ms = s.cfg.Gateway.OpenAIWS.SessionDisableCapabilityTTLMS
-		} else {
-			ms = s.cfg.Gateway.OpenAIWS.SessionDisableRetryTTLMS
-		}
+func (s *OpenAIGatewayService) openAIWSSessionDisabledReason(scope openAIWSSessionScope) string {
+	if s == nil || scope.AccountID <= 0 || scope.Session == "" || !s.openAIWSSessionDisableEnabled() {
+		return ""
 	}
-	if ms <= 0 {
-		if capability {
-			ms = 24 * 60 * 60 * 1000 // 24h
-		} else {
-			ms = 15 * 60 * 1000 // 15min
-		}
+	openAIWSSessionRegistryMu.Lock()
+	defer openAIWSSessionRegistryMu.Unlock()
+	state := s.openAIWSSessionStateLocked(scope)
+	if state.reason != "" || state.prewarmStarted {
+		s.storeOpenAIWSSessionStateLocked(scope, state)
 	}
-	return time.Duration(ms) * time.Millisecond
+	return state.reason
 }
 
-// openAIWSSessionDisabledReason 返回账号当前的 WS 禁用原因（"" = 未禁用）。
-// 到期条目惰性清除：到期即视为「自动重探窗口已开」，下一个请求可正常尝试 WS。
-func (s *OpenAIGatewayService) openAIWSSessionDisabledReason(accountID int64) string {
-	if s == nil || accountID <= 0 || !s.openAIWSSessionDisableEnabled() {
-		return ""
-	}
-	raw, ok := s.openaiWSSessionDisabled.Load(accountID)
-	if !ok || raw == nil {
-		return ""
-	}
-	state, ok := raw.(openAIWSSessionDisableState)
-	if !ok || state.until.IsZero() {
-		s.openaiWSSessionDisabled.Delete(accountID)
-		return ""
-	}
-	if time.Now().Before(state.until) {
-		return state.reason
-	}
-	s.openaiWSSessionDisabled.Delete(accountID)
-	return ""
-}
-
-// markOpenAIWSSessionDisabled 标记账号 WS 会话级禁用；禁用时长按原因分档。
-func (s *OpenAIGatewayService) markOpenAIWSSessionDisabled(accountID int64, reason string, capability bool) {
-	if s == nil || accountID <= 0 || !s.openAIWSSessionDisableEnabled() {
+func (s *OpenAIGatewayService) markOpenAIWSSessionDisabled(scope openAIWSSessionScope, reason string) {
+	if s == nil || scope.AccountID <= 0 || scope.Session == "" || !s.openAIWSSessionDisableEnabled() {
 		return
 	}
-	s.openaiWSSessionDisabled.Store(accountID, openAIWSSessionDisableState{
-		reason: reason,
-		since:  time.Now(),
-		until:  time.Now().Add(s.openAIWSSessionDisableTTL(capability)),
-	})
+	openAIWSSessionRegistryMu.Lock()
+	defer openAIWSSessionRegistryMu.Unlock()
+	state := s.openAIWSSessionStateLocked(scope)
+	if state.reason == "" {
+		state.reason, state.since = reason, time.Now()
+	}
+	s.storeOpenAIWSSessionStateLocked(scope, state)
 }
 
-// clearOpenAIWSSessionDisabled 在 WS 成功后清除账号禁用标记。
-func (s *OpenAIGatewayService) clearOpenAIWSSessionDisabled(accountID int64) {
-	if s == nil || accountID <= 0 {
+// Anonymous sessions end with the request/connection that created their scope.
+func (s *OpenAIGatewayService) clearOpenAIWSSessionDisabled(scope openAIWSSessionScope) {
+	if s == nil || scope.AccountID <= 0 {
 		return
 	}
-	s.openaiWSSessionDisabled.Delete(accountID)
+	openAIWSSessionRegistryMu.Lock()
+	defer openAIWSSessionRegistryMu.Unlock()
+	s.openaiWSSessionDisabled.Delete(scope)
 }

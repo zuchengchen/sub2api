@@ -832,6 +832,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if c != nil {
 		isCodexCLI = openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
 	}
+	nativeTurnState := account.UsesOpenAICodexProtocol() || isCodexCLI
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		isCodexCLI = true
 	}
@@ -857,10 +858,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if buildHdrErr != nil {
 		return fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	if nativeTurnState {
+		headers.Del(openAIWSTurnStateHeader)
 	}
+	proxyURL := resolveAccountProxyURL(account)
 
 	dialer := s.getOpenAIWSPassthroughDialer()
 	if dialer == nil {
@@ -880,7 +881,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
 		sentHeaders := cloneHeader(headers)
-		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
+		upstreamConn, statusCode, handshakeHeaders, err = dialOpenAIWSForAccount(dialCtx, s.cfg, openAIWSAcquireRequest{
+			Account: codexAccountIdentitySource(c, account), WSURL: wsURL, ProxyURL: proxyURL,
+		}, headers, dialer)
 		cancelDial()
 		if err == nil {
 			break
@@ -921,11 +924,23 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), capturedSessionModel)
 			return s.newOpenAIWSRateLimitFailoverError(account, handshakeHeaders, nil, err.Error())
 		}
+		if action := openAIWSSessionFallbackActionFor(classifyOpenAIWSAcquireError(dialErr)); action.capability {
+			s.markOpenAIWSSessionDisabled(resolveOpenAIWSSessionScope(c, account, originalFirstClientMessage), action.reason)
+		}
 		return s.mapOpenAIWSPassthroughDialError(err, statusCode, handshakeHeaders)
 	}
 	defer func() {
 		_ = upstreamConn.Close()
 	}()
+	if nativeTurnState {
+		if state := strings.TrimSpace(handshakeHeaders.Get(openAIWSTurnStateHeader)); state != "" {
+			turnState = state
+		}
+		firstClientMessage, err = applyOpenAIWSNativeTurnState(firstClientMessage, turnState)
+		if err != nil {
+			return fmt.Errorf("apply websocket turn state: %w", err)
+		}
+	}
 	logOpenAIWSV2Passthrough(
 		"relay_dial_ok account_id=%d status_code=%d upstream_request_id=%s",
 		account.ID,
@@ -1014,6 +1029,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}()
 			}
 			if isResponseCreate {
+				if nativeTurnState {
+					payload, filterErr = applyOpenAIWSNativeTurnState(payload, turnState)
+					if filterErr != nil {
+						return payload, nil, filterErr
+					}
+				}
 				payload = s.rewriteOpenAIClientLocalTimeIfEnabled(account, payload)
 			}
 			responsesLite := isResponseCreate && isOpenAIResponsesLiteWebSocketPayload(payload)

@@ -262,14 +262,14 @@ func TestOpenAIGatewayService_OAuthMessagesBridgeDoesNotInjectDefaultInstruction
 	require.Nil(t, result)
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, "", gjson.GetBytes(upstream.lastBody, "instructions").String())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "prompt-cache", "anthropic-metadata-session-1"), gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	// Session identity rides on the official session-id (UUIDv7); the
 	// underscored alias is a header the Codex CLI never sends over HTTP.
 	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
 	require.Empty(t, upstream.lastReq.Header.Get("Session_Id"))
 	require.Empty(t, upstream.lastReq.Header.Get("Conversation_Id"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
-	require.Empty(t, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, openai.CodexDefaultOriginator, upstream.lastReq.Header.Get("originator"))
 }
 
 type openAIPassthroughFailoverRepo struct {
@@ -2184,11 +2184,9 @@ func TestOpenAIGatewayService_CodexFingerprintHTTPTransformedHeaderBodyParityAnd
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
 
-	seed, ok := codexFingerprintSeed(account.Extra)
-	require.True(t, ok)
-	wantInstall := resolveConvergedInstallationID(account, seed)
-	wantSession := resolveConvergedSessionID(seed)
-	wantThread := resolveConvergedThreadID(seed, "header-session")
+	ids := stagedCodexFingerprintIDs(c, account)
+	require.NotNil(t, ids)
+	wantInstall, wantSession, wantThread := ids.installationID, ids.sessionID, ids.threadID
 
 	// x-codex-installation-id 官方 HTTP 头不发（仅 client_metadata 携带，见下）。
 	require.Empty(t, upstream.lastReq.Header.Get("x-codex-installation-id"))
@@ -2248,11 +2246,9 @@ func TestOpenAIGatewayService_CodexFingerprintHTTPRawPassthroughHeaderBodyParity
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
 
-	seed, ok := codexFingerprintSeed(account.Extra)
-	require.True(t, ok)
-	wantInstall := resolveConvergedInstallationID(account, seed)
-	wantSession := resolveConvergedSessionID(seed)
-	wantThread := resolveConvergedThreadID(seed, "header-session")
+	ids := stagedCodexFingerprintIDs(c, account)
+	require.NotNil(t, ids)
+	wantInstall, wantSession, wantThread := ids.installationID, ids.sessionID, ids.threadID
 
 	// x-codex-installation-id 官方 HTTP 头不发（仅 client_metadata 携带，见下）。
 	require.Empty(t, upstream.lastReq.Header.Get("x-codex-installation-id"))
@@ -2320,7 +2316,7 @@ func TestOpenAIGatewayService_CodexFingerprintCompactDoesNotRewriteBodyCacheKeyO
 	require.Empty(t, upstream.lastReq.Header.Get("x-codex-window-id"))
 }
 
-func TestOpenAIGatewayService_CodexFingerprintMessagesBridgeDoesNotInjectBodyPromptCacheKey(t *testing.T) {
+func TestOpenAIGatewayService_CodexFingerprintMessagesBridgeUsesCachePolicy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -2353,11 +2349,10 @@ func TestOpenAIGatewayService_CodexFingerprintMessagesBridgeDoesNotInjectBodyPro
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
 
-	seed, ok := codexFingerprintSeed(account.Extra)
-	require.True(t, ok)
-	wantSession := resolveConvergedSessionID(seed)
-	t.Logf("upstream body: %s", string(upstream.lastBody))
-	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
+	ids := stagedCodexFingerprintIDs(c, account)
+	require.NotNil(t, ids)
+	wantSession := ids.sessionID
+	require.Equal(t, wantSession, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.Equal(t, wantSession, gjson.GetBytes(upstream.lastBody, "client_metadata.session_id").String())
 	require.Equal(t, wantSession, upstream.lastReq.Header.Get("session-id"))
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))

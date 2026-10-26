@@ -1,6 +1,9 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,12 +13,13 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// applyCodexWireLaneMetadata 在 codex lane 上把 client_metadata / turn-metadata
-// 补齐到真实 Codex CLI 的字段全集（身份字段已由
-// ensureCodexClientMetadataDefaults 负责）。kind ∈ {"turn","prewarm"}：
-// prewarm 帧的官方画像是 request_kind=prewarm、turn_id 为空串、且没有
-// root_turn_id/turn_trigger/workspaces/turn_started_at_unix_ms。
+// HTTP and WebSocket share logical turn metadata. Transport-only fields are
+// added by the corresponding projection, without inventing client capabilities.
 func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, account *Account, kind string) {
+	applyCodexWireMetadata(payload, wsHeaders, account, kind, true)
+}
+
+func applyCodexWireMetadata(payload map[string]any, wsHeaders http.Header, account *Account, kind string, websocket bool) {
 	if payload == nil || account == nil {
 		return
 	}
@@ -33,6 +37,9 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 	}
 
 	setStr := func(m map[string]any, key, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
 		if current, exists := m[key]; exists {
 			if s, ok := current.(string); ok && s != "" {
 				return
@@ -40,36 +47,28 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 		}
 		m[key] = value
 	}
-	setBool := func(m map[string]any, key string, value bool) {
-		if _, exists := m[key]; !exists {
-			m[key] = value
-		}
+	// Flat metadata and projected headers can be the only available ancestry.
+	// Keep those already-isolated references before considering root defaults.
+	for _, field := range []string{"parent_thread_id", "forked_from_thread_id", "parent_turn_id", "root_turn_id"} {
+		setStr(metadata, field, firstNonEmptyString(cm[field]))
 	}
-
-	// 行为字段（官方 CodexTurnMetadataPayload 非身份部分）。
+	setStr(metadata, "parent_thread_id", firstNonEmptyString(cm["x-codex-parent-thread-id"], wsHeaders.Get("x-codex-parent-thread-id")))
+	// Environment and capability claims require explicit configuration. Preserve
+	// native client metadata instead of replacing it with the gateway's host.
 	profile, hasProfile := codexDeviceProfileForRequest(account)
-	setStr(metadata, "agent_name", "/root")
-	setStr(metadata, "history_initialization", "new")
-	setStr(metadata, "thread_source", "user")
-	sandbox := codexDefaultSandbox
-	sandboxMode := codexDefaultWorkspaceMode
-	cwd := codexDefaultWorkspaceCWD
 	if hasProfile {
-		sandbox = profile.Sandbox
-		sandboxMode = profile.SandboxMode
-		cwd = profile.WorkspaceCWD
-	}
-	setStr(metadata, "sandbox", sandbox)
-	setStr(metadata, "sandbox_mode", sandboxMode)
-	setBool(metadata, "auto_review_enabled", false)
-	setBool(metadata, "node_repl_auto_review_required", codexAccountNodeReplAutoReviewRequired(account))
-	setBool(metadata, "node_repl_disabled", false)
-	setBool(metadata, "analytics_enabled", true)
-	setStr(metadata, "model", openAIWSPayloadString(payload, "model"))
-	if _, exists := metadata["reasoning_effort"]; !exists {
-		if effort := strings.TrimSpace(gjson.GetBytes(payloadAsJSONBytes(payload), "reasoning.effort").String()); effort != "" {
-			metadata["reasoning_effort"] = effort
+		if account.GetExtraString(codexSandboxExtraKey) != "" {
+			setStr(metadata, "sandbox", profile.Sandbox)
 		}
+		if account.GetExtraString(codexSandboxModeExtraKey) != "" {
+			setStr(metadata, "sandbox_mode", profile.SandboxMode)
+		}
+	}
+	if model := openAIWSPayloadString(payload, "model"); model != "" {
+		metadata["model"] = model
+	}
+	if effort := strings.TrimSpace(gjson.GetBytes(payloadAsJSONBytes(payload), "reasoning.effort").String()); effort != "" {
+		metadata["reasoning_effort"] = effort
 	}
 
 	switch kind {
@@ -88,14 +87,16 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 			metadata["request_kind"] = "turn"
 		}
 		// 官方 root_turn_id：新线程首回合时等于 turn_id（抓包 frame1 证实两值相同）。
-		if _, exists := metadata["root_turn_id"]; !exists {
+		if _, exists := metadata["root_turn_id"]; !exists && firstNonEmptyString(metadata["parent_thread_id"], metadata["parent_turn_id"], cm["x-openai-subagent"], wsHeaders.Get("x-openai-subagent")) == "" {
 			if turnID, ok := metadata["turn_id"].(string); ok && turnID != "" {
 				metadata["root_turn_id"] = turnID
 			}
 		}
-		setStr(metadata, "turn_trigger", codexWireAccountExtra(account, "codex_turn_trigger", "user"))
-		if _, exists := metadata["workspaces"]; !exists {
-			metadata["workspaces"] = map[string]any{cwd: map[string]any{}}
+		if trigger := account.GetExtraString("codex_turn_trigger"); trigger != "" {
+			setStr(metadata, "turn_trigger", trigger)
+		}
+		if _, exists := metadata["workspaces"]; !exists && hasProfile && account.GetExtraString(codexWorkspaceCWDExtraKey) != "" {
+			metadata["workspaces"] = map[string]any{profile.WorkspaceCWD: map[string]any{}}
 		}
 		if _, exists := metadata["turn_started_at_unix_ms"]; !exists {
 			metadata["turn_started_at_unix_ms"] = time.Now().UnixMilli()
@@ -130,12 +131,8 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 		}
 	}
 
-	// 官方 client_metadata 里的工具/额度/lite 标记。
-	if _, exists := cm["mcp_attribution"]; !exists {
-		cm["mcp_attribution"] = `{"status":"none"}`
-	}
-	if _, exists := cm["guardian_credits_requested"]; !exists {
-		cm["guardian_credits_requested"] = "true"
+	if !websocket {
+		return
 	}
 	// 官方 use_responses_lite 是模型级属性（models-manager catalog）：lite
 	// 标记与 reasoning.context=all_turns 必须同现，上游强制配对。网关感知不到
@@ -166,6 +163,49 @@ func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, a
 	if _, exists := cm["x-codex-ws-stream-request-start-ms"]; !exists {
 		cm["x-codex-ws-stream-request-start-ms"] = strconv.FormatInt(time.Now().UnixMilli(), 10)
 	}
+}
+
+// applyCodexHTTPWireMetadata edits only the small metadata object. Large native
+// inputs, tool schemas and their integer values keep their original bytes.
+func applyCodexHTTPWireMetadata(req *http.Request, body []byte, account *Account) ([]byte, error) {
+	if req == nil || account == nil || !account.IsOpenAI() || !account.IsOpenAIOAuthLike() {
+		return body, nil
+	}
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() {
+		return body, nil
+	}
+	cm := map[string]any{}
+	if raw := root.Get("client_metadata"); raw.IsObject() {
+		if err := decodeCodexMetadataObject(raw.Raw, &cm); err != nil {
+			return body, err
+		}
+	} else if raw.Exists() {
+		return body, nil
+	}
+	payload := map[string]any{"client_metadata": cm, "model": root.Get("model").String()}
+	if reasoning := root.Get("reasoning"); reasoning.Exists() {
+		payload["reasoning"] = json.RawMessage(reasoning.Raw)
+	}
+	applyCodexWireMetadata(payload, req.Header, account, "turn", false)
+	raw, err := marshalOpenAIUpstreamJSON(cm)
+	if err != nil {
+		return body, err
+	}
+	next, err := sjson.SetRawBytes(body, "client_metadata", raw)
+	if err != nil {
+		return body, err
+	}
+	if bytes.Equal(next, body) {
+		return body, nil
+	}
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	req.Body = io.NopCloser(bytes.NewReader(next))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(next)), nil }
+	req.ContentLength = int64(len(next))
+	return next, nil
 }
 
 // relocateCodexWSTurnState 把 x-codex-turn-state 从握手头挪进

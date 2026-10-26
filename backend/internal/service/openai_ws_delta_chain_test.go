@@ -1,9 +1,18 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func deltaTestItems(t *testing.T, bodies ...string) []json.RawMessage {
@@ -124,6 +133,81 @@ func TestOpenAIWSDeltaRecorder_NoCompleteNoChain(t *testing.T) {
 	_, ok := r.finalize(1, "fp", nil, nil)
 	if ok {
 		t.Fatal("incomplete response must not extend chain")
+	}
+}
+
+func TestOpenAIWSDeltaRecorder_BaselineLimit(t *testing.T) {
+	for _, total := range []int{openAIWSDeltaChainMaxBaseline, openAIWSDeltaChainMaxBaseline + 1} {
+		t.Run(fmt.Sprint(total), func(t *testing.T) {
+			r := &openAIWSDeltaRecorder{}
+			r.observe([]byte(`{"type":"response.output_item.done","item":{"type":"message"}}`))
+			r.observe([]byte(`{"type":"response.completed","response":{"id":"resp_full"}}`))
+			previous := &openAIWSDeltaChainState{ResponseID: "resp_old"}
+			next, changed := r.finalize(1, "fp", make([]string, total-1), previous)
+			require.True(t, changed)
+			if total > openAIWSDeltaChainMaxBaseline {
+				require.Nil(t, next, "overflow must invalidate the previous chain")
+			} else {
+				require.Len(t, next.BaselineHashes, total)
+			}
+		})
+	}
+	items := make([]json.RawMessage, openAIWSDeltaChainMaxBaseline+1)
+	chain := &openAIWSDeltaChainState{ResponseID: "resp_old", BaselineHashes: make([]string, len(items))}
+	require.Equal(t, "baseline_too_large", resolveOpenAIWSDelta(chain, 1, "", items).Reason)
+}
+
+func TestOpenAIWSDeltaOverflowDeletesStoredChain(t *testing.T) {
+	for _, tc := range []struct {
+		inputCount int
+		complete   bool
+	}{{openAIWSDeltaChainMaxBaseline, true}, {openAIWSDeltaChainMaxBaseline + 1, true}, {openAIWSDeltaChainMaxBaseline, false}} {
+		t.Run(fmt.Sprintf("%d/complete=%v", tc.inputCount, tc.complete), func(t *testing.T) {
+			inputCount := tc.inputCount
+			cfg := &config.Config{}
+			cfg.Gateway.OpenAIWS.DeltaContextEnabled = true
+			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+			cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+			conn := &openAIWSCaptureConn{events: [][]byte{
+				[]byte(`{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[]}}`),
+				[]byte(`{"type":"response.completed","response":{"id":"resp_next","output":[]}}`),
+			}}
+			if !tc.complete {
+				conn.events = conn.events[:1]
+			}
+			pool := newOpenAIWSConnPool(cfg)
+			pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: conn})
+			defer pool.Close()
+			store := NewOpenAIWSStateStore(nil)
+			store.BindSessionDeltaChain(0, "scope", &openAIWSDeltaChainState{AccountID: 1, ResponseID: "resp_old", FieldsFP: "old-properties"}, time.Hour)
+			svc := &OpenAIGatewayService{cfg: cfg, openaiWSPool: pool, openaiWSStateStore: store, toolCorrector: NewCodexToolCorrector()}
+			account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+			input := make([]any, inputCount)
+			for i := range input {
+				input[i] = map[string]any{"type": "message", "role": "user", "content": fmt.Sprint(i)}
+			}
+			payload := map[string]any{"model": "gpt-5.1", "input": input, "store": false}
+			raw, err := json.Marshal(payload)
+			require.NoError(t, err)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			c.Request.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+			c.Request.Header.Set("tracestate", "vendor=value")
+			_, err = svc.forwardOpenAIWSV2(context.Background(), c, account, payload, raw, "", "scope", "token", OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2}, false, false, "gpt-5.1", "gpt-5.1", time.Now(), 1, "", nil)
+			if tc.complete {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			_, ok := store.GetSessionDeltaChain(0, "scope")
+			require.False(t, ok, "both input overflow and input+output overflow must delete the old chain")
+			require.Len(t, conn.writes, 1)
+			frame := requestToJSONString(conn.writes[0])
+			require.False(t, gjson.Get(frame, "previous_response_id").Exists())
+			require.Equal(t, int64(inputCount), gjson.Get(frame, "input.#").Int())
+			require.Equal(t, c.GetHeader("traceparent"), gjson.Get(frame, "client_metadata.ws_request_header_traceparent").String())
+			require.Equal(t, "vendor=value", gjson.Get(frame, "client_metadata.ws_request_header_tracestate").String())
+		})
 	}
 }
 

@@ -2567,8 +2567,9 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 		payload["store"] = false
 	}
 
-	// All accounts require instructions for Responses API
-	payload["instructions"] = openai.DefaultInstructions
+	if !isOAuth {
+		payload["instructions"] = openai.DefaultInstructions
+	}
 
 	return payload
 }

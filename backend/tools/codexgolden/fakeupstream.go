@@ -36,6 +36,8 @@ type scenario struct {
 	// has refreshed its token against POST /oauth/token, so the recording
 	// includes the unauthorized-recovery refresh request.
 	UnauthorizedUntilRefresh bool
+	// Compaction forces the CLI's auto-compaction threshold after a tool turn.
+	Compaction bool
 }
 
 // headerKV preserves the exact wire name casing and order.
@@ -94,6 +96,7 @@ type fakeUpstream struct {
 	seq      int
 	connSeq  atomic.Int64
 	respSeq  atomic.Int64
+	toolSent atomic.Bool
 	wg       sync.WaitGroup
 	// refreshedAccess is the access token issued by /oauth/token.
 	refreshedAccess atomic.Value
@@ -217,6 +220,10 @@ func (f *fakeUpstream) handleConn(c net.Conn, connID int) {
 			f.add(record{Conn: connID, ConnReq: reqIdx, Kind: "ws_handshake", Method: method, Target: target, Proto: proto, Headers: headers})
 			if f.scenario.RejectWebSocket {
 				_, _ = io.WriteString(c, "HTTP/1.1 426 Upgrade Required\r\ncontent-length: 0\r\n\r\n")
+				continue
+			}
+			if f.scenario.UnauthorizedUntilRefresh && !f.authorizedAfterRefresh(get("authorization")) {
+				writeJSONResponse(c, 401, []byte(`{"error":{"message":"token expired","type":"invalid_request_error","code":"token_expired"}}`))
 				continue
 			}
 			f.serveWebSocket(c, br, connID, get("sec-websocket-key"), get("sec-websocket-extensions"))
@@ -414,13 +421,26 @@ func (f *fakeUpstream) scriptedEvents(body []byte) []map[string]any {
 	if req.Generate != nil && !*req.Generate {
 		return []map[string]any{created, completed}
 	}
+	compaction := false
+	for _, item := range req.Input {
+		if item["type"] == "compaction_trigger" {
+			compaction = true
+		}
+	}
+	if compaction {
+		item := map[string]any{"type": "compaction", "id": "cmp_golden_" + id, "encrypted_content": "golden-compaction"}
+		return []map[string]any{created,
+			{"type": "response.output_item.added", "output_index": 0, "item": item},
+			{"type": "response.output_item.done", "output_index": 0, "item": item},
+			completed}
+	}
 	hasToolOutput := false
 	for _, item := range req.Input {
 		if t, _ := item["type"].(string); t == "function_call_output" {
 			hasToolOutput = true
 		}
 	}
-	if f.scenario.ToolLoop && !hasToolOutput {
+	if f.scenario.ToolLoop && !hasToolOutput && f.toolSent.CompareAndSwap(false, true) {
 		call := map[string]any{
 			"type": "function_call", "id": "fc_golden_" + id, "call_id": "call_golden_" + id,
 			"name": "exec_command", "arguments": `{"cmd":"echo golden"}`, "status": "completed",

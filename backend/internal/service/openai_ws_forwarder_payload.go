@@ -207,6 +207,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	// 管理员显式配置传入（上面写进 headers 的值只在强制统一被关闭时才参与配对）。
 	if account != nil && account.UsesOpenAICodexProtocol() {
 		enforceCodexIdentityHeadersWithUA(headers, s.codexIdentityOverrideUA(account))
+		s.applyCodexSessionIdentity(c, account, nil, headers)
 		restoreOpenAICodexTicketIdentity(c, headers)
 	}
 

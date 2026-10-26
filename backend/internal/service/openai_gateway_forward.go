@@ -141,6 +141,9 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
+	restoreClientSession := stageCodexHTTPClientSession(c, account, body)
+	defer restoreClientSession()
+	s.codexWireProfileForRequest(c, account, body)
 	startTime := time.Now()
 	body, stripErr := StripOpenAIImageGenerationToolsForGroup(apiKeyGroup(getAPIKeyFromContext(c)), body)
 	if stripErr != nil {
@@ -160,6 +163,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	// 请求体里的 client_metadata / prompt_cache_key，用改写后的值取键会让不同会话
 	// 落到同一个键，也会与 WS 接入路径按原始报文算出的键对不上。
 	wsExecutionScope, _ := resolveOpenAIWSExecutionScope(c, body, apiKeyID)
+	wsSessionScope := resolveOpenAIWSSessionScope(c, account, body)
+	if wsSessionScope.Ephemeral {
+		defer s.clearOpenAIWSSessionDisabled(wsSessionScope)
+	}
 	logCodexCLIOnlyDetection(ctx, c, account, apiKeyID, restrictionResult, body)
 	if restrictionResult.Enabled && !restrictionResult.Matched {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
@@ -253,11 +260,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		// The compact endpoint is unary HTTP, not a WS response.create turn.
 		wsDecision = openAIWSHTTPDecision("compact_http")
 	}
-	if disabledReason := s.openAIWSSessionDisabledReason(account.ID); disabledReason != "" &&
+	if disabledReason := s.openAIWSSessionDisabledReason(wsSessionScope); disabledReason != "" &&
 		(wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocket ||
 			wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2) {
-		// 官方 Codex disable_websockets 语义：该账号 WS 已因能力信号或重试
-		// 预算耗尽被会话级禁用，本请求直接走 HTTP；TTL 到期清除后重探。
+		// A transport fallback lasts for this isolated logical session.
 		wsDecision = openAIWSHTTPDecision("ws_session_disabled:" + disabledReason)
 		logOpenAIWSModeInfo(
 			"ws_session_disabled_skip account_id=%d reason=%s",
@@ -698,7 +704,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		var requestWireProfile codexWireProfile
 		var wireProfilePtr *codexWireProfile
 		if isCodexOAuthAccount(account) {
-			requestWireProfile, _ = codexWireProfileForAccount(account, s.cfg)
+			requestWireProfile, _ = s.codexWireProfileForRequest(c, account, body)
 			wireProfilePtr = &requestWireProfile
 		}
 		if isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() && !isCompactRequest {
@@ -719,7 +725,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				ResponsesLite:  responsesLite,
 				IsCompact:      isCompactRequest,
 				WireProfile:    requestWireProfile,
-				WireVersion:    CodexCanonicalClientVersion(),
+				WireVersion:    s.codexSessionClientVersion(c, account, body),
 				Device:         deviceProfile,
 				Now:            time.Now(),
 				Strict:         s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
@@ -807,6 +813,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		if currentClientPromptCacheKey, ok := decoded["prompt_cache_key"].(string); ok {
 			clientPromptCacheKey = currentClientPromptCacheKey
 		}
+		if isCodexOAuthAccount(account) && !isCompactRequest && !fingerprintPreResolved {
+			attemptFingerprintIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, nil, decoded)
+			fingerprintPreResolved = true
+		}
 		// Account namespace is orthogonal to fingerprint convergence: preserve
 		// each client's identity cardinality, but never reuse it across OAuth
 		// credentials after scheduler failover.
@@ -826,9 +836,6 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				fpIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, decoded)
 			}
 			if fpIDs != nil {
-				if compatMessagesBridge {
-					fpIDs.promptCacheKeyPolicy = codexPromptCacheKeyOmit
-				}
 				if applyCodexFingerprintClientMetadata(decoded, fpIDs) {
 					markDecodedModified()
 				}
@@ -1117,10 +1124,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 					if store := s.getOpenAIWSStateStore(); store != nil {
 						scope := strings.TrimSpace(wsExecutionScope)
 						if scope == "" {
-							scope = s.GenerateSessionHash(c, nil)
-						}
-						if scope == "" && clientPromptCacheKey != "" {
-							scope, _ = openAIWSSessionHashesFromID(clientPromptCacheKey)
+							scope = openAIWSLocalStateScope(c, apiKeyID)
 						}
 						if scope != "" {
 							store.DeleteSessionDeltaChain(lineageGroupID, scope)
@@ -1242,10 +1246,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 			// previous_response_not_found 说明续链锚点不可用：
 			// 对非 function_call_output 场景，允许一次“去掉 previous_response_id 后重放”。
-			if reason == "previous_response_not_found" && recoverPrevResponseNotFound(attempt) {
+			if strings.TrimPrefix(reason, "prewarm_") == "previous_response_not_found" && recoverPrevResponseNotFound(attempt) {
 				continue
 			}
-			if reason == "invalid_encrypted_content" && recoverInvalidEncryptedContent(attempt) {
+			if strings.TrimPrefix(reason, "prewarm_") == "invalid_encrypted_content" && recoverInvalidEncryptedContent(attempt) {
 				continue
 			}
 			if retryable && attempt < maxAttempts {
@@ -1307,8 +1311,6 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			break
 		}
 		if wsErr == nil {
-			// WS 成功即清除遗留的会话级禁用标记（重探成功）。
-			s.clearOpenAIWSSessionDisabled(account.ID)
 			firstTokenMs := int64(0)
 			hasFirstTokenMs := wsResult != nil && wsResult.FirstTokenMs != nil
 			if hasFirstTokenMs {
@@ -1347,7 +1349,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		if !cookieWS && s.openAIWSSessionDisableEnabled() {
 			action := openAIWSSessionFallbackActionFor(openAIWSSessionFallbackReason(wsErr))
 			if action.markDisable {
-				s.markOpenAIWSSessionDisabled(account.ID, action.reason, action.capability)
+				s.markOpenAIWSSessionDisabled(wsSessionScope, action.reason)
 			}
 			if action.fallbackHTTP && !openAIStreamClientOutputStarted(c, false) {
 				if marshaled, marshalErr := marshalOpenAIUpstreamJSON(wsReqBody); marshalErr == nil {
@@ -1919,6 +1921,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 客户端自报身份不参与构造，浏览器型 UA 也因此不会再到达上游（原浏览器 UA 兜底已被吸收）。
 	if account.UsesOpenAICodexProtocol() {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		s.applyCodexSessionIdentity(c, account, body, req.Header)
 		restoreOpenAICodexTicketIdentity(c, req.Header)
 	}
 
@@ -1944,6 +1947,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	body, err = applyCodexRequestMetadata(req, body, account, legacyCompactRequest)
 	if err != nil {
 		return nil, err
+	}
+	if !legacyCompactRequest {
+		body, err = applyCodexHTTPWireMetadata(req, body, account)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// HTTP 顶层字段按官方 ResponsesApiRequest 声明序输出；合成路径原本是
 	// Go map 的字母序，必须收口，否则上游可逐字节识别。

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const goldenDir = "testdata/golden/0.163.0"
+const goldenDir = "testdata/golden"
 
 type goldenRecord struct {
 	Kind    string `json:"kind"`
@@ -28,9 +28,9 @@ type goldenRecord struct {
 	BodyJSON     json.RawMessage `json:"body_json"`
 }
 
-func loadGolden(t *testing.T, name string) []goldenRecord {
+func loadGolden(t *testing.T, version, name string) []goldenRecord {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(goldenDir, name))
+	data, err := os.ReadFile(filepath.Join(goldenDir, version, name))
 	if err != nil {
 		t.Fatalf("read golden %s: %v", name, err)
 	}
@@ -67,8 +67,15 @@ outer:
 // /responses header set through the h1 writer and requires byte-identical
 // name order and casing, including hyper's trailing host/content-length.
 func TestGolden_HTTPResponsesHeaderOrder(t *testing.T) {
+	for _, version := range []string{"0.163.0", "0.164.0"} {
+		t.Run(version, func(t *testing.T) { testGoldenHTTPResponsesHeaderOrder(t, version) })
+	}
+}
+
+func testGoldenHTTPResponsesHeaderOrder(t *testing.T, version string) {
+	t.Helper()
 	var checked int
-	for _, rec := range loadGolden(t, "http_fallback_tool_loop.jsonl") {
+	for _, rec := range loadGolden(t, version, "http_fallback_tool_loop.jsonl") {
 		if rec.Kind != "http_request" || !strings.HasSuffix(rec.Target, "/codex/responses") {
 			continue
 		}
@@ -125,8 +132,15 @@ func TestGolden_HTTPResponsesHeaderOrder(t *testing.T) {
 // TestGolden_WSHandshakeHeaderOrder replays the captured WS handshake headers
 // through the upgrade builder.
 func TestGolden_WSHandshakeHeaderOrder(t *testing.T) {
+	for _, version := range []string{"0.163.0", "0.164.0"} {
+		t.Run(version, func(t *testing.T) { testGoldenWSHandshakeHeaderOrder(t, version) })
+	}
+}
+
+func testGoldenWSHandshakeHeaderOrder(t *testing.T, version string) {
+	t.Helper()
 	var checked int
-	for _, rec := range loadGolden(t, "ws_tool_loop.jsonl") {
+	for _, rec := range loadGolden(t, version, "ws_tool_loop.jsonl") {
 		if rec.Kind != "ws_handshake" {
 			continue
 		}

@@ -2,10 +2,11 @@ package service
 
 import (
 	"bytes"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,13 +16,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/tidwall/gjson"
 )
-
-// codexOfficialTools0163JSON is the official tool array captured from
-// codex-cli 0.163.0 (backend/tools/codexgolden, http_fallback_tool_loop).
-// It is the schema source for synthesized compatible clients.
-//
-//go:embed codex_official_tools_0_163.json
-var codexOfficialTools0163JSON []byte
 
 type codexCapability string
 
@@ -39,15 +33,15 @@ type codexSynthOptions struct {
 	WireProfile   codexWireProfile
 	WireVersion   string
 	Device        codexDeviceProfile
+	// Environment contains only explicitly configured downstream facts, never
+	// the defaults used to construct the outbound device identity.
+	Environment   codexDeviceProfile
 	TurnID        string
 	TurnStartedMs int64
 	Now           time.Time
 	Strict        bool
-	// OfficialClient reports that the inbound User-Agent/originator belongs to
-	// an official Codex client. Such clients already build the full Codex
-	// request themselves; with a custom model_provider (is_openai()==false)
-	// they strip internal_chat_message_metadata_passthrough, so the
-	// model.base_instructions marker alone cannot identify them.
+	// OfficialClient is a prompt-preservation hint, not tool capability
+	// evidence. Custom Codex providers can omit base-instruction metadata.
 	OfficialClient bool
 }
 
@@ -85,81 +79,7 @@ type codexSynthContextLimits struct {
 	Hard       int
 }
 
-var (
-	codexOfficialToolsOnce sync.Once
-	codexOfficialToolIndex map[string]map[string]any
-
-	codexSynthDescriptorWarned sync.Map
-)
-
-func loadCodexOfficialTools() {
-	codexOfficialToolsOnce.Do(func() {
-		var tools []map[string]any
-		if err := json.Unmarshal(codexOfficialTools0163JSON, &tools); err != nil {
-			codexOfficialToolIndex = map[string]map[string]any{}
-			return
-		}
-		index := make(map[string]map[string]any, len(tools))
-		for _, tool := range tools {
-			if name, _ := tool["name"].(string); name != "" {
-				index[name] = tool
-			}
-		}
-		codexOfficialToolIndex = index
-	})
-}
-
-// codexOfficialToolAliases maps client-declared names onto the official tool
-// name. Only client-executed core tools are covered; hosted tools are never
-// renamed.
-var codexOfficialToolAliases = map[string]string{
-	"exec_command":                "exec_command",
-	"shell":                       "exec_command",
-	"run_shell":                   "exec_command",
-	"bash":                        "exec_command",
-	"terminal":                    "exec_command",
-	"local_shell":                 "exec_command",
-	"apply_patch":                 "apply_patch",
-	"edit":                        "apply_patch",
-	"str_replace_editor":          "apply_patch",
-	"str_replace_based_edit_tool": "apply_patch",
-	"view_image":                  "view_image",
-	"update_plan":                 "update_plan",
-	"todo_write":                  "update_plan",
-	"todowrite":                   "update_plan",
-	"plan":                        "update_plan",
-}
-
-var codexCoreOfficialToolNames = []string{
-	"exec_command", "write_stdin", "apply_patch", "view_image", "update_plan",
-}
-
-var codexUpdatePlanTool = map[string]any{
-	"type":        "function",
-	"name":        "update_plan",
-	"description": "Updates the task plan. Provide an optional explanation and a list of plan items, each with a step and status. At most one step can be in_progress at a time.",
-	"strict":      false,
-	"parameters": map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"explanation": map[string]any{"type": "string"},
-			"plan": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"step":   map[string]any{"type": "string"},
-						"status": map[string]any{"type": "string", "enum": []any{"pending", "in_progress", "completed"}},
-					},
-					"required":             []any{"step", "status"},
-					"additionalProperties": false,
-				},
-			},
-		},
-		"required":             []any{"plan"},
-		"additionalProperties": false,
-	},
-}
+var codexSynthDescriptorWarned sync.Map
 
 // codexRequestSynthesizer rebuilds a non-native request into the Codex CLI
 // request shape. It must only be called for isCodexOAuthAccount accounts.
@@ -206,6 +126,7 @@ func synthesizeCodexOAuthRequest(reqBody map[string]any, account *Account, upstr
 		return result, fmt.Errorf("codex synthesis: empty base instructions for model %q", upstreamModel)
 	}
 
+	opts.Environment = codexSynthesisConfiguredEnvironment(account, reqBody)
 	original, _ := codexSynthesisCollectOriginalInput(reqBody)
 	prefix, skillsItem := codexSynthesisPrefixItems(descriptor, hasDescriptor, capability, baseInstructions, opts)
 	input := make([]any, 0, len(prefix)+len(original))
@@ -237,30 +158,28 @@ func synthesizeCodexOAuthRequest(reqBody map[string]any, account *Account, upstr
 }
 
 func classifyCodexCapability(reqBody map[string]any, account *Account, officialClient bool) codexCapability {
-	// Official clients already send their own base prompt (possibly without
-	// the marker), and isCodexBaseInstructionsItem cannot strip an unmarked
-	// one, so even a forced "compatible" account would double the prompt.
-	if officialClient {
-		return codexCapabilityNative
-	}
-	switch strings.ToLower(strings.TrimSpace(account.GetExtraString(codexClientCapabilityExtraKey))) {
-	case string(codexCapabilityNative):
-		return codexCapabilityNative
-	case string(codexCapabilityCompatible):
-		return codexCapabilityCompatible
-	}
+	// An existing base prompt always wins over account defaults. This only
+	// controls prompt synthesis; it never grants an undeclared tool executor.
 	if codexInputMapCarriesBaseInstructions(reqBody) {
 		return codexCapabilityNative
 	}
-	declaresOfficialTool := false
-	for _, name := range codexSynthesisToolNames(reqBody) {
-		if _, ok := codexOfficialToolAliases[strings.ToLower(strings.TrimSpace(name))]; ok {
-			declaresOfficialTool = true
-			break
+	if officialClient {
+		if instructions, _ := reqBody["instructions"].(string); strings.TrimSpace(instructions) != "" {
+			return codexCapabilityNative
+		}
+		if input, _ := reqBody["input"].([]any); len(input) > 0 {
+			if first, ok := decodeCodexSynthItem(input[0]); ok && first["role"] == "developer" && first["type"] != openAIAdditionalToolsItemType {
+				return codexCapabilityNative
+			}
 		}
 	}
-	if declaresOfficialTool {
-		return codexCapabilityCompatible
+	if account != nil {
+		switch strings.ToLower(strings.TrimSpace(account.GetExtraString(codexClientCapabilityExtraKey))) {
+		case string(codexCapabilityNative):
+			return codexCapabilityNative
+		case string(codexCapabilityCompatible):
+			return codexCapabilityCompatible
+		}
 	}
 	return codexCapabilityGeneric
 }
@@ -311,8 +230,7 @@ func codexSynthesisCollectOriginalInput(reqBody map[string]any) ([]any, bool) {
 		delete(reqBody, "instructions")
 		if trimmed := strings.TrimSpace(raw); trimmed != "" {
 			hadInstructions = true
-			// Keep the client's own system prompt after the synthesized context
-			// (position 5 of the documented order) instead of dropping it.
+			// Keep the client's own system prompt after the synthesized context.
 			out = append(out, map[string]any{
 				"type":    "message",
 				"role":    "developer",
@@ -373,7 +291,6 @@ func codexSynthesisPrefixItems(
 	baseInstructions string,
 	opts codexSynthOptions,
 ) ([]any, json.RawMessage) {
-	device := opts.Device
 	baseItem := codexSynthMessageRaw(
 		codexWSInstructionsItemID(baseInstructions),
 		"developer",
@@ -383,45 +300,36 @@ func codexSynthesisPrefixItems(
 		0,
 	)
 
-	permissionsText := codexSynthesisPermissionsText(device)
-	permissionsItem := codexSynthMessageRaw(
-		codexSynthItemID("permissions", permissionsText),
-		"developer",
-		[]string{permissionsText},
-		[]string{"permissions.instructions"},
-		opts.TurnID,
-		codexSynthCreateTime(opts.TurnStartedMs, 1),
-	)
-
-	var skillsItem json.RawMessage
-	if capability == codexCapabilityCompatible {
-		skillsText := codexSynthesisSkillsText()
-		skillsItem = codexSynthMessageRaw(
-			codexSynthItemID("skills", skillsText),
+	prefix := []any{baseItem}
+	if capability != codexCapabilityNative {
+		// Model base prompts can mention official CLI tools even when the
+		// downstream has no such executor. Actual declarations are authoritative.
+		text := "Use only the tools declared for this request, with their exact names and schemas. References to other tools in the base instructions do not make those tools available. Do not infer local tools, skills, shell access, filesystem paths, network access, or approval permissions unless the client declares them or explicit environment configuration supplies them."
+		prefix = append(prefix, codexSynthMessageRaw(
+			codexSynthItemID("capabilities", text), "developer", []string{text}, nil, opts.TurnID, 0,
+		))
+	}
+	if text := codexSynthesisPermissionsText(opts.Environment); text != "" {
+		prefix = append(prefix, codexSynthMessageRaw(
+			codexSynthItemID("permissions", text),
 			"developer",
-			[]string{skillsText},
-			[]string{"host_skills.instructions", "permissions.instructions"},
+			[]string{text},
+			[]string{"permissions.instructions"},
 			opts.TurnID,
-			codexSynthCreateTime(opts.TurnStartedMs, 2),
-		)
+			codexSynthCreateTime(opts.TurnStartedMs, 1),
+		))
 	}
-
-	environmentText := codexSynthesisEnvironmentText(device, opts.Now)
-	environmentItem := codexSynthMessageRaw(
-		codexSynthItemID("environment", environmentText),
-		"user",
-		[]string{environmentText},
-		[]string{"environments.environment_context"},
-		opts.TurnID,
-		codexSynthCreateTime(opts.TurnStartedMs, 3),
-	)
-
-	prefix := []any{baseItem, permissionsItem}
-	if skillsItem != nil {
-		prefix = append(prefix, skillsItem)
+	if text := codexSynthesisEnvironmentText(opts.Environment, opts.Now); text != "" {
+		prefix = append(prefix, codexSynthMessageRaw(
+			codexSynthItemID("environment", text),
+			"user",
+			[]string{text},
+			[]string{"environments.environment_context"},
+			opts.TurnID,
+			codexSynthCreateTime(opts.TurnStartedMs, 3),
+		))
 	}
-	prefix = append(prefix, environmentItem)
-	return prefix, skillsItem
+	return prefix, nil
 }
 
 func removeCodexSynthItem(items []any, target json.RawMessage) []any {
@@ -594,63 +502,83 @@ func codexCatalogDefaultReasoningLevel(descriptor openai.CodexCatalogModel) stri
 	return strings.TrimSpace(*descriptor.DefaultReasoningLevel)
 }
 
-func codexSynthesisPermissionsText(device codexDeviceProfile) string {
-	mode := strings.TrimSpace(device.SandboxMode)
-	var body string
-	switch mode {
-	case "read-only":
-		body = "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
-	case "danger-full-access":
-		body = "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled."
-	default:
-		body = "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
+// codexSynthesisConfiguredEnvironment reads explicit downstream facts. Device
+// identity defaults describe the outbound connection, not a client's executor.
+func codexSynthesisConfiguredEnvironment(account *Account, reqBody map[string]any) codexDeviceProfile {
+	if !isCodexOAuthAccount(account) {
+		return codexDeviceProfile{}
 	}
-	return "<permissions instructions>\n" + body +
-		"\nApproval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.\n</permissions instructions>"
-}
-
-func codexSynthesisSkillsText() string {
-	return `<skills_instructions>
-## Skills
-A skill is a set of local instructions to follow that is stored in a ` + "`SKILL.md`" + ` file. Below is the list of skills that can be used. Each entry includes a name and a description.
-### Available skills
-- imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector.
-- openai-docs: Use for Codex models, pricing, scheduled tasks, skills, settings, setup, troubleshooting, customization, automations, and self-knowledge, and for OpenAI APIs and products.
-- skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources.
-- skill-installer: Install Codex skills into ` + "`$CODEX_HOME/skills`" + ` from a curated list or a GitHub repo path.
-### How to use skills
-- Discovery: the list above is the skills available in this session.
-- Trigger rules: If the user names a skill or the task clearly matches a skill's description, use that skill for this turn. Do not carry skills across turns unless re-mentioned.
-- Missing/blocked: If a named skill is not available, say so briefly and continue with the best fallback.
-</skills_instructions>`
-}
-
-func codexSynthesisEnvironmentText(device codexDeviceProfile, now time.Time) string {
-	location := time.UTC
-	if name := strings.TrimSpace(device.Timezone); name != "" {
-		if loaded, err := time.LoadLocation(name); err == nil {
-			location = loaded
+	// Keep client-provided context authoritative, including unmarked context
+	// from custom Codex providers. Do not put a conflicting account default
+	// ahead of it, or interpret tool results as environment declarations.
+	texts := []string{firstNonEmptyString(reqBody["instructions"])}
+	if text, ok := reqBody["input"].(string); ok {
+		texts = append(texts, text)
+	}
+	input, _ := reqBody["input"].([]any)
+	for _, raw := range input {
+		item, ok := decodeCodexSynthItem(raw)
+		if !ok || (item["role"] != "developer" && item["role"] != "system" && item["role"] != "user") {
+			continue
+		}
+		if kind, _ := item["type"].(string); kind != "" && kind != "message" {
+			continue
+		}
+		meta, _ := item["internal_chat_message_metadata_passthrough"].(map[string]any)
+		kinds, _ := meta["content_item_kinds"].([]any)
+		for _, kind := range kinds {
+			if kind == "permissions.instructions" || kind == "environments.environment_context" {
+				return codexDeviceProfile{}
+			}
+		}
+		texts = append(texts, extractTextFromContent(item["content"]))
+	}
+	for _, text := range texts {
+		if strings.Contains(text, "<environment_context") || strings.Contains(text, "<permissions instructions>") {
+			return codexDeviceProfile{}
 		}
 	}
-	timezone := strings.TrimSpace(device.Timezone)
-	if timezone == "" {
-		timezone = codexDefaultTimezone
+	var environment codexDeviceProfile
+	if cwd := strings.TrimSpace(account.GetExtraString(codexWorkspaceCWDExtraKey)); strings.HasPrefix(cwd, "/") && !strings.Contains(cwd, "..") && filepath.Clean(cwd) == cwd {
+		environment.WorkspaceCWD = cwd
 	}
-	access := "write"
-	if strings.TrimSpace(device.SandboxMode) == "read-only" {
-		access = "read"
+	switch mode := strings.TrimSpace(account.GetExtraString(codexSandboxModeExtraKey)); mode {
+	case "read-only", "workspace-write", "danger-full-access":
+		environment.SandboxMode = mode
 	}
-	cwd := strings.TrimSpace(device.WorkspaceCWD)
-	if cwd == "" {
-		cwd = codexDefaultWorkspaceCWD
+	if timezone := strings.TrimSpace(account.GetExtraString(codexTimezoneExtraKey)); timezone != "" {
+		if _, err := time.LoadLocation(timezone); err == nil {
+			environment.Timezone = timezone
+		}
 	}
-	return fmt.Sprintf(`<environment_context>
-  <cwd>%s</cwd>
-  <shell>bash</shell>
-  <current_date>%s</current_date>
-  <timezone>%s</timezone>
-  <filesystem><workspace_roots><root>%s</root></workspace_roots><permission_profile type="managed"><file_system type="restricted"><entry access="%s"><special>:root</special></entry></file_system></permission_profile></filesystem>
-</environment_context>`, cwd, now.In(location).Format("2006-01-02"), timezone, cwd, access)
+	return environment
+}
+
+func codexSynthesisPermissionsText(environment codexDeviceProfile) string {
+	switch environment.SandboxMode {
+	case "read-only", "workspace-write", "danger-full-access":
+		// A sandbox mode alone does not specify shell, network, approval policy,
+		// or writable roots. Leave those to the downstream's own declarations.
+		return "<permissions instructions>\nThe downstream filesystem sandbox mode is `" + environment.SandboxMode + "`.\n</permissions instructions>"
+	default:
+		return ""
+	}
+}
+
+func codexSynthesisEnvironmentText(environment codexDeviceProfile, now time.Time) string {
+	var fields []string
+	if cwd := strings.TrimSpace(environment.WorkspaceCWD); cwd != "" {
+		fields = append(fields, "  <cwd>"+html.EscapeString(cwd)+"</cwd>")
+	}
+	if timezone := strings.TrimSpace(environment.Timezone); timezone != "" {
+		if location, err := time.LoadLocation(timezone); err == nil {
+			fields = append(fields, "  <current_date>"+now.In(location).Format("2006-01-02")+"</current_date>", "  <timezone>"+html.EscapeString(timezone)+"</timezone>")
+		}
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	return "<environment_context>\n" + strings.Join(fields, "\n") + "\n</environment_context>"
 }
 
 func codexSynthCreateTime(turnStartedMs int64, ordinal int) float64 {
@@ -713,40 +641,10 @@ func codexSynthMessageRaw(id, role string, texts, kinds []string, turnID string,
 	return json.RawMessage(escapeCodexNonASCII(buf.Bytes()))
 }
 
-func codexSynthesisToolNames(reqBody map[string]any) []string {
-	names := make([]string, 0, 8)
-	var collect func(raw any)
-	collect = func(raw any) {
-		tools, _ := raw.([]any)
-		for _, rawTool := range tools {
-			tool, ok := rawTool.(map[string]any)
-			if !ok {
-				continue
-			}
-			if name, _ := tool["name"].(string); strings.TrimSpace(name) != "" {
-				names = append(names, name)
-			}
-			if nested, ok := tool["tools"].([]any); ok {
-				collect(nested)
-			}
-		}
-	}
-	collect(reqBody["tools"])
-	if input, ok := reqBody["input"].([]any); ok {
-		for _, raw := range input {
-			item, ok := raw.(map[string]any)
-			if !ok || item["type"] != openAIAdditionalToolsItemType {
-				continue
-			}
-			collect(item["tools"])
-		}
-	}
-	return names
-}
-
-// codexSynthesisPrepareTools aliases client tool names and injects the core
-// official tool set for compatible clients. Generic clients keep their tools
-// and only receive the hosted web_search declaration.
+// codexSynthesisPrepareTools preserves downstream tool contracts. Official
+// names require both argument and result adapters, not just a reverse name
+// map. Reserved-name escaping remains in the OAuth transform, which restores
+// those names on responses without changing their schemas or execution model.
 func codexSynthesisPrepareTools(
 	reqBody map[string]any,
 	descriptor openai.CodexCatalogModel,
@@ -754,107 +652,12 @@ func codexSynthesisPrepareTools(
 	capability codexCapability,
 	responsesLite bool,
 ) map[string]string {
-	loadCodexOfficialTools()
-	reverse := map[string]string{}
-	if capability == codexCapabilityGeneric {
-		if codexSynthesisToolChoiceNone(reqBody) {
-			return reverse
-		}
-		if !codexSynthesisHasToolType(reqBody, "web_search") && codexDescriptorSupportsWebSearch(descriptor, hasDescriptor) {
-			codexSynthesisAppendTools(reqBody, []any{map[string]any{"type": "web_search"}}, responsesLite)
-		}
-		return reverse
+	if capability == codexCapabilityGeneric && !codexSynthesisToolChoiceNone(reqBody) &&
+		!codexSynthesisHasToolType(reqBody, "web_search") && codexDescriptorSupportsWebSearch(descriptor, hasDescriptor) {
+		// Hosted search executes upstream and needs no downstream executor.
+		codexSynthesisAppendTools(reqBody, []any{map[string]any{"type": "web_search"}}, responsesLite)
 	}
-
-	// Compatible: rename client names to the official name (keeping the
-	// client's schema) and then fill missing core tools.
-	declared := map[string]struct{}{}
-	var aliasTools func(raw any)
-	aliasTools = func(raw any) {
-		tools, _ := raw.([]any)
-		for _, rawTool := range tools {
-			tool, ok := rawTool.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, _ := tool["name"].(string)
-			key := strings.ToLower(strings.TrimSpace(name))
-			if canonical, ok := codexOfficialToolAliases[key]; ok {
-				if name != canonical {
-					reverse[canonical] = name
-					tool["name"] = canonical
-				}
-				declared[canonical] = struct{}{}
-			}
-			if nested, ok := tool["tools"].([]any); ok {
-				aliasTools(nested)
-			}
-		}
-	}
-	aliasTools(reqBody["tools"])
-	if input, ok := reqBody["input"].([]any); ok {
-		for _, raw := range input {
-			item, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			if item["type"] == openAIAdditionalToolsItemType {
-				aliasTools(item["tools"])
-			}
-			// History may reference the client name; rewrite it so the upstream
-			// sees one consistent tool vocabulary.
-			if isCodexToolCallItemType(firstNonEmptyString(item["type"])) {
-				if name, _ := item["name"].(string); name != "" {
-					if canonical, ok := codexOfficialToolAliases[strings.ToLower(strings.TrimSpace(name))]; ok && canonical != name {
-						item["name"] = canonical
-					}
-				}
-			}
-		}
-	}
-	if choice, ok := reqBody["tool_choice"].(map[string]any); ok {
-		if name, _ := choice["name"].(string); name != "" {
-			if canonical, ok := codexOfficialToolAliases[strings.ToLower(strings.TrimSpace(name))]; ok {
-				choice["name"] = canonical
-			}
-		}
-	}
-	if choice, ok := reqBody["tool_choice"].(string); ok {
-		if canonical, exists := codexOfficialToolAliases[strings.ToLower(strings.TrimSpace(choice))]; exists {
-			reqBody["tool_choice"] = canonical
-		}
-	}
-
-	wanted := codexSynthesisWantedOfficialTools(descriptor, hasDescriptor)
-	missing := make([]any, 0, len(wanted))
-	for _, name := range wanted {
-		if _, ok := declared[name]; ok {
-			continue
-		}
-		if tool, ok := codexOfficialToolIndex[name]; ok {
-			missing = append(missing, deepCopyCodexMap(tool))
-			continue
-		}
-		if name == "update_plan" {
-			missing = append(missing, deepCopyCodexMap(codexUpdatePlanTool))
-		}
-	}
-	if len(missing) > 0 {
-		codexSynthesisAppendTools(reqBody, missing, responsesLite)
-	}
-	return reverse
-}
-
-func codexSynthesisWantedOfficialTools(descriptor openai.CodexCatalogModel, hasDescriptor bool) []string {
-	wanted := make([]string, 0, len(codexCoreOfficialToolNames))
-	if !hasDescriptor || descriptor.ShellType != "" && descriptor.ShellType != "disabled" {
-		wanted = append(wanted, "exec_command", "write_stdin")
-	}
-	if !hasDescriptor || descriptor.ApplyPatchToolType != nil {
-		wanted = append(wanted, "apply_patch")
-	}
-	wanted = append(wanted, "view_image", "update_plan")
-	return wanted
+	return nil
 }
 
 func codexDescriptorSupportsWebSearch(descriptor openai.CodexCatalogModel, hasDescriptor bool) bool {
@@ -949,19 +752,4 @@ func codexSynthesisApplyDefaults(reqBody map[string]any, descriptor openai.Codex
 	if opts.WireProfile.PromptCacheKeyPolicy == codexPromptCacheKeyOmit {
 		delete(reqBody, "prompt_cache_key")
 	}
-}
-
-func deepCopyCodexMap(in map[string]any) map[string]any {
-	if in == nil {
-		return nil
-	}
-	raw, err := json.Marshal(in)
-	if err != nil {
-		return in
-	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return in
-	}
-	return out
 }

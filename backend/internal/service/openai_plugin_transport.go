@@ -136,13 +136,17 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxy
 			return response, err
 		}
 	}
-	// codex lane：官方客户端走 rustls TLS 栈，启用指纹时用 rustls profile；
-	// 账号显式配置的指纹优先（tls_fingerprint_builtin / profile_id）。
-	if account != nil && account.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
-		profile := s.resolveCodexHTTPSTLSProfile(account)
-		return s.httpUpstream.DoWithTLS(WithAccountTrafficRequest(request, account), proxyURL, account.ID, account.Concurrency, profile)
+	return s.doOpenAIHTTPTransport(WithAccountTrafficRequest(request, account), proxyURL, account, account)
+}
+
+func (s *OpenAIGatewayService) doOpenAIHTTPTransport(request *http.Request, proxyURL string, account, credentialAccount *Account) (*http.Response, error) {
+	// Resolve the HTTP lane from the credential owner's profile. Routing and
+	// concurrency still belong to the selected account, including shadows.
+	if credentialAccount != nil && credentialAccount.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
+		profile := s.resolveCodexHTTPSTLSProfile(credentialAccount)
+		return s.httpUpstream.DoWithTLS(request, proxyURL, account.ID, account.Concurrency, profile)
 	}
-	return s.httpUpstream.Do(WithAccountTrafficRequest(request, account), proxyURL, account.ID, account.Concurrency)
+	return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
 }
 
 // resolveCodexHTTPSTLSProfile 为 codex lane 的 HTTP 请求解析 TLS 指纹。
@@ -180,14 +184,23 @@ func (s *OpenAIGatewayService) isCodexHTTPH2Enabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.CodexHTTPH2Enabled
 }
 
-// doOpenAIAccountTestUpstream 让 OpenAI OAuth 账号测试与真实转发使用同一插件路径。
-// API Key 和未命中插件的账号保持各自原有的 HTTPUpstream 行为。
+// doOpenAIAccountTestUpstream shares Codex request preparation and HTTP transport
+// for OAuth-like tests while retaining each API-key endpoint's own contract.
 func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	request *http.Request,
 	proxyURL string,
 	account *Account,
 	useTLSFallback bool,
 ) (*http.Response, error) {
+	if account.IsOpenAI() && account.IsOpenAIOAuthLike() {
+		// Keep the current sender/repository: intelligent tests wrap both to
+		// capture the response and suppress account-policy writes.
+		gateway := &OpenAIGatewayService{
+			cfg: codexProbeConfig(s.cfg), httpUpstream: s.httpUpstream,
+			accountRepo: s.accountRepo, pluginManager: s.pluginManager,
+		}
+		return gateway.doOpenAICodexProbe(WithAccountTrafficRequest(request, account), proxyURL, account)
+	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {

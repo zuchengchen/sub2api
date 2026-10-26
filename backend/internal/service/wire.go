@@ -231,6 +231,7 @@ func ProvideAccountUsageService(
 	service.agentIdentityWS = openAIGatewayService
 	service.SetOpenAI429RecoveryScheduler(rateLimitService)
 	service.SetOpenAICreditsGuard(openAIGatewayService)
+	service.SetOpenAICodexProbeSender(openAIGatewayService)
 	return service
 }
 

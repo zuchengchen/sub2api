@@ -2,11 +2,9 @@ package service
 
 import (
 	"errors"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
 
@@ -17,34 +15,11 @@ var errOpenAITiboAccountUnavailable = errors.New("tibo account is unavailable")
 
 func openAITiboProbePayload() map[string]any {
 	return map[string]any{
-		"model": openAICodexTicketDefaultModel, "store": false, "instructions": "",
+		"model": openAICodexTicketDefaultModel, "store": false,
 		"stream": true, "reasoning": map[string]any{"effort": "low"},
 		"include": []string{"reasoning.encrypted_content"},
 		"input":   []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": openAITiboProbePrompt}}}},
 	}
-}
-
-func applyOpenAITiboProbeIdentity(h http.Header) {
-	if h == nil {
-		return
-	}
-	version := "0.156.1"
-	if canonical := CodexCanonicalClientVersion(); CompareVersions(canonical, version) > 0 {
-		version = canonical
-	}
-	threadID := uuid.NewString()
-	for _, key := range []string{"session-id", "conversation_id", "x-codex-turn-metadata", "x-codex-parent-thread-id"} {
-		h.Del(key)
-	}
-	h.Set("version", version)
-	h.Set("user-agent", "codex_cli_rs/"+version+" (Mac OS 15.5.0; arm64) xterm-256color")
-	h.Set("originator", "codex_cli_rs")
-	h.Set("x-codex-installation-id", uuid.NewString())
-	h.Set("x-codex-window-id", uuid.NewString())
-	h.Set("session_id", uuid.NewString())
-	h.Set("thread-id", threadID)
-	h.Set("x-client-request-id", threadID)
-	h.Set("x-codex-routing-hint", "model="+openAICodexTicketDefaultModel)
 }
 
 func openAICookieWSIsProbePayloadRaw(payload []byte) bool {

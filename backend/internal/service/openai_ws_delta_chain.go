@@ -96,6 +96,9 @@ func resolveOpenAIWSDelta(chain *openAIWSDeltaChainState, accountID int64, field
 	if chain == nil {
 		return openAIWSDeltaDecision{Reason: "no_chain"}
 	}
+	if len(chain.BaselineHashes) > openAIWSDeltaChainMaxBaseline || len(currentItems) > openAIWSDeltaChainMaxBaseline {
+		return openAIWSDeltaDecision{Reason: "baseline_too_large"}
+	}
 	if chain.AccountID != 0 && accountID != 0 && chain.AccountID != accountID {
 		return openAIWSDeltaDecision{Reason: "account_mismatch"}
 	}
@@ -128,6 +131,7 @@ type openAIWSDeltaRecorder struct {
 	itemsAddedHashes []string
 	responseID       string
 	completed        bool
+	overflow         bool
 }
 
 // observe 处理一条上游事件原始字节。
@@ -143,7 +147,11 @@ func (r *openAIWSDeltaRecorder) observe(message []byte) {
 			return
 		}
 		r.mu.Lock()
-		r.itemsAddedHashes = append(r.itemsAddedHashes, openAIWSDeltaItemHash(json.RawMessage(item.Raw)))
+		if len(r.itemsAddedHashes) >= openAIWSDeltaChainMaxBaseline {
+			r.overflow = true
+		} else {
+			r.itemsAddedHashes = append(r.itemsAddedHashes, openAIWSDeltaItemHash(json.RawMessage(item.Raw)))
+		}
 		r.mu.Unlock()
 	case "response.completed":
 		id := gjson.GetBytes(message, "response.id").String()
@@ -160,22 +168,24 @@ func (r *openAIWSDeltaRecorder) observe(message []byte) {
 }
 
 // finalize 用当前请求的逻辑 input 哈希与本回合收集到的 output item 哈希
-// 生成下一回合可用的链快照。未完成响应不更新链。
+// 生成下一回合可用的链快照。未完成响应不更新链；nil,true 要求删除旧链。
 func (r *openAIWSDeltaRecorder) finalize(accountID int64, fieldsFP string, logicalInputHashes []string, prev *openAIWSDeltaChainState) (*openAIWSDeltaChainState, bool) {
 	if r == nil {
 		return prev, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// An anchor covers the entire response. A truncated prefix cannot describe
+	// that anchor: a later delta would replay history the upstream already has.
+	if r.overflow || len(logicalInputHashes)+len(r.itemsAddedHashes) > openAIWSDeltaChainMaxBaseline {
+		return nil, true
+	}
 	if !r.completed || r.responseID == "" {
 		return prev, false
 	}
 	baseline := make([]string, 0, len(logicalInputHashes)+len(r.itemsAddedHashes))
 	baseline = append(baseline, logicalInputHashes...)
 	baseline = append(baseline, r.itemsAddedHashes...)
-	if len(baseline) > openAIWSDeltaChainMaxBaseline {
-		baseline = baseline[:openAIWSDeltaChainMaxBaseline]
-	}
 	return &openAIWSDeltaChainState{
 		ResponseID:      r.responseID,
 		AccountID:       accountID,

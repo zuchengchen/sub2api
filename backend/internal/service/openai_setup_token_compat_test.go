@@ -198,6 +198,7 @@ func TestOpenAISetupTokenMessagesUsesCodexBridgeAndTurnState(t *testing.T) {
 	firstCtx, _ := gin.CreateTestContext(firstRec)
 	firstCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(firstBody))
 	firstCtx.Request.Header.Set("Content-Type", "application/json")
+	firstCtx.Request.Header.Set("session-id", "setup-token-session")
 
 	firstResult, err := svc.ForwardAsAnthropic(context.Background(), firstCtx, account, firstBody, "stable-cache-key", "gpt-5.4")
 
@@ -208,7 +209,7 @@ func TestOpenAISetupTokenMessagesUsesCodexBridgeAndTurnState(t *testing.T) {
 	require.Equal(t, "developer", gjson.GetBytes(upstream.bodies[0], "input.0.role").String())
 	require.Contains(t, gjson.GetBytes(upstream.bodies[0], "input.0.content.0.text").String(), openAICompatClaudeCodeTodoGuardMarker)
 	require.Equal(t, "message-00", gjson.GetBytes(upstream.bodies[0], "input.1.content.0.text").String())
-	require.False(t, gjson.GetBytes(upstream.bodies[0], "prompt_cache_key").Exists())
+	require.NotEmpty(t, gjson.GetBytes(upstream.bodies[0], "prompt_cache_key").String())
 	require.Equal(t, chatgptCodexURL, upstream.requests[0].URL.String())
 	require.Equal(t, "Bearer setup-token-value", upstream.requests[0].Header.Get("Authorization"))
 	require.Equal(t, "chatgpt-setup", upstream.requests[0].Header.Get("chatgpt-account-id"))
@@ -220,6 +221,7 @@ func TestOpenAISetupTokenMessagesUsesCodexBridgeAndTurnState(t *testing.T) {
 	secondCtx, _ := gin.CreateTestContext(secondRec)
 	secondCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(secondBody))
 	secondCtx.Request.Header.Set("Content-Type", "application/json")
+	secondCtx.Request.Header.Set("session-id", "setup-token-session")
 
 	secondResult, err := svc.ForwardAsAnthropic(context.Background(), secondCtx, account, secondBody, "stable-cache-key", "gpt-5.4")
 

@@ -27,29 +27,29 @@ func TestResolveOpenAIWSClientThreadID(t *testing.T) {
 		want    string
 	}{
 		{
-			name: "thread-id header wins",
+			name: "flat body wins over headers",
 			headers: map[string]string{
 				openAIWSThreadIDHeader:     " t-plain ",
 				openAIWSTurnMetadataHeader: `{"session_id":"s","thread_id":"t-header"}`,
 				openAIWSWindowIDHeader:     "t-window:0",
 			},
 			body: `{"client_metadata":{"thread_id":"t-body"}}`,
-			want: "t-plain",
+			want: "t-body",
 		},
 		{
-			name: "turn metadata header second",
+			name: "canonical header fallback",
 			headers: map[string]string{
 				openAIWSTurnMetadataHeader: `{"session_id":"s","thread_id":"t-header"}`,
 				openAIWSWindowIDHeader:     "t-window:0",
 			},
-			body: `{"client_metadata":{"thread_id":"t-body"}}`,
+			body: `{}`,
 			want: "t-header",
 		},
 		{
-			name:    "window id fallback",
+			name:    "window alone is not a thread",
 			headers: map[string]string{openAIWSWindowIDHeader: " t-window:0 "},
-			body:    `{"client_metadata":{"thread_id":"t-body"}}`,
-			want:    "t-window",
+			body:    `{}`,
+			want:    "",
 		},
 		{
 			name: "body client_metadata.thread_id",
@@ -58,7 +58,7 @@ func TestResolveOpenAIWSClientThreadID(t *testing.T) {
 		},
 		{
 			name: "body embedded turn metadata",
-			body: `{"client_metadata":{"x-codex-turn-metadata":"{\"thread_id\":\"t-embedded\"}"}}`,
+			body: `{"client_metadata":{"thread_id":"t-flat","x-codex-turn-metadata":"{\"thread_id\":\"t-embedded\"}"}}`,
 			want: "t-embedded",
 		},
 		{
@@ -126,10 +126,10 @@ func TestResolveOpenAIWSExecutionLane(t *testing.T) {
 			want:    "kind=future",
 		},
 		{
-			name:    "header metadata wins over body metadata",
+			name:    "canonical body wins over header metadata",
 			headers: map[string]string{openAIWSTurnMetadataHeader: `{"thread_id":"t","request_kind":"turn"}`},
 			body:    `{"client_metadata":{"x-codex-turn-metadata":"{\"thread_id\":\"t\",\"request_kind\":\"memory\"}"}}`,
-			want:    "",
+			want:    "kind=memory",
 		},
 		{
 			name: "body embedded metadata used when header absent",
@@ -235,7 +235,22 @@ func TestResolveOpenAIWSExecutionScope(t *testing.T) {
 	require.NotEqual(t, bySession, scopeOf(sessionOnly, sessionMemory, 11), "只有会话标识时记忆整理也单独成道")
 
 	byCacheKey := scopeOf(nil, []byte(`{"type":"response.create","prompt_cache_key":"cache-1","input":"hi"}`), 11)
-	require.Len(t, byCacheKey, 16)
+	require.Empty(t, byCacheKey, "cache keys must never arm cross-connection preemption")
+	canonicalBody := []byte(`{"client_metadata":{"session_id":"flat-session","thread_id":"flat-thread","x-codex-turn-metadata":"{\"session_id\":\"canonical-session\",\"thread_id\":\"canonical-thread\"}"}}`)
+	canonicalScope, canonicalThread := resolveOpenAIWSExecutionScope(newOpenAIWSExecutionScopeTestContext(threadHeaders), canonicalBody, 11)
+	require.Equal(t, "canonical-thread", canonicalThread)
+	require.Equal(t, scopeOf(map[string]string{"thread-id": "canonical-thread"}, nil, 11), canonicalScope)
+	require.Equal(t, bySession, scopeOf(nil, []byte(`{"client_metadata":{"session_id":"root-session"}}`), 11))
+	require.Equal(t, bySession, scopeOf(nil, []byte(`{"client_metadata":{"session_id":"flat","x-codex-turn-metadata":"{\"session_id\":\"root-session\"}"}}`), 11))
+	localContext := newOpenAIWSExecutionScopeTestContext(nil)
+	local := openAIWSLocalStateScope(localContext, 11)
+	require.NotEmpty(t, local)
+	require.Equal(t, local, openAIWSLocalStateScope(localContext, 11))
+	require.NotEqual(t, local, openAIWSLocalStateScope(newOpenAIWSExecutionScopeTestContext(nil), 11))
+	localContext.Request.Header.Set("session-id", localContext.GetString("codex_anonymous_http_session"))
+	anonymousScope, _ := resolveOpenAIWSExecutionScope(localContext, bodyFirst, 11)
+	require.Empty(t, anonymousScope, "staged anonymous HTTP identity is not a shared execution scope")
+	require.Equal(t, local, openAIWSLocalStateScope(localContext, 11))
 
 	require.Equal(t, "", scopeOf(nil, bodyFirst, 11), "只有请求内容时不得产生执行作用域")
 	nilScope, nilThread := resolveOpenAIWSExecutionScope(nil, bodyFirst, 11)

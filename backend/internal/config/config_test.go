@@ -2747,6 +2747,7 @@ func TestLoadDefaultCodexFidelitySwitches(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	cfg, err := Load()
 	require.NoError(t, err)
+	require.True(t, cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled, "managed HTTP to WS sessions prewarm once")
 	require.NotNil(t, cfg.Gateway.OpenAITiboRoute.Enabled)
 	require.True(t, *cfg.Gateway.OpenAITiboRoute.Enabled, "Tibo probes on by default so admin astra health dots render")
 	require.False(t, cfg.Gateway.OpenAIWS.ClientPingEnabled, "official client never pings")

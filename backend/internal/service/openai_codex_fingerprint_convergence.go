@@ -152,18 +152,6 @@ func applyCodexDeviceWireProfile(c *gin.Context, account *Account, headers http.
 	}
 	if !websocket {
 		stripOpenAILegacyResponsesBeta(headers)
-		// rollout-trace generates this only for an actual HTTP Responses attempt.
-		// Preserve an explicit value; do not invent one or project it to WS/search/compact.
-		if c != nil && c.Request != nil && c.Request.Method == http.MethodPost &&
-			GetOpenAIClientTransport(c) != OpenAIClientTransportWS && c.Request.URL != nil &&
-			strings.HasSuffix(c.Request.URL.Path, "/responses") && !isOpenAIResponsesCompactPath(c) {
-			// 真客户端每次 attempt 都新铸一个 v4（rollout-trace/src/inference.rs:129-130 start_attempt
-			// → :347-349 Uuid::new_v4），网关同样每次出站新铸：既不让客户端原值经 failover 发给
-			// 两个账号形成跨账号关联，也不会在同账号重试时重复同一个值。
-			if value := c.GetHeader("x-codex-inference-call-id"); strings.TrimSpace(value) != "" {
-				headers.Set("x-codex-inference-call-id", uuid.NewString())
-			}
-		}
 	}
 	if !websocket && isOpenAIResponsesCompactPath(c) {
 		headers.Del("x-client-request-id")
@@ -314,20 +302,35 @@ func codexIdentitySeedKind(kind string) string {
 	return kind
 }
 
-// Preserve a proven root-turn relationship when session/full replaces turn_id.
-// A child turn's different root belongs to its parent and must not be overwritten.
-func preserveCodexConvergenceRootTurn(metadata map[string]any, ids *codexFingerprintIDs) {
-	if metadata == nil || ids == nil || !ids.convergence || ids.turnID == "" {
-		return
+// References use the same mapping as the referenced primary identity. Do not
+// infer missing ancestry, or replace unknown metadata with a synthetic tree.
+func codexFingerprintRelationshipFields(metadata map[string]any, ids *codexFingerprintIDs) map[string]any {
+	if ids == nil || ids.turnID == "" {
+		return nil
 	}
 	if ids.mode != codexFingerprintSession && ids.mode != codexFingerprintFull {
-		return
+		return nil
+	}
+	fields := make(map[string]any)
+	for name, value := range map[string]string{
+		"parent_thread_id":      ids.parentThreadID,
+		"forked_from_thread_id": ids.forkedThreadID,
+		"root_turn_id":          ids.rootTurnID,
+		"parent_turn_id":        ids.parentTurnID,
+	} {
+		if value != "" {
+			fields[name] = value
+		}
+	}
+	if _, exists := metadata["x-codex-parent-thread-id"]; exists && ids.parentThreadID != "" {
+		fields["x-codex-parent-thread-id"] = ids.parentThreadID
 	}
 	turn, _ := metadata["turn_id"].(string)
 	root, _ := metadata["root_turn_id"].(string)
-	if strings.TrimSpace(turn) != "" && root == turn {
-		metadata["root_turn_id"] = ids.turnID
+	if ids.rootTurnID == "" && strings.TrimSpace(turn) != "" && root == turn {
+		fields["root_turn_id"] = ids.turnID
 	}
+	return fields
 }
 
 const codexConvergenceUUIDPattern = `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
