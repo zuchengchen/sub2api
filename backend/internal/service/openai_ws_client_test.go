@@ -26,7 +26,7 @@ func TestOpenAIWSAccountDialerRawAndFallback(t *testing.T) {
 			serverErr <- err
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		kind, frame, err := conn.Read(r.Context())
 		if err == nil {
 			err = conn.Write(r.Context(), kind, frame)
@@ -40,11 +40,12 @@ func TestOpenAIWSAccountDialerRawAndFallback(t *testing.T) {
 	defer cancel()
 	conn, _, headers, err := dialOpenAIWSForAccount(ctx, cfg, req, http.Header{"Authorization": {"Bearer fake"}}, fallback)
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	require.IsType(t, &codexWireClientConn{}, conn)
 	require.Zero(t, fallback.DialCount())
 	require.Equal(t, "raw-handshake", headers.Get("X-Request-ID"))
-	frameConn := conn.(openaiwsv2.FrameConn)
+	frameConn, ok := conn.(openaiwsv2.FrameConn)
+	require.True(t, ok)
 	require.NoError(t, frameConn.WriteFrame(ctx, coderws.MessageBinary, []byte(`{"type":"response.create"}`)))
 	kind, frame, err := frameConn.ReadFrame(ctx)
 	require.NoError(t, err)

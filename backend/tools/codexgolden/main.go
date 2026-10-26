@@ -516,7 +516,7 @@ func validateScenario(sc scenario, recs []record) error {
 		if strings.HasSuffix(rec.Target, "/oauth/token") {
 			refresh++
 		}
-		if rec.Kind != "ws_message" && !(rec.Method == "POST" && strings.HasSuffix(rec.Target, "/codex/responses")) {
+		if rec.Kind != "ws_message" && (rec.Method != "POST" || !strings.HasSuffix(rec.Target, "/codex/responses")) {
 			continue
 		}
 		var body struct {

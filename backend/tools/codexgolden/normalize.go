@@ -166,9 +166,16 @@ func tlsStructuresEqual(a, b any) bool {
 			}
 			if fields["lane"] == "rustls" {
 				if ext, ok := fields["extensions"].([]any); ok {
-					ext = append([]any(nil), ext...)
-					sort.Slice(ext, func(i, j int) bool { return ext[i].(float64) < ext[j].(float64) })
-					fields["extensions"] = ext
+					ordered := make([]float64, 0, len(ext))
+					for _, value := range ext {
+						number, ok := value.(float64)
+						if !ok {
+							return "invalid"
+						}
+						ordered = append(ordered, number)
+					}
+					sort.Float64s(ordered)
+					fields["extensions"] = ordered
 				}
 			}
 			unique[string(mustJSON(fields))] = true

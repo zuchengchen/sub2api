@@ -36,10 +36,10 @@ func TestCodexHTTPHeaderParityIncludesOptionalTrace(t *testing.T) {
 	}
 	regular, err := svc.buildUpstreamRequest(context.Background(), ctx, account, input, "test-token", true, "", true)
 	require.NoError(t, err)
-	defer regular.Body.Close()
+	defer func() { _ = regular.Body.Close() }()
 	passthrough, err := svc.buildUpstreamRequestOpenAIPassthrough(context.Background(), ctx, account, input, "test-token")
 	require.NoError(t, err)
-	defer passthrough.Body.Close()
+	defer func() { _ = passthrough.Body.Close() }()
 	for _, name := range []string{"session-id", "thread-id", "x-openai-memgen-request", "x-responsesapi-include-timing-metrics", "x-openai-subagent", "x-codex-parent-thread-id", "x-codex-inference-call-id", "traceparent", "tracestate"} {
 		require.NotEmpty(t, regular.Header.Get(name), name)
 		require.Equal(t, regular.Header.Get(name), passthrough.Header.Get(name), name)
@@ -83,7 +83,7 @@ func TestCodexHTTPMetadataPreservesNativeFactsAndLargeIntegers(t *testing.T) {
 	replay, err := req.GetBody()
 	require.NoError(t, err)
 	raw, err := io.ReadAll(replay)
-	replay.Close()
+	require.NoError(t, replay.Close())
 	require.NoError(t, err)
 	require.Equal(t, next, raw)
 }
@@ -167,11 +167,12 @@ func TestCodexHTTPMessagesRetainsAccountClientIdentityAndCachePolicy(t *testing.
 				require.NoError(t, err)
 				require.True(t, strings.HasPrefix(upstream.lastReq.UserAgent(), "codex_exec/"))
 				require.Equal(t, "codex_exec", upstream.lastReq.Header.Get("originator"))
-				if policy == "omit" {
+				switch policy {
+				case "omit":
 					require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
-				} else if policy == "custom" {
+				case "custom":
 					require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "prompt-cache", "explicit-cache"), gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
-				} else {
+				default:
 					require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 				}
 			})

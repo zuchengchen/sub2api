@@ -188,15 +188,3 @@ func dialOpenAIWSForAccount(ctx context.Context, cfg *config.Config, req openAIW
 	}
 	return &codexWireClientConn{conn: wsConn}, 0, res.Headers, nil
 }
-
-// useCodexWireLane reports whether the pool should route this acquire through
-// the byte-exact codex transport instead of the generic coder/websocket dialer.
-func (p *openAIWSConnPool) useCodexWireLane(account *Account) bool {
-	if p == nil || p.cfg == nil || account == nil {
-		return false
-	}
-	if !p.cfg.Gateway.OpenAIWS.ExactFidelityEnabled {
-		return false
-	}
-	return account.UsesOpenAICodexProtocol()
-}

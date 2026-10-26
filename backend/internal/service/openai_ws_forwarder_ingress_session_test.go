@@ -1280,7 +1280,7 @@ func TestOpenAIWSNativePrewarmAndTurnState(t *testing.T) {
 				clientHeaders.Set(openAIWSTurnStateHeader, "upgrade-state")
 				client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &coderws.DialOptions{HTTPHeader: clientHeaders})
 				require.NoError(t, err)
-				defer client.CloseNow()
+				defer func() { _ = client.CloseNow() }()
 				require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","generate":false,"model":"gpt-5.5","input":[{"role":"user","content":"native"}],"client_metadata":{"x-codex-turn-state":"frame-state"}}`)))
 				_, _, err = client.Read(ctx)
 				require.NoError(t, err)

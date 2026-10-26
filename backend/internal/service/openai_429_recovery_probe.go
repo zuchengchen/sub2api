@@ -372,7 +372,7 @@ func (s *RateLimitService) probeOpenAI429RecoveryHTTP(ctx context.Context, accou
 		proxyURL = account.Proxy.URL()
 	}
 	if s.codexProbeSender == nil {
-		return openai429RecoveryProbeResult{Stop: true, Err: fmt.Errorf("Codex recovery probe transport is unavailable")}
+		return openai429RecoveryProbeResult{Stop: true, Err: fmt.Errorf("codex recovery probe transport is unavailable")}
 	}
 	resp, err := s.codexProbeSender.doOpenAICodexProbe(req, proxyURL, account)
 	if err != nil {

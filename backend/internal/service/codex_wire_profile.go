@@ -2,11 +2,8 @@ package service
 
 import (
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -77,9 +74,6 @@ const (
 	codexWireProfileModeMain   = "main"
 )
 
-// codexWireProfileUnknownVersionWarned 避免未知版本每个请求刷日志。
-var codexWireProfileUnknownVersionWarned sync.Map
-
 // verifiedCodexWireProfile is an exact release allowlist for automatic identity
 // updates. A compatible profile range is not evidence that a new release has
 // been checked. Add a release only alongside its captured reference fixtures.
@@ -114,31 +108,6 @@ func resolveCodexWireProfile(version, mode string) (profile codexWireProfile, kn
 		return codexWireProfileMain, CompareVersions(version, "0.165.0") < 0
 	}
 	return codexWireProfileStable, true
-}
-
-// codexWireProfileForAccount 返回本请求应使用的 profile。非 OAuth 账号返回
-// ok=false，所有调用方必须先检查 ok 再读取任何字段。
-func codexWireProfileForAccount(account *Account, cfg *config.Config) (codexWireProfile, bool) {
-	if !isCodexOAuthAccount(account) {
-		return codexWireProfile{}, false
-	}
-	mode := codexWireProfileModeAuto
-	strict := false
-	if cfg != nil {
-		mode = cfg.Gateway.CodexWire.Profile
-		strict = cfg.Gateway.CodexWire.Strict
-	}
-	version := CodexCanonicalClientVersion()
-	profile, known := resolveCodexWireProfile(version, mode)
-	if !known {
-		key := version + "|" + mode
-		if _, loaded := codexWireProfileUnknownVersionWarned.LoadOrStore(key, struct{}{}); !loaded {
-			logger.LegacyPrintf("service.openai_codex",
-				"[Codex] unknown wire profile version %s (mode=%s strict=%v); using %s",
-				version, mode, strict, profile.Name)
-		}
-	}
-	return profile, true
 }
 
 // codexFullSynthesisEnabled is the service-level switch. A nil config (tests,

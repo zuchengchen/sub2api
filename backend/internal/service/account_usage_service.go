@@ -899,7 +899,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshotLegacy(ctx context.Context
 		proxyURL = account.Proxy.URL()
 	}
 	if s.codexProbeSender == nil {
-		return nil, fmt.Errorf("Codex usage probe transport is unavailable")
+		return nil, fmt.Errorf("codex usage probe transport is unavailable")
 	}
 	resp, err := s.codexProbeSender.doOpenAICodexProbe(req, proxyURL, account)
 	if err != nil {
