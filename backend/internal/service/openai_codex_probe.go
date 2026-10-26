@@ -38,7 +38,7 @@ func codexProbeConfig(cfg *config.Config) *config.Config {
 
 func (s *OpenAIGatewayService) doOpenAICodexProbe(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
 	if s == nil || s.httpUpstream == nil || req == nil || account == nil {
-		return nil, fmt.Errorf("Codex probe transport is unavailable")
+		return nil, fmt.Errorf("codex probe transport is unavailable")
 	}
 	if s.cfg == nil {
 		s = &OpenAIGatewayService{
@@ -88,7 +88,7 @@ func (s *OpenAIGatewayService) prepareOpenAICodexProbeRequest(req *http.Request,
 		return nil
 	}
 	if req.Body == nil || req.Body == http.NoBody || req.Header.Get("Content-Encoding") != "" {
-		return fmt.Errorf("Codex probe requires an unencoded Responses body")
+		return fmt.Errorf("codex probe requires an unencoded Responses body")
 	}
 	raw, err := io.ReadAll(req.Body)
 	_ = req.Body.Close()
@@ -181,7 +181,10 @@ func (s *OpenAIGatewayService) prepareOpenAICodexProbeRequest(req *http.Request,
 	if instruction, ok := body["instructions"].(string); ok {
 		delete(body, "instructions")
 		if strings.TrimSpace(instruction) != "" {
-			input := body["input"].([]any)
+			input, ok := body["input"].([]any)
+			if !ok || len(input) == 0 {
+				return fmt.Errorf("codex probe input is missing its base instructions")
+			}
 			item := codexSynthMessageRaw(codexSynthItemID("probe-guidance", instruction), "developer", []string{instruction}, nil, turn.String(), float64(now.UnixMilli())/1000)
 			body["input"] = append([]any{input[0], item}, input[1:]...)
 		}
@@ -201,7 +204,10 @@ func (s *OpenAIGatewayService) prepareOpenAICodexProbeRequest(req *http.Request,
 		return err
 	}
 	applyCodexWireMetadata(body, req.Header, account, "turn", false)
-	metadata := body["client_metadata"].(map[string]any)
+	metadata, ok := body["client_metadata"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("codex probe metadata is invalid")
+	}
 	delete(metadata, "x-codex-ws-stream-request-start-ms")
 	delete(metadata, "ws_request_header_x_openai_internal_codex_responses_lite")
 	// Reuse the existing serde-shaped field writers for nested structs as well

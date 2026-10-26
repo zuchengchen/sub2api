@@ -83,11 +83,6 @@ func parseCodexTurnMetadata(raw string) (codexTurnMetadata, bool) {
 	return metadata, true
 }
 
-func codexTurnMetadataThreadID(raw string) string {
-	metadata, _ := parseCodexTurnMetadata(raw)
-	return metadata.ThreadID
-}
-
 // Canonical embedded metadata wins over flat metadata and compatibility headers.
 func openAIWSExecutionTurnMetadata(c *gin.Context, body []byte) codexTurnMetadata {
 	metadata, _ := parseCodexTurnMetadata(gjson.GetBytes(body, "client_metadata."+openAIWSTurnMetadataHeader).String())

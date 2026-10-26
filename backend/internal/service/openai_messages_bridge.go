@@ -20,16 +20,6 @@ func isOpenAICompatMessagesBridgeBody(body []byte) bool {
 	return isOpenAICompatMessagesBridgePromptCacheKey(gjson.GetBytes(body, "prompt_cache_key").String())
 }
 
-func isOpenAICompatMessagesBridgeRequestBody(reqBody map[string]any) bool {
-	if reqBody == nil {
-		return false
-	}
-	if input, ok := reqBody["input"].([]any); ok && inputContainsText(input, openAICompatClaudeCodeTodoGuardMarker) {
-		return true
-	}
-	return isOpenAICompatMessagesBridgePromptCacheKey(firstNonEmptyString(reqBody["prompt_cache_key"]))
-}
-
 func isOpenAICompatMessagesBridgePromptCacheKey(key string) bool {
 	key = strings.TrimSpace(key)
 	return strings.HasPrefix(key, "anthropic-metadata-") ||

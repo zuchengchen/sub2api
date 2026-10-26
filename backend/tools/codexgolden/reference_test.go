@@ -37,7 +37,8 @@ func referenceRecords(t *testing.T, name string) []record {
 func TestOfficial164ScenarioContracts(t *testing.T) {
 	meta, err := readJSONFile(filepath.Join(reference164, "meta.json"))
 	require.NoError(t, err)
-	m := meta.(map[string]any)
+	m, ok := meta.(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, "codex-cli 0.164.0", m["codex_version"])
 	require.Equal(t, "6aaac694803004a63c6f393d153c96d22521a6b9", m["source_commit"])
 	require.Equal(t, "b93f6811d3f653f0fb83be4050d857fb9abbb111dfa2ce160563327daff7f306", m["binary_sha256"])
@@ -131,7 +132,7 @@ func TestOfficial164HeaderTemplates(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			checked := 0
 			for _, r := range referenceRecords(t, name) {
-				if r.Kind != "ws_handshake" && !(r.Kind == "http_request" && strings.Contains(r.Target, "/codex/responses")) {
+				if r.Kind != "ws_handshake" && (r.Kind != "http_request" || !strings.Contains(r.Target, "/codex/responses")) {
 					continue
 				}
 				checked++
@@ -187,14 +188,19 @@ func TestOfficial164TLSProfiles(t *testing.T) {
 			value, err := readJSONFile(filepath.Join(reference164, tc.file))
 			require.NoError(t, err)
 			var expected any
-			for _, row := range value.([]any) {
-				v := row.(map[string]any)
+			rows, ok := value.([]any)
+			require.True(t, ok)
+			for _, row := range rows {
+				v, ok := row.(map[string]any)
+				require.True(t, ok)
 				alpn, _ := v["alpn"].([]any)
 				if v["lane"] != tc.lane || (len(alpn) > 0) != tc.alpn {
 					continue
 				}
 				resumed := false
-				for _, ext := range v["extensions"].([]any) {
+				extensions, ok := v["extensions"].([]any)
+				require.True(t, ok)
+				for _, ext := range extensions {
 					if ext == float64(41) {
 						resumed = true
 					}
@@ -207,7 +213,7 @@ func TestOfficial164TLSProfiles(t *testing.T) {
 			require.NotNil(t, expected)
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			require.NoError(t, err)
-			defer listener.Close()
+			defer func() { _ = listener.Close() }()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			done := make(chan struct{})

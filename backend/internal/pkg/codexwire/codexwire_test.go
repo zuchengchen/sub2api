@@ -49,7 +49,7 @@ func TestBuildWSUpgradeRequest_ByteLayout(t *testing.T) {
 
 func TestDialWSFailedUpgradeClosesConnection(t *testing.T) {
 	client, server := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	closed := make(chan error, 1)
 	go func() {
 		_ = server.SetDeadline(time.Now().Add(3 * time.Second))

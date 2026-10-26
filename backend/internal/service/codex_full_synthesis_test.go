@@ -266,7 +266,9 @@ func TestCodexSynthesisToolContractRoundTrip(t *testing.T) {
 				require.Equal(t, map[string]string{tool.field: tool.value}, received)
 				var replay map[string]any
 				require.NoError(t, json.Unmarshal([]byte(call.Raw), &replay))
-				request["input"] = append(request["input"].([]any), replay, map[string]any{
+				input, ok := request["input"].([]any)
+				require.True(t, ok)
+				request["input"] = append(input, replay, map[string]any{
 					"type": "function_call_output", "call_id": call.Get("call_id").String(), "output": "downstream-result",
 				})
 				body, err = json.Marshal(request)
