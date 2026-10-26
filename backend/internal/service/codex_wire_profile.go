@@ -80,6 +80,20 @@ const (
 // codexWireProfileUnknownVersionWarned 避免未知版本每个请求刷日志。
 var codexWireProfileUnknownVersionWarned sync.Map
 
+// verifiedCodexWireProfile is an exact release allowlist for automatic identity
+// updates. A compatible profile range is not evidence that a new release has
+// been checked. Add a release only alongside its captured reference fixtures.
+func verifiedCodexWireProfile(version string) (codexWireProfile, bool) {
+	switch strings.TrimSpace(version) {
+	case "0.163.0":
+		return codexWireProfileStable, true
+	case "0.164.0":
+		return codexWireProfileMain, true
+	default:
+		return codexWireProfile{}, false
+	}
+}
+
 // resolveCodexWireProfile 选择版本 profile。known=false 表示版本高于当前
 // 已知的最新版本；调用方按 gateway.codex_wire.strict 决定拒绝还是告警。
 func resolveCodexWireProfile(version, mode string) (profile codexWireProfile, known bool) {
@@ -95,8 +109,8 @@ func resolveCodexWireProfile(version, mode string) (profile codexWireProfile, kn
 		return codexWireProfileStable, true
 	}
 	if CompareVersions(version, "0.164.0") >= 0 {
-		// 0.164 是当前已知的最新 profile；更高的版本先按 main 行为处理并
-		// 由调用方告警（官方尚未发布稳定版）。
+		// This compatibility range supports explicit administrator overrides.
+		// Automatic updates use the exact verified release allowlist instead.
 		return codexWireProfileMain, CompareVersions(version, "0.165.0") < 0
 	}
 	return codexWireProfileStable, true

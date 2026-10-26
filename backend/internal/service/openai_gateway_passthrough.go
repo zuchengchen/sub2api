@@ -186,6 +186,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		reqStream = gjson.GetBytes(body, "stream").Bool()
 
+		var fpIDs *codexFingerprintIDs
+		if !isOpenAIResponsesCompactPath(c) {
+			fpIDs = resolveCodexFingerprintIDsForRawBody(c, account, nil, body)
+		}
 		accountScopedBody, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(body, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 		if scopeErr != nil {
 			return nil, scopeErr
@@ -200,11 +204,6 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		// 手术，透传热路径禁全量 Unmarshal），出站头改写由请求构造器读取
 		// context 中的同一份 IDs 完成（turn_id 等随机字段两侧必须一致）。
 		if !isOpenAIResponsesCompactPath(c) {
-			var clientHeaders http.Header
-			if c != nil && c.Request != nil {
-				clientHeaders = c.Request.Header
-			}
-			fpIDs := resolveCodexFingerprintIDsForRawBody(c, account, clientHeaders, body)
 			if fpIDs != nil {
 				fpBody, fpChanged, fpErr := applyCodexFingerprintClientMetadataRaw(body, fpIDs)
 				if fpErr != nil {
@@ -635,13 +634,14 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		for key, values := range c.Request.Header {
 			lower := strings.ToLower(strings.TrimSpace(key))
 			if !isOpenAIPassthroughAllowedRequestHeader(lower, allowTimeoutHeaders) &&
-				(!usesCustomOpenAICompatibleUpstream(account) || !openaiCompatibleSessionHeaders[lower]) {
+				!allowOpenAIClientHeader(lower, openaiPassthroughAllowedHeaders, account) {
 				continue
 			}
 			for _, v := range values {
 				req.Header.Add(key, v)
 			}
 		}
+		copyOpenAICodexTraceHeaders(req.Header, c.Request.Header, account)
 		rewriteClaudeClientUAForCustomOpenAIHop(req.Header, account)
 	}
 
@@ -735,6 +735,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// （User-Agent / originator / version 同源自洽），客户端自报身份不会到达上游。
 	if account.UsesOpenAICodexProtocol() {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		s.applyCodexSessionIdentity(c, account, body, req.Header)
 		restoreOpenAICodexTicketIdentity(c, req.Header)
 	}
 
@@ -759,6 +760,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	body, err = applyCodexRequestMetadata(req, body, account, legacyCompactRequest)
 	if err != nil {
 		return nil, err
+	}
+	if !legacyCompactRequest {
+		body, err = applyCodexHTTPWireMetadata(req, body, account)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// 透传 HTTP 出站同样按官方线序收口（与非透传 buildUpstreamRequest 一致）。
 	// legacy /responses/compact 与 messages 桥是不同上游契约，不参与收口。

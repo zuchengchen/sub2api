@@ -599,14 +599,12 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	applyOpenAITiboProbeIdentity(req.Header)
 	if !account.IsOpenAIApiKey() {
 		if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
 			return unknown
 		}
 	}
-	resp, err := s.httpUpstream.Do(req, openAITiboAccountProxyURL(account), account.ID, account.Concurrency)
+	resp, err := s.doOpenAICodexProbe(req, openAITiboAccountProxyURL(account), account)
 	if resp != nil && resp.Body != nil {
 		defer func() { _ = resp.Body.Close() }()
 	}

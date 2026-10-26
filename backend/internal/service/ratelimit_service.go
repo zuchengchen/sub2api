@@ -30,6 +30,7 @@ type RateLimitService struct {
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
 	runtimeBlocker        AccountRuntimeBlocker
+	codexProbeSender      openAICodexProbeSender
 	// ollamaCloudUsageProbe is the optional Ollama Cloud usage probe scheduler
 	// injected via SetOllamaCloudUsageProbeScheduler. See
 	// ratelimit_service_ollama_429.go for how real-Ollama 429s schedule an async
@@ -116,6 +117,10 @@ func (s *RateLimitService) SetOpenAI403CounterCache(cache OpenAI403CounterCache)
 // SetSettingService 设置系统设置服务（可选依赖）
 func (s *RateLimitService) SetSettingService(settingService *SettingService) {
 	s.settingService = settingService
+}
+
+func (s *RateLimitService) SetOpenAICodexProbeSender(sender openAICodexProbeSender) {
+	s.codexProbeSender = sender
 }
 
 // SetTokenCacheInvalidator 设置 token 缓存清理器（可选依赖）

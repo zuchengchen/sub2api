@@ -84,6 +84,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
+	restoreClientSession := stageCodexHTTPClientSession(c, account, body)
+	defer restoreClientSession()
+	s.codexWireProfileForRequest(c, account, body)
 
 	restrictionResult := s.detectCodexClientRestriction(c, account, body)
 	logCodexCLIOnlyDetection(ctx, c, account, getAPIKeyIDFromContext(c), restrictionResult, body)
@@ -320,20 +323,16 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		var wireProfile codexWireProfile
 		var wireProfilePtr *codexWireProfile
 		if isCodexOAuthAccount(account) {
-			wireProfile, _ = codexWireProfileForAccount(account, s.cfg)
+			wireProfile, _ = s.codexWireProfileForRequest(c, account, body)
 			wireProfilePtr = &wireProfile
+			fpIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, nil, reqBody)
 		}
 		if isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() {
-			var clientHeaders http.Header
-			if c != nil && c.Request != nil {
-				clientHeaders = c.Request.Header
-			}
-			fpIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, reqBody)
 			deviceProfile, _ := codexDeviceProfileForRequest(account)
 			synthOptions := codexSynthOptions{
 				ResponsesLite: false,
 				WireProfile:   wireProfile,
-				WireVersion:   CodexCanonicalClientVersion(),
+				WireVersion:   s.codexSessionClientVersion(c, account, body),
 				Device:        deviceProfile,
 				Now:           time.Now(),
 				Strict:        s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,

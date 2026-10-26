@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -18,12 +19,34 @@ func (s *OpenAIGatewayService) isOpenAIWSGeneratePrewarmEnabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled
 }
 
+func (s *OpenAIGatewayService) shouldPrewarmOpenAIWS(c *gin.Context, account *Account, payload map[string]any) bool {
+	if !s.isOpenAIWSGeneratePrewarmEnabled() || account == nil || !account.IsOpenAIOAuthLike() ||
+		GetOpenAIClientTransport(c) != OpenAIClientTransportHTTP {
+		return false
+	}
+	// Native clients own startup prewarm, including a deliberate HTTP fallback.
+	if c == nil || openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) {
+		return false
+	}
+	_, hasGenerate := payload["generate"]
+	return !hasGenerate
+}
+
 func (s *OpenAIGatewayService) isOpenAIWSDeltaContextEnabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.DeltaContextEnabled
 }
 
 func (s *OpenAIGatewayService) isOpenAIWSExactFidelityEnabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ExactFidelityEnabled
+}
+
+// Preserve a native frame's metadata, including an explicitly empty value.
+func applyOpenAIWSNativeTurnState(payload []byte, turnState string) ([]byte, error) {
+	path := "client_metadata." + openAIWSTurnStateHeader
+	if strings.TrimSpace(turnState) == "" || gjson.GetBytes(payload, path).Exists() {
+		return payload, nil
+	}
+	return sjson.SetBytes(payload, path, turnState)
 }
 
 // openAIWSPrewarmResult 记录预热交换里入链所需的信息：官方把预热响应当作
@@ -38,10 +61,11 @@ type openAIWSPrewarmResult struct {
 }
 
 // performOpenAIWSGeneratePrewarm 在 WSv2 下执行可选的 generate=false 预热。
-// 预热默认关闭，仅在配置开启后生效；失败时按可恢复错误回退到 HTTP。
+// 仅限网关管理的 HTTP→WS 转换；原生客户端拥有自己的预热生命周期。
 // 返回预热结果供增量链锚定（未执行或失败时 result 为 nil）。
 func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	ctx context.Context,
+	c *gin.Context,
 	lease *openAIWSConnLease,
 	decision OpenAIWSProtocolDecision,
 	payload map[string]any,
@@ -60,7 +84,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		return nil, nil
 	}
 	connID := strings.TrimSpace(lease.ConnID())
-	if !s.isOpenAIWSGeneratePrewarmEnabled() {
+	if !s.shouldPrewarmOpenAIWS(c, account, payload) {
 		return nil, nil
 	}
 	if decision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
@@ -81,8 +105,11 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		)
 		return nil, nil
 	}
-	if lease.IsPrewarmed() {
+	if lease.IsPrewarmed() || lease.Reused() {
 		logOpenAIWSModeInfo("prewarm_skip account_id=%d conn_id=%s reason=already_prewarmed", account.ID, connID)
+		return nil, nil
+	}
+	if !s.beginOpenAIWSSessionPrewarm(resolveOpenAIWSSessionScope(c, account, bodyRaw)) {
 		return nil, nil
 	}
 	// 官方 Codex 客户端在新连接上无条件发送 generate=false 预热帧（包含完整
@@ -203,13 +230,35 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 				errMessage,
 			)
 			lease.MarkBroken()
+			if isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+				return nil, s.newOpenAIWSRateLimitFailoverError(account, nil, message, errMsg)
+			}
+			if status := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw); status == http.StatusUnauthorized || status == http.StatusForbidden {
+				s.handleOpenAIWSFailureAccountSideEffects(ctx, account, prewarmModel, lease.HandshakeHeaders(), message)
+				return nil, wrapOpenAIWSFallback("prewarm_auth_failed", errors.New(errMsg))
+			}
 			if canFallback {
 				return nil, wrapOpenAIWSFallback("prewarm_"+fallbackReason, errors.New(errMsg))
 			}
-			return nil, wrapOpenAIWSFallback("prewarm_error_event", errors.New(errMsg))
+			return nil, wrapOpenAIWSFallback("prewarm_policy_violation", errors.New(errMsg))
 		}
 
 		if isOpenAIWSTerminalEvent(eventType) {
+			if (eventType != "response.completed" && eventType != "response.done") || result.ResponseID == "" {
+				lease.MarkBroken()
+				s.handleOpenAIWSFailureAccountSideEffects(ctx, account, openAIWSPayloadString(payload, "model"), lease.HandshakeHeaders(), message)
+				status := openAIStreamFailureStatus(message, extractOpenAISSEErrorMessage(message))
+				if status == http.StatusTooManyRequests {
+					return nil, s.newOpenAIWSRateLimitFailoverError(account, nil, message, "prewarm rate limited")
+				}
+				if status == http.StatusUnauthorized || status == http.StatusForbidden {
+					return nil, wrapOpenAIWSFallback("prewarm_auth_failed", errors.New("prewarm authentication failed"))
+				}
+				if status == http.StatusBadRequest {
+					return nil, wrapOpenAIWSFallback("prewarm_policy_violation", errors.New("prewarm request rejected"))
+				}
+				return nil, wrapOpenAIWSFallback("prewarm_error_event", errors.New("prewarm did not complete successfully"))
+			}
 			prewarmTerminalCount++
 			break
 		}
@@ -900,5 +949,5 @@ func openAIWSErrorHTTPStatus(message []byte) int {
 	return openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
 }
 
-// 账号级 WS 会话禁用（官方 Codex disable_websockets 语义）见
+// 逻辑会话级 WS 禁用（官方 Codex disable_websockets 语义）见
 // openai_ws_session_disable.go；旧的 fallback_cooldown_seconds 快捷冷却已被取代。

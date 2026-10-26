@@ -173,7 +173,8 @@ func (s *OpenAIGatewayService) injectOpenAICompatBridgeIdentity(c *gin.Context, 
 	c.Request.Header = inbound
 	restore = func() { c.Request.Header = original }
 
-	reqBody["prompt_cache_key"] = session.SessionID
+	// Cache policy is independent of conversation identity. In particular a
+	// custom key must survive the bridge; the common policy applies afterward.
 	clientMetadata, _ := reqBody["client_metadata"].(map[string]any)
 	if clientMetadata == nil {
 		clientMetadata = make(map[string]any)

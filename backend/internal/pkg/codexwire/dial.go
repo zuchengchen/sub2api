@@ -95,6 +95,9 @@ func DialWS(ctx context.Context, wsURL string, ordered []HeaderKV, proxyURL stri
 
 	var conn net.Conn
 	if scheme == "ws" || scheme == "http" {
+		if strings.TrimSpace(proxyURL) != "" {
+			return nil, nil, errors.New("raw websocket plaintext proxy is unsupported")
+		}
 		base := opts.BaseDialer
 		if base == nil {
 			base = (&net.Dialer{}).DialContext
@@ -127,6 +130,7 @@ func DialWS(ctx context.Context, wsURL string, ordered []HeaderKV, proxyURL stri
 	}
 	_ = conn.SetDeadline(time.Time{})
 	if res.StatusCode != http.StatusSwitchingProtocols {
+		_ = conn.Close()
 		return nil, res, fmt.Errorf("websocket upgrade failed: status %d", res.StatusCode)
 	}
 	return NewWSConn(conn, br, res), res, nil

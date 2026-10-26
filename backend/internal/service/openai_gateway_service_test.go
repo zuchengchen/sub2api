@@ -3284,7 +3284,7 @@ func TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(t *testing.T)
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
 }
 
-func TestOpenAIBuildUpstreamRequestOAuthMessagesBridgeUsesSessionOnly(t *testing.T) {
+func TestOpenAIBuildUpstreamRequestOAuthMessagesBridgeUsesCodexIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -3296,15 +3296,17 @@ func TestOpenAIBuildUpstreamRequestOAuthMessagesBridgeUsesSessionOnly(t *testing
 	svc := &OpenAIGatewayService{}
 	account := &Account{
 		Type:        AccountTypeOAuth,
+		Platform:    PlatformOpenAI,
 		Credentials: map[string]any{"chatgpt_account_id": "chatgpt-acc"},
 	}
 
 	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, body, "token", true, "anthropic-metadata-session-1", false)
 	require.NoError(t, err)
-	require.NotEmpty(t, req.Header.Get("Session_Id"))
+	require.Empty(t, req.Header.Get("Session_Id"))
+	require.NotEmpty(t, req.Header.Get("session-id"))
 	require.Empty(t, req.Header.Get("Conversation_Id"))
 	require.Empty(t, req.Header.Get("OpenAI-Beta"))
-	require.Empty(t, req.Header.Get("originator"))
+	require.Equal(t, openai.CodexDefaultOriginator, req.Header.Get("originator"))
 }
 
 func TestOpenAIBuildUpstreamRequestOAuthResponsesPreservesCallerBeta(t *testing.T) {

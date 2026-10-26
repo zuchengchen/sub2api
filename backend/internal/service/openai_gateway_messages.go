@@ -62,6 +62,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
+	restoreClientSession := stageCodexHTTPClientSession(c, account, body)
+	defer restoreClientSession()
+	s.codexWireProfileForRequest(c, account, body)
 
 	// 上游协议统一由 resolveUpstreamProtocol 判定（按模型分流时带上游模型目录）。Anthropic 分流必须先于
 	// ShouldUseResponsesAPI：Anthropic 协议账号经 probe 落标
@@ -228,7 +231,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		var wireProfile codexWireProfile
 		var wireProfilePtr *codexWireProfile
 		if isCodexOAuthAccount(account) {
-			wireProfile, _ = codexWireProfileForAccount(account, s.cfg)
+			wireProfile, _ = s.codexWireProfileForRequest(c, account, body)
 			wireProfilePtr = &wireProfile
 		}
 		if isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() {
@@ -236,7 +239,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			synthOptions := codexSynthOptions{
 				ResponsesLite: false,
 				WireProfile:   wireProfile,
-				WireVersion:   CodexCanonicalClientVersion(),
+				WireVersion:   s.codexSessionClientVersion(c, account, body),
 				Device:        deviceProfile,
 				Now:           time.Now(),
 				Strict:        s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
@@ -306,24 +309,28 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 		if codexResult.PromptCacheKey != "" {
 			promptCacheKey = codexResult.PromptCacheKey
+		} else if promptCacheKey != "" {
+			reqBody["prompt_cache_key"] = promptCacheKey
 		}
-		restoreBridge, _ := s.injectOpenAICompatBridgeIdentity(c, account, reqBody, promptCacheKey)
+		bridgeSession := promptCacheKey
+		if c != nil && c.Request != nil {
+			bridgeSession = extractClientSessionID(c.Request.Header)
+		}
+		restoreBridge, _ := s.injectOpenAICompatBridgeIdentity(c, account, reqBody, bridgeSession)
 		defer restoreBridge()
-		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), apiKeyID)
 		if isCodexOAuthAccount(account) {
 			var clientHeaders http.Header
 			if c != nil && c.Request != nil {
 				clientHeaders = c.Request.Header
 			}
 			fpIDs = resolveCodexFingerprintIDsForDecodedBody(c, account, clientHeaders, reqBody)
+		}
+		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), apiKeyID)
+		if isCodexOAuthAccount(account) {
 			if fpIDs != nil {
-				fpIDs.promptCacheKeyPolicy = codexPromptCacheKeyOmit
 				applyCodexFingerprintClientMetadata(reqBody, fpIDs)
 			}
 			stageCodexFingerprintIDs(c, fpIDs)
-		}
-		if !codexDeviceWireProfileEnabled(c, account) {
-			delete(reqBody, "prompt_cache_key")
 		}
 		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey)
@@ -457,7 +464,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		// 官方 HTTP 请求从不带 OpenAI-Beta / session_id / conversation_id /
 		// x-codex-installation-id 头（golden 0.163.0）。
 		ensureCodexIdentityHeaders(upstreamReq.Header)
-		enforceCodexIdentityHeaders(upstreamReq.Header)
+		enforceCodexIdentityHeadersWithUA(upstreamReq.Header, s.codexIdentityOverrideUA(codexAccountIdentitySource(c, account)))
+		s.applyCodexSessionIdentity(c, account, nil, upstreamReq.Header)
 		projectCodexOutboundHeaders(upstreamReq.Header, false)
 		logger.L().Debug("openai messages: upstream identity restored",
 			zap.Int64("account_id", account.ID),

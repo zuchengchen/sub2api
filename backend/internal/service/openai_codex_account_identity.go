@@ -108,6 +108,17 @@ func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw 
 		codexIdentitySeedKind(kind),
 		raw,
 	)
+	// Seeded session/full accounts use one mapping for primary IDs and all
+	// references to them. Keep unseeded accounts on their existing mapping.
+	if _, ok := codexFingerprintSeed(account.Extra); ok &&
+		(account.GetCodexFingerprintMode() == codexFingerprintFull || account.GetCodexFingerprintMode() == codexFingerprintSession) &&
+		(codexIdentitySeedKind(kind) == "thread" || kind == "turn") {
+		created := codexUUIDv7Millis(raw)
+		if created <= 0 {
+			created = defaultCodexTurnClock.StartedAt(seed)
+		}
+		return deriveStableCodexUUIDv7(seed, created)
+	}
 	if derived, ok := deriveCodexConvergenceIdentityValue(account, seed, raw); ok {
 		return derived
 	}
@@ -229,7 +240,7 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 	originalBodySessionID := ""
 	if cm := gjson.GetBytes(body, "client_metadata"); cm.IsObject() {
 		clientMetadata := map[string]any{}
-		if err := json.Unmarshal([]byte(cm.Raw), &clientMetadata); err != nil {
+		if err := decodeCodexMetadataObject(cm.Raw, &clientMetadata); err != nil {
 			return body, false, fmt.Errorf("decode client_metadata for account identity: %w", err)
 		}
 		originalBodySessionID, _ = clientMetadata["session_id"].(string)
@@ -282,6 +293,11 @@ func applyCodexAccountIdentityHeaders(headers http.Header, account *Account, api
 		raw := strings.TrimSpace(headers.Get(field.name))
 		if raw != "" {
 			headers.Set(field.name, scopeCodexAccountIdentityValue(account, apiKeyID, field.kind, raw))
+		}
+	}
+	if codexFingerprintConvergenceEnabled(account) {
+		if parent := strings.TrimSpace(headers.Get("x-codex-parent-thread-id")); parent != "" {
+			headers.Set("x-codex-parent-thread-id", scopeCodexAccountIdentityValue(account, apiKeyID, "thread", parent))
 		}
 	}
 	if raw := headers.Get(openAIWSTurnMetadataHeader); strings.TrimSpace(raw) != "" {

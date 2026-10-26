@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -14,9 +15,9 @@ import (
 )
 
 // compareMain implements `codexgolden compare`: it reports wire differences
-// between a recorded baseline and a candidate recording. Dynamic IDs, clocks
-// and payload values are ignored; header name/order, body top-level key order,
-// and TLS ClientHello structure are compared.
+// between a recorded baseline and a candidate recording. Dynamic IDs and clocks
+// are normalized while preserving identity relationships, body values, header
+// order, compression, and TLS ClientHello structure.
 func compareMain(args []string) int {
 	fs := flag.NewFlagSet("compare", flag.ExitOnError)
 	golden := fs.String("golden", "", "baseline golden directory (required)")
@@ -33,6 +34,10 @@ func compareMain(args []string) int {
 	files, err := filepath.Glob(filepath.Join(*golden, "*.jsonl"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "compare:", err)
+		return 2
+	}
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "compare: baseline has no scenario recordings")
 		return 2
 	}
 	sort.Strings(files)
@@ -56,6 +61,8 @@ func compareMain(args []string) int {
 	for _, name := range []string{"tls_clienthellos.json", "tls_clienthellos_custom_ca.json"} {
 		base, err := readJSONFile(filepath.Join(*golden, name))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "compare: %s: baseline missing/unreadable: %v\n", name, err)
+			diffs++
 			continue
 		}
 		cand, err := readJSONFile(filepath.Join(*candidate, name))
@@ -64,7 +71,7 @@ func compareMain(args []string) int {
 			diffs++
 			continue
 		}
-		if !jsonEqualIgnoringRecordedAt(base, cand) {
+		if !tlsStructuresEqual(base, cand) {
 			fmt.Fprintf(os.Stderr, "compare: %s: TLS ClientHello structure differs\n", name)
 			diffs++
 		} else if *verbose {
@@ -98,77 +105,39 @@ func readRecordMap(path string) (map[recordKey]record, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
 			return nil, err
 		}
-		out[recordKey{Conn: rec.Conn, Seq: rec.Seq}] = rec
+		key := recordKey{Conn: rec.Conn, Seq: rec.Seq}
+		if _, exists := out[key]; exists {
+			return nil, fmt.Errorf("duplicate record conn=%d seq=%d", rec.Conn, rec.Seq)
+		}
+		out[key] = rec
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, errors.New("empty recording")
 	}
 	return out, nil
 }
 
 func compareRecords(file string, base, cand map[recordKey]record, verbose bool) int {
+	a, b := normalizedRecordGroups(base), normalizedRecordGroups(cand)
 	diffs := 0
-	keys := make([]recordKey, 0, len(base))
-	for key := range base {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].Conn != keys[j].Conn {
-			return keys[i].Conn < keys[j].Conn
-		}
-		return keys[i].Seq < keys[j].Seq
-	})
-	for _, key := range keys {
-		b := base[key]
-		c, ok := cand[key]
-		if !ok {
-			fmt.Fprintf(os.Stderr, "compare: %s conn=%d seq=%d: missing in candidate\n", file, key.Conn, key.Seq)
+	for key, values := range a {
+		if string(mustJSON(values)) != string(mustJSON(b[key])) {
+			fmt.Fprintf(os.Stderr, "compare: %s %s: %s\n", file, key, firstJSONDifference(values, b[key]))
 			diffs++
-			continue
-		}
-		if b.Kind != c.Kind || b.Method != c.Method || b.Target != c.Target {
-			fmt.Fprintf(os.Stderr, "compare: %s seq=%d: kind/method/target %s %s %s -> %s %s %s\n",
-				file, b.Seq, b.Kind, b.Method, b.Target, c.Kind, c.Method, c.Target)
-			diffs++
-		}
-		baseHeaders := headerNames(b.Headers)
-		candHeaders := headerNames(c.Headers)
-		if strings.Join(baseHeaders, "\n") != strings.Join(candHeaders, "\n") {
-			fmt.Fprintf(os.Stderr, "compare: %s seq=%d: header order differs\n  base: %v\n  cand: %v\n",
-				file, b.Seq, baseHeaders, candHeaders)
-			diffs++
-		}
-		baseKeys := bodyTopLevelKeys(b.BodyJSON)
-		candKeys := bodyTopLevelKeys(c.BodyJSON)
-		if strings.Join(baseKeys, "\n") != strings.Join(candKeys, "\n") {
-			fmt.Fprintf(os.Stderr, "compare: %s seq=%d: body top-level key order differs\n  base: %v\n  cand: %v\n",
-				file, b.Seq, baseKeys, candKeys)
-			diffs++
-		}
-		if verbose && b.Kind == c.Kind && b.Target == c.Target {
-			fmt.Printf("%s seq=%d: match\n", file, b.Seq)
+		} else if verbose {
+			fmt.Printf("%s %s: %d requests match\n", file, key, len(values))
 		}
 	}
-	for key := range cand {
-		if _, ok := base[key]; !ok {
-			fmt.Fprintf(os.Stderr, "compare: %s conn=%d seq=%d: extra record in candidate\n", file, key.Conn, key.Seq)
+	for key := range b {
+		if _, ok := a[key]; !ok {
+			fmt.Fprintf(os.Stderr, "compare: %s %s: extra request group\n", file, key)
 			diffs++
 		}
 	}
 	return diffs
-}
-
-func headerNames(headers []headerKV) []string {
-	out := make([]string, 0, len(headers))
-	for _, header := range headers {
-		name := strings.ToLower(header.Name)
-		// Host/port and content length vary with the fake listener.
-		if name == "host" || name == "content-length" || name == "date" {
-			continue
-		}
-		out = append(out, name)
-	}
-	return out
 }
 
 func bodyTopLevelKeys(raw json.RawMessage) []string {
@@ -206,33 +175,6 @@ func readJSONFile(path string) (any, error) {
 		return nil, err
 	}
 	return value, nil
-}
-
-func jsonEqualIgnoringRecordedAt(a, b any) bool {
-	return string(mustJSON(stripVolatileJSON(a))) == string(mustJSON(stripVolatileJSON(b)))
-}
-
-func stripVolatileJSON(value any) any {
-	switch v := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for key, child := range v {
-			switch key {
-			case "recorded_at", "seq", "conn", "conn_request_index":
-				continue
-			}
-			out[key] = stripVolatileJSON(child)
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, child := range v {
-			out[i] = stripVolatileJSON(child)
-		}
-		return out
-	default:
-		return value
-	}
 }
 
 func mustJSON(value any) []byte {

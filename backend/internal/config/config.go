@@ -1389,7 +1389,7 @@ type GatewayOpenAIWSConfig struct {
 	// StoreDisabledForceNewConn: store=false 且无可复用粘连连接时是否强制新建连接（默认 true，保障会话隔离）
 	// 兼容旧配置；当 StoreDisabledConnMode 为空时才生效。
 	StoreDisabledForceNewConn bool `mapstructure:"store_disabled_force_new_conn"`
-	// PrewarmGenerateEnabled: 是否启用 WSv2 generate=false 预热（默认 false）
+	// PrewarmGenerateEnabled: 网关管理的 OAuth HTTP→WSv2 generate=false 预热（默认 true）
 	PrewarmGenerateEnabled bool `mapstructure:"prewarm_generate_enabled"`
 	// DeltaContextEnabled: OAuth codex lane 的增量上下文传输（官方 Codex CLI 协议：
 	// input 仅发尾部新增 items + previous_response_id 锚定上轮响应）。默认 true，
@@ -1475,21 +1475,18 @@ type GatewayOpenAIWSConfig struct {
 	// StickyPreviousResponseTTLSeconds: 兼容旧键（当新键未设置时回退）
 	StickyPreviousResponseTTLSeconds int `mapstructure:"sticky_previous_response_ttl_seconds"`
 
-	// SessionDisableEnabled: 官方 Codex CLI 会话级传输回退的账号级模拟。
-	// 开启后，账号的 WS 失败按原因分类把该账号临时标记为 WS 禁用，
-	// 期间新请求直接走 HTTP；TTL 到期后自动重探（下个 WS 请求即探测）。
+	// SessionDisableEnabled keeps a failed logical client session on HTTP.
+	// Other sessions using the same account retain their own transport choice.
 	SessionDisableEnabled bool `mapstructure:"session_disable_enabled"`
 	// CodexHTTPH2Enabled: Codex OAuth 的 HTTP 出站模拟「自定义 CA」部署的官方
 	// 客户端（rustls-h2 TLS profile + codexwire h2 多路复用）。默认 false：官方
 	// Linux 客户端默认走 native-tls/OpenSSL、无 ALPN、HTTP/1.1、每请求新连接
 	// （openssl36 profile + codexwire 原始 h1，codexgolden 实抓校准）。
 	CodexHTTPH2Enabled bool `mapstructure:"codex_http_h2_enabled"`
-	// SessionDisableRetryTTLMS: 可重试类故障（dial/read/write/upstream 5xx/
-	// error_event 等）耗尽重试预算后的账号 WS 禁用时长（毫秒）。
+	// SessionDisableRetryTTLMS is retained for configuration compatibility.
+	// Session fallback no longer expires on an account-wide retry timer.
 	SessionDisableRetryTTLMS int `mapstructure:"session_disable_retry_ttl_ms"`
-	// SessionDisableCapabilityTTLMS: 能力信号类故障（426 upgrade_required /
-	// ws_unsupported）的账号 WS 禁用时长（毫秒）；此类故障非瞬时，
-	// 默认比重试类显著更长。
+	// SessionDisableCapabilityTTLMS is retained for configuration compatibility.
 	SessionDisableCapabilityTTLMS int `mapstructure:"session_disable_capability_ttl_ms"`
 
 	SchedulerScoreWeights GatewayOpenAIWSSchedulerScoreWeights `mapstructure:"scheduler_score_weights"`
@@ -2593,7 +2590,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.ingress_previous_response_recovery_enabled", true)
 	viper.SetDefault("gateway.openai_ws.store_disabled_conn_mode", "strict")
 	viper.SetDefault("gateway.openai_ws.store_disabled_force_new_conn", true)
-	viper.SetDefault("gateway.openai_ws.prewarm_generate_enabled", false)
+	viper.SetDefault("gateway.openai_ws.prewarm_generate_enabled", true)
 	viper.SetDefault("gateway.openai_ws.delta_context_enabled", true)
 	viper.SetDefault("gateway.openai_ws.exact_fidelity_enabled", true)
 	viper.SetDefault("gateway.openai_ws.client_read_limit_bytes", 64*1024*1024)

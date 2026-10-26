@@ -142,10 +142,12 @@ func TestCodexSynthesisGenericClientGetsFullCodexShape(t *testing.T) {
 	}, openAIUpstreamJSONTopLevelKeys(sent))
 	require.Equal(t, "developer", gjson.GetBytes(sent, "input.0.role").String())
 	require.True(t, isCodexBaseInstructionsItemMustParse(t, sent, 0))
-	require.Contains(t, gjson.GetBytes(sent, "input.1.content.0.text").String(), "<permissions instructions>")
-	require.Equal(t, "user", gjson.GetBytes(sent, "input.2.role").String())
-	require.Contains(t, gjson.GetBytes(sent, "input.2.content.0.text").String(), "<environment_context>")
-	require.Equal(t, "hello", gjson.GetBytes(sent, "input.3.content").String())
+	require.Len(t, gjson.GetBytes(sent, "input").Array(), 3)
+	require.Contains(t, gjson.GetBytes(sent, "input.1.content.0.text").String(), "Use only the tools declared for this request")
+	require.Equal(t, "hello", gjson.GetBytes(sent, "input.2.content").String())
+	require.NotContains(t, string(sent), "<permissions instructions>")
+	require.NotContains(t, string(sent), "<environment_context>")
+	require.NotContains(t, string(sent), "<skills_instructions>")
 
 	// Generic clients get hosted tools only, never client-executed shell tools.
 	require.False(t, gjson.GetBytes(sent, `tools.#(name=="exec_command")`).Exists())
@@ -171,19 +173,278 @@ func isCodexBaseInstructionsItemMustParse(t *testing.T, body []byte, index int) 
 
 func itoaForTest(v int) string { return strconv.Itoa(v) }
 
-func TestCodexSynthesisCompatibleClientMapsOfficialToolNames(t *testing.T) {
+func TestCodexSynthesisCompatibleClientPreservesDeclaredTools(t *testing.T) {
 	pinCodexTestVersion(t, "0.163.0")
 	svc := &OpenAIGatewayService{cfg: codexSynthEnabledConfig()}
 	account := newCodexSynthTestAccount(7102, AccountTypeOAuth)
+	account.Extra[codexClientCapabilityExtraKey] = "compatible"
 	body := []byte(`{"model":"gpt-5.5","stream":true,"tools":[{"type":"function","name":"shell","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}}],"input":[{"type":"message","role":"user","content":"hello"}]}`)
 
 	upstream := runCodexSynthForward(t, svc, account, body, map[string]string{"User-Agent": "third-party/1.0"})
 	sent := upstream.lastBody
-	require.True(t, gjson.GetBytes(sent, `tools.#(name=="exec_command")`).Exists(), "client shell tool is aliased to exec_command")
-	require.False(t, gjson.GetBytes(sent, `tools.#(name=="shell")`).Exists())
-	require.True(t, gjson.GetBytes(sent, `tools.#(name=="apply_patch")`).Exists())
-	require.True(t, gjson.GetBytes(sent, `tools.#(name=="update_plan")`).Exists())
-	require.Contains(t, string(sent), "<skills_instructions>")
+	require.JSONEq(t, gjson.GetBytes(body, "tools").Raw, gjson.GetBytes(sent, "tools").Raw)
+	require.NotContains(t, string(sent), "<skills_instructions>")
+	require.NotContains(t, string(sent), "<permissions instructions>")
+	require.NotContains(t, string(sent), "<environment_context>")
+}
+
+func TestCodexSynthesisToolContractRoundTrip(t *testing.T) {
+	pinCodexTestVersion(t, "0.163.0")
+	gin.SetMode(gin.TestMode)
+	for _, capability := range []string{"generic", "compatible"} {
+		for _, tool := range []struct {
+			name     string
+			field    string
+			value    string
+			wireName string
+		}{
+			{"shell", "command", "printf hello", "shell"},
+			{"bash", "script", "printf hello", "bash"},
+			{"edit", "replacement", "replacement text", "edit"},
+			{"exec_command", "command", "printf hello", "exec_command"},
+			{"python", "code", "print('hello')", codexPythonToolAlias},
+		} {
+			t.Run(capability+"/"+tool.name, func(t *testing.T) {
+				account := newCodexSynthTestAccount(7105, AccountTypeOAuth)
+				account.Extra[codexClientCapabilityExtraKey] = capability
+				schema := map[string]any{
+					"type": "object", "properties": map[string]any{tool.field: map[string]any{"type": "string"}},
+					"required": []any{tool.field}, "additionalProperties": false,
+				}
+				arguments, err := json.Marshal(map[string]string{tool.field: tool.value})
+				require.NoError(t, err)
+				upstreamCall := map[string]any{
+					"type": "function_call", "id": "fc_item", "call_id": "call_contract",
+					"name": tool.wireName, "arguments": string(arguments), "status": "completed",
+				}
+				completed, err := json.Marshal(map[string]any{
+					"type": "response.completed", "response": map[string]any{
+						"id": "resp_contract", "model": "gpt-5.5", "status": "completed", "output": []any{upstreamCall},
+						"usage": map[string]any{"input_tokens": 1, "output_tokens": 1},
+					},
+				})
+				require.NoError(t, err)
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}},
+					Body: io.NopCloser(strings.NewReader("data: " + string(completed) + "\n\ndata: [DONE]\n\n")),
+				}}
+				svc := &OpenAIGatewayService{cfg: codexSynthEnabledConfig(), httpUpstream: upstream, tiboRouteDisabled: true}
+				request := map[string]any{
+					"model": "gpt-5.5", "stream": false,
+					"tools":       []any{map[string]any{"type": "function", "name": tool.name, "strict": true, "parameters": schema}},
+					"tool_choice": map[string]any{"type": "function", "name": tool.name},
+					"input":       []any{map[string]any{"type": "message", "role": "user", "content": "use the declared tool"}},
+				}
+				body, err := json.Marshal(request)
+				require.NoError(t, err)
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+				c.Request.Header.Set("Content-Type", "application/json")
+				c.Request.Header.Set("User-Agent", "third-party/1.0")
+				_, err = svc.Forward(context.Background(), c, account, body)
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rec.Code)
+				sent := upstream.lastBody
+				require.Equal(t, tool.wireName, gjson.GetBytes(sent, "tools.0.name").String())
+				require.JSONEq(t, gjson.GetBytes(body, "tools.0.parameters").Raw, gjson.GetBytes(sent, "tools.0.parameters").Raw)
+				require.True(t, gjson.GetBytes(sent, "tools.0.strict").Bool())
+				require.Equal(t, tool.wireName, gjson.GetBytes(sent, "tool_choice.name").String())
+				for _, declaration := range gjson.GetBytes(sent, "tools").Array() {
+					if declaration.Get("type").String() != "web_search" {
+						require.Equal(t, tool.wireName, declaration.Get("name").String(), "no undeclared client executor")
+					}
+				}
+
+				// The downstream dispatches by name and decodes its own argument
+				// schema. A name-only alias to exec_command/apply_patch fails here.
+				call := gjson.Get(rec.Body.String(), "output.0")
+				require.Equal(t, "function_call", call.Get("type").String())
+				require.Equal(t, tool.name, call.Get("name").String())
+				var received map[string]string
+				require.NoError(t, json.Unmarshal([]byte(call.Get("arguments").String()), &received))
+				require.Equal(t, map[string]string{tool.field: tool.value}, received)
+				var replay map[string]any
+				require.NoError(t, json.Unmarshal([]byte(call.Raw), &replay))
+				request["input"] = append(request["input"].([]any), replay, map[string]any{
+					"type": "function_call_output", "call_id": call.Get("call_id").String(), "output": "downstream-result",
+				})
+				body, err = json.Marshal(request)
+				require.NoError(t, err)
+				sent = runCodexSynthForward(t, svc, account, body, map[string]string{"User-Agent": "third-party/1.0"}).lastBody
+				replayed := gjson.GetBytes(sent, `input.#(type=="function_call")`)
+				output := gjson.GetBytes(sent, `input.#(type=="function_call_output")`)
+				require.Equal(t, tool.wireName, replayed.Get("name").String())
+				require.JSONEq(t, string(arguments), replayed.Get("arguments").String())
+				require.NotEmpty(t, output.Get("call_id").String())
+				require.Equal(t, replayed.Get("call_id").String(), output.Get("call_id").String())
+				require.Equal(t, "downstream-result", output.Get("output").String())
+			})
+		}
+	}
+}
+
+func TestCodexSynthesisLitePreservesToolContracts(t *testing.T) {
+	pinCodexTestVersion(t, "0.163.0")
+	for _, capability := range []string{"generic", "compatible"} {
+		t.Run(capability, func(t *testing.T) {
+			account := newCodexSynthTestAccount(7106, AccountTypeOAuth)
+			account.Extra[codexClientCapabilityExtraKey] = capability
+			body := []byte(`{"model":"gpt-5.5","input":[
+				{"type":"additional_tools","role":"developer","tools":[
+					{"type":"namespace","name":"local","tools":[{"type":"function","name":"shell","parameters":{"type":"object","properties":{"command":{"type":"array","items":{"type":"string"}}},"required":["command"]}}]},
+					{"type":"custom","name":"edit","format":{"type":"text"}}
+				]},
+				{"type":"function_call","name":"shell","namespace":"local","call_id":"fc_shell","arguments":"{\"command\":[\"pwd\"]}"},
+				{"type":"function_call_output","call_id":"fc_shell","output":"/client"},
+				{"type":"custom_tool_call","name":"edit","call_id":"ctc_edit","input":"client-specific edit"},
+				{"type":"custom_tool_call_output","call_id":"ctc_edit","output":"edited"}
+			],"tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"shell","namespace":"local"},{"type":"custom","name":"edit"}]}}`)
+			var request map[string]any
+			require.NoError(t, json.Unmarshal(body, &request))
+			result, err := synthesizeCodexOAuthRequest(request, account, "gpt-5.5", codexSynthOptions{ResponsesLite: true, WireProfile: codexWireProfileStable})
+			require.NoError(t, err)
+			require.Empty(t, result.ToolNameReverse)
+			sent, err := json.Marshal(request)
+			require.NoError(t, err)
+			require.False(t, gjson.GetBytes(sent, "tools").Exists())
+			additional := gjson.GetBytes(sent, `input.#(type=="additional_tools").tools`)
+			for i, original := range gjson.GetBytes(body, "input.0.tools").Array() {
+				require.JSONEq(t, original.Raw, additional.Array()[i].Raw)
+			}
+			wantTools := 2
+			if capability == "generic" {
+				wantTools++
+				require.Equal(t, "web_search", additional.Array()[2].Get("type").String())
+			}
+			require.Len(t, additional.Array(), wantTools)
+			require.JSONEq(t, gjson.GetBytes(body, "tool_choice").Raw, gjson.GetBytes(sent, "tool_choice").Raw)
+			for i, original := range gjson.GetBytes(body, "input").Array()[1:] {
+				require.JSONEq(t, original.Raw, gjson.GetBytes(sent, "input").Array()[i+3].Raw)
+			}
+			svc := &OpenAIGatewayService{cfg: codexSynthEnabledConfig()}
+			sent = runCodexSynthForward(t, svc, account, body, map[string]string{
+				"User-Agent": "third-party/1.0", responsesLiteHeader: "true",
+			}).lastBody
+			require.False(t, gjson.GetBytes(sent, "tools").Exists())
+			additional = gjson.GetBytes(sent, `input.#(type=="additional_tools").tools`)
+			for i, original := range gjson.GetBytes(body, "input.0.tools").Array() {
+				require.JSONEq(t, original.Raw, additional.Array()[i].Raw)
+			}
+			require.Equal(t, "shell", gjson.GetBytes(sent, `input.#(type=="function_call").name`).String())
+			require.Equal(t, "edit", gjson.GetBytes(sent, `input.#(type=="custom_tool_call").name`).String())
+			require.Equal(t, "client-specific edit", gjson.GetBytes(sent, `input.#(type=="custom_tool_call").input`).String())
+			for _, kind := range []string{"function", "custom_tool"} {
+				callID := gjson.GetBytes(sent, `input.#(type=="`+kind+`_call").call_id`).String()
+				require.NotEmpty(t, callID)
+				require.Equal(t, callID, gjson.GetBytes(sent, `input.#(type=="`+kind+`_call_output").call_id`).String())
+			}
+		})
+	}
+}
+
+func TestCodexSynthesisNativeClassificationPreservesPromptAndTools(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		official   bool
+		capability string
+		input      string
+	}{
+		{"marked_with_compatible_setting", false, "compatible", `[{"type":"message","role":"developer","content":"native base","internal_chat_message_metadata_passthrough":{"content_item_kinds":["model.base_instructions"]}}]`},
+		{"official_unmarked", true, "compatible", `[{"type":"message","role":"developer","content":"native base"}]`},
+		{"explicit_native", false, "native", `[{"type":"message","role":"user","content":"hi"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := newCodexSynthTestAccount(7107, AccountTypeOAuth)
+			account.Extra[codexClientCapabilityExtraKey] = tc.capability
+			body := `{"input":` + tc.input + `,"tools":[{"type":"function","name":"bash","parameters":{"type":"object","properties":{"script":{"type":"string"}},"required":["script"]}}]}`
+			var request map[string]any
+			require.NoError(t, json.Unmarshal([]byte(body), &request))
+			result, err := synthesizeCodexOAuthRequest(request, account, "gpt-5.5", codexSynthOptions{OfficialClient: tc.official})
+			require.NoError(t, err)
+			require.Equal(t, codexCapabilityNative, result.Capability)
+			require.False(t, result.Modified)
+			sent, err := json.Marshal(request)
+			require.NoError(t, err)
+			require.JSONEq(t, body, string(sent))
+		})
+	}
+}
+
+func TestCodexSynthesisUserAgentAndToolNamesDoNotGrantCapabilities(t *testing.T) {
+	account := newCodexSynthTestAccount(7108, AccountTypeOAuth)
+	request := map[string]any{
+		"input": []any{map[string]any{"role": "user", "content": "hi"}},
+		"tools": []any{map[string]any{"type": "function", "name": "shell", "parameters": map[string]any{"type": "object"}}},
+	}
+	result, err := synthesizeCodexOAuthRequest(request, account, "gpt-5.5", codexSynthOptions{OfficialClient: true})
+	require.NoError(t, err)
+	require.Equal(t, codexCapabilityGeneric, result.Capability)
+	require.Empty(t, result.ToolNameReverse)
+	sent, err := json.Marshal(request)
+	require.NoError(t, err)
+	require.Equal(t, "shell", gjson.GetBytes(sent, "tools.0.name").String())
+	require.Len(t, gjson.GetBytes(sent, "tools").Array(), 2, "only declared shell and hosted search")
+	require.Len(t, gjson.GetBytes(sent, "input").Array(), 3, "base prompt, actual capability guidance and client message")
+}
+
+func TestCodexSynthesisEnvironmentRequiresExplicitFacts(t *testing.T) {
+	account := newCodexSynthTestAccount(7109, AccountTypeOAuth)
+	account.Extra[codexClientCapabilityExtraKey] = "compatible"
+	device, ok := codexDeviceProfileForRequest(account)
+	require.True(t, ok)
+	prefix, skills := codexSynthesisPrefixItems(openai.CodexCatalogModel{}, false, codexCapabilityCompatible, "base", codexSynthOptions{Device: device})
+	require.Len(t, prefix, 2, "device defaults do not describe downstream permissions")
+	require.Nil(t, skills)
+	account.Extra[codexWorkspaceCWDExtraKey] = "/client/<workspace>"
+	env := codexSynthesisConfiguredEnvironment(account, nil)
+	require.Equal(t, codexDeviceProfile{WorkspaceCWD: "/client/<workspace>"}, env)
+	require.Empty(t, codexSynthesisPermissionsText(env), "a cwd does not imply write permission")
+	account.Extra[codexSandboxModeExtraKey] = "read-only"
+	account.Extra[codexTimezoneExtraKey] = "America/Los_Angeles"
+	request := map[string]any{"input": "hi"}
+	_, err := synthesizeCodexOAuthRequest(request, account, "gpt-5.5", codexSynthOptions{
+		Device: device, Now: time.Date(2026, 2, 3, 2, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	sent, err := json.Marshal(request)
+	require.NoError(t, err)
+	permissions := gjson.GetBytes(sent, "input.2.content.0.text").String()
+	environment := gjson.GetBytes(sent, "input.3.content.0.text").String()
+	require.Contains(t, permissions, "`read-only`")
+	require.Contains(t, environment, "<cwd>/client/&lt;workspace&gt;</cwd>")
+	require.Contains(t, environment, "2026-02-02")
+	require.Contains(t, environment, "America/Los_Angeles")
+	for _, invented := range []string{"<shell>", "<filesystem>", "Approval policy", "Network access", "<skills_instructions>", "writable_roots"} {
+		require.NotContains(t, permissions+environment, invented)
+	}
+
+	account.Extra[codexWorkspaceCWDExtraKey] = "../etc"
+	account.Extra[codexSandboxModeExtraKey] = "unsafe"
+	account.Extra[codexTimezoneExtraKey] = "Not/AZone"
+	require.Equal(t, codexDeviceProfile{}, codexSynthesisConfiguredEnvironment(account, nil))
+}
+
+func TestCodexSynthesisClientContextRemainsAuthoritative(t *testing.T) {
+	account := newCodexSynthTestAccount(7110, AccountTypeOAuth)
+	account.Extra[codexWorkspaceCWDExtraKey] = "/account-default"
+	account.Extra[codexSandboxModeExtraKey] = "workspace-write"
+	body := `{"input":[{"type":"message","role":"developer","content":"<permissions instructions>read-only; ask for approval</permissions instructions>"},{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context><cwd>/client</cwd><shell>fish</shell></environment_context>"}]},{"type":"message","role":"developer","content":"<skills_instructions>Only project-review at /client/review/SKILL.md</skills_instructions>"}]}`
+	var request map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &request))
+	_, err := synthesizeCodexOAuthRequest(request, account, "gpt-5.5", codexSynthOptions{})
+	require.NoError(t, err)
+	sent, err := json.Marshal(request)
+	require.NoError(t, err)
+	input := gjson.GetBytes(sent, "input").Array()
+	require.Len(t, input, 5)
+	for i, original := range gjson.Get(body, "input").Array() {
+		require.JSONEq(t, original.Raw, input[i+2].Raw)
+	}
+	require.NotContains(t, string(sent), "/account-default")
+
+	request = map[string]any{"input": "<environment_context><cwd>/client</cwd></environment_context>"}
+	require.Equal(t, codexDeviceProfile{}, codexSynthesisConfiguredEnvironment(account, request), "string input also carries client context")
 }
 
 func TestCodexSynthesisNativeRequestIsNotRebuilt(t *testing.T) {
@@ -191,7 +452,7 @@ func TestCodexSynthesisNativeRequestIsNotRebuilt(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: codexSynthEnabledConfig()}
 	account := newCodexSynthTestAccount(7103, AccountTypeOAuth)
 	base := "native base prompt"
-	body := []byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"message","id":"msg_x","role":"developer","content":[{"type":"input_text","text":"native base prompt"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["model.base_instructions"]}},{"type":"message","role":"user","content":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"message","id":"msg_x","role":"developer","content":[{"type":"input_text","text":"native base prompt"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["model.base_instructions"]}},{"type":"message","role":"user","content":"hello"}],"tools":[{"type":"custom","name":"apply_patch","format":{"type":"text"}},{"type":"function","name":"shell","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}]}`)
 
 	upstream := runCodexSynthForward(t, svc, account, body, map[string]string{
 		"User-Agent": "codex_exec/0.163.0 (Ubuntu 26.4.0; x86_64) xterm-256color (codex_exec; 0.163.0)",
@@ -201,6 +462,7 @@ func TestCodexSynthesisNativeRequestIsNotRebuilt(t *testing.T) {
 	require.Equal(t, base, gjson.GetBytes(sent, "input.0.content.0.text").String())
 	require.Equal(t, "hello", gjson.GetBytes(sent, "input.1.content").String())
 	require.Equal(t, 2, len(gjson.GetBytes(sent, "input").Array()), "native requests keep their original input")
+	require.JSONEq(t, gjson.GetBytes(body, "tools").Raw, gjson.GetBytes(sent, "tools").Raw)
 }
 
 func TestCodexSynthesisSkippedForNonOAuthScope(t *testing.T) {
@@ -321,7 +583,8 @@ func TestCodexSynthesisChatCompletionsBridge(t *testing.T) {
 	sent := upstream.lastBody
 	require.False(t, gjson.GetBytes(sent, "instructions").Exists())
 	require.True(t, isCodexBaseInstructionsItemMustParse(t, sent, 0), "base prompt must be input[0]")
-	require.True(t, gjson.GetBytes(sent, `tools.#(name=="exec_command")`).Exists(), string(sent))
+	require.Equal(t, "object", gjson.GetBytes(sent, `tools.#(name=="shell").parameters.type`).String())
+	require.False(t, gjson.GetBytes(sent, `tools.#(name=="exec_command")`).Exists())
 	require.Contains(t, string(sent), "be terse", "client system message is preserved as a developer item")
 }
 
@@ -352,13 +615,15 @@ func TestCodexSynthesisAnthropicBridge(t *testing.T) {
 	sent := upstream.lastBody
 	require.False(t, gjson.GetBytes(sent, "instructions").Exists())
 	require.True(t, isCodexBaseInstructionsItemMustParse(t, sent, 0), "base prompt must be input[0]")
-	require.True(t, gjson.GetBytes(sent, `tools.#(name=="exec_command")`).Exists(), string(sent))
+	require.Equal(t, "object", gjson.GetBytes(sent, `tools.#(name=="shell").parameters.type`).String())
+	require.False(t, gjson.GetBytes(sent, `tools.#(name=="exec_command")`).Exists())
 	require.Contains(t, string(sent), "be terse")
 }
 
 func TestCodexFingerprintMultiUserIsolation(t *testing.T) {
 	accountA := newCodexSynthTestAccount(7301, AccountTypeOAuth)
 	accountB := newCodexSynthTestAccount(7302, AccountTypeOAuth)
+	accountB.Credentials["chatgpt_account_id"] = "other-chatgpt-account"
 	accountB.Extra[codexFingerprintSeedExtraKey] = "22222222-2222-4222-8222-222222222222"
 
 	idsA1 := resolveCodexFingerprintIDs(accountA, "shared-client-session", codexFingerprintFull)

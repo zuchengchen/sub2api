@@ -1253,7 +1253,56 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughBridg
 	}
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeadersUsePromptCacheAndTurnState(t *testing.T) {
+func TestOpenAIWSNativePrewarmAndTurnState(t *testing.T) {
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		for _, mode := range []string{OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough} {
+			t.Run(accountType+"/"+mode, func(t *testing.T) {
+				cfg := newOpenAIWSExecutionScopeTestConfig()
+				cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = true
+				cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+				conn := &openAIWSCaptureConn{events: [][]byte{[]byte(`{"type":"response.completed","response":{"id":"resp_native","output":[]}}`)}}
+				headers := make(http.Header)
+				headers.Set(openAIWSTurnStateHeader, "upstream-state")
+				dialer := &openAIWSCaptureDialer{conn: conn, handshake: headers}
+				pool := newOpenAIWSConnPool(cfg)
+				pool.setClientDialerForTest(dialer)
+				defer pool.Close()
+				svc := &OpenAIGatewayService{cfg: cfg, openaiWSPool: pool, openaiWSPassthroughDialer: dialer, toolCorrector: NewCodexToolCorrector()}
+				account := &Account{ID: 345, Platform: PlatformOpenAI, Type: accountType, Concurrency: 1,
+					Credentials: map[string]any{"api_key": "sk-test", "access_token": "sk-test"},
+					Extra:       map[string]any{"responses_websockets_v2_enabled": true, "openai_oauth_responses_websockets_v2_mode": mode, "openai_apikey_responses_websockets_v2_mode": mode}}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				server, serverErr := startPassthroughLifecycleServer(t, ctx, svc, account)
+				defer server.Close()
+				clientHeaders := make(http.Header)
+				clientHeaders.Set("User-Agent", "codex_cli_rs/0.164.0")
+				clientHeaders.Set(openAIWSTurnStateHeader, "upgrade-state")
+				client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &coderws.DialOptions{HTTPHeader: clientHeaders})
+				require.NoError(t, err)
+				defer client.CloseNow()
+				require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","generate":false,"model":"gpt-5.5","input":[{"role":"user","content":"native"}],"client_metadata":{"x-codex-turn-state":"frame-state"}}`)))
+				_, _, err = client.Read(ctx)
+				require.NoError(t, err)
+				_ = client.Close(coderws.StatusNormalClosure, "done")
+				select {
+				case <-serverErr:
+				case <-ctx.Done():
+					t.Fatal("native relay did not stop")
+				}
+				require.Empty(t, dialer.lastHeaders.Get(openAIWSTurnStateHeader))
+				require.Len(t, conn.writes, 1, "native startup frame must not trigger a second synthetic prewarm")
+				frame := requestToJSONString(conn.writes[0])
+				require.True(t, gjson.Get(frame, "generate").Exists())
+				require.False(t, gjson.Get(frame, "generate").Bool())
+				require.Equal(t, "frame-state", gjson.Get(frame, "client_metadata."+openAIWSTurnStateHeader).String())
+				require.Equal(t, int64(1), gjson.Get(frame, "input.#").Int())
+			})
+		}
+	}
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughSeparatesCacheAndSession(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -1300,6 +1349,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	}
 
 	serverErrCh := make(chan error, 1)
+	var anonymousSession string
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{
 			CompressionMode: coderws.CompressionContextTakeover,
@@ -1333,7 +1383,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 			return
 		}
 
-		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "oauth-token", firstMessage, nil)
+		err = svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "oauth-token", firstMessage, nil)
+		anonymousSession = ginCtx.GetString("codex_anonymous_http_session")
+		serverErrCh <- err
 	}))
 	defer wsServer.Close()
 
@@ -1377,12 +1429,15 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 		t.Fatal("等待 passthrough websocket 结束超时")
 	}
 
-	require.Equal(t, canonicalCodexSessionHeaderValue(isolateOpenAIUpstreamSessionID(0, account, "pcache_passthrough")), captureDialer.lastHeaders.Get("session-id"))
+	require.NotEmpty(t, anonymousSession)
+	require.Equal(t, canonicalCodexSessionHeaderValue(scopeCodexAccountIdentityValue(account, 0, "session", anonymousSession)), captureDialer.lastHeaders.Get("session-id"))
+	require.NotEqual(t, canonicalCodexSessionHeaderValue("pcache_passthrough"), captureDialer.lastHeaders.Get("session-id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
-	require.Equal(t, "turn-state-1", captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
+	require.Empty(t, captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
 	require.Equal(t, "turn-meta-1", captureDialer.lastHeaders.Get(openAIWSTurnMetadataHeader))
 	require.Len(t, upstreamConn.writes, 1)
 	forwarded := requestToJSONString(upstreamConn.writes[0])
+	require.Equal(t, "turn-state-1", gjson.Get(forwarded, "client_metadata."+openAIWSTurnStateHeader).String())
 	require.False(t, gjson.Get(forwarded, `tools.#(type=="namespace")`).Exists())
 	require.Equal(t, "collaboration", gjson.Get(forwarded, `input.#(type=="additional_tools").tools.0.name`).String())
 	require.Equal(t, "namespace", gjson.Get(forwarded, "tool_choice.type").String())

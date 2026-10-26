@@ -36,6 +36,13 @@ func TestRewriteOpenAIClientLocalTimeContext_EnvironmentTags(t *testing.T) {
 	require.NotContains(t, text, "Asia/Shanghai")
 }
 
+func TestRewriteOpenAIClientLocalTimePreservesNativeEnvironment(t *testing.T) {
+	body := []byte(`{"input":[{"role":"developer","content":"base","internal_chat_message_metadata_passthrough":{"content_item_kinds":["model.base_instructions"]}},{"role":"user","content":"<environment_context><timezone>Asia/Tokyo</timezone></environment_context>"}]}`)
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	got := svc.rewriteOpenAIClientLocalTimeIfEnabled(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, body)
+	require.Equal(t, body, got)
+}
+
 func TestRewriteOpenAIClientLocalTimeContext_DoesNotTouchProseDates(t *testing.T) {
 	ctx := pacificTestContext(t, 8)
 

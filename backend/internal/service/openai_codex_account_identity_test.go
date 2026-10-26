@@ -245,3 +245,46 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 	require.Equal(t, first.Get("session-id"), firstMeta["session_id"], "session identity must agree between header and body metadata")
 	require.GreaterOrEqual(t, checked, 4, "test must exercise the real outbound identity surface")
 }
+
+func TestCodexAccountIdentityParentHeaderMatchesBody(t *testing.T) {
+	for _, mode := range []string{"device", "off", "full", "unseeded"} {
+		t.Run(mode, func(t *testing.T) {
+			account := newTestOAuthAccount(61, map[string]any{codexFingerprintModeExtraKey: mode})
+			account.Credentials = map[string]any{"chatgpt_account_id": "parent-header-credential"}
+			if mode == "unseeded" {
+				account.Extra = nil
+			}
+			c := newFingerprintStageTestContext(t)
+			c.Set("api_key", &APIKey{ID: 13})
+			c.Request.Header.Set("session-id", convTestSession)
+			c.Request.Header.Set("thread-id", convTestThread)
+			c.Request.Header.Set("x-codex-parent-thread-id", convTestParentThread)
+			body := []byte(`{"model":"gpt-5.5","input":[],"client_metadata":{"session_id":"` + convTestSession + `","thread_id":"` + convTestThread + `","parent_thread_id":"` + convTestParentThread + `"}}`)
+			ids := resolveCodexFingerprintIDsForRawBody(c, account, nil, body)
+			scoped, _, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 13)
+			require.NoError(t, err)
+			projected, _, err := applyCodexFingerprintClientMetadataRaw(scoped, ids)
+			require.NoError(t, err)
+			stageCodexFingerprintIDs(c, ids)
+			stageCodexConvergenceBodyIdentityRaw(c, account, projected)
+
+			svc := &OpenAIGatewayService{}
+			req, err := svc.buildUpstreamRequestOpenAIPassthrough(context.Background(), c, account, projected, "token")
+			require.NoError(t, err)
+			parent := scopeCodexAccountIdentityValue(account, 13, "thread", convTestParentThread)
+			require.Equal(t, parent, req.Header.Get("x-codex-parent-thread-id"))
+			require.Equal(t, parent, gjson.GetBytes(projected, "client_metadata.parent_thread_id").String())
+			require.NotEqual(t, convTestParentThread, parent)
+		})
+	}
+
+	for _, account := range []*Account{
+		{Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
+		{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+	} {
+		headers := http.Header{}
+		headers.Set("x-codex-parent-thread-id", convTestParentThread)
+		applyCodexAccountIdentityHeaders(headers, account, 13)
+		require.Equal(t, convTestParentThread, headers.Get("x-codex-parent-thread-id"))
+	}
+}

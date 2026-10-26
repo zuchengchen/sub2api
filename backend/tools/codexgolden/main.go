@@ -21,6 +21,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -55,6 +56,8 @@ func main() {
 	timeout := flag.Duration("timeout", 90*time.Second, "per-run timeout")
 	useStrace := flag.Bool("strace", true, "trace connect(2) and fail on non-loopback destinations")
 	modelsPath := flag.String("models-json", "", "models.json served for GET /codex/models (codex-rs/models-manager/models.json at the recorded tag)")
+	expectVersion := flag.String("expect-version", "", "require this exact CLI version before recording")
+	sourceCommit := flag.String("source-commit", "", "official commit resolved from the recorded release tag")
 	flag.StringVar(&keepDir, "keep", "", "copy each sandbox (trace, stderr) here for debugging")
 	traceDNS := flag.Bool("trace-dns", false, "also trace sendto/sendmsg to see DNS query names (debug)")
 	flag.Parse()
@@ -79,6 +82,9 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	if *expectVersion != "" && version != "codex-cli "+*expectVersion {
+		fatal(fmt.Errorf("version %q does not match requested %q", version, *expectVersion))
+	}
 	fmt.Printf("recording %s\n", version)
 
 	tracer := ""
@@ -86,7 +92,7 @@ func main() {
 		if p, err := exec.LookPath("strace"); err == nil {
 			tracer = p
 		} else {
-			fmt.Fprintln(os.Stderr, "warning: strace not found; outbound-connection guard disabled")
+			fatal(errors.New("strace is required unless explicitly disabled with -strace=false"))
 		}
 	}
 
@@ -95,6 +101,27 @@ func main() {
 		"recorded_at":   time.Now().UTC().Format(time.RFC3339),
 		"recorder":      "backend/tools/codexgolden",
 	}
+	if *sourceCommit != "" {
+		meta["source_commit"] = *sourceCommit
+	}
+	if len(modelsJSON) > 0 {
+		meta["models_sha256"] = fmt.Sprintf("%x", sha256.Sum256(modelsJSON))
+	}
+	binPath, err := exec.LookPath(*codexBin)
+	if err != nil {
+		fatal(err)
+	}
+	bin, err := os.Open(binPath)
+	if err != nil {
+		fatal(err)
+	}
+	hash := sha256.New()
+	_, hashErr := io.Copy(hash, bin)
+	_ = bin.Close()
+	if hashErr != nil {
+		fatal(hashErr)
+	}
+	meta["binary_sha256"] = fmt.Sprintf("%x", hash.Sum(nil))
 	var leaks []string
 
 	hellos, tlsLeaks, err := recordTLS(*codexBin, tracer, *timeout)
@@ -106,9 +133,12 @@ func main() {
 	meta["tls_lanes"] = len(hellos)
 
 	scenarios := []scenario{
+		{Name: "ws_initial"},
 		{Name: "ws_tool_loop", ToolLoop: true},
 		{Name: "http_fallback_tool_loop", RejectWebSocket: true, ToolLoop: true},
 		{Name: "http_unauthorized_refresh", RejectWebSocket: true, UnauthorizedUntilRefresh: true},
+		{Name: "ws_unauthorized_refresh", UnauthorizedUntilRefresh: true},
+		{Name: "ws_compaction", ToolLoop: true, Compaction: true},
 	}
 	var names []string
 	var customCAHellos []map[string]any
@@ -145,7 +175,16 @@ func fatal(err error) {
 }
 
 func codexVersion(bin string) (string, error) {
-	out, err := exec.Command(bin, "--version").Output()
+	sb, err := newSandbox("http://127.0.0.1:1")
+	if err != nil {
+		return "", err
+	}
+	defer sb.cleanup()
+	cmd := exec.Command(bin, "--version")
+	cmd.Dir = sb.cwd
+	cmd.Env = []string{"HOME=" + sb.home, "CODEX_HOME=" + sb.codexHome, "PATH=" + os.Getenv("PATH")}
+	cmd.Env = append(cmd.Env, blackholeProxyEnv()...)
+	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("%s --version: %w", bin, err)
 	}
@@ -431,6 +470,17 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
 		return nil, nil, nil, err
 	}
+	if sc.Compaction {
+		config, err := os.OpenFile(filepath.Join(sb.codexHome, "config.toml"), os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		_, err = io.WriteString(config, "model_auto_compact_token_limit = 1\n")
+		_ = config.Close()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
 	sb.extraEnv = []string{
 		"CODEX_CA_CERTIFICATE=" + caPath,
 		"CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + origin + "/oauth/token",
@@ -449,7 +499,58 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 		stderr, _ := os.ReadFile(filepath.Join(sb.root, "codex.stderr"))
 		return nil, nil, nil, fmt.Errorf("no Responses traffic recorded; codex stderr tail:\n%s", tail(stderr, 2000))
 	}
+	if runErr != nil || ctx.Err() != nil {
+		stderr, _ := os.ReadFile(filepath.Join(sb.root, "codex.stderr"))
+		return nil, nil, nil, fmt.Errorf("incomplete run (exec=%v context=%v): %s", runErr, ctx.Err(), tail(stderr, 2000))
+	}
+	if err := validateScenario(sc, recs); err != nil {
+		return nil, nil, nil, err
+	}
 	return normalizeRecords(recs, sb, up.port()), hellos.export(), checkTrace(traceFile), nil
+}
+
+func validateScenario(sc scenario, recs []record) error {
+	var prewarm, turns, refresh int
+	var tool, trigger, compact bool
+	for _, rec := range recs {
+		if strings.HasSuffix(rec.Target, "/oauth/token") {
+			refresh++
+		}
+		if rec.Kind != "ws_message" && !(rec.Method == "POST" && strings.HasSuffix(rec.Target, "/codex/responses")) {
+			continue
+		}
+		var body struct {
+			Generate *bool `json:"generate"`
+			Input    []struct {
+				Type string `json:"type"`
+			} `json:"input"`
+		}
+		if err := json.Unmarshal(rec.BodyJSON, &body); err != nil {
+			return fmt.Errorf("invalid Responses body: %w", err)
+		}
+		if body.Generate != nil && !*body.Generate {
+			prewarm++
+		} else {
+			turns++
+		}
+		if sc.RejectWebSocket && rec.Kind == "ws_message" {
+			return errors.New("HTTP fallback scenario unexpectedly sent WebSocket messages")
+		}
+		for _, item := range body.Input {
+			switch item.Type {
+			case "function_call_output":
+				tool = true
+			case "compaction_trigger":
+				trigger = true
+			case "compaction":
+				compact = true
+			}
+		}
+	}
+	if turns == 0 || (!sc.RejectWebSocket && prewarm != 1) || (sc.ToolLoop && !tool) || (sc.UnauthorizedUntilRefresh && refresh != 1) || (sc.Compaction && (!trigger || !compact)) {
+		return fmt.Errorf("incomplete scenario: turns=%d prewarm=%d refresh=%d tool=%v compaction_trigger=%v compaction_result=%v", turns, prewarm, refresh, tool, trigger, compact)
+	}
+	return nil
 }
 
 func hasResponsesTraffic(recs []record) bool {

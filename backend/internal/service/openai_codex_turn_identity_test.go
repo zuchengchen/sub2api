@@ -100,11 +100,39 @@ func TestCodexFullMode_PerConversationThreadsAndStableTurns(t *testing.T) {
 	require.Equal(t, a1.turnStartedAtUnixMs, a2.turnStartedAtUnixMs)
 	require.Equal(t, a1.threadID+":0", a1.windowID)
 
-	// No client session: prompt_cache_key is the conversation key and the
-	// body key is rewritten to the session id (official prompt_cache_key == session_id).
+	// A cache key alone is not proof of a session or its default cache policy.
 	p := resolveCodexFingerprintIDsWithWindow(account, "", codexFingerprintFull, "", codexTurnEvidence{PromptCacheKey: "cache-key-1"})
 	requireUUIDv7(t, p.sessionID)
-	require.True(t, shouldRewriteCodexFingerprintPromptCacheKey(p, "cache-key-1"))
+	require.False(t, shouldRewriteCodexFingerprintPromptCacheKey(p, "cache-key-1"))
 	q := resolveCodexFingerprintIDsWithWindow(account, "", codexFingerprintFull, "", codexTurnEvidence{PromptCacheKey: "cache-key-2"})
 	require.NotEqual(t, p.sessionID, q.sessionID)
+	sameCache := resolveCodexFingerprintIDsWithWindow(account, "", codexFingerprintFull, "", codexTurnEvidence{PromptCacheKey: "cache-key-1"})
+	require.NotEqual(t, p.sessionID, sameCache.sessionID)
+}
+
+func TestCodexTurnIdentity_CanonicalMetadataAndTimestampEvidence(t *testing.T) {
+	headers := http.Header{}
+	headers.Set(openAIWSTurnMetadataHeader, `{"session_id":"header-session","thread_id":"header-thread","turn_id":"stale-turn","turn_started_at_unix_ms":1}`)
+	metadata := map[string]any{
+		"session_id": "flat-session", "thread_id": "flat-thread", "turn_id": "stale-turn",
+		"turn_started_at_unix_ms":  1,
+		openAIWSTurnMetadataHeader: `{"session_id":"canonical-session","thread_id":"canonical-thread","turn_id":"` + convTestTurn + `"}`,
+	}
+	ev := collectCodexTurnEvidence(metadata, headers, gjson.Result{})
+	require.Equal(t, "canonical-session", ev.ClientSessionID)
+	require.Equal(t, "canonical-thread", ev.ClientThreadID)
+	require.Equal(t, convTestTurn, ev.ClientTurnID)
+	require.Zero(t, ev.ClientTurnStartedAtMs, "a different turn's timestamp must not be borrowed")
+	_, started := resolveCodexTurnIdentity(newTestTurnClock(), "seed", "thread", ev)
+	require.Equal(t, codexUUIDv7Millis(convTestTurn), started)
+
+	metadata[openAIWSTurnMetadataHeader] = `{"turn_id":"` + convTestTurn + `","turn_started_at_unix_ms":"1792601171792"}`
+	ev = collectCodexTurnEvidence(metadata, headers, gjson.Result{})
+	require.EqualValues(t, 1792601171792, ev.ClientTurnStartedAtMs)
+
+	id, started := resolveCodexTurnIdentity(newTestTurnClock(), "seed", "thread", codexTurnEvidence{
+		RequestID: convTestTurn, ClientTurnStartedAtMs: 1792601171792,
+	})
+	require.EqualValues(t, 1792601171792, started)
+	require.Equal(t, started, codexUUIDv7Millis(id))
 }

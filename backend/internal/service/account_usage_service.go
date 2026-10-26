@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	httppool "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	openaipkg "github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
@@ -250,6 +249,7 @@ type AccountUsageService struct {
 
 	openAI429Recovery  openAI429RecoveryScheduler
 	openaiCreditsGuard *OpenAIGatewayService
+	codexProbeSender   openAICodexProbeSender
 }
 
 type openAI429RecoveryScheduler interface {
@@ -293,6 +293,10 @@ func (s *AccountUsageService) SetOpenAICreditsGuard(gateway *OpenAIGatewayServic
 		return
 	}
 	s.openaiCreditsGuard = gateway
+}
+
+func (s *AccountUsageService) SetOpenAICodexProbeSender(sender openAICodexProbeSender) {
+	s.codexProbeSender = sender
 }
 
 func supportsAnthropicPassiveUsage(account *Account) bool {
@@ -894,15 +898,10 @@ func (s *AccountUsageService) probeOpenAICodexSnapshotLegacy(ctx context.Context
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	client, err := httppool.GetClient(httppool.Options{
-		ProxyURL:              proxyURL,
-		Timeout:               15 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build openai probe client: %w", err)
+	if s.codexProbeSender == nil {
+		return nil, fmt.Errorf("Codex usage probe transport is unavailable")
 	}
-	resp, err := client.Do(req)
+	resp, err := s.codexProbeSender.doOpenAICodexProbe(req, proxyURL, account)
 	if err != nil {
 		return nil, fmt.Errorf("openai codex probe request failed: %w", err)
 	}

@@ -49,11 +49,11 @@ type goldenHello struct {
 	StatusRequest      bool  `json:"status_request"`
 }
 
-const goldenDir = "../codexwire/testdata/golden/0.163.0"
+const goldenDir = "../codexwire/testdata/golden"
 
-func loadGoldenHellos(t *testing.T, file string) []goldenHello {
+func loadGoldenHellos(t *testing.T, version, file string) []goldenHello {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(goldenDir, file))
+	data, err := os.ReadFile(filepath.Join(goldenDir, version, file))
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
 	}
@@ -152,28 +152,39 @@ func assertHelloMatchesGolden(t *testing.T, ours, golden goldenHello, orderedExt
 }
 
 func TestCodexGolden_OpenSSLHTTPLane(t *testing.T) {
-	golden := pickGolden(t, loadGoldenHellos(t, "tls_clienthellos.json"), "openssl", false)
-	ours := captureOurHello(t, BuiltinProfile("openssl36"))
-	assertHelloMatchesGolden(t, ours, golden, true)
+	for _, version := range []string{"0.163.0", "0.164.0"} {
+		t.Run(version, func(t *testing.T) {
+			golden := pickGolden(t, loadGoldenHellos(t, version, "tls_clienthellos.json"), "openssl", false)
+			ours := captureOurHello(t, BuiltinProfile("openssl36"))
+			assertHelloMatchesGolden(t, ours, golden, true)
+		})
+	}
 }
 
 func TestCodexGolden_RustlsWSLane(t *testing.T) {
-	golden := pickGolden(t, loadGoldenHellos(t, "tls_clienthellos.json"), "rustls", false)
-	for i := 0; i < 5; i++ { // shuffled order: check several handshakes
-		ours := captureOurHello(t, BuiltinProfile("rustls"))
-		assertHelloMatchesGolden(t, ours, golden, false)
+	for _, version := range []string{"0.163.0", "0.164.0"} {
+		t.Run(version, func(t *testing.T) {
+			golden := pickGolden(t, loadGoldenHellos(t, version, "tls_clienthellos.json"), "rustls", false)
+			for i := 0; i < 5; i++ { // shuffled order: check several handshakes
+				ours := captureOurHello(t, BuiltinProfile("rustls"))
+				assertHelloMatchesGolden(t, ours, golden, false)
+			}
+		})
 	}
 }
 
 func TestCodexGolden_RustlsCustomCAHTTPLane(t *testing.T) {
-	golden := pickGolden(t, loadGoldenHellos(t, "tls_clienthellos_custom_ca.json"), "rustls", true)
-	// The custom-CA capture's first connection carries session_ticket(35);
-	// later resumption attempts add pre_shared_key(41). Compare to a fresh one.
-	if !slices.Contains(golden.Extensions, 35) || slices.Contains(golden.Extensions, 41) {
-		t.Fatalf("unexpected golden extension set %v", golden.Extensions)
+	for _, version := range []string{"0.163.0", "0.164.0"} {
+		t.Run(version, func(t *testing.T) {
+			golden := pickGolden(t, loadGoldenHellos(t, version, "tls_clienthellos_custom_ca.json"), "rustls", true)
+			// Later resumption attempts add pre_shared_key(41); compare a fresh one.
+			if !slices.Contains(golden.Extensions, 35) || slices.Contains(golden.Extensions, 41) {
+				t.Fatalf("unexpected golden extension set %v", golden.Extensions)
+			}
+			ours := captureOurHello(t, BuiltinProfile("rustls-h2"))
+			assertHelloMatchesGolden(t, ours, golden, false)
+		})
 	}
-	ours := captureOurHello(t, BuiltinProfile("rustls-h2"))
-	assertHelloMatchesGolden(t, ours, golden, false)
 }
 
 // TestHybridKeyShareHandshake checks that the prefilled hybrid/X25519 shares
