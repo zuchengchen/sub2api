@@ -4,10 +4,15 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
-// Default Grok stream idle when gateway.stream_data_interval_timeout is 0.
+// Default Grok no-progress idle when gateway.stream_data_interval_timeout is 0.
 // Long enough for slow thinking models, short enough to release hung sockets.
+// Keepalive bytes (pings, comments, repeated in_progress) do not reset it.
 const defaultGrokStreamIdleTimeout = 180 * time.Second
 
 // xhigh Grok turns can stay silent for minutes of encrypted reasoning. The
@@ -39,10 +44,43 @@ func resolveGrokChatStreamIdleTimeout(cfgStreamIntervalSec int, effort string) t
 	return defaultGrokStreamIdleTimeout
 }
 
+// grokStreamIdleMessage is the client- and operator-facing idle summary. Idle
+// is measured against model progress, not raw bytes (see grok_stream_progress.go).
+func grokStreamIdleMessage(idle time.Duration) string {
+	return fmt.Sprintf("Grok stream idle timeout after %s with no upstream progress", idle.Round(time.Second))
+}
+
+// recordGrokStreamIdle writes one operator-visible record of a Grok
+// no-progress timeout, including counters that show whether keepalive bytes
+// were still arriving.
+func recordGrokStreamIdle(c *gin.Context, account *Account, requestID string, idle time.Duration, detail string) {
+	if account == nil {
+		return
+	}
+	logger.L().Warn("grok stream: no upstream progress",
+		zap.Int64("account_id", account.ID),
+		zap.String("upstream_request_id", requestID),
+		zap.Duration("idle", idle),
+		zap.String("detail", detail),
+	)
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:           opsUpstreamProxyID(account),
+		ProxyName:         opsUpstreamProxyName(account),
+		Platform:          account.Platform,
+		AccountID:         account.ID,
+		AccountName:       account.Name,
+		UpstreamRequestID: requestID,
+		Kind:              "failover",
+		Reason:            grokChatReasoningIdleTimeoutCode,
+		Message:           grokStreamIdleMessage(idle),
+		Detail:            detail,
+	})
+}
+
 // grokStreamIdleFailoverError builds a pre-commit/handler-visible failover so
 // the gateway can switch OAuth accounts after a hung Grok upstream stream.
 func grokStreamIdleFailoverError(account *Account, idle time.Duration) *UpstreamFailoverError {
-	msg := fmt.Sprintf("Grok stream idle timeout after %s with no upstream data", idle.Round(time.Second))
+	msg := grokStreamIdleMessage(idle)
 	return &UpstreamFailoverError{
 		StatusCode:               502,
 		ResponseBody:             []byte(`{"error":{"code":"empty_upstream","message":"` + strings.ReplaceAll(msg, `"`, `'`) + `"}}`),

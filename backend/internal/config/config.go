@@ -968,11 +968,14 @@ type GatewayConfig struct {
 	// GrokResponseHeaderTimeout bounds the pre-first-byte wait for xAI/Grok.
 	// A zero value uses the provider-safe default instead of the generic gateway timeout.
 	GrokResponseHeaderTimeout int `mapstructure:"grok_response_header_timeout"`
-	// GrokStreamDataIntervalTimeout is the Grok Chat/Responses upstream-read
-	// idle timeout in seconds. 0 uses the Grok-only default (180s, or 600s for
-	// xhigh). Distinct from StreamDataIntervalTimeout so xhigh reasoning can
-	// stay silent longer than the 300s global cap without disabling idle
-	// failover for other platforms.
+	// GrokStreamDataIntervalTimeout is the Grok Chat Completions no-progress
+	// timeout in seconds: how long the upstream may go without an event that
+	// advances the response. Keepalive bytes (vendor pings, SSE comments,
+	// repeated response.in_progress) do not reset it. 0 uses the Grok-only
+	// default (180s, or 600s for xhigh). Distinct from
+	// StreamDataIntervalTimeout so xhigh reasoning can stay silent longer than
+	// the 300s global cap without disabling idle failover for other platforms.
+	// After a client disconnect the drain window is capped at 120s.
 	GrokStreamDataIntervalTimeout int `mapstructure:"grok_stream_data_interval_timeout"`
 	// OpenAIFirstOutputTimeoutSeconds: native HTTP Responses 首个语义输出超时（秒），0表示禁用。
 	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
