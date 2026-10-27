@@ -1039,9 +1039,17 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 		streamInterval = resolveGrokChatStreamIdleTimeout(cfgSec, grokEffort)
 	}
+	// Grok idle is measured against model progress; keepalive bytes from the
+	// upstream (vendor pings, comments) must not keep a stalled turn alive.
+	var grokProgress *grokStreamProgress
+	idleCheckInterval := streamInterval
+	if grokStream {
+		grokProgress = newGrokStreamProgress(time.Now())
+		idleCheckInterval = grokStreamIdleCheckInterval(streamInterval)
+	}
 	var intervalTicker *time.Ticker
-	if streamInterval > 0 {
-		intervalTicker = time.NewTicker(streamInterval)
+	if idleCheckInterval > 0 {
+		intervalTicker = time.NewTicker(idleCheckInterval)
 		defer intervalTicker.Stop()
 	}
 	var intervalCh <-chan time.Time
@@ -1092,6 +1100,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			)
 			return false
 		}
+		grokProgress.ObserveEvent(event.Type, []byte(payload))
 		observer.ObserveOpenAI([]byte(payload), event.Type)
 		refusalDetector.ObservePayload([]byte(payload))
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
@@ -1587,6 +1596,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 			lastDataAt = time.Now()
 			line := ev.line
+			grokProgress.ObserveLine(line)
 			frame, ok := parser.AddLine(line)
 			if !ok {
 				continue
@@ -1599,8 +1609,39 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 
 		case <-intervalCh:
+			now := time.Now()
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
-			if time.Since(lastRead) < streamInterval {
+			if grokStream {
+				// Measure against model progress, not raw bytes, so keepalive
+				// frames cannot postpone the deadline indefinitely.
+				idle := grokStreamEffectiveIdle(streamInterval, clientDisconnected)
+				if grokProgress.SinceProgress(now) < idle {
+					continue
+				}
+				detail := grokProgress.Summary(now, lastRead)
+				_ = resp.Body.Close()
+				if clientDisconnected {
+					logger.L().Warn("openai chat_completions stream: grok drain stopped after client disconnect",
+						zap.String("request_id", requestID),
+						zap.String("model", originalModel),
+						zap.Duration("idle", idle),
+						zap.String("detail", detail),
+					)
+					return resultWithUsage(), fmt.Errorf("stream usage incomplete after timeout")
+				}
+				recordGrokStreamIdle(c, account, requestID, idle, detail)
+				var idleCtx context.Context
+				if c != nil && c.Request != nil {
+					idleCtx = c.Request.Context()
+				}
+				s.tempUnscheduleGrok(idleCtx, account, grokStreamIdleCooldown, "grok stream idle timeout")
+				if !clientOutputStarted {
+					return resultWithUsage(), grokStreamIdleFailoverError(account, idle)
+				}
+				grokAbortErr = fmt.Errorf("%s: %s", grokChatReasoningIdleTimeoutCode, grokStreamIdleMessage(idle))
+				return finalizeStream()
+			}
+			if now.Sub(lastRead) < streamInterval {
 				continue
 			}
 			if clientDisconnected {
@@ -1611,19 +1652,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				zap.String("model", originalModel),
 				zap.Duration("interval", streamInterval),
 			)
-			if grokStream {
-				var idleCtx context.Context
-				if c != nil && c.Request != nil {
-					idleCtx = c.Request.Context()
-				}
-				s.tempUnscheduleGrok(idleCtx, account, grokStreamIdleCooldown, "grok stream idle timeout")
-				_ = resp.Body.Close()
-				if !clientOutputStarted {
-					return resultWithUsage(), grokStreamIdleFailoverError(account, streamInterval)
-				}
-				grokAbortErr = fmt.Errorf("%s: Grok stream idle timeout after %s with no upstream data", grokChatReasoningIdleTimeoutCode, streamInterval.Round(time.Second))
-				return finalizeStream()
-			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:

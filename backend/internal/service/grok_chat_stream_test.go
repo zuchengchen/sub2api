@@ -64,7 +64,7 @@ func TestGrokChatAbortTerminalChunks(t *testing.T) {
 	}{
 		{grokChatReasoningDeadlineCode, grokChatReasoningDeadlineAbortMsg, "length"},
 		{grokChatReasoningWindowCode, grokChatReasoningWindowMsg, "length"},
-		{grokChatReasoningIdleTimeoutCode, "Grok stream idle timeout after 2s with no upstream data", "stop"},
+		{grokChatReasoningIdleTimeoutCode, "Grok stream idle timeout after 2s with no upstream progress", "stop"},
 		{grokChatReasoningUpstreamCutCode, grokChatReasoningUpstreamCutMsg, "stop"},
 	}
 	for _, tc := range cases {
@@ -334,7 +334,7 @@ func TestHandleChatStreamingResponse_GrokIdleTimeoutAfterHeartbeatWritesChatTerm
 	require.False(t, errors.As(err, &failover))
 	require.NotNil(t, result)
 	require.Contains(t, rec.Body.String(), `"reasoning_content":"…"`)
-	requireGrokChatAbortTerminal(t, rec.Body.String(), "Grok stream idle timeout after 2s with no upstream data", "stop")
+	requireGrokChatAbortTerminal(t, rec.Body.String(), "Grok stream idle timeout after 2s with no upstream progress", "stop")
 }
 
 func TestHandleChatStreamingResponse_GrokUpstreamCutAfterHeartbeatWritesChatTerminal(t *testing.T) {
