@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -208,6 +209,54 @@ func TestCodexDirectImagesEmptyResponseFails(t *testing.T) {
 	for _, body := range []string{`{"data":[]}`, `{"data":[{"b64_json":""}]}`, `{}`, `{"error":{"message":"overloaded","type":"server_error"}}`, `not json`} {
 		_, err := parseCodexDirectImagesResponse([]byte(body))
 		require.Error(t, err)
+	}
+}
+
+func TestCodexDirectImagesJSONErrorResponse(t *testing.T) {
+	for _, retryable := range []bool{false, true} {
+		for _, keepalive := range []string{"disabled", "pending", "committed"} {
+			t.Run(fmt.Sprintf("retryable=%t/keepalive=%s", retryable, keepalive), func(t *testing.T) {
+				body := []byte(`{"model":"gpt-image-2","prompt":"海边日出图片描述","size":"1536x1024","quality":"high"}`)
+				c, rec := newOpenAIImagesTestContext(t, body)
+				responseBody := `{"error":{"type":"invalid_request_error","code":"invalid_value","message":"invalid size","param":"size"}}`
+				if retryable {
+					responseBody = `{"error":{"type":"server_error","message":"temporarily unavailable"}}`
+				}
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(responseBody)),
+				}}
+				svc := newOpenAIImagesTestService(upstream)
+				parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+				require.NoError(t, err)
+				if keepalive != "disabled" {
+					stop := StartOpenAIImagesJSONKeepalive(c, time.Hour)
+					defer stop()
+					if keepalive == "committed" {
+						require.True(t, openAIImagesJSONKeepaliveFromContext(c).beat())
+					}
+				}
+
+				result, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+				require.Nil(t, result)
+				if retryable {
+					var failoverErr *UpstreamFailoverError
+					require.ErrorAs(t, err, &failoverErr)
+					require.Empty(t, strings.TrimSpace(rec.Body.String()), "failover must remain possible before image output")
+					return
+				}
+				var upstreamErr *OpenAIImagesUpstreamError
+				require.ErrorAs(t, err, &upstreamErr)
+				wantStatus := http.StatusBadRequest
+				if keepalive == "committed" {
+					wantStatus = http.StatusOK
+				}
+				require.Equal(t, wantStatus, rec.Code)
+				require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+				require.JSONEq(t, responseBody, rec.Body.String())
+			})
+		}
 	}
 }
 
