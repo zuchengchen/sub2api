@@ -187,6 +187,102 @@ func TestCalculateCostUnified_DeepseekGroupPricingNotScaledByPeak(t *testing.T) 
 	}
 }
 
+func TestCalculateCostUnified_DeepseekEmptyChannelCardAppliesPeak(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := newResolverWithChannelOnPlatform(t, "deepseek", []ChannelModelPricing{{
+		Platform:    "deepseek",
+		Models:      []string{"deepseek-v4.1-flash"},
+		BillingMode: BillingModeToken,
+	}}, bs)
+
+	tokens := UsageTokens{InputTokens: 1000, OutputTokens: 500, CacheReadTokens: 1000}
+	offPeakTotal := 1000*1.5e-7 + 500*6e-7 + 1000*3e-9
+	gid := groupIDPtr()
+
+	resolved := resolver.Resolve(context.Background(), PricingInput{
+		Model: "deepseek-v4.1-flash", GroupID: gid,
+	})
+	require.Equal(t, PricingSourceLiteLLM, resolved.Source)
+
+	offPeak, err := bs.CalculateCostUnified(CostInput{
+		Ctx: context.Background(), Model: "deepseek-v4.1-flash", GroupID: gid,
+		Tokens: tokens, RateMultiplier: 1.0, Resolver: resolver,
+		PricingAt: time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.InDelta(t, offPeakTotal, offPeak.TotalCost, 1e-10)
+
+	peak, err := bs.CalculateCostUnified(CostInput{
+		Ctx: context.Background(), Model: "deepseek-v4.1-flash", GroupID: gid,
+		Tokens: tokens, RateMultiplier: 1.0, Resolver: resolver,
+		PricingAt: time.Date(2026, 8, 24, 2, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.InDelta(t, offPeakTotal*2, peak.TotalCost, 1e-10)
+}
+
+func TestCalculateCostUnified_DeepseekEmptyGroupCardAppliesPeak(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+	group := &Group{
+		ID: 84, Name: "DeepSeek", Platform: PlatformDeepseek, Status: StatusActive,
+		ModelPricing: []ChannelModelPricing{{
+			Models: []string{"deepseek-v4.1-flash"}, BillingMode: BillingModeToken,
+		}},
+	}
+
+	tokens := UsageTokens{InputTokens: 1000, OutputTokens: 500, CacheReadTokens: 1000}
+	offPeakTotal := 1000*1.5e-7 + 500*6e-7 + 1000*3e-9
+
+	resolved := resolver.Resolve(context.Background(), PricingInput{
+		Model: "deepseek-v4.1-flash", Group: group,
+	})
+	require.Equal(t, PricingSourceLiteLLM, resolved.Source)
+
+	peak, err := bs.CalculateCostUnified(CostInput{
+		Ctx: context.Background(), Model: "deepseek-v4.1-flash", Group: group,
+		Tokens: tokens, RateMultiplier: 1.0, Resolver: resolver,
+		PricingAt: time.Date(2026, 8, 24, 2, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.InDelta(t, offPeakTotal*2, peak.TotalCost, 1e-10)
+}
+
+func TestCalculateCostUnified_DeepseekChannelCustomPriceNotScaledByPeak(t *testing.T) {
+	bs := newTestBillingService()
+	inputPrice := 1e-6
+	outputPrice := 2e-6
+	resolver := newResolverWithChannelOnPlatform(t, "deepseek", []ChannelModelPricing{{
+		Platform:    "deepseek",
+		Models:      []string{"deepseek-v4.1-flash"},
+		BillingMode: BillingModeToken,
+		InputPrice:  &inputPrice,
+		OutputPrice: &outputPrice,
+	}}, bs)
+
+	tokens := UsageTokens{InputTokens: 1000, OutputTokens: 500, CacheReadTokens: 1000}
+	customTotal := 1000*1e-6 + 500*2e-6 + 1000*3e-9
+	gid := groupIDPtr()
+
+	resolved := resolver.Resolve(context.Background(), PricingInput{
+		Model: "deepseek-v4.1-flash", GroupID: gid,
+	})
+	require.Equal(t, PricingSourceChannel, resolved.Source)
+
+	for _, pricingAt := range []time.Time{
+		time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 24, 2, 0, 0, 0, time.UTC),
+	} {
+		cost, err := bs.CalculateCostUnified(CostInput{
+			Ctx: context.Background(), Model: "deepseek-v4.1-flash", GroupID: gid,
+			Tokens: tokens, RateMultiplier: 1.0, Resolver: resolver, PricingAt: pricingAt,
+		})
+		require.NoError(t, err)
+		require.InDelta(t, customTotal, cost.TotalCost, 1e-10,
+			"渠道自定义定价不应叠加官方峰谷倍率（pricingAt=%v）", pricingAt)
+	}
+}
+
 func TestCalculateCostUnified_NonDeepseekDefaultCardNotScaledByPeak(t *testing.T) {
 	bs := newTestBillingService()
 	resolver := NewModelPricingResolver(nil, bs)
