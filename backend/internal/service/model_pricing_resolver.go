@@ -156,15 +156,49 @@ func matchGroupModelPricing(group *Group, model string) *ChannelModelPricing {
 			normalized := normalizeChannelPricingModelName(pattern)
 			if normalized == model {
 				cp := entry.Clone()
-				return &cp
+				if channelPricingCustomizesRates(&cp) {
+					return &cp
+				}
+				continue
 			}
 			if strings.HasSuffix(normalized, "*") && strings.HasPrefix(model, strings.TrimSuffix(normalized, "*")) && wildcard == nil {
 				cp := entry.Clone()
-				wildcard = &cp
+				if channelPricingCustomizesRates(&cp) {
+					wildcard = &cp
+				}
 			}
 		}
 	}
 	return wildcard
+}
+
+// channelPricingCustomizesRates reports whether a group/channel card actually
+// replaces catalog rates. Empty token stubs (model allowlist placeholders with
+// every price field nil) must not be treated as custom pricing: DeepSeek's
+// official peak 2× only applies to LiteLLM catalog cards.
+func channelPricingCustomizesRates(p *ChannelModelPricing) bool {
+	if p == nil {
+		return false
+	}
+	mode := p.BillingMode
+	if mode == "" {
+		mode = BillingModeToken
+	}
+	if mode == BillingModePerRequest || mode == BillingModeImage || mode == BillingModeVideo {
+		return true
+	}
+	if p.InputPrice != nil || p.OutputPrice != nil ||
+		p.CacheWritePrice != nil || p.CacheWrite1hPrice != nil || p.CacheReadPrice != nil ||
+		p.ImageInputPrice != nil || p.ImageOutputPrice != nil || p.PerRequestPrice != nil {
+		return true
+	}
+	if p.FastMultiplier != nil || p.FlexMultiplier != nil || len(p.ReasoningEffortMultipliers) > 0 {
+		return true
+	}
+	if p.TimePricing != nil && len(p.TimePricing.Periods) > 0 {
+		return true
+	}
+	return len(filterValidIntervals(p.Intervals)) > 0
 }
 
 // resolveBasePricing 从 LiteLLM 或 Fallback 获取基础定价
@@ -193,13 +227,19 @@ func (r *ModelPricingResolver) lookupChannelPricingNormalized(ctx context.Contex
 		return nil
 	}
 	if pricing := r.channelService.GetChannelModelPricing(ctx, groupID, model); pricing != nil {
-		return pricing
+		if channelPricingCustomizesRates(pricing) {
+			return pricing
+		}
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
 	if normalized == "" || strings.EqualFold(normalized, strings.TrimSpace(model)) {
 		return nil
 	}
-	return r.channelService.GetChannelModelPricing(ctx, groupID, normalized)
+	pricing := r.channelService.GetChannelModelPricing(ctx, groupID, normalized)
+	if pricing != nil && channelPricingCustomizesRates(pricing) {
+		return pricing
+	}
+	return nil
 }
 
 // applyChannelOverrides 应用渠道定价覆盖
