@@ -2170,6 +2170,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthResponseError(
 		)
 	}
 	if !retryable || responseWritten {
+		if !responseWritten {
+			writeOpenAIImagesUpstreamErrorResponse(c, upstreamErr)
+		}
 		return err
 	}
 	shouldDisable := s.handleOpenAIAccountUpstreamError(ctx, account, upstreamErr.StatusCode, headers, responseBody, requestedModel)
