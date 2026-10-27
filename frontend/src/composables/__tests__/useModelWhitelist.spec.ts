@@ -36,7 +36,6 @@ describe('useModelWhitelist', () => {
     const models = getModelsByPlatform('openai')
 
     expect(models).toContain('codex-auto-review')
-    expect(models).toContain('gpt-5.5')
     expect(models).toContain('gpt-5.6')
     expect(models).toContain('gpt-6')
     expect(models).toContain('gpt-6-astra')
@@ -76,6 +75,7 @@ describe('useModelWhitelist', () => {
     expect(models).not.toContain('gpt-5.1-codex-max')
     expect(models).not.toContain('gpt-5.1-codex-mini')
     expect(models).not.toContain('gpt-5.2-codex')
+    expect(models).not.toContain('gpt-5.5')
   })
 
   it('openai 预设映射不再指向过期 GPT 快照', () => {
@@ -85,11 +85,9 @@ describe('useModelWhitelist', () => {
       expect.objectContaining({ from: 'gpt-5.2' }),
       expect.objectContaining({ from: 'gpt-5.3-codex-spark' }),
       expect.objectContaining({ from: 'gpt-5.4' }),
-      expect.objectContaining({ to: 'gpt-5.4' })
-    ]))
-    expect(presets).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: 'GPT-5.5', from: 'gpt-5.5', to: 'gpt-5.5' }),
-      expect.objectContaining({ label: 'Haiku→5.5', from: 'claude-haiku-4-5-20251001', to: 'gpt-5.5' })
+      expect.objectContaining({ to: 'gpt-5.4' }),
+      expect.objectContaining({ from: 'gpt-5.5' }),
+      expect.objectContaining({ to: 'gpt-5.5' })
     ]))
   })
 
