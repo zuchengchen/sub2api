@@ -215,6 +215,11 @@ func TestGetRequestTierPrice_NilPerRequestPrice(t *testing.T) {
 // channel (active, groupID=100, platform=anthropic) with the specified pricing.
 func newResolverWithChannel(t *testing.T, pricing []ChannelModelPricing) *ModelPricingResolver {
 	t.Helper()
+	return newResolverWithChannelOnPlatform(t, "anthropic", pricing, newTestBillingServiceForResolver())
+}
+
+func newResolverWithChannelOnPlatform(t *testing.T, platform string, pricing []ChannelModelPricing, bs *BillingService) *ModelPricingResolver {
+	t.Helper()
 	const groupID = 100
 	repo := &mockChannelRepository{
 		listAllFn: func(_ context.Context) ([]Channel, error) {
@@ -227,11 +232,10 @@ func newResolverWithChannel(t *testing.T, pricing []ChannelModelPricing) *ModelP
 			}}, nil
 		},
 		getGroupPlatformsFn: func(_ context.Context, _ []int64) (map[int64]string, error) {
-			return map[int64]string{groupID: "anthropic"}, nil
+			return map[int64]string{groupID: platform}, nil
 		},
 	}
 	cs := NewChannelService(repo, nil, nil, nil, nil)
-	bs := newTestBillingServiceForResolver()
 	return NewModelPricingResolver(cs, bs)
 }
 
@@ -241,6 +245,71 @@ func groupIDPtr() *int64 { v := int64(100); return &v }
 // ---------------------------------------------------------------------------
 // 1. Token mode overrides
 // ---------------------------------------------------------------------------
+
+func TestChannelPricingCustomizesRates(t *testing.T) {
+	zero := 0.0
+	one := 1.0
+	tests := []struct {
+		name string
+		p    *ChannelModelPricing
+		want bool
+	}{
+		{name: "nil", p: nil, want: false},
+		{name: "empty token stub", p: &ChannelModelPricing{BillingMode: BillingModeToken, Models: []string{"deepseek-v4.1-flash"}}, want: false},
+		{name: "empty billing mode defaults to token stub", p: &ChannelModelPricing{Models: []string{"m"}}, want: false},
+		{name: "explicit zero input is custom", p: &ChannelModelPricing{InputPrice: &zero}, want: true},
+		{name: "input price", p: &ChannelModelPricing{InputPrice: &one}, want: true},
+		{name: "per_request mode", p: &ChannelModelPricing{BillingMode: BillingModePerRequest}, want: true},
+		{name: "fast multiplier", p: &ChannelModelPricing{FastMultiplier: &one}, want: true},
+		{name: "time pricing with period", p: &ChannelModelPricing{TimePricing: &ChannelTimePricing{Periods: []ChannelTimePricingPeriod{{Multiplier: 2}}}}, want: true},
+		{name: "time pricing without periods", p: &ChannelModelPricing{TimePricing: &ChannelTimePricing{}}, want: false},
+		{name: "priced interval", p: &ChannelModelPricing{Intervals: []PricingInterval{{InputPrice: &one}}}, want: true},
+		{name: "empty interval", p: &ChannelModelPricing{Intervals: []PricingInterval{{MinTokens: 0}}}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, channelPricingCustomizesRates(tt.p))
+		})
+	}
+}
+
+func TestResolve_EmptyChannelTokenCardKeepsLiteLLMSource(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:    "anthropic",
+		Models:      []string{"claude-sonnet-4"},
+		BillingMode: BillingModeToken,
+	}})
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+	})
+	require.Equal(t, PricingSourceLiteLLM, resolved.Source)
+	require.NotNil(t, resolved.BasePricing)
+	require.InDelta(t, 3e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+}
+
+func TestResolve_EmptyGroupTokenCardFallsThroughToChannel(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:    "anthropic",
+		Models:      []string{"claude-sonnet-4"},
+		BillingMode: BillingModeToken,
+		InputPrice:  testPtrFloat64(1e-6),
+		OutputPrice: testPtrFloat64(2e-6),
+	}})
+	group := &Group{
+		ID: 100, Platform: "anthropic", Status: StatusActive,
+		ModelPricing: []ChannelModelPricing{{
+			Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		}},
+	}
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+		Group:   group,
+	})
+	require.Equal(t, PricingSourceChannel, resolved.Source)
+	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+}
 
 func TestResolve_WithChannelOverride_TokenFlat(t *testing.T) {
 	r := newResolverWithChannel(t, []ChannelModelPricing{{
