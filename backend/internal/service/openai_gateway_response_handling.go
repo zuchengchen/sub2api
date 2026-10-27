@@ -189,10 +189,18 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		streamInterval = resolveGrokStreamIdleTimeout(cfgSec)
 	}
+	// Grok idle is measured against model progress; vendor pings rewritten to
+	// `: ping` comments and repeated in_progress events must not reset it.
+	var grokProgress *grokStreamProgress
+	idleCheckInterval := streamInterval
+	if account != nil && account.Platform == PlatformGrok {
+		grokProgress = newGrokStreamProgress(time.Now())
+		idleCheckInterval = grokStreamIdleCheckInterval(streamInterval)
+	}
 	// 仅监控上游数据间隔超时，不被下游写入阻塞影响
 	var intervalTicker *time.Ticker
-	if streamInterval > 0 {
-		intervalTicker = time.NewTicker(streamInterval)
+	if idleCheckInterval > 0 {
+		intervalTicker = time.NewTicker(idleCheckInterval)
 		defer intervalTicker.Stop()
 	}
 	var intervalCh <-chan time.Time
@@ -519,6 +527,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if streamEarlyErr != nil {
 			return
 		}
+		grokProgress.ObserveLine(line)
 		if eventType, ok := extractOpenAISSEEventLine(line); ok {
 			pendingSSEEventType = eventType
 			eventType = strings.TrimSpace(eventType)
@@ -543,6 +552,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if codexFailureTerminal && sawBareError && !sawResponseFailed && eventType != "response.failed" {
 				suppressCurrentEvent = true
 			}
+			grokProgress.ObserveEvent(eventType, dataBytes)
 			observer.ObserveOpenAI(dataBytes, eventType)
 			appendOpenAIStreamedBillingDelta(eventType, dataBytes, &streamedBilling)
 			// 初始上游 data 的 type 只解析一次：原始值保持终止事件的精确匹配，规范化值供后续分支复用。
@@ -965,8 +975,17 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if failureDelivered {
 				return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 			}
+			now := time.Now()
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
-			if time.Since(lastRead) < streamInterval {
+			effectiveInterval := streamInterval
+			if grokProgress != nil {
+				// Grok: measure against model progress so keepalive bytes
+				// cannot postpone the deadline indefinitely.
+				effectiveInterval = grokStreamEffectiveIdle(streamInterval, clientDisconnected)
+				if grokProgress.SinceProgress(now) < effectiveInterval {
+					continue
+				}
+			} else if now.Sub(lastRead) < streamInterval {
 				continue
 			}
 			if codexFailureTerminal && sawBareError && !sawResponseFailed {
@@ -974,9 +993,16 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				return finalizeStream()
 			}
 			if clientDisconnected {
+				if grokProgress != nil {
+					_ = resp.Body.Close()
+					logger.LegacyPrintf("service.openai_gateway", "Grok drain stopped after client disconnect: account=%d model=%s idle=%s %s", account.ID, originalModel, effectiveInterval, grokProgress.Summary(now, lastRead))
+				}
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete after timeout")
 			}
-			logger.LegacyPrintf("service.openai_gateway", "Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
+			if grokProgress != nil {
+				recordGrokStreamIdle(c, account, upstreamRequestID, effectiveInterval, grokProgress.Summary(now, lastRead))
+			}
+			logger.LegacyPrintf("service.openai_gateway", "Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, effectiveInterval)
 			// 处理流超时，可能标记账户为临时不可调度或错误状态
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
@@ -988,7 +1014,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				s.tempUnscheduleGrok(ctx, account, grokStreamIdleCooldown, "grok stream idle timeout")
 				if !openAIStreamClientOutputStarted(c, clientOutputStarted) && !eventShouldFlush {
 					_ = resp.Body.Close()
-					return resultWithUsage(), grokStreamIdleFailoverError(account, streamInterval)
+					return resultWithUsage(), grokStreamIdleFailoverError(account, effectiveInterval)
 				}
 			}
 			sendErrorEvent("stream_timeout", "Upstream response stream timed out")
