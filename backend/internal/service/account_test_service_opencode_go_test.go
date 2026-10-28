@@ -110,6 +110,66 @@ func TestAccountTestService_OpenCodeGoAppliesModelMappingOnResponses(t *testing.
 	require.NotContains(t, string(upstream.lastBody), "opencode/muse-spark-1.3-contributior-free")
 }
 
+// 国产平台 API Key 账号把 base_url 指向官方 OpenCode Go 并固定 responses 协议时，
+// 测试走 testOpenAIAccountConnection 的 /responses 分支，也必须带上
+// x-opencode-session，否则上游返回 400 MissingSessionID。
+func TestAccountTestService_CNResponsesOnOpenCodeHostSendsSessionHeader(t *testing.T) {
+	account := &Account{
+		ID:          407,
+		Name:        "opencode",
+		Platform:    PlatformDeepseek,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":      "sk-opencode-go-test",
+			"api_protocol": APIProtocolResponses,
+			"base_url":     "https://opencode.ai/zen/go/v1",
+		},
+		Extra: map[string]any{
+			"openai_responses_mode":      "force_responses",
+			"openai_responses_supported": true,
+		},
+	}
+	svc, upstream := adaptiveCNAccountTestService(account, adaptiveCNResponsesTestResponse())
+	c, recorder := newTestContext()
+
+	err := svc.TestAccountConnection(c, account.ID, "deepseek-v4.1-flash", "hi", AccountTestModeDefault)
+
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	req := upstream.requests[0]
+	require.Equal(t, "https://opencode.ai/zen/go/v1/responses", req.URL.String())
+	require.NotEmpty(t, req.Header.Get("X-OpenCode-Session"))
+	require.Equal(t, openCodeUpstreamUserAgent, req.Header.Get("User-Agent"))
+	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
+}
+
+func TestAccountTestService_AnthropicAPIKeyOnOpenCodeHostSendsSessionHeader(t *testing.T) {
+	account := &Account{
+		ID:          408,
+		Name:        "opencode-anthropic",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-opencode-go-test",
+			"base_url": "https://opencode.ai/zen/go",
+		},
+	}
+	svc, upstream := adaptiveCNAccountTestService(account, adaptiveCNAnthropicTestResponse())
+	c, _ := newTestContext()
+
+	err := svc.TestAccountConnection(c, account.ID, "minimax-m3", "hi", AccountTestModeDefault)
+
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	req := upstream.requests[0]
+	require.True(t, strings.HasPrefix(req.URL.String(), "https://opencode.ai/zen/go/v1/messages"))
+	require.NotEmpty(t, req.Header.Get("X-OpenCode-Session"))
+}
+
 func TestAccountTestService_OpenCodeGoEmptyModelDefaultsToChatCatalogID(t *testing.T) {
 	account := openCodeGoTestAccount(405)
 	svc, upstream := adaptiveCNAccountTestService(account, adaptiveCNChatTestResponse())
