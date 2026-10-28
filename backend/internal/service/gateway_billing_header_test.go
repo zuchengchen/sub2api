@@ -92,6 +92,24 @@ func TestClaudeCodeFingerprintMatchesJavaScriptUTF16Indexing(t *testing.T) {
 	require.Equal(t, "d80", computeClaudeCodeFingerprint(body, "2.1.283"))
 }
 
+func TestSyncBillingHeaderVersion_UnicodeSuffix(t *testing.T) {
+	for _, initialVersion := range []string{"2.1.81.df2", "2.1.283.000", "2.1.283.c7e"} {
+		t.Run(initialVersion, func(t *testing.T) {
+			body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=` + initialVersion + `; cc_entrypoint=cli;"},{"type":"text","text":"Keep this prompt."}],"messages":[{"role":"user","content":"这是一个用于验证中文指纹计算的测试消息，请保持一致。"}],"unknown":{"keep":true}}`)
+			result := syncBillingHeaderVersion(body, "claude-cli/2.1.283", nil)
+			// Node.js reference output; do not derive this from the helper under test.
+			require.Equal(t, "x-anthropic-billing-header: cc_version=2.1.283.c7e; cc_entrypoint=cli;", gjson.GetBytes(result, "system.0.text").String())
+			require.Equal(t, result, syncBillingHeaderVersion(result, "claude-cli/2.1.283", nil))
+			if initialVersion == "2.1.283.c7e" {
+				require.Equal(t, body, result)
+			}
+			for _, path := range []string{"messages", "system.1", "unknown"} {
+				require.Equal(t, gjson.GetBytes(body, path).Raw, gjson.GetBytes(result, path).Raw)
+			}
+		})
+	}
+}
+
 func TestBuildOAuthRequest_BillingMatchesWireUserAgent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, endpoint := range []string{"messages", "count_tokens"} {
