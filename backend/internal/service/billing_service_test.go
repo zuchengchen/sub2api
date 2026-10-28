@@ -2317,6 +2317,9 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 			input, output, write, read float64
 		}{
 			{"gpt-6.1-sol", 4e-6, 20e-6, 5e-6, 0.2e-6},
+			// gpt-6.1-terra 与 Sol 同口径：官价（$1/$5/$1.25/$0.05）的 2 倍。
+			{"gpt-6.1-terra", 2e-6, 10e-6, 2.5e-6, 0.1e-6},
+			{"openai/gpt-6.1-terra-max", 2e-6, 10e-6, 2.5e-6, 0.1e-6},
 			{"gpt-6-sol", 4e-6, 20e-6, 5e-6, 0.4e-6},
 			// gpt-6-luna 与 gpt-5.6-luna 同一张价卡（官价 2 倍），不按 GPT-6 Luna 更低的官价计费。
 			{"gpt-6-luna", 0.4e-6, 2.4e-6, 0.5e-6, 0.04e-6},

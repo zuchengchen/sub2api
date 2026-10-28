@@ -44,6 +44,7 @@ describe('useModelWhitelist', () => {
     expect(models).not.toContain('gpt-image-1')
     expect(models).not.toContain('gpt-image-1.5')
     expect(models).toContain('gpt-6.1-sol')
+    expect(models).toContain('gpt-6.1-terra')
     expect(models).toContain('gpt-6-sol')
     expect(models).toContain('gpt-6-luna')
     expect(models).not.toContain('mimo-v2.5')
@@ -61,6 +62,7 @@ describe('useModelWhitelist', () => {
   it('openai 预设映射包含 GPT-6 别名和 Astra', () => {
     expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: 'GPT-6.1 Sol', from: 'gpt-6.1-sol', to: 'gpt-6.1-sol' }),
+      expect.objectContaining({ label: 'GPT-6.1 Terra', from: 'gpt-6.1-terra', to: 'gpt-6.1-terra' }),
       expect.objectContaining({ label: 'GPT-6', from: 'gpt-6', to: 'gpt-6' }),
       expect.objectContaining({ label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra' })
     ]))
