@@ -855,6 +855,19 @@ func lockAndMergeAccountProbeExtra(
 			}
 		}
 	}
+	// Grok 目录和能力 metadata 是同步写入的受管状态。普通更新在行锁内采用最新
+	// 数据库值，忽略表单旧值、缺键和注入。来源身份变化不删除已有成功快照。
+	// 这里复用整行 extra（currentExtra）而不是单独 SELECT 两列；
+	// currentExtra 解析失败时已降级为 nil，此时这两个键按「库中无值」处理。
+	for _, key := range []string{
+		"grok_observed_models",
+		service.UpstreamModelMetadataExtraKey,
+	} {
+		delete(extra, key)
+		if value, ok := currentExtra[key]; ok && value != nil {
+			extra[key] = value
+		}
+	}
 	return extra, nil
 }
 
