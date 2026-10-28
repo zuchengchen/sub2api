@@ -48,7 +48,7 @@ func runZhipu429(service *RateLimitService, account *Account, body string) bool 
 // 额度充裕 + 限频文案 → 走秒级 429 兜底，而不是冷却到 5h 窗口结束。
 func TestHandleUpstreamError_ZhipuFrequency429UsesShortCooldown(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := newZhipuCodingPlanAccount(12, 4, 4*time.Hour)
 
 	runZhipu429(service, account, zhipuFrequencyLimitedBody)
@@ -64,7 +64,7 @@ func TestHandleUpstreamError_ZhipuFrequency429UsesShortCooldown(t *testing.T) {
 // 快照显示窗口已耗尽时，即使文案是限频，也仍然冷却到窗口重置点（护栏）。
 func TestHandleUpstreamError_ZhipuFrequency429WithExhaustedSnapshotKeepsWindowCooldown(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := newZhipuCodingPlanAccount(100, 40, 2*time.Hour)
 
 	runZhipu429(service, account, zhipuFrequencyLimitedBody)
@@ -78,7 +78,7 @@ func TestHandleUpstreamError_ZhipuFrequency429WithExhaustedSnapshotKeepsWindowCo
 // 额度类文案（即使同时出现"速率限制"字样）不降级，仍按窗口冷却。
 func TestHandleUpstreamError_ZhipuQuotaWorded429KeepsWindowCooldown(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := newZhipuCodingPlanAccount(12, 4, 2*time.Hour)
 	body := `{"error":{"message":"已达速率限制：本月额度已用尽，请升级套餐"}}`
 
@@ -92,7 +92,7 @@ func TestHandleUpstreamError_ZhipuQuotaWorded429KeepsWindowCooldown(t *testing.T
 // 余额不足文案仍走原有的临时停调路径，不受本次改动影响。
 func TestHandleUpstreamError_ZhipuInsufficientBalance429StillTempUnschedulable(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil)
 	account := newZhipuCodingPlanAccount(12, 4, 4*time.Hour)
 
 	runZhipu429(service, account, `{"error":{"message":"余额不足，请充值"}}`)
