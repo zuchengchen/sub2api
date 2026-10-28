@@ -706,10 +706,12 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer，
 		// 其余保持 extra/default 行为。
 		setAnthropicAPIKeyAuthHeader(req.Header, account, authToken, account.GetBaseURL())
+		applyOpenCodeUpstreamUserAgent(account, apiURL, req.Header)
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	// Get proxy URL
 	proxyURL := ""
@@ -1066,10 +1068,16 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		// 与真实转发一致：账号级自定义 UA 同样作为管理员显式配置传入，否则测试用的身份
 		// 与该账号真实出站的身份不是同一个（issue #3901 的配对不变式由收口保证）。
 		enforceCodexIdentityHeadersWithUA(req.Header, credentialAccount.GetOpenAIUserAgent())
+	} else {
+		// 官方 OpenCode 上游收敛为规范客户端 UA，与真实转发路径一致。
+		applyOpenCodeUpstreamUserAgent(credentialAccount, apiURL, req.Header)
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	credentialAccount.ApplyHeaderOverrides(req.Header)
+	// OpenCode Go 要求 x-opencode-session（缺失即 400 MissingSessionID）；
+	// 任意平台 API Key 账号指向官方 opencode.ai 主机时同样需要。
+	applyOpenCodeSessionHeader(c, credentialAccount, apiURL, req.Header, payloadBytes)
 	if err := applyIntelligentTestProtection(c, account, req.Header, payloadBytes); err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
@@ -2444,10 +2452,13 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 			applyCodexFingerprintHeaders(req.Header, fpIDs)
 			applyCodexFingerprintConvergenceHeaders(c, account, req.Header)
 		}
+	} else {
+		applyOpenCodeUpstreamUserAgent(account, apiURL, req.Header)
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
