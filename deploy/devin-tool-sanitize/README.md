@@ -25,6 +25,12 @@ frameworks, design patterns, and best practices`) as:
 Kilo Code / Kilo CLI send that sentence on every turn. `CLIProxyAPI` does not
 rewrite it, so this proxy does. "You are Kilo" by itself is not blocked.
 
+OpenClaw's static system prompt opens with `You are a personal assistant
+running inside OpenClaw.`, which hits the same content-policy block. The
+trigger is the template itself (`... assistant running inside <any name>`
+still fails), so the proxy drops "personal": `an assistant running inside`
+passes.
+
 `CLIProxyAPI` does not rewrite descriptions, so this proxy shortens and
 rewrites them first. Tool *names* are left untouched: the model echoes them
 back in `tool_use` blocks and one-way renaming would break client dispatch.

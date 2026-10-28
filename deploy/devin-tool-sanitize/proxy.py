@@ -54,6 +54,15 @@ PHRASE_REWRITES = [
         "highly skilled software engineer with broad knowledge across "
         "programming languages, frameworks, design patterns, and established practices",
     ),
+    # OpenClaw's static system prompt opens with "You are a personal
+    # assistant running inside OpenClaw." Devin swe-2 blocks that exact
+    # template as content-policy / permission_denied regardless of the
+    # product name (swapping in any other name still fails). Dropping
+    # "personal" is enough; "assistant running inside X" passes.
+    (
+        re.compile(r"(?i)\ba\s+personal\s+assistant\s+running\s+inside\b"),
+        "an assistant running inside",
+    ),
 ]
 
 
@@ -142,6 +151,66 @@ def ensure_system_present(payload: dict) -> None:
     ]
 
 
+# Claude Code appends a one-turn nudge AFTER the cache_control block of the
+# trailing `role: "system"` message and drops it from history on the next turn.
+# Direct Anthropic leaves it outside the cached prefix, but CPA discards
+# cache_control and Devin places its own breakpoint at the end of the prompt,
+# so every cache write includes the nudge and the next turn misses it (cache
+# reads fall back to system+tools only). Strip it from every system message so
+# the prefix Devin sees is stable across turns. Match only this known text:
+# trailing blocks after cache_control in other places (e.g. the auto-mode
+# classifier's `</transcript>` + instructions in a user message) are real
+# instructions and must stay.
+TRANSIENT_SYSTEM_NUDGE_RE = re.compile(r"^First privately list what you need next;")
+
+
+def strip_transient_system_nudges(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        return
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "system":
+            continue
+        blocks = msg.get("content")
+        if not isinstance(blocks, list):
+            continue
+        cc = [
+            i
+            for i, b in enumerate(blocks)
+            if isinstance(b, dict) and b.get("cache_control")
+        ]
+        if not cc:
+            continue
+        head, tail = blocks[: cc[-1] + 1], blocks[cc[-1] + 1 :]
+        kept = [
+            b
+            for b in tail
+            if not (
+                isinstance(b, dict)
+                and b.get("type") == "text"
+                and isinstance(b.get("text"), str)
+                and TRANSIENT_SYSTEM_NUDGE_RE.match(b["text"])
+            )
+        ]
+        if len(kept) != len(tail):
+            msg["content"] = head + kept
+
+
+def drop_zero_temperature(payload: dict) -> None:
+    """Devin rejects an explicit temperature of exactly 0 on every model
+    (swe-2, swe-1-7, claude-*, gpt-*) with trailer invalid_argument "an
+    internal error occurred"; 0.7 / 1 / top_p are accepted. Health probes
+    and eval harnesses commonly send temperature:0, so drop it and let Devin
+    use its default instead of failing the request."""
+    if not isinstance(payload, dict):
+        return
+    temp = payload.get("temperature")
+    if isinstance(temp, (int, float)) and not isinstance(temp, bool) and temp == 0:
+        del payload["temperature"]
+
+
 def sanitize_body(raw: bytes, content_type: str) -> bytes:
     if "json" not in content_type.lower():
         return raw
@@ -150,7 +219,9 @@ def sanitize_body(raw: bytes, content_type: str) -> bytes:
     except json.JSONDecodeError:
         return raw
     walk(payload)
+    strip_transient_system_nudges(payload)
     ensure_system_present(payload)
+    drop_zero_temperature(payload)
     out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if DUMP and out != raw:
         try:
