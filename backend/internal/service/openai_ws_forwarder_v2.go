@@ -1000,12 +1000,14 @@ readLoop:
 			fallbackReason, canFallback := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 			errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 			logOpenAIWSModeInfo(
-				"error_event account_id=%d conn_id=%s idx=%d fallback_reason=%s can_fallback=%v err_code=%s err_type=%s err_message=%s",
+				"error_event account_id=%d conn_id=%s idx=%d fallback_reason=%s can_fallback=%v wrote_downstream=%v client_output_started=%v err_code=%s err_type=%s err_message=%s",
 				account.ID,
 				connID,
 				eventCount,
 				truncateOpenAIWSLogValue(fallbackReason, openAIWSLogValueMaxLen),
 				canFallback,
+				wroteDownstream,
+				clientOutputStarted,
 				errCode,
 				errType,
 				errMessage,
@@ -1038,6 +1040,9 @@ readLoop:
 			}
 			// error 事件后连接不再可复用，避免回池后污染下一请求。
 			lease.MarkBroken()
+			if failoverErr := s.openAIWSV2PreOutputAccountFailover(c, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, wroteDownstream, clientDisconnected); failoverErr != nil {
+				return nil, failoverErr
+			}
 			if !wroteDownstream && canFallback {
 				return nil, wrapOpenAIWSFallback(fallbackReason, errors.New(errMsg))
 			}

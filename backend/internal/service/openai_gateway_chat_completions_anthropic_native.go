@@ -136,7 +136,8 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 			WriteChatCompletionsContextLengthExceeded(c, upstreamMsg)
 			return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 		}
-		writeChatCompletionsError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		recordConvertedUpstreamHTTPError(c, account, resp, upstreamMsg)
+		writeChatCompletionsError(c, mapUpstreamStatusCode(resp.StatusCode), convertedUpstreamErrorCode(resp.StatusCode), upstreamMsg)
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 

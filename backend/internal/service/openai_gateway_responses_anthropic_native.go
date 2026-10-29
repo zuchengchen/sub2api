@@ -142,7 +142,8 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 			WriteOpenAIResponsesContextLengthExceeded(c, upstreamMsg)
 			return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 		}
-		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		recordConvertedUpstreamHTTPError(c, account, resp, upstreamMsg)
+		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), convertedUpstreamErrorCode(resp.StatusCode), upstreamMsg)
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
