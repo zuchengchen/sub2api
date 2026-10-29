@@ -99,7 +99,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			return s.forwardWithoutHostedWebSearch(ctx, c, account, next)
 		}, mergeOpenAIWebSearchResult, executeResponsesWebSearch)
 	}
-	next, err := normalizeResponsesWebSearchHistory(c, body)
+	next, err := normalizeResponsesWebSearchHistory(c, body, false)
 	if err != nil {
 		writeResponsesWebSearchRequestError(c, err)
 		return nil, err
