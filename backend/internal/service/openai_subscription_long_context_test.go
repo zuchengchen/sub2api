@@ -125,31 +125,30 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionLongContext(t *test
 
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolUsesCredentialAndUpstreamModel(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		model      string
-		upstream   string
-		parentType string
-		wantTotal  float64
-		wantLong   bool
+		name        string
+		model       string
+		upstream    string
+		accountType string
+		wantTotal   float64
+		wantLong    bool
 	}{
-		{name: "客户别名映射到目标", model: "custom", upstream: "gpt-6.1-sol", parentType: AccountTypeOAuth, wantTotal: 0.62},
-		{name: "请求目标映射到旧模型", model: "gpt-6.1-sol", upstream: "gpt-6-sol", parentType: AccountTypeOAuth, wantTotal: 1.23, wantLong: true},
-		{name: "其他订阅模型", model: "gpt-6-sol", parentType: AccountTypeOAuth, wantTotal: 1.23, wantLong: true},
-		{name: "订阅母账号", model: "gpt-6.1-sol", parentType: AccountTypeOAuth, wantTotal: 0.62},
+		{name: "客户别名映射到目标", model: "custom", upstream: "gpt-6.1-sol", accountType: AccountTypeOAuth, wantTotal: 0.62},
+		{name: "请求目标映射到旧模型", model: "gpt-6.1-sol", upstream: "gpt-6-sol", accountType: AccountTypeOAuth, wantTotal: 1.23, wantLong: true},
+		{name: "其他订阅模型", model: "gpt-6-sol", accountType: AccountTypeOAuth, wantTotal: 1.23, wantLong: true},
+		{name: "订阅账号", model: "gpt-6.1-sol", accountType: AccountTypeOAuth, wantTotal: 0.62},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 			svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
-			parentID := int64(4)
-			svc.accountRepo = &openAIRecordUsageAccountRepoStub{account: &Account{
-				ID: parentID, Platform: PlatformOpenAI, Type: tt.parentType,
+			account := &Account{
+				ID: 4, Platform: PlatformOpenAI, Type: tt.accountType,
 				Extra: map[string]any{openAILongContextBillingEnabledKey: true},
-			}}
+			}
 			err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 				Result: &OpenAIForwardResult{RequestID: tt.name, Model: tt.model, UpstreamModel: tt.upstream,
 					Usage: OpenAIUsage{InputTokens: 300000, OutputTokens: 2000}, Duration: time.Second},
 				APIKey: openAIRecordUsageAPIKeyWithGroup(svc, 1, true), User: &User{ID: 2},
-				Account: &Account{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID, QuotaDimension: QuotaDimensionSpark},
+				Account: account,
 			})
 			require.NoError(t, err)
 			require.Equal(t, tt.wantLong, usageRepo.lastLog.LongContextBillingApplied)

@@ -1453,17 +1453,6 @@ export interface Account {
   active_sessions?: number | null // 当前活跃会话数
   current_rpm?: number | null // 当前分钟 RPM 计数
 
-  // 影子账号关系（spark 维度影子）
-  parent_account_id?: number | null
-  quota_dimension?: string
-  // 影子账号回填的母账号信息（仅影子非空）
-  parent_email?: string
-  parent_plan_type?: string
-  parent_privacy_mode?: string
-  parent_subscription_expires_at?: string
-  parent_subscription_is_delinquent?: boolean | null
-  parent_chatgpt_account_id?: string
-
   grok_model_diagnostics?: GrokModelDiagnostics
 }
 
@@ -1758,8 +1747,6 @@ export interface AdminDataPayload {
   exported_at: string
   proxies: AdminDataProxy[]
   accounts: AdminDataAccount[]
-  // 导出时被排除的 spark 影子账号数量(影子不持凭据、其调度配置不在备份范围)。
-  skipped_shadows?: number
 }
 
 export interface AdminDataProxy {

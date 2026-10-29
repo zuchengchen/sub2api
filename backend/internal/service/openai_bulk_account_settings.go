@@ -167,47 +167,37 @@ func validateBulkOpenAISettingsTargets(
 	input *BulkUpdateAccountsInput,
 	settings bulkOpenAISettings,
 	targetsByID map[int64]*Account,
-) (int, error) {
+) error {
 	if input == nil || !settings.any() {
-		return 0, nil
+		return nil
 	}
 
-	inheritedCount := 0
 	for _, accountID := range input.AccountIDs {
 		account, ok := targetsByID[accountID]
 		if !ok || account == nil {
-			return 0, invalidBulkOpenAITarget(accountID, "account does not exist")
+			return invalidBulkOpenAITarget(accountID, "account does not exist")
 		}
 
 		if settings.longContextBilling {
 			if account.Platform != PlatformOpenAI || !supportsOpenAILongContextBilling(account.Type) {
-				return 0, invalidBulkOpenAITarget(accountID, "long-context billing requires an OpenAI OAuth, setup-token, or API-key account")
-			}
-			if account.IsShadow() {
-				inheritedCount++
+				return invalidBulkOpenAITarget(accountID, "long-context billing requires an OpenAI OAuth, setup-token, or API-key account")
 			}
 		}
 
 		if settings.endpointCapabilities || settings.responsesMode {
 			if account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey {
-				return 0, invalidBulkOpenAITarget(accountID, "endpoint capabilities and Responses routing require an OpenAI API-key account")
+				return invalidBulkOpenAITarget(accountID, "endpoint capabilities and Responses routing require an OpenAI API-key account")
 			}
 		}
 
 		if settings.forcedResponsesMode && !settings.capabilitiesIncludeChat &&
 			!settings.endpointCapabilities &&
 			!account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityChatCompletions) {
-			return 0, invalidBulkOpenAITarget(accountID, "a forced Responses route requires the chat_completions endpoint capability")
+			return invalidBulkOpenAITarget(accountID, "a forced Responses route requires the chat_completions endpoint capability")
 		}
 	}
 
-	if settings.longContextBilling && inheritedCount == len(input.AccountIDs) && bulkUpdateOnlyChangesLongContext(input) {
-		return 0, infraerrors.BadRequest(
-			"OPENAI_LONG_CONTEXT_PARENT_REQUIRED",
-			"long-context billing is owned by parent accounts; select at least one parent account",
-		)
-	}
-	return inheritedCount, nil
+	return nil
 }
 
 func supportsOpenAILongContextBilling(accountType string) bool {
@@ -224,18 +214,4 @@ func invalidBulkOpenAITarget(accountID int64, message string) error {
 		"OPENAI_BULK_TARGET_INVALID",
 		fmt.Sprintf("account %d: %s", accountID, message),
 	).WithMetadata(map[string]string{"account_id": strconv.FormatInt(accountID, 10)})
-}
-
-func bulkUpdateOnlyChangesLongContext(input *BulkUpdateAccountsInput) bool {
-	if input == nil || input.Name != "" || input.ProxyID != nil || input.Concurrency != nil ||
-		input.Priority != nil || input.RateMultiplier != nil || input.LoadFactor != nil ||
-		input.Status != "" || input.Schedulable != nil || input.GroupIDs != nil ||
-		len(input.Credentials) != 0 || input.ProbeEnabled != nil {
-		return false
-	}
-	if len(input.Extra) != 1 {
-		return false
-	}
-	_, ok := input.Extra[openAILongContextBillingEnabledKey]
-	return ok
 }

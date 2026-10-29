@@ -87,14 +87,6 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			expectedModel:               "claude-fable-5",
 		},
 		{
-			name: "ordinary codex spark request keeps requested model",
-			account: &Account{
-				Credentials: map[string]any{},
-			},
-			requestedModel: "gpt-5.3-codex-spark",
-			expectedModel:  "gpt-5.3-codex-spark",
-		},
-		{
 			name: "ordinary gpt-5.5 request keeps requested model",
 			account: &Account{
 				Credentials: map[string]any{},
@@ -344,15 +336,12 @@ func TestResolveOpenAIErrorSchedulingModelPrefersActualUpstreamModel(t *testing.
 
 func TestNormalizeCodexModel(t *testing.T) {
 	cases := map[string]string{
-		"gpt-5.3-codex-spark":       "gpt-5.3-codex-spark",
-		"gpt-5.3-codex-spark-high":  "gpt-5.3-codex-spark",
-		"gpt-5.3-codex-spark-xhigh": "gpt-5.3-codex-spark",
-		"gpt-5.3":                   "gpt-5.3-codex",
-		"gpt-image-2":               "gpt-image-2",
-		"gpt-5.4-nano":              "gpt-5.4-nano",
-		"gpt-5.4-nano-high":         "gpt-5.4-nano",
-		"gpt6":                      "gpt6",
-		"claude-opus-4-6":           "claude-opus-4-6",
+		"gpt-5.3":           "gpt-5.3-codex",
+		"gpt-image-2":       "gpt-image-2",
+		"gpt-5.4-nano":      "gpt-5.4-nano",
+		"gpt-5.4-nano-high": "gpt-5.4-nano",
+		"gpt6":              "gpt6",
+		"claude-opus-4-6":   "claude-opus-4-6",
 	}
 
 	for input, expected := range cases {

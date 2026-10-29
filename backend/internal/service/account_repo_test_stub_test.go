@@ -189,9 +189,5 @@ func (m *mockAccountRepoForTest) RevertProxyFallback(ctx context.Context, accoun
 	return nil
 }
 
-func (m *mockAccountRepoForTest) ListShadowsByParent(ctx context.Context, parentID int64) ([]*Account, error) {
-	return nil, nil
-}
-
 // Verify interface implementation
 var _ AccountRepository = (*mockAccountRepoForTest)(nil)

@@ -72,7 +72,7 @@ func openAI429CooldownDisabledForAccount(account *Account) bool {
 }
 
 func (s *RateLimitService) shouldCooldownOpenAI429(ctx context.Context, account *Account, headers http.Header, body []byte) bool {
-	if account == nil || account.Platform != PlatformOpenAI || account.IsShadow() {
+	if account == nil || account.Platform != PlatformOpenAI {
 		return false
 	}
 

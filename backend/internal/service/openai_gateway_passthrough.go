@@ -525,11 +525,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	serviceTier := extractOpenAIServiceTierFromBody(body)
 	s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
-	// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
-	if !account.IsShadow() {
-		if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
-			s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
-		}
+	if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
+		s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 	}
 
 	if usage == nil {
@@ -1719,8 +1716,7 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 		}
 		accountHeaders := headers
 		if statusCode == http.StatusTooManyRequests {
-			// 普通模型的流式 429 不能继承外层 HTTP 200 的全局 quota 快照；
-			// 只有 OAuth/SetupToken 的 Spark 配额 429 才需要保留 headers 读取明确的 5h/7d reset。
+			// 流式 429 不能继承外层 HTTP 200 的全局 quota 快照。
 			accountHeaders = openAIWSSemantic429Headers(account, model, headers)
 		}
 		return statusCode, s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, accountHeaders, payload, model)

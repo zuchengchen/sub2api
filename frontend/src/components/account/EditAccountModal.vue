@@ -1781,7 +1781,7 @@
         </div>
       </div>
 
-      <div v-if="!isSparkShadow">
+      <div>
         <div class="mb-1 flex items-center gap-2">
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
@@ -2409,7 +2409,7 @@
 
       <!-- OpenAI API 长上下文计费开关 -->
       <div
-        v-if="account?.platform === 'openai' && !isSparkShadow && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2565,9 +2565,9 @@
         </div>
       </div>
 
-      <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
+      <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 账号 -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -3452,10 +3452,6 @@ const selectableGroups = computed(() => {
   }
   return Array.from(groups.values())
 })
-
-// Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
-// 故隐藏代理选择器。
-const isSparkShadow = computed(() => props.account?.parent_account_id != null)
 
 const codexTiboRoutes = computed(() =>
   (props.account?.codex_turn_tickets ?? []).flatMap((ticket) =>
@@ -5774,10 +5770,9 @@ const handleSubmit = async () => {
 
     // OpenAI/Grok OAuth: persist model mapping to credentials
     if ((props.account.platform === 'openai' || props.account.platform === 'grok') && props.account.type === 'oauth') {
-      const currentCredentials = isSparkShadow.value
-        ? {}
-        : (updatePayload.credentials as Record<string, unknown>) ||
-          ((props.account.credentials as Record<string, unknown>) || {})
+      const currentCredentials =
+        (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
       if (props.account.platform === 'openai') {
         applyOpenAIModelMappingCredentials(newCredentials)
@@ -5837,9 +5832,8 @@ const handleSubmit = async () => {
     }
 
     // OpenAI: 手动覆盖订阅档位 plan_type（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）。
-    // 仅 OAuth 非影子账号：
-    // 影子账号凭据由母账号管理(且后端会 sanitize),setup-token 无订阅调度语义。
-    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
+    // setup-token 无订阅调度语义。
+    if (props.account.platform === 'openai' && props.account.type === 'oauth') {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
@@ -5987,11 +5981,7 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_responses_flatten_namespaces
       }
-      if (isSparkShadow.value) {
-        delete newExtra.openai_long_context_billing_enabled
-      } else {
-        newExtra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
-      }
+      newExtra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
       if (openAICompactMode.value === 'auto') {
         delete newExtra.openai_compact_mode
       } else {

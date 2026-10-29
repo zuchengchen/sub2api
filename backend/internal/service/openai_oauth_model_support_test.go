@@ -27,7 +27,7 @@ func TestIsModelSupported_OpenAIOAuthEmptyMapping_ServableModels(t *testing.T) {
 		"gpt-5.1-codex-mini",
 		"gpt-5",
 		"codex-mini-latest",
-		"gpt5.3codexspark",  // 别名拼写
+		"gpt5.3codex",       // 别名拼写
 		"gpt-image-1",       // 图像生成模型
 		"claude-sonnet-4-6", // /v1/messages 调度默认映射兜底
 		"claude-3-opus-20240229",

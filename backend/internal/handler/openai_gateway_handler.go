@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/userfacing"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -1004,8 +1005,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			}
 		}
 		if result != nil {
-			// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
-			if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
+			if account.Type == service.AccountTypeOAuth {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
@@ -3084,6 +3084,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if mapping.Mapped && strings.TrimSpace(mapping.MappedModel) != "" {
 					forwardModel = strings.TrimSpace(mapping.MappedModel)
 				}
+				if openai.IsRetiredSparkModel(forwardModel) || openai.IsRetiredSparkModel(account.GetMappedModel(forwardModel)) {
+					return "", newOpenAIWSUnsupportedModelSwitchError(forwardModel)
+				}
 				if !apiKeyCanAccessModels(c, apiKey, model, mapping.MappedModel) ||
 					!apiKeyCanAccessAccountModels(c, apiKey, account, false, forwardModel) {
 					service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
@@ -3210,8 +3213,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					zap.String("turn_upstream_model", turnUpstreamModel),
 					zap.String("billing_model", result.BillingModel),
 				)
-				// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
-				if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
+				if account.Type == service.AccountTypeOAuth {
 					h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
 				}
 				scheduleModel := turnUpstreamModel
@@ -4054,14 +4056,11 @@ func isOpenAIWSUpgradeRequest(r *http.Request) bool {
 }
 
 // blockedModelAllowlistCandidate 对全部候选模型逐一校验分组白名单，返回第一个
-// 未命中的值（全部命中或白名单未开启返回空串）。WS 帧与 HTTP 请求体共用该
+// 未命中的值；全局退役模型不受白名单开关影响。WS 帧与 HTTP 请求体共用该
 // 规则：重复 model 键/大小写变体可能被上游按末值绑定，任一未命中即拒绝。
 func blockedModelAllowlistCandidate(group *service.Group, candidates []string) string {
-	if group == nil || !group.ModelAllowlistEnabled() {
-		return ""
-	}
 	for _, candidate := range candidates {
-		if !group.ModelAllowlist.Allows(candidate) {
+		if openai.IsRetiredSparkModel(candidate) || (group != nil && group.ModelAllowlistEnabled() && !group.ModelAllowlist.Allows(candidate)) {
 			return candidate
 		}
 	}

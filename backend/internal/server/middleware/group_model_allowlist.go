@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -18,7 +19,7 @@ import (
 // 保证校验发生在合成路由改写与调度之前，且只看客户端书写的公开模型名。
 //
 // 行为：
-//   - 快速路径：未绑定分组或白名单未开启时直接放行，不读请求体。
+//   - 未绑定分组直接放行；全局退役模型始终检查，不受白名单开关影响。
 //   - Responses WebSocket 入口跳过（首帧与后续 turn 由 ResponsesWebSocket 逐帧
 //     校验）；Grok Realtime 的升级请求模型固定在查询参数里，仍走中间件校验，
 //     其他路由伪造 Upgrade 头不得绕过校验。
@@ -31,7 +32,7 @@ import (
 func GroupModelAllowlist() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		apiKey, ok := GetAPIKeyFromContext(c)
-		if !ok || apiKey == nil || apiKey.Group == nil || !apiKey.Group.ModelAllowlistEnabled() {
+		if !ok || apiKey == nil || apiKey.Group == nil {
 			c.Next()
 			return
 		}
@@ -71,7 +72,7 @@ func GroupModelAllowlist() gin.HandlerFunc {
 
 		blocked := ""
 		for _, candidate := range models {
-			if !allowlist.Allows(candidate) {
+			if openai.IsRetiredSparkModel(candidate) || (apiKey.Group.ModelAllowlistEnabled() && !allowlist.Allows(candidate)) {
 				blocked = candidate
 				break
 			}

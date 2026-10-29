@@ -2,15 +2,40 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
+
+func isRetiredOpenAIModel(account *Account, model string) bool {
+	return openai.IsRetiredSparkModel(model) || isRetiredOpenAISubscriptionModel(account, model)
+}
+
+// Spark is removed for every upstream, including explicit replacements of its
+// public name. Check before normalization, passthrough and protocol fallbacks.
+func validateRetiredOpenAIRequestModel(account *Account, requestedModel string, requireCompact bool, mappedModel string) error {
+	models := []string{requestedModel, resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)}
+	if account != nil && (!account.IsOpenAIPassthroughEnabled() || shouldForwardOpenAIResponsesViaRawChatCompletions(account)) {
+		models = append(models, account.GetMappedModel(requestedModel))
+	}
+	if mappedModel != "" {
+		models = append(models, mappedModel)
+	}
+	for _, model := range models {
+		if openai.IsRetiredSparkModel(model) {
+			return fmt.Errorf("model %q has been retired", strings.TrimSpace(model))
+		}
+	}
+	return nil
+}
 
 // GPT-5.5 retired from Codex with ChatGPT sign-in on 2026-10-14 at
 // 19:00 UTC. API-key upstreams remain supported. Do not infer upstream
 // eligibility from the API key a client uses to authenticate to this gateway.
 // https://learn.chatgpt.com/docs/models#gpt-55-retirement
 func isRetiredOpenAISubscriptionModel(account *Account, upstreamModel string) bool {
-	if account == nil || !account.IsOpenAI() || (!account.IsOpenAIOAuthLike() && !account.IsShadow()) {
+	if account == nil || !account.IsOpenAI() || !account.IsOpenAIOAuthLike() {
 		return false
 	}
 	model := canonicalizeOpenAIModelAliasSpelling(upstreamModel)
@@ -21,14 +46,17 @@ func isRetiredOpenAISubscriptionModel(account *Account, upstreamModel string) bo
 // retain their existing listing policy. An explicitly mapped replacement is
 // allowed, but a public alias targeting retired GPT-5.5 is not.
 func openAIModelRetiredForAccounts(accounts []Account, modelID string) bool {
+	if openai.IsRetiredSparkModel(modelID) {
+		return true
+	}
 	retired := false
 	for i := range accounts {
 		account := &accounts[i]
-		if !account.IsOpenAI() {
+		target := resolveOpenAIAccountUpstreamModelForRequest(account, modelID, false)
+		if !account.IsOpenAI() && !openai.IsRetiredSparkModel(target) {
 			continue
 		}
-		target := resolveOpenAIAccountUpstreamModelForRequest(account, modelID, false)
-		if isRetiredOpenAISubscriptionModel(account, target) {
+		if isRetiredOpenAIModel(account, target) {
 			retired = true
 		} else if account.IsModelSupported(modelID) {
 			return false
@@ -84,6 +112,9 @@ func filterRetiredOpenAIPublicModelsBody(body []byte, accounts []Account, codex 
 // Compact-only administrator mappings are evaluated against their actual
 // target, without treating an old client-visible name as a retired target.
 func supportsOpenAIRequestModel(account *Account, requestedModel string, requireCompact bool) bool {
+	if validateRetiredOpenAIRequestModel(account, requestedModel, requireCompact, "") != nil {
+		return false
+	}
 	if isRetiredOpenAISubscriptionModel(account, resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)) {
 		return false
 	}

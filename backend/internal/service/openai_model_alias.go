@@ -27,6 +27,10 @@ func normalizeKnownOpenAICodexModel(model string) string {
 	if normalized == "" {
 		return ""
 	}
+	// Preserve the retired identity so broad Codex aliases cannot revive it.
+	if openai.IsRetiredSparkModel(normalized) {
+		return normalized
+	}
 
 	if mapped := getNormalizedCodexModel(normalized); mapped != "" {
 		return mapped
@@ -79,8 +83,6 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		return "gpt-5.4"
 	case strings.Contains(normalized, "gpt-5.2"):
 		return "gpt-5.2"
-	case strings.Contains(normalized, "gpt-5.3-codex-spark"):
-		return "gpt-5.3-codex-spark"
 	case strings.Contains(normalized, "gpt-5.3-codex"):
 		return "gpt-5.3-codex"
 	case strings.Contains(normalized, "gpt-5.3"):

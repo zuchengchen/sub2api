@@ -155,7 +155,7 @@ const GroupSelectorStub = defineComponent({
     <div data-testid="group-selector">
       <button
         type="button"
-        data-testid="set-shadow-group"
+        data-testid="set-group"
         @click="$emit('update:modelValue', [7])"
       >
         group
@@ -187,30 +187,6 @@ function buildAccount() {
     group_ids: [],
     expires_at: null,
     auto_pause_on_expired: false
-  } as any
-}
-
-function buildOpenAISparkShadowAccount() {
-  const account = buildAccount()
-  return {
-    ...account,
-    id: 4,
-    name: 'OpenAI Spark Shadow',
-    type: 'oauth',
-    parent_account_id: 1,
-    credentials: {
-      access_token: 'parent-access-token',
-      refresh_token: 'parent-refresh-token',
-      api_key: 'sk-parent',
-      base_url: 'https://api.openai.com',
-      model_mapping: {
-        'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark'
-      },
-      compact_model_mapping: {
-        'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark-compact'
-      }
-    },
-    group_ids: []
   } as any
 }
 
@@ -1092,27 +1068,6 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_long_context_billing_enabled).toBe(false)
   })
 
-  it('does not render or submit the long-context billing toggle for Spark shadow accounts', async () => {
-    const account = buildOpenAISparkShadowAccount()
-    account.extra = {
-      openai_long_context_billing_enabled: false
-    }
-    updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
-    updateAccountMock.mockResolvedValue(account)
-    const wrapper = mountModal(account)
-
-    expect(wrapper.find('[data-testid="openai-long-context-billing-toggle"]').exists()).toBe(false)
-
-    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-
-    expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty(
-      'openai_long_context_billing_enabled'
-    )
-  })
-
   it('preserves an explicit OpenAI long-context billing opt-out', async () => {
     const account = buildAccount()
     account.extra = {
@@ -1198,32 +1153,6 @@ describe('EditAccountModal', () => {
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.base_url).toBe('https://api.x.ai/v1')
-  })
-
-  it('only submits model mapping credentials when saving an OpenAI spark shadow account', async () => {
-    authIsSimpleMode.value = false
-    const account = buildOpenAISparkShadowAccount()
-    updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
-    updateAccountMock.mockResolvedValue(account)
-
-    const wrapper = mountModal(account)
-
-    await wrapper.get('[data-testid="set-shadow-group"]').trigger('click')
-    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-
-    expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    const payload = updateAccountMock.mock.calls[0]?.[1]
-    expect(payload?.group_ids).toEqual([7])
-    expect(payload?.credentials).toEqual({
-      model_mapping: {
-        'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark'
-      },
-      compact_model_mapping: {
-        'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark-compact'
-      }
-    })
   })
 
   it('submits OpenAI APIKey Responses support override mode', async () => {

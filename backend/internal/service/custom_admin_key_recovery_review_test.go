@@ -28,9 +28,6 @@ func (r *scopedRecoveryReviewRepo) GetByID(ctx context.Context, id int64) (*Acco
 	}
 	return r.accountRepoStubForClearAccountError.GetByID(ctx, id)
 }
-func (*scopedRecoveryReviewRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
-	return nil, nil
-}
 
 type scopedRecoveryReviewBlocker struct {
 	runtimeBlockRecorder

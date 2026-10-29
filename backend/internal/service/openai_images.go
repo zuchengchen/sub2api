@@ -41,7 +41,6 @@ const (
 	openAIImageMaxDownloadBytes  = 20 << 20 // 20MB per image download
 	openAIImageMaxUploadPartSize = 50 << 20 // OpenAI's documented per-image limit for GPT image edits
 	// gpt-5.6-luna: ChatGPT Codex replacement for gpt-5.4-mini; cheaper than gpt-5.5.
-	// Spark is text-only and rejects image_generation.
 	openAIImagesResponsesMainModel         = "gpt-5.6-luna"
 	openAIImagesVerbatimPromptInstructions = "When invoking the image_generation tool, use the user's image prompt verbatim. Do not rewrite, expand, summarize, embellish, translate, normalize punctuation, or add or remove visual details or constraints. Preserve the original language, wording, capitalization, quotes, and punctuation exactly."
 )

@@ -119,41 +119,6 @@ func TestAccountHandlerBatchDeleteReturnsStablePerAccountResults(t *testing.T) {
 	require.Greater(t, adminSvc.maxActive, 1)
 }
 
-func TestAccountHandlerBatchDeleteDoesNotRaceSelectedShadowWithParent(t *testing.T) {
-	parentID := int64(1)
-	adminSvc := &batchDeleteAdminService{
-		stubAdminService: newStubAdminService(),
-		accountsByID: map[int64]*service.Account{
-			1: {ID: 1},
-			2: {ID: 2, ParentAccountID: &parentID},
-			3: {ID: 3},
-		},
-	}
-	router := setupAccountBatchDeleteRouter(adminSvc)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/v1/admin/accounts/batch-delete",
-		bytes.NewBufferString(`{"account_ids":[1,2,3]}`),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var payload struct {
-		Data struct {
-			SuccessIDs []int64 `json:"success_ids"`
-			FailedIDs  []int64 `json:"failed_ids"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
-	require.Equal(t, []int64{1, 2, 3}, payload.Data.SuccessIDs)
-	require.Empty(t, payload.Data.FailedIDs)
-	require.ElementsMatch(t, []int64{1, 3}, adminSvc.deletedIDs)
-}
-
 func TestAccountHandlerBatchDeleteRejectsEmptyNormalizedIDs(t *testing.T) {
 	adminSvc := &batchDeleteAdminService{
 		stubAdminService: newStubAdminService(),

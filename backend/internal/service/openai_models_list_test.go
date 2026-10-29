@@ -304,17 +304,6 @@ func TestPinnedOpenAIModelsListMixedAccountsShareColdCacheAcrossGroups(t *testin
 	require.EqualValues(t, 1, oauthCalls.Load())
 }
 
-func TestFetchOpenAIModelsListResolvesShadowOAuthCredentials(t *testing.T) {
-	_, calls := newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"parent-model"}]}`)
-	parent := newCodexModelsTestAccount()
-	shadow := &Account{ID: 9, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent.ID}
-	s := &OpenAIGatewayService{accountRepo: newStubCredRepo(parent)}
-	response, err := s.FetchOpenAIModelsList(context.Background(), shadow)
-	require.NoError(t, err)
-	require.Contains(t, string(response.Body), `"id":"parent-model"`)
-	require.EqualValues(t, 1, calls.Load())
-}
-
 func TestProjectAccountModelsCannotExposeCodexMediaThroughAlias(t *testing.T) {
 	account := newCodexModelsAPIKeyTestAccount("https://models.example/v1")
 	account.Credentials["model_mapping"] = map[string]any{"image-alias": "gpt-image-1", "auto-alias": "codex-auto-fast"}

@@ -40,7 +40,6 @@ var codexModelMap = map[string]string{
 	"gpt-5.3-high":         "gpt-5.3-codex",
 	"gpt-5.3-xhigh":        "gpt-5.3-codex",
 	"gpt-5.3-codex":        "gpt-5.3-codex",
-	"gpt-5.3-codex-spark":  "gpt-5.3-codex-spark",
 	"gpt-5.3-codex-low":    "gpt-5.3-codex",
 	"gpt-5.3-codex-medium": "gpt-5.3-codex",
 	"gpt-5.3-codex-high":   "gpt-5.3-codex",
@@ -75,7 +74,6 @@ var codexVersionModelPrefixes = []struct {
 	{prefix: "gpt-5.6-sol", target: "gpt-5.6-sol"},
 	{prefix: "gpt-5.6-terra", target: "gpt-5.6-terra"},
 	{prefix: "gpt-5.6-luna", target: "gpt-5.6-luna"},
-	{prefix: "gpt-5.3-codex-spark", target: "gpt-5.3-codex-spark"},
 	{prefix: "gpt-5.3-codex", target: "gpt-5.3-codex"},
 	{prefix: "gpt-5.4-mini", target: "gpt-5.4-mini"},
 	{prefix: "gpt-5.4-nano", target: "gpt-5.4-nano"},
@@ -156,8 +154,6 @@ const codexImageGenerationFunctionToolName = "image_gen.imagegen"
 const (
 	codexImageGenerationBridgeMarker = "<image-tool-availability>"
 	codexImageGenerationBridgeText   = codexImageGenerationBridgeMarker + "\nWhen the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. The local Codex client may not expose an `image_gen` namespace, but that does not mean image generation is unavailable. Do not ask the user to switch to CLI fallback solely because `image_gen` is absent.\n</image-tool-availability>"
-	codexSparkImageUnsupportedMarker = "<spark-image-capability>"
-	codexSparkImageUnsupportedText   = codexSparkImageUnsupportedMarker + "\nThe current model is gpt-5.3-codex-spark, which does not support image generation, image editing, image input, the `image_generation` tool, or Codex `image_gen`/`$imagegen` workflows. If the user asks for image generation or image editing, clearly explain this model limitation and ask them to switch to a non-Spark Codex model such as gpt-5.3-codex or gpt-5.4. Do not claim that the local environment merely lacks image_gen tooling, and do not suggest CLI fallback as the primary fix while the model remains Spark.\n</spark-image-capability>"
 )
 
 var openAIChatGPTInternalUnsupportedFields = []string{
@@ -316,14 +312,6 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 
 	// instructions 处理逻辑：根据是否是 Codex CLI 分别调用不同方法
 	if !opts.SkipDefaultInstructions && applyInstructions(reqBody, opts.IsCodexCLI) {
-		result.Modified = true
-	}
-	if isCodexSparkModel(normalizedModel) && applyCodexSparkImageUnsupportedInstructions(reqBody) {
-		result.Modified = true
-	}
-	// gpt-5.3-codex-spark rejects the image_generation tool upstream (HTTP 400,
-	// param=tools); Codex CLI advertises it by default, so strip it for spark.
-	if isCodexSparkModel(normalizedModel) && stripCodexSparkImageGenerationTools(reqBody) {
 		result.Modified = true
 	}
 
@@ -864,10 +852,6 @@ func isCodexDateSuffix(suffix string) bool {
 	return true
 }
 
-func isCodexSparkModel(model string) bool {
-	return normalizeCodexModel(model) == "gpt-5.3-codex-spark"
-}
-
 func hasOpenAIImageGenerationTool(reqBody map[string]any) bool {
 	if toolsContainImageGeneration(reqBody["tools"]) {
 		return true
@@ -1029,47 +1013,6 @@ func stripOpenAIImageGenerationToolsFromRawPayload(payload []byte) ([]byte, bool
 		return payload, false, err
 	}
 	return rebuilt, true, nil
-}
-
-// stripCodexSparkImageGenerationTools removes image tool declarations and choices.
-// gpt-5.3-codex-spark rejects those capabilities upstream, while Codex clients may
-// advertise them by default.
-func stripCodexSparkImageGenerationTools(reqBody map[string]any) bool {
-	return stripOpenAIImageGenerationTools(reqBody)
-}
-
-func hasOpenAIInputImage(reqBody map[string]any) bool {
-	if reqBody == nil {
-		return false
-	}
-	return hasOpenAIInputImageValue(reqBody["input"]) || hasOpenAIInputImageValue(reqBody["messages"])
-}
-
-func hasOpenAIInputImageValue(value any) bool {
-	switch v := value.(type) {
-	case []any:
-		for _, item := range v {
-			if hasOpenAIInputImageValue(item) {
-				return true
-			}
-		}
-	case map[string]any:
-		if strings.TrimSpace(firstNonEmptyString(v["type"])) == "input_image" {
-			return true
-		}
-		if _, ok := v["image_url"]; ok {
-			return true
-		}
-		return hasOpenAIInputImageValue(v["content"])
-	}
-	return false
-}
-
-func validateCodexSparkInput(reqBody map[string]any, model string) error {
-	if !isCodexSparkModel(model) || !hasOpenAIInputImage(reqBody) {
-		return nil
-	}
-	return fmt.Errorf("model %q does not support image input", strings.TrimSpace(model))
 }
 
 func normalizeOpenAIResponsesImageGenerationTools(reqBody map[string]any) bool {
@@ -1234,9 +1177,6 @@ func ensureOpenAIResponsesImageGenerationTool(reqBody map[string]any) bool {
 	if len(reqBody) == 0 {
 		return false
 	}
-	if isCodexSparkModel(firstNonEmptyString(reqBody["model"])) {
-		return false
-	}
 	if hasCodexImageGenerationFunctionTool(reqBody) {
 		return false
 	}
@@ -1268,9 +1208,6 @@ func ensureOpenAIResponsesImageGenerationToolChoiceAuto(reqBody map[string]any) 
 	if len(reqBody) == 0 || hasCodexImageGenerationFunctionTool(reqBody) || !hasOpenAIImageGenerationTool(reqBody) {
 		return false
 	}
-	if isCodexSparkModel(firstNonEmptyString(reqBody["model"])) {
-		return false
-	}
 	if _, ok := reqBody["tool_choice"]; ok {
 		return false
 	}
@@ -1280,9 +1217,6 @@ func ensureOpenAIResponsesImageGenerationToolChoiceAuto(reqBody map[string]any) 
 
 func applyCodexImageGenerationBridgeInstructions(reqBody map[string]any) bool {
 	if len(reqBody) == 0 || hasCodexImageGenerationFunctionTool(reqBody) || !hasOpenAIImageGenerationTool(reqBody) {
-		return false
-	}
-	if isCodexSparkModel(firstNonEmptyString(reqBody["model"])) {
 		return false
 	}
 
@@ -1298,23 +1232,6 @@ func applyCodexImageGenerationBridgeInstructions(reqBody map[string]any) bool {
 	}
 
 	reqBody["instructions"] = existing + "\n\n" + codexImageGenerationBridgeText
-	return true
-}
-
-func applyCodexSparkImageUnsupportedInstructions(reqBody map[string]any) bool {
-	if len(reqBody) == 0 {
-		return false
-	}
-	existing, _ := reqBody["instructions"].(string)
-	if strings.Contains(existing, codexSparkImageUnsupportedMarker) {
-		return false
-	}
-	existing = strings.TrimRight(existing, " \t\r\n")
-	if strings.TrimSpace(existing) == "" {
-		reqBody["instructions"] = codexSparkImageUnsupportedText
-		return true
-	}
-	reqBody["instructions"] = existing + "\n\n" + codexSparkImageUnsupportedText
 	return true
 }
 

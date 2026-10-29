@@ -360,20 +360,18 @@ func TestCodexModelsSupplementsConfiguredModelsWithUnmappedAccountDefaults(t *te
 	}
 }
 
-func TestCodexModelsUnmappedParentAndSparkShadowHonorCustomListAndETag(t *testing.T) {
+func TestCodexModelsUnmappedAndMappedAccountsHonorCustomListAndETag(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	const sparkModel = "gpt-5.3-codex-spark"
-	parentID := int64(1)
+	const mappedModel = "gpt-5.3-codex"
 	repo := &codexModelsFailoverAccountRepo{accounts: []service.Account{
 		{
-			ID: parentID, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+			ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
 			Status: service.StatusActive, Schedulable: true,
 		},
 		{
 			ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
 			Status: service.StatusActive, Schedulable: true,
-			ParentAccountID: &parentID, QuotaDimension: "spark",
-			Credentials: map[string]any{"model_mapping": map[string]any{sparkModel: sparkModel}},
+			Credentials: map[string]any{"model_mapping": map[string]any{mappedModel: mappedModel}},
 		},
 	}}
 	upstream := &codexModelsFailoverHTTPUpstream{firstStatus: http.StatusNotFound}
@@ -389,18 +387,18 @@ func TestCodexModelsUnmappedParentAndSparkShadowHonorCustomListAndETag(t *testin
 	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
 	slugs := codexHandlerManifestSlugs(t, first)
 	require.Contains(t, slugs, "gpt-5.6-sol")
-	require.Contains(t, slugs, sparkModel)
+	require.Contains(t, slugs, mappedModel)
 	require.NotContains(t, slugs, "gpt-image-2")
 	require.NotContains(t, slugs, "codex-auto-review")
 	firstETag := first.Header().Get("ETag")
 	require.NotEmpty(t, firstETag)
 
 	group.ModelAllowlist = service.GroupModelAllowlist{
-		Enabled: true, Models: []string{"gpt-5.6-sol", sparkModel, "unknown-model"},
+		Enabled: true, Models: []string{"gpt-5.6-sol", mappedModel, "unknown-model"},
 	}
 	second := performCodexModelsRequestForGroup(t, handler, group, firstETag)
 	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
-	require.ElementsMatch(t, []string{"gpt-5.6-sol", sparkModel}, codexHandlerManifestSlugs(t, second))
+	require.ElementsMatch(t, []string{"gpt-5.6-sol", mappedModel}, codexHandlerManifestSlugs(t, second))
 	require.NotEqual(t, firstETag, second.Header().Get("ETag"))
 	third := performCodexModelsRequestForGroup(t, handler, group, second.Header().Get("ETag"))
 	require.Equal(t, http.StatusNotModified, third.Code)

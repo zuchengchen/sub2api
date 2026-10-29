@@ -214,6 +214,34 @@ func TestMigration154aAddsSparkShadowIndexesConcurrently(t *testing.T) {
 	require.Contains(t, sql, "deleted_at IS NULL")
 }
 
+func TestMigration271SoftDeletesSparkShadowAccountsWithoutDroppingColumns(t *testing.T) {
+	content, err := FS.ReadFile("271_remove_spark_shadow_accounts.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "parent_account_id IS NOT NULL")
+	require.Contains(t, sql, "quota_dimension = 'spark'")
+	require.Contains(t, sql, "deleted_at = COALESCE(deleted_at, NOW())")
+	require.Contains(t, sql, "parent_account_id = NULL")
+	require.Contains(t, sql, "quota_dimension = 'global'")
+	require.Contains(t, sql, "schedulable = false")
+	require.Contains(t, sql, "DELETE FROM account_groups")
+	require.Contains(t, sql, "UPDATE scheduled_test_plans")
+	require.Contains(t, sql, "auto_recover = false")
+	require.Contains(t, sql, "next_run_at = NULL")
+	require.Contains(t, sql, "INSERT INTO scheduler_outbox")
+	require.Contains(t, sql, "account_changed")
+	require.Contains(t, sql, "'group_ids'")
+	require.NotContains(t, sql, "DELETE FROM accounts")
+	require.NotContains(t, sql, "DELETE FROM usage_logs")
+	require.NotContains(t, sql, "DELETE FROM scheduled_test_plans")
+	require.NotContains(t, sql, "UPDATE usage_logs")
+	require.NotContains(t, sql, "credentials =")
+	require.NotContains(t, sql, "DROP COLUMN")
+	require.NotContains(t, sql, "DROP CONSTRAINT")
+	require.NotContains(t, sql, "DROP INDEX")
+}
+
 func TestMigration173AllowsCyberBlockedUsageRequestType(t *testing.T) {
 	entries, err := FS.ReadDir(".")
 	require.NoError(t, err)

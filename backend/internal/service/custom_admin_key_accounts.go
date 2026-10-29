@@ -200,16 +200,6 @@ func (s *adminServiceImpl) ScopedAdminWrite(ctx context.Context, id int64, actio
 				return nil, infraerrors.Forbidden("SCOPED_ACCOUNT_FORBIDDEN", "账户字段未授权")
 			}
 		}
-		if a.IsShadow() {
-			return nil, infraerrors.Forbidden("SCOPED_ACCOUNT_FORBIDDEN", "不支持修改影子账户")
-		}
-		shadows, e := s.accountRepo.ListShadowsByParent(txctx, id)
-		if e != nil {
-			return nil, e
-		}
-		if len(shadows) > 0 {
-			return nil, infraerrors.Forbidden("SCOPED_ACCOUNT_FORBIDDEN", "请由完整管理员管理关联影子账户")
-		}
 
 		if run != nil {
 			return run(txctx, a)

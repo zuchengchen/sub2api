@@ -61,16 +61,8 @@ func newTeamLinkedAccount(id int64, teamID string) Account {
 	}
 }
 
-// newTeamLinkedFixture: #1 触发者(team-A) #2 同队 #3 异队 #4 apikey #5 影子 #6 同队 #7 同队但已 error
+// newTeamLinkedFixture: #1 触发者(team-A) #2 同队 #3 异队 #4 apikey #6 同队 #7 同队但已 error
 func newTeamLinkedFixture() []Account {
-	parentID := int64(1)
-	shadow := Account{
-		ID:              5,
-		Platform:        PlatformOpenAI,
-		Type:            AccountTypeOAuth,
-		Status:          StatusActive,
-		ParentAccountID: &parentID,
-	}
 	apikey := newTeamLinkedAccount(4, "team-A")
 	apikey.Type = AccountTypeAPIKey
 	erroredSibling := newTeamLinkedAccount(7, "team-A")
@@ -80,7 +72,6 @@ func newTeamLinkedFixture() []Account {
 		newTeamLinkedAccount(2, "team-A"),
 		newTeamLinkedAccount(3, "team-B"),
 		apikey,
-		shadow,
 		newTeamLinkedAccount(6, "team-A"),
 		erroredSibling,
 	}

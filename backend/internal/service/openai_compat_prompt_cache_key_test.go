@@ -22,7 +22,6 @@ func TestShouldAutoInjectPromptCacheKeyForCompat(t *testing.T) {
 	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.2"))
 	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.3"))
 	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.3-codex"))
-	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.3-codex-spark"))
 	require.False(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-4o"))
 }
 
@@ -478,18 +477,18 @@ func TestDeriveCompatPromptCacheKey_NotRewrittenByCodexFingerprint(t *testing.T)
 		"auto-injected compat cache keys must not collapse onto the account session id")
 }
 
-func TestDeriveCompatPromptCacheKey_UsesResolvedSparkFamily(t *testing.T) {
+func TestDeriveCompatPromptCacheKey_UsesResolvedCodexFamily(t *testing.T) {
 	req := &apicompat.ChatCompletionsRequest{
-		Model: "gpt-5.3-codex-spark",
+		Model: "gpt-5.3-codex",
 		Messages: []apicompat.ChatMessage{
 			{Role: "user", Content: mustRawJSON(t, `"Question A"`)},
 		},
 	}
 
-	k1 := deriveCompatPromptCacheKey(req, "gpt-5.3-codex-spark")
-	k2 := deriveCompatPromptCacheKey(req, " openai/gpt-5.3-codex-spark ")
+	k1 := deriveCompatPromptCacheKey(req, "gpt-5.3-codex")
+	k2 := deriveCompatPromptCacheKey(req, " openai/gpt-5.3-codex ")
 	require.NotEmpty(t, k1)
-	require.Equal(t, k1, k2, "resolved spark family should derive a stable compat cache key")
+	require.Equal(t, k1, k2, "resolved Codex family should derive a stable compat cache key")
 }
 
 func TestDeriveAnthropicCompatPromptCacheKey_StableAcrossLaterTurns(t *testing.T) {

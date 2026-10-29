@@ -39,17 +39,6 @@ type openAIRecordUsageBillingRepoStub struct {
 	lastCtxErr error
 }
 
-type openAIRecordUsageAccountRepoStub struct {
-	AccountRepository
-	account *Account
-	calls   int
-}
-
-func (s *openAIRecordUsageAccountRepoStub) GetByID(_ context.Context, _ int64) (*Account, error) {
-	s.calls++
-	return s.account, nil
-}
-
 func (s *openAIRecordUsageBillingRepoStub) Apply(ctx context.Context, cmd *UsageBillingCommand) (*UsageBillingApplyResult, error) {
 	s.calls++
 	s.lastCmd = cmd
@@ -1490,62 +1479,6 @@ func TestOpenAIGatewayServiceRecordUsage_GrokLongContextFollowsGroupToggleOnly(t
 		require.InDelta(t, baseInput, usageRepo.lastLog.InputCost, 1e-10)
 		require.InDelta(t, baseOutput, usageRepo.lastLog.OutputCost, 1e-10)
 	})
-}
-
-func TestOpenAIGatewayServiceRecordUsage_SparkShadowUsesCurrentParentBillingSetting(t *testing.T) {
-	tests := []struct {
-		name          string
-		parentEnabled bool
-	}{
-		{name: "parent opt out overrides stale enabled shadow", parentEnabled: false},
-		{name: "parent opt in overrides stale disabled shadow", parentEnabled: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
-			accountRepo := &openAIRecordUsageAccountRepoStub{account: &Account{
-				ID:       4016,
-				Platform: PlatformOpenAI,
-				Type:     AccountTypeOAuth,
-				Extra:    map[string]any{openAILongContextBillingEnabledKey: tt.parentEnabled},
-			}}
-			svc := newOpenAIRecordUsageServiceForTest(
-				usageRepo,
-				&openAIRecordUsageUserRepoStub{},
-				&openAIRecordUsageSubRepoStub{},
-				nil,
-			)
-			swapInOpenAILadderCatalog(t, svc)
-			svc.accountRepo = accountRepo
-			parentID := int64(4016)
-
-			err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
-				Result: &OpenAIForwardResult{
-					RequestID: "resp_gpt54_shadow_parent_setting",
-					Usage:     OpenAIUsage{InputTokens: 300000, OutputTokens: 2000},
-					Model:     "gpt-5.4-2026-03-05",
-					Duration:  time.Second,
-				},
-				APIKey: openAIRecordUsageAPIKeyWithGroup(svc, 1016, true),
-				User:   &User{ID: 2016},
-				Account: &Account{
-					ID:              3016,
-					Platform:        PlatformOpenAI,
-					Type:            AccountTypeOAuth,
-					ParentAccountID: &parentID,
-					QuotaDimension:  QuotaDimensionSpark,
-					Extra: map[string]any{
-						openAILongContextBillingEnabledKey: !tt.parentEnabled,
-					},
-				},
-			})
-
-			require.NoError(t, err)
-			require.Equal(t, 1, accountRepo.calls)
-			require.Equal(t, tt.parentEnabled, usageRepo.lastLog.LongContextBillingApplied)
-		})
-	}
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ServiceTierPriorityUsesFastPricing(t *testing.T) {
@@ -3190,50 +3123,6 @@ func TestOpenAIGatewayServiceRecordUsage_CodexDefaultEchoKeepsFastBilling(t *tes
 			require.InDelta(t, fastCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-10)
 		})
 	}
-}
-
-func TestOpenAIGatewayServiceRecordUsage_ShadowUsesParentCredentialTierContract(t *testing.T) {
-	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
-	svc := newOpenAIRecordUsageServiceForTest(
-		usageRepo,
-		&openAIRecordUsageUserRepoStub{},
-		&openAIRecordUsageSubRepoStub{},
-		nil,
-	)
-	parentID := int64(9001)
-	accountRepo := &openAIRecordUsageAccountRepoStub{account: &Account{
-		ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-	}}
-	svc.accountRepo = accountRepo
-	serviceTier := "priority"
-	tokens := UsageTokens{InputTokens: 100, OutputTokens: 50}
-
-	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
-		Result: &OpenAIForwardResult{
-			RequestID:                   "resp_shadow_codex_default_echo",
-			ServiceTier:                 &serviceTier,
-			UpstreamResponseServiceTier: "default",
-			Usage:                       OpenAIUsage{InputTokens: tokens.InputTokens, OutputTokens: tokens.OutputTokens},
-			Model:                       "gpt-5.6-sol",
-			Duration:                    time.Second,
-		},
-		APIKey: &APIKey{ID: 1020},
-		User:   &User{ID: 2020},
-		Account: &Account{
-			ID: 3020, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-			ParentAccountID: &parentID,
-		},
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, 1, accountRepo.calls)
-	require.NotNil(t, usageRepo.lastLog)
-	require.NotNil(t, usageRepo.lastLog.ServiceTier)
-	require.Equal(t, "priority", *usageRepo.lastLog.ServiceTier)
-
-	fastCost, calcErr := svc.billingService.CalculateCostWithServiceTier("gpt-5.6-sol", tokens, 1.0, "priority")
-	require.NoError(t, calcErr)
-	require.InDelta(t, fastCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-10)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_FreeOpenAIFastChargesStandard(t *testing.T) {

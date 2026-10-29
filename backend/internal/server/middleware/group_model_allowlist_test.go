@@ -78,7 +78,7 @@ func (b *readTrackingBody) Read(p []byte) (int, error) {
 
 func (b *readTrackingBody) Close() error { return nil }
 
-func TestGroupModelAllowlistDisabledDoesNotReadBody(t *testing.T) {
+func TestGroupModelAllowlistDisabledStillChecksRetirement(t *testing.T) {
 	router, calls := newGroupModelAllowlistTestRouter(allowlistAPIKey(false, "claude-sonnet-4.5"), "/v1")
 
 	body := &readTrackingBody{Reader: strings.NewReader(`{"model":"claude-opus-4.6"}`)}
@@ -93,8 +93,27 @@ func TestGroupModelAllowlistDisabledDoesNotReadBody(t *testing.T) {
 	if len(*calls) != 1 {
 		t.Fatalf("expected handler to run once, got %v", *calls)
 	}
-	if body.read {
-		t.Fatal("allowlist disabled: middleware must not read the request body")
+	if !body.read {
+		t.Fatal("global retirement must be checked even with the allowlist disabled")
+	}
+}
+
+func TestSparkRetirementIngress(t *testing.T) {
+	for _, path := range []string{"/v1/responses", "/v1/messages", "/v1/chat/completions", "/v1/embeddings"} {
+		for _, enabled := range []bool{false, true} {
+			router, calls := newGroupModelAllowlistTestRouter(allowlistAPIKey(enabled, "*"), "/v1")
+			w := doJSON(t, router, http.MethodPost, path, `{"model":"custom-model","Model":"openai/GPT5.3CodexSpark_xhigh_openai_compact"}`)
+			if w.Code != http.StatusNotFound || len(*calls) != 0 {
+				t.Fatalf("%s enabled=%v: retired alias reached handler: status=%d calls=%v", path, enabled, w.Code, *calls)
+			}
+		}
+	}
+	for _, model := range []string{"custom-model", "muse-spark", "iFlytek/spark", "gpt-5.3-codex"} {
+		router, calls := newGroupModelAllowlistTestRouter(allowlistAPIKey(false), "/v1")
+		w := doJSON(t, router, http.MethodPost, "/v1/responses", `{"model":"`+model+`"}`)
+		if w.Code != http.StatusOK || len(*calls) != 1 {
+			t.Fatalf("unrelated model %s was rejected: %d", model, w.Code)
+		}
 	}
 }
 
