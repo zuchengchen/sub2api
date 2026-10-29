@@ -2475,3 +2475,91 @@ func TestOpenAIGatewayService_Forward_WSv2_ErrorBeforeCommitStillFailsOver(t *te
 	require.NotContains(t, finalBody, "server_is_overloaded")
 	require.NotContains(t, finalBody, "resp_shed_1", "第一次失败尝试的缓冲事件不得泄漏给客户端")
 }
+
+// 提交点之前到达的容量降载 / 限流错误事件：同账号 HTTP 回退无意义（classify 判
+// can_fallback=false），但应与 HTTP SSE / ingress / bridge 一致返回账号级
+// UpstreamFailoverError，交给 handler 延迟重试或换号，而不是直接把 502 写给客户端。
+func TestOpenAIGatewayService_Forward_WSv2_PreOutputCapacityAndRateLimitFailOver(t *testing.T) {
+	cases := []struct {
+		name       string
+		errorEvent string
+		wantStatus int
+		wantScoped bool
+	}{
+		{
+			name:       "capacity_shed",
+			errorEvent: `{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}`,
+			wantStatus: http.StatusServiceUnavailable,
+			wantScoped: true,
+		},
+		{
+			name:       "turn_rate_limit",
+			errorEvent: `{"type":"error","error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity, please try again later"}}`,
+			wantStatus: http.StatusTooManyRequests,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+			c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
+
+			cfg := &config.Config{}
+			cfg.Security.URLAllowlist.Enabled = false
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+			cfg.Gateway.OpenAIWS.Enabled = true
+			cfg.Gateway.OpenAIWS.OAuthEnabled = true
+			cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+			cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+			cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+			captureConn := &openAIWSCaptureConn{
+				events: [][]byte{
+					[]byte(`{"type":"response.created","response":{"id":"resp_pre_shed","model":"gpt-5.1","status":"in_progress"}}`),
+					[]byte(`{"type":"response.in_progress","response":{"id":"resp_pre_shed","status":"in_progress"}}`),
+					[]byte(tc.errorEvent),
+				},
+			}
+			pool := newOpenAIWSConnPool(cfg)
+			pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
+
+			upstream := &httpUpstreamRecorder{}
+			svc := &OpenAIGatewayService{
+				tiboRouteDisabled: true,
+				cfg:               cfg,
+				httpUpstream:      upstream,
+				cache:             &stubGatewayCache{},
+				openaiWSResolver:  NewOpenAIWSProtocolResolver(cfg),
+				toolCorrector:     NewCodexToolCorrector(),
+				openaiWSPool:      pool,
+			}
+			account := &Account{
+				ID:          85,
+				Name:        "openai-pre-output-failover",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token"},
+				Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+			}
+
+			body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"hi"}]}`)
+			_, err := svc.Forward(context.Background(), c, account, body)
+			require.Error(t, err)
+
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr, "提交点前的降载/限流错误应交给 handler 做账号级 failover")
+			require.Equal(t, tc.wantStatus, failoverErr.StatusCode)
+			require.Equal(t, tc.wantScoped, failoverErr.RequestScopedTransient)
+			require.Empty(t, rec.Body.String(), "failover 前不得向客户端写任何字节")
+			require.Empty(t, upstream.requests, "降载/限流不应走同账号 HTTP 回退")
+		})
+	}
+}
