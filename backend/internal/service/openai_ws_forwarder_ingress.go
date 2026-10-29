@@ -975,10 +975,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				wsPath,
 				baseAcquireReq.ProxyURL != "",
 			)
+			recordOpenAIWSDialRejected(c, account, acquireErr)
 			var dialErr *openAIWSDialError
 			if errors.As(acquireErr, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
 				s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(acquireErr.Error()), canonicalModel)
 				return nil, s.newOpenAIWSRateLimitFailoverError(account, dialErr.ResponseHeaders, nil, acquireErr.Error())
+			}
+			// Handshake 403 before the first turn reaches upstream: nothing has
+			// been relayed, so the handler can replay the first frame on another
+			// account. Later turns keep the close path because the handler only
+			// holds the first client frame for replay.
+			if forbiddenErr, forbidden := openAIWSDialForbidden(acquireErr); forbidden && turn == 1 && !cookieWS {
+				return nil, s.newOpenAIWSDialForbiddenFailoverError(ctx, account, canonicalModel, forbiddenErr)
 			}
 			if errors.Is(acquireErr, errOpenAIWSPreferredConnUnavailable) {
 				return nil, NewOpenAIWSClientCloseError(

@@ -157,6 +157,12 @@ func openAIWSSessionFallbackActionFor(reason string) openAIWSSessionFallbackActi
 	case "acquire_timeout", "acquire_conn", "conn_queue_full", "preferred_conn_unavailable":
 		// 本地连接池争用：本请求可回退，不标记账号。
 		return openAIWSSessionFallbackAction{fallbackHTTP: true, reason: reason}
+	case openAIWSUpstreamForbiddenReason:
+		// WS 握手 403 多为 chatgpt.com 边缘（Cloudflare）对出口 IP/传输指纹的
+		// 间歇性拦截，同账号 HTTP 通常仍可用。本请求改走 HTTP；HTTP 上的 403
+		// 会经既有策略（边缘页豁免、累计冷却、换号）处理。不标记会话，
+		// 避免一次边缘抖动把整段会话钉在 HTTP 上。
+		return openAIWSSessionFallbackAction{fallbackHTTP: true, reason: reason}
 	case "dial_failed",
 		"upstream_5xx",
 		"read_event",

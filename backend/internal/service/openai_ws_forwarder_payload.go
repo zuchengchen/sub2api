@@ -489,7 +489,7 @@ func shouldForceNewConnOnStoreDisabled(mode, lastFailureReason string) bool {
 	case openAIWSStoreDisabledConnModeAdaptive:
 		reason := strings.TrimPrefix(strings.TrimSpace(lastFailureReason), "prewarm_")
 		switch reason {
-		case "policy_violation", "message_too_big", "auth_failed", "write_request", "write":
+		case "policy_violation", "message_too_big", "auth_failed", openAIWSUpstreamForbiddenReason, "write_request", "write":
 			return true
 		default:
 			return false

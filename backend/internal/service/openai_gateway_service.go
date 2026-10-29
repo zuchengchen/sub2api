@@ -851,6 +851,7 @@ func classifyOpenAIWSReconnectReason(err error) (string, bool) {
 		"upgrade_required",
 		"ws_unsupported",
 		"auth_failed",
+		openAIWSUpstreamForbiddenReason,
 		"invalid_encrypted_content",
 		"previous_response_not_found":
 		return reason, false
@@ -930,6 +931,10 @@ func resolveOpenAIWSFallbackErrorResponse(err error) (statusCode int, errType st
 		if statusCode == 0 {
 			statusCode = http.StatusUnauthorized
 		}
+	case openAIWSUpstreamForbiddenReason:
+		if statusCode == 0 {
+			statusCode = http.StatusForbidden
+		}
 	case "upstream_rate_limited":
 		if statusCode == 0 {
 			statusCode = http.StatusTooManyRequests
@@ -951,6 +956,8 @@ func resolveOpenAIWSFallbackErrorResponse(err error) (statusCode int, errType st
 			upstreamMessage = "upstream websocket not supported"
 		case "auth_failed":
 			upstreamMessage = "upstream authentication failed"
+		case openAIWSUpstreamForbiddenReason:
+			upstreamMessage = "upstream websocket handshake forbidden"
 		case "upstream_rate_limited":
 			upstreamMessage = "upstream rate limit exceeded, please retry later"
 		default:
