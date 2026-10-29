@@ -234,7 +234,7 @@ func TestHandle429_OpenAISyncsObservedPlanType(t *testing.T) {
 		ID:          124,
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
-		Credentials: map[string]any{"plan_type": "plus"},
+		Credentials: map[string]any{"plan_type": "plus", "subscription_expires_at": "2026-11-28T00:00:00Z", "subscription_is_delinquent": true},
 	}
 	body := []byte(`{"error":{"type":"usage_limit_reached","message":"limit reached","plan_type":"free","resets_at":1777283883}}`)
 
@@ -243,6 +243,10 @@ func TestHandle429_OpenAISyncsObservedPlanType(t *testing.T) {
 	require.Equal(t, []int64{account.ID}, repo.bulkUpdatedIDs)
 	require.Equal(t, "free", repo.bulkUpdatedPayload.Credentials["plan_type"])
 	require.Equal(t, "free", account.Credentials["plan_type"])
+	require.Empty(t, repo.bulkUpdatedPayload.Credentials["subscription_expires_at"])
+	require.Nil(t, repo.bulkUpdatedPayload.Credentials["subscription_is_delinquent"])
+	require.Empty(t, account.Credentials["subscription_expires_at"])
+	require.Nil(t, account.Credentials["subscription_is_delinquent"])
 	require.Equal(t, account.ID, repo.rateLimitedID)
 }
 

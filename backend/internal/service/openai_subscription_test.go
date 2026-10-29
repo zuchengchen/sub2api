@@ -41,6 +41,129 @@ func TestFetchChatGPTSubscriptionExpiresAt(t *testing.T) {
 	require.Equal(t, wantExpiresAt, got)
 }
 
+func TestFetchChatGPTAccountInfo_DelinquencyFollowsSelectedEntitlement(t *testing.T) {
+	delinquent, paid := true, false
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  *bool
+	}{
+		{"delinquent", true, &delinquent},
+		{"paid", false, &paid},
+		{"unknown", nil, nil},
+		{"invalid", "true", nil},
+	} {
+		for _, selector := range []string{"direct", "default", "paid"} {
+			t.Run(tc.name+"/"+selector, func(t *testing.T) {
+				expiry := time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+				server := newChatGPTBackendTestServer(t, chatGPTBackendTestServerConfig{accountsCheck: map[string]any{
+					"accounts": map[string]any{
+						"personal": map[string]any{
+							"account":     map[string]any{"account_id": "personal", "plan_type": "pro", "is_default": selector == "default"},
+							"entitlement": map[string]any{"expires_at": expiry, "is_delinquent": tc.value},
+						},
+						"other": map[string]any{
+							"account":     map[string]any{"account_id": "other", "plan_type": "free"},
+							"entitlement": map[string]any{"is_delinquent": true},
+						},
+					},
+				}})
+				defer server.Close()
+				orgID := ""
+				if selector == "direct" {
+					orgID = "personal"
+				}
+				info := fetchChatGPTAccountInfo(context.Background(), newTestPrivacyClientFactory(), "at", "", orgID)
+				require.NotNil(t, info)
+				require.Equal(t, "personal", info.AccountID)
+				require.Equal(t, expiry, info.SubscriptionExpiresAt)
+				require.Equal(t, tc.want, info.SubscriptionIsDelinquent)
+			})
+		}
+	}
+}
+
+func TestMergeCredentials_SubscriptionSnapshot(t *testing.T) {
+	t.Run("other provider plan unchanged semantics", func(t *testing.T) {
+		got := MergeCredentials(map[string]any{"plan_type": "supergrok", "subscription_expires_at": "2026-11-28T00:00:00Z"}, map[string]any{"plan_type": "supergrokheavy"})
+		require.Equal(t, "2026-11-28T00:00:00Z", got["subscription_expires_at"])
+		require.NotContains(t, got, "subscription_is_delinquent")
+	})
+	for _, tc := range []struct {
+		name      string
+		incoming  map[string]any
+		wantDate  string
+		wantState any
+	}{
+		{"unchanged", map[string]any{"plan_type": "pro"}, "2026-11-28T00:00:00Z", true},
+		{"changed plan", map[string]any{"plan_type": "plus"}, "", nil},
+		{"changed identity", map[string]any{"chatgpt_account_id": "other"}, "", nil},
+		{"new snapshot", map[string]any{"subscription_expires_at": "2026-12-28T00:00:00Z", "subscription_is_delinquent": false}, "2026-12-28T00:00:00Z", false},
+		{"unknown new snapshot", map[string]any{"subscription_expires_at": "2026-12-28T00:00:00Z"}, "2026-12-28T00:00:00Z", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			existing := map[string]any{"chatgpt_account_id": "personal", "plan_type": "pro", "subscription_expires_at": "2026-11-28T00:00:00Z", "subscription_is_delinquent": true}
+			got := MergeCredentials(existing, tc.incoming)
+			require.Equal(t, tc.wantDate, got["subscription_expires_at"])
+			require.Equal(t, tc.wantState, got["subscription_is_delinquent"])
+			require.Equal(t, true, existing["subscription_is_delinquent"])
+		})
+	}
+}
+
+func TestEnrichTokenInfo_DelinquencySnapshotAndRenewal(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"delinquent", true}, {"renewed", false}, {"unknown", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expiry := time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+			server := newChatGPTBackendTestServer(t, chatGPTBackendTestServerConfig{accountsCheck: map[string]any{
+				"accounts": map[string]any{"personal": map[string]any{
+					"account":     map[string]any{"account_id": "personal", "plan_type": "pro", "is_default": true},
+					"entitlement": map[string]any{"expires_at": expiry, "is_delinquent": tc.value},
+				}},
+			}})
+			defer server.Close()
+			delinquent := true
+			info := &OpenAITokenInfo{AccessToken: "at", ChatGPTAccountID: "personal", PlanType: "pro",
+				SubscriptionExpiresAt: "2026-01-01T00:00:00Z", SubscriptionIsDelinquent: &delinquent}
+			svc := &OpenAIOAuthService{privacyClientFactory: newTestPrivacyClientFactory()}
+			svc.enrichTokenInfo(context.Background(), info, "")
+			require.Equal(t, expiry, info.SubscriptionExpiresAt, "keep raw entitlement expiry without subtracting a month")
+			creds := MergeCredentials(map[string]any{"subscription_is_delinquent": true}, svc.BuildAccountCredentials(info))
+			require.Contains(t, creds, "subscription_is_delinquent")
+			require.Equal(t, tc.value, creds["subscription_is_delinquent"])
+		})
+	}
+}
+
+func TestEnrichTokenInfo_PersonalPlanChangeKeepsSubscriptionTogether(t *testing.T) {
+	for _, tc := range []struct{ current, upstream, want string }{
+		{"pro", "plus", "plus"}, {"plus", "pro", "pro"}, {"prolite", "pro", "prolite"}, {"promax", "pro", "promax"},
+	} {
+		t.Run(tc.current+"/"+tc.upstream, func(t *testing.T) {
+			expiry := time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+			server := newChatGPTBackendTestServer(t, chatGPTBackendTestServerConfig{accountsCheck: map[string]any{
+				"accounts": map[string]any{"personal": map[string]any{
+					"account":     map[string]any{"account_id": "personal", "plan_type": tc.upstream},
+					"entitlement": map[string]any{"expires_at": expiry, "is_delinquent": false},
+				}},
+			}})
+			defer server.Close()
+			info := &OpenAITokenInfo{AccessToken: "at", ChatGPTAccountID: "personal", PlanType: tc.current}
+			svc := &OpenAIOAuthService{privacyClientFactory: newTestPrivacyClientFactory()}
+			svc.enrichTokenInfo(context.Background(), info, "")
+			require.Equal(t, tc.want, info.PlanType)
+			require.Equal(t, expiry, info.SubscriptionExpiresAt)
+			require.NotNil(t, info.SubscriptionIsDelinquent)
+			require.False(t, *info.SubscriptionIsDelinquent)
+		})
+	}
+}
+
 func TestFetchChatGPTAccountInfo_SkipsExpiredWorkspaceCandidate(t *testing.T) {
 	expiredAt := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
 
@@ -191,7 +314,7 @@ func TestEnrichTokenInfo_WorkspaceEntitlementDoesNotOverridePersonalSubscription
 						"plan_type":  "pro",
 						"is_default": true,
 					},
-					"entitlement": map[string]any{"expires_at": workspaceExpiresAt},
+					"entitlement": map[string]any{"expires_at": workspaceExpiresAt, "is_delinquent": true},
 				},
 			},
 		},
@@ -218,6 +341,7 @@ func TestEnrichTokenInfo_WorkspaceEntitlementDoesNotOverridePersonalSubscription
 		"到期时间必须来自个人订阅 active_until，不能是 workspace 的 entitlement.expires_at")
 	require.NotEqual(t, workspaceExpiresAt, tokenInfo.SubscriptionExpiresAt)
 	require.Equal(t, 1, subscriptionCalls)
+	require.Nil(t, tokenInfo.SubscriptionIsDelinquent, "workspace delinquency must not be applied to personal subscription")
 }
 
 // 单个人账号（poid == chatgpt_account_id）是绝大多数情况，行为必须保持不变：

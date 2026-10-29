@@ -97,8 +97,9 @@ type ChatGPTAccountInfo struct {
 	// AccountID 是本条信息所属账号的标识（优先取 account.account_id，否则取 accounts
 	// 的 map key）。accounts/check 是多账号/工作区端点，调用方需要据此判断拿到的
 	// plan_type / expires_at 到底属于个人账号还是某个 workspace。
-	AccountID             string
-	SubscriptionExpiresAt string // entitlement.expires_at (RFC3339)
+	AccountID                string
+	SubscriptionExpiresAt    string // entitlement.expires_at (RFC3339)
+	SubscriptionIsDelinquent *bool
 }
 
 var (
@@ -163,12 +164,7 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 
 	// 未匹配到时，遍历所有账号：优先 is_default，次选非 free
 	if info.PlanType == "" {
-		type candidate struct {
-			planType  string
-			expiresAt string
-			accountID string
-		}
-		var defaultC, paidC, anyC candidate
+		var defaultC, paidC, anyC ChatGPTAccountInfo
 		for key, acctRaw := range accounts {
 			acct, ok := acctRaw.(map[string]any)
 			if !ok {
@@ -181,28 +177,28 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 			if planType == "" {
 				continue
 			}
-			ea := extractEntitlementExpiresAt(acct)
-			id := chatGPTAccountObjectID(acct, key)
-			if anyC.planType == "" {
-				anyC = candidate{planType, ea, id}
+			var candidate ChatGPTAccountInfo
+			fillAccountInfo(&candidate, acct, key)
+			if anyC.PlanType == "" {
+				anyC = candidate
 			}
 			if account, ok := acct["account"].(map[string]any); ok {
 				if isDefault, _ := account["is_default"].(bool); isDefault {
-					defaultC = candidate{planType, ea, id}
+					defaultC = candidate
 				}
 			}
-			if !strings.EqualFold(planType, "free") && paidC.planType == "" {
-				paidC = candidate{planType, ea, id}
+			if !strings.EqualFold(planType, "free") && paidC.PlanType == "" {
+				paidC = candidate
 			}
 		}
 		// 优先级：default > 非 free > 任意
 		switch {
-		case defaultC.planType != "":
-			info.PlanType, info.SubscriptionExpiresAt, info.AccountID = defaultC.planType, defaultC.expiresAt, defaultC.accountID
-		case paidC.planType != "":
-			info.PlanType, info.SubscriptionExpiresAt, info.AccountID = paidC.planType, paidC.expiresAt, paidC.accountID
+		case defaultC.PlanType != "":
+			*info = defaultC
+		case paidC.PlanType != "":
+			*info = paidC
 		default:
-			info.PlanType, info.SubscriptionExpiresAt, info.AccountID = anyC.planType, anyC.expiresAt, anyC.accountID
+			*info = anyC
 		}
 	}
 
@@ -275,6 +271,12 @@ func fillAccountInfo(info *ChatGPTAccountInfo, acct map[string]any, fallbackID s
 	info.PlanType = extractPlanType(acct)
 	info.SubscriptionExpiresAt = extractEntitlementExpiresAt(acct)
 	info.AccountID = chatGPTAccountObjectID(acct, fallbackID)
+	info.SubscriptionIsDelinquent = nil
+	if entitlement, ok := acct["entitlement"].(map[string]any); ok {
+		if delinquent, ok := entitlement["is_delinquent"].(bool); ok {
+			info.SubscriptionIsDelinquent = &delinquent
+		}
+	}
 }
 
 // chatGPTAccountObjectID 取单个 account 对象的账号标识。

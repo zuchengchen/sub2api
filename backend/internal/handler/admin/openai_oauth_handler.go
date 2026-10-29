@@ -278,11 +278,7 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	newCredentials := h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
 
 	// Preserve non-token settings from existing credentials
-	for k, v := range account.Credentials {
-		if _, exists := newCredentials[k]; !exists {
-			newCredentials[k] = v
-		}
-	}
+	newCredentials = service.MergeCredentials(account.Credentials, newCredentials)
 	newCredentials = service.NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
 
 	updatedAccount, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{

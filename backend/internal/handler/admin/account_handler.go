@@ -1439,11 +1439,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 
 		newCredentials = h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
-		for k, v := range account.Credentials {
-			if _, exists := newCredentials[k]; !exists {
-				newCredentials[k] = v
-			}
-		}
+		newCredentials = service.MergeCredentials(account.Credentials, newCredentials)
 		newCredentials = service.NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
 	} else if account.Platform == service.PlatformGrok {
 		if h.grokOAuthService == nil {
