@@ -30,45 +30,32 @@ func (r *accountTestLoggingRepo) GetByID(context.Context, int64) (*Account, erro
 
 func TestAccountTestFailureLogAttribution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, background := range []bool{false, true} {
-		for _, missing := range []bool{false, true} {
-			core, logs := observer.New(zap.WarnLevel)
-			ctx := logger.IntoContext(context.Background(), zap.New(core).With(zap.String("request_id", "req-test")))
-			repo := &accountTestLoggingRepo{}
-			if !missing {
-				repo.account = &Account{ID: 77, Platform: PlatformAnthropic, Type: AccountTypeAPIKey}
-			}
-			svc := &AccountTestService{accountRepo: repo}
-			if background {
-				result, err := svc.RunTestBackground(ctx, 77, "test-model")
-				require.NoError(t, err)
-				require.Equal(t, "failed", result.Status)
-				require.NotEmpty(t, result.ErrorMessage)
-			} else {
-				rec := httptest.NewRecorder()
-				c, _ := gin.CreateTestContext(rec)
-				c.Request = httptest.NewRequest("POST", "/accounts/77/test", nil).WithContext(ctx)
-				err := svc.TestAccountConnection(c, 77, "test-model", "private prompt", "")
-				require.Error(t, err)
-				require.Contains(t, rec.Body.String(), `"type":"error"`)
-			}
-			entries := logs.FilterMessage("account_test.failed").All()
-			require.Len(t, entries, 1)
-			fields := entries[0].ContextMap()
-			require.Equal(t, int64(77), fields["account_id"])
-			require.Equal(t, "req-test", fields["request_id"])
-			require.Equal(t, "test-model", fields["requested_model"])
-			require.NotEmpty(t, fields["test_id"])
-			if background {
-				require.Equal(t, "background", fields["test_source"])
-			} else {
-				require.Equal(t, "http", fields["test_source"])
-			}
-			if !missing {
-				require.Equal(t, PlatformAnthropic, fields["platform"])
-			}
-			require.NotContains(t, fields, "prompt")
+	for _, missing := range []bool{false, true} {
+		core, logs := observer.New(zap.WarnLevel)
+		ctx := logger.IntoContext(context.Background(), zap.New(core).With(zap.String("request_id", "req-test")))
+		repo := &accountTestLoggingRepo{}
+		if !missing {
+			repo.account = &Account{ID: 77, Platform: PlatformAnthropic, Type: AccountTypeAPIKey}
 		}
+		svc := &AccountTestService{accountRepo: repo}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest("POST", "/accounts/77/test", nil).WithContext(ctx)
+		err := svc.TestAccountConnection(c, 77, "test-model", "private prompt", "")
+		require.Error(t, err)
+		require.Contains(t, rec.Body.String(), `"type":"error"`)
+		entries := logs.FilterMessage("account_test.failed").All()
+		require.Len(t, entries, 1)
+		fields := entries[0].ContextMap()
+		require.Equal(t, int64(77), fields["account_id"])
+		require.Equal(t, "req-test", fields["request_id"])
+		require.Equal(t, "test-model", fields["requested_model"])
+		require.NotEmpty(t, fields["test_id"])
+		require.Equal(t, "http", fields["test_source"])
+		if !missing {
+			require.Equal(t, PlatformAnthropic, fields["platform"])
+		}
+		require.NotContains(t, fields, "prompt")
 	}
 }
 

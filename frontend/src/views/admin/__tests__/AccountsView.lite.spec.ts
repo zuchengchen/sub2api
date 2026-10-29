@@ -111,7 +111,6 @@ function mountView(stubActionMenu = true) {
         ReAuthAccountModal: true,
         AccountTestModal: AccountTestModalStub,
         AccountStatsModal: AccountStatsModalStub,
-        ScheduledTestsPanel: true,
         SyncFromCrsModal: true,
         TempUnschedStatusModal: true,
         ErrorPassthroughRulesModal: true,

@@ -632,27 +632,6 @@ func ProvideOutboxCleanupService(
 	return svc
 }
 
-// ProvideScheduledTestService creates ScheduledTestService.
-func ProvideScheduledTestService(
-	planRepo ScheduledTestPlanRepository,
-	resultRepo ScheduledTestResultRepository,
-) *ScheduledTestService {
-	return NewScheduledTestService(planRepo, resultRepo)
-}
-
-// ProvideScheduledTestRunnerService creates and starts ScheduledTestRunnerService.
-func ProvideScheduledTestRunnerService(
-	planRepo ScheduledTestPlanRepository,
-	scheduledSvc *ScheduledTestService,
-	accountTestSvc *AccountTestService,
-	rateLimitSvc *RateLimitService,
-	cfg *config.Config,
-) *ScheduledTestRunnerService {
-	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
-	svc.Start()
-	return svc
-}
-
 // ProvideOpsScheduledReportService creates and starts OpsScheduledReportService.
 func ProvideOpsScheduledReportService(
 	opsService *OpsService,
@@ -1019,8 +998,6 @@ var ProviderSet = wire.NewSet(
 	ProvideOutboxCleanupService,
 	ProvideSupportDecisionAtomicReader,
 	ProvideSupportDecisionReader,
-	ProvideScheduledTestService,
-	ProvideScheduledTestRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
