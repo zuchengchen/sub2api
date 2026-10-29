@@ -2,18 +2,22 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
 
 type openaiOAuthClientStateStub struct {
 	exchangeCalled int32
 	lastClientID   string
+	idToken        string
 }
 
 func (s *openaiOAuthClientStateStub) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
@@ -22,11 +26,15 @@ func (s *openaiOAuthClientStateStub) ExchangeCode(ctx context.Context, code, cod
 	return &openai.TokenResponse{
 		AccessToken:  "at",
 		RefreshToken: "rt",
+		IDToken:      s.idToken,
 		ExpiresIn:    3600,
 	}, nil
 }
 
 func (s *openaiOAuthClientStateStub) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
+	if s.idToken != "" {
+		return &openai.TokenResponse{AccessToken: "at", IDToken: s.idToken, ExpiresIn: 3600}, nil
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -103,4 +111,59 @@ func TestOpenAIOAuthService_ExchangeCode_StateMatch(t *testing.T) {
 
 	_, ok := svc.sessionStore.Get("sid")
 	require.False(t, ok)
+}
+
+func TestOpenAIOAuthService_SubscriptionExpiryFromIDToken(t *testing.T) {
+	const expiry = "2026-11-20T15:01:57+00:00"
+	payload, err := json.Marshal(map[string]any{
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id":                "subscription-account",
+			"chatgpt_user_id":                   "subscription-user",
+			"chatgpt_plan_type":                 "prolite",
+			"chatgpt_subscription_active_until": expiry,
+		},
+	})
+	require.NoError(t, err)
+	idToken := "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+	for _, mode := range []string{"exchange", "refresh", "throttled refresh", "access token only", "saved subscription", "saved subscription throttled"} {
+		t.Run(mode, func(t *testing.T) {
+			const key = "subscription-account|subscription-user"
+			openAIRefreshEnrichLast.Delete(key)
+			t.Cleanup(func() { openAIRefreshEnrichLast.Delete(key) })
+			if mode == "throttled refresh" || mode == "saved subscription throttled" {
+				openAIRefreshEnrichLast.Store(key, time.Now())
+			}
+			svc := NewOpenAIOAuthService(nil, &openaiOAuthClientStateStub{idToken: idToken})
+			defer svc.Stop()
+			svc.SetPrivacyClientFactory(func(string) (*req.Client, error) { return nil, errors.New("upstream unavailable") })
+			var info *OpenAITokenInfo
+			var err error
+			want := expiry
+			switch mode {
+			case "exchange":
+				svc.sessionStore.Set("sid", &openai.OAuthSession{State: "state", CreatedAt: time.Now()})
+				info, err = svc.ExchangeCode(context.Background(), &OpenAIExchangeCodeInput{SessionID: "sid", State: "state", Code: "code"})
+			case "access token only":
+				info, err = svc.RefreshAccountToken(context.Background(), &Account{
+					Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+					Credentials: map[string]any{"access_token": "at", "id_token": idToken, "plan_type": "prolite"},
+				})
+			case "saved subscription", "saved subscription throttled":
+				want = "2026-12-20T00:00:00Z"
+				info, err = svc.RefreshAccountToken(context.Background(), &Account{
+					Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+					Credentials: map[string]any{
+						"refresh_token": "rt", "plan_type": "prolite", "chatgpt_account_id": "subscription-account",
+						"subscription_expires_at": want,
+					},
+				})
+			default:
+				info, err = svc.RefreshToken(context.Background(), "rt", "")
+			}
+			require.NoError(t, err)
+			require.Equal(t, want, info.SubscriptionExpiresAt)
+			require.Equal(t, want, svc.BuildAccountCredentials(info)["subscription_expires_at"])
+		})
+	}
 }

@@ -369,6 +369,10 @@ export default {
       setPrivacy: 'Set Privacy',
       subscriptionAbnormal: 'Abnormal',
       subscriptionExpires: 'Expires',
+      subscriptionGraceUntil: 'Grace until {date}',
+      subscriptionGraceActive: 'In grace period',
+      subscriptionGraceExpired: 'Grace period ended',
+      subscriptionGraceTooltip: 'Estimated using this site\'s rule: {days} days (24 hours each) after subscription expiry, until {time} (local time). For reference only; actual availability depends on the upstream provider.',
       // Capacity status tooltips
       capacity: {
         windowCost: {

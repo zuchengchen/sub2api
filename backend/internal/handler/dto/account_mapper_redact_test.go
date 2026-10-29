@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -148,6 +149,55 @@ func TestAccountFromServiceShallow_NilCredentialsOmitsStatus(t *testing.T) {
 	require.NotNil(t, got)
 	require.Nil(t, got.Credentials)
 	require.Nil(t, got.CredentialsStatus)
+}
+
+func TestAccountFromServiceShallow_SubscriptionExpiryFallback(t *testing.T) {
+	const expiry = "2026-11-20T15:01:57+00:00"
+	for _, tc := range []struct {
+		name, platform, accountID, plan, stored, claim, want string
+	}{
+		{"legacy expired ID token", "openai", "acct-1", "prolite", "", expiry, expiry},
+		{"explicit value wins", "openai", "acct-1", "prolite", "2026-12-20T00:00:00Z", expiry, "2026-12-20T00:00:00Z"},
+		{"different account", "openai", "workspace-2", "prolite", "", expiry, ""},
+		{"different plan", "openai", "acct-1", "free", "", expiry, ""},
+		{"different platform", "anthropic", "acct-1", "prolite", "", expiry, ""},
+		{"invalid date", "openai", "acct-1", "prolite", "", "invalid-date", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(map[string]any{
+				"exp": 1,
+				"https://api.openai.com/auth": map[string]any{
+					"chatgpt_account_id":                "acct-1",
+					"chatgpt_plan_type":                 "prolite",
+					"chatgpt_subscription_active_until": tc.claim,
+				},
+			})
+			require.NoError(t, err)
+			token := "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+			src := &service.Account{Platform: tc.platform, Type: service.AccountTypeOAuth,
+				Credentials: map[string]any{"id_token": token, "chatgpt_account_id": tc.accountID, "plan_type": tc.plan},
+			}
+			if tc.stored != "" {
+				src.Credentials["subscription_expires_at"] = tc.stored
+			}
+			before, err := json.Marshal(src.Credentials)
+			require.NoError(t, err)
+			got := AccountFromServiceShallow(src)
+			if tc.want == "" {
+				require.NotContains(t, got.Credentials, "subscription_expires_at")
+			} else {
+				require.Equal(t, tc.want, got.Credentials["subscription_expires_at"])
+				require.Equal(t, tc.want, AccountListItemFromAccount(got).Credentials["subscription_expires_at"])
+			}
+			raw, err := json.Marshal(got)
+			require.NoError(t, err)
+			require.NotContains(t, string(raw), token)
+			require.NotContains(t, got.Credentials, "id_token")
+			after, err := json.Marshal(src.Credentials)
+			require.NoError(t, err)
+			require.Equal(t, string(before), string(after), "display fallback must not mutate credentials")
+		})
+	}
 }
 
 func TestAccountFromService_RedactsGrokModelDiagnostics(t *testing.T) {

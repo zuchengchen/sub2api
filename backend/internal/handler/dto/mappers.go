@@ -240,6 +240,9 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		return nil
 	}
 	redactedCreds, credsStatus := RedactCredentials(a.Credentials)
+	if expiresAt := a.GetSubscriptionExpiresAt(); expiresAt != "" {
+		redactedCreds["subscription_expires_at"] = expiresAt
+	}
 	extra := redactAccountManagedExtra(a.Extra)
 	var ollamaCloudUsage *service.OllamaCloudUsageState
 	if state := service.OllamaCloudUsageStateFromAccount(a); state.Eligible {
