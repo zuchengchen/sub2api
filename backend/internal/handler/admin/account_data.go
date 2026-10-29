@@ -741,6 +741,8 @@ func enrichCredentialsFromIDToken(item *DataAccount) {
 	setIfMissing("chatgpt_account_id", userInfo.ChatGPTAccountID)
 	setIfMissing("chatgpt_user_id", userInfo.ChatGPTUserID)
 	setIfMissing("organization_id", userInfo.OrganizationID)
+	account := &service.Account{Platform: platform, Type: service.AccountTypeOAuth, Credentials: item.Credentials}
+	setIfMissing("subscription_expires_at", account.GetSubscriptionExpiresAt())
 }
 
 func normalizeProxyStatus(status string) string {

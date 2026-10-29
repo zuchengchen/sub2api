@@ -249,12 +249,29 @@ type IDTokenClaims struct {
 
 // OpenAIAuthClaims represents the OpenAI specific auth claims
 type OpenAIAuthClaims struct {
-	ChatGPTAccountID string              `json:"chatgpt_account_id"`
-	ChatGPTUserID    string              `json:"chatgpt_user_id"`
-	ChatGPTPlanType  string              `json:"chatgpt_plan_type"`
-	UserID           string              `json:"user_id"`
-	POID             string              `json:"poid"` // organization ID in access_token JWT
-	Organizations    []OrganizationClaim `json:"organizations"`
+	ChatGPTAccountID               string              `json:"chatgpt_account_id"`
+	ChatGPTUserID                  string              `json:"chatgpt_user_id"`
+	ChatGPTPlanType                string              `json:"chatgpt_plan_type"`
+	ChatGPTSubscriptionActiveUntil json.RawMessage     `json:"chatgpt_subscription_active_until"`
+	UserID                         string              `json:"user_id"`
+	POID                           string              `json:"poid"` // organization ID in access_token JWT
+	Organizations                  []OrganizationClaim `json:"organizations"`
+}
+
+// SubscriptionExpiresAt is display metadata, not an authorization decision.
+func (c *OpenAIAuthClaims) SubscriptionExpiresAt() string {
+	if c == nil {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(c.ChatGPTSubscriptionActiveUntil, &value); err != nil {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if _, err := time.Parse(time.RFC3339, value); err != nil {
+		return ""
+	}
+	return value
 }
 
 // OrganizationClaim represents an organization in the ID Token
@@ -368,13 +385,14 @@ func ParseIDToken(idToken string) (*IDTokenClaims, error) {
 
 // UserInfo represents user information extracted from ID Token claims.
 type UserInfo struct {
-	Email            string
-	ChatGPTAccountID string
-	ChatGPTUserID    string
-	PlanType         string
-	UserID           string
-	OrganizationID   string
-	Organizations    []OrganizationClaim
+	Email                 string
+	ChatGPTAccountID      string
+	ChatGPTUserID         string
+	PlanType              string
+	SubscriptionExpiresAt string
+	UserID                string
+	OrganizationID        string
+	Organizations         []OrganizationClaim
 }
 
 // GetUserInfo extracts user info from ID Token claims
@@ -387,6 +405,7 @@ func (c *IDTokenClaims) GetUserInfo() *UserInfo {
 		info.ChatGPTAccountID = c.OpenAIAuth.ChatGPTAccountID
 		info.ChatGPTUserID = c.OpenAIAuth.ChatGPTUserID
 		info.PlanType = c.OpenAIAuth.ChatGPTPlanType
+		info.SubscriptionExpiresAt = c.OpenAIAuth.SubscriptionExpiresAt()
 		info.UserID = c.OpenAIAuth.UserID
 		info.Organizations = c.OpenAIAuth.Organizations
 

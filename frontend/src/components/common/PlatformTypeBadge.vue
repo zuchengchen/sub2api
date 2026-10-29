@@ -61,20 +61,43 @@
     <div v-if="expiresLabel" class="text-[10px] leading-tight text-gray-400 dark:text-gray-500 pl-0.5" :title="subscriptionExpiresAt">
       {{ expiresLabel }}
     </div>
+    <div
+      v-if="subscriptionGrace"
+      data-testid="subscription-grace"
+      class="pl-0.5 text-[10px] leading-tight"
+      :class="subscriptionGraceState === 'active'
+        ? 'text-amber-600 dark:text-amber-400'
+        : subscriptionGraceState === 'expired'
+          ? 'text-red-500 dark:text-red-400'
+          : 'text-gray-400 dark:text-gray-500'"
+      :title="t('admin.accounts.subscriptionGraceTooltip', {
+        days: subscriptionGrace.days,
+        time: formatDateTime(subscriptionGrace.until, undefined, locale)
+      })"
+    >
+      {{ t('admin.accounts.subscriptionGraceUntil', { date: formatDateLocalInput(subscriptionGrace.until) }) }}
+      <span v-if="subscriptionGraceState === 'active'" class="font-medium">
+        {{ t('admin.accounts.subscriptionGraceActive') }}
+      </span>
+      <span v-else-if="subscriptionGraceState === 'expired'" class="font-medium">
+        {{ t('admin.accounts.subscriptionGraceExpired') }}
+      </span>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccountPlatform, AccountType } from '@/types'
+import { formatDateLocalInput, formatDateTime } from '@/utils/format'
 import { platformLabel as sharedPlatformLabel } from '@/utils/platformColors'
 import { normalizePlanType, openAIPlanTypeLabel } from '@/utils/planType'
 import GrokFreeIcon from './GrokFreeIcon.vue'
 import PlatformIcon from './PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 interface Props {
   platform: AccountPlatform
@@ -268,24 +291,67 @@ const planBadgeClass = computed(() => {
   return typeClass.value
 })
 
-// Subscription expiration label (non-free only)
-const expiresLabel = computed(() => {
-  if (!props.subscriptionExpiresAt || !props.planType) return ''
+const subscriptionExpiry = computed(() => {
+  if (!props.subscriptionExpiresAt || !normalizedPlanType.value) return null
   if (
     normalizedPlanType.value === 'free' ||
     normalizedPlanType.value === 'basic' ||
     normalizedPlanType.value === 'xbasic'
-  ) return ''
-  try {
-    const d = new Date(props.subscriptionExpiresAt)
-    if (isNaN(d.getTime())) return ''
-    const yyyy = d.getFullYear()
-    const mm = String(d.getMonth() + 1).padStart(2, '0')
-    const dd = String(d.getDate()).padStart(2, '0')
-    return `${t('admin.accounts.subscriptionExpires')} ${yyyy}-${mm}-${dd}`
-  } catch {
-    return ''
+  ) return null
+  const date = new Date(props.subscriptionExpiresAt)
+  if (!Number.isFinite(date.getTime())) return null
+  // Date parsing otherwise normalizes impossible ISO dates, such as February 30.
+  const isoDate = /^(\d{4}-\d{2}-\d{2})(?:T|$)/.exec(props.subscriptionExpiresAt)
+  if (isoDate && new Date(`${isoDate[1]}T00:00:00Z`).getUTCDate() !== Number(isoDate[1].slice(8))) {
+    return null
   }
+  return date
+})
+
+// Subscription expiration label (non-free only)
+const expiresLabel = computed(() => subscriptionExpiry.value
+  ? `${t('admin.accounts.subscriptionExpires')} ${formatDateLocalInput(subscriptionExpiry.value)}`
+  : '')
+
+const subscriptionGrace = computed(() => {
+  if (props.platform !== 'openai' || !subscriptionExpiry.value) return null
+  let days: number
+  switch (normalizedPlanType.value) {
+    case 'pro':
+    case 'chatgptpro':
+    case 'prolite':
+    case 'promax':
+      days = 14
+      break
+    case 'plus':
+      days = 30
+      break
+    default:
+      return null
+  }
+  // Display estimate only; fixed 24-hour days avoid DST calendar shifts.
+  const until = new Date(subscriptionExpiry.value.getTime() + days * 24 * 60 * 60 * 1000)
+  return Number.isFinite(until.getTime()) ? { days, start: subscriptionExpiry.value, until } : null
+})
+
+const subscriptionGraceState = ref<'upcoming' | 'active' | 'expired'>('upcoming')
+watchEffect((onCleanup) => {
+  const grace = subscriptionGrace.value
+  if (!grace) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const update = () => {
+    const now = Date.now()
+    const start = grace.start.getTime()
+    const end = grace.until.getTime()
+    subscriptionGraceState.value = now >= end ? 'expired' : now >= start ? 'active' : 'upcoming'
+    const nextBoundary = now < start ? start : end
+    if (now < nextBoundary) {
+      // Long subscriptions and Plus grace periods can exceed the timer limit.
+      timer = setTimeout(update, Math.min(nextBoundary - now, 2_147_483_647))
+    }
+  }
+  update()
+  onCleanup(() => clearTimeout(timer))
 })
 
 // Privacy badge — shows different states for OpenAI OAuth privacy setting

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -40,3 +41,20 @@ func TestEnrichShadowParentInfo(t *testing.T) {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+func TestEnrichShadowParentInfo_SubscriptionExpiryFromIDToken(t *testing.T) {
+	const expiry = "2026-11-20T15:01:57Z"
+	idToken := buildCodexImportTestJWT(t, time.Now().Add(-time.Hour), map[string]any{
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id": "acct-1", "chatgpt_plan_type": "prolite",
+			"chatgpt_subscription_active_until": expiry,
+		},
+	})
+	parent := &service.Account{ID: 100, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		Credentials: map[string]any{"id_token": idToken, "plan_type": "prolite", "chatgpt_account_id": "acct-1"},
+	}
+	items := []AccountWithConcurrency{{Account: &dto.Account{ParentAccountID: ptrInt64(100)}}}
+	enrichShadowParentInfo(items, map[int64]*service.Account{100: parent})
+	require.Equal(t, expiry, items[0].ParentSubscriptionExpiresAt)
+	require.NotContains(t, parent.Credentials, "subscription_expires_at")
+}

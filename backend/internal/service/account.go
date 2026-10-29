@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
@@ -1624,6 +1625,32 @@ func (a *Account) GetOpenAIIDToken() string {
 		return ""
 	}
 	return a.GetCredential("id_token")
+}
+
+// GetSubscriptionExpiresAt fills display metadata for accounts imported before
+// subscription claims were extracted, without mutating cached credentials.
+func (a *Account) GetSubscriptionExpiresAt() string {
+	if a == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(a.GetCredential("subscription_expires_at")); value != "" {
+		return value
+	}
+	if !a.IsOpenAIOAuth() {
+		return ""
+	}
+	claims, err := openai.DecodeIDToken(a.GetOpenAIIDToken())
+	if err != nil || claims.OpenAIAuth == nil {
+		return ""
+	}
+	auth := claims.OpenAIAuth
+	if id := strings.TrimSpace(a.GetCredential("chatgpt_account_id")); id != "" && !strings.EqualFold(id, strings.TrimSpace(auth.ChatGPTAccountID)) {
+		return ""
+	}
+	if plan := strings.TrimSpace(a.GetCredential("plan_type")); plan != "" && !strings.EqualFold(plan, strings.TrimSpace(auth.ChatGPTPlanType)) {
+		return ""
+	}
+	return auth.SubscriptionExpiresAt()
 }
 
 func (a *Account) GetOpenAIApiKey() string {
