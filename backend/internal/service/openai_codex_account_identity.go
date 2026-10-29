@@ -18,22 +18,14 @@ const codexAccountIdentityNamespaceVersion = "v1"
 
 const codexAccountIdentitySourceContextKey = "openai_codex_account_identity_source"
 
-// prepareCodexAccountIdentitySource resolves credential shadows once per selected
-// attempt. The handler reuses gin.Context across failover attempts, so every entry
+// prepareCodexAccountIdentitySource stages the selected account for each attempt.
+// The handler reuses gin.Context across failover attempts, so every entry
 // point overwrites the staged source before projecting outbound identity.
 func (s *OpenAIGatewayService) prepareCodexAccountIdentitySource(ctx context.Context, c *gin.Context, account *Account) (*Account, error) {
-	source := account
-	if account != nil && account.IsShadow() {
-		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-		if err != nil {
-			return nil, err
-		}
-		source = resolved
-	}
 	if c != nil {
-		c.Set(codexAccountIdentitySourceContextKey, source)
+		c.Set(codexAccountIdentitySourceContextKey, account)
 	}
-	return source, nil
+	return account, nil
 }
 
 func codexAccountIdentitySource(c *gin.Context, fallback *Account) *Account {

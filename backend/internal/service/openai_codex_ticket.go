@@ -253,11 +253,11 @@ func MergeOpenAICodexTicketExtra(extra, current map[string]any) map[string]any {
 	return result
 }
 
-// isOpenAITiboAccount is any non-shadow OpenAI credential that can answer the
+// isOpenAITiboAccount is any OpenAI credential that can answer the
 // Astra Tibo probe: ChatGPT OAuth / setup-token, and API-key (including
 // compatible gateways with a custom base_url).
 func isOpenAITiboAccount(account *Account) bool {
-	if account == nil || account.IsShadow() || !account.IsOpenAI() {
+	if account == nil || !account.IsOpenAI() {
 		return false
 	}
 	return account.IsOpenAIOAuthLike() || account.Type == AccountTypeAPIKey

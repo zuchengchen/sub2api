@@ -4,11 +4,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import AccountsView from '../AccountsView.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
-import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 
-// 外审 F2:AccountActionMenu emit 'create-spark-shadow',但 AccountsView 此前未监听,
-// 导致按钮点击无效。本测试通过真实组件引用 emit 该事件,断言父页面接线调用 API。
 const {
   listAccounts,
   listWithEtag,
@@ -17,7 +14,6 @@ const {
   getAllProxies,
   getAllGroups,
   duplicateAccount,
-  createSparkShadow,
   showSuccess,
   showError
 } = vi.hoisted(() => ({
@@ -28,7 +24,6 @@ const {
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
   duplicateAccount: vi.fn(),
-  createSparkShadow: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
 }))
@@ -41,7 +36,6 @@ vi.mock('@/api/admin', () => ({
       getBatchTodayStats,
       duplicate: duplicateAccount,
       getUpstreamBillingProbeSettings,
-      createSparkShadow,
       delete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
@@ -106,10 +100,10 @@ const mountView = () =>
     }
   })
 
-describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
+describe('admin AccountsView — duplicate wiring', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, showSuccess, showError]) {
       fn.mockReset()
     }
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
@@ -118,8 +112,7 @@ describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
     getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: true, interval_minutes: 30 })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
-    duplicateAccount.mockResolvedValue({ id: 998, name: 'parent-acc (Copy)' })
-    createSparkShadow.mockResolvedValue({ id: 999, name: 'parent-acc (Spark)' })
+    duplicateAccount.mockResolvedValue({ id: 998, name: 'source-acc (Copy)' })
   })
 
   afterEach(() => {
@@ -130,7 +123,7 @@ describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    wrapper.findComponent(AccountActionMenu).vm.$emit('duplicate', { id: 42, name: 'parent-acc' })
+    wrapper.findComponent(AccountActionMenu).vm.$emit('duplicate', { id: 42, name: 'source-acc' })
     await flushPromises()
 
     expect(duplicateAccount).toHaveBeenCalledTimes(1)
@@ -147,12 +140,12 @@ describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
     await flushPromises()
 
     const menu = wrapper.findComponent(AccountActionMenu)
-    menu.vm.$emit('duplicate', { id: 42, name: 'parent-acc' })
-    menu.vm.$emit('duplicate', { id: 42, name: 'parent-acc' })
+    menu.vm.$emit('duplicate', { id: 42, name: 'source-acc' })
+    menu.vm.$emit('duplicate', { id: 42, name: 'source-acc' })
     await flushPromises()
 
     expect(duplicateAccount).toHaveBeenCalledTimes(1)
-    resolveDuplicate({ id: 998, name: 'parent-acc (Copy)' })
+    resolveDuplicate({ id: 998, name: 'source-acc (Copy)' })
     await flushPromises()
     wrapper.unmount()
   })
@@ -163,55 +156,15 @@ describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    wrapper.findComponent(AccountActionMenu).vm.$emit('duplicate', { id: 42, name: 'parent-acc' })
+    wrapper.findComponent(AccountActionMenu).vm.$emit('duplicate', { id: 42, name: 'source-acc' })
     await flushPromises()
 
     expect(showError).toHaveBeenCalledWith('duplicate failed')
     consoleError.mockRestore()
     wrapper.unmount()
   })
-
-  it('AccountActionMenu 的 create-spark-shadow 事件触发 createSparkShadow API + 成功提示', async () => {
-    const wrapper = mountView()
-    await flushPromises()
-
-    const menu = wrapper.findComponent(AccountActionMenu)
-    expect(menu.exists()).toBe(true)
-
-    menu.vm.$emit('create-spark-shadow', { id: 42, name: 'parent-acc' })
-    await flushPromises()
-
-    // 不再用原生 confirm,改用应用内 ConfirmDialog:先弹出,点确认才调 API
-    const dialog = wrapper.findAllComponents(ConfirmDialog).find(d => d.props('show'))
-    expect(dialog).toBeTruthy()
-    dialog?.vm.$emit('confirm')
-    await flushPromises()
-
-    expect(createSparkShadow).toHaveBeenCalledTimes(1)
-    expect(createSparkShadow).toHaveBeenCalledWith(42, { name: 'parent-acc (Spark)' })
-    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.createSparkShadowSuccess')
-    wrapper.unmount()
-  })
-
-  it('用户取消确认时不调用 API', async () => {
-    const wrapper = mountView()
-    await flushPromises()
-
-    wrapper.findComponent(AccountActionMenu).vm.$emit('create-spark-shadow', { id: 42, name: 'parent-acc' })
-    await flushPromises()
-
-    // 弹出 ConfirmDialog 后点取消,不应调用 API
-    const dialog = wrapper.findAllComponents(ConfirmDialog).find(d => d.props('show'))
-    expect(dialog).toBeTruthy()
-    dialog?.vm.$emit('cancel')
-    await flushPromises()
-
-    expect(createSparkShadow).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
 })
 
-// 账号行展示
 const mountViewWithRow = () =>
   mount(AccountsView, {
     global: {
@@ -220,7 +173,6 @@ const mountViewWithRow = () =>
         TablePageLayout: {
           template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
         },
-        // 使用能透传 row 数据的自定义 DataTable stub，以便渲染 cell 插槽
         DataTable: {
           props: ['data', 'columns', 'loading'],
           template: `<div>
@@ -262,7 +214,7 @@ const mountViewWithRow = () =>
 describe('admin AccountsView — 账号行展示', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, showSuccess, showError]) {
       fn.mockReset()
     }
     listWithEtag.mockResolvedValue({ notModified: true, etag: null, data: null })
@@ -279,69 +231,34 @@ describe('admin AccountsView — 账号行展示', () => {
     vi.unstubAllGlobals()
   })
 
-  it('影子行 email 单元格显示 parent_email，PlatformTypeBadge 接收 parent_plan_type/parent_privacy_mode', async () => {
-    const shadowAccount = {
-      id: 100,
-      name: '影子账号',
-      platform: 'openai',
-      type: 'oauth',
-      parent_account_id: 1,
-      parent_email: 'parent@example.com',
-      parent_plan_type: 'plus',
-      parent_privacy_mode: 'false',
-      parent_subscription_expires_at: '2027-01-01T00:00:00Z',
-      parent_subscription_is_delinquent: true,
-      parent_chatgpt_account_id: 'chatgpt-abc123',
-    }
-
-    listAccounts.mockResolvedValue({ items: [shadowAccount], total: 1, page: 1, page_size: 20, pages: 1 })
-
-    const wrapper = mountViewWithRow()
-    await flushPromises()
-
-    // 1. email 单元格通过 OR 兜底渲染 parent_email
-    expect(wrapper.text()).toContain('parent@example.com')
-
-    // 2. PlatformTypeBadge 收到 parent_plan_type 和 parent_privacy_mode
-    const badge = wrapper.findComponent(PlatformTypeBadge)
-    expect(badge.exists()).toBe(true)
-    expect(badge.props('planType')).toBe('plus')
-    expect(badge.props('privacyMode')).toBe('false')
-    expect(badge.props('subscriptionExpiresAt')).toBe('2027-01-01T00:00:00Z')
-    expect(badge.props('subscriptionIsDelinquent')).toBe(true)
-
-    wrapper.unmount()
-  })
-
-  it.each([
-    { own: false, parent: true, expected: false },
-    { own: true, parent: false, expected: true },
-    { own: null, parent: true, expected: true },
-    { own: undefined, parent: false, expected: false },
-    { own: undefined, parent: true, expected: true },
-    { own: null, parent: null, expected: null },
-    { own: undefined, parent: undefined, expected: undefined }
-  ])('passes credential delinquency $own with parent $parent as $expected', async ({ own, parent, expected }) => {
+  it.each([false, true, null, undefined])('passes subscription expiry and delinquency %s from account credentials', async (delinquent) => {
     listAccounts.mockResolvedValue({
       items: [{
         id: 100,
-        name: 'shadow-account',
+        name: 'oauth-account',
         platform: 'openai',
         type: 'oauth',
-        parent_account_id: 1,
-        parent_plan_type: 'pro',
-        parent_subscription_expires_at: '2026-11-28T12:34:56Z',
-        parent_subscription_is_delinquent: parent,
-        credentials: { subscription_is_delinquent: own }
+        credentials: {
+          email: 'account@example.com',
+          plan_type: 'pro',
+          subscription_expires_at: '2026-11-28T12:34:56Z',
+          subscription_is_delinquent: delinquent
+        },
+        extra: { privacy_mode: 'false' }
       }],
       total: 1, page: 1, page_size: 20, pages: 1
     })
 
     const wrapper = mountViewWithRow()
     await flushPromises()
+
+    expect(wrapper.text()).toContain('account@example.com')
+    expect(wrapper.get('[title="account@example.com"]').text()).toBe('account@example.com')
     const badge = wrapper.findComponent(PlatformTypeBadge)
+    expect(badge.props('planType')).toBe('pro')
+    expect(badge.props('privacyMode')).toBe('false')
     expect(badge.props('subscriptionExpiresAt')).toBe('2026-11-28T12:34:56Z')
-    expect(badge.props('subscriptionIsDelinquent')).toBe(expected)
+    expect(badge.props('subscriptionIsDelinquent')).toBe(delinquent)
     wrapper.unmount()
   })
 
@@ -554,7 +471,6 @@ describe('admin AccountsView — 账号行展示', () => {
         platform: 'grok',
         type: 'oauth',
         credentials: { subscription_tier: {}, plan_type: 2 },
-        parent_plan_type: [],
         extra: {
           grok_billing_snapshot: { plan: [] },
           grok_usage_snapshot: { subscription_tier: 1 },

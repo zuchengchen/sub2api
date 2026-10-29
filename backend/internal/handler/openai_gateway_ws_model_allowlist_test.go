@@ -17,6 +17,24 @@ func wsAllowlistGroup(enabled bool, models ...string) *service.Group {
 	}
 }
 
+func TestSparkRetirementWebSocketEveryTurn(t *testing.T) {
+	for _, mode := range []string{service.OpenAIWSIngressModePassthrough, service.OpenAIWSIngressModeDedicated} {
+		t.Run(mode+"/first", func(t *testing.T) {
+			runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+				firstPayload: `{"type":"response.create","model":"openai/GPT5.3CodexSpark_xhigh","stream":false}`,
+				group:        wsAllowlistGroup(false), ingressMode: mode, firstFrameCloseExpected: true,
+			})
+		})
+		t.Run(mode+"/later", func(t *testing.T) {
+			runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+				firstPayload:  `{"type":"response.create","model":"gpt-5.4","stream":false}`,
+				secondPayload: `{"type":"response.create","model":"gpt-5.4","Model":"gpt-5.3-codex-spark-openai-compact","stream":false}`,
+				group:         wsAllowlistGroup(false), ingressMode: mode, secondTurnCloseExpected: true,
+			})
+		})
+	}
+}
+
 // 首帧拒绝：模型不在白名单时连接被 1008 关闭（passthrough relay 模式）。
 func TestOpenAIResponsesWebSocket_FirstFrameModelNotAllowedCloses_Passthrough(t *testing.T) {
 	runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{

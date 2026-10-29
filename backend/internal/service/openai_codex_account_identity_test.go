@@ -13,15 +13,6 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-type codexAccountIdentityRepoStub struct {
-	AccountRepository
-	account *Account
-}
-
-func (s *codexAccountIdentityRepoStub) GetByID(_ context.Context, _ int64) (*Account, error) {
-	return s.account, nil
-}
-
 func TestCodexRequestBodyIdentityNamespaceIsStablePerOAuthAccount(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-codex","prompt_cache_key":"client-session","client_metadata":{"x-codex-installation-id":"client-installation","session_id":"client-session","thread_id":"client-thread","x-codex-window-id":"client-window","x-codex-turn-metadata":"{\"installation_id\":\"client-installation\",\"session_id\":\"client-session\",\"thread_id\":\"client-thread\",\"turn_id\":\"client-turn\",\"window_id\":\"client-window\"}"}}`)
 	account11 := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "chatgpt-account-11"}}
@@ -89,32 +80,30 @@ func TestCodexAccountIdentityNamespaceUsesStableCredentialSource(t *testing.T) {
 	require.NotEqual(t, setupNamespace, codexAccountIdentityNamespace(setupTokenB))
 }
 
-func TestCodexAccountIdentitySourceResolvesShadowAndOverwritesFailoverContext(t *testing.T) {
+func TestCodexAccountIdentitySourceOverwritesFailoverContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 
-	parentID := int64(11)
-	parent := &Account{ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+	account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
 		"chatgpt_account_id": "team-account",
 		"chatgpt_user_id":    "user-1",
 	}}
-	shadow := &Account{ID: 111, ParentAccountID: &parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
-	service := &OpenAIGatewayService{accountRepo: &codexAccountIdentityRepoStub{account: parent}}
+	service := &OpenAIGatewayService{}
 
-	resolved, err := service.prepareCodexAccountIdentitySource(context.Background(), c, shadow)
+	resolved, err := service.prepareCodexAccountIdentitySource(context.Background(), c, account)
 	require.NoError(t, err)
-	require.Same(t, parent, resolved)
-	require.Same(t, parent, codexAccountIdentitySource(c, shadow))
+	require.Same(t, account, resolved)
+	require.Same(t, account, codexAccountIdentitySource(c, nil))
 
 	req, err := service.buildUpstreamRequest(
-		context.Background(), c, shadow,
+		context.Background(), c, account,
 		[]byte(`{"model":"gpt-5.6-codex","stream":true,"prompt_cache_key":"client-session"}`),
 		"token", true, "client-session", true,
 	)
 	require.NoError(t, err)
-	require.Equal(t, canonicalCodexSessionHeaderValue(isolateOpenAIUpstreamSessionID(0, parent, "client-session")), req.Header.Get("session-id"))
+	require.Equal(t, canonicalCodexSessionHeaderValue(isolateOpenAIUpstreamSessionID(0, account, "client-session")), req.Header.Get("session-id"))
 
 	next := &Account{ID: 19, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
 		"chatgpt_account_id": "other-account",
@@ -123,7 +112,7 @@ func TestCodexAccountIdentitySourceResolvesShadowAndOverwritesFailoverContext(t 
 	resolved, err = service.prepareCodexAccountIdentitySource(context.Background(), c, next)
 	require.NoError(t, err)
 	require.Same(t, next, resolved)
-	require.Same(t, next, codexAccountIdentitySource(c, shadow))
+	require.Same(t, next, codexAccountIdentitySource(c, account))
 }
 
 func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T) {

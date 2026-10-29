@@ -167,9 +167,6 @@ func (m *sessionWindowMockRepo) ResetQuotaUsedAndClearRateLimitCooldown(context.
 func (m *sessionWindowMockRepo) RevertProxyFallback(context.Context, int64) error {
 	panic("unexpected")
 }
-func (m *sessionWindowMockRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
-	panic("unexpected")
-}
 
 // newRateLimitServiceForTest creates a RateLimitService with the given mock repo.
 func newRateLimitServiceForTest(repo AccountRepository) *RateLimitService {

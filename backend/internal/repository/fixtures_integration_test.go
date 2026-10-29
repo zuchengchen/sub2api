@@ -241,12 +241,6 @@ func mustCreateAccount(t *testing.T, client *dbent.Client, a *service.Account) *
 	if !a.UpdatedAt.IsZero() {
 		create.SetUpdatedAt(a.UpdatedAt)
 	}
-	if a.ParentAccountID != nil {
-		create.SetParentAccountID(*a.ParentAccountID)
-	}
-	if a.QuotaDimension != "" {
-		create.SetQuotaDimension(dbaccount.QuotaDimension(a.QuotaDimension))
-	}
 
 	created, err := create.Save(ctx)
 	require.NoError(t, err, "create account")

@@ -54,7 +54,6 @@ describe('useModelWhitelist', () => {
     expect(models).not.toContain('gpt-4o')
     expect(models).not.toContain('gpt-4o-audio-preview')
     expect(models).not.toContain('gpt-5.2')
-    expect(models).not.toContain('gpt-5.3-codex-spark')
     expect(models).not.toContain('gpt-5.4')
     expect(models).not.toContain('gpt-5.4-mini')
   })
@@ -85,7 +84,6 @@ describe('useModelWhitelist', () => {
     expect(presets).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ from: 'gpt-4o' }),
       expect.objectContaining({ from: 'gpt-5.2' }),
-      expect.objectContaining({ from: 'gpt-5.3-codex-spark' }),
       expect.objectContaining({ from: 'gpt-5.4' }),
       expect.objectContaining({ to: 'gpt-5.4' }),
       expect.objectContaining({ from: 'gpt-5.5' }),

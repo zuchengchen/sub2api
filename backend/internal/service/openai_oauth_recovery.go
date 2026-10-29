@@ -13,12 +13,6 @@ import (
 )
 
 func (s *OpenAIGatewayService) openAIOAuthCredentialOwner(ctx context.Context, account *Account) (*Account, error) {
-	if account != nil && account.IsShadow() {
-		if s.accountRepo == nil {
-			return nil, errors.New("OpenAI OAuth credential owner is unavailable")
-		}
-		return resolveCredentialAccount(ctx, s.accountRepo, account)
-	}
 	return account, nil
 }
 

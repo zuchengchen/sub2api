@@ -187,51 +187,6 @@ func TestNormalizeOpenAIWSContextWindowBoundary(t *testing.T) {
 	})
 }
 
-func TestStripCodexSparkImageGenerationToolFromRawPayload(t *testing.T) {
-	t.Run("strips_image_generation_for_spark", func(t *testing.T) {
-		payload := []byte(`{"type":"response.create","model":"gpt-5.3-codex-spark","tools":[{"type":"function","name":"shell"},{"type":"image_generation","output_format":"png"}]}`)
-		updated, changed, err := stripCodexSparkImageGenerationToolFromRawPayload(payload, "gpt-5.3-codex-spark")
-		require.NoError(t, err)
-		require.True(t, changed)
-		require.False(t, gjson.GetBytes(updated, `tools.#(type=="image_generation")`).Exists())
-		require.True(t, gjson.GetBytes(updated, `tools.#(type=="function")`).Exists())
-	})
-
-	t.Run("strips_namespace_tools_for_spark", func(t *testing.T) {
-		payload := []byte(`{
-			"type":"response.create",
-			"model":"gpt-5.3-codex-spark",
-			"input":[
-				{"type":"message","role":"user","content":"hello"},
-				{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen"}]}
-			],
-			"tool_choice":{"type":"namespace","name":"image_gen"}
-		}`)
-		updated, changed, err := stripCodexSparkImageGenerationToolFromRawPayload(payload, "gpt-5.3-codex-spark")
-		require.NoError(t, err)
-		require.True(t, changed)
-		require.False(t, IsImageGenerationIntent(openAIResponsesEndpoint, "gpt-5.3-codex-spark", updated))
-		require.Equal(t, "hello", gjson.GetBytes(updated, "input.0.content").String())
-		require.False(t, gjson.GetBytes(updated, "tool_choice").Exists())
-	})
-
-	t.Run("keeps_image_generation_for_non_spark", func(t *testing.T) {
-		payload := []byte(`{"type":"response.create","model":"gpt-5.3-codex","tools":[{"type":"image_generation","output_format":"png"}]}`)
-		updated, changed, err := stripCodexSparkImageGenerationToolFromRawPayload(payload, "gpt-5.3-codex")
-		require.NoError(t, err)
-		require.False(t, changed)
-		require.Equal(t, string(payload), string(updated))
-	})
-
-	t.Run("noop_when_no_image_tool", func(t *testing.T) {
-		payload := []byte(`{"type":"response.create","model":"gpt-5.3-codex-spark","tools":[{"type":"function","name":"shell"}]}`)
-		updated, changed, err := stripCodexSparkImageGenerationToolFromRawPayload(payload, "gpt-5.3-codex-spark")
-		require.NoError(t, err)
-		require.False(t, changed)
-		require.Equal(t, string(payload), string(updated))
-	})
-}
-
 func TestStripOpenAIImageGenerationToolsFromRawPayload(t *testing.T) {
 	t.Run("flat image tool", func(t *testing.T) {
 		payload := []byte(`{

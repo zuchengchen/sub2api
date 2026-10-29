@@ -426,7 +426,7 @@ func protectionEligibilityIssue(account *Account, mode AntiDegradeMode) string {
 	if _, ok := registeredProtectionStrategy(mode); !ok {
 		return ErrUnknownAntiDegradeMode.Message
 	}
-	if account == nil || !account.IsOpenAIOAuthLike() || account.IsShadow() {
+	if account == nil || !account.IsOpenAIOAuthLike() {
 		return "仅支持独立的 OpenAI OAuth / Setup Token 账号"
 	}
 	if account.IsRandomProxy() {

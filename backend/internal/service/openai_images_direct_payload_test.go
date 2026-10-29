@@ -104,18 +104,16 @@ func TestCodexImagesLunaErrorDoesNotCoolImageAccount(t *testing.T) {
 	}
 }
 
-func TestCodexDirectImagesShadowCredentials(t *testing.T) {
-	parent := directImagesTestAccount()
-	parent.Status = StatusActive
-	shadow := &Account{ID: 99, ParentAccountID: &parent.ID, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+func TestCodexDirectImagesAccountCredentials(t *testing.T) {
+	account := directImagesTestAccount()
+	account.Status = StatusActive
 	body := []byte(`{"model":"gpt-image-2","prompt":"draw"}`)
 	c, _ := newOpenAIImagesTestContext(t, body)
 	upstream := &httpUpstreamRecorder{resp: openAIImagesJSONResponse()}
 	svc := newOpenAIImagesTestService(upstream)
-	svc.accountRepo = newStubCredRepo(parent)
 	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 	require.NoError(t, err)
-	_, err = svc.ForwardImages(context.Background(), c, shadow, body, parsed, "")
+	_, err = svc.ForwardImages(context.Background(), c, account, body, parsed, "")
 	require.NoError(t, err)
 	require.Equal(t, "Bearer test-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "test-account", upstream.lastReq.Header.Get("Chatgpt-Account-Id"))

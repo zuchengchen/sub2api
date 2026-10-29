@@ -620,7 +620,7 @@ describe('BulkEditAccountModal', () => {
     expect((wrapper.get('[data-testid="bulk-edit-openai-responses-mode-select"]').element as HTMLSelectElement).value).toBe('auto')
   })
 
-  it('筛选全量模式固定展示影子继承说明并按 filters 提交', async () => {
+  it('筛选全量模式按 filters 提交长上下文计费设置', async () => {
     const wrapper = mountModal({
       accountIds: [],
       selectedPlatforms: [],
@@ -634,8 +634,6 @@ describe('BulkEditAccountModal', () => {
       }
     })
 
-    expect(wrapper.get('[data-testid="bulk-edit-openai-long-context-shadow-hint"]').text())
-      .toContain('admin.accounts.bulkEdit.longContextShadowHint')
     await wrapper.get('#bulk-edit-openai-long-context-billing-enabled').setValue(true)
     await wrapper.get('[data-testid="bulk-edit-openai-long-context-billing-toggle"]').trigger('click')
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
@@ -647,11 +645,10 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
-  it('成功响应包含影子继承数量时展示专用提示', async () => {
+  it('长上下文计费更新成功时展示成功数量并关闭弹窗', async () => {
     vi.mocked(adminAPI.accounts.bulkUpdate).mockResolvedValueOnce({
       success: 2,
       failed: 0,
-      long_context_inherited_count: 1,
       results: []
     } as any)
     const wrapper = mountModal({
@@ -662,18 +659,18 @@ describe('BulkEditAccountModal', () => {
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.bulkEdit.successWithInherited')
-    expect(translate).toHaveBeenCalledWith('admin.accounts.bulkEdit.successWithInherited', {
-      count: 2,
-      inherited: 1
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.bulkEdit.success')
+    expect(translate).toHaveBeenCalledWith('admin.accounts.bulkEdit.success', {
+      count: 2
     })
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+    expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
-  it('部分成功且包含影子继承数量时展示组合提示', async () => {
+  it('长上下文计费部分更新成功时展示成功和失败数量', async () => {
     vi.mocked(adminAPI.accounts.bulkUpdate).mockResolvedValueOnce({
       success: 1,
       failed: 1,
-      long_context_inherited_count: 1,
       results: []
     } as any)
     const wrapper = mountModal({
@@ -684,19 +681,19 @@ describe('BulkEditAccountModal', () => {
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.bulkEdit.partialSuccessWithInherited')
-    expect(translate).toHaveBeenCalledWith('admin.accounts.bulkEdit.partialSuccessWithInherited', {
+    expect(showError).toHaveBeenCalledWith('admin.accounts.bulkEdit.partialSuccess')
+    expect(translate).toHaveBeenCalledWith('admin.accounts.bulkEdit.partialSuccess', {
       success: 1,
-      failed: 1,
-      inherited: 1
+      failed: 1
     })
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+    expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
-  it('全影子长上下文错误使用专用提示并保持弹窗打开', async () => {
+  it('长上下文计费更新失败时显示后端错误并保持弹窗打开', async () => {
     vi.mocked(adminAPI.accounts.bulkUpdate).mockRejectedValueOnce({
       status: 400,
-      reason: 'OPENAI_LONG_CONTEXT_PARENT_REQUIRED',
-      message: 'select parent'
+      message: 'update failed'
     })
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],
@@ -706,7 +703,8 @@ describe('BulkEditAccountModal', () => {
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.bulkEdit.longContextParentRequired')
+    expect(showError).toHaveBeenCalledWith('update failed')
+    expect(wrapper.emitted('updated')).toBeUndefined()
     expect(wrapper.emitted('close')).toBeUndefined()
   })
 

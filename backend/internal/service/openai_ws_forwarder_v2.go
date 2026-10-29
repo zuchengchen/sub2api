@@ -1217,17 +1217,3 @@ readLoop:
 	result.ImageOutputSizes = imageCounter.Sizes()
 	return result, nil
 }
-
-// ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。
-// 当前实现按“单请求 -> 终止事件 -> 下一请求”的顺序代理，适配 Codex CLI 的 turn 模式。
-// stripCodexSparkImageGenerationToolFromRawPayload removes the image_generation
-// tool from a raw /responses payload when the upstream model is gpt-5.3-codex-spark.
-// Spark rejects that tool upstream with HTTP 400 (invalid_request_error, param=tools);
-// Codex clients advertise it by default. Returns the (possibly unchanged) payload,
-// whether it changed, and any JSON decode error.
-func stripCodexSparkImageGenerationToolFromRawPayload(payload []byte, model string) ([]byte, bool, error) {
-	if !isCodexSparkModel(model) {
-		return payload, false, nil
-	}
-	return stripOpenAIImageGenerationToolsFromRawPayload(payload)
-}

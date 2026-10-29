@@ -13,7 +13,7 @@ func TestResolveIntelligentTestModelDefaultsChatGPTToGpt6Astra(t *testing.T) {
 	oauth := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	require.Equal(t, "gpt-6-astra", resolveIntelligentTestModel(oauth, ""))
 	require.Equal(t, "gpt-6-astra", resolveIntelligentTestModel(oauth, "  "))
-	require.Equal(t, "gpt-5.3-codex-spark", resolveIntelligentTestModel(oauth, "gpt-5.3-codex-spark"))
+	require.Equal(t, "gpt-5.3-codex", resolveIntelligentTestModel(oauth, "gpt-5.3-codex"))
 	require.Equal(t, "", resolveIntelligentTestModel(&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, ""))
 	require.Equal(t, "", resolveIntelligentTestModel(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, ""))
 }

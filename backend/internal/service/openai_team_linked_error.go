@@ -47,7 +47,7 @@ func (s *RateLimitService) maybeHandleOpenAITeamLinkedError(ctx context.Context,
 	var targets []*Account
 	for i := range accounts {
 		acc := &accounts[i]
-		if acc.ID == account.ID || acc.IsShadow() || strings.TrimSpace(acc.GetChatGPTAccountID()) != teamID {
+		if acc.ID == account.ID || strings.TrimSpace(acc.GetChatGPTAccountID()) != teamID {
 			continue
 		}
 		targets = append(targets, acc)

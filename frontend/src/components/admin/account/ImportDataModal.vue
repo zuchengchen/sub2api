@@ -258,11 +258,7 @@ const mergeDataPayloads = (payloads: AdminDataPayload[]): AdminDataPayload => {
     version: payloads.find((item) => typeof item.version === 'number')?.version,
     exported_at: new Date().toISOString(),
     proxies: payloads.flatMap((item) => item.proxies),
-    accounts: payloads.flatMap((item) => item.accounts),
-    skipped_shadows: payloads.reduce((sum, item) => {
-      const count = Number(item.skipped_shadows || 0)
-      return Number.isFinite(count) ? sum + count : sum
-    }, 0)
+    accounts: payloads.flatMap((item) => item.accounts)
   }
 }
 

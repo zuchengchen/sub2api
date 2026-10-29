@@ -101,94 +101,33 @@ func newQuotaRedirectingFactory(srv *httptest.Server) PrivacyClientFactory {
 	}
 }
 
-// ── Part A: buildCodexSparkWindowExtraUpdates ─────────────────────────────────
-
-// TestBuildCodexSparkWindowExtraUpdates_ContainsCodexKeys 验证:
-//   - 产出包含 codex_5h_used_percent / codex_7d_used_percent
-//   - 不含任何 codex_spark_ 前缀的 key（Method Z 前缀已禁止）
-//   - 数值正确映射（primary 较短→5h，secondary 较长→7d）
-func TestBuildCodexSparkWindowExtraUpdates_ContainsCodexKeys(t *testing.T) {
-	now := time.Now().UTC()
-	usage := &OpenAIQuotaUsage{
-		AdditionalRateLimits: []OpenAIAdditionalRateLimit{
-			{
-				MeteredFeature: "codex_bengalfox",
-				RateLimit: &OpenAIRateLimit{
-					PrimaryWindow: &OpenAIRateLimitWindow{
-						UsedPercent:        0.42,
-						LimitWindowSeconds: 18000, // 300 min = 5 h
-						ResetAfterSeconds:  3600,
-					},
-					SecondaryWindow: &OpenAIRateLimitWindow{
-						UsedPercent:        0.15,
-						LimitWindowSeconds: 604800, // 7 d
-						ResetAfterSeconds:  86400,
-					},
-				},
-			},
-		},
+func TestResetCreditUsesAccountCredentials(t *testing.T) {
+	account := &Account{
+		ID: 204, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "account-reset"},
 	}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	tokenCache := &stubQuotaTokenCache{tokens: map[string]string{OpenAITokenCacheKey(account): "fake-token"}}
+	tokenProvider := NewOpenAITokenProvider(repo, tokenCache, nil)
+	var body map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/backend-api/wham/rate-limit-reset-credits/consume", r.URL.Path)
+		require.Equal(t, "account-reset", r.Header.Get("chatgpt-account-id"))
+		require.Equal(t, "Bearer fake-token", r.Header.Get("authorization"))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"code":"ok","windows_reset":2}`))
+	}))
+	defer srv.Close()
 
-	updates := buildCodexSparkWindowExtraUpdates(usage, now)
-	require.NotNil(t, updates, "expected non-nil updates for valid codex_bengalfox entry")
-
-	// 必须含有 codex_5h_* 和 codex_7d_* 键
-	require.Contains(t, updates, "codex_5h_used_percent")
-	require.Contains(t, updates, "codex_7d_used_percent")
-
-	// 任何键不得含有 codex_spark_ 前缀（Method Z 已禁止）
-	for k := range updates {
-		require.False(t, strings.Contains(k, "codex_spark_"),
-			"unexpected Method-Z prefix in key: %s", k)
-	}
-
-	// 数值验证（primary=5h, secondary=7d）
-	require.InDelta(t, 0.42, updates["codex_5h_used_percent"], 1e-9)
-	require.InDelta(t, 0.15, updates["codex_7d_used_percent"], 1e-9)
-}
-
-// TestBuildCodexSparkWindowExtraUpdates_NilUsage 验证 nil usage 返回 nil。
-func TestBuildCodexSparkWindowExtraUpdates_NilUsage(t *testing.T) {
-	require.Nil(t, buildCodexSparkWindowExtraUpdates(nil, time.Now()))
-}
-
-// TestBuildCodexSparkWindowExtraUpdates_NoBengalfox 验证无 codex_bengalfox 条目时返回 nil。
-func TestBuildCodexSparkWindowExtraUpdates_NoBengalfox(t *testing.T) {
-	usage := &OpenAIQuotaUsage{
-		AdditionalRateLimits: []OpenAIAdditionalRateLimit{
-			{MeteredFeature: "other_feature", RateLimit: &OpenAIRateLimit{}},
-		},
-	}
-	require.Nil(t, buildCodexSparkWindowExtraUpdates(usage, time.Now()))
-}
-
-// ── Part C: ResetCredit 影子拒绝 ───────────────────────────────────────────
-
-// TestResetCreditShadowRejected 验证:
-//   - ResetCredit(ctx, shadowID) 返回 ErrSparkShadowResetNotSupported
-//   - 不触达上游（privacyClientFactory 为 nil，若调用则 panic）
-func TestResetCreditShadowRejected(t *testing.T) {
-	pid := int64(100)
-	shadow := &Account{
-		ID:              200,
-		ParentAccountID: &pid,
-		Platform:        PlatformOpenAI,
-		Type:            AccountTypeOAuth,
-		QuotaDimension:  QuotaDimensionSpark,
-	}
-	repo := &stubQuotaAccountRepo{
-		accounts: map[int64]*Account{200: shadow},
-	}
-	// privacyClientFactory 故意为 nil —— 若流程误到上游则 prepareUpstreamCall 会先在
-	// 配置检查处报错，但我们在此之前就应该拦截并返回 ErrSparkShadowResetNotSupported。
-	svc := &OpenAIQuotaService{accountRepo: repo}
-
-	_, err := svc.ResetCredit(context.Background(), 200)
-	require.ErrorIs(t, err, ErrSparkShadowResetNotSupported,
-		"shadow ResetCredit should return ErrSparkShadowResetNotSupported, got: %v", err)
-	// 外审 F6:必须是结构化 409(而非裸 error→500)。
-	require.Equal(t, http.StatusConflict, infraerrors.Code(err),
-		"shadow ResetCredit 应映射为 409 Conflict 而非 500")
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
+	result, err := svc.ResetCredit(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Equal(t, "ok", result.Code)
+	require.Equal(t, 2, result.WindowsReset)
+	require.Len(t, body, 1)
+	require.Regexp(t, `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`, body["redeem_request_id"])
 }
 
 func TestResetCreditTargetedSendsStableCreditAndRedeemIDs(t *testing.T) {
@@ -333,43 +272,21 @@ func TestResetCreditAgentIdentityReusesConcurrentlyRecoveredTask(t *testing.T) {
 	require.Equal(t, "task-reset-concurrent", decodeAgentAssertionTask(t, assertions[1]))
 }
 
-// ── Part B: prepareUpstreamCall 影子 resolve ──────────────────────────────
-
-// TestPrepareUpstreamCallShadowResolve 验证影子账号（200）QueryUsage 时:
-//   - 不因 chatgpt_account_id 为空而报错
-//   - 使用母账号（100）的 chatgpt_account_id("org-parent123")
-//
-// 测试策略: 直接调用包内可见的 prepareUpstreamCall，注入 stubTokenCache（命中路径）
-// 和 stubQuotaAccountRepo（同时持有影子+母账号），绕开 /wham/usage HTTP 往返。
-// 这比 httptest 端到端 mock 更轻量且对实现细节的耦合更低。
-func TestPrepareUpstreamCallShadowResolve(t *testing.T) {
+func TestPrepareUpstreamCallUsesAccountCredentials(t *testing.T) {
 	ctx := context.Background()
-	pid := int64(100)
-
-	// 影子账号：无 chatgpt_account_id credentials
-	shadow := &Account{
-		ID:              200,
-		ParentAccountID: &pid,
-		Platform:        PlatformOpenAI,
-		Type:            AccountTypeOAuth,
-		Status:          StatusActive,
-		QuotaDimension:  QuotaDimensionSpark,
-	}
-	// 母账号：有完整 credentials
-	parent := &Account{
+	account := &Account{
 		ID:       100,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Status:   StatusActive,
 		Credentials: map[string]any{
-			"chatgpt_account_id": "org-parent123",
+			"chatgpt_account_id": "account-quota",
 		},
 	}
-	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{200: shadow, 100: parent}}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
 
-	// stubTokenCache 为母账号 cache key 提供 fake token（走缓存命中路径，无需真实刷新）
 	tokenCache := &stubQuotaTokenCache{tokens: map[string]string{
-		OpenAITokenCacheKey(parent): "fake-access-token",
+		OpenAITokenCacheKey(account): "fake-access-token",
 	}}
 	tokenProvider := NewOpenAITokenProvider(repo, tokenCache, nil)
 
@@ -378,10 +295,10 @@ func TestPrepareUpstreamCallShadowResolve(t *testing.T) {
 		return req.C(), nil
 	}, nil)
 
-	_, chatGPTAccountID, _, _, err := svc.prepareUpstreamCall(ctx, 200)
-	require.NoError(t, err, "shadow resolve should succeed; got error: %v", err)
-	require.Equal(t, "org-parent123", chatGPTAccountID,
-		"prepareUpstreamCall should use parent's chatgpt_account_id after shadow resolve")
+	accessToken, chatGPTAccountID, _, _, err := svc.prepareUpstreamCall(ctx, account.ID)
+	require.NoError(t, err)
+	require.Equal(t, "fake-access-token", accessToken)
+	require.Equal(t, "account-quota", chatGPTAccountID)
 }
 
 func TestQueryUsageAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
@@ -728,61 +645,57 @@ func TestCachePostResetSnapshot(t *testing.T) {
 	require.Equal(t, 0.0, repo.extraUpdates[100]["codex_7d_used_percent"])
 }
 
-// TestResetCreditGetByIDError_FailsClosed 验证守卫「失败关闭」语义：
-// 当守卫的 GetByID 发生瞬时错误时，ResetCredit 必须立即返回该错误，
-// 不得旁路进入 prepareUpstreamCall（否则影子账号会借 resolve 路径操作母账号）。
-//
-// 区分方法：privacyClientFactory/tokenProvider 留 nil；
-//   - 旁路路径：prepareUpstreamCall 配置检查先命中，报 "not configured"
-//   - 守卫正确关闭：报 "account not found"（来自守卫的 infraerrors）
-func TestResetCreditGetByIDError_FailsClosed(t *testing.T) {
-	// 空 map：GetByID(200) 返回 "account 200 not found"
-	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{}}
-	// tokenProvider / privacyClientFactory 故意为 nil：
-	// 若代码泄漏到 prepareUpstreamCall，会因配置检查而报 "not configured" 而非 "account not found"。
-	svc := &OpenAIQuotaService{accountRepo: repo}
+func TestResetCreditValidationDoesNotContactUpstream(t *testing.T) {
+	tests := []struct {
+		name     string
+		accounts map[int64]*Account
+		code     int
+		reason   string
+	}{
+		{name: "lookup error", code: http.StatusNotFound, reason: "OPENAI_QUOTA_ACCOUNT_NOT_FOUND"},
+		{name: "nil account", accounts: map[int64]*Account{200: nil}, code: http.StatusNotFound, reason: "OPENAI_QUOTA_ACCOUNT_NOT_FOUND"},
+		{name: "invalid platform", accounts: map[int64]*Account{200: {ID: 200, Platform: PlatformAnthropic, Type: AccountTypeOAuth}}, code: http.StatusBadRequest, reason: "OPENAI_QUOTA_INVALID_PLATFORM"},
+		{name: "invalid type", accounts: map[int64]*Account{200: {ID: 200, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}}, code: http.StatusBadRequest, reason: "OPENAI_QUOTA_INVALID_TYPE"},
+		{name: "missing account id", accounts: map[int64]*Account{200: {ID: 200, Platform: PlatformOpenAI, Type: AccountTypeOAuth}}, code: http.StatusBadRequest, reason: "OPENAI_QUOTA_MISSING_ACCOUNT_ID"},
+		{name: "missing token provider", accounts: map[int64]*Account{200: {ID: 200, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "account-quota"}}}, code: http.StatusInternalServerError, reason: "OPENAI_QUOTA_NOT_CONFIGURED"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &stubQuotaAccountRepo{accounts: tt.accounts}
+			clientCalls := 0
+			svc := NewOpenAIQuotaService(repo, nil, nil, func(_ string) (*req.Client, error) {
+				clientCalls++
+				return nil, errors.New("unexpected upstream client creation")
+			}, nil)
 
-	_, err := svc.ResetCredit(context.Background(), 200)
-	require.Error(t, err, "GetByID error must propagate; got nil")
-	require.NotContains(t, err.Error(), "not configured",
-		"error reached prepareUpstreamCall config-check — guard did not fail-closed; got: %v", err)
+			result, err := svc.ResetCredit(context.Background(), 200)
+			require.Nil(t, result)
+			require.Equal(t, tt.code, infraerrors.Code(err))
+			require.Equal(t, tt.reason, infraerrors.Reason(err))
+			result, err = svc.ResetCreditTargeted(context.Background(), 200, "credit-123", "redeem-456")
+			require.Nil(t, result)
+			require.Equal(t, tt.code, infraerrors.Code(err))
+			require.Equal(t, tt.reason, infraerrors.Reason(err))
+			require.Zero(t, clientCalls)
+		})
+	}
 }
 
-// TestQueryUsageShadowResolve_EndToEnd 是端到端补充：通过 httptest 服务真实 /wham/usage
-// 路径，验证影子账号的 QueryUsage 能成功拿到服务器响应（header 由母账号注入）。
-func TestQueryUsageShadowResolve_EndToEnd(t *testing.T) {
-	ctx := context.Background()
-	pid := int64(100)
-
-	shadow := &Account{
-		ID: 200, ParentAccountID: &pid,
-		Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		Status: StatusActive, QuotaDimension: QuotaDimensionSpark,
+func TestResetCreditUnconfigured(t *testing.T) {
+	for _, svc := range []*OpenAIQuotaService{nil, {}, {accountRepo: &stubQuotaAccountRepo{}}} {
+		result, err := svc.ResetCredit(context.Background(), 200)
+		require.Nil(t, result)
+		require.Equal(t, http.StatusInternalServerError, infraerrors.Code(err))
+		require.Equal(t, "OPENAI_QUOTA_NOT_CONFIGURED", infraerrors.Reason(err))
 	}
-	parent := &Account{
-		ID: 100, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
-		Credentials: map[string]any{"chatgpt_account_id": "org-e2e-parent"},
+}
+
+func TestResetCreditTargetedRequiresBothIDs(t *testing.T) {
+	svc := &OpenAIQuotaService{}
+	for _, ids := range [][2]string{{" ", "redeem-456"}, {"credit-123", " "}} {
+		result, err := svc.ResetCreditTargeted(context.Background(), 200, ids[0], ids[1])
+		require.Nil(t, result)
+		require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+		require.Equal(t, "OPENAI_QUOTA_TARGETED_RESET_INVALID", infraerrors.Reason(err))
 	}
-	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{200: shadow, 100: parent}}
-
-	tokenCache := &stubQuotaTokenCache{tokens: map[string]string{
-		OpenAITokenCacheKey(parent): "fake-token-e2e",
-	}}
-	tokenProvider := NewOpenAITokenProvider(repo, tokenCache, nil)
-
-	// httptest server 记录收到的 chatgpt-account-id header，返回空 usage JSON
-	var capturedAccountID string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAccountID = r.Header.Get("chatgpt-account-id")
-		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(OpenAIQuotaUsage{})
-	}))
-	defer srv.Close()
-
-	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
-	usage, err := svc.QueryUsage(ctx, 200)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	require.Equal(t, "org-e2e-parent", capturedAccountID,
-		"upstream should receive parent's chatgpt-account-id; got: %s", capturedAccountID)
 }

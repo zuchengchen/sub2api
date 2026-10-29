@@ -415,8 +415,6 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 		}
 	}
 
-	h.enrichShadowParents(ctx, []AccountWithConcurrency{item})
-
 	return item
 }
 
@@ -847,8 +845,6 @@ func (h *AccountHandler) List(c *gin.Context) {
 
 		result[i] = item
 	}
-
-	h.enrichShadowParents(c.Request.Context(), result)
 
 	if lite {
 		compact := make([]AccountListItemWithConcurrency, len(result))
@@ -1419,12 +1415,6 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
-	// spark 影子凭据由母账号管理、自身恒空,刷新无意义且会先打上游;在调用上游前早拒
-	// (覆盖单账号与批量两入口;批量侧将其计为 failed 并附说明)(外审第6轮)。
-	if account.IsCredentialShadow() {
-		return nil, "", infraerrors.BadRequest("SPARK_SHADOW_NO_REFRESH",
-			"cannot refresh spark shadow account; its credentials are managed by the parent account")
-	}
 
 	var newCredentials map[string]any
 
@@ -1763,10 +1753,6 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 		Error     string `json:"error"`
 	}
 
-	requestedIDs := make(map[int64]struct{}, len(accountIDs))
-	for _, accountID := range accountIDs {
-		requestedIDs[accountID] = struct{}{}
-	}
 	accountsByID := make(map[int64]*service.Account, len(accounts))
 	for _, account := range accounts {
 		if account != nil {
@@ -1774,13 +1760,11 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 		}
 	}
 
-	rootIDs := make([]int64, 0, len(accountIDs))
-	dependentIDs := make(map[int64][]int64)
+	idsToDelete := make([]int64, 0, len(accountIDs))
 	failedIDs := make([]int64, 0)
 	errorsByAccount := make([]deleteError, 0)
 	for _, accountID := range accountIDs {
-		account := accountsByID[accountID]
-		if account == nil {
+		if accountsByID[accountID] == nil {
 			failedIDs = append(failedIDs, accountID)
 			errorsByAccount = append(errorsByAccount, deleteError{
 				AccountID: accountID,
@@ -1788,34 +1772,7 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 			})
 			continue
 		}
-
-		rootID := accountID
-		visited := map[int64]struct{}{accountID: {}}
-		for {
-			current := accountsByID[rootID]
-			if current == nil || current.ParentAccountID == nil {
-				break
-			}
-			parentID := *current.ParentAccountID
-			if _, selected := requestedIDs[parentID]; !selected {
-				break
-			}
-			if _, exists := accountsByID[parentID]; !exists {
-				break
-			}
-			if _, cyclic := visited[parentID]; cyclic {
-				rootID = accountID
-				break
-			}
-			visited[parentID] = struct{}{}
-			rootID = parentID
-		}
-
-		if rootID != accountID {
-			dependentIDs[rootID] = append(dependentIDs[rootID], accountID)
-			continue
-		}
-		rootIDs = append(rootIDs, accountID)
+		idsToDelete = append(idsToDelete, accountID)
 	}
 
 	const maxConcurrency = 5
@@ -1826,25 +1783,22 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 	successIDs := make([]int64, 0, len(accountIDs))
 
 	// Every worker returns nil so one account failure does not cancel the remaining deletions.
-	for _, id := range rootIDs {
+	for _, id := range idsToDelete {
 		accountID := id
 		g.Go(func() error {
 			err := h.adminService.DeleteAccount(gctx, accountID)
 
 			mu.Lock()
 			defer mu.Unlock()
-			affectedIDs := append([]int64{accountID}, dependentIDs[accountID]...)
 			if err != nil {
-				for _, affectedID := range affectedIDs {
-					failedIDs = append(failedIDs, affectedID)
-					errorsByAccount = append(errorsByAccount, deleteError{
-						AccountID: affectedID,
-						Error:     err.Error(),
-					})
-				}
+				failedIDs = append(failedIDs, accountID)
+				errorsByAccount = append(errorsByAccount, deleteError{
+					AccountID: accountID,
+					Error:     err.Error(),
+				})
 				return nil
 			}
-			successIDs = append(successIDs, affectedIDs...)
+			successIDs = append(successIDs, accountID)
 			return nil
 		})
 	}

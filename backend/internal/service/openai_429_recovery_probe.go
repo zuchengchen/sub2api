@@ -46,7 +46,7 @@ type openai429RecoveryProbeResult struct {
 type openai429RecoveryProber func(ctx context.Context, account *Account, model string) openai429RecoveryProbeResult
 
 func (s *RateLimitService) markOpenAIFormalCooldown(account *Account, resetAt time.Time, requestedModel ...string) {
-	if s == nil || account == nil || !account.IsOpenAI() || account.IsShadow() {
+	if s == nil || account == nil || !account.IsOpenAI() {
 		return
 	}
 	now := time.Now()
@@ -407,7 +407,7 @@ func openai429RecoveryProbeModel(account *Account, requestedModel string) string
 }
 
 func openAIAccountEligibleFor429RecoveryProbe(account *Account, now time.Time) bool {
-	if account == nil || !account.IsOpenAI() || account.IsShadow() {
+	if account == nil || !account.IsOpenAI() {
 		return false
 	}
 	if account.IsPoolMode() && !account.IsCustomErrorCodesEnabled() {

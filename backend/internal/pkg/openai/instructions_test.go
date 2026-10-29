@@ -26,7 +26,6 @@ func TestCodexBaseInstructionsForModel(t *testing.T) {
 		{"gpt-6-astra-2026-09-01", "You are Codex, an agent based on GPT-6"},
 		{"gpt-5-codex", "You are Codex, based on GPT-5"},
 		{"gpt-5.3-codex", "You are Codex, based on GPT-5"},
-		{"gpt-5.3-codex-spark", "You are Codex, based on GPT-5"},
 		{"gpt-5.1-codex-max", "You are Codex, based on GPT-5"},
 		{"gpt-5.2-codex", "You are Codex, based on GPT-5"},
 		{"gpt-5.5", "You are Codex, a coding agent based on GPT-5"},

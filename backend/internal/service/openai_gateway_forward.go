@@ -94,6 +94,10 @@ func isOpenAIGPT56OrLaterModel(model string) bool {
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	if err := validateRetiredOpenAIRequestModel(account, gjson.GetBytes(body, "model").String(), isOpenAIResponsesCompactPath(c), ""); err != nil {
+		writeOpenAIResponsesErrorJSON(c, http.StatusNotFound, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "model_not_found", "message": err.Error()}})
+		return nil, err
+	}
 	if responsesWebSearchEnabled(ctx, c, account, s.settingService, s.channelService) {
 		return forwardHostedResponsesWebSearch(ctx, c, account, body, func(next []byte) (*OpenAIForwardResult, error) {
 			return s.forwardWithoutHostedWebSearch(ctx, c, account, next)
@@ -663,31 +667,6 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	} else if imageGenerationAllowed && imageIntent && openAIRequestBodyHasImageGenerationDeclaration(body) {
 		// 完整 image_generation tool 只做 raw 计费读取，校验/桥接/旧字段迁移命中时才展开大 input map。
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] /responses image_generation request inbound_model=%s mapped_model=%s account_type=%s", requestView.Model, upstreamModel, account.Type)
-	}
-
-	if isCodexSparkModel(upstreamModel) && openAIRequestBodyMayContainImageInput(body) {
-		decoded, decodeErr := ensureReqBody()
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		if err := validateCodexSparkInput(decoded, upstreamModel); err != nil {
-			setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
-			writeOpenAIResponsesErrorJSON(c, http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": err.Error(), "param": "input"}})
-			return nil, err
-		}
-	}
-
-	// gpt-5.3-codex-spark also rejects the image_generation tool (HTTP 400,
-	// param=tools). Strip it here so both APIKey and OAuth /responses paths are
-	// covered regardless of the image-generation feature gate.
-	if isCodexSparkModel(upstreamModel) && openAIRequestBodyHasImageGenerationDeclaration(body) {
-		decoded, decodeErr := ensureReqBody()
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		if stripCodexSparkImageGenerationTools(decoded) {
-			markDecodedModified()
-		}
 	}
 
 	if account.UsesOpenAICodexProtocol() {
@@ -1712,8 +1691,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
 		// Extract and save Codex usage snapshot from response headers (for OAuth accounts).
-		// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
-		if account.UsesOpenAICodexProtocol() && !account.IsShadow() {
+		if account.UsesOpenAICodexProtocol() {
 			if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 				s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 			}

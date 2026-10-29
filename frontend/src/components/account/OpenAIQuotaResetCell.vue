@@ -75,7 +75,6 @@
       </button>
       <!-- 额度用尽后是否允许消耗点数：默认关闭，开启需二次确认 -->
       <button
-        v-if="showCreditsToggle"
         type="button"
         role="switch"
         data-testid="openai-credits-enabled-toggle"
@@ -336,10 +335,6 @@ const readCachedResetCredits = (account: Account): OpenAIQuotaUsage | null => {
 cachedData.value = readCachedResetCredits(props.account)
 data.value = cachedData.value
 
-// 影子账号的额度查询会 resolve 到母账号,但影子本身不支持重置(后端返回 409);
-// 重置必须在母账号上进行。前端据此禁用影子的重置入口(外审 F6)。
-const isShadow = computed(() => props.account.parent_account_id != null)
-
 const availableResetCount = computed(() => data.value?.rate_limit_reset_credits?.available_count ?? 0)
 // Prefer the live payload and fall back to the persisted snapshot only when the
 // live state is unknown, so the count and the expirations never come from two
@@ -352,7 +347,7 @@ const resetCreditExpirations = computed(() =>
 )
 const primaryResetCreditExpiry = computed(() => resetCreditExpirations.value[0] ?? '')
 const hiddenResetCreditCount = computed(() => Math.max(resetCreditExpirations.value.length - 1, 0))
-const canReset = computed(() => availableResetCount.value > 0 && !isShadow.value)
+const canReset = computed(() => availableResetCount.value > 0)
 
 const resetCreditDetailsTitle = computed(() =>
   resetCreditExpirations.value
@@ -368,7 +363,6 @@ const resetCreditDetailsToggleLabel = computed(() => {
 })
 
 const resetButtonTitle = computed(() => {
-  if (isShadow.value) return t('admin.accounts.openaiQuotaReset.resetTooltipShadow')
   if (!data.value) return t('admin.accounts.openaiQuotaReset.resetTooltipNeedQuery')
   if (!canReset.value) return t('admin.accounts.openaiQuotaReset.resetTooltipNoCredits')
   return t('admin.accounts.openaiQuotaReset.resetTooltipReady')
@@ -471,8 +465,6 @@ const handleQuery = async () => {
 }
 
 // ---- 额度用尽后消耗点数开关 ----
-// 仅 OpenAI OAuth 母账号；影子账号的额度来自独立通道，不受点数保护。
-const showCreditsToggle = computed(() => !isShadow.value)
 const creditsEnabledOverride = ref<boolean | null>(null)
 const creditsEnabled = computed(() =>
   creditsEnabledOverride.value ?? props.account.extra?.openai_credits_enabled === true

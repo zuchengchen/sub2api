@@ -1477,6 +1477,9 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		if cached, found := s.modelsListCache.Get(cacheKey); found {
 			if models, ok := cached.([]string); ok {
 				modelsListCacheHitTotal.Add(1)
+				if models != nil {
+					return filterRetiredOpenAIModelIDs(nil, models)
+				}
 				return cloneStringSlice(models)
 			}
 		}
@@ -1525,6 +1528,10 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 
 		mapping := acc.GetModelMapping()
 		for model := range mapping {
+			if validateRetiredOpenAIRequestModel(&acc, model, false, "") != nil {
+				hasAnyMapping = true
+				continue
+			}
 			// Accounts pulled in through mixed scheduling only contribute the
 			// models that belong to the listing platform (e.g. an antigravity
 			// account's claude-* mappings must not surface on a gemini group).

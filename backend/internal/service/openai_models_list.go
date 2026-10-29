@@ -20,11 +20,7 @@ func (s *OpenAIGatewayService) FetchOpenAIModelsList(ctx context.Context, accoun
 	if s == nil || account == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_MODELS_ACCOUNT_REQUIRED", "OpenAI account is required")
 	}
-	credentialAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-	if err != nil {
-		return nil, fmt.Errorf("resolve model list credentials: %w", err)
-	}
-	if credentialAccount.IsOpenAIOAuth() {
+	if account.IsOpenAIOAuth() {
 		clientVersion := CodexCanonicalClientVersion()
 		if s.settingService != nil {
 			clientVersion = s.settingService.GetOpenAICodexClientVersion(ctx)
@@ -39,14 +35,14 @@ func (s *OpenAIGatewayService) FetchOpenAIModelsList(ctx context.Context, accoun
 		}
 		return &OpenAIModelsResponse{Body: body, ETag: codexModelsManifestBodyETag(body)}, nil
 	}
-	req, err := buildOpenAIAPIKeyModelsRequest(ctx, credentialAccount, s.validateUpstreamBaseURL)
+	req, err := buildOpenAIAPIKeyModelsRequest(ctx, account, s.validateUpstreamBaseURL)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_MODELS_REQUEST_INVALID", "cannot build upstream model list request: %v", err)
 	}
 	request := openAIModelsRequest{
 		url: req.URL.String(), headers: req.Header,
 		proxyURL: upstreamModelsProxyURL(account), accountID: account.ID,
-		credentialAccountID: credentialAccount.ID, credentialAccount: credentialAccount,
+		credentialAccount:  account,
 		accountConcurrency: account.Concurrency, useAPIKeyUpstream: true,
 		standardModelsList: true,
 	}

@@ -17,16 +17,80 @@ import (
 )
 
 type duplicateAccountRepoStub struct {
-	*sparkShadowRepoStub
+	mockAccountRepoForTest
+	nextID          int64
+	accounts        map[int64]*Account
+	groupsOf        map[int64][]int64
 	atomicCreateErr error
 	accountGroupsOf map[int64][]AccountGroup
 }
 
 func newDuplicateAccountRepoStub() *duplicateAccountRepoStub {
 	return &duplicateAccountRepoStub{
-		sparkShadowRepoStub: newSparkShadowRepoStub(),
-		accountGroupsOf:     make(map[int64][]AccountGroup),
+		accounts:        make(map[int64]*Account),
+		groupsOf:        make(map[int64][]int64),
+		accountGroupsOf: make(map[int64][]AccountGroup),
+		mockAccountRepoForTest: mockAccountRepoForTest{
+			accountsByID: make(map[int64]*Account),
+		},
 	}
+}
+
+func (s *duplicateAccountRepoStub) Create(_ context.Context, account *Account) error {
+	s.nextID++
+	account.ID = s.nextID
+	cp := *account
+	s.accounts[account.ID] = &cp
+	s.mockAccountRepoForTest.accountsByID[account.ID] = &cp
+	return nil
+}
+
+func (s *duplicateAccountRepoStub) GetByID(_ context.Context, id int64) (*Account, error) {
+	acc, ok := s.accounts[id]
+	if !ok {
+		return nil, ErrAccountNotFound
+	}
+	return acc, nil
+}
+
+func (s *duplicateAccountRepoStub) BindGroups(_ context.Context, accountID int64, groupIDs []int64) error {
+	s.groupsOf[accountID] = append(s.groupsOf[accountID], groupIDs...)
+	return nil
+}
+
+func (s *duplicateAccountRepoStub) ExistsByID(_ context.Context, id int64) (bool, error) {
+	_, ok := s.accounts[id]
+	return ok, nil
+}
+
+func (s *duplicateAccountRepoStub) Update(_ context.Context, account *Account) error {
+	if _, ok := s.accounts[account.ID]; !ok {
+		return ErrAccountNotFound
+	}
+	cp := *account
+	s.accounts[account.ID] = &cp
+	s.mockAccountRepoForTest.accountsByID[account.ID] = &cp
+	return nil
+}
+
+func (s *duplicateAccountRepoStub) Delete(_ context.Context, id int64) error {
+	delete(s.accounts, id)
+	delete(s.mockAccountRepoForTest.accountsByID, id)
+	return nil
+}
+
+func (s *duplicateAccountRepoStub) FindByExtraField(_ context.Context, key string, value any) ([]Account, error) {
+	wanted, ok := value.(string)
+	if !ok {
+		return nil, nil
+	}
+	var matches []Account
+	for _, account := range s.accounts {
+		if actual, ok := account.Extra[key].(string); ok && actual == wanted {
+			matches = append(matches, *account)
+		}
+	}
+	return matches, nil
 }
 
 func (s *duplicateAccountRepoStub) CreateWithAccountGroups(ctx context.Context, account *Account, groups []AccountGroup) error {
@@ -55,20 +119,6 @@ func (s *duplicateAccountRepoStub) CreateWithAccountGroups(ctx context.Context, 
 	s.accounts[account.ID] = &stored
 	s.mockAccountRepoForTest.accountsByID[account.ID] = &stored
 	return nil
-}
-
-func (s *duplicateAccountRepoStub) FindByExtraField(_ context.Context, key string, value any) ([]Account, error) {
-	wanted, ok := value.(string)
-	if !ok {
-		return nil, nil
-	}
-	var matches []Account
-	for _, account := range s.accounts {
-		if actual, ok := account.Extra[key].(string); ok && actual == wanted {
-			matches = append(matches, *account)
-		}
-	}
-	return matches, nil
 }
 
 func TestDuplicateAccountCopiesConfigurationAndResetsRuntimeState(t *testing.T) {
@@ -197,28 +247,6 @@ func TestDuplicateAccountCopiesConfigurationAndResetsRuntimeState(t *testing.T) 
 	require.Equal(t, "us-east-1", storedSource.Extra["config"].(map[string]any)["region"])
 	require.Equal(t, true, storedSource.Extra["items"].([]any)[0].(map[string]any)["enabled"])
 	require.Equal(t, "remote-42", storedSource.Extra["crs_account_id"])
-}
-
-func TestDuplicateAccountRejectsCredentialShadow(t *testing.T) {
-	ctx := context.Background()
-	repo := newDuplicateAccountRepoStub()
-	svc := &adminServiceImpl{accountRepo: repo, accountDuplicateRepo: repo}
-	parentID := int64(99)
-	shadow := &Account{
-		Name:            "shadow",
-		Platform:        PlatformOpenAI,
-		Type:            AccountTypeOAuth,
-		ParentAccountID: &parentID,
-		QuotaDimension:  QuotaDimensionSpark,
-	}
-	require.NoError(t, repo.Create(ctx, shadow))
-
-	_, err := svc.DuplicateAccount(ctx, shadow.ID, "admin:1", "")
-
-	require.Error(t, err)
-	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
-	require.Equal(t, "ACCOUNT_DUPLICATE_SHADOW_UNSUPPORTED", infraerrors.Reason(err))
-	require.Len(t, repo.accounts, 1)
 }
 
 func TestDuplicateAccountRejectsRotatingOrUnknownCredentialTypes(t *testing.T) {

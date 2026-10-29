@@ -240,16 +240,6 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 		return nil
 	}
 	credAccount := account
-	if account.IsShadow() {
-		resolved, err := resolveCredentialAccount(ctx, repo, account)
-		if err != nil {
-			return err
-		}
-		credAccount = resolved
-	}
-	if credAccount == nil || !credAccount.IsOpenAIAgentIdentity() {
-		return errors.New("agent identity credentials are unavailable")
-	}
 	currentTaskID := strings.TrimSpace(credAccount.GetCredential("task_id"))
 	if currentTaskID != "" && (expectedTaskID == "" || currentTaskID != expectedTaskID) {
 		return nil
@@ -275,16 +265,9 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 	// has already persisted a new task.
 	if repo != nil && credAccount.ID > 0 {
 		if refreshed, refreshErr := repo.GetByID(ctx, credAccount.ID); refreshErr == nil && refreshed != nil {
-			if refreshed.IsShadow() {
-				if resolved, resolveErr := resolveCredentialAccount(ctx, repo, refreshed); resolveErr == nil && resolved != nil {
-					refreshed = resolved
-				}
-			}
 			if refreshed.IsOpenAIAgentIdentity() {
 				credAccount = refreshed
-				if !account.IsShadow() {
-					account.Credentials = shallowCopyMap(credAccount.Credentials)
-				}
+				account.Credentials = shallowCopyMap(credAccount.Credentials)
 			}
 		}
 	}
@@ -304,7 +287,7 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 	if err := persistAccountCredentials(ctx, repo, credAccount, credentials); err != nil {
 		return err
 	}
-	if !account.IsShadow() && account != credAccount {
+	if account != credAccount {
 		account.Credentials = shallowCopyMap(credAccount.Credentials)
 	}
 	if wsInvalidator != nil {
@@ -372,17 +355,9 @@ func (s *OpenAIGatewayService) buildOpenAIAuthenticationHeaders(ctx context.Cont
 	if account == nil {
 		return nil, errors.New("account is nil")
 	}
-	credAccount := account
-	if account.IsShadow() {
-		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-		if err != nil {
-			return nil, err
-		}
-		credAccount = resolved
-	}
 	headers := make(http.Header)
-	if credAccount != nil && credAccount.IsOpenAIAgentIdentity() {
-		agentHeaders, err := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s, &s.agentIdentityTaskMu, credAccount)
+	if account.IsOpenAIAgentIdentity() {
+		agentHeaders, err := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s, &s.agentIdentityTaskMu, account)
 		if err != nil {
 			return nil, err
 		}
@@ -416,22 +391,14 @@ func (s *OpenAIGatewayService) refreshOpenAIAgentIdentityHeaders(ctx context.Con
 	if account == nil {
 		return cloneHeader(headers), nil
 	}
-	credAccount := account
-	if account.IsShadow() {
-		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-		if err != nil {
-			return nil, err
-		}
-		credAccount = resolved
-	}
-	if !credAccount.IsOpenAIAgentIdentity() {
+	if !account.IsOpenAIAgentIdentity() {
 		return cloneHeader(headers), nil
 	}
 	refreshed := cloneHeader(headers)
 	if refreshed == nil {
 		refreshed = make(http.Header)
 	}
-	authHeaders, err := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s, &s.agentIdentityTaskMu, credAccount)
+	authHeaders, err := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s, &s.agentIdentityTaskMu, account)
 	if err != nil {
 		return nil, err
 	}
@@ -440,27 +407,11 @@ func (s *OpenAIGatewayService) refreshOpenAIAgentIdentityHeaders(ctx context.Con
 }
 
 func (s *OpenAIGatewayService) recoverAgentIdentityTask(ctx context.Context, account *Account, expectedTaskID string) error {
-	if account != nil && account.IsShadow() {
-		if resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account); err == nil && resolved != nil && strings.TrimSpace(expectedTaskID) == "" {
-			expectedTaskID = strings.TrimSpace(resolved.GetCredential("task_id"))
-		}
-	}
 	return s.ensureAgentIdentityTask(ctx, account, expectedTaskID)
 }
 
 func (s *OpenAIGatewayService) isAgentIdentityAccount(ctx context.Context, account *Account) bool {
-	if account == nil {
-		return false
-	}
-	credAccount := account
-	if account.IsShadow() {
-		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-		if err != nil {
-			return false
-		}
-		credAccount = resolved
-	}
-	return credAccount != nil && credAccount.IsOpenAIAgentIdentity()
+	return account.IsOpenAIAgentIdentity()
 }
 
 // redactAgentIdentitySensitiveBody removes credential values before an
@@ -471,13 +422,7 @@ func redactAgentIdentitySensitiveBodyForAccount(ctx context.Context, repo Accoun
 	if account == nil || len(body) == 0 {
 		return body
 	}
-	credAccount := account
-	if account != nil && account.IsShadow() {
-		if resolved, err := resolveCredentialAccount(ctx, repo, account); err == nil && resolved != nil {
-			credAccount = resolved
-		}
-	}
-	if credAccount == nil || !credAccount.IsOpenAIAgentIdentity() {
+	if !account.IsOpenAIAgentIdentity() {
 		return body
 	}
 	redacted := string(body)
@@ -492,7 +437,7 @@ func redactAgentIdentitySensitiveBodyForAccount(ctx context.Context, repo Accoun
 		"session_key",
 		"cookie",
 	} {
-		if value := strings.TrimSpace(credAccount.GetCredential(key)); value != "" {
+		if value := strings.TrimSpace(account.GetCredential(key)); value != "" {
 			redacted = strings.ReplaceAll(redacted, value, "[redacted]")
 		}
 	}

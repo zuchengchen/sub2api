@@ -46,27 +46,19 @@ func (s *OpenAIGatewayService) doOpenAICodexProbe(req *http.Request, proxyURL st
 			accountRepo: s.accountRepo, pluginManager: s.pluginManager,
 		}
 	}
-	credentialAccount := account
-	if account.IsShadow() {
-		var err error
-		credentialAccount, err = resolveCredentialAccount(req.Context(), s.accountRepo, account)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := s.prepareOpenAICodexProbeRequest(req, credentialAccount); err != nil {
+	if err := s.prepareOpenAICodexProbeRequest(req, account); err != nil {
 		return nil, err
 	}
 	// Preserve each diagnostic caller's admission and error policy. A health
 	// sample must not refresh credentials or record a permanent auth failure.
-	s.maybeCompressCodexUpstreamRequest(req, credentialAccount)
+	s.maybeCompressCodexUpstreamRequest(req, account)
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(req.Context(), req, proxyURL, account)
 		if handled {
 			return response, err
 		}
 	}
-	return s.doOpenAIHTTPTransport(req, proxyURL, account, credentialAccount)
+	return s.doOpenAIHTTPTransport(req, proxyURL, account, account)
 }
 
 func (s *OpenAIGatewayService) prepareOpenAICodexProbeRequest(req *http.Request, account *Account) error {
@@ -176,8 +168,7 @@ func (s *OpenAIGatewayService) prepareOpenAICodexProbeRequest(req *http.Request,
 	if result.Error != nil {
 		return result.Error
 	}
-	// Model-specific compatibility rules can add instructions (e.g. Spark's
-	// image limitation). Keep them as input without duplicating the base prompt.
+	// Keep supplemental instructions as input without duplicating the base prompt.
 	if instruction, ok := body["instructions"].(string); ok {
 		delete(body, "instructions")
 		if strings.TrimSpace(instruction) != "" {
