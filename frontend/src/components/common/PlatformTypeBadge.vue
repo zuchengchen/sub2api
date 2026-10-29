@@ -58,36 +58,27 @@
       </span>
     </div>
     <!-- Row 3: Subscription expiration (non-free paid accounts only) -->
-    <div v-if="expiresLabel" class="text-[10px] leading-tight text-gray-400 dark:text-gray-500 pl-0.5" :title="subscriptionExpiresAt">
+    <div
+      v-if="expiresLabel"
+      data-testid="subscription-expiry"
+      class="text-[10px] leading-tight text-gray-400 dark:text-gray-500 pl-0.5"
+      :title="formatDateTime(subscriptionExpiry, undefined, locale)"
+    >
       {{ expiresLabel }}
     </div>
     <div
       v-if="subscriptionGrace"
       data-testid="subscription-grace"
-      class="pl-0.5 text-[10px] leading-tight"
-      :class="subscriptionGraceState === 'active'
-        ? 'text-amber-600 dark:text-amber-400'
-        : subscriptionGraceState === 'expired'
-          ? 'text-red-500 dark:text-red-400'
-          : 'text-gray-400 dark:text-gray-500'"
-      :title="t('admin.accounts.subscriptionGraceTooltip', {
-        days: subscriptionGrace.days,
-        time: formatDateTime(subscriptionGrace.until, undefined, locale)
-      })"
+      class="pl-0.5 text-[10px] leading-tight text-gray-400 dark:text-gray-500"
+      :title="formatDateTime(subscriptionGrace, undefined, locale)"
     >
-      {{ t('admin.accounts.subscriptionGraceUntil', { date: formatDateLocalInput(subscriptionGrace.until) }) }}
-      <span v-if="subscriptionGraceState === 'active'" class="font-medium">
-        {{ t('admin.accounts.subscriptionGraceActive') }}
-      </span>
-      <span v-else-if="subscriptionGraceState === 'expired'" class="font-medium">
-        {{ t('admin.accounts.subscriptionGraceExpired') }}
-      </span>
+      {{ t('admin.accounts.subscriptionGraceUntil', { date: formatDateLocalInput(subscriptionGrace) }) }}
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watchEffect } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccountPlatform, AccountType } from '@/types'
 import { formatDateLocalInput, formatDateTime } from '@/utils/format'
@@ -106,6 +97,7 @@ interface Props {
   planType?: string
   privacyMode?: string
   subscriptionExpiresAt?: string
+  subscriptionIsDelinquent?: boolean | null
 }
 
 const props = defineProps<Props>()
@@ -305,7 +297,13 @@ const subscriptionExpiry = computed(() => {
   if (isoDate && new Date(`${isoDate[1]}T00:00:00Z`).getUTCDate() !== Number(isoDate[1].slice(8))) {
     return null
   }
-  return date
+  if (props.platform === 'openai' && props.subscriptionIsDelinquent === true) {
+    // Keep the local time and clamp the day to the previous calendar month's end.
+    const previousMonthEnd = new Date(date.getTime())
+    previousMonthEnd.setDate(0)
+    date.setMonth(date.getMonth() - 1, Math.min(date.getDate(), previousMonthEnd.getDate()))
+  }
+  return Number.isFinite(date.getTime()) ? date : null
 })
 
 // Subscription expiration label (non-free only)
@@ -329,29 +327,9 @@ const subscriptionGrace = computed(() => {
     default:
       return null
   }
-  // Display estimate only; fixed 24-hour days avoid DST calendar shifts.
+  // Fixed 24-hour days avoid DST calendar shifts.
   const until = new Date(subscriptionExpiry.value.getTime() + days * 24 * 60 * 60 * 1000)
-  return Number.isFinite(until.getTime()) ? { days, start: subscriptionExpiry.value, until } : null
-})
-
-const subscriptionGraceState = ref<'upcoming' | 'active' | 'expired'>('upcoming')
-watchEffect((onCleanup) => {
-  const grace = subscriptionGrace.value
-  if (!grace) return
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const update = () => {
-    const now = Date.now()
-    const start = grace.start.getTime()
-    const end = grace.until.getTime()
-    subscriptionGraceState.value = now >= end ? 'expired' : now >= start ? 'active' : 'upcoming'
-    const nextBoundary = now < start ? start : end
-    if (now < nextBoundary) {
-      // Long subscriptions and Plus grace periods can exceed the timer limit.
-      timer = setTimeout(update, Math.min(nextBoundary - now, 2_147_483_647))
-    }
-  }
-  update()
-  onCleanup(() => clearTimeout(timer))
+  return Number.isFinite(until.getTime()) ? until : null
 })
 
 // Privacy badge — shows different states for OpenAI OAuth privacy setting

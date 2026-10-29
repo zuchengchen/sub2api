@@ -1333,7 +1333,10 @@ export interface Account {
   // api_key / session_key / cookie / aws_secret_access_key / aws_session_token /
   // service_account_json / service_account / private_key 不会出现，
   // 改为通过 credentials_status.has_<key> 暴露存在性。
-  credentials?: Record<string, unknown>
+  credentials?: Record<string, unknown> & {
+    subscription_expires_at?: string
+    subscription_is_delinquent?: boolean | null
+  }
   credentials_status?: Record<string, boolean>
   ollama_cloud_usage?: OllamaCloudUsageState
   opencode_go_usage?: OpenCodeGoUsageState
@@ -1458,6 +1461,7 @@ export interface Account {
   parent_plan_type?: string
   parent_privacy_mode?: string
   parent_subscription_expires_at?: string
+  parent_subscription_is_delinquent?: boolean | null
   parent_chatgpt_account_id?: string
 
   grok_model_diagnostics?: GrokModelDiagnostics

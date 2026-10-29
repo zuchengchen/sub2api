@@ -262,7 +262,8 @@
                   :auth-mode="getOpenAIAuthMode(row)"
                   :plan-type="getAccountPlanType(row)"
                   :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
-                  :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at" />
+                  :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at"
+                  :subscription-is-delinquent="row.credentials?.subscription_is_delinquent ?? row.parent_subscription_is_delinquent" />
               </div>
               <div
                 v-if="getOpenAICompactMeta(row)"
