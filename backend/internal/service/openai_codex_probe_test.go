@@ -206,23 +206,20 @@ func TestCodexProbeRetryKeepsPreparedBodyAndIdentity(t *testing.T) {
 	require.Equal(t, req.Header.Get("session-id"), retry.Header.Get("session-id"))
 }
 
-func TestCodexProbeUsesCredentialOwnerTLSWithoutChangingAdmission(t *testing.T) {
-	parent := newCodexProbeTestAccount()
-	parent.Extra["codex_tls_profile"] = "rustls-h2"
-	shadow := &Account{ID: 43, ParentAccountID: &parent.ID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
-	repo := &stubOpenAIAccountRepo{accounts: []Account{*parent, *shadow}}
+func TestCodexProbeUsesAccountTLSWithoutChangingAdmission(t *testing.T) {
+	account := newCodexProbeTestAccount()
+	account.Extra["codex_tls_profile"] = "rustls-h2"
 	upstream := &codexProbeUpstream{httpUpstreamRecorder: httpUpstreamRecorder{resp: cookieWSHTTPResponse("True")}}
-	svc := &OpenAIGatewayService{cfg: codexProbeConfig(nil), accountRepo: repo, httpUpstream: upstream}
-	req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, strings.NewReader(`{"model":"gpt-5.3-codex-spark","input":[]}`))
+	svc := &OpenAIGatewayService{cfg: codexProbeConfig(nil), httpUpstream: upstream}
+	req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, strings.NewReader(`{"model":"gpt-5.3-codex","input":[]}`))
 	require.NoError(t, err)
-	resp, err := svc.doOpenAICodexProbe(req, "", shadow)
+	resp, err := svc.doOpenAICodexProbe(req, "", account)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	require.Len(t, upstream.profiles, 1)
 	require.True(t, upstream.profiles[0].H2)
 	body := decodeCodexProbeTestBody(t, req)
 	require.False(t, gjson.GetBytes(body, "instructions").Exists())
-	require.Contains(t, string(body), codexSparkImageUnsupportedMarker)
 	require.Nil(t, req.Context().Value(accountTrafficPlanKey{}))
 }
 

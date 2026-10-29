@@ -25,7 +25,6 @@ func (r *pluginDirRepoStub) ListByPlatform(_ context.Context, platform string) (
 
 func TestListPluginAccounts_ScopeAndSchedulable(t *testing.T) {
 	future := time.Now().Add(time.Hour)
-	parentID := int64(1)
 	openai := []Account{
 		// schedulable active oauth. Credentials hold secrets (stripped); Extra is
 		// released.
@@ -40,9 +39,6 @@ func TestListPluginAccounts_ScopeAndSchedulable(t *testing.T) {
 		// active but rate-limited (429) — status stays active, returned, not schedulable
 		{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
 			RateLimitResetAt: &future},
-		// shadow oauth — excluded entirely
-		{ID: 4, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
-			ParentAccountID: &parentID},
 		// apikey type — out of (openai, oauth) scope, excluded
 		{ID: 5, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true},
 	}
@@ -56,12 +52,11 @@ func TestListPluginAccounts_ScopeAndSchedulable(t *testing.T) {
 	for _, info := range infos {
 		got[info.ID] = info
 	}
-	// 1,2,3 in scope; 4 shadow and 5 apikey excluded.
+	// 1,2,3 in scope; 5 apikey excluded.
 	require.Len(t, infos, 3)
 	assert.Contains(t, got, int64(1))
 	assert.Contains(t, got, int64(2))
 	assert.Contains(t, got, int64(3))
-	assert.NotContains(t, got, int64(4), "shadow account must be excluded")
 	assert.NotContains(t, got, int64(5), "out-of-scope account type must be excluded")
 
 	// Host-authoritative schedulable decision.
@@ -104,7 +99,7 @@ func TestAccountReadableSnapshot_DenylistTripwire(t *testing.T) {
 		"RateLimitedAt": {}, "RateLimitResetAt": {}, "OverloadUntil": {},
 		"TempUnschedulableUntil": {}, "TempUnschedulableReason": {},
 		"SessionWindowStart": {}, "SessionWindowEnd": {}, "SessionWindowStatus": {},
-		"ParentAccountID": {}, "QuotaDimension": {}, "GroupIDs": {},
+		"GroupIDs": {},
 	}
 	tp := reflect.TypeOf(Account{})
 	for i := 0; i < tp.NumField(); i++ {

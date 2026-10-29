@@ -340,7 +340,6 @@ func TestAdminServiceBulkUpdateAccounts_NormalizesOpenAISettings(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 2, result.Success)
-	require.Zero(t, result.LongContextInheritedCount)
 	require.Equal(t, 1, repo.bulkUpdateCalls)
 	require.Contains(t, repo.lastBulkUpdate.Credentials, openAIEndpointCapabilitiesCredentialKey)
 	require.Nil(t, repo.lastBulkUpdate.Credentials[openAIEndpointCapabilitiesCredentialKey])
@@ -519,63 +518,6 @@ func TestAdminServiceBulkUpdateAccounts_ForcedResponsesAcceptsChatCapabilityUpda
 
 	require.NoError(t, err)
 	require.Equal(t, 1, repo.bulkUpdateCalls)
-}
-
-func TestAdminServiceBulkUpdateAccounts_ReportsLongContextShadowInheritance(t *testing.T) {
-	parentID := int64(1)
-	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{
-		{ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
-		{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID},
-	}}
-	svc := &adminServiceImpl{accountRepo: repo}
-
-	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
-		AccountIDs: []int64{parentID, 2},
-		Extra:      map[string]any{openAILongContextBillingEnabledKey: true},
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, 1, result.LongContextInheritedCount)
-	require.Equal(t, 1, repo.bulkUpdateCalls)
-}
-
-func TestAdminServiceBulkUpdateAccounts_RequiresParentForShadowOnlyLongContextUpdate(t *testing.T) {
-	parentID := int64(10)
-	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{
-		{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID},
-		{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID},
-	}}
-	svc := &adminServiceImpl{accountRepo: repo}
-
-	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
-		AccountIDs: []int64{1, 2},
-		Extra:      map[string]any{openAILongContextBillingEnabledKey: true},
-	})
-
-	require.Nil(t, result)
-	requireApplicationErrorReason(t, err, "OPENAI_LONG_CONTEXT_PARENT_REQUIRED")
-	require.Zero(t, repo.bulkUpdateCalls)
-}
-
-func TestAdminServiceBulkUpdateAccounts_ShadowLongContextAllowsOtherUpdates(t *testing.T) {
-	parentID := int64(10)
-	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{
-		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID,
-	}}}
-	svc := &adminServiceImpl{accountRepo: repo}
-	status := StatusDisabled
-
-	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
-		AccountIDs: []int64{1},
-		Status:     status,
-		Extra:      map[string]any{openAILongContextBillingEnabledKey: false},
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, 1, result.LongContextInheritedCount)
-	require.Equal(t, 1, repo.bulkUpdateCalls)
-	require.NotNil(t, repo.lastBulkUpdate.Status)
-	require.Equal(t, status, *repo.lastBulkUpdate.Status)
 }
 
 func TestAdminServiceBulkUpdateAccounts_ValidatesFilterResolvedOpenAITargets(t *testing.T) {

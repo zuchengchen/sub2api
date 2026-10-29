@@ -1039,17 +1039,6 @@ func TestEnsureOpenAIResponsesImageGenerationTool_NoTools(t *testing.T) {
 	require.Equal(t, "png", tool["output_format"])
 }
 
-func TestEnsureOpenAIResponsesImageGenerationTool_SkipsSpark(t *testing.T) {
-	reqBody := map[string]any{
-		"model": "gpt-5.3-codex-spark",
-		"input": "draw a cat",
-	}
-
-	modified := ensureOpenAIResponsesImageGenerationTool(reqBody)
-	require.False(t, modified)
-	require.NotContains(t, reqBody, "tools")
-}
-
 func TestEnsureOpenAIResponsesImageGenerationTool_AppendsToExistingTools(t *testing.T) {
 	reqBody := map[string]any{
 		"model": "gpt-5.4",
@@ -1254,20 +1243,6 @@ func TestApplyCodexImageGenerationBridgeInstructions_AppendsBridgeOnce(t *testin
 	require.False(t, modified)
 }
 
-func TestApplyCodexImageGenerationBridgeInstructions_SkipsSpark(t *testing.T) {
-	reqBody := map[string]any{
-		"model":        "gpt-5.3-codex-spark",
-		"instructions": "existing instructions",
-		"tools": []any{
-			map[string]any{"type": "image_generation", "output_format": "png"},
-		},
-	}
-
-	modified := applyCodexImageGenerationBridgeInstructions(reqBody)
-	require.False(t, modified)
-	require.Equal(t, "existing instructions", reqBody["instructions"])
-}
-
 func TestApplyCodexImageGenerationBridgeInstructions_SkipsWithoutImageTool(t *testing.T) {
 	reqBody := map[string]any{
 		"instructions": "existing instructions",
@@ -1279,136 +1254,6 @@ func TestApplyCodexImageGenerationBridgeInstructions_SkipsWithoutImageTool(t *te
 	modified := applyCodexImageGenerationBridgeInstructions(reqBody)
 	require.False(t, modified)
 	require.Equal(t, "existing instructions", reqBody["instructions"])
-}
-
-func TestValidateCodexSparkInputRejectsInputImage(t *testing.T) {
-	reqBody := map[string]any{
-		"model": "gpt-5.3-codex-spark",
-		"input": []any{
-			map[string]any{
-				"role": "user",
-				"content": []any{
-					map[string]any{"type": "input_text", "text": "describe"},
-					map[string]any{"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="},
-				},
-			},
-		},
-	}
-
-	err := validateCodexSparkInput(reqBody, "gpt-5.3-codex-spark")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "does not support image input")
-}
-
-func TestValidateCodexSparkInputRejectsChatImageURL(t *testing.T) {
-	reqBody := map[string]any{
-		"model": "gpt-5.3-codex-spark",
-		"messages": []any{
-			map[string]any{
-				"role": "user",
-				"content": []any{
-					map[string]any{"type": "text", "text": "describe"},
-					map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,aGVsbG8="}},
-				},
-			},
-		},
-	}
-
-	err := validateCodexSparkInput(reqBody, "gpt-5.3-codex-spark")
-	require.Error(t, err)
-}
-
-func TestValidateCodexSparkInputAllowsTextOnly(t *testing.T) {
-	reqBody := map[string]any{
-		"model": "gpt-5.3-codex-spark",
-		"input": []any{
-			map[string]any{
-				"role": "user",
-				"content": []any{
-					map[string]any{"type": "input_text", "text": "hello"},
-				},
-			},
-		},
-	}
-
-	require.NoError(t, validateCodexSparkInput(reqBody, "gpt-5.3-codex-spark"))
-}
-
-func TestApplyCodexOAuthTransform_AddsSparkImageUnsupportedInstructions(t *testing.T) {
-	reqBody := map[string]any{
-		"model":        "gpt-5.3-codex-spark",
-		"instructions": "existing instructions",
-		"input":        "hello",
-	}
-
-	result := applyCodexOAuthTransform(reqBody, true, false)
-	require.True(t, result.Modified)
-
-	instructions, ok := reqBody["instructions"].(string)
-	require.True(t, ok)
-	require.Contains(t, instructions, "existing instructions")
-	require.Contains(t, instructions, codexSparkImageUnsupportedMarker)
-	require.Contains(t, instructions, "does not support image generation")
-	require.Contains(t, instructions, "switch to a non-Spark Codex model")
-	require.NotContains(t, instructions, codexImageGenerationBridgeMarker)
-}
-
-func TestApplyCodexOAuthTransform_DoesNotAddSparkImageUnsupportedForNonSpark(t *testing.T) {
-	reqBody := map[string]any{
-		"model":        "gpt-5.4",
-		"instructions": "existing instructions",
-		"input":        "hello",
-	}
-
-	applyCodexOAuthTransform(reqBody, true, false)
-	instructions, ok := reqBody["instructions"].(string)
-	require.True(t, ok)
-	require.NotContains(t, instructions, codexSparkImageUnsupportedMarker)
-}
-
-// gpt-5.3-codex-spark rejects the image_generation tool upstream (HTTP 400
-// invalid_request_error, param=tools). Codex CLI advertises that tool by default,
-// so the OAuth transform must strip it for spark while keeping the rest.
-func TestApplyCodexOAuthTransform_StripsImageGenerationToolForSpark(t *testing.T) {
-	reqBody := map[string]any{
-		"model": "gpt-5.3-codex-spark",
-		"input": "hello",
-		"tools": []any{
-			map[string]any{"type": "function", "name": "shell"},
-			map[string]any{"type": "image_generation", "output_format": "png"},
-		},
-	}
-
-	result := applyCodexOAuthTransform(reqBody, true, false)
-	require.True(t, result.Modified)
-	require.False(t, hasOpenAIImageGenerationTool(reqBody))
-
-	tools, ok := reqBody["tools"].([]any)
-	require.True(t, ok)
-	require.Len(t, tools, 1)
-	first, ok := tools[0].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "function", first["type"])
-	require.Equal(t, "shell", first["name"])
-}
-
-// Spark reasoning-effort aliases (e.g. -low/-high) normalize to gpt-5.3-codex-spark,
-// so they must be stripped too.
-func TestApplyCodexOAuthTransform_StripsImageGenerationToolForSparkAlias(t *testing.T) {
-	reqBody := map[string]any{
-		"model": "gpt-5.3-codex-spark-high",
-		"input": "hello",
-		"tools": []any{
-			map[string]any{"type": "image_generation", "output_format": "png"},
-		},
-	}
-
-	result := applyCodexOAuthTransform(reqBody, true, false)
-	require.True(t, result.Modified)
-	require.False(t, hasOpenAIImageGenerationTool(reqBody))
-	// tools became empty after stripping the only entry; the key is dropped.
-	_, hasTools := reqBody["tools"]
-	require.False(t, hasTools)
 }
 
 func TestStripOpenAIImageGenerationTools_StripsNamespaceFormats(t *testing.T) {
@@ -1614,39 +1459,33 @@ func TestApplyCodexOAuthTransform_EmptyInput(t *testing.T) {
 
 func TestNormalizeCodexModel_Gpt53(t *testing.T) {
 	cases := map[string]string{
-		"gpt-6-astra":               "gpt-6-astra",
-		"openai/gpt-6-astra":        "gpt-6-astra",
-		"gpt-6":                     "gpt-6-astra",
-		"openai/gpt-6":              "gpt-6-astra",
-		"gpt-5.4":                   "gpt-5.4",
-		"gpt5.5":                    "gpt-5.5",
-		"openai/gpt5.5":             "gpt-5.5",
-		"gpt-5.5-pro":               "gpt-5.5-pro",
-		"gpt5.5-pro":                "gpt-5.5-pro",
-		"openai/gpt5.5-pro":         "gpt-5.5-pro",
-		"gpt-5.5-pro-high":          "gpt-5.5-pro",
-		"codex-auto-review":         "codex-auto-review",
-		"gpt5.4":                    "gpt-5.4",
-		"gpt-5.4-high":              "gpt-5.4",
-		"gpt-5.4-chat-latest":       "gpt-5.4",
-		"gpt 5.4":                   "gpt-5.4",
-		"gpt-5.4-mini":              "gpt-5.4-mini",
-		"gpt5.4-mini":               "gpt-5.4-mini",
-		"gpt5.4mini":                "gpt-5.4-mini",
-		"gpt 5.4 mini":              "gpt-5.4-mini",
-		"gpt-5.3":                   "gpt-5.3-codex",
-		"gpt5.3":                    "gpt-5.3-codex",
-		"gpt-5.3-codex":             "gpt-5.3-codex",
-		"gpt5.3-codex":              "gpt-5.3-codex",
-		"gpt5.3codex":               "gpt-5.3-codex",
-		"gpt-5.3-codex-xhigh":       "gpt-5.3-codex",
-		"gpt-5.3-codex-spark":       "gpt-5.3-codex-spark",
-		"gpt5.3-codex-spark":        "gpt-5.3-codex-spark",
-		"gpt5.3codexspark":          "gpt-5.3-codex-spark",
-		"gpt 5.3 codex spark":       "gpt-5.3-codex-spark",
-		"gpt-5.3-codex-spark-high":  "gpt-5.3-codex-spark",
-		"gpt-5.3-codex-spark-xhigh": "gpt-5.3-codex-spark",
-		"gpt 5.3 codex":             "gpt-5.3-codex",
+		"gpt-6-astra":         "gpt-6-astra",
+		"openai/gpt-6-astra":  "gpt-6-astra",
+		"gpt-6":               "gpt-6-astra",
+		"openai/gpt-6":        "gpt-6-astra",
+		"gpt-5.4":             "gpt-5.4",
+		"gpt5.5":              "gpt-5.5",
+		"openai/gpt5.5":       "gpt-5.5",
+		"gpt-5.5-pro":         "gpt-5.5-pro",
+		"gpt5.5-pro":          "gpt-5.5-pro",
+		"openai/gpt5.5-pro":   "gpt-5.5-pro",
+		"gpt-5.5-pro-high":    "gpt-5.5-pro",
+		"codex-auto-review":   "codex-auto-review",
+		"gpt5.4":              "gpt-5.4",
+		"gpt-5.4-high":        "gpt-5.4",
+		"gpt-5.4-chat-latest": "gpt-5.4",
+		"gpt 5.4":             "gpt-5.4",
+		"gpt-5.4-mini":        "gpt-5.4-mini",
+		"gpt5.4-mini":         "gpt-5.4-mini",
+		"gpt5.4mini":          "gpt-5.4-mini",
+		"gpt 5.4 mini":        "gpt-5.4-mini",
+		"gpt-5.3":             "gpt-5.3-codex",
+		"gpt5.3":              "gpt-5.3-codex",
+		"gpt-5.3-codex":       "gpt-5.3-codex",
+		"gpt5.3-codex":        "gpt-5.3-codex",
+		"gpt5.3codex":         "gpt-5.3-codex",
+		"gpt-5.3-codex-xhigh": "gpt-5.3-codex",
+		"gpt 5.3 codex":       "gpt-5.3-codex",
 	}
 
 	for input, expected := range cases {
@@ -1674,16 +1513,16 @@ func TestNormalizeCodexModel_RemovedModelsFallbackToSupportedTargets(t *testing.
 	}
 }
 
-func TestApplyCodexOAuthTransform_PreservesBareSparkModel(t *testing.T) {
+func TestApplyCodexOAuthTransform_PreservesBareCodexModel(t *testing.T) {
 	reqBody := map[string]any{
-		"model": "gpt-5.3-codex-spark",
+		"model": "gpt-5.3-codex",
 		"input": []any{},
 	}
 
 	result := applyCodexOAuthTransform(reqBody, false, false)
 
-	require.Equal(t, "gpt-5.3-codex-spark", reqBody["model"])
-	require.Equal(t, "gpt-5.3-codex-spark", result.NormalizedModel)
+	require.Equal(t, "gpt-5.3-codex", reqBody["model"])
+	require.Equal(t, "gpt-5.3-codex", result.NormalizedModel)
 	store, ok := reqBody["store"].(bool)
 	require.True(t, ok)
 	require.False(t, store)
@@ -1691,14 +1530,14 @@ func TestApplyCodexOAuthTransform_PreservesBareSparkModel(t *testing.T) {
 
 func TestApplyCodexOAuthTransform_TrimmedModelWithoutPolicyRewrite(t *testing.T) {
 	reqBody := map[string]any{
-		"model": "  gpt-5.3-codex-spark  ",
+		"model": "  gpt-5.3-codex  ",
 		"input": []any{},
 	}
 
 	result := applyCodexOAuthTransform(reqBody, false, false)
 
-	require.Equal(t, "gpt-5.3-codex-spark", reqBody["model"])
-	require.Equal(t, "gpt-5.3-codex-spark", result.NormalizedModel)
+	require.Equal(t, "gpt-5.3-codex", reqBody["model"])
+	require.Equal(t, "gpt-5.3-codex", result.NormalizedModel)
 	require.True(t, result.Modified)
 }
 

@@ -48,11 +48,6 @@ func TestAccount_IsOpenAICreditsGuardActive(t *testing.T) {
 	apiKey := newCreditsGuardTestAccount(5, nil)
 	apiKey.Type = AccountTypeAPIKey
 	require.False(t, apiKey.IsOpenAICreditsGuardActive())
-
-	parentID := int64(1)
-	shadow := newCreditsGuardTestAccount(6, nil)
-	shadow.ParentAccountID = &parentID
-	require.False(t, shadow.IsOpenAICreditsGuardActive())
 }
 
 func TestOpenAICodexExhaustedResetAt(t *testing.T) {

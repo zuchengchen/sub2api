@@ -103,7 +103,7 @@ type AdminService interface {
 	// ForceOpenAIPrivacy 强制重新设置 OpenAI OAuth 账号隐私，无论当前状态。
 	ForceOpenAIPrivacy(ctx context.Context, account *Account) string
 	SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error)
-	// SetOpenAICreditsEnabled 切换 OpenAI OAuth/SetupToken 母账号"额度用尽后消耗点数"开关。
+	// SetOpenAICreditsEnabled 切换 OpenAI OAuth/SetupToken 账号"额度用尽后消耗点数"开关。
 	// 开启时解除当前限流，让账号立即恢复调度并由上游消耗点数。
 	SetOpenAICreditsEnabled(ctx context.Context, id int64, enabled bool) (*Account, error)
 	BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error)
@@ -111,9 +111,6 @@ type AdminService interface {
 	// RevertAccountProxyFallback 将账号的 proxy_id 切回 proxy_fallback_origin_id，并清空 origin 字段。
 	// 若账号不存在返回 ErrAccountNotFound；若账号存在但不在 fallback 状态，返回 ErrAccountNotInFallback。
 	RevertAccountProxyFallback(ctx context.Context, id int64) error
-	// CreateShadow 为指定 OpenAI OAuth 母账号创建 spark 维度影子账号（一母一影）。
-	// 影子账号不持凭据（Credentials 恒为空），透传母账号凭据；继承母账号的 ProxyID。
-	CreateShadow(ctx context.Context, parentID int64, opts ShadowOptions) (*Account, error)
 
 	// Proxy management
 	ListProxies(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]Proxy, int64, error)
@@ -422,15 +419,6 @@ type CreateAccountInput struct {
 	SkipMixedChannelCheck bool
 }
 
-// ShadowOptions is the input for CreateShadow.
-// The shadow holds no credentials — the scheduler transparently delegates to the parent account's tokens.
-type ShadowOptions struct {
-	Name        string
-	Priority    int
-	Concurrency int
-	GroupIDs    []int64
-}
-
 type UpdateAccountInput struct {
 	ProxyMode             string // 受限写入在验权后选择代理。
 	Name                  string
@@ -520,12 +508,11 @@ type UserGroupRPMStatus struct {
 
 // BulkUpdateAccountsResult is the aggregated response for bulk updates.
 type BulkUpdateAccountsResult struct {
-	Success                   int                       `json:"success"`
-	Failed                    int                       `json:"failed"`
-	SuccessIDs                []int64                   `json:"success_ids"`
-	FailedIDs                 []int64                   `json:"failed_ids"`
-	Results                   []BulkUpdateAccountResult `json:"results"`
-	LongContextInheritedCount int                       `json:"long_context_inherited_count,omitempty"`
+	Success    int                       `json:"success"`
+	Failed     int                       `json:"failed"`
+	SuccessIDs []int64                   `json:"success_ids"`
+	FailedIDs  []int64                   `json:"failed_ids"`
+	Results    []BulkUpdateAccountResult `json:"results"`
 }
 
 type CreateProxyInput struct {

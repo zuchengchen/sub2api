@@ -500,21 +500,6 @@ func TestPricingService_MergesFallbackOnlyModels(t *testing.T) {
 	require.InDelta(t, 0.034, merged["gemini-3.1-flash-lite-image"].OutputCostPerImage, 1e-12)
 }
 
-func TestGetModelPricing_Gpt53CodexSparkUsesGpt51CodexPricing(t *testing.T) {
-	sparkPricing := &LiteLLMModelPricing{InputCostPerToken: 1}
-	gpt53Pricing := &LiteLLMModelPricing{InputCostPerToken: 9}
-
-	svc := &PricingService{
-		pricingData: map[string]*LiteLLMModelPricing{
-			"gpt-5.1-codex": sparkPricing,
-			"gpt-5.3":       gpt53Pricing,
-		},
-	}
-
-	got := svc.GetModelPricing("gpt-5.3-codex-spark")
-	require.Same(t, sparkPricing, got)
-}
-
 func TestGetModelPricing_Gpt53CodexFallbackStillUsesGpt52Codex(t *testing.T) {
 	gpt52CodexPricing := &LiteLLMModelPricing{InputCostPerToken: 2}
 

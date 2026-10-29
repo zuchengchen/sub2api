@@ -59,11 +59,9 @@ func TestAdminService_SetOpenAICreditsEnabled_DisableKeepsRateLimit(t *testing.T
 }
 
 func TestAdminService_SetOpenAICreditsEnabled_RejectsUnsupportedAccounts(t *testing.T) {
-	parentID := int64(1)
 	for name, account := range map[string]*Account{
 		"api key":   {ID: 43, Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
 		"anthropic": {ID: 44, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
-		"shadow":    {ID: 45, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID},
 	} {
 		t.Run(name, func(t *testing.T) {
 			repo := newOpenAICreditsRepo(account)

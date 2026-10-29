@@ -3781,7 +3781,7 @@ func TestBuildCodexModelsManifestStripsGPTIdentityForNonGPTModels(t *testing.T) 
 func TestBuildCodexModelsManifestKeepsGPTIdentityForGPTModels(t *testing.T) {
 	t.Parallel()
 
-	for _, model := range []string{"gpt-5.5", "gpt-6-astra", "gpt-5.2", "gpt-5.3-codex-spark"} {
+	for _, model := range []string{"gpt-5.5", "gpt-6-astra", "gpt-5.2", "gpt-5.3-codex"} {
 		require.Equal(t, openai.CodexBaseInstructionsForModel(model), codexInstructionsTemplateForModel(model), model)
 	}
 }

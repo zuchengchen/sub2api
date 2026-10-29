@@ -127,12 +127,6 @@ describe('OpenAIQuotaResetCell — 点数开关', () => {
     expect(toggle(wrapper).attributes('aria-checked')).toBe('false')
     wrapper.unmount()
   })
-
-  it('hides the toggle on spark shadow accounts', () => {
-    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({ parent_account_id: 9 }) } })
-    expect(wrapper.find('[data-testid="openai-credits-enabled-toggle"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
 })
 
 describe('OpenAIQuotaResetCell — Codex 点数', () => {
@@ -227,30 +221,19 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
   })
 })
 
-describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
-  it('影子账号(parent_account_id 非空)的 reset 按钮被禁用且提示在母账号重置', () => {
-    const account = makeAccount({ parent_account_id: 100 })
+describe('OpenAIQuotaResetCell — 重置次数', () => {
+  it('未查询时禁用原因是「需先查询」', () => {
+    const account = makeAccount({})
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
 
     const btn = resetButton(wrapper)
     expect(btn.attributes('disabled')).toBeDefined()
-    expect(btn.attributes('title')).toBe('admin.accounts.openaiQuotaReset.resetTooltipShadow')
-    wrapper.unmount()
-  })
-
-  it('普通账号(无 parent_account_id)未查询时禁用原因是「需先查询」而非影子提示', () => {
-    const account = makeAccount({ parent_account_id: null })
-    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
-
-    const btn = resetButton(wrapper)
-    // 未加载数据时本就 disabled(无次数),但提示语必须是 needQuery,不得是 shadow 提示。
     expect(btn.attributes('title')).toBe('admin.accounts.openaiQuotaReset.resetTooltipNeedQuery')
     wrapper.unmount()
   })
 
   it('从账号 extra 缓存恢复重置卡次数和到期时间', () => {
     const account = makeAccount({
-      parent_account_id: null,
       extra: {
         codex_reset_credit_snapshot: {
           available_count: 2,
@@ -273,7 +256,6 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
 
   it('缓存中的重置卡全部过期时视为未知,不点亮重置入口', () => {
     const account = makeAccount({
-      parent_account_id: null,
       extra: {
         codex_reset_credit_snapshot: {
           available_count: 1,
@@ -292,7 +274,6 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
 
   it('缓存次数向未过期的明细数量收敛', () => {
     const account = makeAccount({
-      parent_account_id: null,
       extra: {
         codex_reset_credit_snapshot: {
           available_count: 3,
@@ -325,7 +306,7 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
       cache_persisted: true,
     })
 
-    const account = makeAccount({ parent_account_id: null })
+    const account = makeAccount({})
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
 
     await wrapper.findAll('button')[0].trigger('click')
@@ -360,7 +341,7 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
       cache_persisted: true,
     })
 
-    const account = makeAccount({ parent_account_id: null })
+    const account = makeAccount({})
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
 
     await wrapper.findAll('button')[0].trigger('click')
@@ -381,7 +362,7 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
       cache_persisted: false,
     })
 
-    const account = makeAccount({ parent_account_id: null })
+    const account = makeAccount({})
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
 
     await wrapper.findAll('button')[0].trigger('click')
@@ -395,7 +376,6 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
 
   it('重置成功后直接使用响应中的最新缓存并回传恢复后的账号', async () => {
     const recoveredAccount = makeAccount({
-      parent_account_id: null,
       status: 'active',
       error_message: null,
     })
@@ -415,7 +395,6 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
       account: recoveredAccount,
     })
     const account = makeAccount({
-      parent_account_id: null,
       extra: {
         codex_reset_credit_snapshot: {
           available_count: 1,
@@ -443,7 +422,6 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
   // 否则列表会继续显示已经不存在的限流状态。
   it('缓存刷新失败时仍回传恢复后的账号并把次数标为未知', async () => {
     const recoveredAccount = makeAccount({
-      parent_account_id: null,
       status: 'active',
       rate_limit_reset_at: null,
     })
@@ -456,7 +434,6 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
       account: recoveredAccount,
     })
     const account = makeAccount({
-      parent_account_id: null,
       extra: {
         codex_reset_credit_snapshot: {
           available_count: 1,
@@ -489,7 +466,6 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
       warning_code: 'account_state_recovery_failed',
     })
     const account = makeAccount({
-      parent_account_id: null,
       extra: {
         codex_reset_credit_snapshot: {
           available_count: 1,
@@ -510,4 +486,3 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
     wrapper.unmount()
   })
 })
-

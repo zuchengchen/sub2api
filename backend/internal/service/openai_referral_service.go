@@ -57,7 +57,7 @@ func referralCapacity(e *OpenAIReferralEligibility) *int {
 	return &count
 }
 
-func (s *OpenAIQuotaService) referralAccount(ctx context.Context, id int64, sending bool) (*Account, error) {
+func (s *OpenAIQuotaService) referralAccount(ctx context.Context, id int64) (*Account, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, infraerrors.New(http.StatusServiceUnavailable, "OPENAI_REFERRAL_NOT_CONFIGURED", "referral service is unavailable")
 	}
@@ -70,12 +70,6 @@ func (s *OpenAIQuotaService) referralAccount(ctx context.Context, id int64, send
 	}
 	if a.Platform != PlatformOpenAI || a.Type != AccountTypeOAuth {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_REFERRAL_INVALID_ACCOUNT", "referrals require an OpenAI OAuth account")
-	}
-	if a.IsShadow() {
-		if sending {
-			return nil, infraerrors.New(http.StatusConflict, "OPENAI_REFERRAL_SHADOW_ACCOUNT", "send invitations from the parent account")
-		}
-		return resolveCredentialAccount(ctx, s.accountRepo, a)
 	}
 	return a, nil
 }
@@ -108,7 +102,7 @@ func (s *OpenAIQuotaService) referralCall(ctx context.Context, id int64, program
 }
 
 func (s *OpenAIQuotaService) QueryReferralEligibility(ctx context.Context, id int64) (*OpenAIReferralEligibility, error) {
-	account, err := s.referralAccount(ctx, id, false)
+	account, err := s.referralAccount(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +144,7 @@ func (s *OpenAIQuotaService) SendReferralInvite(ctx context.Context, id int64, i
 	if err != nil || address.Address != email || len(email) > 254 || strings.ContainsAny(email, "\r\n") {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_REFERRAL_INVALID_EMAIL", "enter one valid email address")
 	}
-	account, err := s.referralAccount(ctx, id, true)
+	account, err := s.referralAccount(ctx, id)
 	if err != nil {
 		return nil, err
 	}

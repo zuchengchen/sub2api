@@ -136,9 +136,6 @@ func (r *scopedAdminWriteTestRepo) GetByID(ctx context.Context, id int64) (*Acco
 	}
 	return a, rows.Err()
 }
-func (r *scopedAdminWriteTestRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
-	return nil, nil
-}
 func (r *scopedAdminWriteTestRepo) Update(ctx context.Context, a *Account) error {
 	credentials, err := json.Marshal(a.Credentials)
 	if err != nil {

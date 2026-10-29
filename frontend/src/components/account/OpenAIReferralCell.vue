@@ -14,8 +14,7 @@
       type="button"
       data-testid="referral-open"
       class="rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
-      :disabled="sending || isShadow"
-      :title="isShadow ? t('admin.accounts.openaiReferral.shadowHint') : undefined"
+      :disabled="sending"
       @click="openDialog"
     >
       {{ t('admin.accounts.openaiReferral.invite') }}
@@ -109,7 +108,6 @@ const error = ref('')
 const warning = ref('')
 const sentEmail = ref('')
 let generation = 0
-const isShadow = computed(() => props.account.parent_account_id != null)
 const formID = computed(() => `codex-referral-form-${props.account.id}`)
 const emailID = computed(() => `codex-referral-email-${props.account.id}`)
 const count = computed(() => {
@@ -124,7 +122,7 @@ const countTitle = computed(() => {
 const programLabel = computed(() => t(eligibility.value?.program_id === 'codex_referral_workspace'
   ? 'admin.accounts.openaiReferral.workspace' : 'admin.accounts.openaiReferral.personal'))
 const needsConsent = computed(() => eligibility.value?.requires_explicit_confirmation !== false)
-const canSend = computed(() => fresh.value && !isShadow.value && !loading.value && !sending.value
+const canSend = computed(() => fresh.value && !loading.value && !sending.value
   && eligibility.value?.should_show === true && count.value !== null && count.value > 0
   && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim()) && (!needsConsent.value || confirmed.value))
 
@@ -167,7 +165,7 @@ async function refresh() {
 }
 
 function openDialog() {
-  if (isShadow.value || sending.value) return
+  if (sending.value) return
   show.value = true
   email.value = ''
   confirmed.value = false

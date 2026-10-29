@@ -87,28 +87,23 @@ func TestOpenAIReferralSend(t *testing.T) {
 func TestOpenAIReferralSendGuards(t *testing.T) {
 	for _, tc := range []struct {
 		name, email, body, reason string
-		confirmed, shadow         bool
+		confirmed                 bool
 	}{
-		{"invalid email", "bad-email", `{}`, "OPENAI_REFERRAL_INVALID_EMAIL", true, false},
-		{"multiple emails", "a@example.com,b@example.com", `{}`, "OPENAI_REFERRAL_INVALID_EMAIL", true, false},
-		{"display name", "User <a@example.com>", `{}`, "OPENAI_REFERRAL_INVALID_EMAIL", true, false},
-		{"header injection", "a@example.com\r\nBcc: b@example.com", `{}`, "OPENAI_REFERRAL_INVALID_EMAIL", true, false},
-		{"no consent", "a@example.com", `{"should_show":true,"remaining_send_capacity":2}`, "OPENAI_REFERRAL_CONFIRMATION_REQUIRED", false, false},
-		{"ineligible", "a@example.com", `{"should_show":false,"remaining_send_capacity":2}`, "OPENAI_REFERRAL_UNAVAILABLE", true, false},
-		{"exhausted", "a@example.com", `{"should_show":true,"remaining_send_capacity":0}`, "OPENAI_REFERRAL_UNAVAILABLE", true, false},
-		{"unknown capacity", "a@example.com", `{"should_show":true}`, "OPENAI_REFERRAL_UNAVAILABLE", true, false},
-		{"reward exhausted", "a@example.com", `{"should_show":true,"remaining_send_capacity":3,"offer_id":"credits_250","remaining_reward_capacity":0}`, "OPENAI_REFERRAL_UNAVAILABLE", true, false},
-		{"unknown reward capacity", "a@example.com", `{"should_show":true,"remaining_send_capacity":3,"grants":[{}]}`, "OPENAI_REFERRAL_UNAVAILABLE", true, false},
-		{"shadow", "a@example.com", `{}`, "OPENAI_REFERRAL_SHADOW_ACCOUNT", true, true},
+		{"invalid email", "bad-email", `{}`, "OPENAI_REFERRAL_INVALID_EMAIL", true},
+		{"multiple emails", "a@example.com,b@example.com", `{}`, "OPENAI_REFERRAL_INVALID_EMAIL", true},
+		{"display name", "User <a@example.com>", `{}`, "OPENAI_REFERRAL_INVALID_EMAIL", true},
+		{"header injection", "a@example.com\r\nBcc: b@example.com", `{}`, "OPENAI_REFERRAL_INVALID_EMAIL", true},
+		{"no consent", "a@example.com", `{"should_show":true,"remaining_send_capacity":2}`, "OPENAI_REFERRAL_CONFIRMATION_REQUIRED", false},
+		{"ineligible", "a@example.com", `{"should_show":false,"remaining_send_capacity":2}`, "OPENAI_REFERRAL_UNAVAILABLE", true},
+		{"exhausted", "a@example.com", `{"should_show":true,"remaining_send_capacity":0}`, "OPENAI_REFERRAL_UNAVAILABLE", true},
+		{"unknown capacity", "a@example.com", `{"should_show":true}`, "OPENAI_REFERRAL_UNAVAILABLE", true},
+		{"reward exhausted", "a@example.com", `{"should_show":true,"remaining_send_capacity":3,"offer_id":"credits_250","remaining_reward_capacity":0}`, "OPENAI_REFERRAL_UNAVAILABLE", true},
+		{"unknown reward capacity", "a@example.com", `{"should_show":true,"remaining_send_capacity":3,"grants":[{}]}`, "OPENAI_REFERRAL_UNAVAILABLE", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &referralClientStub{}
 			require.NoError(t, json.Unmarshal([]byte(tc.body), &client.eligibility))
-			svc, repo := referralTestService(t, "plus", client)
-			if tc.shadow {
-				parentID := int64(200)
-				repo.accounts[100].ParentAccountID = &parentID
-			}
+			svc, _ := referralTestService(t, "plus", client)
 			_, err := svc.SendReferralInvite(context.Background(), 100, OpenAIReferralSendRequest{Email: tc.email, ProgramID: openAIReferralConsumer, Confirmed: tc.confirmed})
 			require.Equal(t, tc.reason, infraerrors.Reason(err))
 			require.Empty(t, client.emails)

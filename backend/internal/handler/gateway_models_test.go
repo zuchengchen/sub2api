@@ -304,15 +304,13 @@ func TestGatewayCodexModels_CompositeUsesCompleteEffectiveModelList(t *testing.T
 func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const groupID int64 = 28
-	const sparkModel = "gpt-5.3-codex-spark"
+	const mappedModel = "gpt-5.3-codex"
 	const alias = "team-coder"
-	parentID := int64(1)
 	accounts := []service.Account{
-		{ID: parentID, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth},
+		{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth},
 		{
 			ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
-			ParentAccountID: &parentID, QuotaDimension: "spark",
-			Credentials: map[string]any{"model_mapping": map[string]any{sparkModel: sparkModel}},
+			Credentials: map[string]any{"model_mapping": map[string]any{mappedModel: mappedModel}},
 		},
 		{
 			ID: 3, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
@@ -332,14 +330,14 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 		want     []string
 	}{
 		{
-			name:     "unmapped parent and Spark shadow retain defaults and aliases",
+			name:     "unmapped and mapped accounts retain defaults and aliases",
 			accounts: accounts,
-			want:     append(append([]string{}, subscriptionDefaults...), alias),
+			want:     append(append([]string{}, subscriptionDefaults...), mappedModel, alias),
 		},
 		{
 			name:     "unmapped API key account also contributes defaults",
 			accounts: append([]service.Account{{ID: 4, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey}}, accounts[1:]...),
-			want:     append(service.FilterUserAccessibleModels(nil, openai.DefaultModelIDs()), alias),
+			want:     append(service.FilterUserAccessibleModels(nil, openai.DefaultModelIDs()), mappedModel, alias),
 		},
 		{
 			name:     "unmapped accounts alone retain default response shape",
@@ -349,8 +347,8 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 		{
 			name:     "custom list can select defaults and aliases",
 			accounts: accounts,
-			config:   service.GroupModelAllowlist{Enabled: true, Models: []string{alias, "gpt-5.6-sol", sparkModel, "unknown-model"}},
-			want:     []string{alias, "gpt-5.6-sol", sparkModel},
+			config:   service.GroupModelAllowlist{Enabled: true, Models: []string{alias, "gpt-5.6-sol", mappedModel, "unknown-model"}},
+			want:     []string{alias, "gpt-5.6-sol", mappedModel},
 		},
 		{
 			name:     "unavailable custom selection remains empty",
@@ -361,7 +359,7 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 		{
 			name:     "mapped accounts alone do not gain defaults",
 			accounts: accounts[1:],
-			want:     []string{sparkModel, alias},
+			want:     []string{mappedModel, alias},
 		},
 		{
 			// A passthrough account with a stale mapping behaves like an unmapped
@@ -373,12 +371,12 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 				Credentials: map[string]any{"model_mapping": map[string]any{"stale-model": "stale-model"}},
 				Extra:       map[string]any{"openai_passthrough": true},
 			}}, accounts[1:]...),
-			want: append(append([]string{}, subscriptionDefaults...), alias),
+			want: append(append([]string{}, subscriptionDefaults...), mappedModel, alias),
 		},
 		{
 			name:     "unmapped accounts from another platform do not add defaults",
 			accounts: append([]service.Account{{ID: 4, Platform: service.PlatformAnthropic}}, accounts[1:]...),
-			want:     []string{sparkModel, alias},
+			want:     []string{mappedModel, alias},
 		},
 	}
 	for _, tt := range tests {

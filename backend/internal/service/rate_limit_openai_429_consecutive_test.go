@@ -123,17 +123,6 @@ func TestHandleUpstreamError_OpenAI429DisableCoolingClearsAndSkips(t *testing.T)
 	require.Equal(t, 0, repo.rateLimitCalls)
 }
 
-func TestHandleUpstreamError_OpenAI429ShadowSkipped(t *testing.T) {
-	resetOpenAI429TestState(t)
-	repo := &consecutive429Repo{}
-	svc := NewRateLimitService(repo, nil, nil, nil)
-	parent := int64(1)
-	shadow := &Account{ID: 9005, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent}
-	svc.HandleUpstreamError(context.Background(), shadow, http.StatusTooManyRequests, openai429Headers(), nil)
-	require.Equal(t, 0, openAI429Count(shadow.ID))
-	require.Equal(t, 0, repo.rateLimitCalls)
-}
-
 func TestNextOpenAI429CooldownCapsAtThreshold(t *testing.T) {
 	resetOpenAI429TestState(t)
 	for i := 1; i <= 35; i++ {

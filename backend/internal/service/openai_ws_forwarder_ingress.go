@@ -83,6 +83,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	if err := validateRetiredOpenAIRequestModel(account, gjson.GetBytes(firstClientMessage, "model").String(), false, ""); err != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+	}
 	// A handler may reuse the same gin context across account failover attempts.
 	// Never let an OAuth attempt's response aliases leak into the next account.
 	setCodexToolNameReverse(c, nil)
@@ -408,6 +411,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		requestModel := originalModel
+		if err := validateRetiredOpenAIRequestModel(account, originalModel, false, ""); err != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+		}
 		if hooks != nil && hooks.MapRequestModel != nil {
 			mappedModel, mapErr := hooks.MapRequestModel(turn, originalModel)
 			if mapErr != nil {
@@ -416,6 +422,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if mappedModel = strings.TrimSpace(mappedModel); mappedModel != "" {
 				requestModel = mappedModel
 			}
+		}
+		if err := validateRetiredOpenAIRequestModel(account, requestModel, false, account.GetMappedModel(requestModel)); err != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
 		}
 		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestModel))
 		if cookieWS && !s.openAICookieWSEnabledForModel(account, upstreamModel) {
@@ -439,12 +448,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				normalized = stripped
 				logOpenAIWSModeInfo("ingress_ws_codex_image_tool_stripped_by_policy account_id=%d", account.ID)
 			}
-		}
-		if stripped, changed, stripErr := stripCodexSparkImageGenerationToolFromRawPayload(normalized, upstreamModel); stripErr != nil {
-			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", stripErr)
-		} else if changed {
-			normalized = stripped
-			logOpenAIWSModeInfo("ingress_ws_codex_spark_image_tool_stripped account_id=%d", account.ID)
 		}
 		imageIntent := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, originalModel, normalized, account.Platform)
 		if imageIntent && !imageGenerationAllowed {

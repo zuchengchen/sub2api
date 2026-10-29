@@ -185,12 +185,6 @@
             />
           </button>
         </div>
-        <p
-          class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
-          data-testid="bulk-edit-openai-long-context-shadow-hint"
-        >
-          {{ t('admin.accounts.bulkEdit.longContextShadowHint') }}
-        </p>
       </div>
 
       <!-- Base URL (API Key only) -->
@@ -2318,22 +2312,11 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
       : await adminAPI.accounts.bulkUpdate(props.accountIds, updates)
     const success = res.success || 0
     const failed = res.failed || 0
-    const inherited = res.long_context_inherited_count || 0
 
     if (success > 0 && failed === 0) {
-      if (inherited > 0) {
-        appStore.showSuccess(t('admin.accounts.bulkEdit.successWithInherited', {
-          count: success,
-          inherited
-        }))
-      } else {
-        appStore.showSuccess(t('admin.accounts.bulkEdit.success', { count: success }))
-      }
+      appStore.showSuccess(t('admin.accounts.bulkEdit.success', { count: success }))
     } else if (success > 0) {
-      const key = inherited > 0
-        ? 'admin.accounts.bulkEdit.partialSuccessWithInherited'
-        : 'admin.accounts.bulkEdit.partialSuccess'
-      appStore.showError(t(key, { success, failed, inherited }))
+      appStore.showError(t('admin.accounts.bulkEdit.partialSuccess', { success, failed }))
     } else {
       appStore.showError(t('admin.accounts.bulkEdit.failed'))
     }
@@ -2353,8 +2336,6 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
       appStore.showError(t('admin.accounts.bulkEdit.rateSyncConflict', {
         count: error.metadata?.count ?? 1
       }))
-    } else if (error.reason === 'OPENAI_LONG_CONTEXT_PARENT_REQUIRED') {
-      appStore.showError(t('admin.accounts.bulkEdit.longContextParentRequired'))
     } else {
       appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
       console.error('Error bulk updating accounts:', error)

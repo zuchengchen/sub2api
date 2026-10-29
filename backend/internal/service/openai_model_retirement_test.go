@@ -5,13 +5,238 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/gin-gonic/gin"
+	gocache "github.com/patrickmn/go-cache"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestSparkRetirementAliasesAndMappings(t *testing.T) {
+	aliases := []string{
+		"gpt-5.3-codex-spark", "openai/GPT5.3CodexSpark", "GPT_5.3_CODEX_SPARK",
+		"gpt 5.3 codex spark", "gpt-5.3-codexspark-high", "gpt5.3codexspark-xhigh-openai-compact",
+		"gpt-5.3-codex-spark-2026-02-12", "gpt-5.3-codex-spark-openai-compact",
+	}
+	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
+		for _, passthrough := range []bool{false, true} {
+			account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: map[string]any{"openai_passthrough": passthrough}}
+			for _, model := range aliases {
+				require.True(t, openai.IsRetiredSparkModel(model), model)
+				require.False(t, account.IsModelSupported(model), "%s passthrough=%v model=%s", typ, passthrough, model)
+				require.True(t, openai.IsRetiredSparkModel(normalizeOpenAIModelForUpstream(account, model)), "normalization must retain retired identity: %s", model)
+				for _, mapping := range []map[string]any{{model: "gpt-5.4"}, {"legacy*": model}} {
+					account.Credentials = map[string]any{"model_mapping": mapping}
+					require.False(t, account.IsModelSupported(model), "mapping source must not revive Spark")
+					if !passthrough {
+						require.False(t, account.IsModelSupported("legacy-client"), "mapped target must not revive Spark")
+					}
+				}
+				account.Credentials = map[string]any{"compact_model_mapping": map[string]any{"custom*": model}}
+				require.False(t, supportsOpenAIRequestModel(account, "custom-model", true))
+				account.Credentials = nil
+			}
+			for _, model := range []string{"custom-model", "muse-spark", "iFlytek/spark", "gpt-5.3-codex", "gpt-5.3-codex-sparkle"} {
+				require.False(t, openai.IsRetiredSparkModel(model), model)
+				require.True(t, account.IsModelSupported(model), model)
+			}
+		}
+	}
+}
+
+func TestSparkRetirementRejectsBeforeUpstreamOrFallback(t *testing.T) {
+	for _, typ := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		for _, passthrough := range []bool{false, true} {
+			for _, endpoint := range []string{"responses", "chat", "messages", "compact", "probe"} {
+				t.Run(typ+"/"+endpoint+"/"+map[bool]string{true: "passthrough", false: "normal"}[passthrough], func(t *testing.T) {
+					var calls atomic.Int32
+					upstream := &codexModelsHTTPUpstreamStub{do: func(*http.Request, string, int64, int) (*http.Response, error) {
+						calls.Add(1)
+						return ordinaryModelsUpstreamResponse(`{}`), nil
+					}}
+					svc := newCodexModelsAPIKeyTestService(upstream)
+					svc.cfg.Gateway.OpenAICompactModel = "gpt-5.4"
+					account := &Account{ID: 1, Platform: PlatformOpenAI, Type: typ, Extra: map[string]any{"openai_passthrough": passthrough}}
+					body := []byte(`{"model":"openai/gpt5.3codexspark-xhigh","input":[],"messages":[],"instructions":"test"}`)
+					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+					var err error
+					switch endpoint {
+					case "responses":
+						_, err = svc.Forward(context.Background(), c, account, body)
+					case "chat":
+						_, err = svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+					case "messages":
+						_, err = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+					case "compact":
+						c.Request.URL.Path = "/v1/responses/compact"
+						require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-5.3-codex-spark"))
+						_, err = svc.Forward(context.Background(), c, account, body)
+					case "probe":
+						err = (&AccountTestService{httpUpstream: upstream}).testOpenAIAccountConnection(c, account, "gpt-5.3-codex-spark", "", "")
+					}
+					require.ErrorContains(t, err, "retired")
+					var failover *UpstreamFailoverError
+					require.NotErrorAs(t, err, &failover)
+					require.Zero(t, calls.Load())
+				})
+			}
+		}
+		account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{"model_mapping": map[string]any{"legacy": "gpt-5.3-codex-spark-high"}}}
+		require.Error(t, validateRetiredOpenAIRequestModel(account, "legacy", false, ""))
+		require.Error(t, validateRetiredOpenAIRequestModel(account, "claude-sonnet", false, "gpt-5.3-codex-spark"))
+		account.Credentials = map[string]any{"compact_model_mapping": map[string]any{"gpt-5.4": "gpt5.3codexspark"}}
+		svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
+		require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-5.4"))
+		account.Credentials = nil
+		svc.cfg.Gateway.OpenAICompactModel = "gpt-5.3-codex-spark"
+		require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-5.4"))
+	}
+}
+
+func TestSparkRetirementMappedForwardDoesNotCallUpstream(t *testing.T) {
+	for _, typ := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		for _, tc := range []struct {
+			name, model, path, mappingKey string
+			mapping                       map[string]any
+		}{
+			{"source", "gpt-5.3-codex-spark", "/v1/responses", "model_mapping", map[string]any{"gpt-5.3-codex-spark": "gpt-5.4"}},
+			{"target", "legacy", "/v1/responses", "model_mapping", map[string]any{"legacy": "openai/gpt5.3codexspark-high"}},
+			{"wildcard", "legacy-client", "/v1/responses", "model_mapping", map[string]any{"legacy*": "gpt-5.3-codex-spark"}},
+			{"compact", "gpt-5.4", "/v1/responses/compact", "compact_model_mapping", map[string]any{"gpt-5.4": "gpt-5.3-codex-spark-openai-compact"}},
+		} {
+			t.Run(typ+"/"+tc.name, func(t *testing.T) {
+				var calls atomic.Int32
+				svc := newCodexModelsAPIKeyTestService(&codexModelsHTTPUpstreamStub{do: func(*http.Request, string, int64, int) (*http.Response, error) {
+					calls.Add(1)
+					return ordinaryModelsUpstreamResponse(`{}`), nil
+				}})
+				account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{tc.mappingKey: tc.mapping}}
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, tc.path, nil)
+				body, err := json.Marshal(map[string]any{"model": tc.model, "input": []any{}})
+				require.NoError(t, err)
+				_, err = svc.Forward(context.Background(), c, account, body)
+				require.ErrorContains(t, err, "retired")
+				require.Equal(t, http.StatusNotFound, c.Writer.Status())
+				require.Zero(t, calls.Load())
+			})
+		}
+	}
+}
+
+func TestSparkRetirementCatalogCompletionCannotRestoreSource(t *testing.T) {
+	account := newCodexModelsAPIKeyTestAccount("https://custom.example/v1")
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"models":[{"slug":"gpt-5.3-codex-spark"},{"slug":"custom-model","custom":true}]}`)
+	manifest := &OpenAIModelsResponse{Body: []byte(`{"models":[]}`), upstreamSourceBody: body}
+	require.NoError(t, svc.CompleteAPIKeyCodexModelsManifestForClient(manifest, account))
+	require.False(t, containsManifestModel(manifest.Body, "gpt-5.3-codex-spark"))
+	require.True(t, containsManifestModel(manifest.Body, "custom-model"))
+	require.Equal(t, codexModelsManifestBodyETag(manifest.Body), manifest.ETag)
+
+	groupID := int64(1)
+	account.Credentials["model_mapping"] = map[string]any{"gpt-5.3-codex-spark": "custom-model", "legacy": "gpt-5.3-codex-spark", "custom-model": "custom-model"}
+	gateway := &GatewayService{accountRepo: codexModelsVisibilityAccountRepo{byGroup: map[int64][]Account{groupID: {*account}}}}
+	require.Equal(t, []string{"custom-model"}, gateway.GetAvailableModels(context.Background(), &groupID, PlatformOpenAI))
+	gateway.modelsListCache = gocache.New(time.Minute, 0)
+	gateway.modelsListCache.Set(modelsListCacheKey(&groupID, PlatformOpenAI), []string{"gpt5.3codexspark", "muse-spark"}, time.Minute)
+	require.Equal(t, []string{"muse-spark"}, gateway.GetAvailableModels(context.Background(), &groupID, PlatformOpenAI))
+}
+
+func TestSparkRetirementCatalogProjectionAndAdminFallback(t *testing.T) {
+	for _, typ := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		for _, codex := range []bool{false, true} {
+			field, idField := "data", "id"
+			if codex {
+				field, idField = "models", "slug"
+			}
+			account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{"model_mapping": map[string]any{
+				"gpt-5.3-codex-spark": "custom-live", "legacy": "gpt-5.3-codex-spark", "custom*": "custom-live",
+			}}}
+			group := &Group{Platform: PlatformOpenAI, ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"legacy", "gpt-5.3-codex-spark", "custom-client"}}}
+			body, err := json.Marshal(map[string]any{field: []map[string]any{{idField: "gpt-5.3-codex-spark"}, {idField: "custom-live", "custom": true}}, "unknown_top": true})
+			require.NoError(t, err)
+			projected, err := projectAccountModelsBody(body, account, group, codex)
+			require.NoError(t, err)
+			require.NotContains(t, string(projected), "spark")
+			require.NotContains(t, string(projected), "legacy")
+			require.Contains(t, string(projected), "custom-client")
+			require.True(t, gjson.GetBytes(projected, "unknown_top").Bool())
+			for _, model := range MergeOpenAIAccountTestModels([]openai.Model{{ID: "gpt-5.3-codex-spark"}}, account) {
+				require.NotEqual(t, "legacy", model.ID)
+				require.False(t, openai.IsRetiredSparkModel(model.ID))
+			}
+			account.Credentials = map[string]any{"model_mapping": map[string]any{"gpt-5.3-codex-spark": "gpt-5.3-codex-spark"}}
+			require.Empty(t, openAIConfiguredCodexModelIDsForGroup([]Account{*account}, nil), "retired-only catalog must not fall back to defaults")
+		}
+	}
+}
+
+func TestSparkRetirementLiveAndCachedCatalogETag(t *testing.T) {
+	for _, standard := range []bool{false, true} {
+		for _, age := range []time.Duration{0, 2 * time.Minute} {
+			field, idField := "models", "slug"
+			if standard {
+				field, idField = "data", "id"
+			}
+			body, err := json.Marshal(map[string]any{field: []map[string]any{{idField: "openai/gpt5.3codexspark-high"}, {idField: "muse-spark", "custom": true}}, "unknown_top": true})
+			require.NoError(t, err)
+			svc := &OpenAIGatewayService{}
+			request := openAIModelsRequest{url: "https://upstream.example/models", standardModelsList: standard}
+			oldETag := codexModelsManifestBodyETag(body)
+			manifest := &OpenAIModelsResponse{Body: body, ETag: oldETag, upstreamETag: oldETag}
+			fetch := func(context.Context, string) (*OpenAIModelsResponse, error) { return manifest, nil }
+			// Live cold fetch and an already-populated cache must apply the same filter.
+			live, err := svc.fetchCachedOpenAIModels(context.Background(), request, fetch, oldETag)
+			require.NoError(t, err)
+			svc.openAIModelsCache.set(buildOpenAIModelsCacheKey(request), manifest, time.Now().Add(-age))
+			got, err := svc.fetchCachedOpenAIModels(context.Background(), request, fetch, oldETag)
+			require.NoError(t, err)
+			require.False(t, got.NotModified)
+			require.Equal(t, live.ETag, got.ETag)
+			require.NotEqual(t, oldETag, got.ETag)
+			require.Equal(t, codexModelsManifestBodyETag(got.Body), got.ETag)
+			require.Len(t, gjson.GetBytes(got.Body, field).Array(), 1)
+			require.Equal(t, "muse-spark", gjson.GetBytes(got.Body, field+".0."+idField).String())
+			require.True(t, gjson.GetBytes(got.Body, field+".0.custom").Bool())
+			require.True(t, gjson.GetBytes(got.Body, "unknown_top").Bool())
+			require.Equal(t, body, manifest.Body, "shared source cache remains intact")
+			notModified, err := svc.fetchCachedOpenAIModels(context.Background(), request, fetch, got.ETag)
+			require.NoError(t, err)
+			require.True(t, notModified.NotModified)
+		}
+	}
+}
+
+func TestSparkRetirementUpstreamDiscoveryAndSnapshot(t *testing.T) {
+	for _, typ := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		body := `{"data":[{"id":"gpt-5.3-codex-spark"},{"id":"muse-spark","reasoning":false,"input_modalities":["text"],"context_window":1000}]}`
+		upstream := &codexModelsHTTPUpstreamStub{do: func(*http.Request, string, int64, int) (*http.Response, error) {
+			return ordinaryModelsUpstreamResponse(body), nil
+		}}
+		account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{"access_token": "test", "api_key": "test", "model_mapping": map[string]any{"legacy": "gpt5.3codexspark"}}}
+		svc := &AccountTestService{httpUpstream: upstream, cfg: &config.Config{}}
+		catalog, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+		require.NoError(t, err)
+		require.Equal(t, []string{"muse-spark"}, catalog.Models)
+		require.Len(t, catalog.Metadata, 1)
+		require.Empty(t, configuredUpstreamModelsForCapabilitySync(account))
+		account.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{Models: map[string]UpstreamModelMetadata{"gpt-5.3-codex-spark": {ID: "gpt-5.3-codex-spark"}, "muse-spark": {ID: "muse-spark"}}})
+		require.Len(t, account.GetUpstreamModelMetadataSnapshot().Models, 1)
+		body = `{"data":[{"id":"gpt-5.3-codex-spark"}]}`
+		catalog, err = svc.SyncUpstreamModelCatalog(context.Background(), account)
+		require.NoError(t, err)
+		require.Empty(t, catalog.Models)
+	}
+}
 
 func TestGPT55RetirementModelSupport(t *testing.T) {
 	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
@@ -35,9 +260,6 @@ func TestGPT55RetirementModelSupport(t *testing.T) {
 	require.True(t, account.IsModelSupported("gpt-5.5"), "explicit administrator replacement remains authoritative")
 	account.Type = AccountTypeAPIKey
 	require.True(t, account.IsModelSupported("gpt-5.5"))
-	parent := int64(3)
-	shadow := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, ParentAccountID: &parent}
-	require.False(t, shadow.IsModelSupported("gpt-5.5"))
 	require.False(t, isRetiredOpenAISubscriptionModel(&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, "gpt-5.5"))
 	require.False(t, isRetiredOpenAISubscriptionModel(account, "gpt-5.50"))
 }

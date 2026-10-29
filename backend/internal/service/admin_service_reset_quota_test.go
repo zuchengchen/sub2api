@@ -51,32 +51,16 @@ func TestResetAccountQuota_ClearsSchedulerRateLimitWithoutClearingOverload(t *te
 	require.True(t, repo.overloaded, "quota reset must preserve an unrelated overload block")
 }
 
-func TestResetAccountQuota_PreservesLookupAndSparkShadowShortCircuits(t *testing.T) {
-	t.Run("lookup failure", func(t *testing.T) {
-		getErr := errors.New("get account failed")
-		repo := &resetAccountQuotaRepoStub{getByIDErr: getErr}
-		svc := &adminServiceImpl{accountRepo: repo}
+func TestResetAccountQuota_PreservesLookupFailure(t *testing.T) {
+	getErr := errors.New("get account failed")
+	repo := &resetAccountQuotaRepoStub{getByIDErr: getErr}
+	svc := &adminServiceImpl{accountRepo: repo}
 
-		err := svc.ResetAccountQuota(context.Background(), 42)
+	err := svc.ResetAccountQuota(context.Background(), 42)
 
-		require.ErrorIs(t, err, getErr)
-		require.Zero(t, repo.resetCalls)
-		require.Zero(t, repo.clearRateLimitCalls)
-	})
-
-	t.Run("spark shadow", func(t *testing.T) {
-		parentID := int64(7)
-		repo := &resetAccountQuotaRepoStub{
-			account: &Account{ID: 42, ParentAccountID: &parentID},
-		}
-		svc := &adminServiceImpl{accountRepo: repo}
-
-		err := svc.ResetAccountQuota(context.Background(), 42)
-
-		require.Error(t, err)
-		require.Zero(t, repo.resetCalls)
-		require.Zero(t, repo.clearRateLimitCalls)
-	})
+	require.ErrorIs(t, err, getErr)
+	require.Zero(t, repo.resetCalls)
+	require.Zero(t, repo.clearRateLimitCalls)
 }
 
 func TestResetAccountQuota_PropagatesAtomicRepositoryFailure(t *testing.T) {

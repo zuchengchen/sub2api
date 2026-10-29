@@ -120,13 +120,6 @@ describe('OpenAIReferralCell', () => {
     wrapper.unmount()
   })
 
-  it('prevents sending from a shadow account', () => {
-    const wrapper = mountCell(account({ parent_account_id: 100 }))
-    expect(wrapper.get('[data-testid="referral-open"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="referral-open"]').attributes('title')).toContain('shadowHint')
-    wrapper.unmount()
-  })
-
   it('does not apply a pending query to a different account', async () => {
     let resolve!: (value: OpenAIReferralRefreshResult) => void
     vi.mocked(refreshOpenAIReferrals).mockReturnValue(new Promise((done) => { resolve = done }))

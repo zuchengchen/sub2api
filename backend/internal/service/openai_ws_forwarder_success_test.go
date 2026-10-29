@@ -202,7 +202,7 @@ func TestOpenAIGatewayService_Forward_WSv2_UsesPatchedBodyAfterValidationDecode(
 			"type": "response.completed",
 			"response": map[string]any{
 				"id":    "resp_patched_ws_1",
-				"model": "gpt-5.3-codex-spark",
+				"model": "gpt-5.3-codex",
 				"usage": map[string]any{"input_tokens": 1, "output_tokens": 1},
 			},
 		}); err != nil {

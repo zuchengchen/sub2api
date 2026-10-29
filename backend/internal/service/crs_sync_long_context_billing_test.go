@@ -58,10 +58,6 @@ func (r *crsLongContextAccountRepo) GetByCRSAccountID(_ context.Context, crsID s
 	return r.accounts[crsID], nil
 }
 
-func (r *crsLongContextAccountRepo) ListShadowsByParent(_ context.Context, _ int64) ([]*Account, error) {
-	return nil, nil
-}
-
 func TestCRSSyncOpenAILongContextBilling(t *testing.T) {
 	tests := []struct {
 		name          string

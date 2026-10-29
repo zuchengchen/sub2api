@@ -230,7 +230,6 @@ func TestOpenAIAccountEligibleFor429RecoveryProbe(t *testing.T) {
 	future := now.Add(2 * time.Hour)
 	short := now.Add(20 * time.Second)
 	expired := now.Add(-time.Minute)
-	parentID := int64(1)
 	freshExtra := openai429RecoveryEligibleExtra(now)
 	staleExtra := openai429RecoveryEligibleExtra(now)
 	staleExtra["codex_usage_updated_at"] = now.Add(-3 * time.Hour).Format(time.RFC3339)
@@ -255,7 +254,6 @@ func TestOpenAIAccountEligibleFor429RecoveryProbe(t *testing.T) {
 		{name: "eligible oauth remaining", account: openai429RecoveryEligibleAccount(1, now), want: true},
 		{name: "nil", account: nil, want: false},
 		{name: "anthropic", account: &Account{ID: 2, Platform: PlatformAnthropic, Type: AccountTypeOAuth, RateLimitResetAt: &future, Extra: freshExtra}, want: false},
-		{name: "shadow", account: &Account{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID, RateLimitResetAt: &future, Extra: freshExtra}, want: false},
 		{name: "pool mode without custom codes", account: &Account{ID: 4, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"pool_mode": true}, RateLimitResetAt: &future, Extra: freshExtra}, want: false},
 		{name: "expired cooldown", account: &Account{ID: 5, Platform: PlatformOpenAI, Type: AccountTypeOAuth, RateLimitResetAt: &expired, Extra: freshExtra}, want: false},
 		{name: "short remaining", account: &Account{ID: 6, Platform: PlatformOpenAI, Type: AccountTypeOAuth, RateLimitResetAt: &short, Extra: freshExtra}, want: false},
@@ -506,53 +504,13 @@ func TestOpenAI429RecoveryProbeStopsWhenRemainingAtOrBelowDelay(t *testing.T) {
 	require.Nil(t, svc.openai429RecoveryStates[account.ID])
 }
 
-func TestOpenAI429RecoveryShadowSkipped(t *testing.T) {
-	resetOpenAI429TestState(t)
-	repo := &openai429RecoveryRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil)
-	calls := installOpenAI429RecoveryAfterRecorder(t, svc)
-	parent := int64(1)
-	now := time.Now()
-	resetAt := now.Add(2 * time.Hour)
-	shadow := &Account{
-		ID:               9110,
-		Platform:         PlatformOpenAI,
-		Type:             AccountTypeOAuth,
-		ParentAccountID:  &parent,
-		RateLimitResetAt: &resetAt,
-		Extra:            openai429RecoveryEligibleExtra(now),
-	}
-	repo.store(shadow)
-
-	svc.HandleUpstreamError(context.Background(), shadow, http.StatusTooManyRequests, openai429RecoveryRemainingHeaders(), openai429UsageLimitReachedBody(resetAt), "gpt-5.4")
-	svc.markOpenAIFormalCooldown(shadow, resetAt, "gpt-5.4")
-	svc.ConsiderOpenAI429Recovery(shadow)
-	require.Empty(t, *calls)
-	require.Empty(t, repo.setRateLimitedIDs)
-	require.Equal(t, 0, openAI429Count(shadow.ID))
-}
-
-func TestGetOpenAIUsage_ConsiderOpenAI429RecoverySkipsShadow(t *testing.T) {
+func TestGetOpenAIUsage_ConsiderOpenAI429Recovery(t *testing.T) {
 	recorder := &considerCallRecorder{}
 	svc := NewAccountUsageService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	svc.SetOpenAI429RecoveryScheduler(recorder)
 	now := time.Now()
-	resetAt := now.Add(2 * time.Hour)
 	account := openai429RecoveryEligibleAccount(9111, now)
 	_, err := svc.GetUsageForAccount(context.Background(), account)
-	require.NoError(t, err)
-	require.Equal(t, []int64{account.ID}, recorder.accountIDs)
-
-	parent := int64(1)
-	shadow := &Account{
-		ID:               9112,
-		Platform:         PlatformOpenAI,
-		Type:             AccountTypeOAuth,
-		ParentAccountID:  &parent,
-		RateLimitResetAt: &resetAt,
-		Extra:            openai429RecoveryEligibleExtra(now),
-	}
-	_, err = svc.GetUsageForAccount(context.Background(), shadow)
 	require.NoError(t, err)
 	require.Equal(t, []int64{account.ID}, recorder.accountIDs)
 }

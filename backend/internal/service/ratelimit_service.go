@@ -449,15 +449,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		}
 		// 其他 400 错误（如参数问题）不处理，不禁用账号
 	case 401:
-		// 外审第9轮:Spark 影子无独立凭据,401 是母账号 token 问题——失效缓存 / refresh_token 判断 /
-		// 永久禁用 / 临时不可调度都必须落到凭据 owner(母账号),否则影子(无 refresh_token)必中
-		// "refresh_token missing"永久禁用分支、母账号 token cache 也不会被清,把母账号可恢复的 token
-		// 问题变成影子永久死亡。母账号被标记 temp-unschedulable 后由 parentHealthyForShadow 级联排除影子。
-		// 非影子时 resolveCredentialAccount 返回自身;母账号缺失/损坏(orphan 影子,罕见)时回退到原 account。
 		authAccount := account
-		if resolved, rerr := resolveCredentialAccount(ctx, s.accountRepo, account); rerr == nil && resolved != nil {
-			authAccount = resolved
-		}
 		// OpenAI: token_invalidated / token_revoked 表示 token 被永久作废（非过期），直接标记 error
 		openai401Code := extractUpstreamErrorCode(responseBody)
 		if authAccount.Platform == PlatformOpenAI && (openai401Code == "token_invalidated" || openai401Code == "token_revoked") {
@@ -844,15 +836,6 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		}); ok && checker.ShouldRetryOpenAIOAuth429(account, headers, responseBody) {
 			return
 		}
-	}
-	// Spark 影子：限流/熔断状态 100% 由 QueryUsage(/wham/usage body 的 codex_bengalfox)驱动。
-	// /responses 的 429 携带的 x-codex-*/usage_limit_reached 是 global codex 道(plan/spec §8),
-	// 套到影子会把 spark 误耦合到 global 窗口——即便 spark 仍有配额也会被冷却到 global reset,
-	// 单影子场景直接变成无可用账号(外审第8轮 P1)。整段跳过;影子的 codex_* 仅由 account_usage 的
-	// QueryUsage→persistOpenAICodexProbeSnapshot 维护。母账号探测快照若套餐额度用尽，
-	// 由点数保护写成 429；影子账号点数保护不生效，枯竭仍由调度守卫处理。
-	if account.IsShadow() {
-		return
 	}
 	// 真实 Ollama Cloud 用量账号（credentials base_url 指向 ollama.com）的 429 由
 	// ollama.com 的用量窗口驱动。其响应头不得被当作 OpenAI codex / Anthropic /
@@ -1405,11 +1388,6 @@ func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, accou
 	if s == nil || s.accountRepo == nil || account == nil || headers == nil {
 		return
 	}
-	// spark 影子的 codex_* 仅由 QueryUsage(/wham/usage bengalfox 道)更新,不能被 /responses 的
-	// x-codex-* 全局头快照污染(外审第7轮 P1,与 updateCodexUsageSnapshot 同口径)。
-	if account.IsShadow() {
-		return
-	}
 	snapshot := ParseCodexRateLimitHeaders(headers)
 	if snapshot == nil {
 		return
@@ -1570,13 +1548,6 @@ func persistOpenAI429PlanType(ctx context.Context, repo AccountRepository, accou
 	if repo == nil || account == nil || account.Platform != PlatformOpenAI {
 		return
 	}
-	// spark 影子账号恒不持凭据:即便收到带 plan_type 的 429,也不能把 plan_type 写进影子 credentials
-	// ——该路径走 repo.BulkUpdate 直写、不经 persistAccountCredentials 守卫(外审第7轮 P1)。
-	// plan_type 由母账号在自己的请求上维护,影子跳过。
-	if account.IsCredentialShadow() {
-		return
-	}
-
 	planType := parseOpenAIRateLimitPlanType(body)
 	if planType == "" {
 		return
@@ -1973,43 +1944,6 @@ func (s *RateLimitService) HandleOpenAIImageRateLimit(ctx context.Context, accou
 	return true
 }
 
-// HandleOpenAICodexSparkRateLimit 将 Spark 独立配额窗口记录为模型级限流。
-// Spark 的 x-codex-* 使用率和 reset 时间只代表 Spark 模型维度，不能写入账号级
-// RateLimitResetAt，否则同一 OAuth 账号上的其他模型也会被错误停调。
-func (s *RateLimitService) HandleOpenAICodexSparkRateLimit(ctx context.Context, account *Account, requestedModel string, statusCode int, headers http.Header, responseBody []byte) bool {
-	if s == nil || account == nil || s.accountRepo == nil || statusCode != http.StatusTooManyRequests || !isOpenAIOAuthAccount(account) {
-		return false
-	}
-	if !isCodexSparkModel(requestedModel) || !account.ShouldHandleErrorCode(statusCode) {
-		return false
-	}
-
-	modelKey := normalizeCodexModel(modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel))
-	if modelKey == "" {
-		return false
-	}
-	now := time.Now()
-	disposition, resetAt := classifyOpenAIOAuth429(headers, responseBody)
-	// Spark 只有明确耗尽 5h/7d 窗口时才能使用上游长 reset；普通瞬时 429
-	// 即使携带全局 reset 头，也只能使用短时回避，避免错误冷却数天。
-	if disposition != openAIOAuth429Quota5h && disposition != openAIOAuth429Quota7d {
-		resetAt = nil
-	}
-	if resetAt == nil || !resetAt.After(now) {
-		cooldown, ok := s.get429FallbackCooldown(ctx, account)
-		if !ok || cooldown <= 0 {
-			cooldown = time.Duration(defaultRateLimit429CooldownSeconds) * time.Second
-		}
-		reset := now.Add(cooldown)
-		resetAt = &reset
-	}
-	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, *resetAt, openAICodexSparkRateLimitReason); err != nil {
-		slog.Warn("openai_codex_spark_model_rate_limit_set_failed", "account_id", account.ID, "model", modelKey, "error", err)
-	}
-	slog.Info("openai_codex_spark_model_rate_limited", "account_id", account.ID, "model", modelKey, "reset_at", *resetAt)
-	return true
-}
-
 func (s *RateLimitService) HandleOpenAIImageCapabilityLoss(ctx context.Context, account *Account, statusCode int, responseBody []byte) bool {
 	if s == nil || account == nil || s.accountRepo == nil {
 		return false
@@ -2238,14 +2172,14 @@ func tempUnschedHitUsesModelScope(account *Account, rule TempUnschedulableRule, 
 	return tempUnschedRuleUsesModelScope(rule, modelKey, statusCode)
 }
 
-// unauthorizedRequiresCredentialHandling 识别凭据级 401：OAuth 账号与 Spark 影子
+// unauthorizedRequiresCredentialHandling 识别凭据级 401：OAuth 账号
 // （失效缓存、刷新窗口、缺 refresh_token 停用），以及 OpenAI 明确的凭据失效
 // （token_invalidated / token_revoked、{"detail":"Unauthorized"}）。
 func unauthorizedRequiresCredentialHandling(account *Account, responseBody []byte) bool {
 	if account == nil {
 		return false
 	}
-	if account.Type == AccountTypeOAuth || account.IsShadow() {
+	if account.Type == AccountTypeOAuth {
 		return true
 	}
 	if account.Platform != PlatformOpenAI {

@@ -15,10 +15,6 @@ type upstreamBillingProbeAdminRepo struct {
 	*upstreamBillingProbeAccountRepo
 }
 
-func (r *upstreamBillingProbeAdminRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
-	return nil, nil
-}
-
 type accountBillingSettingsAdminRepo struct {
 	*upstreamBillingProbeAccountRepo
 	concurrentRate   *float64

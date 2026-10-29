@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
 const (
@@ -123,6 +124,11 @@ func (a *Account) GetUpstreamModelMetadataSnapshot() *UpstreamModelMetadataSnaps
 	var snapshot UpstreamModelMetadataSnapshot
 	if err := json.Unmarshal(body, &snapshot); err != nil || len(snapshot.Models) == 0 {
 		return nil
+	}
+	for id, metadata := range snapshot.Models {
+		if openai.IsRetiredSparkModel(id) || openai.IsRetiredSparkModel(metadata.ID) {
+			delete(snapshot.Models, id)
+		}
 	}
 	return &snapshot
 }
@@ -377,7 +383,7 @@ func configuredUpstreamModelsForCapabilitySync(account *Account) []string {
 	models := make([]string, 0)
 	for _, mappedModel := range account.GetModelMapping() {
 		mappedModel = strings.TrimSpace(mappedModel)
-		if mappedModel == "" || strings.Contains(mappedModel, "*") {
+		if mappedModel == "" || strings.Contains(mappedModel, "*") || openai.IsRetiredSparkModel(mappedModel) {
 			continue
 		}
 		models = append(models, mappedModel)
@@ -389,7 +395,7 @@ func capabilitySyncModelIDs(modelIDs []string) []string {
 	filtered := make([]string, 0, len(modelIDs))
 	for _, modelID := range modelIDs {
 		modelID = strings.TrimSpace(modelID)
-		if modelID == "" || isCodexDedicatedMediaModel(modelID) {
+		if modelID == "" || isCodexDedicatedMediaModel(modelID) || openai.IsRetiredSparkModel(modelID) {
 			continue
 		}
 		filtered = append(filtered, modelID)
@@ -816,7 +822,7 @@ func (s *AccountTestService) fetchUpstreamModelListRequest(ctx context.Context, 
 		return nil, nil, req, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
 
-	return models, body, req, nil
+	return filterRetiredOpenAIModelIDs(nil, models), body, req, nil
 }
 
 func (s *AccountTestService) saveGrokCatalogObservation(ctx context.Context, account *Account, observation *GrokCatalogObservation) error {
@@ -1084,13 +1090,9 @@ func buildOpenAIAPIKeyModelsRequest(ctx context.Context, account *Account, valid
 // OAuth subscriptions do not expose the public Platform API /v1/models endpoint,
 // so treating them like API-key accounts makes the admin sync button fail locally.
 func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
-	credentialAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Failed to resolve OpenAI account credentials", err)
-	}
-	if !credentialAccount.IsOpenAIOAuth() {
+	if !account.IsOpenAIOAuth() {
 		return nil, newUpstreamModelSyncUnsupportedError(
-			fmt.Sprintf("Unsupported OpenAI account type for upstream model sync: %s", credentialAccount.Type), nil,
+			fmt.Sprintf("Unsupported OpenAI account type for upstream model sync: %s", account.Type), nil,
 		)
 	}
 
@@ -1107,13 +1109,13 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI Codex model list request", err)
 	}
 
-	if credentialAccount.IsOpenAIAgentIdentity() {
+	if account.IsOpenAIAgentIdentity() {
 		authHeaders, authErr := buildAgentIdentityAuthenticationHeaders(
 			ctx,
 			s.accountRepo,
 			s.agentIdentityWS,
 			&s.agentIdentityTaskMu,
-			credentialAccount,
+			account,
 		)
 		if authErr != nil {
 			return nil, newUpstreamModelSyncUpstreamError("Failed to build OpenAI Agent Identity authentication", authErr)
@@ -1124,21 +1126,21 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 			}
 		}
 	} else {
-		accessToken := strings.TrimSpace(credentialAccount.GetOpenAIAccessToken())
+		accessToken := strings.TrimSpace(account.GetOpenAIAccessToken())
 		if accessToken == "" {
 			return nil, newUpstreamModelSyncConfigError("No OpenAI access token is available", nil)
 		}
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
 
-	identity := resolveCodexOutboundIdentity(credentialAccount.GetOpenAIUserAgent())
+	identity := resolveCodexOutboundIdentity(account.GetOpenAIUserAgent())
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Originator", identity.originator)
 	req.Header.Set("User-Agent", identity.userAgent)
 	req.Header.Set("Version", identity.version)
-	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
-	credentialAccount.ApplyHeaderOverrides(req.Header)
-	enforceCodexIdentityHeadersWithUA(req.Header, credentialAccount.GetOpenAIUserAgent())
+	setOpenAIChatGPTAccountHeaders(req.Header, account)
+	account.ApplyHeaderOverrides(req.Header)
+	enforceCodexIdentityHeadersWithUA(req.Header, account.GetOpenAIUserAgent())
 	return req, nil
 }
 
@@ -1238,7 +1240,7 @@ func extractUpstreamModelCatalog(body []byte, grok bool) ([]string, map[string]U
 			continue
 		}
 		modelID := strings.TrimSpace(selectID(capability.upstreamModelEntry))
-		if modelID == "" {
+		if modelID == "" || openai.IsRetiredSparkModel(modelID) {
 			continue
 		}
 		models = append(models, modelID)
