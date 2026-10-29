@@ -461,6 +461,28 @@ func MergeCredentials(oldCreds, newCreds map[string]any) map[string]any {
 	if newCreds == nil {
 		newCreds = make(map[string]any)
 	}
+	oldChatGPTID, _ := oldCreds["chatgpt_account_id"].(string)
+	newChatGPTID, _ := newCreds["chatgpt_account_id"].(string)
+	_, oldHasState := oldCreds["subscription_is_delinquent"]
+	_, newHasState := newCreds["subscription_is_delinquent"]
+	if oldChatGPTID != "" || newChatGPTID != "" || oldHasState || newHasState {
+		// A subscription snapshot belongs to one ChatGPT identity and plan.
+		for _, key := range []string{"chatgpt_account_id", "plan_type"} {
+			previous, _ := oldCreds[key].(string)
+			current, _ := newCreds[key].(string)
+			if strings.TrimSpace(previous) != "" && strings.TrimSpace(current) != "" && !strings.EqualFold(strings.TrimSpace(previous), strings.TrimSpace(current)) {
+				if expiry, _ := newCreds["subscription_expires_at"].(string); strings.TrimSpace(expiry) == "" {
+					newCreds["subscription_expires_at"] = ""
+					newCreds["subscription_is_delinquent"] = nil
+				}
+			}
+		}
+		if _, hasDate := newCreds["subscription_expires_at"]; hasDate {
+			if _, hasState := newCreds["subscription_is_delinquent"]; !hasState {
+				newCreds["subscription_is_delinquent"] = nil
+			}
+		}
+	}
 	for k, v := range oldCreds {
 		if _, exists := newCreds[k]; !exists {
 			newCreds[k] = v

@@ -129,6 +129,7 @@ type OpenAITokenInfo struct {
 	OrganizationID                string `json:"organization_id,omitempty"`
 	PlanType                      string `json:"plan_type,omitempty"`
 	SubscriptionExpiresAt         string `json:"subscription_expires_at,omitempty"`
+	SubscriptionIsDelinquent      *bool  `json:"subscription_is_delinquent"`
 	PrivacyMode                   string `json:"privacy_mode,omitempty"`
 	subscriptionExpiryFromIDToken bool
 }
@@ -328,7 +329,9 @@ func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *Ope
 	}
 	fallbackExpiresAt, fallbackPlan := tokenInfo.SubscriptionExpiresAt, tokenInfo.PlanType
 	fallbackFromIDToken := tokenInfo.subscriptionExpiryFromIDToken
+	fallbackIsDelinquent := tokenInfo.SubscriptionIsDelinquent
 	tokenInfo.SubscriptionExpiresAt = ""
+	tokenInfo.SubscriptionIsDelinquent = nil
 	tokenInfo.subscriptionExpiryFromIDToken = false
 
 	// 从 access_token JWT 中提取 orgID（poid），用于匹配正确的账号
@@ -349,6 +352,24 @@ func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *Ope
 		appliedAccountInfoPlanType := shouldApplyChatGPTAccountInfoPlanType(tokenInfo.PlanType, info.PlanType)
 		if appliedAccountInfoPlanType {
 			tokenInfo.PlanType = info.PlanType
+		} else if tokenInfo.ChatGPTAccountID != "" && strings.EqualFold(tokenInfo.ChatGPTAccountID, info.AccountID) {
+			// A confirmed personal account may have renewed onto a different plan.
+			// Keep specific Pro tiers when the web endpoint only reports generic Pro.
+			family := func(plan string) string {
+				switch strings.ToLower(strings.TrimSpace(plan)) {
+				case "pro", "chatgptpro", "prolite", "promax":
+					return "pro"
+				case "plus":
+					return "plus"
+				case "free":
+					return "free"
+				default:
+					return ""
+				}
+			}
+			if current, candidate := family(tokenInfo.PlanType), family(info.PlanType); current != "" && candidate != "" && current != candidate {
+				tokenInfo.PlanType = info.PlanType
+			}
 		}
 		// plan_type 与 subscription_expires_at 必须描述同一份订阅。套餐取自
 		// accounts/check 时，到期时间跟着取同一条记录；套餐保留了 JWT 里的个人值时，
@@ -358,6 +379,7 @@ func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *Ope
 		if info.SubscriptionExpiresAt != "" {
 			if appliedAccountInfoPlanType || chatGPTAccountInfoBelongsToTokenAccount(tokenInfo, info) {
 				tokenInfo.SubscriptionExpiresAt = info.SubscriptionExpiresAt
+				tokenInfo.SubscriptionIsDelinquent = info.SubscriptionIsDelinquent
 			} else {
 				forcePersonalSubscriptionLookup = true
 			}
@@ -374,6 +396,7 @@ func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *Ope
 	if tokenInfo.SubscriptionExpiresAt == "" && tokenInfo.PlanType == fallbackPlan {
 		tokenInfo.SubscriptionExpiresAt = fallbackExpiresAt
 		tokenInfo.subscriptionExpiryFromIDToken = fallbackFromIDToken
+		tokenInfo.SubscriptionIsDelinquent = fallbackIsDelinquent
 	}
 
 	// 尝试设置隐私（关闭训练数据共享），best-effort
@@ -437,16 +460,17 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 	if refreshToken == "" {
 		if accessToken != "" {
 			tokenInfo := &OpenAITokenInfo{
-				AccessToken:           accessToken,
-				RefreshToken:          "",
-				IDToken:               account.GetCredential("id_token"),
-				ClientID:              account.GetCredential("client_id"),
-				Email:                 account.GetCredential("email"),
-				ChatGPTAccountID:      account.GetCredential("chatgpt_account_id"),
-				ChatGPTUserID:         account.GetCredential("chatgpt_user_id"),
-				OrganizationID:        account.GetCredential("organization_id"),
-				PlanType:              account.GetCredential("plan_type"),
-				SubscriptionExpiresAt: account.GetSubscriptionExpiresAt(),
+				AccessToken:              accessToken,
+				RefreshToken:             "",
+				IDToken:                  account.GetCredential("id_token"),
+				ClientID:                 account.GetCredential("client_id"),
+				Email:                    account.GetCredential("email"),
+				ChatGPTAccountID:         account.GetCredential("chatgpt_account_id"),
+				ChatGPTUserID:            account.GetCredential("chatgpt_user_id"),
+				OrganizationID:           account.GetCredential("organization_id"),
+				PlanType:                 account.GetCredential("plan_type"),
+				SubscriptionExpiresAt:    account.GetSubscriptionExpiresAt(),
+				SubscriptionIsDelinquent: account.GetSubscriptionIsDelinquent(),
 			}
 			if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
 				tokenInfo.ExpiresAt = expiresAt.Unix()
@@ -473,6 +497,7 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		strings.EqualFold(strings.TrimSpace(info.PlanType), strings.TrimSpace(account.GetCredential("plan_type"))) {
 		if existing := strings.TrimSpace(account.GetCredential("subscription_expires_at")); existing != "" {
 			info.SubscriptionExpiresAt = existing
+			info.SubscriptionIsDelinquent = account.GetSubscriptionIsDelinquent()
 			info.subscriptionExpiryFromIDToken = false
 		}
 	}
@@ -513,6 +538,11 @@ func (s *OpenAIOAuthService) BuildAccountCredentials(tokenInfo *OpenAITokenInfo)
 	}
 	if tokenInfo.SubscriptionExpiresAt != "" {
 		creds["subscription_expires_at"] = tokenInfo.SubscriptionExpiresAt
+		// Keep the state paired with its date; nil clears a previous snapshot's flag.
+		creds["subscription_is_delinquent"] = nil
+		if tokenInfo.SubscriptionIsDelinquent != nil {
+			creds["subscription_is_delinquent"] = *tokenInfo.SubscriptionIsDelinquent
+		}
 	}
 	if strings.TrimSpace(tokenInfo.ClientID) != "" {
 		creds["client_id"] = strings.TrimSpace(tokenInfo.ClientID)

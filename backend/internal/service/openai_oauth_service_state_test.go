@@ -155,7 +155,8 @@ func TestOpenAIOAuthService_SubscriptionExpiryFromIDToken(t *testing.T) {
 					Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 					Credentials: map[string]any{
 						"refresh_token": "rt", "plan_type": "prolite", "chatgpt_account_id": "subscription-account",
-						"subscription_expires_at": want,
+						"subscription_expires_at":    want,
+						"subscription_is_delinquent": true,
 					},
 				})
 			default:
@@ -164,6 +165,14 @@ func TestOpenAIOAuthService_SubscriptionExpiryFromIDToken(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, info.SubscriptionExpiresAt)
 			require.Equal(t, want, svc.BuildAccountCredentials(info)["subscription_expires_at"])
+			if mode == "saved subscription" || mode == "saved subscription throttled" {
+				require.NotNil(t, info.SubscriptionIsDelinquent)
+				require.True(t, *info.SubscriptionIsDelinquent)
+				require.Equal(t, true, svc.BuildAccountCredentials(info)["subscription_is_delinquent"])
+			} else {
+				require.Contains(t, svc.BuildAccountCredentials(info), "subscription_is_delinquent")
+				require.Nil(t, svc.BuildAccountCredentials(info)["subscription_is_delinquent"])
+			}
 		})
 	}
 }

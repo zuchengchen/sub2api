@@ -693,6 +693,9 @@ func enrichCodexImportAccountFromJWT(item *codexImportAccount, token string, val
 		strings.EqualFold(item.AccountID, strings.TrimSpace(claims.OpenAIAuth.ChatGPTAccountID)) &&
 		strings.EqualFold(item.PlanType, strings.TrimSpace(claims.OpenAIAuth.ChatGPTPlanType)) {
 		setCodexCredentialIfNotEmpty(item.Credentials, "subscription_expires_at", claims.OpenAIAuth.SubscriptionExpiresAt())
+		if item.Credentials["subscription_expires_at"] != nil {
+			item.Credentials["subscription_is_delinquent"] = nil
+		}
 	}
 	if item.Organization == "" {
 		item.Organization = strings.TrimSpace(claims.OpenAIAuth.POID)
@@ -1097,7 +1100,7 @@ func mergeCodexImportMap(existing, incoming map[string]any) map[string]any {
 }
 
 func mergeCodexImportCredentials(existing, incoming map[string]any, item *codexImportAccount) map[string]any {
-	out := mergeCodexImportMap(existing, incoming)
+	out := service.MergeCredentials(existing, mergeCodexImportMap(nil, incoming))
 	if item == nil {
 		return out
 	}

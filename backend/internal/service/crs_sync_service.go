@@ -620,7 +620,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			continue
 		}
 		if existing != nil {
-			credentials = mergeMap(existing.Credentials, credentials)
+			credentials = MergeCredentials(existing.Credentials, credentials)
 		}
 		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformOpenAI, AccountTypeOAuth, credentials, extra)
 
@@ -1158,11 +1158,7 @@ func (s *CRSSyncService) refreshOAuthToken(ctx context.Context, account *Account
 		} else {
 			newCredentials = s.openaiOAuthService.BuildAccountCredentials(tokenInfo)
 			// Preserve non-token settings from existing credentials
-			for k, v := range account.Credentials {
-				if _, exists := newCredentials[k]; !exists {
-					newCredentials[k] = v
-				}
-			}
+			newCredentials = MergeCredentials(account.Credentials, newCredentials)
 			newCredentials = NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
 		}
 	default:

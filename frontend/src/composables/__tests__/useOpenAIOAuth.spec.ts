@@ -76,6 +76,30 @@ describe('useOpenAIOAuth.buildCredentials', () => {
 
     expect(creds.plan_type).toBe('team')
     expect(creds.subscription_expires_at).toBe('2026-07-20T19:22:48+00:00')
+    expect(creds.subscription_is_delinquent).toBeNull()
+  })
+
+  it.each([true, false, null, undefined])('pairs a new subscription date with delinquency %s when merging credentials', (subscription_is_delinquent) => {
+    const oauth = useOpenAIOAuth()
+    const creds = oauth.buildCredentials({
+      subscription_expires_at: '2026-11-28T12:34:56Z',
+      subscription_is_delinquent
+    })
+    const merged = {
+      subscription_expires_at: '2026-10-28T12:34:56Z',
+      subscription_is_delinquent: true,
+      ...creds
+    }
+
+    expect(creds).toHaveProperty('subscription_is_delinquent', subscription_is_delinquent ?? null)
+    expect(merged.subscription_expires_at).toBe('2026-11-28T12:34:56Z')
+    expect(merged.subscription_is_delinquent).toBe(subscription_is_delinquent ?? null)
+  })
+
+  it('does not clear a stored subscription pair when no new subscription date is returned', () => {
+    const creds = useOpenAIOAuth().buildCredentials({ access_token: 'at' })
+    expect(creds).not.toHaveProperty('subscription_expires_at')
+    expect(creds).not.toHaveProperty('subscription_is_delinquent')
   })
 })
 

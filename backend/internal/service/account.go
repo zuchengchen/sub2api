@@ -1653,6 +1653,16 @@ func (a *Account) GetSubscriptionExpiresAt() string {
 	return auth.SubscriptionExpiresAt()
 }
 
+func (a *Account) GetSubscriptionIsDelinquent() *bool {
+	if a == nil || !a.IsOpenAIOAuth() {
+		return nil
+	}
+	if value, ok := a.Credentials["subscription_is_delinquent"].(bool); ok {
+		return &value
+	}
+	return nil
+}
+
 func (a *Account) GetOpenAIApiKey() string {
 	if !a.IsOpenAIApiKey() {
 		return ""

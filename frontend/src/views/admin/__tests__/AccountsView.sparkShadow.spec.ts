@@ -13,6 +13,7 @@ const {
   listAccounts,
   listWithEtag,
   getBatchTodayStats,
+  getUpstreamBillingProbeSettings,
   getAllProxies,
   getAllGroups,
   duplicateAccount,
@@ -23,6 +24,7 @@ const {
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
+  getUpstreamBillingProbeSettings: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
   duplicateAccount: vi.fn(),
@@ -38,7 +40,7 @@ vi.mock('@/api/admin', () => ({
       listWithEtag,
       getBatchTodayStats,
       duplicate: duplicateAccount,
-      getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
+      getUpstreamBillingProbeSettings,
       createSparkShadow,
       delete: vi.fn(),
       batchClearError: vi.fn(),
@@ -107,12 +109,13 @@ const mountView = () =>
 describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
       fn.mockReset()
     }
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     listWithEtag.mockResolvedValue({ notModified: true, etag: null, data: null })
     getBatchTodayStats.mockResolvedValue({ stats: {} })
+    getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: true, interval_minutes: 30 })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
     duplicateAccount.mockResolvedValue({ id: 998, name: 'parent-acc (Copy)' })
@@ -259,11 +262,12 @@ const mountViewWithRow = () =>
 describe('admin AccountsView — 账号行展示', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
       fn.mockReset()
     }
     listWithEtag.mockResolvedValue({ notModified: true, etag: null, data: null })
     getBatchTodayStats.mockResolvedValue({ stats: {} })
+    getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: true, interval_minutes: 30 })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
     vi.stubGlobal('confirm', vi.fn(() => true))
@@ -286,6 +290,7 @@ describe('admin AccountsView — 账号行展示', () => {
       parent_plan_type: 'plus',
       parent_privacy_mode: 'false',
       parent_subscription_expires_at: '2027-01-01T00:00:00Z',
+      parent_subscription_is_delinquent: true,
       parent_chatgpt_account_id: 'chatgpt-abc123',
     }
 
@@ -303,7 +308,40 @@ describe('admin AccountsView — 账号行展示', () => {
     expect(badge.props('planType')).toBe('plus')
     expect(badge.props('privacyMode')).toBe('false')
     expect(badge.props('subscriptionExpiresAt')).toBe('2027-01-01T00:00:00Z')
+    expect(badge.props('subscriptionIsDelinquent')).toBe(true)
 
+    wrapper.unmount()
+  })
+
+  it.each([
+    { own: false, parent: true, expected: false },
+    { own: true, parent: false, expected: true },
+    { own: null, parent: true, expected: true },
+    { own: undefined, parent: false, expected: false },
+    { own: undefined, parent: true, expected: true },
+    { own: null, parent: null, expected: null },
+    { own: undefined, parent: undefined, expected: undefined }
+  ])('passes credential delinquency $own with parent $parent as $expected', async ({ own, parent, expected }) => {
+    listAccounts.mockResolvedValue({
+      items: [{
+        id: 100,
+        name: 'shadow-account',
+        platform: 'openai',
+        type: 'oauth',
+        parent_account_id: 1,
+        parent_plan_type: 'pro',
+        parent_subscription_expires_at: '2026-11-28T12:34:56Z',
+        parent_subscription_is_delinquent: parent,
+        credentials: { subscription_is_delinquent: own }
+      }],
+      total: 1, page: 1, page_size: 20, pages: 1
+    })
+
+    const wrapper = mountViewWithRow()
+    await flushPromises()
+    const badge = wrapper.findComponent(PlatformTypeBadge)
+    expect(badge.props('subscriptionExpiresAt')).toBe('2026-11-28T12:34:56Z')
+    expect(badge.props('subscriptionIsDelinquent')).toBe(expected)
     wrapper.unmount()
   })
 

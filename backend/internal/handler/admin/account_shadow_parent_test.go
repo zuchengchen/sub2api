@@ -12,12 +12,14 @@ import (
 func TestEnrichShadowParentInfo(t *testing.T) {
 	pid := int64(100)
 	parent := &service.Account{
-		ID: 100,
+		ID:       100,
+		Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
 		Credentials: map[string]any{
-			"email":                   "owner@example.com",
-			"plan_type":               "pro",
-			"subscription_expires_at": "2026-12-31T00:00:00Z",
-			"chatgpt_account_id":      "acct_123",
+			"email":                      "owner@example.com",
+			"plan_type":                  "pro",
+			"subscription_expires_at":    "2026-12-31T00:00:00Z",
+			"subscription_is_delinquent": false,
+			"chatgpt_account_id":         "acct_123",
 		},
 		Extra: map[string]any{"privacy_mode": "training_off"},
 	}
@@ -34,6 +36,10 @@ func TestEnrichShadowParentInfo(t *testing.T) {
 	require.Equal(t, "pro", items[0].ParentPlanType)
 	require.Equal(t, "training_off", items[0].ParentPrivacyMode)
 	require.Equal(t, "2026-12-31T00:00:00Z", items[0].ParentSubscriptionExpiresAt)
+	require.NotNil(t, items[0].ParentSubscriptionIsDelinquent)
+	require.False(t, *items[0].ParentSubscriptionIsDelinquent)
+	require.NotNil(t, dto.AccountListItemFromAccount(items[0].Account).ParentSubscriptionIsDelinquent)
+	require.False(t, *dto.AccountListItemFromAccount(items[0].Account).ParentSubscriptionIsDelinquent)
 	require.Equal(t, "acct_123", items[0].ParentChatGPTAccountID)
 
 	require.Empty(t, items[1].ParentEmail, "非影子不回填")
