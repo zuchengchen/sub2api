@@ -37,6 +37,11 @@ func TestClassifyOpenAIWSAcquireError(t *testing.T) {
 		require.Equal(t, "auth_failed", classifyOpenAIWSAcquireError(err))
 	})
 
+	t.Run("upstream_forbidden_403", func(t *testing.T) {
+		err := &openAIWSDialError{StatusCode: 403, Err: errors.New("forbidden")}
+		require.Equal(t, openAIWSUpstreamForbiddenReason, classifyOpenAIWSAcquireError(err))
+	})
+
 	t.Run("upstream_rate_limited", func(t *testing.T) {
 		err := &openAIWSDialError{StatusCode: 429, Err: errors.New("rate limited")}
 		require.Equal(t, "upstream_rate_limited", classifyOpenAIWSAcquireError(err))
@@ -120,6 +125,11 @@ func TestClassifyOpenAIWSReconnectReason(t *testing.T) {
 	reason, retryable = classifyOpenAIWSReconnectReason(wrapOpenAIWSFallback("read_event", errors.New("io")))
 	require.Equal(t, "read_event", reason)
 	require.True(t, retryable)
+
+	// A handshake 403 must not burn same-WS reconnect attempts.
+	reason, retryable = classifyOpenAIWSReconnectReason(wrapOpenAIWSFallback(openAIWSUpstreamForbiddenReason, errors.New("forbidden")))
+	require.Equal(t, openAIWSUpstreamForbiddenReason, reason)
+	require.False(t, retryable)
 }
 
 func TestOpenAIWSErrorHTTPStatus(t *testing.T) {
@@ -322,6 +332,12 @@ func TestOpenAIWSSessionFallbackActionFor(t *testing.T) {
 	a = openAIWSSessionFallbackActionFor("message_too_big")
 	require.True(t, a.fallbackHTTP)
 	require.False(t, a.markDisable)
+
+	// 握手 403（多为边缘拦截）：本请求回退 HTTP，不标记会话。
+	a = openAIWSSessionFallbackActionFor(openAIWSUpstreamForbiddenReason)
+	require.True(t, a.fallbackHTTP)
+	require.False(t, a.markDisable)
+	require.False(t, a.capability)
 
 	// 请求/凭据级：不回退不标记。
 	for _, reason := range []string{

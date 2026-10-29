@@ -920,9 +920,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
 		)
 		s.handleOpenAIWSDialTransientFailure(ctx, account, capturedSessionModel, dialErr)
+		recordOpenAIWSDialRejected(c, account, dialErr)
 		if statusCode == http.StatusTooManyRequests {
 			s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), capturedSessionModel)
 			return s.newOpenAIWSRateLimitFailoverError(account, handshakeHeaders, nil, err.Error())
+		}
+		// The relay has not started: the handler can replay the first frame on
+		// another account instead of closing with "authentication failed".
+		if statusCode == http.StatusForbidden {
+			return s.newOpenAIWSDialForbiddenFailoverError(ctx, account, capturedSessionModel, dialErr)
 		}
 		if action := openAIWSSessionFallbackActionFor(classifyOpenAIWSAcquireError(dialErr)); action.capability {
 			s.markOpenAIWSSessionDisabled(resolveOpenAIWSSessionScope(c, account, originalFirstClientMessage), action.reason)

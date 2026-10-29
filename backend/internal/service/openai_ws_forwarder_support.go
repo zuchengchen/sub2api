@@ -782,8 +782,10 @@ func classifyOpenAIWSAcquireError(err error) string {
 		switch dialErr.StatusCode {
 		case 426:
 			return "upgrade_required"
-		case 401, 403:
+		case 401:
 			return "auth_failed"
+		case 403:
+			return openAIWSUpstreamForbiddenReason
 		case 429:
 			return "upstream_rate_limited"
 		}
