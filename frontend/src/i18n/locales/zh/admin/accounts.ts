@@ -1621,6 +1621,4 @@ export default {
         noData: '该账号暂无使用数据'
       }
     },
-
-    // Scheduled Tests
 }

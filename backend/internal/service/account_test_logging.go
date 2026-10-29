@@ -8,21 +8,15 @@ import (
 	"go.uber.org/zap"
 )
 
-const accountTestBackgroundKey = "account_test_background"
-
 // Bind attribution before lookup so missing accounts are identifiable too. The
-// request logger retains HTTP request IDs or the caller's background correlation.
+// request logger retains HTTP request IDs.
 func initAccountTestLogger(c *gin.Context, accountID int64, modelID, mode string) {
-	source := "http"
-	if c.GetBool(accountTestBackgroundKey) {
-		source = "background"
-	}
 	ctx := c.Request.Context()
 	l := logger.FromContext(ctx).With(
 		zap.String("component", "service.account_test"),
 		zap.Int64("account_id", accountID),
 		zap.String("test_id", uuid.NewString()),
-		zap.String("test_source", source),
+		zap.String("test_source", "http"),
 		zap.String("requested_model", modelID),
 		zap.String("test_mode", normalizeAccountTestMode(mode)),
 	)

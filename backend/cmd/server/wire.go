@@ -108,7 +108,6 @@ func provideCleanup(
 	openaiOAuth *service.OpenAIOAuthService,
 	grokOAuth *service.GrokOAuthService,
 	openAIGateway *service.OpenAIGatewayService,
-	scheduledTestRunner *service.ScheduledTestRunnerService,
 	backupSvc *service.BackupService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
@@ -298,12 +297,6 @@ func provideCleanup(
 			{"OpenAICodexTicketHarvester", func() error {
 				if openAIGateway != nil {
 					openAIGateway.StopOpenAICodexTicketHarvester()
-				}
-				return nil
-			}},
-			{"ScheduledTestRunnerService", func() error {
-				if scheduledTestRunner != nil {
-					scheduledTestRunner.Stop()
 				}
 				return nil
 			}},

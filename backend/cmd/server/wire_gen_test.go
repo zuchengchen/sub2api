@@ -73,7 +73,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		openAIOAuthSvc,
 		nil, // grokOAuth
 		nil, // openAIGateway
-		nil, // scheduledTestRunner
 		nil, // backupSvc
 		nil, // channelMonitorRunner
 		nil, // quotaFlusher
