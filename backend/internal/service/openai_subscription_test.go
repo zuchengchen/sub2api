@@ -260,6 +260,36 @@ func TestEnrichTokenInfo_KeepsEntitlementWhenAccountMatches(t *testing.T) {
 	require.Zero(t, subscriptionCalls, "账号一致时不应额外请求订阅端点")
 }
 
+func TestEnrichTokenInfo_RefreshesIDTokenSubscriptionFallback(t *testing.T) {
+	for _, activeUntil := range []string{"2027-02-01T00:00:00Z", ""} {
+		t.Run(activeUntil, func(t *testing.T) {
+			const fallback = "2026-11-20T15:01:57Z"
+			calls := 0
+			server := newChatGPTBackendTestServer(t, chatGPTBackendTestServerConfig{
+				accountsCheck: map[string]any{"accounts": map[string]any{}},
+				onSubscription: func(id string) map[string]any {
+					calls++
+					require.Equal(t, "personal-a", id)
+					return map[string]any{"active_until": activeUntil}
+				},
+			})
+			defer server.Close()
+			info := &OpenAITokenInfo{AccessToken: "at", ChatGPTAccountID: "personal-a", PlanType: "pro", SubscriptionExpiresAt: fallback}
+			info.subscriptionExpiryFromIDToken = true
+			svc := &OpenAIOAuthService{privacyClientFactory: newTestPrivacyClientFactory()}
+			svc.enrichTokenInfo(context.Background(), info, "")
+			require.Equal(t, 1, calls, "cached JWT date must not suppress subscription refresh")
+			if activeUntil == "" {
+				require.Equal(t, fallback, info.SubscriptionExpiresAt)
+				require.True(t, info.subscriptionExpiryFromIDToken)
+			} else {
+				require.Equal(t, activeUntil, info.SubscriptionExpiresAt)
+				require.False(t, info.subscriptionExpiryFromIDToken)
+			}
+		})
+	}
+}
+
 // 反向不变式：套餐本身就取自 accounts/check（JWT 没有 plan_type）时，到期时间必须
 // 跟着取同一条记录，否则会变成「workspace 套餐 + 个人到期时间」的另一种错配。
 func TestEnrichTokenInfo_WorkspacePlanTypeKeepsItsOwnExpiry(t *testing.T) {

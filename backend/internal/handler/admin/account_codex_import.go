@@ -94,20 +94,11 @@ type codexImportAccount struct {
 }
 
 type codexJWTClaims struct {
-	Sub        string                `json:"sub"`
-	Email      string                `json:"email"`
-	Exp        int64                 `json:"exp"`
-	Iat        int64                 `json:"iat"`
-	OpenAIAuth *codexJWTOpenAIClaims `json:"https://api.openai.com/auth,omitempty"`
-}
-
-type codexJWTOpenAIClaims struct {
-	ChatGPTAccountID string                     `json:"chatgpt_account_id"`
-	ChatGPTUserID    string                     `json:"chatgpt_user_id"`
-	ChatGPTPlanType  string                     `json:"chatgpt_plan_type"`
-	UserID           string                     `json:"user_id"`
-	POID             string                     `json:"poid"`
-	Organizations    []openai.OrganizationClaim `json:"organizations"`
+	Sub        string                   `json:"sub"`
+	Email      string                   `json:"email"`
+	Exp        int64                    `json:"exp"`
+	Iat        int64                    `json:"iat"`
+	OpenAIAuth *openai.OpenAIAuthClaims `json:"https://api.openai.com/auth,omitempty"`
 }
 
 type codexAccountIndex struct {
@@ -697,6 +688,11 @@ func enrichCodexImportAccountFromJWT(item *codexImportAccount, token string, val
 	}
 	if item.PlanType == "" {
 		item.PlanType = strings.TrimSpace(claims.OpenAIAuth.ChatGPTPlanType)
+	}
+	if item.Credentials["subscription_expires_at"] == nil &&
+		strings.EqualFold(item.AccountID, strings.TrimSpace(claims.OpenAIAuth.ChatGPTAccountID)) &&
+		strings.EqualFold(item.PlanType, strings.TrimSpace(claims.OpenAIAuth.ChatGPTPlanType)) {
+		setCodexCredentialIfNotEmpty(item.Credentials, "subscription_expires_at", claims.OpenAIAuth.SubscriptionExpiresAt())
 	}
 	if item.Organization == "" {
 		item.Organization = strings.TrimSpace(claims.OpenAIAuth.POID)

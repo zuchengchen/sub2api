@@ -226,6 +226,10 @@ export default {
       setPrivacy: '设置隐私',
       subscriptionAbnormal: '异常',
       subscriptionExpires: '到期',
+      subscriptionGraceUntil: '宽限期至 {date}',
+      subscriptionGraceActive: '宽限期中',
+      subscriptionGraceExpired: '宽限期已结束',
+      subscriptionGraceTooltip: '按本站规则估算：订阅到期后 {days} 天（每天 24 小时），宽限期至 {time}（本地时间）。仅供参考，实际可用性以上游为准。',
       // 容量状态提示
       capacity: {
         windowCost: {

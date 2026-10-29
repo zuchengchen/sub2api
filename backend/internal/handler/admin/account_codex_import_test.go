@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseCodexSessionImportEntriesSupportsRawTokenJSONAndArray(t *testing.T) {
@@ -142,6 +143,60 @@ func TestNormalizeCodexSessionJSONExtractsCredentialsAndIgnoresSessionToken(t *t
 	}
 	if item.TokenExpiresAt == nil {
 		t.Fatalf("TokenExpiresAt should be parsed from accessToken")
+	}
+}
+
+func TestImportSubscriptionExpiryFromIDToken(t *testing.T) {
+	const expiry = "2026-11-20T15:01:57+00:00"
+	for _, tc := range []struct{ name, accountID, plan, claim, want string }{
+		{"paid plan", "acct-1", "prolite", expiry, expiry},
+		{"different account", "workspace-2", "prolite", expiry, ""},
+		{"different plan", "acct-1", "free", expiry, ""},
+		{"invalid date", "acct-1", "prolite", "invalid", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			idToken := buildCodexImportTestJWT(t, time.Now().Add(-time.Hour), map[string]any{
+				"https://api.openai.com/auth": map[string]any{
+					"chatgpt_account_id": "acct-1", "chatgpt_plan_type": "prolite",
+					"chatgpt_subscription_active_until": tc.claim,
+				},
+			})
+			accessToken := buildCodexImportTestJWT(t, time.Now().Add(time.Hour), map[string]any{})
+			item, err := normalizeCodexImportEntry(codexImportEntry{Index: 1, Value: map[string]any{
+				"id_token": idToken, "access_token": accessToken, "refresh_token": "rt",
+				"chatgpt_account_id": tc.accountID, "plan_type": tc.plan,
+			}})
+			require.NoError(t, err)
+			dataItem := &DataAccount{Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+				Credentials: map[string]any{"id_token": idToken, "chatgpt_account_id": tc.accountID, "plan_type": tc.plan},
+			}
+			enrichCredentialsFromIDToken(dataItem)
+			for _, credentials := range []map[string]any{item.Credentials, dataItem.Credentials} {
+				if tc.want == "" {
+					require.NotContains(t, credentials, "subscription_expires_at")
+				} else {
+					require.Equal(t, tc.want, credentials["subscription_expires_at"])
+				}
+			}
+			dataItem.Credentials["subscription_expires_at"] = "2026-12-20T00:00:00Z"
+			enrichCredentialsFromIDToken(dataItem)
+			require.Equal(t, "2026-12-20T00:00:00Z", dataItem.Credentials["subscription_expires_at"])
+		})
+	}
+}
+
+func TestCodexImportMalformedSubscriptionClaimKeepsTokenExpiryValidation(t *testing.T) {
+	for _, value := range []any{12345, true, map[string]any{"unexpected": true}} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			token := buildCodexImportTestJWT(t, time.Now().Add(-time.Hour), map[string]any{
+				"https://api.openai.com/auth": map[string]any{
+					"chatgpt_plan_type": "pro", "chatgpt_subscription_active_until": value,
+				},
+			})
+			_, err := normalizeCodexImportEntry(codexImportEntry{Index: 1, Value: token})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "access_token")
+		})
 	}
 }
 

@@ -115,21 +115,22 @@ type OpenAIExchangeCodeInput struct {
 
 // OpenAITokenInfo represents the token information for OpenAI
 type OpenAITokenInfo struct {
-	AccessToken           string `json:"access_token"`
-	RefreshToken          string `json:"refresh_token"`
-	IDToken               string `json:"id_token,omitempty"`
-	ExpiresIn             int64  `json:"expires_in"`
-	ExpiresAt             int64  `json:"expires_at"`
-	ClientID              string `json:"client_id,omitempty"`
-	AuthMode              string `json:"auth_mode,omitempty"`
-	Email                 string `json:"email,omitempty"`
-	ChatGPTAccountID      string `json:"chatgpt_account_id,omitempty"`
-	ChatGPTUserID         string `json:"chatgpt_user_id,omitempty"`
-	ChatGPTAccountFedRAMP bool   `json:"chatgpt_account_is_fedramp,omitempty"`
-	OrganizationID        string `json:"organization_id,omitempty"`
-	PlanType              string `json:"plan_type,omitempty"`
-	SubscriptionExpiresAt string `json:"subscription_expires_at,omitempty"`
-	PrivacyMode           string `json:"privacy_mode,omitempty"`
+	AccessToken                   string `json:"access_token"`
+	RefreshToken                  string `json:"refresh_token"`
+	IDToken                       string `json:"id_token,omitempty"`
+	ExpiresIn                     int64  `json:"expires_in"`
+	ExpiresAt                     int64  `json:"expires_at"`
+	ClientID                      string `json:"client_id,omitempty"`
+	AuthMode                      string `json:"auth_mode,omitempty"`
+	Email                         string `json:"email,omitempty"`
+	ChatGPTAccountID              string `json:"chatgpt_account_id,omitempty"`
+	ChatGPTUserID                 string `json:"chatgpt_user_id,omitempty"`
+	ChatGPTAccountFedRAMP         bool   `json:"chatgpt_account_is_fedramp,omitempty"`
+	OrganizationID                string `json:"organization_id,omitempty"`
+	PlanType                      string `json:"plan_type,omitempty"`
+	SubscriptionExpiresAt         string `json:"subscription_expires_at,omitempty"`
+	PrivacyMode                   string `json:"privacy_mode,omitempty"`
+	subscriptionExpiryFromIDToken bool
 }
 
 // ExchangeCode exchanges authorization code for tokens
@@ -203,6 +204,8 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 		tokenInfo.ChatGPTUserID = userInfo.ChatGPTUserID
 		tokenInfo.OrganizationID = userInfo.OrganizationID
 		tokenInfo.PlanType = userInfo.PlanType
+		tokenInfo.SubscriptionExpiresAt = userInfo.SubscriptionExpiresAt
+		tokenInfo.subscriptionExpiryFromIDToken = userInfo.SubscriptionExpiresAt != ""
 	}
 
 	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
@@ -250,6 +253,8 @@ func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 		tokenInfo.ChatGPTUserID = userInfo.ChatGPTUserID
 		tokenInfo.OrganizationID = userInfo.OrganizationID
 		tokenInfo.PlanType = userInfo.PlanType
+		tokenInfo.SubscriptionExpiresAt = userInfo.SubscriptionExpiresAt
+		tokenInfo.subscriptionExpiryFromIDToken = userInfo.SubscriptionExpiresAt != ""
 	}
 
 	// Refresh happens on every token expiry; the official CLI sends nothing
@@ -321,6 +326,10 @@ func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *Ope
 	if tokenInfo.AccessToken == "" || s.privacyClientFactory == nil {
 		return
 	}
+	fallbackExpiresAt, fallbackPlan := tokenInfo.SubscriptionExpiresAt, tokenInfo.PlanType
+	fallbackFromIDToken := tokenInfo.subscriptionExpiryFromIDToken
+	tokenInfo.SubscriptionExpiresAt = ""
+	tokenInfo.subscriptionExpiryFromIDToken = false
 
 	// 从 access_token JWT 中提取 orgID（poid），用于匹配正确的账号
 	orgID := tokenInfo.OrganizationID
@@ -361,6 +370,10 @@ func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *Ope
 		if expiresAt := fetchChatGPTSubscriptionExpiresAt(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL, resolveChatGPTSubscriptionAccountID(tokenInfo, orgID)); expiresAt != "" {
 			tokenInfo.SubscriptionExpiresAt = expiresAt
 		}
+	}
+	if tokenInfo.SubscriptionExpiresAt == "" && tokenInfo.PlanType == fallbackPlan {
+		tokenInfo.SubscriptionExpiresAt = fallbackExpiresAt
+		tokenInfo.subscriptionExpiryFromIDToken = fallbackFromIDToken
 	}
 
 	// 尝试设置隐私（关闭训练数据共享），best-effort
@@ -433,7 +446,7 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 				ChatGPTUserID:         account.GetCredential("chatgpt_user_id"),
 				OrganizationID:        account.GetCredential("organization_id"),
 				PlanType:              account.GetCredential("plan_type"),
-				SubscriptionExpiresAt: account.GetCredential("subscription_expires_at"),
+				SubscriptionExpiresAt: account.GetSubscriptionExpiresAt(),
 			}
 			if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
 				tokenInfo.ExpiresAt = expiresAt.Unix()
@@ -449,7 +462,21 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		ctx = openai.WithCodexClientUserAgent(ctx, profile.UserAgent)
 	}
 	clientID := account.GetCredential("client_id")
-	return s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
+	info, err := s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
+	if err != nil {
+		return nil, err
+	}
+	// A throttled or failed web lookup must not replace a saved subscription
+	// date with a potentially older ID-token snapshot of the same subscription.
+	if info.subscriptionExpiryFromIDToken &&
+		strings.EqualFold(strings.TrimSpace(info.ChatGPTAccountID), strings.TrimSpace(account.GetCredential("chatgpt_account_id"))) &&
+		strings.EqualFold(strings.TrimSpace(info.PlanType), strings.TrimSpace(account.GetCredential("plan_type"))) {
+		if existing := strings.TrimSpace(account.GetCredential("subscription_expires_at")); existing != "" {
+			info.SubscriptionExpiresAt = existing
+			info.subscriptionExpiryFromIDToken = false
+		}
+	}
+	return info, nil
 }
 
 // BuildAccountCredentials builds credentials map from token info
