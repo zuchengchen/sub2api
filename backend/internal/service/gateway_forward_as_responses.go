@@ -207,7 +207,8 @@ func (s *GatewayService) forwardAsResponsesWithoutHostedWebSearch(
 		}
 
 		// Non-failover error: return Responses-formatted error to client
-		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		recordConvertedUpstreamHTTPError(c, account, resp, upstreamMsg)
+		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), convertedUpstreamErrorCode(resp.StatusCode), upstreamMsg)
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
@@ -807,6 +808,47 @@ func writeResponsesError(c *gin.Context, statusCode int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+// recordConvertedUpstreamHTTPError attributes a non-failover upstream HTTP
+// error on a protocol-converting path (Anthropic upstream answered a Responses
+// or Chat Completions client) to the provider. Without it the ops logger only
+// sees the locally written error body and classifies a provider 400 (content
+// policy, invalid argument) as a platform/internal failure.
+func recordConvertedUpstreamHTTPError(c *gin.Context, account *Account, resp *http.Response, upstreamMsg string) {
+	if c == nil || resp == nil {
+		return
+	}
+	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, "")
+	event := OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
+		UpstreamStatusCode: resp.StatusCode,
+		UpstreamRequestID:  resp.Header.Get("x-request-id"),
+		Kind:               "http_error",
+		Message:            upstreamMsg,
+	}
+	if account != nil {
+		event.Platform = account.Platform
+		event.AccountID = account.ID
+		event.AccountName = account.Name
+	}
+	appendOpsUpstreamError(c, event)
+}
+
+// convertedUpstreamErrorCode picks the OpenAI-vocabulary error code for a
+// non-failover upstream HTTP error relayed to a Responses/Chat client. A 4xx
+// is a request-scoped rejection; labeling it server_error makes clients such
+// as Codex treat a content-policy refusal as a retryable server fault.
+func convertedUpstreamErrorCode(statusCode int) string {
+	switch {
+	case statusCode == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case statusCode >= 400 && statusCode < 500:
+		return "invalid_request_error"
+	default:
+		return "server_error"
+	}
 }
 
 // mapUpstreamStatusCode maps upstream HTTP status codes to appropriate client-facing codes.

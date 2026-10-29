@@ -865,6 +865,55 @@ func (s *OpenAIGatewayService) newOpenAIWSRateLimitFailoverError(account *Accoun
 	)
 }
 
+// openAIWSV2PreOutputAccountFailover converts a WSv2 error event that arrives
+// before any client-visible byte into an account failover, matching the HTTP
+// SSE, ingress WS, and WS→HTTP bridge paths. Capacity shed
+// (server_is_overloaded / slow_down) and rate-limit events classify as
+// non-fallback for same-account HTTP retry, so without this they were written
+// straight to the client as 502 even though another account (or a delayed
+// same-account retry) could serve the request.
+//
+// Account side effects were already applied by the caller
+// (handleOpenAIWSErrorEventTransientFailure / persistOpenAIWSRateLimitSignal);
+// this helper only records the attempt and builds the failover sentinel.
+func (s *OpenAIGatewayService) openAIWSV2PreOutputAccountFailover(
+	c *gin.Context,
+	account *Account,
+	headers http.Header,
+	payload []byte,
+	errCodeRaw, errTypeRaw, errMsgRaw string,
+	wroteDownstream bool,
+	clientDisconnected bool,
+) *UpstreamFailoverError {
+	if s == nil || account == nil || wroteDownstream || clientDisconnected {
+		return nil
+	}
+	if c != nil && c.Writer != nil && c.Writer.Written() {
+		return nil
+	}
+	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
+		return nil
+	}
+	statusCode := 0
+	switch {
+	case isOpenAIUpstreamCapacityShedEvent(payload):
+		statusCode = http.StatusServiceUnavailable
+	case isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw):
+		statusCode = http.StatusTooManyRequests
+	default:
+		return nil
+	}
+	message := strings.TrimSpace(errMsgRaw)
+	if message == "" {
+		message = extractOpenAISSEErrorMessage(payload)
+	}
+	message = s.recordOpenAIStreamUpstreamError(c, account, false, "", "failover", payload, message)
+	if statusCode == http.StatusTooManyRequests {
+		return s.newOpenAIWSRateLimitFailoverError(account, headers, payload, message)
+	}
+	return s.newOpenAIAccountFailoverError(account, statusCode, headers, payload, message, false, false)
+}
+
 func classifyOpenAIWSErrorEventFromRaw(codeRaw, errTypeRaw, msgRaw string) (string, bool) {
 	code := strings.ToLower(strings.TrimSpace(codeRaw))
 	errType := strings.ToLower(strings.TrimSpace(errTypeRaw))
