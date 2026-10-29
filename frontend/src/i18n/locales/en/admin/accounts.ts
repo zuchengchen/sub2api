@@ -1651,6 +1651,4 @@ export default {
       rateLimited: 'Rate Limited',
       usageError: 'Fetch Error'
     },
-
-    // Scheduled Tests
 }

@@ -19,7 +19,6 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"sort"
@@ -3078,64 +3077,4 @@ func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) er
 	logAccountTestError(c, errorMsg)
 	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
 	return fmt.Errorf("%s", errorMsg)
-}
-
-// RunTestBackground executes an account test in-memory (no real HTTP client),
-// capturing SSE output via httptest.NewRecorder, then parses the result.
-func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error) {
-	startedAt := time.Now()
-
-	w := httptest.NewRecorder()
-	ginCtx, _ := gin.CreateTestContext(w)
-	ginCtx.Request = (&http.Request{}).WithContext(ctx)
-	ginCtx.Set(accountTestBackgroundKey, true)
-
-	testErr := s.TestAccountConnection(ginCtx, accountID, modelID, "", AccountTestModeDefault)
-
-	finishedAt := time.Now()
-	body := w.Body.String()
-	responseText, errMsg := parseTestSSEOutput(body)
-
-	status := "success"
-	if testErr != nil || errMsg != "" {
-		status = "failed"
-		if errMsg == "" && testErr != nil {
-			errMsg = testErr.Error()
-		}
-	}
-
-	return &ScheduledTestResult{
-		Status:       status,
-		ResponseText: responseText,
-		ErrorMessage: errMsg,
-		LatencyMs:    finishedAt.Sub(startedAt).Milliseconds(),
-		StartedAt:    startedAt,
-		FinishedAt:   finishedAt,
-	}, nil
-}
-
-// parseTestSSEOutput extracts response text and error message from captured SSE output.
-func parseTestSSEOutput(body string) (responseText, errMsg string) {
-	var texts []string
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		jsonStr := strings.TrimPrefix(line, "data: ")
-		var event TestEvent
-		if err := json.Unmarshal([]byte(jsonStr), &event); err != nil {
-			continue
-		}
-		switch event.Type {
-		case "content":
-			if event.Text != "" {
-				texts = append(texts, event.Text)
-			}
-		case "error":
-			errMsg = event.Error
-		}
-	}
-	responseText = strings.Join(texts, "")
-	return
 }

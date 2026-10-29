@@ -106,8 +106,7 @@ func TestScopedAdminReviewGroupPriorityAndStatus(t *testing.T) {
 		}
 	})
 	t.Run("删除提交后立即清缓存且失败保留缓存", func(t *testing.T) {
-		_, err := db.Exec(`CREATE TABLE scheduled_test_plans(account_id BIGINT);
-  CREATE FUNCTION reject_review_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION '模拟提交失败'; RETURN NULL; END $$;
+		_, err := db.Exec(`CREATE FUNCTION reject_review_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION '模拟提交失败'; RETURN NULL; END $$;
   CREATE CONSTRAINT TRIGGER reject_review_delete AFTER UPDATE ON accounts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.name='删除回滚' AND NEW.deleted_at IS NOT NULL) EXECUTE FUNCTION reject_review_delete();`)
 		require.NoError(t, err)
 		deleteCtx := adminaccess.WithPrincipal(context.Background(), &adminaccess.Principal{Policy: adminaccess.Policy{Rules: []adminaccess.Rule{{Permissions: []string{"accounts.delete"}, GroupIDs: []int64{a.ID}, AccountTypes: []string{"apikey"}}}}})

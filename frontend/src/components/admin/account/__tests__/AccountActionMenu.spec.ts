@@ -44,6 +44,31 @@ const anchorRect = new DOMRect(100, 100, 24, 24)
 const getBodyText = () => document.body.textContent ?? ''
 
 describe('AccountActionMenu actions', () => {
+  it.each(['apikey', 'oauth'] as const)('keeps only standard actions and a clickable manual test for %s accounts', async (type) => {
+    const account = makeAccount({ type })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, anchorRect },
+      attachTo: document.body,
+    })
+    const buttons = Array.from(document.body.querySelectorAll('.action-menu-content button'))
+    expect(buttons.map(button => button.textContent?.trim())).toEqual([
+      'admin.accounts.testConnection',
+      'admin.accounts.viewStats',
+      ...(type === 'apikey'
+        ? ['admin.accounts.duplicateAccount']
+        : ['admin.accounts.reAuthorize', 'admin.accounts.refreshToken', 'admin.accounts.setPrivacy']),
+    ])
+
+    const testButton = buttons.find(button => button.textContent?.trim() === 'admin.accounts.testConnection') as HTMLButtonElement
+    expect(testButton.disabled).toBe(false)
+    testButton.click()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('test')).toEqual([[account]])
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
   it('shows duplicate for API key accounts', () => {
     const account = makeAccount({ platform: 'anthropic', type: 'apikey' })
     const wrapper = mount(AccountActionMenu, {
