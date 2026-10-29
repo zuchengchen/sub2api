@@ -284,7 +284,7 @@ func TestHostedResponsesSearchHistoryResolvesAliasesAndDoesNotDuplicateResults(t
 	putResponsesWebSearchReplay(scope, "pending:resp_last", responsesWebSearchReplayEntry{pending: []json.RawMessage{
 		json.RawMessage(`{"type":"function_call_output","call_id":"paid_search","output":"retained evidence"}`),
 	}})
-	next, err := normalizeResponsesWebSearchHistory(c, body)
+	next, err := normalizeResponsesWebSearchHistory(c, body, false)
 	require.NoError(t, err)
 	require.Equal(t, "resp_last", gjson.GetBytes(next, "previous_response_id").String())
 	require.Equal(t, int64(1), gjson.GetBytes(next, "input.#").Int())
@@ -296,6 +296,7 @@ func TestHostedResponsesSearchReplaysIDStrippedProviderPayload(t *testing.T) {
 		"replay", "empty_id", "new_search_disabled", "hosted_gate_disabled", "changed_query", "changed_sources",
 		"missing_status", "failed_status", "incomplete_status", "expired", "other_key",
 		"other_user", "other_group", "unauthenticated", "ambiguous", "foreign_id", "null_id",
+		"codex_dropped_sources", "hosted_gate_disabled_unmatched",
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			// Mirrors the actual client contract: store=false, function tools only,
@@ -341,6 +342,14 @@ func TestHostedResponsesSearchReplaysIDStrippedProviderPayload(t *testing.T) {
 				public["id"] = json.RawMessage(`""`)
 			case "null_id":
 				public["id"] = json.RawMessage(`null`)
+			case "codex_dropped_sources":
+				// Codex's typed WebSearchAction keeps only type/query/queries.
+				var action map[string]json.RawMessage
+				require.NoError(t, json.Unmarshal(public["action"], &action))
+				delete(action, "sources")
+				public["action"] = rawResponsesSearchJSON(action)
+			case "hosted_gate_disabled_unmatched":
+				public["status"] = json.RawMessage(`"failed"`)
 			case "changed_query", "changed_sources":
 				var action map[string]json.RawMessage
 				require.NoError(t, json.Unmarshal(public["action"], &action))
@@ -393,9 +402,38 @@ func TestHostedResponsesSearchReplaysIDStrippedProviderPayload(t *testing.T) {
 			case "unauthenticated":
 				continued.Set("api_key", (*APIKey)(nil))
 			}
-			success := scenario == "replay" || scenario == "empty_id" || scenario == "new_search_disabled" || scenario == "hosted_gate_disabled"
+			var success, degraded, passthrough bool
+			switch scenario {
+			case "replay", "empty_id", "new_search_disabled", "hosted_gate_disabled", "changed_sources", "codex_dropped_sources":
+				success = true
+			case "foreign_id", "null_id":
+			case "hosted_gate_disabled_unmatched":
+				passthrough = true
+			default:
+				// Unmatched id-less history never selects evidence; hosted mode
+				// replaces it with a neutral note so the conversation continues.
+				degraded = true
+			}
 			forward := func(next []byte) (*OpenAIForwardResult, error) {
-				require.True(t, success, "irrecoverable history must not reach the upstream")
+				require.True(t, success || degraded || passthrough, "irrecoverable history must not reach the upstream")
+				if !success {
+					require.NotContains(t, string(next), "complete evidence", "unmatched history must never replay retained evidence")
+				}
+				if passthrough {
+					require.Equal(t, int64(4), gjson.GetBytes(next, "input.#").Int())
+					require.JSONEq(t, string(rawResponsesSearchJSON(public)), gjson.GetBytes(next, "input.1").Raw)
+					return hostedSearchTestResponse(continued, "resp_idless_continued", nil, 8, 1), nil
+				}
+				if degraded {
+					require.Equal(t, int64(4), gjson.GetBytes(next, "input.#").Int())
+					require.Equal(t, "message", gjson.GetBytes(next, "input.1.type").String())
+					require.Equal(t, "assistant", gjson.GetBytes(next, "input.1.role").String())
+					require.Contains(t, gjson.GetBytes(next, "input.1.content.0.text").String(), "no longer available")
+					require.False(t, gjson.GetBytes(next, `input.#(type=="web_search_call")`).Exists())
+					require.JSONEq(t, string(clientCall), gjson.GetBytes(next, "input.2").Raw)
+					require.JSONEq(t, string(clientResult), gjson.GetBytes(next, "input.3").Raw)
+					return hostedSearchTestResponse(continued, "resp_idless_continued", nil, 8, 1), nil
+				}
 				require.Equal(t, int64(5), gjson.GetBytes(next, "input.#").Int())
 				require.Equal(t, "function_call", gjson.GetBytes(next, "input.1.type").String())
 				require.Equal(t, "paid_idless", gjson.GetBytes(next, "input.1.call_id").String())
@@ -405,7 +443,7 @@ func TestHostedResponsesSearchReplaysIDStrippedProviderPayload(t *testing.T) {
 				require.JSONEq(t, string(clientResult), gjson.GetBytes(next, "input.4").Raw)
 				return hostedSearchTestResponse(continued, "resp_idless_continued", nil, 8, 1), nil
 			}
-			if scenario == "hosted_gate_disabled" {
+			if scenario == "hosted_gate_disabled" || scenario == "hosted_gate_disabled_unmatched" {
 				svc := &GatewayService{}
 				_, err = svc.ForwardResponsesWithWebSearch(context.Background(), continued, &Account{}, continuation, func(next []byte) (*ForwardResult, error) {
 					_, err := forward(next)
@@ -417,7 +455,7 @@ func TestHostedResponsesSearchReplaysIDStrippedProviderPayload(t *testing.T) {
 					return nil, nil
 				})
 			}
-			if success {
+			if success || degraded || passthrough {
 				require.NoError(t, err)
 				require.Equal(t, "completed", gjson.Get(rejected.Body.String(), "status").String())
 			} else {
