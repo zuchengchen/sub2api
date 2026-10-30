@@ -243,4 +243,37 @@ describe('AccountTestModal', () => {
       mode: 'compact'
     })
   })
+
+  it('展示测试 SSE 返回的 Chat Completions 路径状态', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' }
+    ])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"status","text":"已通过 /v1/chat/completions 验证"}\n\n',
+        'data: {"type":"test_complete","success":true}\n\n'
+      ])
+    ) as any
+
+    const wrapper = mountModal({
+      id: 42,
+      name: 'OpenAI OAuth',
+      platform: 'openai',
+      type: 'oauth',
+      status: 'active'
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const startButton = wrapper.findAll('button').find(
+      (button) => button.text().includes('admin.accounts.startTest')
+    )
+    expect(startButton).toBeTruthy()
+    await startButton!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已通过 /v1/chat/completions 验证')
+    expect(wrapper.text()).toContain('admin.accounts.testCompleted')
+    wrapper.unmount()
+  })
 })

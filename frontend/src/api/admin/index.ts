@@ -19,7 +19,6 @@ import cnProvidersAPI from './cnProviders'
 import userAttributesAPI from './userAttributes'
 import opsAPI from './ops'
 import errorPassthroughAPI from './errorPassthrough'
-import dataManagementAPI from './dataManagement'
 import apiKeysAPI from './apiKeys'
 import backupAPI from './backup'
 import tlsFingerprintProfileAPI from './tlsFingerprintProfile'
@@ -55,7 +54,6 @@ export const adminAPI = {
   userAttributes: userAttributesAPI,
   ops: opsAPI,
   errorPassthrough: errorPassthroughAPI,
-  dataManagement: dataManagementAPI,
   apiKeys: apiKeysAPI,
   backup: backupAPI,
   tlsFingerprintProfiles: tlsFingerprintProfileAPI,
@@ -89,7 +87,6 @@ export {
   userAttributesAPI,
   opsAPI,
   errorPassthroughAPI,
-  dataManagementAPI,
   apiKeysAPI,
   backupAPI,
   tlsFingerprintProfileAPI,
@@ -112,7 +109,6 @@ export default adminAPI
 export type { AuditLog, AuditLogQuery, AuditLogListResponse } from './audit'
 export type { BalanceHistoryItem } from './users'
 export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from './errorPassthrough'
-export type { BackupAgentHealth, DataManagementConfig } from './dataManagement'
 export type { TLSFingerprintProfile, CreateProfileRequest, UpdateProfileRequest } from './tlsFingerprintProfile'
 export type { ContentModerationConfig, ContentModerationLog, ModerationMode } from './riskControl'
 export type {

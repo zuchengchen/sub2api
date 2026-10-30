@@ -56,6 +56,8 @@ func NewSupportDecisionAtomicReader(maxStale time.Duration) *SupportDecisionAtom
 }
 
 func ProvideSupportDecisionAtomicReader() *SupportDecisionAtomicReader {
+	// No table is installed while the classifier only returns Unknown. Keeping
+	// this reader empty preserves selection fallbacks without a refresh worker.
 	return NewSupportDecisionAtomicReader(30 * time.Second)
 }
 

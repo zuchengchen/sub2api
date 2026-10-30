@@ -54,6 +54,8 @@ type DataManagementAgentInfo struct {
 	UptimeSeconds int64
 }
 
+// DataManagementService is a compatibility facade for the retired agent.
+// It reports health and deprecation errors without dialing sockets or doing I/O.
 type DataManagementService struct {
 	socketPath string
 }

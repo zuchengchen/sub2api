@@ -70,9 +70,3 @@ func TestDataManagementHandler_NonHealthRouteReturns503WhenDisabled(t *testing.T
 	require.Equal(t, http.StatusServiceUnavailable, envelope.Code)
 	require.Equal(t, service.DataManagementDeprecatedReason, envelope.Reason)
 }
-
-func TestNormalizeBackupIdempotencyKey(t *testing.T) {
-	require.Equal(t, "from-header", normalizeBackupIdempotencyKey("from-header", "from-body"))
-	require.Equal(t, "from-body", normalizeBackupIdempotencyKey(" ", " from-body "))
-	require.Equal(t, "", normalizeBackupIdempotencyKey("", ""))
-}
