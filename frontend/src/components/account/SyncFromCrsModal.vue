@@ -303,9 +303,9 @@ watch(
       form.password = ''
       form.sync_proxies = true
     }
-  }
+  },
+  { immediate: true }
 )
-
 const handleClose = () => {
   if (syncing.value || previewing.value) {
     return

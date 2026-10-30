@@ -9,7 +9,7 @@ const {
   listAccounts,
   listWithEtag,
   getById,
-  getBatchTodayStats,
+  getBatchTodayStatsWithEtag,
   getUpstreamBillingProbeSettings,
   getAllProxies,
   getAllGroups,
@@ -20,7 +20,7 @@ const {
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getById: vi.fn(),
-  getBatchTodayStats: vi.fn(),
+  getBatchTodayStatsWithEtag: vi.fn(),
   getUpstreamBillingProbeSettings: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('@/api/admin', () => ({
       list: listAccounts,
       getById,
       listWithEtag,
-      getBatchTodayStats,
+      getBatchTodayStatsWithEtag,
       getUpstreamBillingProbeSettings,
       delete: vi.fn(),
       batchClearError: vi.fn(),
@@ -161,7 +161,7 @@ describe('admin AccountsView lite account list', () => {
     listAccounts.mockReset().mockResolvedValue({ items: [listRow], total: 1, page: 1, page_size: 20, pages: 1 })
     listWithEtag.mockReset().mockResolvedValue({ notModified: true, etag: 'compact-etag', data: null })
     getById.mockReset().mockResolvedValue(fullAccount)
-    getBatchTodayStats.mockReset().mockResolvedValue({ stats: {} })
+    getBatchTodayStatsWithEtag.mockReset().mockResolvedValue({ notModified: false, etag: null, data: { stats: {} } })
     getUpstreamBillingProbeSettings.mockReset().mockResolvedValue({ enabled: true })
     getAllProxies.mockReset().mockResolvedValue([])
     getAllGroups.mockReset().mockResolvedValue([{ id: 7, name: 'codex', platform: 'openai' }])
@@ -289,7 +289,7 @@ describe('admin AccountsView lite account list', () => {
     await flushPromises()
 
     expect(showError).toHaveBeenCalledWith('detail failed')
-    expect(wrapper.get('[data-test="edit-account"]').text()).toBe('')
+    expect(wrapper.find('[data-test="edit-account"]').exists()).toBe(false)
     consoleError.mockRestore()
     wrapper.unmount()
   })

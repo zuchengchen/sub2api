@@ -249,24 +249,6 @@ const canExchangeCode = computed(() => {
   return authCode.trim() && sessionId && !loading
 })
 
-// Watchers
-watch(
-  () => props.show,
-  (newVal) => {
-    if (newVal && props.account) {
-      // Initialize addMethod based on current account type (Claude only)
-      if (
-        isAnthropic.value &&
-        (props.account.type === 'oauth' || props.account.type === 'setup-token')
-      ) {
-        addMethod.value = props.account.type as AddMethod
-      }
-    } else {
-      resetState()
-    }
-  }
-)
-
 // Methods
 const resetState = () => {
   addMethod.value = 'oauth'
@@ -565,4 +547,23 @@ const handleGrokValidateRefreshToken = async (refreshTokenInput: string) => {
     grokOAuth.loading.value = false
   }
 }
+
+// Register after the helpers above: the first lazy mount already has show=true.
+watch(
+  () => props.show,
+  (newVal) => {
+    if (newVal && props.account) {
+      // Initialize addMethod based on current account type (Claude only)
+      if (
+        isAnthropic.value &&
+        (props.account.type === 'oauth' || props.account.type === 'setup-token')
+      ) {
+        addMethod.value = props.account.type as AddMethod
+      }
+    } else {
+      resetState()
+    }
+  },
+  { immediate: true }
+)
 </script>

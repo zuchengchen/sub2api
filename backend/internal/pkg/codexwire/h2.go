@@ -606,11 +606,17 @@ func (c *h2Conn) RoundTrip(ctx context.Context, method, scheme, authority, path 
 	select {
 	case head = <-st.headCh:
 	case <-st.done:
-		c.dropStream(st)
-		if err := st.err; err != nil && !errors.Is(err, io.EOF) {
-			return nil, err
+		// The response may finish before this goroutine receives its head.
+		// Preserve queued headers and let the body expose any terminal error.
+		select {
+		case head = <-st.headCh:
+		default:
+			c.dropStream(st)
+			if err := st.err; err != nil && !errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			return nil, errors.New("h2: stream closed before response headers")
 		}
-		return nil, errors.New("h2: stream closed before response headers")
 	case <-ctx.Done():
 		c.dropStream(st)
 		_ = c.writeFrame(func(fr *http2.Framer) error {

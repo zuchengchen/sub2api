@@ -198,8 +198,9 @@ func hasOpenAIContentSessionUserAnchor(body []byte) bool {
 	if len(body) == 0 {
 		return false
 	}
+	root := openAIContentSessionSeedRoot(body)
 
-	if messages := gjson.GetBytes(body, "messages"); messages.Exists() && messages.IsArray() {
+	if messages := root.Get("messages"); messages.Exists() && messages.IsArray() {
 		anchored := false
 		messages.ForEach(func(_, message gjson.Result) bool {
 			if strings.TrimSpace(message.Get("role").String()) != "user" {
@@ -211,7 +212,7 @@ func hasOpenAIContentSessionUserAnchor(body []byte) bool {
 		return anchored
 	}
 
-	input := gjson.GetBytes(body, "input")
+	input := root.Get("input")
 	if !input.Exists() {
 		return false
 	}
@@ -275,6 +276,7 @@ func deriveOpenAIStablePrefixSessionSeed(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
+	root := openAIContentSessionSeedRoot(body)
 
 	var b strings.Builder
 	hasStablePrefix := false
@@ -290,13 +292,13 @@ func deriveOpenAIStablePrefixSessionSeed(body []byte) string {
 		hasStablePrefix = true
 	}
 
-	if tools := gjson.GetBytes(body, "tools"); tools.Exists() && tools.IsArray() {
+	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() {
 		appendJSON("tools", tools)
 	}
-	if funcs := gjson.GetBytes(body, "functions"); funcs.Exists() && funcs.IsArray() {
+	if funcs := root.Get("functions"); funcs.Exists() && funcs.IsArray() {
 		appendJSON("functions", funcs)
 	}
-	if instructions := gjson.GetBytes(body, "instructions"); strings.TrimSpace(instructions.String()) != "" {
+	if instructions := root.Get("instructions"); strings.TrimSpace(instructions.String()) != "" {
 		appendJSON("instructions", instructions)
 	}
 
@@ -311,9 +313,9 @@ func deriveOpenAIStablePrefixSessionSeed(body []byte) string {
 		})
 	}
 
-	if messages := gjson.GetBytes(body, "messages"); messages.Exists() && messages.IsArray() {
+	if messages := root.Get("messages"); messages.Exists() && messages.IsArray() {
 		appendSystemMessages(messages)
-	} else if input := gjson.GetBytes(body, "input"); input.Exists() && input.IsArray() {
+	} else if input := root.Get("input"); input.Exists() && input.IsArray() {
 		appendSystemMessages(input)
 	}
 
@@ -321,6 +323,21 @@ func deriveOpenAIStablePrefixSessionSeed(body []byte) string {
 		return ""
 	}
 	return contentStablePrefixSessionSeedPrefix + b.String()
+}
+
+// openAIContentSessionSeedRoot borrows body only for synchronous, read-only
+// lookups. Result.Get keeps gjson.GetBytes field selection (including the first
+// duplicate key) without copying a potentially large messages/input array.
+// Match GetBytes' search for the first container even after a malformed prefix;
+// parsing body directly would reject that prefix or stop at a primitive value.
+// The view and its fields must not outlive or be used while modifying body.
+func openAIContentSessionSeedRoot(body []byte) gjson.Result {
+	for i, char := range body {
+		if char == '{' || char == '[' {
+			return parseRawJSONView(body[i:])
+		}
+	}
+	return gjson.Result{}
 }
 
 func normalizeNonEmptyCompatSeedJSON(value gjson.Result) (string, bool) {

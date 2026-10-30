@@ -4014,23 +4014,6 @@ const canExchangeCode = computed(() => {
   return authCode.trim() && oauth.sessionId.value && !oauth.loading.value
 })
 
-// Watchers
-watch(
-  () => props.show,
-  (newVal) => {
-    if (newVal) {
-      // Load TLS fingerprint profiles
-      adminAPI.tlsFingerprintProfiles.list()
-        .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
-        .catch(() => { tlsFingerprintProfiles.value = [] })
-      // Modal opened - fill related models
-      allowedModels.value = [...getModelsByPlatform(form.platform)]
-    } else {
-      resetForm()
-    }
-  }
-)
-
 // Sync form.type based on accountCategory, addMethod, and platform-specific type
 watch(
   [accountCategory, addMethod, () => form.platform],
@@ -6056,4 +6039,22 @@ const handleCookieAuth = async (sessionKey: string) => {
     oauth.loading.value = false
   }
 }
+
+// Register after the helpers above: the first lazy mount already has show=true.
+watch(
+  () => props.show,
+  (newVal) => {
+    if (newVal) {
+      // Load TLS fingerprint profiles
+      adminAPI.tlsFingerprintProfiles.list()
+        .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
+        .catch(() => { tlsFingerprintProfiles.value = [] })
+      // Modal opened - fill related models
+      allowedModels.value = [...getModelsByPlatform(form.platform)]
+    } else {
+      resetForm()
+    }
+  },
+  { immediate: true }
+)
 </script>

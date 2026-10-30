@@ -1702,7 +1702,8 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 	}
-	if bodyHasSSEFraming(body) {
+	bodyLooksLikeSSE := bodyHasSSEFraming(body)
+	if bodyLooksLikeSSE {
 		observeOpenAISSEBody(observer, string(body))
 	} else {
 		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
@@ -1720,8 +1721,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// whose string content merely echoes the literal text "data:" or
 	// "event:" (e.g. compact tool output), causing those JSON bodies to be
 	// misrouted into handleSSEToJSON and lose their usage accounting.
-	bodyLooksLikeSSE := bodyHasSSEFraming(body)
-
 	// For OAuth accounts, also fall back to a body-content heuristic because
 	// the upstream may omit the Content-Type header while still sending SSE.
 	// This heuristic is NOT applied to API-key accounts to avoid false
@@ -1803,7 +1802,13 @@ func isEventStreamResponse(header http.Header) bool {
 // (e.g. "data: foo" quoted as part of an assistant text field), since such
 // occurrences never start a physical line in a valid JSON encoding.
 func bodyHasSSEFraming(body []byte) bool {
-	for _, line := range bytes.Split(body, []byte("\n")) {
+	for len(body) > 0 {
+		line := body
+		if end := bytes.IndexByte(body, '\n'); end >= 0 {
+			line, body = body[:end], body[end+1:]
+		} else {
+			body = nil
+		}
 		line = bytes.TrimRight(line, "\r")
 		if bytes.HasPrefix(line, []byte("data:")) || bytes.HasPrefix(line, []byte("event:")) {
 			return true

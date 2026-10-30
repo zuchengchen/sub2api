@@ -9,7 +9,7 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 const {
   listAccounts,
   listWithEtag,
-  getBatchTodayStats,
+  getBatchTodayStatsWithEtag,
   getUpstreamBillingProbeSettings,
   getAllProxies,
   getAllGroups,
@@ -19,7 +19,7 @@ const {
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
-  getBatchTodayStats: vi.fn(),
+  getBatchTodayStatsWithEtag: vi.fn(),
   getUpstreamBillingProbeSettings: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
@@ -33,7 +33,7 @@ vi.mock('@/api/admin', () => ({
     accounts: {
       list: listAccounts,
       listWithEtag,
-      getBatchTodayStats,
+      getBatchTodayStatsWithEtag,
       duplicate: duplicateAccount,
       getUpstreamBillingProbeSettings,
       delete: vi.fn(),
@@ -102,12 +102,12 @@ const mountView = () =>
 describe('admin AccountsView — duplicate wiring', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStatsWithEtag, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, showSuccess, showError]) {
       fn.mockReset()
     }
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     listWithEtag.mockResolvedValue({ notModified: true, etag: null, data: null })
-    getBatchTodayStats.mockResolvedValue({ stats: {} })
+    getBatchTodayStatsWithEtag.mockResolvedValue({ notModified: false, etag: null, data: { stats: {} } })
     getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: true, interval_minutes: 30 })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
@@ -212,11 +212,11 @@ const mountViewWithRow = () =>
 describe('admin AccountsView — 账号行展示', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStatsWithEtag, getUpstreamBillingProbeSettings, getAllProxies, getAllGroups, duplicateAccount, showSuccess, showError]) {
       fn.mockReset()
     }
     listWithEtag.mockResolvedValue({ notModified: true, etag: null, data: null })
-    getBatchTodayStats.mockResolvedValue({ stats: {} })
+    getBatchTodayStatsWithEtag.mockResolvedValue({ notModified: false, etag: null, data: { stats: {} } })
     getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: true, interval_minutes: 30 })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
