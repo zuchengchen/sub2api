@@ -62,6 +62,14 @@ type openAIUnauthorizedRefreshExecutor struct {
 	accountID     string
 }
 
+func (e *openAIUnauthorizedRefreshExecutor) AuthCredentialsPersisted(ctx context.Context, previous *Account) {
+	if publisher, ok := e.OAuthRefreshExecutor.(interface {
+		AuthCredentialsPersisted(context.Context, *Account)
+	}); ok {
+		publisher.AuthCredentialsPersisted(ctx, previous)
+	}
+}
+
 func (e *openAIUnauthorizedRefreshExecutor) CanRefresh(account *Account) bool {
 	return canRecoverOpenAIOAuth(account) && e.OAuthRefreshExecutor.CanRefresh(account) && account.GetCredential("chatgpt_account_id") == e.accountID
 }
@@ -74,12 +82,14 @@ func (e *openAIUnauthorizedRefreshExecutor) NeedsRefresh(account *Account, _ tim
 
 // RefreshAfterUnauthorized performs at most one token-endpoint call, independent
 // of expiry. It shares the proactive/background lock and rereads credentials
-// before acting. Callers may replay the rejected HTTP request only once.
+// before acting. After the guarded reload replay, callers may replay once more
+// with this refresh result; a third 401 ends the recovery chain.
 func (p *OpenAITokenProvider) RefreshAfterUnauthorized(ctx context.Context, account *Account, rejectedAccessToken string) (string, error) {
 	if p == nil || p.refreshAPI == nil || p.executor == nil || !canRecoverOpenAIOAuth(account) || strings.TrimSpace(rejectedAccessToken) == "" {
 		return "", errors.New("OpenAI OAuth unauthorized recovery is unavailable")
 	}
 	executor := &openAIUnauthorizedRefreshExecutor{OAuthRefreshExecutor: p.executor, rejectedToken: rejectedAccessToken, accountID: account.GetCredential("chatgpt_account_id")}
+	ctx = openai.WithCodexRefreshReason(ctx, "unauthorized_recovery")
 	result, err := p.refreshAPI.RefreshIfNeeded(withOAuthRefreshRequestPath(ctx), account, executor, 0)
 	if err != nil {
 		var rejection *openai.RefreshTokenError

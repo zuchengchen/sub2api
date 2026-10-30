@@ -2,11 +2,13 @@ package service
 
 import (
 	"bytes"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -41,6 +43,28 @@ func TestRewriteOpenAIClientLocalTimePreservesNativeEnvironment(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
 	got := svc.rewriteOpenAIClientLocalTimeIfEnabled(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, body)
 	require.Equal(t, body, got)
+}
+
+func TestNativeCodexDeltasPreserveClientDatesAndQuotedText(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_exec/0.166.0 (Ubuntu 26.4.0; x86_64) xterm-256color")
+	c.Request.Header.Set("originator", "codex_exec")
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	for _, body := range []string{
+		`{"type":"response.create","input":[{"role":"developer","content":"base","internal_chat_message_metadata_passthrough":{"content_item_kinds":["model.base_instructions"]}}],"generate":false}`,
+		`{"type":"response.create","input":[{"role":"user","content":"<environment_context><current_date>2026-01-01</current_date><timezone>Pacific/Kiritimati</timezone></environment_context>","internal_chat_message_metadata_passthrough":{"content_item_kinds":["environments.environment_context"]}}]}`,
+		`{"type":"response.create","input":[{"role":"user","content":"Explain the quoted XML: <environment_context><current_date>2000-01-01</current_date><timezone>UTC</timezone></environment_context>"}]}`,
+		`{"type":"response.create","input":[{"type":"function_call_output","call_id":"call_1","output":"<environment_context><timezone>Asia/Tokyo</timezone></environment_context>"}]}`,
+	} {
+		require.Equal(t, body, string(svc.rewriteOpenAIClientLocalTimeForRequest(c, account, []byte(body))))
+	}
+	// Existing generic-client overrides still use the selected account policy.
+	c.Request.Header.Del("User-Agent")
+	c.Request.Header.Del("originator")
+	body := []byte(`{"input":"<environment_context><timezone>UTC</timezone></environment_context>"}`)
+	require.Contains(t, string(svc.rewriteOpenAIClientLocalTimeForRequest(c, account, body)), "America/Los_Angeles")
 }
 
 func TestRewriteOpenAIClientLocalTimeContext_DoesNotTouchProseDates(t *testing.T) {

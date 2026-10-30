@@ -186,7 +186,8 @@ func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact
 
 func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuthTransformOptions) codexTransformResult {
 	result := codexTransformResult{}
-	if normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody) {
+	keepContentMetadata := opts.ResponsesLite || (opts.WireProfile != nil && !opts.WireProfile.ClearContentItemMetadata)
+	if normalizeOpenAIOAuthResponsesCompatibilityFieldsWithMetadata(reqBody, opts.WireProfile != nil && !opts.IsCompact, keepContentMetadata) {
 		result.Modified = true
 	}
 	// 工具续链需求会影响存储策略与 input 过滤逻辑。
@@ -419,9 +420,19 @@ func applyCodexWireProfileInputRules(reqBody map[string]any, profile codexWirePr
 						delete(meta, "content_item_metadata")
 						modified = true
 					}
+					if len(meta) == 0 {
+						delete(v, "internal_chat_message_metadata_passthrough")
+						modified = true
+					}
 				}
 			case json.RawMessage:
-				if updated, err := sjson.DeleteBytes(v, "internal_chat_message_metadata_passthrough.content_item_metadata"); err == nil && !bytes.Equal(updated, v) {
+				path := "internal_chat_message_metadata_passthrough.content_item_metadata"
+				meta := gjson.GetBytes(v, "internal_chat_message_metadata_passthrough")
+				fields := meta.Map()
+				if meta.IsObject() && (len(fields) == 0 || (len(fields) == 1 && meta.Get("content_item_metadata").Exists())) {
+					path = "internal_chat_message_metadata_passthrough"
+				}
+				if updated, err := sjson.DeleteBytes(v, path); err == nil && !bytes.Equal(updated, v) {
 					next = append(next, json.RawMessage(updated))
 					modified = true
 					continue

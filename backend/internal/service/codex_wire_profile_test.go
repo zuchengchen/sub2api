@@ -12,7 +12,7 @@ import (
 )
 
 func TestVerifiedCodexWireProfilesRequireCapturedExactRelease(t *testing.T) {
-	for _, version := range []string{"0.163.0", "0.164.0"} {
+	for _, version := range []string{"0.163.0", "0.164.0", "0.166.0"} {
 		profile, verified := verifiedCodexWireProfile(version)
 		require.True(t, verified)
 		resolved, known := resolveCodexWireProfile(version, "auto")
@@ -32,9 +32,23 @@ func TestVerifiedCodexWireProfilesRequireCapturedExactRelease(t *testing.T) {
 		require.True(t, meta.Strace)
 		require.Empty(t, meta.Leaks)
 	}
-	for _, version := range []string{"", "0.163", "0.163.1", "0.164.1", "0.164.0-alpha.1", "0.165.0", "0.999.0", "invalid"} {
+	for _, version := range []string{"", "0.163", "0.163.1", "0.164.1", "0.164.0-alpha.1", "0.165.0", "0.166.1", "0.167.0", "0.999.0", "invalid"} {
 		_, verified := verifiedCodexWireProfile(version)
 		require.False(t, verified, version)
+	}
+}
+
+func TestCodexReleaseUpdatePreservesWebIdentityPolicy(t *testing.T) {
+	for _, tc := range []struct{ name, pin, synced, want string }{
+		{"default", "", "", "0.163.0"},
+		{"old verified automatic", "", "0.164.0", "0.164.0"},
+		{"new Codex-only verification", "", "0.166.0", "0.163.0"},
+		{"explicit administrator pin", "0.166.0", "", "0.166.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewSettingService(&codexVersionSettingRepoStub{values: map[string]string{SettingKeyOpenAICodexClientVersion: tc.pin, SettingKeyOpenAICodexClientVersionSynced: tc.synced}}, nil)
+			require.Equal(t, buildCodexCLIUserAgent(tc.want), svc.getOpenAIWebCanonicalUserAgent(context.Background()))
+		})
 	}
 }
 

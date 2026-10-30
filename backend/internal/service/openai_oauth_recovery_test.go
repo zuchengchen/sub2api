@@ -16,20 +16,28 @@ import (
 
 type openAIRecoveryRepo struct {
 	AccountRepository
-	mu       sync.Mutex
-	account  *Account
-	setError int
+	mu        sync.Mutex
+	account   *Account
+	setError  int
+	readErr   error
+	updateErr error
 }
 
 func (r *openAIRecoveryRepo) GetByID(context.Context, int64) (*Account, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.readErr != nil {
+		return nil, r.readErr
+	}
 	return snapshotOAuthRefreshAccount(r.account), nil
 }
 
 func (r *openAIRecoveryRepo) UpdateCredentials(_ context.Context, id int64, credentials map[string]any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.updateErr != nil {
+		return r.updateErr
+	}
 	r.account = snapshotOAuthRefreshAccount(r.account)
 	r.account.Credentials = shallowCopyMap(credentials)
 	return nil
@@ -43,8 +51,13 @@ func (r *openAIRecoveryRepo) SetError(context.Context, int64, string) error {
 }
 
 type openAIRecoveryExecutor struct {
-	calls   atomic.Int32
-	refresh func(context.Context, *Account) (map[string]any, error)
+	calls     atomic.Int32
+	published atomic.Int32
+	refresh   func(context.Context, *Account) (map[string]any, error)
+}
+
+func (e *openAIRecoveryExecutor) AuthCredentialsPersisted(context.Context, *Account) {
+	e.published.Add(1)
 }
 
 func (e *openAIRecoveryExecutor) CanRefresh(account *Account) bool {
@@ -85,12 +98,30 @@ func newOpenAIRecoveryFixture() (*Account, *openAIRecoveryRepo, *openAIRecoveryE
 
 func TestOpenAIOAuthRecovery_ProactiveRefreshWithinFiveMinutes(t *testing.T) {
 	account, repo, executor, provider := newOpenAIRecoveryFixture()
+	account.Credentials["access_token"] = codexTestJWTExpiry(time.Now().Add(4 * time.Minute).Unix())
 	account.Credentials["expires_at"] = time.Now().Add(4 * time.Minute).UTC().Format(time.RFC3339)
 	repo.account = snapshotOAuthRefreshAccount(account)
 	token, err := provider.GetAccessToken(context.Background(), account)
 	require.NoError(t, err)
 	require.Equal(t, "repaired-access", token)
 	require.Equal(t, int32(1), executor.calls.Load())
+}
+
+func TestOpenAIOAuthRecoveryPublishesAuthOnlyAfterPersistence(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		account, repo, executor, provider := newOpenAIRecoveryFixture()
+		if fail {
+			repo.updateErr = errors.New("synthetic persistence failure")
+		}
+		_, err := provider.RefreshAfterUnauthorized(context.Background(), account, "rejected-access")
+		if fail {
+			require.Error(t, err)
+			require.Zero(t, executor.published.Load())
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, int32(1), executor.published.Load(), "the 401 executor must forward the publication hook")
+		}
+	}
 }
 
 func TestOpenAIOAuthRecovery_PermanentRejectionFailsFastAndPreservesCredentials(t *testing.T) {
@@ -199,7 +230,7 @@ func TestOpenAIOAuthRecovery_SecondUnauthorizedBlocksOnlyRejectedVersion(t *test
 }
 
 func TestOpenAIOAuthRecovery_DoesNotRefreshAPIKeySetupTokenOrPAT(t *testing.T) {
-	for _, authType := range []string{AccountTypeAPIKey, AccountTypeSetupToken, "pat", "legacy-pat"} {
+	for _, authType := range []string{AccountTypeAPIKey, AccountTypeSetupToken, "pat", "legacy-pat", "agent-identity"} {
 		t.Run(authType, func(t *testing.T) {
 			account, repo, executor, provider := newOpenAIRecoveryFixture()
 			switch authType {
@@ -209,6 +240,10 @@ func TestOpenAIOAuthRecovery_DoesNotRefreshAPIKeySetupTokenOrPAT(t *testing.T) {
 				account.Credentials["access_token"] = "at-imported-pat"
 				account.Credentials["expires_at"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 				delete(account.Credentials, "refresh_token")
+			case "agent-identity":
+				account.Credentials["auth_mode"] = OpenAIAuthModeAgentIdentity
+				account.Credentials["expires_at"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+				delete(account.Credentials, "refresh_token")
 			default:
 				account.Type = authType
 			}
@@ -216,10 +251,10 @@ func TestOpenAIOAuthRecovery_DoesNotRefreshAPIKeySetupTokenOrPAT(t *testing.T) {
 			_, err := provider.RefreshAfterUnauthorized(context.Background(), account, account.GetOpenAIAccessToken())
 			require.Error(t, err)
 			require.Zero(t, executor.calls.Load())
-			if authType == "legacy-pat" {
+			if authType == "legacy-pat" || authType == "agent-identity" {
 				token, err := provider.GetAccessToken(context.Background(), account)
 				require.NoError(t, err)
-				require.Equal(t, "at-imported-pat", token)
+				require.Equal(t, account.GetOpenAIAccessToken(), token)
 				require.Zero(t, repo.setError)
 			}
 		})

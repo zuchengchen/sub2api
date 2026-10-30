@@ -790,6 +790,9 @@ func ProvideSettingService(scopedKeys ScopedAdminKeyRepository, settingRepo Sett
 	SetCodexCanonicalUserAgentResolver(func() string {
 		return svc.GetOpenAICodexCanonicalUserAgent(context.Background())
 	})
+	codexCanonicalUAMu.Lock()
+	codexWebUAResolver = func() string { return svc.getOpenAIWebCanonicalUserAgent(context.Background()) }
+	codexCanonicalUAMu.Unlock()
 	// Claude CLI 伪装版本号同理：运行期解析（面板手动值 → 后台同步值 → 内置基线），
 	// 解析器内部自带 60s TTL 缓存，热路径不触库。
 	claude.SetCLIVersionResolver(func() string {

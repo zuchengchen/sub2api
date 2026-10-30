@@ -177,7 +177,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			body = nextBody
 		}
 
-		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c))
+		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBodyWithMetadata(body, isOpenAIResponsesCompactPath(c), isCodexOAuthAccount(account), isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)))
 		if err != nil {
 			return nil, err
 		}

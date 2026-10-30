@@ -745,7 +745,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if capturedSessionModel != "" && capturedSessionModel != strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String()) {
 		firstClientMessage = s.ReplaceModelInBody(firstClientMessage, capturedSessionModel)
 	}
-	firstClientMessage = s.rewriteOpenAIClientLocalTimeIfEnabled(account, firstClientMessage)
+	firstClientMessage = s.rewriteOpenAIClientLocalTimeForRequest(c, account, firstClientMessage)
 	firstMessageResponsesLite := isOpenAIResponsesLiteWebSocketPayload(firstClientMessage)
 	if normalized, compatibilityChanged, normalizeErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(s.cfg, firstClientMessage, account, firstMessageResponsesLite); normalizeErr != nil {
 		return fmt.Errorf("normalize first websocket response.create: %w", normalizeErr)
@@ -869,7 +869,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	agentTaskRecoveryTried := false
-	oauthRecoveryTried := false
+	oauthRecoveryStep := 0
 	var oauthCredentialOwner *Account
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
@@ -902,10 +902,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			continue
 		}
 		if statusCode == http.StatusUnauthorized {
-			if !oauthRecoveryTried {
-				oauthRecoveryTried = true
+			if oauthRecoveryStep < 2 {
 				var recovered bool
-				headers, oauthCredentialOwner, recovered = s.recoverOpenAIOAuthHeaders(ctx, account, sentHeaders)
+				if oauthRecoveryStep == 0 {
+					headers, oauthCredentialOwner, recovered = s.reloadOpenAIOAuthHeaders(ctx, account, sentHeaders)
+				} else {
+					headers, oauthCredentialOwner, recovered = s.recoverOpenAIOAuthHeaders(ctx, oauthCredentialOwner, sentHeaders)
+				}
+				oauthRecoveryStep++
 				if recovered {
 					continue
 				}
@@ -939,8 +943,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		_ = upstreamConn.Close()
 	}()
 	if nativeTurnState {
-		if state := strings.TrimSpace(handshakeHeaders.Get(openAIWSTurnStateHeader)); state != "" {
-			turnState = state
+		// Codex connects with turn_state=None; the Upgrade response does not
+		// initialize the turn's state (0.166.0 core/client.rs:1464,1531).
+		// Only explicit frame state / subsequent turn events belong in JSON.
+		if !isCodexOAuthAccount(account) {
+			if state := strings.TrimSpace(handshakeHeaders.Get(openAIWSTurnStateHeader)); state != "" {
+				turnState = state
+			}
 		}
 		firstClientMessage, err = applyOpenAIWSNativeTurnState(firstClientMessage, turnState)
 		if err != nil {
@@ -1041,7 +1050,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						return payload, nil, filterErr
 					}
 				}
-				payload = s.rewriteOpenAIClientLocalTimeIfEnabled(account, payload)
+				payload = s.rewriteOpenAIClientLocalTimeForRequest(c, account, payload)
 			}
 			responsesLite := isResponseCreate && isOpenAIResponsesLiteWebSocketPayload(payload)
 			if isResponseCreate {

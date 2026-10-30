@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -43,6 +45,18 @@ func (s *OpenAIGatewayService) openaiClientLocalTimeRewriteEnabled() bool {
 		return true
 	}
 	return !s.cfg.Gateway.DisableOpenAIClientLocalTimeRewrite
+}
+
+func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeForRequest(c *gin.Context, account *Account, body []byte) []byte {
+	// A native WS session sends base instructions only in its prewarm. Later
+	// deltas and tool outputs still describe that same client's environment.
+	// Identify the client from the request, rather than requiring every frame
+	// to repeat the base-instructions item. This also protects quoted XML in
+	// user text and tool output from the legacy timezone substitution.
+	if isCodexOAuthAccount(account) && c != nil && openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) {
+		return body
+	}
+	return s.rewriteOpenAIClientLocalTimeIfEnabled(account, body)
 }
 
 func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeIfEnabled(account *Account, body []byte) []byte {

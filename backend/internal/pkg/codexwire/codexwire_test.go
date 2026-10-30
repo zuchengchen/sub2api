@@ -6,6 +6,7 @@ import (
 	"compress/flate"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -455,6 +456,46 @@ func TestWSConnClose_WritesCloseFrame(t *testing.T) {
 	}
 	if err := c.WriteMessage(context.Background(), []byte("x")); err == nil {
 		t.Fatalf("write after close should fail")
+	}
+}
+
+func TestWSConnCloseNormalSendsCodeWithoutReason(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	done := make(chan error, 1)
+	go func() {
+		br := bufio.NewReader(server)
+		h, err := readFrameHeader(br)
+		if err != nil {
+			done <- err
+			return
+		}
+		if h.opcode != opcodeClose || !h.masked || h.rsv1 || !h.fin || h.length != 2 {
+			done <- fmt.Errorf("unexpected close frame: %+v", h)
+			return
+		}
+		payload := make([]byte, h.length)
+		_, err = io.ReadFull(br, payload)
+		if err == nil {
+			for i := range payload {
+				payload[i] ^= h.maskKey[i%4]
+			}
+			if !bytes.Equal(payload, []byte{0x03, 0xe8}) {
+				err = fmt.Errorf("unexpected close code/reason: %x", payload)
+			}
+		}
+		done <- err
+	}()
+	c := NewWSConn(client, nil, nil)
+	if err := c.CloseNormal(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CloseNormal(); err != nil {
+		t.Fatal("repeated close", err)
 	}
 }
 

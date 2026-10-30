@@ -281,6 +281,7 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	h.openaiOAuthService.AuthCredentialsPersisted(c.Request.Context(), account)
 
 	response.Success(c, dto.AccountFromService(updatedAccount))
 }

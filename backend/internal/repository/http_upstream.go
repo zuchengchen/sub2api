@@ -1812,7 +1812,7 @@ func (s *httpUpstreamService) doCodexH2Uncontrolled(req *http.Request, proxyURL 
 			req.Body = io.NopCloser(bytes.NewReader(body))
 		}
 	}
-	ordered := codexwire.OrderCodexHTTPHeaders(req.Header)
+	ordered := codexwire.OrderCodexHTTPHeadersForPath(req.URL.Path, req.Header)
 	// Framing headers are owned by the transport; content-length is emitted
 	// from the actual body length (skip_value_index → literal-not-indexed).
 	filtered := ordered[:0]
@@ -1822,7 +1822,12 @@ func (s *httpUpstreamService) doCodexH2Uncontrolled(req *http.Request, proxyURL 
 		}
 		filtered = append(filtered, kv)
 	}
-	ordered = append(filtered, codexwire.HeaderKV{Name: "content-length", Value: strconv.Itoa(len(body))})
+	ordered = filtered
+	// Hyper does not advertise a body for an empty GET/HEAD. In particular,
+	// the Codex models request has Accept: */* and no Content-Length.
+	if len(body) > 0 || (req.Method != http.MethodGet && req.Method != http.MethodHead) {
+		ordered = append(ordered, codexwire.HeaderKV{Name: "content-length", Value: strconv.Itoa(len(body))})
+	}
 
 	ctx, cancel := context.WithCancel(req.Context())
 	resp, err := s.codexH2().Do(ctx, req.Method, req.URL.String(), ordered, body, proxyURL, strconv.FormatInt(accountID, 10), profile)

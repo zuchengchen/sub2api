@@ -7,9 +7,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -95,16 +97,57 @@ func (s *OpenAIGatewayService) prepareLiveAttestation(ctx context.Context) (stri
 }
 
 func (s *OpenAIGatewayService) decryptLiveAttestation(record *LiveCallRecord) (string, error) {
+	_, attestation, err := s.decryptLiveUpstreamContext(record)
+	return attestation, err
+}
+
+const liveUpstreamContextPrefix = "sub2api/live-context/v1\n"
+
+type liveUpstreamContext struct {
+	AccountID int64       `json:"account_id"`
+	CallID    string      `json:"call_id"`
+	Headers   http.Header `json:"headers"`
+}
+
+func (s *OpenAIGatewayService) encryptLiveUpstreamContext(accountID int64, callID string, headers http.Header) (string, error) {
+	if s.liveAttestationCipher == nil || headers.Get(liveAttestationHeader) == "" {
+		return "", errors.New("live upstream context is unavailable")
+	}
+	data, err := json.Marshal(liveUpstreamContext{AccountID: accountID, CallID: callID, Headers: headers})
+	if err != nil {
+		return "", errors.New("cannot encode live upstream context")
+	}
+	return s.liveAttestationCipher.Encrypt(liveUpstreamContextPrefix + string(data))
+}
+
+func (s *OpenAIGatewayService) decryptLiveUpstreamContext(record *LiveCallRecord) (http.Header, string, error) {
 	if record == nil || strings.TrimSpace(record.AttestationCiphertext) == "" || s.liveAttestationCipher == nil {
-		return "", &LiveAttestationUnavailableError{
+		return nil, "", &LiveAttestationUnavailableError{
 			Reason: "the Live call has no reusable DeviceCheck attestation",
 		}
 	}
-	header, err := s.liveAttestationCipher.Decrypt(record.AttestationCiphertext)
+	ciphertext := record.UpstreamContextCiphertext
+	if ciphertext == "" {
+		ciphertext = record.AttestationCiphertext
+	}
+	header, err := s.liveAttestationCipher.Decrypt(ciphertext)
 	if err != nil {
-		return "", &LiveAttestationUnavailableError{
+		return nil, "", &LiveAttestationUnavailableError{
 			Reason: "the Live call DeviceCheck attestation cannot be decrypted on this instance",
 		}
 	}
-	return header, nil
+	if record.UpstreamContextCiphertext == "" {
+		return nil, header, nil
+	}
+	if !strings.HasPrefix(header, liveUpstreamContextPrefix) {
+		return nil, "", &LiveAttestationUnavailableError{Reason: "the Live call context version is invalid"}
+	}
+	var snapshot liveUpstreamContext
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(header, liveUpstreamContextPrefix)), &snapshot); err != nil || len(snapshot.Headers) == 0 || snapshot.Headers.Get(liveAttestationHeader) == "" {
+		return nil, "", &LiveAttestationUnavailableError{Reason: "the Live call context is invalid"}
+	}
+	if snapshot.AccountID != record.AccountID || snapshot.CallID != record.CallID {
+		return nil, "", ErrLiveIdentityMismatch
+	}
+	return snapshot.Headers, snapshot.Headers.Get(liveAttestationHeader), nil
 }

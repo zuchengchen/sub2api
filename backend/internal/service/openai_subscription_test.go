@@ -3,8 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -490,11 +494,22 @@ func newChatGPTBackendTestServer(t *testing.T, cfg chatGPTBackendTestServerConfi
 	return server
 }
 
-// enrichTokenInfo 收尾还会调用 disableOpenAITraining，它的 URL 是常量、指向真实
-// chatgpt.com，测试无法接管。给客户端一个短超时让它快速失败——该调用只写
-// PrivacyMode，不影响本组用例的断言。
+// Intercept the constant production privacy URL before any network access.
+// All remaining requests must address a literal loopback IP, including redirects.
 func newTestPrivacyClientFactory() PrivacyClientFactory {
 	return func(string) (*req.Client, error) {
-		return req.C().SetTimeout(time.Second), nil
+		client := req.C().SetTimeout(time.Second)
+		client.Transport.WrapRoundTripFunc(func(next http.RoundTripper) req.HttpRoundTripFunc {
+			return func(r *http.Request) (*http.Response, error) {
+				if r.URL.Scheme == "https" && r.URL.Host == "chatgpt.com" && r.URL.Path == "/backend-api/settings/account_user_setting" {
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+				}
+				if ip := net.ParseIP(r.URL.Hostname()); ip == nil || !ip.IsLoopback() {
+					return nil, fmt.Errorf("test denied non-loopback request")
+				}
+				return next.RoundTrip(r)
+			}
+		})
+		return client, nil
 	}
 }

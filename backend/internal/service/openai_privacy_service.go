@@ -53,7 +53,7 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("User-Agent", CodexCanonicalUserAgent()).
+		SetHeader("User-Agent", codexWebCanonicalUserAgent()).
 		SetHeader("Authorization", "Bearer "+accessToken).
 		SetQueryParam("feature", "training_allowed").
 		SetQueryParam("value", "false").
@@ -128,7 +128,7 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 	var result map[string]any
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("User-Agent", CodexCanonicalUserAgent()).
+		SetHeader("User-Agent", codexWebCanonicalUserAgent()).
 		SetHeader("Authorization", "Bearer "+accessToken).
 		SetSuccessResult(&result).
 		Get(chatGPTAccountsCheckURL)
@@ -237,7 +237,7 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 	}
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("User-Agent", CodexCanonicalUserAgent()).
+		SetHeader("User-Agent", codexWebCanonicalUserAgent()).
 		SetHeader("Authorization", "Bearer "+accessToken).
 		SetSuccessResult(&result).
 		SetQueryParam("account_id", accountID).

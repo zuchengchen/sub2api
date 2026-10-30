@@ -16,6 +16,24 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestCodexNativeHTTPMetadataKeepsAbsentWorkspaces(t *testing.T) {
+	account := newTestOAuthAccount(81, map[string]any{codexFingerprintModeExtraKey: "full", codexWorkspaceCWDExtraKey: "/configured/work"})
+	for _, native := range []bool{false, true} {
+		metadata := map[string]any{"turn_id": "turn"}
+		if native {
+			metadata["request_kind"] = "turn"
+		}
+		raw, err := json.Marshal(metadata)
+		require.NoError(t, err)
+		payload := map[string]any{"model": "gpt-5.5", "client_metadata": map[string]any{openAIWSTurnMetadataHeader: string(raw)}}
+		applyCodexWireMetadata(payload, nil, account, "turn", false)
+		result, err := decodeCodexTurnMetadata(payload["client_metadata"].(map[string]any)[openAIWSTurnMetadataHeader].(string))
+		require.NoError(t, err)
+		_, exists := result["workspaces"]
+		require.Equal(t, !native, exists)
+	}
+}
+
 func TestCodexHTTPHeaderParityIncludesOptionalTrace(t *testing.T) {
 	account := &Account{ID: 90242, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"chatgpt_account_id": "header-parity-account"}}
