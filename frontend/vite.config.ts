@@ -124,8 +124,12 @@ export default defineConfig(({ mode }) => {
               return 'vendor-vue'
             }
 
-            // UI 工具库（较大，单独分离）
-            if (id.includes('/@vueuse/') || id.includes('/xlsx/')) {
+            // Excel is only used on export; never bundle it with everyday UI helpers.
+            if (id.includes('/xlsx/')) {
+              return 'vendor-xlsx'
+            }
+
+            if (id.includes('/@vueuse/')) {
               return 'vendor-ui'
             }
 

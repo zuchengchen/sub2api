@@ -492,6 +492,7 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 		accountsByID[account.ID] = account
 	}
 
+	var pendingOpenAI []openAIUsageWindows
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(6)
@@ -500,15 +501,20 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 		id := accountID
 		account := accountsByID[id]
 		if account == nil {
+			mu.Lock()
 			errorsByAccount[id] = ErrAccountNotFound.Error()
+			mu.Unlock()
 			continue
 		}
 
 		g.Go(func() error {
 			var usage *UsageInfo
 			var usageErr error
+			var preparedAt time.Time
 			if supportsAnthropicPassiveUsage(account) {
 				usage, usageErr = s.getPassiveUsageForAccount(gctx, account)
+			} else if account.IsOpenAIOAuth() {
+				usage, preparedAt = s.getOpenAIUsageSnapshot(gctx, account, force)
 			} else {
 				usage, usageErr = s.getUsageForAccount(gctx, account, force)
 			}
@@ -520,6 +526,9 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 				return nil
 			}
 			usageByAccount[id] = usage
+			if !preparedAt.IsZero() {
+				pendingOpenAI = append(pendingOpenAI, openAIUsageWindows{accountID: id, usage: usage, now: preparedAt})
+			}
 			return nil
 		})
 	}
@@ -528,6 +537,8 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 		return nil, nil, err
 	}
 
+	// errgroup cancels gctx after Wait; database work uses the caller context.
+	s.addOpenAIWindowStats(ctx, pendingOpenAI)
 	return usageByAccount, errorsByAccount, nil
 }
 
@@ -655,11 +666,21 @@ func (s *AccountUsageService) syncActiveToPassive(ctx context.Context, accountID
 }
 
 func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Account, force bool) (*UsageInfo, error) {
+	usage, now := s.getOpenAIUsageSnapshot(ctx, account, force)
+	if account != nil {
+		s.addOpenAIWindowStats(ctx, []openAIUsageWindows{{accountID: account.ID, usage: usage, now: now}})
+	}
+	return usage, nil
+}
+
+// Prepare snapshots before batching SQL so refreshed reset times remain the
+// source of each account's local window bounds.
+func (s *AccountUsageService) getOpenAIUsageSnapshot(ctx context.Context, account *Account, force bool) (*UsageInfo, time.Time) {
 	now := time.Now()
 	usage := &UsageInfo{UpdatedAt: &now}
 
 	if account == nil {
-		return usage, nil
+		return usage, now
 	}
 
 	applyExtraToUsage(usage, account.Extra, now)
@@ -678,25 +699,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 		s.openAI429Recovery.ConsiderOpenAI429Recovery(account)
 	}
 
-	if s.usageLogRepo == nil {
-		return usage, nil
-	}
-
-	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.FiveHour, 5*time.Hour, now)); err == nil {
-		if usage.FiveHour == nil {
-			usage.FiveHour = &UsageProgress{Utilization: 0}
-		}
-		usage.FiveHour.WindowStats = windowStatsFromAccountStats(stats)
-	}
-
-	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.SevenDay, 7*24*time.Hour, now)); err == nil {
-		if usage.SevenDay == nil {
-			usage.SevenDay = &UsageProgress{Utilization: 0}
-		}
-		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
-	}
-
-	return usage, nil
+	return usage, now
 }
 
 func shouldRefreshOpenAICodexSnapshot(account *Account, usage *UsageInfo, now time.Time) bool {
