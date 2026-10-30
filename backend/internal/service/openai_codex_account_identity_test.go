@@ -4,14 +4,83 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestCodexInputTurnReferencesFollowAccountIdentity(t *testing.T) {
+	const current = "019abc00-0000-7000-8000-000000000001"
+	const historical = "019abc00-0000-7000-8000-000000000002"
+	body := []byte(fmt.Sprintf(` {"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":%q}],"internal_chat_message_metadata_passthrough":{"turn_id":%q,"content_item_kinds":["text"]}},{"type":"function_call","arguments":%q,"internal_chat_message_metadata_passthrough":{"turn_id":%q}},{"type":"function_call_output","output":%q,"internal_chat_message_metadata_passthrough":{"turn_id":%q}}],"client_metadata":{"turn_id":%q},"prompt_cache_key":"session"} `, current, historical, current, current, historical, current, current))
+	original := bytes.Clone(body)
+	accountA := newTestOAuthAccount(51, map[string]any{codexFingerprintModeExtraKey: "full"})
+	accountA.Credentials = map[string]any{"chatgpt_account_id": "input-account-a"}
+	accountB := newTestOAuthAccount(52, map[string]any{codexFingerprintModeExtraKey: "full"})
+	accountB.Credentials = map[string]any{"chatgpt_account_id": "input-account-b"}
+	var previousTurn string
+	for _, selection := range []struct {
+		account *Account
+		key     int64
+	}{{accountA, 7}, {accountB, 7}, {accountA, 8}} {
+		scoped, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, selection.account, selection.key)
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.Equal(t, original, body, "retry/failover must retain the original identity source")
+		currentTurn := gjson.GetBytes(scoped, "client_metadata.turn_id").String()
+		require.NotEqual(t, current, currentTurn)
+		require.NotEqual(t, previousTurn, currentTurn, "different credential or API key must not share a turn")
+		previousTurn = currentTurn
+		for _, index := range []int{1, 2} {
+			require.Equal(t, currentTurn, gjson.GetBytes(scoped, fmt.Sprintf("input.%d.internal_chat_message_metadata_passthrough.turn_id", index)).String())
+		}
+		historyTurn := gjson.GetBytes(scoped, "input.0.internal_chat_message_metadata_passthrough.turn_id").String()
+		require.NotEqual(t, currentTurn, historyTurn, "history must not be relabeled as the current turn")
+		require.Equal(t, scopeCodexAccountIdentityValue(selection.account, selection.key, "turn", historical), historyTurn)
+		require.Equal(t, current, gjson.GetBytes(scoped, "input.0.content.0.text").String())
+		require.Equal(t, current, gjson.GetBytes(scoped, "input.1.arguments").String())
+		require.Equal(t, historical, gjson.GetBytes(scoped, "input.2.output").String())
+		var mapped map[string]any
+		require.NoError(t, json.Unmarshal(body, &mapped))
+		require.True(t, applyCodexAccountIdentityClientMetadataMap(mapped, selection.account, selection.key))
+		encoded, err := json.Marshal(mapped)
+		require.NoError(t, err)
+		require.JSONEq(t, string(scoped), string(encoded), "raw and decoded entry points must use identical mappings")
+	}
+	setup := &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Credentials: map[string]any{"access_token": "setup"}}
+	scoped, _, err := applyCodexAccountIdentityClientMetadataRaw(body, setup, 7)
+	require.NoError(t, err)
+	require.Equal(t, current, gjson.GetBytes(scoped, "input.1.internal_chat_message_metadata_passthrough.turn_id").String())
+}
+
+func BenchmarkCodexAccountIdentityConversation(b *testing.B) {
+	account := newTestOAuthAccount(51, map[string]any{codexFingerprintModeExtraKey: "full"})
+	account.Credentials = map[string]any{"chatgpt_account_id": "bench-account"}
+	for _, count := range []int{1, 64} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			items := make([]string, count)
+			for i := range items {
+				items[i] = fmt.Sprintf(`{"type":"message","role":"user","content":[{"type":"input_text","text":%q}],"internal_chat_message_metadata_passthrough":{"turn_id":"019abc00-0000-7000-8000-000000000001"}}`, strings.Repeat("content ", 512))
+			}
+			body := []byte(`{"input":[` + strings.Join(items, ",") + `],"client_metadata":{"turn_id":"019abc00-0000-7000-8000-000000000001","session_id":"client-session"},"prompt_cache_key":"client-session"}`)
+			b.ReportAllocs()
+			b.SetBytes(int64(len(body)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				result, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 7)
+				if err != nil || !changed || len(result) == 0 {
+					b.Fatal("identity rewrite did not execute", err)
+				}
+			}
+		})
+	}
+}
 
 func TestCodexRequestBodyIdentityNamespaceIsStablePerOAuthAccount(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-codex","prompt_cache_key":"client-session","client_metadata":{"x-codex-installation-id":"client-installation","session_id":"client-session","thread_id":"client-thread","x-codex-window-id":"client-window","x-codex-turn-metadata":"{\"installation_id\":\"client-installation\",\"session_id\":\"client-session\",\"thread_id\":\"client-thread\",\"turn_id\":\"client-turn\",\"window_id\":\"client-window\"}"}}`)

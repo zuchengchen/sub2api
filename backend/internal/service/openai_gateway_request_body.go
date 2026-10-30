@@ -1344,6 +1344,10 @@ func extractOpenAIRequestMetaFromBody(body []byte) (model string, stream bool, p
 }
 
 func normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody map[string]any) bool {
+	return normalizeOpenAIOAuthResponsesCompatibilityFieldsWithMetadata(reqBody, false, false)
+}
+
+func normalizeOpenAIOAuthResponsesCompatibilityFieldsWithMetadata(reqBody map[string]any, preserveMetadata, keepContentMetadata bool) bool {
 	if reqBody == nil {
 		return false
 	}
@@ -1361,12 +1365,27 @@ func normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody map[string]any) bo
 		delete(reqBody, "commands")
 		changed = true
 	}
-	// Codex can attach internal message metadata when a custom provider is
-	// named OpenAI. ChatGPT rejects this field on input items (#7066).
+	// Official OpenAI-provider requests retain content_item_kinds. Codex
+	// 0.166 only removes content_item_metadata for non-RLITE requests
+	// (core/src/client.rs:1084-1092). Legacy compact/SetupToken keep their
+	// existing compatibility policy.
 	input, _ := reqBody["input"].([]any)
 	for _, value := range input {
 		item, ok := value.(map[string]any)
 		if !ok {
+			continue
+		}
+		if preserveMetadata {
+			if meta, ok := item["internal_chat_message_metadata_passthrough"].(map[string]any); ok && !keepContentMetadata {
+				if _, exists := meta["content_item_metadata"]; exists {
+					delete(meta, "content_item_metadata")
+					changed = true
+				}
+				if len(meta) == 0 {
+					delete(item, "internal_chat_message_metadata_passthrough")
+					changed = true
+				}
+			}
 			continue
 		}
 		if _, exists := item["internal_chat_message_metadata_passthrough"]; exists {
@@ -1378,6 +1397,10 @@ func normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody map[string]any) bo
 }
 
 func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, error) {
+	return normalizeOpenAIOAuthResponsesCompatibilityBodyWithMetadata(body, false, false)
+}
+
+func normalizeOpenAIOAuthResponsesCompatibilityBodyWithMetadata(body []byte, preserveMetadata, keepContentMetadata bool) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
@@ -1417,7 +1440,22 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 		if !item.IsObject() || !item.Get("internal_chat_message_metadata_passthrough").Exists() {
 			continue
 		}
-		next, err := sjson.DeleteBytes(normalized, fmt.Sprintf("input.%d.internal_chat_message_metadata_passthrough", i))
+		path := fmt.Sprintf("input.%d.internal_chat_message_metadata_passthrough", i)
+		if preserveMetadata {
+			if keepContentMetadata {
+				continue
+			}
+			meta := item.Get("internal_chat_message_metadata_passthrough")
+			fields := meta.Map()
+			_, hasContentMetadata := fields["content_item_metadata"]
+			if !meta.IsObject() || (!hasContentMetadata && len(fields) != 0) {
+				continue
+			}
+			if len(fields) > 1 {
+				path += ".content_item_metadata"
+			}
+		}
+		next, err := sjson.DeleteBytes(normalized, path)
 		if err != nil {
 			return body, false, fmt.Errorf("normalize oauth input metadata: %w", err)
 		}
@@ -1589,7 +1627,11 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 		}
 	}
 	if account != nil && account.IsOpenAIOAuthLike() {
-		oauthBody, oauthChanged, err := normalizeOpenAIOAuthResponsesCompatibilityBody(normalized)
+		keepContentMetadata := responsesLite
+		if opts.Config != nil && opts.Config.Gateway.CodexWire.Profile == codexWireProfileModeStable {
+			keepContentMetadata = true
+		}
+		oauthBody, oauthChanged, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithMetadata(normalized, isCodexOAuthAccount(account) && !opts.Compact, keepContentMetadata)
 		if err != nil {
 			return body, false, err
 		}
@@ -1695,11 +1737,15 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 // 1) 删除 ChatGPT internal API 不支持的顶层 Responses 参数
 // 2) store=false 3) 非 compact 保持 stream=true；compact 强制 stream=false
 func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, bool, error) {
+	return normalizeOpenAIPassthroughOAuthBodyWithMetadata(body, compact, false, false)
+}
+
+func normalizeOpenAIPassthroughOAuthBodyWithMetadata(body []byte, compact, preserveMetadata, responsesLite bool) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
 
-	normalized, changed, err := normalizeOpenAIOAuthResponsesCompatibilityBody(body)
+	normalized, changed, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithMetadata(body, preserveMetadata && !compact, responsesLite)
 	if err != nil {
 		return body, false, err
 	}

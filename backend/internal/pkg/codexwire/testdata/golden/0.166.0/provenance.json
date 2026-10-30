@@ -1,0 +1,17 @@
+{
+  "source_commit": "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856",
+  "binary_sha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+  "release": "https://github.com/openai/codex/releases/tag/rust-v0.166.0",
+  "origin": "reference-03: official CLI against loopback fake upstream with synthetic credentials, strace guard, bounded two-reader model barrier",
+  "files": {
+    "http_fallback_tool_loop.jsonl": "5897809c94cbf9e4c5fa496aa3a3a0f37fc1bc40c436337cc2582b89768038ed",
+    "http_unauthorized_refresh.jsonl": "fcd11cf4ca730071b7fdb8985fe859a26260a6180bcaddb265da77708694f622",
+    "ws_compaction.jsonl": "a3bc4e8efab45c25b1da0ba4d017462d3aba5320bf5979b21a7b6a90d6fd7c57",
+    "ws_initial.jsonl": "988e92cb7e1a75dde6e8e13973c0292f274a986d30f1174af08e0f83d8ba1649",
+    "ws_tool_loop.jsonl": "793a6356c6510f41a7f4ce2daf1e6bbf668d3d33d7754fa5a9d3499626649a8d",
+    "ws_unauthorized_refresh.jsonl": "9a12b1299c4f50c489c67a1c755762e4b8e5559dcef3a54ba4cd474c0fa376db",
+    "meta.json": "324180663fde7a57ddd2b44ce4bf4d8acd459efa4710cba69b229e013e92d2a0",
+    "tls_clienthellos.json": "4893c2b049ced6c1f83d7c6033f10189df132fadb234aab3a409306d8955c69a",
+    "tls_clienthellos_custom_ca.json": "2f7ef3e752c03b58f09aaeb00aeab293b99263be287a5cc545224fc702a90050"
+  }
+}

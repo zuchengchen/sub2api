@@ -28,6 +28,8 @@ import (
 // （字典序、排在末尾）。Go map 的 json.Marshal 恒为字母序，与官方线序不一致，
 // 上游可逐字节比对——必须显式复刻。
 var codexTurnMetadataKeyOrder = [...]string{
+	// Codex 0.166.0 responses_metadata.rs:559; emitted only when supplied.
+	"guardian_recorded_items",
 	"installation_id",
 	"session_id",
 	"thread_id",

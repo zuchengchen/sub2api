@@ -137,6 +137,8 @@ func TestCreateUpstreamLiveCallPreservesSession(t *testing.T) {
 	require.Equal(t, `{"v":1,"s":0,"t":"v1.test"}`, upstream.request.Header.Get(liveAttestationHeader))
 	require.NotEmpty(t, upstream.request.Header.Get("Session-Id"))
 	require.NotEmpty(t, upstream.request.Header.Get("Thread-Id"))
+	require.Equal(t, upstream.request.Header.Get("Session-Id"), upstream.request.Header.Get("Thread-Id"))
+	require.Equal(t, `{"thread_source":"user"}`, upstream.request.Header.Get("x-codex-turn-metadata"))
 	require.Empty(t, upstream.request.Header.Get("OpenAI-Beta"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.request.Context()))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.request.Context()))
@@ -162,6 +164,47 @@ func TestLiveAttestationCipherRoundTripAndRejectsOtherInstanceKey(t *testing.T) 
 
 	_, err = second.Decrypt(ciphertext)
 	require.Error(t, err)
+}
+
+func TestLiveSidebandReusesCreationContext(t *testing.T) {
+	upstream := &liveHTTPUpstreamStub{}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{}, httpUpstream: upstream,
+		liveAttestationCipher: newLiveAttestationCipher(&config.Config{JWT: config.JWTConfig{Secret: "live-snapshot-test"}}),
+	}
+	account := directImagesTestAccount()
+	account.Extra = map[string]any{codexClientFamilyExtraKey: codexClientFamilyExec}
+	created, err := svc.createUpstreamLiveCall(context.Background(), account, &LiveCallRequest{SDP: "v=offer\r\n", Session: json.RawMessage(`{"model":"gpt-live-test"}`)}, "test-attestation")
+	require.NoError(t, err)
+	record := &LiveCallRecord{AccountID: account.ID, CallID: created.CallID}
+	record.AttestationCiphertext, err = svc.liveAttestationCipher.Encrypt("test-attestation")
+	require.NoError(t, err)
+	record.UpstreamContextCiphertext, err = svc.encryptLiveUpstreamContext(account.ID, created.CallID, created.upstreamHeaders)
+	require.NoError(t, err)
+	require.NotContains(t, record.UpstreamContextCiphertext, "test-token")
+	account.Credentials["access_token"] = "changed-after-creation"
+	account.Extra[codexClientFamilyExtraKey] = codexClientFamilyTUI
+	for range 2 {
+		headers, err := svc.liveSidebandHeaders(context.Background(), account, record)
+		require.NoError(t, err)
+		for _, key := range []string{"Authorization", "Chatgpt-Account-Id", "User-Agent", "Originator", "Version", "session-id", "thread-id", "OpenAI-Alpha", openAIWSTurnMetadataHeader, liveAttestationHeader} {
+			require.Equal(t, upstream.request.Header.Get(key), headers.Get(key), key)
+		}
+		require.Empty(t, headers.Get("Content-Type"))
+		require.Empty(t, headers.Get("Accept"))
+	}
+	otherCall := *record
+	otherCall.CallID = "another-call"
+	_, err = svc.liveSidebandHeaders(context.Background(), account, &otherCall)
+	require.ErrorIs(t, err, ErrLiveIdentityMismatch)
+	otherAccount := *account
+	otherAccount.ID++
+	_, err = svc.liveSidebandHeaders(context.Background(), &otherAccount, record)
+	require.ErrorIs(t, err, ErrLiveIdentityMismatch)
+	// The pre-existing field stays usable by an older server on rollback.
+	plain, err := svc.liveAttestationCipher.Decrypt(record.AttestationCiphertext)
+	require.NoError(t, err)
+	require.Equal(t, "test-attestation", plain)
 }
 
 func TestPrepareLiveAttestationEncryptsHeaderAndReturnsExplicitProviderError(t *testing.T) {

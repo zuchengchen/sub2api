@@ -36,13 +36,19 @@ type H2Pool struct {
 
 	mu    sync.Mutex
 	conns map[string]*h2Conn
+	dials map[string]*h2DialGeneration
+}
+
+type h2DialGeneration struct {
+	pending int
+	retired bool
 }
 
 func NewH2Pool(opts H2Options) *H2Pool {
 	if opts.IdleTimeout <= 0 {
 		opts.IdleTimeout = 90 * time.Second
 	}
-	return &H2Pool{opts: opts, conns: make(map[string]*h2Conn)}
+	return &H2Pool{opts: opts, conns: make(map[string]*h2Conn), dials: make(map[string]*h2DialGeneration)}
 }
 
 // CloseAll tears down every pooled connection (process shutdown).
@@ -50,9 +56,36 @@ func (p *H2Pool) CloseAll() {
 	p.mu.Lock()
 	conns := p.conns
 	p.conns = make(map[string]*h2Conn)
+	for key, generation := range p.dials {
+		generation.retired = true
+		delete(p.dials, key)
+	}
 	p.mu.Unlock()
 	for _, c := range conns {
 		c.Close()
+	}
+}
+
+// Retire releases one logical client generation after credentials reload.
+// Already active responses finish normally; future requests get a new socket.
+func (p *H2Pool) Retire(key string) {
+	var retired []*h2Conn
+	p.mu.Lock()
+	for poolKey, generation := range p.dials {
+		if strings.HasPrefix(poolKey, key+"|") {
+			generation.retired = true
+			delete(p.dials, poolKey)
+		}
+	}
+	for poolKey, conn := range p.conns {
+		if strings.HasPrefix(poolKey, key+"|") {
+			delete(p.conns, poolKey)
+			retired = append(retired, conn)
+		}
+	}
+	p.mu.Unlock()
+	for _, conn := range retired {
+		conn.retire()
 	}
 }
 
@@ -92,7 +125,7 @@ func (p *H2Pool) Do(ctx context.Context, method, rawURL string, ordered []Header
 
 	// Plain-http targets cannot carry a TLS fingerprint; use the raw h1 path.
 	if scheme != "https" {
-		return doHTTP1OnConn(ctx, method, path, host, ordered, body, func(dctx context.Context) (net.Conn, error) {
+		return doHTTP1OnConn(ctx, method, path, host, h2HeadersForHTTP1(ordered), body, func(dctx context.Context) (net.Conn, error) {
 			base := p.opts.BaseDialer
 			if base == nil {
 				base = (&net.Dialer{}).DialContext
@@ -102,14 +135,20 @@ func (p *H2Pool) Do(ctx context.Context, method, rawURL string, ordered []Header
 	}
 
 	poolKey := key + "|" + proxyURL + "|" + host
+	if profile != nil {
+		poolKey += "|" + profile.Name + "|" + profile.RootCAID
+	}
 
 	for attempt := 0; attempt < 2; attempt++ {
 		conn, err := p.acquire(ctx, poolKey, key, addr, proxyURL, profile)
 		if err != nil {
+			if errors.Is(err, errH2GoAway) {
+				continue
+			}
 			var h1c *h1FallbackConn
 			if errors.As(err, &h1c) {
 				slog.Info("codex_h2_alpn_fallback", "key", key, "host", host, "alpn", h1c.alpn)
-				return doHTTP1OnConn(ctx, method, path, host, ordered, body, func(context.Context) (net.Conn, error) {
+				return doHTTP1OnConn(ctx, method, path, host, h2HeadersForHTTP1(ordered), body, func(context.Context) (net.Conn, error) {
 					return h1c.conn, nil
 				}, 0)
 			}
@@ -134,6 +173,24 @@ func (p *H2Pool) Do(ctx context.Context, method, rawURL string, ordered []Header
 	return nil, errors.New("h2: request failed after connection retry")
 }
 
+// HTTP/2 callers supply content-length for HPACK. On an HTTP/1.1 fallback,
+// hyper appends that framing header after host instead of preserving its H2
+// position among application headers. writeHTTP1Request computes it from body.
+func h2HeadersForHTTP1(ordered []HeaderKV) []HeaderKV {
+	for i, header := range ordered {
+		if strings.EqualFold(header.Name, "content-length") {
+			out := append(make([]HeaderKV, 0, len(ordered)-1), ordered[:i]...)
+			for _, next := range ordered[i+1:] {
+				if !strings.EqualFold(next.Name, "content-length") {
+					out = append(out, next)
+				}
+			}
+			return out
+		}
+	}
+	return ordered
+}
+
 func (p *H2Pool) acquire(ctx context.Context, poolKey, key, addr, proxyURL string, profile *tlsfingerprint.Profile) (*h2Conn, error) {
 	p.mu.Lock()
 	if c := p.conns[poolKey]; c != nil {
@@ -144,18 +201,43 @@ func (p *H2Pool) acquire(ctx context.Context, poolKey, key, addr, proxyURL strin
 		// Full or dying — dial a second conn rather than queueing; hyper does
 		// the same when max streams is hit.
 	}
+	generation := p.dials[poolKey]
+	if generation == nil {
+		generation = &h2DialGeneration{}
+		if p.dials == nil {
+			p.dials = make(map[string]*h2DialGeneration)
+		}
+		p.dials[poolKey] = generation
+	}
+	generation.pending++
 	p.mu.Unlock()
 
 	opts := p.opts
 	opts.TLSProfile = profile
 	c, err := dialH2(ctx, addr, proxyURL, opts)
+	p.mu.Lock()
+	generation.pending--
+	if generation.pending == 0 && p.dials[poolKey] == generation {
+		delete(p.dials, poolKey)
+	}
+	if generation.retired {
+		p.mu.Unlock()
+		if c != nil {
+			c.Close()
+		}
+		var fallback *h1FallbackConn
+		if errors.As(err, &fallback) {
+			_ = fallback.conn.Close()
+		}
+		return nil, errH2GoAway
+	}
 	if err != nil {
+		p.mu.Unlock()
 		return nil, err
 	}
 	// Per-connection evidence of the negotiated transport; poolKey embeds the
 	// proxy URL (possibly with credentials) so log key/host separately.
 	slog.Info("codex_h2_dial", "key", key, "host", addr, "alpn", "h2")
-	p.mu.Lock()
 	// Someone may have won the race; use the existing conn if it has room.
 	if existing := p.conns[poolKey]; existing != nil && existing.CanTake() {
 		p.mu.Unlock()

@@ -38,7 +38,7 @@ func TestCodexDirectImagesRouting(t *testing.T) {
 			require.Equal(t, "https://chatgpt.com/backend-api/codex/images/generations", upstream.lastReq.URL.String())
 			require.NoError(t, upstream.lastReq.Context().Err())
 			require.Equal(t, "Bearer test-token", upstream.lastReq.Header.Get("Authorization"))
-			require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
+			require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
 			require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 			require.NotEmpty(t, upstream.lastReq.Header.Get("Originator"))
 			require.NotEmpty(t, upstream.lastReq.Header.Get("User-Agent"))
@@ -48,6 +48,9 @@ func TestCodexDirectImagesRouting(t *testing.T) {
 			for _, key := range []string{"tools", "reasoning", "instructions", "response_format", "stream"} {
 				require.False(t, gjson.GetBytes(upstream.lastBody, key).Exists(), key)
 			}
+			require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists(), "images use their own typed payload")
+			require.NotEmpty(t, upstream.lastReq.Header.Get("x-codex-image-turn-id"))
+			require.Empty(t, upstream.lastReq.Header.Get("x-codex-turn-metadata"))
 			require.Equal(t, "data:image/png;base64,aGVsbG8=", gjson.GetBytes(rec.Body.Bytes(), "data.0.url").String())
 		})
 	}
@@ -81,6 +84,48 @@ func TestCodexDirectImagesMappingBeforeRouting(t *testing.T) {
 	}
 }
 
+func TestCodexImagesAlignmentPreservesOtherAuth(t *testing.T) {
+	for _, mode := range []string{AccountTypeSetupToken, OpenAIAuthModePersonalAccessToken, OpenAIAuthModeAgentIdentity} {
+		for _, model := range []string{"gpt-image-2", "gpt-image-1"} {
+			t.Run(mode+"/"+model, func(t *testing.T) {
+				account := directImagesTestAccount()
+				if mode == AccountTypeSetupToken {
+					account.Type = AccountTypeSetupToken
+				} else {
+					account.Credentials["auth_mode"] = mode
+				}
+				if mode == OpenAIAuthModeAgentIdentity {
+					key, private := newTestAgentIdentityKey(t)
+					account.Credentials["agent_runtime_id"] = key.runtimeID
+					account.Credentials["agent_private_key"] = private
+					account.Credentials["task_id"] = key.taskID
+				}
+				body := []byte(fmt.Sprintf(`{"model":%q,"prompt":"draw"}`, model))
+				c, _ := newOpenAIImagesTestContext(t, body)
+				upstream := &httpUpstreamRecorder{resp: openAIImagesJSONResponse()}
+				if model == "gpt-image-1" {
+					upstream.resp = &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"image_generation_call\",\"result\":\"aGVsbG8=\"}]}}\n\n"))}
+				}
+				svc := newOpenAIImagesTestService(upstream)
+				parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+				require.NoError(t, err)
+				_, err = svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+				require.NoError(t, err)
+				require.Empty(t, upstream.lastReq.Header.Get("x-codex-image-turn-id"))
+				if model == "gpt-image-2" {
+					require.Equal(t, "/backend-api/codex/images/generations", upstream.lastReq.URL.Path)
+					require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
+					require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
+				} else {
+					require.Equal(t, "/backend-api/codex/responses", upstream.lastReq.URL.Path)
+					require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
+					require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
+				}
+			})
+		}
+	}
+}
+
 func TestCodexDirectImagesHTTPErrorFallbacksOnlyWhenEndpointUnavailable(t *testing.T) {
 	for _, status := range []int{400, 401, 403, 429, 500, 502, 503, 404, 405} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
@@ -92,6 +137,7 @@ func TestCodexDirectImagesHTTPErrorFallbacksOnlyWhenEndpointUnavailable(t *testi
 					return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","message":"image request rejected"}}`))}, nil
 				}
 				require.Contains(t, req.URL.Path, "/backend-api/codex/responses")
+				require.Empty(t, req.Header.Get("OpenAI-Beta"), "Responses fallback must not reintroduce the retired experimental beta")
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"image_generation_call\",\"result\":\"aGVsbG8=\"}]}}\n\n"))}, nil
 			}}
 			body := []byte(`{"model":"gpt-image-2.5-sunburst","prompt":"draw"}`)

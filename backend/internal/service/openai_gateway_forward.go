@@ -137,7 +137,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	if filterErr != nil {
 		return nil, filterErr
 	}
-	body = s.rewriteOpenAIClientLocalTimeIfEnabled(account, filteredBody)
+	body = s.rewriteOpenAIClientLocalTimeForRequest(c, account, filteredBody)
 	clearGrokResponsesClientToolMapping(c)
 	clearOpenAIResponsesClientToolMapping(c)
 	clearOpenAIResponsesNamespaceNames(c)

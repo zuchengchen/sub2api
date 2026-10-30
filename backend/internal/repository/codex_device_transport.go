@@ -2,13 +2,18 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/codexwire"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/imroc/req/v3"
@@ -115,6 +120,27 @@ type codexDeviceRoundTripper struct {
 	proxyURL string
 	profile  *tlsfingerprint.Profile
 	timeout  time.Duration
+	authH2   bool
+}
+
+// Auth clients share only the transport pool; the key includes the exact
+// credentials, device identity and trust configuration. Failed refreshes may
+// reuse the client; a successful auth reload retires that generation.
+var codexAuthH2Pool = codexwire.NewH2Pool(codexwire.H2Options{Timeout: 35 * time.Second})
+
+func codexAuthPoolKey(ctx context.Context, rawURL string, headers http.Header, body []byte) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) == nil && fields != nil {
+		delete(fields, "refresh_reason") // trigger is not an auth-client identity
+		if canonical, err := json.Marshal(fields); err == nil {
+			body = canonical
+		}
+	}
+	identity, _ := json.Marshal([]string{strconv.FormatInt(openai.CodexAuthAccountFromContext(ctx), 10), rawURL, headers.Get("User-Agent"), headers.Get("originator"), string(body)})
+	if id := openai.CodexAuthAccountFromContext(ctx); id > 0 {
+		return fmt.Sprintf("auth-account-%d|%x", id, sha256.Sum256(identity))
+	}
+	return fmt.Sprintf("auth-%x", sha256.Sum256(identity))
 }
 
 func (t *codexDeviceRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -129,11 +155,21 @@ func (t *codexDeviceRoundTripper) RoundTrip(r *http.Request) (*http.Response, er
 	}
 	ordered := codexDeviceOrderedHeaders(r.URL.String(), r.Header)
 	ctx, cancel := context.WithCancel(r.Context())
-	resp, err := codexwire.DoHTTP1(ctx, r.Method, r.URL.String(), ordered, body, t.proxyURL, codexwire.HTTP1Options{
-		TLSProfile:            t.profile,
-		DialTimeout:           defaultUpstreamDialTimeout + 5*time.Second,
-		ResponseHeaderTimeout: t.timeout,
-	})
+	var resp *http.Response
+	var err error
+	if t.authH2 {
+		if len(body) > 0 || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			ordered = append(ordered, codexwire.HeaderKV{Name: "content-length", Value: strconv.Itoa(len(body))})
+		}
+		identity := codexAuthPoolKey(r.Context(), r.URL.String(), r.Header, body)
+		resp, err = codexAuthH2Pool.Do(ctx, r.Method, r.URL.String(), ordered, body, t.proxyURL, identity, t.profile)
+	} else {
+		resp, err = codexwire.DoHTTP1(ctx, r.Method, r.URL.String(), ordered, body, t.proxyURL, codexwire.HTTP1Options{
+			TLSProfile:            t.profile,
+			DialTimeout:           defaultUpstreamDialTimeout + 5*time.Second,
+			ResponseHeaderTimeout: t.timeout,
+		})
+	}
 	if err != nil {
 		cancel()
 		return nil, err
@@ -148,11 +184,24 @@ func (t *codexDeviceRoundTripper) RoundTrip(r *http.Request) (*http.Response, er
 // device lane, so existing req-based callers keep their API while their
 // traffic matches the Codex CLI.
 func newCodexDeviceReqClient(proxyURL string, timeout time.Duration) (*req.Client, error) {
+	return newCodexDeviceReqClientWithAuthCA(proxyURL, timeout, false)
+}
+
+func newCodexDeviceReqClientWithAuthCA(proxyURL string, timeout time.Duration, auth bool) (*req.Client, error) {
 	trimmed, _, err := proxyurl.Parse(proxyURL)
 	if err != nil {
 		return nil, err
 	}
 	rt := &codexDeviceRoundTripper{proxyURL: trimmed, profile: tlsfingerprint.BuiltinProfile("openssl36"), timeout: timeout}
+	if auth && codexwire.CodexCustomCAConfigured() {
+		profile, caErr := codexwire.WithCodexCustomCA(tlsfingerprint.BuiltinProfile("rustls-h2"))
+		if caErr == nil {
+			rt.profile, rt.authH2 = profile, true
+		}
+		// The default Codex auth builder retries its original native/system-root
+		// builder when custom-CA construction fails. Runtime TLS failures never
+		// trigger this fallback, and certificate verification remains enabled.
+	}
 	client := req.C().SetTimeout(timeout)
 	client.GetTransport().WrapRoundTripFunc(func(http.RoundTripper) req.HttpRoundTripFunc {
 		return rt.RoundTrip

@@ -48,6 +48,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "gateway" {
+		os.Exit(gatewayMain(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "compare" {
 		os.Exit(compareMain(os.Args[2:]))
 	}
@@ -77,6 +80,11 @@ func main() {
 	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		fatal(err)
+	}
+	if len(modelsJSON) > 0 {
+		if err := os.WriteFile(filepath.Join(*outDir, "models.json"), modelsJSON, 0600); err != nil {
+			fatal(err)
+		}
 	}
 	version, err := codexVersion(*codexBin)
 	if err != nil {
@@ -289,6 +297,7 @@ func runCodex(ctx context.Context, codexBin, tracer string, sb *sandbox, prompt 
 		"TERM=xterm-256color",
 		"SHELL=/bin/bash",
 		"LANG=C.UTF-8",
+		"RUST_LOG=codex_models_manager=info",
 		// No desktop keyring / Secret Service access.
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/codexgolden-dbus",
 	}, sb.extraEnv...)
@@ -455,7 +464,7 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 		return nil, nil, nil, err
 	}
 	hellos := newHelloSet()
-	up, err := newFakeUpstream(sc, upstreamOptions{TLS: serverTLS, ModelsJSON: modelsJSON, OnHello: hellos.add})
+	up, err := newFakeUpstream(sc, upstreamOptions{TLS: serverTLS, ModelsJSON: modelsJSON, ModelsBarrier: true, OnHello: hellos.add})
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -489,9 +498,18 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 	defer cancel()
 	traceFile, runErr := runCodex(ctx, codexBin, tracer, sb, "Reply with ok.")
 	if keepDir != "" {
-		_ = exec.Command("cp", "-r", sb.root, filepath.Join(keepDir, sc.Name+"-sandbox")).Run()
+		if err := os.CopyFS(filepath.Join(keepDir, sc.Name+"-sandbox"), os.DirFS(sb.root)); err != nil {
+			return nil, nil, nil, fmt.Errorf("save synthetic CLI sandbox: %w", err)
+		}
 	}
 	recs := up.close()
+	if keepDir != "" {
+		writeJSONL(filepath.Join(keepDir, sc.Name+"-raw.jsonl"), recs)
+		writeJSON(filepath.Join(keepDir, sc.Name+"-tls-connections.json"), up.tlsConnections())
+	}
+	if err := up.validateModelsBarrier(); err != nil {
+		return nil, nil, nil, err
+	}
 	if runErr != nil && len(recs) == 0 {
 		return nil, nil, nil, fmt.Errorf("codex exec: %w", runErr)
 	}
@@ -506,7 +524,8 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 	if err := validateScenario(sc, recs); err != nil {
 		return nil, nil, nil, err
 	}
-	return normalizeRecords(recs, sb, up.port()), hellos.export(), checkTrace(traceFile), nil
+	normalized, err := normalizeRecords(recs, sb, up.port())
+	return normalized, up.coreHellos(), checkTrace(traceFile), err
 }
 
 func validateScenario(sc scenario, recs []record) error {
@@ -522,7 +541,9 @@ func validateScenario(sc scenario, recs []record) error {
 		var body struct {
 			Generate *bool `json:"generate"`
 			Input    []struct {
-				Type string `json:"type"`
+				Type   string `json:"type"`
+				CallID string `json:"call_id"`
+				Output string `json:"output"`
 			} `json:"input"`
 		}
 		if err := json.Unmarshal(rec.BodyJSON, &body); err != nil {
@@ -539,7 +560,7 @@ func validateScenario(sc scenario, recs []record) error {
 		for _, item := range body.Input {
 			switch item.Type {
 			case "function_call_output":
-				tool = true
+				tool = tool || (strings.HasPrefix(item.CallID, "call_golden_") && strings.Contains(item.Output, "Process exited with code 0\n") && strings.HasSuffix(item.Output, "Output:\ngolden\n"))
 			case "compaction_trigger":
 				trigger = true
 			case "compaction":
@@ -640,7 +661,7 @@ cli_auth_credentials_store = "file"
 
 // newEphemeralTLS creates a throwaway CA plus a localhost leaf. ALPN is pinned
 // to http/1.1 so the recording keeps hyper's h1 framing.
-func newEphemeralTLS() ([]byte, *tls.Config, error) {
+func newEphemeralTLS(extraNames ...string) ([]byte, *tls.Config, error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, err
@@ -667,7 +688,7 @@ func newEphemeralTLS() ([]byte, *tls.Config, error) {
 	leafTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "localhost"},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     append([]string{"localhost"}, extraNames...),
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.Add(24 * time.Hour),
@@ -704,8 +725,9 @@ func readTLSRecord(br *bufio.Reader) ([]byte, error) {
 }
 
 var (
-	straceInet  = regexp.MustCompile(`sa_family=AF_INET, sin_port=htons\((\d+)\), sin_addr=inet_addr\("([^"]+)"\)`)
-	straceInet6 = regexp.MustCompile(`sa_family=AF_INET6, sin6_port=htons\((\d+)\).*?inet_pton\(AF_INET6, "([^"]+)"`)
+	straceInet    = regexp.MustCompile(`sa_family=AF_INET, sin_port=htons\((\d+)\), sin_addr=inet_addr\("([^"]+)"\)`)
+	straceInet6   = regexp.MustCompile(`sa_family=AF_INET6, sin6_port=htons\((\d+)\).*?inet_pton\(AF_INET6, "([^"]+)"`)
+	straceConnect = regexp.MustCompile(`^(?:[0-9]+\s+)?connect\(`)
 )
 
 // checkTrace lists connect(2) destinations that are not loopback, plus any
@@ -720,17 +742,32 @@ func checkTrace(path string) []string {
 	}
 	var leaks []string
 	seen := map[string]bool{}
+	inetConnections := 0
 	for _, line := range strings.Split(string(data), "\n") {
+		if !straceConnect.MatchString(line) {
+			continue
+		}
+		// AF_UNIX paths can contain text resembling an internet sockaddr.
+		// Parse only the actual address argument, never quoted path contents.
+		if strings.Contains(line, "{sa_family=AF_UNIX,") || strings.Contains(line, "{sa_family=AF_UNSPEC}") {
+			continue
+		}
 		var port, host string
 		if m := straceInet.FindStringSubmatch(line); m != nil {
 			port, host = m[1], m[2]
 		} else if m := straceInet6.FindStringSubmatch(line); m != nil {
 			port, host = m[1], m[2]
 		} else {
+			leaks = append(leaks, "strace connect address is unparseable: "+line)
 			continue
 		}
+		inetConnections++
 		ip := net.ParseIP(host)
-		p, _ := strconv.Atoi(port)
+		p, err := strconv.Atoi(port)
+		if err != nil || p < 0 || p > 65535 || ip == nil {
+			leaks = append(leaks, "strace connect address is invalid: "+line)
+			continue
+		}
 		if ip != nil && ip.IsLoopback() && p != 53 {
 			continue
 		}
@@ -743,31 +780,10 @@ func checkTrace(path string) []string {
 			leaks = append(leaks, key)
 		}
 	}
-	return leaks
-}
-
-func normalizeRecords(recs []record, sb *sandbox, port int) []record {
-	replacer := strings.NewReplacer(
-		sb.cwd, "<CWD>",
-		sb.codexHome, "<CODEX_HOME>",
-		sb.home, "<HOME>",
-		sb.root, "<TMP>",
-		fmt.Sprintf("127.0.0.1:%d", port), "<UPSTREAM>",
-		fmt.Sprintf("localhost:%d", port), "<UPSTREAM>",
-	)
-	out := make([]record, 0, len(recs))
-	for _, r := range recs {
-		raw, err := json.Marshal(r)
-		if err != nil {
-			continue
-		}
-		var n record
-		if err := json.Unmarshal([]byte(replacer.Replace(string(raw))), &n); err != nil {
-			continue
-		}
-		out = append(out, n)
+	if inetConnections == 0 {
+		leaks = append(leaks, "strace contains no parsed internet connect calls")
 	}
-	return out
+	return leaks
 }
 
 func writeJSON(path string, v any) {

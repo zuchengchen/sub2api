@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/codexwire"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/klauspost/compress/zstd"
 )
@@ -36,6 +37,30 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		return response, nil
 	}
 	retry := request.Clone(request.Context())
+	if request.GetBody != nil {
+		retry.Body, err = request.GetBody()
+		if err != nil {
+			return response, nil
+		}
+	}
+	reloadedHeaders, reloadedOwner, reloaded := s.reloadOpenAIOAuthHeaders(request.Context(), credentialAccount, request.Header)
+	if !reloaded {
+		if retry.Body != nil {
+			_ = retry.Body.Close()
+		}
+		return response, nil
+	}
+	if response.Body != nil {
+		_ = response.Body.Close()
+	}
+	retry.Header = reloadedHeaders
+	response, err = s.doOpenAIUpstreamOnce(retry, proxyURL, account)
+	if err != nil || response == nil || response.StatusCode != http.StatusUnauthorized || request.Context().Err() != nil {
+		return response, err
+	}
+	credentialAccount = reloadedOwner
+	rejectedToken = strings.TrimPrefix(reloadedHeaders.Get("Authorization"), "Bearer ")
+	retry = request.Clone(request.Context())
 	if request.GetBody != nil {
 		retry.Body, err = request.GetBody()
 		if err != nil {
@@ -133,10 +158,17 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxy
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {
+			if response != nil && response.Request == nil {
+				response.Request = request
+			}
 			return response, err
 		}
 	}
-	return s.doOpenAIHTTPTransport(WithAccountTrafficRequest(request, account), proxyURL, account, account)
+	response, err := s.doOpenAIHTTPTransport(WithAccountTrafficRequest(request, account), proxyURL, account, account)
+	if response != nil && response.Request == nil {
+		response.Request = request
+	}
+	return response, err
 }
 
 func (s *OpenAIGatewayService) doOpenAIHTTPTransport(request *http.Request, proxyURL string, account, credentialAccount *Account) (*http.Response, error) {
@@ -144,6 +176,13 @@ func (s *OpenAIGatewayService) doOpenAIHTTPTransport(request *http.Request, prox
 	// concurrency still belong to the selected account, including shadows.
 	if credentialAccount != nil && credentialAccount.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
 		profile := s.resolveCodexHTTPSTLSProfile(credentialAccount)
+		if isCodexOAuthAccount(credentialAccount) {
+			var err error
+			profile, err = codexwire.WithCodexCustomCA(profile)
+			if err != nil {
+				return nil, err
+			}
+		}
 		return s.httpUpstream.DoWithTLS(request, proxyURL, account.ID, account.Concurrency, profile)
 	}
 	return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
@@ -171,7 +210,7 @@ func (s *OpenAIGatewayService) resolveCodexHTTPSTLSProfile(account *Account) *tl
 			}
 		}
 	}
-	if s.isCodexHTTPH2Enabled() {
+	if s.isCodexHTTPH2Enabled() || (isCodexOAuthAccount(account) && codexwire.CodexCustomCAConfigured()) {
 		return tlsfingerprint.BuiltinProfile("rustls-h2")
 	}
 	return tlsfingerprint.BuiltinProfile("openssl36")

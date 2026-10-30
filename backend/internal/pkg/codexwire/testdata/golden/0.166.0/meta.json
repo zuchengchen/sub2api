@@ -1,0 +1,22 @@
+{
+  "binary_sha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+  "blocked_outbound_requests": {
+    "CONNECT ab.chatgpt.com:443": 6
+  },
+  "codex_version": "codex-cli 0.166.0",
+  "models_sha256": "1384625c0b6b3e67d3c60da29becea2b017f2c283fc1e2d05b8edafb4698eb10",
+  "outbound_leaks": null,
+  "recorded_at": "2026-10-30T15:13:32Z",
+  "recorder": "backend/tools/codexgolden",
+  "scenarios": [
+    "ws_initial",
+    "ws_tool_loop",
+    "http_fallback_tool_loop",
+    "http_unauthorized_refresh",
+    "ws_unauthorized_refresh",
+    "ws_compaction"
+  ],
+  "source_commit": "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856",
+  "strace_guard": true,
+  "tls_lanes": 2
+}

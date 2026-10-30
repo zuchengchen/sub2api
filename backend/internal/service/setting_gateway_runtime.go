@@ -98,8 +98,9 @@ type cachedOpenAICodexUserAgent struct {
 
 // cachedOpenAICodexClientVersion 缓存出站 Codex 客户端版本号（进程内缓存，60s TTL）
 type cachedOpenAICodexClientVersion struct {
-	version   string
-	expiresAt int64 // unix nano
+	webVersion string
+	version    string
+	expiresAt  int64 // unix nano
 }
 
 const openAICodexClientVersionCacheTTL = 60 * time.Second
@@ -452,12 +453,20 @@ func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string
 		if err != nil {
 			slog.Warn("failed to get openai codex client version setting", "error", err)
 			s.openAICodexVersionCache.Store(&cachedOpenAICodexClientVersion{
-				version:   fallback,
-				expiresAt: time.Now().Add(openAICodexClientVersionErrorTTL).UnixNano(),
+				webVersion: codexWebCompatibilityVersion,
+				version:    fallback,
+				expiresAt:  time.Now().Add(openAICodexClientVersionErrorTTL).UnixNano(),
 			})
 			return fallback, nil
 		}
 		version := NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersion])
+		webVersion := version
+		if webVersion == "" {
+			webVersion = NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersionSynced])
+			if webVersion != "0.163.0" && webVersion != "0.164.0" {
+				webVersion = codexWebCompatibilityVersion
+			}
+		}
 		if version == "" {
 			version = NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersionSynced])
 			if _, verified := verifiedCodexWireProfile(version); !verified {
@@ -468,8 +477,9 @@ func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string
 			version = fallback
 		}
 		s.openAICodexVersionCache.Store(&cachedOpenAICodexClientVersion{
-			version:   version,
-			expiresAt: time.Now().Add(openAICodexClientVersionCacheTTL).UnixNano(),
+			webVersion: webVersion,
+			version:    version,
+			expiresAt:  time.Now().Add(openAICodexClientVersionCacheTTL).UnixNano(),
 		})
 		return version, nil
 	})
@@ -603,6 +613,25 @@ func (s *SettingService) GetOpenAICodexCanonicalUserAgent(ctx context.Context) s
 		}
 	}
 	// Invalid fingerprints must not discard the independently resolved version.
+	return buildCodexCLIUserAgent(version)
+}
+
+// Web helpers retain the pre-alignment version policy. Sharing the settings
+// read/cache avoids changing their requests as the Codex release allowlist grows.
+func (s *SettingService) getOpenAIWebCanonicalUserAgent(ctx context.Context) string {
+	version := codexWebCompatibilityVersion
+	if s == nil {
+		return buildCodexCLIUserAgent(version)
+	}
+	_ = s.GetOpenAICodexClientVersion(ctx)
+	if cached, ok := s.openAICodexVersionCache.Load().(*cachedOpenAICodexClientVersion); ok && cached != nil && cached.webVersion != "" {
+		version = cached.webVersion
+	}
+	if _, paired, ok := openai.PairCodexClientIdentity(s.GetOpenAICodexUserAgent(ctx)); ok {
+		if ua := openai.SetCodexUserAgentVersion(paired, version); ua != "" {
+			return ua
+		}
+	}
 	return buildCodexCLIUserAgent(version)
 }
 

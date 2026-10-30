@@ -78,7 +78,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		writeChatCompletionsError(c, http.StatusNotFound, "invalid_request_error", err.Error())
 		return nil, err
 	}
-	body = s.rewriteOpenAIClientLocalTimeIfEnabled(account, body)
+	body = s.rewriteOpenAIClientLocalTimeForRequest(c, account, body)
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)

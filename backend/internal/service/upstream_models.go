@@ -1096,10 +1096,12 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 		)
 	}
 
+	gateway := &OpenAIGatewayService{cfg: s.cfg}
+	identity := resolveCodexOutboundIdentity(gateway.codexIdentityOverrideUA(account))
 	modelsURL, err := buildCodexModelsManifestURL(
 		chatgptCodexModelsURL,
 		false,
-		CodexCanonicalClientVersion(),
+		identity.version,
 	)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI Codex model list URL", err)
@@ -1127,24 +1129,40 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 		}
 	} else {
 		accessToken := strings.TrimSpace(account.GetOpenAIAccessToken())
+		if s.openaiGatewayService != nil {
+			accessToken, _, err = s.openaiGatewayService.GetAccessToken(ctx, account)
+			if err != nil {
+				return nil, newUpstreamModelSyncUpstreamError("Failed to resolve OpenAI access token", err)
+			}
+		}
 		if accessToken == "" {
 			return nil, newUpstreamModelSyncConfigError("No OpenAI access token is available", nil)
 		}
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
 
-	identity := resolveCodexOutboundIdentity(account.GetOpenAIUserAgent())
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Originator", identity.originator)
 	req.Header.Set("User-Agent", identity.userAgent)
 	req.Header.Set("Version", identity.version)
-	setOpenAIChatGPTAccountHeaders(req.Header, account)
+	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
+		return nil, newUpstreamModelSyncUpstreamError("Failed to resolve ChatGPT account identity", err)
+	}
 	account.ApplyHeaderOverrides(req.Header)
-	enforceCodexIdentityHeadersWithUA(req.Header, account.GetOpenAIUserAgent())
 	return req, nil
 }
 
 func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	if account.IsOpenAIOAuth() {
+		// Keep the models endpoint's own retry policy. The official models
+		// client shares device transport, but has no Responses 401 replay loop.
+		gateway := &OpenAIGatewayService{
+			cfg: codexProbeConfig(s.cfg), httpUpstream: s.httpUpstream,
+			accountRepo: s.accountRepo, pluginManager: s.pluginManager,
+		}
+		req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+		return gateway.doOpenAIUpstreamOnce(req, proxyURL, account)
+	}
 	if s.tlsFPProfileService == nil {
 		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
 	}

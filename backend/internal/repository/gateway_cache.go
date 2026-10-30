@@ -421,6 +421,7 @@ func (c *gatewayCache) SaveLiveCall(ctx context.Context, record *service.LiveCal
 		"ip_address":       record.IPAddress,
 		"inbound_endpoint": record.InboundEndpoint,
 		"attestation":      record.AttestationCiphertext,
+		"upstream_context": record.UpstreamContextCiphertext,
 	}
 	key := liveCallKey(record.CallHash)
 	pipe := c.rdb.TxPipeline()
@@ -445,23 +446,24 @@ func (c *gatewayCache) GetLiveCall(ctx context.Context, callHash string) (*servi
 	createdAt := time.UnixMilli(parseInt("created_at"))
 	expiresAt := time.UnixMilli(parseInt("expires_at"))
 	return &service.LiveCallRecord{
-		CallID:                values["call_id"],
-		CallHash:              callHash,
-		AccountID:             parseInt("account_id"),
-		APIKeyID:              parseInt("api_key_id"),
-		UserID:                parseInt("user_id"),
-		GroupID:               parseInt("group_id"),
-		SubscriptionID:        parseInt("subscription_id"),
-		LeaseID:               values["lease_id"],
-		Model:                 values["model"],
-		CreatedAt:             createdAt,
-		ExpiresAt:             expiresAt,
-		Controller:            values["controller"],
-		ControllerOwner:       values["controller_owner"],
-		UserAgent:             values["user_agent"],
-		IPAddress:             values["ip_address"],
-		InboundEndpoint:       values["inbound_endpoint"],
-		AttestationCiphertext: values["attestation"],
+		CallID:                    values["call_id"],
+		CallHash:                  callHash,
+		AccountID:                 parseInt("account_id"),
+		APIKeyID:                  parseInt("api_key_id"),
+		UserID:                    parseInt("user_id"),
+		GroupID:                   parseInt("group_id"),
+		SubscriptionID:            parseInt("subscription_id"),
+		LeaseID:                   values["lease_id"],
+		Model:                     values["model"],
+		CreatedAt:                 createdAt,
+		ExpiresAt:                 expiresAt,
+		Controller:                values["controller"],
+		ControllerOwner:           values["controller_owner"],
+		UserAgent:                 values["user_agent"],
+		IPAddress:                 values["ip_address"],
+		InboundEndpoint:           values["inbound_endpoint"],
+		AttestationCiphertext:     values["attestation"],
+		UpstreamContextCiphertext: values["upstream_context"],
 	}, nil
 }
 
