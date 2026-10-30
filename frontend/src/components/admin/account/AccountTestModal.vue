@@ -726,25 +726,6 @@ const pickDefaultModelForMode = () => {
   selectedModelId.value = opts[0].id
 }
 
-watch(
-  () => props.show,
-  async (newVal) => {
-    if (newVal && props.account) {
-      testPrompt.value = ''
-      testMode.value = 'default'
-      grokTestMode.value = 'text'
-      resetState()
-      await loadAvailableModels()
-      if (isGrokAccount.value) {
-        pickDefaultModelForMode()
-        applyDefaultPromptForMode()
-      }
-    } else {
-      abortStream()
-    }
-  }
-)
-
 watch(grokTestMode, () => {
   if (!isGrokAccount.value) return
   testPrompt.value = ''
@@ -753,13 +734,16 @@ watch(grokTestMode, () => {
   applyDefaultPromptForMode()
 })
 
+let modelRequestVersion = 0
 const loadAvailableModels = async () => {
   if (!props.account) return
 
+  const version = ++modelRequestVersion
   loadingModels.value = true
   selectedModelId.value = '' // Reset selection before loading
   try {
     const models = await adminAPI.accounts.getAvailableModels(props.account.id)
+    if (version !== modelRequestVersion) return
     availableModels.value = models
     if (availableModels.value.length > 0) {
       // Try to select Sonnet as default, otherwise use first model
@@ -767,12 +751,13 @@ const loadAvailableModels = async () => {
       selectedModelId.value = sonnetModel?.id || availableModels.value[0].id
     }
   } catch (error) {
+    if (version !== modelRequestVersion) return
     console.error('Failed to load available models:', error)
     // Fallback to empty list
     availableModels.value = []
     selectedModelId.value = ''
   } finally {
-    loadingModels.value = false
+    if (version === modelRequestVersion) loadingModels.value = false
   }
 }
 
@@ -1037,6 +1022,34 @@ const copyOutput = () => {
   const text = outputLines.value.map((l) => l.text).join('\n')
   copyToClipboard(text, t('admin.accounts.outputCopied'))
 }
+
+// Register after the helpers above: the first lazy mount already has show=true.
+watch(
+  () => props.show,
+  async (newVal, _, onCleanup) => {
+    onCleanup(() => {
+      modelRequestVersion++
+      abortStream()
+    })
+    if (newVal && props.account) {
+      testPrompt.value = ''
+      testMode.value = 'default'
+      grokTestMode.value = 'text'
+      resetState()
+      const version = modelRequestVersion + 1
+      await loadAvailableModels()
+      if (version !== modelRequestVersion) return
+      if (isGrokAccount.value) {
+        pickDefaultModelForMode()
+        applyDefaultPromptForMode()
+      }
+    } else {
+      abortStream()
+      loadingModels.value = false
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <style>

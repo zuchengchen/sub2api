@@ -12,7 +12,7 @@ vi.mock('@/api/admin', () => ({
     accounts: {
       list: listAccounts,
       listWithEtag: vi.fn(),
-      getBatchTodayStats: vi.fn().mockResolvedValue({ stats: {} }),
+      getBatchTodayStatsWithEtag: vi.fn().mockResolvedValue({ notModified: false, etag: null, data: { stats: {} } }),
       getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
       delete: vi.fn(),
       batchClearError: vi.fn(),

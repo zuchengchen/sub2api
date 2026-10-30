@@ -461,6 +461,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { Account, AccountUsageInfo, WindowStats } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { accountUsageShowsTodayStats } from '@/utils/accountTodayStats'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import { supportsAccountQuota } from '@/utils/accountQuota'
@@ -535,18 +536,9 @@ let desktopViewportMediaQuery: MediaQueryList | null = null
 let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = null
 let visibilityObserver: IntersectionObserver | null = null
 
-// Show usage windows for OAuth and Setup Token accounts
-const showUsageWindows = computed(() => {
-  // 多协议 API Key 供应商：apikey 账号也有滚动用量窗口（coding plan / 订阅）或余额，
-  // 由 CNProviderQuotaCell / CNProviderBalanceCell 自行探测与展示。
-  if (isMultiProtocolApiKeyPlatform(props.account.platform)) {
-    return true
-  }
-  if (props.account.platform === 'openai' && props.account.type === 'apikey') {
-    return true
-  }
-  return props.account.type === 'oauth' || props.account.type === 'setup-token'
-})
+// Shared with the list's batch-stat selection so hidden branches never fetch
+// today's metrics solely because the usage column is visible.
+const showUsageWindows = computed(() => !accountUsageShowsTodayStats(props.account))
 
 const shouldFetchUsage = computed(() => {
   if (props.account.platform === 'anthropic') {

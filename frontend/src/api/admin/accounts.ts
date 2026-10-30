@@ -648,6 +648,36 @@ export async function getBatchTodayStats(accountIds: number[]): Promise<BatchTod
   return data
 }
 
+export interface BatchTodayStatsWithEtagResult {
+  notModified: boolean
+  etag: string | null
+  data: BatchTodayStatsResponse | null
+}
+
+/** Revalidate a batch snapshot without downloading or replacing unchanged stats. */
+export async function getBatchTodayStatsWithEtag(
+  accountIds: number[],
+  options?: { etag?: string | null; signal?: AbortSignal }
+): Promise<BatchTodayStatsWithEtagResult> {
+  const headers: Record<string, string> = {}
+  if (options?.etag) headers['If-None-Match'] = options.etag
+  const response = await apiClient.post<BatchTodayStatsResponse>(
+    '/admin/accounts/today-stats/batch',
+    { account_ids: accountIds },
+    {
+      headers,
+      signal: options?.signal,
+      validateStatus: status => (status >= 200 && status < 300) || status === 304
+    }
+  )
+  const etag = typeof response.headers?.etag === 'string' ? response.headers.etag : null
+  return {
+    notModified: response.status === 304,
+    etag,
+    data: response.status === 304 ? null : response.data
+  }
+}
+
 /**
  * Set account schedulable status
  * @param id - Account ID
@@ -1214,6 +1244,7 @@ export const accountsAPI = {
   getBatchUsage,
   getTodayStats,
   getBatchTodayStats,
+  getBatchTodayStatsWithEtag,
   clearRateLimit,
   recoverState,
   resetAccountQuota,

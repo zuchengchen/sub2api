@@ -270,14 +270,9 @@ func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context) error {
 	active, idle := c.dbPoolStats()
 	redisTotal, redisIdle, redisStatsOK := c.redisPoolStats()
 
-	successCount, tokenConsumed, err := c.queryUsageCounts(ctx, windowStart, windowEnd)
+	successCount, tokenConsumed, duration, ttft, err := c.queryUsageMetrics(ctx, windowStart, windowEnd)
 	if err != nil {
-		return fmt.Errorf("query usage counts: %w", err)
-	}
-
-	duration, ttft, err := c.queryUsageLatency(ctx, windowStart, windowEnd)
-	if err != nil {
-		return fmt.Errorf("query usage latency: %w", err)
+		return fmt.Errorf("query usage metrics: %w", err)
 	}
 
 	errorTotal, businessLimited, errorSLA, upstreamExcl, upstream429, upstream529, err := c.queryErrorCounts(ctx, windowStart, windowEnd)
@@ -405,92 +400,57 @@ type opsCollectedPercentiles struct {
 	max *int
 }
 
-func (c *OpsMetricsCollector) queryUsageCounts(ctx context.Context, start, end time.Time) (successCount int64, tokenConsumed int64, err error) {
-	q := `
+const opsUsageMetricsQuery = `
 SELECT
   COALESCE(COUNT(*), 0) AS success_count,
-  COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS token_consumed
+  COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS token_consumed,
+  percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms),
+  percentile_cont(0.90) WITHIN GROUP (ORDER BY duration_ms),
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms),
+  percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms),
+  AVG(duration_ms), MAX(duration_ms),
+  percentile_cont(0.50) WITHIN GROUP (ORDER BY first_token_ms),
+  percentile_cont(0.90) WITHIN GROUP (ORDER BY first_token_ms),
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY first_token_ms),
+  percentile_cont(0.99) WITHIN GROUP (ORDER BY first_token_ms),
+  AVG(first_token_ms), MAX(first_token_ms)
 FROM usage_logs
 WHERE created_at >= $1 AND created_at < $2`
 
+func (c *OpsMetricsCollector) queryUsageMetrics(ctx context.Context, start, end time.Time) (successCount int64, tokenConsumed int64, duration opsCollectedPercentiles, ttft opsCollectedPercentiles, err error) {
+	// Ordered-set aggregates, AVG and MAX ignore NULL independently. Keeping
+	// them in SELECT preserves count/tokens even when both latencies are NULL.
 	var tokens sql.NullInt64
-	if err := c.db.QueryRowContext(ctx, q, start, end).Scan(&successCount, &tokens); err != nil {
-		return 0, 0, err
+	var d50, d90, d95, d99, dAvg, t50, t90, t95, t99, tAvg sql.NullFloat64
+	var dMax, tMax sql.NullInt64
+	if err := c.db.QueryRowContext(ctx, opsUsageMetricsQuery, start, end).Scan(
+		&successCount, &tokens, &d50, &d90, &d95, &d99, &dAvg, &dMax,
+		&t50, &t90, &t95, &t99, &tAvg, &tMax,
+	); err != nil {
+		return 0, 0, opsCollectedPercentiles{}, opsCollectedPercentiles{}, err
 	}
 	if tokens.Valid {
 		tokenConsumed = tokens.Int64
 	}
-	return successCount, tokenConsumed, nil
+	duration = collectedPercentiles(d50, d90, d95, d99, dAvg, dMax)
+	ttft = collectedPercentiles(t50, t90, t95, t99, tAvg, tMax)
+	return successCount, tokenConsumed, duration, ttft, nil
 }
 
-func (c *OpsMetricsCollector) queryUsageLatency(ctx context.Context, start, end time.Time) (duration opsCollectedPercentiles, ttft opsCollectedPercentiles, err error) {
-	{
-		q := `
-SELECT
-  percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms) AS p50,
-  percentile_cont(0.90) WITHIN GROUP (ORDER BY duration_ms) AS p90,
-  percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95,
-  percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms) AS p99,
-  AVG(duration_ms) AS avg_ms,
-  MAX(duration_ms) AS max_ms
-FROM usage_logs
-WHERE created_at >= $1 AND created_at < $2
-  AND duration_ms IS NOT NULL`
-
-		var p50, p90, p95, p99 sql.NullFloat64
-		var avg sql.NullFloat64
-		var max sql.NullInt64
-		if err := c.db.QueryRowContext(ctx, q, start, end).Scan(&p50, &p90, &p95, &p99, &avg, &max); err != nil {
-			return opsCollectedPercentiles{}, opsCollectedPercentiles{}, err
-		}
-		duration.p50 = floatToIntPtr(p50)
-		duration.p90 = floatToIntPtr(p90)
-		duration.p95 = floatToIntPtr(p95)
-		duration.p99 = floatToIntPtr(p99)
-		if avg.Valid {
-			v := roundTo1DP(avg.Float64)
-			duration.avg = &v
-		}
-		if max.Valid {
-			v := int(max.Int64)
-			duration.max = &v
-		}
+func collectedPercentiles(p50, p90, p95, p99, avg sql.NullFloat64, max sql.NullInt64) opsCollectedPercentiles {
+	result := opsCollectedPercentiles{
+		p50: floatToIntPtr(p50), p90: floatToIntPtr(p90),
+		p95: floatToIntPtr(p95), p99: floatToIntPtr(p99),
 	}
-
-	{
-		q := `
-SELECT
-  percentile_cont(0.50) WITHIN GROUP (ORDER BY first_token_ms) AS p50,
-  percentile_cont(0.90) WITHIN GROUP (ORDER BY first_token_ms) AS p90,
-  percentile_cont(0.95) WITHIN GROUP (ORDER BY first_token_ms) AS p95,
-  percentile_cont(0.99) WITHIN GROUP (ORDER BY first_token_ms) AS p99,
-  AVG(first_token_ms) AS avg_ms,
-  MAX(first_token_ms) AS max_ms
-FROM usage_logs
-WHERE created_at >= $1 AND created_at < $2
-  AND first_token_ms IS NOT NULL`
-
-		var p50, p90, p95, p99 sql.NullFloat64
-		var avg sql.NullFloat64
-		var max sql.NullInt64
-		if err := c.db.QueryRowContext(ctx, q, start, end).Scan(&p50, &p90, &p95, &p99, &avg, &max); err != nil {
-			return opsCollectedPercentiles{}, opsCollectedPercentiles{}, err
-		}
-		ttft.p50 = floatToIntPtr(p50)
-		ttft.p90 = floatToIntPtr(p90)
-		ttft.p95 = floatToIntPtr(p95)
-		ttft.p99 = floatToIntPtr(p99)
-		if avg.Valid {
-			v := roundTo1DP(avg.Float64)
-			ttft.avg = &v
-		}
-		if max.Valid {
-			v := int(max.Int64)
-			ttft.max = &v
-		}
+	if avg.Valid {
+		v := roundTo1DP(avg.Float64)
+		result.avg = &v
 	}
-
-	return duration, ttft, nil
+	if max.Valid {
+		v := int(max.Int64)
+		result.max = &v
+	}
+	return result
 }
 
 func (c *OpsMetricsCollector) queryErrorCounts(ctx context.Context, start, end time.Time) (

@@ -16,12 +16,24 @@ function deferred() {
   return { promise, resolve, reject }
 }
 const active = (message: string) => ({ active: true, state: { until_unix: Date.now() / 1000 + 3600, error_message: message, rule_index: -1 } })
-async function open() {
-  const w = mount(TempUnschedStatusModal, { props: { show: false, account: { id: 1, name: 'first' } as Account },
+async function open(initialShow = false) {
+  const w = mount(TempUnschedStatusModal, { props: { show: initialShow, account: { id: 1, name: 'first' } as Account },
     global: { stubs: { BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /><slot name="footer" /></div>' } } } })
   await w.setProps({ show: true }); return w
 }
 describe('temporary unschedulable status requests', () => {
+  it('loads on the first show=true mount and reloads after closing', async () => {
+    mocks.getTempUnschedulableStatus.mockResolvedValue(active('first open'))
+    const w = await open(true)
+    await flushPromises()
+    expect(mocks.getTempUnschedulableStatus).toHaveBeenCalledTimes(1)
+    expect(w.text()).toContain('first open')
+    await w.setProps({ show: false })
+    expect(w.text()).not.toContain('first open')
+    await w.setProps({ show: true })
+    await flushPromises()
+    expect(mocks.getTempUnschedulableStatus).toHaveBeenCalledTimes(2)
+  })
   it('does not let a late response replace the next account status', async () => {
     const old = deferred()
     mocks.getTempUnschedulableStatus.mockReturnValueOnce(old.promise).mockResolvedValueOnce(active('current-error'))

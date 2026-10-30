@@ -68,10 +68,10 @@ function mountModal(account: Record<string, unknown> = {
   platform: 'openai',
   type: 'apikey',
   status: 'active'
-}) {
+}, show = false) {
   return mount(AccountTestModal, {
     props: {
-      show: false,
+      show,
       account
     } as any,
     global: {
@@ -116,6 +116,20 @@ describe('AccountTestModal', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('loads models on the first show=true mount and ignores stale results after closing', async () => {
+    let finish!: (value: unknown[]) => void
+    getAvailableModels.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const wrapper = mountModal(undefined, true)
+    expect(getAvailableModels).toHaveBeenCalled()
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    finish([{ id: 'stale-model', display_name: 'Stale model' }])
+    await flushPromises()
+    expect((wrapper.vm as any).availableModels.map((item: { id: string }) => item.id)).not.toContain('stale-model')
+    wrapper.unmount()
   })
 
   it('图片模型测试会携带提示词并渲染图片预览', async () => {

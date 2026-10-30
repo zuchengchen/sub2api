@@ -642,29 +642,21 @@ const lineChartOptions = computed(() => ({
   }
 }))
 
-// Load stats when modal opens
-watch(
-  () => props.show,
-  async (newVal) => {
-    if (newVal && props.account) {
-      await loadStats()
-    } else {
-      stats.value = null
-    }
-  }
-)
-
+let statsRequestVersion = 0
 const loadStats = async () => {
   if (!props.account) return
 
+  const version = ++statsRequestVersion
   loading.value = true
   try {
-    stats.value = await adminAPI.accounts.getStats(props.account.id, 30)
+    const result = await adminAPI.accounts.getStats(props.account.id, 30)
+    if (version === statsRequestVersion) stats.value = result
   } catch (error) {
+    if (version !== statsRequestVersion) return
     console.error('Failed to load account stats:', error)
     stats.value = null
   } finally {
-    loading.value = false
+    if (version === statsRequestVersion) loading.value = false
   }
 }
 
@@ -710,4 +702,19 @@ const formatDuration = (ms: number): string => {
   }
   return `${Math.round(ms)}ms`
 }
+
+// Register after the helpers above: the first lazy mount already has show=true.
+watch(
+  () => props.show,
+  async (newVal, _, onCleanup) => {
+    onCleanup(() => { statsRequestVersion++ })
+    if (newVal && props.account) {
+      await loadStats()
+    } else {
+      stats.value = null
+      loading.value = false
+    }
+  },
+  { immediate: true }
+)
 </script>
