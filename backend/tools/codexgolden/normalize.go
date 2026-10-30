@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -14,22 +15,23 @@ import (
 var dynamicUUID = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 var dynamicChunk = regexp.MustCompile(`Chunk ID: [0-9a-f]+`)
 var dynamicWallTime = regexp.MustCompile(`Wall time: [0-9.]+ seconds`)
-var dynamicDate = regexp.MustCompile(`<current_date>[^<]+</current_date>`)
+var toolExecutionPrefix = regexp.MustCompile(`^Chunk ID: [0-9a-f]+\nWall time: [0-9.]+ seconds\nProcess exited with code [0-9]+\n(?:Original token count: [0-9]+\n)?Output:\n`)
 
 type referenceNormalizer struct{ ids map[string]string }
 
-func (n *referenceNormalizer) value(key string, value any) any {
+func (n *referenceNormalizer) value(path string, value any) any {
+	key := path[strings.LastIndex(path, ".")+1:]
+	metadata := strings.HasPrefix(path, "body.client_metadata.") || strings.Contains(path, ".internal_chat_message_metadata_passthrough.") || strings.HasPrefix(path, "body.events[].event_params.") || strings.HasPrefix(path, "header.x-codex-turn-metadata.")
 	// Preserve field presence and type; only clocks and durations are volatile.
 	volatile := false
 	switch key {
 	case "created_at", "started_at", "completed_at", "create_time", "turn_started_at_unix_ms",
 		"x-codex-ws-stream-request-start-ms", "started_at_ms", "completed_at_ms", "duration_ms",
 		"execution_duration_ms", "before_first_sampling_ms", "sampling_ms", "compaction_ms",
-		"between_sampling_overhead_ms", "tool_blocking_ms", "after_last_sampling_ms",
-		"active_context_tokens_before", "active_context_tokens_after":
+		"between_sampling_overhead_ms", "tool_blocking_ms", "after_last_sampling_ms":
 		volatile = true
 	}
-	if value != nil && volatile {
+	if value != nil && volatile && (metadata || path == "header.x-codex-ws-stream-request-start-ms") {
 		switch value.(type) {
 		case string:
 			return "<CLOCK>"
@@ -46,41 +48,87 @@ func (n *referenceNormalizer) value(key string, value any) any {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			out[k] = n.value(k, v[k])
+			out[k] = n.value(path+"."+k, v[k])
+		}
+		// Only the recorder's known exec_command wrapper contains clocks. The
+		// tool's actual output, including UUIDs or lookalike text, stays exact.
+		if path == "body.input[]" && v["type"] == "function_call_output" {
+			callID, _ := v["call_id"].(string)
+			output, _ := v["output"].(string)
+			if strings.HasPrefix(callID, "call_golden_") {
+				prefix := toolExecutionPrefix.FindString(output)
+				if prefix != "" {
+					normalized := dynamicChunk.ReplaceAllString(prefix, "Chunk ID: <CHUNK>")
+					normalized = dynamicWallTime.ReplaceAllString(normalized, "Wall time: <SECONDS> seconds")
+					out["output"] = normalized + output[len(prefix):]
+				}
+			}
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
 		for i, child := range v {
-			out[i] = n.value("", child)
+			out[i] = n.value(path+"[]", child)
 		}
 		return out
 	case string:
-		if key == "sec-websocket-key" || key == "content-length" || key == "date" {
+		if path == "header.sec-websocket-key" || path == "header.content-length" || path == "header.date" {
 			return "<DYNAMIC>"
 		}
-		// Metadata is JSON encoded inside a string, with its own random map order.
-		var embedded any
-		if (strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[")) && json.Unmarshal([]byte(v), &embedded) == nil {
-			return string(mustJSON(n.value("", embedded)))
+		// Turn metadata is a typed Rust struct encoded inside a string. Keep
+		// its field order, unlike client_metadata's randomized HashMap order.
+		if (metadata || strings.HasPrefix(path, "header.")) && key == "x-codex-turn-metadata" {
+			var embedded map[string]any
+			if json.Unmarshal([]byte(v), &embedded) == nil && embedded != nil {
+				var out bytes.Buffer
+				out.WriteByte('{')
+				for i, k := range bodyTopLevelKeys([]byte(v)) {
+					if i > 0 {
+						out.WriteByte(',')
+					}
+					out.Write(mustJSON(k))
+					out.WriteByte(':')
+					out.Write(mustJSON(n.value(path+"."+k, embedded[k])))
+				}
+				out.WriteByte('}')
+				return out.String()
+			}
 		}
-		v = dynamicUUID.ReplaceAllStringFunc(v, func(id string) string {
+		identity := path == "body.prompt_cache_key" || path == "body.input[].id"
+		if metadata || strings.HasPrefix(path, "header.") {
+			switch key {
+			case "session-id", "thread-id", "x-client-request-id", "x-codex-window-id", "x-codex-installation-id",
+				"session_id", "thread_id", "parent_thread_id", "turn_id", "root_turn_id", "installation_id", "window_id", "context_window_id":
+				identity = true
+			}
+		}
+		if !identity {
+			return v
+		}
+		return dynamicUUID.ReplaceAllStringFunc(v, func(id string) string {
 			if n.ids == nil {
 				n.ids = make(map[string]string)
 			}
 			if n.ids[id] == "" {
-				n.ids[id] = fmt.Sprintf("<ID:%d>", len(n.ids)+1)
+				variant := "other"
+				switch strings.ToLower(id[19:20]) {
+				case "0", "1", "2", "3", "4", "5", "6", "7":
+					variant = "ncs"
+				case "8", "9", "a", "b":
+					variant = "rfc4122"
+				case "c", "d":
+					variant = "microsoft"
+				}
+				letterCase := "mixed"
+				if id == strings.ToLower(id) {
+					letterCase = "lower"
+				} else if id == strings.ToUpper(id) {
+					letterCase = "upper"
+				}
+				n.ids[id] = fmt.Sprintf("<ID:%d:v%s:%s:%s>", len(n.ids)+1, id[14:15], variant, letterCase)
 			}
 			return n.ids[id]
 		})
-		if key == "output" {
-			v = dynamicChunk.ReplaceAllString(v, "Chunk ID: <CHUNK>")
-			v = dynamicWallTime.ReplaceAllString(v, "Wall time: <SECONDS> seconds")
-		}
-		if key == "text" {
-			v = dynamicDate.ReplaceAllString(v, "<current_date><DATE></current_date>")
-		}
-		return v
 	default:
 		return value
 	}
@@ -104,14 +152,27 @@ func normalizedRecordGroups(records map[recordKey]record) map[string][]any {
 	sort.Strings(keys)
 	normalizer := &referenceNormalizer{}
 	out := make(map[string][]any)
+	connections := make(map[int]int)
 	for _, key := range keys {
 		recs := groups[key]
 		sort.Slice(recs, func(i, j int) bool { return recs[i].Seq < recs[j].Seq })
-		connections := make(map[int]int)
+		// The fixed CLI starts two independent model clients: bootstrap and
+		// initialized. Each makes its first request on a separate connection;
+		// scheduling can reverse their arrival even at the same endpoint. Sort
+		// only that pair by its actual headers before assigning connection IDs.
+		// Counts, header values/order, TLS and later connection reuse remain
+		// observable. Retries and requests sharing a connection stay ordered.
+		if len(recs) == 2 && recs[0].Kind == "http_request" && recs[0].Method == "GET" &&
+			strings.HasPrefix(recs[0].Target, "/backend-api/codex/models?client_version=") &&
+			recs[0].Conn != recs[1].Conn && recs[0].ConnReq == 1 && recs[1].ConnReq == 1 {
+			sort.Slice(recs, func(i, j int) bool {
+				return string(mustJSON(recs[i].Headers)) < string(mustJSON(recs[j].Headers))
+			})
+		}
 		for _, rec := range recs {
 			headers := make([]headerKV, 0, len(rec.Headers))
 			for _, header := range rec.Headers {
-				header.Value, _ = normalizer.value(strings.ToLower(header.Name), header.Value).(string)
+				header.Value = normalizer.value("header."+strings.ToLower(header.Name), header.Value).(string)
 				headers = append(headers, header)
 			}
 			// The MCP client's product headers come from a randomized HashMap.
@@ -125,13 +186,15 @@ func normalizedRecordGroups(records map[recordKey]record) map[string][]any {
 				"kind": rec.Kind, "method": rec.Method, "target": rec.Target,
 				"proto": rec.Proto, "headers": headers, "body_encoding": rec.BodyEncoding,
 				"body_key_order": bodyTopLevelKeys(rec.BodyJSON),
-				"body":           normalizer.value("", body), "body_text": normalizer.value("", rec.BodyText),
+				"body":           normalizer.value("body", body), "body_text": rec.BodyText,
 			}
-			if key == "responses_lifecycle" {
-				if connections[rec.Conn] == 0 {
-					connections[rec.Conn] = len(connections) + 1
-				}
-				value["connection"] = connections[rec.Conn]
+			if connections[rec.Conn] == 0 {
+				connections[rec.Conn] = len(connections) + 1
+			}
+			value["connection"] = connections[rec.Conn]
+			value["connection_request_index"] = rec.ConnReq
+			if rec.TLS != nil {
+				value["tls"] = rec.TLS.fingerprintKey()
 			}
 			if rec.Frame != nil {
 				frame := *rec.Frame
@@ -145,6 +208,9 @@ func normalizedRecordGroups(records map[recordKey]record) map[string][]any {
 }
 
 func tlsStructuresEqual(a, b any) bool {
+	if validateTLSRecording(a) != nil || validateTLSRecording(b) != nil {
+		return false
+	}
 	left, leftOK := a.([]any)
 	right, rightOK := b.([]any)
 	if !leftOK || !rightOK || len(left) == 0 || len(right) == 0 {

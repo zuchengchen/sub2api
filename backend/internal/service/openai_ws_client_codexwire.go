@@ -167,6 +167,13 @@ func dialOpenAIWSForAccount(ctx context.Context, cfg *config.Config, req openAIW
 			profile = tlsfingerprint.BuiltinProfile("rustls")
 		}
 	}
+	if isCodexOAuthAccount(req.Account) {
+		var err error
+		profile, err = codexwire.WithCodexCustomCA(profile)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+	}
 	timeout := 15 * time.Second
 	if cfg.Gateway.OpenAIWS.DialTimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.Gateway.OpenAIWS.DialTimeoutSeconds) * time.Second

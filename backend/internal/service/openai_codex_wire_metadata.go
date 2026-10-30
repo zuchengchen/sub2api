@@ -35,6 +35,10 @@ func applyCodexWireMetadata(payload map[string]any, wsHeaders http.Header, accou
 			metadata = decoded
 		}
 	}
+	// Native turn metadata already describes the caller's permissions. An
+	// omitted workspace is meaningful (e.g. read-only seccomp); account defaults
+	// only fill metadata synthesized for a client without a native lifecycle.
+	_, nativeRequestKind := metadata["request_kind"]
 
 	setStr := func(m map[string]any, key, value string) {
 		if strings.TrimSpace(value) == "" {
@@ -95,7 +99,7 @@ func applyCodexWireMetadata(payload map[string]any, wsHeaders http.Header, accou
 		if trigger := account.GetExtraString("codex_turn_trigger"); trigger != "" {
 			setStr(metadata, "turn_trigger", trigger)
 		}
-		if _, exists := metadata["workspaces"]; !exists && hasProfile && account.GetExtraString(codexWorkspaceCWDExtraKey) != "" {
+		if _, exists := metadata["workspaces"]; !exists && !nativeRequestKind && hasProfile && account.GetExtraString(codexWorkspaceCWDExtraKey) != "" {
 			metadata["workspaces"] = map[string]any{profile.WorkspaceCWD: map[string]any{}}
 		}
 		if _, exists := metadata["turn_started_at_unix_ms"]; !exists {

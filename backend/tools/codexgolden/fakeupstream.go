@@ -48,6 +48,8 @@ type headerKV struct {
 
 // record is one client→server unit observed on the wire.
 type record struct {
+	Hop          string          `json:"hop,omitempty"`
+	TLS          *clientHello    `json:"tls,omitempty"`
 	Seq          int             `json:"seq"`
 	Conn         int             `json:"conn"`
 	ConnReq      int             `json:"conn_request_index"`
@@ -81,25 +83,37 @@ type upstreamOptions struct {
 	// ModelsJSON is served for GET /codex/models (404 when empty, so Codex
 	// falls back to its bundled catalog).
 	ModelsJSON []byte
+	// Hold the first model response until both independent CLI startup reads
+	// arrive. The default provider deliberately does not serialize these reads.
+	// Timeout is a fixture failure, never an extra synthesized request.
+	ModelsBarrier bool
 	// TLS terminates TLS on the listener when set.
 	TLS *tls.Config
 	// OnHello observes every TLS ClientHello before the handshake.
 	OnHello func(*clientHello)
+	// Candidate captures route only the real CLI's core requests through the
+	// local gateway. Upstream connections (different SNI) are always recorded.
+	RouteRequest func(net.Conn, *bufio.Reader, string, string, string, []headerKV) (handled, done bool)
 }
 
 type fakeUpstream struct {
-	ln       net.Listener
-	scenario scenario
-	opts     upstreamOptions
-	mu       sync.Mutex
-	records  []record
-	seq      int
-	connSeq  atomic.Int64
-	respSeq  atomic.Int64
-	toolSent atomic.Bool
-	wg       sync.WaitGroup
+	ln         net.Listener
+	scenario   scenario
+	opts       upstreamOptions
+	mu         sync.Mutex
+	records    []record
+	connHops   map[int]string
+	connHellos map[int]*clientHello
+	seq        int
+	connSeq    atomic.Int64
+	respSeq    atomic.Int64
+	toolSent   atomic.Bool
+	wg         sync.WaitGroup
 	// refreshedAccess is the access token issued by /oauth/token.
-	refreshedAccess atomic.Value
+	refreshedAccess     atomic.Value
+	modelsArrived       atomic.Int32
+	modelsReady         chan struct{}
+	modelsBarrierFailed atomic.Bool
 }
 
 func newFakeUpstream(sc scenario, opts upstreamOptions) (*fakeUpstream, error) {
@@ -107,7 +121,7 @@ func newFakeUpstream(sc scenario, opts upstreamOptions) (*fakeUpstream, error) {
 	if err != nil {
 		return nil, err
 	}
-	f := &fakeUpstream{ln: ln, scenario: sc, opts: opts}
+	f := &fakeUpstream{ln: ln, scenario: sc, opts: opts, connHops: make(map[int]string), connHellos: make(map[int]*clientHello), modelsReady: make(chan struct{})}
 	go f.serve()
 	return f, nil
 }
@@ -142,6 +156,12 @@ func (f *fakeUpstream) add(r record) {
 	defer f.mu.Unlock()
 	f.seq++
 	r.Seq = f.seq
+	r.Hop = f.connHops[r.Conn]
+	if hello := f.connHellos[r.Conn]; hello != nil {
+		shape := *hello
+		shape.Raw = ""
+		r.TLS = &shape
+	}
 	f.records = append(f.records, r)
 }
 
@@ -156,6 +176,8 @@ func (f *fakeUpstream) serve() {
 			defer f.wg.Done()
 			defer func() { _ = c.Close() }()
 			conn := net.Conn(c)
+			front := false
+			var capturedHello *clientHello
 			if f.opts.TLS != nil {
 				pc, hello, err := peekClientHello(c)
 				if err != nil {
@@ -164,6 +186,8 @@ func (f *fakeUpstream) serve() {
 				if hello != nil && f.opts.OnHello != nil {
 					f.opts.OnHello(hello)
 				}
+				capturedHello = hello
+				front = hello != nil && hello.ServerName == "localhost" && f.opts.RouteRequest != nil
 				tc := tls.Server(pc, f.opts.TLS)
 				_ = tc.SetDeadline(time.Now().Add(10 * time.Second))
 				if err := tc.Handshake(); err != nil {
@@ -172,9 +196,37 @@ func (f *fakeUpstream) serve() {
 				_ = tc.SetDeadline(time.Time{})
 				conn = tc
 			}
-			f.handleConn(conn, int(f.connSeq.Add(1)))
+			id := int(f.connSeq.Add(1))
+			f.mu.Lock()
+			f.connHellos[id] = capturedHello
+			if f.opts.RouteRequest != nil {
+				f.connHops[id] = "gateway_upstream"
+				if front {
+					f.connHops[id] = "cli_bootstrap"
+				}
+			}
+			f.mu.Unlock()
+			f.handleConn(conn, id, front)
 		}()
 	}
+}
+
+// coreHellos projects actual socket ClientHellos onto the same product-owned
+// endpoints as the gateway comparison. Bootstrap TLS is retained separately.
+func (f *fakeUpstream) coreHellos() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	set := newHelloSet()
+	seen := make(map[int]bool)
+	for _, rec := range f.records {
+		if !seen[rec.Conn] && (gatewayCoreTarget(rec.Target) || rec.Kind == "ws_message") {
+			if hello := f.connHellos[rec.Conn]; hello != nil {
+				set.add(hello)
+				seen[rec.Conn] = true
+			}
+		}
+	}
+	return set.export()
 }
 
 // prefixConn replays already-read bytes before reading from the socket.
@@ -200,13 +252,22 @@ func peekClientHello(c net.Conn) (net.Conn, *clientHello, error) {
 	return &prefixConn{Conn: c, r: io.MultiReader(bytes.NewReader(rec), br)}, hello, nil
 }
 
-func (f *fakeUpstream) handleConn(c net.Conn, connID int) {
+func (f *fakeUpstream) handleConn(c net.Conn, connID int, front bool) {
 	br := bufio.NewReader(c)
 	for reqIdx := 1; ; reqIdx++ {
 		_ = c.SetReadDeadline(time.Now().Add(120 * time.Second))
 		method, target, proto, headers, err := readRequestHead(br)
 		if err != nil {
 			return
+		}
+		if front && f.opts.RouteRequest != nil {
+			handled, done := f.opts.RouteRequest(c, br, method, target, proto, headers)
+			if done {
+				return
+			}
+			if handled {
+				continue
+			}
 		}
 		get := func(name string) string {
 			for _, h := range headers {
@@ -265,11 +326,40 @@ func (f *fakeUpstream) handleConn(c net.Conn, connID int) {
 		case method == "GET" && strings.HasSuffix(path, "/wham/accounts/check"):
 			writeJSONResponse(c, 200, f.accountsCheck())
 		case method == "GET" && strings.HasSuffix(path, "/codex/models") && len(f.opts.ModelsJSON) > 0:
+			if f.opts.ModelsBarrier {
+				if f.modelsArrived.Add(1) == 2 {
+					close(f.modelsReady)
+				}
+				select {
+				case <-f.modelsReady:
+				case <-time.After(2 * time.Second):
+					f.modelsBarrierFailed.Store(true)
+				}
+			}
 			writeJSONResponse(c, 200, f.opts.ModelsJSON)
 		default:
 			writeJSONResponse(c, 404, []byte("{}"))
 		}
 	}
+}
+
+func (f *fakeUpstream) validateModelsBarrier() error {
+	if f.opts.ModelsBarrier && (f.modelsArrived.Load() != 2 || f.modelsBarrierFailed.Load()) {
+		return fmt.Errorf("models startup barrier failed: arrivals=%d timed_out=%v", f.modelsArrived.Load(), f.modelsBarrierFailed.Load())
+	}
+	return nil
+}
+
+// Preserve the association before aggregation so every handshake can be tied
+// to the raw requests on that socket, including auxiliary/bootstrap traffic.
+func (f *fakeUpstream) tlsConnections() map[int]*clientHello {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := make(map[int]*clientHello, len(f.connHellos))
+	for id, hello := range f.connHellos {
+		result[id] = hello
+	}
+	return result
 }
 
 func (f *fakeUpstream) authorizedAfterRefresh(authorization string) bool {

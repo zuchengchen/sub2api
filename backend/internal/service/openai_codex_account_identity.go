@@ -7,11 +7,12 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 const codexAccountIdentityNamespaceVersion = "v1"
@@ -212,12 +213,34 @@ func applyCodexAccountIdentityClientMetadataMap(requestBody map[string]any, acco
 			changed = true
 		}
 	}
+	if isCodexOAuthAccount(account) {
+		input, _ := requestBody["input"].([]any)
+		turns := make(map[string]string)
+		for _, value := range input {
+			item, _ := value.(map[string]any)
+			metadata, _ := item["internal_chat_message_metadata_passthrough"].(map[string]any)
+			raw, _ := metadata["turn_id"].(string)
+			if strings.TrimSpace(raw) == "" {
+				continue
+			}
+			scoped, ok := turns[raw]
+			if !ok {
+				scoped = scopeCodexAccountIdentityValue(account, apiKeyID, "turn", raw)
+				turns[raw] = scoped
+			}
+			if scoped != raw {
+				metadata["turn_id"] = scoped
+				changed = true
+			}
+		}
+	}
 	return changed
 }
 
 // applyCodexAccountIdentityClientMetadataRaw scopes only the small identity
-// subobjects with gjson/sjson. The passthrough hot path never unmarshals the
-// potentially multi-megabyte request body.
+// subobjects and input turn references. All replacements use original offsets
+// and one output allocation, preserving user content and input key order without
+// repeatedly copying a potentially multi-megabyte conversation.
 func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, apiKeyID int64) ([]byte, bool, error) {
 	if len(body) == 0 || codexAccountIdentityNamespace(account) == "" {
 		return body, false, nil
@@ -227,10 +250,16 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 		return body, false, nil
 	}
 
-	next := body
-	changed := false
+	type edit struct {
+		start, end int
+		value      []byte
+	}
+	var edits []edit
+	add := func(value gjson.Result, replacement []byte) {
+		edits = append(edits, edit{value.Index, value.Index + len(value.Raw), replacement})
+	}
 	originalBodySessionID := ""
-	if cm := gjson.GetBytes(body, "client_metadata"); cm.IsObject() {
+	if cm := root.Get("client_metadata"); cm.IsObject() {
 		clientMetadata := map[string]any{}
 		if err := decodeCodexMetadataObject(cm.Raw, &clientMetadata); err != nil {
 			return body, false, fmt.Errorf("decode client_metadata for account identity: %w", err)
@@ -245,15 +274,10 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 			if err != nil {
 				return body, false, fmt.Errorf("encode account-scoped client_metadata: %w", err)
 			}
-			var setErr error
-			next, setErr = sjson.SetRawBytes(next, "client_metadata", raw)
-			if setErr != nil {
-				return body, false, fmt.Errorf("splice account-scoped client_metadata: %w", setErr)
-			}
-			changed = true
+			add(cm, raw)
 		}
 	}
-	if promptCacheKey := gjson.GetBytes(body, "prompt_cache_key"); promptCacheKey.Type == gjson.String && strings.TrimSpace(promptCacheKey.String()) != "" {
+	if promptCacheKey := root.Get("prompt_cache_key"); promptCacheKey.Type == gjson.String && strings.TrimSpace(promptCacheKey.String()) != "" {
 		raw := promptCacheKey.String()
 		kind := "prompt-cache"
 		if strings.TrimSpace(originalBodySessionID) != "" && raw == originalBodySessionID {
@@ -261,15 +285,53 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 		}
 		scoped := scopeCodexAccountIdentityValue(account, apiKeyID, kind, raw)
 		if scoped != raw {
-			rewritten, err := sjson.SetBytes(next, "prompt_cache_key", scoped)
-			if err != nil {
-				return body, false, fmt.Errorf("splice account-scoped prompt_cache_key: %w", err)
-			}
-			next = rewritten
-			changed = true
+			add(promptCacheKey, []byte(strconv.Quote(scoped)))
 		}
 	}
-	return next, changed, nil
+	if isCodexOAuthAccount(account) {
+		turns := make(map[string]string)
+		if input := root.Get("input"); input.IsArray() {
+			input.ForEach(func(_, item gjson.Result) bool {
+				if !item.IsObject() {
+					return true
+				}
+				turn := item.Get("internal_chat_message_metadata_passthrough.turn_id")
+				if turn.Type != gjson.String || strings.TrimSpace(turn.Str) == "" {
+					return true
+				}
+				scoped, ok := turns[turn.Str]
+				if !ok {
+					scoped = scopeCodexAccountIdentityValue(account, apiKeyID, "turn", turn.Str)
+					turns[turn.Str] = scoped
+				}
+				if scoped != turn.Str {
+					add(turn, []byte(strconv.Quote(scoped)))
+				}
+				return true
+			})
+		}
+	}
+	if len(edits) == 0 {
+		return body, false, nil
+	}
+	slices.SortFunc(edits, func(a, b edit) int { return a.start - b.start })
+	size, end := len(body), 0
+	for _, e := range edits {
+		if e.start < end || e.end < e.start || e.end > len(body) {
+			return body, false, fmt.Errorf("invalid account identity replacement bounds")
+		}
+		size += len(e.value) - (e.end - e.start)
+		end = e.end
+	}
+	next := make([]byte, 0, size)
+	end = 0
+	for _, e := range edits {
+		next = append(next, body[end:e.start]...)
+		next = append(next, e.value...)
+		end = e.end
+	}
+	next = append(next, body[end:]...)
+	return next, true, nil
 }
 
 func applyCodexAccountIdentityHeaders(headers http.Header, account *Account, apiKeyID int64) {

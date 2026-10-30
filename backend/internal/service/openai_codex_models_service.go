@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/codexwire"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -1756,9 +1757,15 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	headers.Set("Accept", "application/json")
 	overrideUA := ""
 	if !useAPIKeyUpstream {
-		overrideUA = account.GetOpenAIUserAgent()
+		overrideUA = s.codexIdentityOverrideUA(account)
 	}
 	identity := resolveCodexOutboundIdentity(overrideUA)
+	if !useAPIKeyUpstream && codexModelsBootstrapRequest(ctx) {
+		// Before app-server initialization the CLI has not installed its
+		// product suffix yet (0.166.0's first models request). Keep the
+		// account's family/version/platform, changing only this lifecycle bit.
+		identity.userAgent = strings.TrimSuffix(identity.userAgent, " ("+identity.originator+"; "+identity.version+")")
+	}
 	headers.Set("Originator", identity.originator)
 	headers.Set("User-Agent", identity.userAgent)
 	// Version 头优先与 client_version 查询参数同源：客户端自报版本合法且不低于上游
@@ -1965,7 +1972,13 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 			// header order (version … user-agent, accept: */*).
 			req.Header.Del("Accept")
 			req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
-			resp, err = s.httpUpstream.DoWithTLS(WithAccountTrafficRequest(req, request.credentialAccount), request.proxyURL, request.accountID, request.accountConcurrency, s.resolveCodexHTTPSTLSProfile(request.credentialAccount))
+			profile := s.resolveCodexHTTPSTLSProfile(request.credentialAccount)
+			if isCodexOAuthAccount(request.credentialAccount) {
+				profile, err = codexwire.WithCodexCustomCA(profile)
+			}
+			if err == nil {
+				resp, err = s.httpUpstream.DoWithTLS(WithAccountTrafficRequest(req, request.credentialAccount), request.proxyURL, request.accountID, request.accountConcurrency, profile)
+			}
 			handled = true
 		}
 		if !handled {

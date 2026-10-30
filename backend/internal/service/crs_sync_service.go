@@ -609,7 +609,10 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			// 🔄 Refresh OAuth token after creation
 			if refreshedCreds := s.refreshOAuthToken(ctx, account); refreshedCreds != nil {
-				_ = persistAccountCredentials(ctx, s.accountRepo, account, refreshedCreds)
+				previous := snapshotOAuthRefreshAccount(account)
+				if err := persistAccountCredentials(ctx, s.accountRepo, account, refreshedCreds); err == nil {
+					s.openaiOAuthService.AuthCredentialsPersisted(ctx, previous)
+				}
 			}
 			item.Action = "created"
 			result.Created++
@@ -640,7 +643,10 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 
 		// 🔄 Refresh OAuth token after update
 		if refreshedCreds := s.refreshOAuthToken(ctx, existing); refreshedCreds != nil {
-			_ = persistAccountCredentials(ctx, s.accountRepo, existing, refreshedCreds)
+			previous := snapshotOAuthRefreshAccount(existing)
+			if err := persistAccountCredentials(ctx, s.accountRepo, existing, refreshedCreds); err == nil {
+				s.openaiOAuthService.AuthCredentialsPersisted(ctx, previous)
+			}
 		}
 
 		item.Action = "updated"

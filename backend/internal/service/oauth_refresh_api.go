@@ -375,6 +375,13 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			)
 			return nil, fmt.Errorf("%w: %v", errOAuthRefreshCredentialPersist, updateErr)
 		}
+		if freshAccount.IsOpenAIOAuth() {
+			if publisher, ok := executor.(interface {
+				AuthCredentialsPersisted(context.Context, *Account)
+			}); ok {
+				publisher.AuthCredentialsPersisted(ctx, attemptedAccount)
+			}
+		}
 	}
 
 	if requestPath && freshAccount.Platform == PlatformGrok {

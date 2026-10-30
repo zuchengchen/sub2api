@@ -7,6 +7,33 @@ import (
 	"strings"
 )
 
+// Codex's first 401 recovery step is a guarded reload of durable credentials.
+// Both Changed and Unchanged permit one replay; a missing/mismatched account
+// identity stops recovery. Only a subsequent 401 may rotate the refresh token.
+func (s *OpenAIGatewayService) reloadOpenAIOAuthHeaders(ctx context.Context, account *Account, headers http.Header) (http.Header, *Account, bool) {
+	p := s.openAITokenProvider
+	if p == nil || p.accountRepo == nil || !canRecoverOpenAIOAuth(account) || ctx.Err() != nil {
+		return headers, nil, false
+	}
+	expected := account.GetChatGPTAccountID()
+	if expected == "" {
+		return headers, nil, false
+	}
+	latest, err := p.accountRepo.GetByID(ctx, account.ID)
+	if err != nil || latest == nil || latest.ID != account.ID || !latest.IsActive() || !canRecoverOpenAIOAuth(latest) || latest.GetChatGPTAccountID() != expected || latest.GetOpenAIAccessToken() == "" || p.refreshAPI.openAIRefreshFailure(latest) != nil {
+		return headers, nil, false
+	}
+	if p.tokenCache != nil {
+		_ = p.tokenCache.DeleteAccessToken(ctx, OpenAITokenCacheKey(latest))
+	}
+	// Reload replaces this account's auth state across its token/device
+	// snapshots, without touching connections owned by any other account.
+	p.openAIOAuthService.retireAccountAuthClient(ctx, latest)
+	updated := headers.Clone()
+	updated.Set("Authorization", "Bearer "+latest.GetOpenAIAccessToken())
+	return updated, latest, true
+}
+
 func (s *OpenAIGatewayService) recoverOpenAIOAuthHeaders(ctx context.Context, account *Account, headers http.Header) (http.Header, *Account, bool) {
 	if s.openAITokenProvider == nil {
 		return headers, nil, false
@@ -67,7 +94,7 @@ func (s *OpenAIGatewayService) acquireOpenAIWSWithAuthRecovery(ctx context.Conte
 	if err == nil || !errors.As(err, &dialErr) || dialErr.StatusCode != http.StatusUnauthorized || ctx.Err() != nil {
 		return lease, err
 	}
-	headers, owner, recovered := s.recoverOpenAIOAuthHeaders(ctx, request.Account, request.Headers)
+	headers, owner, recovered := s.reloadOpenAIOAuthHeaders(ctx, request.Account, request.Headers)
 	if !recovered {
 		return nil, err
 	}
@@ -76,6 +103,16 @@ func (s *OpenAIGatewayService) acquireOpenAIWSWithAuthRecovery(ctx context.Conte
 	// Active leases belong to other turns and must not be closed by this retry.
 	retry := cloneOpenAIWSAcquireRequest(*request)
 	retry.ForceNewConn = true
+	lease, err = pool.Acquire(ctx, retry)
+	if err == nil || !errors.As(err, &dialErr) || dialErr.StatusCode != http.StatusUnauthorized || ctx.Err() != nil {
+		return lease, err
+	}
+	headers, owner, recovered = s.recoverOpenAIOAuthHeaders(ctx, owner, headers)
+	if !recovered {
+		return nil, err
+	}
+	request.Headers = headers
+	retry.Headers = headers
 	lease, err = pool.Acquire(ctx, retry)
 	if err != nil && errors.As(err, &dialErr) && dialErr.StatusCode == http.StatusUnauthorized {
 		s.openAITokenProvider.RecordUnauthorizedAfterRefresh(ctx, owner, strings.TrimPrefix(headers.Get("Authorization"), "Bearer "))

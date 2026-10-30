@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"time"
 )
 
@@ -66,15 +67,19 @@ type LiveCallRecord struct {
 	UserAgent       string
 	IPAddress       string
 	InboundEndpoint string
-	// AttestationCiphertext 仅用于让同一会话的 Sideband 复用创建时的证明。
+	// Keep the original attestation field readable by older instances.
 	AttestationCiphertext string
+	// Optional encrypted creation-time context for sideband reconnects. Redis
+	// stores this alongside the original fields; no migration is required.
+	UpstreamContextCiphertext string
 }
 
 type LiveCallCreated struct {
-	SDP      []byte
-	CallID   string
-	Location string
-	Account  *Account
+	SDP             []byte
+	CallID          string
+	Location        string
+	Account         *Account
+	upstreamHeaders http.Header
 }
 
 // LiveCallStore 由 GatewayCache 的 Redis 实现可选提供，避免扩大旧缓存接口。

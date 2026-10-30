@@ -81,7 +81,7 @@ func verifiedCodexWireProfile(version string) (codexWireProfile, bool) {
 	switch strings.TrimSpace(version) {
 	case "0.163.0":
 		return codexWireProfileStable, true
-	case "0.164.0":
+	case "0.164.0", "0.166.0":
 		return codexWireProfileMain, true
 	default:
 		return codexWireProfile{}, false
@@ -99,6 +99,9 @@ func resolveCodexWireProfile(version, mode string) (profile codexWireProfile, kn
 		return codexWireProfileMain, true
 	}
 	version = strings.TrimSpace(version)
+	if verified, ok := verifiedCodexWireProfile(version); ok {
+		return verified, true
+	}
 	if version == "" {
 		return codexWireProfileStable, true
 	}

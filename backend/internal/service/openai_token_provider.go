@@ -177,8 +177,9 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 
 	// 2) Refresh if needed (pre-expiry skew).
 	expiresAt := openAIAccessTokenExpiresAt(account)
-	needsRefresh := !account.IsOpenAIPersonalAccessToken() && !strings.HasPrefix(strings.TrimSpace(account.GetOpenAIAccessToken()), "at-") && (expiresAt == nil || time.Until(*expiresAt) <= openAITokenRefreshSkew)
-	if needsRefresh && strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" {
+	managedOAuth := !account.IsOpenAIPersonalAccessToken() && !account.IsOpenAIAgentIdentity() && !strings.HasPrefix(strings.TrimSpace(account.GetOpenAIAccessToken()), "at-")
+	needsRefresh := managedOAuth && codexAutomaticRefreshReason(account, time.Now()) != ""
+	if managedOAuth && strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" {
 		if expiresAt != nil && !time.Now().Before(*expiresAt) {
 			const reason = "openai access_token expired and refresh_token is missing"
 			// 永久故障：缺失 refresh_token 时账号无法自愈，必须立即从调度池剔除，
@@ -288,6 +289,13 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 					ttl = until
 				default:
 					ttl = time.Minute
+				}
+			}
+			// No JWT expiry: don't cache beyond the scheduled-refresh boundary.
+			if last := account.GetCredentialAsTime("last_refresh"); last != nil && codexAutomaticRefreshReason(account, time.Now()) == "" {
+				until := time.Until(last.Add(8 * 24 * time.Hour))
+				if until > 0 && until < ttl {
+					ttl = until
 				}
 			}
 			if err := p.tokenCache.SetAccessToken(ctx, cacheKey, accessToken, ttl); err != nil {

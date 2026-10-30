@@ -46,6 +46,26 @@ func TestPrepareOpenAIWSHTTPBridgeBodyStripsWSFields(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestPrepareOpenAIWSHTTPBridgeBodyPreservesCodexRequestOrder(t *testing.T) {
+	body, err := prepareOpenAIWSHTTPBridgeBody(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, []byte(`{"type":"response.create","generate":true,"client_metadata":{"turn_id":"turn"},"store":false,"stream":true,"tools":[],"input":[{"role":"user","content":"quoted stream and input"}],"instructions":"","model":"gpt-5.5"}`))
+	require.NoError(t, err)
+	// Official Response struct order survives WS -> HTTP conversion; user data
+	// remains literal, including strings that resemble protocol keys.
+	require.Equal(t, `{"model":"gpt-5.5","stream":true,"input":[{"content":"quoted stream and input","role":"user"}],"tools":[],"store":false,"client_metadata":{"turn_id":"turn"},"instructions":""}`, string(body))
+}
+
+func TestCodexBridgeReplayKeepsOriginalAndProjectedTurnsSeparate(t *testing.T) {
+	items := []json.RawMessage{json.RawMessage(`{"type":"function_call","name":"echo","call_id":"call_1","arguments":"original-turn"}`)}
+	projected, err := codexBridgeOutputTurnReferences(items, []byte(`{"client_metadata":{"turn_id":"projected-turn"}}`))
+	require.NoError(t, err)
+	original, err := codexBridgeOutputTurnReferences(items, []byte(`{"client_metadata":{"turn_id":"original-turn"}}`))
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(items[0], "internal_chat_message_metadata_passthrough").Exists())
+	require.Equal(t, "projected-turn", gjson.GetBytes(projected[0], "internal_chat_message_metadata_passthrough.turn_id").String())
+	require.Equal(t, "original-turn", gjson.GetBytes(original[0], "internal_chat_message_metadata_passthrough.turn_id").String())
+	require.Equal(t, "original-turn", gjson.GetBytes(projected[0], "arguments").String())
+}
+
 func TestPrepareOpenAIWSHTTPBridgeBodyStripsNoneReasoningForCompatibleEndpoint(t *testing.T) {
 	payload := []byte(`{"type":"response.create","model":"company-coding-model","reasoning":{"effort":"none"},"input":"hi"}`)
 	compatible := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{

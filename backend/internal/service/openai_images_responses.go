@@ -1839,24 +1839,34 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 	upstreamCtx = withOpenAIImagesSelfBuiltRequest(upstreamCtx)
-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, parsed.StickySessionSeed(), false)
-	if err != nil {
-		return nil, err
-	}
-	// 复用 Codex 认证、影子账号及指纹头；仅切换已构造请求的端点和响应协议。
-	upstreamReq.URL, err = url.Parse(targetURL)
-	if err != nil {
-		return nil, err
-	}
-	upstreamReq.Header.Set("Content-Type", "application/json")
-	upstreamReq.Header.Set("Accept", "text/event-stream")
-	if direct {
-		upstreamReq.Header.Del("OpenAI-Beta")
-		if !parsed.Stream {
-			upstreamReq.Header.Set("Accept", "application/json")
-		}
+	managedOAuth := account.IsOpenAIOAuth() && !account.IsOpenAIPersonalAccessToken() &&
+		!account.IsOpenAIAgentIdentity() && !strings.HasPrefix(strings.TrimSpace(account.GetOpenAIAccessToken()), "at-")
+	var upstreamReq *http.Request
+	if direct && managedOAuth {
+		upstreamReq, err = s.buildCodexImagesUpstreamRequest(upstreamCtx, c, account, targetURL, responsesBody, token, parsed.Stream)
 	} else {
-		upstreamReq.Header.Set("OpenAI-Beta", "responses=experimental")
+		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, parsed.StickySessionSeed(), false)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !managedOAuth {
+		// This alignment is limited to managed GPT OAuth. Preserve the
+		// existing request builder and response negotiation for other auth.
+		upstreamReq.URL, err = url.Parse(targetURL)
+		if err != nil {
+			return nil, err
+		}
+		upstreamReq.Header.Set("Content-Type", "application/json")
+		upstreamReq.Header.Set("Accept", "text/event-stream")
+		if direct {
+			upstreamReq.Header.Del("OpenAI-Beta")
+			if !parsed.Stream {
+				upstreamReq.Header.Set("Accept", "application/json")
+			}
+		} else {
+			upstreamReq.Header.Set("OpenAI-Beta", "responses=experimental")
+		}
 	}
 
 	proxyURL := ""
@@ -2017,6 +2027,62 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		ImageInputSize:                parsed.Size,
 		ImageOutputSizes:              imageOutputSizes,
 	}, nil
+}
+
+// ImagesClient has its own typed request and turn header (Codex 0.166.0,
+// codex-api/endpoint/images.rs and ext/image-generation/src/backend.rs).
+// Constructing a Responses request first would add fields the image API never
+// receives from Codex, even if its URL is replaced afterwards.
+func (s *OpenAIGatewayService) buildCodexImagesUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, target string, body []byte, token string, stream bool) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI), http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	headers, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = headers
+	req.Host = "chatgpt.com"
+	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
+		return nil, err
+	}
+	enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+	s.applyCodexSessionIdentity(c, account, body, req.Header)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	req.Header.Set("x-codex-image-turn-id", codexImageTurnID(c, account))
+	return req, nil
+}
+
+func codexImageTurnID(c *gin.Context, account *Account) string {
+	seed := fmt.Sprintf("%s:key:%d", codexIdentityClockSeed(account), getAPIKeyIDFromContext(c))
+	key := "codex_image_turn_id:" + seed
+	var headers http.Header
+	if c != nil {
+		if id := c.GetString(key); id != "" {
+			return id
+		}
+		if c.Request != nil {
+			headers = c.Request.Header
+		}
+	}
+	evidence := collectCodexTurnEvidence(nil, headers, gjson.Result{})
+	if id := strings.TrimSpace(headers.Get("x-codex-image-turn-id")); id != "" {
+		evidence.ClientTurnID = id
+	}
+	// A real image invocation carries the current submission's turn ID. The
+	// API adapter gives a standalone image request its own turn, caches it in
+	// the request context, and reuses it for every retry. Prompt text is not an
+	// identity: two requests for the same picture are still distinct turns.
+	id, _ := resolveCodexTurnIdentity(defaultCodexTurnClock, seed, evidence.ClientThreadID, evidence)
+	if c != nil {
+		c.Set(key, id)
+	}
+	return id
 }
 
 const (

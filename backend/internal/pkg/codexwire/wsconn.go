@@ -319,11 +319,22 @@ func (c *WSConn) settleDeadline(write bool) {
 
 // Close sends a close frame and closes the transport.
 func (c *WSConn) Close() error {
+	return c.closeWithPayload(nil)
+}
+
+// CloseNormal matches Codex Live close_transport: code 1000, empty reason.
+// Responses uses Close's empty payload, so the two protocols remain distinct.
+func (c *WSConn) CloseNormal() error {
+	return c.closeWithPayload([]byte{0x03, 0xe8})
+}
+
+func (c *WSConn) closeWithPayload(payload []byte) error {
 	if c.closed.Swap(true) {
 		return nil
 	}
 	c.writeMu.Lock()
-	_ = writeFrame(c.conn, true, false, opcodeClose, nil)
+	_ = c.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_ = writeFrame(c.conn, true, false, opcodeClose, payload)
 	c.writeMu.Unlock()
 	return c.conn.Close()
 }

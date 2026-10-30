@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -171,11 +172,20 @@ func classifyLane(ch *clientHello) string {
 }
 
 // fingerprintKey dedupes hellos that differ only in randomness. Extension
-// order is excluded on purpose: rustls shuffles it per connection.
+// order is excluded only for rustls, which shuffles it per connection. Every
+// other parsed field participates, so aggregation cannot hide a bad sample.
 func (ch *clientHello) fingerprintKey() string {
-	exts := append([]uint16(nil), ch.Extensions...)
-	sort.Slice(exts, func(i, j int) bool { return exts[i] < exts[j] })
-	return fmt.Sprintf("%s|%v|%v|%v|%v|%v|%v", ch.Lane, ch.CipherSuites, exts, ch.SupportedGroups, ch.SignatureSchemes, ch.ALPN, ch.KeyShares)
+	shape := *ch
+	shape.Raw = ""
+	if ch.Lane == "rustls" {
+		shape.Extensions = append([]uint16(nil), ch.Extensions...)
+		sort.Slice(shape.Extensions, func(i, j int) bool { return shape.Extensions[i] < shape.Extensions[j] })
+	}
+	encoded, err := json.Marshal(shape)
+	if err != nil {
+		panic(err)
+	} // fixed struct has no fallible JSON values
+	return string(encoded)
 }
 
 type reader struct {

@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
@@ -253,9 +254,21 @@ func prepareOpenAIWSHTTPBridgeBody(account *Account, payload []byte) ([]byte, er
 	delete(body, "type")
 	delete(body, "generate")
 	delete(body, "previous_response_id")
+	if isCodexOAuthAccount(account) {
+		if metadata, ok := body["client_metadata"].(map[string]any); ok {
+			delete(metadata, "x-codex-ws-stream-request-start-ms")
+		}
+	}
 	deleteOpenAIResponsesNoneReasoningEffortFromObject(account, body)
 	body["stream"] = true
-	return json.Marshal(body)
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	if isCodexOAuthAccount(account) {
+		encoded, _ = reorderCodexRequestTopLevelJSON(encoded)
+	}
+	return encoded, nil
 }
 
 type openAIWSToolCallReplayCollector struct {
@@ -305,6 +318,28 @@ func openAIWSHTTPBridgeReplayOutputItems(items []json.RawMessage) []json.RawMess
 		replayable = append(replayable, item)
 	}
 	return replayable
+}
+
+// Like Codex's history insertion, attach the originating turn to newly received
+// output items. Same-account replay uses projected identity; failover history
+// uses the original client identity so the next account can scope it once.
+func codexBridgeOutputTurnReferences(items []json.RawMessage, source []byte) ([]json.RawMessage, error) {
+	turn := gjson.GetBytes(source, "client_metadata.turn_id").String()
+	if turn == "" || len(items) == 0 {
+		return items, nil
+	}
+	result := slices.Clone(items)
+	for i, item := range result {
+		if gjson.GetBytes(item, "internal_chat_message_metadata_passthrough.turn_id").String() != "" {
+			continue
+		}
+		next, err := sjson.SetBytes(item, "internal_chat_message_metadata_passthrough.turn_id", turn)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = next
+	}
+	return result, nil
 }
 
 func (c *openAIWSToolCallReplayCollector) addAllItem(item gjson.Result) {

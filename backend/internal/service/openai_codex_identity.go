@@ -68,6 +68,7 @@ type codexCanonicalUserAgentResolver func() string
 var (
 	codexCanonicalUAMu       sync.RWMutex
 	codexCanonicalUAResolver codexCanonicalUserAgentResolver
+	codexWebUAResolver       codexCanonicalUserAgentResolver
 )
 
 // SetCodexCanonicalUserAgentResolver 注入规范 User-Agent 解析器。
@@ -76,6 +77,20 @@ func SetCodexCanonicalUserAgentResolver(resolver func() string) {
 	codexCanonicalUAMu.Lock()
 	defer codexCanonicalUAMu.Unlock()
 	codexCanonicalUAResolver = resolver
+}
+
+const codexWebCompatibilityVersion = "0.163.0"
+
+func codexWebCanonicalUserAgent() string {
+	codexCanonicalUAMu.RLock()
+	resolver := codexWebUAResolver
+	codexCanonicalUAMu.RUnlock()
+	if resolver != nil {
+		if ua := resolver(); strings.TrimSpace(ua) != "" {
+			return ua
+		}
+	}
+	return buildCodexCLIUserAgent(codexWebCompatibilityVersion)
 }
 
 // CodexCanonicalUserAgent 返回当前生效的规范 Codex User-Agent。

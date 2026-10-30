@@ -115,6 +115,7 @@ type OpenAIExchangeCodeInput struct {
 
 // OpenAITokenInfo represents the token information for OpenAI
 type OpenAITokenInfo struct {
+	refreshedAt                   time.Time
 	AccessToken                   string `json:"access_token"`
 	RefreshToken                  string `json:"refresh_token"`
 	IDToken                       string `json:"id_token,omitempty"`
@@ -197,6 +198,7 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 		ExpiresIn:    int64(tokenResp.ExpiresIn),
 		ExpiresAt:    time.Now().Unix() + int64(tokenResp.ExpiresIn),
 		ClientID:     clientID,
+		refreshedAt:  time.Now().UTC(),
 	}
 
 	if userInfo != nil {
@@ -243,6 +245,7 @@ func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 		IDToken:      tokenResp.IDToken,
 		ExpiresIn:    int64(tokenResp.ExpiresIn),
 		ExpiresAt:    openAIRefreshedTokenExpiresAt(tokenResp.AccessToken, tokenResp.ExpiresIn),
+		refreshedAt:  time.Now().UTC(),
 	}
 	if trimmed := strings.TrimSpace(clientID); trimmed != "" {
 		tokenInfo.ClientID = trimmed
@@ -482,6 +485,7 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
 	}
 
+	ctx = openai.WithCodexAuthAccount(ctx, account.ID)
 	if profile, ok := resolveCodexDeviceProfile(account); ok {
 		ctx = openai.WithCodexClientUserAgent(ctx, profile.UserAgent)
 	}
@@ -504,11 +508,43 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 	return info, nil
 }
 
+func (s *OpenAIOAuthService) retireAccountAuthClient(ctx context.Context, account *Account) {
+	if s == nil || !canRecoverOpenAIOAuth(account) {
+		return
+	}
+	client, ok := s.oauthClient.(interface {
+		RetireAuthClient(context.Context, string, string)
+	})
+	if !ok {
+		return
+	}
+	ctx = openai.WithCodexAuthAccount(ctx, account.ID)
+	if profile, ok := resolveCodexDeviceProfile(account); ok {
+		ctx = openai.WithCodexClientUserAgent(ctx, profile.UserAgent)
+	}
+	client.RetireAuthClient(ctx, account.GetOpenAIRefreshToken(), account.GetCredential("client_id"))
+}
+
+// AuthCredentialsPersisted publishes a new managed OAuth auth state only after
+// its durable write commits. A failed or rolled-back update keeps the old client.
+func (s *OpenAIOAuthService) AuthCredentialsPersisted(ctx context.Context, previous *Account) {
+	if s == nil || !canRecoverOpenAIOAuth(previous) {
+		return
+	}
+	snapshot := snapshotOAuthRefreshAccount(previous)
+	AfterAccountCommit(ctx, func(committed context.Context) {
+		s.retireAccountAuthClient(committed, snapshot)
+	})
+}
+
 // BuildAccountCredentials builds credentials map from token info
 func (s *OpenAIOAuthService) BuildAccountCredentials(tokenInfo *OpenAITokenInfo) map[string]any {
 	creds := make(map[string]any)
 	if strings.TrimSpace(tokenInfo.AccessToken) != "" {
 		creds["access_token"] = tokenInfo.AccessToken
+		if !tokenInfo.refreshedAt.IsZero() {
+			creds["last_refresh"] = tokenInfo.refreshedAt.Format(time.RFC3339Nano)
+		}
 	}
 	if tokenInfo.ExpiresAt > 0 {
 		creds["expires_at"] = time.Unix(tokenInfo.ExpiresAt, 0).Format(time.RFC3339)

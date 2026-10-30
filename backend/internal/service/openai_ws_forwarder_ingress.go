@@ -301,7 +301,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		} else {
 			normalized = next
 		}
-		normalized = s.rewriteOpenAIClientLocalTimeIfEnabled(account, normalized)
+		normalized = s.rewriteOpenAIClientLocalTimeForRequest(c, account, normalized)
 		responsesLite := isOpenAIResponsesLiteWebSocketPayload(normalized)
 		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(s.cfg, normalized, account, responsesLite); compatibilityErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", compatibilityErr)
@@ -757,6 +757,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if result == nil {
 				return errors.New("websocket http bridge turn result is nil")
 			}
+			if isCodexOAuthAccount(account) {
+				result.wsReplayInput, err = codexBridgeOutputTurnReferences(result.wsReplayInput, currentBridgePayload.payloadRaw)
+				if err != nil {
+					return fmt.Errorf("annotate bridge replay turn: %w", err)
+				}
+				result.wsAccountFailoverReplayInput, err = codexBridgeOutputTurnReferences(result.wsAccountFailoverReplayInput, currentBridgePayload.accountIdentitySourceRaw)
+				if err != nil {
+					return fmt.Errorf("annotate bridge failover turn: %w", err)
+				}
+			}
 			// turnReplayInput/turnAccountFailoverInput 可能共享同一头数组（转移自
 			// bridgeCurrentItems），保存历史必须经 combine 新建头，禁止就地 append。
 			bridgeReplayInput = turnReplayInput
@@ -1008,7 +1018,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return nil, acquireErr
 		}
 		connID := strings.TrimSpace(lease.ConnID())
-		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); !cookieWS && handshakeTurnState != "" {
+		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); !cookieWS && !isCodexOAuthAccount(account) && handshakeTurnState != "" {
 			turnState = handshakeTurnState
 			if stateStore != nil && sessionHash != "" {
 				stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())

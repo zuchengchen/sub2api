@@ -109,12 +109,13 @@ func TestOpenAIOAuthService_RefreshAccountToken_PATIgnoresStaleRefreshToken(t *t
 func TestOpenAITokenRefresher_NeedsRefresh_SkipsAccountWithoutRefreshToken(t *testing.T) {
 	refresher := NewOpenAITokenRefresher(nil, nil)
 	expiresAt := time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
+	accessToken := codexTestJWTExpiry(time.Now().Add(time.Minute).Unix())
 
 	withoutRT := &Account{
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token": "access-token",
+			"access_token": accessToken,
 			"expires_at":   expiresAt,
 		},
 	}
@@ -124,7 +125,7 @@ func TestOpenAITokenRefresher_NeedsRefresh_SkipsAccountWithoutRefreshToken(t *te
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token":  "access-token",
+			"access_token":  accessToken,
 			"refresh_token": "refresh-token",
 			"expires_at":    expiresAt,
 		},

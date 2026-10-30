@@ -60,7 +60,8 @@ func TestOpenAIWSOAuthRecovery_LocalHandshakeRefreshOnce(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			lease, err := svc.acquireOpenAIWSWithAuthRecovery(ctx, pool, &request)
-			require.Equal(t, int32(2), calls.Load(), "expected original and repaired handshake: %v", err)
+			require.Equal(t, int32(3), calls.Load(), "expected original, guarded reload and refreshed handshake: %v", err)
+			require.Equal(t, "Bearer rejected-access", <-seen)
 			require.Equal(t, "Bearer rejected-access", <-seen)
 			require.Equal(t, "Bearer repaired-access", <-seen)
 			require.Equal(t, "Bearer rejected-access", headers.Get("Authorization"), "original headers must remain immutable")
@@ -73,7 +74,7 @@ func TestOpenAIWSOAuthRecovery_LocalHandshakeRefreshOnce(t *testing.T) {
 				require.Nil(t, lease)
 				_, err = svc.acquireOpenAIWSWithAuthRecovery(ctx, pool, &request)
 				require.Error(t, err)
-				require.Equal(t, int32(2), calls.Load(), "rejected credential version must not redial")
+				require.Equal(t, int32(3), calls.Load(), "rejected credential version must not redial")
 				require.Equal(t, int32(1), executor.calls.Load())
 				return
 			}
@@ -154,7 +155,7 @@ func TestOpenAIWSOAuthRecovery_PassthroughLocalHandshake(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("passthrough auth recovery did not terminate")
 			}
-			require.Equal(t, int32(2), calls.Load())
+			require.Equal(t, int32(3), calls.Load())
 			require.Equal(t, int32(1), executor.calls.Load())
 			require.Zero(t, repo.setError)
 			if rejectsReplacement {

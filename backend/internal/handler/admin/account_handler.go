@@ -1469,6 +1469,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	}
 
 	service.AfterAccountCommit(ctx, func(ctx context.Context) {
+		h.openaiOAuthService.AuthCredentialsPersisted(ctx, account)
 		// 刷新成功后，清除 token 缓存，确保下次请求使用新 token
 		if h.tokenCacheInvalidator != nil {
 			if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(ctx, updatedAccount); invalidateErr != nil {
@@ -1590,6 +1591,8 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+
+	h.openaiOAuthService.AuthCredentialsPersisted(ctx, existing)
 
 	// 增量合并 Extra（JSONB key 级 merge，绝不覆盖 base_rpm / window_cost_limit /
 	// max_sessions / quota_* / privacy_mode 等持久化键）。

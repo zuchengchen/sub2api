@@ -46,6 +46,15 @@ type liveFrameConn interface {
 	Close() error
 }
 
+type liveCodexWireConn struct{ *codexWireClientConn }
+
+func (c *liveCodexWireConn) Close() error {
+	if c == nil || c.codexWireClientConn == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.CloseNormal()
+}
+
 func liveSidebandReadError(err error) error {
 	if coderws.CloseStatus(err) == coderws.StatusNormalClosure {
 		return ErrLiveCallNotFound
@@ -230,6 +239,11 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			InboundEndpoint:       identity.InboundEndpoint,
 			AttestationCiphertext: attestationCiphertext,
 		}
+		record.UpstreamContextCiphertext, err = s.encryptLiveUpstreamContext(account.ID, created.CallID, created.upstreamHeaders)
+		if err != nil {
+			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
+			return nil, fmt.Errorf("protect live call context: %w", err)
+		}
 		mappingTTL := s.liveMaxSessionDuration() + 5*time.Minute
 		if saveErr := store.SaveLiveCall(ctx, record, mappingTTL); saveErr != nil {
 			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
@@ -302,7 +316,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept", "application/sdp")
 	upstreamReq.Header.Set(liveAttestationHeader, attestation)
-	applyLiveUpstreamIdentityHeaders(upstreamReq.Header)
+	s.applyLiveUpstreamIdentityHeaders(upstreamReq.Header, account)
 
 	resp, err := s.doOpenAIUpstream(upstreamReq, resolveAccountProxyURL(account), account)
 	if err != nil {
@@ -329,10 +343,20 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	if err != nil {
 		return nil, err
 	}
+	// A 401 recovery may have sent a cloned request with fresh credentials.
+	// Snapshot the successful request, not a later read of the account token.
+	usedHeaders := upstreamReq.Header
+	if resp.Request != nil {
+		usedHeaders = resp.Request.Header
+	}
+	sidebandHeaders := usedHeaders.Clone()
+	sidebandHeaders.Del("Content-Type")
+	sidebandHeaders.Del("Accept")
 	return &LiveCallCreated{
-		SDP:      responseBody,
-		CallID:   callID,
-		Location: resp.Header.Get("Location"),
+		SDP:             responseBody,
+		CallID:          callID,
+		Location:        resp.Header.Get("Location"),
+		upstreamHeaders: sidebandHeaders,
 	}, nil
 }
 
@@ -399,16 +423,18 @@ func liveCallIDFromLocation(location string) (string, error) {
 	return callID, nil
 }
 
-func applyLiveUpstreamIdentityHeaders(headers http.Header) {
+func (s *OpenAIGatewayService) applyLiveUpstreamIdentityHeaders(headers http.Header, account *Account) {
 	headers.Set("OpenAI-Alpha", "quicksilver=v2")
-	ensureCodexIdentityHeaders(headers)
-	enforceCodexIdentityHeaders(headers)
+	enforceCodexIdentityHeadersWithUA(headers, s.codexIdentityOverrideUA(account))
 	if strings.TrimSpace(headers.Get("session-id")) == "" {
-		headers.Set("session-id", uuid.NewString())
+		headers.Set("session-id", uuid.Must(uuid.NewV7()).String())
 	}
 	if strings.TrimSpace(headers.Get("thread-id")) == "" {
-		headers.Set("thread-id", uuid.NewString())
+		headers.Set("thread-id", headers.Get("session-id"))
 	}
+	// A voice call can span multiple backing turns. Codex 0.166.0 sends
+	// only the saved thread source here, never Responses turn/window fields.
+	headers.Set(openAIWSTurnMetadataHeader, `{"thread_source":"user"}`)
 	// Realtime/Live 不使用 Responses 的实验头。
 	headers.Del("OpenAI-Beta")
 }
@@ -418,6 +444,18 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 	account *Account,
 	record *LiveCallRecord,
 ) (http.Header, error) {
+	if record == nil || account == nil || record.AccountID != account.ID {
+		return nil, ErrLiveIdentityMismatch
+	}
+	snapshot, attestation, err := s.decryptLiveUpstreamContext(record)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot != nil {
+		return snapshot, nil
+	}
+	// Older, already running calls stored only their encrypted attestation.
+	// Keep them usable during an upgrade; new calls always use the snapshot.
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err
@@ -429,12 +467,9 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {
 		return nil, err
 	}
-	attestation, err := s.decryptLiveAttestation(record)
-	if err != nil {
-		return nil, err
-	}
 	headers.Set(liveAttestationHeader, attestation)
-	applyLiveUpstreamIdentityHeaders(headers)
+	headers.Set("session-id", deriveStableCodexUUIDv7("live:"+record.CallHash, record.CreatedAt.UnixMilli()))
+	s.applyLiveUpstreamIdentityHeaders(headers, account)
 	return headers, nil
 }
 
@@ -451,7 +486,9 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 		return nil, err
 	}
 	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(record.CallID)
-	conn, status, _, err := s.getOpenAIWSPassthroughDialer().Dial(ctx, target, headers, resolveAccountProxyURL(account))
+	conn, status, _, err := dialOpenAIWSForAccount(ctx, s.cfg, openAIWSAcquireRequest{
+		WSURL: target, ProxyURL: resolveAccountProxyURL(account), Account: account,
+	}, headers, s.getOpenAIWSPassthroughDialer())
 	if err != nil {
 		return nil, fmt.Errorf("dial live sideband (status %d): %w", status, err)
 	}
@@ -459,6 +496,9 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if !ok {
 		_ = conn.Close()
 		return nil, errors.New("live sideband transport does not support raw frames")
+	}
+	if wire, ok := raw.(*codexWireClientConn); ok {
+		return &liveCodexWireConn{wire}, nil
 	}
 	return raw, nil
 }

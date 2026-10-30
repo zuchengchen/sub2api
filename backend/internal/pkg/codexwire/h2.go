@@ -68,6 +68,7 @@ type h2Conn struct {
 	writeErr  error      // sticky write failure
 	readErr   error      // sticky read-loop failure
 	goaway    bool       // GOAWAY received — no new streams
+	draining  bool       // retired client; finish existing streams, then close
 	streams   map[uint32]*h2Stream
 	nextID    uint32
 	peer      h2SettingsUpdate
@@ -159,7 +160,21 @@ func (c *h2Conn) openStream() (*h2Stream, error) {
 func (c *h2Conn) dropStream(st *h2Stream) {
 	c.mu.Lock()
 	delete(c.streams, st.id)
+	closeNow := c.draining && len(c.streams) == 0
 	c.mu.Unlock()
+	if closeNow {
+		c.Close()
+	}
+}
+
+func (c *h2Conn) retire() {
+	c.mu.Lock()
+	c.goaway, c.draining = true, true
+	closeNow := len(c.streams) == 0
+	c.mu.Unlock()
+	if closeNow {
+		c.Close()
+	}
 }
 
 var (
