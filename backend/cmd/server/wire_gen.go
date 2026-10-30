@@ -265,7 +265,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	supportDecisionAtomicReader := service.ProvideSupportDecisionAtomicReader()
 	supportDecisionReader := service.ProvideSupportDecisionReader(supportDecisionAtomicReader, gatewayService, openAIGatewayService)
 	schedulerSnapshotDirtyProcessor := service.ProvideSchedulerSnapshotDirtyProcessor(schedulerSnapshotService)
-	runtime, err := provideWorkerRuntime(accountExpiryService, idempotencyCleanupService, usageRecordWorkerPool, subscriptionExpiryService, paymentOrderExpiryService, tokenRefreshService, oAuthService, openAIOAuthService, grokOAuthService, userMessageQueueService, concurrencyService, emailQueueService, opsSystemLogSink, channelMonitorV2Aggregator, outboxCleanupService, supportDecisionAtomicReader, supportDecisionReader, schedulerDirtyWorkRepository, schedulerOwnershipRepository, schedulerSnapshotDirtyProcessor)
+	runtime, err := provideWorkerRuntime(accountExpiryService, idempotencyCleanupService, usageRecordWorkerPool, subscriptionExpiryService, paymentOrderExpiryService, tokenRefreshService, oAuthService, openAIOAuthService, grokOAuthService, userMessageQueueService, concurrencyService, emailQueueService, opsSystemLogSink, channelMonitorV2Aggregator, outboxCleanupService, supportDecisionReader, schedulerDirtyWorkRepository, schedulerOwnershipRepository, schedulerSnapshotDirtyProcessor)
 	if err != nil {
 		return nil, err
 	}

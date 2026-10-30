@@ -444,17 +444,11 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 **推荐：** 使用 `docker-compose.local.yml`（脚本部署）以便更轻松地管理数据。
 
-#### 启用“数据管理”功能（datamanagementd）
+#### 旧“数据管理”功能已退役
 
-如需启用管理后台“数据管理”，需要额外部署宿主机数据管理进程 `datamanagementd`。
+旧 `datamanagementd` 数据管理接口仅保留兼容响应：健康查询返回 `enabled: false`，通过原有请求校验的操作返回 `503 DATA_MANAGEMENT_DEPRECATED`。启动代理或挂载 Socket 不会重新启用该功能，无需为此额外部署代理。
 
-关键点：
-
-- 主进程固定探测：`/tmp/sub2api-datamanagement.sock`
-- 只有该 Socket 可连通时，数据管理功能才会开启
-- Docker 场景需将宿主机 Socket 挂载到容器同路径
-
-详细部署步骤见：`deploy/DATAMANAGEMENTD_CN.md`
+现有“数据库备份”及图片对象存储配置仍使用独立的备份服务。请按实际需求使用这些功能，并继续保留原有备份文件；它们不代表旧数据管理代理全部能力的替代。
 
 #### 访问
 

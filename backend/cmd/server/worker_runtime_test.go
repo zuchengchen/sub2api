@@ -40,7 +40,6 @@ func TestProvideWorkerRuntimeRegistersAndStartsPilots(t *testing.T) {
 		opsSink,
 		aggregator,
 		service.NewOutboxCleanupService(nil, nil, nil, 30*24*time.Hour),
-		service.NewSupportDecisionAtomicReader(30*time.Second),
 		nil,
 		nil,
 		nil,
@@ -62,9 +61,20 @@ func TestProvideWorkerRuntimeRegistersAndStartsPilots(t *testing.T) {
 	require.Equal(t, workerruntime.KindPeriodic, names["claude-oauth-session-cleanup"])
 	require.Equal(t, workerruntime.KindPeriodic, names["openai-oauth-session-cleanup"])
 	require.Equal(t, workerruntime.KindPeriodic, names["grok-oauth-session-cleanup"])
-	require.Equal(t, workerruntime.KindPeriodic, names["scheduler-support-replica"])
+	require.NotContains(t, names, "scheduler-support-replica")
 	require.NotContains(t, names, "gemini-oauth-session-cleanup")
 	require.NotContains(t, names, "antigravity-oauth-session-cleanup")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	results, err := runtime.StopAll(ctx)
+	require.NoError(t, err)
+	require.Len(t, results, len(names))
+	for _, result := range results {
+		require.Contains(t, names, result.Name)
+		require.Equal(t, workerruntime.StopCompleted, result.Outcome, result.Name)
+		require.False(t, result.StillRunning, result.Name)
+	}
 }
 
 func TestProvideWorkerRuntimeRegistersTokenRefreshOnlyWhenEnabled(t *testing.T) {
@@ -90,7 +100,6 @@ func TestProvideWorkerRuntimeRegistersTokenRefreshOnlyWhenEnabled(t *testing.T) 
 			service.NewOpsSystemLogSink(nil),
 			service.NewChannelMonitorV2Aggregator(nil, nil, nil),
 			service.NewOutboxCleanupService(nil, nil, nil, 30*24*time.Hour),
-			service.NewSupportDecisionAtomicReader(30*time.Second),
 			nil,
 			nil,
 			nil,
