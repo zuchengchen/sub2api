@@ -388,7 +388,7 @@ export default {
       },
       actions: {
         refresh: 'Refresh Status',
-        disabledHint: 'Start datamanagementd first and ensure the socket is reachable.',
+        disabledHint: 'Legacy data management is retired. Starting datamanagementd will not re-enable it.',
         reloadConfig: 'Reload Config',
         reloadSourceProfiles: 'Reload Source Profiles',
         reloadProfiles: 'Reload Profiles',

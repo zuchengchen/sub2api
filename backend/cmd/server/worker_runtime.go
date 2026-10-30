@@ -26,7 +26,8 @@ func provideWorkerRuntime(
 	opsSystemLogSink *service.OpsSystemLogSink,
 	channelMonitorV2 *service.ChannelMonitorV2Aggregator,
 	outboxCleanup *service.OutboxCleanupService,
-	supportReader *service.SupportDecisionAtomicReader,
+	// Keep the provider dependency so both gateways receive the conservative
+	// reader even though there is no support-decision refresh worker.
 	_ service.SupportDecisionReader,
 	dirtyWorkRepo service.SchedulerDirtyWorkRepository,
 	ownershipRepo service.SchedulerOwnershipRepository,
@@ -84,10 +85,6 @@ func provideWorkerRuntime(
 	if err != nil {
 		return nil, err
 	}
-	supportReplicaWorker, err := service.NewSupportDecisionReplicaWorker(supportReader)
-	if err != nil {
-		return nil, err
-	}
 	schedulerDirtyWorkWorker, err := service.NewSchedulerDirtyWorkWorker(dirtyWorkRepo, ownershipRepo, dirtyProcessor)
 	if err != nil {
 		return nil, err
@@ -105,7 +102,6 @@ func provideWorkerRuntime(
 		opsSystemLogSinkWorker,
 		channelMonitorV2Worker,
 		outboxCleanupWorker,
-		supportReplicaWorker,
 	}
 	if schedulerDirtyWorkWorker != nil {
 		components = append(components, schedulerDirtyWorkWorker)
