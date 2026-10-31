@@ -9,6 +9,7 @@ import (
 )
 
 const openAITiboProbePrompt = "Tell me whether you know who Tibo is in OpenAI based on your knowledge without searching online. Only return True or  False."
+const openAITiboProbeReasoningEffort = "xhigh"
 const openAITiboProbeBodyLimit = 4 << 20
 
 var errOpenAITiboAccountUnavailable = errors.New("tibo account is unavailable")
@@ -16,7 +17,7 @@ var errOpenAITiboAccountUnavailable = errors.New("tibo account is unavailable")
 func openAITiboProbePayload() map[string]any {
 	return map[string]any{
 		"model": openAICodexTicketDefaultModel, "store": false,
-		"stream": true, "reasoning": map[string]any{"effort": "low"},
+		"stream": true, "reasoning": map[string]any{"effort": openAITiboProbeReasoningEffort},
 		"include": []string{"reasoning.encrypted_content"},
 		"input":   []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": openAITiboProbePrompt}}}},
 	}
