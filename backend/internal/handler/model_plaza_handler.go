@@ -137,7 +137,6 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	var allowedGroups map[int64]struct{}
 	var restrictPublicGroups bool
 	var userRates map[int64]float64
-	var userIsVIP bool
 	if authed {
 		allowedGroups, restrictPublicGroups, err = h.apiKeyService.GetUserGroupVisibility(c.Request.Context(), subject.UserID)
 		if err != nil {
@@ -151,11 +150,6 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 			slog.Warn("model_plaza_user_rates_failed", "error", err, "user_id", subject.UserID)
 			userRates = nil
 		}
-		if userIsVIP, err = h.apiKeyService.IsUserVIP(c.Request.Context(), subject.UserID); err != nil {
-			// VIP 折算同样只是展示增强，失败按非 VIP 展示。
-			slog.Warn("model_plaza_user_vip_failed", "error", err, "user_id", subject.UserID)
-			userIsVIP = false
-		}
 	}
 
 	visible := filterPlazaVisibleGroups(groups, allowedGroups, restrictPublicGroups)
@@ -163,7 +157,7 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	// 广场可匿名访问，分组文案随请求语言变化，提示中间缓存按语言区分。
 	// 追加而非覆盖：CORS 中间件已为具体来源写入 Vary: Origin。
 	c.Writer.Header().Add("Vary", "Accept-Language")
-	out := toLocalizedModelPlazaGroups(visible, userRates, userIsVIP, c.GetHeader("Accept-Language"))
+	out := toLocalizedModelPlazaGroups(visible, userRates, c.GetHeader("Accept-Language"))
 	response.Success(c, modelPlazaResponse{
 		Description: rt.Description,
 		Groups:      out,
@@ -195,10 +189,10 @@ func filterPlazaVisibleGroups(
 }
 
 // toLocalizedModelPlazaGroups 转换可见分组，并把名称与描述换成请求首选语言的版本。
-func toLocalizedModelPlazaGroups(visible []service.PlazaGroup, userRates map[int64]float64, userIsVIP bool, acceptLanguage string) []modelPlazaGroup {
+func toLocalizedModelPlazaGroups(visible []service.PlazaGroup, userRates map[int64]float64, acceptLanguage string) []modelPlazaGroup {
 	out := make([]modelPlazaGroup, 0, len(visible))
 	for i := range visible {
-		group := toModelPlazaGroupDTO(&visible[i], userRates, userIsVIP)
+		group := toModelPlazaGroupDTO(&visible[i], userRates)
 		group.Name, group.Description = visible[i].I18n.Localize(acceptLanguage, group.Name, group.Description)
 		out = append(out, group)
 	}
@@ -206,8 +200,8 @@ func toLocalizedModelPlazaGroups(visible []service.PlazaGroup, userRates map[int
 }
 
 // toModelPlazaGroupDTO 将 service 层广场分组映射为白名单 DTO,并合并用户专属倍率。
-func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64, userIsVIP bool) modelPlazaGroup {
-	groupRate := plazaGroupDisplayRate(g, userRates, userIsVIP)
+func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) modelPlazaGroup {
+	groupRate := plazaGroupBaseRate(g, userRates)
 	models := make([]modelPlazaModel, 0, len(g.Models))
 	for i := range g.Models {
 		m := &g.Models[i]
@@ -219,7 +213,7 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64, us
 			LongContextBasis: string(m.LongContextBasis),
 			TimePricing:      toModelPlazaTimePricing(m.TimePricing),
 		}
-		if modelRate := plazaModelDisplayRate(m.Name, g, userRates, userIsVIP); math.Abs(modelRate-groupRate) > 1e-9 {
+		if modelRate := plazaModelDisplayRate(m.Name, g, userRates); math.Abs(modelRate-groupRate) > 1e-9 {
 			rate := modelRate
 			item.RateMultiplier = &rate
 		}
@@ -244,13 +238,7 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64, us
 		LongContextPricingEnabled: g.LongContextPricingEnabled,
 		Models:                    models,
 	}
-	// 展示倍率与计费同源：管理员专属覆盖 ?? 分组默认；VIP 命中减免分组时
-	// 再叠加 -0.05，前端按专属倍率样式展示真实计费口径。
-	if userIsVIP && service.VipDiscountedGroup(g.Name) {
-		effective := groupRate
-		dto.UserRateMultiplier = &effective
-		return dto
-	}
+	// 仅管理员显式配置的覆盖以专属倍率展示，包含零值和与分组默认相同的值。
 	if rate, ok := userRates[g.ID]; ok {
 		dto.UserRateMultiplier = &rate
 	}
@@ -264,20 +252,8 @@ func plazaGroupBaseRate(g *service.PlazaGroup, userRates map[int64]float64) floa
 	return g.RateMultiplier
 }
 
-func plazaGroupDisplayRate(g *service.PlazaGroup, userRates map[int64]float64, userIsVIP bool) float64 {
-	base := plazaGroupBaseRate(g, userRates)
-	if userIsVIP && service.VipDiscountedGroup(g.Name) {
-		return service.ApplyVipRateDiscount(base)
-	}
-	return base
-}
-
-func plazaModelDisplayRate(modelName string, g *service.PlazaGroup, userRates map[int64]float64, userIsVIP bool) float64 {
-	base := service.ApplyLunaMinRateMultiplier(modelName, plazaGroupBaseRate(g, userRates))
-	if userIsVIP && service.VipDiscountedGroup(g.Name) {
-		return service.ApplyVipRateDiscount(base)
-	}
-	return base
+func plazaModelDisplayRate(modelName string, g *service.PlazaGroup, userRates map[int64]float64) float64 {
+	return service.ApplyLunaMinRateMultiplier(modelName, plazaGroupBaseRate(g, userRates))
 }
 
 // toModelPlazaTimePricing 转换分时倍率；nil 透传（JSON 省略）。

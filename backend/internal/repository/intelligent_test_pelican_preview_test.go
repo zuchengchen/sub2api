@@ -20,9 +20,9 @@ func TestUserPelicanTestsDistinguishesIncompleteAndRestrictedPreviews(t *testing
 	rows.AddRow(3, "completed", `<html><body><svg></svg>`, "gpt-6-astra", now, now, 120000, "GPT-PRO", "low", "draw")
 	rows.AddRow(2, "completed", `<html><body><svg></svg><script>draw()</script></body></html>`, "gpt-6-astra", now, now, 120000, "GPT-PRO", "low", "draw")
 	rows.AddRow(1, "completed", `<html><body><svg></svg></body></html>`, "gpt-6-astra", now, now, 120000, "GPT-PRO", "low", "draw")
-	mock.ExpectQuery(`SELECT COUNT\(\*\)`).WithArgs(service.VipDiscountedGroupName).
+	mock.ExpectQuery(`SELECT COUNT\(\*\)`).WithArgs(service.IntelligentTestPublicGroupName).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
-	mock.ExpectQuery(`SELECT t.id,t.status,t.result`).WithArgs(service.VipDiscountedGroupName, 96, 0).WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT t.id,t.status,t.result`).WithArgs(service.IntelligentTestPublicGroupName, 96, 0).WillReturnRows(rows)
 
 	page, err := (&intelligentTestRepository{db: db}).UserPelicanTests(context.Background(), service.IntelligentTestFilter{Page: 1, PageSize: 96})
 	require.NoError(t, err)

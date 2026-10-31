@@ -108,7 +108,7 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 	}
 
 	// 有专属倍率:user_rate_multiplier 序列化输出
-	dto := toModelPlazaGroupDTO(&g, map[int64]float64{2: 0.5}, false)
+	dto := toModelPlazaGroupDTO(&g, map[int64]float64{2: 0.5})
 	raw, err := json.Marshal(dto)
 	require.NoError(t, err)
 	var decoded map[string]any
@@ -147,7 +147,7 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 	require.False(t, hasTimePricing, "无分时时不输出 time_pricing")
 
 	// 无专属倍率:user_rate_multiplier 整个字段省略
-	dtoNoRate := toModelPlazaGroupDTO(&g, nil, false)
+	dtoNoRate := toModelPlazaGroupDTO(&g, nil)
 	rawNoRate, err := json.Marshal(dtoNoRate)
 	require.NoError(t, err)
 	var decodedNoRate map[string]any
@@ -187,7 +187,7 @@ func TestToModelPlazaGroupDTO_LongContextTiersAndBasis(t *testing.T) {
 		}},
 	}
 
-	raw, err := json.Marshal(toModelPlazaGroupDTO(&g, nil, false))
+	raw, err := json.Marshal(toModelPlazaGroupDTO(&g, nil))
 	require.NoError(t, err)
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
@@ -231,7 +231,7 @@ func TestToModelPlazaGroupDTO_TimePricing(t *testing.T) {
 			}},
 		}},
 	}
-	raw, err := json.Marshal(toModelPlazaGroupDTO(&g, nil, false))
+	raw, err := json.Marshal(toModelPlazaGroupDTO(&g, nil))
 	require.NoError(t, err)
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
@@ -252,72 +252,42 @@ func TestToModelPlazaGroupDTO_TimePricing(t *testing.T) {
 	require.Equal(t, true, weekdaysTP["weekdays_only"])
 }
 
-func TestToModelPlazaGroupDTOVipDiscount(t *testing.T) {
-	g := service.PlazaGroup{
-		ID:               37,
-		Name:             "GPT-PRO",
-		Platform:         "openai",
-		RateMultiplier:   0.15,
-		IsExclusive:      false,
-		SubscriptionType: "standard",
+func TestUnifiedUserRateModelPlazaDTO(t *testing.T) {
+	g := service.PlazaGroup{ID: 38, Name: "GPT-PRO", Platform: "openai", RateMultiplier: 0.1,
+		Models: []service.PlazaModel{{Name: "gpt-5.6-sol"}, {Name: "gpt-5.6-luna"}, {Name: "gpt-6-luna"}, {Name: "gpt-5.6-luna-2026-07-09"}},
 	}
-
-	// VIP 命中减免分组：无管理员覆盖时按分组默认折算，并以专属倍率字段展示。
-	dto := toModelPlazaGroupDTO(&g, nil, true)
-	require.NotNil(t, dto.UserRateMultiplier)
-	require.InDelta(t, 0.10, *dto.UserRateMultiplier, 1e-9)
-
-	// VIP + 管理员专属覆盖：在覆盖值基础上折算（与计费同源）。
-	dtoOverride := toModelPlazaGroupDTO(&g, map[int64]float64{37: 0.20}, true)
-	require.NotNil(t, dtoOverride.UserRateMultiplier)
-	require.InDelta(t, 0.15, *dtoOverride.UserRateMultiplier, 1e-9)
-
-	// 非 VIP：不产生 user_rate_multiplier。
-	dtoPlain := toModelPlazaGroupDTO(&g, nil, false)
-	require.Nil(t, dtoPlain.UserRateMultiplier)
-
-	// VIP 但非减免分组：不折算。
-	other := g
-	other.Name = "claude-code"
-	dtoOther := toModelPlazaGroupDTO(&other, nil, true)
-	require.Nil(t, dtoOther.UserRateMultiplier)
-}
-
-func TestToModelPlazaGroupDTOLunaMinRate(t *testing.T) {
-	g := service.PlazaGroup{
-		ID:             38,
-		Name:           "gpt-pro",
-		Platform:       "openai",
-		RateMultiplier: 0.1,
-		Models: []service.PlazaModel{
-			{Name: "gpt-5.6-sol"},
-			{Name: "gpt-5.6-luna"},
-			{Name: "gpt-5.6-luna-2026-07-09"},
-		},
+	for _, tc := range []struct {
+		name               string
+		rates              map[int64]float64
+		wantBase, wantLuna float64
+	}{
+		{"no override", nil, 0.1, 0.2},
+		{"low override", map[int64]float64{38: 0.07}, 0.07, 0.2},
+		{"zero override", map[int64]float64{38: 0}, 0, 0.2},
+		{"same as default", map[int64]float64{38: 0.1}, 0.1, 0.2},
+		{"at floor", map[int64]float64{38: 0.2}, 0.2, 0.2},
+		{"above floor", map[int64]float64{38: 0.3}, 0.3, 0.3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dto := toModelPlazaGroupDTO(&g, tc.rates)
+			require.Equal(t, 0.1, dto.RateMultiplier)
+			if tc.rates == nil {
+				require.Nil(t, dto.UserRateMultiplier)
+			} else {
+				require.NotNil(t, dto.UserRateMultiplier)
+				require.InDelta(t, tc.wantBase, *dto.UserRateMultiplier, 1e-12)
+			}
+			require.Nil(t, dto.Models[0].RateMultiplier)
+			for _, model := range dto.Models[1:] {
+				if tc.wantBase == tc.wantLuna {
+					require.Nil(t, model.RateMultiplier)
+				} else {
+					require.NotNil(t, model.RateMultiplier)
+					require.InDelta(t, tc.wantLuna, *model.RateMultiplier, 1e-12)
+				}
+			}
+		})
 	}
-
-	plain := toModelPlazaGroupDTO(&g, nil, false)
-	require.Nil(t, plain.UserRateMultiplier)
-	require.Nil(t, plain.Models[0].RateMultiplier)
-	require.NotNil(t, plain.Models[1].RateMultiplier)
-	require.InDelta(t, 0.2, *plain.Models[1].RateMultiplier, 1e-9)
-	require.NotNil(t, plain.Models[2].RateMultiplier)
-	require.InDelta(t, 0.2, *plain.Models[2].RateMultiplier, 1e-9)
-
-	vip := toModelPlazaGroupDTO(&g, nil, true)
-	require.NotNil(t, vip.UserRateMultiplier)
-	require.InDelta(t, 0.05, *vip.UserRateMultiplier, 1e-9)
-	require.Nil(t, vip.Models[0].RateMultiplier)
-	require.NotNil(t, vip.Models[1].RateMultiplier)
-	require.InDelta(t, 0.15, *vip.Models[1].RateMultiplier, 1e-9)
-
-	aboveFloor := g
-	aboveFloor.RateMultiplier = 0.3
-	vipAbove := toModelPlazaGroupDTO(&aboveFloor, nil, true)
-	require.NotNil(t, vipAbove.UserRateMultiplier)
-	require.InDelta(t, 0.25, *vipAbove.UserRateMultiplier, 1e-9)
-	require.Nil(t, vipAbove.Models[0].RateMultiplier)
-	require.Nil(t, vipAbove.Models[1].RateMultiplier)
 }
 
 func TestFilterPlazaVisibleGroups_SubscribedExclusiveGroup(t *testing.T) {

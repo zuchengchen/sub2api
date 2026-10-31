@@ -204,8 +204,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
 	}
-	// Luna 保底 + VIP 分组减免：作用于解析后的基础倍率，高峰因子仍按比例叠加。
-	multiplier = applyRequestBillingRatePolicies(user, apiKey.Group, multiplier,
+	// 所有用户统一应用 Luna 保底，高峰因子仍按比例叠加。
+	multiplier = applyRequestBillingRatePolicies(multiplier,
 		result.Model, result.BillingModel, input.OriginalModel, input.ChannelMappedModel, result.UpstreamModel)
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。
 	// 高峰因子按请求级 PricingAt 现算（与利润门 D 同源同刻，跨峰谷请求不中途

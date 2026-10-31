@@ -129,21 +129,6 @@ func TestInflightEstimate_GroupPerRequestPricing(t *testing.T) {
 	require.InDelta(t, (1000*in+500*out)*2, est, 1e-12)
 }
 
-func TestInflightEstimate_AppliesLunaFloorAndSVIPDiscount(t *testing.T) {
-	groupID := int64(21)
-	group := &Group{ID: groupID, Name: VipDiscountedGroupName, Platform: PlatformOpenAI, RateMultiplier: 0.1}
-	svc := newInflightEstimateGateway(t, nil)
-	apiKey := &APIKey{User: &User{ID: 1, IsVIP: true}, GroupID: &groupID, Group: group}
-
-	// Actual billing applies the Luna 0.2 floor, then the 0.05 SVIP discount.
-	// Inflight reservation must use the same request-level multiplier policy.
-	est, priced := svc.EstimateInflightReservation(context.Background(), apiKey, InflightEstimateRequest{
-		Model: "gpt-5.6-luna", BodyBytes: 400, MaxTokens: 1000,
-	})
-	require.True(t, priced)
-	require.InDelta(t, (100*0.4e-6+1000*2.4e-6)*0.15, est, 1e-12)
-}
-
 func TestInflightEstimate_GPT6AstraUsesForkBillingRatesWithoutLongContextSurcharge(t *testing.T) {
 	svc := newInflightEstimateGateway(t, nil)
 	svc.cfg.Billing.InflightReservation.MaxInputTokens = 400000
