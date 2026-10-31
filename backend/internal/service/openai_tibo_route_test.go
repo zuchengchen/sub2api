@@ -153,7 +153,7 @@ func requireTiboProbe(t *testing.T, body []byte) {
 	t.Helper()
 	require.Contains(t, string(body), openAITiboProbePrompt)
 	require.Contains(t, string(body), `"model":"gpt-6-astra"`)
-	require.Contains(t, string(body), `"effort":"low"`)
+	require.Contains(t, string(body), `"effort":"xhigh"`)
 }
 
 func TestTiboRouteAppliesForTicketAccountWithoutCookieWS(t *testing.T) {

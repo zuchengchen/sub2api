@@ -116,7 +116,7 @@ func TestCodexProbeTiboUsesSharedHTTPWire(t *testing.T) {
 	first := requireCodexProbeWire(t, upstream)
 	require.Nil(t, upstream.lastReq.Context().Value(accountTrafficPlanKey{}), "background health samples retain their existing admission policy")
 	require.Contains(t, string(first), openAITiboProbePrompt)
-	require.Equal(t, "low", gjson.GetBytes(first, "reasoning.effort").String())
+	require.Equal(t, "xhigh", gjson.GetBytes(first, "reasoning.effort").String())
 	require.Equal(t, openAITiboDegraded, svc.probeOpenAITiboHTTP(context.Background(), account).verdict)
 	second := requireCodexProbeWire(t, upstream)
 	require.Equal(t, gjson.GetBytes(first, "client_metadata.x-codex-installation-id").String(), gjson.GetBytes(second, "client_metadata.x-codex-installation-id").String())
