@@ -28,6 +28,8 @@ type intelligentRunContext struct {
 // intelligent tests use gpt-6-astra with explicit low reasoning; omitting
 // reasoning.effort lets Codex default to medium.
 const (
+	// IntelligentTestPublicGroupName 是智能测试公开结果所属的分组，不代表计费优惠。
+	IntelligentTestPublicGroupName        = "gpt-pro"
 	intelligentTestDefaultCodexModel      = "gpt-6-astra"
 	intelligentTestDefaultReasoningEffort = "low"
 	intelligentCaptureRawLimit            = 256 << 10
@@ -42,7 +44,7 @@ func pelicanTestGroupName(account *Account) string {
 		return ""
 	}
 	for _, group := range account.Groups {
-		if group != nil && VipDiscountedGroup(group.Name) {
+		if group != nil && strings.EqualFold(strings.TrimSpace(group.Name), IntelligentTestPublicGroupName) {
 			return strings.TrimSpace(group.Name)
 		}
 	}

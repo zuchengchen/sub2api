@@ -499,7 +499,7 @@ func (d inflightEstimateDeps) rates(ctx context.Context, apiKey *APIKey, models 
 			rate = d.userGroupRate(ctx, apiKey.User.ID, *apiKey.GroupID, rate)
 		}
 	}
-	rate = applyRequestBillingRatePolicies(apiKey.User, apiKey.Group, rate, models...)
+	rate = applyRequestBillingRatePolicies(rate, models...)
 	return computePeakAwareMultipliers(apiKey, rate, timezone.Now())
 }
 

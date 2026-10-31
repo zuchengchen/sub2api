@@ -62,7 +62,7 @@ export default {
 	    totalBalance: 'Total balance',
 	    available: 'Available',
     vipBadge: 'SVIP',
-    vipBadgeTitle: 'Super VIP member: granted automatically when the balance threshold is met, with exclusive rate discount and moderation privileges',
+    vipBadgeTitle: 'Super VIP member: granted automatically when the balance threshold is met, with moderation privileges and the same billing multipliers as regular users',
     copiedToClipboard: 'Copied to clipboard',
     copied: 'Copied',
     copyFailed: 'Failed to copy',

@@ -161,20 +161,24 @@ describe('PlazaModelPricingTable', () => {
     expect(text).toContain('0.8x')
   })
 
-  it('模型级倍率覆盖分组倍率,并按该倍率计算实付', () => {
-    const luna = tokenModel({ name: 'gpt-5.6-luna', rate_multiplier: 0.15 })
+  it.each([
+    { userRate: null, rate: '0.1x', input: '$0.30', output: '$1.50' },
+    { userRate: 0.05, rate: '0.05x', input: '$0.15', output: '$0.75' },
+    { userRate: 0, rate: '0x', input: '$0.00', output: '$0.00' }
+  ])('Luna 保底覆盖基础倍率,普通模型保留人工倍率 $userRate', ({ userRate, rate, input, output }) => {
+    const luna = tokenModel({ name: 'gpt-5.6-luna', rate_multiplier: 0.2 })
     const other = tokenModel({ name: 'gpt-5.6-sol' })
-    const wrapper = mountTable([luna, other], 0.1, 0.05)
+    const wrapper = mountTable([luna, other], 0.1, userRate)
     const rows = wrapper.findAll('tbody tr')
     const lunaRow = rows.find((tr) => tr.text().includes('gpt-5.6-luna'))
     const otherRow = rows.find((tr) => tr.text().includes('gpt-5.6-sol'))
 
-    expect(lunaRow?.text()).toContain('0.15x')
-    expect(lunaRow?.text()).toContain('$0.45')
-    expect(lunaRow?.text()).toContain('$2.25')
-    expect(otherRow?.text()).toContain('0.05x')
-    expect(otherRow?.text()).toContain('$0.15')
-    expect(otherRow?.text()).toContain('$0.75')
+    expect(lunaRow?.text()).toContain('0.2x')
+    expect(lunaRow?.text()).toContain('$0.60')
+    expect(lunaRow?.text()).toContain('$3.00')
+    expect(otherRow?.text()).toContain(rate)
+    expect(otherRow?.text()).toContain(input)
+    expect(otherRow?.text()).toContain(output)
   })
 
   it('模型按官方输出价从高到低排序,无官方价的排最后', () => {
