@@ -25,8 +25,8 @@ type intelligentRunContext struct {
 }
 
 // ChatGPT Codex plan-gates gpt-5.3-codex and gpt-5.4. Empty ChatGPT OAuth
-// intelligent tests use gpt-6-astra with explicit low reasoning; omitting
-// reasoning.effort lets Codex default to medium.
+// intelligent tests use gpt-6-astra with explicit reasoning: xhigh for Tibo,
+// low for other tests. Omitting reasoning.effort lets Codex default to medium.
 const (
 	// IntelligentTestPublicGroupName 是智能测试公开结果所属的分组，不代表计费优惠。
 	IntelligentTestPublicGroupName        = "gpt-pro"
@@ -73,10 +73,11 @@ func intelligentPrompt(ctx context.Context) string {
 	return ""
 }
 func applyIntelligentPayloadPrompt(ctx context.Context, payload map[string]any) {
-	prompt := intelligentPrompt(ctx)
-	if prompt == "" {
+	run := intelligentContext(ctx)
+	if run == nil || run.prompt == "" {
 		return
 	}
+	prompt := run.prompt
 	if _, ok := payload["input"]; ok {
 		payload["input"] = []map[string]any{{"role": "user", "content": []map[string]any{{"type": "input_text", "text": prompt}}}}
 	}
@@ -86,7 +87,7 @@ func applyIntelligentPayloadPrompt(ctx context.Context, payload map[string]any) 
 			payload["max_tokens"] = 8192
 		}
 	}
-	applyIntelligentTestReasoning(payload)
+	applyIntelligentTestReasoning(payload, run.testType)
 }
 
 func (s *AccountTestService) OpenAITiboHTTPVerdict(accountID int64) string {
@@ -101,19 +102,27 @@ func pelicanUsesHTTPTransport(ctx context.Context, httpHealthy bool) bool {
 	return run != nil && run.testType == "pelican" && httpHealthy
 }
 
-func applyIntelligentTestReasoning(payload map[string]any) {
+func intelligentTestReasoningEffort(testType string) string {
+	if testType == "tibo" {
+		return openAITiboProbeReasoningEffort
+	}
+	return intelligentTestDefaultReasoningEffort
+}
+
+func applyIntelligentTestReasoning(payload map[string]any, testType string) {
 	if payload == nil {
 		return
 	}
+	effort := intelligentTestReasoningEffort(testType)
 	if _, ok := payload["input"]; ok {
-		payload["reasoning"] = map[string]any{"effort": intelligentTestDefaultReasoningEffort}
+		payload["reasoning"] = map[string]any{"effort": effort}
 		return
 	}
 	if _, ok := payload["messages"]; ok {
 		if _, hasSystem := payload["system"]; hasSystem {
 			return
 		}
-		payload["reasoning_effort"] = intelligentTestDefaultReasoningEffort
+		payload["reasoning_effort"] = effort
 	}
 }
 
@@ -146,7 +155,7 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 	r.ConfigSnapshot.Execution = snapshotIntelligentProtectionRuntime(account)
 	r.ConfigSnapshot.Execution.RequestedModel = r.ConfigSnapshot.Model
 	r.ConfigSnapshot.Execution.Model = r.Model
-	r.ConfigSnapshot.Execution.ReasoningEffort = intelligentTestDefaultReasoningEffort
+	r.ConfigSnapshot.Execution.ReasoningEffort = intelligentTestReasoningEffort(r.TestType)
 	r.ConfigSnapshot.Execution.GroupName = pelicanTestGroupName(account)
 	capture := &intelligentCapture{}
 	capture.collectCredentialSecrets(account.Credentials)
