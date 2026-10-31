@@ -21,13 +21,13 @@ func TestToLocalizedModelPlazaGroups(t *testing.T) {
 		{ID: 2, Name: "无译文", Description: "原描述", Platform: "openai"},
 	}
 
-	english := toLocalizedModelPlazaGroups(visible, nil, false, "en")
+	english := toLocalizedModelPlazaGroups(visible, nil, "en")
 	require.Equal(t, "Standard", english[0].Name)
 	require.Equal(t, "Pro + Max pool", english[0].Description)
 	require.Equal(t, "无译文", english[1].Name)
 	require.Equal(t, "原描述", english[1].Description)
 
-	chinese := toLocalizedModelPlazaGroups(visible, nil, false, "zh")
+	chinese := toLocalizedModelPlazaGroups(visible, nil, "zh")
 	require.Equal(t, "标准", chinese[0].Name)
 	require.Equal(t, "号池", chinese[0].Description)
 

@@ -650,7 +650,7 @@ export default {
       grantSvipTitle: 'Grant SVIP',
       revokeSvipTitle: 'Revoke SVIP',
       grantSvipConfirm: "Grant SVIP to '{email}'? This takes effect even if total balance is below 100.",
-      revokeSvipConfirm: "Revoke SVIP from '{email}'? They will lose the gpt-pro rate discount.",
+      revokeSvipConfirm: "Revoke SVIP from '{email}'? They will lose SVIP status and moderation privileges. Billing multipliers will stay the same.",
       revokeSvipConfirmAutoUpgrade: 'Total balance is still at least 100, so they may be auto-upgraded to SVIP again. Lower the balance below 100 to keep them as a regular user.',
       svipGranted: 'SVIP granted',
       svipRevoked: 'SVIP revoked',

@@ -66,9 +66,13 @@ describe('guide BAT asset', () => {
     const viewVersion = guideViewSource.match(/^const bundledGuideVersion = '([^']+)'$/m)?.[1]
 
     // Both patterns must actually match; an absent version is a failure, not a passing match.
-    expect(documentVersion).toBe('1.6')
-    expect(viewVersion).toBe('1.6')
+    expect(documentVersion).toBe('1.7')
+    expect(viewVersion).toBe('1.7')
     expect(documentVersion).toBe(viewVersion)
+    const documentDate = guide.match(/^- 更新日期：`([^`]+)`$/m)?.[1]
+    const viewDate = guideViewSource.match(/^const bundledGuideUpdatedAt = '([^']+)'$/m)?.[1]
+    expect(documentDate).toBe('2026-10-31')
+    expect(viewDate).toBe(documentDate)
   })
 
   it('ships the guide as one file per chapter, each starting with its heading', () => {
@@ -86,16 +90,12 @@ describe('guide BAT asset', () => {
   it('keeps the published SVIP rules synchronized with backend constants', () => {
     const constants = {
       threshold: vipSource.match(/VipBalanceThreshold\s*=\s*([\d.]+)/)?.[1],
-      discount: vipSource.match(/VipRateDiscount\s*=\s*([\d.]+)/)?.[1],
-      group: vipSource.match(/VipDiscountedGroupName\s*=\s*"([^"]+)"/)?.[1],
       model: vipSource.match(/VipExclusiveModelName\s*=\s*"([^"]+)"/)?.[1],
       lunaMin: vipSource.match(/LunaMinRateMultiplier\s*=\s*([\d.]+)/)?.[1],
     }
 
     expect(constants).toEqual({
       threshold: '100.0',
-      discount: '0.05',
-      group: 'gpt-pro',
       model: 'gpt-5.6-luna',
       lunaMin: '0.2',
     })
@@ -103,13 +103,13 @@ describe('guide BAT asset', () => {
     expect(guide).toContain('大于等于 100 元')
     expect(guide).toContain('不扣押金')
     expect(guide).not.toContain('冻结 50 元')
-    expect(guide).toContain('倍率减 0.05')
-    expect(guide).toContain('`gpt-pro`')
+    expect(guide).toContain('普通用户与 SVIP 使用相同的计费倍率规则')
+    expect(guide).toContain('管理员单独配置的用户倍率仍然有效')
     expect(guide).toContain('`gpt-5.6-luna`')
     expect(guide).toContain('所有用户都可以使用')
     expect(guide).toContain('低于 0.2')
     expect(guide).toContain('按 0.2 计费')
-    expect(guide).toContain('实际是 0.15')
+    expect(guide).toContain('普通用户与 SVIP 都按 0.2 计费')
     expect(guide).not.toContain('专属模型')
   })
 })

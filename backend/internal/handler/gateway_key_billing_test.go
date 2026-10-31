@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -133,6 +134,61 @@ func TestGatewayHandlerKeyBillingInfoUsesUserOverride(t *testing.T) {
 	require.Equal(t, 0.5, *got.UserRateMultiplier)
 	require.Equal(t, 0.5, got.ResolvedRateMultiplier)
 	require.Equal(t, 0.5, got.EffectiveRateMultiplier)
+}
+
+func TestUnifiedUserRateKeyBilling(t *testing.T) {
+	zero, override := 0.0, 0.07
+	for _, platform := range []string{service.PlatformOpenAI, service.PlatformGrok, service.PlatformAnthropic} {
+		for _, groupName := range []string{"gpt-pro", "GPT-PRO", "other"} {
+			for _, userRate := range []*float64{nil, &zero, &override} {
+				var plain keyBillingInfoResponse
+				for _, vip := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/rate=%v/vip=%t", platform, groupName, userRate, vip), func(t *testing.T) {
+						groupID := int64(7)
+						key := &service.APIKey{UserID: 11, User: &service.User{ID: 11, IsVIP: vip}, GroupID: &groupID,
+							Group: &service.Group{ID: groupID, Name: groupName, Platform: platform, RateMultiplier: 0.1}}
+						c, w := newKeyBillingContext(key)
+						newKeyBillingHandler(&keyBillingUserGroupRateRepo{rate: userRate}).KeyBillingInfo(c)
+						require.Equal(t, http.StatusOK, w.Code)
+						var got keyBillingInfoResponse
+						require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+						want := 0.1
+						if userRate != nil {
+							want = *userRate
+							require.Equal(t, userRate, got.UserRateMultiplier)
+						} else {
+							require.Nil(t, got.UserRateMultiplier)
+						}
+						require.Equal(t, 1, got.SchemaVersion)
+						require.InDelta(t, want, got.ResolvedRateMultiplier, 1e-12)
+						require.InDelta(t, want, got.EffectiveRateMultiplier, 1e-12)
+						got.ObservedAt = time.Time{}
+						if vip {
+							require.Equal(t, plain, got)
+						} else {
+							plain = got
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestUnifiedUserRateKeyBillingPeak(t *testing.T) {
+	for _, vip := range []bool{false, true} {
+		groupID := int64(7)
+		key := &service.APIKey{UserID: 11, User: &service.User{ID: 11, IsVIP: vip}, GroupID: &groupID,
+			Group: &service.Group{ID: 7, Name: "gpt-pro", Platform: service.PlatformOpenAI, RateMultiplier: 0.1,
+				SubscriptionType: service.SubscriptionTypeSubscription, PeakRateEnabled: true,
+				PeakStart: "09:00", PeakEnd: "18:00", PeakRateMultiplier: 2}}
+		c, _ := newKeyBillingContext(key)
+		rate, ok := newKeyBillingHandler(nil).resolveKeyBillingRate(c, key)
+		require.True(t, ok)
+		got := buildKeyBillingInfo(key, rate, time.Date(2026, 10, 31, 12, 0, 0, 0, timezone.Location()))
+		require.Equal(t, 0.1, got.ResolvedRateMultiplier)
+		require.Equal(t, 0.2, got.EffectiveRateMultiplier)
+	}
 }
 
 func TestBuildKeyBillingInfoAppliesPeakMultiplier(t *testing.T) {

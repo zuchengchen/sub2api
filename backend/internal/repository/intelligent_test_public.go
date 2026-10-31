@@ -185,7 +185,7 @@ WHERE a.deleted_at IS NULL AND a.status=$1 AND a.platform=$2
     AND NULLIF(btrim(a.extra->>'codex_7d_reset_at'),'') IS NOT NULL
     AND (a.extra->>'codex_7d_reset_at')::timestamptz > NOW()
   )
-ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.VipDiscountedGroupName, astraTicket, tiboHTTP)
+ORDER BY a.id`, service.StatusActive, service.PlatformOpenAI, pq.Array([]string{service.AccountTypeOAuth, service.AccountTypeSetupToken}), service.IntelligentTestPublicGroupName, astraTicket, tiboHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -242,14 +242,14 @@ WHERE t.test_type='pelican' AND t.status NOT IN ('queued','running','cancelled')
     SELECT 1 FROM account_groups ag JOIN groups g ON g.id=ag.group_id
     WHERE ag.account_id=a.id AND g.deleted_at IS NULL AND lower(g.name)=$1
   )`
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) `+base, service.VipDiscountedGroupName).Scan(&out.Total); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) `+base, service.IntelligentTestPublicGroupName).Scan(&out.Total); err != nil {
 		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT t.id,t.status,t.result,t.model,t.created_at,t.finished_at,t.duration_ms,
 COALESCE(NULLIF(t.config_snapshot#>>'{execution,group_name}',''),'GPT-PRO'),
 COALESCE(NULLIF(t.config_snapshot#>>'{execution,reasoning_effort}',''),'low'),
 COALESCE(NULLIF(t.input,''),NULLIF(t.config_snapshot->>'prompt',''),'')
-`+base+` ORDER BY t.id DESC LIMIT $2 OFFSET $3`, service.VipDiscountedGroupName, f.PageSize, (f.Page-1)*f.PageSize)
+`+base+` ORDER BY t.id DESC LIMIT $2 OFFSET $3`, service.IntelligentTestPublicGroupName, f.PageSize, (f.Page-1)*f.PageSize)
 	if err != nil {
 		return nil, err
 	}

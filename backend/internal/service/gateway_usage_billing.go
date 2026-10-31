@@ -886,8 +886,8 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		groupDefault := apiKey.Group.RateMultiplier
 		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, groupDefault)
 	}
-	// Luna 保底 + VIP 分组减免：对解析后的基础倍率先抬保底再减固定额度，高峰因子仍按比例叠加。
-	multiplier = applyRequestBillingRatePolicies(user, apiKey.Group, multiplier,
+	// 所有用户统一应用 Luna 保底，高峰因子仍按比例叠加。
+	multiplier = applyRequestBillingRatePolicies(multiplier,
 		result.Model, result.UpstreamModel, input.OriginalModel, input.ChannelMappedModel)
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。高峰因子按请求时刻现算，
 	// 不并入上面的 getUserGroupRateMultiplier，以免污染 user:group 倍率缓存。

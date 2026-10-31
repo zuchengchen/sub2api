@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"log/slog"
-	"math"
 	"strings"
 	"time"
 
@@ -15,15 +14,11 @@ import (
 const (
 	// VipBalanceThreshold 总余额（含赠送）达到该值时自动升级为 VIP。
 	VipBalanceThreshold = 100.0
-	// VipRateDiscount VIP 在指定分组的计费倍率减免额（显示倍率 - 0.05）。
-	VipRateDiscount = 0.05
-	// VipDiscountedGroupName 享受倍率减免的分组名（大小写不敏感）。
-	VipDiscountedGroupName = "gpt-pro"
 	// VipExclusiveModelName 是 gpt-5.6-luna 家族基名。访问已对全部用户开放，
 	// 该常量仍作为 Luna 保底计费的家族标识。
 	VipExclusiveModelName = "gpt-5.6-luna"
 	// LunaMinRateMultiplier 是 gpt-5.6-luna 与 gpt-6-luna 家族在分组/用户倍率低于该值时的计费保底。
-	// 先抬到该保底，再叠加 VIP 分组减免：分组 0.1 时普通用户按 0.2、SVIP 按 0.15。
+	// 普通用户和 VIP 使用相同保底：基础倍率 0.1 时均按 0.2。
 	LunaMinRateMultiplier = 0.2
 	// vipSweepTimeout 启动扫描的超时上限。
 	vipSweepTimeout = 30 * time.Second
@@ -32,21 +27,6 @@ const (
 // VipExclusiveModelAccessMessage 是网关拒绝用户调用受限模型时的稳定提示。
 // Luna 已对全部用户开放；该文案仅在未来的用户级模型策略拒绝时使用。
 var VipExclusiveModelAccessMessage = userfacing.VipExclusiveModel
-
-// VipDiscountedGroup 判断分组名是否享受 VIP 倍率减免。
-func VipDiscountedGroup(groupName string) bool {
-	return strings.EqualFold(strings.TrimSpace(groupName), VipDiscountedGroupName)
-}
-
-// ApplyVipRateDiscount 对已解析的基础倍率应用 VIP 减免，结果不为负，
-// 并消除浮点减法噪声（如 0.17-0.05=0.12000000000000001）。
-func ApplyVipRateDiscount(multiplier float64) float64 {
-	discounted := multiplier - VipRateDiscount
-	if discounted < 0 {
-		return 0
-	}
-	return math.Round(discounted*1e6) / 1e6
-}
 
 // IsVIPOnlyModel 判断模型是否属于 gpt-5.6-luna 家族。日期版等带连字符后缀的
 // Luna 变体与基名使用相同保底计费。名称是历史遗留：Luna 已对全部用户开放。
@@ -83,14 +63,6 @@ func FilterUserAccessibleModels(_ *User, models []string) []string {
 	return models
 }
 
-// applyVipGroupRateDiscount 仅当 VIP 用户命中减免分组时应用倍率减免。
-func applyVipGroupRateDiscount(user *User, group *Group, multiplier float64) float64 {
-	if user == nil || group == nil || !user.IsVIP || !VipDiscountedGroup(group.Name) {
-		return multiplier
-	}
-	return ApplyVipRateDiscount(multiplier)
-}
-
 // isLunaMinRateModel 判断模型是否套用 Luna 0.2 倍率保底。
 // 覆盖 gpt-5.6-luna 与 gpt-6-luna，含日期版和紧凑拼写。gpt-6-sol / gpt-6-astra 不在内。
 func isLunaMinRateModel(model string) bool {
@@ -115,10 +87,10 @@ func applyLunaMinRateForModels(multiplier float64, models ...string) float64 {
 	return multiplier
 }
 
-// applyRequestBillingRatePolicies 在解析后的基础倍率上先套 Luna 保底，再套 VIP 分组减免。
+// applyRequestBillingRatePolicies 对所有用户统一在解析后的基础倍率上应用 Luna 保底。
 // 高峰因子仍由调用方按返回值叠加，避免污染 user:group 倍率缓存。
-func applyRequestBillingRatePolicies(user *User, group *Group, multiplier float64, models ...string) float64 {
-	return applyVipGroupRateDiscount(user, group, applyLunaMinRateForModels(multiplier, models...))
+func applyRequestBillingRatePolicies(multiplier float64, models ...string) float64 {
+	return applyLunaMinRateForModels(multiplier, models...)
 }
 
 // vipUpgradeExecutor 提供 VIP 升级的公共执行逻辑，避免各触发点重复实现。
