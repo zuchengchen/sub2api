@@ -66,8 +66,8 @@ describe('guide BAT asset', () => {
     const viewVersion = guideViewSource.match(/^const bundledGuideVersion = '([^']+)'$/m)?.[1]
 
     // Both patterns must actually match; an absent version is a failure, not a passing match.
-    expect(documentVersion).toBe('1.7')
-    expect(viewVersion).toBe('1.7')
+    expect(documentVersion).toBe('1.8')
+    expect(viewVersion).toBe('1.8')
     expect(documentVersion).toBe(viewVersion)
     const documentDate = guide.match(/^- 更新日期：`([^`]+)`$/m)?.[1]
     const viewDate = guideViewSource.match(/^const bundledGuideUpdatedAt = '([^']+)'$/m)?.[1]
@@ -100,7 +100,8 @@ describe('guide BAT asset', () => {
       lunaMin: '0.2',
     })
     expect(vipSource).not.toMatch(/VipFrozenReserve/)
-    expect(guide).toContain('大于等于 100 元')
+    expect(guide).toContain('总余额（含赠送）达到 **100**')
+    expect(guide).toContain('页面单位为美元')
     expect(guide).toContain('不扣押金')
     expect(guide).not.toContain('冻结 50 元')
     expect(guide).toContain('普通用户与 SVIP 使用相同的计费倍率规则')
@@ -109,7 +110,8 @@ describe('guide BAT asset', () => {
     expect(guide).toContain('所有用户都可以使用')
     expect(guide).toContain('低于 0.2')
     expect(guide).toContain('按 0.2 计费')
-    expect(guide).toContain('普通用户与 SVIP 都按 0.2 计费')
+    expect(guide).toContain('普通用户与 SVIP 都先按 0.2 计费')
+    expect(guide).toContain('0.2 是 Luna 的基础倍率保底')
     expect(guide).not.toContain('专属模型')
   })
 })
