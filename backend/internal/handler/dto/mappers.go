@@ -268,8 +268,6 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		ProxyFallbackOriginID:   a.ProxyFallbackOriginID,
 		ProxyFallbackOriginName: a.ProxyFallbackOriginName,
 		Concurrency:             a.Concurrency,
-		AntiDegradation:         a.AntiDegradationEnabled(),
-		ProtectionScope:         a.ProtectionScope(),
 		LoadFactor:              a.LoadFactor,
 		Priority:                a.Priority,
 		RateMultiplier:          a.BillingRateMultiplier(),

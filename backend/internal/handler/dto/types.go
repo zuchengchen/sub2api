@@ -233,8 +233,6 @@ type Account struct {
 	ProxyFallbackOriginID   *int64                            `json:"proxy_fallback_origin_id"`
 	ProxyFallbackOriginName *string                           `json:"proxy_fallback_origin_name,omitempty"`
 	Concurrency             int                               `json:"concurrency"`
-	AntiDegradation         bool                              `json:"anti_degradation"`
-	ProtectionScope         string                            `json:"protection_scope,omitempty"`
 	LoadFactor              *int                              `json:"load_factor,omitempty"`
 	Priority                int                               `json:"priority"`
 	RateMultiplier          float64                           `json:"rate_multiplier"`

@@ -22,7 +22,7 @@ import (
 
 // These tests pin the transport behavior HTTP upstream uses to decide
 // whether a failed BPS request may already have executed: httptrace's
-// WroteRequest must survive the real stack (account traffic wrapper,
+// WroteRequest must survive the real stack (
 // per-attempt context, per-account client, long-stream HTTP/1.1 and HTTP/2
 // transports) and fire with a nil error only once the request was written.
 
@@ -44,37 +44,13 @@ func (tr *wroteRequestTrace) attach(ctx context.Context) context.Context {
 	})
 }
 
-// admitAllTrafficCache admits every attempt so DoHTTP takes its
-// req.WithContext(permit context) branch.
-type admitAllTrafficCache struct{ acquired atomic.Int32 }
-
-func (c *admitAllTrafficCache) Acquire(context.Context, service.AccountTrafficPlan, string) (service.AccountTrafficAdmission, error) {
-	c.acquired.Add(1)
-	return service.AccountTrafficAdmission{Allowed: true}, nil
-}
-func (c *admitAllTrafficCache) Refresh(context.Context, int64, string) (bool, error) {
-	return true, nil
-}
-func (c *admitAllTrafficCache) Finish(context.Context, service.AccountTrafficPlan, string, int, int64) error {
-	return nil
-}
-func (c *admitAllTrafficCache) Snapshot(context.Context, service.AccountTrafficPlan) (service.AccountTrafficState, error) {
-	return service.AccountTrafficState{}, nil
-}
-func (c *admitAllTrafficCache) Sync(context.Context, service.AccountTrafficPlan) error { return nil }
-
 const wroteRequestTestBody = `{"model":"gpt-6-astra","stream":true,"input":"hello"}`
 
-func wroteRequestUpstream(t *testing.T, controlled bool) (*httpUpstreamService, *admitAllTrafficCache) {
+func wroteRequestUpstream(t *testing.T) *httpUpstreamService {
 	t.Helper()
-	cache := &admitAllTrafficCache{}
-	upstream := NewHTTPUpstream(nil)
-	if controlled {
-		upstream = NewControlledHTTPUpstream(nil, service.NewAccountTrafficService(cache))
-	}
-	s, ok := upstream.(*httpUpstreamService)
+	s, ok := NewHTTPUpstream(nil).(*httpUpstreamService)
 	require.True(t, ok)
-	return s, cache
+	return s
 }
 
 // trustLongStreamClient pre-creates the account's long-stream client, as the
@@ -95,18 +71,12 @@ func trustLongStreamClient(t *testing.T, s *httpUpstreamService, srv *httptest.S
 }
 
 // newWroteRequestRequest mirrors the gateway HTTP request context wrappers.
-func newWroteRequestRequest(t *testing.T, ctx context.Context, target string, controlled bool) *http.Request {
+func newWroteRequestRequest(t *testing.T, ctx context.Context, target string) *http.Request {
 	t.Helper()
 	ctx = service.WithHTTPUpstreamRedirectsDisabled(service.WithHTTPUpstreamProfile(ctx, service.HTTPUpstreamProfileLongStream))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader([]byte(wroteRequestTestBody)))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	if controlled {
-		account := &service.Account{ID: 1, Concurrency: 1, Extra: map[string]any{
-			service.AccountTrafficPolicyKey: map[string]any{"strict_rpm_enabled": true, "rpm": 600, "burst": 10},
-		}}
-		req = service.WithAccountTrafficRequest(req, account)
-	}
 	return req
 }
 
@@ -160,59 +130,47 @@ func TestHTTPUpstreamWroteRequestTrace(t *testing.T) {
 		name string
 		h2   bool
 	}{{"http1", false}, {"tls_h2", true}} {
-		for _, controlled := range []bool{false, true} {
-			name := tc.name + "/plain"
-			if controlled {
-				name = tc.name + "/traffic_controlled"
+		t.Run(tc.name+"/written_then_dropped", func(t *testing.T) {
+			srv := newReadThenDropServer(t, tc.h2)
+			s := wroteRequestUpstream(t)
+			if tc.h2 {
+				trustLongStreamClient(t, s, srv.Server)
 			}
-			t.Run(name+"/written_then_dropped", func(t *testing.T) {
-				srv := newReadThenDropServer(t, tc.h2)
-				s, cache := wroteRequestUpstream(t, controlled)
-				if tc.h2 {
-					trustLongStreamClient(t, s, srv.Server)
-				}
-				var trace wroteRequestTrace
-				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-				defer cancel()
-				resp, err := s.Do(newWroteRequestRequest(t, trace.attach(ctx), srv.URL, controlled), "", 1, 1)
-				require.Error(t, err)
-				require.Nil(t, resp)
-				require.NoError(t, ctx.Err())
-				require.Equal(t, int32(1), srv.requests.Load(), "the transport must not replay a written POST")
-				require.Equal(t, int64(len(wroteRequestTestBody)), srv.bodyBytes.Load())
-				if tc.h2 {
-					require.Equal(t, int32(2), srv.proto.Load())
-				} else {
-					require.Equal(t, int32(1), srv.proto.Load())
-				}
-				require.True(t, trace.headers.Load())
-				require.Equal(t, int32(1), trace.wrote.Load(), "WroteRequest fires exactly once before Do returns")
-				require.Zero(t, trace.wroteErr.Load(), "a written request reports WroteRequest without an error")
-				if controlled {
-					require.Equal(t, int32(1), cache.acquired.Load(), "the traffic wrapper's WithContext branch ran")
-				}
-				requireNoUpstreamInFlight(t, s)
-			})
-			t.Run(name+"/refused", func(t *testing.T) {
-				s, cache := wroteRequestUpstream(t, controlled)
-				scheme := "http://"
-				if tc.h2 {
-					scheme = "https://"
-				}
-				var trace wroteRequestTrace
-				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-				defer cancel()
-				resp, err := s.Do(newWroteRequestRequest(t, trace.attach(ctx), scheme+closedLocalAddress(t), controlled), "", 1, 1)
-				require.ErrorIs(t, err, syscall.ECONNREFUSED)
-				require.Nil(t, resp)
-				require.False(t, trace.headers.Load())
-				require.Zero(t, trace.wrote.Load(), "nothing was written, so WroteRequest never fires")
-				if controlled {
-					require.Equal(t, int32(1), cache.acquired.Load())
-				}
-				requireNoUpstreamInFlight(t, s)
-			})
-		}
+			var trace wroteRequestTrace
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			resp, err := s.Do(newWroteRequestRequest(t, trace.attach(ctx), srv.URL), "", 1, 1)
+			require.Error(t, err)
+			require.Nil(t, resp)
+			require.NoError(t, ctx.Err())
+			require.Equal(t, int32(1), srv.requests.Load(), "written POST must not replay")
+			require.Equal(t, int64(len(wroteRequestTestBody)), srv.bodyBytes.Load())
+			if tc.h2 {
+				require.Equal(t, int32(2), srv.proto.Load())
+			} else {
+				require.Equal(t, int32(1), srv.proto.Load())
+			}
+			require.True(t, trace.headers.Load())
+			require.Equal(t, int32(1), trace.wrote.Load())
+			require.Zero(t, trace.wroteErr.Load())
+			requireNoUpstreamInFlight(t, s)
+		})
+		t.Run(tc.name+"/refused", func(t *testing.T) {
+			s := wroteRequestUpstream(t)
+			scheme := "http://"
+			if tc.h2 {
+				scheme = "https://"
+			}
+			var trace wroteRequestTrace
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			resp, err := s.Do(newWroteRequestRequest(t, trace.attach(ctx), scheme+closedLocalAddress(t)), "", 1, 1)
+			require.ErrorIs(t, err, syscall.ECONNREFUSED)
+			require.Nil(t, resp)
+			require.False(t, trace.headers.Load())
+			require.Zero(t, trace.wrote.Load())
+			requireNoUpstreamInFlight(t, s)
+		})
 	}
 }
 
@@ -242,7 +200,7 @@ func TestHTTPUpstreamHTTP2CancelCanPrecedeWroteRequest(t *testing.T) {
 				srv.Start()
 			}
 			defer srv.Close()
-			s, _ := wroteRequestUpstream(t, false)
+			s := wroteRequestUpstream(t)
 			if tc.h2 {
 				trustLongStreamClient(t, s, srv)
 			}
@@ -267,7 +225,7 @@ func TestHTTPUpstreamHTTP2CancelCanPrecedeWroteRequest(t *testing.T) {
 				err      error
 				reported bool
 			}
-			req := newWroteRequestRequest(t, traced, srv.URL, false)
+			req := newWroteRequestRequest(t, traced, srv.URL)
 			done := make(chan outcome, 1)
 			go func() {
 				resp, err := s.Do(req, "", 1, 1)

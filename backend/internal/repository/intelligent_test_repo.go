@@ -18,8 +18,6 @@ func NewIntelligentTestRepository(db *sql.DB) service.IntelligentTestRepository 
 	return &intelligentTestRepository{db: db}
 }
 
-const intelligentProtectionSQL = `COALESCE((a.extra->'anti_degradation')='true'::jsonb,(a.extra#>'{anti_degrade,enabled}')='true'::jsonb,false)`
-
 // intelligentSchedulableAccountSQL matches Account.IsSchedulable and the
 // scheduler's candidate query: active, manually schedulable, and not inside
 // an expiry, rate-limit, overload, or temporary-unschedulable window.
@@ -229,9 +227,6 @@ func intelligentAccountWhere(f service.IntelligentTestFilter) *intelligentWhere 
 	if f.GroupID > 0 {
 		w.add("EXISTS(SELECT 1 FROM account_groups ag WHERE ag.account_id=a.id AND ag.group_id=$%d)", f.GroupID)
 	}
-	if f.AntiDegradation != nil {
-		w.add(intelligentProtectionSQL+"=$%d", *f.AntiDegradation)
-	}
 	sub := `SELECT DISTINCT ON(t.test_type) t.test_type,t.status,t.evaluation FROM account_tests t WHERE t.account_id=a.id AND ` + intelligentAdminManualSQL
 	if f.TestType != "" && (f.Status != "" || f.OnlyAbnormal) {
 		w.args = append(w.args, f.TestType)
@@ -274,14 +269,14 @@ SELECT (SELECT COUNT(DISTINCT t.account_id) FROM account_tests t JOIN selected a
 		return nil, err
 	}
 	args := append(append([]any{}, w.args...), f.PageSize, (f.Page-1)*f.PageSize)
-	rows, err := r.db.QueryContext(ctx, `SELECT a.id,a.name,COALESCE(a.notes,''),a.platform,a.type,a.status,`+intelligentProtectionSQL+`,ARRAY(SELECT group_id FROM account_groups WHERE account_id=a.id ORDER BY group_id) FROM accounts a WHERE `+w.sql()+fmt.Sprintf(` ORDER BY a.id DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
+	rows, err := r.db.QueryContext(ctx, `SELECT a.id,a.name,COALESCE(a.notes,''),a.platform,a.type,a.status,ARRAY(SELECT group_id FROM account_groups WHERE account_id=a.id ORDER BY group_id) FROM accounts a WHERE `+w.sql()+fmt.Sprintf(` ORDER BY a.id DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, err
 	}
 	ids := []int64{}
 	for rows.Next() {
 		var card service.IntelligentTestAccountCard
-		if err := rows.Scan(&card.AccountID, &card.Name, &card.Notes, &card.Platform, &card.AccountType, &card.AccountStatus, &card.AntiDegradation, pq.Array(&card.GroupIDs)); err != nil {
+		if err := rows.Scan(&card.AccountID, &card.Name, &card.Notes, &card.Platform, &card.AccountType, &card.AccountStatus, pq.Array(&card.GroupIDs)); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}

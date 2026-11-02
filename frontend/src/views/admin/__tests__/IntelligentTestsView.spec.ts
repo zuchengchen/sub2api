@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 
 vi.mock('@/api/intelligentTests', () => ({
   intelligentTestsAPI: {
+    run: vi.fn().mockResolvedValue({ records: [], submitted: 1 }),
     accounts: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 24, overview: {} }),
     records: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 24 }),
     settings: vi.fn().mockResolvedValue([
@@ -90,7 +91,6 @@ describe('IntelligentTestsView router modes', () => {
         account_type: 'oauth',
         account_status: 'active',
         group_ids: [],
-        anti_degradation: true,
         tests: [{ test_type: 'pelican', latest: null, history_count: 1, consecutive_anomalies: 0, risk: '' }]
       }],
       total: 1,
@@ -106,6 +106,14 @@ describe('IntelligentTestsView router modes', () => {
       expect.anything()
     )
     expect(vi.mocked(intelligentTestsAPI.accounts).mock.calls[0][0]).not.toHaveProperty('test_type')
+    expect(vi.mocked(intelligentTestsAPI.accounts).mock.calls[0][0]).not.toHaveProperty('anti_degradation')
+    expect(wrapper.text()).not.toContain('账号保护')
+    const runButton = wrapper.findAll('button').find(button => button.text() === '开始测试')
+    expect(runButton).toBeTruthy()
+    await runButton!.trigger('click')
+    await flushPromises()
+    expect(intelligentTestsAPI.run).toHaveBeenCalledWith([8], ['pelican'], 'test-key')
+
     const historyButton = wrapper.findAll('button').find(button => button.text().includes('历史'))
     expect(historyButton).toBeTruthy()
     await historyButton!.trigger('click')

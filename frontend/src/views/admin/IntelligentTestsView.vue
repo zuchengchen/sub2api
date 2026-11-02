@@ -22,8 +22,7 @@
             </template>
             <label class="text-xs text-gray-500">测试类型<select v-model="filters.test_type" class="input mt-1.5"><option value="">全部测试</option><option v-for="setting in settings" :key="setting.test_type" :value="setting.test_type">{{ setting.name || testName(setting.test_type) }}</option></select></label>
             <label class="text-xs text-gray-500">测试结果<select v-model="filters.status" class="input mt-1.5"><option value="">全部结果</option><option v-for="(label, value) in statusLabels" :key="value" :value="value">{{ label }}</option></select></label>
-            <label v-if="mode === 'tests'" class="text-xs text-gray-500">账号保护<select v-model="filters.anti_degradation" class="input mt-1.5"><option value="">全部</option><option value="true">已开启</option><option value="false">已关闭</option></select></label>
-            <template v-else>
+            <template v-if="mode === 'history'">
               <label class="text-xs text-gray-500">开始时间<input v-model="filters.from" type="datetime-local" class="input mt-1.5" /></label>
               <label class="text-xs text-gray-500">结束时间<input v-model="filters.to" type="datetime-local" class="input mt-1.5" /></label>
             </template>
@@ -83,7 +82,7 @@ const loading = ref(false), running = ref(false), error = ref(''), detailId = re
 const metadataError = ref(''), metadataLoading = ref(false)
 const page = ref(1), pageSize = ref(12), total = ref(0), now = ref(Date.now())
 const overview = ref<TestOverview>({ total_accounts: 0, tested_today: 0, success_accounts: 0, abnormal_accounts: 0, suspected_degradation: 0 })
-const defaults = { search: '', type: '', group_id: '', account_status: '', test_type: '', status: '', anti_degradation: '', only_abnormal: false, from: '', to: '' }
+const defaults = { search: '', type: '', group_id: '', account_status: '', test_type: '', status: '', only_abnormal: false, from: '', to: '' }
 const filters = reactive({ ...defaults })
 let applied: TestFilters = {}, controller: AbortController | undefined, version = 0, inFlight = false, metadataVersion = 0
 let pollTimer: ReturnType<typeof setInterval>, clockTimer: ReturnType<typeof setInterval>, runKey = '', runSignature = ''

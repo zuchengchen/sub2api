@@ -161,9 +161,6 @@ func (s *OpenAIGatewayService) OpenGrokRealtime(ctx context.Context, account *Ac
 	if s == nil || account == nil || account.Platform != PlatformGrok {
 		return nil, fmt.Errorf("grok realtime account is required")
 	}
-	if err := validateGrokRealtimeTrafficPolicy(account); err != nil {
-		return nil, err
-	}
 	base, err := buildGrokVoiceURL(account, s.cfg, "realtime")
 	if err != nil {
 		return nil, err
@@ -268,9 +265,6 @@ func (s *OpenAIGatewayService) ProbeGrokRealtime(ctx context.Context, account *A
 	}
 	if account.Platform != PlatformGrok {
 		return fmt.Errorf("account platform %s is not supported for grok realtime", account.Platform)
-	}
-	if err := validateGrokRealtimeTrafficPolicy(account); err != nil {
-		return err
 	}
 	base, err := buildGrokVoiceURL(account, s.cfg, "realtime")
 	if err != nil {

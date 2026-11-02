@@ -8,15 +8,13 @@
         <div><dt class="text-xs text-gray-500">模型</dt><dd class="mt-1 break-all">{{ record.model || '上游默认' }}</dd></div>
         <div><dt class="text-xs text-gray-500">耗时</dt><dd class="mt-1">{{ (record.duration_ms / 1000).toFixed(1) }} 秒</dd></div>
         <div><dt class="text-xs text-gray-500">最终答案得分</dt><dd class="mt-1">{{ isModernAssessment(record.evaluation?.evaluator_version) ? record.score ?? '未评分' : '旧规则，待复核' }}</dd></div>
-        <div v-if="!publicView"><dt class="text-xs text-gray-500">检测时账号保护</dt><dd class="mt-1">{{ record.anti_degradation ? '开启' : '关闭' }}</dd></div>
       </dl>
       <section v-if="!publicView && execution" class="rounded-xl border border-gray-200 p-4 dark:border-dark-700" data-testid="execution-snapshot">
         <h4 class="mb-2 text-sm font-semibold">执行时账号配置</h4>
         <dl class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-          <div><dt class="text-xs text-gray-500">策略</dt><dd>{{ execution.strategy }}</dd></div>
           <div><dt class="text-xs text-gray-500">身份模式</dt><dd>{{ execution.identity_mode }}</dd></div>
-          <div><dt class="text-xs text-gray-500">有效传输</dt><dd>{{ execution.effective_tls }}</dd></div>
-          <div><dt class="text-xs text-gray-500">并发上限</dt><dd>{{ execution.concurrency }}</dd></div>
+          <div v-if="execution.effective_tls"><dt class="text-xs text-gray-500">有效传输</dt><dd>{{ execution.effective_tls }}</dd></div>
+          <div v-if="execution.concurrency != null"><dt class="text-xs text-gray-500">并发上限</dt><dd>{{ execution.concurrency }}</dd></div>
           <div><dt class="text-xs text-gray-500">请求完整性</dt><dd>{{ execution.integrity_mode === 'enforce' ? '严格拦截' : execution.integrity_mode === 'observe' ? '仅观察' : execution.integrity_mode === 'off' ? '关闭' : '未记录' }}</dd></div>
         </dl>
         <p v-if="execution.tls_reason" class="mt-2 text-xs text-amber-700">{{ execution.tls_reason }}</p>
@@ -67,7 +65,7 @@ const emit = defineEmits<{ close: []; history: [id: number, type: string]; run: 
 const record = ref<TestRecord | null>(null)
 const execution = computed(() => {
   if (props.publicView) return undefined
-  const config = record.value?.config_snapshot as { execution?: { strategy: string; identity_mode: string; effective_tls: string; concurrency: number; tls_reason?: string; integrity_mode?: string } } | undefined
+  const config = record.value?.config_snapshot as { execution?: { identity_mode: string; effective_tls?: string; concurrency?: number; tls_reason?: string; integrity_mode?: string } } | undefined
   return config?.execution
 })
 const loading = ref(false), error = ref('')
@@ -102,7 +100,7 @@ async function load() {
   const version = ++requestVersion
   loading.value = record.value === null
   try {
-    const result = props.publicView ? { ...await intelligentTestsAPI.publicDetail(id), anti_degradation: false, started_at: null } : await intelligentTestsAPI.detail(id)
+    const result = props.publicView ? { ...await intelligentTestsAPI.publicDetail(id), started_at: null } : await intelligentTestsAPI.detail(id)
     if (version !== requestVersion) return
     record.value = result; error.value = ''
     if (isPending(result.status) || props.publicView) timer = setTimeout(load, 5000)

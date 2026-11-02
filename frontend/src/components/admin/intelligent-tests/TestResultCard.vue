@@ -32,7 +32,6 @@
     <p v-if="summary.risk" class="mx-4 mt-3 rounded-lg bg-amber-50 p-2 text-xs leading-relaxed text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">⚠ {{ summary.risk }}</p>
     <div class="mt-auto space-y-2 px-4 pb-4 pt-4 text-xs text-gray-500">
       <div class="flex items-center justify-between gap-2">
-        <span>账号保护：{{ account.anti_degradation ? '开启' : '关闭' }}</span>
         <button v-if="record?.status === 'queued'" class="text-primary-600" @click="emit('cancel', record.id)">取消排队</button>
         <button class="text-primary-600 disabled:opacity-40 dark:text-primary-300" :disabled="disabled || isPending(record?.status)" @click="emit('run', account.account_id, summary.test_type)">{{ record ? '重新测试' : '开始测试' }}</button>
       </div>
