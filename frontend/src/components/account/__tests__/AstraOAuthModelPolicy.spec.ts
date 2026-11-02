@@ -5,7 +5,6 @@ vi.mock('vue-i18n', async () => {
 })
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
-import AstraOAuthModelPolicy from '../AstraOAuthModelPolicy.vue'
 import TiboRouteSpark from '../TiboRouteSpark.vue'
 import AccountStatusIndicator from '../AccountStatusIndicator.vue'
 import { buildOpenAIAstraPolicyRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
@@ -23,26 +22,6 @@ const global = (locale = 'zh') => ({
 })
 
 describe('Astra OAuth automatic model policy', () => {
-  it.each(['zh', 'en'])('renders all states and live changes in %s without an edit action', async locale => {
-    const wrapper = mount(AstraOAuthModelPolicy, { props: { policy: policy('healthy') }, global: global(locale) })
-    const copy = locale === 'zh' ? zh.accounts.openai : en.accounts.openai
-    for (const verdict of ['healthy', 'degraded', 'unknown', 'healthy'] as const) {
-      await wrapper.setProps({ policy: policy(verdict) })
-      expect(wrapper.attributes('data-verdict')).toBe(verdict)
-      expect(wrapper.text()).toContain(copy.astraPolicyRange[verdict])
-      expect(wrapper.text()).toContain(copy.astraPolicyDescription)
-      if (verdict !== 'unknown') expect(wrapper.text()).toContain(at)
-      expect(wrapper.find('input, select, button').exists()).toBe(false)
-    }
-    wrapper.unmount()
-  })
-
-  it('uses the initial restriction when there is no sample, including a newly created account', () => {
-    const wrapper = mount(AstraOAuthModelPolicy, { global: global() })
-    expect(wrapper.text()).toContain(zh.accounts.openai.astraPolicyRange.unknown)
-    wrapper.unmount()
-  })
-
   it('refreshes policy and dots even when updated_at and usage have not changed', () => {
     const account = { id: 8, platform: 'openai', type: 'oauth', updated_at: at,
       credentials: { model_mapping: { 'gpt-6-luna': 'gpt-6-luna' } },
@@ -62,13 +41,10 @@ describe('Astra OAuth automatic model policy', () => {
       extra: {}, openai_oauth_model_policy: policy('degraded') } as Account
     const status = mount(AccountStatusIndicator, { props: { account }, global: global() })
     const history = mount(TiboRouteSpark, { props: { model: 'gpt-6-astra', verdict: 'degraded', samples: [{ verdict: 'healthy', at }] }, global: global() })
-    const display = mount(AstraOAuthModelPolicy, { props: { policy: account.openai_oauth_model_policy }, global: global() })
     await status.setProps({ account: { ...account, openai_oauth_model_policy: policy('healthy') } })
-    await display.setProps({ policy: policy('healthy') })
     expect(status.text()).toContain(zh.accounts.status.paused)
     expect(history.findAll('[data-testid="tibo-dot"]')).toHaveLength(24)
     expect(history.findAll('[data-testid="tibo-dot"]')[23].classes()).toContain('bg-emerald-500')
-    expect(display.text()).toContain(zh.accounts.openai.astraPolicyRange.healthy)
-    status.unmount(); history.unmount(); display.unmount()
+    status.unmount(); history.unmount()
   })
 })
