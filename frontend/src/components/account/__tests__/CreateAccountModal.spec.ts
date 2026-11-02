@@ -14,6 +14,9 @@ const {
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  generateAuthUrlMock,
+  exchangeCodeMock,
+  refreshOpenAITokenMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -22,6 +25,9 @@ const {
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  generateAuthUrlMock: vi.fn(),
+  exchangeCodeMock: vi.fn(),
+  refreshOpenAITokenMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -50,6 +56,9 @@ vi.mock('@/api/admin', () => ({
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
+      generateAuthUrl: generateAuthUrlMock,
+      exchangeCode: exchangeCodeMock,
+      refreshOpenAIToken: refreshOpenAITokenMock,
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -86,8 +95,8 @@ const OAuthAuthorizationFlowStub = defineComponent({
     showCodexPatOption: Boolean,
     initialInputMethod: String,
   },
-  data: () => ({ inputMethod: 'manual' }),
-  emits: ['import-codex-session', 'import-codex-pat'],
+  data: () => ({ inputMethod: 'manual', authCode: 'authorization-code', oauthState: 'oauth-state' }),
+  emits: ['import-codex-session', 'import-codex-pat', 'generate-url', 'validate-refresh-token', 'validate-mobile-refresh-token'],
   template: `
     <div>
       <button data-testid="import-codex-session" @click="$emit('import-codex-session', 'session-json')">session</button>
@@ -195,6 +204,31 @@ async function openCodexImportStep(toggleClicks = 0) {
   return wrapper
 }
 
+type OpenAICreateMethod = 'code' | 'refresh-token' | 'mobile-refresh-token' | 'session' | 'pat' | 'agent-identity'
+
+async function submitOpenAIOAuthMethod(wrapper: ReturnType<typeof mountModal>, method: OpenAICreateMethod) {
+  const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+  if (method === 'code') {
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.completeAuth')
+  } else if (method === 'refresh-token' || method === 'mobile-refresh-token') {
+    flow.vm.$emit(method === 'refresh-token' ? 'validate-refresh-token' : 'validate-mobile-refresh-token', 'refresh-token')
+  } else if (method === 'pat') {
+    flow.vm.$emit('import-codex-pat', 'pat-token')
+  } else {
+    if (method === 'agent-identity') flow.vm.inputMethod = 'agent_identity'
+    flow.vm.$emit('import-codex-session', method === 'agent-identity'
+      ? JSON.stringify({ auth_mode: 'agentIdentity', agent_identity: { agent_runtime_id: 'runtime' } })
+      : 'session-json')
+  }
+  await flushPromises()
+  const mock = method === 'pat' ? createOpenAICodexPATMock
+    : method === 'session' || method === 'agent-identity' ? importCodexSessionMock : createAccountMock
+  expect(mock).toHaveBeenCalledTimes(1)
+  return mock.mock.calls[0]?.[0]
+}
+
 describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
@@ -211,9 +245,100 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    generateAuthUrlMock.mockReset().mockResolvedValue({
+      auth_url: 'https://auth.example/authorize?state=oauth-state',
+      session_id: 'oauth-session',
+    })
+    const tokenInfo = { access_token: 'access-token', refresh_token: 'refresh-token', email: 'test@example.com' }
+    exchangeCodeMock.mockReset().mockResolvedValue(tokenInfo)
+    refreshOpenAITokenMock.mockReset().mockResolvedValue(tokenInfo)
   })
 
   afterEach(() => vi.useRealTimers())
+
+  it.each<OpenAICreateMethod>(['code', 'refresh-token', 'mobile-refresh-token', 'session', 'pat', 'agent-identity'])(
+    'defaults %s OAuth creation to concurrency 50 and Hosted image bridge', async (method) => {
+      const wrapper = await openCodexImportStep()
+      const payload = await submitOpenAIOAuthMethod(wrapper, method)
+      expect(payload.concurrency).toBe(50)
+      expect(payload.extra.codex_image_generation_bridge).toBe(true)
+      expect(payload.extra).not.toHaveProperty('codex_image_generation_bridge_enabled')
+      expect(payload.extra).not.toHaveProperty('codex_image_generation_explicit_tool_policy')
+      wrapper.unmount()
+    },
+  )
+
+  it.each([
+    ['enabled', true, undefined],
+    ['disabled', false, undefined],
+    ['inherit', null, undefined],
+    ['block', undefined, 'strip'],
+  ])('preserves the explicit %s image policy and concurrency on OAuth import', async (mode, bridge, toolPolicy) => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="create-account-concurrency"]').setValue(23)
+    await wrapper.get('[data-testid="create-codex-image-tool-mode"]').setValue(mode)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Custom OAuth settings')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    const payload = await submitOpenAIOAuthMethod(wrapper, 'session')
+    expect(payload.concurrency).toBe(23)
+    if (mode === 'block') {
+      expect(payload.extra).not.toHaveProperty('codex_image_generation_bridge')
+    } else {
+      expect(payload.extra.codex_image_generation_bridge).toBe(bridge)
+    }
+    if (toolPolicy) {
+      expect(payload.extra.codex_image_generation_explicit_tool_policy).toBe(toolPolicy)
+    } else {
+      expect(payload.extra).not.toHaveProperty('codex_image_generation_explicit_tool_policy')
+    }
+    expect(payload.extra).not.toHaveProperty('codex_image_generation_bridge_enabled')
+    wrapper.unmount()
+  })
+
+  it('changes untouched defaults only for GPT OAuth and keeps explicit concurrency', async () => {
+    const wrapper = mountModal()
+    const concurrency = () => wrapper.get<HTMLInputElement>('[data-testid="create-account-concurrency"]')
+    expect(concurrency().element.value).toBe('10')
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(concurrency().element.value).toBe('50')
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="create-codex-image-tool-mode"]').element.value).toBe('enabled')
+    await selectButtonByText(wrapper, 'API Key')
+    expect(concurrency().element.value).toBe('10')
+    expect(wrapper.find('[data-testid="create-codex-image-tool-mode"]').exists()).toBe(false)
+    await selectButtonByText(wrapper, 'Anthropic')
+    expect(concurrency().element.value).toBe('10')
+    await selectButtonByText(wrapper, 'Grok')
+    expect(concurrency().element.value).toBe('1')
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(concurrency().element.value).toBe('50')
+    await concurrency().setValue(17)
+    await selectButtonByText(wrapper, 'API Key')
+    expect(concurrency().element.value).toBe('17')
+    wrapper.unmount()
+  })
+
+  it('restores GPT OAuth defaults when reopening the create dialog', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="create-account-concurrency"]').setValue(23)
+    await wrapper.get('[data-testid="create-codex-image-tool-mode"]').setValue('block')
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="create-account-concurrency"]').element.value).toBe('50')
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="create-codex-image-tool-mode"]').element.value).toBe('enabled')
+    wrapper.unmount()
+  })
+
+  it.each(['openai', 'anthropic'] as const)('keeps %s API key creation defaults unchanged', async (platform) => {
+    const wrapper = await submitApiKeyAccount(platform)
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload.concurrency).toBe(10)
+    expect(payload.extra ?? {}).not.toHaveProperty('codex_image_generation_bridge')
+    expect(payload.extra ?? {}).not.toHaveProperty('codex_image_generation_explicit_tool_policy')
+    wrapper.unmount()
+  })
 
   it('new OpenAI OAuth accounts hide policy copy and manual model controls', async () => {
     const wrapper = mountModal()

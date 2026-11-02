@@ -124,7 +124,7 @@ type CreateAccountRequest struct {
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
-	Concurrency             int            `json:"concurrency"`
+	Concurrency             *int           `json:"concurrency"`
 	Priority                int            `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
 	LoadFactor              *int           `json:"load_factor"`
@@ -1053,7 +1053,8 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			Credentials:           req.Credentials,
 			Extra:                 req.Extra,
 			ProxyID:               req.ProxyID,
-			Concurrency:           req.Concurrency,
+			Concurrency:           service.ResolveAccountCreateConcurrency(req.Platform, req.Type, req.Concurrency),
+			ConcurrencyProvided:   req.Concurrency != nil,
 			Priority:              req.Priority,
 			RateMultiplier:        req.RateMultiplier,
 			LoadFactor:            req.LoadFactor,
@@ -2049,7 +2050,8 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				Credentials:           item.Credentials,
 				Extra:                 item.Extra,
 				ProxyID:               item.ProxyID,
-				Concurrency:           item.Concurrency,
+				Concurrency:           service.ResolveAccountCreateConcurrency(item.Platform, item.Type, item.Concurrency),
+				ConcurrencyProvided:   item.Concurrency != nil,
 				Priority:              item.Priority,
 				RateMultiplier:        item.RateMultiplier,
 				GroupIDs:              item.GroupIDs,
