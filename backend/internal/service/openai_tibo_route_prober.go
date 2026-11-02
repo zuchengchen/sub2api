@@ -189,15 +189,12 @@ func (s *OpenAIGatewayService) recordOpenAITiboSample(state *openAITiboAccountSt
 	}
 	after := r.effective(now, cfg)
 	persist := openAITiboShouldPersist(r, transition, now, cfg)
-	if persist {
-		r.persistedAt = now
-	}
 	record := openAITiboVerdictRecordFor(r)
 	samples := append([]openAITiboRecentSample(nil), r.recent...)
 	flipsHour, probesHour := countOpenAITiboWindow(r.flips, now), countOpenAITiboWindow(r.probes, now)
 	state.mu.Unlock()
 	if done != nil {
-		close(done)
+		defer close(done)
 	}
 	s.openaiTiboStats.noteProbe(transition.flipped && transition.from != "")
 	fields := []zap.Field{
@@ -220,13 +217,29 @@ func (s *OpenAIGatewayService) recordOpenAITiboSample(state *openAITiboAccountSt
 	// Unknown samples change neither the verdict nor the sparkline; skip the
 	// write so a failing account does not rewrite the same row every probe.
 	if persist || (sample.verdict.definitive() && len(samples) > 0) {
-		s.persistOpenAITiboVerdict(state.accountID, route, record, samples)
+		if s.persistOpenAITiboVerdict(state.accountID, route, record, samples) == nil {
+			state.mu.Lock()
+			for _, sample := range samples {
+				if sample.At.After(r.persistedSampleAt) {
+					r.persistedSampleAt = sample.At
+				}
+			}
+			if record.CheckedAt.After(r.persistedAt) {
+				r.persistedAt = record.CheckedAt
+			}
+			state.mu.Unlock()
+		}
 	}
 }
 
 // openAITiboShouldPersist writes confirmed flips, and refreshes an unchanged
 // verdict once it has aged half of max_stale, so a restart keeps it usable.
 func openAITiboShouldPersist(r *openAITiboRouteState, transition openAITiboTransition, now time.Time, cfg openAITiboSettings) bool {
+	for _, sample := range r.recent {
+		if sample.Verdict.definitive() && sample.At.After(r.persistedSampleAt) {
+			return true
+		}
+	}
 	if !r.verdict.definitive() {
 		return false
 	}
@@ -263,9 +276,9 @@ func parseOpenAITiboVerdictRecord(raw any) (openAITiboVerdictRecord, bool) {
 	return record, true
 }
 
-func (s *OpenAIGatewayService) persistOpenAITiboVerdict(accountID int64, route openAITiboRoute, record openAITiboVerdictRecord, samples []openAITiboRecentSample) {
+func (s *OpenAIGatewayService) persistOpenAITiboVerdict(accountID int64, route openAITiboRoute, record openAITiboVerdictRecord, samples []openAITiboRecentSample) error {
 	if s == nil || s.accountRepo == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -277,7 +290,9 @@ func (s *OpenAIGatewayService) persistOpenAITiboVerdict(accountID int64, route o
 	}
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{openAITiboVerdictExtraKey(route): value}); err != nil {
 		logger.L().Warn("openai_tibo verdict persist failed", zap.Int64("account_id", accountID), zap.String("route", string(route)), zap.Error(err))
+		return err
 	}
+	return nil
 }
 
 func encodeOpenAITiboRecentSamples(samples []openAITiboRecentSample) []map[string]any {
@@ -333,8 +348,13 @@ func (s *OpenAIGatewayService) seedOpenAITiboStateLocked(state *openAITiboAccoun
 		return
 	}
 	raw := extra[openAITiboVerdictExtraKey(route)]
-	if samples := parseOpenAITiboRecentSamples(openAITiboExtraField(raw, "recent_samples")); len(samples) > 0 && len(r.recent) == 0 {
+	if samples := validOpenAIAstraSamples(raw, now); len(samples) > 0 && len(r.recent) == 0 {
 		r.recent = samples
+		for _, sample := range samples {
+			if sample.At.After(r.persistedSampleAt) {
+				r.persistedSampleAt = sample.At
+			}
+		}
 		last := samples[len(samples)-1]
 		if r.lastSampleAt.IsZero() {
 			r.lastSampleAt = last.At
@@ -660,12 +680,19 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, now tim
 			item.VoteWindows, item.VoteConfirmed, item.VoteRejected = r.voteWindows, r.voteConfirmed, r.voteRejected
 			state.mu.Unlock()
 		}
-		if len(item.RecentSamples) == 0 {
+		if account.IsOpenAIOAuth() || len(item.RecentSamples) == 0 {
+			// OAuth permissions and dots use the same committed observations.
+			// A failed write must not advertise a policy that routing cannot see.
+			item.RecentSamples = nil
 			// Not yet seeded in this process (restart, or skipped while
 			// rate-limited/paused): show the persisted sparkline instead of
 			// empty dots. Read-only; never seeds state or starts probes.
 			raw := account.Extra[openAITiboVerdictExtraKey(route)]
-			for _, sample := range parseOpenAITiboRecentSamples(openAITiboExtraField(raw, "recent_samples")) {
+			samples := parseOpenAITiboRecentSamples(openAITiboExtraField(raw, "recent_samples"))
+			if account.IsOpenAIOAuth() {
+				samples = validOpenAIAstraSamples(raw, now)
+			}
+			for _, sample := range samples {
 				if sample.Verdict.definitive() {
 					item.RecentSamples = append(item.RecentSamples, OpenAITiboSampleStatus{Verdict: string(sample.Verdict), At: openAITiboTimePtr(sample.At)})
 				}
@@ -707,7 +734,6 @@ func (s *OpenAIGatewayService) forceOpenAITiboDegraded(account *Account, route o
 	changed := r.forceDegraded(now)
 	if changed {
 		r.flips = append(pruneOpenAITiboWindow(r.flips, now), now)
-		r.persistedAt = now
 	}
 	record := openAITiboVerdictRecordFor(r)
 	samples := append([]openAITiboRecentSample(nil), r.recent...)
@@ -716,13 +742,23 @@ func (s *OpenAIGatewayService) forceOpenAITiboDegraded(account *Account, route o
 		s.startOpenAITiboProbeLocked(state, route, account, false, cfg, now)
 	}
 	state.mu.Unlock()
-	if !changed {
-		return
+	if changed {
+		s.openaiTiboStats.noteFlip()
+		logger.L().Info("openai_tibo verdict flip", zap.Int64("account_id", account.ID), zap.String("route", string(route)),
+			zap.String("from", string(before)), zap.String("to", string(openAITiboDegraded)), zap.String("cause", "response_model_mismatch"))
 	}
-	s.openaiTiboStats.noteFlip()
-	logger.L().Info("openai_tibo verdict flip", zap.Int64("account_id", account.ID), zap.String("route", string(route)),
-		zap.String("from", string(before)), zap.String("to", string(openAITiboDegraded)), zap.String("cause", "response_model_mismatch"))
-	s.persistOpenAITiboVerdict(account.ID, route, record, samples)
+	if s.persistOpenAITiboVerdict(account.ID, route, record, samples) == nil {
+		state.mu.Lock()
+		for _, sample := range samples {
+			if sample.At.After(r.persistedSampleAt) {
+				r.persistedSampleAt = sample.At
+			}
+		}
+		if record.CheckedAt.After(r.persistedAt) {
+			r.persistedAt = record.CheckedAt
+		}
+		state.mu.Unlock()
+	}
 }
 
 // openAICookieWSTurnModelMismatch is the Cookie WS passive check on a raw

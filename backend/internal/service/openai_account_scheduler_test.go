@@ -490,11 +490,11 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_LoadBat
 		Status:      StatusActive,
 		Schedulable: true,
 		Concurrency: 1,
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"codex_7d_used_percent":  95.0,
 			"codex_7d_reset_at":      time.Now().Add(24 * time.Hour).Format(time.RFC3339),
 			"codex_usage_updated_at": time.Now().Add(-time.Minute).Format(time.RFC3339),
-		},
+		}),
 	}
 	mappingMiss := Account{
 		ID:          36004,
@@ -995,11 +995,11 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_NoAvailableErrorReports
 			Status:      StatusActive,
 			Schedulable: true,
 			Concurrency: 1,
-			Extra: map[string]any{
+			Extra: astraHealthyTestExtra(map[string]any{
 				"codex_7d_used_percent":  95.0,
 				"codex_7d_reset_at":      time.Now().Add(24 * time.Hour).Format(time.RFC3339),
 				"codex_usage_updated_at": time.Now().Add(-time.Minute).Format(time.RFC3339),
-			},
+			}),
 		},
 	}
 	cfg := &config.Config{}
@@ -1029,7 +1029,8 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_NoAvailableErrorReports
 	// OAuth account with empty model_mapping: foreign-family models (grok-*)
 	// are not servable by Codex upstream (#3662) and are dropped by the filter.
 	accounts := []Account{
-		{
+		{Extra: astraHealthyTestExtra(nil),
+
 			ID:          38111,
 			Platform:    PlatformOpenAI,
 			Type:        AccountTypeOAuth,
@@ -1067,11 +1068,11 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_NoAvailableErrorAggrega
 		Status:      StatusActive,
 		Schedulable: true,
 		Concurrency: 1,
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"codex_7d_used_percent":  95.0,
 			"codex_7d_reset_at":      time.Now().Add(24 * time.Hour).Format(time.RFC3339),
 			"codex_usage_updated_at": time.Now().Add(-time.Minute).Format(time.RFC3339),
-		},
+		}),
 	}
 	mappingMiss := Account{
 		ID:          38122,
@@ -1708,9 +1709,12 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SkipsQuarantinedSharedP
 	proxyA := int64(4698)
 	proxyB := int64(4699)
 	accounts := []Account{
-		{ID: 469801, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, ProxyID: &proxyA},
-		{ID: 469802, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, ProxyID: &proxyA},
-		{ID: 469803, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, ProxyID: &proxyB},
+		{Extra: astraHealthyTestExtra(nil),
+			ID: 469801, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, ProxyID: &proxyA},
+		{Extra: astraHealthyTestExtra(nil),
+			ID: 469802, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, ProxyID: &proxyA},
+		{Extra: astraHealthyTestExtra(nil),
+			ID: 469803, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, ProxyID: &proxyB},
 	}
 	cfg := &config.Config{}
 	cfg.Gateway.Scheduling.LoadBatchEnabled = false
@@ -1743,8 +1747,10 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_FailsOpenWhenAllProxies
 	// degrade to a preference instead of zeroing out capacity (#5056).
 	proxyA := int64(5056)
 	accounts := []Account{
-		{ID: 505601, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, ProxyID: &proxyA},
-		{ID: 505602, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, ProxyID: &proxyA},
+		{Extra: astraHealthyTestExtra(nil),
+			ID: 505601, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, ProxyID: &proxyA},
+		{Extra: astraHealthyTestExtra(nil),
+			ID: 505602, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, ProxyID: &proxyA},
 	}
 	cfg := &config.Config{}
 	cfg.Gateway.Scheduling.LoadBatchEnabled = false
@@ -1778,10 +1784,14 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyRateLimite
 	ctx := context.Background()
 	groupID := int64(10101)
 	rateLimitedUntil := time.Now().Add(30 * time.Minute)
-	staleSticky := &Account{ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
-	staleBackup := &Account{ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
-	freshSticky := &Account{ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
-	freshBackup := &Account{ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	staleSticky := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleBackup := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	freshSticky := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
+	freshBackup := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_rate_limited": 31001}}
 	snapshotCache := &openAISnapshotCacheStub{snapshotAccounts: []*Account{staleSticky, staleBackup}, accountsByID: map[int64]*Account{31001: freshSticky, 31002: freshBackup}}
 	snapshotService := &SchedulerSnapshotService{cache: snapshotCache}
@@ -2086,10 +2096,14 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_SkipsFreshlyRa
 	ctx := context.Background()
 	groupID := int64(10102)
 	rateLimitedUntil := time.Now().Add(30 * time.Minute)
-	stalePrimary := &Account{ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
-	staleSecondary := &Account{ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
-	freshPrimary := &Account{ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
-	freshSecondary := &Account{ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	stalePrimary := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleSecondary := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	freshPrimary := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
+	freshSecondary := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	snapshotCache := &openAISnapshotCacheStub{snapshotAccounts: []*Account{stalePrimary, staleSecondary}, accountsByID: map[int64]*Account{32001: freshPrimary, 32002: freshSecondary}}
 	snapshotService := &SchedulerSnapshotService{cache: snapshotCache}
 	svc := &OpenAIGatewayService{
@@ -2153,10 +2167,14 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyDBRuntimeR
 	ctx := context.Background()
 	groupID := int64(10103)
 	rateLimitedUntil := time.Now().Add(30 * time.Minute)
-	staleSticky := &Account{ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
-	staleBackup := &Account{ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
-	dbSticky := Account{ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
-	dbBackup := Account{ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	staleSticky := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleBackup := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	dbSticky := Account{Extra: astraHealthyTestExtra(nil),
+		ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
+	dbBackup := Account{Extra: astraHealthyTestExtra(nil),
+		ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_db_runtime_recheck": 33001}}
 	snapshotCache := &openAISnapshotCacheStub{
 		snapshotAccounts: []*Account{staleSticky, staleBackup},
@@ -2184,10 +2202,14 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_DBRuntimeReche
 	ctx := context.Background()
 	groupID := int64(10104)
 	rateLimitedUntil := time.Now().Add(30 * time.Minute)
-	stalePrimary := &Account{ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
-	staleSecondary := &Account{ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
-	dbPrimary := Account{ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
-	dbSecondary := Account{ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	stalePrimary := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleSecondary := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	dbPrimary := Account{Extra: astraHealthyTestExtra(nil),
+		ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
+	dbSecondary := Account{Extra: astraHealthyTestExtra(nil),
+		ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	snapshotCache := &openAISnapshotCacheStub{
 		snapshotAccounts: []*Account{stalePrimary, staleSecondary},
 		accountsByID:     map[int64]*Account{34001: stalePrimary, 34002: staleSecondary},
@@ -2360,7 +2382,8 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_PreviousResponseSticky(
 func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10)
-	account := Account{
+	account := Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          2001,
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
@@ -2707,7 +2730,8 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityCho
 	cheapAPIKey.Priority = 0
 	cheapAPIKey.GroupIDs = []int64{groupID}
 	accounts := []Account{
-		{
+		{Extra: astraHealthyTestExtra(nil),
+
 			ID:          21601,
 			Platform:    PlatformOpenAI,
 			Type:        AccountTypeOAuth,
@@ -2753,7 +2777,8 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityFal
 	ctx := context.Background()
 	groupID := int64(10121)
 	accounts := []Account{
-		{
+		{Extra: astraHealthyTestExtra(nil),
+
 			ID:          21611,
 			Platform:    PlatformOpenAI,
 			Type:        AccountTypeOAuth,
@@ -2806,7 +2831,8 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityDis
 	ctx := context.Background()
 	groupID := int64(10122)
 	accounts := []Account{
-		{
+		{Extra: astraHealthyTestExtra(nil),
+
 			ID:          21621,
 			Platform:    PlatformOpenAI,
 			Type:        AccountTypeOAuth,
@@ -2982,9 +3008,9 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky_ForceHTTP
 		Schedulable: true,
 		Concurrency: 1,
 		GroupIDs:    []int64{groupID},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"openai_ws_force_http": true,
-		},
+		}),
 	}
 	cache := &schedulerTestGatewayCache{
 		sessionBindings: map[string]int64{
@@ -3168,7 +3194,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_RequiredWSV2_NoAvailabl
 			Status:      StatusActive,
 			Schedulable: true,
 			Concurrency: 1,
-			Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff},
+			Extra:       astraHealthyTestExtra(map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff}),
 		},
 	}
 
@@ -3886,7 +3912,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityWai
 			Priority:    0,
 			GroupIDs:    []int64{groupID},
 			Credentials: map[string]any{"plan_type": "team"},
-			Extra:       map[string]any{"openai_compact_supported": true},
+			Extra:       astraHealthyTestExtra(map[string]any{"openai_compact_supported": true}),
 		},
 		{
 			// 常规账号：明确不支持 compact，无法服务本次请求。

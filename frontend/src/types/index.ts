@@ -1341,6 +1341,11 @@ export interface Account {
   ollama_cloud_usage?: OllamaCloudUsageState
   opencode_go_usage?: OpenCodeGoUsageState
   codex_turn_tickets?: CodexTurnTicketStatus[]
+  openai_oauth_model_policy?: {
+    verdict: 'healthy' | 'degraded' | 'unknown'
+    scope: 'non_luna' | 'luna_and_images'
+    sampled_at?: string
+  }
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>

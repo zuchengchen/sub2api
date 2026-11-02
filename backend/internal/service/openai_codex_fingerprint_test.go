@@ -29,7 +29,7 @@ func newTestOAuthAccount(id int64, extra map[string]any) *Account {
 		ID:       id,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
-		Extra:    extra,
+		Extra:    astraHealthyTestExtra(extra),
 	}
 }
 

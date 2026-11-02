@@ -36,7 +36,9 @@ func (tc *tiboRouteCase) forwardWith(t *testing.T, body string, headers map[stri
 		c.Request.Header.Set(key, value)
 	}
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
-	result, err := tc.svc.Forward(context.Background(), c, tc.account, []byte(body))
+	requestAccount := cloneTiboAccount(tc.account)
+	requestAccount.Extra = astraHealthyTestExtra(requestAccount.Extra) // Transport tier and latest sample are deliberately independent.
+	result, err := tc.svc.Forward(context.Background(), c, requestAccount, []byte(body))
 	return result, rec, c, err
 }
 
@@ -114,6 +116,7 @@ func TestTiboRouteStaleRouteRecordClearedOnNextAttempt(t *testing.T) {
 	c.Header("X-Codex2API-Upstream", "codex")
 	c.Header("X-Codex2API-Basispoints-Bypass", "bps_error")
 	tc.seed(openAITiboRouteHTTP, openAITiboHealthy)
+	tc.account.Extra = astraHealthyTestExtra(tc.account.Extra)
 	result, err := tc.svc.Forward(context.Background(), c, tc.account, []byte(tiboRouteAstraBody))
 	require.NoError(t, err)
 	require.False(t, *result.RouteDegraded)

@@ -75,8 +75,9 @@ func TestFetchOpenAIAccountModelsAPIKeyPopulatesPickerFields(t *testing.T) {
 	require.Equal(t, "named-model", models[2].ID)
 }
 
-func TestMergeOpenAIAccountTestModelsAppendsMappedImageModels(t *testing.T) {
-	account := &Account{
+func TestMergeOpenAIAccountTestModelsAppendsSupportedImageModels(t *testing.T) {
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
@@ -100,7 +101,7 @@ func TestMergeOpenAIAccountTestModelsAppendsMappedImageModels(t *testing.T) {
 	require.Equal(t, "gpt-6-astra", ids[0], "live catalog order must be preserved")
 	require.Contains(t, ids, "gpt-image-2")
 	require.Contains(t, ids, "gpt-image-2.5")
-	require.Contains(t, ids, "custom-alias")
+	require.NotContains(t, ids, "custom-alias")
 	require.NotContains(t, ids, "gpt-image-*")
 	require.Equal(t, "GPT Image 2.5", display["gpt-image-2.5"])
 	require.Equal(t, "GPT Image 2", display["gpt-image-2"])
@@ -142,9 +143,7 @@ func TestFetchOpenAIAccountModelsOAuthLabelsLocalImageModelsLikeUpstream(t *test
 	newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"gpt-5.6-sol"}]}`)
 	svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}
 	account := newCodexModelsTestAccount()
-	// This case is about label sources, so it must configure the upstream slug it
-	// asserts on: the picker is scoped to the account mapping, and an unconfigured
-	// slug is intentionally absent (see the exclusion test below).
+	// Label sources remain intact even with an old restrictive whitelist.
 	account.Credentials["model_mapping"] = map[string]any{
 		"gpt-5.6-sol":         "gpt-5.6-sol",
 		"gpt-image-2.5-flare": "gpt-image-2.5-flare",
@@ -159,7 +158,7 @@ func TestFetchOpenAIAccountModelsOAuthLabelsLocalImageModelsLikeUpstream(t *test
 	require.Equal(t, "GPT Image 2.5 Flare", byID["gpt-image-2.5-flare"], "locally added models use the same naming rule")
 }
 
-func TestFetchOpenAIAccountModelsOAuthRespectsImageAllowlist(t *testing.T) {
+func TestFetchOpenAIAccountModelsOAuthIgnoresOldImageAllowlist(t *testing.T) {
 	newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"gpt-6-astra"}]}`)
 	svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}
 	account := newCodexModelsTestAccount()
@@ -171,7 +170,7 @@ func TestFetchOpenAIAccountModelsOAuthRespectsImageAllowlist(t *testing.T) {
 		ids = append(ids, model.ID)
 	}
 	require.Contains(t, ids, "gpt-image-2.5-flare")
-	require.NotContains(t, ids, "gpt-image-2.5-sunburst")
+	require.Contains(t, ids, "gpt-image-2.5-sunburst")
 }
 
 func pickerModelIDs(models []openai.Model) []string {
@@ -182,9 +181,8 @@ func pickerModelIDs(models []openai.Model) []string {
 	return ids
 }
 
-// The picker is scoped to the account mapping: an upstream slug the account does
-// not configure must not become a testable choice.
-func TestFetchOpenAIAccountModelsOAuthExcludesUnconfiguredTextModels(t *testing.T) {
+// A healthy OAuth account offers the upstream catalog without an old whitelist.
+func TestFetchOpenAIAccountModelsOAuthIncludesUnconfiguredTextModels(t *testing.T) {
 	newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"gpt-5.6-sol"},{"slug":"gpt-6-astra"}]}`)
 	svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}
 	account := newCodexModelsTestAccount()
@@ -192,7 +190,8 @@ func TestFetchOpenAIAccountModelsOAuthExcludesUnconfiguredTextModels(t *testing.
 
 	models, err := svc.FetchOpenAIAccountModels(context.Background(), account)
 	require.NoError(t, err)
-	require.Equal(t, []string{"gpt-5.6-sol"}, pickerModelIDs(models))
+	require.Contains(t, pickerModelIDs(models), "gpt-5.6-sol")
+	require.Contains(t, pickerModelIDs(models), "gpt-6-astra")
 }
 
 // An alias may point at a local image model that Codex discovery never lists, so
@@ -205,8 +204,8 @@ func TestFetchOpenAIAccountModelsOAuthLocalImageAlias(t *testing.T) {
 
 	models, err := svc.FetchOpenAIAccountModels(context.Background(), account)
 	require.NoError(t, err)
-	require.Equal(t, []string{"paint"}, pickerModelIDs(models))
-	require.Equal(t, "paint", models[0].DisplayName)
+	require.NotContains(t, pickerModelIDs(models), "paint")
+	require.Contains(t, pickerModelIDs(models), "gpt-image-2.5-flare")
 }
 
 // Image-shaped public names must come from projection when their target is text,
@@ -222,12 +221,9 @@ func TestFetchOpenAIAccountModelsOAuthImageNamesMappedToText(t *testing.T) {
 
 				models, err := svc.FetchOpenAIAccountModels(context.Background(), account)
 				require.NoError(t, err)
-				if target == "text-target-missing" {
-					require.Empty(t, models, "a missing text target must not be synthesized as an image choice")
-					return
-				}
-				require.Equal(t, []string{publicID}, pickerModelIDs(models))
-				require.Equal(t, publicID, models[0].DisplayName, "a real text target uses the projected alias label")
+				require.Contains(t, pickerModelIDs(models), "gpt-6-astra")
+				require.Contains(t, pickerModelIDs(models), "gpt-image-2.5-flare")
+				require.NotContains(t, pickerModelIDs(models), "gpt-image-2.5-lookalike")
 			})
 		}
 	}
@@ -239,7 +235,7 @@ func TestFetchOpenAIAccountModelsOAuthPassthroughIgnoresMappingTargets(t *testin
 			newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"gpt-6-astra"}]}`)
 			svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}
 			account := newCodexModelsTestAccount()
-			account.Extra = map[string]any{flag: true}
+			account.Extra[flag] = true
 			account.Credentials["model_mapping"] = map[string]any{
 				"gpt-image-custom":    "text-target-missing",
 				"gpt-image-2.5-flare": "text-target-missing",
@@ -252,7 +248,7 @@ func TestFetchOpenAIAccountModelsOAuthPassthroughIgnoresMappingTargets(t *testin
 			require.Contains(t, ids, "gpt-6-astra", "passthrough preserves the upstream catalog")
 			require.Contains(t, ids, "gpt-image-2.5-flare")
 			require.Contains(t, ids, "gpt-image-2.5-sunburst")
-			require.Contains(t, ids, "gpt-image-custom", "preserve existing native image choices in passthrough")
+			require.NotContains(t, ids, "gpt-image-custom", "old account mappings do not create catalog entries")
 			require.NotContains(t, ids, "paint", "passthrough must not revive a stale mapping alias")
 		})
 	}

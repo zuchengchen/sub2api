@@ -307,9 +307,9 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 	const mappedModel = "gpt-5.3-codex"
 	const alias = "team-coder"
 	accounts := []service.Account{
-		{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth},
+		{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: astraHandlerExtra("healthy")},
 		{
-			ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+			ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
 			Credentials: map[string]any{"model_mapping": map[string]any{mappedModel: mappedModel}},
 		},
 		{
@@ -319,7 +319,7 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 	}
 	subscriptionDefaults := make([]string, 0)
 	for _, model := range openai.DefaultModelIDs() {
-		if model != "gpt-5.5" {
+		if model != "gpt-5.5" && model != "gpt-5.6-luna" && model != "gpt-6-luna" {
 			subscriptionDefaults = append(subscriptionDefaults, model)
 		}
 	}
@@ -369,7 +369,11 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 			accounts: append([]service.Account{{
 				ID: 5, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
 				Credentials: map[string]any{"model_mapping": map[string]any{"stale-model": "stale-model"}},
-				Extra:       map[string]any{"openai_passthrough": true},
+				Extra: func() map[string]any {
+					extra := astraHandlerExtra("healthy")
+					extra["openai_passthrough"] = true
+					return extra
+				}(),
 			}}, accounts[1:]...),
 			want: append(append([]string{}, subscriptionDefaults...), mappedModel, alias),
 		},

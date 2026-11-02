@@ -1473,7 +1473,10 @@ func mixedListingModelAllowed(string, string) bool {
 
 func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64, platform string) []string {
 	cacheKey := modelsListCacheKey(groupID, platform)
-	if s.modelsListCache != nil {
+	// OAuth eligibility changes on each Astra point. Cache raw upstream catalogs
+	// elsewhere, but do not reuse a policy-filtered list without its accounts.
+	cacheable := platform != "" && platform != PlatformOpenAI && platform != PlatformComposite
+	if cacheable && s.modelsListCache != nil {
 		if cached, found := s.modelsListCache.Get(cacheKey); found {
 			if models, ok := cached.([]string); ok {
 				modelsListCacheHitTotal.Add(1)
@@ -1551,7 +1554,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		}
 	}
 	if !hasAnyMapping {
-		if s.modelsListCache != nil {
+		if cacheable && s.modelsListCache != nil {
 			s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
 			modelsListCacheStoreTotal.Add(1)
 		}
@@ -1575,7 +1578,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		}
 	}
 
-	if s.modelsListCache != nil {
+	if cacheable && s.modelsListCache != nil {
 		s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)
 		modelsListCacheStoreTotal.Add(1)
 	}
@@ -1630,6 +1633,9 @@ func (s *GatewayService) resolveCompositeModelOwnership(ctx context.Context, gro
 }
 
 func explicitModelMappingClaims(account Account, model string) bool {
+	if account.IsOpenAIOAuth() {
+		return false // Managed OAuth accounts do not claim stale manual aliases.
+	}
 	if account.Credentials == nil || model == "" {
 		return false
 	}

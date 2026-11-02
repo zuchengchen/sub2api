@@ -426,6 +426,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if err := validateRetiredOpenAIRequestModel(account, requestModel, false, account.GetMappedModel(requestModel)); err != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
 		}
+		if err := s.CheckOpenAIAstraModelPolicy(ctx, account, requestModel); err != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "model is no longer available on this account; reconnect", err)
+		}
 		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestModel))
 		if cookieWS && !s.openAICookieWSEnabledForModel(account, upstreamModel) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "this Cookie websocket session does not support switching models", nil)

@@ -64,7 +64,8 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_turn_ticket:",
 	"codex_turn_ticket_revoked:",
 	"codex_cookie_ws:",
-	// Tibo 线路结论同样只是运行态观测，调度读进程内状态，不走快照投影。
+	// Legacy Tibo keys are observations. The Astra HTTP key is explicitly
+	// promoted to a durable policy update in UpdateExtra.
 	"codex_tibo_verdict:",
 	"passive_usage_",
 	"upstream_billing_probe",
@@ -1805,18 +1806,20 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 // when account status changes. Called when account is set to error, disabled,
 // unschedulable, or temporarily unschedulable, ensuring scheduler and sticky session
 // logic can promptly detect the latest account state and avoid using unavailable accounts.
-func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
+func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, accountID int64) error {
 	if r == nil || r.schedulerCache == nil || accountID <= 0 {
-		return
+		return nil
 	}
 	account, err := r.GetByID(ctx, accountID)
 	if err != nil {
 		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot read failed: id=%d err=%v", accountID, err)
-		return
+		return err
 	}
 	if err := r.schedulerCache.SetAccount(ctx, account); err != nil {
 		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot write failed: id=%d err=%v", accountID, err)
+		return err
 	}
+	return nil
 }
 
 func (r *accountRepository) syncSchedulerAccountSnapshotDetached(ctx context.Context, accountID int64) {
@@ -2794,7 +2797,9 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	}
 
 	clearProbeSnapshot := upstreamBillingProbeExplicitlyDisabled(updates) || upstreamBillingProbeSnapshotClearRequested(updates)
-	durableSchedulerChange := shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot
+	_, updatesAstra := updates[service.OpenAIAstraPolicyExtraKey]
+	// Policy changes need durable propagation as well as an immediate cache update.
+	durableSchedulerChange := updatesAstra || shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
 	client := clientFromContext(ctx, r.client)
@@ -2809,6 +2814,29 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 			defer func() { _ = tx.Rollback() }()
 			ctx = dbent.NewTxContext(ctx, tx)
 			client = tx.Client()
+		}
+	}
+	if updatesAstra {
+		updates, err = lockAstraPolicyExtraUpdate(ctx, client, id, updates)
+		if err != nil {
+			return err
+		}
+		if len(updates) == 0 {
+			if tx != nil {
+				if err := tx.Commit(); err != nil {
+					return err
+				}
+			}
+			if contextTx == nil {
+				if syncErr := r.syncSchedulerAccountSnapshot(baseCtx, id); updatesAstra && syncErr != nil {
+					return syncErr
+				}
+			}
+			return nil
+		}
+		payload, err = json.Marshal(updates)
+		if err != nil {
+			return err
 		}
 	}
 	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
@@ -2839,20 +2867,17 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 			return err
 		}
-		if tx != nil {
-			if err := tx.Commit(); err != nil {
-				return err
-			}
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
 		}
-		if contextTx == nil {
-			r.syncSchedulerAccountSnapshot(baseCtx, id)
-		}
-	} else {
-		// 观测型 extra 字段不需要触发 bucket 重建，但仍同步单账号快照，
-		// 让 sticky session / GetAccount 命中缓存时也能读到最新数据，
-		// 同时避免缓存局部 patch 覆盖掉并发写入的其它账号字段。
-		if dbent.TxFromContext(ctx) == nil {
-			r.syncSchedulerAccountSnapshot(ctx, id)
+	}
+	// Sync even observational updates, without overwriting concurrent account fields.
+	// Astra must report propagation failures so the prober keeps its sample dirty.
+	if contextTx == nil {
+		if syncErr := r.syncSchedulerAccountSnapshot(baseCtx, id); updatesAstra && syncErr != nil {
+			return syncErr
 		}
 	}
 	return nil
@@ -3132,7 +3157,10 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			return 0, err
 		}
 		credentialPlaceholder = "$" + itoa(idx)
-		setClauses = append(setClauses, "credentials = COALESCE(credentials, '{}'::jsonb) || "+credentialPlaceholder+"::jsonb")
+		// Mixed bulk edits retain the dormant OAuth mappings for rollback.
+		credentialPatch := credentialPlaceholder + "::jsonb"
+		credentialPatch = "CASE WHEN platform = 'openai' AND type = 'oauth' THEN (" + credentialPatch + " - 'model_mapping' - 'compact_model_mapping') ELSE " + credentialPatch + " END"
+		setClauses = append(setClauses, "credentials = COALESCE(credentials, '{}'::jsonb) || ("+credentialPatch+")")
 		args = append(args, payload)
 		idx++
 	}

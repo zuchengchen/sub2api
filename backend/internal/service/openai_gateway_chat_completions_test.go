@@ -722,7 +722,8 @@ func TestForwardAsChatCompletions_UnknownModelWithoutMessagesDispatchKeepsReques
 		cfg:          &config.Config{},
 		httpUpstream: upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -892,7 +893,8 @@ func TestForwardAsChatCompletions_OAuthDoesNotInjectDefaultInstructions(t *testi
 		cfg:          &config.Config{},
 		httpUpstream: upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          3,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -927,7 +929,8 @@ func TestForwardAsChatCompletions_OAuthGPT61SolUsesCodexHTTP(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"stop before response parsing"}}`)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          3,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -964,7 +967,8 @@ func forwardOAuthChatCompletionsForUpstreamBodyWithModel(t *testing.T, body []by
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"stop before response parsing"}}`)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          4,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1044,7 +1048,8 @@ func TestForwardAsChatCompletions_OAuthGPT56RetriesWithoutRejectedPromptCacheFie
 		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"invalid_request_error","message":"stop without sending prompt_cache_options"}}`),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          5,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1131,7 +1136,8 @@ func TestForwardAsChatCompletions_ClientDisconnectDrainsUpstreamUsage(t *testing
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1171,7 +1177,8 @@ func TestForwardAsChatCompletions_BufferedContextWindowResponseFailedReturnsErro
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1216,7 +1223,8 @@ func TestForwardAsChatCompletions_StreamContextWindowResponseFailedReturnsErrorW
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1265,7 +1273,8 @@ func TestForwardAsChatCompletions_StreamBareErrorAfterOutputDoesNotFailOver(t *t
 		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
 	}}
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
 	}
@@ -1303,7 +1312,8 @@ func TestForwardAsChatCompletions_StreamCyberPolicyNoFailover(t *testing.T) {
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1350,7 +1360,8 @@ func TestForwardAsChatCompletions_StreamsUsageWithoutClientStreamOptions(t *test
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1401,7 +1412,8 @@ func TestForwardAsChatCompletions_StreamsTopLevelTerminalUsage(t *testing.T) {
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1448,7 +1460,8 @@ func TestForwardAsChatCompletions_BufferedTopLevelTerminalUsage(t *testing.T) {
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1495,7 +1508,8 @@ func TestForwardAsChatCompletions_TerminalUsageWithoutUpstreamCloseReturns(t *te
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1560,7 +1574,8 @@ func TestForwardAsChatCompletions_EventNamedTerminalWithoutUpstreamCloseReturns(
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1622,7 +1637,8 @@ func TestForwardAsChatCompletions_EventTypeDoesNotLeakAcrossFrames(t *testing.T)
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1661,7 +1677,8 @@ func TestForwardAsChatCompletions_BufferedTerminalWithoutUpstreamCloseReturns(t 
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1712,7 +1729,8 @@ func TestForwardAsChatCompletions_DoneSentinelWithoutTerminalReturnsError(t *tes
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1753,7 +1771,8 @@ func TestForwardAsChatCompletions_UpstreamRequestIgnoresClientCancel(t *testing.
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,

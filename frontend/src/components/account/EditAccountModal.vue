@@ -876,8 +876,9 @@
       </div>
 
       <!-- OpenAI/Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
+      <AstraOAuthModelPolicy v-if="account.platform === 'openai' && account.type === 'oauth'" :policy="account.openai_oauth_model_policy" />
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'grok') && account.type === 'oauth'"
+        v-if="account.platform === 'grok' && account.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
         :data-testid="account.platform === 'grok' ? 'grok-model-settings' : undefined"
       >
@@ -2608,7 +2609,7 @@
             {{ formatDateTime(new Date(String(account.extra.openai_compact_checked_at))) }}
           </span>
         </div>
-        <div>
+        <div v-if="account.type !== 'oauth'">
           <label class="input-label">{{ t('admin.accounts.openai.compactModelMapping') }}</label>
           <p class="input-hint">{{ t('admin.accounts.openai.compactModelMappingDesc') }}</p>
           <div v-if="openAICompactModelMappings.length > 0" class="mb-3 space-y-2">
@@ -3265,6 +3266,7 @@ import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestId
 import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezoneField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
+import AstraOAuthModelPolicy from './AstraOAuthModelPolicy.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
@@ -4502,6 +4504,7 @@ const buildModelRestrictionMapping = () =>
   buildModelMappingObject('combined', allowedModels.value, modelMappings.value)
 
 const applyOpenAIModelMappingCredentials = (credentials: Record<string, unknown>) => {
+  if (props.account?.platform === 'openai' && props.account.type === 'oauth') return
   const shouldApplyModelMapping = !openaiPassthroughEnabled.value
 
   if (shouldApplyModelMapping) {

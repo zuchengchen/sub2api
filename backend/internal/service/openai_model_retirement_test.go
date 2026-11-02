@@ -27,7 +27,7 @@ func TestSparkRetirementAliasesAndMappings(t *testing.T) {
 	}
 	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
 		for _, passthrough := range []bool{false, true} {
-			account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: map[string]any{"openai_passthrough": passthrough}}
+			account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough})}
 			for _, model := range aliases {
 				require.True(t, openai.IsRetiredSparkModel(model), model)
 				require.False(t, account.IsModelSupported(model), "%s passthrough=%v model=%s", typ, passthrough, model)
@@ -35,12 +35,12 @@ func TestSparkRetirementAliasesAndMappings(t *testing.T) {
 				for _, mapping := range []map[string]any{{model: "gpt-5.4"}, {"legacy*": model}} {
 					account.Credentials = map[string]any{"model_mapping": mapping}
 					require.False(t, account.IsModelSupported(model), "mapping source must not revive Spark")
-					if !passthrough {
+					if !passthrough && typ != AccountTypeOAuth {
 						require.False(t, account.IsModelSupported("legacy-client"), "mapped target must not revive Spark")
 					}
 				}
 				account.Credentials = map[string]any{"compact_model_mapping": map[string]any{"custom*": model}}
-				require.False(t, supportsOpenAIRequestModel(account, "custom-model", true))
+				require.Equal(t, typ == AccountTypeOAuth, supportsOpenAIRequestModel(account, "custom-model", true))
 				account.Credentials = nil
 			}
 			for _, model := range []string{"custom-model", "muse-spark", "iFlytek/spark", "gpt-5.3-codex", "gpt-5.3-codex-sparkle"} {
@@ -63,7 +63,7 @@ func TestSparkRetirementRejectsBeforeUpstreamOrFallback(t *testing.T) {
 					}}
 					svc := newCodexModelsAPIKeyTestService(upstream)
 					svc.cfg.Gateway.OpenAICompactModel = "gpt-5.4"
-					account := &Account{ID: 1, Platform: PlatformOpenAI, Type: typ, Extra: map[string]any{"openai_passthrough": passthrough}}
+					account := &Account{ID: 1, Platform: PlatformOpenAI, Type: typ, Extra: astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough})}
 					body := []byte(`{"model":"openai/gpt5.3codexspark-xhigh","input":[],"messages":[],"instructions":"test"}`)
 					c, _ := gin.CreateTestContext(httptest.NewRecorder())
 					c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -89,12 +89,16 @@ func TestSparkRetirementRejectsBeforeUpstreamOrFallback(t *testing.T) {
 				})
 			}
 		}
-		account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{"model_mapping": map[string]any{"legacy": "gpt-5.3-codex-spark-high"}}}
-		require.Error(t, validateRetiredOpenAIRequestModel(account, "legacy", false, ""))
+		account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: astraHealthyTestExtra(nil), Credentials: map[string]any{"model_mapping": map[string]any{"legacy": "gpt-5.3-codex-spark-high"}}}
+		require.Equal(t, typ != AccountTypeOAuth, validateRetiredOpenAIRequestModel(account, "legacy", false, "") != nil)
 		require.Error(t, validateRetiredOpenAIRequestModel(account, "claude-sonnet", false, "gpt-5.3-codex-spark"))
 		account.Credentials = map[string]any{"compact_model_mapping": map[string]any{"gpt-5.4": "gpt5.3codexspark"}}
 		svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}}}
-		require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-5.4"))
+		if typ == AccountTypeOAuth {
+			require.Equal(t, "gpt-5.4", svc.resolveOpenAICompactFallbackModel(account, "gpt-5.4"))
+		} else {
+			require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-5.4"))
+		}
 		account.Credentials = nil
 		svc.cfg.Gateway.OpenAICompactModel = "gpt-5.3-codex-spark"
 		require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-5.4"))
@@ -102,7 +106,7 @@ func TestSparkRetirementRejectsBeforeUpstreamOrFallback(t *testing.T) {
 }
 
 func TestSparkRetirementMappedForwardDoesNotCallUpstream(t *testing.T) {
-	for _, typ := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+	for _, typ := range []string{AccountTypeSetupToken, AccountTypeAPIKey} {
 		for _, tc := range []struct {
 			name, model, path, mappingKey string
 			mapping                       map[string]any
@@ -118,7 +122,7 @@ func TestSparkRetirementMappedForwardDoesNotCallUpstream(t *testing.T) {
 					calls.Add(1)
 					return ordinaryModelsUpstreamResponse(`{}`), nil
 				}})
-				account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{tc.mappingKey: tc.mapping}}
+				account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: astraHealthyTestExtra(nil), Credentials: map[string]any{tc.mappingKey: tc.mapping}}
 				c, _ := gin.CreateTestContext(httptest.NewRecorder())
 				c.Request = httptest.NewRequest(http.MethodPost, tc.path, nil)
 				body, err := json.Marshal(map[string]any{"model": tc.model, "input": []any{}})
@@ -148,7 +152,7 @@ func TestSparkRetirementCatalogCompletionCannotRestoreSource(t *testing.T) {
 	require.Equal(t, []string{"custom-model"}, gateway.GetAvailableModels(context.Background(), &groupID, PlatformOpenAI))
 	gateway.modelsListCache = gocache.New(time.Minute, 0)
 	gateway.modelsListCache.Set(modelsListCacheKey(&groupID, PlatformOpenAI), []string{"gpt5.3codexspark", "muse-spark"}, time.Minute)
-	require.Equal(t, []string{"muse-spark"}, gateway.GetAvailableModels(context.Background(), &groupID, PlatformOpenAI))
+	require.Equal(t, []string{"custom-model"}, gateway.GetAvailableModels(context.Background(), &groupID, PlatformOpenAI))
 }
 
 func TestSparkRetirementCatalogProjectionAndAdminFallback(t *testing.T) {
@@ -158,7 +162,7 @@ func TestSparkRetirementCatalogProjectionAndAdminFallback(t *testing.T) {
 			if codex {
 				field, idField = "models", "slug"
 			}
-			account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{"model_mapping": map[string]any{
+			account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: astraHealthyTestExtra(nil), Credentials: map[string]any{"model_mapping": map[string]any{
 				"gpt-5.3-codex-spark": "custom-live", "legacy": "gpt-5.3-codex-spark", "custom*": "custom-live",
 			}}}
 			group := &Group{Platform: PlatformOpenAI, ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"legacy", "gpt-5.3-codex-spark", "custom-client"}}}
@@ -168,14 +172,18 @@ func TestSparkRetirementCatalogProjectionAndAdminFallback(t *testing.T) {
 			require.NoError(t, err)
 			require.NotContains(t, string(projected), "spark")
 			require.NotContains(t, string(projected), "legacy")
-			require.Contains(t, string(projected), "custom-client")
+			require.Equal(t, typ != AccountTypeOAuth, strings.Contains(string(projected), "custom-client"))
 			require.True(t, gjson.GetBytes(projected, "unknown_top").Bool())
 			for _, model := range MergeOpenAIAccountTestModels([]openai.Model{{ID: "gpt-5.3-codex-spark"}}, account) {
 				require.NotEqual(t, "legacy", model.ID)
 				require.False(t, openai.IsRetiredSparkModel(model.ID))
 			}
 			account.Credentials = map[string]any{"model_mapping": map[string]any{"gpt-5.3-codex-spark": "gpt-5.3-codex-spark"}}
-			require.Empty(t, openAIConfiguredCodexModelIDsForGroup([]Account{*account}, nil), "retired-only catalog must not fall back to defaults")
+			if typ == AccountTypeOAuth {
+				require.Empty(t, openAIConfiguredCodexModelIDsForGroup([]Account{*account}, nil), "OAuth has no explicit model mapping")
+			} else {
+				require.Empty(t, openAIConfiguredCodexModelIDsForGroup([]Account{*account}, nil), "retired-only catalog must not fall back to defaults")
+			}
 		}
 	}
 }
@@ -222,7 +230,7 @@ func TestSparkRetirementUpstreamDiscoveryAndSnapshot(t *testing.T) {
 		upstream := &codexModelsHTTPUpstreamStub{do: func(*http.Request, string, int64, int) (*http.Response, error) {
 			return ordinaryModelsUpstreamResponse(body), nil
 		}}
-		account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{"access_token": "test", "api_key": "test", "model_mapping": map[string]any{"legacy": "gpt5.3codexspark"}}}
+		account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: astraHealthyTestExtra(nil), Credentials: map[string]any{"access_token": "test", "api_key": "test", "model_mapping": map[string]any{"legacy": "gpt5.3codexspark"}}}
 		svc := &AccountTestService{httpUpstream: upstream, cfg: &config.Config{}}
 		catalog, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
 		require.NoError(t, err)
@@ -242,7 +250,7 @@ func TestGPT55RetirementModelSupport(t *testing.T) {
 	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
 		for _, passthrough := range []bool{false, true} {
 			t.Run(typ+"/passthrough="+map[bool]string{true: "true", false: "false"}[passthrough], func(t *testing.T) {
-				account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: map[string]any{"openai_passthrough": passthrough}}
+				account := &Account{Platform: PlatformOpenAI, Type: typ, Extra: astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough})}
 				for _, model := range []string{"gpt-5.5", "openai/gpt-5.5-high", "gpt-5.5-2026-04-23", "GPT_5.5", "gpt-5.5-openai-compact"} {
 					require.Equal(t, typ == AccountTypeAPIKey, account.IsModelSupported(model), model)
 				}
@@ -253,11 +261,13 @@ func TestGPT55RetirementModelSupport(t *testing.T) {
 	for _, mapping := range []map[string]any{
 		{"legacy": "gpt-5.5"}, {"legacy*": "gpt-5.5"},
 	} {
-		account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"model_mapping": mapping}}
-		require.False(t, account.IsModelSupported("legacy"))
+		account := &Account{Extra: astraHealthyTestExtra(nil),
+			Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"model_mapping": mapping}}
+		require.True(t, account.IsModelSupported("legacy"), "unused OAuth mapping does not route this name to a retired target")
 	}
-	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.5": "gpt-6.1-sol"}}}
-	require.True(t, account.IsModelSupported("gpt-5.5"), "explicit administrator replacement remains authoritative")
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.5": "gpt-6.1-sol"}}}
+	require.False(t, account.IsModelSupported("gpt-5.5"), "unused OAuth mapping cannot revive a retired source")
 	account.Type = AccountTypeAPIKey
 	require.True(t, account.IsModelSupported("gpt-5.5"))
 	require.False(t, isRetiredOpenAISubscriptionModel(&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, "gpt-5.5"))
@@ -265,7 +275,8 @@ func TestGPT55RetirementModelSupport(t *testing.T) {
 }
 
 func TestGPT55RetirementCatalogs(t *testing.T) {
-	oauth := Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	oauth := Account{Extra: astraHealthyTestExtra(nil),
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	api := Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	group := &Group{ID: 1, Platform: PlatformOpenAI}
 	for _, tc := range []struct {
@@ -305,7 +316,8 @@ func TestGPT55RetirementCatalogs(t *testing.T) {
 	repo := codexModelsVisibilityAccountRepo{byGroup: map[int64][]Account{1: {oauth}}}
 	models := (&GatewayService{accountRepo: repo}).GetAvailableModels(context.Background(), &group.ID, PlatformOpenAI)
 	require.NotNil(t, models)
-	require.Empty(t, models)
+	require.Contains(t, models, "gpt-6-astra")
+	require.NotContains(t, models, "gpt-5.5")
 }
 
 func containsModelID(models []string, id string) bool {
@@ -358,9 +370,11 @@ func TestGPT55RetirementProjectionUsesPublicNames(t *testing.T) {
 		} {
 			t.Run(field+"/"+tc.name, func(t *testing.T) {
 				account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-					Credentials: map[string]any{"model_mapping": tc.mapping}, Extra: map[string]any{"openai_passthrough": tc.passthrough}}
+					Credentials: map[string]any{"model_mapping": tc.mapping}, Extra: astraHealthyTestExtra(map[string]any{"openai_passthrough": tc.passthrough})}
 				if tc.api {
 					account.Type = AccountTypeAPIKey
+				} else {
+					tc.want = map[string]string{"gpt-6.1-sol": "live"}
 				}
 				group := &Group{Platform: PlatformOpenAI, ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"legacy", "gpt-5.5", "gpt-6.1-sol"}}}
 				body, err := json.Marshal(map[string]any{field: []map[string]any{
@@ -402,7 +416,7 @@ func TestGPT55RetirementProjectionUsesPublicNames(t *testing.T) {
 func TestGPT55RetirementCompactFallbackKeepsSelectedModel(t *testing.T) {
 	for _, passthrough := range []bool{false, true} {
 		account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
-			Credentials: map[string]any{"access_token": "test-token"}, Extra: map[string]any{"openai_passthrough": passthrough}}
+			Credentials: map[string]any{"access_token": "test-token"}, Extra: astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough})}
 		upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"compact","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`))}}
 		svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.5"}}, httpUpstream: upstream}
 		require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-6.1-sol"))
@@ -418,7 +432,8 @@ func TestGPT55RetirementCompactFallbackKeepsSelectedModel(t *testing.T) {
 func TestGPT55RetirementSchedulerAndDiagnosis(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(1)
-	oauth := Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
+	oauth := Account{Extra: astraHealthyTestExtra(nil),
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
 	api := Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true}
 	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
 		account := oauth
@@ -432,13 +447,13 @@ func TestGPT55RetirementSchedulerAndDiagnosis(t *testing.T) {
 	oauth.Credentials = map[string]any{"compact_model_mapping": map[string]any{"gpt-6.1-sol": "gpt-5.5"}}
 	scheduler := &defaultOpenAIAccountScheduler{}
 	ok, reason := scheduler.isAccountRequestCompatibleReason(ctx, &oauth, OpenAIAccountScheduleRequest{RequestedModel: "gpt-6.1-sol", RequireCompact: true})
-	require.False(t, ok)
-	require.Equal(t, "model_not_supported", reason)
+	require.True(t, ok)
+	require.Empty(t, reason)
 	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-6.1-sol"}}}
-	require.Empty(t, svc.resolveOpenAICompactFallbackModel(&oauth, "gpt-6.1-sol"), "native compact retries must not use a retired explicit target")
+	require.Equal(t, "gpt-6.1-sol", svc.resolveOpenAICompactFallbackModel(&oauth, "gpt-6.1-sol"), "unused OAuth compact mapping cannot select a retired target")
 	oauth.Credentials = map[string]any{"compact_model_mapping": map[string]any{"gpt-5.5": "gpt-6.1-sol"}}
 	ok, _ = scheduler.isAccountRequestCompatibleReason(ctx, &oauth, OpenAIAccountScheduleRequest{RequestedModel: "gpt-5.5", RequireCompact: true})
-	require.True(t, ok, "an explicit compact replacement remains usable")
+	require.False(t, ok, "unused compact mapping cannot revive a retired source")
 	for _, accounts := range [][]Account{{oauth}, {oauth, api}} {
 		svc := &OpenAIGatewayService{accountRepo: codexModelsVisibilityAccountRepo{byGroup: map[int64][]Account{groupID: accounts}}}
 		diagnosis := svc.DiagnoseModelAvailabilityForPlatform(ctx, &groupID, "gpt-5.5", PlatformOpenAI)
@@ -450,8 +465,9 @@ func TestGPT55RetirementSchedulerAndDiagnosis(t *testing.T) {
 
 func TestGPT55RetirementEmptyListingSource(t *testing.T) {
 	// A configured alias targeting retired GPT-5.5 must not reappear in a generated catalog.
-	account := Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"model_mapping": map[string]any{"legacy": "gpt-5.5"}}}
-	require.Empty(t, openAIConfiguredCodexModelIDsForGroup([]Account{account}, nil))
+	account := Account{Extra: astraHealthyTestExtra(nil),
+		Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"model_mapping": map[string]any{"legacy": "gpt-5.5"}}}
+	require.Empty(t, openAIConfiguredCodexModelIDsForGroup([]Account{account}, nil), "OAuth has no explicit model mapping")
 	body, err := buildCodexModelsManifestForAccounts(PlatformComposite, []string{"gpt-5.5", "gpt-6.1-sol"}, []Account{account}, nil, nil, true)
 	require.NoError(t, err)
 	require.False(t, containsManifestModel(body, "gpt-5.5"))

@@ -10,7 +10,8 @@ import (
 )
 
 func tiboSchedulerAccount(id int64, priority int, groupID int64) Account {
-	return Account{ID: id, Name: "tibo", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+	return Account{Extra: astraHealthyTestExtra(nil),
+		ID: id, Name: "tibo", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
 		Concurrency: 4, Priority: priority, GroupIDs: []int64{groupID},
 		Credentials: map[string]any{"access_token": "token", "chatgpt_account_id": "chatgpt"}}
 }

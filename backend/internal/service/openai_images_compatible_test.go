@@ -142,8 +142,21 @@ func TestCompatibleImagesNativeAccountsRejectGeminiBeforeForwarding(t *testing.T
 				c.Request = httptest.NewRequest(http.MethodPost, openAIImagesGenerationsEndpoint, nil)
 				upstream := &httpUpstreamRecorder{}
 				svc := &OpenAIGatewayService{httpUpstream: upstream}
+				if typ == AccountTypeOAuth && mapping {
+					upstream.resp = openAIImagesJSONResponse()
+					result, err := svc.ForwardImages(context.Background(), c, account, nil, &OpenAIImagesRequest{Model: model, Prompt: "draw", Endpoint: openAIImagesGenerationsEndpoint}, "")
+					require.NoError(t, err)
+					require.Equal(t, "gpt-image-2", result.UpstreamModel)
+					require.NotContains(t, string(upstream.lastBody), "gemini")
+					return
+				}
 				_, err := svc.ForwardImages(context.Background(), c, account, nil, &OpenAIImagesRequest{Model: model}, "")
-				require.ErrorContains(t, err, "images endpoint requires an image model")
+				if typ == AccountTypeOAuth {
+					var failover *UpstreamFailoverError
+					require.ErrorAs(t, err, &failover)
+				} else {
+					require.ErrorContains(t, err, "images endpoint requires an image model")
+				}
 				require.Empty(t, upstream.requests)
 			})
 		}

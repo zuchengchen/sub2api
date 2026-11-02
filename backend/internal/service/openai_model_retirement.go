@@ -68,7 +68,7 @@ func openAIModelRetiredForAccounts(accounts []Account, modelID string) bool {
 func filterRetiredOpenAIModelIDs(accounts []Account, models []string) []string {
 	filtered := make([]string, 0, len(models))
 	for _, model := range models {
-		if !openAIModelRetiredForAccounts(accounts, model) {
+		if !openAIModelRetiredForAccounts(accounts, model) && !openAIAstraModelUnavailableForAccounts(accounts, model) {
 			filtered = append(filtered, model)
 		}
 	}
@@ -94,7 +94,7 @@ func filterRetiredOpenAIPublicModelsBody(body []byte, accounts []Account, codex 
 		if json.Unmarshal(raw, &entry) == nil {
 			_ = json.Unmarshal(entry[idField], &id)
 		}
-		if !openAIModelRetiredForAccounts(accounts, id) {
+		if !openAIModelRetiredForAccounts(accounts, id) && !openAIAstraModelUnavailableForAccounts(accounts, id) {
 			filtered = append(filtered, raw)
 		}
 	}
@@ -112,6 +112,9 @@ func filterRetiredOpenAIPublicModelsBody(body []byte, accounts []Account, codex 
 // Compact-only administrator mappings are evaluated against their actual
 // target, without treating an old client-visible name as a retired target.
 func supportsOpenAIRequestModel(account *Account, requestedModel string, requireCompact bool) bool {
+	if !account.AllowsOpenAIOAuthModelPolicy(requestedModel) {
+		return false
+	}
 	if validateRetiredOpenAIRequestModel(account, requestedModel, requireCompact, "") != nil {
 		return false
 	}

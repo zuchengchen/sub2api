@@ -854,6 +854,7 @@ func newOpenAIOAuthNamespaceTestAccount() *Account {
 	return &Account{
 		ID:          5108,
 		Name:        "openai-oauth-namespace",
+		Extra:       astraHealthyTestExtra(nil),
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
 		Concurrency: 1,

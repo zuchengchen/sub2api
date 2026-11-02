@@ -29,7 +29,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_StripsInvalidInputItemIDs(t *tes
 	svc := newOpenAIImageGenerationControlTestService(upstream)
 	c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.144.1")
 	account := newOpenAIImageGenerationControlTestAccount()
-	account.Extra = map[string]any{"openai_passthrough": true}
+	account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": true})
 
 	body := []byte(`{
 		"model":"gpt-5.6-sol",
@@ -90,7 +90,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_SanitizesNativeToolItemIDs(t *tes
 				"access_token":       "oauth-token",
 				"chatgpt_account_id": "chatgpt-account",
 			}
-			account.Extra = map[string]any{"openai_passthrough": true}
+			account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": true})
 
 			body := []byte(`{
 		"model":"gpt-5.6-sol",
@@ -133,7 +133,7 @@ func TestOpenAIGatewayService_SetupTokenLegacy_SanitizesAndTransforms(t *testing
 		"access_token":       "setup-token",
 		"chatgpt_account_id": "chatgpt-account",
 	}
-	account.Extra = map[string]any{"openai_passthrough": false}
+	account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": false})
 	body := []byte(`{
 		"model":"gpt-5.6-sol",
 		"stream":true,
@@ -176,7 +176,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_StripsInvalidReasoningItemIDs(t 
 	svc := newOpenAIImageGenerationControlTestService(upstream)
 	c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.144.1")
 	account := newOpenAIImageGenerationControlTestAccount()
-	account.Extra = map[string]any{"openai_passthrough": true}
+	account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": true})
 
 	body := []byte(`{
 		"model":"gpt-5.6-sol",

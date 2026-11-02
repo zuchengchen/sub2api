@@ -155,16 +155,17 @@ type openAITiboRouteState struct {
 	// holdUntil defers probes while the account is rate-limited, overloaded
 	// or temporarily unschedulable; parked stops them while it is paused,
 	// disabled or expired (no known end time).
-	holdUntil    time.Time
-	parked       bool
-	lastSampleAt time.Time
-	lastSample   openAITiboProbeSample
-	recent       []openAITiboRecentSample // last openAITiboRecentSampleLimit probes, oldest first
-	probes       []time.Time              // probe starts within the last hour
-	flips        []time.Time              // confirmed flips within the last hour
-	inflight     bool
-	done         chan struct{}
-	persistedAt  time.Time
+	holdUntil         time.Time
+	parked            bool
+	lastSampleAt      time.Time
+	lastSample        openAITiboProbeSample
+	recent            []openAITiboRecentSample // last openAITiboRecentSampleLimit probes, oldest first
+	probes            []time.Time              // probe starts within the last hour
+	flips             []time.Time              // confirmed flips within the last hour
+	inflight          bool
+	done              chan struct{}
+	persistedAt       time.Time
+	persistedSampleAt time.Time
 	// Calibration counters (process lifetime): vote windows opened by a
 	// disagreeing sample and how they ended.
 	voteWindows   int
