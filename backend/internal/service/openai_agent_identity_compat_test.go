@@ -21,6 +21,7 @@ func TestAccountTestServiceOpenAICompactAgentIdentityUsesFreshAssertion(t *testi
 	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := Account{
+		Extra:       astraHealthyTestExtra(nil),
 		ID:          21,
 		Name:        "agent-identity",
 		Platform:    PlatformOpenAI,
@@ -60,6 +61,7 @@ func TestAccountTestServiceOpenAICompactAgentIdentityRecoversInvalidTaskOnce(t *
 	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
+		Extra:       astraHealthyTestExtra(nil),
 		ID:          22,
 		Name:        "agent-identity-recovery",
 		Platform:    PlatformOpenAI,
@@ -108,6 +110,7 @@ func TestOpenAIAgentIdentityPassthroughKeepsSessionAndPromptCacheHeaders(t *test
 	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
+		Extra:    astraHealthyTestExtra(nil),
 		ID:       24,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -146,6 +149,7 @@ func TestOpenAIAgentIdentityPassthroughKeepsSessionAndPromptCacheHeaders(t *test
 	// behavior. Compare the same request with the existing OAuth path instead
 	// of pinning this test to an implementation-specific hash.
 	oauthAccount := &Account{
+		Extra:    astraHealthyTestExtra(nil),
 		ID:       26,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -167,6 +171,7 @@ func TestOpenAIAgentIdentityPassthroughKeepsSessionAndPromptCacheHeaders(t *test
 func TestOpenAIAgentIdentityErrorRedactionDoesNotLeakCredentialValues(t *testing.T) {
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
+		Extra:    astraHealthyTestExtra(nil),
 		ID:       25,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -195,8 +200,10 @@ func TestOpenAIAuthenticationHeadersPreserveOAuthPATAndAPIKeyBearerModes(t *test
 		account *Account
 		token   string
 	}{
-		{name: "oauth", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, token: "oauth-runtime-token"},
-		{name: "personal access token", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"auth_mode": OpenAIAuthModePersonalAccessToken}}, token: "pat-runtime-token"},
+		{name: "oauth", account: &Account{Extra: astraHealthyTestExtra(nil),
+			Platform: PlatformOpenAI, Type: AccountTypeOAuth}, token: "oauth-runtime-token"},
+		{name: "personal access token", account: &Account{Extra: astraHealthyTestExtra(nil),
+			Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"auth_mode": OpenAIAuthModePersonalAccessToken}}, token: "pat-runtime-token"},
 		{name: "api key", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, token: "api-key-runtime-token"},
 	}
 	for _, tt := range tests {
@@ -222,6 +229,7 @@ func TestOpenAIWSAgentIdentityRecoveryRequiresTaskInvalidBody(t *testing.T) {
 func TestValidateOpenAIWSBearerTokenAllowsAgentIdentityWithoutStoredToken(t *testing.T) {
 	t.Run("Given Agent Identity When a WS path receives no bearer token Then dial-time assertion auth is allowed", func(t *testing.T) {
 		account := &Account{
+			Extra:    astraHealthyTestExtra(nil),
 			Platform: PlatformOpenAI,
 			Type:     AccountTypeOAuth,
 			Credentials: map[string]any{
@@ -234,8 +242,10 @@ func TestValidateOpenAIWSBearerTokenAllowsAgentIdentityWithoutStoredToken(t *tes
 
 	t.Run("Given bearer credentials When a WS path receives no token Then the request is rejected", func(t *testing.T) {
 		accounts := []*Account{
-			{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
-			{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"auth_mode": OpenAIAuthModePersonalAccessToken}},
+			{Extra: astraHealthyTestExtra(nil),
+				Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			{Extra: astraHealthyTestExtra(nil),
+				Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"auth_mode": OpenAIAuthModePersonalAccessToken}},
 			{Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
 		}
 
@@ -257,8 +267,9 @@ func TestOpenAIWSConnPoolHeadersFactoryRunsAtDialAndStalePrewarmIsDiscarded(t *t
 	factoryCalls := 0
 	latestHeader := ""
 	req := openAIWSAcquireRequest{
-		Account: &Account{ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
-		WSURL:   "wss://example.com/v1/responses",
+		Account: &Account{Extra: astraHealthyTestExtra(nil),
+			ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		WSURL: "wss://example.com/v1/responses",
 		HeadersFactory: func(_ context.Context, headers http.Header) (http.Header, error) {
 			factoryCalls++
 			latestHeader = "AgentAssertion dial-" + string(rune('0'+factoryCalls))
@@ -296,6 +307,7 @@ func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
+		Extra:       astraHealthyTestExtra(nil),
 		ID:          23,
 		Name:        "agent-identity",
 		Platform:    PlatformOpenAI,
@@ -355,7 +367,7 @@ func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
 	require.Len(t, upstream.requests, 4)
 
 	// Passthrough uses the same one-shot task recovery contract.
-	account.Extra = map[string]any{"openai_passthrough": true}
+	account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": true})
 	account.Credentials["task_id"] = "task-old-passthrough"
 	upstream.responses = []*http.Response{
 		{StatusCode: http.StatusUnauthorized, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"invalid_task_id"}}`))},
@@ -400,6 +412,7 @@ func TestOpenAIAgentIdentityCompatRoutesRecoverInvalidTaskOnce(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			key, privateKey := newTestAgentIdentityKey(t)
 			account := &Account{
+				Extra:       astraHealthyTestExtra(nil),
 				ID:          int64(40 + index),
 				Name:        "agent-identity-compat",
 				Platform:    PlatformOpenAI,
@@ -456,7 +469,7 @@ func TestOpenAIAgentIdentityChatRecoveryKeepsAutoDerivedSessionIsolationStable(t
 			"agent_private_key": privateKey,
 			"task_id":           "task-cache-old",
 		},
-		Extra: map[string]any{"openai_responses_supported": true},
+		Extra: astraHealthyTestExtra(map[string]any{"openai_responses_supported": true}),
 	}
 	repo := &agentIdentityForwardRepo{account: account}
 	registerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

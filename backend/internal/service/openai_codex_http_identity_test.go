@@ -35,7 +35,8 @@ func TestCodexNativeHTTPMetadataKeepsAbsentWorkspaces(t *testing.T) {
 }
 
 func TestCodexHTTPHeaderParityIncludesOptionalTrace(t *testing.T) {
-	account := &Account{ID: 90242, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 90242, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"chatgpt_account_id": "header-parity-account"}}
 	input := []byte(`{"model":"gpt-5.5","input":[],"stream":true}`)
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
@@ -83,7 +84,8 @@ func TestCodexHTTPMetadataPreservesNativeFactsAndLargeIntegers(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","reasoning":{"effort":"high"},"input":` + input + `,"client_metadata":{"x-codex-turn-metadata":` + string(encodedMetadata) + `}}`)
 	req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
 	require.NoError(t, err)
-	next, err := applyCodexHTTPWireMetadata(req, body, &Account{ID: 5, Platform: PlatformOpenAI, Type: AccountTypeOAuth})
+	next, err := applyCodexHTTPWireMetadata(req, body, &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 5, Platform: PlatformOpenAI, Type: AccountTypeOAuth})
 	require.NoError(t, err)
 	require.Equal(t, input, gjson.GetBytes(next, "input").Raw)
 	md := gjson.Parse(gjson.GetBytes(next, "client_metadata.x-codex-turn-metadata").String())
@@ -118,7 +120,8 @@ func TestCodexHTTPMetadataDoesNotInventChildRoot(t *testing.T) {
 			if source == "header" {
 				req.Header.Set("x-codex-parent-thread-id", "parent-thread")
 			}
-			next, err := applyCodexHTTPWireMetadata(req, body, &Account{ID: 4, Platform: PlatformOpenAI, Type: AccountTypeOAuth})
+			next, err := applyCodexHTTPWireMetadata(req, body, &Account{Extra: astraHealthyTestExtra(nil),
+				ID: 4, Platform: PlatformOpenAI, Type: AccountTypeOAuth})
 			require.NoError(t, err)
 			md := gjson.Parse(gjson.GetBytes(next, "client_metadata.x-codex-turn-metadata").String())
 			require.Equal(t, "parent-thread", md.Get("parent_thread_id").String())
@@ -128,7 +131,8 @@ func TestCodexHTTPMetadataDoesNotInventChildRoot(t *testing.T) {
 }
 
 func TestCodexHTTPAnonymousSessionIsRequestScoped(t *testing.T) {
-	account := &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	body := []byte(`{"model":"gpt-5.5","prompt_cache_key":"shared-cache","input":"same prompt"}`)
 	newContext := func() *gin.Context {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -150,7 +154,8 @@ func TestCodexHTTPAnonymousSessionIsRequestScoped(t *testing.T) {
 }
 
 func TestCodexHTTPMessagesTurnStateSeparatesChildThread(t *testing.T) {
-	account := &Account{ID: 523, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 523, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"chatgpt_account_id": "parent-child-state"}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
 	newContext := func(thread string) *gin.Context {
@@ -178,7 +183,7 @@ func TestCodexHTTPMessagesRetainsAccountClientIdentityAndCachePolicy(t *testing.
 				c.Request.Header.Set("session-id", "account-family-"+mode+"-"+policy)
 				account := &Account{ID: 9235, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 					Credentials: map[string]any{"access_token": "test-token"},
-					Extra:       map[string]any{codexClientFamilyExtraKey: "exec", codexFingerprintModeExtraKey: mode, codexFingerprintSeedExtraKey: testCodexFingerprintSeed, codexPromptCacheKeyExtraKey: policy}}
+					Extra:       astraHealthyTestExtra(map[string]any{codexClientFamilyExtraKey: "exec", codexFingerprintModeExtraKey: mode, codexFingerprintSeedExtraKey: testCodexFingerprintSeed, codexPromptCacheKeyExtraKey: policy})}
 				upstream := &httpUpstreamRecorder{resp: openAICompatSSECompletedResponse("resp_identity", "gpt-5.5")}
 				svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
 				_, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "explicit-cache", "")

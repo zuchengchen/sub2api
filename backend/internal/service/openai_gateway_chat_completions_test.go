@@ -423,6 +423,7 @@ func TestForwardAsChatCompletions_StructuredInputRejectionDoesNotRetryIneligible
 			if test.accountType != "" {
 				account.Type = test.accountType
 				account.Credentials["access_token"] = "test-token"
+				account.Extra = astraHealthyTestExtra(account.Extra)
 			}
 			status := test.status
 			if status == 0 {
@@ -980,6 +981,9 @@ func forwardOAuthChatCompletionsForUpstreamBodyWithModel(t *testing.T, body []by
 		},
 	}
 
+	if isLunaBilledAsGPT56Model(gjson.GetBytes(body, "model").String()) {
+		account.Extra = astraPolicyTestAccount("degraded").Extra
+	}
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", mappedModel)
 	require.Error(t, err)
 	require.Nil(t, result)
@@ -1048,7 +1052,7 @@ func TestForwardAsChatCompletions_OAuthGPT56RetriesWithoutRejectedPromptCacheFie
 		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"invalid_request_error","message":"stop without sending prompt_cache_options"}}`),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{Extra: astraHealthyTestExtra(nil),
+	account := &Account{Extra: astraPolicyTestAccount("degraded").Extra,
 
 		ID:          5,
 		Name:        "openai-oauth",

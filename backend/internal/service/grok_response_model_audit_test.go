@@ -371,6 +371,7 @@ func TestGrokResponseAuditConvertedAggregateKeepsNonGrokTerminalOnly(t *testing.
 		c.Request.Header.Set("Content-Type", "application/json")
 		upstream := &httpUpstreamRecorder{resp: grokAuditHTTPResponse("text/event-stream", sse)}
 		account := &Account{
+			Extra:       astraHealthyTestExtra(nil),
 			ID:          89201,
 			Name:        "openai-oauth",
 			Platform:    PlatformOpenAI,
@@ -415,7 +416,8 @@ func TestGrokResponseAuditAggregatePriorStateStaysBounded(t *testing.T) {
 	late := "grok-late-distinct"
 	wantModel := string([]rune(overlong)[:upstreamResponseModelMaxLength])
 	grok := grokAuditAPIKeyAccount(89301)
-	other := &Account{ID: 89302, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	other := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 89302, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 
 	t.Run("repeated-declarations", func(t *testing.T) {
 		terminal, prior := grokAuditReadBufferedPriors(t, grok, grokAuditPriorModelSSE(repeats, overlong, late, overlong))

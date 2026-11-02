@@ -148,7 +148,7 @@ func TestOpenAIWSHTTPBridgeSessionIsolationAcrossSameSessionHash(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), openaiWSStateStore: stateStore}
 	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "test-token"},
-		Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
+		Extra:       astraHealthyTestExtra(map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge}),
 		Concurrency: 2, Status: StatusActive, Schedulable: true}
 	groupID := int64(7)
 	newContext := func(r *http.Request) *gin.Context {

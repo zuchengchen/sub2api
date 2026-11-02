@@ -67,7 +67,8 @@ func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T)
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	account := &Account{
-		ID: 1, Name: "oauth-test", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Extra: astraHealthyTestExtra(nil),
+		ID:    1, Name: "oauth-test", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Schedulable: true, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"},
 	}

@@ -124,6 +124,9 @@ func (tc routingMatrixCase) account() *Account {
 	case "no":
 		extra[openai_compat.ExtraKeyResponsesSupported] = false
 	}
+	if tc.platform == PlatformOpenAI && tc.accountType == AccountTypeOAuth {
+		extra = astraHealthyTestExtra(extra)
+	}
 	return &Account{
 		ID: 801, Name: "routing-matrix", Platform: tc.platform, Type: tc.accountType,
 		Concurrency: 1, Credentials: credentials, Extra: extra,
