@@ -862,7 +862,7 @@ export default {
           model_temporarily_unschedulable: '模型暂时不可调度'
         },
         codexTiboRoutes: '线路',
-        codexTiboRouteDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / low）。OAuth / Setup Token 打 chatgpt.com；API Key 打账号自己的 Responses 地址。',
+        codexTiboRouteDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / xhigh）。OAuth / Setup Token 打 chatgpt.com；API Key 打账号自己的 Responses 地址。手动暂停的 OAuth 账号在额度等可用条件满足时仍会定期探测，并保持暂停。',
         codexTiboRouteSummary: '线路 {route}：{verdict}',
         codexTiboRouteVerdict: {
           healthy: '健康',
@@ -870,7 +870,7 @@ export default {
           degraded: '降智',
           unavailable: '不可用'
         },
-        codexTiboRecentSamples: '最近 10 次 Tibo 探测',
+        codexTiboRecentSamples: '最近 24 次 Tibo 探测',
         codexTiboSampleEmpty: '尚无探测',
         codexTiboRouteConfirmed: '已确认：{verdict}',
         codexTiboRouteCheckedAt: '最近检查：{time}',

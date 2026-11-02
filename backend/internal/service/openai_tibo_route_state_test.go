@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -209,32 +210,54 @@ func TestTiboRecentSamplesRoundTrip(t *testing.T) {
 	require.Equal(t, samples, got)
 }
 
-func TestTiboRecentSamplesKeepLastTen(t *testing.T) {
-	cfg := tiboTestSettings()
-	now := time.Now()
-	var r openAITiboRouteState
-	for i := 0; i < 12; i++ {
-		verdict := openAITiboHealthy
-		if i%3 == 0 {
-			verdict = openAITiboUnknown
-		} else if i%2 == 0 {
-			verdict = openAITiboDegraded
-		}
-		r.observe(tiboSample(verdict), now.Add(time.Duration(i)*time.Second), cfg)
-	}
-	require.Len(t, r.recent, 8, "unknown probes are not kept on the sparkline")
-	require.Equal(t, openAITiboHealthy, r.recent[0].Verdict)
-	require.Equal(t, openAITiboHealthy, r.recent[len(r.recent)-1].Verdict)
+func TestTiboRecentSamplesKeepLastTwentyFour(t *testing.T) {
+	for _, count := range []int{0, 10, 24, 30} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			cfg := tiboTestSettings()
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			var r openAITiboRouteState
+			var all []openAITiboRecentSample
+			for i := 0; i < count; i++ {
+				verdict := openAITiboHealthy
+				if i%2 == 0 {
+					verdict = openAITiboDegraded
+				}
+				at := now.Add(-time.Minute + time.Duration(i)*time.Second)
+				r.observe(tiboSample(verdict), at, cfg)
+				all = append(all, openAITiboRecentSample{Verdict: verdict, At: at})
+				r.observe(tiboSample(openAITiboUnknown), at.Add(time.Millisecond), cfg)
+			}
+			want := all[max(0, len(all)-24):]
+			require.Len(t, r.recent, min(count, 24))
+			require.Equal(t, want, r.recent, "unknown probes do not displace valid history")
+			decoded := parseOpenAITiboRecentSamples(encodeOpenAITiboRecentSamples(all))
+			require.Len(t, decoded, len(want), "overlong persisted histories are capped too")
+			for i := range want {
+				require.Equal(t, want[i], decoded[i])
+			}
 
-	tc := newTiboRouteCase(t, false, false)
-	state := tc.svc.openAITiboAccountState(tc.account.ID)
-	state.mu.Lock()
-	state.http = r
-	state.mu.Unlock()
-	status := tc.svc.openAITiboRouteStatuses(tc.account, now.Add(20*time.Second))
-	require.Len(t, status[0].RecentSamples, 8)
-	require.Equal(t, string(r.recent[0].Verdict), status[0].RecentSamples[0].Verdict)
-	require.Equal(t, string(r.recent[7].Verdict), status[0].RecentSamples[7].Verdict)
+			tc := newTiboRouteCase(t, false, false)
+			tc.svc.persistOpenAITiboVerdict(tc.account.ID, openAITiboRouteHTTP, openAITiboVerdictRecordFor(&r), r.recent)
+			repo := mustTestValue[*tiboAccountRepo](t, tc.svc.accountRepo)
+			stored, err := repo.GetByID(context.Background(), tc.account.ID)
+			require.NoError(t, err)
+			warm := newTiboRouteCase(t, false, false)
+			assertStatus := func() {
+				status := warm.svc.openAITiboRouteStatuses(stored, now)
+				require.Len(t, status[0].RecentSamples, len(want))
+				for i, sample := range want {
+					require.Equal(t, string(sample.Verdict), status[0].RecentSamples[i].Verdict)
+					require.Equal(t, sample.At, *status[0].RecentSamples[i].At)
+				}
+			}
+			assertStatus() // Read-only admin view before warm-start enrollment.
+			state := warm.svc.openAITiboAccountState(stored.ID)
+			state.mu.Lock()
+			warm.svc.seedOpenAITiboStateLocked(state, stored.Extra, now, cfg)
+			state.mu.Unlock()
+			assertStatus() // Restart retains the same ordered history, including old 10-item rows.
+		})
+	}
 }
 
 func TestTiboRateLimitUnknownNotRemembered(t *testing.T) {
@@ -414,9 +437,9 @@ func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
 	tc.svc.openaiTiboProbeWG.Wait()
 	require.Empty(t, tc.upstream.requests, "hourly budget exhausted")
 
-	// A paused account is not sampled and its budget is refunded.
+	// A disabled account is not sampled and its budget is refunded.
 	repo := mustTestValue[*tiboAccountRepo](t, tc.svc.accountRepo)
-	repo.setAccount(func(a *Account) { a.Schedulable = false })
+	repo.setAccount(func(a *Account) { a.Status = StatusDisabled })
 	state.mu.Lock()
 	state.http.probes = nil
 	state.http.nextProbeAt = time.Time{}
@@ -426,7 +449,7 @@ func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
 	require.Empty(t, tc.upstream.requests)
 	state.mu.Lock()
 	require.Empty(t, state.http.probes)
-	require.True(t, state.http.parked, "paused accounts are parked")
+	require.True(t, state.http.parked, "disabled accounts are parked")
 	require.False(t, state.http.due(time.Now().Add(time.Hour)))
 	require.False(t, state.http.inflight)
 	state.mu.Unlock()
