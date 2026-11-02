@@ -92,6 +92,10 @@ func TestOpenAIGatewayService_Forward_FailoverReparsesCachedBodyForNextAccount(t
 
 			firstAccount := openAIFailoverCachedBodyTestAccount(1, "account-a", tt.firstMapping)
 			secondAccount := openAIFailoverCachedBodyTestAccount(2, "account-b", tt.secondMapping)
+			// Setup tokens retain manual mappings; OAuth has a separate
+			// automatic-policy regression proving those mappings are ignored.
+			firstAccount.Type = AccountTypeSetupToken
+			secondAccount.Type = AccountTypeSetupToken
 
 			_, err := svc.Forward(context.Background(), c, firstAccount, body)
 			require.Error(t, err)
@@ -113,6 +117,7 @@ func TestOpenAIGatewayService_Forward_FailoverReparsesCachedBodyForNextAccount(t
 func TestOpenAIGatewayService_HandleFailoverSideEffects_DoesNotRereadResponseBody(t *testing.T) {
 	svc := &OpenAIGatewayService{tiboRouteDisabled: true}
 	account := &Account{
+		Extra:    astraHealthyTestExtra(nil),
 		ID:       88,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -150,6 +155,7 @@ func openAIFailoverCachedBodyTestAccount(id int64, name string, mapping map[stri
 		credentials["model_mapping"] = mapping
 	}
 	return &Account{
+		Extra:          astraHealthyTestExtra(nil),
 		ID:             id,
 		Name:           name,
 		Platform:       PlatformOpenAI,

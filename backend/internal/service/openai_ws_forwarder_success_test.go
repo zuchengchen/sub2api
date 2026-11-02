@@ -789,9 +789,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 		Credentials: map[string]any{
 			"access_token": "oauth-token-1",
 		},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"responses_websockets_v2_enabled": true,
-		},
+		}),
 	}
 
 	body := []byte(`{"model":"gpt-5.1","stream":false,"store":true,"input":[{"type":"input_text","text":"hello","namespace":"native-wsv2"}]}`)
@@ -865,9 +865,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{"access_token": "test-oauth-token"},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"responses_websockets_v2_enabled": true,
-		},
+		}),
 	}
 
 	body := []byte(`{"model":"gpt-5.6-sol","stream":false,"instructions":"Continue the task.","input":[{"type":"custom_tool_call","id":"fc_hotfix_probe","call_id":"fc_hotfix","name":"exec","input":"pwd","status":"completed"},{"type":"custom_tool_call_output","call_id":"fc_hotfix","output":"done"}]}`)
@@ -965,9 +965,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 				Credentials: map[string]any{
 					"access_token": "oauth-token-1",
 				},
-				Extra: map[string]any{
+				Extra: astraHealthyTestExtra(map[string]any{
 					"responses_websockets_v2_enabled": true,
-				},
+				}),
 			}
 
 			body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
@@ -1034,9 +1034,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testin
 			// 填写于某个历史版本的账号级 UA：指纹要保留，版本段不能被逐字沿用。
 			"user_agent": "codex-tui/0.125.0 (Mac OS X 15.1.0; arm64) iTerm.app",
 		},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"responses_websockets_v2_enabled": true,
-		},
+		}),
 	}
 
 	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
@@ -1102,9 +1102,9 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 			Credentials: map[string]any{
 				"access_token": "oauth-token-1",
 			},
-			Extra: map[string]any{
+			Extra: astraHealthyTestExtra(map[string]any{
 				"responses_websockets_v2_enabled": true,
-			},
+			}),
 		}
 
 		body := []byte(`{"model":"gpt-5.1","stream":true,"prompt_cache_key":"pcache_123","input":[{"type":"input_text","text":"hi"}]}`)
@@ -1528,9 +1528,9 @@ func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
 		Credentials: map[string]any{
 			"access_token": "oauth-test",
 		},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"responses_websockets_v2_enabled": true,
-		},
+		}),
 	}
 
 	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
@@ -1559,6 +1559,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 		toolCorrector:     NewCodexToolCorrector(),
 	}
 	account := &Account{
+		Extra:       astraHealthyTestExtra(nil),
 		ID:          601,
 		Name:        "openai-prewarm-timeout",
 		Platform:    PlatformOpenAI,
@@ -1633,7 +1634,8 @@ func TestOpenAIWSPrewarmManagedHTTPOnly(t *testing.T) {
 func TestOpenAIWSPrewarmSingleExchangeAcrossReconnect(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
 	svc.cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = true
-	account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	for attempt := 0; attempt < 2; attempt++ {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -1660,7 +1662,8 @@ func TestOpenAIWSPrewarmPreservesFailureClassification(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
-			account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+			account := &Account{Extra: astraHealthyTestExtra(nil),
+				ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 			capture := &openAIWSCaptureConn{events: [][]byte{[]byte(tc.event)}}
 			lease := &openAIWSConnLease{conn: newOpenAIWSConn("conn", account.ID, capture, nil)}
 			_, err := svc.performOpenAIWSGeneratePrewarm(context.Background(), c, lease, OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2}, map[string]any{"model": "gpt-5.5"}, "", nil, nil, account, nil, 0)
@@ -2304,7 +2307,7 @@ func TestOpenAIGatewayService_Forward_WSv2_ReleasesPreambleAtClientOutput(t *tes
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token"},
-		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+		Extra:       astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": true}),
 	}
 
 	body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"hi"}]}`)
@@ -2391,7 +2394,7 @@ func TestOpenAIGatewayService_Forward_WSv2_CapacityShedErrorAfterCommitSanitized
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token"},
-		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+		Extra:       astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": true}),
 	}
 
 	body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"hi"}]}`)
@@ -2461,7 +2464,7 @@ func TestOpenAIGatewayService_Forward_WSv2_ErrorBeforeCommitStillFailsOver(t *te
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token"},
-		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+		Extra:       astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": true}),
 	}
 
 	body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"hi"}]}`)
@@ -2547,7 +2550,7 @@ func TestOpenAIGatewayService_Forward_WSv2_PreOutputCapacityAndRateLimitFailOver
 				Schedulable: true,
 				Concurrency: 1,
 				Credentials: map[string]any{"access_token": "oauth-token"},
-				Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+				Extra:       astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": true}),
 			}
 
 			body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"hi"}]}`)

@@ -59,7 +59,7 @@ func newAstraOAuthSetup(t *testing.T, passthrough bool) *astraForwardSetup {
 		Type:           AccountTypeOAuth,
 		Concurrency:    1,
 		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_passthrough": passthrough},
+		Extra:          astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough}),
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),

@@ -1270,7 +1270,7 @@ func TestOpenAIWSNativePrewarmAndTurnState(t *testing.T) {
 				svc := &OpenAIGatewayService{cfg: cfg, openaiWSPool: pool, openaiWSPassthroughDialer: dialer, toolCorrector: NewCodexToolCorrector()}
 				account := &Account{ID: 345, Platform: PlatformOpenAI, Type: accountType, Concurrency: 1,
 					Credentials: map[string]any{"api_key": "sk-test", "access_token": "sk-test"},
-					Extra:       map[string]any{"responses_websockets_v2_enabled": true, "openai_oauth_responses_websockets_v2_mode": mode, "openai_apikey_responses_websockets_v2_mode": mode}}
+					Extra:       astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": true, "openai_oauth_responses_websockets_v2_mode": mode, "openai_apikey_responses_websockets_v2_mode": mode})}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				server, serverErr := startPassthroughLifecycleServer(t, ctx, svc, account)
