@@ -152,7 +152,7 @@ func (h *AccountHandler) importScopedCodexSessions(ctx context.Context, api serv
 					return infraerrors.Conflict("SCOPED_CODEX_CHANGED", "账户身份已变更")
 				}
 				safe.Credentials = mergeCodexImportCredentials(current.Credentials, credentials, item)
-				safe.Extra = mergeCodexImportMap(current.Extra, extra)
+				safe.Extra = mergeCodexImportExtra(current.Extra, extra)
 				if item.RefreshToken == "" && codexCredentialString(current.Credentials, "refresh_token") != "" {
 					safe.ExpiresAt = nil
 					safe.AutoPauseOnExpired = nil
@@ -160,14 +160,14 @@ func (h *AccountHandler) importScopedCodexSessions(ctx context.Context, api serv
 				return nil
 			})
 		} else {
-			concurrency, priority := 3, 50
+			concurrency, priority := service.DefaultOpenAIOAuthConcurrency, 50
 			if req.Concurrency != nil {
 				concurrency = *req.Concurrency
 			}
 			if req.Priority != nil {
 				priority = *req.Priority
 			}
-			account, err = api.ScopedAdminCreateCodex(ctx, &service.CreateAccountInput{ProxyMode: proxyMode, Name: name, Notes: req.Notes, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: credentials, Extra: extra, GroupIDs: req.GroupIDs, ProxyID: req.ProxyID, Concurrency: concurrency, Priority: priority, RateMultiplier: req.RateMultiplier, LoadFactor: req.LoadFactor, ExpiresAt: expires, AutoPauseOnExpired: autoPause, SkipDefaultGroupBind: true})
+			account, err = api.ScopedAdminCreateCodex(ctx, &service.CreateAccountInput{ProxyMode: proxyMode, Name: name, Notes: req.Notes, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: credentials, Extra: extra, GroupIDs: req.GroupIDs, ProxyID: req.ProxyID, Concurrency: concurrency, ConcurrencyProvided: req.Concurrency != nil, Priority: priority, RateMultiplier: req.RateMultiplier, LoadFactor: req.LoadFactor, ExpiresAt: expires, AutoPauseOnExpired: autoPause, SkipDefaultGroupBind: true})
 		}
 		if err != nil {
 			fail(entry.Index, err)

@@ -537,7 +537,6 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 		}
 		priority := clampPriority(src.Priority)
-		concurrency := 3
 		status := mapCRSStatus(src.IsActive, src.Status)
 
 		// 🔧 Preserve all CRS extra fields and add sync metadata
@@ -595,11 +594,12 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				Credentials: credentials,
 				Extra:       extra,
 				ProxyID:     proxyID,
-				Concurrency: concurrency,
+				Concurrency: DefaultOpenAIOAuthConcurrency,
 				Priority:    priority,
 				Status:      status,
 				Schedulable: src.Schedulable,
 			}
+			applyOpenAIOAuthCreateDefaults(account, true)
 			if err := s.accountRepo.Create(ctx, account); err != nil {
 				item.Action = "failed"
 				item.Error = "create failed: " + err.Error()
@@ -628,7 +628,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		if proxyID != nil {
 			existing.ProxyID = proxyID
 		}
-		existing.Concurrency = concurrency
+		// CRS exports no concurrency setting; preserve the local override on updates.
 		existing.Priority = priority
 		existing.Status = status
 		existing.Schedulable = src.Schedulable

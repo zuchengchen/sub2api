@@ -2502,7 +2502,7 @@
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
           <input v-model.number="form.concurrency" type="number" min="1" class="input"
-            @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
+            data-testid="create-account-concurrency" @input="handleConcurrencyInput" />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
@@ -2604,6 +2604,23 @@
             />
           </button>
         </div>
+      </div>
+
+      <div v-if="isOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label for="create-codex-image-tool-mode" class="input-label">
+          {{ t('admin.accounts.openai.codexImageTool') }}
+        </label>
+        <select
+          id="create-codex-image-tool-mode"
+          v-model="codexImageToolMode"
+          data-testid="create-codex-image-tool-mode"
+          class="input"
+        >
+          <option v-for="option in codexImageToolOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <p class="input-hint">{{ codexImageToolOptions.find(option => option.value === codexImageToolMode)?.description }}</p>
       </div>
 
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
@@ -3715,6 +3732,14 @@ const codexCLIOnlyAppServerEnabled = ref(false)
 type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
 const codexFingerprintMode = ref<CodexFingerprintMode>('full')
 const codexFingerprintConvergence = ref(true)
+type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
+const codexImageToolMode = ref<CodexImageToolMode>('enabled')
+const codexImageToolOptions = computed(() => [
+  { value: 'inherit', label: t('admin.accounts.openai.codexImageToolInherit'), description: t('admin.accounts.openai.codexImageToolInheritDesc') },
+  { value: 'enabled', label: t('admin.accounts.openai.codexImageToolEnabled'), description: t('admin.accounts.openai.codexImageToolEnabledDesc') },
+  { value: 'disabled', label: t('admin.accounts.openai.codexImageToolDisabled'), description: t('admin.accounts.openai.codexImageToolDisabledDesc') },
+  { value: 'block', label: t('admin.accounts.openai.codexImageToolBlock'), description: t('admin.accounts.openai.codexImageToolBlockDesc') },
+])
 const codexFingerprintModeOptions = computed(() => [
   { value: 'off' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintOff') },
   { value: 'device' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintDevice') },
@@ -3981,6 +4006,21 @@ const form = reactive({
   expires_at: null as number | null
 })
 
+const isOpenAIOAuth = computed(() => form.platform === 'openai' && form.type === 'oauth')
+const concurrencyEdited = ref(false)
+const handleConcurrencyInput = () => {
+  concurrencyEdited.value = true
+  form.concurrency = Math.max(1, form.concurrency || 1)
+}
+
+// Change untouched defaults when entering or leaving GPT OAuth, while keeping
+// an explicitly entered concurrency across account-type changes.
+watch(isOpenAIOAuth, (enabled) => {
+  if (!concurrencyEdited.value) {
+    form.concurrency = enabled ? 50 : form.platform === 'grok' ? 1 : 10
+  }
+})
+
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
   // Bedrock 类型不需要 OAuth 流程
@@ -4060,6 +4100,7 @@ watch(
       addMethod.value = 'oauth'
       modelRestrictionMode.value = 'mapping'
       form.concurrency = 1
+      concurrencyEdited.value = false
       form.load_factor = null
     }
     if (newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
@@ -4440,6 +4481,7 @@ const resetForm = () => {
   form.credentials = {}
   form.proxy_id = null
   form.concurrency = 10
+  concurrencyEdited.value = false
   form.load_factor = null
   form.priority = 1
   form.rate_multiplier = 1
@@ -4498,6 +4540,7 @@ const resetForm = () => {
   codexCLIOnlyAppServerEnabled.value = false
   codexFingerprintMode.value = 'full'
   codexFingerprintConvergence.value = true
+  codexImageToolMode.value = 'enabled'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
@@ -4547,6 +4590,20 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   }
 
   const extra: Record<string, unknown> = { ...(base || {}) }
+  if (isOpenAIOAuth.value) {
+    delete extra.codex_image_generation_bridge_enabled
+    delete extra.codex_image_generation_explicit_tool_policy
+    if (codexImageToolMode.value === 'block') {
+      extra.codex_image_generation_explicit_tool_policy = 'strip'
+      delete extra.codex_image_generation_bridge
+    } else {
+      // null explicitly selects inheritance on creation, so the backend's
+      // default Hosted bridge does not override the administrator's choice.
+      extra.codex_image_generation_bridge = codexImageToolMode.value === 'inherit'
+        ? null
+        : codexImageToolMode.value === 'enabled'
+    }
+  }
   if (accountCategory.value === 'oauth-based') {
     extra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
     extra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)

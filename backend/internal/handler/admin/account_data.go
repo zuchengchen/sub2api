@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -51,18 +52,37 @@ type DataProxy struct {
 // Credentials 原文返回。这是"管理员备份"这一显式行为的一部分；如未来需要导出脱敏版本，
 // 应新增独立结构而非修改这里。
 type DataAccount struct {
-	Name               string         `json:"name"`
-	Notes              *string        `json:"notes,omitempty"`
-	Platform           string         `json:"platform"`
-	Type               string         `json:"type"`
-	Credentials        map[string]any `json:"credentials"`
-	Extra              map[string]any `json:"extra,omitempty"`
-	ProxyKey           *string        `json:"proxy_key,omitempty"`
-	Concurrency        int            `json:"concurrency"`
-	Priority           int            `json:"priority"`
-	RateMultiplier     *float64       `json:"rate_multiplier,omitempty"`
-	ExpiresAt          *int64         `json:"expires_at,omitempty"`
-	AutoPauseOnExpired *bool          `json:"auto_pause_on_expired,omitempty"`
+	Name                string         `json:"name"`
+	Notes               *string        `json:"notes,omitempty"`
+	Platform            string         `json:"platform"`
+	Type                string         `json:"type"`
+	Credentials         map[string]any `json:"credentials"`
+	Extra               map[string]any `json:"extra,omitempty"`
+	ProxyKey            *string        `json:"proxy_key,omitempty"`
+	Concurrency         int            `json:"concurrency"`
+	Priority            int            `json:"priority"`
+	RateMultiplier      *float64       `json:"rate_multiplier,omitempty"`
+	ExpiresAt           *int64         `json:"expires_at,omitempty"`
+	AutoPauseOnExpired  *bool          `json:"auto_pause_on_expired,omitempty"`
+	concurrencyProvided bool
+}
+
+func (a *DataAccount) UnmarshalJSON(data []byte) error {
+	type accountJSON DataAccount
+	var decoded accountJSON
+	payload := struct {
+		*accountJSON
+		Concurrency *int `json:"concurrency"`
+	}{accountJSON: &decoded}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*a = DataAccount(decoded)
+	if payload.Concurrency != nil {
+		a.Concurrency = *payload.Concurrency
+		a.concurrencyProvided = true
+	}
+	return nil
 }
 
 type DataImportRequest struct {
@@ -413,6 +433,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			Extra:                item.Extra,
 			ProxyID:              proxyID,
 			Concurrency:          item.Concurrency,
+			ConcurrencyProvided:  item.concurrencyProvided,
 			Priority:             item.Priority,
 			RateMultiplier:       item.RateMultiplier,
 			GroupIDs:             nil,
