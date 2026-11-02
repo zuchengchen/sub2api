@@ -1977,7 +1977,7 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 				profile, err = codexwire.WithCodexCustomCA(profile)
 			}
 			if err == nil {
-				resp, err = s.httpUpstream.DoWithTLS(WithAccountTrafficRequest(req, request.credentialAccount), request.proxyURL, request.accountID, request.accountConcurrency, profile)
+				resp, err = s.httpUpstream.DoWithTLS(req, request.proxyURL, request.accountID, request.accountConcurrency, profile)
 			}
 			handled = true
 		}

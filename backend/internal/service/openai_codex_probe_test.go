@@ -104,17 +104,12 @@ func requireCodexProbeWire(t *testing.T, upstream *codexProbeUpstream) []byte {
 
 func TestCodexProbeTiboUsesSharedHTTPWire(t *testing.T) {
 	account := newCodexProbeTestAccount()
-	policy := DefaultAccountTrafficPolicy()
-	policy.StrictRPMEnabled = true
-	policy.RPM = 1
-	policy.Burst = 1
-	account.Extra[AccountTrafficPolicyKey] = policy
+	account.Extra["account_traffic_control"] = map[string]any{"strict_rpm_enabled": true, "rpm": 1, "burst": 1}
 	upstream := &codexProbeUpstream{httpUpstreamRecorder: httpUpstreamRecorder{responses: []*http.Response{cookieWSHTTPResponse("True"), cookieWSHTTPResponse("False")}}}
 	svc := &OpenAIGatewayService{cfg: codexProbeConfig(nil), httpUpstream: upstream}
 	require.True(t, svc.openAITiboRouteApplies(account))
 	require.Equal(t, openAITiboHealthy, svc.probeOpenAITiboHTTP(context.Background(), account).verdict)
 	first := requireCodexProbeWire(t, upstream)
-	require.Nil(t, upstream.lastReq.Context().Value(accountTrafficPlanKey{}), "background health samples retain their existing admission policy")
 	require.Contains(t, string(first), openAITiboProbePrompt)
 	require.Equal(t, "xhigh", gjson.GetBytes(first, "reasoning.effort").String())
 	require.Equal(t, openAITiboDegraded, svc.probeOpenAITiboHTTP(context.Background(), account).verdict)
@@ -135,11 +130,7 @@ func TestCodexProbeAdminModesUseSharedHTTPWire(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/admin/test", nil)
 			account := newCodexProbeTestAccount()
-			policy := DefaultAccountTrafficPolicy()
-			policy.StrictRPMEnabled = true
-			policy.RPM = 1
-			policy.Burst = 1
-			account.Extra[AccountTrafficPolicyKey] = policy
+			account.Extra["account_traffic_control"] = map[string]any{"strict_rpm_enabled": true, "rpm": 1, "burst": 1}
 			switch mode {
 			case "compact":
 				require.NoError(t, svc.testOpenAICompactConnection(c, account, "gpt-5.5"))
@@ -150,7 +141,6 @@ func TestCodexProbeAdminModesUseSharedHTTPWire(t *testing.T) {
 				require.NoError(t, svc.testOpenAIAccountConnection(c, account, "gpt-5.5", "", ""))
 			}
 			body := requireCodexProbeWire(t, upstream)
-			require.NotNil(t, upstream.lastReq.Context().Value(accountTrafficPlanKey{}), "manual tests retain their traffic admission policy")
 			if mode == "compact" {
 				items := gjson.GetBytes(body, "input").Array()
 				require.Equal(t, "compaction_trigger", items[len(items)-1].Get("type").String())
@@ -220,7 +210,6 @@ func TestCodexProbeUsesAccountTLSWithoutChangingAdmission(t *testing.T) {
 	require.True(t, upstream.profiles[0].H2)
 	body := decodeCodexProbeTestBody(t, req)
 	require.False(t, gjson.GetBytes(body, "instructions").Exists())
-	require.Nil(t, req.Context().Value(accountTrafficPlanKey{}))
 }
 
 func TestCodexProbeStandaloneSenderDoesNotFallback(t *testing.T) {

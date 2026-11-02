@@ -17,8 +17,13 @@ type intelligentTestIdentity struct {
 	threadID  string
 }
 
-type ProtectionRuntimeState struct {
+type IntelligentTestRuntimeState struct {
+	// Strategy is retained only to decode historical snapshots; new runs leave it empty.
 	Strategy        string `json:"strategy,omitempty"`
+	EffectiveTLS    string `json:"effective_tls,omitempty"`
+	TLSReason       string `json:"tls_reason,omitempty"`
+	Concurrency     *int   `json:"concurrency,omitempty"`
+	IntegrityMode   string `json:"integrity_mode,omitempty"`
 	IdentityMode    string `json:"identity_mode,omitempty"`
 	RequestedModel  string `json:"requested_model,omitempty"`
 	Model           string `json:"model,omitempty"`
@@ -26,21 +31,22 @@ type ProtectionRuntimeState struct {
 	GroupName       string `json:"group_name,omitempty"`
 }
 
-func snapshotIntelligentProtectionRuntime(account *Account) *ProtectionRuntimeState {
+func snapshotIntelligentRuntime(account *Account) *IntelligentTestRuntimeState {
 	if account == nil {
-		return &ProtectionRuntimeState{}
+		return &IntelligentTestRuntimeState{}
 	}
-	return &ProtectionRuntimeState{
-		Strategy:     account.ProtectionMode(),
-		IdentityMode: string(account.GetCodexFingerprintMode()),
+	concurrency := account.Concurrency
+	return &IntelligentTestRuntimeState{
+		IdentityMode:  string(account.GetCodexFingerprintMode()),
+		Concurrency:   &concurrency,
+		IntegrityMode: account.RequestIntegrityMode(),
 	}
 }
 
-// prepareIntelligentTestProtection reuses the persisted device identity of a
-// protected OpenAI account and issues a fresh session/thread per run. It never
-// writes extra.
-func prepareIntelligentTestProtection(c *gin.Context, account *Account, payload map[string]any) error {
-	if c == nil || c.Request == nil || account == nil || !account.AntiDegradationEnabled() {
+// prepareIntelligentTestIdentity follows the independent fingerprint setting
+// and issues a fresh session/thread per run without writing account extra.
+func prepareIntelligentTestIdentity(c *gin.Context, account *Account, payload map[string]any) error {
+	if c == nil || c.Request == nil || account == nil {
 		return nil
 	}
 	if !account.IsOpenAIOAuthLike() || account.GetCodexFingerprintMode() == codexFingerprintOff {
@@ -73,19 +79,18 @@ func prepareIntelligentTestProtection(c *gin.Context, account *Account, payload 
 	return nil
 }
 
-func applyIntelligentTestProtection(c *gin.Context, account *Account, headers http.Header, payload []byte) error {
-	if c == nil {
-		return nil
+func applyIntelligentTestIdentity(c *gin.Context, account *Account, headers http.Header, payload []byte) error {
+	if c != nil {
+		value, exists := c.Get(intelligentTestIdentityKey)
+		identity, ok := value.(intelligentTestIdentity)
+		if exists && ok {
+			applyStagedCodexFingerprintHeaders(c, account, headers)
+			applyCodexFingerprintConvergenceHeaders(c, codexAccountIdentitySource(c, account), headers)
+			headers.Set("conversation_id", identity.sessionID)
+			headers.Set("thread-id", identity.threadID)
+		}
 	}
-	value, exists := c.Get(intelligentTestIdentityKey)
-	identity, ok := value.(intelligentTestIdentity)
-	if !exists || !ok {
-		return nil
-	}
-	applyStagedCodexFingerprintHeaders(c, account, headers)
-	applyCodexFingerprintConvergenceHeaders(c, codexAccountIdentitySource(c, account), headers)
-	headers.Set("conversation_id", identity.sessionID)
-	headers.Set("thread-id", identity.threadID)
+	// Integrity is explicit and independent of whether fingerprint headers were staged.
 	return checkAccountRequestIntegrity(c, account, nil, payload)
 }
 

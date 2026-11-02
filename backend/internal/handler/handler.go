@@ -8,8 +8,6 @@ type AdminHandlers struct {
 	User                   *admin.UserHandler
 	Group                  *admin.GroupHandler
 	Account                *admin.AccountHandler
-	AccountTraffic         *admin.AccountTrafficHandler
-	AntiDegrade            *admin.AntiDegradeHandler
 	IntelligentTest        *admin.IntelligentTestHandler
 	SecurityPolicy         *admin.SecurityPolicyHandler
 	AccountHealth          *admin.AccountHealthHandler

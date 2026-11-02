@@ -65,26 +65,6 @@ vi.mock('@/stores/auth', () => ({
   })
 }))
 
-vi.mock('@/api/admin/accountTraffic', async () => {
-  const actual = await vi.importActual<typeof import('@/api/admin/accountTraffic')>('@/api/admin/accountTraffic')
-  return {
-    ...actual,
-    accountTrafficAPI: {
-      get: vi.fn().mockResolvedValue({
-        policy: actual.defaultTrafficPolicy(),
-        state: null,
-        state_available: false,
-        hard_limit: 3
-      }),
-      save: vi.fn().mockImplementation(async (_id: number, policy: unknown) => ({
-        policy,
-        state_available: true,
-        hard_limit: 3
-      }))
-    }
-  }
-})
-
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
@@ -92,9 +72,6 @@ vi.mock('@/api/admin', () => ({
       getById: getByIdMock,
       syncUpstreamModels: syncUpstreamModelsMock,
       checkMixedChannelRisk: checkMixedChannelRiskMock,
-      previewAntiDegrade: vi.fn(),
-      applyAntiDegrade: vi.fn(),
-      revertAntiDegrade: vi.fn()
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),

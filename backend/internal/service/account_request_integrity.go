@@ -10,8 +10,8 @@ import (
 
 const requestIntegrityModeKey = "request_integrity_mode"
 
-// RequestIntegrityMode is independent of TLS/identity. Mode1 defaults to
-// enforce; legacy protection defaults to observe; everything else is off.
+// RequestIntegrityMode is explicitly configured and defaults to off.
+// Retired protection markers never enable request validation.
 func (a *Account) RequestIntegrityMode() string {
 	if a == nil || a.Platform != PlatformOpenAI {
 		return "off"
@@ -21,12 +21,6 @@ func (a *Account) RequestIntegrityMode() string {
 		case "off", "observe", "enforce":
 			return mode
 		}
-	}
-	if isMode1ProtectionEnabled(a) {
-		return "enforce"
-	}
-	if a.IsOpenAIOAuthLike() && a.AntiDegradationEnabled() {
-		return "observe"
 	}
 	return "off"
 }
@@ -42,7 +36,7 @@ func validateRequestIntegrityExtra(extra map[string]any) error {
 	return infraerrors.BadRequest("REQUEST_INTEGRITY_INVALID", "请求完整性模式必须为关闭、仅观察或严格拦截")
 }
 
-func validateMode1RequestIntegrityForAccount(a *Account, original, forwarded []byte) error {
+func validateRequestIntegrityForAccount(a *Account, original, forwarded []byte) error {
 	if a == nil || len(forwarded) == 0 {
 		return nil
 	}
@@ -51,7 +45,7 @@ func validateMode1RequestIntegrityForAccount(a *Account, original, forwarded []b
 	}
 	if a.UsesOpenAICodexProtocol() {
 		instructions := gjson.GetBytes(forwarded, "instructions").String()
-		if instructions != "" && a.AntiDegradationEnabled() && isMode1ProtectionEnabled(a) {
+		if instructions != "" && len(original) > 0 {
 			if gjson.GetBytes(original, "instructions").String() != instructions {
 				return infraerrors.BadRequest("REQUEST_INTEGRITY_MISMATCH", "instructions 与入站请求不一致")
 			}
@@ -65,7 +59,7 @@ func checkAccountRequestIntegrity(c *gin.Context, a *Account, original, forwarde
 	if mode == "off" {
 		return nil
 	}
-	err := validateMode1RequestIntegrityForAccount(a, original, forwarded)
+	err := validateRequestIntegrityForAccount(a, original, forwarded)
 	if err == nil {
 		return nil
 	}

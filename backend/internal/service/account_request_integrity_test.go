@@ -1,26 +1,17 @@
 package service
 
 import (
-	"testing"
-
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
-func TestAccountProtectionRequestIntegrityDefaults(t *testing.T) {
-	off := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{}}
-	require.Equal(t, "off", off.RequestIntegrityMode())
-
-	legacy := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
-		AntiDegradationExtraKey:   true,
-		AntiDegradeMarkerExtraKey: map[string]any{"enabled": true, "mode": "legacy"},
-	}}
-	require.Equal(t, "observe", legacy.RequestIntegrityMode())
-
-	mode1 := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
-		AntiDegradationExtraKey: true,
-		AntiDegradeMarkerExtraKey: map[string]any{
-			"enabled": true, "mode": "mode1", "policy_version": mode1PolicyVersion,
-		},
-	}}
-	require.Equal(t, "enforce", mode1.RequestIntegrityMode())
+func TestRequestIntegrityExplicitModeIgnoresRetiredProtection(t *testing.T) {
+	for _, marker := range []any{nil, false, true, "invalid", map[string]any{"enabled": true, "mode": "legacy"}, map[string]any{"enabled": true, "mode": "mode1", "policy_version": 3}} {
+		a := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"anti_degradation": true, "anti_degrade": marker}}
+		require.Equal(t, "off", a.RequestIntegrityMode())
+		for _, mode := range []string{"off", "observe", "enforce"} {
+			a.Extra[requestIntegrityModeKey] = mode
+			require.Equal(t, mode, a.RequestIntegrityMode())
+		}
+	}
 }
