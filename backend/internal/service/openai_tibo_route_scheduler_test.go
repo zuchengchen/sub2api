@@ -36,6 +36,22 @@ func seedTiboSchedulerVerdict(svc *OpenAIGatewayService, accountID int64, verdic
 	state.http.verdict, state.http.checkedAt, state.http.lastSampleAt = verdict, now, now
 }
 
+func TestTiboSchedulerExcludesPausedHealthyOAuth(t *testing.T) {
+	groupID := int64(7000)
+	paused, active := tiboSchedulerAccount(7001, 0, groupID), tiboSchedulerAccount(7002, 1, groupID)
+	paused.Schedulable = false
+	svc := newTiboSchedulerService([]Account{paused, active}, &schedulerTestGatewayCache{}, true)
+	seedTiboSchedulerVerdict(svc, paused.ID, openAITiboHealthy)
+	seedTiboSchedulerVerdict(svc, active.ID, openAITiboDegraded)
+	selection, _, err := svc.SelectAccountWithScheduler(context.Background(), &groupID, "", "", openAICodexTicketDefaultModel, nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	if selection.ReleaseFunc != nil {
+		defer selection.ReleaseFunc()
+	}
+	require.Equal(t, active.ID, selection.Account.ID, "healthy probes never override the manual pause")
+}
+
 func TestTiboSchedulerTier(t *testing.T) {
 	groupID := int64(7001)
 	account := tiboSchedulerAccount(7101, 1, groupID)

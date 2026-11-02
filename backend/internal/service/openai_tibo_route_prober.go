@@ -111,8 +111,8 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 			s.abortOpenAITiboProbe(state, route, nil)
 			return
 		}
-		if hold := s.openAITiboHoldFor(latest, time.Now()); hold.parked || !hold.until.IsZero() {
-			// Paused, rate-limited or disabled accounts are not sampled; keep
+		if hold := s.openAITiboHoldFor(s.withOpenAIQuotaAutoPauseContext(ctx), latest, time.Now()); hold.parked || !hold.until.IsZero() {
+			// Ineligible, rate-limited or disabled accounts are not sampled; keep
 			// the last definitive sparkline until they are eligible again.
 			s.abortOpenAITiboProbe(state, route, &hold)
 			return
@@ -133,13 +133,19 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 	s.recordOpenAITiboSample(state, route, account, sample)
 }
 
-// openAITiboHoldFor is openAITiboAccountHold plus the gateway switch: an
-// account Tibo no longer applies to is parked.
-func (s *OpenAIGatewayService) openAITiboHoldFor(account *Account, now time.Time) openAITiboHold {
+// openAITiboHoldFor also checks the gateway switch and the model's runtime
+// cooldown for paused OAuth accounts. Callers attach the current quota settings.
+func (s *OpenAIGatewayService) openAITiboHoldFor(ctx context.Context, account *Account, now time.Time) openAITiboHold {
 	if !s.openAITiboRouteApplies(account) {
 		return openAITiboHold{parked: true}
 	}
-	return openAITiboAccountHold(account, now)
+	hold := openAITiboAccountHold(ctx, account, now)
+	if !hold.parked && hold.until.IsZero() && !account.Schedulable && account.IsOpenAIOAuth() {
+		// Probes normalize the fixed model without business model mappings.
+		model := normalizeOpenAIModelForUpstream(account, openAICodexTicketDefaultModel)
+		hold.parked = s.getOpenAIAccountModelTransientState().isBlocked(account.ID, openAIAccountModelTransientModel(model), now)
+	}
+	return hold
 }
 
 // abortOpenAITiboProbe ends a probe that produced no sample and refunds its
@@ -391,6 +397,7 @@ func (s *OpenAIGatewayService) enrollOpenAITiboAccounts(ctx context.Context) {
 	}
 	cfg := s.openAITiboRouteConfig()
 	enrolled, held := 0, 0
+	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
 	listed := make(map[int64]struct{}, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
@@ -398,7 +405,7 @@ func (s *OpenAIGatewayService) enrollOpenAITiboAccounts(ctx context.Context) {
 			continue
 		}
 		listed[account.ID] = struct{}{}
-		hold := openAITiboAccountHold(account, now)
+		hold := s.openAITiboHoldFor(ctx, account, now)
 		if hold.parked || !hold.until.IsZero() {
 			// Not probed now. Only existing state is updated; an account
 			// first seen while held is enrolled once it is eligible.

@@ -127,6 +127,8 @@ func openAITiboAccountSkipReason(account *Account, now time.Time) string {
 		return "not_active"
 	}
 	if !account.Schedulable {
+		// Request-triggered probes follow business eligibility. Only the
+		// background hold check allows otherwise usable paused OAuth accounts.
 		return "manual_unschedulable"
 	}
 	if account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt) {
