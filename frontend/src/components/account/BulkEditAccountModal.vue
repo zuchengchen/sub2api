@@ -226,7 +226,8 @@
       </div>
 
       <!-- Model restriction -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <p v-if="hasManagedOAuthTargets" data-testid="astra-policy-bulk" class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.astraPolicyBulk') }}</p>
+      <div v-if="!allOpenAIOAuthOnly" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-model-restriction-label"
@@ -1227,7 +1228,7 @@
       </div>
 
       <!-- OpenAI Compact model mapping -->
-      <div v-if="allOpenAIPassthroughCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="allOpenAIPassthroughCapable && !allOpenAIOAuthOnly" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <div class="flex-1 pr-4">
             <label
@@ -1573,6 +1574,13 @@ const targetMode = computed(() => props.target?.mode ?? 'selected')
 const targetPreviewCount = computed(() => props.target?.previewCount ?? props.accountIds.length)
 const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?? props.selectedPlatforms)
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
+const hasManagedOAuthTargets = computed(() => {
+  if (targetMode.value === 'filtered') {
+    const filters = props.target?.filters ?? {}
+    return (!filters.platform || filters.platform === 'openai') && (!filters.type || filters.type === 'oauth')
+  }
+  return targetSelectedPlatforms.value.includes('openai') && targetSelectedTypes.value.includes('oauth')
+})
 // Grok 快捷端点仅在所选账号全部为 grok 平台时展示（其他平台不显示）
 const allTargetsGrok = computed(
   () =>
@@ -1601,6 +1609,10 @@ const allOpenAIOAuth = computed(() => {
 
 // 严格 OAuth（不含 setup-token）：namespace 摊平兼容开关只对 OAuth 账号生效
 const allOpenAIOAuthOnly = computed(() => {
+  // Filtered previews are capped; only explicit filters prove every target is OAuth.
+  if (targetMode.value === 'filtered') {
+    return props.target?.filters?.platform === 'openai' && props.target?.filters?.type === 'oauth'
+  }
   return (
     targetSelectedPlatforms.value.length === 1 &&
     targetSelectedPlatforms.value[0] === 'openai' &&
@@ -2043,7 +2055,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
         : openAIResponsesMode.value
   }
 
-  if (enableModelRestriction.value && !isOpenAIModelRestrictionDisabled.value) {
+  if (enableModelRestriction.value && !isOpenAIModelRestrictionDisabled.value && !allOpenAIOAuthOnly.value) {
     // 统一使用 model_mapping 字段
     if (modelRestrictionMode.value === 'whitelist') {
       // 白名单模式：将模型转换为 model_mapping 格式（key=value）
@@ -2140,7 +2152,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     extra.openai_compact_mode = openAICompactMode.value
   }
 
-  if (enableOpenAICompactModelMapping.value) {
+  if (enableOpenAICompactModelMapping.value && !allOpenAIOAuthOnly.value) {
     credentials.compact_model_mapping = buildOpenAICompactModelMapping() ?? {}
     credentialsChanged = true
   }

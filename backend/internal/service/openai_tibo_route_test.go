@@ -135,7 +135,19 @@ func (tc *tiboRouteCase) forward(t *testing.T) (*OpenAIForwardResult, *httptest.
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
-	result, err := tc.svc.Forward(context.Background(), c, tc.account, []byte(`{"model":"gpt-6-astra","input":"hello","stream":false}`))
+	// Probe independently, then exercise the route with a model allowed by its latest point.
+	tc.svc.openAITiboRequestVerdicts(context.Background(), tc.account)
+	requestAccount := cloneTiboAccount(tc.account)
+	if repo, ok := tc.svc.accountRepo.(*tiboAccountRepo); ok {
+		if update, wrote := repo.updateFor(tc.account.ID); wrote {
+			requestAccount.Extra[OpenAIAstraPolicyExtraKey] = update[OpenAIAstraPolicyExtraKey]
+		}
+	}
+	model := "gpt-6-luna"
+	if requestAccount.AllowsOpenAIOAuthModelPolicy("gpt-6-astra") {
+		model = "gpt-6-astra"
+	}
+	result, err := tc.svc.Forward(context.Background(), c, requestAccount, []byte(`{"model":"`+model+`","input":"hello","stream":false}`))
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	return result, rec, c
@@ -169,7 +181,8 @@ func TestTiboRouteAppliesForTicketAccountWithoutCookieWS(t *testing.T) {
 }
 
 func TestOpenAICodexTicketStatusesOmitsRowsWithoutTiboRoutes(t *testing.T) {
-	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	require.Nil(t, (&AccountTestService{}).OpenAICodexTicketStatuses(account, config.OpenAICodexTicketConfig{}, time.Now()))
 
 	tc := newTiboRouteCase(t, false, false)
@@ -313,7 +326,19 @@ func TestTiboRouteVerdictIsCachedAndRefreshedWhenStale(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
-	result, err := tc.svc.Forward(context.Background(), c, tc.account, []byte(`{"model":"gpt-6-astra","input":"hello","stream":false}`))
+	// Probe independently, then exercise the route with a model allowed by its latest point.
+	tc.svc.openAITiboRequestVerdicts(context.Background(), tc.account)
+	requestAccount := cloneTiboAccount(tc.account)
+	if repo, ok := tc.svc.accountRepo.(*tiboAccountRepo); ok {
+		if update, wrote := repo.updateFor(tc.account.ID); wrote {
+			requestAccount.Extra[OpenAIAstraPolicyExtraKey] = update[OpenAIAstraPolicyExtraKey]
+		}
+	}
+	model := "gpt-6-luna"
+	if requestAccount.AllowsOpenAIOAuthModelPolicy("gpt-6-astra") {
+		model = "gpt-6-astra"
+	}
+	result, err := tc.svc.Forward(context.Background(), c, requestAccount, []byte(`{"model":"`+model+`","input":"hello","stream":false}`))
 	require.NoError(t, err)
 	require.False(t, result.OpenAIWSMode, "served on the confirmed verdict")
 	require.NotNil(t, result.RouteDegraded)

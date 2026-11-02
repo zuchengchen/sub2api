@@ -270,7 +270,9 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 // including ordinary discovery and pinned scheduler fallback. Locally generated
 // catalogs retain their existing policy and do not pass through this function.
 func ApplyPinnedCodexModelsMapping(response *OpenAIModelsResponse, account *Account, group *Group) error {
-	if group == nil || group.Platform != PlatformOpenAI {
+	// OAuth policy also applies to discovery without an OpenAI group. Keep
+	// the existing projection scope for all other credential types.
+	if (group == nil || group.Platform != PlatformOpenAI) && !account.IsOpenAIOAuth() {
 		return nil
 	}
 	body, err := projectAccountModelsBody(response.Body, account, group, true)

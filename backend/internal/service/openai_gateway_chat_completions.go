@@ -74,8 +74,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
 	requestedModel := gjson.GetBytes(body, "model").String()
+
 	if err := validateRetiredOpenAIRequestModel(account, requestedModel, false, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)); err != nil {
 		writeChatCompletionsError(c, http.StatusNotFound, "invalid_request_error", err.Error())
+		return nil, err
+	}
+	if err := s.CheckOpenAIAstraModelPolicy(ctx, account, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)); err != nil {
 		return nil, err
 	}
 	body = s.rewriteOpenAIClientLocalTimeForRequest(c, account, body)

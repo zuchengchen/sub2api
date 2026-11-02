@@ -54,7 +54,7 @@ func isExplicitOpenAICompactRequest(c *gin.Context, body []byte) bool {
 // that account has no matching compact rule.
 func (s *OpenAIGatewayService) resolveOpenAICompactFallbackModel(account *Account, requestedModel string) string {
 	requestedModel = strings.TrimSpace(requestedModel)
-	if validateRetiredOpenAIRequestModel(account, requestedModel, true, "") != nil {
+	if validateRetiredOpenAIRequestModel(account, requestedModel, true, "") != nil || !account.AllowsOpenAIOAuthModelPolicy(requestedModel) {
 		return ""
 	}
 	if account != nil {
@@ -75,7 +75,7 @@ func (s *OpenAIGatewayService) resolveOpenAICompactFallbackModel(account *Accoun
 		return ""
 	}
 	resolved := strings.TrimSpace(resolveOpenAIAccountUpstreamModelForRequest(account, fallback, false))
-	if validateRetiredOpenAIRequestModel(account, fallback, false, "") != nil || isRetiredOpenAIModel(account, resolved) {
+	if validateRetiredOpenAIRequestModel(account, fallback, false, "") != nil || isRetiredOpenAIModel(account, resolved) || !account.AllowsOpenAIOAuthModelPolicy(resolved) {
 		return ""
 	}
 	return resolved

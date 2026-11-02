@@ -155,11 +155,11 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token-1"},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"responses_websockets_v2_enabled": true,
 			codexFingerprintModeExtraKey:      "full",
 			codexFingerprintSeedExtraKey:      "11111111-1111-4111-8111-aaaaaaaaaaaa",
-		},
+		}),
 	}
 
 	forward := func(sessionID, body string) (*gin.Context, []byte) {

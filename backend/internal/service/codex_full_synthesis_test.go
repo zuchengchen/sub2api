@@ -41,10 +41,10 @@ func newCodexSynthTestAccount(id int64, accountType string) *Account {
 		ID: id, Name: "codex-synth", Platform: PlatformOpenAI, Type: accountType,
 		Concurrency: 1, Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			codexFingerprintModeExtraKey: "full",
 			codexFingerprintSeedExtraKey: "11111111-1111-4111-8111-111111111111",
-		},
+		}),
 	}
 }
 
@@ -75,7 +75,8 @@ func runCodexSynthForward(t *testing.T, svc *OpenAIGatewayService, account *Acco
 }
 
 func TestIsCodexOAuthAccountScope(t *testing.T) {
-	require.True(t, isCodexOAuthAccount(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}))
+	require.True(t, isCodexOAuthAccount(&Account{Extra: astraHealthyTestExtra(nil),
+		Platform: PlatformOpenAI, Type: AccountTypeOAuth}))
 	require.True(t, isCodexOAuthAccount(&Account{Platform: "", Type: AccountTypeOAuth}), "legacy empty platform is OpenAI")
 	require.False(t, isCodexOAuthAccount(&Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken}))
 	require.False(t, isCodexOAuthAccount(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}))

@@ -3093,6 +3093,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, service.VipExclusiveModelAccessMessage, nil)
 				}
 				mappedModelUnchanged := false
+				if err := h.gatewayService.CheckOpenAIAstraModelPolicy(ctx, account, forwardModel); err != nil {
+					return "", newOpenAIWSUnsupportedModelSwitchError(forwardModel)
+				}
 				if previous := turnChannelMapping.Load(); previous != nil && previous.turn < turn {
 					mappedModelUnchanged = strings.TrimSpace(previous.mapping.MappedModel) == strings.TrimSpace(mapping.MappedModel)
 				}

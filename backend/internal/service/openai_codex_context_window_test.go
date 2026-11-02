@@ -53,6 +53,7 @@ func TestCodexContextWindowSyncRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			account.Extra = nil
 			require.NoError(t, json.Unmarshal(persisted, &account.Extra))
+			account.Extra = astraHealthyTestExtra(account.Extra)
 			model := codexContextWindowManifest(t, []Account{account})
 			require.EqualValues(t, tc.wantWindow, model["context_window"])
 			require.EqualValues(t, tc.wantMax, model["max_context_window"])
@@ -155,7 +156,8 @@ func TestCodexContextWindowRegistryEnrichment(t *testing.T) {
 func codexContextWindowAccount(t *testing.T, id int64, fields string) Account {
 	t.Helper()
 	account := Account{
-		ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Extra: astraHealthyTestExtra(nil),
+		ID:    id, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{
 			"access_token":  "test-token",
 			"model_mapping": map[string]any{"gpt-6-astra": "gpt-6-astra"},

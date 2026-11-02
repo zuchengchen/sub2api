@@ -62,6 +62,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 			Concurrency: 0,
 			Priority:    0,
 			Credentials: map[string]any{"access_token": "token-1"},
+			Extra:       astraHandlerExtra("healthy"),
 		},
 		{
 			ID:          2,
@@ -73,6 +74,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 			Concurrency: 0,
 			Priority:    1,
 			Credentials: map[string]any{"access_token": "token-2"},
+			Extra:       astraHandlerExtra("healthy"),
 		},
 	}
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}

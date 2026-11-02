@@ -66,7 +66,8 @@ func TestForward_CodexGoldenBodyGetsNoSyntheticInstructions(t *testing.T) {
 	}}
 	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: &config.Config{}, httpUpstream: upstream}
 	account := &Account{
-		ID: 321, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Extra: astraHealthyTestExtra(nil),
+		ID:    321, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
 		Status:      StatusActive, Schedulable: true,
 	}
@@ -122,7 +123,7 @@ func TestCodexOfficial164HTTPReplayThroughGateway(t *testing.T) {
 					cfg.Gateway.CodexFullSynthesis = boolPtr(true)
 					account := &Account{ID: 90164, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 						Credentials: map[string]any{"access_token": "fixture-test-token", "chatgpt_account_id": "acct-golden"},
-						Extra:       map[string]any{"openai_passthrough": passthrough, codexClientFamilyExtraKey: "exec", codexFingerprintSeedExtraKey: testCodexFingerprintSeed}}
+						Extra:       astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough, codexClientFamilyExtraKey: "exec", codexFingerprintSeedExtraKey: testCodexFingerprintSeed})}
 					svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, tiboRouteDisabled: true}
 					_, err := svc.Forward(context.Background(), c, account, record.Body)
 					require.NoError(t, err)

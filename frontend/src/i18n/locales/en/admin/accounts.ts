@@ -777,6 +777,15 @@ export default {
           model_temporarily_unschedulable: 'Model is temporarily unschedulable'
         },
         codexTiboRoutes: 'Routes',
+        astraPolicyTitle: 'Models managed by Astra status',
+        astraPolicyRange: {
+          healthy: 'Supported models except Luna, including image generation',
+          degraded: 'Luna and image generation only',
+          unknown: 'No valid Astra sample yet: Luna and image generation only'
+        },
+        astraPolicyDescription: 'Model access follows the latest valid Astra sample. Previous manual allowlists are retained for rollback and no longer control access. Passthrough and Compact follow the same policy.',
+        astraPolicySampledAt: 'Latest valid sample: {time}',
+        astraPolicyBulk: 'GPT OAuth models are managed automatically: green allows supported models except Luna, including image generation; red or no valid result allows only Luna and image generation. Bulk model settings apply to other accounts only.',
         codexTiboRouteDesc: 'Astra HTTP is selected by the Tibo probe (astra / xhigh). OAuth / setup-token probes chatgpt.com; API-key accounts probe their own Responses URL. Manually paused OAuth accounts continue periodic probes when quota and other availability checks allow, while remaining paused.',
         codexTiboRouteSummary: 'Route {route}: {verdict}',
         codexTiboRouteVerdict: {

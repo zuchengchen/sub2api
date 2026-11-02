@@ -978,8 +978,9 @@ func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service
 	}
 
 	type metaWrite struct {
-		platform string
-		previous *redis.StatusCmd
+		platform       string
+		previous       *redis.StatusCmd
+		atomicPrevious *redis.Cmd
 	}
 	pipe := c.rdb.Pipeline()
 	accountIDs := make([]int64, 0, len(accounts))
@@ -1007,6 +1008,10 @@ func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service
 			}
 		}
 		for _, write := range writes {
+			if write.atomicPrevious != nil {
+				previous, err := write.atomicPrevious.Text()
+				write.previous = redis.NewStatusResult(previous, err)
+			}
 			if schedulerMetaPlatformChanged(write.previous, write.platform) {
 				platformChanged = true
 			}
@@ -1033,11 +1038,18 @@ func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service
 		}
 
 		id := strconv.FormatInt(account.ID, 10)
-		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
-		writes = append(writes, metaWrite{
-			platform: account.Platform,
-			previous: pipe.SetArgs(ctx, schedulerAccountMetaKey(id), metaPayload, redis.SetArgs{Get: true}),
-		})
+		if account.IsOpenAIOAuth() {
+			_, at := service.LatestOpenAIAstraSample(account.Extra[service.OpenAIAstraPolicyExtraKey])
+			version := schedulerAstraVersion(at)
+			previous := pipe.Eval(ctx, schedulerWriteAstraAccountScript, []string{schedulerAccountKey(id), schedulerAccountMetaKey(id)}, fullPayload, metaPayload, version)
+			writes = append(writes, metaWrite{platform: account.Platform, atomicPrevious: previous})
+		} else {
+			pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
+			writes = append(writes, metaWrite{
+				platform: account.Platform,
+				previous: pipe.SetArgs(ctx, schedulerAccountMetaKey(id), metaPayload, redis.SetArgs{Get: true}),
+			})
+		}
 		// Keep the hot LastUsedAt side key untouched: a lagging snapshot rebuild
 		// must not overwrite a newer scheduler update.
 		accountIDs = append(accountIDs, account.ID)
@@ -1114,11 +1126,22 @@ func newSchedulerAccountMetaRevision() string {
 }
 
 func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {
-	fullPayload, err := json.Marshal(account)
+	// A fixed-width UTC revision lets Redis reject an older bucket rebuild
+	// without decoding/re-encoding credentials or rounding JSON numbers.
+	version := ""
+	if account.IsOpenAIOAuth() {
+		_, at := service.LatestOpenAIAstraSample(account.Extra[service.OpenAIAstraPolicyExtraKey])
+		version = schedulerAstraVersion(at)
+	}
+	type versionedAccount struct {
+		service.Account
+		AstraPolicyVersion string `json:"astra_policy_version,omitempty"`
+	}
+	fullPayload, err := json.Marshal(versionedAccount{account, version})
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account: %w", err)
 	}
-	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	metaPayload, err := json.Marshal(versionedAccount{buildSchedulerMetadataAccount(account), version})
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account metadata: %w", err)
 	}
@@ -1259,6 +1282,7 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		return nil
 	}
 	keys := []string{
+		service.OpenAIAstraPolicyExtraKey,
 		// Anthropic shared-window and Fable-only threshold checks run on this
 		// projection. UpdateExtra refreshes both payloads without a bucket rebuild.
 		"session_window_utilization",

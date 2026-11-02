@@ -45,7 +45,7 @@ func diagnosticContinuationAccount() *Account {
 		ID: 7799, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Schedulable: true, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "fixture-token", "chatgpt_account_id": "fixture-account"},
-		Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
+		Extra:       astraHealthyTestExtra(map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge}),
 	}
 }
 

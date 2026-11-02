@@ -144,6 +144,7 @@ func TestTiboUnknownSampleSkipsPersist(t *testing.T) {
 	state := tc.svc.openAITiboAccountState(tc.account.ID)
 	state.mu.Lock()
 	state.http.recent = []openAITiboRecentSample{{Verdict: openAITiboHealthy, At: time.Now()}}
+	state.http.persistedSampleAt = state.http.recent[0].At
 	state.mu.Unlock()
 
 	tc.svc.recordOpenAITiboSample(state, openAITiboRouteHTTP, tc.account, openAITiboProbeSample{verdict: openAITiboUnknown, status: http.StatusBadRequest})

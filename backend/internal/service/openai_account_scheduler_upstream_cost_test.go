@@ -106,7 +106,7 @@ func upstreamCostTestAccount(id int64, status string, rate float64, receivedAt t
 }
 
 func upstreamCostTestOAuthAccount(id int64) *Account {
-	return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: astraHealthyTestExtra(nil)}
 }
 
 func TestAdvancedCostSchedulerUsesTopKOverflowWhenPreferredAccountIsKnownFull(t *testing.T) {

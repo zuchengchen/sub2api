@@ -1213,12 +1213,13 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     expect(account.credentials.base_url).toBe('https://my-relay.example.com')
   })
 
-  it('keeps the selector sync button for a non-grok edit and skips diagnostics loads', async () => {
+  it('shows automatic policy for OpenAI OAuth and skips Grok diagnostics loads', async () => {
     getByIdMock.mockClear()
     const wrapper = mountLiveSelectorModal({ ...buildGrokOAuthAccount(), platform: 'openai', type: 'oauth' })
     await flushPromises()
     expect(wrapper.find('[data-testid="grok-model-diagnostics"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="sync-upstream-models"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="sync-upstream-models"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(true)
     expect(getByIdMock).not.toHaveBeenCalled()
   })
 
@@ -1288,7 +1289,7 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     expect(translateMock).toHaveBeenCalledWith('admin.accounts.grokModelDiagnostics.mappingFromAria', { index: 2 })
   })
 
-  it.each(['oauth', 'apikey'])('leaves non-grok %s model controls unchanged', async type => {
+  it.each(['oauth', 'apikey'])('keeps non-grok %s model controls appropriate to the account type', async type => {
     getByIdMock.mockClear()
     const wrapper = mountLiveSelectorModal({
       ...buildGrokOAuthAccount({ model_mapping: { friendly: 'grok-4.7' } }),
@@ -1308,6 +1309,12 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     }
     expect(wrapper.text()).not.toContain('admin.accounts.grokModelDiagnostics.requestColumn')
     expect(wrapper.text()).not.toContain('admin.accounts.grokModelDiagnostics.targetColumn')
+    if (type === 'oauth') {
+      expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(true)
+      expect(wrapper.find('input[placeholder="admin.accounts.requestModel"]').exists()).toBe(false)
+      expect(getByIdMock).not.toHaveBeenCalled()
+      return
+    }
     expect(wrapper.text()).toContain('admin.accounts.mapRequestModels')
     const from = wrapper.get('input[placeholder="admin.accounts.requestModel"]')
     const to = wrapper.get('input[placeholder="admin.accounts.actualModel"]')

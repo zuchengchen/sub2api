@@ -29,6 +29,11 @@ const isNonBlankString = (value: unknown): value is string => (
   typeof value === 'string' && value.trim().length > 0
 )
 
+export const buildOpenAIAstraPolicyRefreshKey = (account: Pick<Account, 'platform' | 'type' | 'openai_oauth_model_policy' | 'codex_turn_tickets'>): string => {
+  if (account.platform !== 'openai' || account.type !== 'oauth') return ''
+  return [account.openai_oauth_model_policy, account.codex_turn_tickets].map(serializeSnapshotRefreshValue).join('|')
+}
+
 export const buildOpenAIUsageRefreshKey = (account: Pick<Account, 'id' | 'platform' | 'type' | 'updated_at' | 'last_used_at' | 'rate_limit_reset_at' | 'extra'>): string => {
   if (account.platform !== 'openai' || account.type !== 'oauth') {
     return ''

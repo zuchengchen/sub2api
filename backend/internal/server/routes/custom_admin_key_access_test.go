@@ -134,7 +134,7 @@ func TestScopedAdminRegisteredRoutesEnforceDefaultDenyAndAccountScope(t *testing
 				}
 				require.Equal(t, want, w.Code, tc.method+" "+tc.path+": "+w.Body.String())
 				require.NotContains(t, w.Body.String(), "绝不返回")
-				require.NotContains(t, w.Body.String(), "auth_mode")
+				require.NotContains(t, w.Body.String(), `"auth_mode"`)
 				require.NotContains(t, w.Body.String(), "agent_private_key")
 				if want == 200 {
 					require.Contains(t, w.Body.String(), `"group_ids":[1]`)
@@ -219,7 +219,15 @@ func TestScopedAdminRegisteredLegacyModelInterfaces(t *testing.T) {
 				require.Equal(t, want, w.Code, tc.method+" "+tc.path+": "+w.Body.String())
 				require.NotContains(t, w.Body.String(), "绝不返回")
 				if tc.method == "GET" && want == 200 {
-					require.Contains(t, w.Body.String(), "custom-model")
+					if strings.HasSuffix(tc.path, "/models") {
+						// OAuth without a valid Astra sample exposes only Luna/images;
+						// the original mapping is retained in account details for rollback.
+						require.Contains(t, w.Body.String(), "gpt-6-luna")
+						require.NotContains(t, w.Body.String(), "custom-model")
+						require.NotContains(t, w.Body.String(), "gpt-6-astra")
+					} else {
+						require.Contains(t, w.Body.String(), "custom-model")
+					}
 				}
 			}
 			if permission == "accounts.models.write" {

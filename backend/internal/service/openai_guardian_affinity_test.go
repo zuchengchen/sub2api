@@ -120,12 +120,14 @@ func TestOpenAIGatewayService_GuardianParentAffinitySelectsParentAccountAcrossSc
 	} {
 		t.Run(mode.name, func(t *testing.T) {
 			accounts := []Account{
-				{
+				{Extra: astraHealthyTestExtra(nil),
+
 					ID: 39001, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 					Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 10,
 					GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"},
 				},
-				{
+				{Extra: astraHealthyTestExtra(nil),
+
 					ID: 39002, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 					Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0,
 					GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"},
@@ -175,8 +177,10 @@ func TestOpenAIGatewayService_GuardianParentAffinityFallsBackWithoutCrossGroupOr
 				parentGroups = []int64{otherGroupID}
 			}
 			accounts := []Account{
-				{ID: 39011, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: parentGroups, Credentials: map[string]any{"plan_type": "team"}},
-				{ID: 39012, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"}},
+				{Extra: astraHealthyTestExtra(nil),
+					ID: 39011, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: parentGroups, Credentials: map[string]any{"plan_type": "team"}},
+				{Extra: astraHealthyTestExtra(nil),
+					ID: 39012, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"}},
 			}
 			cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:" + parentHash: 39011}}
 			svc := &OpenAIGatewayService{
@@ -212,8 +216,10 @@ func TestOpenAIGatewayService_GuardianParentHashCollisionPreservesParentBinding(
 	for _, advanced := range []string{"false", "true"} {
 		t.Run(map[string]string{"false": "legacy", "true": "advanced"}[advanced], func(t *testing.T) {
 			accounts := []Account{
-				{ID: 39021, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{otherGroupID}, Credentials: map[string]any{"plan_type": "team"}},
-				{ID: 39022, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"}},
+				{Extra: astraHealthyTestExtra(nil),
+					ID: 39021, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{otherGroupID}, Credentials: map[string]any{"plan_type": "team"}},
+				{Extra: astraHealthyTestExtra(nil),
+					ID: 39022, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"}},
 			}
 			cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:" + parentHash: 39021}}
 			svc := &OpenAIGatewayService{
@@ -250,8 +256,9 @@ func TestOpenAIGatewayService_GuardianParentAffinityHonorsRequiredPrivacy(t *tes
 	for _, advanced := range []string{"false", "true"} {
 		t.Run(map[string]string{"false": "legacy", "true": "advanced"}[advanced], func(t *testing.T) {
 			accounts := []Account{
-				{ID: 39031, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"}},
-				{ID: 39032, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"}, Extra: map[string]any{"privacy_mode": PrivacyModeTrainingOff}},
+				{Extra: astraHealthyTestExtra(nil),
+					ID: 39031, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"}},
+				{ID: 39032, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}, Credentials: map[string]any{"plan_type": "team"}, Extra: astraHealthyTestExtra(map[string]any{"privacy_mode": PrivacyModeTrainingOff})},
 			}
 			repo := &guardianAffinityAccountRepo{schedulerGroupAwareOpenAIAccountRepo: schedulerGroupAwareOpenAIAccountRepo{schedulerTestOpenAIAccountRepo{accounts: accounts}}}
 			cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:" + parentHash: 39031}}

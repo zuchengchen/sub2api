@@ -151,7 +151,8 @@ func TestForwardAsAnthropic_UsesExactFableMessagesDispatchModel(t *testing.T) {
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -199,7 +200,8 @@ func TestForwardAsAnthropic_NormalizesRoutingAndEffortForGpt54XHigh(t *testing.T
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -214,7 +216,7 @@ func TestForwardAsAnthropic_NormalizesRoutingAndEffortForGpt54XHigh(t *testing.T
 		},
 	}
 
-	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, "gpt-5.4-xhigh", result.Model)
@@ -254,12 +256,12 @@ func TestForwardAsAnthropic_PreservesMaxForFinalGPT56ResponsesModel(t *testing.T
 			wantEffort:    "max",
 		},
 		{
-			name:          "OAuth mapping wins and keeps Sol max",
+			name:          "OAuth ignores old mapping and preserves dispatch Terra max",
 			account:       rawGPT56ResponsesOAuthAccount("sol", "gpt-5.6-sol"),
 			model:         "sol",
 			defaultMapped: "gpt-5.6-terra",
 			effort:        "max",
-			wantModel:     "gpt-5.6-sol",
+			wantModel:     "gpt-5.6-terra",
 			wantEffort:    "max",
 		},
 		{
@@ -352,7 +354,8 @@ func rawGPT56ResponsesAPIKeyAccount(requestedModel, mappedModel string) *Account
 }
 
 func rawGPT56ResponsesOAuthAccount(requestedModel, mappedModel string) *Account {
-	return &Account{
+	return &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          502,
 		Name:        "gpt56-oauth",
 		Platform:    PlatformOpenAI,
@@ -699,7 +702,8 @@ func TestForwardAsAnthropic_OAuthCompatKeepsFullReplayForCacheGrowth(t *testing.
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1050,7 +1054,8 @@ func TestForwardAsAnthropic_DoesNotAttachPreviousResponseIDForOAuthCompat(t *tes
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1088,7 +1093,8 @@ func TestForwardAsAnthropic_ReusesOAuthCodexTurnState(t *testing.T) {
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1162,7 +1168,8 @@ func TestForwardAsAnthropic_OAuthRestoresCodexIdentityHeaders(t *testing.T) {
 				httpUpstream: upstream,
 				cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 			}
-			account := &Account{
+			account := &Account{Extra: astraHealthyTestExtra(nil),
+
 				ID:          1,
 				Name:        "openai-oauth",
 				Platform:    PlatformOpenAI,
@@ -1195,7 +1202,8 @@ func TestForwardAsAnthropic_OAuthDigestCacheDoesNotShareSessionOrTurnState(t *te
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1252,7 +1260,8 @@ func TestForwardAsAnthropic_OAuthMetadataSessionSurvivesDigestPrefixRewrite(t *t
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1308,7 +1317,8 @@ func TestForwardAsAnthropic_OAuthMetadataSessionSurvivesChangingCacheControlAnch
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1359,7 +1369,8 @@ func TestForwardAsAnthropic_OAuthKeepsSystemAsDeveloperInput(t *testing.T) {
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1397,7 +1408,8 @@ func TestForwardAsAnthropic_OAuthAddsClaudeCodeTodoGuardForCompatModel(t *testin
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1433,7 +1445,8 @@ func TestForwardAsAnthropic_OAuthPreservesClaudeCodeToolCallID(t *testing.T) {
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1578,7 +1591,8 @@ func TestForwardAsAnthropic_ForcedCodexInstructionsTemplatePrependsRenderedInstr
 		}},
 		httpUpstream: upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1624,7 +1638,8 @@ func TestForwardAsAnthropic_ForcedCodexInstructionsTemplateUsesCachedTemplateCon
 		}},
 		httpUpstream: upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1668,7 +1683,8 @@ func TestForwardAsAnthropic_ClientDisconnectDrainsUpstreamUsage(t *testing.T) {
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1709,7 +1725,8 @@ func TestForwardAsAnthropic_TerminalUsageWithoutUpstreamCloseReturns(t *testing.
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1769,7 +1786,8 @@ func TestForwardAsAnthropic_EventNamedTerminalWithoutUpstreamCloseReturns(t *tes
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1836,7 +1854,8 @@ func TestForwardAsAnthropic_EventNamedTerminalWithKeepaliveReturns(t *testing.T)
 		}},
 		httpUpstream: upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1890,7 +1909,8 @@ func TestForwardAsAnthropic_BufferedTerminalWithoutUpstreamCloseReturns(t *testi
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -1986,7 +2006,8 @@ func TestForwardAsAnthropic_BufferedEventNamedTerminalWithoutUpstreamCloseReturn
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -2037,7 +2058,8 @@ func TestForwardAsAnthropic_MissingTerminalBeforeOutputReturnsFailoverAndOps(t *
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -2091,7 +2113,8 @@ func TestForwardAsAnthropic_MissingTerminalAfterOutputRecordsOpsWithoutFailover(
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -2143,7 +2166,8 @@ func TestForwardAsAnthropic_MissingTerminalAfterClientDisconnectSkipsOpsAndFailo
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -2192,7 +2216,8 @@ func TestForwardAsAnthropic_CompleteStreamDoesNotRecordMissingTerminalOps(t *tes
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -2246,7 +2271,8 @@ func TestForwardAsAnthropic_UpstreamRequestIgnoresClientCancel(t *testing.T) {
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,

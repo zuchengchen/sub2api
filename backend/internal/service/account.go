@@ -545,6 +545,11 @@ func stringMappingFromRaw(raw any) map[string]string {
 }
 
 func (a *Account) GetModelMapping() map[string]string {
+	// OAuth models are managed by the latest Astra observation. Keep the raw
+	// administrator configuration intact for rollback, but never apply it.
+	if a.IsOpenAIOAuth() {
+		return nil
+	}
 	runtimeVersion := xai.RuntimeModelMappingVersion()
 	credentialsPtr := mapPtr(a.Credentials)
 	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
@@ -822,7 +827,7 @@ func (a *Account) AllowsOpenAICompact() bool {
 // This mapping is intended for /responses/compact only and does not affect
 // normal /responses traffic.
 func (a *Account) GetCompactModelMapping() map[string]string {
-	if a == nil || a.Credentials == nil {
+	if a == nil || a.Credentials == nil || a.IsOpenAIOAuth() {
 		return nil
 	}
 	return stringMappingFromRaw(a.Credentials["compact_model_mapping"])

@@ -21,9 +21,9 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_UsesWSPassthroughSnapsh
 		Schedulable: true,
 		Concurrency: 10,
 		GroupIDs:    []int64{groupID},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,
-		},
+		}),
 	}
 
 	snapshotCache := &openAISnapshotCacheStub{

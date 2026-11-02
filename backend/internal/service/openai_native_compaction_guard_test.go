@@ -28,7 +28,7 @@ func excelAccount() *Account {
 	return &Account{
 		ID: 300, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 10,
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"},
-		Extra:       map[string]any{"openai_passthrough": true},
+		Extra:       astraHealthyTestExtra(map[string]any{"openai_passthrough": true}),
 	}
 }
 
@@ -87,7 +87,7 @@ func TestOpenAINativeCompactionZeroItemsFailsOverOnHTTP(t *testing.T) {
 			upstream := &httpUpstreamRecorder{resp: nativeCompactionSSEResponse(false)}
 			svc := openAIClientToolsTestService(upstream)
 			account := excelAccount()
-			account.Extra = map[string]any{"openai_passthrough": passthrough}
+			account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough})
 			c, rec := newNativeCompactionContext("/v1/responses")
 
 			_, err := svc.Forward(context.Background(), c, account, []byte(nativeCompactionBody))
@@ -108,7 +108,7 @@ func TestOpenAINativeCompactionWithItemSucceedsOnHTTP(t *testing.T) {
 			upstream := &httpUpstreamRecorder{resp: nativeCompactionSSEResponse(true)}
 			svc := openAIClientToolsTestService(upstream)
 			account := excelAccount()
-			account.Extra = map[string]any{"openai_passthrough": passthrough}
+			account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough})
 			c, rec := newNativeCompactionContext("/v1/responses")
 
 			result, err := svc.Forward(context.Background(), c, account, []byte(nativeCompactionBody))
@@ -127,7 +127,7 @@ func TestOpenAINativeCompactionGuardIgnoresOrdinaryTurns(t *testing.T) {
 	upstream := &httpUpstreamRecorder{resp: nativeCompactionSSEResponse(false)}
 	svc := openAIClientToolsTestService(upstream)
 	account := excelAccount()
-	account.Extra = map[string]any{"openai_passthrough": true}
+	account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": true})
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -197,7 +197,7 @@ func TestOpenAINativeCompactionSurvivesSilenceBeyondStreamInterval(t *testing.T)
 	svc.cfg.Gateway.StreamDataIntervalTimeout = 1
 	svc.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds = 1
 	account := excelAccount()
-	account.Extra = map[string]any{"openai_passthrough": false}
+	account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": false})
 	c, rec := newNativeCompactionContext("/v1/responses")
 
 	result, err := svc.Forward(context.Background(), c, account, []byte(nativeCompactionBody))
@@ -217,7 +217,7 @@ func TestOrdinaryTurnStillTimesOutAfterStreamInterval(t *testing.T) {
 	svc.cfg.Gateway.StreamDataIntervalTimeout = 1
 	svc.cfg.Gateway.CodexWire.StreamIdleTimeoutSeconds = 1
 	account := excelAccount()
-	account.Extra = map[string]any{"openai_passthrough": false}
+	account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": false})
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)

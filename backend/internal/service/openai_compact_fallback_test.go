@@ -89,7 +89,8 @@ func TestOpenAIGatewayForwardUsesGlobalCompactModelOnInitialLegacyRequest(t *tes
 		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
 		httpUpstream:      upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
 		Status:      StatusActive, Schedulable: true,
@@ -203,7 +204,8 @@ func TestOpenAIGatewayForwardRetriesExplicitNativeCompactHTTPFailureOnce(t *test
 		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
 		httpUpstream:      upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
 		Status:      StatusActive, Schedulable: true,
@@ -233,7 +235,8 @@ func TestOpenAIGatewayForwardRetriesExplicitNativeCompactHTTPFailureOnce(t *test
 
 func compactFallbackManagedProxyAccount() (*Account, *Proxy) {
 	proxy := &Proxy{ID: 10060, Name: "wldsg82-ipv6-10060", Protocol: "http", Host: "proxy.example", Port: 8080}
-	return &Account{
+	return &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
 		Status:      StatusActive, Schedulable: true,
@@ -371,7 +374,8 @@ func TestOpenAIGatewayForwardRetriesExplicitNativeCompactSSEFailureBeforeOutput(
 		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
 		httpUpstream:      upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
 		Status:      StatusActive, Schedulable: true,
@@ -413,7 +417,8 @@ func TestOpenAIGatewayForwardRetriesStreamingCompactFailureBeforeOutput(t *testi
 		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
 		httpUpstream:      upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
 		Status:      StatusActive, Schedulable: true,
@@ -454,7 +459,8 @@ func TestOpenAIGatewayForwardDoesNotRecurseWhenCompactFallbackAlsoFails(t *testi
 		cfg:               &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "gpt-5.4"}},
 		httpUpstream:      upstream,
 	}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
 		Status:      StatusActive, Schedulable: true,

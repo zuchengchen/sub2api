@@ -366,7 +366,7 @@ func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelUsesModelRateLi
 	require.WithinDuration(t, time.Now().Add(upstreamCodexPlanGatedModelCooldown), call.resetAt, 5*time.Second)
 }
 
-func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelRespectsModelMapping(t *testing.T) {
+func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelIgnoresOldOAuthMapping(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &RateLimitService{accountRepo: repo}
 	account := openAICodexPlanGatedOAuthAccount()
@@ -383,7 +383,7 @@ func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelRespectsModelMa
 
 	require.True(t, handled)
 	require.Len(t, repo.modelRateLimitCalls, 1)
-	require.Equal(t, "gpt-5.6-sol-upstream", repo.modelRateLimitCalls[0].scope)
+	require.Equal(t, "gpt-5.6-sol", repo.modelRateLimitCalls[0].scope)
 }
 
 func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelIgnoresAPIKeyAccount(t *testing.T) {
@@ -449,7 +449,8 @@ func TestRateLimitService_HandleUpstreamError_CodexPlanGatedTextModelStillCoolsD
 }
 
 func openAICodexPlanGatedOAuthAccount() *Account {
-	return &Account{
+	return &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          202,
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
@@ -509,7 +510,7 @@ func TestRateLimitService_HandleUpstreamError_CodexPlanGatedImageModelSkipsCoold
 
 // 守卫口径必须与冷却键一致：冷却键走 account.GetMappedModel，账号可以把文本别名
 // 映射到 gpt-image-*，只判请求模型会漏掉这种形态，原 bug 原样复现。
-func TestRateLimitService_HandleUpstreamError_CodexPlanGatedImageModelSkipsCooldownViaModelMapping(t *testing.T) {
+func TestRateLimitService_HandleUpstreamError_CodexPlanGatedOldOAuthImageAliasDoesNotSkipCooldown(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &RateLimitService{accountRepo: repo}
 	account := openAICodexPlanGatedOAuthAccount()
@@ -525,8 +526,8 @@ func TestRateLimitService_HandleUpstreamError_CodexPlanGatedImageModelSkipsCoold
 	)
 
 	require.True(t, handled)
-	require.Empty(t, repo.modelRateLimitCalls,
-		"映射后的上游模型是图片模型，冷却键会写到 gpt-image-2 上，守卫必须一并识别")
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.Equal(t, "my-draw-alias", repo.modelRateLimitCalls[0].scope, "旧 OAuth 映射不再把此模型转换为图片")
 }
 
 // 404 model-not-found 分支不受守卫影响：即使是图片模型也照常冷却。

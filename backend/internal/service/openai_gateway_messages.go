@@ -34,8 +34,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	requestedModel := gjson.GetBytes(body, "model").String()
+
 	if err := validateRetiredOpenAIRequestModel(account, requestedModel, false, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)); err != nil {
 		writeAnthropicError(c, http.StatusNotFound, "invalid_request_error", err.Error())
+		return nil, err
+	}
+	if err := s.CheckOpenAIAstraModelPolicy(ctx, account, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)); err != nil {
 		return nil, err
 	}
 	// 工具 Schema 清洗必须先于所有分流：下游每条路径（原生 Anthropic 直通、

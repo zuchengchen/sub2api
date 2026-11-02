@@ -628,7 +628,8 @@ func TestBuildCodexModelsManifestForGroupAdvertisesOfficialOpenAIResponsesImageI
 	const groupID int64 = 702
 	svc := &GatewayService{
 		accountRepo: codexModelsVisibilityAccountRepo{byGroup: map[int64][]Account{
-			groupID: {{
+			groupID: {{Extra: astraHealthyTestExtra(nil),
+
 				ID:       2,
 				Platform: PlatformOpenAI,
 				Type:     AccountTypeOAuth,
@@ -1247,7 +1248,8 @@ func TestBuildGroupConfiguredCodexModelsManifestUsesAdministratorConfiguration(t
 	svc := &OpenAIGatewayService{accountRepo: codexModelsVisibilityAccountRepo{
 		byGroup: map[int64][]Account{
 			groupID: {
-				{
+				{Extra: astraHealthyTestExtra(nil),
+
 					Platform: PlatformOpenAI,
 					Type:     AccountTypeOAuth,
 				},
@@ -1703,7 +1705,8 @@ func newCodexModelsAPIKeyTestAccount(baseURL string) *Account {
 }
 
 func newCodexModelsTestAccount() *Account {
-	return &Account{
+	return &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:       1,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -1761,7 +1764,8 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 
 func TestFetchCodexModelsManifestAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
 	key, privateKey := newTestAgentIdentityKey(t)
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:       3,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -1804,7 +1808,8 @@ func TestFetchCodexModelsManifestAgentIdentityUsesAssertionWithoutOAuthToken(t *
 
 func TestFetchCodexModelsManifestAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
 	key, privateKey := newTestAgentIdentityKey(t)
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:       4,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -1858,7 +1863,8 @@ func TestFetchCodexModelsManifestAgentIdentityRecoversInvalidTaskOnce(t *testing
 
 func TestFetchCodexModelsManifestAgentIdentityRedactsUpstreamErrors(t *testing.T) {
 	key, privateKey := newTestAgentIdentityKey(t)
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:       5,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
@@ -3350,7 +3356,8 @@ func TestFetchCodexModelsManifestOAuth401TokenRevokedDisablesAccount(t *testing.
 
 func TestFetchCodexModelsManifestAgentIdentity401DoesNotDisableAccount(t *testing.T) {
 	key, privateKey := newTestAgentIdentityKey(t)
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:       6,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,

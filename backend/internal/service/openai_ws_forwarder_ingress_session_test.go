@@ -680,10 +680,10 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexImageBridge
 		Credentials: map[string]any{
 			"access_token": "test-token",
 		},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"openai_oauth_responses_websockets_v2_enabled": true,
 			"codex_image_generation_bridge":                true,
-		},
+		}),
 	}
 
 	serverErrCh := make(chan error, 1)
@@ -1270,7 +1270,7 @@ func TestOpenAIWSNativePrewarmAndTurnState(t *testing.T) {
 				svc := &OpenAIGatewayService{cfg: cfg, openaiWSPool: pool, openaiWSPassthroughDialer: dialer, toolCorrector: NewCodexToolCorrector()}
 				account := &Account{ID: 345, Platform: PlatformOpenAI, Type: accountType, Concurrency: 1,
 					Credentials: map[string]any{"api_key": "sk-test", "access_token": "sk-test"},
-					Extra:       map[string]any{"responses_websockets_v2_enabled": true, "openai_oauth_responses_websockets_v2_mode": mode, "openai_apikey_responses_websockets_v2_mode": mode}}
+					Extra:       astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": true, "openai_oauth_responses_websockets_v2_mode": mode, "openai_apikey_responses_websockets_v2_mode": mode})}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				server, serverErr := startPassthroughLifecycleServer(t, ctx, svc, account)
@@ -1343,9 +1343,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughSepar
 		Credentials: map[string]any{
 			"access_token": "oauth-token",
 		},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,
-		},
+		}),
 	}
 
 	serverErrCh := make(chan error, 1)

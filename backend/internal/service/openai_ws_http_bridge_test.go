@@ -47,7 +47,8 @@ func TestPrepareOpenAIWSHTTPBridgeBodyStripsWSFields(t *testing.T) {
 }
 
 func TestPrepareOpenAIWSHTTPBridgeBodyPreservesCodexRequestOrder(t *testing.T) {
-	body, err := prepareOpenAIWSHTTPBridgeBody(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, []byte(`{"type":"response.create","generate":true,"client_metadata":{"turn_id":"turn"},"store":false,"stream":true,"tools":[],"input":[{"role":"user","content":"quoted stream and input"}],"instructions":"","model":"gpt-5.5"}`))
+	body, err := prepareOpenAIWSHTTPBridgeBody(&Account{Extra: astraHealthyTestExtra(nil),
+		Platform: PlatformOpenAI, Type: AccountTypeOAuth}, []byte(`{"type":"response.create","generate":true,"client_metadata":{"turn_id":"turn"},"store":false,"stream":true,"tools":[],"input":[{"role":"user","content":"quoted stream and input"}],"instructions":"","model":"gpt-5.5"}`))
 	require.NoError(t, err)
 	// Official Response struct order survives WS -> HTTP conversion; user data
 	// remains literal, including strings that resemble protocol keys.
@@ -113,7 +114,8 @@ func TestProxyOpenAIWSHTTPBridgeTurnReplaysAssistantAndEncryptedReasoning(t *tes
 		cfg:          &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
 		httpUpstream: upstream,
 	}
-	account := &Account{ID: 7799, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 7799, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
 	payload := []byte(`{"type":"response.create","model":"gpt-5.4","stream":true,"reasoning":{"effort":"xhigh"},"input":[{"role":"user","content":"Inspect the fixture."}]}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -169,7 +171,7 @@ func TestOpenAIWSHTTPBridgeContinuationPreservesAssistantAndEncryptedReasoning(t
 	account := &Account{
 		ID: 7800, Name: "oauth-http-bridge-continuation", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "fixture-token", "chatgpt_account_id": "fixture-account"},
-		Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
+		Extra:       astraHealthyTestExtra(map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge}),
 		Concurrency: 1, Status: StatusActive, Schedulable: true,
 	}
 
@@ -721,7 +723,7 @@ func TestOpenAIWSHTTPBridgeFullCustomToolHistoryWithoutPreviousResponseIDDoesNot
 	}
 	account := &Account{
 		ID: 9002, Name: "oauth-full-context", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		Credentials: map[string]any{"access_token": "test-token"}, Extra: map[string]any{"responses_websockets_v2_enabled": true},
+		Credentials: map[string]any{"access_token": "test-token"}, Extra: astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": true}),
 		Concurrency: 1, Status: StatusActive, Schedulable: true,
 	}
 
@@ -820,7 +822,7 @@ func TestOpenAIWSHTTPBridgeObjectToolOutputWithoutPreviousResponseIDReplaysMatch
 	}
 	account := &Account{
 		ID: 9003, Name: "oauth-output-only", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		Credentials: map[string]any{"access_token": "test-token"}, Extra: map[string]any{"responses_websockets_v2_enabled": true},
+		Credentials: map[string]any{"access_token": "test-token"}, Extra: astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": true}),
 		Concurrency: 1, Status: StatusActive, Schedulable: true,
 	}
 
@@ -1171,7 +1173,8 @@ func TestProxyOpenAIWSHTTPBridgeTurnRewritesCapacityShedCodeForClient(t *testing
 				Body:       io.NopCloser(strings.NewReader(tt.body)),
 			}}
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-			account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+			account := &Account{Extra: astraHealthyTestExtra(nil),
+				ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
@@ -1347,7 +1350,8 @@ func TestProxyOpenAIWSHTTPBridgeTurnBareErrorFollowedByCompletedUsesCompleted(t 
 	}, "\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{ID: 113, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 113, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
@@ -1410,7 +1414,8 @@ func TestProxyOpenAIWSHTTPBridgeTurnStagesMetadataAndRelaysKeepaliveBeforeCapaci
 		Body:       reader,
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{ID: 12, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 12, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
@@ -1461,7 +1466,8 @@ func TestProxyOpenAIWSHTTPBridgeTurnDoesNotReplayCapacityAfterSemanticOutput(t *
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{ID: 13, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 13, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
@@ -1517,7 +1523,8 @@ func TestProxyOpenAIWSHTTPBridgeTurnKeepaliveWriteFailure(t *testing.T) {
 				Body:       io.NopCloser(strings.NewReader(body)),
 			}}
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-			account := &Account{ID: 14, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+			account := &Account{Extra: astraHealthyTestExtra(nil),
+				ID: 14, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
@@ -1585,7 +1592,8 @@ func TestProxyOpenAIWSHTTPBridgeTurnDisconnectedBeforeOutputDoesNotFailOver(t *t
 				Body:       io.NopCloser(reader),
 			}}
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-			account := &Account{ID: 15, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+			account := &Account{Extra: astraHealthyTestExtra(nil),
+				ID: 15, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
