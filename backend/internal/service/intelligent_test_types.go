@@ -6,16 +6,16 @@ import (
 )
 
 type IntelligentTestConfig struct {
-	AnswerType     string                  `json:"answer_type,omitempty"`
-	AnswerUnit     string                  `json:"answer_unit,omitempty"`
-	AnswerUnitMode string                  `json:"answer_unit_mode,omitempty"`
-	AnswerFormat   string                  `json:"answer_format,omitempty"`
-	Execution      *ProtectionRuntimeState `json:"execution,omitempty"`
-	Prompt         string                  `json:"prompt"`
-	Model          string                  `json:"model"`
-	Evaluator      string                  `json:"evaluator"`
-	ExpectedAnswer string                  `json:"expected_answer"`
-	TimeoutSeconds int                     `json:"timeout_seconds"`
+	AnswerType     string                       `json:"answer_type,omitempty"`
+	AnswerUnit     string                       `json:"answer_unit,omitempty"`
+	AnswerUnitMode string                       `json:"answer_unit_mode,omitempty"`
+	AnswerFormat   string                       `json:"answer_format,omitempty"`
+	Execution      *IntelligentTestRuntimeState `json:"execution,omitempty"`
+	Prompt         string                       `json:"prompt"`
+	Model          string                       `json:"model"`
+	Evaluator      string                       `json:"evaluator"`
+	ExpectedAnswer string                       `json:"expected_answer"`
+	TimeoutSeconds int                          `json:"timeout_seconds"`
 	// Source marks how the run was created. "pelican-schedule" is the user-page
 	// timer and is hidden from the admin intelligent-test console.
 	Source string `json:"source,omitempty"`
@@ -61,15 +61,14 @@ type IntelligentTestCardTest struct {
 	Risk                 string                 `json:"risk"`
 }
 type IntelligentTestAccountCard struct {
-	AccountID       int64                     `json:"account_id"`
-	Name            string                    `json:"name"`
-	Notes           string                    `json:"notes"`
-	Platform        string                    `json:"platform"`
-	AccountType     string                    `json:"account_type"`
-	AccountStatus   string                    `json:"account_status"`
-	GroupIDs        []int64                   `json:"group_ids"`
-	AntiDegradation bool                      `json:"anti_degradation"`
-	Tests           []IntelligentTestCardTest `json:"tests"`
+	AccountID     int64                     `json:"account_id"`
+	Name          string                    `json:"name"`
+	Notes         string                    `json:"notes"`
+	Platform      string                    `json:"platform"`
+	AccountType   string                    `json:"account_type"`
+	AccountStatus string                    `json:"account_status"`
+	GroupIDs      []int64                   `json:"group_ids"`
+	Tests         []IntelligentTestCardTest `json:"tests"`
 }
 type IntelligentTestOverview struct {
 	ReviewAccounts       int64 `json:"review_accounts"`
@@ -83,7 +82,6 @@ type IntelligentTestFilter struct {
 	Page, PageSize                                                 int
 	AccountID, GroupID                                             int64
 	Search, Platform, AccountType, AccountStatus, TestType, Status string
-	AntiDegradation                                                *bool
 	OnlyAbnormal                                                   bool
 	From, To                                                       *time.Time
 }

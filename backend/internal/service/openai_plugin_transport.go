@@ -164,7 +164,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxy
 			return response, err
 		}
 	}
-	response, err := s.doOpenAIHTTPTransport(WithAccountTrafficRequest(request, account), proxyURL, account, account)
+	response, err := s.doOpenAIHTTPTransport(request, proxyURL, account, account)
 	if response != nil && response.Request == nil {
 		response.Request = request
 	}
@@ -238,7 +238,7 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 			cfg: codexProbeConfig(s.cfg), httpUpstream: s.httpUpstream,
 			accountRepo: s.accountRepo, pluginManager: s.pluginManager,
 		}
-		return gateway.doOpenAICodexProbe(WithAccountTrafficRequest(request, account), proxyURL, account)
+		return gateway.doOpenAICodexProbe(request, proxyURL, account)
 	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
@@ -248,12 +248,12 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	}
 	if useTLSFallback {
 		return s.httpUpstream.DoWithTLS(
-			WithAccountTrafficRequest(request, account),
+			request,
 			proxyURL,
 			account.ID,
 			account.Concurrency,
 			s.tlsFPProfileService.ResolveTLSProfile(account),
 		)
 	}
-	return s.httpUpstream.Do(WithAccountTrafficRequest(request, account), proxyURL, account.ID, account.Concurrency)
+	return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
 }

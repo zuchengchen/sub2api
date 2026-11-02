@@ -2316,12 +2316,12 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 }
 
 // IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
-// Anthropic OAuth/SetupToken 与受保护的 OpenAI OAuth/Setup Token 账号可启用。
+// Anthropic 与 OpenAI OAuth/SetupToken 账号按显式配置启用。
 func (a *Account) IsTLSFingerprintEnabled() bool {
 	if a == nil {
 		return false
 	}
-	if !a.IsAnthropicOAuthOrSetupToken() && (!a.IsOpenAIOAuthLike() || !a.AntiDegradationEnabled()) {
+	if !a.IsAnthropicOAuthOrSetupToken() && !a.IsOpenAIOAuthLike() {
 		return false
 	}
 	if a.Extra == nil {

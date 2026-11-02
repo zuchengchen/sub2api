@@ -1079,7 +1079,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// OpenCode Go 要求 x-opencode-session（缺失即 400 MissingSessionID）；
 	// 任意平台 API Key 账号指向官方 opencode.ai 主机时同样需要。
 	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
-	if err := applyIntelligentTestProtection(c, account, req.Header, payloadBytes); err != nil {
+	if err := applyIntelligentTestIdentity(c, account, req.Header, payloadBytes); err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
 	if isOAuth {
@@ -2309,7 +2309,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
-	if err := applyIntelligentTestProtection(c, account, req.Header, payloadBytes); err != nil {
+	if err := applyIntelligentTestIdentity(c, account, req.Header, payloadBytes); err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
 

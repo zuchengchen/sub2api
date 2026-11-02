@@ -68,14 +68,6 @@ func ParseIntelligentTestFilter(c *gin.Context) (service.IntelligentTestFilter, 
 			*dst = v
 		}
 	}
-	if raw := c.Query("anti_degradation"); raw != "" {
-		v, err := strconv.ParseBool(raw)
-		if err != nil {
-			response.BadRequest(c, "invalid anti_degradation")
-			return f, false
-		}
-		f.AntiDegradation = &v
-	}
 	if raw := c.Query("only_abnormal"); raw != "" {
 		v, err := strconv.ParseBool(raw)
 		if err != nil {

@@ -143,7 +143,7 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 		r.Status = "account_error"
 		return errors.New("account unavailable")
 	}
-	r.AntiDegradation = account.AntiDegradationEnabled()
+	r.AntiDegradation = false // Legacy history column; new runs have no protection policy.
 	if r.ConfigSnapshot == nil {
 		return errors.New("missing configuration")
 	}
@@ -152,7 +152,7 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 		r.Status = "request_error"
 		return err
 	}
-	r.ConfigSnapshot.Execution = snapshotIntelligentProtectionRuntime(account)
+	r.ConfigSnapshot.Execution = snapshotIntelligentRuntime(account)
 	r.ConfigSnapshot.Execution.RequestedModel = r.ConfigSnapshot.Model
 	r.ConfigSnapshot.Execution.Model = r.Model
 	r.ConfigSnapshot.Execution.ReasoningEffort = intelligentTestReasoningEffort(r.TestType)
@@ -177,7 +177,7 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 		r.Status = "account_error"
 		return errors.New("account unavailable")
 	}
-	if err := prepareIntelligentTestProtection(c, prepared, map[string]any{}); err != nil {
+	if err := prepareIntelligentTestIdentity(c, prepared, map[string]any{}); err != nil {
 		r.Status = "request_error"
 		return err
 	}
@@ -187,9 +187,6 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 		err = clone.TestAccountConnection(c, prepared.ID, r.Model, r.Input, AccountTestModeDefault)
 	}
 	textOutput, eventError, model, _ := parseIntelligentSSE(recorder.body.String())
-	if capture.trafficWait != nil && capture.status == 0 {
-		return &TestAdmissionWaitError{Until: time.Now().Add(capture.trafficWait.RetryAfter), Reason: capture.trafficWait.Reason}
-	}
 	return finalizeIntelligentTestRun(r, capture, recorder, textOutput, eventError, model, err)
 }
 
@@ -447,7 +444,6 @@ func (w *intelligentSSEWriter) appendText(s string) {
 }
 
 type intelligentCapture struct {
-	trafficWait       *AccountTrafficLimitError
 	mu                sync.Mutex
 	body              bytes.Buffer
 	pending           []byte
@@ -763,22 +759,11 @@ type intelligentHTTPUpstream struct {
 
 func (h *intelligentHTTPUpstream) Do(req *http.Request, proxy string, id int64, concurrency int) (*http.Response, error) {
 	resp, err := h.inner.Do(req, proxy, id, concurrency)
-	var wait *AccountTrafficLimitError
-	if errors.As(err, &wait) {
-		h.capture.trafficWait = wait
-	}
 	return h.capture.response(req, resp), err
 }
 func (h *intelligentHTTPUpstream) DoWithTLS(req *http.Request, proxy string, id int64, concurrency int, p *tlsfingerprint.Profile) (*http.Response, error) {
 	resp, err := h.inner.DoWithTLS(req, proxy, id, concurrency, p)
-	var wait *AccountTrafficLimitError
-	if errors.As(err, &wait) {
-		h.capture.trafficWait = wait
-	}
 	return h.capture.response(req, resp), err
-}
-func (h *intelligentHTTPUpstream) AccountTrafficController() *AccountTrafficService {
-	return accountTrafficController(h.inner)
 }
 
 type intelligentReadOnlyAccountRepo struct {

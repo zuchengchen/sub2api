@@ -14,7 +14,7 @@ export interface TestAssessment {
 export interface TestRecord {
   id: number; account_id: number; test_type: string; status: TestStatus
   score: number | null; result: string; result_image: string; error_message?: string
-  duration_ms: number; model: string; anti_degradation: boolean
+  duration_ms: number; model: string; anti_degradation?: boolean
   started_at: string | null; finished_at: string | null; created_at: string
   input?: string; raw_response?: unknown; config_snapshot?: unknown
   queue_reason?: string
@@ -28,7 +28,7 @@ export interface TestSummary {
 }
 export interface TestAccount {
   account_id: number; name: string; notes?: string; platform: string; account_type: string
-  account_status: string; group_ids: number[]; anti_degradation: boolean; tests: TestSummary[]
+  account_status: string; group_ids: number[]; tests: TestSummary[]
 }
 export interface TestOverview {
   total_accounts: number; tested_today: number; success_accounts: number

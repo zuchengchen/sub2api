@@ -696,8 +696,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		normalizedExtra = MergeOpenAICodexTicketExtra(normalizedExtra, account.Extra)
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
-		normalizedExtra, err = mergeAccountProtectionForSave(ctx, account, normalizedExtra)
-		if err != nil {
+		if err := validateRequestIntegrityExtra(normalizedExtra); err != nil {
 			return nil, err
 		}
 		account.Extra = normalizedExtra

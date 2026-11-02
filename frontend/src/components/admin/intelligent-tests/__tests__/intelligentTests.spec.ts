@@ -172,7 +172,7 @@ describe('independent settings and persisted status', () => {
   })
   it('renders the generated pelican while a new attempt waits and keeps B verdicts distinct', async () => {
     vi.mocked(intelligentTestsAPI.animation).mockResolvedValue({ html: '<!DOCTYPE html><html><body><svg><animate attributeName="x" values="0;1"/></svg></body></html>' })
-    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], anti_degradation: true, tests: [] }
+    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], tests: [] }
     const completed: TestRecord = { ...record, id: 7, status: 'completed', result_image: '<svg viewBox="0 0 20 20"><circle r="5" cx="10" cy="10"/></svg>', evaluation: { evaluator_version: 2, answer_verdict: 'not_evaluated', format_verdict: 'compliant' } }
     const wrapper = mount(TestResultCard, { props: { account, summary: { test_type: 'pelican', latest: { ...record, id: 8, status: 'queued' }, latest_completed: completed, history_count: 2, consecutive_anomalies: 0, risk: '' }, now: Date.now() }, global })
     await flushPromises()
@@ -188,7 +188,7 @@ describe('independent settings and persisted status', () => {
     wrapper.unmount()
   })
   it('shows a tibo True/False answer without review notes', async () => {
-    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], anti_degradation: true, tests: [] }
+    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], tests: [] }
     const completed: TestRecord = { ...record, id: 9, test_type: 'tibo', status: 'completed', result: 'True', evaluation: { evaluator_version: 3, answer_verdict: 'correct', format_verdict: 'not_required', actual_answer: 'True' } }
     const wrapper = mount(TestResultCard, { props: { account, summary: { test_type: 'tibo', latest: completed, latest_completed: completed, history_count: 1, consecutive_anomalies: 0, risk: '' }, now: Date.now() }, global })
     expect(wrapper.text()).toContain('tibo题')
@@ -243,16 +243,16 @@ describe('independent settings and persisted status', () => {
     wrapper.unmount()
   })
   it('shows persisted running elapsed time, disables retry and includes risk', () => {
-    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], anti_degradation: false, tests: [] }
-    const wrapper = mount(TestResultCard, { props: { account, summary: { test_type: 'pelican', latest: record, history_count: 6, consecutive_anomalies: 2, risk: '当前账号防降智模式已关闭' }, now: Date.parse('2026-09-12T12:00:42Z') }, global })
+    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], tests: [] }
+    const wrapper = mount(TestResultCard, { props: { account, summary: { test_type: 'pelican', latest: record, history_count: 6, consecutive_anomalies: 2, risk: '当前账号需要重新检测' }, now: Date.parse('2026-09-12T12:00:42Z') }, global })
     expect(wrapper.text()).toContain('已运行 42 秒')
     expect(wrapper.text()).toContain('历史 6')
-    expect(wrapper.text()).toContain('当前账号防降智模式已关闭')
+    expect(wrapper.text()).toContain('当前账号需要重新检测')
     expect(wrapper.findAll('button').at(-1)?.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
   it('shows the latest failure reason even when previewing an earlier completed result', () => {
-    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], anti_degradation: false, tests: [] }
+    const account: TestAccount = { account_id: 42, account_type: 'oauth', account_status: 'active', name: 'A', platform: 'openai', group_ids: [], tests: [] }
     const latest: TestRecord = { ...record, id: 8, status: 'account_error', error_message: 'WS 验证未返回 True；该连接已关闭 <script>unsafe</script>' }
     const completed: TestRecord = { ...record, id: 7, status: 'completed', result: '7' }
     const wrapper = mount(TestResultCard, { props: { account, summary: { test_type: 'candy', latest, latest_completed: completed, history_count: 2, consecutive_anomalies: 0, risk: '' }, now: Date.now() }, global })

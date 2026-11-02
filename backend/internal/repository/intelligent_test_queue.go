@@ -23,7 +23,7 @@ import (
 // drained by Claim in arrival order.
 const intelligentClaimPickSQL = `SELECT q.id FROM account_tests q WHERE q.status='queued' AND q.available_at<=NOW() ORDER BY q.available_at,q.id FOR UPDATE SKIP LOCKED LIMIT 1`
 
-const intelligentStartSetSQL = `status='running',queue_reason='',started_at=NOW(),lease_token=$1,lease_until=NOW()+make_interval(secs=>LEAST(600,GREATEST(30,(t.config_snapshot->>'timeout_seconds')::integer))+90),anti_degradation=(SELECT ` + intelligentProtectionSQL + ` FROM accounts a WHERE a.id=t.account_id)`
+const intelligentStartSetSQL = `status='running',queue_reason='',started_at=NOW(),lease_token=$1,lease_until=NOW()+make_interval(secs=>LEAST(600,GREATEST(30,(t.config_snapshot->>'timeout_seconds')::integer))+90),anti_degradation=false`
 
 func (r *intelligentTestRepository) Enqueue(ctx context.Context, actor int64, req service.IntelligentTestEnqueue) (*service.IntelligentTestEnqueued, error) {
 	accountIDs := append([]int64{}, req.AccountIDs...)
@@ -95,8 +95,8 @@ func (r *intelligentTestRepository) Enqueue(ctx context.Context, actor int64, re
 	}
 	out := &service.IntelligentTestEnqueued{Records: []*service.IntelligentTestRecord{}}
 	for _, id := range accountIDs {
-		var protected bool
-		err := tx.QueryRowContext(ctx, `SELECT `+intelligentProtectionSQL+` FROM accounts a WHERE a.id=$1 AND a.deleted_at IS NULL FOR SHARE`, id).Scan(&protected)
+		var existingID int64
+		err := tx.QueryRowContext(ctx, `SELECT a.id FROM accounts a WHERE a.id=$1 AND a.deleted_at IS NULL FOR SHARE`, id).Scan(&existingID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, infraerrors.BadRequest("INTELLIGENT_TEST_ACCOUNT_MISSING", "an account does not exist")
 		}
@@ -135,7 +135,7 @@ func (r *intelligentTestRepository) Enqueue(ctx context.Context, actor int64, re
 			}
 			cfgJSON, _ := json.Marshal(cfg)
 			var testID int64
-			err := tx.QueryRowContext(ctx, `INSERT INTO account_tests(account_id,test_type,input,model,anti_degradation,config_snapshot,requested_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`, id, kind, cfg.Prompt, cfg.Model, protected, string(cfgJSON), actor).Scan(&testID)
+			err := tx.QueryRowContext(ctx, `INSERT INTO account_tests(account_id,test_type,input,model,anti_degradation,config_snapshot,requested_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`, id, kind, cfg.Prompt, cfg.Model, false, string(cfgJSON), actor).Scan(&testID)
 			if err != nil {
 				return nil, err
 			}

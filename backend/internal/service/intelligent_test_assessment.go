@@ -306,11 +306,11 @@ func SameIntelligentTestConfig(a, b IntelligentTestConfig) bool {
 }
 
 func IsCurrentIntelligentAssessment(evaluation map[string]any) bool {
-	return mode1Int(evaluation["evaluator_version"]) == IntelligentEvaluatorVersion
+	return evaluationInt(evaluation["evaluator_version"]) == IntelligentEvaluatorVersion
 }
 
 func PublicIntelligentAssessment(evaluation map[string]any) map[string]any {
-	version := mode1Int(evaluation["evaluator_version"])
+	version := evaluationInt(evaluation["evaluator_version"])
 	if version < 2 || version > IntelligentEvaluatorVersion {
 		return nil
 	}
@@ -321,4 +321,17 @@ func PublicIntelligentAssessment(evaluation map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+// evaluationInt reads JSON version numbers without coupling assessment to account policies.
+func evaluationInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
 }
