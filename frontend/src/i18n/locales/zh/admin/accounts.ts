@@ -862,15 +862,7 @@ export default {
           model_temporarily_unschedulable: '模型暂时不可调度'
         },
         codexTiboRoutes: '线路',
-        astraPolicyTitle: 'Astra 自动管理模型',
-        astraPolicyRange: {
-          healthy: '除 Luna 外的可支持模型（含生图）',
-          degraded: '仅 Luna 和生图',
-          unknown: '尚无有效 Astra 样本，仅 Luna 和生图'
-        },
-        astraPolicyDescription: '模型范围按最新有效 Astra 红绿点自动切换。原手工白名单保留供回退，不再决定权限；透传和 Compact 也遵守此规则。',
-        astraPolicySampledAt: '最新有效样本：{time}',
-        astraPolicyBulk: 'GPT OAuth 账号自动管理模型：绿点允许除 Luna 外的可支持模型（含生图）；红点或尚无有效结果时仅允许 Luna 和生图。批量模型设置仅应用于其他账号。',
+        astraPolicyBulk: '批量模型设置仅应用于非 GPT OAuth 账号。',
         codexTiboRouteDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / xhigh）。OAuth / Setup Token 打 chatgpt.com；API Key 打账号自己的 Responses 地址。手动暂停的 OAuth 账号在额度等可用条件满足时仍会定期探测，并保持暂停。',
         codexTiboRouteSummary: '线路 {route}：{verdict}',
         codexTiboRouteVerdict: {

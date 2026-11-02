@@ -215,11 +215,11 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   afterEach(() => vi.useRealTimers())
 
-  it('new OpenAI OAuth accounts show the initial automatic policy instead of manual model controls', async () => {
+  it('new OpenAI OAuth accounts hide policy copy and manual model controls', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
-    expect(wrapper.get('[data-testid="astra-oauth-model-policy"]').attributes('data-verdict')).toBe('unknown')
-    expect(wrapper.text()).toContain('admin.accounts.openai.astraPolicyTitle')
+    expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.astraPolicyTitle')
     expect(wrapper.find('[data-testid="model-whitelist-selector"]').exists()).toBe(false)
     await selectButtonByText(wrapper, 'API Key')
     expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(false)
