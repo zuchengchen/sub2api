@@ -318,6 +318,7 @@ func TestCodexModelsSupplementsConfiguredModelsWithUnmappedAccountDefaults(t *te
 			Name:        "chatgpt-oauth",
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeOAuth,
+			Extra:       astraHandlerExtra("healthy"),
 			Status:      service.StatusActive,
 			Schedulable: true,
 			Priority:    1,
@@ -362,14 +363,14 @@ func TestCodexModelsSupplementsConfiguredModelsWithUnmappedAccountDefaults(t *te
 
 func TestCodexModelsUnmappedAndMappedAccountsHonorCustomListAndETag(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	const mappedModel = "gpt-5.3-codex"
+	const mappedModel = "gpt-6-astra"
 	repo := &codexModelsFailoverAccountRepo{accounts: []service.Account{
 		{
-			ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+			ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: astraHandlerExtra("healthy"),
 			Status: service.StatusActive, Schedulable: true,
 		},
 		{
-			ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+			ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
 			Status: service.StatusActive, Schedulable: true,
 			Credentials: map[string]any{"model_mapping": map[string]any{mappedModel: mappedModel}},
 		},

@@ -104,17 +104,19 @@ func TestNormalizeOpenAICodexCompactReasoningEffortForAccountScopesCompatibility
 		want    string
 	}{
 		{
-			name:    "OpenAI OAuth compact 降级",
-			path:    "/openai/v1/responses/compact",
-			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			name: "OpenAI OAuth compact 降级",
+			path: "/openai/v1/responses/compact",
+			account: &Account{Extra: astraHealthyTestExtra(nil),
+				Platform: PlatformOpenAI, Type: AccountTypeOAuth},
 			changed: true,
 			want:    "xhigh",
 		},
 		{
-			name:    "OpenAI OAuth 普通请求保留",
-			path:    "/openai/v1/responses",
-			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
-			want:    "max",
+			name: "OpenAI OAuth 普通请求保留",
+			path: "/openai/v1/responses",
+			account: &Account{Extra: astraHealthyTestExtra(nil),
+				Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			want: "max",
 		},
 		{
 			name:    "OpenAI API Key compact 保留",
@@ -239,7 +241,8 @@ func TestOpenAIGatewayServiceForwardOAuthCompactDowngradesMaxEffort(t *testing.T
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
 	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          8,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
@@ -285,7 +288,8 @@ func TestOpenAIGatewayServiceForwardOAuthRemoteCompactV2PreservesResponsesWire(t
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
 	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, httpUpstream: upstream}
-	account := &Account{
+	account := &Account{Extra: astraHealthyTestExtra(nil),
+
 		ID:          10,
 		Name:        "openai-oauth-responses",
 		Platform:    PlatformOpenAI,

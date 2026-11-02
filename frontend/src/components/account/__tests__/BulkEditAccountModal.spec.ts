@@ -849,7 +849,7 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
-  it('开启 OpenAI 自动透传时不再同时提交模型限制', async () => {
+  it('OpenAI OAuth 自动透传仍由红绿点管理，不提交手工模型限制', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],
       selectedTypes: ['oauth']
@@ -857,7 +857,8 @@ describe('BulkEditAccountModal', () => {
 
     await wrapper.get('#bulk-edit-openai-passthrough-enabled').setValue(true)
     await wrapper.get('#bulk-edit-openai-passthrough-toggle').trigger('click')
-    await wrapper.get('#bulk-edit-model-restriction-enabled').setValue(true)
+    expect(wrapper.find('#bulk-edit-model-restriction-enabled').exists()).toBe(false)
+    expect(wrapper.find('#bulk-edit-openai-compact-model-mapping-enabled').exists()).toBe(false)
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
@@ -867,7 +868,19 @@ describe('BulkEditAccountModal', () => {
         openai_passthrough: true
       }
     })
-    expect(wrapper.text()).toContain('admin.accounts.openai.modelRestrictionDisabledByPassthrough')
+    expect(wrapper.get('[data-testid="astra-policy-bulk"]').text()).toContain('admin.accounts.openai.astraPolicyBulk')
+  })
+
+  it.each([
+    { name: 'selected mixed types', target: undefined, types: ['oauth', 'apikey'], manual: true },
+    { name: 'filtered OAuth', target: { mode: 'filtered', filters: { platform: 'openai', type: 'oauth' } }, types: ['oauth'], manual: false },
+    { name: 'filtered OAuth-only preview', target: { mode: 'filtered', filters: { platform: 'openai' } }, types: ['oauth'], manual: true },
+    { name: 'filtered API-key-only preview', target: { mode: 'filtered', filters: { platform: 'openai' } }, types: ['apikey'], manual: true },
+  ])('$name preserves editing for other account types and explains the OAuth exception', ({ target, types, manual }) => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: types, target })
+    expect(wrapper.find('[data-testid="astra-policy-bulk"]').exists()).toBe(true)
+    expect(wrapper.find('#bulk-edit-model-restriction-enabled').exists()).toBe(manual)
+    expect(wrapper.find('#bulk-edit-openai-compact-model-mapping-enabled').exists()).toBe(manual)
   })
 
   it('filtered-results 模式下应提交 filters 而不是 account_ids', async () => {

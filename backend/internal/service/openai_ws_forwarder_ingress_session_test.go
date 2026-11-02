@@ -680,10 +680,10 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexImageBridge
 		Credentials: map[string]any{
 			"access_token": "test-token",
 		},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"openai_oauth_responses_websockets_v2_enabled": true,
 			"codex_image_generation_bridge":                true,
-		},
+		}),
 	}
 
 	serverErrCh := make(chan error, 1)
@@ -1343,9 +1343,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughSepar
 		Credentials: map[string]any{
 			"access_token": "oauth-token",
 		},
-		Extra: map[string]any{
+		Extra: astraHealthyTestExtra(map[string]any{
 			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,
-		},
+		}),
 	}
 
 	serverErrCh := make(chan error, 1)

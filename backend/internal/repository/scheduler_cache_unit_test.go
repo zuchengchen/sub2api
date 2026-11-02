@@ -1072,7 +1072,7 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIPassthroughForModelGate(t *tes
 					"model_mapping": map[string]any{"gpt-5.5": "gpt-5.5"},
 					"access_token":  "drop-me",
 				},
-				Extra: map[string]any{key: true},
+				Extra: map[string]any{key: true, service.OpenAIAstraPolicyExtraKey: astraPolicyCacheAccount("healthy", time.Now().Add(-time.Minute)).Extra[service.OpenAIAstraPolicyExtraKey]},
 			}
 			require.True(t, account.IsModelSupported("gpt-5.6-sol"),
 				"前置条件：透传账号本应放行白名单外的模型")

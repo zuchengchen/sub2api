@@ -14,7 +14,8 @@ import (
 )
 
 func directImagesTestAccount() *Account {
-	return &Account{ID: 35, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+	return &Account{Extra: astraHealthyTestExtra(nil),
+		ID: 35, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"}}
 }
 
@@ -70,9 +71,13 @@ func TestCodexDirectImagesMappingBeforeRouting(t *testing.T) {
 			account.Credentials["model_mapping"] = map[string]any{"gpt-image-2": "gpt-image-2.5-flare"}
 			result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "gpt-image-2")
 			require.NoError(t, err)
-			require.Equal(t, "gpt-image-2.5-flare", result.UpstreamModel)
+			want := "gpt-image-2.5-flare"
+			if accountType == AccountTypeOAuth {
+				want = "gpt-image-2"
+			}
+			require.Equal(t, want, result.UpstreamModel)
 			require.Equal(t, "gpt-image-2", result.Model)
-			require.Equal(t, "gpt-image-2.5-flare", gjson.GetBytes(upstream.lastBody, "model").String())
+			require.Equal(t, want, gjson.GetBytes(upstream.lastBody, "model").String())
 		})
 	}
 	for _, model := range []string{"gpt-image-1", "gpt-image-future"} {
@@ -320,7 +325,5 @@ func TestCodexDirectImagesAccountTestAndWhitelist(t *testing.T) {
 	account.Credentials["model_mapping"] = map[string]any{"gpt-image-2.5-flare": "gpt-image-2.5-flare"}
 	models, err := svc.FetchOpenAIAccountModels(context.Background(), account)
 	require.NoError(t, err)
-	for _, model := range models {
-		require.NotEqual(t, "gpt-image-2.5-sunburst", model.ID)
-	}
+	require.Contains(t, pickerModelIDs(models), "gpt-image-2.5-sunburst")
 }

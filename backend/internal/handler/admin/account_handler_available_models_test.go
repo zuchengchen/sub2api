@@ -147,7 +147,7 @@ func TestAccountHandlerGetAvailableModels_GrokDefaultsToXAIModelsWithoutMapping(
 	require.Contains(t, ids, "grok-build-0.1")
 }
 
-func TestAccountHandlerGetAvailableModels_OpenAIOAuthUsesExplicitModelMapping(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_OpenAIOAuthIgnoresExplicitModelMapping(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -177,8 +177,12 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthUsesExplicitModelMapping(t 
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.Len(t, resp.Data, 1)
-	require.Equal(t, "gpt-5", resp.Data[0].ID)
+	ids := []string{}
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+	}
+	require.Contains(t, ids, "gpt-6-luna")
+	require.NotContains(t, ids, "gpt-5")
 }
 
 func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefaults(t *testing.T) {
@@ -289,7 +293,10 @@ func TestAccountHandlerGetAvailableModels_OpenAIFallbackIncludesMappedImageModel
 		ids = append(ids, model.ID)
 		display[model.ID] = model.DisplayName
 	}
-	require.ElementsMatch(t, []string{"gpt-6-astra", "gpt-image-2", "gpt-image-2.5"}, ids)
+	require.NotContains(t, ids, "gpt-6-astra")
+	require.Contains(t, ids, "gpt-6-luna")
+	require.Contains(t, ids, "gpt-image-2")
+	require.Contains(t, ids, "gpt-image-2.5")
 	require.Equal(t, "GPT Image 2.5", display["gpt-image-2.5"])
 }
 

@@ -220,7 +220,7 @@ func MergeOpenAIAccountTestModels(models []openai.Model, account *Account) []ope
 func mergeOpenAIAccountTestModels(models []openai.Model, account *Account, includeMappedAliases bool) []openai.Model {
 	filtered := make([]openai.Model, 0, len(models))
 	for _, model := range models {
-		if validateRetiredOpenAIRequestModel(account, model.ID, false, "") == nil {
+		if validateRetiredOpenAIRequestModel(account, model.ID, false, "") == nil && account.AllowsOpenAIOAuthModelPolicy(model.ID) {
 			filtered = append(filtered, model)
 		}
 	}

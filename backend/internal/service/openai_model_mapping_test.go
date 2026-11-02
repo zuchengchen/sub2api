@@ -232,7 +232,8 @@ func TestResolveOpenAIForwardMappedModels_CompactMappingPrecedence(t *testing.T)
 	}{
 		{
 			name: "compact uses client-visible model before ordinary mapping",
-			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+			account: &Account{Extra: astraHealthyTestExtra(nil),
+				Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 				Credentials: conflictingMappings},
 			requireCompact: true,
 			wantBilling:    "gpt-5.4",
@@ -240,14 +241,16 @@ func TestResolveOpenAIForwardMappedModels_CompactMappingPrecedence(t *testing.T)
 		},
 		{
 			name: "non-compact uses ordinary mapping",
-			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+			account: &Account{Extra: astraHealthyTestExtra(nil),
+				Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 				Credentials: conflictingMappings},
 			wantBilling:  "gpt-5.4",
 			wantUpstream: "gpt-5.4",
 		},
 		{
 			name: "compact falls back to ordinary mapped model",
-			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+			account: &Account{Extra: astraHealthyTestExtra(nil),
+				Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 				Credentials: mappedOnlyCompact},
 			requireCompact: true,
 			wantBilling:    "gpt-5.4",
@@ -256,7 +259,7 @@ func TestResolveOpenAIForwardMappedModels_CompactMappingPrecedence(t *testing.T)
 		{
 			name: "passthrough ignores ordinary mapping",
 			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-				Credentials: conflictingMappings, Extra: map[string]any{"openai_passthrough": true}},
+				Credentials: conflictingMappings, Extra: astraHealthyTestExtra(map[string]any{"openai_passthrough": true})},
 			requireCompact: true,
 			wantBilling:    "gpt-5.5",
 			wantUpstream:   "gpt-5.5-openai-compact",
@@ -272,6 +275,9 @@ func TestResolveOpenAIForwardMappedModels_CompactMappingPrecedence(t *testing.T)
 	}
 
 	for _, tt := range tests {
+		if tt.account.IsOpenAIOAuth() {
+			tt.wantBilling, tt.wantUpstream = "gpt-5.5", "gpt-5.5"
+		}
 		t.Run(tt.name, func(t *testing.T) {
 			billing, upstream := resolveOpenAIForwardMappedModels(tt.account, "gpt-5.5", tt.requireCompact)
 			if billing != tt.wantBilling {
@@ -295,16 +301,17 @@ func TestCanonicalOpenAIAccountSchedulingModelMatchesForwardSemantics(t *testing
 		want    string
 	}{
 		{
-			name:    "OpenAI OAuth applies Codex alias normalization",
-			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
-			model:   "gpt-5.6",
-			want:    "gpt-5.6-sol",
+			name: "OpenAI OAuth applies Codex alias normalization",
+			account: &Account{Extra: astraHealthyTestExtra(nil),
+				Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			model: "gpt-5.6",
+			want:  "gpt-5.6-sol",
 		},
 		{
 			name: "OpenAI passthrough ignores ordinary account mapping",
 			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 				Credentials: map[string]any{"model_mapping": map[string]any{"public": "private"}},
-				Extra:       map[string]any{"openai_passthrough": true}},
+				Extra:       astraHealthyTestExtra(map[string]any{"openai_passthrough": true})},
 			model: "public",
 			want:  "public",
 		},

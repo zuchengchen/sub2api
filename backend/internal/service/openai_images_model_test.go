@@ -109,7 +109,7 @@ func TestGPTImage25AccountModelPermissions(t *testing.T) {
 				require.Equal(t, model, account.GetMappedModel(model))
 			}
 			restricted := &Account{Platform: PlatformOpenAI, Type: accountType, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-image-2": "gpt-image-2"}}}
-			require.False(t, restricted.IsModelSupported(model), "an explicit administrator allowlist must remain restricted")
+			require.Equal(t, accountType == AccountTypeOAuth, restricted.IsModelSupported(model), "OAuth ignores the old whitelist; setup-token retains it")
 		}
 	}
 }

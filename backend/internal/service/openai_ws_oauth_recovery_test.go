@@ -108,7 +108,7 @@ func TestOpenAIWSOAuthRecovery_PassthroughLocalHandshake(t *testing.T) {
 	for _, rejectsReplacement := range []bool{false, true} {
 		t.Run(map[bool]string{false: "refresh_then_stream", true: "refresh_then_401"}[rejectsReplacement], func(t *testing.T) {
 			account, repo, executor, provider := newOpenAIRecoveryFixture()
-			account.Extra = map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough}
+			account.Extra = astraHealthyTestExtra(map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough})
 			var calls atomic.Int32
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)

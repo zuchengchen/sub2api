@@ -27,6 +27,9 @@ func scopedAdminAccountDTO(a *service.Account, p adminaccess.Policy) gin.H {
 	result := gin.H{"id": a.ID, "name": a.Name, "notes": a.Notes, "platform": a.Platform, "type": a.Type, "status": a.Status, "schedulable": a.Schedulable, "concurrency": a.Concurrency, "priority": a.Priority, "group_ids": groups}
 	// 兼容原账户读取结构，仅返回模型映射，凭证及扩展字段继续脱敏。
 	if p.AllowsAccount("accounts.read", resource) {
+		if policy := a.OpenAIOAuthModelPolicy(); policy != nil {
+			result["openai_oauth_model_policy"] = policy
+		}
 		mapping := map[string]string{}
 		switch raw := a.Credentials["model_mapping"].(type) {
 		case map[string]string:

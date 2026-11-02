@@ -90,7 +90,7 @@ func newOpenAIWSHTTPUpstreamOAuthAccount(extra map[string]any) *Account {
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:       extra,
+		Extra:       astraHealthyTestExtra(extra),
 	}
 }
 

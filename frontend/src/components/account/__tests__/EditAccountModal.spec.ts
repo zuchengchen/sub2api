@@ -287,6 +287,28 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it('keeps dormant OAuth model settings unchanged when saving ordinary fields', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials.compact_model_mapping = { 'gpt-6-astra': 'gpt-6-luna' }
+    account.openai_oauth_model_policy = { verdict: 'healthy', scope: 'non_luna' }
+    updateAccountMock.mockReset().mockResolvedValue({ ...account, name: 'Renamed OAuth' })
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="model-whitelist-value"]').exists()).toBe(false)
+    await wrapper.get('input[type="text"]').setValue('Renamed OAuth')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials.model_mapping).toEqual(account.credentials.model_mapping)
+    expect(credentials.compact_model_mapping).toEqual(account.credentials.compact_model_mapping)
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.name).toBe('Renamed OAuth')
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+    wrapper.unmount()
+  })
   beforeEach(() => {
     authIsSimpleMode.value = true
   })
