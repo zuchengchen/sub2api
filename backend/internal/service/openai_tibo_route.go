@@ -25,7 +25,7 @@ const (
 	// A cold account (no sample yet) waits at most this long for its first probe.
 	openAITiboProbeWait = 8 * time.Second
 	// Admin sparkline: last N Tibo probe outcomes, oldest first.
-	openAITiboRecentSampleLimit = 10
+	openAITiboRecentSampleLimit = 24
 	// Gin context key for a leftover routing record from a previous attempt.
 	// Routing details stay internal; they are never sent to API clients.
 	openAIBPSBypassReasonKey = "openai_bps_bypass_reason"
@@ -336,13 +336,25 @@ func (r *openAITiboRouteState) applyHold(hold openAITiboHold) {
 }
 
 // openAITiboAccountHold derives the hold from an authoritative account row:
-// parked when it is paused, disabled, expired or no longer a Tibo account;
+// parked when it is disabled, expired or no longer a Tibo account. Manually
+// paused OAuth accounts may still probe if the existing quota guards allow it;
+// other credential types keep their manual-pause behavior.
 // held until the latest active rate-limit/overload/unschedulable window;
 // zero when it can be probed now.
-func openAITiboAccountHold(account *Account, now time.Time) openAITiboHold {
-	if account == nil || !isOpenAITiboAccount(account) || account.Status != StatusActive || !account.Schedulable ||
+func openAITiboAccountHold(ctx context.Context, account *Account, now time.Time) openAITiboHold {
+	if account == nil || !isOpenAITiboAccount(account) || account.Status != StatusActive ||
 		(account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt)) {
 		return openAITiboHold{parked: true}
+	}
+	if !account.Schedulable {
+		if !account.IsOpenAIOAuth() {
+			return openAITiboHold{parked: true}
+		}
+		if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+			// Enrollment rechecks quota and global settings every minute, so
+			// a reset or lifted threshold can resume probes while still paused.
+			return openAITiboHold{parked: true}
+		}
 	}
 	var until time.Time
 	for _, at := range []*time.Time{account.RateLimitResetAt, account.OverloadUntil, account.TempUnschedulableUntil, account.modelRateLimitResetAt(openAICodexTicketDefaultModel)} {

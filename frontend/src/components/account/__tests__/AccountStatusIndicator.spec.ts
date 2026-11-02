@@ -51,6 +51,22 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  it('keeps the paused badge after a healthy Tibo result arrives', async () => {
+    const account = makeAccount({ platform: 'openai', type: 'oauth', schedulable: false })
+    const wrapper = mount(AccountStatusIndicator, { props: { account }, global: { stubs: { Icon: true } } })
+    expect(wrapper.text()).toContain('admin.accounts.status.paused')
+    await wrapper.setProps({ account: { ...account, codex_turn_tickets: [{
+      model: 'gpt-6-astra', tibo_routes: [{
+        route: 'http', verdict: 'healthy', probes_hour: 1, flips_hour: 0,
+        recent_samples: [{ verdict: 'healthy', at: '2026-11-02T10:00:00Z' }],
+      }],
+    }] } })
+    expect(wrapper.text()).toContain('admin.accounts.status.paused')
+    expect(wrapper.find('.badge-gray').exists()).toBe(true)
+    expect(wrapper.find('.badge-success').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('Claude 5 系列模型限流时显示 Opus 和 Sonnet 的短别名', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

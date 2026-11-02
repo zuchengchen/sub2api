@@ -184,19 +184,20 @@ func TestTiboAccountHold(t *testing.T) {
 	base := func() *Account {
 		return &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
 	}
-	require.Equal(t, openAITiboHold{}, openAITiboAccountHold(base(), now))
+	ctx := context.Background()
+	require.Equal(t, openAITiboHold{}, openAITiboAccountHold(ctx, base(), now))
 
 	paused := base()
 	paused.Schedulable = false
-	require.True(t, openAITiboAccountHold(paused, now).parked)
+	require.Equal(t, openAITiboHold{}, openAITiboAccountHold(ctx, paused, now))
 	disabled := base()
 	disabled.Status = StatusDisabled
-	require.True(t, openAITiboAccountHold(disabled, now).parked)
+	require.True(t, openAITiboAccountHold(ctx, disabled, now).parked)
 
 	limited := base()
 	rl, overload, past := now.Add(time.Hour), now.Add(2*time.Hour), now.Add(-time.Hour)
 	limited.RateLimitResetAt, limited.OverloadUntil, limited.TempUnschedulableUntil = &rl, &overload, &past
-	hold := openAITiboAccountHold(limited, now)
+	hold := openAITiboAccountHold(ctx, limited, now)
 	require.False(t, hold.parked)
 	require.Equal(t, overload, hold.until, "the latest active window")
 }

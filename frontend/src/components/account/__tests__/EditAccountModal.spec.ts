@@ -311,6 +311,31 @@ describe('EditAccountModal', () => {
     wrapper.unmount()
   })
 
+  it('updates 24 full-size Tibo dots while an OAuth account stays paused', async () => {
+    const account = { ...buildAccount(), type: 'oauth', schedulable: false, credentials: {} }
+    const ticket = (verdict: 'healthy' | 'degraded', at: string) => [{
+      model: 'gpt-6-astra', tibo_routes: [{
+        route: 'http', verdict, probes_hour: 1, flips_hour: 0,
+        checked_at: at, recent_samples: [{ verdict, at }],
+      }],
+    }]
+    account.codex_turn_tickets = ticket('healthy', '2026-11-02T10:00:00Z')
+    const wrapper = mountModal(account)
+    let dots = wrapper.findAll('[data-testid="tibo-dot"]')
+    expect(dots).toHaveLength(24)
+    expect(dots[23].classes()).toContain('h-2')
+    expect(dots[23].classes()).toContain('bg-emerald-500')
+    await wrapper.setProps({ account: {
+      ...account, codex_turn_tickets: ticket('degraded', '2026-11-02T10:10:00Z'),
+    } })
+    dots = wrapper.findAll('[data-testid="tibo-dot"]')
+    expect(dots).toHaveLength(24)
+    expect(dots[23].classes()).toContain('bg-red-500')
+    expect(dots[23].attributes('title')).toContain('2026-11-02T10:10:00Z')
+    expect(wrapper.props('account')?.schedulable).toBe(false)
+    wrapper.unmount()
+  })
+
   it('strips leftover Excel BPS extra keys on OAuth save', async () => {
     const account = buildAccount()
     account.type = 'oauth'

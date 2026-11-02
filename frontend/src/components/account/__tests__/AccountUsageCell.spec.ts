@@ -153,7 +153,7 @@ describe('AccountUsageCell', () => {
     })
     await flushPromises()
     expect(wrapper.text()).toContain('astra')
-    expect(wrapper.findAll('[data-testid="tibo-dot"]').length).toBeGreaterThan(0)
+    expect(wrapper.findAll('[data-testid="tibo-dot"]')).toHaveLength(48)
     expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTiboRouteVerdict.healthy')
     expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTiboRouteVerdict.degraded')
     expect(wrapper.text()).not.toContain('codexTurnTicket')
@@ -163,6 +163,41 @@ describe('AccountUsageCell', () => {
     }
     await wrapper.setProps({ account: { ...wrapper.props('account'), codex_turn_tickets: [] } })
     expect(wrapper.find('[data-testid="tibo-routes"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('updates 24 Tibo dots for a paused OAuth account without enabling it', async () => {
+    getUsage.mockResolvedValue({})
+    const account = makeAccount({
+      platform: 'openai', type: 'oauth', schedulable: false,
+      codex_turn_tickets: [{ model: 'gpt-6-astra', tibo_routes: [{
+        route: 'http', verdict: 'healthy', probes_hour: 1, flips_hour: 0,
+        recent_samples: [{ verdict: 'healthy', at: '2026-11-02T10:00:00Z' }],
+      }] }],
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account },
+      global: { stubs: { OpenAIQuotaResetCell: true, UsageProgressBar: true } },
+    })
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="tibo-dot"]')).toHaveLength(24)
+    expect(wrapper.findAll('[data-testid="tibo-dot"]')[23].classes()).toContain('bg-emerald-500')
+    await wrapper.setProps({ account: {
+      ...account,
+      codex_turn_tickets: [{ model: 'gpt-6-astra', tibo_routes: [{
+        route: 'http', verdict: 'degraded', probes_hour: 2, flips_hour: 1,
+        recent_samples: [
+          { verdict: 'healthy', at: '2026-11-02T10:00:00Z' },
+          { verdict: 'degraded', at: '2026-11-02T10:10:00Z' },
+        ],
+      }] }],
+    } })
+    const dots = wrapper.findAll('[data-testid="tibo-dot"]')
+    expect(dots).toHaveLength(24)
+    expect(dots[22].classes()).toContain('bg-emerald-500')
+    expect(dots[23].classes()).toContain('bg-red-500')
+    expect(dots[23].attributes('title')).toContain('2026-11-02T10:10:00Z')
+    expect(wrapper.props('account').schedulable).toBe(false)
     wrapper.unmount()
   })
 

@@ -777,7 +777,7 @@ export default {
           model_temporarily_unschedulable: 'Model is temporarily unschedulable'
         },
         codexTiboRoutes: 'Routes',
-        codexTiboRouteDesc: 'Astra HTTP is selected by the Tibo probe (astra / low). OAuth / setup-token probes chatgpt.com; API-key accounts probe their own Responses URL.',
+        codexTiboRouteDesc: 'Astra HTTP is selected by the Tibo probe (astra / xhigh). OAuth / setup-token probes chatgpt.com; API-key accounts probe their own Responses URL. Manually paused OAuth accounts continue periodic probes when quota and other availability checks allow, while remaining paused.',
         codexTiboRouteSummary: 'Route {route}: {verdict}',
         codexTiboRouteVerdict: {
           healthy: 'Healthy',
@@ -785,7 +785,7 @@ export default {
           degraded: 'Degraded',
           unavailable: 'Unavailable'
         },
-        codexTiboRecentSamples: 'Last 10 Tibo probes',
+        codexTiboRecentSamples: 'Last 24 Tibo probes',
         codexTiboSampleEmpty: 'No probe yet',
         codexTiboRouteConfirmed: 'Confirmed: {verdict}',
         codexTiboRouteCheckedAt: 'Last checked: {time}',

@@ -1,15 +1,15 @@
 <template>
-  <div class="flex items-center gap-1" :class="compact ? 'text-[10px] leading-4' : 'text-sm'">
+  <div class="flex flex-wrap items-center gap-1" :class="compact ? 'text-[10px] leading-4' : 'text-sm'">
     <span class="truncate font-medium text-gray-500 dark:text-gray-400" :title="model">{{ shortName }}</span>
     <span
-      class="inline-flex shrink-0 items-center"
+      class="inline-flex max-w-full flex-wrap items-center"
       :class="compact ? 'gap-px' : 'gap-0.5'"
       :aria-label="sparkLabel"
     >
       <span
         v-for="(slot, index) in slots"
         :key="index"
-        class="inline-block rounded-full"
+        class="inline-block shrink-0 rounded-full"
         data-testid="tibo-dot"
         :data-verdict="slot?.verdict || 'empty'"
         :class="[compact ? 'h-1.5 w-1.5' : 'h-2 w-2', slotClass(slot)]"
@@ -35,7 +35,7 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const sampleLimit = 10
+const sampleLimit = 24
 
 const shortName = computed(() => {
   if (props.model === 'gpt-6-astra') return 'astra'
