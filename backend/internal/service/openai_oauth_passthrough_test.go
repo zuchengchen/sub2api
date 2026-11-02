@@ -1046,6 +1046,8 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIFastInjectsMissingTier
 		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 	}}
 	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	// This single-response recorder observes the business FAST request only.
+	svc.tiboRouteDisabled = true
 	svc.cfg = &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}}
 	svc.httpUpstream = upstream
 	account := &Account{
