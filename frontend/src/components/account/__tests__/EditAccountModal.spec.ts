@@ -296,7 +296,7 @@ describe('EditAccountModal', () => {
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
     await flushPromises()
-    expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="model-whitelist-value"]').exists()).toBe(false)
     await wrapper.get('input[type="text"]').setValue('Renamed OAuth')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')

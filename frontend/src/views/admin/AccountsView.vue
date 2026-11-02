@@ -257,7 +257,6 @@
           </template>
           <template #cell-platform_type="{ row }">
             <div class="flex min-w-0 flex-col gap-1">
-              <AstraOAuthModelPolicy v-if="row.platform === 'openai' && row.type === 'oauth'" :policy="row.openai_oauth_model_policy" compact />
               <div class="flex flex-wrap items-center gap-1">
                 <PlatformTypeBadge :platform="row.platform" :type="row.type"
                   :auth-mode="getOpenAIAuthMode(row)"
@@ -511,7 +510,6 @@ import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActions
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
-import AstraOAuthModelPolicy from '@/components/account/AstraOAuthModelPolicy.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'

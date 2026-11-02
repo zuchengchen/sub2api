@@ -1213,13 +1213,13 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     expect(account.credentials.base_url).toBe('https://my-relay.example.com')
   })
 
-  it('shows automatic policy for OpenAI OAuth and skips Grok diagnostics loads', async () => {
+  it('hides policy copy and model controls for OpenAI OAuth and skips Grok diagnostics loads', async () => {
     getByIdMock.mockClear()
     const wrapper = mountLiveSelectorModal({ ...buildGrokOAuthAccount(), platform: 'openai', type: 'oauth' })
     await flushPromises()
     expect(wrapper.find('[data-testid="grok-model-diagnostics"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="sync-upstream-models"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(false)
     expect(getByIdMock).not.toHaveBeenCalled()
   })
 
@@ -1310,7 +1310,7 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     expect(wrapper.text()).not.toContain('admin.accounts.grokModelDiagnostics.requestColumn')
     expect(wrapper.text()).not.toContain('admin.accounts.grokModelDiagnostics.targetColumn')
     if (type === 'oauth') {
-      expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="astra-oauth-model-policy"]').exists()).toBe(false)
       expect(wrapper.find('input[placeholder="admin.accounts.requestModel"]').exists()).toBe(false)
       expect(getByIdMock).not.toHaveBeenCalled()
       return
