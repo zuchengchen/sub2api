@@ -297,6 +297,7 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 		Extra:                 extra,
 		ProxyID:               cloneAccountValuePointer(proxyID),
 		Concurrency:           source.Concurrency,
+		ConcurrencyProvided:   true,
 		Priority:              source.Priority,
 		RateMultiplier:        cloneAccountValuePointer(source.RateMultiplier),
 		LoadFactor:            cloneAccountValuePointer(source.LoadFactor),
@@ -438,6 +439,7 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		Status:      StatusActive,
 		Schedulable: true,
 	}
+	applyOpenAIOAuthCreateDefaults(account, input.ConcurrencyProvided)
 	if input.ProbeEnabled != nil && *input.ProbeEnabled {
 		if !isUpstreamBillingProbeAccount(account) {
 			return nil, ErrUpstreamBillingProbeAccountInvalid

@@ -179,7 +179,7 @@ type CreateAccountRequest struct {
 	Credentials        map[string]any `json:"credentials"`
 	Extra              map[string]any `json:"extra"`
 	ProxyID            *int64         `json:"proxy_id"`
-	Concurrency        int            `json:"concurrency"`
+	Concurrency        *int           `json:"concurrency"`
 	Priority           int            `json:"priority"`
 	GroupIDs           []int64        `json:"group_ids"`
 	ExpiresAt          *time.Time     `json:"expires_at"`
@@ -237,11 +237,12 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Credentials: SanitizeStoredCredentials(req.Platform, req.Credentials),
 		Extra:       prepareCodexFingerprintExtraForCreate(req.Platform, req.Type, req.Extra),
 		ProxyID:     req.ProxyID,
-		Concurrency: req.Concurrency,
+		Concurrency: ResolveAccountCreateConcurrency(req.Platform, req.Type, req.Concurrency),
 		Priority:    req.Priority,
 		Status:      StatusActive,
 		ExpiresAt:   req.ExpiresAt,
 	}
+	applyOpenAIOAuthCreateDefaults(account, req.Concurrency != nil)
 	if req.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
 	} else {

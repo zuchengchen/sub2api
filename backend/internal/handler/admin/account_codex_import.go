@@ -168,7 +168,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 	if req.UpdateExisting != nil {
 		updateExisting = *req.UpdateExisting
 	}
-	concurrency := 3
+	concurrency := service.DefaultOpenAIOAuthConcurrency
 	if req.Concurrency != nil {
 		concurrency = *req.Concurrency
 	}
@@ -270,7 +270,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 				autoPauseOnExpired = nil
 			}
 			mergedCredentials := mergeCodexImportCredentials(existing.Credentials, credentials, item)
-			mergedExtra := mergeCodexImportMap(existing.Extra, extra)
+			mergedExtra := mergeCodexImportExtra(existing.Extra, extra)
 			updateInput := &service.UpdateAccountInput{
 				Credentials:        mergedCredentials,
 				Extra:              mergedExtra,
@@ -332,6 +332,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 			Extra:                 extra,
 			ProxyID:               req.ProxyID,
 			Concurrency:           concurrency,
+			ConcurrencyProvided:   req.Concurrency != nil,
 			Priority:              priority,
 			RateMultiplier:        req.RateMultiplier,
 			LoadFactor:            req.LoadFactor,
@@ -1086,6 +1087,41 @@ func markCodexIdentitySeen(seen map[string]codexSeenIdentity, keys []string, ind
 	for _, key := range keys {
 		seen[key] = codexSeenIdentity{index: index, userID: userID}
 	}
+}
+
+func mergeCodexImportExtra(existing, incoming map[string]any) map[string]any {
+	keys := []string{"codex_image_generation_bridge", "codex_image_generation_bridge_enabled", "codex_image_generation_explicit_tool_policy"}
+	nested, _ := incoming[service.PlatformOpenAI].(map[string]any)
+	explicitPolicy := false
+	for _, values := range []map[string]any{incoming, nested} {
+		for _, key := range keys[:2] {
+			if _, exists := values[key]; exists {
+				explicitPolicy = true
+			}
+		}
+		if policy, ok := values[keys[2]].(string); ok {
+			switch strings.ToLower(strings.TrimSpace(policy)) {
+			case "strip", "remove", "drop":
+				explicitPolicy = true
+			}
+		}
+	}
+	base := mergeCodexImportMap(nil, existing)
+	if explicitPolicy {
+		// A form selection replaces the previous image strategy as a whole.
+		// In particular, Hosted/inherit must not retain a stale strip or alias.
+		for _, key := range keys {
+			delete(base, key)
+		}
+		if previous, ok := base[service.PlatformOpenAI].(map[string]any); ok {
+			cleaned := mergeCodexImportMap(nil, previous)
+			for _, key := range keys {
+				delete(cleaned, key)
+			}
+			base[service.PlatformOpenAI] = cleaned
+		}
+	}
+	return mergeCodexImportMap(base, incoming)
 }
 
 func mergeCodexImportMap(existing, incoming map[string]any) map[string]any {
