@@ -671,7 +671,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
 
-	token, _, err := s.GetAccessToken(upstreamCtx, account)
+	token, _, err := s.getRequestCredential(upstreamCtx, c, account)
 	if err != nil {
 		return nil, err
 	}

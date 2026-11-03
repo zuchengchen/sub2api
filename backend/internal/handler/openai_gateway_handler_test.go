@@ -445,6 +445,11 @@ func TestOpenAIEnsureForwardErrorResponse_ImageJSONKeepaliveWritesSingleJSONFall
 	require.ErrorIs(t, decoder.Decode(&payload), io.EOF)
 	require.Equal(t, "upstream_error", gjson.Get(w.Body.String(), "error.type").String())
 	require.Equal(t, userfacing.UpstreamRequestFailed, gjson.Get(w.Body.String(), "error.message").String())
+	streamErrors := service.GetOpsStreamErrors(c)
+	require.Len(t, streamErrors, 1)
+	require.Equal(t, http.StatusBadGateway, streamErrors[0].IntendedStatus)
+	require.True(t, streamErrors[0].CountTowardsSLA)
+	require.True(t, streamErrors[0].NonStream)
 }
 
 func TestOpenAIEnsureForwardErrorResponse_ImageJSONKeepalivePreservesCompletedJSON(t *testing.T) {
