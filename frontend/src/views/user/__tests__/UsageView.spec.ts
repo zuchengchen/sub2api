@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import UsageView from '../UsageView.vue'
+import UserErrorRequestsTable from '@/components/user/UserErrorRequestsTable.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'
@@ -160,7 +161,7 @@ function mountUsageView() {
         Icon: true,
         UsageStatsCards: chartStub,
         UsageTable: { ...chartStub, props: ['columns'] },
-        UserErrorRequestsTable: chartStub,
+        UserErrorRequestsTable: { ...chartStub, props: ['rows', 'loading', 'total', 'page', 'pageSize'] },
         ModelDistributionChart: chartStub,
         GroupDistributionChart: chartStub,
         EndpointDistributionChart: chartStub,
@@ -168,6 +169,13 @@ function mountUsageView() {
       },
     },
   })
+}
+
+function deferredRequest() {
+  let resolve!: (value: unknown) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
 }
 
 describe('user UsageView', () => {
@@ -214,6 +222,66 @@ describe('user UsageView', () => {
     listMyErrorRequests.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     list.mockResolvedValue({ items: [{ id: 1, name: 'demo-key' }], total: 1, page: 1, page_size: 100, pages: 1 })
     getAvailable.mockResolvedValue([{ id: 1, name: 'default' }])
+  })
+
+  it('user errors keep the newest page when requests finish out of order', async () => {
+    const old = deferredRequest()
+    const current = deferredRequest()
+    listMyErrorRequests.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+    const wrapper = mountUsageView()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'Error records')!.trigger('click')
+    const table = wrapper.findComponent(UserErrorRequestsTable)
+    table.vm.$emit('update:page', 2)
+    await flushPromises()
+    expect(listMyErrorRequests).toHaveBeenCalledTimes(2)
+    expect(listMyErrorRequests.mock.calls[1][0].page).toBe(2)
+    current.resolve({ items: [{ id: 2, model: 'current' }], total: 40 })
+    await flushPromises()
+    old.resolve({ items: [{ id: 1, model: 'stale' }], total: 20 })
+    await flushPromises()
+    expect(table.props('page')).toBe(2)
+    expect(table.props('rows')).toEqual([{ id: 2, model: 'current' }])
+    expect(table.props('total')).toBe(40)
+    wrapper.unmount()
+  })
+
+  it('user errors stay loading while the current request is pending', async () => {
+    const old = deferredRequest()
+    const current = deferredRequest()
+    listMyErrorRequests.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+    const wrapper = mountUsageView()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'Error records')!.trigger('click')
+    const table = wrapper.findComponent(UserErrorRequestsTable)
+    table.vm.$emit('update:page', 2)
+    await flushPromises()
+    old.resolve({ items: [{ id: 1 }], total: 20 })
+    await flushPromises()
+    expect(table.props('loading')).toBe(true)
+    current.resolve({ items: [{ id: 2 }], total: 40 })
+    await flushPromises()
+    expect(table.props('loading')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('user date filters invalidate pending errors while the tab is hidden', async () => {
+    const old = deferredRequest()
+    listMyErrorRequests.mockReturnValueOnce(old.promise).mockResolvedValueOnce({ items: [{ id: 2 }], total: 1 })
+    const wrapper = mountUsageView()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'Error records')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === 'Usage records')!.trigger('click')
+    wrapper.findComponent(DateRangePicker).vm.$emit('change', { startDate: '2026-10-30', endDate: '2026-10-30', preset: null })
+    await flushPromises()
+    old.resolve({ items: [{ id: 1 }], total: 20 })
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'Error records')!.trigger('click')
+    await flushPromises()
+    expect(listMyErrorRequests).toHaveBeenCalledTimes(2)
+    expect(listMyErrorRequests.mock.calls[1][0].start_date).toBe('2026-10-30')
+    expect(wrapper.findComponent(UserErrorRequestsTable).props('rows')).toEqual([{ id: 2 }])
+    wrapper.unmount()
   })
 
   it('loads logs, stats, model stats, and snapshot on first render', async () => {

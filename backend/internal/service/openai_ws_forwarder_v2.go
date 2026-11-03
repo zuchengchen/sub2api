@@ -984,6 +984,18 @@ readLoop:
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
 		}
 
+		// A standalone capacity terminal can precede any semantic output, just
+		// like a bare error. Preserve already metered usage and image results.
+		if reqStream && eventType == "response.failed" &&
+			!openAIUsageHasTokens(usage) && imageCounter.Count() == 0 &&
+			isOpenAIUpstreamCapacityShedEvent(message) {
+			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
+			if failoverErr := s.openAIWSV2PreOutputAccountFailover(c, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, wroteDownstream, clientDisconnected); failoverErr != nil {
+				lease.MarkBroken()
+				return nil, failoverErr
+			}
+		}
+
 		if eventType == "error" {
 			if deltaApplied && stateStore != nil && sessionHash != "" {
 				// 注入的增量锚点被上游拒绝（如 previous_response_not_found）
@@ -1083,8 +1095,7 @@ readLoop:
 			// 本次尝试；此前仅首个 token 事件放行，推理思考期客户端看不到
 			// response.created / output_item.added 等前置事件。
 			if !clientOutputStarted && !isTerminalEvent &&
-				(isTokenEvent ||
-					openAIStreamDataStartsClientOutput(string(clientMessage), eventType) ||
+				(openAIStreamDataStartsClientOutput(string(clientMessage), eventType) ||
 					openAIStreamDataStartsVisibleOutput(string(clientMessage), eventType)) {
 				clientOutputStarted = true
 			}

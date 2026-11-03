@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
 
 import UsageView from '../UsageView.vue'
+import OpsErrorLogTable from '@/views/admin/ops/components/OpsErrorLogTable.vue'
 
 const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
@@ -164,9 +165,16 @@ const mountRouteFilteredUsageView = () => mount(UsageView, {
     UserBalanceHistoryModal: true, Pagination: true, Select: true,
     DateRangePicker: true, Icon: true, TokenUsageTrend: true,
     ModelDistributionChart: true, GroupDistributionChart: true,
-    EndpointDistributionChart: true, UserTokenRanking: true,
+    EndpointDistributionChart: true, UserTokenRanking: true, OpsErrorLogTable: { template: '<div/>', props: ['rows','loading','total','page','pageSize'] }, OpsErrorDetailModal: true,
   } },
 })
+
+function deferredRequest() {
+  let resolve!: (value: unknown) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
 
 describe('admin UsageView route filters', () => {
   beforeEach(() => {
@@ -191,6 +199,49 @@ describe('admin UsageView route filters', () => {
   afterEach(() => {
     Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
     vi.useRealTimers()
+  })
+
+  it('admin errors keep the newest page when requests finish out of order', async () => {
+    const old = deferredRequest()
+    const current = deferredRequest()
+    listErrorLogs.mockReset().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+    const wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    await wrapper.findAll('[data-testid="usage-detail-tab"]')[1].trigger('click')
+    const table = wrapper.findComponent(OpsErrorLogTable)
+    table.vm.$emit('update:page', 2)
+    await flushPromises()
+    expect(listErrorLogs).toHaveBeenCalledTimes(2)
+    expect(listErrorLogs.mock.calls[1][0].page).toBe(2)
+    current.resolve({ items: [{ id: 2, model: 'current' }], total: 40 })
+    await flushPromises()
+    old.resolve({ items: [{ id: 1, model: 'stale' }], total: 20 })
+    await flushPromises()
+    expect(table.props('page')).toBe(2)
+    expect(table.props('rows')).toEqual([{ id: 2, model: 'current' }])
+    expect(table.props('total')).toBe(40)
+    wrapper.unmount()
+  })
+
+  it('admin filter changes invalidate pending errors while the tab is hidden', async () => {
+    const old = deferredRequest()
+    listErrorLogs.mockReset().mockReturnValueOnce(old.promise).mockResolvedValueOnce({ items: [{ id: 2 }], total: 1 })
+    const wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    await wrapper.findAll('[data-testid="usage-detail-tab"]')[1].trigger('click')
+    await wrapper.findAll('[data-testid="usage-detail-tab"]')[0].trigger('click')
+    const vm = wrapper.vm as any
+    vm.filters.model = 'updated-model'
+    wrapper.findComponent(UsageFiltersStub).vm.$emit('change')
+    await flushPromises()
+    old.resolve({ items: [{ id: 1 }], total: 20 })
+    await flushPromises()
+    await wrapper.findAll('[data-testid="usage-detail-tab"]')[1].trigger('click')
+    await flushPromises()
+    expect(listErrorLogs).toHaveBeenCalledTimes(2)
+    expect(listErrorLogs.mock.calls[1][0].model).toBe('updated-model')
+    expect(wrapper.findComponent(OpsErrorLogTable).props('rows')).toEqual([{ id: 2 }])
+    wrapper.unmount()
   })
 
   it('uses one exact rolling 24-hour range for the default usage requests', async () => {

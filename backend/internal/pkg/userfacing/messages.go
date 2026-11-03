@@ -22,7 +22,7 @@ var (
 	APIKeyUserNotFound                           = ZHEN("API Key 关联的用户不存在", "User associated with API key not found")
 	UserInactive                                 = ZHEN("用户账号未启用", "User account is not active")
 	InsufficientBalance                          = ZHEN("余额不足", "insufficient balance")
-	InsufficientAccountBalance                   = ZHEN("账户余额不足", "Insufficient account balance")
+	InsufficientAccountBalance                   = ZHEN("用户余额不足", "Insufficient balance")
 	NoActiveSubscription                         = ZHEN("当前分组没有有效订阅", "No active subscription found for this group")
 	SubscriptionInvalid                          = ZHEN("订阅无效或已过期", "subscription is invalid or expired")
 	SubscriptionMaintenanceFailed                = ZHEN("订阅用量窗口维护失败", "Failed to maintain subscription usage windows")
