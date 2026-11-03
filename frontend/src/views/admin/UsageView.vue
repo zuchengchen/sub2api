@@ -547,11 +547,14 @@ const applyFilters = () => {
   loadStats()
   loadModelStats(modelDistributionSource.value, true)
   loadChartData()
+  errRequestVersion++
+  errLoading.value = false
   errPage.value = 1
   if (activeTab.value === 'errors') {
     loadAdminErrors()
   } else {
     errRows.value = []
+    errTotal.value = 0
   }
 }
 const refreshData = () => {
@@ -891,6 +894,7 @@ const switchTab = (tab: DetailTab) => {
 // Error tab state
 const errRows = ref<OpsErrorLog[]>([])
 const errLoading = ref(false)
+let errRequestVersion = 0
 const errPage = ref(1)
 const errPageSize = ref(20)
 const errTotal = ref(0)
@@ -904,6 +908,7 @@ const toRFC3339 = (d: string | undefined, endOfDay = false): string | undefined 
   d ? new Date(d + (endOfDay ? 'T23:59:59.999' : 'T00:00:00')).toISOString() : undefined
 
 const loadAdminErrors = async () => {
+  const version = ++errRequestVersion
   errLoading.value = true
   try {
     const resp = await listErrorLogs({
@@ -923,13 +928,15 @@ const loadAdminErrors = async () => {
       sort_by: errSortBy.value,
       sort_order: errSortOrder.value,
     })
+    if (version !== errRequestVersion) return
     errRows.value = resp.items
     errTotal.value = resp.total
   } catch (error) {
+    if (version !== errRequestVersion) return
     console.error('Failed to load admin errors:', error)
     appStore.showError(t('usage.errors.failedToLoad'))
   } finally {
-    errLoading.value = false
+    if (version === errRequestVersion) errLoading.value = false
   }
 }
 
@@ -966,7 +973,7 @@ onMounted(() => {
   loadSavedRankingColumns()
   document.addEventListener('click', handleColumnClickOutside)
 })
-onUnmounted(() => { abortController?.abort(); exportAbortController?.abort(); document.removeEventListener('click', handleColumnClickOutside) })
+onUnmounted(() => { errRequestVersion++; abortController?.abort(); exportAbortController?.abort(); document.removeEventListener('click', handleColumnClickOutside) })
 
 watch(modelDistributionSource, (source) => {
   void loadModelStats(source)

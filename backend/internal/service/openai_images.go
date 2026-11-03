@@ -154,14 +154,27 @@ func (r *OpenAIImagesRequest) moderationImages() []map[string]string {
 	return images
 }
 
+// openAIImageUploadContentType resolves generic multipart file media types from
+// the image bytes. File names and generic headers are not image format evidence.
+func openAIImageUploadContentType(upload OpenAIImagesUpload) string {
+	contentType := strings.TrimSpace(upload.ContentType)
+	if contentType == "" {
+		return http.DetectContentType(upload.Data)
+	}
+	mediaType := strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
+	if strings.EqualFold(mediaType, "application/octet-stream") || strings.EqualFold(mediaType, "binary/octet-stream") {
+		if detected := detectedImageContentType(upload.Data); detected != "" {
+			return detected
+		}
+	}
+	return contentType
+}
+
 func (u OpenAIImagesUpload) ModerationDataURL() string {
 	if len(u.Data) == 0 {
 		return ""
 	}
-	contentType := strings.TrimSpace(u.ContentType)
-	if contentType == "" {
-		contentType = http.DetectContentType(u.Data)
-	}
+	contentType := openAIImageUploadContentType(u)
 	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
 		return ""
 	}

@@ -283,6 +283,7 @@ const endpointStatsLoading = ref(false)
 const exporting = ref(false)
 const errorRows = ref<UserErrorRequest[]>([])
 const errorLoading = ref(false)
+let errorRequestVersion = 0
 const errorPage = ref(1)
 const errorPageSize = ref(20)
 const errorSortBy = ref('created_at')
@@ -870,6 +871,8 @@ const loadFilterOptions = async () => {
 }
 
 const resetErrorRows = () => {
+  errorRequestVersion++
+  errorLoading.value = false
   errorPage.value = 1
   if (activeTab.value === 'errors') {
     void loadErrors()
@@ -880,6 +883,7 @@ const resetErrorRows = () => {
 }
 
 const loadErrors = async () => {
+  const version = ++errorRequestVersion
   errorLoading.value = true
   try {
     const resp = await usageAPI.listMyErrorRequests({
@@ -893,13 +897,15 @@ const loadErrors = async () => {
       sort_by: errorSortBy.value,
       sort_order: errorSortOrder.value,
     })
+    if (version !== errorRequestVersion) return
     errorRows.value = resp.items
     errorTotal.value = resp.total
   } catch (error) {
+    if (version !== errorRequestVersion) return
     console.error('[UsageView] loadErrors failed:', error)
     appStore.showError(t('usage.errors.failedToLoad'))
   } finally {
-    errorLoading.value = false
+    if (version === errorRequestVersion) errorLoading.value = false
   }
 }
 
@@ -935,6 +941,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  errorRequestVersion++
   abortController?.abort()
   document.removeEventListener('click', handleColumnClickOutside)
 })

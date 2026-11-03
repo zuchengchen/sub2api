@@ -319,6 +319,7 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		phases, types := service.CategoryToFilter(cat)
 		filter.ErrorPhasesAny = phases
 		filter.ErrorTypesAny = types
+		filter.ErrorCategoryOther = cat == "other"
 	}
 
 	if platform := strings.TrimSpace(c.Query("platform")); platform != "" {
@@ -448,6 +449,7 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 		phases, types := service.CategoryToFilter(cat)
 		filter.ErrorPhasesAny = phases
 		filter.ErrorTypesAny = types
+		filter.ErrorCategoryOther = cat == "other"
 	}
 
 	if platform := strings.TrimSpace(c.Query("platform")); platform != "" {

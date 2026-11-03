@@ -282,6 +282,17 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if managedNonReasoning {
 		responsesReq.Reasoning = nil
 	}
+	// The upstream header is forwarded by buildUpstreamRequest. Apply the same
+	// Lite contract as native Responses before synthesis and OAuth transforms.
+	responsesLite := account.IsOpenAI() && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader))
+	if responsesLite {
+		normalized, _, normalizeErr := normalizeOpenAIResponsesLitePayloadForAccount(responsesBody, account)
+		if normalizeErr != nil {
+			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", normalizeErr.Error())
+			return nil, normalizeErr
+		}
+		responsesBody = normalized
+	}
 	promptCachePreparation := openAIPromptCachePreparation{}
 	if account.IsOpenAI() && isOpenAIGPT56OrLaterModel(upstreamModel) {
 		responsesBody, promptCachePreparation, err = prepareOpenAIGPT56PromptCaching(
@@ -339,7 +350,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		if isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() {
 			deviceProfile, _ := codexDeviceProfileForRequest(account)
 			synthOptions := codexSynthOptions{
-				ResponsesLite: false,
+				ResponsesLite: responsesLite,
 				WireProfile:   wireProfile,
 				WireVersion:   s.codexSessionClientVersion(c, account, body),
 				Device:        deviceProfile,
@@ -366,6 +377,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 		synthesized := synthResult != nil && synthResult.Modified
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
+			ResponsesLite:                       responsesLite,
 			SkipDefaultInstructions:             !isResponsesShape || synthesized,
 			OmitPromotedSystemMessagesFromInput: !isResponsesShape && !isJSONObjectFormat,
 			WireProfile:                         wireProfilePtr,

@@ -32,7 +32,7 @@ func TestMapUserErrorCategory(t *testing.T) {
 
 func TestCategoryToFilter(t *testing.T) {
 	phases, types := CategoryToFilter("rate_limit")
-	if len(types) != 1 || types[0] != "rate_limit_error" || len(phases) != 0 {
+	if len(types) != 1 || types[0] != "rate_limit_error" || len(phases) != 1 || phases[0] != "request" {
 		t.Fatalf("rate_limit => phases=%v types=%v", phases, types)
 	}
 	phases, types = CategoryToFilter("auth")
@@ -52,11 +52,11 @@ func TestCategoryToFilter(t *testing.T) {
 		t.Fatalf("internal => phases=%v types=%v", phases, types)
 	}
 	phases, types = CategoryToFilter("quota")
-	if len(types) != 2 || types[0] != "billing_error" || types[1] != "subscription_error" || len(phases) != 0 {
+	if len(types) != 2 || types[0] != "billing_error" || types[1] != "subscription_error" || len(phases) != 1 || phases[0] != "request" {
 		t.Fatalf("quota => phases=%v types=%v", phases, types)
 	}
 	phases, types = CategoryToFilter("invalid_request")
-	if len(types) != 1 || types[0] != "invalid_request_error" || len(phases) != 0 {
+	if len(types) != 1 || types[0] != "invalid_request_error" || len(phases) != 1 || phases[0] != "request" {
 		t.Fatalf("invalid_request => phases=%v types=%v", phases, types)
 	}
 	phases, types = CategoryToFilter("other")
@@ -180,5 +180,38 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 func TestToUserErrorRequestDetail_Nil(t *testing.T) {
 	if out := ToUserErrorRequestDetail(nil); out != nil {
 		t.Errorf("expected nil for nil input, got %+v", out)
+	}
+}
+
+func TestUserCategoryFilterMatchesDisplayedCategory(t *testing.T) {
+	// Identical upstream and request error types must remain distinct in the UI.
+	samples := []struct{ phase, errType string }{
+		{"request", "rate_limit_error"},
+		{"upstream", "rate_limit_error"},
+		{"account_auth", "rate_limit_error"},
+		{"request", "invalid_request_error"},
+		{"upstream", "invalid_request_error"},
+		{"request", "billing_error"},
+		{"request", "subscription_error"},
+		{"upstream", "billing_error"},
+	}
+	contains := func(values []string, value string) bool {
+		for _, candidate := range values {
+			if candidate == value {
+				return true
+			}
+		}
+		return false
+	}
+	for _, category := range []string{"auth", "rate_limit", "quota", "invalid_request", "service_unavailable", "upstream", "internal", "cyber"} {
+		phases, types := CategoryToFilter(category)
+		for _, sample := range samples {
+			// These are the repository's two independent ANY predicates joined by AND.
+			selected := (len(phases) == 0 || contains(phases, sample.phase)) && (len(types) == 0 || contains(types, sample.errType))
+			displayed := MapUserErrorCategory(sample.phase, sample.errType)
+			if selected != (displayed == category) {
+				t.Errorf("category=%s phase=%s type=%s selected=%v displayed=%s", category, sample.phase, sample.errType, selected, displayed)
+			}
+		}
 	}
 }
