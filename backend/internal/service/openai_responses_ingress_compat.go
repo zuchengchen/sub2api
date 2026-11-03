@@ -28,7 +28,7 @@ func normalizeOpenAIResponsesLegacyIngressWithConfig(cfg *config.Config, body []
 		hasLegacyField := false
 		view.ForEach(func(key, _ gjson.Result) bool {
 			switch key.Str {
-			case "messages", "prompt", "commands":
+			case "messages", "prompt", "commands", "reasoning_effort":
 				hasLegacyField = true
 			}
 			return !hasLegacyField
@@ -82,6 +82,24 @@ func normalizeOpenAIResponsesLegacyIngressWithConfig(cfg *config.Config, body []
 	}
 	if _, hasCommands := request["commands"]; hasCommands {
 		delete(request, "commands")
+		changed = true
+	}
+	if effort, hasEffort := request["reasoning_effort"]; hasEffort {
+		// Some clients combine native input with Chat Completions' effort
+		// alias. Responses only accepts reasoning.effort. Preserve explicit
+		// native values (including null), other reasoning fields and invalid
+		// types so upstream validation still sees malformed client input.
+		effortText, isText := effort.(string)
+		if effort != nil && (!isText || strings.TrimSpace(effortText) != "") {
+			if request["reasoning"] == nil {
+				request["reasoning"] = map[string]any{"effort": effort}
+			} else if reasoning, ok := request["reasoning"].(map[string]any); ok {
+				if _, hasNativeEffort := reasoning["effort"]; !hasNativeEffort {
+					reasoning["effort"] = effort
+				}
+			}
+		}
+		delete(request, "reasoning_effort")
 		changed = true
 	}
 
@@ -212,7 +230,7 @@ func applyLegacyResponsesTopLevelFields(request map[string]any, legacy converted
 	if legacy.hasChatTools && legacy.tools != nil {
 		request["tools"] = legacy.tools
 	}
-	if legacy.hasReasoningEffort && legacy.reasoning != nil {
+	if legacy.hasReasoningEffort && legacy.reasoning != nil && request["reasoning"] == nil {
 		request["reasoning"] = legacy.reasoning
 	}
 	if legacy.hasChatToolChoice && legacy.toolChoice != nil {
@@ -221,7 +239,7 @@ func applyLegacyResponsesTopLevelFields(request map[string]any, legacy converted
 	if legacy.serviceTier != "" {
 		request["service_tier"] = legacy.serviceTier
 	}
-	for _, key := range []string{"max_tokens", "max_completion_tokens", "reasoning_effort", "functions", "function_call"} {
+	for _, key := range []string{"max_tokens", "max_completion_tokens", "functions", "function_call"} {
 		delete(request, key)
 	}
 }

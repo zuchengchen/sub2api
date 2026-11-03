@@ -3723,6 +3723,9 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 }
 
 func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
+	if failoverErr != nil && failoverErr.Reason == service.OpenAICredentialReasonReauthRequired {
+		return http.StatusServiceUnavailable, service.OpenAICredentialUnavailableClientMessage
+	}
 	if failoverErr != nil && failoverErr.Reason == service.OpenAIUpstreamAccessStateReason && strings.TrimSpace(failoverErr.ClientMessage) != "" {
 		status := failoverErr.ClientStatusCode
 		if status <= 0 {
@@ -3816,6 +3819,9 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 	streamStarted bool,
 	countTowardsSLA bool,
 ) {
+	if writeOpenAIImagesKeepaliveError(c, status, errType, code, message) {
+		return
+	}
 	// body-signal compact 心跳可能已把响应头提交为 200：先停心跳（建立
 	// happens-before，接管 ResponseWriter），并升级为流内错误处理。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
@@ -3999,6 +4005,9 @@ func openAIFirstOutputFailoverExhausted(failoverErr *service.UpstreamFailoverErr
 
 // errorResponse returns OpenAI API format error response
 func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType, message string) {
+	if writeOpenAIImagesKeepaliveError(c, status, errType, "", message) {
+		return
+	}
 	// body-signal compact 心跳可能已把响应头提交为 200：JSON 错误体会与已
 	// 提交的 SSE 流交错，必须降级为 response.failed 终止事件（#3887）。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
@@ -4013,6 +4022,24 @@ func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType
 			"message": message,
 		},
 	})
+}
+
+// Images keepalive commits HTTP 200 using JSON whitespace. Later failures must
+// remain JSON and count as failures, even though the wire status cannot change.
+func writeOpenAIImagesKeepaliveError(c *gin.Context, status int, errType, code, message string) bool {
+	if !service.StopOpenAIImagesJSONKeepaliveCommitted(c) {
+		return false
+	}
+	service.MarkOpsStreamErrorValue(c, service.OpsStreamError{
+		ErrType: errType, Code: code, Message: message, IntendedStatus: status,
+		CountTowardsSLA: true, NonStream: true,
+	})
+	errorObject := gin.H{"type": errType, "message": message}
+	if code != "" {
+		errorObject["code"] = code
+	}
+	c.JSON(status, gin.H{"error": errorObject})
+	return true
 }
 
 // openAICompactKeepaliveInterval 复用流式 keepalive 配置作为 compact 下游
