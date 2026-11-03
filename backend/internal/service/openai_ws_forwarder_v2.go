@@ -1059,7 +1059,15 @@ readLoop:
 				return nil, wrapOpenAIWSFallback(fallbackReason, errors.New(errMsg))
 			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
-			setOpsUpstreamError(c, statusCode, errMsg, "")
+			capacityShed := isOpenAIUpstreamCapacityShedEvent(message)
+			if capacityShed {
+				// Preserve the semantic capacity failure after output has committed.
+				// The generic WS fallback would otherwise overwrite it with a 502.
+				statusCode = http.StatusServiceUnavailable
+				errMsg = s.recordOpenAIStreamUpstreamError(c, account, false, lease.HandshakeHeader("x-request-id"), "ws_error", message, errMsg)
+			} else {
+				setOpsUpstreamError(c, statusCode, errMsg, "")
+			}
 			// Codex ignores bare `error` events (only flex-unavailable is
 			// parsed) and the handler would append response.failed with
 			// code=upstream_error, so overflow must become the terminal
@@ -1076,6 +1084,16 @@ readLoop:
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
 				emitStreamMessage(clientMessage, true)
+				if capacityShed && !clientDisconnected {
+					// Responses clients require a terminal event. Finish here while
+					// the typed error is available so the handler cannot append a
+					// generic response.failed that loses its retryable capacity code.
+					writeOpenAIResponsesSSEFailure(c, statusCode, gin.H{
+						"type":    firstNonEmpty(errTypeRaw, "upstream_error"),
+						"code":    openAICapacityShedRetryableClientCode,
+						"message": errMsg,
+					})
+				}
 			}
 			if !reqStream {
 				MarkResponseCommitted(c)

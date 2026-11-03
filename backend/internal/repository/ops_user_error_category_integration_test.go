@@ -51,6 +51,10 @@ func TestOpsUserErrorCategoryFilters(t *testing.T) {
 		{"auth", "authentication_error", "auth", 401, false},
 		{"routing", "api_error", "service_unavailable", 503, false},
 		{"account_auth", "upstream_error", "upstream", 503, false},
+		// Transport failures and committed capacity failures keep their upstream
+		// category after persistence, with their distinct logical HTTP statuses.
+		{"upstream", "upstream_error", "upstream", 502, false},
+		{"upstream", "service_unavailable_error", "upstream", 503, false},
 		{"upstream", "rate_limit_error", "upstream", 429, false},
 		{"upstream", "invalid_request_error", "upstream", 400, false},
 		{"upstream", "billing_error", "upstream", 402, false},
