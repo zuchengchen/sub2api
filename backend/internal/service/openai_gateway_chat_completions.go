@@ -852,7 +852,8 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	}
 
 	if finalResponse == nil {
-		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
+		message := s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "request_error", nil, "Upstream stream ended without a terminal response event")
+		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", message)
 		return nil, fmt.Errorf("upstream stream ended without terminal event")
 	}
 	observer := upstreamResponseModelObserverFromContext(c)
