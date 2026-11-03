@@ -1,11 +1,79 @@
 package service
 
 import (
+	"context"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestOpenAIResponsesReasoningEffortAliasReachesUpstream(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-astra","stream":true,"input":"hello","reasoning_effort":"high","reasoning":{"summary":"auto"}}`)
+	account := newOpenAIOAuthNamespaceTestAccount()
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ok\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"),
+	}}
+	upstream.responses[0].Header.Set("Content-Type", "text/event-stream")
+	_, err := newOpenAIRejectedFieldTestService(upstream).Forward(context.Background(), newOpenAIRejectedFieldTestContext(body), account, body)
+	require.NoError(t, err)
+	require.Len(t, upstream.bodies, 1)
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "reasoning_effort").Exists())
+	require.Equal(t, "high", gjson.GetBytes(upstream.bodies[0], "reasoning.effort").String())
+
+	frame, _, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(body, account, false)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(frame, "reasoning_effort").Exists())
+	require.Equal(t, "high", gjson.GetBytes(frame, "reasoning.effort").String())
+	require.Equal(t, "auto", gjson.GetBytes(frame, "reasoning.summary").String())
+}
+
+func TestNormalizeOpenAIResponsesLegacyIngressReasoningEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"native_input", `{"input":"hello","reasoning_effort":"high"}`, `{"input":"hello","reasoning":{"effort":"high"}}`},
+		{"empty_alias", `{"input":"hello","reasoning_effort":""}`, `{"input":"hello"}`},
+		{"null_alias", `{"input":"hello","reasoning_effort":null}`, `{"input":"hello"}`},
+		{"native_precedence", `{"input":"hello","reasoning_effort":"low","reasoning":{"effort":"xhigh","summary":"auto"}}`, `{"input":"hello","reasoning":{"effort":"xhigh","summary":"auto"}}`},
+		{"merge_other_fields", `{"input":"hello","reasoning_effort":"high","reasoning":{"mode":"pro","summary":"auto"}}`, `{"input":"hello","reasoning":{"effort":"high","mode":"pro","summary":"auto"}}`},
+		{"null_reasoning", `{"input":"hello","reasoning":null,"reasoning_effort":"medium"}`, `{"input":"hello","reasoning":{"effort":"medium"}}`},
+		{"explicit_null_effort", `{"input":"hello","reasoning":{"effort":null},"reasoning_effort":"high"}`, `{"input":"hello","reasoning":{"effort":null}}`},
+		{"invalid_native_type", `{"input":"hello","reasoning":42,"reasoning_effort":"high"}`, `{"input":"hello","reasoning":42}`},
+		{"invalid_alias_type", `{"input":"hello","reasoning_effort":42}`, `{"input":"hello","reasoning":{"effort":42}}`},
+		{"native_input_with_messages", `{"input":"hello","messages":[{"role":"user","content":"ignored"}],"reasoning_effort":"high"}`, `{"input":"hello","reasoning":{"effort":"high"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, changed, err := normalizeOpenAIResponsesLegacyIngress([]byte(tc.body))
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.JSONEq(t, tc.want, string(out))
+			again, changed, err := normalizeOpenAIResponsesLegacyIngress(out)
+			require.NoError(t, err)
+			require.False(t, changed)
+			require.Equal(t, out, again)
+		})
+	}
+}
+
+func TestNormalizeOpenAIResponsesLegacyMessagesPreserveNativeReasoning(t *testing.T) {
+	for _, reasoning := range []string{`{"effort":"xhigh","mode":"pro"}`, `{"mode":"pro"}`} {
+		body := []byte(`{"model":"gpt-6-astra","messages":[{"role":"user","content":"hello"}],"reasoning_effort":"high","reasoning":` + reasoning + `}`)
+		out, changed, err := normalizeOpenAIResponsesLegacyIngress(body)
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.False(t, gjson.GetBytes(out, "reasoning_effort").Exists())
+		require.Equal(t, "pro", gjson.GetBytes(out, "reasoning.mode").String())
+		wantEffort := "high"
+		if gjson.Get(reasoning, "effort").Exists() {
+			wantEffort = "xhigh"
+		}
+		require.Equal(t, wantEffort, gjson.GetBytes(out, "reasoning.effort").String())
+	}
+}
 
 func TestNormalizeOpenAIResponsesLegacyIngressMessagesOnly(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","stream":false,"messages":[{"role":"system","content":"repo policy"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"hello\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}],"previous_response_id":"resp_stale"}`)

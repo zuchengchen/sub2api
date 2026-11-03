@@ -16,6 +16,22 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestOpenAIOAuthCredentialFailureExhaustedReturnsSafeOpenAIResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	(&OpenAIGatewayHandler{}).handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		Stage: service.GatewayFailureStageAccountAuth, Scope: service.GatewayFailureScopeAccount,
+		Reason: service.OpenAICredentialReasonReauthRequired, NextAccountAction: service.NextAccountRetry,
+		ClientMessage: "secret-must-not-leak", ResponseBody: []byte(`{"error":{"message":"refresh_token_reused"}}`),
+	}, false)
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Contains(t, recorder.Body.String(), service.OpenAICredentialUnavailableClientMessage)
+	require.NotContains(t, recorder.Body.String(), "Grok")
+	require.NotContains(t, recorder.Body.String(), "secret")
+	require.NotContains(t, recorder.Body.String(), "refresh_token")
+}
+
 func TestGatewayChatCredentialStopDoesNotSelectAnotherAccountAndReturnsSafe503(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	stopErr := &service.UpstreamFailoverError{

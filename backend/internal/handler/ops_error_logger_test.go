@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
@@ -15,6 +17,56 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpsErrorLoggerMiddleware_ImageKeepaliveFailureIsNotRecovered(t *testing.T) {
+	for _, mode := range []string{"fallback", "coded_error", "direct_error", "failover_exhausted", "success"} {
+		t.Run(mode, func(t *testing.T) {
+			setupOpsErrorLogTestQueue(t, 2)
+			gin.SetMode(gin.TestMode)
+			ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			router := gin.New()
+			router.Use(OpsErrorLoggerMiddleware(ops))
+			router.POST("/v1/images/edits", func(c *gin.Context) {
+				setOpsRequestContext(c, "gpt-image-2", false)
+				c.Set(service.OpsUpstreamErrorsKey, []*service.OpsUpstreamErrorEvent{{
+					Platform: service.PlatformOpenAI, Kind: "request_error", Message: "timeout awaiting response headers",
+				}})
+				stop := service.StartOpenAIImagesJSONKeepalive(c, time.Millisecond)
+				defer stop()
+				require.Eventually(t, c.Writer.Written, time.Second, time.Millisecond)
+				h := &OpenAIGatewayHandler{}
+				switch mode {
+				case "fallback":
+					require.True(t, h.ensureForwardErrorResponse(c, false))
+				case "coded_error":
+					h.handleStreamingAwareErrorWithCode(c, http.StatusBadGateway, "upstream_error", "upstream_timeout", "upstream timeout", false, false)
+				case "direct_error":
+					h.errorResponse(c, http.StatusBadGateway, "upstream_error", "upstream timeout")
+				case "failover_exhausted":
+					h.handleFailoverExhausted(c, &service.UpstreamFailoverError{StatusCode: http.StatusBadGateway}, true)
+				case "success":
+					c.JSON(http.StatusOK, gin.H{"data": []any{gin.H{"b64_json": "image"}}})
+				}
+			})
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/images/edits", nil))
+			require.Equal(t, http.StatusOK, recorder.Code, "keepalive already committed HTTP 200")
+			require.True(t, json.Valid(recorder.Body.Bytes()), recorder.Body.String())
+			require.Equal(t, int64(1), OpsErrorLogQueueLength())
+			job := <-opsErrorLogQueue
+			if mode == "success" {
+				require.Equal(t, http.StatusOK, job.entry.StatusCode)
+				require.Contains(t, job.entry.ErrorMessage, "Recovered upstream error")
+			} else {
+				require.Equal(t, http.StatusBadGateway, job.entry.StatusCode)
+				require.False(t, job.entry.Stream)
+				require.NotContains(t, job.entry.ErrorMessage, "Recovered")
+				require.NotNil(t, job.entry.UpstreamErrorsJSON)
+				require.Contains(t, *job.entry.UpstreamErrorsJSON, "timeout awaiting response headers")
+			}
+		})
+	}
+}
 
 type ingressRejectSettingRepo struct {
 	service.SettingRepository
