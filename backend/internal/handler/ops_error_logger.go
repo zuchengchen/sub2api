@@ -2175,11 +2175,14 @@ func isKnownOpsErrorType(t string) bool {
 }
 
 func normalizeOpsErrorType(errType string, code string) string {
-	if errType != "" && isKnownOpsErrorType(errType) {
+	// api_error is the parser's fallback for untyped middleware responses.
+	// Preserve specific protocol types, but let an explicit business code
+	// classify that fallback so quota denials remain filterable as quota errors.
+	if errType != "" && errType != "api_error" && isKnownOpsErrorType(errType) {
 		return errType
 	}
 	switch strings.TrimSpace(code) {
-	case opsCodeInsufficientBalance:
+	case opsCodeInsufficientBalance, opsCodeAPIKeyQuotaExhausted:
 		return "billing_error"
 	case opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid:
 		return "subscription_error"

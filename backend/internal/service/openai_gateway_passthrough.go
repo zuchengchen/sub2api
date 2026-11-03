@@ -2131,6 +2131,18 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			eventType := effectiveOpenAISSEEventType(dataBytes, rawEventType)
 			appendOpenAIStreamedBillingDelta(eventType, dataBytes, &streamedBilling)
 			createdAtTracker.Observe(dataBytes, eventType)
+			if codexFailureTerminal && sawBareError && !sawResponseFailed &&
+				(eventType == "response.completed" || eventType == "response.done") {
+				// A later successful terminal supersedes a pending bare error, as in
+				// the native SSE and WS HTTP bridge paths.
+				sawBareError = false
+				sawFailedEvent = false
+				responseFailedPending = false
+				suppressCurrentEvent = false
+				bareErrorPayload = nil
+				bareErrorAccountSideEffectsPending = false
+				failedMessage = ""
+			}
 			if codexFailureTerminal && sawBareError && !sawResponseFailed && eventType != "response.failed" {
 				suppressCurrentEvent = true
 			}

@@ -186,10 +186,11 @@ func opsErrorLogsOrderBy(filter *service.OpsErrorLogFilter) string {
 	case "model":
 		column = "COALESCE(NULLIF(TRIM(e.requested_model), ''), e.model)"
 	case "status_code":
-		// 与展示列/过滤保持同义:列表展示 COALESCE(upstream_status_code, status_code, 0),
-		// status_code 过滤也用同一表达式,故排序必须一致——否则 recovered upstream 行
-		//（status_code<400 但展示上游 5xx）排序键与显示值/分页切分不符。
-		column = "COALESCE(e.upstream_status_code, e.status_code, 0)"
+		// Keep ordering aligned with displayed/filtered status. An explicit zero
+		// upstream status means no HTTP response (account_auth); use the client
+		// status for display while preserving that zero in UpstreamStatusCode.
+		// Positive upstream codes still describe recovered provider-health rows.
+		column = "COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0)"
 	default:
 		column = "e.created_at"
 	}
@@ -240,7 +241,7 @@ SELECT
   COALESCE(e.error_owner, ''),
   COALESCE(e.error_source, ''),
   e.severity,
-  COALESCE(e.upstream_status_code, e.status_code, 0),
+  COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0),
   COALESCE(e.platform, ''),
   COALESCE(e.model, ''),
   COALESCE(e.resolved, false),
@@ -411,7 +412,7 @@ SELECT
   COALESCE(e.error_owner, ''),
   COALESCE(e.error_source, ''),
   e.severity,
-  COALESCE(e.upstream_status_code, e.status_code, 0),
+  COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0),
   COALESCE(e.platform, ''),
   COALESCE(e.model, ''),
   COALESCE(e.resolved, false),
@@ -978,12 +979,12 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	}
 	if len(filter.StatusCodes) > 0 {
 		args = append(args, pq.Array(filter.StatusCodes))
-		clauses = append(clauses, "COALESCE(e.upstream_status_code, e.status_code, 0) = ANY($"+itoa(len(args))+")")
+		clauses = append(clauses, "COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0) = ANY($"+itoa(len(args))+")")
 	} else if filter.StatusCodesOther {
 		// "Other" means: status codes not in the common list.
 		known := []int{400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504, 529}
 		args = append(args, pq.Array(known))
-		clauses = append(clauses, "NOT (COALESCE(e.upstream_status_code, e.status_code, 0) = ANY($"+itoa(len(args))+"))")
+		clauses = append(clauses, "NOT (COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0) = ANY($"+itoa(len(args))+"))")
 	}
 	// Exact correlation keys (preferred for request↔upstream linkage).
 	if rid := strings.TrimSpace(filter.RequestID); rid != "" {
@@ -1037,6 +1038,11 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	if len(filter.ErrorTypesAny) > 0 {
 		args = append(args, pq.Array(filter.ErrorTypesAny))
 		clauses = append(clauses, "e.error_type = ANY($"+itoa(len(args))+")")
+	}
+	if filter.ErrorCategoryOther {
+		// Complement of service.MapUserErrorCategory: a recognized phase wins
+		// regardless of type; only request needs the type-specific exclusions.
+		clauses = append(clauses, `(COALESCE(e.error_phase, '') NOT IN ('auth', 'routing', 'account_auth', 'upstream', 'network', 'internal', 'request') OR (e.error_phase = 'request' AND COALESCE(e.error_type, '') NOT IN ('rate_limit_error', 'billing_error', 'subscription_error', 'invalid_request_error', 'cyber_policy')))`)
 	}
 
 	return "WHERE " + strings.Join(clauses, " AND "), args

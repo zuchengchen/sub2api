@@ -1157,7 +1157,7 @@ func TestClassifyOpsLocalBusinessLimitErrorsExcludedFromSLA(t *testing.T) {
 			message:     "API key 额度已用完",
 			code:        "API_KEY_QUOTA_EXHAUSTED",
 			status:      http.StatusTooManyRequests,
-			wantErrType: "api_error",
+			wantErrType: "billing_error",
 			wantPhase:   "request",
 		},
 		{

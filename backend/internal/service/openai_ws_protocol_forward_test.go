@@ -707,7 +707,7 @@ func TestOpenAIGatewayService_Forward_WSv2EarlyCloseExhaustedTransparentFallback
 	require.Empty(t, svc.openAIWSSessionDisabledReason(resolveOpenAIWSSessionScope(c, account, body)), "anonymous fallback must not disable the account")
 }
 
-// 凭据级失败（401 auth_failed）：不回退、不标记。
+// 凭据级失败（401 auth_failed）：不降同账号 HTTP、不禁用 WS；首次输出前允许有限换账号。
 func TestOpenAIGatewayService_Forward_WSv2Dial401NoFallbackNoMark(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ws401Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -739,6 +739,8 @@ func TestOpenAIGatewayService_Forward_WSv2Dial401NoFallbackNoMark(t *testing.T) 
 		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
 	}
 
+	defer svc.CloseOpenAIWSPool()
+
 	account := &Account{
 		ID:          90,
 		Name:        "openai-apikey",
@@ -758,6 +760,12 @@ func TestOpenAIGatewayService_Forward_WSv2Dial401NoFallbackNoMark(t *testing.T) 
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.Error(t, err)
 	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusUnauthorized, failoverErr.StatusCode)
+	require.True(t, failoverErr.ShouldRetryNextAccount())
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, c.Writer.Written(), "auth_failed 应保留首次输出前的账号切换机会")
 	require.Nil(t, upstream.lastReq, "auth_failed 不应回退 HTTP")
 	require.Empty(t, svc.openAIWSSessionDisabledReason(resolveOpenAIWSSessionScope(c, account, body)), "auth_failed 不应标记会话禁用")
 }

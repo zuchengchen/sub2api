@@ -1380,6 +1380,22 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 		}
 		if !wsHTTPFallback {
+			// Local OAuth reload/refresh recovery has already finished. A rejected
+			// handshake has sent no model request, so the ordinary bounded handler
+			// loop may try another account without replaying on this credential.
+			if ctx.Err() == nil && !openAIStreamClientOutputStarted(c, false) {
+				var dialErr *openAIWSDialError
+				if errors.As(wsErr, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusUnauthorized {
+					message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(dialErr.ResponseBody)))
+					if message == "" {
+						message = "upstream websocket authentication failed"
+					}
+					if s.shouldFailoverOpenAIUpstreamResponse(account, dialErr.StatusCode, message, dialErr.ResponseBody) {
+						shouldDisable := s.handleOpenAIAccountUpstreamError(ctx, account, dialErr.StatusCode, dialErr.ResponseHeaders, dialErr.ResponseBody, resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel))
+						return nil, s.newOpenAIAccountFailoverError(account, dialErr.StatusCode, dialErr.ResponseHeaders, dialErr.ResponseBody, message, shouldDisable, false)
+					}
+				}
+			}
 			var failoverErr *UpstreamFailoverError
 			if cookieWS {
 				wsErr = openAICookieWSUnavailableFailover(wsErr)
