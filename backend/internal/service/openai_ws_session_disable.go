@@ -151,7 +151,7 @@ func openAIWSSessionFallbackActionFor(reason string) openAIWSSessionFallbackActi
 	switch reason {
 	case "upgrade_required", "ws_unsupported":
 		return openAIWSSessionFallbackAction{fallbackHTTP: true, markDisable: true, capability: true, reason: reason}
-	case "message_too_big":
+	case "message_too_big", "payload_too_large":
 		// WS 帧上限问题；HTTP 无帧上限可重试，但非账号健康问题。
 		return openAIWSSessionFallbackAction{fallbackHTTP: true, reason: reason}
 	case "acquire_timeout", "acquire_conn", "conn_queue_full", "preferred_conn_unavailable":

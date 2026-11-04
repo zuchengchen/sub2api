@@ -346,7 +346,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
-		if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" {
+		frameTurnMetadata := gjson.GetBytes(normalized, "client_metadata."+gjsonEscapeKey(openAIWSTurnMetadataHeader))
+		if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" && !frameTurnMetadata.Exists() {
+			// The Upgrade may describe prewarm. A later frame owns its turn
+			// metadata, including an explicitly empty value.
 			next, setErr := applyPayloadMutation(normalized, "client_metadata."+openAIWSTurnMetadataHeader, turnMetadata)
 			if setErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", setErr)

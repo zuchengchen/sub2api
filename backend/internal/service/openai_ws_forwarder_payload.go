@@ -1094,3 +1094,24 @@ func shouldKeepIngressPreviousResponseIDWithStrictState(
 	}
 	return true, "strict_incremental_ok", nil
 }
+
+// Native incremental requests have no base prompt in their input tail. Typed
+// per-item turn metadata ties them to the request's explicit continuation.
+// This gates compatibility normalization only; it grants no identity or access.
+func codexNativeContinuation(body map[string]any) bool {
+	previous, _ := body["previous_response_id"].(string)
+	metadata, _ := body["client_metadata"].(map[string]any)
+	turn, _ := metadata["turn_id"].(string)
+	if previous == "" || turn == "" {
+		return false
+	}
+	input, _ := body["input"].([]any)
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		meta, _ := item["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if value, ok := meta["turn_id"].(string); ok && value == turn {
+			return true
+		}
+	}
+	return false
+}

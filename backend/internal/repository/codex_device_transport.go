@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/codexwire"
@@ -117,10 +118,16 @@ func codexDeviceOrderedHeaders(rawURL string, h http.Header) []codexwire.HeaderK
 // reqwest client does on Linux: OpenSSL-profile ClientHello without ALPN,
 // HTTP/1.1, captured header order, one connection per request.
 type codexDeviceRoundTripper struct {
-	proxyURL string
-	profile  *tlsfingerprint.Profile
-	timeout  time.Duration
-	authH2   bool
+	proxyURL  string
+	profile   *tlsfingerprint.Profile
+	timeout   time.Duration
+	authH2    bool
+	authCode  bool
+	codeH1    *codexwire.H1Pool
+	codeH2    *codexwire.H2Pool
+	quotaOnce sync.Once
+	quotaH1   *codexwire.H1Pool
+	quotaH2   *codexwire.H2Pool
 }
 
 // Auth clients share only the transport pool; the key includes the exact
@@ -153,16 +160,57 @@ func (t *codexDeviceRoundTripper) RoundTrip(r *http.Request) (*http.Response, er
 		}
 		body = b
 	}
-	ordered := codexDeviceOrderedHeaders(r.URL.String(), r.Header)
+	headers := r.Header
+	if t.authCode {
+		// A login client is built without the AuthManager's product headers.
+		// Also omit req's default UA if an outer caller installed one.
+		headers = headers.Clone()
+		for name := range headers {
+			if strings.EqualFold(name, "User-Agent") || strings.EqualFold(name, "Originator") {
+				delete(headers, name)
+			}
+		}
+	}
+	ordered := codexDeviceOrderedHeaders(r.URL.String(), headers)
+	profile := t.profile
+	var pool *codexwire.H2Pool
+	var h1Pool *codexwire.H1Pool
+	var identity string
+	if t.authCode {
+		identity = "login" // pool is owned by this single login client
+		if t.authH2 {
+			pool = t.codeH2
+		} else {
+			h1Pool = t.codeH1
+		}
+	} else if t.authH2 {
+		pool = codexAuthH2Pool
+		identity = codexAuthPoolKey(r.Context(), r.URL.String(), r.Header, body)
+	} else if isCodexQuotaRequest(r) {
+		identity = codexQuotaPoolKey(r.Context(), r.Header)
+		if codexwire.CodexCustomCAConfigured() {
+			var err error
+			profile, err = codexwire.WithCodexCustomCA(tlsfingerprint.BuiltinProfile("rustls-h2"))
+			if err != nil {
+				return nil, err
+			}
+			pool = t.quotaHTTP2Pool()
+		} else {
+			h1Pool = t.quotaHTTP1Pool()
+		}
+	}
 	ctx, cancel := context.WithCancel(r.Context())
 	var resp *http.Response
 	var err error
-	if t.authH2 {
+	if pool != nil {
 		if len(body) > 0 || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 			ordered = append(ordered, codexwire.HeaderKV{Name: "content-length", Value: strconv.Itoa(len(body))})
 		}
-		identity := codexAuthPoolKey(r.Context(), r.URL.String(), r.Header, body)
-		resp, err = codexAuthH2Pool.Do(ctx, r.Method, r.URL.String(), ordered, body, t.proxyURL, identity, t.profile)
+		resp, err = pool.Do(ctx, r.Method, r.URL.String(), ordered, body, t.proxyURL, identity, profile)
+	} else if h1Pool != nil {
+		resp, err = h1Pool.Do(ctx, r.Method, r.URL.String(), ordered, body, t.proxyURL, identity, codexwire.HTTP1Options{
+			TLSProfile: profile, DialTimeout: defaultUpstreamDialTimeout + 5*time.Second, ResponseHeaderTimeout: t.timeout,
+		})
 	} else {
 		resp, err = codexwire.DoHTTP1(ctx, r.Method, r.URL.String(), ordered, body, t.proxyURL, codexwire.HTTP1Options{
 			TLSProfile:            t.profile,
@@ -188,11 +236,33 @@ func newCodexDeviceReqClient(proxyURL string, timeout time.Duration) (*req.Clien
 }
 
 func newCodexDeviceReqClientWithAuthCA(proxyURL string, timeout time.Duration, auth bool) (*req.Client, error) {
+	return newCodexDeviceReqClientConfigured(proxyURL, timeout, auth, false)
+}
+
+// One explicit login client, never an AuthManager credential generation or a
+// process-wide token pool. It may reuse its own socket for related login grants.
+func newCodexAuthCodeReqClient(proxyURL string, timeout time.Duration) (*req.Client, error) {
+	return newCodexDeviceReqClientConfigured(proxyURL, timeout, false, true)
+}
+
+func newCodexDeviceReqClientConfigured(proxyURL string, timeout time.Duration, auth, authCode bool) (*req.Client, error) {
 	trimmed, _, err := proxyurl.Parse(proxyURL)
 	if err != nil {
 		return nil, err
 	}
 	rt := &codexDeviceRoundTripper{proxyURL: trimmed, profile: tlsfingerprint.BuiltinProfile("openssl36"), timeout: timeout}
+	if authCode {
+		rt.authCode = true
+		rt.codeH1 = codexwire.NewH1Pool(codexwire.H1PoolOptions{})
+		rt.codeH2 = codexwire.NewH2Pool(codexwire.H2Options{Timeout: 35 * time.Second, LogKey: "codex-login"})
+		if codexwire.CodexCustomCAConfigured() {
+			profile, caErr := codexwire.WithCodexCustomCA(tlsfingerprint.BuiltinProfile("rustls-h2"))
+			if caErr != nil {
+				return nil, caErr
+			}
+			rt.profile, rt.authH2 = profile, true
+		}
+	}
 	if auth && codexwire.CodexCustomCAConfigured() {
 		profile, caErr := codexwire.WithCodexCustomCA(tlsfingerprint.BuiltinProfile("rustls-h2"))
 		if caErr == nil {

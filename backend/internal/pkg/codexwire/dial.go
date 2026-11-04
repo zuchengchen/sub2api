@@ -3,7 +3,9 @@ package codexwire
 import (
 	"bufio"
 	"context"
+	"crypto/sha1"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +19,9 @@ import (
 
 // DialOptions controls the raw transport dial.
 type DialOptions struct {
+	// DisableCompression is for protocols such as Codex Live that do not offer
+	// permessage-deflate. The default keeps the Responses offer unchanged.
+	DisableCompression bool
 	// TLSProfile selects a uTLS ClientHello profile; nil falls back to stock
 	// crypto/tls.
 	TLSProfile *tlsfingerprint.Profile
@@ -110,7 +115,10 @@ func DialWS(ctx context.Context, wsURL string, ordered []HeaderKV, proxyURL stri
 		return nil, nil, err
 	}
 
-	reqBytes, _, err := BuildWSUpgradeRequest(wsURL, ordered, "")
+	// This watcher owns only the handshake, not the established connection.
+	stop := context.AfterFunc(dialCtx, func() { _ = conn.Close() })
+	defer stop()
+	reqBytes, secKey, err := buildWSUpgradeRequest(wsURL, ordered, "", !opts.DisableCompression)
 	if err != nil {
 		_ = conn.Close()
 		return nil, nil, err
@@ -133,5 +141,29 @@ func DialWS(ctx context.Context, wsURL string, ordered []HeaderKV, proxyURL stri
 		_ = conn.Close()
 		return nil, res, fmt.Errorf("websocket upgrade failed: status %d", res.StatusCode)
 	}
+	accept := sha1.Sum([]byte(secKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	if res.Headers.Get("Sec-WebSocket-Accept") != base64.StdEncoding.EncodeToString(accept[:]) ||
+		!strings.EqualFold(res.Headers.Get("Upgrade"), "websocket") ||
+		!headerHasToken(res.Headers.Get("Connection"), "upgrade") {
+		_ = conn.Close()
+		return nil, res, errors.New("invalid websocket upgrade response")
+	}
+	if opts.DisableCompression && res.PerMessageDeflate {
+		_ = conn.Close()
+		return nil, res, errors.New("websocket server selected compression without an offer")
+	}
+	if !stop() && dialCtx.Err() != nil {
+		_ = conn.Close()
+		return nil, res, dialCtx.Err()
+	}
 	return NewWSConn(conn, br, res), res, nil
+}
+
+func headerHasToken(value, token string) bool {
+	for _, part := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
 }

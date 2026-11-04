@@ -187,6 +187,20 @@ func applyCodexHTTPWireMetadata(req *http.Request, body []byte, account *Account
 	} else if raw.Exists() {
 		return body, nil
 	}
+	// A native WS frame can reach this HTTP projection through the fallback
+	// bridge. Codex declares Responses Lite in an HTTP header, whereas only
+	// ResponseCreateWsRequest carries this client_metadata transport marker.
+	// Translate the capability before dropping the WS-only representation;
+	// the caller's input/tools and explicit HTTP declaration remain intact.
+	if marker, exists := cm[responsesLiteWSMetadataKey]; exists {
+		if value, ok := marker.(string); ok && isOpenAIResponsesLiteHeader(value) && strings.TrimSpace(req.Header.Get(responsesLiteHeader)) == "" {
+			if req.Header == nil {
+				req.Header = make(http.Header)
+			}
+			req.Header.Set(responsesLiteHeader, "true")
+		}
+		delete(cm, responsesLiteWSMetadataKey)
+	}
 	payload := map[string]any{"client_metadata": cm, "model": root.Get("model").String()}
 	if reasoning := root.Get("reasoning"); reasoning.Exists() {
 		payload["reasoning"] = json.RawMessage(reasoning.Raw)

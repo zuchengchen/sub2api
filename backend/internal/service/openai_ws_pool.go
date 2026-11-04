@@ -333,6 +333,8 @@ type openAIWSConn struct {
 	createdAtNano atomic.Int64
 	lastUsedNano  atomic.Int64
 	prewarmed     atomic.Bool
+	// The leased socket is authoritative; a session map is only an affinity hint.
+	deltaCheckpoint atomic.Pointer[openAIWSDeltaChainState]
 }
 
 func newOpenAIWSConn(id string, _ int64, ws openAIWSClientConn, handshakeHeaders http.Header) *openAIWSConn {
@@ -620,6 +622,8 @@ func (c *openAIWSConn) writeJSONWithTimeout(parent context.Context, value any, t
 func (c *openAIWSConn) writeJSON(value any, writeCtx context.Context) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	// A new native, prewarm, or failed write supersedes the prior checkpoint.
+	c.deltaCheckpoint.Store(nil)
 	if c.ws == nil {
 		return errOpenAIWSConnClosed
 	}

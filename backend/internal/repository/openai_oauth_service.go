@@ -26,7 +26,7 @@ type openaiOAuthService struct {
 }
 
 func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
-	client, err := createOpenAIReqClient(proxyURL)
+	client, err := createOpenAICodeExchangeClient(proxyURL)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
@@ -39,21 +39,23 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 		clientID = openai.ClientID
 	}
 
-	formData := url.Values{}
-	formData.Set("grant_type", "authorization_code")
-	formData.Set("client_id", clientID)
-	formData.Set("code", code)
-	formData.Set("redirect_uri", redirectURI)
-	formData.Set("code_verifier", codeVerifier)
+	// codex-login's OAuthClient keeps this vector order when form-encoding.
+	// QueryEscape differs from WHATWG form encoding for '*' and '~'.
+	formValue := func(value string) string {
+		encoded := url.QueryEscape(value)
+		encoded = strings.ReplaceAll(encoded, "~", "%7E")
+		return strings.ReplaceAll(encoded, "%2A", "*")
+	}
+	formBody := "grant_type=authorization_code&client_id=" + formValue(clientID) +
+		"&code=" + formValue(code) + "&redirect_uri=" + formValue(redirectURI) +
+		"&code_verifier=" + formValue(codeVerifier)
 
 	var tokenResp openai.TokenResponse
 
-	authUA, authOriginator := service.CodexAuthIdentityForContext(ctx)
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("User-Agent", authUA).
-		SetHeader("originator", authOriginator).
-		SetFormDataFromValues(formData).
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
+		SetBodyString(formBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
 
@@ -69,6 +71,13 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 	}
 
 	return &tokenResp, nil
+}
+
+func createOpenAICodeExchangeClient(proxyURL string) (*req.Client, error) {
+	if !codexDeviceClientDisabled() {
+		return newCodexAuthCodeReqClient(proxyURL, 120*time.Second)
+	}
+	return getSharedReqClient(reqClientOptions{ProxyURL: proxyURL, Timeout: 120 * time.Second})
 }
 
 func (s *openaiOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {

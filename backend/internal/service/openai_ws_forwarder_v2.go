@@ -73,6 +73,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		wsPath,
 	)
 
+	if c != nil {
+		if _, exists := c.Get("openai_ws_auto_incremental_attempted"); !exists {
+			c.Set("openai_ws_auto_incremental_attempted", false)
+		}
+		c.Set("openai_ws_auto_incremental", false)
+		c.Set("openai_ws_auto_incremental_succeeded", false)
+		c.Set("openai_ws_auto_incremental_reason", "disabled")
+	}
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
 	if c != nil && c.Request != nil && account.UsesOpenAICodexProtocol() {
 		traceHeaders := make(http.Header)
@@ -93,7 +101,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 		}
 	}
-	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
+	strategyAttempt := attempt
+	if c != nil && c.GetBool("openai_ws_auto_incremental_replay") {
+		strategyAttempt = 1 // Restore the original include/encrypted-content contract.
+	}
+	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, strategyAttempt)
 	turnState := ""
 	turnMetadata := ""
 	if c != nil && c.Request != nil {
@@ -178,68 +190,42 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// 增量上下文（官方 Codex CLI delta 协议）：会话内已有完整链快照且当前请求
 	// 是其严格前缀扩展时，仅发送尾部新增 items + previous_response_id 锚定。
 	// 客户端自己发送 previous_response_id 时按客户端的链走，不覆盖。
-	deltaEnabled := account.UsesOpenAICodexProtocol() && s.isOpenAIWSDeltaContextEnabled() && stateStore != nil && sessionHash != ""
+	deltaEnabled := account.UsesOpenAICodexProtocol() && s.isOpenAIWSDeltaContextEnabled() && stateStore != nil && sessionHash != "" && previousResponseID == ""
+	deltaScope := fmt.Sprintf("%d:%d:%s", groupID, getAPIKeyIDFromContext(c), sessionHash)
+	deltaWindowID := openAIWSPayloadCodexWindowID(bodyRaw)
 	deltaFieldsFP := ""
 	var deltaLogicalItems []json.RawMessage
 	var deltaLogicalHashes []string
 	var deltaRecorder *openAIWSDeltaRecorder
 	deltaApplied := false
+	deltaSucceeded := false
 	if deltaEnabled {
 		deltaFieldsFP = openAIWSDeltaFieldsFingerprint(payload)
 		deltaLogicalItems = openAIWSDeltaWireItems(bodyRaw, payload["input"])
-		if len(deltaLogicalItems) > openAIWSDeltaChainMaxBaseline {
+		reason := "baseline_too_large"
+		if len(deltaLogicalItems) <= openAIWSDeltaChainMaxBaseline {
+			deltaLogicalHashes, reason = openAIWSDeltaInputSnapshot(deltaLogicalItems)
+		}
+		if reason != "" {
+			if c != nil {
+				c.Set("openai_ws_auto_incremental_reason", reason)
+			}
 			stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
 			deltaEnabled = false
 		}
 	}
 	if deltaEnabled {
-		deltaLogicalHashes = openAIWSDeltaItemsHash(deltaLogicalItems)
 		deltaRecorder = &openAIWSDeltaRecorder{}
 		defer func() {
 			deltaRecorder.mu.Lock()
-			overflow := deltaRecorder.overflow || len(deltaLogicalHashes)+len(deltaRecorder.itemsAddedHashes) > openAIWSDeltaChainMaxBaseline
+			overflow := deltaRecorder.overflow || len(deltaLogicalHashes)+len(deltaRecorder.itemsAddedHashes) > openAIWSDeltaChainMaxBaseline || len(deltaLogicalHashes)+len(deltaRecorder.output.items) > openAIWSDeltaChainMaxBaseline
 			deltaRecorder.mu.Unlock()
 			if overflow {
 				stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
 			}
 		}()
-		if previousResponseID == "" {
-			if chain, ok := stateStore.GetSessionDeltaChain(groupID, sessionHash); ok {
-				if chain != nil && chain.AccountID != 0 && chain.AccountID != account.ID {
-					logOpenAIWSModeInfo(
-						"delta_skip account_id=%d reason=account_mismatch chain_account_id=%d",
-						account.ID, chain.AccountID,
-					)
-				} else if decision := resolveOpenAIWSDelta(chain, account.ID, deltaFieldsFP, deltaLogicalItems); decision.Delta {
-					payload["input"] = decision.TailItems
-					payload["previous_response_id"] = decision.PreviousResponse
-					previousResponseID = decision.PreviousResponse
-					previousResponseIDKind = ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
-					deltaApplied = true
-					logOpenAIWSModeInfo(
-						"delta_applied account_id=%d session_hash=%s previous_response_id=%s tail_items=%d baseline_items=%d",
-						account.ID,
-						truncateOpenAIWSLogValue(sessionHash, 12),
-						truncateOpenAIWSLogValue(decision.PreviousResponse, openAIWSIDValueMaxLen),
-						len(decision.TailItems),
-						len(chain.BaselineHashes),
-					)
-				} else {
-					if decision.Reason == "baseline_too_large" {
-						stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
-					}
-					logOpenAIWSModeInfo(
-						"delta_skip account_id=%d session_hash=%s reason=%s baseline_items=%d current_items=%d",
-						account.ID,
-						truncateOpenAIWSLogValue(sessionHash, 12),
-						normalizeOpenAIWSLogValue(decision.Reason),
-						len(chain.BaselineHashes),
-						len(deltaLogicalItems),
-					)
-				}
-			}
-		}
 	}
+
 	preferredConnID := ""
 	if stateStore != nil && previousResponseID != "" {
 		if connID, ok := stateStore.GetResponseConn(previousResponseID); ok {
@@ -449,27 +435,43 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		lease.Release()
 	}()
 	connID := strings.TrimSpace(lease.ConnID())
-	// previous_response_id is socket-scoped in the official client: a reconnect
-	// clears last_request and the first frame on a new socket is a full request
-	// (core/src/client.rs). The per-session delta chain may have picked a
-	// response from another (or a closed) socket; with store=false that
-	// response cannot be continued here, so revert to the full input.
-	if deltaApplied && stateStore != nil && previousResponseID != "" {
-		producerConn, sameSocket := openAIWSResponseProducedOnConn(stateStore, previousResponseID, connID)
-		if !sameSocket {
-			logOpenAIWSModeInfo(
-				"delta_revert account_id=%d reason=socket_mismatch conn_id=%s producer_conn_id=%s previous_response_id=%s",
-				account.ID,
-				truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
-				truncateOpenAIWSLogValue(producerConn, openAIWSIDValueMaxLen),
-				truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen),
-			)
-			payload["input"] = append([]json.RawMessage(nil), deltaLogicalItems...)
-			delete(payload, "previous_response_id")
-			previousResponseID = ""
-			previousResponseIDKind = ""
-			deltaApplied = false
+	// The latest successful checkpoint on the leased socket, not a cached
+	// session response ID, decides continuation. Concurrent branches may have
+	// advanced this socket while this request waited for its lease.
+	if deltaEnabled {
+		deltaFieldsFP = openAIWSDeltaFieldsFingerprint(payload)
+		reason := "no_checkpoint"
+		checkpoint := lease.conn.deltaCheckpoint.Load()
+		if checkpoint != nil && attempt == 1 {
+			switch {
+			case checkpoint.Scope != deltaScope:
+				reason = "scope_changed"
+			case checkpoint.WindowID != deltaWindowID:
+				reason = "context_window_changed"
+			case checkpoint.UpdatedUnixNano <= 0 || time.Since(time.Unix(0, checkpoint.UpdatedUnixNano)) >= openAIWSDeltaCheckpointTTL:
+				reason = "checkpoint_expired"
+			default:
+				resolved := resolveOpenAIWSDeltaWithHashes(checkpoint, account.ID, deltaFieldsFP, deltaLogicalItems, deltaLogicalHashes)
+				reason = resolved.Reason
+				if resolved.Delta {
+					payload["input"] = resolved.TailItems
+					payload["previous_response_id"] = resolved.PreviousResponse
+					previousResponseID = resolved.PreviousResponse
+					previousResponseIDKind = ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
+					deltaApplied = true
+					payloadBytes = -1
+				}
+			}
 		}
+		if c != nil {
+			c.Set("openai_ws_auto_incremental", deltaApplied)
+			if deltaApplied {
+				c.Set("openai_ws_auto_incremental_attempted", true)
+			}
+			c.Set("openai_ws_auto_incremental_succeeded", false)
+			c.Set("openai_ws_auto_incremental_reason", reason)
+		}
+		logOpenAIWSModeDebug("auto_continuation account_id=%d conn_id=%s incremental=%v reason=%s", account.ID, connID, deltaApplied, reason)
 	}
 	logOpenAIWSModeDebug(
 		"connected account_id=%d account_type=%s transport=%s conn_id=%s conn_reused=%v conn_idle_ms=%d conn_age_ms=%d upstream_pings=%d conn_pick_ms=%d queue_wait_ms=%d has_previous_response_id=%v",
@@ -532,6 +534,19 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 
+	preflightSize := !cookieWS && s.shouldPreflightOpenAIHTTPToWS(c, account, reqBody)
+	if preflightSize {
+		frame, frameErr := s.marshalOpenAIWSOutgoingFrame(bodyRaw, payload, account)
+		if frameErr == nil {
+			frameErr = s.checkOpenAIWSOutgoingFrameSize(frame)
+		}
+		if frameErr != nil {
+			cleanExit = true // No request was written; keep the healthy leased socket.
+			return nil, frameErr
+		}
+		payloadBytes = len(frame)
+	}
+
 	var prewarmResult *openAIWSPrewarmResult
 	if attempt == 1 {
 		prewarmResult, err = s.performOpenAIWSGeneratePrewarm(
@@ -549,14 +564,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		)
 	}
 	if err != nil {
+		if openAIWSSessionFallbackReason(err) == "payload_too_large" {
+			cleanExit = true
+		}
 		return nil, err
 	}
 	// 官方行为（from_untraced_warmup）：预热响应成为最新的 last_response，
 	// 真实请求以它为 previous_response_id 锚点。预热 input 与真实请求 input
 	// 一致时，增量尾为空——即抓包里第二帧只有 previous_response_id 的形态。
-	if deltaRecorder != nil && prewarmResult != nil && prewarmResult.ResponseID != "" {
+	if deltaRecorder != nil && prewarmResult != nil && prewarmResult.ResponseID != "" && prewarmResult.OutputValid {
 		baseline := openAIWSDeltaItemsHash(prewarmResult.SentItems)
-		baseline = append(baseline, openAIWSDeltaItemsHash(prewarmResult.ItemsAdded)...)
+		baseline = append(baseline, prewarmResult.OutputHashes...)
 		if len(baseline) > openAIWSDeltaChainMaxBaseline {
 			stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
 		}
@@ -573,6 +591,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			previousResponseID = decision.PreviousResponse
 			previousResponseIDKind = ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 			deltaApplied = true
+			if c != nil {
+				c.Set("openai_ws_auto_incremental", true)
+				c.Set("openai_ws_auto_incremental_attempted", true)
+				c.Set("openai_ws_auto_incremental_reason", "prewarm")
+			}
 			logOpenAIWSModeInfo(
 				"delta_applied_prewarm account_id=%d conn_id=%s previous_response_id=%s tail_items=%d baseline_items=%d",
 				account.ID,
@@ -596,6 +619,20 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				account.ID, connID, truncateOpenAIWSLogValue(marshalErr.Error(), openAIWSLogValueMaxLen),
 			)
 		}
+	}
+	if preflightSize {
+		if len(frameBytes) == 0 {
+			frameBytes, err = s.marshalOpenAIWSOutgoingFrame(bodyRaw, payload, account)
+			if err != nil {
+				cleanExit = true
+				return nil, err
+			}
+		}
+		if err := s.checkOpenAIWSOutgoingFrameSize(frameBytes); err != nil {
+			cleanExit = true
+			return nil, err
+		}
+		payloadBytes = len(frameBytes)
 	}
 	var writeErr error
 	if len(frameBytes) > 0 {
@@ -632,6 +669,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// output_item.done / delta 事件里。与 HTTP SSE 路径共用同一套补全逻辑。
 	terminalOutput := newResponsesTerminalOutputCollector()
 	var firstTokenMs *int
+	upstreamOutputStarted := false
 	responseID := ""
 	var finalResponse []byte
 	wroteDownstream := false
@@ -704,7 +742,43 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
 			ClientDisconnect:              clientDisconnected,
+			ImageCount:                    imageCounter.Count(),
+			ImageOutputSizes:              imageCounter.Sizes(),
 		}
+	}
+
+	// The upstream can already have generated text or executed a hosted tool
+	// while a non-streaming client has received no bytes. Client delivery and
+	// upstream progress are independent replay boundaries; metered usage/image
+	// results also cannot be discarded by a new attempt.
+	upstreamProgress := func() bool {
+		return upstreamOutputStarted || openAIUsageHasTokens(usage) || imageCounter.Count() > 0
+	}
+	replayUnsafe := func() bool { return wroteDownstream || upstreamProgress() }
+	partialResultWithUsage := func() *OpenAIForwardResult {
+		// Cyber-policy failures already settle their observed usage through
+		// OpsCyberPolicy in the handler; returning it again would bill twice.
+		if GetOpsCyberPolicy(c) != nil {
+			return nil
+		}
+		return resultWithUsage()
+	}
+	incompleteAfterProgress := func(cause error) (*OpenAIForwardResult, error) {
+		if reqStream && wroteDownstream && responseID == "" && !openAIUsageHasTokens(usage) && imageCounter.Count() == 0 {
+			// Preserve the existing streaming error contract when there is no
+			// response identity or metered result to retain.
+			return nil, fmt.Errorf("upstream websocket error after downstream output: %w", cause)
+		}
+		// A locally terminated stream has no successful upstream terminal.
+		// Preserve its known attribution/usage without marking it successful.
+		upstreamTerminalEvent = "response.incomplete"
+		message := "upstream websocket ended before completing the response"
+		setOpsUpstreamError(c, http.StatusBadGateway, sanitizeUpstreamErrorMessage(cause.Error()), "")
+		if !reqStream && !clientDisconnected {
+			MarkResponseCommitted(c)
+			c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "message": message}})
+		}
+		return partialResultWithUsage(), fmt.Errorf("openai ws incomplete response after upstream progress: %w", cause)
 	}
 
 	var flusher http.Flusher
@@ -838,6 +912,9 @@ readLoop:
 				len(message),
 				wroteDownstream,
 			)
+			if replayUnsafe() {
+				return incompleteAfterProgress(errors.New("upstream websocket returned malformed Responses event JSON"))
+			}
 			if !wroteDownstream {
 				return nil, wrapOpenAIWSFallback("invalid_event_json", errors.New("upstream websocket returned malformed Responses event JSON"))
 			}
@@ -886,11 +963,17 @@ readLoop:
 					break readLoop
 				}
 			}
+			if replayUnsafe() {
+				return incompleteAfterProgress(readErr)
+			}
 			if !wroteDownstream {
 				return nil, wrapOpenAIWSFallback(classifyOpenAIWSReadFallbackReason(readErr), readErr)
 			}
 			setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(readErr.Error()), "")
 			return nil, fmt.Errorf("openai ws read event: %w", readErr)
+		}
+		if deltaRecorder != nil {
+			deltaRecorder.observe(message)
 		}
 		if normalized, changed := normalizeCompletedImageGenerationStatus(message); changed {
 			message = normalized
@@ -899,6 +982,10 @@ readLoop:
 		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
 		if eventType == "" {
 			continue
+		}
+		if deltaApplied && eventType == "response.completed" {
+			status := gjson.GetBytes(message, "response.status").String()
+			deltaSucceeded = (status == "" || status == "completed") && gjson.GetBytes(message, "response.error").Type != gjson.JSON && gjson.GetBytes(message, "error").Type != gjson.JSON
 		}
 		responseModelObserver.ObserveOpenAI(message, eventType)
 		cookieProbeObserver.observe(lease, message, eventType)
@@ -958,9 +1045,6 @@ readLoop:
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
 		}
 		imageCounter.AddSSEData(message)
-		if deltaRecorder != nil {
-			deltaRecorder.observe(message)
-		}
 		// 放在用量/图片计数之后：补进 terminal 的 item 已由 output_item.done 计过，
 		// 不能再被计一次。补全后重取 responseField，非流式 finalResponse 才拿得到正文。
 		terminalOutput.Observe(message, eventType)
@@ -990,9 +1074,30 @@ readLoop:
 			!openAIUsageHasTokens(usage) && imageCounter.Count() == 0 &&
 			isOpenAIUpstreamCapacityShedEvent(message) {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
-			if failoverErr := s.openAIWSV2PreOutputAccountFailover(c, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, wroteDownstream, clientDisconnected); failoverErr != nil {
+			if failoverErr := s.openAIWSV2PreOutputAccountFailover(c, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, replayUnsafe(), clientDisconnected); failoverErr != nil {
 				lease.MarkBroken()
 				return nil, failoverErr
+			}
+		}
+
+		if eventType != "error" && !isTerminalEvent && (openAIStreamDataStartsClientOutput(string(message), eventType) || openAIStreamDataStartsVisibleOutput(string(message), eventType)) {
+			upstreamOutputStarted = true
+		}
+		if deltaApplied && !wroteDownstream && !upstreamOutputStarted && !clientDisconnected && ctx.Err() == nil &&
+			!openAIUsageHasTokens(usage) && imageCounter.Count() == 0 && (eventType == "error" || eventType == "response.failed") {
+			path := "error"
+			if eventType == "response.failed" {
+				path = "response.error"
+			}
+			rejection := gjson.GetBytes(message, path)
+			reason, _ := classifyOpenAIWSErrorEventFromRaw(rejection.Get("code").String(), rejection.Get("type").String(), rejection.Get("message").String())
+			if reason == "previous_response_not_found" || openAIWSCanReplayMissingToolOutput(rejection, reqBody) {
+				lease.MarkBroken()
+				stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+				if c != nil {
+					c.Set("openai_ws_auto_incremental_replay", true)
+				}
+				return nil, wrapOpenAIWSFallback("auto_continuation_miss", errors.New(rejection.Get("message").String()))
 			}
 		}
 
@@ -1052,10 +1157,10 @@ readLoop:
 			}
 			// error 事件后连接不再可复用，避免回池后污染下一请求。
 			lease.MarkBroken()
-			if failoverErr := s.openAIWSV2PreOutputAccountFailover(c, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, wroteDownstream, clientDisconnected); failoverErr != nil {
+			if failoverErr := s.openAIWSV2PreOutputAccountFailover(c, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, replayUnsafe(), clientDisconnected); failoverErr != nil {
 				return nil, failoverErr
 			}
-			if !wroteDownstream && canFallback {
+			if !replayUnsafe() && canFallback {
 				return nil, wrapOpenAIWSFallback(fallbackReason, errors.New(errMsg))
 			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
@@ -1078,6 +1183,10 @@ readLoop:
 						flushBufferedStreamEvents("error_event")
 					}
 					WriteOpenAIResponsesContextLengthExceeded(c, errMsg)
+				}
+				if upstreamProgress() {
+					upstreamTerminalEvent = "error"
+					return partialResultWithUsage(), fmt.Errorf("openai ws error event: %s", errMsg)
 				}
 				return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 			}
@@ -1103,6 +1212,10 @@ readLoop:
 						"message": errMsg,
 					},
 				})
+			}
+			if upstreamProgress() {
+				upstreamTerminalEvent = "error"
+				return partialResultWithUsage(), fmt.Errorf("openai ws error event: %s", errMsg)
 			}
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 		}
@@ -1174,6 +1287,9 @@ readLoop:
 				terminalEventCount,
 				wroteDownstream,
 			)
+			if replayUnsafe() {
+				return incompleteAfterProgress(errors.New("no terminal response payload"))
+			}
 			if !wroteDownstream {
 				return nil, wrapOpenAIWSFallback("missing_final_response", errors.New("no terminal response payload"))
 			}
@@ -1202,11 +1318,13 @@ readLoop:
 	if stateStore != nil && sessionHash != "" {
 		stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
 	}
-	if deltaRecorder != nil && stateStore != nil && sessionHash != "" {
+	if deltaRecorder != nil && stateStore != nil && sessionHash != "" && cleanExit && !clientDisconnected {
 		if next, ok := deltaRecorder.finalize(account.ID, deltaFieldsFP, deltaLogicalHashes, nil); ok {
 			if next == nil {
 				stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
 			} else {
+				next.Scope, next.WindowID = deltaScope, deltaWindowID
+				lease.conn.deltaCheckpoint.Store(next)
 				stateStore.BindSessionDeltaChain(groupID, sessionHash, next, s.openAIWSSessionStickyTTL())
 				logOpenAIWSModeInfo(
 					"delta_chain_updated account_id=%d session_hash=%s response_id=%s baseline_items=%d",
@@ -1217,6 +1335,9 @@ readLoop:
 				)
 			}
 		}
+	}
+	if c != nil && deltaApplied && deltaSucceeded && cleanExit && !clientDisconnected {
+		c.Set("openai_ws_auto_incremental_succeeded", true)
 	}
 	firstTokenMsValue := -1
 	if firstTokenMs != nil {
@@ -1241,8 +1362,5 @@ readLoop:
 		clientDisconnected,
 	)
 
-	result := resultWithUsage()
-	result.ImageCount = imageCounter.Count()
-	result.ImageOutputSizes = imageCounter.Sizes()
-	return result, nil
+	return resultWithUsage(), nil
 }

@@ -27,7 +27,7 @@ func normalizeRecords(recs []record, sb *sandbox, port int) ([]record, error) {
 		}
 		n.Headers = append([]headerKV(nil), rec.Headers...)
 		for j, h := range n.Headers {
-			if strings.EqualFold(h.Name, "host") && (h.Value == fmt.Sprintf("localhost:%d", port) || h.Value == fmt.Sprintf("127.0.0.1:%d", port)) {
+			if (strings.EqualFold(h.Name, "host") || h.Name == ":authority") && (h.Value == fmt.Sprintf("localhost:%d", port) || h.Value == fmt.Sprintf("127.0.0.1:%d", port)) {
 				n.Headers[j].Value = "<UPSTREAM>"
 			}
 		}

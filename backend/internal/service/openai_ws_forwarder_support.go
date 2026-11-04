@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -56,8 +57,9 @@ type openAIWSPrewarmResult struct {
 	ResponseID string
 	// SentItems 是预热帧 input 的逻辑项（按线序原始字节）。
 	SentItems []json.RawMessage
-	// ItemsAdded 是预热响应流里 response.output_item.done 收集的项。
-	ItemsAdded []json.RawMessage
+	// Only bounded fingerprints of successful, complete upstream output survive.
+	OutputHashes []string
+	OutputValid  bool
 }
 
 // performOpenAIWSGeneratePrewarm 在 WSv2 下执行可选的 generate=false 预热。
@@ -109,7 +111,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		logOpenAIWSModeInfo("prewarm_skip account_id=%d conn_id=%s reason=already_prewarmed", account.ID, connID)
 		return nil, nil
 	}
-	if !s.beginOpenAIWSSessionPrewarm(resolveOpenAIWSSessionScope(c, account, bodyRaw)) {
+	if !s.openAIWSSessionPrewarmPending(resolveOpenAIWSSessionScope(c, account, bodyRaw)) {
 		return nil, nil
 	}
 	// 官方 Codex 客户端在新连接上无条件发送 generate=false 预热帧（包含完整
@@ -146,6 +148,22 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		}
 	}
 
+	if s.shouldPreflightOpenAIHTTPToWS(c, account, reqBody) {
+		if len(prewarmFrame) == 0 {
+			var err error
+			prewarmFrame, err = s.marshalOpenAIWSOutgoingFrame(bodyRaw, prewarmPayload, account)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := s.checkOpenAIWSOutgoingFrameSize(prewarmFrame); err != nil {
+			return nil, err
+		}
+	}
+	if !s.beginOpenAIWSSessionPrewarm(resolveOpenAIWSSessionScope(c, account, bodyRaw)) {
+		return nil, nil
+	}
+
 	var prewarmWriteErr error
 	if len(prewarmFrame) > 0 {
 		prewarmWriteErr = lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(prewarmFrame), s.openAIWSWriteTimeout())
@@ -165,6 +183,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	logOpenAIWSModeInfo("prewarm_write_sent account_id=%d conn_id=%s payload_bytes=%d", account.ID, connID, len(prewarmPayloadJSON))
 
 	result := &openAIWSPrewarmResult{SentItems: prewarmSentItems}
+	var prewarmOutput openAIWSContinuationOutputCollector
 	prewarmEventCount := 0
 	prewarmTerminalCount := 0
 	for {
@@ -192,11 +211,8 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		if result.ResponseID == "" && eventResponseID != "" {
 			result.ResponseID = eventResponseID
 		}
-		if eventType == "response.output_item.done" {
-			if item := gjson.GetBytes(message, "item"); item.Exists() {
-				result.ItemsAdded = append(result.ItemsAdded, openAIWSRawMessageFromResult(message, item))
-			}
-		}
+		prewarmOutput.observe(message, eventType)
+
 		if prewarmEventCount <= openAIWSPrewarmEventLogHead || eventType == "error" || isOpenAIWSTerminalEvent(eventType) {
 			logOpenAIWSModeInfo(
 				"prewarm_event account_id=%d conn_id=%s idx=%d type=%s bytes=%d",
@@ -244,7 +260,9 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		}
 
 		if isOpenAIWSTerminalEvent(eventType) {
-			if (eventType != "response.completed" && eventType != "response.done") || result.ResponseID == "" {
+			status := gjson.GetBytes(message, "response.status").String()
+			if (eventType != "response.completed" && eventType != "response.done") || result.ResponseID == "" ||
+				(status != "" && status != "completed") || gjson.GetBytes(message, "response.error").Type == gjson.JSON || gjson.GetBytes(message, "error").Type == gjson.JSON {
 				lease.MarkBroken()
 				s.handleOpenAIWSFailureAccountSideEffects(ctx, account, openAIWSPayloadString(payload, "model"), lease.HandshakeHeaders(), message)
 				status := openAIStreamFailureStatus(message, extractOpenAISSEErrorMessage(message))
@@ -258,6 +276,20 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 					return nil, wrapOpenAIWSFallback("prewarm_policy_violation", errors.New("prewarm request rejected"))
 				}
 				return nil, wrapOpenAIWSFallback("prewarm_error_event", errors.New("prewarm did not complete successfully"))
+			}
+			output := gjson.GetBytes(message, "response.output")
+			if !output.Exists() && len(prewarmOutput.items) == 0 {
+				output = gjson.Parse("[]") // generate=false can complete without an output field.
+			}
+			items, valid := prewarmOutput.finish(output)
+			result.OutputValid = valid
+			if valid {
+				for _, item := range items {
+					result.OutputHashes = append(result.OutputHashes, hex.EncodeToString(item.digest[:]))
+				}
+			}
+			if finalID := gjson.GetBytes(message, "response.id").String(); finalID != "" {
+				result.ResponseID = finalID
 			}
 			prewarmTerminalCount++
 			break
@@ -855,7 +887,7 @@ func (s *OpenAIGatewayService) newOpenAIWSRateLimitFailoverError(account *Accoun
 }
 
 // openAIWSV2PreOutputAccountFailover converts a WSv2 error event that arrives
-// before any client-visible byte into an account failover, matching the HTTP
+// before upstream output/usage or any client-visible byte into an account failover, matching the HTTP
 // SSE, ingress WS, and WS→HTTP bridge paths. Capacity shed
 // (server_is_overloaded / slow_down) and rate-limit events classify as
 // non-fallback for same-account HTTP retry, so without this they were written
@@ -871,10 +903,10 @@ func (s *OpenAIGatewayService) openAIWSV2PreOutputAccountFailover(
 	headers http.Header,
 	payload []byte,
 	errCodeRaw, errTypeRaw, errMsgRaw string,
-	wroteDownstream bool,
+	replayUnsafe bool,
 	clientDisconnected bool,
 ) *UpstreamFailoverError {
-	if s == nil || account == nil || wroteDownstream || clientDisconnected {
+	if s == nil || account == nil || replayUnsafe || clientDisconnected {
 		return nil
 	}
 	if c != nil && c.Writer != nil && c.Writer.Written() {

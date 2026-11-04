@@ -38,14 +38,33 @@ func compareMain(args []string) int {
 		fmt.Fprintln(os.Stderr, "compare: inputs must be distinct, readable recording directories")
 		return 2
 	}
-	diffs := 0
-	invalid := 0
-	gatewayCapture := false
-	if metadata, err := readJSONFile(filepath.Join(*candidate, "meta.json")); err == nil {
-		if fields, ok := metadata.(map[string]any); ok {
-			gatewayCapture = fields["recorder"] == "backend/tools/codexgolden gateway"
+	baseMeta, err := readCaptureMetadata(*golden)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "compare: reference:", err)
+		return 2
+	}
+	if baseMeta.Recorder != "backend/tools/codexgolden" {
+		fmt.Fprintln(os.Stderr, "compare: baseline must be an official CLI capture")
+		return 2
+	}
+	candidateMeta, err := readCaptureMetadata(*candidate)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "compare: candidate:", err)
+		return 2
+	}
+	if err := compatibleCaptureMetadata(baseMeta, candidateMeta); err != nil {
+		fmt.Fprintln(os.Stderr, "compare:", err)
+		return 2
+	}
+	for _, dir := range []string{*golden, *candidate} {
+		if err := validateScenarioFiles(dir); err != nil {
+			fmt.Fprintln(os.Stderr, "compare:", err)
+			return 2
 		}
 	}
+	diffs := 0
+	invalid := 0
+	gatewayCapture := candidateMeta.Recorder == "backend/tools/codexgolden gateway"
 	files, err := filepath.Glob(filepath.Join(*golden, "*.jsonl"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "compare:", err)
@@ -100,6 +119,11 @@ func compareMain(args []string) int {
 			}
 		}
 		if gatewayCapture {
+			if err := readGatewayModeEvidence(*candidate, strings.TrimSuffix(name, ".jsonl"), candidateMeta); err != nil {
+				fmt.Fprintln(os.Stderr, "compare: missing/invalid gateway ingress evidence:", err)
+				invalid++
+				continue
+			}
 			baseRecords, candRecords, err = gatewayComparisonInputs(baseRecords, candRecords)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "compare: %s: invalid gateway provenance: %v\n", name, err)
@@ -107,9 +131,19 @@ func compareMain(args []string) int {
 				continue
 			}
 		}
+		if err := validateCoreTransports(baseMeta, baseRecords); err != nil {
+			fmt.Fprintln(os.Stderr, "compare: reference transport:", err)
+			invalid++
+			continue
+		}
+		if err := validateCoreTransports(candidateMeta, candRecords); err != nil {
+			fmt.Fprintln(os.Stderr, "compare: candidate transport:", err)
+			invalid++
+			continue
+		}
 		diffs += compareRecords(name, baseRecords, candRecords, *verbose)
 	}
-	for _, name := range []string{"tls_clienthellos.json", "tls_clienthellos_custom_ca.json"} {
+	for _, name := range []string{"tls_clienthellos.json", "tls_clienthellos_scenarios.json"} {
 		base, err := readJSONFile(filepath.Join(*golden, name))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "compare: %s: baseline missing/unreadable: %v\n", name, err)
@@ -250,6 +284,13 @@ func validateRecord(rec record) error {
 		}
 	default:
 		return fmt.Errorf("unknown record kind %q", rec.Kind)
+	}
+	if rec.Proto == "HTTP/2.0" {
+		if rec.Kind != "http_request" || rec.H2 == nil || rec.H2.StreamID == 0 || rec.H2.StreamID%2 == 0 || len(rec.H2.Settings) == 0 {
+			return errors.New("incomplete real HTTP/2 observation")
+		}
+	} else if rec.H2 != nil {
+		return errors.New("HTTP/2 observation attached to a non-HTTP/2 record")
 	}
 	if len(rec.BodyJSON) > 0 {
 		var body map[string]any

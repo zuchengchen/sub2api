@@ -740,6 +740,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 		}
 		synthesized := synthResult != nil && synthResult.Modified
+		nativeInput := inputCarriesBaseInstructions || officialClientOwnsPrompt || codexNativeContinuation(decoded)
 		// Responses OAuth 与 Chat 兼容入口保持一致：纯文本 system 可以无损提升后删除，
 		// JSON object 模式仍需在 input 中保留 JSON 指令供上游兼容校验。
 		omitPromotedSystemMessages := !strings.EqualFold(
@@ -765,7 +766,9 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                          isCodexCLI,
 				IsCompact:                           isCompactRequest,
-				SkipDefaultInstructions:             synthesized || cookieWS || inputCarriesBaseInstructions || officialClientOwnsPrompt,
+				SkipDefaultInstructions:             synthesized || cookieWS || nativeInput,
+				PreserveNativeInput:                 nativeInput,
+				PreserveToolCallIDs:                 nativeInput,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 				ResponsesLite:                       responsesLite,
 				WireProfile:                         wireProfilePtr,
@@ -1227,6 +1230,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			if reason != "" {
 				wsLastFailureReason = reason
 			}
+			if reason == "auto_continuation_miss" && !wsPrevResponseRecoveryTried && attempt < maxAttempts {
+				wsPrevResponseRecoveryTried = true
+				continue // Original full request; no further inferred-anchor retry.
+			}
 			// previous_response_not_found 说明续链锚点不可用：
 			// 对非 function_call_output 场景，允许一次“去掉 previous_response_id 后重放”。
 			if strings.TrimPrefix(reason, "prewarm_") == "previous_response_not_found" && recoverPrevResponseNotFound(attempt) {
@@ -1293,6 +1300,19 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 			break
 		}
+		if wsResult != nil {
+			// Failed turns may still carry authoritative partial usage/media.
+			// Keep the same pricing context as a completed WS response.
+			wsResult.UpstreamModel = upstreamModel
+			if wsResult.BillingModel == "" {
+				wsResult.BillingModel = billingModel
+			}
+			if wsResult.ImageCount > 0 {
+				wsResult.ImageSize = imageSizeTier
+				wsResult.ImageInputSize = imageInputSize
+				wsResult.BillingModel = imageBillingModel
+			}
+		}
 		if wsErr == nil {
 			firstTokenMs := int64(0)
 			hasFirstTokenMs := wsResult != nil && wsResult.FirstTokenMs != nil
@@ -1312,15 +1332,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				firstTokenMs,
 				wsAttempts,
 			)
-			wsResult.UpstreamModel = upstreamModel
-			if wsResult.BillingModel == "" {
-				wsResult.BillingModel = billingModel
-			}
-			if wsResult.ImageCount > 0 {
-				wsResult.ImageSize = imageSizeTier
-				wsResult.ImageInputSize = imageInputSize
-				wsResult.BillingModel = imageBillingModel
-			}
+
 			return wsResult, nil
 		}
 		// 官方 Codex FallbackToHttp 语义：WS 失败先按原因分类——能力信号与
@@ -1329,7 +1341,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		// 的合法变异）。本地池争用与超大帧只回本请求，不标记账号。
 		// Cookie WS 保留既有语义：不可用即 failover 到其他账号，不走本路径。
 		wsHTTPFallback := false
-		if !cookieWS && s.openAIWSSessionDisableEnabled() {
+		if !cookieWS && (s.openAIWSSessionDisableEnabled() || openAIWSSessionFallbackReason(wsErr) == "payload_too_large") {
 			action := openAIWSSessionFallbackActionFor(openAIWSSessionFallbackReason(wsErr))
 			if action.markDisable {
 				s.markOpenAIWSSessionDisabled(wsSessionScope, action.reason)
@@ -1347,6 +1359,9 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 						c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
 						c.Set("openai_ws_transport_reason", wsDecision.Reason)
 						c.Set("openai_ws_session_fallback_reason", action.reason)
+						c.Set("openai_ws_auto_incremental", false)
+						c.Set("openai_ws_auto_incremental_succeeded", false)
+						c.Set("openai_ws_auto_incremental_reason", "http_fallback")
 					}
 					logOpenAIWSModeInfo(
 						"ws_http_fallback account_id=%d model=%s reason=%s session_marked=%v cause=%s",
@@ -1404,7 +1419,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				return nil, failoverErr
 			}
 			s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
-			return nil, wsErr
+			return wsResult, wsErr
 		}
 	}
 
