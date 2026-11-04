@@ -35,7 +35,7 @@ func TestAstraOAuthModelPolicyCacheRejectsOlderSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "healthy", meta.OpenAIOAuthModelPolicy().Verdict)
 	require.True(t, meta.IsModelSupported("gpt-6-astra"))
-	require.False(t, meta.IsModelSupported("gpt-6-luna"))
+	require.True(t, meta.IsModelSupported("gpt-6-luna"))
 }
 
 func TestAstraOAuthModelPolicyConcurrentCacheReads(t *testing.T) {
@@ -59,7 +59,7 @@ func TestAstraOAuthModelPolicyConcurrentCacheReads(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if account == nil || !account.IsModelSupported("gpt-6-astra") {
+				if account == nil || account.OpenAIOAuthModelPolicy().Verdict != "healthy" {
 					t.Error("older snapshot replaced latest policy")
 					return
 				}

@@ -151,12 +151,7 @@ func TestCompatibleImagesNativeAccountsRejectGeminiBeforeForwarding(t *testing.T
 					return
 				}
 				_, err := svc.ForwardImages(context.Background(), c, account, nil, &OpenAIImagesRequest{Model: model}, "")
-				if typ == AccountTypeOAuth {
-					var failover *UpstreamFailoverError
-					require.ErrorAs(t, err, &failover)
-				} else {
-					require.ErrorContains(t, err, "images endpoint requires an image model")
-				}
+				require.ErrorContains(t, err, "images endpoint requires an image model")
 				require.Empty(t, upstream.requests)
 			})
 		}

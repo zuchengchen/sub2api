@@ -3157,7 +3157,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			return 0, err
 		}
 		credentialPlaceholder = "$" + itoa(idx)
-		// Mixed bulk edits retain the dormant OAuth mappings for rollback.
+		// Mixed bulk edits keep OAuth mapping records intact for inspection.
 		credentialPatch := credentialPlaceholder + "::jsonb"
 		credentialPatch = "CASE WHEN platform = 'openai' AND type = 'oauth' THEN (" + credentialPatch + " - 'model_mapping' - 'compact_model_mapping') ELSE " + credentialPatch + " END"
 		setClauses = append(setClauses, "credentials = COALESCE(credentials, '{}'::jsonb) || ("+credentialPatch+")")

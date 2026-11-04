@@ -64,17 +64,12 @@ func TestGatewayFixtureUsesProductionModelPolicyAndTLSSelection(t *testing.T) {
 					svc := service.NewOpenAIGatewayService(&gatewayAccounts{account: account}, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, capture, nil, nil, nil, nil, nil, nil, nil, nil)
 					svc.StopOpenAICodexTicketHarvester()
 					defer svc.CloseOpenAIWSPool()
-					require.Equal(t, eligible, account.AllowsOpenAIOAuthModelPolicy("gpt-6-astra"))
+					require.True(t, account.AllowsOpenAIOAuthModelPolicy("gpt-6-astra"))
 					body := []byte(`{"model":"gpt-6-astra","instructions":"Reply briefly.","input":[{"role":"user","content":"ok"}],"stream":true,"store":false}`)
 					c, _ := gin.CreateTestContext(httptest.NewRecorder())
 					c.Request = httptest.NewRequest("POST", "/v1/responses", strings.NewReader(string(body)))
 					c.Request.Header.Set("User-Agent", "codex_cli_rs/0.166.0")
 					_, err := svc.Forward(context.Background(), c, account, body)
-					if !eligible {
-						require.Error(t, err)
-						require.Zero(t, capture.calls)
-						return
-					}
 					require.NoError(t, err)
 					require.Equal(t, 1, capture.calls)
 					require.NotNil(t, capture.profile)

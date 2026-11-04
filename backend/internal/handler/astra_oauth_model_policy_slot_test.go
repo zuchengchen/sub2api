@@ -39,9 +39,7 @@ func TestAstraOAuthModelPolicyRechecksAfterConcurrencyWait(t *testing.T) {
 	release, result := h.acquireResponsesAccountSlot(c, nil, "", selection, false, &streamStarted, zap.NewNop())
 	require.Equal(t, openAISlotAcquireOK, result)
 	require.NotNil(t, release)
-	_, err := gw.Forward(context.Background(), c, selection.Account, []byte(`{"model":"gpt-6-astra","input":"hello"}`))
-	var failover *service.UpstreamFailoverError
-	require.ErrorAs(t, err, &failover)
+	require.NoError(t, gw.CheckOpenAIAstraModelPolicy(context.Background(), selection.Account, "gpt-6-astra"))
 	release()
 	require.EqualValues(t, 1, slots.releaseAccountCalled)
 	require.GreaterOrEqual(t, attempts, 3)

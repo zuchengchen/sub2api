@@ -545,8 +545,8 @@ func stringMappingFromRaw(raw any) map[string]string {
 }
 
 func (a *Account) GetModelMapping() map[string]string {
-	// OAuth models are managed by the latest Astra observation. Keep the raw
-	// administrator configuration intact for rollback, but never apply it.
+	// OAuth models are not rewritten by stored mapping. Probe history is
+	// diagnostic only; opened/servable models are gated separately.
 	if a.IsOpenAIOAuth() {
 		return nil
 	}
