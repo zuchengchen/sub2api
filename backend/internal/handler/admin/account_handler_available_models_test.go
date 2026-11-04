@@ -293,7 +293,7 @@ func TestAccountHandlerGetAvailableModels_OpenAIFallbackIncludesMappedImageModel
 		ids = append(ids, model.ID)
 		display[model.ID] = model.DisplayName
 	}
-	require.NotContains(t, ids, "gpt-6-astra")
+	require.Contains(t, ids, "gpt-6-astra")
 	require.Contains(t, ids, "gpt-6-luna")
 	require.Contains(t, ids, "gpt-image-2")
 	require.Contains(t, ids, "gpt-image-2.5")

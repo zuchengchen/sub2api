@@ -319,7 +319,7 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 	}
 	subscriptionDefaults := make([]string, 0)
 	for _, model := range openai.DefaultModelIDs() {
-		if model != "gpt-5.5" && model != "gpt-5.6-luna" && model != "gpt-6-luna" {
+		if model != "gpt-5.5" {
 			subscriptionDefaults = append(subscriptionDefaults, model)
 		}
 	}

@@ -27,19 +27,18 @@ func TestAstraOAuthModelPolicyStatesAndOriginalConfiguration(t *testing.T) {
 			require.Nil(t, account.GetModelMapping())
 			require.Nil(t, account.GetCompactModelMapping())
 			require.Len(t, account.Credentials, 2)
-			for _, model := range []string{"gpt-6-luna", "gpt-5.6-luna", "provider/gpt6luna-high", "gpt-5.6-luna-2026-09-01"} {
-				require.Equal(t, verdict != "healthy", account.IsModelSupported(model), model)
-			}
-			for _, model := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-lunatic"} {
-				require.Equal(t, verdict == "healthy", account.IsModelSupported(model), model)
+			for _, model := range []string{"gpt-6-luna", "gpt-5.6-luna", "provider/gpt6luna-high", "gpt-5.6-luna-2026-09-01", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol"} {
+				require.True(t, account.IsModelSupported(model), model)
 			}
 			for _, model := range []string{"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"} {
 				require.True(t, account.IsModelSupported(model), model)
 			}
 			require.False(t, account.IsModelSupported("gpt-5.5"))
+			require.False(t, account.IsModelSupported("deepseek-v4"))
 			require.Equal(t, "gpt-6-astra", account.GetMappedModel("gpt-6-astra"))
 			account.Extra["openai_passthrough"] = true
-			require.Equal(t, verdict == "healthy", account.IsModelSupported("gpt-6-astra"))
+			require.True(t, account.IsModelSupported("gpt-6-astra"))
+			require.True(t, account.IsModelSupported("gpt-6-luna"))
 		})
 	}
 	for _, kind := range []string{AccountTypeAPIKey, AccountTypeSetupToken} {
@@ -71,19 +70,11 @@ func TestAstraOAuthModelPolicyLatestDefinitiveSample(t *testing.T) {
 	}
 }
 
-func TestAstraOAuthModelPolicyForwardAndCompactCannotBypass(t *testing.T) {
+func TestAstraOAuthModelPolicyNoLongerGatesOpenedModels(t *testing.T) {
 	account := astraPolicyTestAccount("degraded")
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
-	_, err := svc.Forward(context.Background(), nil, account, []byte(`{"model":"gpt-6-astra","tools":[{"type":"image_generation"}]}`))
-	require.Error(t, err)
-	var failover *UpstreamFailoverError
-	require.ErrorAs(t, err, &failover)
-	require.False(t, failover.RetryableOnSameAccount)
-	svc.cfg.Gateway.OpenAICompactModel = "gpt-6-astra"
-	require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-6-luna"))
-	account = astraPolicyTestAccount("healthy")
-	svc.cfg.Gateway.OpenAICompactModel = "gpt-6-luna"
-	require.Empty(t, svc.resolveOpenAICompactFallbackModel(account, "gpt-6-astra"))
+	require.NoError(t, validateOpenAIAstraModelPolicy(account, "gpt-6-astra"))
+	require.NoError(t, svc.CheckOpenAIAstraModelPolicy(context.Background(), account, "gpt-6-luna"))
 	require.NoError(t, validateOpenAIAstraModelPolicy(account, "gpt-image-2"))
 }
 
