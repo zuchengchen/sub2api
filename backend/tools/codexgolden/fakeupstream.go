@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -48,6 +49,7 @@ type headerKV struct {
 
 // record is one client→server unit observed on the wire.
 type record struct {
+	H2           *h2Observation  `json:"h2,omitempty"`
 	Hop          string          `json:"hop,omitempty"`
 	TLS          *clientHello    `json:"tls,omitempty"`
 	Seq          int             `json:"seq"`
@@ -97,18 +99,21 @@ type upstreamOptions struct {
 }
 
 type fakeUpstream struct {
-	ln         net.Listener
-	scenario   scenario
-	opts       upstreamOptions
-	mu         sync.Mutex
-	records    []record
-	connHops   map[int]string
-	connHellos map[int]*clientHello
-	seq        int
-	connSeq    atomic.Int64
-	respSeq    atomic.Int64
-	toolSent   atomic.Bool
-	wg         sync.WaitGroup
+	ln                  net.Listener
+	scenario            scenario
+	opts                upstreamOptions
+	mu                  sync.Mutex
+	records             []record
+	captureErrors       []error
+	h2ReadEnds          map[int]*h2ReadEnd
+	connHops            map[int]string
+	connHellos          map[int]*clientHello
+	seq                 int
+	connSeq             atomic.Int64
+	respSeq             atomic.Int64
+	upgrade426Responses atomic.Int64
+	toolSent            atomic.Bool
+	wg                  sync.WaitGroup
 	// refreshedAccess is the access token issued by /oauth/token.
 	refreshedAccess     atomic.Value
 	modelsArrived       atomic.Int32
@@ -206,7 +211,11 @@ func (f *fakeUpstream) serve() {
 				}
 			}
 			f.mu.Unlock()
-			f.handleConn(conn, id, front)
+			if tc, ok := conn.(*tls.Conn); ok && tc.ConnectionState().NegotiatedProtocol == "h2" {
+				f.serveH2(conn, id, front)
+			} else {
+				f.handleConn(conn, id, front)
+			}
 		}()
 	}
 }
@@ -253,6 +262,9 @@ func peekClientHello(c net.Conn) (net.Conn, *clientHello, error) {
 }
 
 func (f *fakeUpstream) handleConn(c net.Conn, connID int, front bool) {
+	f.handleObservedConn(c, connID, front, nil)
+}
+func (f *fakeUpstream) handleObservedConn(c net.Conn, connID int, front bool, observation *h2Observation) {
 	br := bufio.NewReader(c)
 	for reqIdx := 1; ; reqIdx++ {
 		_ = c.SetReadDeadline(time.Now().Add(120 * time.Second))
@@ -280,7 +292,12 @@ func (f *fakeUpstream) handleConn(c net.Conn, connID int, front bool) {
 		if strings.EqualFold(get("upgrade"), "websocket") {
 			f.add(record{Conn: connID, ConnReq: reqIdx, Kind: "ws_handshake", Method: method, Target: target, Proto: proto, Headers: headers})
 			if f.scenario.RejectWebSocket {
-				_, _ = io.WriteString(c, "HTTP/1.1 426 Upgrade Required\r\ncontent-length: 0\r\n\r\n")
+				const rejection = "HTTP/1.1 426 Upgrade Required\r\ncontent-length: 0\r\n\r\n"
+				if n, err := io.WriteString(c, rejection); err != nil || n != len(rejection) {
+					f.captureError(fmt.Errorf("incomplete synthetic 426 response: written=%d err=%v", n, err))
+					return
+				}
+				f.upgrade426Responses.Add(1)
 				continue
 			}
 			if f.scenario.UnauthorizedUntilRefresh && !f.authorizedAfterRefresh(get("authorization")) {
@@ -303,6 +320,12 @@ func (f *fakeUpstream) handleConn(c net.Conn, connID int, front bool) {
 			}
 		}
 		setBody(&rec, body)
+		if observation != nil {
+			rec.Proto = "HTTP/2.0"
+			rec.Headers = observation.Headers
+			rec.ConnReq = observation.RequestIndex
+			rec.H2 = observation
+		}
 		f.add(rec)
 
 		path := target
@@ -343,7 +366,19 @@ func (f *fakeUpstream) handleConn(c net.Conn, connID int, front bool) {
 	}
 }
 
+func (f *fakeUpstream) captureError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.captureErrors = append(f.captureErrors, err)
+}
+
 func (f *fakeUpstream) validateModelsBarrier() error {
+	f.mu.Lock()
+	err := errors.Join(f.captureErrors...)
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if f.opts.ModelsBarrier && (f.modelsArrived.Load() != 2 || f.modelsBarrierFailed.Load()) {
 		return fmt.Errorf("models startup barrier failed: arrivals=%d timed_out=%v", f.modelsArrived.Load(), f.modelsBarrierFailed.Load())
 	}
@@ -358,6 +393,24 @@ func (f *fakeUpstream) tlsConnections() map[int]*clientHello {
 	result := make(map[int]*clientHello, len(f.connHellos))
 	for id, hello := range f.connHellos {
 		result[id] = hello
+	}
+	return result
+}
+
+// Retain close-boundary decisions beside raw socket evidence, including idle
+// negotiated HTTP/2 connections that never carried a request.
+func (f *fakeUpstream) h2ConnectionEnds() map[int]*h2ReadEnd {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := map[int]*h2ReadEnd{}
+	for id, end := range f.h2ReadEnds {
+		value := *end
+		value.PendingStreams = append([]uint32(nil), end.PendingStreams...)
+		value.Frames = make([]h2FrameSummary, len(end.Frames))
+		for i, frame := range end.Frames {
+			value.Frames[i] = frame.clone()
+		}
+		result[id] = &value
 	}
 	return result
 }

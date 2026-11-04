@@ -31,6 +31,10 @@ var wsUpgradeGeneratedNames = []HeaderKV{
 // headers in codex order, then the extension offer last (tungstenite appends it
 // at serialization time). secKey may be empty to generate a fresh nonce.
 func BuildWSUpgradeRequest(wsURL string, ordered []HeaderKV, secKey string) ([]byte, string, error) {
+	return buildWSUpgradeRequest(wsURL, ordered, secKey, true)
+}
+
+func buildWSUpgradeRequest(wsURL string, ordered []HeaderKV, secKey string, compression bool) ([]byte, string, error) {
 	u, err := url.Parse(wsURL)
 	if err != nil {
 		return nil, "", fmt.Errorf("parse ws url: %w", err)
@@ -57,12 +61,18 @@ func BuildWSUpgradeRequest(wsURL string, ordered []HeaderKV, secKey string) ([]b
 	}
 	fmt.Fprintf(&buf, "Sec-WebSocket-Key: %s\r\n", secKey)
 	for _, kv := range ordered {
+		if !compression && strings.EqualFold(kv.Name, "Sec-WebSocket-Extensions") {
+			continue
+		}
 		if strings.ContainsAny(kv.Name, "\r\n:") || strings.ContainsAny(kv.Value, "\r\n") {
 			return nil, "", fmt.Errorf("invalid header %q", kv.Name)
 		}
 		fmt.Fprintf(&buf, "%s: %s\r\n", kv.Name, kv.Value)
 	}
-	fmt.Fprintf(&buf, "sec-websocket-extensions: %s\r\n\r\n", WSUpgradeOffer)
+	if compression {
+		fmt.Fprintf(&buf, "sec-websocket-extensions: %s\r\n", WSUpgradeOffer)
+	}
+	buf.WriteString("\r\n")
 	return buf.Bytes(), secKey, nil
 }
 

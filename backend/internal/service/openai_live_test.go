@@ -138,7 +138,7 @@ func TestCreateUpstreamLiveCallPreservesSession(t *testing.T) {
 	require.NotEmpty(t, upstream.request.Header.Get("Session-Id"))
 	require.NotEmpty(t, upstream.request.Header.Get("Thread-Id"))
 	require.Equal(t, upstream.request.Header.Get("Session-Id"), upstream.request.Header.Get("Thread-Id"))
-	require.Equal(t, `{"thread_source":"user"}`, upstream.request.Header.Get("x-codex-turn-metadata"))
+	require.Empty(t, upstream.request.Header.Get("x-codex-turn-metadata"), "standalone Live has no saved thread source")
 	require.Empty(t, upstream.request.Header.Get("OpenAI-Beta"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.request.Context()))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.request.Context()))

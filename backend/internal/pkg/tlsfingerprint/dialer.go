@@ -207,7 +207,7 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 
 	// Step 2: Establish SOCKS5 tunnel to target
 	slog.Debug("tls_fingerprint_socks5_establishing_tunnel", "target", addr)
-	conn, err := socksDialer.Dial("tcp", addr)
+	conn, err := socksDialer.(proxy.ContextDialer).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		slog.Debug("tls_fingerprint_socks5_connect_failed", "error", err)
 		return nil, fmt.Errorf("SOCKS5 connect: %w", err)
@@ -244,6 +244,11 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	}
 	slog.Debug("tls_fingerprint_http_proxy_connected", "proxy_addr", proxyAddr)
 	conn := rawConn
+	// DialContext only covers TCP establishment. Keep CONNECT's write/read
+	// and TLS-to-proxy negotiation cancelable too, without owning the returned
+	// tunnel after this function succeeds.
+	stopCancel := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
+	defer stopCancel()
 	// An https:// proxy speaks TLS before CONNECT. Sending CONNECT (and the
 	// Proxy-Authorization credentials) in plaintext to it fails and leaks them.
 	if strings.EqualFold(d.proxyURL.Scheme, "https") {
@@ -284,6 +289,10 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		_ = conn.Close()
 		slog.Debug("tls_fingerprint_http_proxy_connect_failed_status", "status_code", resp.StatusCode, "status", resp.Status)
 		return nil, fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
+	}
+	if !stopCancel() && ctx.Err() != nil {
+		_ = conn.Close()
+		return nil, ctx.Err()
 	}
 	slog.Debug("tls_fingerprint_http_proxy_tunnel_established")
 
@@ -470,7 +479,7 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 	}
 
 	// Determine extension order
-	extOrder := defaultExtensionOrder
+	extOrder := slices.Clone(defaultExtensionOrder)
 	if profile != nil && len(profile.Extensions) > 0 {
 		extOrder = slices.Clone(profile.Extensions)
 	}

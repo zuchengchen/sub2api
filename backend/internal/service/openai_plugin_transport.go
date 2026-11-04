@@ -172,6 +172,11 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxy
 }
 
 func (s *OpenAIGatewayService) doOpenAIHTTPTransport(request *http.Request, proxyURL string, account, credentialAccount *Account) (*http.Response, error) {
+	// Each OAuth API attempt builds a fresh official HTTP client. Scope the
+	// marker to this clone, including explicitly clearing it on other accounts.
+	if business := codexBusinessHTTPAccount(credentialAccount); business || CodexBusinessHTTPFromContext(request.Context()) {
+		request = request.Clone(WithCodexBusinessHTTP(request.Context(), business))
+	}
 	// Resolve the HTTP lane from the credential owner's profile. Routing and
 	// concurrency still belong to the selected account, including shadows.
 	if credentialAccount != nil && credentialAccount.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {

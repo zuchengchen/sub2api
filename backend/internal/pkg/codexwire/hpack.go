@@ -109,9 +109,11 @@ const hpackEntryOverhead = 32
 // hpackEncoder keeps the dynamic table state so per-connection header blocks
 // track insertions and evictions like the h2 encoder does.
 type hpackEncoder struct {
-	dyn     []hpackDynEntry // newest first
-	dynSize int
-	maxSize int // dynamic table capacity advertised to us (default 4096)
+	dyn        []hpackDynEntry // newest first
+	dynSize    int
+	sizeUpdate bool
+	pendingMin int
+	maxSize    int // dynamic table capacity advertised to us (default 4096)
 }
 
 type hpackDynEntry struct {
@@ -226,6 +228,13 @@ func (e *hpackEncoder) encodeLiteral(dst []byte, flag byte, prefix uint8, name, 
 // (:method :scheme :authority :path), then the ordered application fields.
 func (e *hpackEncoder) EncodeBlock(method, scheme, authority, path string, fields []HeaderKV) ([]byte, error) {
 	dst := make([]byte, 0, 256)
+	if e.sizeUpdate {
+		if e.pendingMin != e.maxSize {
+			dst = appendHpackInt(dst, 5, 0x20, uint64(e.pendingMin))
+		}
+		dst = appendHpackInt(dst, 5, 0x20, uint64(e.maxSize))
+		e.sizeUpdate = false
+	}
 	dst = e.encodeField(dst, ":method", method, true)
 	dst = e.encodeField(dst, ":scheme", scheme, true)
 	dst = e.encodeField(dst, ":authority", authority, true)
@@ -266,3 +275,22 @@ func newHpackDecoder() *hpackDecoderState {
 }
 
 var _ = bytes.MinRead // keep bytes import if needed elsewhere
+
+func (e *hpackEncoder) setMaxSize(size int) {
+	if size > 4096 {
+		size = 4096
+	}
+	if size == e.maxSize {
+		return
+	}
+	if !e.sizeUpdate || size < e.pendingMin {
+		e.pendingMin = size
+	}
+	e.sizeUpdate = true
+	e.maxSize = size
+	for e.dynSize > size && len(e.dyn) > 0 {
+		last := e.dyn[len(e.dyn)-1]
+		e.dynSize -= len(last.name) + len(last.value) + hpackEntryOverhead
+		e.dyn = e.dyn[:len(e.dyn)-1]
+	}
+}

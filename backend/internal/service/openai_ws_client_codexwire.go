@@ -159,6 +159,11 @@ func dialOpenAIWSForAccount(ctx context.Context, cfg *config.Config, req openAIW
 	// 未命中模板头（如 x-codex-turn-state 已挪进 client_metadata 后不应再出现；
 	// cookie/attestation 等模板外注入头）按出现顺序附在官方头之后。
 	ordered = append(ordered, leftover...)
+	if openAIWSCompressionDisabled(ctx) {
+		// This private context is set only by the Live sideband entry. Its
+		// handshake has a distinct header contract from Responses.
+		ordered = codexwire.OrderCodexLiveWSHeaders(headers)
+	}
 
 	var profile *tlsfingerprint.Profile
 	if name := codexWireTLSProfileName(req.Account); name != "none" {
@@ -179,8 +184,9 @@ func dialOpenAIWSForAccount(ctx context.Context, cfg *config.Config, req openAIW
 		timeout = time.Duration(cfg.Gateway.OpenAIWS.DialTimeoutSeconds) * time.Second
 	}
 	wsConn, res, err := codexwire.DialWS(ctx, req.WSURL, ordered, req.ProxyURL, codexwire.DialOptions{
-		TLSProfile:       profile,
-		HandshakeTimeout: timeout,
+		DisableCompression: openAIWSCompressionDisabled(ctx),
+		TLSProfile:         profile,
+		HandshakeTimeout:   timeout,
 	})
 	if err != nil {
 		status := 0

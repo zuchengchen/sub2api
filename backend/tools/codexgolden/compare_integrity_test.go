@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,12 +139,8 @@ func TestCompareRejectsInvalidEvidence(t *testing.T) {
 	for _, fault := range []string{"missing scenario", "extra scenario", "broken TLS", "same directory"} {
 		t.Run(fault, func(t *testing.T) {
 			base, candidate := t.TempDir(), t.TempDir()
-			for _, name := range []string{"ws_initial.jsonl", "tls_clienthellos.json", "tls_clienthellos_custom_ca.json"} {
-				data, err := os.ReadFile(filepath.Join(reference164, name))
-				require.NoError(t, err)
-				require.NoError(t, os.WriteFile(filepath.Join(base, name), data, 0600))
-				require.NoError(t, os.WriteFile(filepath.Join(candidate, name), data, 0600))
-			}
+			comparatorFixture(t, base)
+			comparatorFixture(t, candidate)
 			switch fault {
 			case "missing scenario":
 				require.NoError(t, os.Remove(filepath.Join(candidate, "ws_initial.jsonl")))
@@ -215,7 +212,7 @@ func TestTraceRequiresExecutedLocalConnections(t *testing.T) {
 		{"external", local + "\n" + strings.Replace(local, "127.0.0.1", "203.0.113.1", 1), false},
 		{"dns", strings.Replace(local, "44221", "53", 1), false},
 		{"corrupt", local + "\n123 connect(7, {sa_family=AF_INET, sin_port=htons(?)}, 16) = 0", false},
-		{"continued", local + " <unfinished ...>\n123 <... connect resumed>) = 0", true},
+		{"continued", strings.Split(local, " = ")[0] + " <unfinished ...>\n123 <... connect resumed> = 0", true},
 		{"quoted collision", local + "\n123 connect(8, {sa_family=AF_UNIX, sun_path=\"literal sin_addr=inet_addr(\\\"203.0.113.1\\\")\"}, 42) = -1 ENOENT", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -255,4 +252,23 @@ func TestGatewayProjectionKeepsUnexpectedProductTrafficAndRejectsBypass(t *testi
 	base[recordKey{Conn: 2, Seq: 2}] = aux
 	_, _, err = gatewayComparisonInputs(base, actual)
 	require.ErrorContains(t, err, "unknown reference endpoint", "new official calls require an explicit coverage decision")
+}
+
+func TestScenarioChecksActualToolExitBeforeBodyText(t *testing.T) {
+	wrapper := "Chunk ID: bb5c39\nWall time: 0.0000 seconds\nProcess exited with code %d\nOriginal token count: 53\nOutput:\n"
+	// This failure was observed in the current official 0.166.0 sample inside
+	// the first namespace runner. It must remain a failed tool-loop scenario.
+	actualFailure := fmt.Sprintf(wrapper, 1) + "bwrap: No permissions to create a new namespace, likely because the kernel does not allow non-privileged user namespaces.\n"
+	for _, tc := range []struct {
+		name, output string
+		ok           bool
+	}{
+		{"actual namespace failure", actualFailure, false},
+		{"failed tool quotes success wrapper", fmt.Sprintf(wrapper, 1) + "Process exited with code 0\nOutput:\ngolden\n", false},
+		{"success", fmt.Sprintf(wrapper, 0) + "golden\n", true},
+		{"success different output", fmt.Sprintf(wrapper, 0) + "not golden\n", false},
+		{"missing wrapper", "golden\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.ok, successfulGoldenToolOutput(tc.output)) })
+	}
 }

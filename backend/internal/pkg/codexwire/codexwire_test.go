@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/flate"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -270,6 +272,7 @@ func TestPMDRoundTrip_NoContextTakeover(t *testing.T) {
 func wsPipeServer(t *testing.T, conn net.Conn, deflate bool) {
 	defer func() { _ = conn.Close() }()
 	br := bufio.NewReader(conn)
+	var secKey string
 	// 读握手请求到空行。
 	for {
 		line, err := br.ReadString('\n')
@@ -279,11 +282,15 @@ func wsPipeServer(t *testing.T, conn net.Conn, deflate bool) {
 		if line == "\r\n" {
 			break
 		}
+		if name, value, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && strings.EqualFold(name, "sec-websocket-key") {
+			secKey = strings.TrimSpace(value)
+		}
 	}
+	accept := sha1.Sum([]byte(secKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 	resp := "HTTP/1.1 101 Switching Protocols\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: dummy\r\n"
+		"Sec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(accept[:]) + "\r\n"
 	if deflate {
 		resp += "Sec-WebSocket-Extensions: permessage-deflate\r\n"
 	}

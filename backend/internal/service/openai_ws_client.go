@@ -134,6 +134,9 @@ func (d *coderOpenAIWSClientDialer) Dial(
 			return true
 		},
 	}
+	if openAIWSCompressionDisabled(ctx) {
+		opts.CompressionMode = coderws.CompressionDisabled
+	}
 	if proxy := strings.TrimSpace(proxyURL); proxy != "" {
 		proxyClient, err := d.proxyHTTPClient(proxy)
 		if err != nil {

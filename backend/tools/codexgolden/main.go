@@ -18,22 +18,15 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"os"
 	"os/exec"
@@ -78,7 +71,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-out is required")
 		os.Exit(2)
 	}
-	if err := os.MkdirAll(*outDir, 0o755); err != nil {
+	if _, err := os.Stat(*outDir); !os.IsNotExist(err) {
+		fatal(errors.New("refusing to reuse reference output directory"))
+	}
+	if err := os.MkdirAll(*outDir, 0o700); err != nil {
+		fatal(err)
+	}
+	traceOutputDir = filepath.Join(*outDir, "traces")
+	if keepDir == "" {
+		keepDir = filepath.Join(*outDir, "raw")
+	}
+	if err := os.MkdirAll(keepDir, 0700); err != nil {
 		fatal(err)
 	}
 	if len(modelsJSON) > 0 {
@@ -108,6 +111,10 @@ func main() {
 		"codex_version": version,
 		"recorded_at":   time.Now().UTC().Format(time.RFC3339),
 		"recorder":      "backend/tools/codexgolden",
+		"tls_mode":      recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh",
+	}
+	if err := addCaptureContract(meta); err != nil {
+		fatal(err)
 	}
 	if *sourceCommit != "" {
 		meta["source_commit"] = *sourceCommit
@@ -161,9 +168,9 @@ func main() {
 		customCAHellos = mergeHellos(customCAHellos, scHellos)
 		fmt.Printf("scenario %s: %d records\n", sc.Name, len(recs))
 	}
-	// With CODEX_CA_CERTIFICATE set Codex switches every lane to rustls; kept
-	// separately because production users normally have no custom CA.
-	writeJSON(filepath.Join(*outDir, "tls_clienthellos_custom_ca.json"), customCAHellos)
+	// Scenario TLS uses a local root installed only inside the runner namespace.
+	// No custom-CA environment variable changes the official TLS backend.
+	writeJSON(filepath.Join(*outDir, "tls_clienthellos_scenarios.json"), customCAHellos)
 	meta["scenarios"] = names
 	meta["strace_guard"] = tracer != ""
 	meta["outbound_leaks"] = leaks
@@ -173,6 +180,11 @@ func main() {
 	if len(leaks) > 0 {
 		fmt.Fprintf(os.Stderr, "ERROR: non-loopback connections observed:\n  %s\n", strings.Join(leaks, "\n  "))
 		os.Exit(3)
+	}
+	if tracer != "" {
+		if err := finalizeCaptureTraces(*outDir); err != nil {
+			fatal(err)
+		}
 	}
 	fmt.Println("done")
 }
@@ -230,7 +242,8 @@ func newSandbox(baseURL string) (*sandbox, error) {
 			return nil, err
 		}
 	}
-	config := fmt.Sprintf(`model = "gpt-5.5"
+	config := fmt.Sprintf(`model = "gpt-6-astra"
+model_reasoning_effort = "xhigh"
 openai_base_url = "%[1]s/backend-api/codex"
 chatgpt_base_url = "%[1]s/backend-api/"
 check_for_update_on_startup = false
@@ -455,7 +468,7 @@ func mergeHellos(dst, src []map[string]any) []map[string]any {
 	return dst
 }
 
-// recordScenario terminates TLS with an ephemeral CA (CODEX_CA_CERTIFICATE)
+// recordScenario terminates TLS with the isolated namespace's trusted local CA
 // and records every request. Workspace routing requires an https origin, so
 // the fake backend must speak TLS.
 func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration) ([]record, []map[string]any, []string, error) {
@@ -491,12 +504,17 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 		}
 	}
 	sb.extraEnv = []string{
-		"CODEX_CA_CERTIFICATE=" + caPath,
 		"CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + origin + "/oauth/token",
+	}
+	if customCARecording() {
+		sb.extraEnv = append(sb.extraEnv, "CODEX_CA_CERTIFICATE="+caPath)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	traceFile, runErr := runCodex(ctx, codexBin, tracer, sb, "Reply with ok.")
+	if err := persistTrace(traceFile, sc.Name); err != nil {
+		return nil, nil, nil, err
+	}
 	if keepDir != "" {
 		if err := os.CopyFS(filepath.Join(keepDir, sc.Name+"-sandbox"), os.DirFS(sb.root)); err != nil {
 			return nil, nil, nil, fmt.Errorf("save synthetic CLI sandbox: %w", err)
@@ -506,6 +524,7 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 	if keepDir != "" {
 		writeJSONL(filepath.Join(keepDir, sc.Name+"-raw.jsonl"), recs)
 		writeJSON(filepath.Join(keepDir, sc.Name+"-tls-connections.json"), up.tlsConnections())
+		writeJSON(filepath.Join(keepDir, sc.Name+"-h2-connection-ends.json"), up.h2ConnectionEnds())
 	}
 	if err := up.validateModelsBarrier(); err != nil {
 		return nil, nil, nil, err
@@ -526,6 +545,15 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 	}
 	normalized, err := normalizeRecords(recs, sb, up.port())
 	return normalized, up.coreHellos(), checkTrace(traceFile), err
+}
+
+func successfulGoldenToolOutput(output string) bool {
+	prefix := toolExecutionPrefix.FindString(output)
+	if prefix == "" {
+		return false
+	}
+	lines := strings.Split(prefix, "\n")
+	return len(lines) > 2 && lines[2] == "Process exited with code 0" && output[len(prefix):] == "golden\n"
 }
 
 func validateScenario(sc scenario, recs []record) error {
@@ -560,7 +588,7 @@ func validateScenario(sc scenario, recs []record) error {
 		for _, item := range body.Input {
 			switch item.Type {
 			case "function_call_output":
-				tool = tool || (strings.HasPrefix(item.CallID, "call_golden_") && strings.Contains(item.Output, "Process exited with code 0\n") && strings.HasSuffix(item.Output, "Output:\ngolden\n"))
+				tool = tool || (strings.HasPrefix(item.CallID, "call_golden_") && successfulGoldenToolOutput(item.Output))
 			case "compaction_trigger":
 				trigger = true
 			case "compaction":
@@ -641,7 +669,8 @@ func recordTLS(codexBin, tracer string, timeout time.Duration) ([]map[string]any
 	defer sb.cleanup()
 	// Bootstrap (accounts/check, models, plugins) goes to the plaintext fake;
 	// the Responses provider is routed to the TLS capture listener.
-	config := fmt.Sprintf(`model = "gpt-5.5"
+	config := fmt.Sprintf(`model = "gpt-6-astra"
+model_reasoning_effort = "xhigh"
 openai_base_url = "%s/backend-api/codex"
 chatgpt_base_url = "http://127.0.0.1:%d/backend-api/"
 check_for_update_on_startup = false
@@ -651,61 +680,39 @@ cli_auth_credentials_store = "file"
 		return nil, nil, err
 	}
 	traceFile, runErr := runCodex(ctx, codexBin, tracer, sb, "Reply with ok.")
+	if err := persistTrace(traceFile, "tls"); err != nil {
+		return nil, nil, err
+	}
+	if keepDir != "" {
+		if err := os.CopyFS(filepath.Join(keepDir, "tls-sandbox"), os.DirFS(sb.root)); err != nil {
+			return nil, nil, err
+		}
+	}
 	out := hellos.export()
-	if len(out) == 0 {
+	if !hellos.hasLanes("rustls", "openssl") {
 		stderr, _ := os.ReadFile(filepath.Join(sb.root, "codex.stderr"))
 		return nil, nil, fmt.Errorf("no ClientHello captured (codex: %v); stderr tail:\n%s", runErr, tail(stderr, 2000))
 	}
 	return out, checkTrace(traceFile), nil
 }
 
-// newEphemeralTLS creates a throwaway CA plus a localhost leaf. ALPN is pinned
-// to http/1.1 so the recording keeps hyper's h1 framing.
+// newEphemeralTLS loads the isolated runner's local test certificate. Native
+// and custom-CA runs negotiate their respective HTTP/1 and HTTP/2 fixtures.
 func newEphemeralTLS(extraNames ...string) ([]byte, *tls.Config, error) {
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Supplied only by the isolated runner; never used by a production service.
+	certPath, keyPath, caPath := os.Getenv("CODEXGOLDEN_CERT"), os.Getenv("CODEXGOLDEN_KEY"), os.Getenv("CODEXGOLDEN_CA")
+	if certPath == "" || keyPath == "" || caPath == "" {
+		return nil, nil, errors.New("system-root fixture certificate required; run in the isolated namespace")
+	}
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	now := time.Now()
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "codexgolden CA"},
-		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	ca, err := os.ReadFile(caPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	caCert, _ := x509.ParseCertificate(caDER)
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, nil, err
-	}
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "localhost"},
-		DNSNames:     append([]string{"localhost"}, extraNames...),
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
-	cfg := &tls.Config{
-		Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER, caDER}, PrivateKey: leafKey}},
-		NextProtos:   []string{"http/1.1"},
-		MinVersion:   tls.VersionTLS12,
-	}
-	return caPEM, cfg, nil
+	return ca, &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: recorderALPN(), MinVersion: tls.VersionTLS12}, nil
 }
 
 func readTLSRecord(br *bufio.Reader) ([]byte, error) {
@@ -725,9 +732,8 @@ func readTLSRecord(br *bufio.Reader) ([]byte, error) {
 }
 
 var (
-	straceInet    = regexp.MustCompile(`sa_family=AF_INET, sin_port=htons\((\d+)\), sin_addr=inet_addr\("([^"]+)"\)`)
-	straceInet6   = regexp.MustCompile(`sa_family=AF_INET6, sin6_port=htons\((\d+)\).*?inet_pton\(AF_INET6, "([^"]+)"`)
-	straceConnect = regexp.MustCompile(`^(?:[0-9]+\s+)?connect\(`)
+	straceInet  = regexp.MustCompile(`^\{sa_family=AF_INET, sin_port=htons\((\d+)\), sin_addr=inet_addr\("([^"]+)"\)`)
+	straceInet6 = regexp.MustCompile(`^\{sa_family=AF_INET6, sin6_port=htons\((\d+)\).*?inet_pton\(AF_INET6, "([^"]+)"`)
 )
 
 // checkTrace lists connect(2) destinations that are not loopback, plus any
@@ -740,16 +746,18 @@ func checkTrace(path string) []string {
 	if err != nil {
 		return []string{"strace output unreadable: " + err.Error()}
 	}
-	var leaks []string
+	calls, leaks := traceConnectCalls(string(data))
 	seen := map[string]bool{}
 	inetConnections := 0
-	for _, line := range strings.Split(string(data), "\n") {
-		if !straceConnect.MatchString(line) {
+	for _, call := range calls {
+		line, err := traceAddress(call)
+		if err != nil {
+			leaks = append(leaks, err.Error())
 			continue
 		}
 		// AF_UNIX paths can contain text resembling an internet sockaddr.
 		// Parse only the actual address argument, never quoted path contents.
-		if strings.Contains(line, "{sa_family=AF_UNIX,") || strings.Contains(line, "{sa_family=AF_UNSPEC}") {
+		if strings.HasPrefix(line, "{sa_family=AF_UNIX,") || strings.HasPrefix(line, "{sa_family=AF_UNSPEC}") || strings.HasPrefix(line, "{sa_family=AF_UNSPEC,") {
 			continue
 		}
 		var port, host string

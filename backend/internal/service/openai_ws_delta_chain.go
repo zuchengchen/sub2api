@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,20 +18,26 @@ import (
 // 下一次请求若 input 以 baseline 为前缀且非 input 字段指纹一致，
 // 即可只发送尾部增量 + previous_response_id。
 type openAIWSDeltaChainState struct {
-	ResponseID      string   `json:"response_id"`
-	AccountID       int64    `json:"account_id"`
-	FieldsFP        string   `json:"fields_fp"`
-	BaselineHashes  []string `json:"baseline"`
-	UpdatedUnixNano int64    `json:"updated_unix_nano"`
+	ResponseID      string                       `json:"response_id"`
+	AccountID       int64                        `json:"account_id"`
+	FieldsFP        string                       `json:"fields_fp"`
+	BaselineHashes  []string                     `json:"baseline"`
+	UpdatedUnixNano int64                        `json:"updated_unix_nano"`
+	Scope           string                       `json:"-"`
+	WindowID        string                       `json:"-"`
+	PendingTools    map[[sha256.Size]byte]string `json:"-"`
 }
 
 const openAIWSDeltaChainMaxBaseline = 2048
+const openAIWSDeltaCheckpointTTL = 10 * time.Minute
 
 // openAIWSDeltaItemHash 对单个 input/output item 规范化后取指纹，
 // 客户端对历史项的再序列化差异（键序、空白）被消掉。
 func openAIWSDeltaItemHash(item json.RawMessage) string {
-	normalized := normalizeOpenAIWSJSONForCompareOrRaw(item)
-	sum := sha256.Sum256(normalized)
+	sum, ok := openAIWSContinuationItemDigest(item)
+	if !ok {
+		sum = sha256.Sum256(normalizeOpenAIWSJSONForCompareOrRaw(item))
+	}
 	return hex.EncodeToString(sum[:])
 }
 
@@ -55,23 +62,17 @@ func openAIWSDeltaFieldsFingerprint(payload map[string]any) string {
 	if len(payload) == 0 {
 		return ""
 	}
-	props := map[string]any{}
-	for _, key := range [...]string{
-		"model",
-		"tools",
-		"tool_choice",
-		"parallel_tool_calls",
-		"reasoning",
-		"store",
-		"stream",
-		"include",
-		"service_tier",
-		"prompt_cache_key",
-		"text",
-	} {
-		if value, ok := payload[key]; ok {
-			props[key] = value
+	props := make(map[string]any, len(payload))
+	for key, value := range payload {
+		switch key {
+		case "input", "previous_response_id", "stream_options", "client_metadata", "access_programs", "type", "background":
+			continue
+		case "generate":
+			if generate, ok := value.(bool); ok && !generate {
+				continue // Official prewarm and generation share the same context.
+			}
 		}
+		props[key] = value
 	}
 	encoded, err := marshalOpenAIUpstreamJSON(props)
 	if err != nil {
@@ -93,6 +94,10 @@ type openAIWSDeltaDecision struct {
 // resolveOpenAIWSDelta 用存储链判断当前请求能否走增量。
 // currentItems 是本回合将发送的逻辑 input（未做增量改写前）。
 func resolveOpenAIWSDelta(chain *openAIWSDeltaChainState, accountID int64, fieldsFP string, currentItems []json.RawMessage) openAIWSDeltaDecision {
+	return resolveOpenAIWSDeltaWithHashes(chain, accountID, fieldsFP, currentItems, nil)
+}
+
+func resolveOpenAIWSDeltaWithHashes(chain *openAIWSDeltaChainState, accountID int64, fieldsFP string, currentItems []json.RawMessage, hashes []string) openAIWSDeltaDecision {
 	if chain == nil {
 		return openAIWSDeltaDecision{Reason: "no_chain"}
 	}
@@ -112,13 +117,27 @@ func resolveOpenAIWSDelta(chain *openAIWSDeltaChainState, accountID int64, field
 		return openAIWSDeltaDecision{Reason: "input_shortened"}
 	}
 	for idx, hash := range chain.BaselineHashes {
-		if openAIWSDeltaItemHash(currentItems[idx]) != hash {
+		currentHash := ""
+		if len(hashes) == len(currentItems) {
+			currentHash = hashes[idx]
+		} else {
+			currentHash = openAIWSDeltaItemHash(currentItems[idx])
+		}
+		if currentHash != hash {
 			return openAIWSDeltaDecision{Reason: "input_mismatch"}
 		}
 	}
+	if hashes == nil {
+		if reason := openAIWSDeltaInputIneligible(currentItems); reason != "" {
+			return openAIWSDeltaDecision{Reason: reason}
+		}
+	}
+	if !openAIWSContinuationToolsComplete(openAIWSDeltaJSONItems(currentItems[len(chain.BaselineHashes):]), chain.PendingTools) {
+		return openAIWSDeltaDecision{Reason: "incomplete_tool_delta"}
+	}
 	return openAIWSDeltaDecision{
 		Delta:            true,
-		TailItems:        append([]json.RawMessage(nil), currentItems[len(chain.BaselineHashes):]...),
+		TailItems:        append([]json.RawMessage{}, currentItems[len(chain.BaselineHashes):]...),
 		PreviousResponse: chain.ResponseID,
 		Reason:           "incremental",
 	}
@@ -128,56 +147,72 @@ func resolveOpenAIWSDelta(chain *openAIWSDeltaChainState, accountID int64, field
 // 每条 response.output_item.done 的 item 规范化哈希 + 终态 response_id。
 type openAIWSDeltaRecorder struct {
 	mu               sync.Mutex
+	output           openAIWSContinuationOutputCollector
 	itemsAddedHashes []string
+	pendingTools     map[[sha256.Size]byte]string
 	responseID       string
 	completed        bool
 	overflow         bool
 }
 
-// observe 处理一条上游事件原始字节。
+// Observe raw upstream output before model/tool rewrites. Only successful,
+// unambiguous terminal output can establish the next socket checkpoint.
 func (r *openAIWSDeltaRecorder) observe(message []byte) {
 	if r == nil || len(message) == 0 {
 		return
 	}
 	eventType := gjson.GetBytes(message, "type").String()
-	switch eventType {
-	case "response.output_item.done":
-		item := gjson.GetBytes(message, "item")
-		if !item.Exists() {
-			return
-		}
-		r.mu.Lock()
-		if len(r.itemsAddedHashes) >= openAIWSDeltaChainMaxBaseline {
-			r.overflow = true
-		} else {
-			r.itemsAddedHashes = append(r.itemsAddedHashes, openAIWSDeltaItemHash(json.RawMessage(item.Raw)))
-		}
-		r.mu.Unlock()
-	case "response.completed":
-		id := gjson.GetBytes(message, "response.id").String()
-		if id == "" {
-			id = gjson.GetBytes(message, "response_id").String()
-		}
-		r.mu.Lock()
-		if id != "" {
-			r.responseID = id
-		}
-		r.completed = true
-		r.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.output.observe(message, eventType)
+	if r.output.invalid {
+		r.overflow = true
 	}
+	if eventType != "response.completed" {
+		return
+	}
+	response := gjson.GetBytes(message, "response")
+	if status := response.Get("status").String(); (status != "" && status != "completed") ||
+		response.Get("error").Type == gjson.JSON || gjson.GetBytes(message, "error").Type == gjson.JSON {
+		r.overflow = true
+		return
+	}
+	output, ok := r.output.finish(response.Get("output"))
+	if !ok {
+		r.overflow = true
+		return
+	}
+	r.responseID = strings.Clone(strings.TrimSpace(response.Get("id").String()))
+	if r.responseID == "" {
+		r.responseID = strings.Clone(strings.TrimSpace(gjson.GetBytes(message, "response_id").String()))
+	}
+	if r.responseID == "" || len(r.responseID) > 256 {
+		r.overflow = true
+		return
+	}
+	r.pendingTools = make(map[[sha256.Size]byte]string)
+	for _, item := range output {
+		if item.toolType != "" {
+			if _, duplicate := r.pendingTools[item.callID]; duplicate {
+				r.overflow = true
+				return
+			}
+			r.pendingTools[item.callID] = item.toolType
+		}
+		r.itemsAddedHashes = append(r.itemsAddedHashes, hex.EncodeToString(item.digest[:]))
+	}
+	r.completed = true
 }
 
-// finalize 用当前请求的逻辑 input 哈希与本回合收集到的 output item 哈希
-// 生成下一回合可用的链快照。未完成响应不更新链；nil,true 要求删除旧链。
+// nil,true invalidates an unusable old session hint. An incomplete stream can
+// never publish a new checkpoint, even when it carried some completed items.
 func (r *openAIWSDeltaRecorder) finalize(accountID int64, fieldsFP string, logicalInputHashes []string, prev *openAIWSDeltaChainState) (*openAIWSDeltaChainState, bool) {
 	if r == nil {
 		return prev, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// An anchor covers the entire response. A truncated prefix cannot describe
-	// that anchor: a later delta would replay history the upstream already has.
-	if r.overflow || len(logicalInputHashes)+len(r.itemsAddedHashes) > openAIWSDeltaChainMaxBaseline {
+	if r.overflow || len(logicalInputHashes)+len(r.output.items) > openAIWSDeltaChainMaxBaseline || len(logicalInputHashes)+len(r.itemsAddedHashes) > openAIWSDeltaChainMaxBaseline {
 		return nil, true
 	}
 	if !r.completed || r.responseID == "" {
@@ -187,12 +222,42 @@ func (r *openAIWSDeltaRecorder) finalize(accountID int64, fieldsFP string, logic
 	baseline = append(baseline, logicalInputHashes...)
 	baseline = append(baseline, r.itemsAddedHashes...)
 	return &openAIWSDeltaChainState{
-		ResponseID:      r.responseID,
-		AccountID:       accountID,
-		FieldsFP:        fieldsFP,
-		BaselineHashes:  baseline,
-		UpdatedUnixNano: time.Now().UnixNano(),
+		ResponseID: r.responseID, AccountID: accountID, FieldsFP: fieldsFP,
+		BaselineHashes: baseline, UpdatedUnixNano: time.Now().UnixNano(), PendingTools: r.pendingTools,
 	}, true
+}
+
+func openAIWSDeltaJSONItems(items []json.RawMessage) []gjson.Result {
+	parsed := make([]gjson.Result, len(items))
+	for i, item := range items {
+		parsed[i] = gjson.ParseBytes(item)
+	}
+	return parsed
+}
+
+// These checks only gate gateway-inferred continuation. They never drop or
+// alter user history, and native clients still own explicitly supplied anchors.
+func openAIWSDeltaInputIneligible(items []json.RawMessage) string {
+	_, reason := openAIWSDeltaInputSnapshot(items)
+	return reason
+}
+
+func openAIWSDeltaInputSnapshot(items []json.RawMessage) ([]string, string) {
+	hashes := make([]string, 0, len(items))
+	for _, item := range items {
+		if gjson.GetBytes(item, "type").String() == "compaction_trigger" {
+			return nil, "compaction_boundary"
+		}
+		digest, ok := openAIWSContinuationItemDigest(item)
+		if !ok {
+			return nil, "non_self_contained_input"
+		}
+		hashes = append(hashes, hex.EncodeToString(digest[:]))
+	}
+	if !openAIWSContinuationToolsComplete(openAIWSDeltaJSONItems(items), nil) {
+		return nil, "incomplete_tool_pairs"
+	}
+	return hashes, ""
 }
 
 // openAIWSExtractRawInputItems 从原始请求体拆出 input 各项的原始字节，
@@ -229,8 +294,18 @@ func openAIWSDeltaWireItems(body []byte, payloadInput any) []json.RawMessage {
 		count = 0
 	}
 	raw := openAIWSExtractRawInputItems(body)
-	if count == 0 || len(raw) == count {
-		return raw
+	if len(raw) == count && count > 0 {
+		encoded, err := marshalOpenAIUpstreamJSON(payloadInput)
+		if err == nil {
+			values := gjson.ParseBytes(encoded).Array()
+			match := len(values) == len(raw)
+			for i := 0; match && i < len(values); i++ {
+				match = bytes.Equal(normalizeOpenAIWSJSONForCompareOrRaw(raw[i]), normalizeOpenAIWSJSONForCompareOrRaw([]byte(values[i].Raw)))
+			}
+			if match {
+				return raw
+			}
+		}
 	}
 	// 变换过的 input（replay/截断等）：按 payload 重新编码，功能正确优先。
 	switch items := payloadInput.(type) {

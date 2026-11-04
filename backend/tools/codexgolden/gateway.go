@@ -37,9 +37,14 @@ func gatewayMain(args []string) int {
 	models := fs.String("models-json", "", "fixed official model catalog")
 	version := fs.String("expect-version", "", "fixed official CLI version")
 	commit := fs.String("source-commit", "", "fixed official source commit")
+	ingressMode := fs.String("ingress-mode", "passthrough", "candidate WS ingress: passthrough or ctx_pool")
 	single := fs.String("scenario", "", "run only one scenario (diagnostics, not full acceptance)")
 	worker := fs.Bool("worker", false, "internal traced worker")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := validateGatewayIngressMode(*ingressMode); err != nil {
+		fmt.Fprintln(os.Stderr, "gateway:", err)
 		return 2
 	}
 	if *bin == "" || *out == "" || *models == "" || *version == "" || *commit == "" {
@@ -83,9 +88,13 @@ func gatewayMain(args []string) int {
 			fmt.Fprintln(os.Stderr, "gateway: non-loopback connections observed")
 			return 3
 		}
+		if err := finalizeCaptureTraces(*out); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
 		return 0
 	}
-	for _, name := range []string{"CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"} {
+	for _, name := range []string{"CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if err := os.Unsetenv(name); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 2
@@ -110,9 +119,11 @@ func gatewayMain(args []string) int {
 	}
 	// Each Codex transport loads this scoped CA explicitly; verification stays
 	// enabled even after native TLS initialized the system root cache above.
-	if err := os.Setenv("SSL_CERT_FILE", caPath); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
+	if customCARecording() {
+		if err := os.Setenv("CODEX_CA_CERTIFICATE", caPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
 	}
 	modelsJSON, err = os.ReadFile(*models)
 	if err != nil {
@@ -142,17 +153,24 @@ func gatewayMain(args []string) int {
 	}
 	names := []string{}
 	var hellos []map[string]any
+	gatewayHash := ""
 	for i, sc := range scenarios {
 		if *single != "" && *single != sc.Name {
 			continue
 		}
-		recs, tlsRows, provenance, err := recordGatewayScenario(*bin, sc, serverTLS, caPath, int64(100+i), *out)
+		recs, tlsRows, provenance, err := recordGatewayScenario(*bin, sc, serverTLS, caPath, int64(100+i), *out, *ingressMode)
 		writeJSONL(filepath.Join(*out, sc.Name+".jsonl"), recs)
 		writeJSON(filepath.Join(*out, sc.Name+"-provenance.json"), provenance)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "gateway scenario %s: %v\n", sc.Name, err)
 			return 1
 		}
+		observedHash, _ := provenance["gateway_config_sha256"].(string)
+		if gatewayHash != "" && gatewayHash != observedHash {
+			fmt.Fprintln(os.Stderr, "gateway: configuration changed between scenarios")
+			return 2
+		}
+		gatewayHash = observedHash
 		hellos = mergeHellos(hellos, tlsRows)
 		names = append(names, sc.Name)
 		fmt.Printf("gateway scenario %s: %d real socket records\n", sc.Name, len(recs))
@@ -161,20 +179,27 @@ func gatewayMain(args []string) int {
 		fmt.Fprintln(os.Stderr, "gateway: no scenarios executed")
 		return 2
 	}
-	writeJSON(filepath.Join(*out, "tls_clienthellos_custom_ca.json"), hellos)
-	writeJSON(filepath.Join(*out, "meta.json"), map[string]any{
+	writeJSON(filepath.Join(*out, "tls_clienthellos_scenarios.json"), hellos)
+	meta := map[string]any{
 		"codex_version": actualVersion, "source_commit": *commit, "binary_sha256": fmt.Sprintf("%x", sha256.Sum256(binary)),
 		"models_sha256": fmt.Sprintf("%x", sha256.Sum256(modelsJSON)), "recorded_at": time.Now().UTC().Format(time.RFC3339),
-		"recorder": "backend/tools/codexgolden gateway", "scenarios": names, "native_tls_pending": false,
-	})
+		"recorder": "backend/tools/codexgolden gateway", "tls_mode": recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh", "scenarios": names, "native_tls_pending": false, "candidate_ingress_mode": *ingressMode, "gateway_config_sha256": gatewayHash,
+	}
+	if err := addCaptureContract(meta); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	writeJSON(filepath.Join(*out, "meta.json"), meta)
 	return 0
 }
 
-func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPath string, id int64, out string) ([]record, []map[string]any, map[string]any, error) {
+func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPath string, id int64, out string, ingressMode string) ([]record, []map[string]any, map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	var mu sync.Mutex
 	routes := map[string]int{}
+	var ingressObservations []gatewayIngressObservation
+	ingressSequence := 0
 	var routeErrors []string
 	recordError := func(err error) { mu.Lock(); routeErrors = append(routeErrors, err.Error()); mu.Unlock() }
 	var ingress string
@@ -218,7 +243,10 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 			return nil, nil, nil, closeErr
 		}
 	}
-	sb.extraEnv = []string{"CODEX_CA_CERTIFICATE=" + caPath, "CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + origin + "/oauth/token"}
+	sb.extraEnv = []string{"CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + origin + "/oauth/token"}
+	if customCARecording() {
+		sb.extraEnv = append(sb.extraEnv, "CODEX_CA_CERTIFICATE="+caPath)
+	}
 	proxy := newGatewayConnectProxy(fmt.Sprintf("127.0.0.1:%d", up.port()))
 	defer proxy.close()
 	proxyURL, _ := url.Parse(proxy.server.URL)
@@ -228,27 +256,19 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 		ID: id, Name: "synthetic-codexgolden", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true, Concurrency: 2,
 		ProxyID: &p.ID, Proxy: p,
 		Credentials: map[string]any{"access_token": fakeJWT(map[string]any{"exp": 4102444800, "https://api.openai.com/auth": goldenAuthClaims()}), "refresh_token": "rt-golden", "chatgpt_account_id": "acct-golden", "chatgpt_user_id": "user-golden", "expires_at": float64(4102444800)},
-		Extra:       map[string]any{"codex_client_family": "exec", "codex_workspace_cwd": sb.cwd, "codex_sandbox_mode": "read-only", "openai_oauth_responses_websockets_v2_mode": "passthrough", "openai_oauth_responses_websockets_v2_enabled": true, "openai_passthrough": true},
+		Extra:       gatewaySyntheticModelPolicyExtra(map[string]any{"codex_client_family": "exec", "codex_workspace_cwd": sb.cwd, "codex_sandbox_mode": "read-only", "openai_oauth_responses_websockets_v2_mode": "passthrough", "openai_oauth_responses_websockets_v2_enabled": true, "openai_passthrough": true}),
 	}
 	accounts := &gatewayAccounts{account: account}
 	cache := &gatewayTokenCache{}
 	oauth := service.NewOpenAIOAuthService(&gatewayProxies{proxy: p}, repository.NewOpenAIOAuthClient())
 	tokens := service.NewOpenAITokenProvider(accounts, cache, oauth)
 	tokens.SetRefreshAPI(service.NewOAuthRefreshAPI(accounts, cache), service.NewOpenAITokenRefresher(oauth, accounts))
-	cfg := &config.Config{}
-	// User-approved compatibility exception: automatic Tibo health probes are
-	// tested separately. The six fixtures compare the CLI request lifecycle.
-	disableTibo := false
-	cfg.Gateway.OpenAITiboRoute.Enabled = &disableTibo
-	cfg.Gateway.OpenAIWS.Enabled = true
-	cfg.Gateway.OpenAIWS.OAuthEnabled = true
-	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
-	cfg.Gateway.OpenAIWS.IngressModeDefault = "passthrough"
-	cfg.Gateway.OpenAIWS.ExactFidelityEnabled = true
-	cfg.Gateway.OpenAIWS.CodexHTTPH2Enabled = true
-	cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
-	upstream := repository.NewHTTPUpstream(cfg)
+	cfg := gatewayScenarioConfig()
+	if err := configureGatewayIngressMode(cfg, account, ingressMode); err != nil {
+		return nil, nil, nil, err
+	}
+	configHash := gatewayConfigFingerprint(cfg)
+	upstream := gatewayObservedHTTPUpstream{HTTPUpstream: repository.NewHTTPUpstream(cfg)}
 	svc := service.NewOpenAIGatewayService(accounts, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, upstream, nil, tokens, nil, nil, nil, nil, nil, nil)
 	svc.StopOpenAICodexTicketHarvester()
 	defer svc.CloseOpenAIWSPool()
@@ -290,6 +310,34 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 			return
 		}
 		if strings.HasPrefix(kind, "WS ") {
+			var httpObservation *gatewayIngressHTTPObservation
+			r, httpObservation = withGatewayIngressHTTPObservation(r)
+			c.Request = r
+			service.SetOpenAIClientTransport(c, service.OpenAIClientTransportWS)
+			mu.Lock()
+			ingressSequence++
+			entrySequence := ingressSequence
+			mu.Unlock()
+			if err := verifyGatewayModeResolution(cfg, acc, ingressMode); err != nil {
+				recordError(err)
+				http.Error(w, "ingress mode mismatch", 500)
+				return
+			}
+			before := svc.SnapshotOpenAIWSPoolMetrics().AcquireTotal
+			observation := gatewayIngressObservation{Sequence: entrySequence, ActualMode: ingressMode, Upgrade426Before: up.upgrade426Responses.Load(), AccountMode: acc.ResolveOpenAIResponsesWebSocketV2Mode(cfg.Gateway.OpenAIWS.IngressModeDefault), ResolverTransport: string(service.NewOpenAIWSProtocolResolver(cfg).Resolve(acc).Transport), PoolAcquiresBefore: before}
+			defer func() {
+				observation.PoolAcquiresAfter = svc.SnapshotOpenAIWSPoolMetrics().AcquireTotal
+				observation.Upgrade426After = up.upgrade426Responses.Load()
+				observation.HTTPResponses = httpObservation.responses.Load()
+				if observation.PoolAcquiresAfter == observation.PoolAcquiresBefore && observation.HTTPResponses > 0 {
+					observation.ActualMode = "http_bridge"
+					observation.FallbackReason = "prior_upstream_426"
+				}
+				mu.Lock()
+				ingressObservations = append(ingressObservations, observation)
+				mu.Unlock()
+			}()
+
 			conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})
 			if err != nil {
 				recordError(err)
@@ -345,6 +393,7 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 	writeJSONL(filepath.Join(out, "raw", sc.Name+".jsonl"), recs)
 	writeJSON(filepath.Join(out, "raw", sc.Name+"-tls.json"), hellos.export())
 	writeJSON(filepath.Join(out, "raw", sc.Name+"-tls-connections.json"), up.tlsConnections())
+	writeJSON(filepath.Join(out, "raw", sc.Name+"-h2-connection-ends.json"), up.h2ConnectionEnds())
 	if err := up.validateModelsBarrier(); err != nil {
 		return nil, nil, nil, err
 	}
@@ -356,8 +405,14 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 		return recs, hellos.export(), nil, err
 	}
 	mu.Lock()
-	provenance := map[string]any{"scenario": sc.Name, "service_routes": routes, "route_errors": routeErrors, "cli_exit_success": runErr == nil, "context_error": fmt.Sprint(ctx.Err()), "synthetic_account_id": id, "credential_writes": accounts.credentialWrites, "proxy_targets": proxy.targets, "proxy_denied": proxy.denied}
+	provenance := map[string]any{"scenario": sc.Name, "candidate_ingress_mode": ingressMode, "gateway_config_sha256": configHash, "ingress_observations": ingressObservations, "upstream_upgrade_426_responses": up.upgrade426Responses.Load(), "service_routes": routes, "route_errors": routeErrors, "cli_exit_success": runErr == nil, "context_error": fmt.Sprint(ctx.Err()), "synthetic_account_id": id, "model_policy_source": "explicit_synthetic_astra_health_snapshot", "model_policy_bypassed": false, "credential_writes": accounts.credentialWrites, "proxy_targets": proxy.targets, "proxy_denied": proxy.denied}
 	mu.Unlock()
+	if err := validateGatewayModeEvidence(captureMetadata{GatewayMode: ingressMode, GatewayConfigHash: configHash}, gatewayModeEvidence{Scenario: sc.Name, Upgrade426Responses: up.upgrade426Responses.Load(), Mode: ingressMode, ConfigHash: configHash, Observations: ingressObservations}, routes["WS /backend-api/codex/responses"]); err != nil {
+		return recs, hellos.export(), provenance, err
+	}
+	if err := validateGatewayModeWireEvidence(gatewayModeEvidence{Scenario: sc.Name, Upgrade426Responses: up.upgrade426Responses.Load(), Mode: ingressMode, ConfigHash: configHash, Observations: ingressObservations}, recs); err != nil {
+		return recs, hellos.export(), provenance, err
+	}
 	normalized, err := normalizeRecords(recs, sb, up.port())
 	if err != nil {
 		return nil, nil, provenance, err
@@ -370,7 +425,7 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 			continue
 		}
 		for j, h := range normalized[i].Headers {
-			if strings.EqualFold(h.Name, "host") && (h.Value == "chatgpt.com" || h.Value == "auth.openai.com") {
+			if (strings.EqualFold(h.Name, "host") || h.Name == ":authority") && (h.Value == "chatgpt.com" || h.Value == "auth.openai.com") {
 				normalized[i].Headers[j].Value = "<UPSTREAM>"
 			}
 		}
@@ -404,4 +459,37 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 		return normalized, hellos.export(), provenance, errors.New("gateway did not persist refreshed credentials")
 	}
 	return normalized, normalizedHellos, provenance, nil
+}
+
+func gatewayScenarioConfig() *config.Config {
+	cfg := &config.Config{}
+	// These fixtures isolate the CLI request lifecycle. Automatic Tibo health
+	// probes require independent coverage outside this wire projection.
+	disableTibo := false
+	cfg.Gateway.OpenAITiboRoute.Enabled = &disableTibo
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+	cfg.Gateway.OpenAIWS.IngressModeDefault = "passthrough"
+	cfg.Gateway.OpenAIWS.ExactFidelityEnabled = true
+	// Preserve the production default: OAuth resolves custom CA from the actual
+	// environment; a forced H2 switch would contaminate the native reference.
+	cfg.Gateway.OpenAIWS.CodexHTTPH2Enabled = false
+	cfg.Gateway.OpenAIWS.SessionDisableEnabled = true
+	return cfg
+}
+
+// This is an explicit synthetic scheduling snapshot, never a live capability
+// claim. Production model policy still validates its model, source and timestamp.
+func gatewaySyntheticModelPolicyExtra(extra map[string]any) map[string]any {
+	out := make(map[string]any, len(extra)+1)
+	for key, value := range extra {
+		out[key] = value
+	}
+	out[service.OpenAIAstraPolicyExtraKey] = map[string]any{
+		"model":          "gpt-6-astra",
+		"recent_samples": []any{map[string]any{"verdict": "healthy", "at": "2020-01-01T00:00:00Z"}},
+	}
+	return out
 }
