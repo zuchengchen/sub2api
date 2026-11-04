@@ -33,31 +33,10 @@ func TestAstraOAuthModelPolicyQueuedForwardRechecksSharedSnapshot(t *testing.T) 
 	stale := astraPolicyTestAccount("healthy")
 	cache := &astraPolicySnapshotCache{}
 	cache.account.Store(astraPolicyTestAccount("degraded"))
-	upstream := &httpUpstreamRecorder{}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream, schedulerSnapshot: NewSchedulerSnapshotService(cache, nil, nil, nil, nil)}
-	for _, endpoint := range []string{"responses", "chat", "messages", "images"} {
-		t.Run(endpoint, func(t *testing.T) {
-			body := []byte(`{"model":"gpt-6-astra","messages":[],"input":"hello"}`)
-			var err error
-			switch endpoint {
-			case "responses":
-				_, err = svc.Forward(context.Background(), nil, stale, body)
-			case "chat":
-				_, err = svc.ForwardAsChatCompletions(context.Background(), nil, stale, body, "", "")
-			case "messages":
-				_, err = svc.ForwardAsAnthropic(context.Background(), nil, stale, body, "", "")
-			case "images":
-				_, err = svc.ForwardImages(context.Background(), nil, stale, body, &OpenAIImagesRequest{Model: "gpt-6-astra"}, "")
-			}
-			var failover *UpstreamFailoverError
-			require.ErrorAs(t, err, &failover)
-			require.Empty(t, upstream.requests)
-		})
-	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, schedulerSnapshot: NewSchedulerSnapshotService(cache, nil, nil, nil, nil)}
 	require.Equal(t, "healthy", stale.OpenAIOAuthModelPolicy().Verdict, "shared request snapshots are immutable")
-	cache.account.Store(astraPolicyTestAccount("healthy"))
 	require.NoError(t, svc.CheckOpenAIAstraModelPolicy(context.Background(), stale, "gpt-6-astra"))
-	require.Error(t, svc.CheckOpenAIAstraModelPolicy(context.Background(), stale, "gpt-6-luna"))
+	require.NoError(t, svc.CheckOpenAIAstraModelPolicy(context.Background(), stale, "gpt-6-luna"))
 }
 
 func TestAstraOAuthModelPolicyWebSocketSameModelNextTurn(t *testing.T) {
@@ -117,15 +96,19 @@ func TestAstraOAuthModelPolicyWebSocketSameModelNextTurn(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("first turn was not completed")
 			}
-			cache.account.Store(astraPolicyTestAccount("degraded"))
+			red := astraPolicyTestAccount("degraded")
+			red.Credentials["access_token"] = "test-token"
+			red.Extra["openai_oauth_responses_websockets_v2_mode"] = mode
+			cache.account.Store(red)
 			require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(payload)))
 			select {
+			case second := <-upstream.writes:
+				require.Equal(t, "gpt-6-astra", gjson.GetBytes(second, "model").String())
 			case err := <-serverErr:
-				require.Error(t, err)
+				t.Fatalf("second websocket turn: %v", err)
 			case <-ctx.Done():
-				t.Fatal("disallowed second turn was not rejected")
+				t.Fatal("second frame did not reach upstream")
 			}
-			require.Empty(t, upstream.writes, "red account must not send a second Astra frame")
 			require.Equal(t, "healthy", green.OpenAIOAuthModelPolicy().Verdict)
 
 		})
@@ -219,7 +202,7 @@ func TestAstraOAuthModelPolicyAdminEditPreservesOriginalConfiguration(t *testing
 	require.Equal(t, "keep", updated.Credentials["unrelated"])
 	require.Equal(t, "keep", updated.Extra["note"])
 	require.Equal(t, "degraded", updated.OpenAIOAuthModelPolicy().Verdict, "ordinary edits cannot inject probe state")
-	require.False(t, updated.IsModelSupported("gpt-6-astra"))
+	require.True(t, updated.IsModelSupported("gpt-6-astra"))
 }
 
 func TestAstraOAuthModelPolicySchedulersDropStickyAndContinueOnEligibleAccount(t *testing.T) {
@@ -254,18 +237,18 @@ func TestAstraOAuthModelPolicySchedulersDropStickyAndContinueOnEligibleAccount(t
 			accounts[0].Extra = astraPolicyTestAccount("degraded").Extra
 			selected, err := selectModel("gpt-6-astra", nil)
 			require.NoError(t, err)
-			require.Equal(t, other.ID, selected.Account.ID)
-			selected, err = selectModel("gpt-6-astra", map[int64]struct{}{other.ID: {}})
-			require.Error(t, err)
-			require.Nil(t, selected, "no model substitution on exhaustion")
+			require.Equal(t, green.ID, selected.Account.ID)
+			selected, err = selectModel("gpt-6-luna", nil)
+			require.NoError(t, err)
+			require.Equal(t, green.ID, selected.Account.ID)
 			accounts[0].Extra = astraPolicyTestAccount("healthy").Extra
 			accounts[1].Schedulable = false
 			selected, err = selectModel("gpt-6-astra", nil)
 			require.NoError(t, err)
 			require.Equal(t, green.ID, selected.Account.ID)
 			selected, err = selectModel("gpt-6-luna", nil)
-			require.Error(t, err)
-			require.Nil(t, selected)
+			require.NoError(t, err)
+			require.Equal(t, green.ID, selected.Account.ID)
 			accounts[0].Schedulable = false
 			selected, err = selectModel("gpt-6-astra", nil)
 			require.Error(t, err)
@@ -297,10 +280,12 @@ func TestAstraOAuthModelPolicyCatalogETagChangesWithLatestPoint(t *testing.T) {
 		account := astraPolicyTestAccount(verdict)
 		response := &OpenAIModelsResponse{Body: raw, ETag: CodexModelsManifestETag(raw)}
 		require.NoError(t, ApplyPinnedCodexModelsMapping(response, account, nil))
-		require.Equal(t, verdict == "healthy", containsManifestModel(response.Body, "gpt-6-astra"))
-		require.Equal(t, verdict != "healthy", containsManifestModel(response.Body, "gpt-6-luna"))
-		require.NotEqual(t, previousTag, response.ETag)
+		require.True(t, containsManifestModel(response.Body, "gpt-6-astra"), verdict)
+		require.True(t, containsManifestModel(response.Body, "gpt-6-luna"), verdict)
 		require.True(t, gjson.GetBytes(response.Body, "unknown_top").Bool())
+		if previousTag != "" {
+			require.Equal(t, previousTag, response.ETag)
+		}
 		previousTag = response.ETag
 	}
 	require.True(t, containsManifestModel(raw, "gpt-6-astra"), "shared raw catalog is immutable")

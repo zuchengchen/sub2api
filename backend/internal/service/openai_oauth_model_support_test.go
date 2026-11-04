@@ -75,7 +75,6 @@ func TestIsModelSupported_OpenAIOAuthExplicitMappingIsIgnored(t *testing.T) {
 		},
 	}
 
-	// OAuth 原映射不能扩大自动策略或上游能力。
 	require.False(t, account.IsModelSupported("deepseek-v4"))
 	require.False(t, account.IsModelSupported("k3"))
 	require.False(t, account.IsModelSupported("glm-4.7"))
@@ -85,7 +84,6 @@ func TestIsModelSupported_OpenAIOAuthPassthroughRespectsUpstreamCapability(t *te
 	account := newOpenAIOAuthAccountForModelTest()
 	account.Extra["openai_passthrough"] = true
 
-	// 透传也不绕过自动策略。
 	require.False(t, account.IsModelSupported("deepseek-v4"))
 }
 

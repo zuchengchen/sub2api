@@ -28,8 +28,8 @@ func TestAstraOAuthModelPolicyAdminCatalogAndListDTOAgree(t *testing.T) {
 		for _, row := range gjson.GetBytes(rec.Body.Bytes(), "data").Array() {
 			ids[row.Get("id").String()] = true
 		}
-		require.Equal(t, verdict == "healthy", ids["gpt-6-astra"])
-		require.Equal(t, verdict != "healthy", ids["gpt-6-luna"])
-		require.True(t, ids["gpt-image-2"])
+		require.True(t, ids["gpt-6-astra"], verdict)
+		require.True(t, ids["gpt-6-luna"], verdict)
+		require.True(t, ids["gpt-image-2"], verdict)
 	}
 }

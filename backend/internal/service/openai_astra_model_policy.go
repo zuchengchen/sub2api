@@ -3,9 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -86,56 +84,24 @@ func (a *Account) OpenAIOAuthModelPolicy() *OpenAIOAuthModelPolicy {
 	return policy
 }
 
-// AllowsOpenAIOAuthModelPolicy is an account-type-specific model gate. It does
-// not replace quota, group permissions, retirement or upstream capability gates.
+// AllowsOpenAIOAuthModelPolicy no longer splits Luna vs non-Luna from the Astra
+// probe. Probe history is still stored for admin diagnostics and Tibo routing.
+// OAuth accounts may serve any opened/servable model; foreign families stay out.
 func (a *Account) AllowsOpenAIOAuthModelPolicy(model string) bool {
-	policy := a.OpenAIOAuthModelPolicy()
-	if policy == nil {
+	if a == nil || !a.IsOpenAIOAuth() {
 		return true
 	}
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return true // Required-model validation belongs to the request parser.
-	}
-	if IsGPTImageGenerationModel(lastOpenAIModelSegment(model)) {
-		return true
-	}
-	model = normalizeOpenAIModelForUpstream(a, model)
-	luna := isOpenAIGPT6LunaModel(model) || isOpenAIGPT56LunaModel(model)
-	if policy.Scope == "non_luna" {
-		return !luna && isOpenAIOAuthServableModel(model)
-	}
-	return luna
+	return isOpenAIOAuthServableModel(model)
 }
 
 func validateOpenAIAstraModelPolicy(account *Account, model string) error {
-	if account.AllowsOpenAIOAuthModelPolicy(model) {
-		return nil
-	}
-	// No upstream request took place. Let HTTP handlers try another eligible
-	// account instead of penalizing this account or rewriting the requested model.
-	return &UpstreamFailoverError{
-		StatusCode:             503,
-		ResponseBody:           []byte(`{"error":{"type":"server_error","code":"model_unavailable","message":"No eligible account for the requested model"}}`),
-		RequestScopedTransient: true,
-	}
+	return nil
 }
 
-// CheckOpenAIAstraModelPolicy rechecks a queued request or connection using
-// the shared scheduler cache. Account state is copied, never patched in place.
+// CheckOpenAIAstraModelPolicy is kept for call sites. Probe verdicts are not a
+// model gate; servable GPT-family models, group allowlists, and retirement still apply.
 func (s *OpenAIGatewayService) CheckOpenAIAstraModelPolicy(ctx context.Context, account *Account, model string) error {
-	if account == nil || !account.IsOpenAIOAuth() {
-		return nil
-	}
-	latest := account
-	if s != nil && s.schedulerSnapshot != nil {
-		var err error
-		latest, err = s.getSchedulableAccount(ctx, account.ID)
-		if err != nil || latest == nil {
-			return fmt.Errorf("account model policy is unavailable; reconnect to select an eligible account")
-		}
-	}
-	return validateOpenAIAstraModelPolicy(latest, model)
+	return nil
 }
 
 // Catalog filtering must allow a model when another account can still serve it.

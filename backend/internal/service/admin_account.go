@@ -624,8 +624,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		// 全对象 PUT 编辑时不会再带回 token，避免覆盖时清空已有凭证。
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
 		if account.IsOpenAIOAuth() {
-			// Automatic policy owns the effective range. Keep the old manual
-			// configuration intact for rollback, even on a partial API edit.
+			// Stored mapping remains unused for OAuth routing; keep it intact
+			// across ordinary edits so administrators can still inspect it.
 			for _, key := range []string{"model_mapping", "compact_model_mapping"} {
 				if value, ok := originalCredentials[key]; ok {
 					account.Credentials[key] = value
