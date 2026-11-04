@@ -74,6 +74,9 @@ func OrderCodexHTTPHeaders(h http.Header) []HeaderKV {
 // path (models manifest vs Responses). reqwest's default accept (*/*) is
 // added for the models GET when the caller did not set one.
 func OrderCodexHTTPHeadersForPath(path string, h http.Header) []HeaderKV {
+	if strings.TrimRight(path, "/") == "/backend-api/codex/realtime/calls" {
+		return orderByTemplate(h, codexLiveHTTPHeaderOrder)
+	}
 	if strings.HasSuffix(strings.TrimRight(path, "/"), "/codex/models") {
 		if h.Get("Accept") == "" {
 			h = h.Clone()
@@ -214,13 +217,43 @@ func doHTTP1OnConn(ctx context.Context, method, path, host string, ordered []Hea
 // streaming response. The socket is closed when ctx is cancelled or the
 // response body is closed, whichever comes first.
 func writeHTTP1Request(ctx context.Context, conn net.Conn, method, path, host string, ordered []HeaderKV, body []byte, headerTimeout time.Duration) (*http.Response, error) {
+	wire, err := buildHTTP1RequestBytes(method, path, host, ordered, body)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	fail := func(err error) (*http.Response, error) {
+		stop()
+		_ = conn.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	if headerTimeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(headerTimeout))
+	}
+	if _, err := conn.Write(wire); err != nil {
+		return fail(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, &http.Request{Method: method})
+	if err != nil {
+		return fail(fmt.Errorf("read response: %w", err))
+	}
+	_ = conn.SetDeadline(time.Time{})
+	resp.Body = &connBoundBody{ReadCloser: resp.Body, conn: conn, stop: stop}
+	return resp, nil
+}
+
+func buildHTTP1RequestBytes(method, path, host string, ordered []HeaderKV, body []byte) ([]byte, error) {
 	var req strings.Builder
 	fmt.Fprintf(&req, "%s %s HTTP/1.1\r\n", method, path)
 	hasCL := false
 	hasHost := false
 	for _, kv := range ordered {
 		if strings.ContainsAny(kv.Name, "\r\n:") || strings.ContainsAny(kv.Value, "\r\n") {
-			_ = conn.Close()
 			return nil, fmt.Errorf("invalid header %q", kv.Name)
 		}
 		if strings.EqualFold(kv.Name, "content-length") || strings.EqualFold(kv.Name, "transfer-encoding") {
@@ -243,33 +276,11 @@ func writeHTTP1Request(ctx context.Context, conn net.Conn, method, path, host st
 	}
 	fmt.Fprint(&req, "\r\n")
 
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	fail := func(err error) (*http.Response, error) {
-		stop()
-		_ = conn.Close()
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, err
-	}
-	if headerTimeout > 0 {
-		_ = conn.SetDeadline(time.Now().Add(headerTimeout))
-	}
 	// One write for head+body, like hyper's buffered writer.
 	wire := make([]byte, 0, req.Len()+len(body))
 	wire = append(wire, req.String()...)
 	wire = append(wire, body...)
-	if _, err := conn.Write(wire); err != nil {
-		return fail(err)
-	}
-	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, &http.Request{Method: method})
-	if err != nil {
-		return fail(fmt.Errorf("read response: %w", err))
-	}
-	_ = conn.SetDeadline(time.Time{})
-	resp.Body = &connBoundBody{ReadCloser: resp.Body, conn: conn, stop: stop}
-	return resp, nil
+	return wire, nil
 }
 
 // connBoundBody ties the socket's lifetime to the response body.
@@ -287,6 +298,9 @@ func (b *connBoundBody) Close() error {
 	if b.stop != nil {
 		b.stop()
 	}
+	// http.ReadResponse's body may drain on Close. Close the socket first so
+	// abandoning an SSE response cannot block waiting for an endless stream.
+	err := b.conn.Close()
 	_ = b.ReadCloser.Close()
-	return b.conn.Close()
+	return err
 }

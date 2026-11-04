@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"regexp"
 	"sort"
@@ -19,22 +20,123 @@ var toolExecutionPrefix = regexp.MustCompile(`^Chunk ID: [0-9a-f]+\nWall time: [
 
 type referenceNormalizer struct{ ids map[string]string }
 
-func (n *referenceNormalizer) value(path string, value any) any {
-	key := path[strings.LastIndex(path, ".")+1:]
-	metadata := strings.HasPrefix(path, "body.client_metadata.") || strings.Contains(path, ".internal_chat_message_metadata_passthrough.") || strings.HasPrefix(path, "body.events[].event_params.") || strings.HasPrefix(path, "header.x-codex-turn-metadata.")
-	// Preserve field presence and type; only clocks and durations are volatile.
-	volatile := false
-	switch key {
-	case "created_at", "started_at", "completed_at", "create_time", "turn_started_at_unix_ms",
-		"x-codex-ws-stream-request-start-ms", "started_at_ms", "completed_at_ms", "duration_ms",
-		"execution_duration_ms", "before_first_sampling_ms", "sampling_ms", "compaction_ms",
-		"between_sampling_overhead_ms", "tool_blocking_ms", "after_last_sampling_ms":
-		volatile = true
+// Path steps distinguish object keys from array traversal. Concatenated dotted
+// strings let literal user keys such as "input[].internal_...create_time" pose
+// as an owned envelope and lose semantic values during normalization.
+type referencePathStep struct {
+	key   string
+	array bool
+}
+type referencePath []referencePathStep
+
+func rootReferencePath(key string) referencePath { return referencePath{{key: key}} }
+func (p referencePath) child(key string) referencePath {
+	out := make(referencePath, len(p)+1)
+	copy(out, p)
+	out[len(p)] = referencePathStep{key: key}
+	return out
+}
+func (p referencePath) element() referencePath {
+	out := make(referencePath, len(p)+1)
+	copy(out, p)
+	out[len(p)] = referencePathStep{array: true}
+	return out
+}
+func (p referencePath) is(parts ...string) bool {
+	if len(p) != len(parts) {
+		return false
 	}
-	if value != nil && volatile && (metadata || path == "header.x-codex-ws-stream-request-start-ms") {
+	for i, part := range parts {
+		if part == "[]" {
+			if !p[i].array {
+				return false
+			}
+		} else if p[i].array || p[i].key != part {
+			return false
+		}
+	}
+	return true
+}
+
+// Only fields owned by the fixed official tracing envelopes are dynamic.
+// Executed-tool arguments, raw MCP result metadata, content attribution and
+// unknown descendants are semantic data even when their keys resemble clocks.
+func referenceDynamicField(path referencePath) (clock, identity bool) {
+	if len(path) == 0 || path[len(path)-1].array {
+		return false, false
+	}
+	key := path[len(path)-1].key
+	parent := path[:len(path)-1]
+	if parent.is("body", "input", "[]", "internal_chat_message_metadata_passthrough") {
+		return key == "create_time", key == "turn_id"
+	}
+	if parent.is("header") {
+		switch key {
+		case "x-codex-ws-stream-request-start-ms":
+			return true, false
+		case "session-id", "thread-id", "x-client-request-id", "x-codex-window-id", "x-codex-installation-id":
+			return false, true
+		}
+		return false, false
+	}
+	if path.is("body", "prompt_cache_key") || path.is("body", "input", "[]", "id") {
+		return false, true
+	}
+	client := parent.is("body", "client_metadata")
+	turn := parent.is("header", "x-codex-turn-metadata") || parent.is("body", "client_metadata", "x-codex-turn-metadata")
+	event := parent.is("body", "events", "[]", "event_params")
+	if client && key == "x-codex-ws-stream-request-start-ms" {
+		return true, false
+	}
+	if turn && key == "turn_started_at_unix_ms" {
+		return true, false
+	}
+	if event {
+		switch key {
+		case "created_at", "started_at", "completed_at", "started_at_ms", "completed_at_ms", "duration_ms",
+			"execution_duration_ms", "before_first_sampling_ms", "sampling_ms", "compaction_ms",
+			"between_sampling_overhead_ms", "tool_blocking_ms", "after_last_sampling_ms":
+			return true, false
+		}
+	}
+	if client || turn || event {
+		switch key {
+		case "session_id", "thread_id", "parent_thread_id", "turn_id", "parent_turn_id", "root_turn_id",
+			"installation_id", "window_id", "context_window_id", "forked_from_thread_id":
+			return false, true
+		}
+	}
+	if client && (key == "x-codex-window-id" || key == "x-codex-installation-id") {
+		return false, true
+	}
+	return false, false
+}
+
+// Preserve every JSON numeric token until comparison. Decoding semantic
+// arguments/config into float64 collapses adjacent integers above 2^53 and
+// high-precision fractions before the comparator can observe the difference.
+func unmarshalReferenceJSON(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("expected one complete JSON value")
+	}
+	return nil
+}
+
+func (n *referenceNormalizer) value(path referencePath, value any) any {
+	volatile, identity := referenceDynamicField(path)
+	// Preserve field presence and type; only the known envelope clocks vary.
+	if value != nil && volatile {
 		switch value.(type) {
 		case string:
 			return "<CLOCK>"
+		case json.Number:
+			return json.Number("0")
 		case float64:
 			return float64(0)
 		}
@@ -48,11 +150,11 @@ func (n *referenceNormalizer) value(path string, value any) any {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			out[k] = n.value(path+"."+k, v[k])
+			out[k] = n.value(path.child(k), v[k])
 		}
 		// Only the recorder's known exec_command wrapper contains clocks. The
 		// tool's actual output, including UUIDs or lookalike text, stays exact.
-		if path == "body.input[]" && v["type"] == "function_call_output" {
+		if path.is("body", "input", "[]") && v["type"] == "function_call_output" {
 			callID, _ := v["call_id"].(string)
 			output, _ := v["output"].(string)
 			if strings.HasPrefix(callID, "call_golden_") {
@@ -68,18 +170,18 @@ func (n *referenceNormalizer) value(path string, value any) any {
 	case []any:
 		out := make([]any, len(v))
 		for i, child := range v {
-			out[i] = n.value(path+"[]", child)
+			out[i] = n.value(path.element(), child)
 		}
 		return out
 	case string:
-		if path == "header.sec-websocket-key" || path == "header.content-length" || path == "header.date" {
+		if path.is("header", "sec-websocket-key") || path.is("header", "content-length") || path.is("header", "date") {
 			return "<DYNAMIC>"
 		}
 		// Turn metadata is a typed Rust struct encoded inside a string. Keep
 		// its field order, unlike client_metadata's randomized HashMap order.
-		if (metadata || strings.HasPrefix(path, "header.")) && key == "x-codex-turn-metadata" {
+		if path.is("header", "x-codex-turn-metadata") || path.is("body", "client_metadata", "x-codex-turn-metadata") {
 			var embedded map[string]any
-			if json.Unmarshal([]byte(v), &embedded) == nil && embedded != nil {
+			if unmarshalReferenceJSON([]byte(v), &embedded) == nil && embedded != nil {
 				var out bytes.Buffer
 				out.WriteByte('{')
 				for i, k := range bodyTopLevelKeys([]byte(v)) {
@@ -88,18 +190,10 @@ func (n *referenceNormalizer) value(path string, value any) any {
 					}
 					out.Write(mustJSON(k))
 					out.WriteByte(':')
-					out.Write(mustJSON(n.value(path+"."+k, embedded[k])))
+					out.Write(mustJSON(n.value(path.child(k), embedded[k])))
 				}
 				out.WriteByte('}')
 				return out.String()
-			}
-		}
-		identity := path == "body.prompt_cache_key" || path == "body.input[].id"
-		if metadata || strings.HasPrefix(path, "header.") {
-			switch key {
-			case "session-id", "thread-id", "x-client-request-id", "x-codex-window-id", "x-codex-installation-id",
-				"session_id", "thread_id", "parent_thread_id", "turn_id", "root_turn_id", "installation_id", "window_id", "context_window_id":
-				identity = true
 			}
 		}
 		if !identity {
@@ -172,7 +266,7 @@ func normalizedRecordGroups(records map[recordKey]record) map[string][]any {
 		for _, rec := range recs {
 			headers := make([]headerKV, 0, len(rec.Headers))
 			for _, header := range rec.Headers {
-				header.Value = normalizer.value("header."+strings.ToLower(header.Name), header.Value).(string)
+				header.Value = normalizer.value(rootReferencePath("header").child(strings.ToLower(header.Name)), header.Value).(string)
 				headers = append(headers, header)
 			}
 			// The MCP client's product headers come from a randomized HashMap.
@@ -181,18 +275,23 @@ func normalizedRecordGroups(records map[recordKey]record) map[string][]any {
 				sort.Slice(headers, func(i, j int) bool { return headers[i].Name < headers[j].Name })
 			}
 			var body any
-			_ = json.Unmarshal(rec.BodyJSON, &body)
+			_ = unmarshalReferenceJSON(rec.BodyJSON, &body)
 			value := map[string]any{
 				"kind": rec.Kind, "method": rec.Method, "target": rec.Target,
 				"proto": rec.Proto, "headers": headers, "body_encoding": rec.BodyEncoding,
 				"body_key_order": bodyTopLevelKeys(rec.BodyJSON),
-				"body":           normalizer.value("body", body), "body_text": rec.BodyText,
+				"body":           normalizer.value(rootReferencePath("body"), body), "body_text": rec.BodyText,
 			}
 			if connections[rec.Conn] == 0 {
 				connections[rec.Conn] = len(connections) + 1
 			}
 			value["connection"] = connections[rec.Conn]
 			value["connection_request_index"] = rec.ConnReq
+			if rec.H2 != nil {
+				value["h2_stream_id"] = rec.H2.StreamID
+				value["h2_settings"] = rec.H2.Settings
+				value["h2_connection_window_increment"] = rec.H2.ConnectionWindowIncrement
+			}
 			if rec.TLS != nil {
 				value["tls"] = rec.TLS.fingerprintKey()
 			}
@@ -259,8 +358,8 @@ func tlsStructuresEqual(a, b any) bool {
 
 func firstJSONDifference(a, b any) string {
 	var left, right any
-	_ = json.Unmarshal(mustJSON(a), &left)
-	_ = json.Unmarshal(mustJSON(b), &right)
+	_ = unmarshalReferenceJSON(mustJSON(a), &left)
+	_ = unmarshalReferenceJSON(mustJSON(b), &right)
 	var walk func(string, any, any) string
 	walk = func(path string, a, b any) string {
 		if reflect.DeepEqual(a, b) {

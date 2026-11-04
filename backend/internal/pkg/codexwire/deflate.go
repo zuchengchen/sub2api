@@ -161,6 +161,10 @@ var pmdReadTail = []byte{0x00, 0x00, 0xff, 0xff, 0x01, 0x00, 0x00, 0xff, 0xff}
 
 // Decompress inflates one wire message.
 func (d *pmdDecompressor) Decompress(payload []byte) ([]byte, error) {
+	return d.decompressLimit(payload, 16<<20)
+}
+
+func (d *pmdDecompressor) decompressLimit(payload []byte, limit int64) ([]byte, error) {
 	src := make([]byte, 0, len(payload)+len(pmdReadTail))
 	src = append(src, payload...)
 	src = append(src, pmdReadTail...)
@@ -183,9 +187,12 @@ func (d *pmdDecompressor) Decompress(payload []byte) ([]byte, error) {
 	if err := resetter.Reset(bytes.NewReader(src), dict); err != nil {
 		return nil, err
 	}
-	out, err := io.ReadAll(r)
+	out, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(out)) > limit {
+		return nil, errors.New("codexwire: inflated message exceeds read limit")
 	}
 	if d.contextTakeover {
 		d.window.push(out)

@@ -1721,6 +1721,7 @@ func (s *httpUpstreamService) doCodexH1Uncontrolled(req *http.Request, proxyURL 
 		return nil, err
 	}
 	decompressResponseBody(resp)
+	resp.Request = req
 	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 	return resp, nil
 }
@@ -1798,12 +1799,34 @@ func (s *httpUpstreamService) doCodexH2Uncontrolled(req *http.Request, proxyURL 
 	}
 
 	ctx, cancel := context.WithCancel(req.Context())
-	resp, err := s.codexH2().Do(ctx, req.Method, req.URL.String(), ordered, body, proxyURL, strconv.FormatInt(accountID, 10), profile)
+	var pool *codexwire.H2Pool
+	closeRequest := cancel
+	var stopOwnedAbort func() bool
+	if service.CodexBusinessHTTPFromContext(req.Context()) {
+		// Auth and quota clients own separate persistent pools. Business API
+		// and models calls instead own one fresh connection/HPACK lifetime per
+		// request, including each 401 recovery attempt.
+		pool = codexwire.NewH2Pool(codexwire.H2Options{Timeout: defaultUpstreamDialTimeout + 5*time.Second})
+		stopOwnedAbort = context.AfterFunc(ctx, pool.CloseAll)
+		closeRequest = func() { stopOwnedAbort(); cancel(); pool.CloseAll() }
+	} else {
+		pool = s.codexH2()
+	}
+	resp, err := pool.Do(ctx, req.Method, req.URL.String(), ordered, body, proxyURL, strconv.FormatInt(accountID, 10), profile)
 	if err != nil {
-		cancel()
+		closeRequest()
 		return nil, err
 	}
+	var complete func() bool
+	if body, ok := resp.Body.(interface{ ResponseComplete() bool }); ok {
+		complete = body.ResponseComplete
+	}
 	decompressResponseBody(resp)
-	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	resp.Request = req
+	if stopOwnedAbort != nil {
+		resp.Body = &codexOwnedH2Body{ReadCloser: resp.Body, ctx: ctx, cancel: cancel, stopAbort: stopOwnedAbort, pool: pool, complete: complete}
+	} else {
+		resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: closeRequest}
+	}
 	return resp, nil
 }

@@ -58,7 +58,7 @@ func recordGatewayNativeTLS() ([]map[string]any, error) {
 	p := &service.Proxy{ID: 1, Protocol: "http", Host: "127.0.0.1", Port: port, Status: service.StatusActive}
 	account := &service.Account{ID: 900, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Concurrency: 1, ProxyID: &p.ID, Proxy: p,
 		Credentials: map[string]any{"access_token": "synthetic-native-tls", "chatgpt_account_id": "synthetic-native-account"},
-		Extra:       map[string]any{"openai_passthrough": true, "openai_oauth_responses_websockets_v2_mode": "passthrough", "openai_oauth_responses_websockets_v2_enabled": true}}
+		Extra:       gatewaySyntheticModelPolicyExtra(map[string]any{"openai_passthrough": true, "openai_oauth_responses_websockets_v2_mode": "passthrough", "openai_oauth_responses_websockets_v2_enabled": true})}
 	accounts := &gatewayAccounts{account: account}
 	for _, websocket := range []bool{false, true} {
 		cfg := &config.Config{}
@@ -75,7 +75,7 @@ func recordGatewayNativeTLS() ([]map[string]any, error) {
 		svc := service.NewOpenAIGatewayService(accounts, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, repository.NewHTTPUpstream(cfg), nil, nil, nil, nil, nil, nil, nil, nil)
 		svc.StopOpenAICodexTicketHarvester()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		body := []byte(`{"model":"gpt-5.5","instructions":"Reply briefly.","input":[{"role":"user","content":"ok"}],"stream":true,"store":false}`)
+		body := []byte(`{"model":"gpt-6-astra","instructions":"Reply briefly.","input":[{"role":"user","content":"ok"}],"stream":true,"store":false}`)
 		if !websocket {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))).WithContext(ctx)

@@ -32,20 +32,26 @@ func (e *ErrClosedByPeer) Error() string {
 type WSConn struct {
 	conn     net.Conn
 	br       *bufio.Reader
-	writeMu  sync.Mutex
+	writeMu  contextMutex
 	compress *pmdCompressor
 	inflate  *pmdDecompressor
 	closed   atomic.Bool
 
 	upstreamPings atomic.Int64
 
-	// readStop/writeStop disarm the ctx watcher per direction
-	// (context.AfterFunc stop funcs).
-	readStop  atomic.Pointer[func() bool]
-	writeStop atomic.Pointer[func() bool]
+	readDeadline  wsDeadline
+	writeDeadline wsDeadline
 
 	// readLimit caps a single assembled message.
 	readLimit int64
+}
+
+// Each direction has one operation owner. The generation keeps a cancellation
+// callback that has already started from setting a deadline on the next operation.
+type wsDeadline struct {
+	mu         sync.Mutex
+	stop       func() bool
+	generation uint64
 }
 
 // NewWSConn wraps an established stream after a successful 101 upgrade.
@@ -107,9 +113,17 @@ func (c *WSConn) WriteMessageBinary(ctx context.Context, payload []byte) error {
 }
 
 func (c *WSConn) write(ctx context.Context, opcode byte, payload []byte) error {
+	if err := c.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer c.writeMu.Unlock()
 	if c.closed.Load() {
 		return ErrClosed
 	}
+	if err := c.withDeadline(ctx, true); err != nil {
+		return err
+	}
+	defer c.settleDeadline(true)
 	rsv1 := false
 	if c.compress != nil && (opcode == opcodeText || opcode == opcodeBinary) {
 		compressed, err := c.compress.Compress(payload)
@@ -119,13 +133,13 @@ func (c *WSConn) write(ctx context.Context, opcode byte, payload []byte) error {
 		payload = compressed
 		rsv1 = true
 	}
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	if err := c.withDeadline(ctx, true); err != nil {
+	if err := writeFrame(c.conn, true, rsv1, opcode, payload); err != nil {
+		// The compressor has advanced and an arbitrary prefix may have reached
+		// the peer. Neither the frame nor its dictionary can be safely reused.
+		_ = c.CloseNow()
 		return err
 	}
-	defer c.settleDeadline(true)
-	return writeFrame(c.conn, true, rsv1, opcode, payload)
+	return nil
 }
 
 // Ping sends a ping frame; the read loop answers the pong automatically.
@@ -133,8 +147,13 @@ func (c *WSConn) Ping(ctx context.Context) error {
 	if c.closed.Load() {
 		return ErrClosed
 	}
-	c.writeMu.Lock()
+	if err := c.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer c.writeMu.Unlock()
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	if err := c.withDeadline(ctx, true); err != nil {
 		return err
 	}
@@ -180,7 +199,7 @@ func (c *WSConn) readMessage(ctx context.Context) (byte, []byte, error) {
 			if err != nil {
 				return 0, nil, err
 			}
-			if err := c.writeControl(opcodePong, payload); err != nil {
+			if err := c.writeControl(ctx, opcodePong, payload); err != nil {
 				return 0, nil, err
 			}
 			continue
@@ -200,9 +219,8 @@ func (c *WSConn) readMessage(ctx context.Context) (byte, []byte, error) {
 				code = uint16(payload[0])<<8 | uint16(payload[1])
 				reason = string(payload[2:])
 			}
-			// Echo close then mark closed.
-			_ = c.writeControl(opcodeClose, payload)
-			c.closed.Store(true)
+			// Echo and release the socket even if the peer no longer reads.
+			_ = c.closeWithPayload(payload)
 			return 0, nil, &ErrClosedByPeer{Code: code, Reason: reason}
 		case opcodeText, opcodeBinary, opcodeContinuation:
 		default:
@@ -230,7 +248,7 @@ func (c *WSConn) readMessage(ctx context.Context) (byte, []byte, error) {
 			if c.inflate == nil {
 				return 0, nil, errors.New("codexwire: compressed frame without negotiated extension")
 			}
-			message, err = c.inflate.Decompress(message)
+			message, err = c.inflate.decompressLimit(message, c.readLimit)
 			if err != nil {
 				return 0, nil, fmt.Errorf("codexwire: inflate: %w", err)
 			}
@@ -256,15 +274,21 @@ func (c *WSConn) readPayload(h frameHeader, limit int64) ([]byte, error) {
 	return payload, nil
 }
 
-func (c *WSConn) writeControl(opcode byte, payload []byte) error {
+func (c *WSConn) writeControl(ctx context.Context, opcode byte, payload []byte) error {
 	if len(payload) > maxControlPayload {
 		payload = payload[:maxControlPayload]
 	}
-	c.writeMu.Lock()
+	if err := c.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer c.writeMu.Unlock()
 	if c.closed.Load() {
 		return ErrClosed
 	}
+	if err := c.withDeadline(ctx, true); err != nil {
+		return err
+	}
+	defer c.settleDeadline(true)
 	return writeFrame(c.conn, true, false, opcode, payload)
 }
 
@@ -277,44 +301,46 @@ func (c *WSConn) withDeadline(ctx context.Context, write bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		if write {
-			return c.conn.SetWriteDeadline(deadline)
-		}
-		return c.conn.SetReadDeadline(deadline)
-	}
-	done := ctx.Done()
-	if done == nil {
-		return nil
-	}
-	stop := context.AfterFunc(ctx, func() {
-		if write {
-			_ = c.conn.SetWriteDeadline(time.Now())
-		} else {
-			_ = c.conn.SetReadDeadline(time.Now())
-		}
-	})
+	watcher := &c.readDeadline
+	set := c.conn.SetReadDeadline
 	if write {
-		c.writeStop.Store(&stop)
-	} else {
-		c.readStop.Store(&stop)
+		watcher, set = &c.writeDeadline, c.conn.SetWriteDeadline
+	}
+	watcher.mu.Lock()
+	defer watcher.mu.Unlock()
+	watcher.generation++
+	generation := watcher.generation
+	deadline, _ := ctx.Deadline()
+	if err := set(deadline); err != nil {
+		return err
+	}
+	if ctx.Done() != nil {
+		watcher.stop = context.AfterFunc(ctx, func() {
+			watcher.mu.Lock()
+			defer watcher.mu.Unlock()
+			if watcher.generation == generation {
+				_ = set(time.Now())
+			}
+		})
 	}
 	return nil
 }
 
 // settleDeadline clears any forced deadline and disarms the ctx watcher.
 func (c *WSConn) settleDeadline(write bool) {
+	watcher := &c.readDeadline
+	set := c.conn.SetReadDeadline
 	if write {
-		if stop := c.writeStop.Swap(nil); stop != nil {
-			(*stop)()
-		}
-		_ = c.conn.SetWriteDeadline(time.Time{})
-		return
+		watcher, set = &c.writeDeadline, c.conn.SetWriteDeadline
 	}
-	if stop := c.readStop.Swap(nil); stop != nil {
-		(*stop)()
+	watcher.mu.Lock()
+	defer watcher.mu.Unlock()
+	watcher.generation++
+	if watcher.stop != nil {
+		watcher.stop()
+		watcher.stop = nil
 	}
-	_ = c.conn.SetReadDeadline(time.Time{})
+	_ = set(time.Time{})
 }
 
 // Close sends a close frame and closes the transport.
@@ -332,11 +358,18 @@ func (c *WSConn) closeWithPayload(payload []byte) error {
 	if c.closed.Swap(true) {
 		return nil
 	}
+	// Start before acquiring writeMu: a blocked writer owns that lock and may
+	// have no deadline. Closing the socket also releases the reader promptly.
+	timer := time.AfterFunc(time.Second, func() { _ = c.conn.Close() })
+	defer timer.Stop()
 	c.writeMu.Lock()
-	_ = c.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(time.Second))
 	_ = writeFrame(c.conn, true, false, opcodeClose, payload)
 	c.writeMu.Unlock()
-	return c.conn.Close()
+	if err := c.conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
 }
 
 // CloseNow drops the transport without a close handshake.

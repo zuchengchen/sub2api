@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,6 +35,7 @@ func TestResolveOpenAIWSDelta_PrefixExtension(t *testing.T) {
 		AccountID:      7,
 		FieldsFP:       "fp",
 		BaselineHashes: openAIWSDeltaItemsHash(base),
+		PendingTools:   map[[sha256.Size]byte]string{sha256.Sum256([]byte("c1")): "function_call_output"},
 	}
 	current := append(append([]json.RawMessage{}, base...),
 		json.RawMessage(`{"type":"function_call_output","call_id":"c1","output":"ok"}`))
@@ -90,7 +92,7 @@ func TestResolveOpenAIWSDelta_NormalizedItemCompare(t *testing.T) {
 	// 客户端以不同键序/空白重发同一 item 时仍应命中前缀。
 	stored := deltaTestItems(t, `{"type":"message","role":"user","content":[{"type":"input_text","text":"a"}]}`)
 	resent := deltaTestItems(t, `{ "role":"user", "type":"message", "content":[ { "text":"a", "type":"input_text" } ] }`,
-		`{"type":"function_call_output","call_id":"c","output":"x"}`)
+		`{"type":"message","role":"user","content":"next"}`)
 	chain := &openAIWSDeltaChainState{
 		ResponseID:     "resp_x",
 		AccountID:      1,
@@ -107,8 +109,8 @@ func TestResolveOpenAIWSDelta_NormalizedItemCompare(t *testing.T) {
 
 func TestOpenAIWSDeltaRecorder(t *testing.T) {
 	r := &openAIWSDeltaRecorder{}
-	r.observe([]byte(`{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}`))
-	r.observe([]byte(`{"type":"response.output_item.done","item":{"type":"reasoning","summary":[]}}`))
+	r.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}`))
+	r.observe([]byte(`{"type":"response.output_item.done","output_index":1,"item":{"type":"reasoning","summary":[]}}`))
 	r.observe([]byte(`{"type":"response.completed","response":{"id":"resp_42","status":"completed"}}`))
 
 	logical := openAIWSDeltaItemsHash(deltaTestItems(t, `{"type":"message","role":"user"}`))
@@ -129,7 +131,7 @@ func TestOpenAIWSDeltaRecorder(t *testing.T) {
 
 func TestOpenAIWSDeltaRecorder_NoCompleteNoChain(t *testing.T) {
 	r := &openAIWSDeltaRecorder{}
-	r.observe([]byte(`{"type":"response.output_item.done","item":{"type":"message"}}`))
+	r.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}`))
 	_, ok := r.finalize(1, "fp", nil, nil)
 	if ok {
 		t.Fatal("incomplete response must not extend chain")
@@ -140,7 +142,7 @@ func TestOpenAIWSDeltaRecorder_BaselineLimit(t *testing.T) {
 	for _, total := range []int{openAIWSDeltaChainMaxBaseline, openAIWSDeltaChainMaxBaseline + 1} {
 		t.Run(fmt.Sprint(total), func(t *testing.T) {
 			r := &openAIWSDeltaRecorder{}
-			r.observe([]byte(`{"type":"response.output_item.done","item":{"type":"message"}}`))
+			r.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}`))
 			r.observe([]byte(`{"type":"response.completed","response":{"id":"resp_full"}}`))
 			previous := &openAIWSDeltaChainState{ResponseID: "resp_old"}
 			next, changed := r.finalize(1, "fp", make([]string, total-1), previous)
@@ -169,7 +171,7 @@ func TestOpenAIWSDeltaOverflowDeletesStoredChain(t *testing.T) {
 			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 			cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 			conn := &openAIWSCaptureConn{events: [][]byte{
-				[]byte(`{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[]}}`),
+				[]byte(`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}`),
 				[]byte(`{"type":"response.completed","response":{"id":"resp_next","output":[]}}`),
 			}}
 			if !tc.complete {

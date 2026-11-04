@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	coderws "github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -314,7 +315,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 		return nil, err
 	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
-	upstreamReq.Header.Set("Accept", "application/sdp")
+	upstreamReq.Header.Set("Accept", "*/*")
 	upstreamReq.Header.Set(liveAttestationHeader, attestation)
 	s.applyLiveUpstreamIdentityHeaders(upstreamReq.Header, account)
 
@@ -423,8 +424,31 @@ func liveCallIDFromLocation(location string) (string, error) {
 	return callID, nil
 }
 
+func (s *OpenAIGatewayService) seedLiveUpstreamIdentityHeaders(headers http.Header, account *Account) {
+	identity := resolveCodexOutboundIdentity(s.codexIdentityOverrideUA(account))
+	if existing := strings.TrimSpace(headers.Get("user-agent")); existing != "" {
+		// A partial legacy snapshot with an existing UA owns its identity;
+		// complete missing fields without replacing that saved persona/version.
+		if originator, _, valid := openai.PairCodexClientIdentity(existing); valid {
+			identity.originator = originator
+			if version := NormalizeCodexClientVersion(openai.CodexUserAgentVersion(existing)); version != "" {
+				identity.version = version
+			}
+		}
+	} else {
+		headers.Set("user-agent", identity.userAgent)
+	}
+	if strings.TrimSpace(headers.Get("originator")) == "" {
+		headers.Set("originator", identity.originator)
+	}
+	if strings.TrimSpace(headers.Get("version")) == "" {
+		headers.Set("version", identity.version)
+	}
+}
+
 func (s *OpenAIGatewayService) applyLiveUpstreamIdentityHeaders(headers http.Header, account *Account) {
 	headers.Set("OpenAI-Alpha", "quicksilver=v2")
+	s.seedLiveUpstreamIdentityHeaders(headers, account)
 	enforceCodexIdentityHeadersWithUA(headers, s.codexIdentityOverrideUA(account))
 	if strings.TrimSpace(headers.Get("session-id")) == "" {
 		headers.Set("session-id", uuid.Must(uuid.NewV7()).String())
@@ -432,9 +456,12 @@ func (s *OpenAIGatewayService) applyLiveUpstreamIdentityHeaders(headers http.Hea
 	if strings.TrimSpace(headers.Get("thread-id")) == "" {
 		headers.Set("thread-id", headers.Get("session-id"))
 	}
-	// A voice call can span multiple backing turns. Codex 0.166.0 sends
-	// only the saved thread source here, never Responses turn/window fields.
-	headers.Set(openAIWSTurnMetadataHeader, `{"thread_source":"user"}`)
+	if strings.TrimSpace(headers.Get("x-session-id")) == "" {
+		headers.Set("x-session-id", headers.Get("session-id"))
+	}
+	// Codex sends thread_source only when the owning thread saved one. This
+	// standalone API has no such thread source. Leave explicit metadata intact,
+	// but do not invent a user source for a newly created Live call.
 	// Realtime/Live 不使用 Responses 的实验头。
 	headers.Del("OpenAI-Beta")
 }
@@ -452,6 +479,12 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 		return nil, err
 	}
 	if snapshot != nil {
+		s.seedLiveUpstreamIdentityHeaders(snapshot, account)
+		// Older creation snapshots predate the Realtime session alias. Preserve
+		// the saved account-scoped session and all other negotiated context.
+		if strings.TrimSpace(snapshot.Get("x-session-id")) == "" {
+			snapshot.Set("x-session-id", snapshot.Get("session-id"))
+		}
 		return snapshot, nil
 	}
 	// Older, already running calls stored only their encrypted attestation.
@@ -485,12 +518,12 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if err != nil {
 		return nil, err
 	}
-	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(record.CallID)
-	conn, status, _, err := dialOpenAIWSForAccount(ctx, s.cfg, openAIWSAcquireRequest{
+	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/live/" + url.PathEscape(record.CallID)
+	conn, status, _, err := dialOpenAIWSForAccount(withoutOpenAIWSCompression(ctx), s.cfg, openAIWSAcquireRequest{
 		WSURL: target, ProxyURL: resolveAccountProxyURL(account), Account: account,
 	}, headers, s.getOpenAIWSPassthroughDialer())
 	if err != nil {
-		return nil, fmt.Errorf("dial live sideband (status %d): %w", status, err)
+		return nil, &liveSidebandHandshakeError{status: status, err: fmt.Errorf("dial live sideband (status %d): %w", status, err)}
 	}
 	raw, ok := conn.(liveFrameConn)
 	if !ok {
@@ -555,7 +588,11 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 	upstream, err := s.dialLiveSideband(ctx, record)
 	if err != nil {
 		_, _ = store.ReleaseLiveController(context.Background(), record.CallHash, owner)
-		go s.observeLiveCall(record)
+		if liveSessionEnded(err) {
+			s.finalizeLiveCall(record)
+		} else {
+			go s.observeLiveCall(record)
+		}
 		return err
 	}
 	defer func() { _ = upstream.Close() }()
@@ -616,6 +653,16 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 // leaseID 被 GC 后不会重新写入，重连也拿不回并发槽 —— 若按临时错误重试，会话会以
 // 约 1 秒一轮的节奏空转到 ExpiresAt，期间持着上游连接却不计入任何并发限制。
 func liveSessionEnded(err error) bool {
+	var handshake *liveSidebandHandshakeError
+	if errors.As(err, &handshake) {
+		switch handshake.status {
+		case http.StatusNotFound, http.StatusGone, http.StatusUnauthorized, http.StatusForbidden:
+			// A saved call cannot be rejoined with a rejected auth snapshot, and
+			// 404/410 mean the existing call has ended. Retrying this snapshot
+			// until expiry would create repeated upstream requests without repair.
+			return true
+		}
+	}
 	return errors.Is(err, ErrLiveCallNotFound) ||
 		errors.Is(err, ErrLiveUnavailable) ||
 		errors.Is(err, context.DeadlineExceeded)
@@ -699,6 +746,10 @@ func (s *OpenAIGatewayService) observeLiveCall(record *LiveCallRecord) {
 		}
 		upstream, dialErr := s.dialLiveSideband(context.Background(), record)
 		if dialErr != nil {
+			if liveSessionEnded(dialErr) {
+				s.finalizeLiveCall(record)
+				return
+			}
 			if !s.waitForLiveObserverRetry(record) {
 				return
 			}

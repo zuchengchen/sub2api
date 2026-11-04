@@ -256,6 +256,9 @@ func TestAttachQuotaSnapshot_NoteOnlyWhenProbeMessageEmpty(t *testing.T) {
 
 func TestValidateCreateParams_CheckModeMatrix(t *testing.T) {
 	accountID := int64(9)
+	// These cases validate fields after the endpoint check. A public IP literal
+	// avoids external DNS; validation does not dial the endpoint.
+	const validEndpoint = "https://8.8.8.8"
 
 	cases := []struct {
 		name    string
@@ -274,7 +277,7 @@ func TestValidateCreateParams_CheckModeMatrix(t *testing.T) {
 			name: "probe requires api key",
 			params: ChannelMonitorCreateParams{
 				Provider: MonitorProviderOpenAI, CheckMode: MonitorCheckModeProbe,
-				Endpoint: "https://api.openai.com", IntervalSeconds: 60, PrimaryModel: "gpt-5",
+				Endpoint: validEndpoint, IntervalSeconds: 60, PrimaryModel: "gpt-5",
 			},
 			wantErr: ErrChannelMonitorMissingAPIKey,
 		},
@@ -324,7 +327,7 @@ func TestValidateCreateParams_CheckModeMatrix(t *testing.T) {
 			name: "quota_probe requires primary model",
 			params: ChannelMonitorCreateParams{
 				Provider: MonitorProviderKimi, CheckMode: MonitorCheckModeQuotaProbe,
-				Endpoint: "https://api.kimi.com", APIKey: "sk",
+				Endpoint: validEndpoint, APIKey: "sk",
 				IntervalSeconds: 60, AccountID: &accountID,
 			},
 			wantErr: ErrChannelMonitorMissingPrimaryModel,

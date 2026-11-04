@@ -18,6 +18,9 @@ import (
 
 // H2Options configures the Codex HTTP/2 client pool.
 type H2Options struct {
+	// LogKey is an optional public label when logical pool keys contain private
+	// credential fingerprints. It changes diagnostics only, never partitioning.
+	LogKey string
 	// TLSProfile must advertise h2 ALPN (use the "rustls-h2" builtin profile).
 	TLSProfile *tlsfingerprint.Profile
 	// Timeout bounds connect + handshake per new connection.
@@ -64,6 +67,25 @@ func (p *H2Pool) CloseAll() {
 	for _, c := range conns {
 		c.Close()
 	}
+}
+
+// RetireAll closes this client's idle connections gracefully and lets active
+// responses finish before closing theirs. CloseAll is the immediate abort path.
+func (p *H2Pool) RetireAll() {
+	p.mu.Lock()
+	conns := p.conns
+	p.conns = make(map[string]*h2Conn)
+	for key, generation := range p.dials {
+		generation.retired = true
+		delete(p.dials, key)
+	}
+	p.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, conn := range conns {
+		wg.Add(1)
+		go func(c *h2Conn) { defer wg.Done(); c.retire() }(conn)
+	}
+	wg.Wait()
 }
 
 // Retire releases one logical client generation after credentials reload.
@@ -125,6 +147,9 @@ func (p *H2Pool) Do(ctx context.Context, method, rawURL string, ordered []Header
 
 	// Plain-http targets cannot carry a TLS fingerprint; use the raw h1 path.
 	if scheme != "https" {
+		if strings.TrimSpace(proxyURL) != "" {
+			return nil, errors.New("raw H2 plaintext proxy is unsupported")
+		}
 		return doHTTP1OnConn(ctx, method, path, host, h2HeadersForHTTP1(ordered), body, func(dctx context.Context) (net.Conn, error) {
 			base := p.opts.BaseDialer
 			if base == nil {
@@ -147,7 +172,7 @@ func (p *H2Pool) Do(ctx context.Context, method, rawURL string, ordered []Header
 			}
 			var h1c *h1FallbackConn
 			if errors.As(err, &h1c) {
-				slog.Info("codex_h2_alpn_fallback", "key", key, "host", host, "alpn", h1c.alpn)
+				slog.Info("codex_h2_alpn_fallback", "key", p.logKey(key), "host", host, "alpn", h1c.alpn)
 				return doHTTP1OnConn(ctx, method, path, host, h2HeadersForHTTP1(ordered), body, func(context.Context) (net.Conn, error) {
 					return h1c.conn, nil
 				}, 0)
@@ -166,7 +191,7 @@ func (p *H2Pool) Do(ctx context.Context, method, rawURL string, ordered []Header
 		var netErr net.Error
 		if errors.As(err, &netErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			conn.Close()
-			continue
+			return nil, err // submission may have reached the server; do not replay billed POSTs
 		}
 		return nil, err
 	}
@@ -237,15 +262,28 @@ func (p *H2Pool) acquire(ctx context.Context, poolKey, key, addr, proxyURL strin
 	}
 	// Per-connection evidence of the negotiated transport; poolKey embeds the
 	// proxy URL (possibly with credentials) so log key/host separately.
-	slog.Info("codex_h2_dial", "key", key, "host", addr, "alpn", "h2")
+	slog.Info("codex_h2_dial", "key", p.logKey(key), "host", addr, "alpn", "h2")
 	// Someone may have won the race; use the existing conn if it has room.
 	if existing := p.conns[poolKey]; existing != nil && existing.CanTake() {
 		p.mu.Unlock()
 		c.Close()
 		return existing, nil
 	}
+	c.mu.Lock()
 	c.onDead = func(dead *h2Conn) { p.evict(poolKey, dead) }
+	c.mu.Unlock()
+	previous := p.conns[poolKey]
+	if previous != nil {
+		defer previous.retire()
+	}
 	p.conns[poolKey] = c
 	p.mu.Unlock()
 	return c, nil
+}
+
+func (p *H2Pool) logKey(key string) string {
+	if p.opts.LogKey != "" {
+		return p.opts.LogKey
+	}
+	return key
 }
