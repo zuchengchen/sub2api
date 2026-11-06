@@ -214,7 +214,7 @@ func TestNormalizeOpenAIAPIKeyStoreFalseReasoningReplay(t *testing.T) {
 	require.True(t, changed)
 	require.Equal(t, int64(3), gjson.GetBytes(normalized, "input.#").Int())
 	require.Equal(t, "reasoning", gjson.GetBytes(normalized, "input.0.type").String())
-	require.False(t, gjson.GetBytes(normalized, "input.0.id").Exists())
+	require.Equal(t, "rs_encrypted", gjson.GetBytes(normalized, "input.0.id").String())
 	require.False(t, gjson.GetBytes(normalized, "input.0.call_id").Exists())
 	require.Equal(t, "cipher", gjson.GetBytes(normalized, "input.0.encrypted_content").String())
 	require.True(t, gjson.GetBytes(normalized, "input.0.summary").IsArray())

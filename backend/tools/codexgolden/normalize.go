@@ -18,7 +18,10 @@ var dynamicChunk = regexp.MustCompile(`Chunk ID: [0-9a-f]+`)
 var dynamicWallTime = regexp.MustCompile(`Wall time: [0-9.]+ seconds`)
 var toolExecutionPrefix = regexp.MustCompile(`^Chunk ID: [0-9a-f]+\nWall time: [0-9.]+ seconds\nProcess exited with code [0-9]+\n(?:Original token count: [0-9]+\n)?Output:\n`)
 
-type referenceNormalizer struct{ ids map[string]string }
+type referenceNormalizer struct {
+	ids    map[string]string
+	chunks map[string]string
+}
 
 // Path steps distinguish object keys from array traversal. Concatenated dotted
 // strings let literal user keys such as "input[].internal_...create_time" pose
@@ -160,9 +163,19 @@ func (n *referenceNormalizer) value(path referencePath, value any) any {
 			if strings.HasPrefix(callID, "call_golden_") {
 				prefix := toolExecutionPrefix.FindString(output)
 				if prefix != "" {
-					normalized := dynamicChunk.ReplaceAllString(prefix, "Chunk ID: <CHUNK>")
+					normalized := dynamicChunk.ReplaceAllStringFunc(prefix, func(value string) string {
+						return "Chunk ID: " + n.chunkIdentity(strings.TrimPrefix(value, "Chunk ID: "))
+					})
 					normalized = dynamicWallTime.ReplaceAllString(normalized, "Wall time: <SECONDS> seconds")
 					out["output"] = normalized + output[len(prefix):]
+				}
+			}
+		}
+		if path.is("body", "input", "[]") && v["type"] == "custom_tool_call_output" {
+			callID, _ := v["call_id"].(string)
+			if strings.HasPrefix(callID, "call_golden_code_mode_") {
+				if normalized, ok := n.normalizeGoldenCodeModeOutput(v["output"]); ok {
+					out["output"] = normalized
 				}
 			}
 		}

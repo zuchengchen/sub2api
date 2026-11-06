@@ -111,7 +111,9 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBody_APIKeyStoreFalseRepl
 	require.True(t, changed)
 	require.False(t, gjson.GetBytes(normalized, "parallel_tool_calls").Exists())
 	require.Equal(t, int64(2), gjson.GetBytes(normalized, "input.#").Int())
-	require.False(t, gjson.GetBytes(normalized, "input.0.id").Exists())
+	// Fixed Codex bfdbf01 preserves a valid prefix_suffix ID when the complete
+	// opaque reasoning item is replayed; bare store:false references still drop.
+	require.Equal(t, "rs_keep", gjson.GetBytes(normalized, "input.0.id").String())
 	require.False(t, gjson.GetBytes(normalized, "input.0.call_id").Exists())
 	require.True(t, gjson.GetBytes(normalized, "input.0.summary").IsArray())
 	require.Equal(t, "message", gjson.GetBytes(normalized, "input.1.type").String())

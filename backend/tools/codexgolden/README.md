@@ -7,17 +7,52 @@ It does not exercise deployed authentication middleware, scheduling, database
 persistence, or real model answers. The checked-in 0.164.0 fixtures remain
 historical verifier regression data; they are not a current acceptance baseline.
 
-Acquire and verify one official stable release before recording. Keep the exact
+Acquire and verify one official stable release, or build one fixed official source
+commit with its locked toolchain, before recording. Keep the exact
 release tag, dereferenced source commit, downloaded package SHA-256, executable
 SHA-256, and `codex-rs/models-manager/models.json` from that commit. Install the
 release's complete package so `codex-code-mode-host`, `codex-exec-server`, and
 `codex-resources/bwrap` retain their expected layout. Do not mix a `main` checkout
 with a separately versioned executable or model catalog.
 
+For a source build, keep its actual version (for example `codex-cli 0.0.0`),
+never substitute a stable-release label. Set `CODEXGOLDEN_SOURCE_BUILD_RECEIPT`
+to the new run's `source-build-receipt.json` for both reference and candidate.
+The recorder verifies and retains that receipt, then binds its SHA-256 into
+`meta.json`; the comparator revalidates it. A development-version capture
+without this receipt is invalid evidence (exit 2). The receipt uses schema 1:
+
+- `source_commit`, `source_tree`, `source_root`, `source_clean`, `version` bind a
+  clean fixed checkout, with `source_files` SHA-256 entries for Cargo.toml,
+  Cargo.lock, rust-toolchain.toml and the model catalog (additional source inputs
+  may be listed).
+- `toolchain` records complete rustc/cargo version text and executable hashes.
+  `artifact_root` and `artifacts` bind the canonical package's `bin/codex`,
+  `bin/codex-code-mode-host`, `bin/codex-exec-server`, `codex-resources/bwrap`,
+  `codex-path/rg` and `codex-package.json`. Use that exact packaged CLI path.
+- `commands` must positively show successful locked release builds of
+  codex-cli, codex-code-mode-host, codex-exec-server-cli and codex-bwrap. Each
+  command retains argv, cwd, start/end times, exit code, absolute log path and
+  log hash; optional env and runner_sha256 preserve the actual build setup.
+  The supported CPU wrapper is `taskset -c CPU_LIST cargo build ...`.
+  `failed_commands` retains failed attempts with their nonzero statuses and
+  readable logs, and cannot substitute for a successful build.
+
+Keep the referenced checkout, artifacts, dependency inputs and command logs
+available throughout comparison. A changed/missing companion, catalog, source,
+log, or configured V8 archive invalidates the evidence. The original six
+scenario barriers, transport evidence and model-request counts still apply.
+
 The fixture config fixes `gpt-6-astra` and `xhigh`. Its six scenarios cover WS
 prewarm and the initial request, WS tools, HTTP fallback tools, HTTP/WS 401
 reload and refresh, and WS compaction with continuation. Each scenario requires
-both independent models initialization requests. Auxiliary paths such as usage,
+both independent models initialization requests. The synthetic upstream chooses
+only an actually declared `exec_command`, or code-mode `exec` when its declared
+capabilities include `exec_command`, including a Responses Lite
+`additional_tools` namespace. The code-mode fixture validates the two actual
+output content items, nested command exit code 0, exactly `golden\n`, and no
+pending session ID. Only this fixture-owned wrapper's clock and chunk ID are
+dynamic; nested command output and unrelated fields remain semantic. Auxiliary paths such as usage,
 Live/Realtime, initial OAuth authorization-code exchange, and legacy unary
 compact need separate coverage; these six scenarios do not cover them.
 

@@ -93,7 +93,8 @@ func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
 			trimmedItemType := strings.TrimSpace(itemType.String())
 			parsed.stripCallID = item.Get("call_id").Exists() && shouldStripOpenAIResponsesNonPairCallID(trimmedItemType)
 			if id.Type == gjson.String {
-				parsed.stripID = shouldStripOpenAIResponsesInputItemID(trimmedItemType, id.String())
+				completeReasoning := trimmedItemType == "reasoning" && keepOpenAIReasoningReplayID(id.String(), item.Get("encrypted_content").Value(), item.Get("status").Value())
+				parsed.stripID = !completeReasoning && shouldStripOpenAIResponsesInputItemID(trimmedItemType, id.String())
 			}
 			// A reference with no usable id cannot point at an upstream item.
 			if trimmedItemType == "item_reference" && parsed.stripID {

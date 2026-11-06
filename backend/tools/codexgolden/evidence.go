@@ -21,30 +21,31 @@ var fullScenarioNames = []string{"ws_initial", "ws_tool_loop", "http_fallback_to
 var traceOutputDir string
 
 type captureMetadata struct {
-	GatewayMode       string            `json:"candidate_ingress_mode,omitempty"`
-	GatewayConfigHash string            `json:"gateway_config_sha256,omitempty"`
-	Contract          int               `json:"recording_contract"`
-	Version           string            `json:"codex_version"`
-	Commit            string            `json:"source_commit"`
-	BinaryHash        string            `json:"binary_sha256"`
-	ModelsHash        string            `json:"models_sha256"`
-	TLSMode           string            `json:"tls_mode"`
-	Model             string            `json:"model"`
-	Reasoning         string            `json:"reasoning_effort"`
-	ConfigHash        string            `json:"effective_config_sha256"`
-	CAHash            string            `json:"fixture_ca_sha256"`
-	RecordedAt        string            `json:"recorded_at"`
-	Recorder          string            `json:"recorder"`
-	Scenarios         []string          `json:"scenarios"`
-	Strace            bool              `json:"strace_guard"`
-	Leaks             []string          `json:"outbound_leaks"`
-	Traces            map[string]string `json:"trace_sha256"`
+	SourceBuildReceiptHash string            `json:"source_build_receipt_sha256,omitempty"`
+	GatewayMode            string            `json:"candidate_ingress_mode,omitempty"`
+	GatewayConfigHash      string            `json:"gateway_config_sha256,omitempty"`
+	Contract               int               `json:"recording_contract"`
+	Version                string            `json:"codex_version"`
+	Commit                 string            `json:"source_commit"`
+	BinaryHash             string            `json:"binary_sha256"`
+	ModelsHash             string            `json:"models_sha256"`
+	TLSMode                string            `json:"tls_mode"`
+	Model                  string            `json:"model"`
+	Reasoning              string            `json:"reasoning_effort"`
+	ConfigHash             string            `json:"effective_config_sha256"`
+	CAHash                 string            `json:"fixture_ca_sha256"`
+	RecordedAt             string            `json:"recorded_at"`
+	Recorder               string            `json:"recorder"`
+	Scenarios              []string          `json:"scenarios"`
+	Strace                 bool              `json:"strace_guard"`
+	Leaks                  []string          `json:"outbound_leaks"`
+	Traces                 map[string]string `json:"trace_sha256"`
 }
 
 func recordingConfigHash() string {
 	// Endpoints and filesystem roots are isolated per invocation. These are the
 	// behavior-affecting configuration values shared by reference and candidate.
-	config := map[string]any{"tls_mode": recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh", "sandbox": "read-only", "auth_store": "file", "updates": false, "compaction_limit": 1, "models_barrier": true}
+	config := map[string]any{"tls_mode": recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh", "sandbox": "read-only", "auth_store": "file", "updates": false, "compaction_limit": 1, "models_barrier": true, "scripted_native_output": 1}
 	return fmt.Sprintf("%x", sha256.Sum256(mustJSON(config)))
 }
 
@@ -125,13 +126,24 @@ func readCaptureMetadata(dir string) (captureMetadata, error) {
 		return meta, fmt.Errorf("invalid recording metadata: %s", reason)
 	}
 	hex64 := regexp.MustCompile(`^[0-9a-f]{64}$`)
-	if meta.Contract != recordingContract || !regexp.MustCompile(`^codex-cli [0-9]+\.[0-9]+\.[0-9]+$`).MatchString(meta.Version) || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(meta.Commit) {
+	if meta.Contract != recordingContract || !regexp.MustCompile(`^codex-cli [0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`).MatchString(meta.Version) || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(meta.Commit) {
 		return invalid("contract, version or commit")
 	}
 	for _, hash := range []string{meta.BinaryHash, meta.ModelsHash, meta.ConfigHash, meta.CAHash} {
 		if !hex64.MatchString(hash) {
 			return invalid("missing or malformed fingerprint")
 		}
+	}
+	if meta.SourceBuildReceiptHash != "" {
+		raw, err := os.ReadFile(filepath.Join(dir, sourceBuildReceiptFile))
+		if err != nil || !hex64.MatchString(meta.SourceBuildReceiptHash) || fmt.Sprintf("%x", sha256.Sum256(raw)) != meta.SourceBuildReceiptHash {
+			return invalid("missing or changed source build receipt")
+		}
+		if err := validateSourceBuildReceipt(raw, meta.Version, meta.Commit, meta.BinaryHash, meta.ModelsHash); err != nil {
+			return invalid(err.Error())
+		}
+	} else if meta.Version == "codex-cli 0.0.0" || strings.Contains(strings.TrimPrefix(meta.Version, "codex-cli "), "-") {
+		return invalid("source CLI without a verified build receipt")
 	}
 	if meta.TLSMode != "system_roots_namespace" && meta.TLSMode != "custom_ca_rustls_h2" {
 		return invalid("unknown TLS mode")
@@ -171,6 +183,7 @@ func readCaptureMetadata(dir string) (captureMetadata, error) {
 
 func compatibleCaptureMetadata(a, b captureMetadata) error {
 	for _, field := range []struct{ name, a, b string }{
+		{"source build receipt", a.SourceBuildReceiptHash, b.SourceBuildReceiptHash},
 		{"version", a.Version, b.Version}, {"commit", a.Commit, b.Commit}, {"binary", a.BinaryHash, b.BinaryHash}, {"models", a.ModelsHash, b.ModelsHash},
 		{"TLS mode", a.TLSMode, b.TLSMode}, {"model", a.Model, b.Model}, {"reasoning", a.Reasoning, b.Reasoning}, {"configuration", a.ConfigHash, b.ConfigHash}, {"CA fixture", a.CAHash, b.CAHash},
 	} {

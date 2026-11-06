@@ -859,7 +859,7 @@ func normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body []byte, knownStoreFalse
 			changed = true
 			return true
 		}
-		stripID := typ == "reasoning" && strings.HasPrefix(id, "rs_")
+		stripID := typ == "reasoning" && item.Get("id").Exists() && !keepOpenAIReasoningReplayID(item.Get("id").Value(), encrypted.Value(), item.Get("status").Value())
 		addSummary := typ == "reasoning" && item.Get("summary").Type == gjson.Null
 		stripCallID := shouldStripOpenAIResponsesNonPairCallID(typ) && item.Get("call_id").Exists()
 		if !stripID && !addSummary && !stripCallID {
@@ -936,7 +936,7 @@ func normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body []byte, knownSto
 				changed = true
 				continue
 			}
-			if strings.HasPrefix(id, "rs_") {
+			if _, present := item["id"]; present && !keepOpenAIReasoningReplayID(item["id"], encryptedContent, item["status"]) {
 				delete(item, "id")
 				changed = true
 			}

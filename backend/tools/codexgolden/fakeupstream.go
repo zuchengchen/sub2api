@@ -26,7 +26,8 @@ import (
 
 // scenario controls how the fake upstream answers.
 type scenario struct {
-	Name string
+	NativeState bool // require encrypted reasoning to survive the scripted tool continuation
+	Name        string
 	// RejectWebSocket answers every upgrade with 426 so Codex falls back to
 	// HTTP SSE for the rest of the session.
 	RejectWebSocket bool
@@ -560,7 +561,7 @@ func (f *fakeUpstream) scriptedEvents(body []byte) []map[string]any {
 		"output_tokens": 2, "output_tokens_details": map[string]any{"reasoning_tokens": 0},
 		"total_tokens": 12,
 	}
-	completed := map[string]any{"type": "response.completed", "response": map[string]any{"id": id, "usage": usage}}
+	completed := map[string]any{"type": "response.completed", "response": map[string]any{"id": id, "status": "completed", "output": []any{}, "usage": usage}}
 	if req.Generate != nil && !*req.Generate {
 		return []map[string]any{created, completed}
 	}
@@ -572,35 +573,43 @@ func (f *fakeUpstream) scriptedEvents(body []byte) []map[string]any {
 	}
 	if compaction {
 		item := map[string]any{"type": "compaction", "id": "cmp_golden_" + id, "encrypted_content": "golden-compaction"}
+		completed["response"].(map[string]any)["output"] = []any{item}
 		return []map[string]any{created,
 			{"type": "response.output_item.added", "output_index": 0, "item": item},
 			{"type": "response.output_item.done", "output_index": 0, "item": item},
 			completed}
 	}
+	reasoning := map[string]any{"type": "reasoning", "id": "rs_golden_" + id, "summary": []any{}, "encrypted_content": "golden-reasoning-" + id}
 	hasToolOutput := false
 	for _, item := range req.Input {
-		if t, _ := item["type"].(string); t == "function_call_output" {
+		if t, _ := item["type"].(string); t == "function_call_output" || t == "custom_tool_call_output" {
 			hasToolOutput = true
 		}
 	}
 	if f.scenario.ToolLoop && !hasToolOutput && f.toolSent.CompareAndSwap(false, true) {
-		call := map[string]any{
-			"type": "function_call", "id": "fc_golden_" + id, "call_id": "call_golden_" + id,
-			"name": "exec_command", "arguments": `{"cmd":"echo golden"}`, "status": "completed",
+		call, ok := goldenDeclaredToolCall(body, id)
+		if !ok {
+			return []map[string]any{created, {"type": "response.failed", "response": map[string]any{"id": id, "status": "failed", "error": map[string]any{"code": "fixture_tool_not_declared", "message": "the fixture requires declared exec_command or code-mode exec"}}}}
 		}
+		completed["response"].(map[string]any)["output"] = []any{reasoning, call}
 		return []map[string]any{created,
-			{"type": "response.output_item.added", "output_index": 0, "item": call},
-			{"type": "response.output_item.done", "output_index": 0, "item": call},
+			{"type": "response.output_item.added", "output_index": 0, "item": reasoning},
+			{"type": "response.output_item.done", "output_index": 0, "item": reasoning},
+			{"type": "response.output_item.added", "output_index": 1, "item": call},
+			{"type": "response.output_item.done", "output_index": 1, "item": call},
 			completed}
 	}
 	msg := map[string]any{
-		"type": "message", "id": "msg_golden_" + id, "role": "assistant", "status": "completed",
+		"type": "message", "id": "msg_golden_" + id, "role": "assistant", "status": "completed", "phase": "final_answer", "encrypted_content": "golden-message-" + id,
 		"content": []any{map[string]any{"type": "output_text", "text": "ok", "annotations": []any{}}},
 	}
+	completed["response"].(map[string]any)["output"] = []any{reasoning, msg}
 	return []map[string]any{created,
-		{"type": "response.output_item.added", "output_index": 0, "item": msg},
-		{"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "ok"},
-		{"type": "response.output_item.done", "output_index": 0, "item": msg},
+		{"type": "response.output_item.added", "output_index": 0, "item": reasoning},
+		{"type": "response.output_item.done", "output_index": 0, "item": reasoning},
+		{"type": "response.output_item.added", "output_index": 1, "item": msg},
+		{"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "ok"},
+		{"type": "response.output_item.done", "output_index": 1, "item": msg},
 		completed}
 }
 

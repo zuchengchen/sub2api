@@ -73,6 +73,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defaultMappedModel string,
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
+	cacheDiagnostic := beginUserCacheDiagnostic(c, body)
 	requestedModel := gjson.GetBytes(body, "model").String()
 
 	if err := validateRetiredOpenAIRequestModel(account, requestedModel, false, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)); err != nil {
@@ -82,6 +83,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if err := s.CheckOpenAIAstraModelPolicy(ctx, account, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)); err != nil {
 		return nil, err
 	}
+	nativeChat := s.beginNativeReasoningChat(c, account, body)
 	body = s.rewriteOpenAIClientLocalTimeForRequest(c, account, body)
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
@@ -515,7 +517,19 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			upstreamReq.Header.Set("session_id", generateSessionUUID(sessionKey))
 		}
 
+		upstreamReq, bindErr := nativeChat.prepareRequest(ctx, c, account, token, upstreamReq)
+		if nativeChat.preSendFallback(bindErr) {
+			continue
+		}
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		cacheDiagnosticAttempt := cacheDiagnostic.upstreamRequest(account, upstreamReq)
 		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		cacheDiagnosticAttempt.upstreamResponse(resp, err)
+		if nativeChat.preSendFallback(err) {
+			continue
+		}
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
@@ -524,6 +538,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 
 		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(resp)
+		if nativeChat.rejectedFallback(ctx, c, resp.StatusCode, respBody, completeErrorBody) {
+			_ = resp.Body.Close()
+			continue
+		}
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			_ = resp.Body.Close()
 			expectedTaskID := account.GetCredential("task_id")
@@ -588,12 +606,26 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defer func() { _ = resp.Body.Close() }()
 
 	// 9. Handle normal response
+	var nativeCapture *NativeReasoningResponseCapture
+	var nativeDelivery *NativeReasoningChatCapture
+	if nativeChat != nil && nativeChat.eligible {
+		nativeCapture = NewNativeReasoningResponseCapture(resp.Body, nativeChat.runtime.limits)
+		resp.Body = nativeCapture
+		originalWriter := c.Writer
+		nativeDelivery = NewNativeReasoningChatCapture(originalWriter, clientStream, nativeChat.runtime.limits)
+		c.Writer = nativeDelivery
+		defer func() { c.Writer = originalWriter }()
+	}
 	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
 		result, handleErr = s.handleChatStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, body)
 	} else {
 		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+	}
+	if nativeCapture != nil {
+		_ = resp.Body.Close()
+		nativeChat.finish(ctx, c, resp, nativeCapture, nativeDelivery, handleErr)
 	}
 	stampOpenAIResponsesUpstreamEndpoint(c, result)
 

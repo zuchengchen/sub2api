@@ -155,6 +155,9 @@ func (s *OpenAIGatewayService) maybeCompressCodexUpstreamRequest(request *http.R
 }
 
 func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	if err := checkNativeReasoningRequestCredential(request); err != nil {
+		return nil, err
+	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {

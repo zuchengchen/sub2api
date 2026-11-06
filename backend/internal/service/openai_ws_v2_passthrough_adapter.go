@@ -20,6 +20,7 @@ import (
 )
 
 type openAIWSClientFrameConn struct {
+	interruptReader      *openAIWSInterruptClientReader
 	conn                 *coderws.Conn
 	controlCtx           context.Context
 	interTurnIdleTimeout time.Duration
@@ -604,6 +605,9 @@ func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.Messag
 	if c.controlCtx != nil {
 		controlCtx = c.controlCtx
 	}
+	if c.interruptReader != nil {
+		return c.interruptReader.nextFrame(controlCtx, c.interTurnIdleTimeout, c.interTurnStarted, func() bool { return c.waitingForNextTurn.Load() })
+	}
 	msgType, payload, err := readOpenAIWSClientMessageWithTimeoutStart(
 		controlCtx,
 		c.conn,
@@ -1003,6 +1007,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	turnLifecycle := newOpenAIWSPassthroughTurnLifecycle(true)
 	var acceptedTurnStartedAt atomic.Pointer[time.Time]
 	clientFrameConn := &openAIWSClientFrameConn{
+		interruptReader:      openAIWSExistingInterruptClientReader(c, clientConn),
 		conn:                 clientConn,
 		controlCtx:           ctx,
 		interTurnIdleTimeout: s.openAIWSIngressInterTurnIdleTimeout(),
