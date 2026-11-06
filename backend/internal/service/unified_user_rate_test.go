@@ -17,6 +17,7 @@ type unifiedUserRateCase struct {
 	groupRate, wantRate    float64
 	override               *float64
 	peak                   bool
+	peakRate, offPeakRate  float64
 }
 
 func unifiedUserRateCases() []unifiedUserRateCase {
@@ -39,8 +40,16 @@ func unifiedUserRateCases() []unifiedUserRateCase {
 		{name: "luna6 below floor", model: "gpt-6-luna", groupName: "gpt-pro", groupRate: 0.1, wantRate: 0.2},
 		{name: "luna6 at floor", model: "gpt-6-luna", groupName: "gpt-pro", groupRate: 0.2, wantRate: 0.2},
 		{name: "luna6 above floor", model: "gpt-6-luna", groupName: "gpt-pro", groupRate: 0.3, wantRate: 0.3},
-		{name: "ordinary peak", model: "gpt-5.1", groupName: "gpt-pro", groupRate: 0.1, peak: true, wantRate: 0.2},
-		{name: "luna peak", model: "gpt-6-luna", groupName: "gpt-pro", groupRate: 0.1, peak: true, wantRate: 0.4},
+		{name: "ordinary peak", model: "gpt-5.1", groupName: "gpt-pro", groupRate: 0.1, peak: true, peakRate: 2, offPeakRate: 0.1, wantRate: 0.2},
+		{name: "luna peak", model: "gpt-6-luna", groupName: "gpt-pro", groupRate: 0.1, peak: true, peakRate: 2, offPeakRate: 0.2, wantRate: 0.4},
+		{name: "ordinary discounted peak", model: "gpt-5.1", groupName: "other", groupRate: 0.1, peak: true, peakRate: 0.5, offPeakRate: 0.1, wantRate: 0.05},
+		{name: "ordinary free peak", model: "gpt-5.1", groupName: "other", groupRate: 0.1, peak: true, peakRate: 0, offPeakRate: 0.1, wantRate: 0},
+		{name: "luna discounted peak", model: "gpt-5.6-luna", groupName: "other", groupRate: 0.1, peak: true, peakRate: 0.5, offPeakRate: 0.2, wantRate: 0.2},
+		{name: "luna6 discounted peak", model: "gpt-6-luna", groupName: "other", groupRate: 0.1, peak: true, peakRate: 0.5, offPeakRate: 0.2, wantRate: 0.2},
+		{name: "luna free peak", model: "gpt-5.6-luna", groupName: "other", groupRate: 0.3, peak: true, peakRate: 0, offPeakRate: 0.3, wantRate: 0.2},
+		{name: "luna6 free peak", model: "gpt-6-luna", groupName: "other", groupRate: 0.3, peak: true, peakRate: 0, offPeakRate: 0.3, wantRate: 0.2},
+		{name: "luna discounted override", model: "gpt-6-luna", groupName: "other", groupRate: 0.5, override: &low, peak: true, peakRate: 0.5, offPeakRate: 0.2, wantRate: 0.2},
+		{name: "luna discounted above floor", model: "gpt-6-luna", groupName: "other", groupRate: 0.5, peak: true, peakRate: 0.5, offPeakRate: 0.5, wantRate: 0.25},
 	}
 }
 
@@ -48,7 +57,7 @@ func (tc unifiedUserRateCase) group() *Group {
 	return &Group{
 		ID: 88, Name: tc.groupName, Platform: PlatformOpenAI, RateMultiplier: tc.groupRate,
 		SubscriptionType: SubscriptionTypeSubscription,
-		PeakRateEnabled:  tc.peak, PeakStart: "00:00", PeakEnd: "23:59", PeakRateMultiplier: 2,
+		PeakRateEnabled:  tc.peak, PeakStart: "00:00", PeakEnd: "23:59", PeakRateMultiplier: tc.peakRate,
 	}
 }
 

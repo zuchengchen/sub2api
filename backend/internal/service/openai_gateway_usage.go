@@ -204,16 +204,15 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
 	}
-	// 所有用户统一应用 Luna 保底，高峰因子仍按比例叠加。
-	multiplier = applyRequestBillingRatePolicies(multiplier,
-		result.Model, result.BillingModel, input.OriginalModel, input.ChannelMappedModel, result.UpstreamModel)
+	// 所有分组、所有用户统一应用 Luna 保底，并在叠加高峰因子后再次保底。
+	rateModels := []string{result.Model, result.BillingModel, input.OriginalModel, input.ChannelMappedModel, result.UpstreamModel}
+	baseMultiplier := applyRequestBillingRatePolicies(multiplier, rateModels...)
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。
 	// 高峰因子按请求级 PricingAt 现算（与利润门 D 同源同刻，跨峰谷请求不中途
 	// 变价）；未装配 PricingAt 的路径回退记录时刻，保持既有行为。不并入上面的
 	// Resolve，以免污染 user:group 倍率缓存。
-	baseMultiplier := multiplier
 	pricingAt := openAIUsagePricingAt(input)
-	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, baseMultiplier, pricingAt)
+	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, baseMultiplier, pricingAt, rateModels...)
 	videoMultiplier := resolveVideoRateMultiplier(apiKey, baseMultiplier)
 
 	billingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
@@ -241,21 +240,31 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	longContextBillingGate := openAILongContextBillingGate(account)
 	modelLongContextExempt := openAISubscriptionLongContextExempt(account, result)
-	cost, err := s.calculateOpenAIRecordUsageCost(
-		ctx,
-		result,
-		apiKey,
-		billingModels,
-		multiplier,
-		imageMultiplier,
-		videoMultiplier,
-		baseMultiplier,
-		tokens,
-		serviceTier,
-		longContextBillingGate,
-		modelLongContextExempt,
-		pricingAt,
-	)
+	// Evaluate Free Fast for every candidate before response-model selection:
+	// compare final Standard charges even when their Fast multipliers differ,
+	// while retaining Priority TotalCost and service_tier for upstream accounting.
+	freeFast := groupBillsOpenAIFastAtStandard(apiKey, account, serviceTier)
+	calculateCost := func(models []string, tokenRate, baseRate float64) (*CostBreakdown, error) {
+		cost, err := s.calculateOpenAIRecordUsageCost(
+			ctx, result, apiKey, models, tokenRate, imageMultiplier, videoMultiplier,
+			baseRate, tokens, serviceTier, longContextBillingGate, modelLongContextExempt, pricingAt,
+		)
+		if err != nil || !freeFast {
+			return cost, err
+		}
+		standardCost, standardErr := s.calculateOpenAIRecordUsageCost(
+			ctx, result, apiKey, models, tokenRate, imageMultiplier, videoMultiplier,
+			baseRate, tokens, "", longContextBillingGate, modelLongContextExempt, pricingAt,
+		)
+		if standardErr != nil && !isUsagePricingUnavailableError(standardErr) {
+			return nil, standardErr
+		}
+		if standardErr == nil && cost != nil && standardCost != nil {
+			cost.ActualCost = standardCost.ActualCost
+		}
+		return cost, nil
+	}
+	cost, err := calculateCost(billingModels, multiplier, baseMultiplier)
 	if err != nil {
 		if !isUsagePricingUnavailableError(err) {
 			return err
@@ -285,10 +294,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	); responseModel != "" && !strings.EqualFold(responseModel, baselineBillingModel) {
 		if identified, responseChannelPriced := s.hasIdentifiedOpenAIResponsePricing(ctx, responseModel, apiKey); identified {
 			responseModels := s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, usageBillingModelCandidates(responseModel))
-			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(
-				ctx, result, apiKey, responseModels, multiplier, imageMultiplier,
-				videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingGate, modelLongContextExempt, pricingAt,
-			)
+			responseBaseMultiplier := applyRequestBillingRatePolicies(baseMultiplier, responseModel)
+			responseMultiplier, _ := computePeakAwareMultipliers(apiKey, responseBaseMultiplier, pricingAt, append(rateModels, responseModel)...)
+			responseCost, responseErr := calculateCost(responseModels, responseMultiplier, responseBaseMultiplier)
 			// 基线定价源以 baselineBillingModel 为准：它正是 calculateOpenAIRecordUsageCost
 			// 内部做渠道定价判断时使用的模型，且"首候选有渠道价"必然意味着首候选就是实际
 			// 定价基准（有渠道价就一定能算出价，循环不会落到后续候选）。
@@ -297,37 +305,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 				logResponseModelBillingApplied("service.openai_gateway", account, result.RequestID,
 					baselineBillingModel, responseModel, cost, responseCost)
 				billingModels = responseModels
+				multiplier = responseMultiplier
 				cost = responseCost
 			}
-		}
-	}
-
-	// Free Fast changes only the customer charge. Keep priority TotalCost and
-	// service_tier for upstream accounting, but evaluate ActualCost once more at
-	// the Standard tier using the same channel, peak, and long-context policy.
-	if groupBillsOpenAIFastAtStandard(apiKey, account, serviceTier) {
-		standardCost, standardErr := s.calculateOpenAIRecordUsageCost(
-			ctx,
-			result,
-			apiKey,
-			billingModels,
-			multiplier,
-			imageMultiplier,
-			videoMultiplier,
-			baseMultiplier,
-			tokens,
-			"",
-			longContextBillingGate,
-			modelLongContextExempt,
-			pricingAt,
-		)
-		if standardErr != nil && !isUsagePricingUnavailableError(standardErr) {
-			return standardErr
-		}
-		// Missing pricing already fell back to a zero-cost log above; keep that
-		// usage row instead of dropping it on the Standard re-evaluation.
-		if standardErr == nil && cost != nil && standardCost != nil {
-			cost.ActualCost = standardCost.ActualCost
 		}
 	}
 
