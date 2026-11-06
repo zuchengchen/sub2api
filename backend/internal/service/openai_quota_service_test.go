@@ -510,6 +510,10 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 	encoded, err := json.Marshal(usage)
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), "secret-credit-id")
+	require.Equal(t, []openAIAutoResetCreditCandidate{
+		{ID: "secret-credit-id", ExpiresAt: "2026-07-03T04:05:06Z"},
+		{ExpiresAt: "2026-07-04T04:05:06Z"},
+	}, usage.autoResetCandidates)
 }
 
 func TestQueryUsageResetCreditDetails401NonFatal(t *testing.T) {
@@ -698,4 +702,44 @@ func TestResetCreditTargetedRequiresBothIDs(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
 		require.Equal(t, "OPENAI_QUOTA_TARGETED_RESET_INVALID", infraerrors.Reason(err))
 	}
+}
+
+func TestResetCreditRejectsAutomaticModeBeforeCallingUpstream(t *testing.T) {
+	for _, status := range []string{"enabled", OpenAIAutoResetStatusChecking, OpenAIAutoResetStatusResetting} {
+		t.Run(status, func(t *testing.T) {
+			account := &Account{ID: 204, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{}}
+			wantCode := "OPENAI_QUOTA_AUTO_RESET_IN_PROGRESS"
+			if status == "enabled" {
+				account.Extra[OpenAIAutoResetCreditEnabledExtraKey] = true
+				account.Extra[OpenAIAutoResetCreditOptInVersionExtraKey] = openAIAutoResetCreditOptInVersion
+				wantCode = "OPENAI_QUOTA_AUTO_RESET_ENABLED"
+			} else {
+				account.Extra[OpenAIAutoResetCreditEnabledExtraKey] = false
+				account.Extra[OpenAIAutoResetCreditStateExtraKey] = &OpenAIAutoResetCreditState{
+					Status: status, CheckedAt: time.Now().UTC().Format(time.RFC3339),
+				}
+			}
+			repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+			svc := NewOpenAIQuotaService(repo, nil, nil, func(string) (*req.Client, error) {
+				t.Fatal("a blocked manual reset must not contact upstream")
+				return nil, nil
+			}, nil)
+			_, err := svc.ResetCredit(context.Background(), account.ID)
+			require.Equal(t, wantCode, infraerrors.Reason(err))
+		})
+	}
+}
+
+func TestValidateOpenAIManualReset_AllowsDisabledAfterTaskWindow(t *testing.T) {
+	now := time.Now().UTC()
+	for _, status := range []string{OpenAIAutoResetStatusChecking, OpenAIAutoResetStatusResetting, OpenAIAutoResetStatusFailed, OpenAIAutoResetStatusSuccess} {
+		account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+			OpenAIAutoResetCreditEnabledExtraKey: false,
+			OpenAIAutoResetCreditStateExtraKey:   &OpenAIAutoResetCreditState{Status: status, CheckedAt: now.Add(-3 * time.Minute).Format(time.RFC3339)},
+		}}
+		require.NoError(t, validateOpenAIManualReset(account, now))
+	}
+	require.NoError(t, validateOpenAIManualReset(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+		OpenAIAutoResetCreditEnabledExtraKey: true,
+	}}, now), "retired settings without a new opt-in must leave manual resets usable")
 }
