@@ -476,6 +476,8 @@ func TestResponseModelBillingAdoptable(t *testing.T) {
 		// 1. 不得更贵
 		{name: "cheaper_adopted", baseline: cost(1), response: cost(0.5), want: true},
 		{name: "equal_adopted", baseline: cost(1), response: cost(1), want: true},
+		{name: "cheaper_price_higher_actual_charge_rejected", baseline: &CostBreakdown{TotalCost: 1, ActualCost: 0.1}, response: &CostBreakdown{TotalCost: 0.75, ActualCost: 0.15}},
+		{name: "cheaper_price_equal_actual_charge_adopted", baseline: &CostBreakdown{TotalCost: 1, ActualCost: 0.1}, response: &CostBreakdown{TotalCost: 0.5, ActualCost: 0.1}, want: true},
 		{name: "float_noise_within_epsilon_adopted", baseline: cost(1), response: cost(1 + 1e-13), want: true},
 		{name: "pricier_rejected", baseline: cost(1), response: cost(1.0001)},
 

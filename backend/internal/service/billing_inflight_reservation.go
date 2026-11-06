@@ -500,7 +500,7 @@ func (d inflightEstimateDeps) rates(ctx context.Context, apiKey *APIKey, models 
 		}
 	}
 	rate = applyRequestBillingRatePolicies(rate, models...)
-	return computePeakAwareMultipliers(apiKey, rate, timezone.Now())
+	return computePeakAwareMultipliers(apiKey, rate, timezone.Now(), models...)
 }
 
 func tokenCounts(cfg config.InflightReservationConfig, bodyBytes, maxTokens int) (int, int) {

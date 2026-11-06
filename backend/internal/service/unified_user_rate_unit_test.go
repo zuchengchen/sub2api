@@ -52,7 +52,7 @@ func TestUnifiedUserRateGatewayRecordUsage(t *testing.T) {
 func TestUnifiedUserRateInflightEstimate(t *testing.T) {
 	for _, tc := range unifiedUserRateCases() {
 		// Final billing above fixes PricingAt to cover peak periods. The estimator
-		// uses the real clock, so apply the observed peak factor to its base oracle.
+		// uses the real clock, so select the expected in-window or off-peak rate.
 		for _, gateway := range []string{"gateway", "openai"} {
 			var plainCost float64
 			for _, vip := range []bool{false, true} {
@@ -71,14 +71,21 @@ func TestUnifiedUserRateInflightEstimate(t *testing.T) {
 					}
 					peak := group.PeakMultiplierAt(timezone.Now())
 					cost, priced := estimate(context.Background(), key, InflightEstimateRequest{Model: tc.model, BodyBytes: 400, MaxTokens: 1000})
+					// A free non-Luna peak has no positive token estimate, while its
+					// nonzero image rate keeps it out of the all-rates-zero shortcut.
+					if tc.peak && peak == 0 && tc.wantRate == 0 {
+						require.False(t, priced)
+						require.Zero(t, cost)
+						return
+					}
 					require.True(t, priced)
 					pricing, err := svc.billingService.GetModelPricing(tc.model)
 					require.NoError(t, err)
-					baseRate := tc.wantRate
-					if tc.peak {
-						baseRate /= 2
+					rate := tc.wantRate
+					if tc.peak && peak == 1 {
+						rate = tc.offPeakRate
 					}
-					expected := (100*pricing.InputPricePerToken + 1000*pricing.OutputPricePerToken) * baseRate * peak
+					expected := (100*pricing.InputPricePerToken + 1000*pricing.OutputPricePerToken) * rate
 					require.InDelta(t, expected, cost, 1e-12)
 					if vip {
 						require.InDelta(t, plainCost, cost, 1e-12)

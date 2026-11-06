@@ -390,15 +390,16 @@ func NormalizePeakRateConfig(subscriptionType string, enabled bool, start, end s
 
 // computePeakAwareMultipliers 把"基础 token 倍率 base"（已含系统/分组/用户级倍率，但不含高峰）
 // 拆分为最终 token 倍率与图片按次倍率：图片按次倍率基于 base 现算、不受高峰影响；token 倍率在 base 上叠加高峰因子。
+// models 用于在叠加时段折扣后再次应用模型倍率下限，避免 Luna 低于 0.2。
 // gateway_service.recordUsageCore 与 openai_gateway_service.RecordUsage 共用此函数，
 // 锁死"高峰因子只乘入 token 倍率、图片按次倍率不受影响"这一叠加顺序——任何调换都会被 group_peak_rate_test 覆盖。
-func computePeakAwareMultipliers(apiKey *APIKey, base float64, now time.Time) (text, image float64) {
+func computePeakAwareMultipliers(apiKey *APIKey, base float64, now time.Time, models ...string) (text, image float64) {
 	image = resolveImageRateMultiplier(apiKey, base)
 	peak := 1.0
 	if apiKey != nil && apiKey.Group != nil {
 		peak = apiKey.Group.PeakMultiplierAt(now)
 	}
-	text = base * peak
+	text = applyRequestBillingRatePolicies(base*peak, models...)
 	return
 }
 
