@@ -99,7 +99,7 @@ type DefaultSubscriptionAssigner interface {
 	AssignOrExtendSubscription(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, bool, error)
 }
 
-// SignupAPIKeyProvisioner creates the API key that every newly registered
+// SignupAPIKeyProvisioner creates the API keys that every newly registered
 // user receives. It is optional so authentication tests and non-HTTP
 // consumers do not need to construct the API key service.
 type SignupAPIKeyProvisioner interface {

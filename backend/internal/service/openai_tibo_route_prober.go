@@ -124,7 +124,9 @@ func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state 
 		s.abortOpenAITiboProbe(state, route, nil)
 		return
 	}
+	startedAt := time.Now()
 	sample := s.probeOpenAITiboHTTP(ctx, account)
+	sample.startedAt = startedAt
 	if parent.Err() != nil {
 		// Harvester shutdown interrupted the probe; this is not a sample.
 		s.abortOpenAITiboProbe(state, route, nil)
@@ -217,7 +219,15 @@ func (s *OpenAIGatewayService) recordOpenAITiboSample(state *openAITiboAccountSt
 	// Unknown samples change neither the verdict nor the sparkline; skip the
 	// write so a failing account does not rewrite the same row every probe.
 	if persist || (sample.verdict.definitive() && len(samples) > 0) {
-		if s.persistOpenAITiboVerdict(state.accountID, route, record, samples) == nil {
+		var fresh []TiboAutoGroupSample
+		if route == openAITiboRouteHTTP && sample.verdict.definitive() && account != nil && account.IsOpenAIOAuth() {
+			startedAt := sample.startedAt
+			if startedAt.IsZero() {
+				startedAt = now
+			}
+			fresh = []TiboAutoGroupSample{{Verdict: string(sample.verdict), StartedAt: startedAt, CompletedAt: now}}
+		}
+		if s.persistOpenAITiboVerdict(state.accountID, route, record, samples, fresh...) == nil {
 			state.mu.Lock()
 			for _, sample := range samples {
 				if sample.At.After(r.persistedSampleAt) {
@@ -276,7 +286,7 @@ func parseOpenAITiboVerdictRecord(raw any) (openAITiboVerdictRecord, bool) {
 	return record, true
 }
 
-func (s *OpenAIGatewayService) persistOpenAITiboVerdict(accountID int64, route openAITiboRoute, record openAITiboVerdictRecord, samples []openAITiboRecentSample) error {
+func (s *OpenAIGatewayService) persistOpenAITiboVerdict(accountID int64, route openAITiboRoute, record openAITiboVerdictRecord, samples []openAITiboRecentSample, fresh ...TiboAutoGroupSample) error {
 	if s == nil || s.accountRepo == nil {
 		return nil
 	}
@@ -288,7 +298,14 @@ func (s *OpenAIGatewayService) persistOpenAITiboVerdict(accountID int64, route o
 		value["checked_at"] = record.CheckedAt.UTC().Format(time.RFC3339Nano)
 		value["flipped_at"] = record.FlippedAt.UTC().Format(time.RFC3339Nano)
 	}
-	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{openAITiboVerdictExtraKey(route): value}); err != nil {
+	updates := map[string]any{openAITiboVerdictExtraKey(route): value}
+	var err error
+	if repo, ok := s.accountRepo.(TiboAutoGroupRepository); ok && len(fresh) == 1 {
+		err = repo.PersistTiboProbeResult(ctx, accountID, updates, fresh[0])
+	} else {
+		err = s.accountRepo.UpdateExtra(ctx, accountID, updates)
+	}
+	if err != nil {
 		logger.L().Warn("openai_tibo verdict persist failed", zap.Int64("account_id", accountID), zap.String("route", string(route)), zap.Error(err))
 		return err
 	}

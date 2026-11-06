@@ -77,15 +77,21 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 	return translatePersistenceError(err, nil, service.ErrAPIKeyExists)
 }
 
-// CreateSignupAPIKey atomically grants access to an exclusive standard group
-// and creates the default signup key. Public and subscription groups do not
-// need an allowed-group row and use Create directly.
+// CreateSignupAPIKey retains the single-key entry point for internal callers.
 func (r *apiKeyRepository) CreateSignupAPIKey(ctx context.Context, key *service.APIKey, grantExclusiveGroup bool) error {
-	if !grantExclusiveGroup {
-		return r.Create(ctx, key)
-	}
-	if r == nil || r.client == nil || key == nil || key.GroupID == nil {
+	return r.CreateSignupAPIKeys(ctx, []service.SignupAPIKeyCreate{{Key: key, GrantExclusiveGroup: grantExclusiveGroup}})
+}
+
+// CreateSignupAPIKeys commits all bootstrap keys and exclusive standard-group
+// grants together. Never leave one usable key or permission behind on failure.
+func (r *apiKeyRepository) CreateSignupAPIKeys(ctx context.Context, keys []service.SignupAPIKeyCreate) error {
+	if r == nil || r.client == nil || len(keys) == 0 {
 		return fmt.Errorf("invalid default signup API key transaction")
+	}
+	for _, item := range keys {
+		if item.Key == nil || item.Key.UserID <= 0 || item.Key.GroupID == nil || *item.Key.GroupID <= 0 || item.Key.UserID != keys[0].Key.UserID {
+			return fmt.Errorf("invalid default signup API key transaction")
+		}
 	}
 
 	tx, err := r.client.Tx(ctx)
@@ -95,20 +101,30 @@ func (r *apiKeyRepository) CreateSignupAPIKey(ctx context.Context, key *service.
 	defer func() { _ = tx.Rollback() }()
 	txCtx := dbent.NewTxContext(ctx, tx)
 
-	err = tx.Client().UserAllowedGroup.Create().
-		SetUserID(key.UserID).
-		SetGroupID(*key.GroupID).
-		OnConflictColumns(userallowedgroup.FieldUserID, userallowedgroup.FieldGroupID).
-		DoNothing().
-		Exec(txCtx)
-	if err != nil && !isSQLNoRowsError(err) {
-		return fmt.Errorf("grant default signup group: %w", err)
-	}
-	if err := r.Create(txCtx, key); err != nil {
-		return err
+	created := make([]service.APIKey, len(keys))
+	for i, item := range keys {
+		key := item.Key
+		if item.GrantExclusiveGroup {
+			err = tx.Client().UserAllowedGroup.Create().
+				SetUserID(key.UserID).
+				SetGroupID(*key.GroupID).
+				OnConflictColumns(userallowedgroup.FieldUserID, userallowedgroup.FieldGroupID).
+				DoNothing().
+				Exec(txCtx)
+			if err != nil && !isSQLNoRowsError(err) {
+				return fmt.Errorf("grant default signup group: %w", err)
+			}
+		}
+		created[i] = *key
+		if err := r.Create(txCtx, &created[i]); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit default signup API key transaction: %w", err)
+	}
+	for i, item := range keys {
+		*item.Key = created[i]
 	}
 	return nil
 }

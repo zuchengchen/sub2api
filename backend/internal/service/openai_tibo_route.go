@@ -52,6 +52,7 @@ const (
 
 // openAITiboProbeSample is one Tibo probe observation for a route.
 type openAITiboProbeSample struct {
+	startedAt   time.Time
 	verdict     openAITiboVerdict // healthy, degraded or unknown
 	status      int               // upstream HTTP status; 0 when no response
 	answerClass string            // classifyTiboAnswer class, "" when none

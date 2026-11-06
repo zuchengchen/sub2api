@@ -16,6 +16,8 @@ import (
 type GroupModelAllowlist struct {
 	Enabled bool     `json:"enabled"`
 	Models  []string `json:"models,omitempty"`
+	// Runtime-only group policy; never persisted in an admin allowlist.
+	excludeLuna bool
 }
 
 // DomainGroupModelAllowlist 把 service 白名单转换为 ent 持久化使用的 domain 类型。
@@ -84,7 +86,7 @@ func normalizeGroupModelAllowlist(cfg GroupModelAllowlist) (GroupModelAllowlist,
 // ModelAllowlistEnabled 报告该分组是否启用了模型白名单。
 // 开启后所有携带模型的网关请求与模型列表接口都受白名单约束。
 func (g *Group) ModelAllowlistEnabled() bool {
-	return g != nil && g.ModelAllowlist.Enabled
+	return g != nil && g.EffectiveModelAllowlist().Enabled
 }
 
 // Allows 判断客户端请求的模型是否命中白名单。
@@ -92,6 +94,9 @@ func (g *Group) ModelAllowlistEnabled() bool {
 // 候选形式覆盖代码中已有的模型名等价规则（Gemini models/ 前缀、
 // Antigravity/Claude -thinking 宽容规则、OpenAI 推理后缀），不做模糊匹配。
 func (a GroupModelAllowlist) Allows(model string) bool {
+	if a.excludeLuna && isTiboLunaModel(model) {
+		return false
+	}
 	if !a.Enabled {
 		return true
 	}
@@ -190,6 +195,9 @@ func (a GroupModelAllowlist) FilterForListing(source []string) []string {
 	seen := make(map[string]struct{}, len(a.Models)+len(patterns))
 	filtered := make([]string, 0, len(patterns))
 	add := func(model string) {
+		if a.excludeLuna && isTiboLunaModel(model) {
+			return
+		}
 		key := strings.ToLower(model)
 		if _, ok := seen[key]; ok {
 			return

@@ -4090,7 +4090,7 @@ func isOpenAIWSUpgradeRequest(r *http.Request) bool {
 // 规则：重复 model 键/大小写变体可能被上游按末值绑定，任一未命中即拒绝。
 func blockedModelAllowlistCandidate(group *service.Group, candidates []string) string {
 	for _, candidate := range candidates {
-		if openai.IsRetiredSparkModel(candidate) || (group != nil && group.ModelAllowlistEnabled() && !group.ModelAllowlist.Allows(candidate)) {
+		if openai.IsRetiredSparkModel(candidate) || (group != nil && group.ModelAllowlistEnabled() && !group.EffectiveModelAllowlist().Allows(candidate)) {
 			return candidate
 		}
 	}
