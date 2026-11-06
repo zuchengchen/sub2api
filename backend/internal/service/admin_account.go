@@ -490,7 +490,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
-	accountExtra, err = normalizeOpenAIAutoResetCreditExtra(input.Platform, input.Type, false, accountExtra)
+	accountExtra, err = normalizeOpenAIAutoResetCreditExtra(input.Platform, input.Type, accountExtra)
 	if err != nil {
 		return nil, err
 	}
@@ -598,7 +598,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if input.Type != "" {
 			effectiveType = input.Type
 		}
-		normalizedExtra, err = normalizeOpenAIAutoResetCreditExtra(account.Platform, effectiveType, false, normalizedExtra)
+		normalizedExtra, err = normalizeOpenAIAutoResetCreditExtra(account.Platform, effectiveType, normalizedExtra)
 		if err != nil {
 			return nil, err
 		}
@@ -689,6 +689,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			OllamaCloudUsageSnapshotExtraKey,
 			OpenCodeGoUsageAutoRefreshExtraKey,
 			OpenCodeGoUsageSnapshotExtraKey,
+			OpenAIAutoResetCreditStateExtraKey,
 		} {
 			if v, ok := account.Extra[key]; ok {
 				normalizedExtra[key] = v
@@ -898,6 +899,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	updated, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if ResolveOpenAIAutoResetCreditConfig(updated).Enabled {
+		AfterAccountCommit(ctx, func(context.Context) { notifyOpenAIAutoReset(id) })
 	}
 	return updated, nil
 }

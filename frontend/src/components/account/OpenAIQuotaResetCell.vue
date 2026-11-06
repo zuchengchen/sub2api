@@ -102,6 +102,32 @@
       {{ t('admin.accounts.openaiQuotaReset.pointsCachePersistFailed') }}
     </div>
 
+    <div
+      v-if="autoResetState"
+      class="flex flex-wrap items-center gap-1 text-[10px]"
+      data-testid="auto-reset-credit-state"
+    >
+      <span
+        class="inline-flex items-center rounded px-1.5 py-0.5 font-medium"
+        :class="autoResetStateClass"
+      >
+        {{ autoResetStateLabel }}
+        <span v-if="autoResetState.trigger_window" class="ml-1 tabular-nums">
+          {{ autoResetState.trigger_window }}
+        </span>
+      </span>
+      <span v-if="autoResetState.checked_at" class="text-gray-500 dark:text-gray-400">
+        {{ formatResetCreditExpiry(autoResetState.checked_at, 'short') }}
+      </span>
+      <span
+        v-if="autoResetState.error_code"
+        class="max-w-full truncate text-red-600 dark:text-red-400"
+        :title="autoResetState.error_code"
+      >
+        {{ autoResetState.error_code }}
+      </span>
+    </div>
+
     <div v-if="primaryResetCreditExpiry" class="space-y-1">
       <div class="flex flex-wrap items-center gap-1">
         <span
@@ -188,7 +214,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Account } from '@/types'
 import {
@@ -224,6 +250,46 @@ const resetWarning = ref<string | null>(null)
 const showResetConfirm = ref(false)
 const showResetCreditDetails = ref(false)
 const creditsCacheWarning = ref(false)
+let quotaSnapshotVersion = 0
+
+type AutoResetCreditState = NonNullable<NonNullable<Account['extra']>['codex_auto_reset_credit_state']>
+const validAutoResetStatuses = new Set(['checking', 'available', 'resetting', 'success', 'no_credit', 'failed'])
+const autoResetEnabled = computed(() =>
+  props.account.extra?.auto_reset_credit_enabled === true && props.account.extra?.auto_reset_credit_opt_in_version === 1
+)
+const autoResetState = computed<AutoResetCreditState | null>(() => {
+  if (!autoResetEnabled.value) return null
+  const state = props.account.extra?.codex_auto_reset_credit_state
+  if (!state || typeof state !== 'object' || !validAutoResetStatuses.has(String(state.status))) return null
+  return state
+})
+const autoResetStateLabel = computed(() => {
+  if (!autoResetState.value?.status) return ''
+  const keyByStatus: Record<string, string> = {
+    checking: 'checking',
+    available: 'available',
+    resetting: 'resetting',
+    success: 'success',
+    no_credit: 'noCredit',
+    failed: 'failed'
+  }
+  return t(`admin.accounts.openaiQuotaReset.autoStatus.${keyByStatus[autoResetState.value.status]}`)
+})
+const autoResetStateClass = computed(() => {
+  switch (autoResetState.value?.status) {
+    case 'available':
+      return 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+    case 'success':
+      return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+    case 'no_credit':
+    case 'failed':
+      return 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+    case 'resetting':
+      return 'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
+    default:
+      return 'bg-gray-100 text-gray-600 dark:bg-dark-800 dark:text-gray-300'
+  }
+})
 
 const readCachedCredits = (account: Account) => {
   const snapshot = account.extra?.codex_credits_snapshot
@@ -347,7 +413,38 @@ const resetCreditExpirations = computed(() =>
 )
 const primaryResetCreditExpiry = computed(() => resetCreditExpirations.value[0] ?? '')
 const hiddenResetCreditCount = computed(() => Math.max(resetCreditExpirations.value.length - 1, 0))
-const canReset = computed(() => availableResetCount.value > 0)
+// A disabled switch can still have an automatic request in flight. Match the
+// backend's two-minute guard and expire the local guard without another poll.
+const autoResetInProgress = ref(false)
+let autoResetGuardTimer: ReturnType<typeof setTimeout> | undefined
+watch(
+  () => [props.account.id, props.account.extra?.codex_auto_reset_credit_state?.status, props.account.extra?.codex_auto_reset_credit_state?.checked_at, autoResetEnabled.value] as const,
+  ([, status, checkedAt, enabled]) => {
+    clearTimeout(autoResetGuardTimer)
+    autoResetGuardTimer = undefined
+    const remaining = Date.parse(checkedAt ?? '') + 120_000 - Date.now()
+    autoResetInProgress.value = (status === 'checking' || status === 'resetting') && Number.isFinite(remaining) && remaining > 0
+    if (autoResetInProgress.value && !enabled) {
+      autoResetGuardTimer = setTimeout(() => { autoResetInProgress.value = false }, remaining)
+    }
+    if (status === 'resetting') {
+      quotaSnapshotVersion++
+      data.value = null
+      cachedData.value = null
+    }
+  },
+  { immediate: true, flush: 'sync' }
+)
+onBeforeUnmount(() => clearTimeout(autoResetGuardTimer))
+const manualResetBlockedReason = computed(() => {
+  if (autoResetEnabled.value) return 'admin.accounts.openaiQuotaReset.resetTooltipAutoEnabled'
+  if (autoResetInProgress.value) return 'admin.accounts.openaiQuotaReset.resetTooltipAutoInProgress'
+  return ''
+})
+const canReset = computed(() => availableResetCount.value > 0 && !manualResetBlockedReason.value)
+watch(manualResetBlockedReason, (reason) => {
+  if (reason) showResetConfirm.value = false
+}, { flush: 'sync' })
 
 const resetCreditDetailsTitle = computed(() =>
   resetCreditExpirations.value
@@ -363,6 +460,7 @@ const resetCreditDetailsToggleLabel = computed(() => {
 })
 
 const resetButtonTitle = computed(() => {
+  if (manualResetBlockedReason.value) return t(manualResetBlockedReason.value)
   if (!data.value) return t('admin.accounts.openaiQuotaReset.resetTooltipNeedQuery')
   if (!canReset.value) return t('admin.accounts.openaiQuotaReset.resetTooltipNoCredits')
   return t('admin.accounts.openaiQuotaReset.resetTooltipReady')
@@ -415,9 +513,16 @@ const extractErrorMessage = (e: unknown): string => {
   // back to the raw axios shape for the cancellation/network branches that
   // bypass the flattening, and finally to the generic i18n string.
   const err = e as {
+    code?: string
     message?: string
     reason?: string
     response?: { data?: { message?: string; error?: string } }
+  }
+  if (err?.reason === 'OPENAI_QUOTA_AUTO_RESET_ENABLED' || err?.code === 'OPENAI_QUOTA_AUTO_RESET_ENABLED') {
+    return t('admin.accounts.openaiQuotaReset.resetTooltipAutoEnabled')
+  }
+  if (err?.reason === 'OPENAI_QUOTA_AUTO_RESET_IN_PROGRESS' || err?.code === 'OPENAI_QUOTA_AUTO_RESET_IN_PROGRESS') {
+    return t('admin.accounts.openaiQuotaReset.resetTooltipAutoInProgress')
   }
   return (
     err?.message ||
@@ -436,6 +541,7 @@ const toggleResetCreditDetails = () => {
 const handleQuery = async () => {
   if (loading.value || resetting.value) return
   const accountID = props.account.id
+  const snapshotVersion = quotaSnapshotVersion
   loading.value = true
   creditsCacheWarning.value = false
   error.value = null
@@ -444,7 +550,7 @@ const handleQuery = async () => {
   showResetCreditDetails.value = false
   try {
     const result = await refreshOpenAIQuota(accountID)
-    if (props.account.id !== accountID) return
+    if (props.account.id !== accountID || quotaSnapshotVersion !== snapshotVersion) return
     updateCredits(result)
     creditsCacheWarning.value = result.credits_cache_persisted === false
     // The upstream read succeeded even when the snapshot write was rejected, so
@@ -457,7 +563,7 @@ const handleQuery = async () => {
       resetWarning.value = t('admin.accounts.openaiQuotaReset.refreshCachePersistFailed')
     }
   } catch (e) {
-    if (props.account.id !== accountID) return
+    if (props.account.id !== accountID || quotaSnapshotVersion !== snapshotVersion) return
     error.value = extractErrorMessage(e)
   } finally {
     if (props.account.id === accountID) loading.value = false
@@ -509,6 +615,10 @@ const confirmEnableCredits = () => {
 
 const openResetConfirm = () => {
   if (resetting.value || loading.value) return
+  if (manualResetBlockedReason.value) {
+    error.value = t(manualResetBlockedReason.value)
+    return
+  }
   if (!canReset.value) {
     error.value = t('admin.accounts.openaiQuotaReset.noCreditsAvailable')
     return
@@ -519,6 +629,10 @@ const openResetConfirm = () => {
 const confirmReset = async () => {
   showResetConfirm.value = false
   if (resetting.value) return
+  if (manualResetBlockedReason.value) {
+    error.value = t(manualResetBlockedReason.value)
+    return
+  }
   if (!canReset.value) {
     error.value = t('admin.accounts.openaiQuotaReset.noCreditsAvailable')
     return
@@ -563,6 +677,27 @@ const confirmReset = async () => {
     if (props.account.id === accountID) resetting.value = false
   }
 }
+
+watch(
+  [
+    () => JSON.stringify(props.account.extra?.codex_reset_credit_snapshot ?? null),
+    () => JSON.stringify(props.account.extra?.codex_credits_snapshot ?? null)
+  ],
+  ([resetSnapshot, creditsSnapshot], [previousResetSnapshot, previousCreditsSnapshot]) => {
+    quotaSnapshotVersion++
+    if (resetSnapshot !== previousResetSnapshot) {
+      cachedData.value = readCachedResetCredits(props.account)
+      data.value = cachedData.value
+      showResetConfirm.value = false
+      showResetCreditDetails.value = false
+    }
+    if (creditsSnapshot !== previousCreditsSnapshot) {
+      creditsData.value = readCachedCredits(props.account)
+      creditsCacheWarning.value = false
+    }
+  },
+  { flush: 'sync' }
+)
 
 watch(
   () => props.account.id,

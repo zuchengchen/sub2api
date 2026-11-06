@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import OpenAIQuotaResetCell from '../OpenAIQuotaResetCell.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -72,6 +72,8 @@ beforeEach(() => {
   vi.mocked(resetOpenAIQuota).mockReset()
   vi.mocked(setOpenAICreditsEnabled).mockReset()
 })
+
+afterEach(() => vi.useRealTimers())
 
 describe('OpenAIQuotaResetCell — 点数开关', () => {
   const toggle = (wrapper: ReturnType<typeof mount>) => wrapper.get('[data-testid="openai-credits-enabled-toggle"]')
@@ -483,6 +485,184 @@ describe('OpenAIQuotaResetCell — 重置次数', () => {
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.resetAccountRecoveryFailed')
     expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
     expect(wrapper.emitted('account-updated')).toBeUndefined()
+    wrapper.unmount()
+  })
+})
+describe('OpenAIQuotaResetCell 自动用卡运行态', () => {
+  it.each([
+    ['checking', 'checking'],
+    ['available', 'available'],
+    ['resetting', 'resetting'],
+    ['success', 'success'],
+    ['no_credit', 'noCredit'],
+    ['failed', 'failed'],
+  ] as const)('展示 %s 状态且不需要暴露卡标识', (status, labelKey) => {
+    const account = makeAccount({
+      extra: {
+        auto_reset_credit_enabled: true,
+        auto_reset_credit_opt_in_version: 1,
+        codex_auto_reset_credit_state: {
+          status,
+          trigger_window: '5h',
+          available_count: 1,
+          checked_at: '2099-07-03T04:05:06Z',
+          error_code: status === 'failed' ? 'RESET_FAILED' : undefined,
+        },
+      },
+    })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    const state = wrapper.get('[data-testid="auto-reset-credit-state"]')
+    expect(state.text()).toContain(`admin.accounts.openaiQuotaReset.autoStatus.${labelKey}`)
+    expect(state.text()).toContain('5h')
+    expect(state.text()).not.toContain('credit_id')
+    wrapper.unmount()
+  })
+
+  it('开关关闭时不显示历史运行态', () => {
+    const account = makeAccount({
+      extra: {
+        auto_reset_credit_enabled: false,
+        codex_auto_reset_credit_state: { status: 'success', available_count: 1 },
+      },
+    })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    expect(wrapper.find('[data-testid="auto-reset-credit-state"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('遗留 enabled=true 但没有启用版本时不显示自动用卡状态', () => {
+    const account = makeAccount({ extra: {
+      auto_reset_credit_enabled: true,
+      codex_auto_reset_credit_state: { status: 'success', available_count: 1 },
+      codex_reset_credit_snapshot: { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }] }
+    } })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    expect(wrapper.find('[data-testid="auto-reset-credit-state"]').exists()).toBe(false)
+    expect(resetButton(wrapper).attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('后台自动用卡更新同一账号后立即显示最新卡数并关闭手动确认', async () => {
+    const account = makeAccount({ extra: {
+      auto_reset_credit_enabled: false,
+      auto_reset_credit_opt_in_version: 1,
+      codex_reset_credit_snapshot: { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }] },
+      codex_credits_snapshot: { credits: { has_credits: true, unlimited: false, balance: '25' }, fetched_at: 1 }
+    } })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    await resetButton(wrapper).trigger('click')
+    expect(wrapper.findAllComponents(ConfirmDialog)[0].props('show')).toBe(true)
+    await wrapper.setProps({ account: { ...account, extra: {
+      ...account.extra,
+      codex_auto_reset_credit_state: { status: 'success', available_count: 0 },
+      codex_reset_credit_snapshot: { available_count: 0, credits: [] },
+      codex_credits_snapshot: { credits: { has_credits: true, unlimited: false, balance: '23' }, fetched_at: 2 }
+    } } })
+    expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(resetButton(wrapper).attributes('title')).toBe('admin.accounts.openaiQuotaReset.resetTooltipNoCredits')
+    expect(wrapper.findAllComponents(ConfirmDialog)[0].props('show')).toBe(false)
+    expect(wrapper.get('[data-testid="codex-credits"]').text()).toContain('23')
+    expect(refreshOpenAIQuota).not.toHaveBeenCalled()
+    expect(resetOpenAIQuota).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('后台自动重置进行中时不能再手动消耗重置卡', async () => {
+    const account = makeAccount({ extra: {
+      auto_reset_credit_enabled: false,
+      auto_reset_credit_opt_in_version: 1,
+      codex_reset_credit_snapshot: { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }] }
+    } })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    await resetButton(wrapper).trigger('click')
+    await wrapper.setProps({ account: { ...account, extra: {
+      ...account.extra,
+      codex_auto_reset_credit_state: { status: 'resetting', checked_at: new Date().toISOString(), available_count: 1 }
+    } } })
+    expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(resetButton(wrapper).attributes('title')).toBe('admin.accounts.openaiQuotaReset.resetTooltipAutoInProgress')
+    expect(wrapper.findAllComponents(ConfirmDialog)[0].props('show')).toBe(false)
+    expect(resetOpenAIQuota).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('自动开关有效开启时，手动入口提示先关闭自动用卡', () => {
+    const account = makeAccount({ extra: {
+      auto_reset_credit_enabled: true,
+      auto_reset_credit_opt_in_version: 1,
+      codex_reset_credit_snapshot: { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }] }
+    } })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(resetButton(wrapper).attributes('title')).toBe('admin.accounts.openaiQuotaReset.resetTooltipAutoEnabled')
+    wrapper.unmount()
+  })
+
+  it('关闭自动用卡后，在途检查保护在两分钟结束时自行解除', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-06T00:00:00Z'))
+    const account = makeAccount({ extra: {
+      auto_reset_credit_enabled: false,
+      auto_reset_credit_opt_in_version: 1,
+      codex_auto_reset_credit_state: { status: 'checking', checked_at: new Date().toISOString(), available_count: 1 },
+      codex_reset_credit_snapshot: { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }] }
+    } })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    expect(resetButton(wrapper).attributes('title')).toBe('admin.accounts.openaiQuotaReset.resetTooltipAutoInProgress')
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(resetButton(wrapper).attributes('disabled')).toBeUndefined()
+    expect(resetButton(wrapper).attributes('title')).toBe('admin.accounts.openaiQuotaReset.resetTooltipReady')
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['OPENAI_QUOTA_AUTO_RESET_ENABLED', 'resetTooltipAutoEnabled'],
+    ['OPENAI_QUOTA_AUTO_RESET_IN_PROGRESS', 'resetTooltipAutoInProgress']
+  ])('后端返回 %s 时显示可操作的本地化提示', async (reason, key) => {
+    vi.mocked(resetOpenAIQuota).mockRejectedValue({ reason, message: 'backend error' })
+    const account = makeAccount({ extra: {
+      codex_reset_credit_snapshot: { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }] }
+    } })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    await resetButton(wrapper).trigger('click')
+    wrapper.findAllComponents(ConfirmDialog)[0].vm.$emit('confirm')
+    await flushPromises()
+    expect(wrapper.text()).toContain(`admin.accounts.openaiQuotaReset.${key}`)
+    expect(wrapper.text()).not.toContain('backend error')
+    wrapper.unmount()
+  })
+
+  it('忽略后台用卡新快照之前发起的迟到查询', async () => {
+    const account = makeAccount({ extra: {
+      codex_reset_credit_snapshot: { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }] }
+    } })
+    let resolve!: (value: OpenAIQuotaRefreshResult) => void
+    vi.mocked(refreshOpenAIQuota).mockReturnValue(new Promise((done) => { resolve = done }))
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    await wrapper.findAll('button')[0].trigger('click')
+    await wrapper.setProps({ account: { ...account, extra: {
+      codex_reset_credit_snapshot: { available_count: 0, credits: [] }
+    } } })
+    resolve({ fetched_at: 1, cache_persisted: true, rate_limit_reset_credits: {
+      available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }]
+    } })
+    await flushPromises()
+    expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(resetButton(wrapper).attributes('title')).toBe('admin.accounts.openaiQuotaReset.resetTooltipNoCredits')
+    wrapper.unmount()
+  })
+
+  it('无变化的后台快照不会覆盖主动查询得到的实时卡数', async () => {
+    const account = makeAccount({ extra: { codex_reset_credit_snapshot: { available_count: 0, credits: [] } } })
+    vi.mocked(refreshOpenAIQuota).mockResolvedValue({ fetched_at: 1, cache_persisted: false,
+      rate_limit_reset_credits: { available_count: 2 }
+    })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    await wrapper.findAll('button')[0].trigger('click')
+    await flushPromises()
+    await wrapper.setProps({ account: { ...account, extra: { codex_reset_credit_snapshot: { available_count: 0, credits: [] } } } })
+    expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.count2')
+    expect(resetButton(wrapper).attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 })
