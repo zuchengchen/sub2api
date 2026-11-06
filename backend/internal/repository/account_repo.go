@@ -74,11 +74,12 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
-	"codex_usage_updated_at":     {},
-	"codex_credits_snapshot":     {},
-	"codex_referral_snapshot":    {},
-	"grok_billing_snapshot":      {},
-	"session_window_utilization": {},
+	service.OpenAIAutoResetCreditStateExtraKey: {},
+	"codex_usage_updated_at":                   {},
+	"codex_credits_snapshot":                   {},
+	"codex_referral_snapshot":                  {},
+	"grok_billing_snapshot":                    {},
+	"session_window_utilization":               {},
 }
 
 const postgresParameterBatchSize = 50000
@@ -738,6 +739,15 @@ func lockAndMergeAccountProbeExtra(
 		}
 	}
 	extra := service.MergeOpenAICodexTicketExtra(copyJSONMap(normalizeJSONMap(account.Extra)), currentExtra)
+	// Preserve the latest attempt under the row lock; a stale admin form must
+	// not erase the card reservation used to deduplicate automatic resets.
+	delete(extra, service.OpenAIAutoResetCreditStateExtraKey)
+	if state, ok := currentExtra[service.OpenAIAutoResetCreditStateExtraKey]; ok {
+		if extra == nil {
+			extra = make(map[string]any)
+		}
+		extra[service.OpenAIAutoResetCreditStateExtraKey] = state
+	}
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,

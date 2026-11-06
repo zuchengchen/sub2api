@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/zeromicro/go-zero/core/collection"
 )
 
@@ -34,4 +36,18 @@ func TestProvideTimingWheelService_Success(t *testing.T) {
 		t.Fatalf("期望 svc 非空，但得到 nil")
 	}
 	svc.Stop()
+}
+func TestProvideOpenAIRequestTimezoneRefreshWorkerWiresGatewayResolver(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIRequestTimezoneFallback = "Asia/Dubai"
+	gateway := &OpenAIGatewayService{}
+	worker := ProvideOpenAIRequestTimezoneRefreshWorker(nil, nil, nil, cfg, gateway)
+	defer worker.Stop()
+	if gateway.requestTimezoneResolver == nil {
+		t.Fatal("timezone worker provider must also wire the gateway resolver")
+	}
+	got := gateway.requestTimezoneResolver.Resolve(context.Background(), &Account{})
+	if got.Timezone != "Asia/Dubai" {
+		t.Fatalf("gateway timezone fallback = %q, want Asia/Dubai", got.Timezone)
+	}
 }

@@ -1885,3 +1885,103 @@ describe('EditAccountModal temp-unschedulable rule scope', () => {
     wrapper.unmount()
   })
 })
+describe('EditAccountModal OpenAI 自动使用重置卡', () => {
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+  })
+
+  it('仅对 OpenAI OAuth 账号显示，默认关闭且阈值为 100/100', () => {
+    const parent = mountModal({ ...buildAccount(), type: 'oauth' })
+    expect(parent.find('[data-testid="auto-reset-credit-settings"]').exists()).toBe(true)
+    expect((parent.get('[data-testid="auto-reset-credit-5h-threshold"]').element as HTMLInputElement).value).toBe('100')
+    expect((parent.get('[data-testid="auto-reset-credit-7d-threshold"]').element as HTMLInputElement).value).toBe('100')
+    expect(parent.get('[data-testid="auto-reset-credit-5h-threshold"]').attributes('disabled')).toBeDefined()
+    parent.unmount()
+
+    for (const account of [buildAccount(), buildOpenAISetupTokenAccount()]) {
+      const wrapper = mountModal(account)
+      expect(wrapper.find('[data-testid="auto-reset-credit-settings"]').exists()).toBe(false)
+      wrapper.unmount()
+    }
+  })
+
+  it('独立保存两个阈值，并禁止把运行态回写到管理请求', async () => {
+    const account = { ...buildAccount(), type: 'oauth' }
+    account.extra = {
+      codex_auto_reset_credit_state: {
+        status: 'success',
+        trigger_window: '5h',
+        available_count: 1
+      }
+    }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="auto-reset-credit-enabled"]').trigger('click')
+    await wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').setValue('75.5')
+    await wrapper.get('[data-testid="auto-reset-credit-7d-threshold"]').setValue('92')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra).toMatchObject({
+      auto_reset_credit_enabled: true,
+      auto_reset_credit_5h_threshold: 0.755,
+      auto_reset_credit_7d_threshold: 0.92
+    })
+    expect(extra).not.toHaveProperty('codex_auto_reset_credit_state')
+    wrapper.unmount()
+  })
+
+  it('开启后拒绝超出 0.1–100 范围的任一阈值', async () => {
+    const wrapper = mountModal({ ...buildAccount(), type: 'oauth' })
+    await wrapper.get('[data-testid="auto-reset-credit-enabled"]').trigger('click')
+    await wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').setValue('0')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('载入已有配置，并允许在输入无效阈值后关闭开关', async () => {
+    const account = { ...buildAccount(), type: 'oauth', extra: {
+      auto_reset_credit_enabled: true,
+      auto_reset_credit_opt_in_version: 1,
+      auto_reset_credit_5h_threshold: 0.75,
+      auto_reset_credit_7d_threshold: 0.9
+    } }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="auto-reset-credit-5h-threshold"]').element.value).toBe('75')
+    expect(wrapper.get('[data-testid="auto-reset-credit-enabled"]').attributes('aria-checked')).toBe('true')
+    await wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').setValue('0')
+    await wrapper.get('[data-testid="auto-reset-credit-enabled"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
+      auto_reset_credit_enabled: false,
+      auto_reset_credit_7d_threshold: 0.9
+    })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('auto_reset_credit_5h_threshold')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('auto_reset_credit_opt_in_version')
+    wrapper.unmount()
+  })
+
+  it('历史 enabled=true 没有显式启用版本时显示关闭，普通保存不重新开启', async () => {
+    const account = { ...buildAccount(), type: 'oauth', extra: {
+      auto_reset_credit_enabled: true,
+      auto_reset_credit_5h_threshold: 0.75,
+      auto_reset_credit_7d_threshold: 0.9
+    } }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    expect(wrapper.get('[data-testid="auto-reset-credit-enabled"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.auto_reset_credit_enabled).toBe(false)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('auto_reset_credit_opt_in_version')
+    wrapper.unmount()
+  })
+})

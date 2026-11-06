@@ -204,6 +204,29 @@ func ProvideOpenAIQuotaService(
 	return service
 }
 
+// ProvideOpenAIQuotaAutoResetService 启动账号级自动用卡队列与补偿扫描。
+func ProvideOpenAIQuotaAutoResetService(
+	accountRepo AccountRepository,
+	quotaService *OpenAIQuotaService,
+	rateLimitService *RateLimitService,
+	idempotency *IdempotencyCoordinator,
+	audit *AuditLogService,
+	settingService *SettingService,
+	leaderLock LeaderLockCache,
+) *OpenAIQuotaAutoResetService {
+	service := NewOpenAIQuotaAutoResetService(
+		accountRepo,
+		quotaService,
+		rateLimitService,
+		idempotency,
+		audit,
+		settingService,
+		leaderLock,
+	)
+	service.Start()
+	return service
+}
+
 func ProvideAccountUsageService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
@@ -385,7 +408,12 @@ func ProvideOpenAIRequestTimezoneRefreshWorker(
 	prober ProxyExitInfoProber,
 	proxyRepo ProxyRepository,
 	latencyCache ProxyLatencyCache,
+	cfg *config.Config,
+	gateway *OpenAIGatewayService,
 ) *OpenAIRequestTimezoneRefreshWorker {
+	// Keep resolver wiring in the provider so Wire regeneration preserves the
+	// gateway's egress-timezone behavior alongside the refresh worker.
+	gateway.SetRequestTimezoneResolver(ProvideOpenAIRequestTimezoneResolver(latencyCache, cfg))
 	w := NewOpenAIRequestTimezoneRefreshWorker(prober, proxyRepo, latencyCache, openAIRequestTimezoneRefreshInterval)
 	w.Start()
 	return w
@@ -936,6 +964,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGrokTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
+	ProvideOpenAIQuotaAutoResetService,
 	ProvideGrokQuotaService,
 	ProvideCNProviderQuotaService,
 	ProvideCNProviderBalanceService,
@@ -979,6 +1008,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	ProvideAccountExpiryService,
 	ProvideOpenAICodexVersionSyncService,
+	ProvideOpenAIRequestTimezoneRefreshWorker,
 	ProvideClaudeCodeVersionSyncService,
 	ProvideProxyExpiryService,
 	ProvideSubscriptionExpiryService,
