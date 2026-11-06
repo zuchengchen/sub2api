@@ -793,7 +793,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 			if len(source) == 0 {
 				source = filterAccessible(defaultModelIDsForPlatform(service.PlatformComposite))
 			}
-			writeAllowlistedModelsList(c, service.PlatformComposite, apiKey.Group.ModelAllowlist.FilterForListing(source))
+			writeAllowlistedModelsList(c, service.PlatformComposite, apiKey.Group.EffectiveModelAllowlist().FilterForListing(source))
 			return
 		}
 		if len(availableModels) > 0 {
@@ -808,7 +808,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	availableModels := filterAccessible(h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform))
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
 		source := modelListingSource(platform, availableModels, filterAccessible(defaultModelIDsForPlatform(platform)))
-		writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(source))
+		writeAllowlistedModelsList(c, platform, apiKey.Group.EffectiveModelAllowlist().FilterForListing(source))
 		return
 	}
 
@@ -885,7 +885,7 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 			models = fallbackModels
 		}
 		if group.ModelAllowlistEnabled() {
-			models = group.ModelAllowlist.FilterForListing(models)
+			models = group.EffectiveModelAllowlist().FilterForListing(models)
 		}
 		if filtered, err := h.gatewayService.FilterCompositeCodexModels(ctx, group.ID, models); err == nil {
 			return filtered
@@ -896,7 +896,7 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 	availableModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
 	fallbackModels := defaultCodexModelIDsForPlatform(platform)
 	if group.ModelAllowlistEnabled() {
-		return group.ModelAllowlist.FilterForListing(modelListingSource(platform, availableModels, fallbackModels))
+		return group.EffectiveModelAllowlist().FilterForListing(modelListingSource(platform, availableModels, fallbackModels))
 	}
 	if len(availableModels) > 0 {
 		return availableModels

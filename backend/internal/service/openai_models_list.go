@@ -220,7 +220,7 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 	sort.Strings(aliases)
 	candidates = append(candidates, aliases...)
 	if group.ModelAllowlistEnabled() {
-		candidates = append(candidates, group.ModelAllowlist.Models...)
+		candidates = append(candidates, group.EffectiveModelAllowlist().Models...)
 	}
 	projected := make([]json.RawMessage, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
@@ -327,7 +327,7 @@ func (s *OpenAIGatewayService) FetchPinnedOpenAIModelsList(ctx context.Context, 
 		}
 	}
 	if group.ModelAllowlistEnabled() {
-		models = selectModelCatalogEntries(byID, group.ModelAllowlist.FilterForListing(modelIDs))
+		models = selectModelCatalogEntries(byID, group.EffectiveModelAllowlist().FilterForListing(modelIDs))
 	}
 	body, err := json.Marshal(struct {
 		Object string            `json:"object"`

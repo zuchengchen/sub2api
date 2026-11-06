@@ -8,6 +8,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -290,4 +291,48 @@ func TestAPIKeyRepositoryCreateSignupAPIKeyRollsBackExclusiveGrantOnKeyConflict(
 		Exist(ctx)
 	require.NoError(t, err)
 	require.False(t, granted, "exclusive group grant must roll back with the failed key insert")
+}
+
+func TestAPIKeyRepositoryCreateSignupAPIKeysAtomicPair(t *testing.T) {
+	for _, failSecond := range []bool{false, true} {
+		name := "commit"
+		if failSecond {
+			name = "second_key_conflict"
+		}
+		t.Run(name, func(t *testing.T) {
+			repo, client := newAPIKeyRepoSQLite(t)
+			ctx := context.Background()
+			newUser := mustCreateAPIKeyRepoUser(t, ctx, client, "signup-pair@test.com")
+			groups := make([]int64, 0, 2)
+			for _, name := range []string{service.TiboHealthyGroupName, service.TiboWelfareGroupName} {
+				group, err := client.Group.Create().SetName(name).SetPlatform(service.PlatformOpenAI).SetIsExclusive(true).Save(ctx)
+				require.NoError(t, err)
+				groups = append(groups, group.ID)
+			}
+			if failSecond {
+				owner := mustCreateAPIKeyRepoUser(t, ctx, client, "signup-pair-owner@test.com")
+				require.NoError(t, repo.Create(ctx, &service.APIKey{UserID: owner.ID, Key: "sk-signup-pair-second", Name: "existing", Status: service.StatusActive}))
+			}
+			first := &service.APIKey{UserID: newUser.ID, Key: "sk-signup-pair-first", Name: service.TiboHealthyGroupName, GroupID: &groups[0], Status: service.StatusActive}
+			second := &service.APIKey{UserID: newUser.ID, Key: "sk-signup-pair-second", Name: service.TiboWelfareGroupName, GroupID: &groups[1], Status: service.StatusActive}
+			err := repo.CreateSignupAPIKeys(ctx, []service.SignupAPIKeyCreate{{Key: first, GrantExclusiveGroup: true}, {Key: second, GrantExclusiveGroup: true}})
+			want := 2
+			if failSecond {
+				require.ErrorIs(t, err, service.ErrAPIKeyExists)
+				want = 0
+				require.Zero(t, first.ID, "rolled back first key must not appear persisted to the caller")
+				require.Zero(t, second.ID)
+			} else {
+				require.NoError(t, err)
+				require.Positive(t, first.ID)
+				require.Positive(t, second.ID)
+			}
+			count, err := client.APIKey.Query().Where(apikey.UserIDEQ(newUser.ID)).Count(ctx)
+			require.NoError(t, err)
+			require.Equal(t, want, count)
+			grants, err := client.UserAllowedGroup.Query().Where(userallowedgroup.UserIDEQ(newUser.ID)).Count(ctx)
+			require.NoError(t, err)
+			require.Equal(t, want, grants, "exclusive grants and both keys share the transaction")
+		})
+	}
 }
