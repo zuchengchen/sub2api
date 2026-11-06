@@ -220,11 +220,11 @@ func TestScopedAdminRegisteredLegacyModelInterfaces(t *testing.T) {
 				require.NotContains(t, w.Body.String(), "绝不返回")
 				if tc.method == "GET" && want == 200 {
 					if strings.HasSuffix(tc.path, "/models") {
-						// OAuth without a valid Astra sample exposes only Luna/images;
-						// the original mapping is retained in account details for rollback.
+						// Account model discovery no longer gates Astra on Tibo samples.
+						// Group-specific policy is enforced on client requests instead.
 						require.Contains(t, w.Body.String(), "gpt-6-luna")
 						require.NotContains(t, w.Body.String(), "custom-model")
-						require.NotContains(t, w.Body.String(), "gpt-6-astra")
+						require.Contains(t, w.Body.String(), "gpt-6-astra")
 					} else {
 						require.Contains(t, w.Body.String(), "custom-model")
 					}

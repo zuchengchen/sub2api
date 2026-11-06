@@ -36,7 +36,7 @@ func GroupModelAllowlist() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		allowlist := apiKey.Group.ModelAllowlist
+		allowlist := apiKey.Group.EffectiveModelAllowlist()
 		if c.Request == nil {
 			c.Next()
 			return

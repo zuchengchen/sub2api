@@ -56,8 +56,6 @@ const (
 	apiKeySortCurrentConcurrency = "current_concurrency"
 	// DB 写失败后的短退避，避免请求路径持续同步重试造成写风暴与高延迟。
 	apiKeyLastUsedFailBackoff = 5 * time.Second
-	defaultSignupAPIKeyName   = "GPT"
-	defaultSignupGroupName    = "GPT-PRO"
 )
 
 // APIKeyUpdateFields 声明 APIKeyRepository.Update 允许写回的列。
@@ -133,10 +131,16 @@ type apiKeyAllByUserIDLister interface {
 	ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error)
 }
 
-// signupAPIKeyCreator is implemented by the production repository so an
-// exclusive-group grant and the default key can be committed atomically.
+// SignupAPIKeyCreate binds one bootstrap key to its optional exclusive-group
+// grant. All signup keys and grants are committed together.
+type SignupAPIKeyCreate struct {
+	Key                 *APIKey
+	GrantExclusiveGroup bool
+}
+
+// signupAPIKeyCreator keeps a partial pair from being left after a failed insert.
 type signupAPIKeyCreator interface {
-	CreateSignupAPIKey(ctx context.Context, key *APIKey, grantExclusiveGroup bool) error
+	CreateSignupAPIKeys(ctx context.Context, keys []SignupAPIKeyCreate) error
 }
 
 // APIKeyRateLimitData holds rate limit usage and window state for an API key.
@@ -428,11 +432,9 @@ func (s *APIKeyService) GenerateKey() (string, error) {
 	return key, nil
 }
 
-// ProvisionDefaultSignupAPIKey creates the built-in key for a newly
-// registered user. The group is resolved by its stable display name instead
-// of a deployment-specific numeric ID. This path intentionally bypasses the
-// normal user-selected group permission check: the administrator explicitly
-// configured GPT-PRO as the signup destination.
+// ProvisionDefaultSignupAPIKey creates one key for each built-in GPT signup
+// group. Resolve the exact names used by group policy, not deployment-specific
+// IDs. Exclusive standard-group access is part of the same bootstrap transaction.
 func (s *APIKeyService) ProvisionDefaultSignupAPIKey(ctx context.Context, userID int64) error {
 	if s == nil || userID <= 0 {
 		return fmt.Errorf("invalid signup user ID")
@@ -448,44 +450,42 @@ func (s *APIKeyService) ProvisionDefaultSignupAPIKey(ctx context.Context, userID
 	if err != nil {
 		return fmt.Errorf("list active groups: %w", err)
 	}
-	var target *Group
-	for i := range groups {
-		if strings.EqualFold(strings.TrimSpace(groups[i].Name), defaultSignupGroupName) {
-			target = &groups[i]
-			break
+	keys := make([]SignupAPIKeyCreate, 0, 2)
+	for _, name := range []string{TiboHealthyGroupName, TiboWelfareGroupName} {
+		var target *Group
+		for i := range groups {
+			group := &groups[i]
+			if group.Name != name || group.Platform != PlatformOpenAI || !group.IsActive() {
+				continue
+			}
+			if target != nil {
+				return fmt.Errorf("signup group %q is ambiguous", name)
+			}
+			target = group
 		}
-	}
-	if target == nil {
-		return fmt.Errorf("signup group %q not found", defaultSignupGroupName)
-	}
-
-	key, err := s.GenerateKey()
-	if err != nil {
-		return fmt.Errorf("generate signup API key: %w", err)
-	}
-	apiKey := &APIKey{
-		UserID:  userID,
-		Key:     key,
-		Name:    html.EscapeString(defaultSignupAPIKeyName),
-		GroupID: &target.ID,
-		Status:  StatusActive,
-	}
-	grantExclusiveGroup := target.IsExclusive && !target.IsSubscriptionType()
-	if grantExclusiveGroup {
-		creator, ok := s.apiKeyRepo.(signupAPIKeyCreator)
-		if !ok {
-			return fmt.Errorf("api key repository does not support atomic signup group grants")
+		if target == nil || target.ID <= 0 {
+			return fmt.Errorf("active OpenAI signup group %q not found", name)
 		}
-		err = creator.CreateSignupAPIKey(ctx, apiKey, true)
-	} else {
-		err = s.apiKeyRepo.Create(ctx, apiKey)
+		key, err := s.GenerateKey()
+		if err != nil {
+			return fmt.Errorf("generate signup API key: %w", err)
+		}
+		keys = append(keys, SignupAPIKeyCreate{
+			Key:                 &APIKey{UserID: userID, Key: key, Name: name, GroupID: &target.ID, Status: StatusActive},
+			GrantExclusiveGroup: target.IsExclusive && !target.IsSubscriptionType(),
+		})
 	}
-	if err != nil {
-		return fmt.Errorf("create signup API key: %w", err)
+	creator, ok := s.apiKeyRepo.(signupAPIKeyCreator)
+	if !ok {
+		return fmt.Errorf("api key repository does not support atomic signup key creation")
 	}
-
-	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
-	s.compileAPIKeyIPRules(apiKey)
+	if err := creator.CreateSignupAPIKeys(ctx, keys); err != nil {
+		return fmt.Errorf("create signup API keys: %w", err)
+	}
+	for _, item := range keys {
+		s.InvalidateAuthCacheByKey(ctx, item.Key.Key)
+		s.compileAPIKeyIPRules(item.Key)
+	}
 	return nil
 }
 

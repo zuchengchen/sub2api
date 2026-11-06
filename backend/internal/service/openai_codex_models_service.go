@@ -59,7 +59,7 @@ const (
 func FilterCodexModelIDsForGroup(modelIDs []string, group *Group) []string {
 	explicitlyEnabled := make(map[string]struct{})
 	if group != nil && group.ModelAllowlistEnabled() {
-		for _, modelID := range group.ModelAllowlist.Models {
+		for _, modelID := range group.EffectiveModelAllowlist().Models {
 			modelID = strings.TrimSpace(modelID)
 			if strings.HasPrefix(modelID, codexAutoModelPrefix) {
 				explicitlyEnabled[modelID] = struct{}{}
@@ -87,7 +87,7 @@ func FilterCodexModelIDsForGroup(modelIDs []string, group *Group) []string {
 		filtered = append(filtered, modelID)
 	}
 	if group != nil && group.ModelAllowlistEnabled() {
-		filtered = group.ModelAllowlist.FilterForListing(filtered)
+		filtered = group.EffectiveModelAllowlist().FilterForListing(filtered)
 	}
 	return filtered
 }
@@ -153,11 +153,15 @@ func (s *OpenAIGatewayService) BuildGroupConfiguredCodexModelsManifest(
 	body, _, err = mergeConfiguredCodexModelsManifest(
 		body,
 		nil,
-		group.ModelAllowlist.Models,
+		group.EffectiveModelAllowlist().Models,
 		group.ModelAllowlistEnabled(),
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf("build group configured Codex models: %w", err)
+	}
+	body, _, err = filterTiboGroupModelsBody(body, group)
+	if err != nil {
+		return nil, false, fmt.Errorf("filter Tibo group Codex models: %w", err)
 	}
 	manifest := &OpenAIModelsResponse{
 		Body: body,
@@ -198,14 +202,14 @@ func (s *OpenAIGatewayService) MergeGroupConfiguredCodexModels(
 	body, changed, err := mergeConfiguredCodexModelsManifest(
 		manifest.Body,
 		configuredModels,
-		group.ModelAllowlist.Models,
+		group.EffectiveModelAllowlist().Models,
 		group.ModelAllowlistEnabled(),
 	)
 	if err != nil {
 		return fmt.Errorf("merge group configured Codex models: %w", err)
 	}
 	if group.CodexModelsManifestConfig.Enabled && group.ModelAllowlistEnabled() {
-		body, err = orderPinnedCodexModelsBySelection(body, group.ModelAllowlist)
+		body, err = orderPinnedCodexModelsBySelection(body, group.EffectiveModelAllowlist())
 		if err != nil {
 			return fmt.Errorf("order pinned Codex models: %w", err)
 		}
@@ -216,7 +220,11 @@ func (s *OpenAIGatewayService) MergeGroupConfiguredCodexModels(
 		return fmt.Errorf("filter retired Codex models: %w", err)
 	}
 	body = filtered
-	if changed || retired {
+	body, tiboFiltered, err := filterTiboGroupModelsBody(body, group)
+	if err != nil {
+		return fmt.Errorf("filter Tibo group Codex models: %w", err)
+	}
+	if changed || retired || tiboFiltered {
 		manifest.Body = body
 		manifest.ETag = codexModelsManifestBodyETag(body)
 	}
@@ -295,11 +303,11 @@ func openAIConfiguredCodexModelIDsForGroup(accounts []Account, group *Group) []s
 		return filterRetiredOpenAIModelIDs(accounts, models)
 	}
 
-	seen := make(map[string]struct{}, len(models)+len(group.ModelAllowlist.Models))
+	seen := make(map[string]struct{}, len(models)+len(group.EffectiveModelAllowlist().Models))
 	for _, modelID := range models {
 		seen[modelID] = struct{}{}
 	}
-	for _, selectedModel := range group.ModelAllowlist.Models {
+	for _, selectedModel := range group.EffectiveModelAllowlist().Models {
 		selectedModel = strings.TrimSpace(selectedModel)
 		if selectedModel == "" || strings.Contains(selectedModel, "*") {
 			continue
