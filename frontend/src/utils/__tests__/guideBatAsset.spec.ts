@@ -111,7 +111,7 @@ describe('guide BAT asset', () => {
     expect(guide).toContain('低于 0.2')
     expect(guide).toContain('按 0.2 计费')
     expect(guide).toContain('普通用户与 SVIP 都先按 0.2 计费')
-    expect(guide).toContain('0.2 是 Luna 的基础倍率保底')
+    expect(guide).toContain('0.2 是 Luna 的基础倍率保底，也是叠加高峰因子后的 token 计费倍率下限')
     expect(guide).not.toContain('专属模型')
   })
 })

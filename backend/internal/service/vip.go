@@ -18,7 +18,7 @@ const (
 	// 该常量仍作为 Luna 保底计费的家族标识。
 	VipExclusiveModelName = "gpt-5.6-luna"
 	// LunaMinRateMultiplier 是 gpt-5.6-luna 与 gpt-6-luna 家族在分组/用户倍率低于该值时的计费保底。
-	// 普通用户和 VIP 使用相同保底：基础倍率 0.1 时均按 0.2。
+	// 普通用户和 VIP 使用相同保底，叠加分组时段因子后的 token 倍率也不得低于该值。
 	LunaMinRateMultiplier = 0.2
 	// vipSweepTimeout 启动扫描的超时上限。
 	vipSweepTimeout = 30 * time.Second
@@ -87,8 +87,8 @@ func applyLunaMinRateForModels(multiplier float64, models ...string) float64 {
 	return multiplier
 }
 
-// applyRequestBillingRatePolicies 对所有用户统一在解析后的基础倍率上应用 Luna 保底。
-// 高峰因子仍由调用方按返回值叠加，避免污染 user:group 倍率缓存。
+// applyRequestBillingRatePolicies 对所有分组、所有用户统一应用 Luna 保底。
+// 基础倍率和叠加高峰因子后的 token 倍率都要应用，避免时段折扣绕过下限；不修改 user:group 倍率缓存。
 func applyRequestBillingRatePolicies(multiplier float64, models ...string) float64 {
 	return applyLunaMinRateForModels(multiplier, models...)
 }
