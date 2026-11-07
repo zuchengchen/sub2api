@@ -18,43 +18,48 @@ import (
 )
 
 func TestCodexDirectImagesMultipartEdit(t *testing.T) {
-	var body bytes.Buffer
-	w := multipart.NewWriter(&body)
-	for key, value := range map[string]string{"model": "gpt-image-2.5-sunburst", "prompt": "编辑", "quality": "xhigh", "n": "2", "output_format": "webp", "output_compression": "75", "partial_images": "2", "input_fidelity": "high"} {
-		require.NoError(t, w.WriteField(key, value))
+	for _, model := range []string{"gpt-image-2.5-sunburst", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"} {
+		t.Run(model, func(t *testing.T) {
+			var body bytes.Buffer
+			w := multipart.NewWriter(&body)
+			for key, value := range map[string]string{"model": model, "prompt": "编辑", "quality": "xhigh", "n": "2", "output_format": "webp", "output_compression": "75", "partial_images": "2", "input_fidelity": "high"} {
+				require.NoError(t, w.WriteField(key, value))
+			}
+			for _, field := range []string{"image[]", "image[]", "mask"} {
+				header := textproto.MIMEHeader{}
+				header.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename="image.png"`, field))
+				header.Set("Content-Type", "image/png")
+				part, err := w.CreatePart(header)
+				require.NoError(t, err)
+				_, err = part.Write([]byte("png-content"))
+				require.NoError(t, err)
+			}
+			require.NoError(t, w.Close())
+			c, _ := newOpenAIImagesTestContext(t, body.Bytes())
+			c.Request.URL.Path = "/v1/images/edits"
+			c.Request.Header.Set("Content-Type", w.FormDataContentType())
+			svc := newOpenAIImagesTestService(nil)
+			parsed, err := svc.ParseOpenAIImagesRequest(c, body.Bytes())
+			require.NoError(t, err)
+			upstreamBody, target, err := buildOpenAIImagesOAuthPayload(parsed, parsed.Model)
+			require.NoError(t, err)
+			require.Equal(t, "https://chatgpt.com/backend-api/codex/images/edits", target)
+			require.Equal(t, model, gjson.GetBytes(upstreamBody, "model").String())
+			require.Len(t, gjson.GetBytes(upstreamBody, "images").Array(), 2)
+			require.Equal(t, "data:image/png;base64,cG5nLWNvbnRlbnQ=", gjson.GetBytes(upstreamBody, "mask.image_url").String())
+			require.Equal(t, "xhigh", gjson.GetBytes(upstreamBody, "quality").String())
+			require.Equal(t, "high", gjson.GetBytes(upstreamBody, "input_fidelity").String())
+			require.EqualValues(t, 2, gjson.GetBytes(upstreamBody, "n").Int())
+			require.EqualValues(t, 75, gjson.GetBytes(upstreamBody, "output_compression").Int())
+			require.EqualValues(t, 2, gjson.GetBytes(upstreamBody, "partial_images").Int())
+			require.False(t, gjson.GetBytes(upstreamBody, "tools").Exists())
+		})
 	}
-	for _, field := range []string{"image[]", "image[]", "mask"} {
-		header := textproto.MIMEHeader{}
-		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename="image.png"`, field))
-		header.Set("Content-Type", "image/png")
-		part, err := w.CreatePart(header)
-		require.NoError(t, err)
-		_, err = part.Write([]byte("png-content"))
-		require.NoError(t, err)
-	}
-	require.NoError(t, w.Close())
-	c, _ := newOpenAIImagesTestContext(t, body.Bytes())
-	c.Request.URL.Path = "/v1/images/edits"
-	c.Request.Header.Set("Content-Type", w.FormDataContentType())
-	svc := newOpenAIImagesTestService(nil)
-	parsed, err := svc.ParseOpenAIImagesRequest(c, body.Bytes())
-	require.NoError(t, err)
-	upstreamBody, target, err := buildOpenAIImagesOAuthPayload(parsed, parsed.Model)
-	require.NoError(t, err)
-	require.Equal(t, "https://chatgpt.com/backend-api/codex/images/edits", target)
-	require.Len(t, gjson.GetBytes(upstreamBody, "images").Array(), 2)
-	require.Equal(t, "data:image/png;base64,cG5nLWNvbnRlbnQ=", gjson.GetBytes(upstreamBody, "mask.image_url").String())
-	require.Equal(t, "xhigh", gjson.GetBytes(upstreamBody, "quality").String())
-	require.Equal(t, "high", gjson.GetBytes(upstreamBody, "input_fidelity").String())
-	require.EqualValues(t, 2, gjson.GetBytes(upstreamBody, "n").Int())
-	require.EqualValues(t, 75, gjson.GetBytes(upstreamBody, "output_compression").Int())
-	require.EqualValues(t, 2, gjson.GetBytes(upstreamBody, "partial_images").Int())
-	require.False(t, gjson.GetBytes(upstreamBody, "tools").Exists())
 }
 
 func TestCodexDirectImagesPricingAndUsage(t *testing.T) {
 	prices := &PricingService{pricingData: map[string]*LiteLLMModelPricing{"gpt-image-2": {InputCostPerToken: 1}}}
-	for _, model := range []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08"} {
+	for _, model := range []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"} {
 		price := prices.matchOpenAIModel(model)
 		require.Equal(t, 5e-6, price.InputCostPerToken)
 		require.Equal(t, 8e-6, price.InputCostPerImageToken)
@@ -66,6 +71,11 @@ func TestCodexDirectImagesPricingAndUsage(t *testing.T) {
 	var catalog map[string]LiteLLMModelPricing
 	require.NoError(t, json.Unmarshal(body, &catalog))
 	require.Equal(t, 2e-6, catalog["gpt-image-2.5-flare"].CacheReadInputImageTokenCost)
+	for _, model := range []string{"gpt-image-2.6-flare", "gpt-image-2.6-sunburst"} {
+		price, ok := catalog[model]
+		require.True(t, ok, "offline pricing must contain %s", model)
+		require.Equal(t, *prices.GetModelPricing(model), price)
+	}
 	usage, ok := codexDirectImagesUsage([]byte(`{"usage":{"input_tokens":100,"input_tokens_details":{"text_tokens":20,"image_tokens":80,"cached_tokens":50,"cached_tokens_details":{"text_tokens":10,"image_tokens":40}},"output_tokens":200}}`))
 	require.True(t, ok)
 	require.Equal(t, 40, usage.ImageCacheReadTokens)
