@@ -111,6 +111,7 @@ type nativeReasoningChat struct {
 	eligible       bool
 	replayDisabled bool
 	fallbackTried  bool
+	publication    *nativeReasoningPublicationLease
 }
 
 func (s *OpenAIGatewayService) beginNativeReasoningChat(c *gin.Context, account *Account, body []byte) *nativeReasoningChat {
@@ -161,19 +162,27 @@ func (n *nativeReasoningChat) prepare(ctx context.Context, c *gin.Context, accou
 	n.request.Scope.Model = gjson.GetBytes(body, "model").String()
 	n.request.Scope.CredentialIdentity = nativeReasoningCredentialIdentity(c, account, token)
 	if n.request.Scope.Model == "" || n.request.Scope.CredentialIdentity == "" {
+		n.releasePublication()
 		return body
 	}
 	n.toolReverse = cloneNativeReasoningToolReverse(codexToolNameReverseFromContext(c))
 	parameters, err := nativeReasoningProjectionParameters(n.original, body, n.toolReverse)
 	if err != nil {
+		n.releasePublication()
 		return body
 	}
 	n.request.Parameters = parameters
 	n.eligible = true
+	prepared, admitted := n.preparePublication(ctx)
+	if !admitted {
+		// Saturation affects only this optimization on this request; do not
+		// evict another producer or wait on an unrelated user's work.
+		return body
+	}
 	if n.mode != NativeReasoningReplayModeReplay || n.replayDisabled {
 		return body
 	}
-	replacements, err := n.runtime.engine.Restore(ctx, n.request)
+	replacements, err := n.restoreAfterPublication(ctx, prepared)
 	if err != nil || len(replacements) == 0 {
 		return body
 	}
@@ -210,16 +219,19 @@ func (n *nativeReasoningChat) prepareRequest(ctx context.Context, c *gin.Context
 	}
 	n.references, n.sourceInput, n.eligible = nil, nil, false
 	if req == nil || req.GetBody == nil {
+		n.releasePublication()
 		return req, nil
 	}
 	reader, err := req.GetBody()
 	if err != nil {
+		n.releasePublication()
 		return req, nil
 	}
 	maxBody := n.runtime.limits.MaxHistoryBytes + (1 << 20)
 	raw, err := io.ReadAll(io.LimitReader(reader, int64(maxBody)+1))
 	_ = reader.Close()
 	if err != nil || len(raw) > maxBody || !gjson.ValidBytes(raw) {
+		n.releasePublication()
 		return req, nil
 	}
 	wire := n.prepare(ctx, c, account, token, raw)
@@ -273,6 +285,7 @@ func (n *nativeReasoningChat) bind(req *http.Request) (*http.Request, error) {
 
 func (n *nativeReasoningChat) unverifiableRequest(req *http.Request) (*http.Request, error) {
 	n.eligible = false
+	n.releasePublication()
 	if len(n.references) > 0 {
 		return req, errNativeReasoningProjectionUnavailable
 	}
@@ -333,6 +346,7 @@ func (n *nativeReasoningChat) rejectedFallback(ctx context.Context, c *gin.Conte
 }
 
 func (n *nativeReasoningChat) finish(ctx context.Context, c *gin.Context, response *http.Response, upstream *NativeReasoningResponseCapture, delivery *NativeReasoningChatCapture, forwardErr error) {
+	defer n.releasePublication()
 	if n == nil || !n.eligible || upstream == nil {
 		return
 	}
@@ -354,5 +368,15 @@ func (n *nativeReasoningChat) finish(ctx context.Context, c *gin.Context, respon
 	if !delivered {
 		return
 	}
-	_ = n.runtime.engine.Commit(ctx, n.request, NativeReasoningReplayCompletion{Response: native, DeliveredAssistant: assistant, DeliveredComplete: true, ToolNameReverse: n.toolReverse, SourceInput: n.sourceInput})
+	commitCtx := ctx
+	if n.publication != nil {
+		var cancel context.CancelFunc
+		var transferred bool
+		commitCtx, cancel, transferred = n.publication.handoff(ctx, c.Request.Context(), n.runtime.limits.IOTimeout)
+		if !transferred {
+			return
+		}
+		defer cancel()
+	}
+	_ = n.runtime.engine.Commit(commitCtx, n.request, NativeReasoningReplayCompletion{Response: native, DeliveredAssistant: assistant, DeliveredComplete: true, ToolNameReverse: n.toolReverse, SourceInput: n.sourceInput})
 }

@@ -1,0 +1,198 @@
+package service_test
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/stretchr/testify/require"
+)
+
+// This wrapper holds the first publication before the backing store's lock.
+// A premature Get therefore returns a real miss instead of accidentally being
+// serialized behind Put by the test store itself.
+type nativePublicationHTTPStore struct {
+	*nativeTrafficStore
+	once      sync.Once
+	entered   chan service.NativeReasoningReplayWrite
+	release   chan struct{}
+	finished  chan error
+	lookups   chan []string
+	premature chan []string
+}
+
+func (s *nativePublicationHTTPStore) PutNativeReasoningReplay(ctx context.Context, value service.NativeReasoningReplayWrite, limits service.NativeReasoningReplayLimits) error {
+	controlled := false
+	s.once.Do(func() { controlled = true })
+	if controlled {
+		s.entered <- value
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			s.finished <- ctx.Err()
+			return ctx.Err()
+		}
+	}
+	err := s.nativeTrafficStore.PutNativeReasoningReplay(ctx, value, limits)
+	if controlled {
+		s.finished <- errors.Join(err, ctx.Err())
+	}
+	return err
+}
+
+func (s *nativePublicationHTTPStore) GetNativeReasoningReplay(ctx context.Context, owner string, keys []string, maxBytes int) (map[string]service.NativeReasoningReplayValue, error) {
+	observed := append([]string(nil), keys...)
+	s.lookups <- observed
+	select {
+	case <-s.release:
+	default:
+		select {
+		case s.premature <- observed:
+		default:
+		}
+	}
+	return s.nativeTrafficStore.GetNativeReasoningReplay(ctx, owner, keys, maxBytes)
+}
+
+func TestNativeReasoningReplayPublicationImmediateNextTurnWaitsForCompletePut(t *testing.T) {
+	t.Run("body_open", func(t *testing.T) { testNativePublicationHTTP(t, false) })
+	t.Run("done_close_and_cancel", func(t *testing.T) { testNativePublicationHTTP(t, true) })
+}
+
+func testNativePublicationHTTP(t *testing.T, closeAfterDONE bool) {
+	store := &nativePublicationHTTPStore{
+		entered: make(chan service.NativeReasoningReplayWrite, 1), release: make(chan struct{}),
+		finished: make(chan error, 1), lookups: make(chan []string, 4), premature: make(chan []string, 1),
+	}
+	h := newNativeTrafficHarness(t, "replay", func(base service.NativeReasoningReplayStore) service.NativeReasoningReplayStore {
+		store.nativeTrafficStore = base.(*nativeTrafficStore)
+		return store
+	})
+	firstContext := make(chan context.Context, 1)
+	oldHandler := h.server.Config.Handler
+	var firstRequest sync.Once
+	h.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstRequest.Do(func() { firstContext <- r.Context() })
+		oldHandler.ServeHTTP(w, r)
+	})
+	client := h.server.Client()
+	client.Timeout = 3 * time.Second
+	released := false
+	defer func() {
+		if !released {
+			close(store.release)
+		}
+	}()
+	tools := []any{}
+	for _, name := range []string{"lookup_temperature", "lookup_humidity"} {
+		tools = append(tools, map[string]any{"type": "function", "function": map[string]any{"name": name, "parameters": map[string]any{"type": "object", "properties": map[string]any{"location": map[string]any{"type": "string"}}, "required": []string{"location"}}}})
+	}
+	request := func(history []json.RawMessage) *http.Request {
+		body := nativeTrafficJSON(map[string]any{"model": "gpt-6-astra", "messages": history, "stream": true, "tools": tools})
+		r, err := http.NewRequest(http.MethodPost, h.server.URL+"/v1/chat/completions", bytes.NewReader(body))
+		require.NoError(t, err)
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("session-id", "deterministic-publication-session")
+		r.Header.Set("turn-id", "019a4e08-b000-7000-8000-000000000001")
+		r.Header.Set("x-codex-turn-metadata", `{"turn_id":"019a4e08-b000-7000-8000-000000000001","turn_started_at_unix_ms":1793980000000}`)
+		return r
+	}
+	history := nativeTrafficInitialHistory()
+	callCtx, cancelCall := context.WithCancel(context.Background())
+	defer cancelCall()
+	response, err := client.Do(request(history).WithContext(callCtx))
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	reader := bufio.NewReader(response.Body)
+	var received bytes.Buffer
+	for {
+		line, err := reader.ReadBytes('\n')
+		require.NoError(t, err)
+		received.Write(line)
+		if bytes.Equal(bytes.TrimSpace(line), []byte("data: [DONE]")) {
+			blank, err := reader.ReadBytes('\n')
+			require.NoError(t, err)
+			received.Write(blank)
+			break
+		}
+	}
+	if closeAfterDONE {
+		require.NoError(t, response.Body.Close())
+		cancelCall()
+	}
+	assistant, err := nativeTrafficDecodeChatSSE(received.Bytes())
+	require.NoError(t, err)
+	follow := request(nativeTrafficContinue(history, assistant))
+	secondDone := make(chan error, 1)
+	go func() {
+		second, err := client.Do(follow)
+		if err == nil {
+			_, err = io.Copy(io.Discard, second.Body)
+			_ = second.Body.Close()
+			if err == nil && second.StatusCode != http.StatusOK {
+				err = errors.New("continuation returned non-success status")
+			}
+		}
+		secondDone <- err
+	}()
+	var firstWrite service.NativeReasoningReplayWrite
+	select {
+	case firstWrite = <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("production Commit did not enter controlled Put after client DONE")
+	}
+	// Only the test store delays publication. The client already sent its next
+	// request immediately after parsing DONE, without any sleep or receipt wait.
+	delay := 20 * time.Millisecond
+	if closeAfterDONE {
+		// Go's HTTP transport may drain a closed body for up to 50ms. A 70ms
+		// storage delay exposes real server cancellation inside the 100ms budget.
+		delay = 70 * time.Millisecond
+	}
+	var premature []string
+	select {
+	case premature = <-store.premature:
+	case <-time.After(delay):
+	}
+	if closeAfterDONE {
+		require.ErrorIs(t, (<-firstContext).Err(), context.Canceled, "the real first ingress must cancel before publication completes")
+	}
+	close(store.release)
+	released = true
+	select {
+	case err := <-store.finished:
+		require.NoError(t, err, "publication must finish inside its original 100ms I/O budget")
+	case <-time.After(time.Second):
+		t.Fatal("controlled Put did not finish")
+	}
+	select {
+	case err := <-secondDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("immediate continuation did not finish")
+	}
+	if !closeAfterDONE {
+		_, err = io.Copy(io.Discard, response.Body)
+		require.NoError(t, err)
+	}
+	h.mu.Lock()
+	rows := append([]nativeTrafficRow(nil), h.rows...)
+	h.mu.Unlock()
+	require.Len(t, rows, 2)
+	require.Empty(t, premature, "next lookup must wait for the matching publication")
+	require.Equal(t, 0, nativeTrafficComparisonExit(rows[1].Body, nativeTrafficOutput(1)), "the actual next upstream request must retain the whole published native array")
+	var observed []string
+	for len(store.lookups) > 0 {
+		observed = append(observed, (<-store.lookups)...)
+	}
+	require.Contains(t, observed, firstWrite.Key, "eventual lookup must request the exact completed assistant key")
+}

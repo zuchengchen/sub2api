@@ -201,7 +201,7 @@ func nativeTrafficOutput(round int) []json.RawMessage {
 		nativeTrafficJSON(map[string]any{"type": "function_call", "id": "fc_b_" + prefix, "call_id": "call_b_" + prefix, "name": "lookup_humidity", "namespace": "functions", "arguments": `{"location":"synthetic"}`, "status": "completed"}),
 	}
 }
-func newNativeTrafficHarness(t *testing.T, mode string) *nativeTrafficHarness {
+func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(service.NativeReasoningReplayStore) service.NativeReasoningReplayStore) *nativeTrafficHarness {
 	t.Helper()
 	h := &nativeTrafficHarness{t: t, store: &nativeTrafficStore{values: map[string]service.NativeReasoningReplayValue{}, poison: map[string]bool{}}, policy: &nativeTrafficPolicy{mode: mode}}
 	h.upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +315,11 @@ func newNativeTrafficHarness(t *testing.T, mode string) *nativeTrafficHarness {
 	cfg.Gateway.CodexWire.Profile = "auto"
 	cipher, err := repository.NewAESEncryptor(cfg)
 	require.NoError(t, err)
-	engine := service.NewNativeReasoningReplay(h.store, cipher, service.DefaultNativeReasoningReplayLimits())
+	var store service.NativeReasoningReplayStore = h.store
+	for _, decorate := range decorators {
+		store = decorate(store)
+	}
+	engine := service.NewNativeReasoningReplay(store, cipher, service.DefaultNativeReasoningReplayLimits())
 	svc := service.NewOpenAIGatewayService(nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil)
 	svc.StopOpenAICodexTicketHarvester()
 	t.Cleanup(svc.CloseOpenAIWSPool)
