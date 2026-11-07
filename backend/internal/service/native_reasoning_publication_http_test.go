@@ -63,11 +63,15 @@ func (s *nativePublicationHTTPStore) GetNativeReasoningReplay(ctx context.Contex
 }
 
 func TestNativeReasoningReplayPublicationImmediateNextTurnWaitsForCompletePut(t *testing.T) {
-	t.Run("body_open", func(t *testing.T) { testNativePublicationHTTP(t, false) })
-	t.Run("done_close_and_cancel", func(t *testing.T) { testNativePublicationHTTP(t, true) })
+	t.Run("body_open", func(t *testing.T) { testNativePublicationHTTP(t, false, false) })
+	t.Run("done_close_and_cancel", func(t *testing.T) { testNativePublicationHTTP(t, true, false) })
 }
 
-func testNativePublicationHTTP(t *testing.T, closeAfterDONE bool) {
+func TestNativeReasoningReplayAssistantMessageHTTPPublicationAfterDONEClose(t *testing.T) {
+	testNativePublicationHTTP(t, true, true)
+}
+
+func testNativePublicationHTTP(t *testing.T, closeAfterDONE, assistantOnly bool) {
 	store := &nativePublicationHTTPStore{
 		entered: make(chan service.NativeReasoningReplayWrite, 1), release: make(chan struct{}),
 		finished: make(chan error, 1), lookups: make(chan []string, 4), premature: make(chan []string, 1),
@@ -76,6 +80,11 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE bool) {
 		store.nativeTrafficStore = base.(*nativeTrafficStore)
 		return store
 	})
+	if assistantOnly {
+		h.mu.Lock()
+		h.outputOverrides = map[int][]json.RawMessage{1: nativeTrafficAssistantOutput(1, true), 2: nativeTrafficAssistantOutput(2, true)}
+		h.mu.Unlock()
+	}
 	firstContext := make(chan context.Context, 1)
 	oldHandler := h.server.Config.Handler
 	var firstRequest sync.Once
@@ -101,8 +110,10 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE bool) {
 		require.NoError(t, err)
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("session-id", "deterministic-publication-session")
-		r.Header.Set("turn-id", "019a4e08-b000-7000-8000-000000000001")
-		r.Header.Set("x-codex-turn-metadata", `{"turn_id":"019a4e08-b000-7000-8000-000000000001","turn_started_at_unix_ms":1793980000000}`)
+		if !assistantOnly {
+			r.Header.Set("turn-id", "019a4e08-b000-7000-8000-000000000001")
+			r.Header.Set("x-codex-turn-metadata", `{"turn_id":"019a4e08-b000-7000-8000-000000000001","turn_started_at_unix_ms":1793980000000}`)
+		}
 		return r
 	}
 	history := nativeTrafficInitialHistory()
@@ -131,7 +142,11 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE bool) {
 	}
 	assistant, err := nativeTrafficDecodeChatSSE(received.Bytes())
 	require.NoError(t, err)
-	follow := request(nativeTrafficContinue(history, assistant))
+	nextHistory := nativeTrafficContinue(history, assistant)
+	if assistantOnly {
+		nextHistory = append(nextHistory, json.RawMessage(`{"role":"user","content":"Continue after the completed assistant."}`))
+	}
+	follow := request(nextHistory)
 	secondDone := make(chan error, 1)
 	go func() {
 		second, err := client.Do(follow)
@@ -189,7 +204,12 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE bool) {
 	h.mu.Unlock()
 	require.Len(t, rows, 2)
 	require.Empty(t, premature, "next lookup must wait for the matching publication")
-	require.Equal(t, 0, nativeTrafficComparisonExit(rows[1].Body, nativeTrafficOutput(1)), "the actual next upstream request must retain the whole published native array")
+	if assistantOnly {
+		require.Equal(t, 0, nativeTrafficCompareOutputBlock(rows[1].Body, nativeTrafficAssistantOutput(1, true), true, false))
+		nativeAssistantRequireNewTurnStablePrefix(t, rows[0], rows[1])
+	} else {
+		require.Equal(t, 0, nativeTrafficComparisonExit(rows[1].Body, nativeTrafficOutput(1)), "the actual next upstream request must retain the whole published native array")
+	}
 	var observed []string
 	for len(store.lookups) > 0 {
 		observed = append(observed, (<-store.lookups)...)

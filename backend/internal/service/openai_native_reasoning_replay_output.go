@@ -30,7 +30,7 @@ func (r *NativeReasoningReplay) validateCompletion(model string, response, assis
 		return nil, ErrNativeReasoningReplayInvalid
 	}
 	ids, calls := map[string]bool{}, map[string]bool{}
-	hasTool := false
+	hasTool, hasMessage := false, false
 	for i, raw := range envelope.Output {
 		var item struct {
 			ID        string `json:"id"`
@@ -56,6 +56,7 @@ func (r *NativeReasoningReplay) validateCompletion(model string, response, assis
 					return nil, ErrNativeReasoningReplayInvalid
 				}
 			}
+			hasMessage = true
 		case "function_call", "custom_tool_call":
 			if item.CallID == "" || item.Name == "" || calls[item.CallID] {
 				return nil, ErrNativeReasoningReplayInvalid
@@ -80,13 +81,16 @@ func (r *NativeReasoningReplay) validateCompletion(model string, response, assis
 			return nil, ErrNativeReasoningReplayInvalid
 		}
 	}
-	// Codex persists every complete tool turn, including turns that produce no
-	// new opaque state. Their IDs and extension fields still belong to history.
-	if !hasTool {
+	// Both tool turns and final assistant messages belong to the native history.
+	// A reasoning-only result has no supported visible-message mapping here.
+	if !hasTool && !hasMessage {
 		return nil, ErrNativeReasoningReplayInvalid
 	}
 	projected := apicompat.ResponsesToChatCompletions(&visible, model)
 	if len(projected.Choices) != 1 {
+		return nil, ErrNativeReasoningReplayInvalid
+	}
+	if !hasTool && !nativeReplayVisibleAssistant(projected.Choices[0].Message) {
 		return nil, ErrNativeReasoningReplayInvalid
 	}
 	rawMessage, _ := json.Marshal(projected.Choices[0].Message)

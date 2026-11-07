@@ -431,7 +431,7 @@ func (s *sparseReplayOutput) response(raw json.RawMessage, canonical []byte, lim
 	}
 	var output bytes.Buffer
 	output.WriteByte('[')
-	tool := false
+	visible := false
 	for index := range s.doneOrder {
 		item := s.items[index]
 		if item == nil || len(item.doneRaw) == 0 {
@@ -447,14 +447,14 @@ func (s *sparseReplayOutput) response(raw json.RawMessage, canonical []byte, lim
 				return nil, false
 			}
 		}
-		tool = tool || item.kind == "function_call" || item.kind == "custom_tool_call"
+		visible = visible || item.kind == "message" || item.kind == "function_call" || item.kind == "custom_tool_call"
 		if index > 0 {
 			output.WriteByte(',')
 		}
 		output.Write(item.doneRaw)
 	}
 	output.WriteByte(']')
-	if !tool {
+	if !visible {
 		return nil, false
 	}
 	var original map[string]json.RawMessage

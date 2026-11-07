@@ -130,7 +130,7 @@ func TestNativeReasoningReplaySparseRawDoneAndTerminalFieldsSurviveCapture(t *te
 }
 
 func TestNativeReasoningReplaySparseClosureFaultsStayIneligible(t *testing.T) {
-	for _, fault := range []string{"no_anchor", "wrong_response", "foreign_response_id", "missing_done", "done_only", "gap", "done_reordered", "duplicate_id", "call_changed", "name_changed", "namespace_changed", "phase_changed", "failed_added", "failed_done", "unknown_item", "unknown_event", "dangling_delta", "cross_reference", "foreign_call", "duplicate_added_reference", "duplicate_done_reference", "null_output", "missing_status", "error_envelope", "incomplete", "missing_usage", "fractional_usage", "no_tool", "conflicting_done", "bad_utf8", "duplicate_json"} {
+	for _, fault := range []string{"no_anchor", "wrong_response", "foreign_response_id", "missing_done", "done_only", "gap", "done_reordered", "duplicate_id", "call_changed", "name_changed", "namespace_changed", "phase_changed", "failed_added", "failed_done", "unknown_item", "unknown_event", "dangling_delta", "cross_reference", "foreign_call", "duplicate_added_reference", "duplicate_done_reference", "null_output", "missing_status", "error_envelope", "incomplete", "missing_usage", "fractional_usage", "reasoning_only", "conflicting_done", "bad_utf8", "duplicate_json"} {
 		t.Run(fault, func(t *testing.T) {
 			engine, _, _, frames, items := sparseReplayFixture(t)
 			editItem := func(position int, field string, value json.RawMessage) {
@@ -203,8 +203,8 @@ func TestNativeReasoningReplaySparseClosureFaultsStayIneligible(t *testing.T) {
 				terminal(func(m map[string]json.RawMessage) {
 					m["usage"] = json.RawMessage(`{"input_tokens":1.5,"output_tokens":1}`)
 				})
-			case "no_tool":
-				frames = append(frames[:5], frames[7:]...)
+			case "reasoning_only":
+				frames = append(frames[:3], frames[7:]...)
 			case "conflicting_done":
 				changed := json.RawMessage(strings.ReplaceAll(string(items[0]), "opaque-synthetic-reasoning", "changed"))
 				frames = append(frames[:3], append([][]byte{sparseReplayFrame("response.output_item.done", 0, changed)}, frames[3:]...)...)

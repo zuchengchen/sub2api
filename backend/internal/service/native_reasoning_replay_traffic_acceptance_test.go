@@ -183,8 +183,9 @@ type nativeTrafficHarness struct {
 	routes               int
 	errors               []string
 	truncateNext         bool
-	sparseTerminalOutput string // Test-only fixture: absent or empty terminal, done items unchanged.
-	pureToolSecondRound  bool   // Test-only fixture: no new opaque item in the middle tool turn.
+	sparseTerminalOutput string                    // Test-only fixture: absent or empty terminal, done items unchanged.
+	pureToolSecondRound  bool                      // Test-only fixture: no new opaque item in the middle tool turn.
+	outputOverrides      map[int][]json.RawMessage // Test-only complete assistant output fixtures.
 }
 
 func nativeTrafficJSON(v any) json.RawMessage {
@@ -242,6 +243,9 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		output := nativeTrafficOutput(round)
 		if h.pureToolSecondRound && round == 2 {
 			output = nativeTrafficPureToolOutput(round)
+		}
+		if override, exists := h.outputOverrides[round]; exists {
+			output = override
 		}
 		truncated := h.truncateNext
 		sparseShape := h.sparseTerminalOutput
@@ -304,7 +308,16 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 			var decoded map[string]any
 			_ = json.Unmarshal(item, &decoded)
 			if decoded["type"] == "message" {
-				emit(map[string]any{"type": "response.output_text.delta", "output_index": index, "content_index": 0, "delta": fmt.Sprintf("Inspecting synthetic step %d.", round)})
+				for contentIndex, raw := range decoded["content"].([]any) {
+					part := raw.(map[string]any)
+					emit(map[string]any{"type": "response.output_text.delta", "output_index": index, "content_index": contentIndex, "delta": part["text"]})
+				}
+			}
+			if decoded["type"] == "reasoning" {
+				for summaryIndex, raw := range decoded["summary"].([]any) {
+					part := raw.(map[string]any)
+					emit(map[string]any{"type": "response.reasoning_summary_text.delta", "output_index": index, "summary_index": summaryIndex, "delta": part["text"]})
+				}
 			}
 			if decoded["type"] == "function_call" {
 				emit(map[string]any{"type": "response.function_call_arguments.delta", "output_index": index, "delta": decoded["arguments"]})
@@ -482,8 +495,35 @@ func (h *nativeTrafficHarness) checkAssistant(message apicompat.ChatMessage) {
 	h.mu.Lock()
 	round := len(h.rows)
 	pureTool := h.pureToolSecondRound && round == 2
+	override, overridden := h.outputOverrides[round]
 	h.mu.Unlock()
 	require.Equal(t, "assistant", message.Role)
+	if overridden {
+		var text, reasoning string
+		for _, raw := range override {
+			var item struct {
+				Type    string `json:"type"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				Summary []struct {
+					Text string `json:"text"`
+				} `json:"summary"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &item))
+			require.Contains(t, []string{"message", "reasoning"}, item.Type)
+			for _, part := range item.Content {
+				text += part.Text
+			}
+			for _, part := range item.Summary {
+				reasoning += part.Text
+			}
+		}
+		require.JSONEq(t, string(nativeTrafficJSON(text)), string(message.Content))
+		require.Equal(t, reasoning, message.ReasoningContent)
+		require.Empty(t, message.ToolCalls)
+		return
+	}
 	if pureTool {
 		require.True(t, len(message.Content) == 0 || string(message.Content) == "null", "pure tool output has no invented assistant text")
 	} else {
@@ -603,6 +643,10 @@ func nativeTrafficComparisonExit(request json.RawMessage, expected []json.RawMes
 // tool regression separately proves the earlier opaque block and uses the same
 // full structural/unique/ordered comparison for the later tool-only block.
 func nativeTrafficCompareBlock(request json.RawMessage, expected []json.RawMessage, requireEncrypted bool) int {
+	return nativeTrafficCompareOutputBlock(request, expected, requireEncrypted, true)
+}
+
+func nativeTrafficCompareOutputBlock(request json.RawMessage, expected []json.RawMessage, requireEncrypted, requireTool bool) int {
 	decode := func(raw []byte, target any) error {
 		d := json.NewDecoder(bytes.NewReader(raw))
 		d.UseNumber()
@@ -646,7 +690,7 @@ func nativeTrafficCompareBlock(request json.RawMessage, expected []json.RawMessa
 			hasTool = true
 		}
 	}
-	if requireEncrypted && !hasEncrypted || !hasTool {
+	if requireEncrypted && !hasEncrypted || requireTool && !hasTool {
 		return 2
 	}
 	matches := 0

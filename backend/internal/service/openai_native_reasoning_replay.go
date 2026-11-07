@@ -303,7 +303,7 @@ func (r *NativeReasoningReplay) Commit(ctx context.Context, req NativeReasoningR
 		NativeReasoningReplayValue: NativeReasoningReplayValue{Digest: digest, Ciphertext: ciphertext}}, r.limits)
 }
 
-// Restore returns only fully matched, completed tool rounds. Errors and empty
+// Restore returns only fully matched, completed assistant rounds. Errors and empty
 // results are ordinary fallback outcomes; the adapter keeps its original body.
 // At most MaxLookups of the most recent eligible assistant turns are read in a
 // single bounded store operation. Every key includes the whole preceding history.
@@ -312,7 +312,7 @@ func (r *NativeReasoningReplay) Restore(ctx context.Context, req NativeReasoning
 	if err != nil {
 		return nil, err
 	}
-	candidates := nativeReplayPairedTools(p.messages, r.limits.MaxLookups)
+	candidates := nativeReplayRestoreCandidates(p.messages, r.limits.MaxLookups)
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -540,9 +540,10 @@ func nativeReplayCanonicalMessage(raw []byte) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// Require exactly one result for each call before another assistant/user turn.
-// Missing, duplicate, foreign, or reused IDs are not repaired by inference.
-func nativeReplayPairedTools(messages []json.RawMessage, maxLookups int) []int {
+// Tool turns require exactly one result per call before another assistant/user
+// turn. Message-only turns require a real, nonempty compatibility fragment and
+// cannot consume a following unpaired tool result. Both use the same history key.
+func nativeReplayRestoreCandidates(messages []json.RawMessage, maxLookups int) []int {
 	// Parse once. Re-scanning a long conversation for every assistant turn can
 	// otherwise make a bounded byte budget quadratic in the number of messages.
 	typed := make([]apicompat.ChatMessage, len(messages))
@@ -561,7 +562,16 @@ func nativeReplayPairedTools(messages []json.RawMessage, maxLookups int) []int {
 	var candidates []int
 	for index := len(typed) - 1; index >= 0 && len(candidates) < maxLookups; index-- {
 		assistant := typed[index]
-		if assistant.Role != "assistant" || len(assistant.ToolCalls) == 0 {
+		if assistant.Role != "assistant" {
+			continue
+		}
+		if len(assistant.ToolCalls) == 0 {
+			if index+1 < len(typed) && (typed[index+1].Role == "tool" || typed[index+1].Role == "function") {
+				continue
+			}
+			if nativeReplayVisibleAssistant(assistant) {
+				candidates = append(candidates, index)
+			}
 			continue
 		}
 		pending := make(map[string]bool, len(assistant.ToolCalls))
@@ -590,6 +600,29 @@ func nativeReplayPairedTools(messages []json.RawMessage, maxLookups int) []int {
 		}
 	}
 	return candidates
+}
+
+func nativeReplayVisibleAssistant(message apicompat.ChatMessage) bool {
+	if message.Role != "assistant" || len(message.ToolCalls) != 0 || message.FunctionCall != nil {
+		return false
+	}
+	converted, err := apicompat.ChatCompletionsToResponses(&apicompat.ChatCompletionsRequest{Messages: []apicompat.ChatMessage{message}})
+	if err != nil {
+		return false
+	}
+	var items []struct {
+		Type string `json:"type"`
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(converted.Input, &items) != nil || len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if item.Type != "message" || item.Role != "assistant" {
+			return false
+		}
+	}
+	return true
 }
 
 func nativeReplayAttachAnchors(messages []json.RawMessage, replacements []NativeReasoningReplayReplacement) error {
