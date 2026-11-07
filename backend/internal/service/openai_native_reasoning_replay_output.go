@@ -112,16 +112,19 @@ func nativeReplayNonNull(b []byte) bool {
 
 // NativeReasoningReplayCollector consumes raw native frames before any tool-name
 // restoration or lossy typed conversion. It is request-local, not goroutine safe.
-// A terminal full output array is mandatory: isolated done events cannot prove
-// that no output item was lost in a truncated stream.
+// A nonempty terminal array remains the authoritative exact comparison. Sparse
+// completion is usable only after the independently checked declared item set
+// closes; isolated done events or a truncated stream remain insufficient.
 type NativeReasoningReplayCollector struct {
-	limits     NativeReasoningReplayLimits
-	added      map[int]string
-	done       map[int]json.RawMessage
-	bytes      int
-	responseID string
-	terminal   json.RawMessage
-	invalid    bool
+	limits           NativeReasoningReplayLimits
+	added            map[int]string
+	done             map[int]json.RawMessage
+	bytes            int
+	responseID       string
+	terminal         json.RawMessage
+	terminalObserved json.RawMessage
+	sparse           sparseReplayOutput
+	invalid          bool
 }
 
 func NewNativeReasoningReplayCollector(limits NativeReasoningReplayLimits) *NativeReasoningReplayCollector {
@@ -140,7 +143,7 @@ func (c *NativeReasoningReplayCollector) Observe(raw []byte, eventType string) {
 		return
 	}
 	canonical, err := nativeReplayCanonicalObject(raw)
-	if err != nil {
+	if err != nil || len(canonical) > c.limits.MaxEntryBytes {
 		c.invalid = true
 		return
 	}
@@ -164,6 +167,7 @@ func (c *NativeReasoningReplayCollector) Observe(raw []byte, eventType string) {
 		c.invalid = true
 		return
 	}
+	c.sparse.observe(raw, canonical, event.Type, c.limits)
 	switch event.Type {
 	case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
 		c.invalid = true
@@ -229,7 +233,7 @@ func (c *NativeReasoningReplayCollector) Observe(raw []byte, eventType string) {
 			return
 		}
 		if c.terminal != nil {
-			if !bytes.Equal(c.terminal, response) {
+			if !bytes.Equal(c.terminalObserved, response) {
 				c.invalid = true
 			}
 			return
@@ -240,8 +244,27 @@ func (c *NativeReasoningReplayCollector) Observe(raw []byte, eventType string) {
 			Output []json.RawMessage `json:"output"`
 		}
 		if json.Unmarshal(response, &terminal) != nil || terminal.ID == "" || terminal.Status != "completed" ||
-			(c.responseID != "" && terminal.ID != c.responseID) || len(terminal.Output) == 0 || len(terminal.Output) > c.limits.MaxOutputItems {
+			(c.responseID != "" && terminal.ID != c.responseID) || len(terminal.Output) > c.limits.MaxOutputItems {
 			c.invalid = true
+			return
+		}
+		if len(terminal.Output) == 0 {
+			var fields map[string]json.RawMessage
+			var original map[string]json.RawMessage
+			if json.Unmarshal(response, &fields) != nil || json.Unmarshal(raw, &original) != nil {
+				c.invalid = true
+				return
+			}
+			if output, exists := fields["output"]; exists && !bytes.Equal(output, []byte("[]")) {
+				c.invalid = true // Explicit null/other empty shapes are not reconstructed.
+				return
+			}
+			rebuilt, complete := c.sparse.response(original["response"], response, c.limits)
+			if !complete {
+				c.invalid = true
+				return
+			}
+			c.terminal, c.terminalObserved = rebuilt, response
 			return
 		}
 		for index, id := range c.added {
@@ -263,7 +286,7 @@ func (c *NativeReasoningReplayCollector) Observe(raw []byte, eventType string) {
 				return
 			}
 		}
-		c.terminal = response
+		c.terminal, c.terminalObserved = response, response
 	default:
 		if c.terminal != nil {
 			c.invalid = true

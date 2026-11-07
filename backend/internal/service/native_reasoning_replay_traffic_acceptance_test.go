@@ -183,6 +183,7 @@ type nativeTrafficHarness struct {
 	routes               int
 	errors               []string
 	truncateNext         bool
+	sparseTerminalOutput string // Test-only fixture: absent or empty terminal, done items unchanged.
 }
 
 func nativeTrafficJSON(v any) json.RawMessage {
@@ -224,6 +225,7 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		round := len(h.rows) + 1
 		output := nativeTrafficOutput(round)
 		truncated := h.truncateNext
+		sparseShape := h.sparseTerminalOutput
 		h.truncateNext = false
 		status := http.StatusOK
 		var rejected json.RawMessage
@@ -293,7 +295,13 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		if truncated {
 			return
 		}
-		emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": id, "model": "gpt-6-astra", "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 101, "output_tokens": 17, "total_tokens": 118, "input_tokens_details": map[string]any{"cached_tokens": 31}, "output_tokens_details": map[string]any{"reasoning_tokens": 7}}}})
+		completed := map[string]any{"id": id, "model": "gpt-6-astra", "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 101, "output_tokens": 17, "total_tokens": 118, "input_tokens_details": map[string]any{"cached_tokens": 31}, "output_tokens_details": map[string]any{"reasoning_tokens": 7}}}
+		if sparseShape == "empty" {
+			completed["output"] = []any{}
+		} else if sparseShape == "absent" {
+			delete(completed, "output")
+		}
+		emit(map[string]any{"type": "response.completed", "response": completed})
 	}))
 	t.Cleanup(h.upstream.Close)
 	origin, err := url.Parse(h.upstream.URL)
