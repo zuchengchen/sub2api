@@ -84,6 +84,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, err
 	}
 	nativeChat := s.beginNativeReasoningChat(c, account, body)
+	if nativeChat != nil {
+		defer nativeChat.releasePublication()
+	}
 	body = s.rewriteOpenAIClientLocalTimeForRequest(c, account, body)
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
@@ -625,8 +628,8 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
 	if nativeCapture != nil {
-		_ = resp.Body.Close()
 		nativeChat.finish(ctx, c, resp, nativeCapture, nativeDelivery, handleErr)
+		_ = resp.Body.Close()
 	}
 	stampOpenAIResponsesUpstreamEndpoint(c, result)
 

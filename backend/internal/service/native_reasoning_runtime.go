@@ -42,12 +42,13 @@ type nativeReasoningRuntimeSnapshot struct {
 }
 
 type nativeReasoningRuntime struct {
-	reader   NativeReasoningReplayRuntimeReader
-	engine   *NativeReasoningReplay
-	limits   NativeReasoningReplayLimits
-	snapshot atomic.Pointer[nativeReasoningRuntimeSnapshot]
-	mu       sync.Mutex
-	rejected nativeReasoningRejected
+	reader       NativeReasoningReplayRuntimeReader
+	engine       *NativeReasoningReplay
+	limits       NativeReasoningReplayLimits
+	snapshot     atomic.Pointer[nativeReasoningRuntimeSnapshot]
+	mu           sync.Mutex
+	rejected     nativeReasoningRejected
+	publications nativeReasoningPublications
 }
 
 // A local barrier prevents a failed Redis poison write from reintroducing an
