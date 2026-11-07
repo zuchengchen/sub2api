@@ -16,7 +16,7 @@ func TestPeriodicJobRecordsSuccessAndSchedulesNextRun(t *testing.T) {
 	ran := make(chan struct{}, 1)
 	job, err := NewPeriodicJob(PeriodicJobSpec{
 		Descriptor:     periodicDescriptor("account-expiry"),
-		Interval:       20 * time.Millisecond,
+		Interval:       time.Hour,
 		Timeout:        time.Second,
 		RunImmediately: true,
 		Run: func(context.Context) error {
@@ -28,13 +28,21 @@ func TestPeriodicJobRecordsSuccessAndSchedulesNextRun(t *testing.T) {
 	require.NoError(t, job.Start(context.Background()))
 	defer stopPeriodicJob(t, job)
 
-	require.Eventually(t, func() bool { return len(ran) == 1 }, time.Second, time.Millisecond)
+	// The callback signal precedes its return and the scheduler's status update.
+	// Wait for both completion and scheduling in one published snapshot; the
+	// long interval keeps a second invocation outside this first-run assertion.
+	require.Eventually(t, func() bool {
+		status := periodicStatus(t, job)
+		return status.SuccessCount == 1 && !status.NextRunAt.IsZero()
+	}, time.Second, time.Millisecond)
 	status := periodicStatus(t, job)
+	require.Len(t, ran, 1, "the callback must actually execute")
 	require.Equal(t, OutcomeSuccess, status.LastOutcome)
 	require.Equal(t, uint64(1), status.SuccessCount)
 	require.False(t, status.NextRunAt.IsZero())
 	require.False(t, status.LastRunAt.IsZero())
 	require.Greater(t, status.LastDuration, time.Duration(0))
+	require.True(t, status.NextRunAt.After(status.LastRunAt.Add(status.LastDuration)))
 }
 
 func TestPeriodicJobConvertsPanicToOutcome(t *testing.T) {

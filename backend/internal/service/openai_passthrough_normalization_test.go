@@ -83,11 +83,11 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBody_SanitizesNativeItemI
 		}
 		normalized, changed, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(body, &Account{Platform: PlatformOpenAI, Type: accountType}, false)
 		require.NoError(t, err)
-		require.True(t, changed)
+		require.Equal(t, !oauth, changed)
 		require.Equal(t, "response.create", gjson.GetBytes(normalized, "type").String())
-		require.False(t, gjson.GetBytes(normalized, "input.0.id").Exists())
+		require.Equal(t, oauth, gjson.GetBytes(normalized, "input.0.id").Exists())
 		require.Equal(t, "ctc_valid", gjson.GetBytes(normalized, "input.1.id").String())
-		require.False(t, gjson.GetBytes(normalized, "input.2.id").Exists())
+		require.Equal(t, oauth, gjson.GetBytes(normalized, "input.2.id").Exists())
 		require.Equal(t, "tsc_valid", gjson.GetBytes(normalized, "input.3.id").String())
 		// Native Responses call_id values are correlation keys, not item IDs.
 		require.Equal(t, "call_custom_1", gjson.GetBytes(normalized, "input.0.call_id").String())

@@ -562,7 +562,7 @@ func successfulGoldenToolOutput(output string) bool {
 
 func validateScenario(sc scenario, recs []record) error {
 	var prewarm, turns, refresh int
-	var tool, trigger, compact, nativeReasoning bool
+	var tool, trigger, compact bool
 	for _, rec := range recs {
 		if strings.HasSuffix(rec.Target, "/oauth/token") {
 			refresh++
@@ -593,8 +593,6 @@ func validateScenario(sc scenario, recs []record) error {
 		}
 		for _, item := range body.Input {
 			switch item.Type {
-			case "reasoning":
-				nativeReasoning = nativeReasoning || (strings.HasPrefix(item.ID, "rs_golden_resp_golden_") && item.Encrypted == "golden-reasoning-"+strings.TrimPrefix(item.ID, "rs_golden_"))
 			case "function_call_output":
 				var output string
 				tool = tool || (strings.HasPrefix(item.CallID, "call_golden_") && json.Unmarshal(item.Output, &output) == nil && successfulGoldenToolOutput(output))
@@ -607,8 +605,10 @@ func validateScenario(sc scenario, recs []record) error {
 			}
 		}
 	}
-	if sc.NativeState && sc.ToolLoop && !nativeReasoning {
-		return errors.New("scripted native reasoning did not survive the tool continuation")
+	if sc.NativeState {
+		if err := validateNativeContinuation(recs); err != nil {
+			return err
+		}
 	}
 	if turns == 0 || (!sc.RejectWebSocket && prewarm != 1) || (sc.ToolLoop && !tool) || (sc.UnauthorizedUntilRefresh && refresh != 1) || (sc.Compaction && (!trigger || !compact)) {
 		return fmt.Errorf("incomplete scenario: turns=%d prewarm=%d refresh=%d tool=%v compaction_trigger=%v compaction_result=%v", turns, prewarm, refresh, tool, trigger, compact)

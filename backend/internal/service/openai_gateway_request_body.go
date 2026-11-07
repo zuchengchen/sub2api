@@ -770,6 +770,15 @@ func openAIRequestBodyHasTools(body []byte) bool {
 // Keep the reasoning item and its portable fields (summary, encrypted_content,
 // ids, and opaque extensions). Callers scope this normalization to OpenAI
 // destinations; compatible providers may still consume their own content.
+// The Codex backend supports native reasoning_text content. Proactive public
+// Responses compatibility must not remove it from the native OAuth route.
+func normalizeOpenAIResponsesReasoningContentReplayForAccount(body []byte, account *Account) ([]byte, bool, error) {
+	if isCodexOAuthAccount(account) {
+		return body, false, nil
+	}
+	return normalizeOpenAIResponsesReasoningContentReplay(body)
+}
+
 func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, error) {
 	input := parseRawJSONView(body).Get("input")
 	if !input.IsArray() {
@@ -1592,7 +1601,7 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 			return body, false, err
 		}
 	}
-	if next, normalizedReasoningContent, err := normalizeOpenAIResponsesReasoningContentReplay(normalized); err != nil {
+	if next, normalizedReasoningContent, err := normalizeOpenAIResponsesReasoningContentReplayForAccount(normalized, account); err != nil {
 		return body, false, err
 	} else if normalizedReasoningContent {
 		normalized = next
@@ -1612,7 +1621,7 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 			changed = true
 		}
 	}
-	if sanitized, idsChanged, err := sanitizeOpenAIResponsesInputItemIDs(normalized); err != nil {
+	if sanitized, idsChanged, err := sanitizeOpenAIResponsesInputItemIDsForAccount(normalized, account); err != nil {
 		return body, false, fmt.Errorf("sanitize websocket Responses input item IDs: %w", err)
 	} else if idsChanged {
 		normalized = sanitized

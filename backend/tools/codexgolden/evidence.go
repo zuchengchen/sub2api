@@ -45,7 +45,7 @@ type captureMetadata struct {
 func recordingConfigHash() string {
 	// Endpoints and filesystem roots are isolated per invocation. These are the
 	// behavior-affecting configuration values shared by reference and candidate.
-	config := map[string]any{"tls_mode": recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh", "sandbox": "read-only", "auth_store": "file", "updates": false, "compaction_limit": 1, "models_barrier": true, "scripted_native_output": 1}
+	config := map[string]any{"tls_mode": recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh", "sandbox": "read-only", "auth_store": "file", "updates": false, "compaction_limit": 1, "models_barrier": true, "scripted_native_output": 1, "native_response_evidence": 2}
 	return fmt.Sprintf("%x", sha256.Sum256(mustJSON(config)))
 }
 

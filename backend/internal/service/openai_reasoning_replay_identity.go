@@ -2,6 +2,11 @@ package service
 
 import "strings"
 
+func hasNativeCodexInputItemID(id string) bool {
+	prefix, suffix, found := strings.Cut(id, "_")
+	return found && prefix != "" && suffix != ""
+}
+
 // Fixed Codex bfdbf01 protocol/response_item_id.rs::is_prefixed and
 // core/client.rs::prepare_response_items_for_request preserve received IDs with
 // nonempty prefix and suffix. A complete opaque reasoning item carries its own
@@ -13,8 +18,7 @@ func keepOpenAIReasoningReplayID(id, encrypted, status any) bool {
 	if !ok {
 		return false
 	}
-	prefix, suffix, found := strings.Cut(itemID, "_")
-	if !found || prefix == "" || suffix == "" {
+	if !hasNativeCodexInputItemID(itemID) {
 		return false
 	}
 	opaque, ok := encrypted.(string)

@@ -129,16 +129,10 @@ func TestGoldenScriptIncludesNativeReasoningAndCompleteTerminal(t *testing.T) {
 }
 
 func TestGoldenSourceNativeStateRequiresActualContinuation(t *testing.T) {
-	result := syntheticGoldenCodeModeOutput("aabbcc", "0.1", "golden\n", 0)
-	makeRecords := func(encrypted string) []record {
-		return []record{{Kind: "ws_message", BodyJSON: json.RawMessage(`{"generate":false}`)}, {Kind: "ws_message", BodyJSON: mustJSON(map[string]any{"input": []any{
-			map[string]any{"type": "reasoning", "id": "rs_golden_resp_golden_001", "encrypted_content": encrypted},
-			map[string]any{"type": "custom_tool_call_output", "call_id": "call_golden_code_mode_1", "output": result},
-		}})}}
-	}
-	require.NoError(t, validateScenario(scenario{ToolLoop: true, NativeState: true}, makeRecords("golden-reasoning-resp_golden_001")))
-	require.Error(t, validateScenario(scenario{ToolLoop: true, NativeState: true}, makeRecords("")))
-	require.Error(t, validateScenario(scenario{ToolLoop: true, NativeState: true}, makeRecords("opaque-mismatch")))
+	rows := nativeTestLifecycle(false)
+	require.NoError(t, validateScenario(scenario{ToolLoop: true, NativeState: true}, rows))
+	rows[1].NativeResponse.Complete = false
+	require.Error(t, validateScenario(scenario{ToolLoop: true, NativeState: true}, rows))
 }
 
 func TestGoldenCodeModeFullComparisonExitCalibration(t *testing.T) {

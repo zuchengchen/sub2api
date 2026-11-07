@@ -115,6 +115,9 @@ func CodexCanonicalAuthIdentity() (userAgent, originator string) {
 // wins over the global canonical TUI identity, so token refresh and whoami use
 // the same family/platform as inference.
 func CodexAuthIdentityForContext(ctx context.Context) (userAgent, originator string) {
+	if identity, ok := codexSourceBuildAuthIdentity(ctx); ok {
+		return identity.userAgent, identity.originator
+	}
 	if candidate := strings.TrimSpace(openai.CodexClientUserAgentFromContext(ctx)); candidate != "" {
 		identity := resolveCodexOutboundIdentity(candidate)
 		return identity.userAgent, identity.originator

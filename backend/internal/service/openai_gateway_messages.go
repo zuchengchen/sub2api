@@ -271,6 +271,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		synthesized := synthResult != nil && synthResult.Modified
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
 			SkipDefaultInstructions: true,
+			NativeItemIDs:           isCodexOAuthAccount(account),
 			PreserveToolCallIDs:     true,
 			WireProfile:             wireProfilePtr,
 		})

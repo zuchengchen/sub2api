@@ -72,6 +72,13 @@ func shouldStripOpenAIResponsesNonPairCallID(itemType string) bool {
 }
 
 func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
+	return sanitizeOpenAIResponsesInputItemIDsForAccount(body, nil)
+}
+
+// The Codex backend uses the fixed client's prefix_suffix identity contract.
+// Public API and compatible providers keep their existing namespace validation.
+func sanitizeOpenAIResponsesInputItemIDsForAccount(body []byte, account *Account) ([]byte, bool, error) {
+	codexNative := isCodexOAuthAccount(account)
 	input := parseRawJSONView(body).Get("input")
 	if !input.IsArray() {
 		return body, false, nil
@@ -95,6 +102,9 @@ func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
 			if id.Type == gjson.String {
 				completeReasoning := trimmedItemType == "reasoning" && keepOpenAIReasoningReplayID(id.String(), item.Get("encrypted_content").Value(), item.Get("status").Value())
 				parsed.stripID = !completeReasoning && shouldStripOpenAIResponsesInputItemID(trimmedItemType, id.String())
+				if codexNative {
+					parsed.stripID = !hasNativeCodexInputItemID(id.String())
+				}
 			}
 			// A reference with no usable id cannot point at an upstream item.
 			if trimmedItemType == "item_reference" && parsed.stripID {

@@ -50,22 +50,24 @@ type headerKV struct {
 
 // record is one client→server unit observed on the wire.
 type record struct {
-	H2           *h2Observation  `json:"h2,omitempty"`
-	Hop          string          `json:"hop,omitempty"`
-	TLS          *clientHello    `json:"tls,omitempty"`
-	Seq          int             `json:"seq"`
-	Conn         int             `json:"conn"`
-	ConnReq      int             `json:"conn_request_index"`
-	Kind         string          `json:"kind"` // http_request | ws_handshake | ws_message
-	Method       string          `json:"method,omitempty"`
-	Target       string          `json:"target,omitempty"`
-	Proto        string          `json:"proto,omitempty"`
-	Headers      []headerKV      `json:"headers,omitempty"`
-	BodyEncoding string          `json:"body_encoding,omitempty"`
-	BodyWireLen  int             `json:"body_wire_len,omitempty"`
-	BodyJSON     json.RawMessage `json:"body_json,omitempty"`
-	BodyText     string          `json:"body_text,omitempty"`
-	Frame        *frameInfo      `json:"frame,omitempty"`
+	requestObservedAtUnixNano int64
+	NativeResponse            *nativeResponseEvidence `json:"native_response,omitempty"`
+	H2                        *h2Observation          `json:"h2,omitempty"`
+	Hop                       string                  `json:"hop,omitempty"`
+	TLS                       *clientHello            `json:"tls,omitempty"`
+	Seq                       int                     `json:"seq"`
+	Conn                      int                     `json:"conn"`
+	ConnReq                   int                     `json:"conn_request_index"`
+	Kind                      string                  `json:"kind"` // http_request | ws_handshake | ws_message
+	Method                    string                  `json:"method,omitempty"`
+	Target                    string                  `json:"target,omitempty"`
+	Proto                     string                  `json:"proto,omitempty"`
+	Headers                   []headerKV              `json:"headers,omitempty"`
+	BodyEncoding              string                  `json:"body_encoding,omitempty"`
+	BodyWireLen               int                     `json:"body_wire_len,omitempty"`
+	BodyJSON                  json.RawMessage         `json:"body_json,omitempty"`
+	BodyText                  string                  `json:"body_text,omitempty"`
+	Frame                     *frameInfo              `json:"frame,omitempty"`
 }
 
 type frameInfo struct {
@@ -100,6 +102,7 @@ type upstreamOptions struct {
 }
 
 type fakeUpstream struct {
+	h2NativeWrites      map[nativeH2Key]bool
 	ln                  net.Listener
 	scenario            scenario
 	opts                upstreamOptions
@@ -157,11 +160,12 @@ func (f *fakeUpstream) close() []record {
 	return append([]record(nil), f.records...)
 }
 
-func (f *fakeUpstream) add(r record) {
+func (f *fakeUpstream) add(r record) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
 	r.Seq = f.seq
+	r.requestObservedAtUnixNano = time.Now().UnixNano()
 	r.Hop = f.connHops[r.Conn]
 	if hello := f.connHellos[r.Conn]; hello != nil {
 		shape := *hello
@@ -169,6 +173,7 @@ func (f *fakeUpstream) add(r record) {
 		r.TLS = &shape
 	}
 	f.records = append(f.records, r)
+	return r.Seq
 }
 
 func (f *fakeUpstream) serve() {
@@ -327,7 +332,7 @@ func (f *fakeUpstream) handleObservedConn(c net.Conn, connID int, front bool, ob
 			rec.ConnReq = observation.RequestIndex
 			rec.H2 = observation
 		}
-		f.add(rec)
+		requestSeq := f.add(rec)
 
 		path := target
 		if i := strings.IndexByte(path, '?'); i >= 0 {
@@ -344,9 +349,10 @@ func (f *fakeUpstream) handleObservedConn(c net.Conn, connID int, front bool, ob
 			})
 			writeJSONResponse(c, 200, tok)
 		case method == "POST" && strings.HasSuffix(path, "/responses") && f.scenario.UnauthorizedUntilRefresh && !f.authorizedAfterRefresh(get("authorization")):
-			writeJSONResponse(c, 401, []byte(`{"error":{"message":"token expired","type":"invalid_request_error","code":"token_expired"}}`))
+			err := writeJSONResponse(c, 401, []byte(`{"error":{"message":"token expired","type":"invalid_request_error","code":"token_expired"}}`))
+			f.nativeEvidence(requestSeq, connID, 401, nil, err == nil, err)
 		case method == "POST" && strings.HasSuffix(path, "/responses"):
-			f.writeSSE(c, f.scriptedEvents(body))
+			f.writeSSE(c, requestSeq, connID, f.scriptedEvents(body))
 		case method == "GET" && strings.HasSuffix(path, "/wham/accounts/check"):
 			writeJSONResponse(c, 200, f.accountsCheck())
 		case method == "GET" && strings.HasSuffix(path, "/codex/models") && len(f.opts.ModelsJSON) > 0:
@@ -421,10 +427,13 @@ func (f *fakeUpstream) authorizedAfterRefresh(authorization string) bool {
 	return access != "" && authorization == "Bearer "+access
 }
 
-func writeJSONResponse(c net.Conn, status int, body []byte) {
+func writeJSONResponse(c net.Conn, status int, body []byte) error {
 	text := map[int]string{200: "OK", 401: "Unauthorized", 404: "Not Found"}[status]
-	_, _ = fmt.Fprintf(c, "HTTP/1.1 %d %s\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n", status, text, len(body))
-	_, _ = c.Write(body)
+	head := []byte(fmt.Sprintf("HTTP/1.1 %d %s\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n", status, text, len(body)))
+	if err := writeFixtureBytes(c, head); err != nil {
+		return err
+	}
+	return writeFixtureBytes(c, body)
 }
 
 // accountsCheck answers workspace discovery for the synthetic account so the
@@ -613,16 +622,24 @@ func (f *fakeUpstream) scriptedEvents(body []byte) []map[string]any {
 		completed}
 }
 
-func (f *fakeUpstream) writeSSE(c net.Conn, events []map[string]any) {
-	var head strings.Builder
-	_, _ = head.WriteString("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nx-codex-turn-state: golden-turn-state\r\n\r\n")
-	_, _ = io.WriteString(c, head.String())
+func (f *fakeUpstream) writeSSE(c net.Conn, requestSeq, connID int, events []map[string]any) {
+	var sent []json.RawMessage
+	err := writeFixtureBytes(c, []byte("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nx-codex-turn-state: golden-turn-state\r\n\r\n"))
+	if err != nil {
+		f.nativeEvidence(requestSeq, connID, 200, sent, false, err)
+		return
+	}
 	for _, ev := range events {
 		data, _ := json.Marshal(ev)
 		chunk := fmt.Sprintf("event: %s\ndata: %s\n\n", ev["type"], data)
-		_, _ = fmt.Fprintf(c, "%x\r\n%s\r\n", len(chunk), chunk)
+		if err = writeFixtureBytes(c, []byte(fmt.Sprintf("%x\r\n%s\r\n", len(chunk), chunk))); err != nil {
+			f.nativeEvidence(requestSeq, connID, 200, sent, false, err)
+			return
+		}
+		sent = append(sent, append(json.RawMessage(nil), data...))
 	}
-	_, _ = io.WriteString(c, "0\r\n\r\n")
+	f.nativeEvidence(requestSeq, connID, 200, sent, true, nil)
+	_ = writeFixtureBytes(c, []byte("0\r\n\r\n"))
 }
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -665,17 +682,21 @@ func (f *fakeUpstream) serveWebSocket(c net.Conn, br *bufio.Reader, connID int, 
 		}
 		rec := record{Conn: connID, Kind: "ws_message", Frame: info}
 		setBody(&rec, msg)
-		f.add(rec)
+		requestSeq := f.add(rec)
 		var probe struct {
 			Type string `json:"type"`
 		}
 		if json.Unmarshal(msg, &probe) == nil && probe.Type == "response.create" {
+			var sent []json.RawMessage
 			for _, ev := range f.scriptedEvents(msg) {
 				data, _ := json.Marshal(ev)
 				if err := writeServerFrame(c, 0x1, data); err != nil {
+					f.nativeEvidence(requestSeq, connID, 200, sent, false, err)
 					return
 				}
+				sent = append(sent, append(json.RawMessage(nil), data...))
 			}
+			f.nativeEvidence(requestSeq, connID, 200, sent, true, nil)
 		}
 	}
 }
@@ -758,8 +779,7 @@ func writeServerFrame(c net.Conn, opcode byte, payload []byte) error {
 		hdr = append(hdr, 127)
 		hdr = binary.BigEndian.AppendUint64(hdr, uint64(n))
 	}
-	_, err := c.Write(append(hdr, payload...))
-	return err
+	return writeFixtureBytes(c, append(hdr, payload...))
 }
 
 // inflater decodes permessage-deflate messages with client context takeover.

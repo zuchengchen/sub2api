@@ -380,6 +380,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		synthesized := synthResult != nil && synthResult.Modified
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
 			ResponsesLite:                       responsesLite,
+			NativeItemIDs:                       isCodexOAuthAccount(account),
 			SkipDefaultInstructions:             !isResponsesShape || synthesized,
 			OmitPromotedSystemMessagesFromInput: !isResponsesShape && !isJSONObjectFormat,
 			WireProfile:                         wireProfilePtr,

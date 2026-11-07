@@ -4,6 +4,14 @@
 
 功能默认关闭。初期适用范围为 OpenAI OAuth 的 Chat Completions → Codex Responses 路径；API Key、PAT、Agent Identity、第三方传输插件与其他平台保持原路径。缺少明确会话标识、无法建立可信凭据身份、非工具调用输出、未知输出类型或未完成响应时不建立可恢复记录。
 
+原生 Codex OAuth 的 Responses / WS→HTTP 路径同时保留固定 Codex 的 `prefix_suffix` 项 ID、reasoning 内容的原生形式及原始工具配对。公开 API Key 上游继续使用原有兼容规则。WS→HTTP 重建历史时，缺失的 reasoning content 按固定源码序列化为 `null`；compaction 通过历史替换续接，不补写普通输出的轮次元数据。
+
+## 固定源码构建的 TLS 配置
+
+本轮固定 Codex GNU 源码构建使用 OpenSSL 3.5.5；旧 `openssl36` 档仍代表此前校准的发布包，不应通过修改同名模板混用两种来源。需要匹配本轮 GNU 构建时，显式设置进程环境变量 `SUB2API_CODEX_NATIVE_TLS_PROFILE=openssl35-gnu`。该选择由 Codex 业务 HTTP 与认证 HTTP 共用；自定义 CA 的 HTTP 仍使用 `rustls-h2`，WS 仍使用 `rustls`。账号显式 TLS 配置保持优先。
+
+空值或 `openssl36` 保留既有默认；其他值在应用配置验证时拒绝启动。新档携带实际支持的 zlib / zstd 证书压缩扩展，继续验证证书。该配置不由客户端请求头选择，也不根据宿主库版本自动猜测。修改后需重启服务；回滚时恢复此前环境配置。精确协议验收应记录所选档位和固定参考来源。
+
 ## 运行开关
 
 通过后端 `settings` 的 `openai_native_reasoning_replay_config` 配置，仅由管理员控制：

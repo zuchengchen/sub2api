@@ -2865,6 +2865,11 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	switch strings.TrimSpace(os.Getenv("SUB2API_CODEX_NATIVE_TLS_PROFILE")) {
+	case "", "openssl36", "openssl35-gnu":
+	default:
+		return fmt.Errorf("SUB2API_CODEX_NATIVE_TLS_PROFILE must be empty, openssl36 or openssl35-gnu")
+	}
 	if c.Gateway.MinOutputTokens < 16 {
 		return fmt.Errorf("gateway.min_output_tokens must be at least 16")
 	}

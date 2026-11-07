@@ -125,7 +125,13 @@ func TestSourceBuildReceiptMetadataAndExitTwo(t *testing.T) {
 		require.NoError(t, err)
 		writeJSON(filepath.Join(dir, "meta.json"), meta)
 	}
-	require.Equal(t, 0, compareMain([]string{"-golden", base, "-candidate", candidate}))
+	_, err := readCaptureMetadata(base)
+	require.NoError(t, err)
+	_, err = readCaptureMetadata(candidate)
+	require.NoError(t, err)
+	// Historical request-only fixtures cannot establish the new source-build
+	// response/continuation contract, even with valid build provenance.
+	require.Equal(t, 2, compareMain([]string{"-golden", base, "-candidate", candidate}))
 	require.NoError(t, os.WriteFile(filepath.Join(candidate, sourceBuildReceiptFile), []byte(`{"schema":1}`), 0600))
 	require.Equal(t, 2, compareMain([]string{"-golden", base, "-candidate", candidate}), "unreadable or unbound source provenance is invalid evidence")
 	t.Setenv("CODEXGOLDEN_SOURCE_BUILD_RECEIPT", "")

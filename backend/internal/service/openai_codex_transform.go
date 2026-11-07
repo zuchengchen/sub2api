@@ -96,6 +96,9 @@ type codexOAuthTransformOptions struct {
 	IsCompact               bool
 	SkipDefaultInstructions bool
 	PreserveToolCallIDs     bool
+	// Enabled by the actual Codex OAuth destination, not by generic legacy
+	// helper callers or SetupToken paths sharing parts of this transform.
+	NativeItemIDs bool
 	// Typed native history already owns its item/call identity. Legacy input
 	// filtering is only for compatibility requests.
 	PreserveNativeInput                 bool
@@ -332,6 +335,7 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		input = filterCodexInputWithOptions(input, codexInputFilterOptions{
 			PreserveReferences: needsToolContinuation,
 			PreserveCallIDs:    opts.PreserveToolCallIDs,
+			NativeItemIDs:      opts.NativeItemIDs,
 		})
 		if reordered, moved := ensureCodexBaseInstructionsFirst(input); moved {
 			input = reordered
@@ -1676,6 +1680,9 @@ func isInstructionsEmpty(reqBody map[string]any) bool {
 type codexInputFilterOptions struct {
 	PreserveReferences bool
 	PreserveCallIDs    bool
+	// Only the Codex backend transform opts into its prefix_suffix identity
+	// contract; direct compatibility helper callers retain their legacy policy.
+	NativeItemIDs bool
 }
 
 // filterCodexInput 按需过滤 item_reference 与 id。
@@ -1797,8 +1804,14 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			if !opts.PreserveReferences {
 				continue
 			}
-			if id, ok := m["id"].(string); ok && shouldStripOpenAIResponsesInputItemID(typ, id) {
-				continue
+			if id, ok := m["id"].(string); ok {
+				strip := shouldStripOpenAIResponsesInputItemID(typ, id)
+				if opts.NativeItemIDs {
+					strip = !hasNativeCodexInputItemID(id)
+				}
+				if strip {
+					continue
+				}
 			}
 			newItem := make(map[string]any, len(m))
 			for key, value := range m {
@@ -1878,9 +1891,15 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		if !opts.PreserveReferences {
 			ensureCopy()
 			delete(newItem, "id")
-		} else if id, ok := m["id"].(string); ok && shouldStripOpenAIResponsesInputItemID(typ, id) {
-			ensureCopy()
-			delete(newItem, "id")
+		} else if id, ok := m["id"].(string); ok {
+			strip := shouldStripOpenAIResponsesInputItemID(typ, id)
+			if opts.NativeItemIDs {
+				strip = !hasNativeCodexInputItemID(id)
+			}
+			if strip {
+				ensureCopy()
+				delete(newItem, "id")
+			}
 		}
 
 		filtered = append(filtered, newItem)
