@@ -111,13 +111,14 @@ func (l *nativeReasoningPublicationLease) release() {
 		return
 	}
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.released {
-		l.mu.Unlock()
 		return
 	}
+	// A concurrent caller must not observe release completion before the
+	// registry ticket is removed and its completion signal is published.
 	l.released = true
 	stop := l.stop
-	l.mu.Unlock()
 	if stop != nil {
 		stop()
 	}

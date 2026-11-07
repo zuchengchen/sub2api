@@ -50,8 +50,11 @@ SUB2_USER_CACHE_DIAGNOSTIC_MAX_REQUESTS=30
 最多汇总前 128 个输出位置。每次上游尝试最多观察 32 MiB 或 8192 个事件；
 超过限制时停止解析，继续原样传递后续响应，并在最终事件记录 `observation_limited`。
 SSE 多行 `data:` 按协议合并，缺少空行分隔的尾部不会被当作完整事件。
-超长行/事件会带 `truncated_events`；读取错误、未读完即关闭或不完整事件分别带
-`read_error`、`eof=false`、`partial_event`。这些标记均表示证据不完整。
+成功的 2xx 响应还依据最终出站请求的 `stream: true` 选择 SSE 观察，覆盖上游缺少或误标
+Content-Type 的情况。HTTP 错误和非流式 JSON 响应沿用 JSON 观察规则。
+超长行/事件会带 `truncated_events`；读取错误和不完整事件分别带 `read_error`、
+`partial_event`，这些标记表示证据不完整。`eof=false` 仅说明没有读到传输 EOF；
+消费者在完整 SSE 终态后正常关闭时，不必再读取 EOF。
 响应不会被提前读出、截断、改写或重放，观察器只处理正常消费者已读出的字节。
 `invalid_json_events`、缺少终态、到期和上限都需要作为采样不完整处理。
 
