@@ -250,7 +250,7 @@ func newCodexDeviceReqClientConfigured(proxyURL string, timeout time.Duration, a
 	if err != nil {
 		return nil, err
 	}
-	rt := &codexDeviceRoundTripper{proxyURL: trimmed, profile: tlsfingerprint.BuiltinProfile("openssl36"), timeout: timeout}
+	rt := &codexDeviceRoundTripper{proxyURL: trimmed, profile: codexwire.NativeHTTPProfile(), timeout: timeout}
 	if authCode {
 		rt.authCode = true
 		rt.codeH1 = codexwire.NewH1Pool(codexwire.H1PoolOptions{})

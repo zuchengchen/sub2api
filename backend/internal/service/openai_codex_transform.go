@@ -96,6 +96,9 @@ type codexOAuthTransformOptions struct {
 	IsCompact               bool
 	SkipDefaultInstructions bool
 	PreserveToolCallIDs     bool
+	// Enabled by the actual Codex OAuth destination, not by generic legacy
+	// helper callers or SetupToken paths sharing parts of this transform.
+	NativeItemIDs bool
 	// Typed native history already owns its item/call identity. Legacy input
 	// filtering is only for compatibility requests.
 	PreserveNativeInput                 bool
@@ -332,6 +335,7 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		input = filterCodexInputWithOptions(input, codexInputFilterOptions{
 			PreserveReferences: needsToolContinuation,
 			PreserveCallIDs:    opts.PreserveToolCallIDs,
+			NativeItemIDs:      opts.NativeItemIDs,
 		})
 		if reordered, moved := ensureCodexBaseInstructionsFirst(input); moved {
 			input = reordered
@@ -1676,6 +1680,9 @@ func isInstructionsEmpty(reqBody map[string]any) bool {
 type codexInputFilterOptions struct {
 	PreserveReferences bool
 	PreserveCallIDs    bool
+	// Only the Codex backend transform opts into its prefix_suffix identity
+	// contract; direct compatibility helper callers retain their legacy policy.
+	NativeItemIDs bool
 }
 
 // filterCodexInput 按需过滤 item_reference 与 id。
@@ -1765,32 +1772,16 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		}
 		typ, _ := m["type"].(string)
 
-		// chatgpt.com codex (OAuth path) runs with store=false (forced by
-		// applyCodexOAuthTransform). Replaying a reasoning item with its rs_*
-		// id but no encrypted_content 404s upstream ("Item with id 'rs_...'
-		// not found") — the 404 is triggered by the id lookup, not by the
-		// reasoning item itself. So strip the id (always, independent of
-		// PreserveReferences) yet keep the item: under store=false
-		// encrypted_content is the official channel for carrying reasoning
-		// context across turns, and dropping the whole item silently degrades
-		// multi-turn agent reasoning. Preserve encrypted_content/content/
-		// summary and every other field verbatim. Upstream additionally
-		// requires a summary field — a missing one is rejected with 400
-		// "Missing required parameter 'input[N].summary'" — so backfill an
-		// empty array when it is absent. Contracts verified end-to-end against
-		// chatgpt.com codex (gpt-5.5); see issue #1957.
-		// compaction_summary items (cmp_*) are the other encrypted_content
-		// carrier. Verified against the live backend: they require
-		// encrypted_content (a missing one is rejected with 400), and with it
-		// present the cmp_* id does not 404 whether kept or stripped. Being
-		// neither reasoning nor tool calls, they flow through the generic path
-		// below (id stripped when !PreserveReferences, encrypted_content
-		// preserved either way), which is safe and needs no special-casing.
+		// Complete native reasoning is self-contained through encrypted_content.
+		// Fixed Codex bfdbf01 preserves valid prefixed IDs on these items; only
+		// bare/incomplete/legacy reasoning keeps the older ID stripping policy.
+		// Other fields, including opaque extensions, remain untouched.
 		if typ == "reasoning" {
+			keepID := keepOpenAIReasoningReplayID(m["id"], m["encrypted_content"], m["status"])
 			newItem := make(map[string]any, len(m))
 			for key, value := range m {
-				if key == "id" || key == "call_id" {
-					// rs_* id replayed under store=false 404s; strip it.
+				if key == "call_id" || (key == "id" && !keepID) {
+					// Reasoning has no tool-result pairing; bare IDs are not reusable.
 					continue
 				}
 				newItem[key] = value
@@ -1813,8 +1804,14 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			if !opts.PreserveReferences {
 				continue
 			}
-			if id, ok := m["id"].(string); ok && shouldStripOpenAIResponsesInputItemID(typ, id) {
-				continue
+			if id, ok := m["id"].(string); ok {
+				strip := shouldStripOpenAIResponsesInputItemID(typ, id)
+				if opts.NativeItemIDs {
+					strip = !hasNativeCodexInputItemID(id)
+				}
+				if strip {
+					continue
+				}
 			}
 			newItem := make(map[string]any, len(m))
 			for key, value := range m {
@@ -1894,9 +1891,15 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		if !opts.PreserveReferences {
 			ensureCopy()
 			delete(newItem, "id")
-		} else if id, ok := m["id"].(string); ok && shouldStripOpenAIResponsesInputItemID(typ, id) {
-			ensureCopy()
-			delete(newItem, "id")
+		} else if id, ok := m["id"].(string); ok {
+			strip := shouldStripOpenAIResponsesInputItemID(typ, id)
+			if opts.NativeItemIDs {
+				strip = !hasNativeCodexInputItemID(id)
+			}
+			if strip {
+				ensureCopy()
+				delete(newItem, "id")
+			}
 		}
 
 		filtered = append(filtered, newItem)

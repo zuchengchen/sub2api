@@ -325,17 +325,48 @@ func openAIWSHTTPBridgeReplayOutputItems(items []json.RawMessage) []json.RawMess
 // uses the original client identity so the next account can scope it once.
 func codexBridgeOutputTurnReferences(items []json.RawMessage, source []byte) ([]json.RawMessage, error) {
 	turn := gjson.GetBytes(source, "client_metadata.turn_id").String()
-	if turn == "" || len(items) == 0 {
+	if len(items) == 0 {
 		return items, nil
 	}
 	result := slices.Clone(items)
 	for i, item := range result {
-		if gjson.GetBytes(item, "internal_chat_message_metadata_passthrough.turn_id").String() != "" {
-			continue
+		next := item
+		kind := gjson.GetBytes(item, "type").String()
+		if kind == "reasoning" {
+			// Fixed bfdbf01 models.rs:1112-1120,1790-1796 serializes
+			// absent/None content as null, but omits empty typed arrays.
+			content := gjson.GetBytes(item, "content")
+			var err error
+			if !content.Exists() {
+				next, err = sjson.SetRawBytes(next, "content", []byte("null"))
+			} else if content.IsArray() {
+				hasReasoningText, knownContent := false, true
+				content.ForEach(func(_, part gjson.Result) bool {
+					switch part.Get("type").String() {
+					case "reasoning_text":
+						hasReasoningText = true
+					case "text":
+					default:
+						knownContent = false
+					}
+					return true
+				})
+				if knownContent && !hasReasoningText {
+					next, err = sjson.DeleteBytes(next, "content")
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
-		next, err := sjson.SetBytes(item, "internal_chat_message_metadata_passthrough.turn_id", turn)
-		if err != nil {
-			return nil, err
+		// Compaction is installed by replace_compacted_history rather than
+		// ordinary history insertion, so it retains its original metadata.
+		if kind != "compaction" && turn != "" && gjson.GetBytes(next, "internal_chat_message_metadata_passthrough.turn_id").String() == "" {
+			var err error
+			next, err = sjson.SetBytes(next, "internal_chat_message_metadata_passthrough.turn_id", turn)
+			if err != nil {
+				return nil, err
+			}
 		}
 		result[i] = next
 	}

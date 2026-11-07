@@ -37,6 +37,10 @@ type Profile struct {
 	KeyShareGroups      []uint16 // Empty uses [X25519]
 	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
 	Extensions          []uint16 // Extension type IDs in order; empty uses default Node.js 24.x order
+	// CertCompressionAlgorithms is the RFC8879 algorithm list for extension27.
+	// It must be explicitly supplied with that extension; uTLS registers and
+	// actually decodes each advertised algorithm (zlib1, brotli2, zstd3).
+	CertCompressionAlgorithms []uint16
 	// ShuffleExtensions reorders Extensions per handshake using the rustls 0.23
 	// scheme (msgs/handshake.rs order_insensitive_extensions_in_random_order):
 	// a random u16 order_seed, extensions sorted ascending by
@@ -338,6 +342,10 @@ func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.
 // It builds a ClientHello spec from the profile, applies it, and completes the handshake.
 // On failure, conn is closed and an error is returned.
 func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, addr string) (net.Conn, error) {
+	if err := validateCertCompressionProfile(profile); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
@@ -513,6 +521,12 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 			extensions = append(extensions, &utls.SCTExtension{})
 		case 23: // extended_master_secret
 			extensions = append(extensions, &utls.ExtendedMasterSecretExtension{})
+		case 27: // compress_certificate (RFC8879), not an empty generic extension
+			algorithms := make([]utls.CertCompressionAlgo, len(profile.CertCompressionAlgorithms))
+			for i, algorithm := range profile.CertCompressionAlgorithms {
+				algorithms[i] = utls.CertCompressionAlgo(algorithm)
+			}
+			extensions = append(extensions, &utls.UtlsCompressCertExtension{Algorithms: algorithms})
 		case 35: // session_ticket
 			extensions = append(extensions, &utls.SessionTicketExtension{})
 		case 43: // supported_versions
@@ -549,6 +563,34 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 		TLSVersMax:         utls.VersionTLS13,
 		TLSVersMin:         utls.VersionTLS10,
 	}
+}
+
+// Reject malformed offers before emitting a ClientHello. The advertised list
+// must correspond to real uTLS decoders; this cannot be a cosmetic extension.
+func validateCertCompressionProfile(profile *Profile) error {
+	if profile == nil {
+		return nil
+	}
+	count := 0
+	for _, extension := range profile.Extensions {
+		if extension == 27 {
+			count++
+		}
+	}
+	if count == 0 && len(profile.CertCompressionAlgorithms) == 0 {
+		return nil
+	}
+	if count != 1 || len(profile.CertCompressionAlgorithms) == 0 {
+		return fmt.Errorf("invalid TLS certificate compression offer")
+	}
+	seen := map[uint16]bool{}
+	for _, algorithm := range profile.CertCompressionAlgorithms {
+		if seen[algorithm] || algorithm < 1 || algorithm > 3 {
+			return fmt.Errorf("unsupported or duplicate TLS certificate compression algorithm")
+		}
+		seen[algorithm] = true
+	}
+	return nil
 }
 
 // toUint8s converts []uint16 to []uint8 (for utls fields that require []uint8).

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -262,6 +263,8 @@ func (f *fakeUpstream) serveH2(conn net.Conn, id int, front bool) {
 			http.Error(w, "missing real HTTP/2 observation", 500)
 			return
 		}
+		delivered := false
+		defer func() { f.confirmNativeH2(id, o.StreamID, delivered) }()
 		body, err := io.ReadAll(io.LimitReader(r.Body, (32<<20)+1))
 		if err != nil || len(body) > 32<<20 {
 			f.captureError(errors.New("HTTP/2 fixture body unreadable or exceeds 32 MiB"))
@@ -298,7 +301,11 @@ func (f *fakeUpstream) serveH2(conn net.Conn, id int, front bool) {
 			w.Header()[name] = values
 		}
 		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		if err := copyNativeH2Response(w, resp.Body); err != nil {
+			f.captureError(fmt.Errorf("incomplete actual HTTP/2 fixture response: %w", err))
+			return
+		}
+		delivered = true
 	})
 	server := &http2.Server{}
 	server.ServeConn(&prefixConn{Conn: conn, r: pr}, &http2.ServeConnOpts{Handler: handler})
@@ -320,4 +327,18 @@ func (f *fakeUpstream) serveH2(conn net.Conn, id int, front bool) {
 	if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 		f.captureError(fmt.Errorf("HTTP/2 frame observation: %w", err))
 	}
+}
+
+// The HTTP/1 pipe is not delivery evidence. Mark completion only after the
+// actual HTTP/2 response writer accepts every body byte and FlushError succeeds.
+func copyNativeH2Response(w http.ResponseWriter, body io.Reader) error {
+	controller := http.NewResponseController(w)
+	if err := controller.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return err
+	}
+	defer controller.SetWriteDeadline(time.Time{})
+	if _, err := io.Copy(w, body); err != nil {
+		return err
+	}
+	return controller.Flush()
 }

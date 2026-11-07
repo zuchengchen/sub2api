@@ -67,7 +67,8 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 			return response, nil
 		}
 	}
-	token, refreshErr := s.openAITokenProvider.RefreshAfterUnauthorized(request.Context(), credentialAccount, rejectedToken)
+	refreshCtx := withCodexSourceBuildAuthIdentity(request.Context(), credentialAccount, request.Header)
+	token, refreshErr := s.openAITokenProvider.RefreshAfterUnauthorized(refreshCtx, credentialAccount, rejectedToken)
 	if refreshErr != nil {
 		if retry.Body != nil && retry.Body != http.NoBody {
 			_ = retry.Body.Close()
@@ -155,6 +156,9 @@ func (s *OpenAIGatewayService) maybeCompressCodexUpstreamRequest(request *http.R
 }
 
 func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	if err := checkNativeReasoningRequestCredential(request); err != nil {
+		return nil, err
+	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {
@@ -218,7 +222,7 @@ func (s *OpenAIGatewayService) resolveCodexHTTPSTLSProfile(account *Account) *tl
 	if s.isCodexHTTPH2Enabled() || (isCodexOAuthAccount(account) && codexwire.CodexCustomCAConfigured()) {
 		return tlsfingerprint.BuiltinProfile("rustls-h2")
 	}
-	return tlsfingerprint.BuiltinProfile("openssl36")
+	return codexwire.NativeHTTPProfile()
 }
 
 // isCodexHTTPH2Enabled 报告 Codex HTTP 出站是否模拟「自定义 CA」部署：

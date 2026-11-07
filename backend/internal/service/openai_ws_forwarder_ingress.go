@@ -125,6 +125,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}()
 	}
 
+	// An earlier account may already have created the connection-owned reader.
+	// Other transport modes consume that same queue, but retain their own close
+	// semantics rather than treating a graceful peer close as control cancellation.
+	if reader := openAIWSExistingInterruptClientReader(c, clientConn); reader != nil && reader.closed.Err() != nil {
+		return nil
+	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	firstRoutingModel := gjson.GetBytes(firstClientMessage, "model").String()
 	if s.openAICookieWSModeConfigured() && hooks != nil && hooks.MapRequestModel != nil {
@@ -536,6 +542,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	readClientMessage := func() ([]byte, error) {
 		idleTimeout := s.openAIWSIngressInterTurnIdleTimeout()
+		// A previous ctx_pool account attempt may already own the socket reader.
+		// Reuse it if routing falls back to the HTTP bridge on this same socket.
+		if reader := openAIWSExistingInterruptClientReader(c, clientConn); reader != nil {
+			return reader.next(ctx, idleTimeout)
+		}
 		msgType, payload, readErr := ReadOpenAIWSClientMessage(
 			ctx,
 			clientConn,
@@ -825,6 +836,28 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 	}
 
+	// The downstream reader is connection-owned and survives account failover.
+	// Starting it before the first upstream response also makes an early client
+	// close cancel acquisition/reads promptly without issuing another generation.
+	clientLifecycle := ctx
+	if c.Request != nil {
+		clientLifecycle = c.Request.Context()
+	}
+	if hooks != nil && hooks.ClientLifecycleContext != nil {
+		clientLifecycle = hooks.ClientLifecycleContext
+	}
+	interruptClient := openAIWSGetInterruptClientReader(c, clientConn, clientLifecycle)
+	attemptCtx, cancelAttempt := context.WithCancelCause(ctx)
+	stopClientClosed := context.AfterFunc(interruptClient.closed, func() { cancelAttempt(context.Cause(interruptClient.closed)) })
+	defer stopClientClosed()
+	defer cancelAttempt(context.Canceled)
+	if interruptClient.closed.Err() != nil {
+		cancelAttempt(context.Cause(interruptClient.closed))
+	}
+	ctx = attemptCtx
+
+	readClientMessage = func() ([]byte, error) { return interruptClient.next(ctx, s.openAIWSIngressInterTurnIdleTimeout()) }
+
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
 	if cookieWS {
 		reservationPreference := ""
@@ -1056,10 +1089,24 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return lease, nil
 	}
 
+	var turnInterrupt *openAIWSInterruptState
+	var turnInterruptFailure error
 	var rejectedFieldRetryState *openAIResponsesRejectedFieldRetryState
 	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
 		responseModelObserver := &upstreamResponseModelObserver{}
 		responseModelObserver.adoptOpenAICodexTicketWatch(c)
+		turnInterrupt = &openAIWSInterruptState{}
+		turnInterruptFailure = nil
+		interruptReader := &openAIWSInterruptReader{lease: lease}
+		defer interruptReader.close()
+		var interruptStarted time.Time
+		var terminalResult *OpenAIForwardResult
+		sendInterrupt := func(raw []byte) error {
+			interruptStarted = time.Now()
+			interruptReader.deadline = time.Time{}
+			return lease.WriteJSONWithContextTimeout(context.WithoutCancel(ctx), json.RawMessage(raw), s.openAIWSWriteTimeout())
+		}
+
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
@@ -1116,6 +1163,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		lastEventType := ""
 		needModelReplace := false
 		clientDisconnected := false
+		settledTerminal := func() *OpenAIForwardResult {
+			if terminalResult != nil {
+				terminalResult.ClientDisconnect = clientDisconnected
+				terminalResult.ClientInterrupted = turnInterrupt.requested && turnInterrupt.reusable() && turnInterruptFailure == nil
+				terminalResult.Duration = time.Since(turnStart)
+			}
+			return terminalResult
+		}
 		mappedModel := ""
 		var mappedModelBytes []byte
 		if originalModel != "" {
@@ -1129,20 +1184,122 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		for {
-			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
-			if readErr != nil {
+			if clientDisconnected && !turnInterrupt.requested && turnInterrupt.responseID != "" {
+				if raw := turnInterrupt.automaticRequest(); len(raw) > 0 {
+					if err := sendInterrupt(raw); err != nil {
+						lease.MarkBroken()
+						return nil, wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
+					}
+				}
+			}
+			readCtx := ctx
+			if clientDisconnected {
+				readCtx = context.WithoutCancel(ctx)
+			}
+			timeout := s.openAIWSReadTimeout()
+			if !interruptStarted.IsZero() {
+				timeout = min(timeout, time.Until(interruptStarted.Add(s.openAIWSReadTimeout())))
+			}
+			if timeout <= 0 {
+				turnInterruptFailure = NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "websocket interruption did not complete", context.DeadlineExceeded)
 				lease.MarkBroken()
-				return nil, wrapOpenAIWSIngressTurnError(
-					"read_upstream",
-					fmt.Errorf("read upstream websocket event: %w", readErr),
-					wroteDownstream,
-				)
+				if terminalResult != nil {
+					return settledTerminal(), nil
+				}
+				return nil, turnInterruptFailure
+			}
+			controls := interruptClient.controls()
+			if clientDisconnected {
+				controls = nil
+			}
+			upstreamMessage, control, readErr := interruptReader.read(readCtx, timeout, controls)
+			if control != nil {
+				if control.err != nil {
+					clientDisconnected = true
+					if turnInterrupt.responseID == "" {
+						interruptStarted = time.Now()
+						continue
+					}
+					if raw := turnInterrupt.automaticRequest(); len(raw) > 0 {
+						if err := sendInterrupt(raw); err != nil {
+							lease.MarkBroken()
+							return nil, wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
+						}
+					}
+					continue
+				}
+				if gjson.GetBytes(control.payload, "type").String() != "response.interrupt" {
+					interruptClient.queued = control
+					continue
+				}
+				if err := turnInterrupt.request(control.payload); err != nil {
+					lease.MarkBroken()
+					return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "interrupt must target the current response with discard_partial_items", err)
+				}
+				if err := sendInterrupt(control.payload); err != nil {
+					lease.MarkBroken()
+					return nil, wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
+				}
+				continue
+			}
+			if readErr != nil {
+				if !clientDisconnected && interruptClient.closed.Err() != nil {
+					clientDisconnected = true
+					if turnInterrupt.responseID == "" {
+						interruptStarted = time.Now()
+						continue
+					}
+					if raw := turnInterrupt.automaticRequest(); len(raw) > 0 {
+						if err := sendInterrupt(raw); err != nil {
+							lease.MarkBroken()
+							return nil, wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
+						}
+					}
+					continue
+				}
+				lease.MarkBroken()
+				if turnInterrupt.requested && terminalResult != nil {
+					turnInterruptFailure = NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "websocket interruption acknowledgement missing", readErr)
+					return settledTerminal(), nil
+				}
+				return nil, wrapOpenAIWSIngressTurnError("read_upstream", fmt.Errorf("read upstream websocket event: %w", readErr), wroteDownstream || turnInterrupt.requested)
 			}
 			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
 				upstreamMessage = normalized
 			}
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+			ack, interruptErr := turnInterrupt.observe(upstreamMessage, eventType, eventResponseID)
+			if interruptErr != nil {
+				turnInterruptFailure = NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "invalid websocket interruption acknowledgement", interruptErr)
+				if terminalResult != nil {
+					lease.MarkBroken()
+					return settledTerminal(), nil
+				}
+				if !ack {
+					lease.MarkBroken()
+					return nil, turnInterruptFailure
+				}
+			}
+			if ack {
+				if turnInterrupt.ackValid && !clientDisconnected {
+					if err := writeClientMessage(upstreamMessage); err != nil {
+						clientDisconnected = true
+					}
+				}
+				if terminalResult != nil && turnInterrupt.ready() {
+					if !turnInterrupt.reusable() {
+						lease.MarkBroken()
+					}
+					return settledTerminal(), nil
+				}
+				continue
+			}
+			if terminalResult != nil {
+				lease.MarkBroken()
+				turnInterruptFailure = NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "response output after interruption terminal", nil)
+				return settledTerminal(), nil
+			}
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 			cookieProbeObserver.observe(lease, upstreamMessage, eventType)
 			if cookieWS && !cookieProbeObserver.enabled && isOpenAIWSTerminalEvent(eventType) &&
@@ -1338,9 +1495,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			if isTerminalEvent {
+				if clientDisconnected && !turnInterrupt.requested {
+					if raw := turnInterrupt.automaticRequest(); len(raw) > 0 {
+						if err := sendInterrupt(raw); err != nil {
+							turnInterrupt.failure = err
+							turnInterruptFailure = NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "websocket interruption write failed", err)
+						}
+					}
+				}
 				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
-				if clientDisconnected {
+				if clientDisconnected && !turnInterrupt.requested {
 					lease.MarkBroken()
 				}
 				firstTokenMsValue := -1
@@ -1378,6 +1543,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					RequestedReasoningEffort:      requestedReasoningEffort,
 					Stream:                        reqStream,
 					OpenAIWSMode:                  true,
+					ClientDisconnect:              clientDisconnected,
 					UpstreamTerminalEvent:         terminalEvent,
 					ResponseHeaders:               lease.HandshakeHeaders(),
 					Duration:                      time.Since(turnStart),
@@ -1394,7 +1560,20 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					result.ImageOutputSizes = imageCounter.Sizes()
 					result.BillingModel = imageBillingModel
 				}
-				return result, nil
+				terminalResult = result
+				if turnInterrupt.requested {
+					result.wsReplayInput = nil
+					result.wsReplayInputExists = false
+				}
+				if turnInterrupt.ready() {
+					if !turnInterrupt.reusable() {
+						lease.MarkBroken()
+						if turnInterruptFailure == nil {
+							turnInterruptFailure = NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "interrupted response is not reusable", errOpenAIWSInterruptProtocol)
+						}
+					}
+					return settledTerminal(), nil
+				}
 			}
 		}
 	}
@@ -2011,34 +2190,54 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if result == nil {
 			return errors.New("websocket turn result is nil")
 		}
+		if turnInterruptFailure != nil {
+			lastTurnClean = false
+			sessionLease.MarkBroken()
+			// Retire an unacknowledged socket, but preserve the existing
+			// successful usage settlement for an already-abandoned client.
+			if result.ClientDisconnect {
+				return nil
+			}
+			return turnInterruptFailure
+		}
 		responseID := strings.TrimSpace(result.RequestID)
+		if turnInterrupt != nil && turnInterrupt.requested {
+			responseID = ""
+			lastTurnReplayInput = nil
+			lastTurnReplayInputExists = false
+			lastTurnStrictState = nil
+			lastTurnPayload = nil
+		}
 		lastTurnResponseID = responseID
 		if contextWindowBoundary.WindowID != "" {
 			lastTurnWindowID = contextWindowBoundary.WindowID
 		}
 		// 正文共享：currentPayload/currentTurnReplayInput 均不可变，历史直接引用；
 		// collector 增量经 combine 合并（新头数组）。
-		lastTurnReplayInput = currentTurnReplayInput
-		lastTurnReplayInputExists = currentTurnReplayInputExists
-		if result.wsReplayInputExists {
-			lastTurnReplayInput = combineOpenAIWSReplayItems(lastTurnReplayInput, result.wsReplayInput)
-			lastTurnReplayInputExists = true
-		}
-		nextStrictState, strictStateErr := buildOpenAIWSIngressPreviousTurnStrictState(currentPayload)
-		if strictStateErr != nil {
-			lastTurnStrictState = nil
-			// strict 状态不可用时保留整份上一轮 payload 供慢路径比较。
-			lastTurnPayload = currentPayload
-			logOpenAIWSModeInfo(
-				"ingress_ws_prev_response_strict_state_skip account_id=%d turn=%d conn_id=%s reason=build_error cause=%s",
-				account.ID,
-				turn,
-				truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
-				truncateOpenAIWSLogValue(strictStateErr.Error(), openAIWSLogValueMaxLen),
-			)
-		} else {
-			lastTurnStrictState = nextStrictState
-			lastTurnPayload = nil
+		if turnInterrupt == nil || !turnInterrupt.requested {
+			lastTurnReplayInput = currentTurnReplayInput
+			lastTurnReplayInputExists = currentTurnReplayInputExists
+			if result.wsReplayInputExists {
+				lastTurnReplayInput = combineOpenAIWSReplayItems(lastTurnReplayInput, result.wsReplayInput)
+				lastTurnReplayInputExists = true
+			}
+			nextStrictState, strictStateErr := buildOpenAIWSIngressPreviousTurnStrictState(currentPayload)
+			if strictStateErr != nil {
+				lastTurnStrictState = nil
+				// strict 状态不可用时保留整份上一轮 payload 供慢路径比较。
+				lastTurnPayload = currentPayload
+				logOpenAIWSModeInfo(
+					"ingress_ws_prev_response_strict_state_skip account_id=%d turn=%d conn_id=%s reason=build_error cause=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+					truncateOpenAIWSLogValue(strictStateErr.Error(), openAIWSLogValueMaxLen),
+				)
+			} else {
+				lastTurnStrictState = nextStrictState
+				lastTurnPayload = nil
+			}
+
 		}
 
 		if responseID != "" && stateStore != nil {
@@ -2072,6 +2271,47 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return fmt.Errorf("read client websocket request: %w", readErr)
 		}
 
+		for gjson.GetBytes(nextClientMessage, "type").String() == "response.interrupt" {
+			if turnInterrupt == nil {
+				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "no response to interrupt", nil)
+			}
+			if err := turnInterrupt.request(nextClientMessage); err != nil {
+				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "interrupt does not match the current response", err)
+			}
+			lastTurnClean = false
+			if err := sessionLease.WriteJSONWithContextTimeout(ctx, json.RawMessage(nextClientMessage), s.openAIWSWriteTimeout()); err != nil {
+				return err
+			}
+			lateReader := &openAIWSInterruptReader{lease: sessionLease}
+			ackBody, _, readErr := lateReader.read(ctx, s.openAIWSReadTimeout(), nil)
+			lateReader.close()
+			if readErr != nil {
+				sessionLease.MarkBroken()
+				return NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "websocket interruption acknowledgement missing", readErr)
+			}
+			kind, id, _ := parseOpenAIWSEventEnvelope(ackBody)
+			ack, ackErr := turnInterrupt.observe(ackBody, kind, id)
+			if !ack || ackErr != nil || !turnInterrupt.reusable() {
+				sessionLease.MarkBroken()
+				return NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "invalid websocket interruption acknowledgement", errOpenAIWSInterruptProtocol)
+			}
+			if err := writeClientMessage(ackBody); err != nil {
+				return err
+			}
+			lastTurnClean = true
+			lastTurnResponseID = ""
+			lastTurnReplayInput = nil
+			lastTurnReplayInputExists = false
+			lastTurnStrictState = nil
+			lastTurnPayload = nil
+			nextClientMessage, readErr = readClientMessage()
+			if readErr != nil {
+				if isOpenAIWSClientDisconnectError(readErr) {
+					return nil
+				}
+				return readErr
+			}
+		}
 		nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
 		if parseErr != nil {
 			return parseErr

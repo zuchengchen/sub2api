@@ -671,6 +671,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	var firstTokenMs *int
 	upstreamOutputStarted := false
 	responseID := ""
+	interruptState := &openAIWSInterruptState{}
+	interruptReader := &openAIWSInterruptReader{lease: lease}
+	defer interruptReader.close()
 	var finalResponse []byte
 	wroteDownstream := false
 	// clientOutputStarted 与 HTTP firstOutputStage 的提交点同口径：首个对
@@ -709,6 +712,13 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			upstreamReadCtx = context.WithoutCancel(ctx)
 			upstreamReadDetached = true
 		}
+		if raw := interruptState.automaticRequest(); len(raw) > 0 {
+			interruptReader.deadline = time.Time{}
+			if err := lease.WriteJSONWithContextTimeout(context.WithoutCancel(ctx), json.RawMessage(raw), s.openAIWSWriteTimeout()); err != nil {
+				interruptState.failure = err
+				lease.MarkBroken()
+			}
+		}
 		logOpenAIWSModeInfo(
 			"client_disconnected account_id=%d conn_id=%s cause=%s events=%d token_events=%d",
 			account.ID,
@@ -742,6 +752,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
 			ClientDisconnect:              clientDisconnected,
+			ClientInterrupted:             cleanExit && interruptState.requested && interruptState.reusable(),
 			ImageCount:                    imageCounter.Count(),
 			ImageOutputSizes:              imageCounter.Sizes(),
 		}
@@ -882,7 +893,7 @@ readLoop:
 					currentReadTimeout = remaining
 				}
 			}
-			message, readErr = lease.ReadMessageWithContextTimeout(upstreamReadCtx, currentReadTimeout)
+			message, _, readErr = interruptReader.read(upstreamReadCtx, currentReadTimeout, nil)
 			if readErr == nil {
 				if documents, repaired := splitOpenAIConcatenatedJSONDocuments(message); repaired {
 					logOpenAIWSModeInfo(
@@ -921,6 +932,9 @@ readLoop:
 			return nil, errors.New("upstream websocket returned malformed Responses event JSON after downstream output")
 		}
 		if readErr != nil {
+			if clientDisconnected && !readUsedDetachedContext && errors.Is(readErr, context.Canceled) && clientRequestCanceled() && responseID != "" {
+				continue
+			}
 			lease.MarkBroken()
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
 			logOpenAIWSModeInfo(
@@ -941,9 +955,6 @@ readLoop:
 				truncateOpenAIWSLogValue(lastEventType, openAIWSLogValueMaxLen),
 			)
 			if clientDisconnected {
-				if !readUsedDetachedContext && errors.Is(readErr, context.Canceled) && clientRequestCanceled() {
-					continue
-				}
 				break
 			}
 			if wroteDownstream && reqStream && isOpenAIWSGracefulClose(readErr) {
@@ -980,6 +991,36 @@ readLoop:
 		}
 
 		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
+		ack, interruptErr := interruptState.observe(message, eventType, eventResponseID)
+		if interruptErr != nil {
+			if terminalEventCount > 0 {
+				lease.MarkBroken()
+				break readLoop
+			}
+			if !ack {
+				lease.MarkBroken()
+				return partialResultWithUsage(), interruptErr
+			}
+		}
+		if ack {
+			if interruptState.ready() {
+				cleanExit = interruptState.reusable() && len(pendingJSONDocuments) == 0
+				if !cleanExit {
+					lease.MarkBroken()
+				}
+				break readLoop
+			}
+			continue
+		}
+		if clientDisconnected && !interruptState.requested && interruptState.responseID != "" {
+			if raw := interruptState.automaticRequest(); len(raw) > 0 {
+				interruptReader.deadline = time.Time{}
+				if err := lease.WriteJSONWithContextTimeout(context.WithoutCancel(ctx), json.RawMessage(raw), s.openAIWSWriteTimeout()); err != nil {
+					interruptState.failure = err
+					lease.MarkBroken()
+				}
+			}
+		}
 		if eventType == "" {
 			continue
 		}
@@ -1265,8 +1306,13 @@ readLoop:
 			// A terminal event must be the final JSON document in its WS message.
 			// Ignore any tail for the completed client turn, but never reuse the
 			// ambiguous upstream connection for another request.
-			cleanExit = len(pendingJSONDocuments) == 0
-			break
+			if interruptState.ready() {
+				cleanExit = len(pendingJSONDocuments) == 0 && interruptState.reusable()
+				if !cleanExit {
+					lease.MarkBroken()
+				}
+				break
+			}
 		}
 	}
 

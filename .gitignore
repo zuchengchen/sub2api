@@ -155,6 +155,8 @@ docs/*
 !docs/channel-monitor-v2-safe-defaults.md
 !docs/codex-credits.md
 !docs/tibo-oauth-auto-groups.md
+!docs/user-cache-diagnostics.md
+!docs/native-reasoning-replay.md
 !docs/legal/
 !docs/legal/*.md
 !docs/screenshots/

@@ -284,7 +284,11 @@ type OpenAIForwardResult struct {
 	Duration              time.Duration
 	FirstTokenMs          *int
 	ClientDisconnect      bool
-	ImageCount            int
+	// ClientInterrupted is set only by a verified response.interrupt lifecycle:
+	// matching accepted ACK plus valid terminal, with no protocol failure.
+	// It is an internal attribution marker, never a client-provided field.
+	ClientInterrupted bool `json:"-"`
+	ImageCount        int
 	// ImageEndpoint 标记请求来自专用图片端点；分组 image_count_billing 开关
 	// 只对这类请求生效，混合 Responses/Chat/WS 请求仍按 token 计费。
 	ImageEndpoint      bool
@@ -492,6 +496,7 @@ type OpenAIGatewayService struct {
 	supportDecisionReader SupportDecisionReader
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
+	nativeReplayRuntime   *nativeReasoningRuntime
 
 	openaiWSPoolOnce               sync.Once
 	openaiWSStateStoreOnce         sync.Once
@@ -648,6 +653,7 @@ func NewOpenAIGatewayService(
 		rateLimitService.SetAccountRuntimeBlocker(svc)
 		rateLimitService.SetOpenAICodexProbeSender(svc)
 	}
+	svc.initNativeReasoningReplay()
 	if openAITokenProvider != nil {
 		openAITokenProvider.SetAccountRuntimeBlocker(svc)
 	}

@@ -52,11 +52,14 @@ func TestScopedAdminAccountModelMappingFieldPermissions(t *testing.T) {
 }
 
 func TestScopedAdminWriteModelMappingEnforcesScopeAndPreservesCredentials(t *testing.T) {
+	// Released UpdateAccount behavior (admin_account.go, baseline 06ed6617b)
+	// preserves historical OpenAI OAuth mappings. Use an API-key account to
+	// verify that models.write can actually mutate supported routing mappings.
 	login, db := scopedAdminAccountTestDB(t)
 	_, err := db.Exec(`CREATE TABLE account_groups(account_id BIGINT,group_id BIGINT);
 	INSERT INTO accounts(id,name,platform,type,credentials) VALUES
-	(101,'共享','openai','oauth','{"access_token":"original-token","refresh_token":"original-refresh","base_url":"https://example.com","model_mapping":{"old":"old"}}'),
-	(102,'API','openai','apikey','{}'),(103,'其他组','openai','oauth','{}'),(104,'其他平台','anthropic','oauth','{}');
+	(101,'共享','openai','apikey','{"api_key":"original-api-key","session_key":"original-session","base_url":"https://example.com","model_mapping":{"old":"old"}}'),
+	(102,'其他类型','openai','oauth','{}'),(103,'其他组','openai','apikey','{}'),(104,'其他平台','anthropic','apikey','{}');
 	INSERT INTO account_groups VALUES(101,1),(101,2),(102,1),(103,2),(104,1);`)
 	require.NoError(t, err)
 	repo := &scopedAdminWriteTestRepo{login: login}
@@ -67,7 +70,7 @@ func TestScopedAdminWriteModelMappingEnforcesScopeAndPreservesCredentials(t *tes
 		return result
 	}
 	ctxFor := func(permissions ...string) context.Context {
-		return adminaccess.WithPrincipal(context.Background(), &adminaccess.Principal{Policy: adminaccess.Policy{Rules: []adminaccess.Rule{{Permissions: permissions, GroupIDs: []int64{1}, AccountTypes: []string{"oauth"}, Platforms: []string{"openai"}}}}})
+		return adminaccess.WithPrincipal(context.Background(), &adminaccess.Principal{Policy: adminaccess.Policy{Rules: []adminaccess.Rule{{Permissions: permissions, GroupIDs: []int64{1}, AccountTypes: []string{"apikey"}, Platforms: []string{"openai"}}}}})
 	}
 	body := `{"credentials":{"model_mapping":{"gpt-6":"gpt-6","alias":"gpt-6"}}}`
 	_, err = admin.ScopedAdminWrite(ctxFor("accounts.credentials", "accounts.update"), 101, "", fields(body), nil)
@@ -77,7 +80,7 @@ func TestScopedAdminWriteModelMappingEnforcesScopeAndPreservesCredentials(t *tes
 		_, err = admin.ScopedAdminWrite(ctx, id, "", fields(body), nil)
 		require.Equal(t, 404, infraerrors.Code(err))
 	}
-	for _, forbidden := range []string{`{"credentials":{"model_mapping":{},"access_token":"changed"}}`, `{"credentials":{"model_mapping":{},"base_url":"https://evil.example"}}`} {
+	for _, forbidden := range []string{`{"credentials":{"model_mapping":{},"api_key":"changed"}}`, `{"credentials":{"model_mapping":{},"access_token":"changed"}}`, `{"credentials":{"model_mapping":{},"base_url":"https://evil.example"}}`} {
 		_, err = admin.ScopedAdminWrite(ctx, 101, "", fields(forbidden), nil)
 		require.Equal(t, 403, infraerrors.Code(err), "模型权限不能混写凭证或网络")
 	}
@@ -86,13 +89,50 @@ func TestScopedAdminWriteModelMappingEnforcesScopeAndPreservesCredentials(t *tes
 		require.NoError(t, err)
 		a, err := repo.GetByID(ctx, 101)
 		require.NoError(t, err)
-		require.Equal(t, "original-token", a.Credentials["access_token"])
-		require.Equal(t, "original-refresh", a.Credentials["refresh_token"])
+		require.Equal(t, "original-api-key", a.Credentials["api_key"])
+		require.Equal(t, "original-session", a.Credentials["session_key"])
+		require.NotContains(t, a.Credentials, "access_token")
 		require.Equal(t, "https://example.com", a.Credentials["base_url"])
 		var want any
 		require.NoError(t, json.Unmarshal([]byte(mapping), &want))
 		require.Equal(t, want, a.Credentials["model_mapping"])
 		require.Equal(t, []int64{1, 2}, a.GroupIDs)
+	}
+}
+
+func TestScopedAdminWriteOAuthModelMappingPreservesHistoricalMapping(t *testing.T) {
+	// UpdateAccount deliberately retains model_mapping/compact_model_mapping
+	// for OpenAI OAuth; these stored legacy values do not drive OAuth routing.
+	// A successful scoped edit must not replace them or introduce absent ones.
+	login, db := scopedAdminAccountTestDB(t)
+	_, err := db.Exec(`CREATE TABLE account_groups(account_id BIGINT,group_id BIGINT);
+	INSERT INTO accounts(id,name,platform,type,credentials) VALUES
+	(201,'OAuth历史映射','openai','oauth','{"access_token":"original-token","refresh_token":"original-refresh","base_url":"https://example.com","model_mapping":{"old":"old"},"compact_model_mapping":{"legacy":"compact"}}'),
+	(202,'OAuth无历史映射','openai','oauth','{"access_token":"original-token","refresh_token":"original-refresh","base_url":"https://example.com"}');
+	INSERT INTO account_groups VALUES(201,1),(201,2),(202,1),(202,2);`)
+	require.NoError(t, err)
+	repo := &scopedAdminWriteTestRepo{login: login}
+	admin := &adminServiceImpl{accountRepo: repo, entClient: dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))}
+	ctx := adminaccess.WithPrincipal(context.Background(), &adminaccess.Principal{Policy: adminaccess.Policy{Rules: []adminaccess.Rule{{Permissions: []string{"accounts.models.write"}, GroupIDs: []int64{1}, AccountTypes: []string{"oauth"}, Platforms: []string{"openai"}}}}})
+	for _, id := range []int64{201, 202} {
+		before, err := repo.GetByID(ctx, id)
+		require.NoError(t, err)
+		for _, mapping := range []string{`{"alias":"gpt-6"}`, `{}`, `null`} {
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal([]byte(`{"credentials":{"model_mapping":`+mapping+`}}`), &fields))
+			_, err = admin.ScopedAdminWrite(ctx, id, "", fields, nil)
+			require.NoError(t, err)
+			after, err := repo.GetByID(ctx, id)
+			require.NoError(t, err)
+			require.Equal(t, before.Credentials, after.Credentials, "OAuth mapping edits preserve legacy mappings and all existing credentials")
+			require.Equal(t, []int64{1, 2}, after.GroupIDs)
+		}
+		for _, mixed := range []string{`{"credentials":{"model_mapping":{},"access_token":"changed"}}`, `{"credentials":{"model_mapping":{},"base_url":"https://evil.example"}}`} {
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal([]byte(mixed), &fields))
+			_, err = admin.ScopedAdminWrite(ctx, id, "", fields, nil)
+			require.Equal(t, 403, infraerrors.Code(err), "historical mapping preservation does not grant credential or network writes")
+		}
 	}
 }
 

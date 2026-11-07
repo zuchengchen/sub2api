@@ -1,0 +1,83 @@
+# Chat Completions 原生推理状态续接
+
+这项功能让已有 Chat Completions 客户端在工具调用的连续轮次中复用上游原生 Responses 输出项。服务器在转换前保留完整的原生状态，并将它与客户端真正收到的 assistant 消息及当时实际发送的输入前缀绑定。
+
+功能默认关闭。初期适用范围为 OpenAI OAuth 的 Chat Completions → Codex Responses 路径；API Key、PAT、Agent Identity、第三方传输插件与其他平台保持原路径。缺少明确会话标识、无法建立可信凭据身份、非工具调用输出、未知输出类型或未完成响应时不建立可恢复记录。
+
+原生 Codex OAuth 的 Responses / WS→HTTP 路径同时保留固定 Codex 的 `prefix_suffix` 项 ID、reasoning 内容的原生形式及原始工具配对。公开 API Key 上游继续使用原有兼容规则。WS→HTTP 重建历史时，缺失的 reasoning content 按固定源码序列化为 `null`；compaction 通过历史替换续接，不补写普通输出的轮次元数据。
+
+## 固定源码构建的 TLS 配置
+
+本轮固定 Codex GNU 源码构建使用 OpenSSL 3.5.5；旧 `openssl36` 档仍代表此前校准的发布包，不应通过修改同名模板混用两种来源。需要匹配本轮 GNU 构建时，显式设置进程环境变量 `SUB2API_CODEX_NATIVE_TLS_PROFILE=openssl35-gnu`。该选择由 Codex 业务 HTTP 与认证 HTTP 共用；自定义 CA 的 HTTP 仍使用 `rustls-h2`，WS 仍使用 `rustls`。账号显式 TLS 配置保持优先。
+
+空值或 `openssl36` 保留既有默认；其他值在应用配置验证时拒绝启动。新档携带实际支持的 zlib / zstd 证书压缩扩展，继续验证证书。该配置不由客户端请求头选择，也不根据宿主库版本自动猜测。修改后需重启服务；回滚时恢复此前环境配置。精确协议验收应记录所选档位和固定参考来源。
+
+## 运行开关
+
+通过后端 `settings` 的 `openai_native_reasoning_replay_config` 配置，仅由管理员控制：
+
+```json
+{"mode":"observe","user_ids":[428]}
+```
+
+模式：
+
+- `off`：不保存或恢复状态。
+- `observe`：观察真实请求并保存符合条件的完整状态，发给上游的请求保持原兼容转换结果。
+- `replay`：严格匹配成功时恢复状态，并保存新的完整结果。
+
+空用户列表不表示所有用户。可添加 RFC3339 格式的 `expires_at`；到期后关闭。设置缺失、非法或读取失败均回退关闭。设置缓存最多 5 秒，修改对随后请求生效；已开始的请求沿用其开始时确定的模式。
+
+例如，先读取并保存原值，再在经过授权的数据库会话中启用单用户观察：
+
+```sql
+SELECT value FROM settings WHERE key = 'openai_native_reasoning_replay_config';
+INSERT INTO settings (key, value, updated_at)
+VALUES ('openai_native_reasoning_replay_config', '{"mode":"observe","user_ids":[428]}', NOW())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
+```
+
+经过功能验证后将模式改为 `replay`。回退时将模式设为 `off`，或恢复上线前保存的原值。不清空生产 Redis，不修改用户 Key、余额或上游账号设置。
+
+## 存储与边界
+
+缓存使用独立 Redis 命名空间，与现有反方向桥接的推理文本缓存分离。完整原生输出使用现有 AES-GCM 实现、以应用 JWT 密钥派生的独立用途密钥保护；上游 `encrypted_content` 本身始终保持不透明。应用密钥变化导致旧记录无法读取时安全回退，不尝试破解或迁移旧状态。
+
+默认存储预算也可以通过 `gateway.native_reasoning_replay` 的对应项缩小：
+
+| 配置项 | 默认值及硬上限 |
+| --- | --- |
+| `ttl_seconds` | 3600 |
+| `io_timeout_ms` | 100 |
+| `max_entry_bytes` | 262144，包含存储摘要头和应用密文 |
+| `max_entries_per_user` | 64 |
+| `max_entries_global` | 1024 |
+| `max_lookups` | 每请求 32 |
+| `max_history_bytes` | 4194304 |
+| `max_output_items` | 128 |
+
+零值采用默认值；负数或超过硬上限的配置拒绝加载。有效 payload 上限约为每用户 16 MiB、全局 256 MiB，另有有界 Redis 元数据。相同输出的重复提交不延长 TTL。这是本地续接状态的保留时间，并不控制上游提示词缓存寿命。
+
+每个记录绑定用户、API Key、显式会话、实际模型、可信上游凭据身份、原始及最终语义参数、工具名映射、完整可见历史和生成时的实际原生输入前缀。只按规范化后的模型名或 session_id 匹配是不够的。
+
+恢复发生在请求构造和语义规范化完成之后；完整原生数组不再经过工具名或 ID 的二次改写。工具结果的调用 ID 和类型同时配对还原。每一组的祖先原生前缀都必须一致：缓存逐出、历史编辑、压缩、并行分支、参数变化或换凭据不能通过拼接不兼容的后代状态来补救。
+
+恢复能力是有界优化。无法证明匹配、历史或输出过大、结果缺失、存储不可用等情况保持原兼容路径。上线前丢失的推理状态无法补回。某些新用户轮次会改变上游合成前缀；这类前缀变化可能产生保守的缓存未命中。
+
+## 完成、错误与重试
+
+原生捕获以完整、可验证的 Responses 终态为逻辑边界，与固定 Codex 的消费者一致，不依赖 TCP EOF 或其后的可选 `[DONE]` 预读字节。客户端 Chat 捕获则必须确认实际写成功的响应：流式需要完整 `finish_reason` 和 `[DONE]`；非流式需要完整唯一 assistant。取消、短写、冲突、错误和不完整终态不提交缓存。
+
+上游返回完整 HTTP 400，且结构化 `error.code` 精确为 `invalid_encrypted_content` 时，对本次实际恢复的记录作失效处理。即使队列心跳已提交响应、客户端已取消，或错误携带用量/部分输出，也不能继续复用已确认遭到拒绝的状态。只有没有用量或部分输出、客户端尚未写出且未取消时，才允许至多重试一次原兼容请求。第二次失败按原错误处理。已写出的 SSE 请求不自动重放；明确的加密状态拒绝仅影响后续恢复。
+
+失效写入失败时，进程内有界拒绝屏障阻止再次注入同一摘要。屏障容量耗尽时，在其保护窗口内回退原兼容路径。跨进程或重启后的持久拒绝仍依赖 Redis 写入成功；所有记录都有短 TTL。
+
+内部 OAuth 401 恢复若改变实际授权主体，发送前阻止携带旧缓存状态的请求并安全回退。仅过期时间变化且主体不变的令牌刷新不必丢失状态。成功响应的授权主体与本次绑定不一致时不提交新记录。
+
+## 验证与观测
+
+协议正确性通过真实生产转换路径、本地 HTTP/SSE 双端记录、完整原生项对比、多用户隔离、Redis 集成和并发检查验证。单独的文本缓存或辅助函数测试不能替代这些检查。
+
+用户定向诊断详见 `user-cache-diagnostics.md`。诊断只记录必要的哈希、长度、类型及数值用量，不记录请求/回答原文、凭据或推理密文。报告实际恢复、未命中、费用和延迟；缓存命中率上升本身不保证任务总费用下降。
+
+生产采用正式 `czc-*` 标签与 GitHub Release 部署，按 AGENTS.md 重建前端并执行 embed 构建。初期仅单用户灰度，出错先关闭开关，必要时恢复已校验的旧标签备份，并重新检查版本、首页及 origin 发布链接。
