@@ -85,8 +85,9 @@ type nativeReasoningProjectionPlan struct {
 }
 
 // applyNativeReasoningProjection operates only on the final normalized input.
-// Candidate location is derived from unique tool IDs, then proved by the entire
-// compatibility fragment and both available adjacent anchors. Original native
+// Tool candidates are located by unique call IDs; message-only candidates by
+// their whole structural fragment. Both need unique matching spans and both
+// available adjacent anchors. Original native
 // output never passes through an alias/filter transformation. Any failed proof
 // retains the whole compatibility group and its original tool results.
 func applyNativeReasoningProjection(body []byte, replacements []NativeReasoningReplayReplacement, reverse map[string]string, limits NativeReasoningReplayLimits) ([]byte, []NativeReasoningReplayReference, error) {
@@ -112,6 +113,7 @@ func applyNativeReasoningProjection(body []byte, replacements []NativeReasoningR
 	canonical := make([][]byte, len(input))
 	typed := make([]nativeReasoningProjectionItem, len(input))
 	calls, results := map[string][]int{}, map[string][]int{}
+	var messageStarts map[string][]int
 	for i, raw := range input {
 		canonical[i], err = nativeReplayCanonicalObject(raw)
 		if err != nil {
@@ -162,34 +164,65 @@ func applyNativeReasoningProjection(body []byte, replacements []NativeReasoningR
 					break
 				}
 			}
-			if callOffset < 0 || firstID == "" || len(calls[firstID]) != 1 {
-				continue
+			var starts []int
+			messageOnly := callOffset < 0
+			if messageOnly {
+				if !nativeReasoningProjectionMessageOnly(replacement, fragment) {
+					continue
+				}
+				if messageStarts == nil {
+					messageStarts = make(map[string][]int)
+					for i, item := range typed {
+						if item.Type == "message" && item.Role == "assistant" {
+							key := nativeReplayDigest(canonical[i])
+							messageStarts[key] = append(messageStarts[key], i)
+						}
+					}
+				}
+				starts = messageStarts[nativeReplayDigest(fragment[0])]
+			} else {
+				if firstID == "" || len(calls[firstID]) != 1 {
+					continue
+				}
+				starts = []int{calls[firstID][0] - callOffset}
 			}
-			start := calls[firstID][0] - callOffset
-			end := start + len(fragment)
-			if start < 0 || end > len(input) {
-				continue
-			}
-			matched := true
-			for i, raw := range fragment {
-				if !bytes.Equal(raw, canonical[start+i]) {
-					matched = false
+			for _, start := range starts {
+				end := start + len(fragment)
+				if start < 0 || end > len(input) {
+					continue
+				}
+				matched := true
+				for i, raw := range fragment {
+					if !bytes.Equal(raw, canonical[start+i]) {
+						matched = false
+						break
+					}
+				}
+				if !matched || (len(before) > 0 && (start == 0 || !bytes.Equal(before, canonical[start-1]))) || (len(after) > 0 && (end == len(input) || !bytes.Equal(after, canonical[end]))) {
+					continue
+				}
+				var fixes []nativeReasoningProjectionFix
+				if messageOnly {
+					if end < len(input) && nativeReasoningProjectionIsResult(typed[end].Type) {
+						continue
+					}
+				} else {
+					var ok bool
+					fixes, ok = nativeReasoningProjectionPairs(replacement, fragment, typed, calls, results, forward, reverse, start, end)
+					if !ok {
+						continue
+					}
+				}
+				plan := nativeReasoningProjectionPlan{start: start, end: end, replacement: replacement, fixes: fixes}
+				if found != nil && (found.start != start || found.end != end) {
+					ambiguous = true
 					break
 				}
+				found = &plan
 			}
-			if !matched || (len(before) > 0 && (start == 0 || !bytes.Equal(before, canonical[start-1]))) || (len(after) > 0 && (end == len(input) || !bytes.Equal(after, canonical[end]))) {
-				continue
-			}
-			fixes, ok := nativeReasoningProjectionPairs(replacement, fragment, typed, calls, results, forward, reverse, start, end)
-			if !ok {
-				continue
-			}
-			plan := nativeReasoningProjectionPlan{start: start, end: end, replacement: replacement, fixes: fixes}
-			if found != nil && (found.start != start || found.end != end) {
-				ambiguous = true
+			if ambiguous {
 				break
 			}
-			found = &plan
 		}
 		if found != nil && !ambiguous {
 			plans = append(plans, *found)
@@ -262,6 +295,38 @@ func applyNativeReasoningProjection(body []byte, replacements []NativeReasoningR
 		return body, nil, ErrNativeReasoningReplayInvalid
 	}
 	return updated, applied, nil
+}
+
+// A message-looking compatibility fragment must never bypass tool pairing for
+// an output that actually contains calls. Only already-supported output kinds
+// are accepted, with at least one real assistant message.
+func nativeReasoningProjectionMessageOnly(r NativeReasoningReplayReplacement, fragment []json.RawMessage) bool {
+	for _, group := range [][]json.RawMessage{r.Compatibility, fragment} {
+		for _, raw := range group {
+			var item nativeReasoningProjectionItem
+			if json.Unmarshal(raw, &item) != nil || item.Type != "message" || item.Role != "assistant" {
+				return false
+			}
+		}
+	}
+	message := false
+	for _, raw := range r.Output {
+		var item nativeReasoningProjectionItem
+		if _, err := nativeReplayCanonicalObject(raw); err != nil || json.Unmarshal(raw, &item) != nil {
+			return false
+		}
+		switch item.Type {
+		case "message":
+			if item.Role != "assistant" {
+				return false
+			}
+			message = true
+		case "reasoning", "web_search_call":
+		default:
+			return false
+		}
+	}
+	return message
 }
 
 func nativeReasoningProjectionExpected(r NativeReasoningReplayReplacement, forward map[string]string, preserve bool) ([]json.RawMessage, json.RawMessage, json.RawMessage, error) {

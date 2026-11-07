@@ -179,7 +179,9 @@ func (c *NativeReasoningResponseCapture) observe(raw []byte, eventType string) b
 	if envelope.Error.Code == "invalid_encrypted_content" || envelope.Response.Error.Code == "invalid_encrypted_content" {
 		c.invalidEncrypted = true
 	}
-	c.collector.Observe(canonical, eventType)
+	// The canonical copy validates framing and error classification only. The
+	// collector also needs original done-item RawMessages for sparse terminals.
+	c.collector.Observe(raw, eventType)
 	if completed, ok := c.collector.CompletedResponse(); ok {
 		// Both the production Chat consumer and fixed Codex responses SSE
 		// consumer return at the first complete terminal event. Fixed Codex

@@ -32,7 +32,7 @@ func TestNativeReasoningReplayPublicationMatchesExactPreAssistantPrefix(t *testi
 	consumer := &nativeReasoningChat{runtime: producer.runtime, request: nativeReplayContinuation(request, completion)}
 	prepared, err := producer.runtime.engine.prepare(consumer.request)
 	require.NoError(t, err)
-	candidates := nativeReplayPairedTools(prepared.messages, 32)
+	candidates := nativeReplayRestoreCandidates(prepared.messages, 32)
 	require.Equal(t, []int{len(request.Messages)}, candidates)
 	require.Equal(t, p.keys[len(p.keys)-1], prepared.keys[candidates[0]-1])
 	require.NotEqual(t, producer.publication.entry.key, prepared.keys[len(prepared.keys)-1], "a request cannot wait on its own whole-history key")
@@ -220,7 +220,7 @@ func TestNativeReasoningReplayPublicationMultiplePredecessorsShareWaitBudget(t *
 		json.RawMessage(`{"role":"tool","tool_call_id":"call_second","content":"synthetic second result"}`))
 	prepared, err := first.runtime.engine.prepare(next)
 	require.NoError(t, err)
-	require.Len(t, nativeReplayPairedTools(prepared.messages, 32), 2)
+	require.Len(t, nativeReplayRestoreCandidates(prepared.messages, 32), 2)
 	store := &publicationDeadlineStore{NativeReasoningReplayStore: first.runtime.engine.store, deadline: make(chan time.Time, 1)}
 	first.runtime.engine.store = store
 	consumer := &nativeReasoningChat{runtime: first.runtime, request: next}
