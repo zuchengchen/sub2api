@@ -46,6 +46,8 @@ func TestFetchOpenAIAccountModelsOAuthPopulatesPickerFields(t *testing.T) {
 	require.Contains(t, ids, "gpt-image-2.5")
 	require.Contains(t, ids, "gpt-image-2.5-flare")
 	require.Contains(t, ids, "gpt-image-2.5-sunburst")
+	require.Contains(t, ids, "gpt-image-2.6-flare")
+	require.Contains(t, ids, "gpt-image-2.6-sunburst")
 
 	after, err := gateway.FetchOpenAIModelsList(ctx, account)
 	require.NoError(t, err)
@@ -156,6 +158,8 @@ func TestFetchOpenAIAccountModelsOAuthLabelsLocalImageModelsLikeUpstream(t *test
 	}
 	require.Equal(t, "GPT-5.6 Sol", byID["gpt-5.6-sol"], "upstream slug must not be the only label source")
 	require.Equal(t, "GPT Image 2.5 Flare", byID["gpt-image-2.5-flare"], "locally added models use the same naming rule")
+	require.Equal(t, "GPT Image 2.6 Flare", byID["gpt-image-2.6-flare"])
+	require.Equal(t, "GPT Image 2.6 Sunburst", byID["gpt-image-2.6-sunburst"])
 }
 
 func TestFetchOpenAIAccountModelsOAuthIgnoresOldImageAllowlist(t *testing.T) {
@@ -171,6 +175,8 @@ func TestFetchOpenAIAccountModelsOAuthIgnoresOldImageAllowlist(t *testing.T) {
 	}
 	require.Contains(t, ids, "gpt-image-2.5-flare")
 	require.Contains(t, ids, "gpt-image-2.5-sunburst")
+	require.Contains(t, ids, "gpt-image-2.6-flare")
+	require.Contains(t, ids, "gpt-image-2.6-sunburst")
 }
 
 func pickerModelIDs(models []openai.Model) []string {

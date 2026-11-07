@@ -1768,7 +1768,11 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		overrideUA = s.codexIdentityOverrideUA(account)
 	}
 	identity := resolveCodexOutboundIdentity(overrideUA)
-	if !useAPIKeyUpstream && codexModelsBootstrapRequest(ctx) {
+	sourceIdentity, sourceBuild := codexModelsSourceBuildIdentity(ctx, account, clientVersion)
+	if sourceBuild {
+		identity = sourceIdentity
+	}
+	if !sourceBuild && !useAPIKeyUpstream && codexModelsBootstrapRequest(ctx) {
 		// Before app-server initialization the CLI has not installed its
 		// product suffix yet (0.166.0's first models request). Keep the
 		// account's family/version/platform, changing only this lifecycle bit.
@@ -1781,7 +1785,7 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	// client_version 查询参数本身始终按客户端原值透传（内容协商语义，契约见
 	// TestFetchCodexModelsManifestPassthrough）。
 	headerVersion := NormalizeCodexClientVersion(clientVersion)
-	if headerVersion == "" || CompareVersions(headerVersion, codexUpstreamMinVersion) < 0 {
+	if !sourceBuild && (headerVersion == "" || CompareVersions(headerVersion, codexUpstreamMinVersion) < 0) {
 		headerVersion = identity.version
 	}
 	headers.Set("Version", headerVersion)

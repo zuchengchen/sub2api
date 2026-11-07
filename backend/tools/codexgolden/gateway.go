@@ -140,6 +140,11 @@ func gatewayMain(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	buildMeta := map[string]any{"codex_version": actualVersion, "source_commit": *commit, "binary_sha256": fmt.Sprintf("%x", sha256.Sum256(binary)), "models_sha256": fmt.Sprintf("%x", sha256.Sum256(modelsJSON))}
+	if err := bindSourceBuildReceipt(buildMeta, *out, *bin); err != nil {
+		fmt.Fprintln(os.Stderr, "gateway:", err)
+		return 2
+	}
 	service.SetCodexCanonicalUserAgentResolver(func() string {
 		return "codex_cli_rs/" + *version + " (Ubuntu 26.4.0; x86_64) xterm-256color (codex_cli_rs; " + *version + ")"
 	})
@@ -155,6 +160,7 @@ func gatewayMain(args []string) int {
 	var hellos []map[string]any
 	gatewayHash := ""
 	for i, sc := range scenarios {
+		sc.NativeState = true
 		if *single != "" && *single != sc.Name {
 			continue
 		}
@@ -184,6 +190,9 @@ func gatewayMain(args []string) int {
 		"codex_version": actualVersion, "source_commit": *commit, "binary_sha256": fmt.Sprintf("%x", sha256.Sum256(binary)),
 		"models_sha256": fmt.Sprintf("%x", sha256.Sum256(modelsJSON)), "recorded_at": time.Now().UTC().Format(time.RFC3339),
 		"recorder": "backend/tools/codexgolden gateway", "tls_mode": recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh", "scenarios": names, "native_tls_pending": false, "candidate_ingress_mode": *ingressMode, "gateway_config_sha256": gatewayHash,
+	}
+	if hash, ok := buildMeta["source_build_receipt_sha256"]; ok {
+		meta["source_build_receipt_sha256"] = hash
 	}
 	if err := addCaptureContract(meta); err != nil {
 		fmt.Fprintln(os.Stderr, err)

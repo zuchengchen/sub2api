@@ -2057,16 +2057,9 @@ func TestIsInstructionsEmpty(t *testing.T) {
 	}
 }
 
-// TestFilterCodexInput_PreservesReasoningStripsID covers the core OAuth-path
-// reasoning contract (replaces the earlier "drops reasoning" test, whose
-// premise was wrong). A reasoning item carrying encrypted_content is the
-// official channel for replaying reasoning context across turns under
-// store=false, so it must survive the filter with encrypted_content intact;
-// only its rs_* id is stripped (always, independent of PreserveReferences)
-// because a bare rs_* id replayed under store=false 404s upstream. Contracts
-// 1/2/3, verified end-to-end against chatgpt.com codex (gpt-5.5). See issue
-// #1957.
-func TestFilterCodexInput_PreservesReasoningStripsID(t *testing.T) {
+// Complete native reasoning IDs follow fixed Codex bfdbf01: a prefixed ID
+// accompanies the opaque payload and survives independently of reference mode.
+func TestFilterCodexInput_PreservesCompleteReasoningID(t *testing.T) {
 	build := func() []any {
 		return []any{
 			map[string]any{
@@ -2091,10 +2084,7 @@ func TestFilterCodexInput_PreservesReasoningStripsID(t *testing.T) {
 			require.Equal(t, "reasoning", item["type"])
 			// Contract 2: encrypted_content (cross-turn channel) preserved verbatim.
 			require.Equal(t, "gAAAAAB-enc-payload", item["encrypted_content"])
-			// Contract 1/3: rs_* id stripped unconditionally, even when
-			// PreserveReferences=true (id lookup, not the item, triggers the 404).
-			_, hasID := item["id"]
-			require.False(t, hasID)
+			require.Equal(t, "rs_0672f12450da0b9c0169f07220a6c08198b68c2455ced99344", item["id"])
 			_, hasCallID := item["call_id"]
 			require.False(t, hasCallID)
 			// summary passed through untouched.
@@ -2159,7 +2149,7 @@ func TestFilterCodexInput_ReasoningBackfillsMissingSummary(t *testing.T) {
 
 // TestFilterCodexInput_PreservesReasoningSummaryAndContent verifies that a
 // non-empty summary is not overwritten and that arbitrary reasoning fields
-// (e.g. content) survive verbatim — only the id is removed.
+// (e.g. content) survive verbatim together with the complete native item ID.
 func TestFilterCodexInput_PreservesReasoningSummaryAndContent(t *testing.T) {
 	summary := []any{
 		map[string]any{"type": "summary_text", "text": "Considered the options."},
@@ -2187,13 +2177,12 @@ func TestFilterCodexInput_PreservesReasoningSummaryAndContent(t *testing.T) {
 	// content preserved verbatim.
 	require.Equal(t, content, item["content"])
 	require.Equal(t, "gAAAAAB-enc", item["encrypted_content"])
-	_, hasID := item["id"]
-	require.False(t, hasID)
+	require.Equal(t, "rs_abc", item["id"])
 }
 
 // TestFilterCodexInput_PreservesReasoningInMixedInput exercises contract 7:
-// reasoning items are stripped of their rs_* ids but kept (with
-// encrypted_content) while message / function_call / function_call_output
+// complete reasoning items keep their IDs; bare reasoning loses its ID while
+// message / function_call / function_call_output
 // items flow through unchanged, with tool-call pairing (call_id) intact.
 func TestFilterCodexInput_PreservesReasoningInMixedInput(t *testing.T) {
 	build := func() []any {
@@ -2230,18 +2219,14 @@ func TestFilterCodexInput_PreservesReasoningInMixedInput(t *testing.T) {
 				require.True(t, ok)
 				typ, _ := item["type"].(string)
 				byType[typ] = append(byType[typ], item)
-				// No surviving item may carry an rs_* id.
-				if id, ok := item["id"].(string); ok {
-					require.False(t, strings.HasPrefix(id, "rs_"),
-						"no item carrying an rs_* id should survive the filter")
-				}
+
 			}
 
-			// Both reasoning items kept, ids stripped, summary present.
+			// Both reasoning items remain; only the self-contained one keeps its ID.
 			require.Len(t, byType["reasoning"], 2)
+			require.Equal(t, "rs_1", byType["reasoning"][0]["id"])
+			require.NotContains(t, byType["reasoning"][1], "id")
 			for _, r := range byType["reasoning"] {
-				_, hasID := r["id"]
-				require.False(t, hasID)
 				_, hasSummary := r["summary"]
 				require.True(t, hasSummary)
 			}

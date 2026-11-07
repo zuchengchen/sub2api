@@ -141,6 +141,24 @@ func compareMain(args []string) int {
 			invalid++
 			continue
 		}
+		if baseMeta.SourceBuildReceiptHash != "" || candidateMeta.SourceBuildReceiptHash != "" {
+			for side, group := range []map[recordKey]record{baseRecords, candRecords} {
+				rows := make([]record, 0, len(group))
+				for _, row := range group {
+					rows = append(rows, row)
+				}
+				if err := validateNativeContinuation(rows); err != nil {
+					var difference *nativeContinuationDifference
+					if side == 1 && errors.As(err, &difference) {
+						fmt.Fprintln(os.Stderr, "compare: native continuation product difference:", err)
+						diffs++
+					} else {
+						fmt.Fprintln(os.Stderr, "compare: invalid native response/continuation evidence:", err)
+						invalid++
+					}
+				}
+			}
+		}
 		diffs += compareRecords(name, baseRecords, candRecords, *verbose)
 	}
 	for _, name := range []string{"tls_clienthellos.json", "tls_clienthellos_scenarios.json"} {

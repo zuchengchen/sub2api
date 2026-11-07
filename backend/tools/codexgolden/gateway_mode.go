@@ -12,6 +12,7 @@ import (
 	"regexp"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/codexwire"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -54,7 +55,10 @@ func verifyGatewayModeResolution(cfg *config.Config, account *service.Account, m
 // Candidate-only hash: unlike recordingConfigHash, this binds the product
 // mode/config and is never compared against or copied into official reference.
 func gatewayConfigFingerprint(cfg *config.Config) string {
-	return fmt.Sprintf("%x", sha256.Sum256(mustJSON(cfg.Gateway)))
+	return fmt.Sprintf("%x", sha256.Sum256(mustJSON(map[string]any{
+		"gateway":            cfg.Gateway,
+		"native_tls_profile": codexwire.NativeTLSProfileName(),
+	})))
 }
 
 type gatewayIngressObservation struct {

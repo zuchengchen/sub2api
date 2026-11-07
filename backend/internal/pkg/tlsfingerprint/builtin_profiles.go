@@ -29,6 +29,16 @@ func BuiltinProfile(name string) *Profile {
 			SupportedVersions: []uint16{0x0304, 0x0303}, KeyShareGroups: []uint16{29}, PSKModes: []uint16{1},
 			Extensions: []uint16{0, 11, 10, 35, 16, 22, 23, 13, 43, 45, 51},
 		}
+	case "openssl35-gnu":
+		// Explicit host-GNU preset: fixed Codex bfdbf01 linked to the verified
+		// OpenSSL 3.5.5 build with zlib+zstd. Keep the published static 3.6
+		// preset below unchanged. The source build advertises both compressed
+		// point formats and RFC8879 algorithms zlib(1), zstd(3), in that order.
+		p = *BuiltinProfile("openssl36")
+		p.Name = "OpenSSL 3.5.5 GNU (Codex CLI HTTP)"
+		p.PointFormats = []uint16{0, 1, 2}
+		p.Extensions = append(p.Extensions, 27)
+		p.CertCompressionAlgorithms = []uint16{1, 3}
 	case "openssl36", "openssl36-linux":
 		// Official Codex CLI HTTP lane on Linux: reqwest default-tls →
 		// native-tls → statically linked OpenSSL 3.6.x. native-tls-alpn is not

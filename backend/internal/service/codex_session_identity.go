@@ -35,6 +35,16 @@ func (s *OpenAIGatewayService) codexSessionIdentity(c *gin.Context, account *Acc
 		namespace = fmt.Sprintf("account:%d", source.ID)
 	}
 	namespace = fmt.Sprintf("%s:key:%d", namespace, getAPIKeyIDFromContext(c))
+	var headers http.Header
+	if c != nil && c.Request != nil {
+		headers = c.Request.Header
+	}
+	sourceIdentity, sourceBuild := codexSourceBuildIdentityFromHeaders(headers, account)
+	if sourceBuild {
+		// A source-build claim must not pin an ordinary client's same session to
+		// 0.0.0, nor inherit an earlier canonical identity from that session.
+		namespace += fmt.Sprintf(":source-build:%x", sha256.Sum256([]byte(sourceIdentity.userAgent)))
+	}
 	contextKey := "codex_session_identity:" + namespace
 	if c != nil {
 		if cached, ok := c.Get(contextKey); ok {
@@ -50,10 +60,6 @@ func (s *OpenAIGatewayService) codexSessionIdentity(c *gin.Context, account *Acc
 				return snapshot
 			}
 		}
-	}
-	var headers http.Header
-	if c != nil && c.Request != nil {
-		headers = c.Request.Header
 	}
 	parsed := openAIRequestPayloadView(rawBody)
 	evidence := collectCodexTurnEvidence(parsed.Get("client_metadata"), headers, parsed)
@@ -80,11 +86,17 @@ func (s *OpenAIGatewayService) codexSessionIdentity(c *gin.Context, account *Acc
 			override = s.codexIdentityOverrideUA(source)
 		}
 		identity := resolveCodexOutboundIdentity(override)
+		profileVersion := identity.version
+		if sourceBuild {
+			identity = sourceIdentity
+		}
 		mode := codexWireProfileModeAuto
 		if s != nil && s.cfg != nil {
 			mode = s.cfg.Gateway.CodexWire.Profile
 		}
-		profile, _ := resolveCodexWireProfile(identity.version, mode)
+		// 0.0.0 says nothing about release feature ordering. Keep the configured
+		// wire profile while preserving the observed source-build identity.
+		profile, _ := resolveCodexWireProfile(profileVersion, mode)
 		snapshot = codexSessionIdentitySnapshot{identity: identity, profile: profile}
 		codexSessionIdentities.Lock()
 		if existing, ok := codexSessionIdentities.entries[key]; ok && now.Sub(existing.lastUsed) < codexSessionIdentityIdleTTL {
@@ -128,7 +140,21 @@ func (s *OpenAIGatewayService) codexSessionClientVersion(c *gin.Context, account
 }
 
 func (s *OpenAIGatewayService) applyCodexSessionIdentity(c *gin.Context, account *Account, rawBody []byte, headers http.Header) {
-	if headers == nil || !isCodexOAuthAccount(account) || !codexIdentityEnforcement.Load() {
+	if headers == nil || !isCodexOAuthAccount(account) {
+		return
+	}
+	if !codexIdentityEnforcement.Load() {
+		if c == nil || c.Request == nil {
+			return
+		}
+		// The legacy min-version pairing may run while enforcement is disabled;
+		// restore a proven source-build value without changing other clients.
+		identity, ok := codexSourceBuildIdentityFromHeaders(c.Request.Header, account)
+		if ok {
+			headers.Set("User-Agent", identity.userAgent)
+			headers.Set("originator", identity.originator)
+			headers.Set("version", identity.version)
+		}
 		return
 	}
 	identity := s.codexSessionIdentity(c, account, rawBody).identity

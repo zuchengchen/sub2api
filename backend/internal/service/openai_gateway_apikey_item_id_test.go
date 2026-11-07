@@ -71,7 +71,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_StripsInvalidInputItemIDs(t *tes
 	require.False(t, gjson.GetBytes(forwarded, "input.9.id").Exists())
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_SanitizesNativeToolItemIDs(t *testing.T) {
+func TestOpenAIGatewayService_OAuthPassthrough_ScopesNativeItemIDs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	for _, accountType := range []string{AccountTypeOAuth, AccountTypeSetupToken} {
@@ -109,9 +109,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_SanitizesNativeToolItemIDs(t *tes
 			require.NotNil(t, result)
 			require.NotNil(t, upstream.lastReq)
 			require.Equal(t, "https://chatgpt.com/backend-api/codex/responses", upstream.lastReq.URL.String())
-			require.False(t, gjson.GetBytes(upstream.lastBody, "input.0.id").Exists())
+			require.Equal(t, accountType == AccountTypeOAuth, gjson.GetBytes(upstream.lastBody, "input.0.id").Exists())
 			require.Equal(t, "ctc_valid", gjson.GetBytes(upstream.lastBody, "input.1.id").String())
-			require.False(t, gjson.GetBytes(upstream.lastBody, "input.2.id").Exists())
+			require.Equal(t, accountType == AccountTypeOAuth, gjson.GetBytes(upstream.lastBody, "input.2.id").Exists())
 			require.Equal(t, "tsc_valid", gjson.GetBytes(upstream.lastBody, "input.3.id").String())
 		})
 	}
@@ -277,12 +277,21 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBodyPreservesOpaqueRefere
 			}, false)
 
 			require.NoError(t, err)
-			require.True(t, changed)
-			require.Len(t, gjson.GetBytes(normalized, "input").Array(), 3)
 			require.Equal(t, "ctc_call", gjson.GetBytes(normalized, "input.0.id").String())
 			require.Equal(t, "call_custom", gjson.GetBytes(normalized, "input.1.call_id").String())
-			require.False(t, gjson.GetBytes(normalized, "input.1.id").Exists())
-			require.Equal(t, "item_future", gjson.GetBytes(normalized, "input.2.id").String())
+			if accountType == AccountTypeOAuth {
+				// Fixed Codex bfdbf01 preserves any nonempty prefix_suffix ID.
+				require.False(t, changed)
+				require.Len(t, gjson.GetBytes(normalized, "input").Array(), 4)
+				require.Equal(t, "ctco_bad", gjson.GetBytes(normalized, "input.1.id").String())
+				require.Equal(t, "ctco_bad", gjson.GetBytes(normalized, "input.2.id").String())
+				require.Equal(t, "item_future", gjson.GetBytes(normalized, "input.3.id").String())
+			} else {
+				require.True(t, changed)
+				require.Len(t, gjson.GetBytes(normalized, "input").Array(), 3)
+				require.False(t, gjson.GetBytes(normalized, "input.1.id").Exists())
+				require.Equal(t, "item_future", gjson.GetBytes(normalized, "input.2.id").String())
+			}
 
 			second, changedAgain, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(normalized, &Account{
 				Platform: PlatformOpenAI,

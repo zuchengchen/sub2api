@@ -28,7 +28,7 @@ func (s *OpenAIGatewayService) reloadOpenAIOAuthHeaders(ctx context.Context, acc
 	}
 	// Reload replaces this account's auth state across its token/device
 	// snapshots, without touching connections owned by any other account.
-	p.openAIOAuthService.retireAccountAuthClient(ctx, latest)
+	p.openAIOAuthService.retireAccountAuthClient(withCodexSourceBuildAuthIdentity(ctx, latest, headers), latest)
 	updated := headers.Clone()
 	updated.Set("Authorization", "Bearer "+latest.GetOpenAIAccessToken())
 	return updated, latest, true
@@ -47,6 +47,7 @@ func (s *OpenAIGatewayService) recoverOpenAIOAuthHeaders(ctx context.Context, ac
 	if rejected == "" || rejected == authorization {
 		return headers, nil, false
 	}
+	ctx = withCodexSourceBuildAuthIdentity(ctx, owner, headers)
 	token, err := s.openAITokenProvider.RefreshAfterUnauthorized(ctx, owner, rejected)
 	if err != nil {
 		return headers, owner, false
@@ -79,6 +80,7 @@ func (s *OpenAIGatewayService) refreshOpenAIWSAuthHeaders(ctx context.Context, a
 		}
 		owner = latest
 	}
+	ctx = withCodexSourceBuildAuthIdentity(ctx, owner, headers)
 	token, err := s.openAITokenProvider.GetAccessToken(ctx, owner)
 	if err != nil {
 		return nil, err

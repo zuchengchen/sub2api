@@ -956,6 +956,7 @@ func (c GatewayConfig) CodexFullSynthesisEnabled() bool {
 
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
+	NativeReasoningReplay GatewayNativeReasoningReplayConfig `mapstructure:"native_reasoning_replay"`
 	// MinOutputTokens is the minimum max_output_tokens used when
 	// converting Chat Completions or Anthropic requests to Responses.
 	MinOutputTokens int `mapstructure:"min_output_tokens"`
@@ -2520,6 +2521,14 @@ func setDefaults() {
 
 	// Gateway
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
+	viper.SetDefault("gateway.native_reasoning_replay.ttl_seconds", 3600)
+	viper.SetDefault("gateway.native_reasoning_replay.io_timeout_ms", 100)
+	viper.SetDefault("gateway.native_reasoning_replay.max_entry_bytes", 256<<10)
+	viper.SetDefault("gateway.native_reasoning_replay.max_entries_per_user", 64)
+	viper.SetDefault("gateway.native_reasoning_replay.max_entries_global", 1024)
+	viper.SetDefault("gateway.native_reasoning_replay.max_lookups", 32)
+	viper.SetDefault("gateway.native_reasoning_replay.max_history_bytes", 4<<20)
+	viper.SetDefault("gateway.native_reasoning_replay.max_output_items", 128)
 	viper.SetDefault("gateway.openai_response_header_timeout", 0)
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
 	viper.SetDefault("gateway.grok_stream_data_interval_timeout", 0)
@@ -2856,6 +2865,11 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	switch strings.TrimSpace(os.Getenv("SUB2API_CODEX_NATIVE_TLS_PROFILE")) {
+	case "", "openssl36", "openssl35-gnu":
+	default:
+		return fmt.Errorf("SUB2API_CODEX_NATIVE_TLS_PROFILE must be empty, openssl36 or openssl35-gnu")
+	}
 	if c.Gateway.MinOutputTokens < 16 {
 		return fmt.Errorf("gateway.min_output_tokens must be at least 16")
 	}
@@ -3455,6 +3469,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.GrokResponseHeaderTimeout < 0 || c.Gateway.GrokResponseHeaderTimeout > 1800 {
 		return fmt.Errorf("gateway.grok_response_header_timeout must be between 0-1800 seconds")
+	}
+	if err := c.Gateway.NativeReasoningReplay.Validate(); err != nil {
+		return err
 	}
 	if c.Gateway.GrokStreamDataIntervalTimeout < 0 {
 		return fmt.Errorf("gateway.grok_stream_data_interval_timeout must be non-negative")

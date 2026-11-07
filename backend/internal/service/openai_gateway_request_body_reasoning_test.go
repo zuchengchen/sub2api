@@ -214,7 +214,7 @@ func TestNormalizeOpenAIAPIKeyStoreFalseReasoningReplay(t *testing.T) {
 	require.True(t, changed)
 	require.Equal(t, int64(3), gjson.GetBytes(normalized, "input.#").Int())
 	require.Equal(t, "reasoning", gjson.GetBytes(normalized, "input.0.type").String())
-	require.False(t, gjson.GetBytes(normalized, "input.0.id").Exists())
+	require.Equal(t, "rs_encrypted", gjson.GetBytes(normalized, "input.0.id").String())
 	require.False(t, gjson.GetBytes(normalized, "input.0.call_id").Exists())
 	require.Equal(t, "cipher", gjson.GetBytes(normalized, "input.0.encrypted_content").String())
 	require.True(t, gjson.GetBytes(normalized, "input.0.summary").IsArray())
@@ -406,7 +406,7 @@ func TestNormalizeOpenAIResponsesReasoningContentReplayKeepsPortableShapes(t *te
 	}
 }
 
-func TestNormalizeOpenAIResponsesWebSocketCompatibilityBodyStripsReasoningContentOnlyForOpenAI(t *testing.T) {
+func TestNormalizeOpenAIResponsesWebSocketCompatibilityBodyScopesReasoningContentToDestination(t *testing.T) {
 	body := []byte(`{"type":"response.create","model":"gpt-5.6-sol","store":true,"input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"keep"}],"content":[{"type":"reasoning_text","text":"remove"}]}]}`)
 	for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
 		normalized, changed, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(body, &Account{
@@ -414,8 +414,14 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBodyStripsReasoningConten
 			Type:     accountType,
 		}, false)
 		require.NoError(t, err)
-		require.True(t, changed)
-		require.False(t, gjson.GetBytes(normalized, "input.0.content").Exists())
+		if accountType == AccountTypeOAuth {
+			// The native Codex schema preserves reasoning_text content.
+			require.False(t, changed)
+			require.Equal(t, "remove", gjson.GetBytes(normalized, "input.0.content.0.text").String())
+		} else {
+			require.True(t, changed)
+			require.False(t, gjson.GetBytes(normalized, "input.0.content").Exists())
+		}
 		require.Equal(t, "keep", gjson.GetBytes(normalized, "input.0.summary.0.text").String())
 	}
 

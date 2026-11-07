@@ -818,7 +818,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 }
 
-func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2_OAuthPreservesPrefixedNativeToolItemID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -881,7 +881,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID
 	requestJSON := requestToJSONString(requestPayload)
 	require.Equal(t, "response.create", gjson.Get(requestJSON, "type").String())
 	toolCall := gjson.Get(requestJSON, `input.#(type=="custom_tool_call")`)
-	require.False(t, toolCall.Get("id").Exists(), "stale fc_* ID must not be replayed as a native custom_tool_call ID")
+	require.Equal(t, "fc_hotfix_probe", toolCall.Get("id").String(), "Codex OAuth preserves the prefixed item identity while legacy call pairing stays consistent")
 	require.Equal(t, "ctc_hotfix", toolCall.Get("call_id").String())
 	toolOutput := gjson.Get(requestJSON, `input.#(type=="custom_tool_call_output")`)
 	require.True(t, toolOutput.Exists())

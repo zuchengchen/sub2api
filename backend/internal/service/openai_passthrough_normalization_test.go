@@ -83,11 +83,11 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBody_SanitizesNativeItemI
 		}
 		normalized, changed, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(body, &Account{Platform: PlatformOpenAI, Type: accountType}, false)
 		require.NoError(t, err)
-		require.True(t, changed)
+		require.Equal(t, !oauth, changed)
 		require.Equal(t, "response.create", gjson.GetBytes(normalized, "type").String())
-		require.False(t, gjson.GetBytes(normalized, "input.0.id").Exists())
+		require.Equal(t, oauth, gjson.GetBytes(normalized, "input.0.id").Exists())
 		require.Equal(t, "ctc_valid", gjson.GetBytes(normalized, "input.1.id").String())
-		require.False(t, gjson.GetBytes(normalized, "input.2.id").Exists())
+		require.Equal(t, oauth, gjson.GetBytes(normalized, "input.2.id").Exists())
 		require.Equal(t, "tsc_valid", gjson.GetBytes(normalized, "input.3.id").String())
 		// Native Responses call_id values are correlation keys, not item IDs.
 		require.Equal(t, "call_custom_1", gjson.GetBytes(normalized, "input.0.call_id").String())
@@ -111,7 +111,9 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBody_APIKeyStoreFalseRepl
 	require.True(t, changed)
 	require.False(t, gjson.GetBytes(normalized, "parallel_tool_calls").Exists())
 	require.Equal(t, int64(2), gjson.GetBytes(normalized, "input.#").Int())
-	require.False(t, gjson.GetBytes(normalized, "input.0.id").Exists())
+	// Fixed Codex bfdbf01 preserves a valid prefix_suffix ID when the complete
+	// opaque reasoning item is replayed; bare store:false references still drop.
+	require.Equal(t, "rs_keep", gjson.GetBytes(normalized, "input.0.id").String())
 	require.False(t, gjson.GetBytes(normalized, "input.0.call_id").Exists())
 	require.True(t, gjson.GetBytes(normalized, "input.0.summary").IsArray())
 	require.Equal(t, "message", gjson.GetBytes(normalized, "input.1.type").String())

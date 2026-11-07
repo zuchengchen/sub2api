@@ -53,7 +53,7 @@ func main() {
 	useStrace := flag.Bool("strace", true, "trace connect(2) and fail on non-loopback destinations")
 	modelsPath := flag.String("models-json", "", "models.json served for GET /codex/models (codex-rs/models-manager/models.json at the recorded tag)")
 	expectVersion := flag.String("expect-version", "", "require this exact CLI version before recording")
-	sourceCommit := flag.String("source-commit", "", "official commit resolved from the recorded release tag")
+	sourceCommit := flag.String("source-commit", "", "fixed official source commit (release or verified source build)")
 	flag.StringVar(&keepDir, "keep", "", "copy each sandbox (trace, stderr) here for debugging")
 	traceDNS := flag.Bool("trace-dns", false, "also trace sendto/sendmsg to see DNS query names (debug)")
 	flag.Parse()
@@ -137,6 +137,9 @@ func main() {
 		fatal(hashErr)
 	}
 	meta["binary_sha256"] = fmt.Sprintf("%x", hash.Sum(nil))
+	if err := bindSourceBuildReceipt(meta, *outDir, binPath); err != nil {
+		fatal(err)
+	}
 	var leaks []string
 
 	hellos, tlsLeaks, err := recordTLS(*codexBin, tracer, *timeout)
@@ -158,6 +161,7 @@ func main() {
 	var names []string
 	var customCAHellos []map[string]any
 	for _, sc := range scenarios {
+		sc.NativeState = true
 		recs, scHellos, scLeaks, err := recordScenario(*codexBin, tracer, sc, *timeout)
 		if err != nil {
 			fatal(fmt.Errorf("scenario %s: %w", sc.Name, err))
@@ -569,9 +573,11 @@ func validateScenario(sc scenario, recs []record) error {
 		var body struct {
 			Generate *bool `json:"generate"`
 			Input    []struct {
-				Type   string `json:"type"`
-				CallID string `json:"call_id"`
-				Output string `json:"output"`
+				Type      string          `json:"type"`
+				ID        string          `json:"id"`
+				Encrypted string          `json:"encrypted_content"`
+				CallID    string          `json:"call_id"`
+				Output    json.RawMessage `json:"output"`
 			} `json:"input"`
 		}
 		if err := json.Unmarshal(rec.BodyJSON, &body); err != nil {
@@ -588,12 +594,20 @@ func validateScenario(sc scenario, recs []record) error {
 		for _, item := range body.Input {
 			switch item.Type {
 			case "function_call_output":
-				tool = tool || (strings.HasPrefix(item.CallID, "call_golden_") && successfulGoldenToolOutput(item.Output))
+				var output string
+				tool = tool || (strings.HasPrefix(item.CallID, "call_golden_") && json.Unmarshal(item.Output, &output) == nil && successfulGoldenToolOutput(output))
+			case "custom_tool_call_output":
+				tool = tool || (strings.HasPrefix(item.CallID, "call_golden_code_mode_") && successfulGoldenCodeModeOutput(item.Output))
 			case "compaction_trigger":
 				trigger = true
 			case "compaction":
 				compact = true
 			}
+		}
+	}
+	if sc.NativeState {
+		if err := validateNativeContinuation(recs); err != nil {
+			return err
 		}
 	}
 	if turns == 0 || (!sc.RejectWebSocket && prewarm != 1) || (sc.ToolLoop && !tool) || (sc.UnauthorizedUntilRefresh && refresh != 1) || (sc.Compaction && (!trigger || !compact)) {
