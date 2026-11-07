@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -19,7 +22,7 @@ import (
 )
 
 func TestCodexOwnedH2BodyRetiresNormallyOrAborts(t *testing.T) {
-	for _, mode := range []string{"eof", "exact_body", "early_close", "cancel", "cancel_after_eof"} {
+	for _, mode := range []string{"eof", "exact_body", "early_close", "cancel", "cancel_after_eof", "gzip_eof", "gzip_without_end_stream", "deflate_without_end_stream"} {
 		t.Run(mode, func(t *testing.T) {
 			template := httptest.NewTLSServer(nil)
 			certificate, root := template.TLS.Certificates[0], template.Certificate()
@@ -63,11 +66,39 @@ func TestCodexOwnedH2BodyRetiresNormallyOrAborts(t *testing.T) {
 						}
 					case *http2.DataFrame:
 						if f.StreamEnded() {
-							if fr.WriteHeaders(http2.HeadersFrameParam{StreamID: f.StreamID, BlockFragment: []byte{0x88}, EndHeaders: true}) != nil {
+							payload, headers := []byte("complete"), []byte{0x88}
+							encoding := ""
+							if strings.HasPrefix(mode, "gzip_") {
+								encoding = "gzip"
+								var compressed bytes.Buffer
+								writer := gzip.NewWriter(&compressed)
+								text := "complete"
+								if mode == "gzip_without_end_stream" {
+									text += "complete"
+								}
+								_, _ = writer.Write([]byte(text))
+								_ = writer.Close()
+								payload = compressed.Bytes()
+							} else if mode == "deflate_without_end_stream" {
+								encoding = "deflate"
+								var compressed bytes.Buffer
+								writer, _ := flate.NewWriter(&compressed, flate.DefaultCompression)
+								_, _ = writer.Write(payload)
+								_ = writer.Close()
+								payload = compressed.Bytes()
+							}
+							if encoding != "" {
+								var block bytes.Buffer
+								encoder := hpack.NewEncoder(&block)
+								_ = encoder.WriteField(hpack.HeaderField{Name: ":status", Value: "200"})
+								_ = encoder.WriteField(hpack.HeaderField{Name: "content-encoding", Value: encoding})
+								headers = block.Bytes()
+							}
+							if fr.WriteHeaders(http2.HeadersFrameParam{StreamID: f.StreamID, BlockFragment: headers, EndHeaders: true}) != nil {
 								return
 							}
-							complete := mode == "eof" || mode == "exact_body" || mode == "cancel_after_eof"
-							if fr.WriteData(f.StreamID, complete, []byte("complete")) != nil {
+							complete := mode == "eof" || mode == "exact_body" || mode == "cancel_after_eof" || mode == "gzip_eof"
+							if fr.WriteData(f.StreamID, complete, payload) != nil {
 								return
 							}
 						}
@@ -87,14 +118,19 @@ func TestCodexOwnedH2BodyRetiresNormallyOrAborts(t *testing.T) {
 			response, err := upstream.doCodexH2Uncontrolled(req, "", 91, &profile)
 			require.NoError(t, err)
 			switch mode {
-			case "eof", "cancel_after_eof":
+			case "eof", "cancel_after_eof", "gzip_eof", "deflate_without_end_stream":
 				body, err := io.ReadAll(response.Body)
 				require.NoError(t, err)
 				require.Equal(t, "complete", string(body))
 				if mode == "cancel_after_eof" {
 					cancel()
 				}
-			case "exact_body":
+				if mode == "deflate_without_end_stream" {
+					owned := response.Body.(*codexOwnedH2Body)
+					require.True(t, owned.eof.Load(), "the decompressor can finish before HTTP/2 framing")
+					require.False(t, owned.complete(), "decoded EOF must not replace remote END_STREAM")
+				}
+			case "exact_body", "gzip_without_end_stream":
 				body := make([]byte, len("complete"))
 				_, err := io.ReadFull(response.Body, body)
 				require.NoError(t, err)
@@ -114,7 +150,7 @@ func TestCodexOwnedH2BodyRetiresNormallyOrAborts(t *testing.T) {
 			require.NoError(t, response.Body.Close())
 			select {
 			case rows := <-observed:
-				if mode == "eof" || mode == "exact_body" {
+				if mode == "eof" || mode == "exact_body" || mode == "gzip_eof" {
 					require.Len(t, rows, 1)
 					require.Equal(t, http2.ErrCodeNo, rows[0].ErrCode)
 					require.Zero(t, rows[0].LastStreamID)
