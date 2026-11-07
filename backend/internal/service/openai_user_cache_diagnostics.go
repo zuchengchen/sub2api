@@ -102,6 +102,7 @@ type userCacheDiagnosticAttempt struct {
 	accountID          int64
 	attempt            int
 	usageRequestIDHash string
+	expectsSSE         bool
 }
 
 func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic {
@@ -299,6 +300,9 @@ func (d *userCacheDiagnostic) upstreamRequest(account *Account, request *http.Re
 			_ = reader.Close()
 			if err == nil {
 				fields = map[string]any{"body": summarizeUserCacheBody(raw)}
+				// The normalized outgoing request is authoritative for streaming.
+				// Providers can omit or mislabel the response Content-Type.
+				a.expectsSSE = gjson.GetBytes(raw, "stream").Type == gjson.True
 			}
 		}
 	}
@@ -331,8 +335,10 @@ func (a *userCacheDiagnosticAttempt) upstreamResponse(response *http.Response, e
 		a.diagnostic.write("upstream_response", a.accountID, a.attempt, usageID, map[string]any{"status": response.StatusCode, "body_unavailable": true})
 		return
 	}
+	streaming := strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") ||
+		(a.expectsSSE && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices)
 	response.Body = &userCacheResponseObserver{ReadCloser: response.Body, diagnostic: a.diagnostic, accountID: a.accountID, status: response.StatusCode, attempt: a.attempt,
-		usageRequestIDHash: usageID, streaming: strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream"), items: map[string]userCacheItemSummary{}, itemRanks: map[string]int{}}
+		usageRequestIDHash: usageID, streaming: streaming, items: map[string]userCacheItemSummary{}, itemRanks: map[string]int{}}
 }
 
 type userCacheResponseObserver struct {

@@ -582,3 +582,51 @@ func TestNativeReasoningReplayPublicationFinishOnlyHandsOffConfirmedDelivery(t *
 		})
 	}
 }
+
+func TestNativeReasoningReplayPublicationConcurrentReleaseWaitsForRegistryCleanup(t *testing.T) {
+	var registry nativeReasoningPublications
+	lease := registry.acquire(context.Background(), "owner", "pending-prefix", DefaultNativeReasoningReplayLimits())
+	require.NotNil(t, lease)
+	entered := make(chan struct{})
+	stop := lease.stop
+	lease.stop = func() bool {
+		close(entered)
+		return stop()
+	}
+	// Hold cleanup at the registry boundary while the first cancellation or
+	// completion path owns release. The second caller must join that cleanup.
+	registry.mu.Lock()
+	first := make(chan struct{})
+	go func() { lease.release(); close(first) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		registry.mu.Unlock()
+		t.Fatal("first release did not reach the controlled cleanup boundary")
+	}
+	secondStarted, second := make(chan struct{}), make(chan struct{})
+	go func() { close(secondStarted); lease.release(); close(second) }()
+	<-secondStarted
+	returnedEarly := false
+	select {
+	case <-second:
+		returnedEarly = true
+	case <-time.After(20 * time.Millisecond):
+	}
+	registry.mu.Unlock()
+	for _, done := range []<-chan struct{}{first, second} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("concurrent release did not complete after registry unlock")
+		}
+	}
+	require.False(t, returnedEarly, "release returned before the registered publication was removed")
+	select {
+	case <-lease.entry.done:
+	default:
+		t.Fatal("completed releases did not signal the publication")
+	}
+	require.Empty(t, registry.entries)
+	require.Empty(t, registry.perOwner)
+}
