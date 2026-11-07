@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,7 +130,7 @@ func TestNativeReasoningReplaySparseRawDoneAndTerminalFieldsSurviveCapture(t *te
 }
 
 func TestNativeReasoningReplaySparseClosureFaultsStayIneligible(t *testing.T) {
-	for _, fault := range []string{"no_anchor", "wrong_response", "foreign_response_id", "missing_done", "done_only", "gap", "done_reordered", "duplicate_id", "call_changed", "name_changed", "namespace_changed", "phase_changed", "failed_added", "failed_done", "unknown_item", "unknown_event", "dangling_delta", "cross_reference", "foreign_call", "duplicate_added_reference", "duplicate_done_reference", "null_output", "missing_status", "error_envelope", "incomplete", "missing_usage", "fractional_usage", "no_opaque", "no_tool", "conflicting_done", "bad_utf8", "duplicate_json"} {
+	for _, fault := range []string{"no_anchor", "wrong_response", "foreign_response_id", "missing_done", "done_only", "gap", "done_reordered", "duplicate_id", "call_changed", "name_changed", "namespace_changed", "phase_changed", "failed_added", "failed_done", "unknown_item", "unknown_event", "dangling_delta", "cross_reference", "foreign_call", "duplicate_added_reference", "duplicate_done_reference", "null_output", "missing_status", "error_envelope", "incomplete", "missing_usage", "fractional_usage", "no_tool", "conflicting_done", "bad_utf8", "duplicate_json"} {
 		t.Run(fault, func(t *testing.T) {
 			engine, _, _, frames, items := sparseReplayFixture(t)
 			editItem := func(position int, field string, value json.RawMessage) {
@@ -202,10 +203,6 @@ func TestNativeReasoningReplaySparseClosureFaultsStayIneligible(t *testing.T) {
 				terminal(func(m map[string]json.RawMessage) {
 					m["usage"] = json.RawMessage(`{"input_tokens":1.5,"output_tokens":1}`)
 				})
-			case "no_opaque":
-				for _, position := range []int{1, 2, 3, 4} {
-					editItem(position, "encrypted_content", json.RawMessage(`null`))
-				}
 			case "no_tool":
 				frames = append(frames[:5], frames[7:]...)
 			case "conflicting_done":
@@ -425,6 +422,49 @@ func TestNativeReasoningReplaySparseOptionalPayloadTypesRemainChecked(t *testing
 			frames = append(frames[:4], append([][]byte{event}, frames[4:]...)...)
 			_, ok := sparseReplayCollect(frames, engine.limits)
 			require.Equal(t, payload.valid, ok)
+		})
+	}
+}
+
+func TestNativeReasoningReplayPureToolTurnNeedsNoNewOpaqueOrAncestor(t *testing.T) {
+	for _, shape := range []string{"full", "empty", "absent"} {
+		t.Run(shape, func(t *testing.T) {
+			engine, request, completion, frames, items := sparseReplayFixture(t)
+			tool := sparseReplayEdit(t, items[2], func(item map[string]json.RawMessage) {
+				delete(item, "encrypted_content")
+				delete(item, "encrypted_function_args")
+				item["future_tool_state"] = json.RawMessage(`{"value":9007199254740993,"retained":null}`)
+			})
+			terminal := frames[len(frames)-1]
+			if shape != "empty" {
+				terminal = sparseReplayEdit(t, terminal, func(event map[string]json.RawMessage) {
+					event["response"] = sparseReplayEdit(t, event["response"], func(response map[string]json.RawMessage) {
+						if shape == "full" {
+							response["output"] = append(append([]byte{'['}, tool...), ']')
+						} else {
+							delete(response, "output")
+						}
+					})
+				})
+			}
+			got, ok := sparseReplayCollect([][]byte{frames[0], sparseReplayFrame("response.output_item.added", 0, tool), sparseReplayFrame("response.output_item.done", 0, tool), terminal}, engine.limits)
+			require.True(t, ok)
+			require.NotContains(t, string(got), "encrypted_content")
+			require.NotContains(t, string(got), "encrypted_function_args")
+			var visible apicompat.ResponsesResponse
+			require.NoError(t, json.Unmarshal(got, &visible))
+			visible.Output[0].Name = "python"
+			completion.Response = got
+			completion.DeliveredAssistant, _ = json.Marshal(apicompat.ResponsesToChatCompletions(&visible, request.Scope.Model).Choices[0].Message)
+			require.NoError(t, engine.Commit(context.Background(), request, completion))
+			restored, err := engine.Restore(context.Background(), nativeReplayContinuation(request, completion))
+			require.NoError(t, err)
+			require.Len(t, restored, 1)
+			require.Len(t, restored[0].Output, 1)
+			require.JSONEq(t, string(tool), string(restored[0].Output[0]))
+			mismatched := completion
+			mismatched.DeliveredAssistant = json.RawMessage(strings.ReplaceAll(string(completion.DeliveredAssistant), "call_synthetic", "call_other"))
+			require.ErrorIs(t, engine.Commit(context.Background(), request, mismatched), ErrNativeReasoningReplayInvalid)
 		})
 	}
 }

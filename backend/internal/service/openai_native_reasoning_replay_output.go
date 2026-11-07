@@ -30,7 +30,7 @@ func (r *NativeReasoningReplay) validateCompletion(model string, response, assis
 		return nil, ErrNativeReasoningReplayInvalid
 	}
 	ids, calls := map[string]bool{}, map[string]bool{}
-	hasEncrypted, hasTool := false, false
+	hasTool := false
 	for i, raw := range envelope.Output {
 		var item struct {
 			ID        string `json:"id"`
@@ -45,9 +45,6 @@ func (r *NativeReasoningReplay) validateCompletion(model string, response, assis
 			return nil, ErrNativeReasoningReplayInvalid
 		}
 		ids[item.ID] = true
-		if item.Encrypted != "" {
-			hasEncrypted = true
-		}
 		switch item.Type {
 		case "reasoning", "web_search_call":
 		case "message":
@@ -83,7 +80,9 @@ func (r *NativeReasoningReplay) validateCompletion(model string, response, assis
 			return nil, ErrNativeReasoningReplayInvalid
 		}
 	}
-	if !hasEncrypted || !hasTool {
+	// Codex persists every complete tool turn, including turns that produce no
+	// new opaque state. Their IDs and extension fields still belong to history.
+	if !hasTool {
 		return nil, ErrNativeReasoningReplayInvalid
 	}
 	projected := apicompat.ResponsesToChatCompletions(&visible, model)

@@ -431,7 +431,7 @@ func (s *sparseReplayOutput) response(raw json.RawMessage, canonical []byte, lim
 	}
 	var output bytes.Buffer
 	output.WriteByte('[')
-	opaque, tool := false, false
+	tool := false
 	for index := range s.doneOrder {
 		item := s.items[index]
 		if item == nil || len(item.doneRaw) == 0 {
@@ -446,7 +446,6 @@ func (s *sparseReplayOutput) response(raw json.RawMessage, canonical []byte, lim
 			if json.Unmarshal(encrypted, &text) != nil {
 				return nil, false
 			}
-			opaque = opaque || text != ""
 		}
 		tool = tool || item.kind == "function_call" || item.kind == "custom_tool_call"
 		if index > 0 {
@@ -455,7 +454,7 @@ func (s *sparseReplayOutput) response(raw json.RawMessage, canonical []byte, lim
 		output.Write(item.doneRaw)
 	}
 	output.WriteByte(']')
-	if !opaque || !tool {
+	if !tool {
 		return nil, false
 	}
 	var original map[string]json.RawMessage

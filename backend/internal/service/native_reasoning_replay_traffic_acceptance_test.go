@@ -184,6 +184,7 @@ type nativeTrafficHarness struct {
 	errors               []string
 	truncateNext         bool
 	sparseTerminalOutput string // Test-only fixture: absent or empty terminal, done items unchanged.
+	pureToolSecondRound  bool   // Test-only fixture: no new opaque item in the middle tool turn.
 }
 
 func nativeTrafficJSON(v any) json.RawMessage {
@@ -202,6 +203,21 @@ func nativeTrafficOutput(round int) []json.RawMessage {
 		nativeTrafficJSON(map[string]any{"type": "function_call", "id": "fc_b_" + prefix, "call_id": "call_b_" + prefix, "name": "lookup_humidity", "namespace": "functions", "arguments": `{"location":"synthetic"}`, "status": "completed"}),
 	}
 }
+
+func nativeTrafficPureToolOutput(round int) []json.RawMessage {
+	var output []json.RawMessage
+	for _, original := range nativeTrafficOutput(round)[2:] {
+		var item map[string]json.RawMessage
+		_ = json.Unmarshal(original, &item)
+		delete(item, "encrypted_content")
+		delete(item, "encrypted_function_args")
+		item["namespace"] = json.RawMessage(`"functions"`)
+		item["future_tool_state"] = json.RawMessage(`{"sequence":9007199254740993,"retained":null}`)
+		output = append(output, nativeTrafficJSON(item))
+	}
+	return output
+}
+
 func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(service.NativeReasoningReplayStore) service.NativeReasoningReplayStore) *nativeTrafficHarness {
 	t.Helper()
 	h := &nativeTrafficHarness{t: t, store: &nativeTrafficStore{values: map[string]service.NativeReasoningReplayValue{}, poison: map[string]bool{}}, policy: &nativeTrafficPolicy{mode: mode}}
@@ -224,6 +240,9 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		h.mu.Lock()
 		round := len(h.rows) + 1
 		output := nativeTrafficOutput(round)
+		if h.pureToolSecondRound && round == 2 {
+			output = nativeTrafficPureToolOutput(round)
+		}
 		truncated := h.truncateNext
 		sparseShape := h.sparseTerminalOutput
 		h.truncateNext = false
@@ -462,9 +481,14 @@ func (h *nativeTrafficHarness) checkAssistant(message apicompat.ChatMessage) {
 	t.Helper()
 	h.mu.Lock()
 	round := len(h.rows)
+	pureTool := h.pureToolSecondRound && round == 2
 	h.mu.Unlock()
 	require.Equal(t, "assistant", message.Role)
-	require.JSONEq(t, string(nativeTrafficJSON(fmt.Sprintf("Inspecting synthetic step %d.", round))), string(message.Content))
+	if pureTool {
+		require.True(t, len(message.Content) == 0 || string(message.Content) == "null", "pure tool output has no invented assistant text")
+	} else {
+		require.JSONEq(t, string(nativeTrafficJSON(fmt.Sprintf("Inspecting synthetic step %d.", round))), string(message.Content))
+	}
 	require.Len(t, message.ToolCalls, 2)
 	for i, name := range []string{"lookup_temperature", "lookup_humidity"} {
 		call := message.ToolCalls[i]
@@ -572,6 +596,13 @@ func nativeTrafficDecodeChatSSE(raw []byte) (apicompat.ChatMessage, error) {
 // 0 means the complete original native block is present exactly once, in order.
 // 1 is an actual product loss/mismatch; 2 is invalid or missing test evidence.
 func nativeTrafficComparisonExit(request json.RawMessage, expected []json.RawMessage) int {
+	return nativeTrafficCompareBlock(request, expected, true)
+}
+
+// Existing acceptance keeps its opaque-bearing fixture requirement. The pure
+// tool regression separately proves the earlier opaque block and uses the same
+// full structural/unique/ordered comparison for the later tool-only block.
+func nativeTrafficCompareBlock(request json.RawMessage, expected []json.RawMessage, requireEncrypted bool) int {
 	decode := func(raw []byte, target any) error {
 		d := json.NewDecoder(bytes.NewReader(raw))
 		d.UseNumber()
@@ -615,7 +646,7 @@ func nativeTrafficComparisonExit(request json.RawMessage, expected []json.RawMes
 			hasTool = true
 		}
 	}
-	if !hasEncrypted || !hasTool {
+	if requireEncrypted && !hasEncrypted || !hasTool {
 		return 2
 	}
 	matches := 0
