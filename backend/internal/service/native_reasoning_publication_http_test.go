@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"sync"
 	"testing"
 	"time"
@@ -22,18 +24,23 @@ import (
 type nativePublicationHTTPStore struct {
 	*nativeTrafficStore
 	once      sync.Once
-	entered   chan service.NativeReasoningReplayWrite
+	entered   chan nativePublicationHTTPWrite
 	release   chan struct{}
 	finished  chan error
 	lookups   chan []string
 	premature chan []string
 }
 
+type nativePublicationHTTPWrite struct {
+	value service.NativeReasoningReplayWrite
+	ctx   context.Context
+}
+
 func (s *nativePublicationHTTPStore) PutNativeReasoningReplay(ctx context.Context, value service.NativeReasoningReplayWrite, limits service.NativeReasoningReplayLimits) error {
 	controlled := false
 	s.once.Do(func() { controlled = true })
 	if controlled {
-		s.entered <- value
+		s.entered <- nativePublicationHTTPWrite{value: value, ctx: ctx}
 		select {
 		case <-s.release:
 		case <-ctx.Done():
@@ -73,7 +80,7 @@ func TestNativeReasoningReplayAssistantMessageHTTPPublicationAfterDONEClose(t *t
 
 func testNativePublicationHTTP(t *testing.T, closeAfterDONE, assistantOnly bool) {
 	store := &nativePublicationHTTPStore{
-		entered: make(chan service.NativeReasoningReplayWrite, 1), release: make(chan struct{}),
+		entered: make(chan nativePublicationHTTPWrite, 1), release: make(chan struct{}),
 		finished: make(chan error, 1), lookups: make(chan []string, 4), premature: make(chan []string, 1),
 	}
 	h := newNativeTrafficHarness(t, "replay", func(base service.NativeReasoningReplayStore) service.NativeReasoningReplayStore {
@@ -119,6 +126,11 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE, assistantOnly bool)
 	history := nativeTrafficInitialHistory()
 	callCtx, cancelCall := context.WithCancel(context.Background())
 	defer cancelCall()
+	firstConnection := make(chan net.Conn, 1)
+	var firstConnectionOnce sync.Once
+	callCtx = httptrace.WithClientTrace(callCtx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		firstConnectionOnce.Do(func() { firstConnection <- info.Conn })
+	}})
 	response, err := client.Do(request(history).WithContext(callCtx))
 	require.NoError(t, err)
 	defer response.Body.Close()
@@ -136,10 +148,6 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE, assistantOnly bool)
 			break
 		}
 	}
-	if closeAfterDONE {
-		require.NoError(t, response.Body.Close())
-		cancelCall()
-	}
 	assistant, err := nativeTrafficDecodeChatSSE(received.Bytes())
 	require.NoError(t, err)
 	nextHistory := nativeTrafficContinue(history, assistant)
@@ -147,6 +155,11 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE, assistantOnly bool)
 		nextHistory = append(nextHistory, json.RawMessage(`{"role":"user","content":"Continue after the completed assistant."}`))
 	}
 	follow := request(nextHistory)
+	followConnection := make(chan net.Conn, 1)
+	var followConnectionOnce sync.Once
+	follow = follow.WithContext(httptrace.WithClientTrace(follow.Context(), &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		followConnectionOnce.Do(func() { followConnection <- info.Conn })
+	}}))
 	secondDone := make(chan error, 1)
 	go func() {
 		second, err := client.Do(follow)
@@ -159,28 +172,45 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE, assistantOnly bool)
 		}
 		secondDone <- err
 	}()
-	var firstWrite service.NativeReasoningReplayWrite
+	var firstWrite nativePublicationHTTPWrite
 	select {
 	case firstWrite = <-store.entered:
 	case <-time.After(time.Second):
 		t.Fatal("production Commit did not enter controlled Put after client DONE")
 	}
-	// Only the test store delays publication. The client already sent its next
-	// request immediately after parsing DONE, without any sleep or receipt wait.
-	delay := 20 * time.Millisecond
+	// The next request was already started after DONE, without waiting for Put
+	// or cancellation. Reaching this store proves that the first publication has
+	// handed off to its original bounded context before cancellation is induced.
 	if closeAfterDONE {
-		// Go's HTTP transport may drain a closed body for up to 50ms. A 70ms
-		// storage delay exposes real server cancellation inside the 100ms budget.
-		delay = 70 * time.Millisecond
+		firstSocket := <-firstConnection
+		select {
+		case nextSocket := <-followConnection:
+			require.NotSame(t, firstSocket, nextSocket, "the pending response must not share its connection with the immediate next request")
+		case <-firstWrite.ctx.Done():
+			t.Fatal("next request did not connect within the original publication budget")
+		}
+		// Body.Close may return before Go's optional response draining and peer
+		// cancellation. Close this exact client socket, then observe cancellation
+		// on the actual first server request rather than assuming a fixed delay.
+		require.NoError(t, firstSocket.Close())
+		require.NoError(t, response.Body.Close())
+		cancelCall()
+		serverContext := <-firstContext
+		select {
+		case <-serverContext.Done():
+			require.ErrorIs(t, serverContext.Err(), context.Canceled)
+		case keys := <-store.premature:
+			t.Fatalf("next lookup bypassed the pending publication before cancellation was observed: %v", keys)
+		case <-firstWrite.ctx.Done():
+			t.Fatal("real first ingress cancellation was not observed within the original publication budget")
+		}
 	}
 	var premature []string
 	select {
 	case premature = <-store.premature:
-	case <-time.After(delay):
+	case <-time.After(20 * time.Millisecond):
 	}
-	if closeAfterDONE {
-		require.ErrorIs(t, (<-firstContext).Err(), context.Canceled, "the real first ingress must cancel before publication completes")
-	}
+	require.Empty(t, premature, "next lookup must wait for the matching publication")
 	close(store.release)
 	released = true
 	select {
@@ -203,7 +233,6 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE, assistantOnly bool)
 	rows := append([]nativeTrafficRow(nil), h.rows...)
 	h.mu.Unlock()
 	require.Len(t, rows, 2)
-	require.Empty(t, premature, "next lookup must wait for the matching publication")
 	if assistantOnly {
 		require.Equal(t, 0, nativeTrafficCompareOutputBlock(rows[1].Body, nativeTrafficAssistantOutput(1, true), true, false))
 		nativeAssistantRequireNewTurnStablePrefix(t, rows[0], rows[1])
@@ -214,5 +243,5 @@ func testNativePublicationHTTP(t *testing.T, closeAfterDONE, assistantOnly bool)
 	for len(store.lookups) > 0 {
 		observed = append(observed, (<-store.lookups)...)
 	}
-	require.Contains(t, observed, firstWrite.Key, "eventual lookup must request the exact completed assistant key")
+	require.Contains(t, observed, firstWrite.value.Key, "eventual lookup must request the exact completed assistant key")
 }
