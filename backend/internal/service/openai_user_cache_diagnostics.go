@@ -6,8 +6,11 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/gin-gonic/gin"
@@ -102,6 +106,7 @@ type userCacheDiagnosticAttempt struct {
 	accountID          int64
 	attempt            int
 	usageRequestIDHash string
+	expectsSSE         bool
 }
 
 func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic {
@@ -299,6 +304,9 @@ func (d *userCacheDiagnostic) upstreamRequest(account *Account, request *http.Re
 			_ = reader.Close()
 			if err == nil {
 				fields = map[string]any{"body": summarizeUserCacheBody(raw)}
+				// The normalized outgoing request is authoritative for streaming.
+				// Providers can omit or mislabel the response Content-Type.
+				a.expectsSSE = gjson.GetBytes(raw, "stream").Type == gjson.True
 			}
 		}
 	}
@@ -331,11 +339,44 @@ func (a *userCacheDiagnosticAttempt) upstreamResponse(response *http.Response, e
 		a.diagnostic.write("upstream_response", a.accountID, a.attempt, usageID, map[string]any{"status": response.StatusCode, "body_unavailable": true})
 		return
 	}
+	streaming := strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") ||
+		(a.expectsSSE && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices)
 	response.Body = &userCacheResponseObserver{ReadCloser: response.Body, diagnostic: a.diagnostic, accountID: a.accountID, status: response.StatusCode, attempt: a.attempt,
-		usageRequestIDHash: usageID, streaming: strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream"), items: map[string]userCacheItemSummary{}, itemRanks: map[string]int{}}
+		usageRequestIDHash: usageID, streaming: streaming, items: map[string]userCacheItemSummary{}, itemRanks: map[string]int{}}
+}
+
+// A candidate is a fully framed, strictly parsed observation, not a claim
+// that the consumer accepted the protocol or that native replay was eligible.
+type userCacheTerminalCandidate struct {
+	Schema           int                               `json:"schema"`
+	Event            int                               `json:"event"`
+	Type             string                            `json:"type"`
+	StatusClass      string                            `json:"status_class"`
+	ResponseIDHash   string                            `json:"response_id_sha256"`
+	Usage            map[string]map[string]json.Number `json:"usage"`
+	Items            map[string]userCacheItemSummary   `json:"output_items"`
+	PrefixError      bool                              `json:"prefix_error_event"`
+	PrefixIDConflict bool                              `json:"prefix_response_id_conflict"`
+	Invalid          int                               `json:"prefix_invalid_json_events"`
+	Truncated        int                               `json:"prefix_truncated_events"`
+	Limited          bool                              `json:"prefix_observation_limited"`
 }
 
 type userCacheResponseObserver struct {
+	terminalCandidate   *userCacheTerminalCandidate
+	eventType           string
+	linesSeen           int
+	prefixError         bool
+	responseIDConflict  bool
+	activeReads         int
+	closeStarted        bool
+	readError           bool
+	readErrorPhase      string
+	readErrorClass      string
+	readErrorAfterClose bool
+	sawEOF              bool
+	postTerminalBytes   int
+	postTerminalLimited bool
 	io.ReadCloser
 	diagnostic         *userCacheDiagnostic
 	accountID          int64
@@ -363,31 +404,92 @@ type userCacheResponseObserver struct {
 }
 
 func (o *userCacheResponseObserver) Read(p []byte) (int, error) {
-	// Do not hold the observation lock across the blocking network read: Close
-	// must be able to unblock it. Serial readers keep parsing order intact.
 	o.readMu.Lock()
 	defer o.readMu.Unlock()
+	o.mu.Lock()
+	o.activeReads++
+	o.mu.Unlock()
 	n, err := o.ReadCloser.Read(p)
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	hadCandidate := o.terminalCandidate != nil
 	if !o.finished && time.Now().Before(o.diagnostic.config.until) {
-		o.consume(p[:n])
+		if n >= 0 && n <= len(p) {
+			o.consume(p[:n])
+		} else {
+			o.invalid++
+			o.limited = true
+		}
 	}
-	if err != nil {
-		o.finishLocked(err == io.EOF, err != io.EOF)
+	if !o.finished && err != nil {
+		if err == io.EOF {
+			o.sawEOF = true
+		} else if !o.readError {
+			o.readError = true
+			o.readErrorPhase = "before_terminal_candidate"
+			if hadCandidate {
+				o.readErrorPhase = "after_terminal_candidate"
+			} else if o.terminalCandidate != nil {
+				o.readErrorPhase = "same_read_after_terminal_candidate"
+			}
+			o.readErrorClass = userCacheReadErrorClass(err)
+			o.readErrorAfterClose = o.closeStarted
+		}
+	}
+	o.activeReads--
+	if err != nil || o.closeStarted && o.activeReads == 0 {
+		o.finishLocked(o.sawEOF, o.readError)
 	}
 	return n, err
 }
 
 func (o *userCacheResponseObserver) Close() error {
+	o.mu.Lock()
+	o.closeStarted = true
+	o.mu.Unlock()
+	// Preserve the underlying Close order and return. Do not wait for readMu:
+	// an arbitrary Reader need not unblock on Close. A still-active normal Read
+	// will publish its own result before the single diagnostic record is emitted.
 	err := o.ReadCloser.Close()
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.finishLocked(false, false)
+	if o.activeReads == 0 {
+		o.finishLocked(o.sawEOF, o.readError)
+	}
 	return err
 }
 
+func userCacheReadErrorClass(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	case errors.Is(err, net.ErrClosed), errors.Is(err, io.ErrClosedPipe):
+		return "closed"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected_eof"
+	case errors.Is(err, io.EOF):
+		return "eof"
+	default:
+		return "other"
+	}
+}
+
+func (o *userCacheResponseObserver) observeSuffix(n int) {
+	if n > userCacheDiagnosticMaxBytes-o.postTerminalBytes {
+		o.postTerminalBytes = userCacheDiagnosticMaxBytes
+		o.postTerminalLimited = true
+	} else {
+		o.postTerminalBytes += n
+	}
+}
+
 func (o *userCacheResponseObserver) consume(raw []byte) {
+	if o.terminalCandidate != nil {
+		o.observeSuffix(len(raw))
+		return
+	}
 	if o.limited || len(raw) == 0 {
 		return
 	}
@@ -428,23 +530,39 @@ func (o *userCacheResponseObserver) consume(raw []byte) {
 			}
 			o.line = o.line[:0]
 			o.lineOverflow = false
+			if o.terminalCandidate != nil {
+				o.observeSuffix(len(raw))
+				o.line = nil
+				o.data = nil
+				o.eventType = ""
+				return
+			}
 		}
 	}
 }
 
 func (o *userCacheResponseObserver) consumeLine(line []byte) {
+	if o.linesSeen == 0 {
+		line = bytes.TrimPrefix(line, []byte{0xef, 0xbb, 0xbf})
+	}
+	o.linesSeen++
 	if len(line) == 0 {
 		if !o.skipping && len(o.data) > 0 {
 			o.observe(bytes.TrimSuffix(o.data, []byte{'\n'}))
 		}
 		o.data = o.data[:0]
 		o.skipping = false
+		o.eventType = ""
 		return
 	}
 	if o.skipping {
 		return
 	}
 	field, value, _ := bytes.Cut(line, []byte{':'})
+	if bytes.Equal(field, []byte("event")) {
+		o.eventType = string(bytes.TrimPrefix(value, []byte{' '}))
+		return
+	}
 	if !bytes.Equal(field, []byte("data")) {
 		return
 	}
@@ -468,22 +586,69 @@ func (o *userCacheResponseObserver) observe(raw []byte) {
 	if bytes.Equal(raw, []byte("[DONE]")) {
 		return
 	}
-	if !gjson.ValidBytes(raw) || !gjson.ParseBytes(raw).IsObject() {
+	if !utf8.Valid(raw) {
+		o.invalid++
+		return
+	}
+	if _, err := nativeReplayCanonicalObject(raw); err != nil {
 		o.invalid++
 		return
 	}
 	parsed := gjson.ParseBytes(raw)
+	kind := ""
+	if declared := parsed.Get("type"); declared.Exists() {
+		if declared.Type != gjson.String || declared.String() == "" {
+			o.invalid++
+			return
+		}
+		kind = declared.String()
+	}
+	if o.streaming {
+		if kind == "" {
+			kind = o.eventType
+		} else if o.eventType != "" && o.eventType != kind {
+			o.invalid++
+			return
+		}
+		if kind == "" {
+			o.invalid++
+			return
+		}
+	}
+	for _, path := range []string{"error", "incomplete_details", "response.error", "response.incomplete_details"} {
+		if value := parsed.Get(path); value.Exists() && value.Type != gjson.Null {
+			o.prefixError = true
+		}
+	}
+	switch kind {
+	case "error", "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "response.error":
+		o.prefixError = true
+	}
 	rank := 0
-	switch kind := parsed.Get("type").String(); kind {
+	switch kind {
 	case "response.completed", "response.done", "response.failed", "response.incomplete":
 		o.terminal, rank = kind, 2
 	case "response.output_item.done":
 		rank = 1
 	}
-	for _, path := range []string{"id", "response.id"} {
-		if value := parsed.Get(path).String(); value != "" {
-			o.responseIDHash = diagnosticSHA256([]byte(value))
+	identityPaths := []string{"response.id", "response_id"}
+	if !o.streaming {
+		identityPaths = append(identityPaths, "id")
+	}
+	for _, path := range identityPaths {
+		value := parsed.Get(path)
+		if !value.Exists() {
+			continue
 		}
+		if value.Type != gjson.String || value.String() == "" {
+			o.responseIDConflict = true
+			continue
+		}
+		hash := diagnosticSHA256([]byte(value.String()))
+		if o.responseIDHash != "" && o.responseIDHash != hash {
+			o.responseIDConflict = true
+		}
+		o.responseIDHash = hash
 	}
 	// Standalone JSON Responses bodies have no event type.
 	if !o.streaming {
@@ -492,6 +657,7 @@ func (o *userCacheResponseObserver) observe(raw []byte) {
 			o.terminal, rank = "response."+status, 2
 		}
 	}
+	var eventUsage map[string]map[string]json.Number
 	for _, path := range []string{"usage", "response.usage"} {
 		usage := parsed.Get(path)
 		if !usage.IsObject() {
@@ -507,6 +673,10 @@ func (o *userCacheResponseObserver) observe(raw []byte) {
 			}
 		}
 		o.usage[path] = values
+		if eventUsage == nil {
+			eventUsage = map[string]map[string]json.Number{}
+		}
+		eventUsage[path] = values
 	}
 	if item := parsed.Get("item"); item.IsObject() {
 		index := parsed.Get("output_index")
@@ -524,6 +694,19 @@ func (o *userCacheResponseObserver) observe(raw []byte) {
 			o.observeItem(item, int(index.Int()), rank)
 			return true
 		})
+	}
+	if o.streaming && (kind == "response.completed" || kind == "response.done") && parsed.Get("response").IsObject() {
+		id := parsed.Get("response.id")
+		if id.Type == gjson.String && id.String() != "" {
+			status := parsed.Get("response.status")
+			statusClass := "other"
+			if !status.Exists() || status.Type == gjson.Null {
+				statusClass = "missing"
+			} else if status.Type == gjson.String && status.String() == "completed" {
+				statusClass = "completed"
+			}
+			o.terminalCandidate = &userCacheTerminalCandidate{Schema: 1, Event: o.events, Type: kind, StatusClass: statusClass, ResponseIDHash: diagnosticSHA256([]byte(id.String())), Usage: eventUsage, Items: o.items, PrefixError: o.prefixError, PrefixIDConflict: o.responseIDConflict, Invalid: o.invalid, Truncated: o.truncated, Limited: o.limited}
+		}
 	}
 }
 
@@ -558,5 +741,15 @@ func (o *userCacheResponseObserver) finishLocked(eof, readError bool) {
 		"usage": o.usage, "output_items": o.items, "response_id_sha256": o.responseIDHash,
 		"truncated_events": o.truncated, "invalid_json_events": o.invalid, "observed_events": o.events,
 		"observation_limited": o.limited, "partial_event": partial, "read_error": readError, "eof": eof,
+		"read_error_phase": userCacheDiagnosticDefault(o.readErrorPhase, "none"), "read_error_class": userCacheDiagnosticDefault(o.readErrorClass, "none"),
+		"local_close_started": o.closeStarted, "read_error_observed_after_close_started": o.readErrorAfterClose,
+		"terminal_candidate": o.terminalCandidate, "post_terminal_bytes": o.postTerminalBytes, "post_terminal_observation_limited": o.postTerminalLimited,
 	})
+}
+
+func userCacheDiagnosticDefault(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }

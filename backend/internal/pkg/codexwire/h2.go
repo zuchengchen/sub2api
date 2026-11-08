@@ -54,6 +54,7 @@ type h2Stream struct {
 	sendWin     int64                // bytes of send window still available
 	closed      bool                 // remote ended (END_STREAM seen)
 	sendPending bool                 // request body writer has not completed yet
+	recvEnd     bool                 // DATA END_STREAM parsed; payload may still await delivery
 }
 
 type h2ResponseHead struct {
@@ -505,6 +506,9 @@ func (c *h2Conn) handleData(f *http2.DataFrame) error {
 		n := int64(len(data))
 		st.recvWin -= n
 		c.connRecvW -= n
+		if f.StreamEnded() {
+			st.recvEnd = true
+		}
 	}
 	c.mu.Unlock()
 	if st != nil && len(data) > 0 {
@@ -719,11 +723,71 @@ func (b *h2StreamBody) Read(p []byte) (int, error) {
 
 // ResponseComplete reports successful framing completion, including a fully
 // submitted request body. Consumers may stop after Content-Length bytes
-// without making an extra Read that returns EOF.
+// without making an extra Read that returns EOF. Last DATA delivery can precede
+// local END_STREAM publication, and a fast peer can finish its response before
+// the request writer publishes completion. Only these explicit framing windows
+// wait, sharing one 250ms budget. Normal retirement has its separate 250ms budget
+// (about 500ms total). Decoded EOF or Content-Length never proves END_STREAM.
 func (b *h2StreamBody) ResponseComplete() bool {
 	b.conn.mu.Lock()
+	healthy := b.responseHealthyLocked()
+	ended := b.st.closed && errors.Is(b.st.err, io.EOF)
+	receiving, pending := b.st.recvEnd && !b.st.closed, b.st.sendPending
+	b.conn.mu.Unlock()
+	if !healthy || !ended && !receiving {
+		return false
+	}
+	if ended && !pending {
+		return true
+	}
+	ctx := b.st.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	bounded, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancel()
+	if receiving {
+		// Keep DATA enqueue before done publication: closing done first could
+		// lose the final payload, while holding mu across a full queue deadlocks
+		// cancellation. A parsed END_STREAM flag permits joining that local step.
+		select {
+		case <-b.st.done:
+		case <-bounded.Done():
+			return false
+		}
+		b.conn.mu.Lock()
+		ended = b.responseHealthyLocked() && b.st.closed && errors.Is(b.st.err, io.EOF)
+		pending = b.st.sendPending
+		b.conn.mu.Unlock()
+		if bounded.Err() != nil || !ended {
+			return false
+		}
+		if !pending {
+			return true
+		}
+	}
+	// Writers take writeMu before mu. Never hold mu while joining a writer:
+	// the successful final DATA callback needs mu to clear sendPending.
+	if err := b.conn.writeMu.LockContext(bounded); err != nil {
+		return false
+	}
+	defer b.conn.writeMu.Unlock()
+	b.conn.mu.Lock()
 	defer b.conn.mu.Unlock()
-	return b.st.closed && errors.Is(b.st.err, io.EOF) && !b.st.sendPending
+	return bounded.Err() == nil && b.responseHealthyLocked() && b.st.closed && errors.Is(b.st.err, io.EOF) && !b.st.sendPending
+}
+
+func (b *h2StreamBody) responseHealthyLocked() bool {
+	if b.st.ctx != nil && b.st.ctx.Err() != nil {
+		return false
+	}
+	select {
+	case <-b.conn.done:
+		return false
+	default:
+	}
+	return (b.st.err == nil || errors.Is(b.st.err, io.EOF)) &&
+		!b.conn.noGraceful && b.conn.readErr == nil && b.conn.writeErr == nil
 }
 
 func (b *h2StreamBody) Close() error {

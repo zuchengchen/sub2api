@@ -306,7 +306,7 @@ func codexSynthesisPrefixItems(
 		// downstream has no such executor. Actual declarations are authoritative.
 		text := "Use only the tools declared for this request, with their exact names and schemas. References to other tools in the base instructions do not make those tools available. Do not infer local tools, skills, shell access, filesystem paths, network access, or approval permissions unless the client declares them or explicit environment configuration supplies them."
 		prefix = append(prefix, codexSynthMessageRaw(
-			codexSynthItemID("capabilities", text), "developer", []string{text}, nil, opts.TurnID, 0,
+			codexSynthItemID("capabilities", text), "developer", []string{text}, nil, "", 0,
 		))
 	}
 	if text := codexSynthesisPermissionsText(opts.Environment); text != "" {

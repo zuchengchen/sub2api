@@ -111,13 +111,14 @@ func (l *nativeReasoningPublicationLease) release() {
 		return
 	}
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.released {
-		l.mu.Unlock()
 		return
 	}
+	// A concurrent caller must not observe release completion before the
+	// registry ticket is removed and its completion signal is published.
 	l.released = true
 	stop := l.stop
-	l.mu.Unlock()
 	if stop != nil {
 		stop()
 	}
@@ -138,12 +139,12 @@ func (l *nativeReasoningPublicationLease) release() {
 	}
 }
 
-// Only paired assistant turns can restore state. A producer registers the
+// Eligible assistant turns share Restore's candidate selector. A producer registers the
 // complete input history before its future assistant; that same prefix is the
 // candidate assistant's immediately preceding key. It is strictly shorter than
 // this request's whole history and therefore cannot wait on its own lease.
 func (p *nativeReasoningPublications) wait(ctx context.Context, prepared nativeReasoningReplayPrepared, maxLookups int) error {
-	candidates := nativeReplayPairedTools(prepared.messages, maxLookups)
+	candidates := nativeReplayRestoreCandidates(prepared.messages, maxLookups)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
