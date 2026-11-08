@@ -20,6 +20,8 @@ export default {
       moreActions: 'More Actions',
       dataActions: 'Data',
       toolActions: 'Tools',
+      displayOptions: 'Display',
+      showAstraIndicators: 'Show Astra intelligence',
       viewColumns: 'Columns',
       selectedCount: '{count} selected',
       dataExportConfirmMessage: 'The exported data contains sensitive account and proxy information. Store it securely.',

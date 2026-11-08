@@ -20,6 +20,8 @@ export default {
       moreActions: '更多操作',
       dataActions: '数据操作',
       toolActions: '工具',
+      displayOptions: '显示设置',
+      showAstraIndicators: '显示astra智商',
       viewColumns: '列显示',
       selectedCount: '已选 {count}',
       dataExportConfirmMessage: '导出的数据包含账号与代理的敏感信息，请妥善保存。',
