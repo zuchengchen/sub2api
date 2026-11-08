@@ -71,3 +71,37 @@ Content-Type 的情况。HTTP 错误和非流式 JSON 响应沿用 JSON 观察�
 这是应用代码变更，必须遵守仓库 AGENTS.md 的完整 VERSION、发布说明、不可变 `czc-*` 标签、GitHub Release 和标签构建部署流程。
 启用后先确认一个目标用户样本，再核对其他用户没有被记录；限额或到期后确认日志不再增长。
 退出采样不需要更改数据库、用户 Key 或上游账号。保留受限访问的哈希证据用于核对，按运维保留策略清理。
+
+### Terminal candidates and read errors
+
+The observer preserves `read_error` as an I/O fact. New `read_error_phase`
+values distinguish `none`, `before_terminal_candidate`,
+`same_read_after_terminal_candidate`, and `after_terminal_candidate`.
+`read_error_class` is a fixed category (`none`, `eof`, `closed`, `canceled`,
+`deadline`, `unexpected_eof`, or `other`); error text is never recorded.
+`local_close_started` is latched before delegating Close, and
+`read_error_observed_after_close_started` describes the order in which the
+observer records the read result. It does not establish the physical cause or
+exact return time of an error. Close does not wait for an arbitrary active
+reader: that reader publishes its result and the single final record when it
+returns. No additional read is issued and original bytes/errors are unchanged.
+
+A `terminal_candidate` is a fully framed, strict JSON/UTF-8 observation of the
+first completed/done event with a response object and ID. It is **not protocol
+success or replay eligibility**. It freezes response-ID hash, status class,
+current-terminal numeric usage, item summaries and sticky prefix error,
+identity-conflict, invalid, truncated and limited flags. Missing terminal usage
+never inherits earlier usage. Bytes after this boundary are counted separately
+by `post_terminal_bytes` and `post_terminal_observation_limited`; they cannot
+rewrite the prefix's item/usage evidence. Numeric values keep their original
+JSON-number representation.
+
+A consumer may accept a post-terminal close/cancellation read error only with
+independent successful protocol evidence for the same actual request, matching
+response-ID and usage, and a clean candidate prefix. Missing/other status,
+earlier errors (including response.error/auth/quota), malformed/duplicate JSON,
+invalid UTF-8, identity conflicts, limits, partial frames and unknown/deadline
+errors do not gain an exception. All original native item/opaque/full-history
+checks remain required. Historical boolean-only read errors cannot be relabeled
+as post-terminal evidence, and production rollout analysis without an
+independent consumer proof must keep such cases uncertain.
