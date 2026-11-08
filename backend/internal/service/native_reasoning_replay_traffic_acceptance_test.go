@@ -184,6 +184,7 @@ type nativeTrafficHarness struct {
 	errors               []string
 	truncateNext         bool
 	sparseTerminalOutput string                    // Test-only fixture: absent or empty terminal, done items unchanged.
+	metadataEvents       bool                      // Test-only numbered non-output notifications interleaved with output.
 	pureToolSecondRound  bool                      // Test-only fixture: no new opaque item in the middle tool turn.
 	outputOverrides      map[int][]json.RawMessage // Test-only complete assistant output fixtures.
 }
@@ -249,6 +250,7 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		}
 		truncated := h.truncateNext
 		sparseShape := h.sparseTerminalOutput
+		metadataEvents := h.metadataEvents
 		h.truncateNext = false
 		status := http.StatusOK
 		var rejected json.RawMessage
@@ -275,7 +277,12 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
+		sequence := 0
 		emit := func(v any) {
+			if metadataEvents {
+				v.(map[string]any)["sequence_number"] = sequence
+				sequence++
+			}
 			data := append([]byte("data: "), nativeTrafficJSON(v)...)
 			data = append(data, '\n', '\n')
 			// Deliberately fragment writes across JSON strings and SSE framing.
@@ -291,6 +298,11 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 			}
 		}
 		id := fmt.Sprintf("resp_fixture_%d", round)
+		emitMetadata := func(kind string) {
+			if metadataEvents {
+				emit(map[string]any{"type": kind, "response_id": id, "metadata": map[string]any{"synthetic": true}})
+			}
+		}
 		// response.created already produces an assistant-role Chat chunk and
 		// commits HTTP 200. A genuine pre-output failure must omit it entirely.
 		if !sseRejected || partial {
@@ -321,8 +333,12 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 			}
 			if decoded["type"] == "function_call" {
 				emit(map[string]any{"type": "response.function_call_arguments.delta", "output_index": index, "delta": decoded["arguments"]})
+				emitMetadata("response.metadata")
 			}
 			emit(map[string]any{"type": "response.output_item.done", "output_index": index, "item": item})
+			if index == 0 {
+				emitMetadata("codex.response.metadata")
+			}
 		}
 		if truncated {
 			return
@@ -333,6 +349,7 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		} else if sparseShape == "absent" {
 			delete(completed, "output")
 		}
+		emitMetadata("responsesapi.websocket_timing")
 		emit(map[string]any{"type": "response.completed", "response": completed})
 	}))
 	t.Cleanup(h.upstream.Close)

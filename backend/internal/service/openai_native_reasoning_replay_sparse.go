@@ -167,6 +167,27 @@ func (s *sparseReplayOutput) observe(raw, canonical []byte, kind string, limits 
 		}
 	case "response.output_item.added", "response.output_item.done":
 		s.observeItem(raw, event, kind, limits)
+	case "response.metadata", "codex.response.metadata", "responsesapi.websocket_timing":
+		// These known notifications do not declare output items. They still
+		// participate in the sequence, response identity and error checks above.
+		// A response envelope may carry headers; it must not declare output or
+		// item references. Metadata/header payloads are never used as output.
+		for _, fields := range []map[string]json.RawMessage{event, response} {
+			if status, present := fields["status"]; present && string(status) != `"queued"` && string(status) != `"in_progress"` && string(status) != `"completed"` {
+				s.fail()
+				return
+			}
+			if s.hasReference(fields) {
+				s.fail()
+				return
+			}
+			for _, name := range []string{"item", "output", "output_items", "items", "content_index", "summary_index"} {
+				if _, declared := fields[name]; declared {
+					s.fail()
+					return
+				}
+			}
+		}
 	default:
 		expected := sparseReplayEventItemType(kind)
 		if expected == "" || response != nil {
