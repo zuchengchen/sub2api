@@ -136,6 +136,26 @@
 
                       <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
                       <div class="px-2 py-2">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                          {{ t('admin.accounts.displayOptions') }}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        :aria-checked="showAstraIndicators"
+                        class="account-tools-menu-item"
+                        @click="showAstraIndicators = !showAstraIndicators"
+                      >
+                        <span class="account-tools-menu-icon bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                          <Icon :name="showAstraIndicators ? 'eye' : 'eyeOff'" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.accounts.showAstraIndicators') }}</span>
+                        <Icon v-if="showAstraIndicators" name="check" size="sm" class="text-primary-500" />
+                      </button>
+
+                      <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
+                      <div class="px-2 py-2">
                         <div class="flex items-center justify-between gap-3">
                           <span class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
                             {{ t('admin.accounts.viewColumns') }}
@@ -310,6 +330,7 @@
           <template #cell-usage="{ row }">
             <AccountUsageCell
               :account="row"
+              :show-astra-indicators="showAstraIndicators"
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :manual-refresh-token="usageManualRefreshToken"
@@ -485,7 +506,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch, defineAsyncComponent, type Ref } from 'vue'
-import { useIntervalFn } from '@vueuse/core'
+import { useIntervalFn, useStorage } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -646,6 +667,7 @@ useIntervalFn(() => { upstreamBillingNow.value = Date.now() }, 60_000)
 
 // Account tools dropdown
 const showAccountToolsDropdown = ref(false)
+const showAstraIndicators = useStorage('account-show-astra-indicators', true)
 const accountToolsDropdownRef = ref<HTMLElement | null>(null)
 const accountToolsTriggerRef = ref<HTMLElement | null>(null)
 const accountToolsDropdownPosition = reactive({

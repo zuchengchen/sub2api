@@ -487,6 +487,7 @@ const USAGE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 const props = withDefaults(
   defineProps<{
     account: Account
+    showAstraIndicators?: boolean
     todayStats?: WindowStats | null
     todayStatsLoading?: boolean
     manualRefreshToken?: number
@@ -496,6 +497,7 @@ const props = withDefaults(
     requestBatchedUsage?: ((account: Account, options?: { force?: boolean }) => void) | null
   }>(),
   {
+    showAstraIndicators: true,
     todayStats: null,
     todayStatsLoading: false,
     manualRefreshToken: 0,
@@ -566,14 +568,16 @@ const hasOpenAIUsageFallback = computed(() => {
 })
 
 const codexTiboRoutes = computed(() =>
-  (props.account.codex_turn_tickets ?? []).flatMap((ticket) =>
-    (ticket.tibo_routes ?? []).map((route) => ({
-      model: ticket.model,
-      route: route.route,
-      verdict: route.verdict,
-      recent_samples: route.recent_samples
-    }))
-  )
+  (props.account.codex_turn_tickets ?? [])
+    .filter((ticket) => props.showAstraIndicators || ticket.model !== 'gpt-6-astra')
+    .flatMap((ticket) =>
+      (ticket.tibo_routes ?? []).map((route) => ({
+        model: ticket.model,
+        route: route.route,
+        verdict: route.verdict,
+        recent_samples: route.recent_samples
+      }))
+    )
 )
 
 const openAISevenDayEstimatedTotalCost = computed(() => {
