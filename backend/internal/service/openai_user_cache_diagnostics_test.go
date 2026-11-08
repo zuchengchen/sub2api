@@ -283,7 +283,12 @@ func TestUserCacheDiagnosticMultilineRawNumbersAndMalformedEvidence(t *testing.T
 			require.Len(t, events, 3)
 			require.Equal(t, "response.completed", events[2]["terminal"])
 			require.Len(t, events[2]["output_items"], 1)
-			require.Equal(t, streaming, events[2]["invalid_json_events"].(float64) == 1)
+			// A framed terminal candidate freezes the observed prefix; malformed read-ahead
+			// is counted separately instead of changing that prefix's validity.
+			require.EqualValues(t, 0, events[2]["invalid_json_events"])
+			if streaming {
+				require.Positive(t, events[2]["post_terminal_bytes"])
+			}
 			require.Equal(t, false, events[2]["partial_event"])
 		})
 	}
