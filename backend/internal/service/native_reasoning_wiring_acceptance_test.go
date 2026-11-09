@@ -28,6 +28,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 const nativeWiringSettingKey = "openai_native_reasoning_replay_config"
@@ -179,7 +180,8 @@ func newNativeConstructorWiringHarness(t *testing.T) (*nativeTrafficHarness, *na
 			}
 		}
 		id := fmt.Sprintf("resp_wiring_%d", round)
-		emit(map[string]any{"type": "response.created", "response": map[string]any{"id": id, "model": "gpt-6-astra", "status": "in_progress"}})
+		model := gjson.GetBytes(body, "model").String()
+		emit(map[string]any{"type": "response.created", "response": map[string]any{"id": id, "model": model, "status": "in_progress"}})
 		for index, item := range output {
 			emit(map[string]any{"type": "response.output_item.added", "output_index": index, "item": item})
 			var native map[string]any
@@ -192,7 +194,7 @@ func newNativeConstructorWiringHarness(t *testing.T) (*nativeTrafficHarness, *na
 			}
 			emit(map[string]any{"type": "response.output_item.done", "output_index": index, "item": item})
 		}
-		emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": id, "model": "gpt-6-astra", "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 101, "output_tokens": 17, "total_tokens": 118, "input_tokens_details": map[string]any{"cached_tokens": 31}}}})
+		emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": id, "model": model, "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 101, "output_tokens": 17, "total_tokens": 118, "input_tokens_details": map[string]any{"cached_tokens": 31}}}})
 	}))
 	t.Cleanup(h.upstream.Close)
 	origin, err := url.Parse(h.upstream.URL)
@@ -216,8 +218,12 @@ func nativeWiringConfig(secret string) *config.Config {
 	cfg.Gateway.CodexWire.Profile = "auto"
 	return cfg
 }
-func nativeWiringStartService(t *testing.T, h *nativeTrafficHarness, upstream *nativeTrafficHTTP, client *redis.Client, settingsRepo *nativeWiringSettingsRepository, cfg *config.Config) {
+func nativeWiringStartService(t *testing.T, h *nativeTrafficHarness, upstream *nativeTrafficHTTP, client *redis.Client, settingsRepo *nativeWiringSettingsRepository, cfg *config.Config, userIDs ...int64) {
 	t.Helper()
+	userID := int64(428)
+	if len(userIDs) > 0 {
+		userID = userIDs[0]
+	}
 	cache := repository.NewGatewayCache(client)
 	settings := service.NewSettingService(settingsRepo, cfg)
 	svc := service.NewOpenAIGatewayService(nil, nil, nil, nil, nil, nil, cache, cfg, nil, nil, nil, nil, nil, upstream, nil, nil, nil, nil, nil, nil, settings, nil)
@@ -238,7 +244,7 @@ func nativeWiringStartService(t *testing.T, h *nativeTrafficHarness, upstream *n
 		}
 		c, _ := gin.CreateTestContext(w)
 		c.Request = r
-		c.Set("api_key", &service.APIKey{ID: 794, UserID: 428, User: &service.User{ID: 428}})
+		c.Set("api_key", &service.APIKey{ID: 794, UserID: userID, User: &service.User{ID: userID}})
 		result, err := svc.ForwardAsChatCompletions(r.Context(), c, account, body, "", "")
 		if err != nil && !c.Writer.Written() {
 			c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"message": "synthetic forwarding failure"}})

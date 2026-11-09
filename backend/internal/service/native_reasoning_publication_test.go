@@ -285,9 +285,10 @@ func TestNativeReasoningReplayPublicationDefaultOffAllocatesNoRegistry(t *testin
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	c.Set("api_key", &APIKey{ID: 202, UserID: 101})
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
-	require.Nil(t, svc.beginNativeReasoningChat(c, account, []byte(`{"messages":[{"role":"user","content":"synthetic"}]}`)))
+	authorization := svc.resolveNativeReasoningChatAuthorization(c, "gpt-6.1-sol")
+	require.Nil(t, svc.beginNativeReasoningChat(c, account, []byte(`{"messages":[{"role":"user","content":"synthetic"}]}`), authorization))
 	allocations := testing.AllocsPerRun(100, func() {
-		if svc.beginNativeReasoningChat(c, account, nil) != nil {
+		if svc.beginNativeReasoningChat(c, account, nil, authorization) != nil {
 			panic("off runtime")
 		}
 	})
