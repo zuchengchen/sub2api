@@ -173,6 +173,13 @@ func opsInsertErrorLogArgs(input *service.OpsInsertErrorLogInput) []any {
 // opsErrorLogsOrderBy builds the ORDER BY clause from a whitelist, mirroring
 // usageLogOrderBy semantics. Unknown SortBy falls back to created_at; e.id is
 // always appended as tiebreaker for stable pagination.
+func opsErrorStatusCodeExpression(filter *service.OpsErrorLogFilter) string {
+	if filter != nil && filter.UseFinalRequestStatus {
+		return "COALESCE(e.status_code, 0)"
+	}
+	return "COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0)"
+}
+
 func opsErrorLogsOrderBy(filter *service.OpsErrorLogFilter) string {
 	sortBy := ""
 	sortOrder := ""
@@ -190,7 +197,7 @@ func opsErrorLogsOrderBy(filter *service.OpsErrorLogFilter) string {
 		// upstream status means no HTTP response (account_auth); use the client
 		// status for display while preserving that zero in UpstreamStatusCode.
 		// Positive upstream codes still describe recovered provider-health rows.
-		column = "COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0)"
+		column = opsErrorStatusCodeExpression(filter)
 	default:
 		column = "e.created_at"
 	}
@@ -242,6 +249,7 @@ SELECT
   COALESCE(e.error_source, ''),
   e.severity,
   COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0),
+  COALESCE(e.status_code, 0),
   COALESCE(e.platform, ''),
   COALESCE(e.model, ''),
   COALESCE(e.resolved, false),
@@ -312,6 +320,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			&item.Source,
 			&item.Severity,
 			&statusCode,
+			&item.FinalRequestStatus,
 			&item.Platform,
 			&item.Model,
 			&item.Resolved,
@@ -413,6 +422,7 @@ SELECT
   COALESCE(e.error_source, ''),
   e.severity,
   COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0),
+  COALESCE(e.status_code, 0),
   COALESCE(e.platform, ''),
   COALESCE(e.model, ''),
   COALESCE(e.resolved, false),
@@ -487,6 +497,7 @@ LIMIT 1`
 		&out.Source,
 		&out.Severity,
 		&statusCode,
+		&out.FinalRequestStatus,
 		&out.Platform,
 		&out.Model,
 		&out.Resolved,
@@ -977,14 +988,19 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 		// treat unknown as default 'errors'
 		clauses = append(clauses, "COALESCE(e.is_business_limited,false) = false")
 	}
+	statusExpression := opsErrorStatusCodeExpression(filter)
 	if len(filter.StatusCodes) > 0 {
 		args = append(args, pq.Array(filter.StatusCodes))
-		clauses = append(clauses, "COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0) = ANY($"+itoa(len(args))+")")
+		clauses = append(clauses, statusExpression+" = ANY($"+itoa(len(args))+")")
 	} else if filter.StatusCodesOther {
 		// "Other" means: status codes not in the common list.
 		known := []int{400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504, 529}
+		if filter.UseFinalRequestStatus {
+			// Keep the request-view Other bucket aligned with COMMON_ERROR_STATUS_CODES.
+			known = []int{400, 401, 403, 404, 408, 413, 429, 499, 500, 502, 503, 504, 529}
+		}
 		args = append(args, pq.Array(known))
-		clauses = append(clauses, "NOT (COALESCE(NULLIF(e.upstream_status_code, 0), e.status_code, 0) = ANY($"+itoa(len(args))+"))")
+		clauses = append(clauses, "NOT ("+statusExpression+" = ANY($"+itoa(len(args))+"))")
 	}
 	// Exact correlation keys (preferred for request↔upstream linkage).
 	if rid := strings.TrimSpace(filter.RequestID); rid != "" {

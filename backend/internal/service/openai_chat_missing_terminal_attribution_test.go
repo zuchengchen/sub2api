@@ -41,7 +41,13 @@ func TestChatBufferedMissingTerminalKeepsFailureAndAttributesUpstream(t *testing
 			account := &Account{ID: 40, Name: "synthetic-account", Platform: PlatformOpenAI}
 			result, err := (&OpenAIGatewayService{}).handleChatBufferedStreamingResponse(resp, c, account, "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", time.Now())
 			require.Error(t, err)
-			require.Nil(t, result)
+			if tc.name == "usage_before_eof" {
+				require.NotNil(t, result)
+				require.Equal(t, 3, result.Usage.InputTokens)
+				require.Equal(t, 2, result.Usage.OutputTokens)
+			} else {
+				require.Nil(t, result)
+			}
 			var failover *UpstreamFailoverError
 			require.NotErrorAs(t, err, &failover, "attribution repair must not add replay after partial upstream work or cancellation")
 			require.Equal(t, http.StatusBadGateway, recorder.Code)

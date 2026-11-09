@@ -265,6 +265,7 @@ func (h *OpsHandler) SetWorkerRuntime(runtime *workerruntime.Runtime) {
 // values degrade to the default (created_at DESC), mirroring the usage list.
 func applyOpsErrorSortParams(c *gin.Context, filter *service.OpsErrorLogFilter) {
 	filter.SetSort(c.Query("sort_by"), c.Query("sort_order"))
+	filter.UseFinalRequestStatus = strings.EqualFold(strings.TrimSpace(c.Query("status_scope")), "request")
 }
 
 // GET /api/v1/admin/ops/errors

@@ -68,3 +68,18 @@ describe('user error detail requests', () => {
     expect(wrapper.find('.animate-spin').exists()).toBe(false)
   })
 })
+
+describe('user final request outcome', () => {
+  it('shows the final 499 separately from the last upstream 503', async () => {
+    getDetail.mockResolvedValueOnce({ ...detail('synthetic-model'), status_code: 503, final_request_status: 499, upstream_status_code: 503 })
+    const wrapper = await open(); await flushPromises()
+    expect(wrapper.find('.badge').text()).toBe('499')
+    expect(wrapper.text()).toContain('503')
+  })
+
+  it('keeps the legacy status when an older server omits the final field', async () => {
+    getDetail.mockResolvedValueOnce(detail('legacy-model'))
+    const wrapper = await open(); await flushPromises()
+    expect(wrapper.find('.badge').text()).toBe('500')
+  })
+})

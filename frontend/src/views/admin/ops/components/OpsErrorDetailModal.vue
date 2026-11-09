@@ -85,10 +85,10 @@
         </div>
 
         <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
-          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.status') }}</div>
+          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.finalRequestStatus') }}</div>
           <div class="mt-1">
             <span :class="['inline-flex items-center rounded-lg px-2 py-1 text-xs font-black ring-1 ring-inset shadow-sm', statusClass]">
-              {{ detail.status_code }}
+              {{ finalRequestStatusCode(detail) }}
             </span>
           </div>
         </div>
@@ -123,6 +123,11 @@
           </div>
         </div>
 
+      </div>
+
+      <div v-if="detail.message && detail.message !== rootCauseMessage" class="text-sm text-gray-900 dark:text-dark-100">
+        <div class="font-medium text-gray-500 dark:text-dark-400">{{ t('admin.ops.errorDetail.requestOutcome') }}</div>
+        <p class="mt-1 break-words">{{ detail.message }}</p>
       </div>
 
       <div v-if="rootCauseMessage" class="rounded-xl bg-amber-50 p-6 dark:bg-amber-900/10">
@@ -231,6 +236,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores'
 import { opsAPI, type OpsErrorDetail } from '@/api/admin/ops'
+import { finalRequestStatusCode } from '@/utils/errorBadges'
 import { formatDateTime } from '@/utils/format'
 import { resolveUpstreamPayload } from '../utils/errorDetailResponse'
 
@@ -430,7 +436,7 @@ function statusBadgeClass(code: number): string {
   return 'bg-gray-50 text-gray-700 ring-gray-600/20 dark:bg-gray-900/30 dark:text-gray-400 dark:ring-gray-500/30'
 }
 
-const statusClass = computed(() => statusBadgeClass(detail.value?.status_code ?? 0))
+const statusClass = computed(() => statusBadgeClass(detail.value ? finalRequestStatusCode(detail.value) : 0))
 
 const upstreamStatusClass = computed(() => statusBadgeClass(detail.value?.upstream_status_code ?? 0))
 

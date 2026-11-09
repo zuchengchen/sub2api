@@ -35,7 +35,7 @@
         <div>
           <span class="font-medium text-gray-500 dark:text-dark-400">{{ t('usage.errors.status') }}</span>
           <p class="mt-0.5">
-            <span class="badge" :class="statusClass(detail.status_code)">{{ detail.status_code || '-' }}</span>
+            <span class="badge" :class="statusClass(finalRequestStatusCode(detail))">{{ finalRequestStatusCode(detail) || '-' }}</span>
           </p>
         </div>
         <!-- Category -->
@@ -76,6 +76,7 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { getMyErrorDetail } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
+import { finalRequestStatusCode } from '@/utils/errorBadges'
 import type { UserErrorRequestDetail } from '@/types'
 
 const props = defineProps<{

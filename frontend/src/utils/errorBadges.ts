@@ -62,3 +62,8 @@ export function mapErrorSortKey(key: string): string {
  * ——后端 status_code 过滤对全量数据生效,选项不应被当前页数据限制。
  */
 export const COMMON_ERROR_STATUS_CODES = [400, 401, 403, 404, 408, 413, 429, 499, 500, 502, 503, 504, 529]
+
+/** Stored request outcome, with a fallback for older servers that omit the field. */
+export function finalRequestStatusCode(row: { status_code: number; final_request_status?: number | null }): number {
+  return row.final_request_status ?? row.status_code
+}

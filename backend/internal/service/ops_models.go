@@ -38,9 +38,13 @@ type OpsErrorLog struct {
 
 	Severity string `json:"severity"`
 
-	StatusCode int    `json:"status_code"`
-	Platform   string `json:"platform"`
-	Model      string `json:"model"`
+	// StatusCode keeps the legacy upstream-first projection for API compatibility.
+	StatusCode int `json:"status_code"`
+	// FinalRequestStatus is the stored request outcome, including logical SSE
+	// failures and locally terminated 499s; it is not necessarily a wire response.
+	FinalRequestStatus int    `json:"final_request_status,omitempty"`
+	Platform           string `json:"platform"`
+	Model              string `json:"model"`
 
 	Resolved           bool       `json:"resolved"`
 	ResolvedAt         *time.Time `json:"resolved_at"`
@@ -111,12 +115,15 @@ type OpsErrorLogFilter struct {
 
 	StatusCodes      []int
 	StatusCodesOther bool
-	Phase            string // Recovered provider rows bypass status>=400 only with the explicit opt-in below.
-	Owner            string
-	Source           string
-	Resolved         *bool
-	Query            string
-	UserQuery        string // Search by user email
+	// UseFinalRequestStatus opts status filtering/sorting into the request outcome.
+	// Legacy callers retain the upstream-first status_code semantics.
+	UseFinalRequestStatus bool
+	Phase                 string // Recovered provider rows bypass status>=400 only with the explicit opt-in below.
+	Owner                 string
+	Source                string
+	Resolved              *bool
+	Query                 string
+	UserQuery             string // Search by user email
 
 	// Optional correlation keys for exact matching.
 	RequestID       string

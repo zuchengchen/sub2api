@@ -11,21 +11,22 @@ import "time"
 // 与用量明细已向用户展示自身 ip_address/user_agent/分组/类型 的口径对齐；
 // error_body 仅在详情接口（GetUserErrorRequestDetail）按归属校验后返回。
 type UserErrorRequest struct {
-	ID              int64     `json:"id"`
-	CreatedAt       time.Time `json:"created_at"`
-	Model           string    `json:"model"`
-	InboundEndpoint string    `json:"inbound_endpoint"`
-	StatusCode      int       `json:"status_code"`
-	Category        string    `json:"category"`
-	Platform        string    `json:"platform"`
-	Message         string    `json:"message"`
-	KeyName         string    `json:"key_name"`
-	KeyDeleted      bool      `json:"key_deleted"`
-	ClientIP        string    `json:"client_ip,omitempty"`
-	GroupName       string    `json:"group_name,omitempty"`
-	RequestType     *int16    `json:"request_type,omitempty"`
-	Stream          bool      `json:"stream"`
-	UserAgent       string    `json:"user_agent,omitempty"`
+	ID                 int64     `json:"id"`
+	CreatedAt          time.Time `json:"created_at"`
+	Model              string    `json:"model"`
+	InboundEndpoint    string    `json:"inbound_endpoint"`
+	StatusCode         int       `json:"status_code"`
+	FinalRequestStatus int       `json:"final_request_status,omitempty"`
+	Category           string    `json:"category"`
+	Platform           string    `json:"platform"`
+	Message            string    `json:"message"`
+	KeyName            string    `json:"key_name"`
+	KeyDeleted         bool      `json:"key_deleted"`
+	ClientIP           string    `json:"client_ip,omitempty"`
+	GroupName          string    `json:"group_name,omitempty"`
+	RequestType        *int16    `json:"request_type,omitempty"`
+	Stream             bool      `json:"stream"`
+	UserAgent          string    `json:"user_agent,omitempty"`
 }
 
 // UserErrorRequestList 是用户错误请求分页结果。
@@ -103,21 +104,22 @@ func ToUserErrorRequest(e *OpsErrorLog) *UserErrorRequest {
 		clientIP = *e.ClientIP
 	}
 	return &UserErrorRequest{
-		ID:              e.ID,
-		CreatedAt:       e.CreatedAt,
-		Model:           model,
-		InboundEndpoint: e.InboundEndpoint,
-		StatusCode:      e.StatusCode,
-		Category:        MapUserErrorCategory(e.Phase, e.Type),
-		Platform:        e.Platform,
-		Message:         e.Message,
-		KeyName:         e.APIKeyName,
-		KeyDeleted:      e.APIKeyDeleted,
-		ClientIP:        clientIP,
-		GroupName:       e.GroupName,
-		RequestType:     e.RequestType,
-		Stream:          e.Stream,
-		UserAgent:       e.UserAgent,
+		ID:                 e.ID,
+		CreatedAt:          e.CreatedAt,
+		Model:              model,
+		InboundEndpoint:    e.InboundEndpoint,
+		StatusCode:         e.StatusCode,
+		FinalRequestStatus: e.FinalRequestStatus,
+		Category:           MapUserErrorCategory(e.Phase, e.Type),
+		Platform:           e.Platform,
+		Message:            e.Message,
+		KeyName:            e.APIKeyName,
+		KeyDeleted:         e.APIKeyDeleted,
+		ClientIP:           clientIP,
+		GroupName:          e.GroupName,
+		RequestType:        e.RequestType,
+		Stream:             e.Stream,
+		UserAgent:          e.UserAgent,
 	}
 }
 

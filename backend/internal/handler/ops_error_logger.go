@@ -1212,6 +1212,11 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				parsed.Code = code
 			}
 		}
+		// Only a locally marked cancellation/deadline can fill an empty summary.
+		// A numeric 499 from an upstream is not evidence of downstream cancellation.
+		if strings.TrimSpace(parsed.Message) == "" {
+			parsed.Message = opsLocalRequestTerminationMessage(c, status)
+		}
 		normalizedType := normalizeOpsErrorType(parsed.ErrorType, parsed.Code)
 
 		phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(c, normalizedType, parsed.Message, parsed.Code, status)
