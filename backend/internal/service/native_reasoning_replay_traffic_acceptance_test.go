@@ -37,6 +37,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type nativeTrafficPolicy struct{ mode string }
@@ -187,6 +188,7 @@ type nativeTrafficHarness struct {
 	metadataEvents       bool                      // Test-only numbered non-output notifications interleaved with output.
 	pureToolSecondRound  bool                      // Test-only fixture: no new opaque item in the middle tool turn.
 	outputOverrides      map[int][]json.RawMessage // Test-only complete assistant output fixtures.
+	modelOverride        string                    // Test-only explicit upstream model; default remains gpt-6-astra.
 }
 
 func nativeTrafficJSON(v any) json.RawMessage {
@@ -241,6 +243,10 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		}
 		h.mu.Lock()
 		round := len(h.rows) + 1
+		model := h.modelOverride
+		if model == "" {
+			model = "gpt-6-astra"
+		}
 		output := nativeTrafficOutput(round)
 		if h.pureToolSecondRound && round == 2 {
 			output = nativeTrafficPureToolOutput(round)
@@ -306,7 +312,7 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		// response.created already produces an assistant-role Chat chunk and
 		// commits HTTP 200. A genuine pre-output failure must omit it entirely.
 		if !sseRejected || partial {
-			emit(map[string]any{"type": "response.created", "response": map[string]any{"id": id, "model": "gpt-6-astra", "status": "in_progress"}})
+			emit(map[string]any{"type": "response.created", "response": map[string]any{"id": id, "model": model, "status": "in_progress"}})
 		}
 		if sseRejected {
 			if partial {
@@ -343,7 +349,7 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 		if truncated {
 			return
 		}
-		completed := map[string]any{"id": id, "model": "gpt-6-astra", "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 101, "output_tokens": 17, "total_tokens": 118, "input_tokens_details": map[string]any{"cached_tokens": 31}, "output_tokens_details": map[string]any{"reasoning_tokens": 7}}}
+		completed := map[string]any{"id": id, "model": model, "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 101, "output_tokens": 17, "total_tokens": 118, "input_tokens_details": map[string]any{"cached_tokens": 31}, "output_tokens_details": map[string]any{"reasoning_tokens": 7}}}
 		if sparseShape == "empty" {
 			completed["output"] = []any{}
 		} else if sparseShape == "absent" {
@@ -464,7 +470,13 @@ func (h *nativeTrafficHarness) callStatus(history []json.RawMessage, stream bool
 	if identity == "changed-parameters" {
 		effort = "medium"
 	}
-	body := nativeTrafficJSON(map[string]any{"model": "gpt-6-astra", "messages": history, "stream": stream, "stream_options": map[string]any{"include_usage": true}, "tools": tools, "reasoning_effort": effort, "parallel_tool_calls": true})
+	h.mu.Lock()
+	model := h.modelOverride
+	h.mu.Unlock()
+	if model == "" {
+		model = "gpt-6-astra"
+	}
+	body := nativeTrafficJSON(map[string]any{"model": model, "messages": history, "stream": stream, "stream_options": map[string]any{"include_usage": true}, "tools": tools, "reasoning_effort": effort, "parallel_tool_calls": true})
 	req, err := http.NewRequest(http.MethodPost, h.server.URL+"/v1/chat/completions", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -741,8 +753,17 @@ func (h *nativeTrafficHarness) snapshot() ([]nativeTrafficRow, int, int, int) {
 }
 
 func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
+	testNativeReasoningReplayTrafficAcceptance(t, "gpt-6-astra", "NATIVE_REASONING_REPLAY_TRAFFIC_CANDIDATE_DIR")
+}
+
+func TestGPT61SolChatCacheTrafficAcceptance(t *testing.T) {
+	testNativeReasoningReplayTrafficAcceptance(t, "gpt-6.1-sol", "GPT61_SOL_CHAT_CACHE_TRAFFIC_CANDIDATE_DIR")
+}
+
+func testNativeReasoningReplayTrafficAcceptance(t *testing.T, model, captureEnv string) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
-	dir := os.Getenv("NATIVE_REASONING_REPLAY_TRAFFIC_CANDIDATE_DIR")
+	dir := os.Getenv(captureEnv)
 	if dir == "" {
 		dir = filepath.Join(t.TempDir(), "capture")
 	} else {
@@ -754,11 +775,25 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "native traffic evidence must use a new directory")
 	require.NoError(t, os.MkdirAll(dir, 0700))
 	started := time.Now().UTC()
+	newHarness := func(t *testing.T, mode string) *nativeTrafficHarness {
+		h := newNativeTrafficHarness(t, mode)
+		h.mu.Lock()
+		h.modelOverride = model
+		h.mu.Unlock()
+		t.Cleanup(func() {
+			rows, _, _, _ := h.snapshot()
+			require.NotEmpty(t, rows, "each scenario must send an actual upstream request")
+			for _, row := range rows {
+				require.Equal(t, model, gjson.GetBytes(row.Body, "model").String(), "the production outgoing model must match the matrix under test")
+			}
+		})
+		return h
+	}
 	var scenarios []map[string]any
 	for _, stream := range []bool{false, true} {
 		name := map[bool]string{false: "buffered_multiturn", true: "streamed_multiturn"}[stream]
 		ok := t.Run(name, func(t *testing.T) {
-			h := newNativeTrafficHarness(t, "replay")
+			h := newHarness(t, "replay")
 			t.Cleanup(func() {
 				if t.Failed() {
 					rows, _, _, _ := h.snapshot()
@@ -821,13 +856,13 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 		})
 		require.True(t, ok)
 	}
-	for _, fault := range []string{"off_baseline", "other-user", "other-key", "other-session", "other-account", "changed-parameters", "cache_unavailable", "truncated_terminal"} {
+	for _, fault := range []string{"off_baseline", "other-user", "other-key", "other-session", "other-account", "changed-parameters", "edited_history", "cache_unavailable", "truncated_terminal"} {
 		ok := t.Run(fault, func(t *testing.T) {
 			mode := "replay"
 			if fault == "off_baseline" {
 				mode = "off"
 			}
-			h := newNativeTrafficHarness(t, mode)
+			h := newHarness(t, mode)
 			t.Cleanup(func() {
 				if t.Failed() {
 					rows, _, _, _ := h.snapshot()
@@ -855,6 +890,9 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 				require.Equal(t, 1, puts)
 			}
 			history = nativeTrafficContinue(history, assistant)
+			if fault == "edited_history" {
+				history[0] = json.RawMessage(`{"role":"system","content":"Edited synthetic instruction; prior native output belongs to the old history."}`)
+			}
 			if fault == "cache_unavailable" {
 				h.store.mu.Lock()
 				h.store.fail = true
@@ -881,7 +919,7 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 			name = "encrypted_rejection_second_failure"
 		}
 		ok := t.Run(name, func(t *testing.T) {
-			h := newNativeTrafficHarness(t, "replay")
+			h := newHarness(t, "replay")
 			t.Cleanup(func() {
 				if t.Failed() {
 					rows, _, _, _ := h.snapshot()
@@ -944,7 +982,7 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 	}
 	okBarrier := t.Run("poison_write_failure_local_barrier", func(t *testing.T) {
 		name := "poison_write_failure_local_barrier"
-		h := newNativeTrafficHarness(t, "replay")
+		h := newHarness(t, "replay")
 		t.Cleanup(func() {
 			if t.Failed() {
 				rows, _, _, _ := h.snapshot()
@@ -1011,7 +1049,7 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 		{"rejection_after_queue_ping", `{"error":{"code":"invalid_encrypted_content"}}`, true, true},
 	} {
 		ok := t.Run(tc.name, func(t *testing.T) {
-			h := newNativeTrafficHarness(t, "replay")
+			h := newHarness(t, "replay")
 			t.Cleanup(func() {
 				if t.Failed() {
 					rows, _, _, _ := h.snapshot()
@@ -1066,7 +1104,7 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 			name = "sse_partial_rejection_no_retry"
 		}
 		ok := t.Run(name, func(t *testing.T) {
-			h := newNativeTrafficHarness(t, "replay")
+			h := newHarness(t, "replay")
 			t.Cleanup(func() {
 				if t.Failed() {
 					rows, _, _, _ := h.snapshot()
@@ -1106,11 +1144,11 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 		})
 		require.True(t, ok)
 	}
-	require.Len(t, scenarios, 21)
+	require.Len(t, scenarios, 22)
 	artifactHashes := map[string]string{}
 	paths, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	require.NoError(t, err)
-	require.Len(t, paths, 21)
+	require.Len(t, paths, 22)
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
 		require.NoError(t, err)
@@ -1129,7 +1167,7 @@ func TestNativeReasoningReplayTrafficAcceptance(t *testing.T) {
 	}
 	executable, err := os.Executable()
 	require.NoError(t, err)
-	receipt := map[string]any{"contract": 1, "test_binary_sha256": hashFile(executable), "go_mod_sha256": hashFile("../../go.mod"), "go_sum_sha256": hashFile("../../go.sum"), "go_version": runtime.Version(), "gomaxprocs": runtime.GOMAXPROCS(0), "started_at": started.Format(time.RFC3339Nano), "completed_at": time.Now().UTC().Format(time.RFC3339Nano), "entrypoint": "POST /v1/chat/completions -> ForwardAsChatCompletions", "upstream": "loopback HTTP/SSE; production target checked before origin-only adapter", "reference_kind": "independently scripted complete native output and actual downstream Chat deltas", "scenarios": scenarios, "artifact_sha256": artifactHashes, "comparison_exit_codes": map[string]int{"match": 0, "product_difference": 1, "invalid_evidence": 2}, "status": "pass"}
+	receipt := map[string]any{"contract": 1, "model": model, "test_binary_sha256": hashFile(executable), "go_mod_sha256": hashFile("../../go.mod"), "go_sum_sha256": hashFile("../../go.sum"), "go_version": runtime.Version(), "gomaxprocs": runtime.GOMAXPROCS(0), "started_at": started.Format(time.RFC3339Nano), "completed_at": time.Now().UTC().Format(time.RFC3339Nano), "entrypoint": "POST /v1/chat/completions -> ForwardAsChatCompletions", "upstream": "loopback HTTP/SSE; production target checked before origin-only adapter", "reference_kind": "independently scripted complete native output and actual downstream Chat deltas", "scenarios": scenarios, "artifact_sha256": artifactHashes, "comparison_exit_codes": map[string]int{"match": 0, "product_difference": 1, "invalid_evidence": 2}, "status": "pass"}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "acceptance.json"), nativeTrafficJSON(receipt), 0600))
 	t.Logf("native reasoning replay traffic acceptance: %s", dir)
 }

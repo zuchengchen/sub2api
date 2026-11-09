@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -282,14 +283,16 @@ type nativeReasoningCapturedChat struct {
 // The caller still owns delivery, Flush, cancellation and the forwarding result.
 type NativeReasoningChatCapture struct {
 	gin.ResponseWriter
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	limits  NativeReasoningReplayLimits
-	stream  bool
-	invalid bool
-	parser  nativeReasoningSSECapture
-	buffer  []byte
-	chat    nativeReasoningCapturedChat
+	writeMu               sync.Mutex
+	mu                    sync.Mutex
+	limits                NativeReasoningReplayLimits
+	stream                bool
+	invalid               bool
+	parser                nativeReasoningSSECapture
+	buffer                []byte
+	chat                  nativeReasoningCapturedChat
+	onCompleteWrite       func()
+	completeWriteNotified bool
 }
 
 func NewNativeReasoningChatCapture(writer gin.ResponseWriter, stream bool, limits NativeReasoningReplayLimits) *NativeReasoningChatCapture {
@@ -327,11 +330,15 @@ func (c *NativeReasoningChatCapture) Write(p []byte) (int, error) {
 	}
 	n, err := c.ResponseWriter.Write(p)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err != nil || n != len(p) {
 		c.failLocked()
 	} else {
 		c.record(p[:n])
+	}
+	notify := c.completeWriteCallbackLocked()
+	c.mu.Unlock()
+	if notify != nil {
+		notify()
 	}
 	return n, err
 }
@@ -343,7 +350,6 @@ func (c *NativeReasoningChatCapture) WriteString(p string) (int, error) {
 	}
 	n, err := c.ResponseWriter.WriteString(p)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err != nil || n != len(p) {
 		c.failLocked()
 	} else if !c.invalid {
@@ -353,8 +359,28 @@ func (c *NativeReasoningChatCapture) WriteString(p string) (int, error) {
 			c.record([]byte(p[:n]))
 		}
 	}
+	notify := c.completeWriteCallbackLocked()
+	c.mu.Unlock()
+	if notify != nil {
+		notify()
+	}
 	return n, err
 }
+
+// The hook is configured before forwarding and invoked once under writeMu,
+// after the successful underlying write and capture validation. Flush has not
+// run yet; the hook may reserve publication but must not commit output.
+func (c *NativeReasoningChatCapture) completeWriteCallbackLocked() func() {
+	if !c.stream || c.onCompleteWrite == nil || c.completeWriteNotified || c.ResponseWriter == nil || c.ResponseWriter.Status() != http.StatusOK {
+		return nil
+	}
+	if _, complete := c.messageLocked(); !complete {
+		return nil
+	}
+	c.completeWriteNotified = true
+	return c.onCompleteWrite
+}
+
 func nativeReasoningCompleteChatFinish(reason string) bool {
 	return reason == "stop" || reason == "tool_calls"
 }

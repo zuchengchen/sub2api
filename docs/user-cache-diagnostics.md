@@ -20,9 +20,14 @@ SUB2_USER_CACHE_DIAGNOSTIC_MAX_REQUESTS=30
 已有符号链接、设备、目录、组/其他用户可读文件均拒绝写入；写前核对已打开文件的身份、权限和大小。
 配置需要同时满足：正整数用户 ID、绝对文件路径、未来一小时以内的到期时间和 1–100 次请求上限。
 省略请求上限时默认 30 次；任何其他必填配置缺失或非法都不采样。
-仅依据服务端已经认证的 API Key 用户 ID 筛选，其他用户不进入解析或记录路径。
+仅依据服务端已经认证的 API Key 用户 ID 决定是否允许采样，其他用户不会产生诊断记录。
+可额外设置 `SUB2_USER_CACHE_DIAGNOSTIC_MODEL=gpt-6.1-sol`，仅采样入站 `model` 字符串精确匹配的请求；
+不做大小写或空白归一化，这也不代表模型映射后的实际模型。未设置或设置为空时保留原有全部模型行为。
+不匹配请求不写文件、不占采样名额；该拒绝在同一入站请求内固定，重试更换 body 也不能绕过。
+启用模型筛选时，入站须为不超过 32 MiB 的合法 JSON 对象，顶层只允许一个精确命名为 `model` 的字段；
+重复字段（包括转义后的同名键）及 `Model`/`MODEL` 等大小写别名均拒绝采样，嵌套对象中的同名字段不影响筛选。
 
-每个入站请求最多观察 4 次上游尝试、最多写 9 条记录（1 条入站、每次尝试最多 2 条）。
+每个入站请求最多观察 4 次上游尝试、最多写 13 条记录（1 条入站，以及每次尝试的请求、响应和目标模型下游交付记录各 1 条）。交付记录绑定到对应的已采样尝试，失败后的重试也使用同一个总上限。
 重试各自携带独立的尝试/上游账号/用量关联信息，迟到的前次响应不会归到下一次尝试。到期后停止新增样本和所有写入，包含未结束请求；
 因此没有响应事件的样本不能解释为“上游没有返回用量或推理项”。输出文件达到 16 MiB 后停止写入。
 采样结束后移除临时环境配置，避免日后运维误用；到期时间不更新时，重启也不会重新采样。
@@ -32,6 +37,7 @@ SUB2_USER_CACHE_DIAGNOSTIC_MAX_REQUESTS=30
 - `ingress`：认证用户、API Key、请求关联哈希、会话哈希，以及转换前的字段和消息摘要。
 - `upstream_request`：上游账号、尝试序号、实际发送请求的字段/消息摘要和会话相关请求头的进程内 HMAC。
 - `upstream_response`：HTTP 状态、终态类型、上游原始数值用量、输出项类型，以及加密推理项的长度和哈希。
+- `chat_delivery`：仅 `gpt-6.1-sol` 兼容转换路径记录实际消费者的返回状态、用量、成功写出的响应 ID/assistant 哈希，以及原生恢复模式、资格和恢复组数；即使原生续接关闭，也可在有界诊断中采集。
 
 每个消息摘要含位置、结构哈希和 JSON 值字节长度，不包含提示词、模型回答、工具参数或工具结果原文。
 不记录 Authorization、Cookie、API Key、错误正文、原始会话 ID、原始响应 ID 或加密推理内容。
@@ -45,7 +51,7 @@ SUB2_USER_CACHE_DIAGNOSTIC_MAX_REQUESTS=30
 与同一用户、同一时间窗口的 `usage_logs` 对齐。对齐后比较 `cache_read_tokens`、
 普通输入加缓存读写的总输入、输出、账号，以及原始 `response.usage` 的相应字段。
 
-请求最多解析 32 MiB、展示前 512 个消息摘要；超限会带标记。
+请求最多解析 32 MiB、展示前 1024 个消息摘要；超限会带标记。
 响应单行及完整 SSE 事件的解析缓冲分别不超过 4 MiB，非 SSE JSON 文档不超过 4 MiB；
 最多汇总前 128 个输出位置。每次上游尝试最多观察 32 MiB 或 8192 个事件；
 超过限制时停止解析，继续原样传递后续响应，并在最终事件记录 `observation_limited`。
@@ -105,3 +111,19 @@ errors do not gain an exception. All original native item/opaque/full-history
 checks remain required. Historical boolean-only read errors cannot be relabeled
 as post-terminal evidence, and production rollout analysis without an
 independent consumer proof must keep such cases uncertain.
+
+For the target Chat bridge, `chat_delivery` adds independent evidence from the
+actual response consumer and successful writes. A complete streaming record
+requires an assistant role, a supported finish reason and `[DONE]`; buffered
+records require one complete assistant response. Short writes, errors, partial
+frames and capture limits prevent `downstream_delivered_complete`. The capture
+uses the native replay limits (256 KiB logical content by default) and never
+writes content to the diagnostic log. `forward_returned_success`,
+`context_canceled` and `downstream_delivered_complete` remain separate facts:
+no single boolean establishes completion. The Chat forward result does not
+reliably populate its disconnect flag, so this diagnostic omits that flag.
+Join the same trace/attempt and require a
+matching `consumer_response_id_sha256` and `consumer_usage` before applying the
+post-terminal exception above. Successful server writes do not prove a remote
+client read the bytes. The additional evidence does not change the forwarding
+result, replay admission or billing, and cannot upgrade old samples that lack it.

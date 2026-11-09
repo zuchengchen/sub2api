@@ -77,8 +77,9 @@ func (l *nativeReasoningPublicationLease) matches(owner, key string) bool {
 	return !l.released && l.entry.owner == owner && l.entry.key == key
 }
 
-// handoff is called only after finish verifies complete native output and
-// successful client delivery. Cancellation before this point still discards the
+// handoff requires verified complete native output and a successful complete
+// client write. The final finish check still gates Commit. Cancellation before
+// this point discards the
 // output. Once confirmed, closing the completed HTTP response must not interrupt
 // the bounded cache publication. A cancellation callback that already started
 // wins: stop returning false prevents transferring an already retiring lease.
@@ -87,7 +88,15 @@ func (l *nativeReasoningPublicationLease) handoff(ctx, clientCtx context.Context
 		return nil, nil, false
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	releaseCanceled := false
+	defer func() {
+		l.mu.Unlock()
+		if releaseCanceled {
+			// The original cancellation hook has already been stopped. Do
+			// not leave this failed transfer waiting for a blocked Flush.
+			l.release()
+		}
+	}()
 	if l.released || l.handedOff || l.stop == nil || ctx.Err() != nil || clientCtx.Err() != nil || budget <= 0 || budget > 100*time.Millisecond {
 		return nil, nil, false
 	}
@@ -96,6 +105,7 @@ func (l *nativeReasoningPublicationLease) handoff(ctx, clientCtx context.Context
 	}
 	l.stop = nil
 	if ctx.Err() != nil || clientCtx.Err() != nil {
+		releaseCanceled = true
 		return nil, nil, false
 	}
 	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
@@ -176,6 +186,11 @@ func (p *nativeReasoningPublications) wait(ctx context.Context, prepared nativeR
 
 func (n *nativeReasoningChat) releasePublication() {
 	if n != nil {
+		if n.publicationCancel != nil {
+			n.publicationCancel()
+			n.publicationCancel = nil
+		}
+		n.publicationContext = nil
 		n.publication.release()
 		n.publication = nil
 	}
