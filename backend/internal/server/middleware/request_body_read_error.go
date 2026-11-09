@@ -4,9 +4,8 @@ import (
 	"net/http"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestbodydiag"
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 // AbortRequestBodyReadFailure logs a bounded body-read failure and writes
@@ -31,20 +30,5 @@ func AbortRequestBodyReadFailure(c *gin.Context, err error) {
 }
 
 func logRequestBodyReadFailure(req *http.Request, err error) {
-	if err == nil {
-		return
-	}
-	contentLength := int64(-1)
-	contentEncoding := "identity"
-	reqLog := logger.L()
-	if req != nil {
-		contentLength = req.ContentLength
-		contentEncoding = pkghttputil.RequestContentEncodingCategory(req.Header.Get("Content-Encoding"))
-		reqLog = logger.FromContext(req.Context())
-	}
-	reqLog.Warn("read request body failed",
-		zap.String("error_kind", pkghttputil.RequestBodyReadErrorKind(err)),
-		zap.String("content_encoding", contentEncoding),
-		zap.Int64("content_length", contentLength),
-	)
+	requestbodydiag.LogFailure(nil, req, err)
 }

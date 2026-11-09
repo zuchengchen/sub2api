@@ -340,6 +340,7 @@ func failoverClientGone(c *gin.Context) bool {
 		return true
 	}
 	if !c.Writer.Written() {
+		markOpsLocalRequestTermination(c)
 		c.Status(statusClientClosedRequest)
 	}
 	return true

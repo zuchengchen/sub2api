@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestbodydiag"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -14,29 +14,7 @@ import (
 // enough information to distinguish compression failures from a
 // disconnected/truncated upload without logging request content.
 func logRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error) {
-	if err == nil {
-		return
-	}
-	if reqLog == nil {
-		if req != nil {
-			reqLog = logger.FromContext(req.Context())
-		} else {
-			reqLog = logger.L()
-		}
-	}
-
-	contentLength := int64(-1)
-	contentEncoding := "identity"
-	if req != nil {
-		contentLength = req.ContentLength
-		contentEncoding = pkghttputil.RequestContentEncodingCategory(req.Header.Get("Content-Encoding"))
-	}
-
-	reqLog.Warn("read request body failed",
-		zap.String("error_kind", pkghttputil.RequestBodyReadErrorKind(err)),
-		zap.String("content_encoding", contentEncoding),
-		zap.Int64("content_length", contentLength),
-	)
+	requestbodydiag.LogFailure(reqLog, req, err)
 }
 
 type gatewayErrorWriter func(*gin.Context, int, string, string)

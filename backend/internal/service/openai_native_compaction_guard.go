@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -66,9 +67,28 @@ func openAINativeCompactionTerminalMissingItem(c *gin.Context, eventType string,
 }
 
 // newOpenAINativeCompactionMissingItemFailoverError turns an empty native v2
-// compaction terminal into a retryable upstream anomaly. Compaction carries
-// no tool side effects, so another account may safely run it again.
+// compaction terminal into a retryable upstream anomaly. Callers must first
+// exclude observed upstream progress or usage before selecting this recovery.
 func newOpenAINativeCompactionMissingItemFailoverError(c *gin.Context, account *Account, upstreamRequestID string) *UpstreamFailoverError {
+	recordOpenAINativeCompactionMissingItem(c, account, upstreamRequestID, "failover")
+	headers := http.Header{}
+	if strings.TrimSpace(upstreamRequestID) != "" {
+		headers.Set("x-request-id", strings.TrimSpace(upstreamRequestID))
+	}
+	body := []byte(`{"error":{"type":"upstream_error","code":"` + openAINativeCompactionMissingItemCode + `","message":"` + openAINativeCompactionMissingItemMessage + `"}}`)
+	return &UpstreamFailoverError{
+		StatusCode:      http.StatusBadGateway,
+		ResponseBody:    body,
+		ResponseHeaders: headers,
+	}
+}
+
+func newOpenAINativeCompactionMissingItemError(c *gin.Context, account *Account, upstreamRequestID string) error {
+	recordOpenAINativeCompactionMissingItem(c, account, upstreamRequestID, "stream_failed")
+	return errors.New(openAINativeCompactionMissingItemMessage)
+}
+
+func recordOpenAINativeCompactionMissingItem(c *gin.Context, account *Account, upstreamRequestID, kind string) {
 	accountID := int64(0)
 	accountName := ""
 	platform := PlatformOpenAI
@@ -87,19 +107,9 @@ func newOpenAINativeCompactionMissingItemFailoverError(c *gin.Context, account *
 		AccountName:        accountName,
 		UpstreamStatusCode: http.StatusBadGateway,
 		UpstreamRequestID:  upstreamRequestID,
-		Kind:               "failover",
+		Kind:               kind,
 		Reason:             openAINativeCompactionMissingItemCode,
 		Message:            openAINativeCompactionMissingItemMessage,
 	})
 
-	headers := http.Header{}
-	if strings.TrimSpace(upstreamRequestID) != "" {
-		headers.Set("x-request-id", strings.TrimSpace(upstreamRequestID))
-	}
-	body := []byte(`{"error":{"type":"upstream_error","code":"` + openAINativeCompactionMissingItemCode + `","message":"` + openAINativeCompactionMissingItemMessage + `"}}`)
-	return &UpstreamFailoverError{
-		StatusCode:      http.StatusBadGateway,
-		ResponseBody:    body,
-		ResponseHeaders: headers,
-	}
 }

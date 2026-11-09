@@ -661,11 +661,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, handleErr
 	}
 
-	// Propagate ServiceTier and ReasoningEffort to result for billing.
-	// 计费 tier 优先采用上游回显值；上游未回显时回退到最终出站 body（经过
-	// fast policy filter/force 之后）里的 tier，policy filter 删掉字段后不再
-	// 按原请求 Fast 计费。
-	if handleErr == nil && result != nil {
+	// Metered failures retain the same final outbound tier/effort as success.
+	// Keep the observed upstream tier separate for the existing usage-time
+	// resolution; a filtered request tier must stay absent.
+	if result != nil {
 		if tier := resolvedOpenAIUpstreamServiceTier(c, extractOpenAIServiceTierFromBody(responsesBody)); tier != nil {
 			result.ServiceTier = tier
 		}
@@ -901,15 +900,31 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, priorModels, err := s.readOpenAICompatBufferedTerminal(resp, c, account, "openai chat_completions buffered", requestID)
+	var replayGuard openAIResponseReplayGuard
+	finalResponse, usage, acc, priorModels, err := s.readOpenAICompatBufferedTerminal(resp, c, account, "openai chat_completions buffered", requestID, &replayGuard)
+	partialResult := func() *OpenAIForwardResult {
+		responseID := ""
+		if finalResponse != nil {
+			responseID = finalResponse.ID
+		}
+		return openAICompatPartialForwardResult(c, resp, usage, responseID, originalModel, billingModel, upstreamModel, startTime)
+	}
 	if err != nil {
+		if !replayGuard.CanReplay(c) {
+			var readErr *openAICompatBufferedReadError
+			if errors.As(err, &readErr) && shouldClassifyOpenAIUpstreamStreamReadError(readErr.cause, c.Request.Context()) {
+				recordOpenAIStreamReadFailure(c, account, requestID, readErr.cause)
+				return partialResult(), newOpenAIUpstreamStreamReadError(readErr.cause)
+			}
+			return partialResult(), err
+		}
 		return nil, s.newOpenAICompatBufferedReadFailoverError(c, account, resp, requestID, err)
 	}
 
 	if finalResponse == nil {
 		message := s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "request_error", nil, "Upstream stream ended without a terminal response event")
 		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", message)
-		return nil, fmt.Errorf("upstream stream ended without terminal event")
+		return partialResult(), fmt.Errorf("upstream stream ended without terminal event")
 	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
@@ -939,7 +954,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
 		}
 		message := openAICompatFailedResponseMessage(finalResponse)
-		if openAIStreamFailedEventShouldFailover(payload, message) {
+		if replayGuard.CanReplay(c) && openAIStreamFailedEventShouldFailover(payload, message) {
 			return nil, s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payload, message, upstreamModel, resp.Header)
 		}
 		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
@@ -953,14 +968,14 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 			}
 			MarkResponseCommitted(c)
 			writeChatCompletionsError(c, status, errType, errMsg)
-			return nil, fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
+			return partialResult(), fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
 		}
 		if isOpenAIContextWindowError(message, payload) {
 			WriteChatCompletionsContextLengthExceeded(c, message)
-			return nil, fmt.Errorf("upstream response failed: %s", message)
+			return partialResult(), fmt.Errorf("upstream response failed: %s", message)
 		}
 		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", message)
-		return nil, fmt.Errorf("upstream response failed: %s", message)
+		return partialResult(), fmt.Errorf("upstream response failed: %s", message)
 	}
 	if strings.TrimSpace(finalResponse.Status) == "completed" {
 		logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, &usage, "response.completed", false)
@@ -1083,6 +1098,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	var grokAbortErr error
 	clientDisconnected := false
 	clientOutputStarted := false
+	var replayGuard openAIResponseReplayGuard
 	pendingSSE := make([]string, 0, 4)
 	refusalBodyLen := len(requestBody)
 	if account != nil && account.IsGrok() {
@@ -1179,6 +1195,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 		grokProgress.ObserveEvent(event.Type, []byte(payload))
 		observer.ObserveOpenAI([]byte(payload), event.Type)
+		replayGuard.Observe([]byte(payload), event.Type)
 		refusalDetector.ObservePayload([]byte(payload))
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 		if grokStream && grokAbortErr == nil && grokChatWindowFuseExceeded(usage, []byte(payload)) {
@@ -1193,10 +1210,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if isTerminalEvent {
 			terminalEventType = strings.TrimSpace(event.Type)
 			if event.Usage != nil {
-				usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
+				retainOpenAITerminalUsage(&usage, copyOpenAIUsageFromResponsesUsage(event.Usage))
 			}
 			if event.Response != nil && event.Response.Usage != nil {
-				usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+				retainOpenAITerminalUsage(&usage, copyOpenAIUsageFromResponsesUsage(event.Response.Usage))
 			}
 		}
 		if strings.TrimSpace(event.Type) == "response.failed" || strings.TrimSpace(event.Type) == "error" {
@@ -1237,7 +1254,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if strings.TrimSpace(event.Type) == "error" {
 				shouldFailover = openAIStreamErrorEventShouldFailover(payloadBytes, message)
 			}
-			if !clientOutputStarted && shouldFailover {
+			if !clientOutputStarted && shouldFailover && replayGuard.CanReplay(c) {
 				streamFailoverErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payloadBytes, message, upstreamModel, resp.Header)
 				return true
 			}
@@ -1501,6 +1518,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
+		if !clientDisconnected {
+			recordOpenAIStreamReadFailure(c, account, requestID, ErrOpenAIUpstreamStreamTruncated)
+		}
 		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
 	failStreamRead := func(err error) (*OpenAIForwardResult, error) {
@@ -1512,6 +1532,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			grokAbortErr = fmt.Errorf("%s: %s", grokChatReasoningUpstreamCutCode, grokChatReasoningUpstreamCutMsg)
 			return finalizeStream()
 		}
+		recordOpenAIStreamReadFailure(c, account, requestID, err)
 		return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
@@ -1712,7 +1733,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					idleCtx = c.Request.Context()
 				}
 				s.tempUnscheduleGrok(idleCtx, account, grokStreamIdleCooldown, "grok stream idle timeout")
-				if !clientOutputStarted {
+				if !clientOutputStarted && replayGuard.CanReplay(c) {
 					return resultWithUsage(), grokStreamIdleFailoverError(account, idle)
 				}
 				grokAbortErr = fmt.Errorf("%s: %s", grokChatReasoningIdleTimeoutCode, grokStreamIdleMessage(idle))

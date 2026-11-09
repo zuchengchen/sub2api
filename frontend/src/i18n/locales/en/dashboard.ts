@@ -464,7 +464,7 @@ export default {
       empty: 'No error requests', failedToLoad: 'Failed to load error requests',
       categories: {
         auth: 'Auth failed', rate_limit: 'Rate limited', quota: 'Balance/Subscription',
-        invalid_request: 'Invalid request', service_unavailable: 'Service unavailable',
+        invalid_request: 'Request error', service_unavailable: 'Service unavailable',
         upstream: 'Upstream error', internal: 'Platform error', other: 'Other', cyber: 'Cyber policy',
       },
       detail: {

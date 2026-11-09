@@ -466,12 +466,12 @@ export default {
       empty: '暂无错误请求', failedToLoad: '加载错误请求失败',
       categories: {
         auth: '认证失败', rate_limit: '限流', quota: '余额/订阅',
-        invalid_request: '参数错误', service_unavailable: '服务暂时不可用',
+        invalid_request: '请求错误', service_unavailable: '服务暂时不可用',
         upstream: '上游错误', internal: '平台错误', other: '其他', cyber: '安全策略',
       },
       detail: {
         title: '错误请求详情',
-        responseBody: '上游响应内容',
+        responseBody: '响应内容',
         upstreamStatus: '上游状态码',
         loadFailed: '加载详情失败，请稍后重试',
       },

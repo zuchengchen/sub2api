@@ -2304,6 +2304,7 @@ export interface ExtendSubscriptionRequest {
 // ==================== Query Parameters ====================
 
 export interface UserErrorRequest {
+  final_request_status?: number
   id: number
   created_at: string
   model: string
@@ -2327,6 +2328,7 @@ export interface UserErrorRequestDetail extends UserErrorRequest {
 }
 
 export interface UserErrorListParams {
+  status_scope?: 'request'
   page?: number
   page_size?: number
   start_date?: string

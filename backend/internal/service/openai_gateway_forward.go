@@ -1648,6 +1648,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 
 		// Handle normal response
 		var usage *OpenAIUsage
+		var responseErr error
 		var firstTokenMs *int
 		responseID := ""
 		imageCount := 0
@@ -1693,9 +1694,17 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 					}
 					return s.handleErrorResponse(ctx, compactResp, c, account, body, resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel))
 				}
-				return nil, err
+				var failoverErr *UpstreamFailoverError
+				if streamResult == nil || errors.As(err, &failoverErr) || GetOpsCyberPolicy(c) != nil ||
+					(!openAIUsageHasTokens(&streamResult.upstreamUsage) && streamResult.imageCount == 0 && streamResult.searchCount == 0) {
+					return nil, err
+				}
+				responseErr = err
 			}
 			usage = streamResult.usage
+			if responseErr != nil {
+				usage = &streamResult.upstreamUsage
+			}
 			firstTokenMs = streamResult.firstTokenMs
 			responseID = strings.TrimSpace(streamResult.responseID)
 			imageCount = streamResult.imageCount
@@ -1717,7 +1726,12 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 						continue
 					}
 				}
-				return nil, err
+				var failoverErr *UpstreamFailoverError
+				if nonStreamResult == nil || errors.As(err, &failoverErr) || GetOpsCyberPolicy(c) != nil ||
+					(!openAIUsageHasTokens(nonStreamResult.usage) && nonStreamResult.imageCount == 0 && nonStreamResult.searchCount == 0) {
+					return nil, err
+				}
+				responseErr = err
 			}
 			usage = nonStreamResult.usage
 			responseID = strings.TrimSpace(nonStreamResult.responseID)
@@ -1725,10 +1739,12 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			searchCount = nonStreamResult.searchCount
 		}
-		s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		if responseErr == nil {
+			s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		}
 
 		// Extract and save Codex usage snapshot from response headers (for OAuth accounts).
-		if account.UsesOpenAICodexProtocol() {
+		if responseErr == nil && account.UsesOpenAICodexProtocol() {
 			if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 				s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 			}
@@ -1770,7 +1786,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			forwardResult.SearchCount = searchCount
 		}
 		stampOpenAIResponsesUpstreamEndpoint(c, forwardResult)
-		return forwardResult, nil
+		return forwardResult, responseErr
 	}
 }
 

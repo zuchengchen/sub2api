@@ -895,6 +895,7 @@ export interface OpsSystemLogSinkHealth {
 }
 
 export interface OpsErrorLog {
+  final_request_status?: number
   id: number
   created_at: string
 
@@ -1087,6 +1088,7 @@ export async function getOpenAITokenStats(
 export type OpsErrorListView = 'errors' | 'excluded' | 'all'
 
 export type OpsErrorListQueryParams = {
+  status_scope?: 'request'
   page?: number
   page_size?: number
   time_range?: string

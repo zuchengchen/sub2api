@@ -387,6 +387,8 @@ export default {
         phase: '阶段',
         status: '状态码',
         upstreamStatus: '上游状态码',
+        finalRequestStatus: '最终请求状态',
+        requestOutcome: '请求结束说明',
         message: '消息',
         rootCause: '根因',
         diagnosticPayloads: '诊断载荷',

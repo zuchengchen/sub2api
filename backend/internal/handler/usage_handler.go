@@ -360,6 +360,7 @@ func (h *UsageHandler) ListErrors(c *gin.Context) {
 
 	// 排序对齐用量明细:列白名单与方向归一在 repo 层,非法值回退 created_at DESC。
 	filter.SetSort(c.Query("sort_by"), c.Query("sort_order"))
+	filter.UseFinalRequestStatus = strings.EqualFold(strings.TrimSpace(c.Query("status_scope")), "request")
 
 	result, err := h.opsService.ListUserErrorRequests(c.Request.Context(), subject.UserID, filter)
 	if err != nil {

@@ -387,6 +387,8 @@ export default {
         phase: 'Phase',
         status: 'Status',
         upstreamStatus: 'Upstream Status',
+        finalRequestStatus: 'Final Request Status',
+        requestOutcome: 'Request Outcome',
         message: 'Message',
         rootCause: 'Root Cause',
         diagnosticPayloads: 'Diagnostic Payloads',

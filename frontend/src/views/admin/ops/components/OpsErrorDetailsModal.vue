@@ -6,6 +6,7 @@ import Select from '@/components/common/Select.vue'
 import OpsErrorLogTable from './OpsErrorLogTable.vue'
 import { opsAPI, type OpsErrorLog } from '@/api/admin/ops'
 import { buildOpsErrorTimeParams } from '../utils/opsErrorParams'
+import { COMMON_ERROR_STATUS_CODES } from '@/utils/errorBadges'
 
 interface Props {
   show: boolean
@@ -45,7 +46,9 @@ const modalTitle = computed(() => {
 })
 
 const statusCodeSelectOptions = computed(() => {
-  const codes = [400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504, 529]
+  const codes = props.errorType === 'request'
+    ? COMMON_ERROR_STATUS_CODES
+    : [400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504, 529]
   return [
     { value: null, label: t('common.all') },
     ...codes.map((c) => ({ value: c, label: String(c) })),
@@ -128,6 +131,7 @@ async function fetchErrorLogs() {
     if (platform) params.platform = platform
     if (typeof props.groupId === 'number' && props.groupId > 0) params.group_id = props.groupId
 
+    if (props.errorType === 'request') params.status_scope = 'request'
     if (q.value.trim()) params.q = q.value.trim()
     if (statusCode.value === 'other') params.status_codes_other = '1'
     else if (typeof statusCode.value === 'number') params.status_codes = String(statusCode.value)
@@ -277,6 +281,7 @@ watch(
           <OpsErrorLogTable
             class="min-h-0 flex-1"
             summary-first
+            :use-final-request-status="errorType === 'request'"
             :rows="rows"
             :total="total"
             :loading="loading"

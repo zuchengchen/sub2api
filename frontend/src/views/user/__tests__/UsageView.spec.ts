@@ -224,6 +224,24 @@ describe('user UsageView', () => {
     getAvailable.mockResolvedValue([{ id: 1, name: 'default' }])
   })
 
+  it('opts error status filtering and sorting into the final request outcome', async () => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'Error records')!.trigger('click')
+    await flushPromises()
+    expect(listMyErrorRequests).toHaveBeenLastCalledWith(expect.objectContaining({ status_scope: 'request' }))
+    wrapper.findComponent(UserErrorRequestsTable).vm.$emit('sort', 'status_code', 'asc')
+    await flushPromises()
+    expect(listMyErrorRequests).toHaveBeenLastCalledWith(expect.objectContaining({ status_scope: 'request', sort_by: 'status_code', sort_order: 'asc' }))
+    const statusSelect = wrapper.findAllComponents(Select).find((select) =>
+      select.props('options').some((option: SelectOption) => option.value === 499))!
+    statusSelect.vm.$emit('update:modelValue', 499)
+    statusSelect.vm.$emit('change', 499)
+    await flushPromises()
+    expect(listMyErrorRequests).toHaveBeenLastCalledWith(expect.objectContaining({ status_scope: 'request', status_code: 499 }))
+    wrapper.unmount()
+  })
+
   it('user errors keep the newest page when requests finish out of order', async () => {
     const old = deferredRequest()
     const current = deferredRequest()
