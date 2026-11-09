@@ -25,6 +25,7 @@ func (a *userCacheDiagnosticAttempt) chatDelivery(c *gin.Context, delivery *Nati
 	if native != nil {
 		fields["native_mode"], fields["native_eligible"], fields["restored_groups"] = native.mode, native.eligible, len(native.references)
 	}
+	var assistantForComparison []byte
 	if delivery != nil {
 		// Use the capture's writer lock order; snapshots must not race writes.
 		delivery.writeMu.Lock()
@@ -41,10 +42,14 @@ func (a *userCacheDiagnosticAttempt) chatDelivery(c *gin.Context, delivery *Nati
 					fields["consumer_response_id_sha256"] = diagnosticSHA256([]byte(responseID))
 				}
 				fields["delivered_assistant"] = summarizeUserCacheValue(assistant)
+				assistantForComparison = assistant
 			}
 		}
 		delivery.mu.Unlock()
 		delivery.writeMu.Unlock()
+	}
+	if d.assistantComparison && assistantForComparison != nil && fields["forward_returned_success"] == true {
+		fields["assistant_comparison"] = d.summarizeAssistant(assistantForComparison)
 	}
 	usageID := a.usageRequestIDHash
 	if result != nil {
