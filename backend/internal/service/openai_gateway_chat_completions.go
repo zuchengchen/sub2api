@@ -83,7 +83,13 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if err := s.CheckOpenAIAstraModelPolicy(ctx, account, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)); err != nil {
 		return nil, err
 	}
-	nativeChat := s.beginNativeReasoningChat(c, account, body)
+	nativeReplayModel := normalizeOpenAIModelForUpstream(account, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel))
+	nativeReplayAuthorization := nativeReasoningChatAuthorization{mode: NativeReasoningReplayModeOff}
+	if isCodexOAuthAccount(account) && !account.IsOpenAIAgentIdentity() && !account.IsOpenAIPersonalAccessToken() &&
+		(s.pluginManager == nil || !s.pluginManager.ShouldRouteOpenAIOAuth(account)) {
+		nativeReplayAuthorization = s.resolveNativeReasoningChatAuthorization(c, nativeReplayModel)
+	}
+	nativeChat := s.beginNativeReasoningChat(c, account, body, nativeReplayAuthorization)
 	if nativeChat != nil {
 		defer nativeChat.releasePublication()
 	}
@@ -98,7 +104,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
-	restoreClientSession := stageCodexHTTPClientSession(c, account, body)
+	restoreClientSession := stageGPT61SolChatClientSession(c, account, body, nativeReplayModel, nativeReplayAuthorization.targetReplayEnabled())
 	defer restoreClientSession()
 	s.codexWireProfileForRequest(c, account, body)
 
@@ -493,6 +499,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	cancelUpstream := func() {}
 	defer func() { cancelUpstream() }()
 	var resp *http.Response
+	var cacheDiagnosticAttempt *userCacheDiagnosticAttempt
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, responsesBody)
 	for {
 		cancelUpstream()
@@ -528,7 +535,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		if bindErr != nil {
 			return nil, bindErr
 		}
-		cacheDiagnosticAttempt := cacheDiagnostic.upstreamRequest(account, upstreamReq)
+		cacheDiagnosticAttempt = cacheDiagnostic.upstreamRequest(account, upstreamReq)
 		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		cacheDiagnosticAttempt.upstreamResponse(resp, err)
 		if nativeChat.preSendFallback(err) {
@@ -612,11 +619,20 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 9. Handle normal response
 	var nativeCapture *NativeReasoningResponseCapture
 	var nativeDelivery *NativeReasoningChatCapture
+	captureLimits := DefaultNativeReasoningReplayLimits()
 	if nativeChat != nil && nativeChat.eligible {
+		captureLimits = nativeChat.runtime.limits
 		nativeCapture = NewNativeReasoningResponseCapture(resp.Body, nativeChat.runtime.limits)
 		resp.Body = nativeCapture
+	}
+	if nativeCapture != nil || (cacheDiagnosticAttempt != nil && upstreamModel == "gpt-6.1-sol") {
 		originalWriter := c.Writer
-		nativeDelivery = NewNativeReasoningChatCapture(originalWriter, clientStream, nativeChat.runtime.limits)
+		nativeDelivery = NewNativeReasoningChatCapture(originalWriter, clientStream, captureLimits)
+		if clientStream && nativeChat != nil && nativeChat.mode == NativeReasoningReplayModeReplay && nativeChat.request.Scope.Model == nativeReasoningReplayAllUsersModel {
+			nativeDelivery.onCompleteWrite = func() {
+				nativeChat.handoffCompletedStream(ctx, c, resp, nativeCapture)
+			}
+		}
 		c.Writer = nativeDelivery
 		defer func() { c.Writer = originalWriter }()
 	}
@@ -630,6 +646,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if nativeCapture != nil {
 		nativeChat.finish(ctx, c, resp, nativeCapture, nativeDelivery, handleErr)
 		_ = resp.Body.Close()
+	}
+	if cacheDiagnosticAttempt != nil && upstreamModel == "gpt-6.1-sol" {
+		cacheDiagnosticAttempt.chatDelivery(c, nativeDelivery, result, handleErr, nativeChat)
 	}
 	stampOpenAIResponsesUpstreamEndpoint(c, result)
 

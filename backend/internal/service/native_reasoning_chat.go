@@ -98,23 +98,57 @@ func nativeReasoningCredentialIdentity(c *gin.Context, account *Account, token s
 	return nativeReplayDigest(value)
 }
 
-type nativeReasoningChat struct {
-	runtime        *nativeReasoningRuntime
-	mode           string
-	original       []byte
-	messages       []json.RawMessage
-	request        NativeReasoningReplayRequest
-	references     []NativeReasoningReplayReference
-	sourceInput    json.RawMessage
-	toolReverse    map[string]string
-	principal      string
-	eligible       bool
-	replayDisabled bool
-	fallbackTried  bool
-	publication    *nativeReasoningPublicationLease
+// One request-local policy decision is shared by native replay and the target
+// model's identity bridge. Resolving it does not require a header session: that
+// bridge also accepts existing, explicit body session evidence.
+type nativeReasoningChatAuthorization struct {
+	mode             string
+	model            string
+	modelRestricted  bool
+	userID, apiKeyID int64
 }
 
-func (s *OpenAIGatewayService) beginNativeReasoningChat(c *gin.Context, account *Account, body []byte) *nativeReasoningChat {
+func (a nativeReasoningChatAuthorization) targetReplayEnabled() bool {
+	return a.mode == NativeReasoningReplayModeReplay && a.model == nativeReasoningReplayAllUsersModel && a.userID > 0 && a.apiKeyID > 0
+}
+
+func (s *OpenAIGatewayService) resolveNativeReasoningChatAuthorization(c *gin.Context, actualModel string) nativeReasoningChatAuthorization {
+	off := nativeReasoningChatAuthorization{mode: NativeReasoningReplayModeOff}
+	if s == nil || s.nativeReplayRuntime == nil || c == nil || c.Request == nil {
+		return off
+	}
+	value, ok := c.Get("api_key")
+	if !ok {
+		return off
+	}
+	key, ok := value.(*APIKey)
+	if !ok || key == nil || key.ID <= 0 || key.UserID <= 0 {
+		return off
+	}
+	mode, restricted := s.nativeReplayRuntime.modeForUserModel(c.Request.Context(), key.UserID, actualModel)
+	return nativeReasoningChatAuthorization{mode: mode, model: actualModel, modelRestricted: restricted, userID: key.UserID, apiKeyID: key.ID}
+}
+
+type nativeReasoningChat struct {
+	authorizedModel    string
+	runtime            *nativeReasoningRuntime
+	mode               string
+	original           []byte
+	messages           []json.RawMessage
+	request            NativeReasoningReplayRequest
+	references         []NativeReasoningReplayReference
+	sourceInput        json.RawMessage
+	toolReverse        map[string]string
+	principal          string
+	eligible           bool
+	replayDisabled     bool
+	fallbackTried      bool
+	publication        *nativeReasoningPublicationLease
+	publicationContext context.Context
+	publicationCancel  context.CancelFunc
+}
+
+func (s *OpenAIGatewayService) beginNativeReasoningChat(c *gin.Context, account *Account, body []byte, authorization nativeReasoningChatAuthorization) *nativeReasoningChat {
 	if s == nil || s.nativeReplayRuntime == nil || c == nil || c.Request == nil || !isCodexOAuthAccount(account) || account.IsOpenAIAgentIdentity() || account.IsOpenAIPersonalAccessToken() {
 		return nil
 	}
@@ -129,11 +163,29 @@ func (s *OpenAIGatewayService) beginNativeReasoningChat(c *gin.Context, account 
 	if !ok || key == nil || key.ID <= 0 || key.UserID <= 0 {
 		return nil
 	}
-	mode := s.nativeReplayRuntime.modeForUser(c.Request.Context(), key.UserID)
-	if mode == NativeReasoningReplayModeOff {
+	if authorization.userID != key.UserID || authorization.apiKeyID != key.ID || (authorization.mode != NativeReasoningReplayModeObserve && authorization.mode != NativeReasoningReplayModeReplay) {
 		return nil
 	}
+	mode := authorization.mode
+	authorizedModel := ""
+	if authorization.modelRestricted {
+		authorizedModel = authorization.model
+		if authorizedModel != nativeReasoningReplayAllUsersModel {
+			return nil
+		}
+	}
 	session := ExtractClientSessionID(c)
+	if authorization.model == nativeReasoningReplayAllUsersModel {
+		clientSession, thread, valid := gpt61SolChatExplicitIdentity(c, body)
+		if !valid {
+			return nil
+		}
+		// Explicit session and thread identify separate conversations. Use a
+		// framed pair and a new target-only namespace; old cache entries safely
+		// miss instead of crossing a thread or a changed identity parser.
+		framed, _ := json.Marshal([2]string{clientSession, thread})
+		session = "gpt61-chat/v1:" + nativeReplayDigest(framed)
+	}
 	if session == "" || len(body) > s.nativeReplayRuntime.limits.MaxHistoryBytes {
 		return nil
 	}
@@ -147,7 +199,7 @@ func (s *OpenAIGatewayService) beginNativeReasoningChat(c *gin.Context, account 
 	if json.Unmarshal(canonical, &request) != nil || len(request.Messages) == 0 {
 		return nil
 	}
-	return &nativeReasoningChat{runtime: s.nativeReplayRuntime, mode: mode, original: bytes.Clone(body), messages: request.Messages,
+	return &nativeReasoningChat{runtime: s.nativeReplayRuntime, mode: mode, authorizedModel: authorizedModel, original: bytes.Clone(body), messages: request.Messages,
 		request: NativeReasoningReplayRequest{Scope: NativeReasoningReplayScope{UserID: key.UserID, APIKeyID: key.ID, SessionID: session}, Messages: request.Messages}}
 }
 
@@ -161,7 +213,7 @@ func (n *nativeReasoningChat) prepare(ctx context.Context, c *gin.Context, accou
 	n.eligible = false
 	n.request.Scope.Model = gjson.GetBytes(body, "model").String()
 	n.request.Scope.CredentialIdentity = nativeReasoningCredentialIdentity(c, account, token)
-	if n.request.Scope.Model == "" || n.request.Scope.CredentialIdentity == "" {
+	if n.request.Scope.Model == "" || n.request.Scope.CredentialIdentity == "" || (n.authorizedModel != "" && n.request.Scope.Model != n.authorizedModel) {
 		n.releasePublication()
 		return body
 	}
@@ -345,6 +397,27 @@ func (n *nativeReasoningChat) rejectedFallback(ctx context.Context, c *gin.Conte
 	return true
 }
 
+// handoffCompletedStream runs only after the capture has accepted a complete
+// finish+[DONE] write, while both request contexts are still live. Arm the same
+// bounded publication before Flush can expose DONE to a client that closes at
+// that protocol boundary. This does not commit: finish still verifies handler
+// success, final captures, policy and the actual upstream principal.
+func (n *nativeReasoningChat) handoffCompletedStream(ctx context.Context, c *gin.Context, response *http.Response, upstream *NativeReasoningResponseCapture) {
+	if n == nil || !n.eligible || n.mode != NativeReasoningReplayModeReplay || n.request.Scope.Model != nativeReasoningReplayAllUsersModel || n.publication == nil || n.publicationContext != nil || upstream == nil || ctx.Err() != nil || c == nil || c.Request == nil || c.Request.Context().Err() != nil || c.Writer.Status() != http.StatusOK || GetOpsCyberPolicy(c) != nil || response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+		return
+	}
+	if upstream.InvalidEncryptedContent() || (response.Request != nil && nativeReasoningTokenPrincipal(response.Request.Header.Get("Authorization")) != n.principal) {
+		return
+	}
+	if _, complete := upstream.CompletedResponse(); !complete {
+		return
+	}
+	bounded, cancel, transferred := n.publication.handoff(ctx, c.Request.Context(), n.runtime.limits.IOTimeout)
+	if transferred {
+		n.publicationContext, n.publicationCancel = bounded, cancel
+	}
+}
+
 func (n *nativeReasoningChat) finish(ctx context.Context, c *gin.Context, response *http.Response, upstream *NativeReasoningResponseCapture, delivery *NativeReasoningChatCapture, forwardErr error) {
 	defer n.releasePublication()
 	if n == nil || !n.eligible || upstream == nil {
@@ -354,7 +427,11 @@ func (n *nativeReasoningChat) finish(ctx context.Context, c *gin.Context, respon
 		n.invalidate(ctx)
 		return
 	}
-	if forwardErr != nil || delivery == nil || ctx.Err() != nil || c == nil || c.Request == nil || c.Request.Context().Err() != nil || c.Writer.Status() != http.StatusOK || GetOpsCyberPolicy(c) != nil || response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+	commitCtx := ctx
+	if n.publicationContext != nil {
+		commitCtx = n.publicationContext
+	}
+	if forwardErr != nil || delivery == nil || commitCtx.Err() != nil || c == nil || c.Request == nil || (n.publicationContext == nil && c.Request.Context().Err() != nil) || c.Writer.Status() != http.StatusOK || GetOpsCyberPolicy(c) != nil || response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return
 	}
 	if response.Request != nil && nativeReasoningTokenPrincipal(response.Request.Header.Get("Authorization")) != n.principal {
@@ -368,8 +445,7 @@ func (n *nativeReasoningChat) finish(ctx context.Context, c *gin.Context, respon
 	if !delivered {
 		return
 	}
-	commitCtx := ctx
-	if n.publication != nil {
+	if n.publicationContext == nil && n.publication != nil {
 		var cancel context.CancelFunc
 		var transferred bool
 		commitCtx, cancel, transferred = n.publication.handoff(ctx, c.Request.Context(), n.runtime.limits.IOTimeout)

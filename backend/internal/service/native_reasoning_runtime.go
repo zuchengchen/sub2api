@@ -17,19 +17,23 @@ import (
 )
 
 const (
-	SettingKeyNativeReasoningReplay  = "openai_native_reasoning_replay_config"
-	NativeReasoningReplayModeOff     = "off"
-	NativeReasoningReplayModeObserve = "observe"
-	NativeReasoningReplayModeReplay  = "replay"
-	nativeReasoningPolicyTTL         = 5 * time.Second
+	SettingKeyNativeReasoningReplay    = "openai_native_reasoning_replay_config"
+	NativeReasoningReplayModeOff       = "off"
+	NativeReasoningReplayModeObserve   = "observe"
+	NativeReasoningReplayModeReplay    = "replay"
+	nativeReasoningPolicyTTL           = 5 * time.Second
+	nativeReasoningReplayAllUsersModel = "gpt-6.1-sol"
 )
 
 // The setting is server-owned. No request body/header can enable replay or
 // choose its user scope. An empty allowlist never means every user.
+// AllUsersModels is an explicit, narrowly validated model authorization.
 type NativeReasoningReplayRuntimeConfig struct {
-	Mode      string    `json:"mode"`
-	UserIDs   []int64   `json:"user_ids"`
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	Mode           string             `json:"mode"`
+	UserIDs        []int64            `json:"user_ids"`
+	AllUsersModels []string           `json:"all_users_models,omitempty"`
+	ModelUserIDs   map[string][]int64 `json:"model_user_ids,omitempty"`
+	ExpiresAt      time.Time          `json:"expires_at,omitempty"`
 }
 
 type NativeReasoningReplayRuntimeReader interface {
@@ -137,6 +141,39 @@ func normalizeNativeReasoningPolicy(value NativeReasoningReplayRuntimeConfig) (N
 		}
 	}
 	value.UserIDs = unique
+	if len(value.ModelUserIDs) > 1 {
+		return NativeReasoningReplayRuntimeConfig{}, errors.New("native reasoning replay model user scope exceeds limit")
+	}
+	if value.ModelUserIDs != nil {
+		modelUsers := make(map[string][]int64, len(value.ModelUserIDs))
+		for model, userIDs := range value.ModelUserIDs {
+			if model != nativeReasoningReplayAllUsersModel || len(userIDs) > 256 {
+				return NativeReasoningReplayRuntimeConfig{}, errors.New("invalid native reasoning replay model user scope")
+			}
+			ids := append([]int64(nil), userIDs...)
+			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+			unique := ids[:0]
+			for _, id := range ids {
+				if id <= 0 {
+					return NativeReasoningReplayRuntimeConfig{}, errors.New("invalid native reasoning replay model user ID")
+				}
+				if len(unique) == 0 || unique[len(unique)-1] != id {
+					unique = append(unique, id)
+				}
+			}
+			modelUsers[model] = unique
+		}
+		value.ModelUserIDs = modelUsers
+	}
+	if len(value.AllUsersModels) > 1 {
+		return NativeReasoningReplayRuntimeConfig{}, errors.New("native reasoning replay model scope exceeds limit")
+	}
+	for _, model := range value.AllUsersModels {
+		if model != nativeReasoningReplayAllUsersModel {
+			return NativeReasoningReplayRuntimeConfig{}, errors.New("invalid native reasoning replay model scope")
+		}
+	}
+	value.AllUsersModels = append([]string(nil), value.AllUsersModels...)
 	return value, nil
 }
 
@@ -255,17 +292,34 @@ func (r *nativeReasoningRuntime) policy(ctx context.Context, now time.Time) Nati
 }
 
 func (r *nativeReasoningRuntime) modeForUser(ctx context.Context, userID int64) string {
+	mode, _ := r.modeForUserModel(ctx, userID, "")
+	return mode
+}
+
+// The boolean marks authorization limited to this exact upstream model. Legacy
+// user allowlists retain their existing model scope, including an empty list.
+func (r *nativeReasoningRuntime) modeForUserModel(ctx context.Context, userID int64, model string) (string, bool) {
 	if r == nil || userID <= 0 {
-		return NativeReasoningReplayModeOff
+		return NativeReasoningReplayModeOff, false
 	}
 	now := time.Now()
 	value := r.policy(ctx, now)
-	if !value.ExpiresAt.IsZero() && !now.Before(value.ExpiresAt) {
-		return NativeReasoningReplayModeOff
+	if value.Mode == NativeReasoningReplayModeOff || (!value.ExpiresAt.IsZero() && !now.Before(value.ExpiresAt)) {
+		return NativeReasoningReplayModeOff, false
 	}
 	index := sort.Search(len(value.UserIDs), func(i int) bool { return value.UserIDs[i] >= userID })
-	if index == len(value.UserIDs) || value.UserIDs[index] != userID {
-		return NativeReasoningReplayModeOff
+	if index < len(value.UserIDs) && value.UserIDs[index] == userID {
+		return value.Mode, false
 	}
-	return value.Mode
+	modelUsers := value.ModelUserIDs[model]
+	modelIndex := sort.Search(len(modelUsers), func(i int) bool { return modelUsers[i] >= userID })
+	if modelIndex < len(modelUsers) && modelUsers[modelIndex] == userID {
+		return value.Mode, true
+	}
+	for _, allowed := range value.AllUsersModels {
+		if model == allowed {
+			return value.Mode, true
+		}
+	}
+	return NativeReasoningReplayModeOff, false
 }

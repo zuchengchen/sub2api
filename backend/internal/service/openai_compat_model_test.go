@@ -517,8 +517,8 @@ func TestForwardAsAnthropic_AutoDerivesPromptCacheKeyWhenMessagesDispatchHasNoSe
 }
 
 func TestForwardAsAnthropic_GPT6AstraPromptCacheIdentityStableAcrossAppendedTurns(t *testing.T) {
-	t.Parallel()
 	gin.SetMode(gin.TestMode)
+	t.Parallel()
 
 	for _, mappedModel := range []string{"gpt-6-astra", "gpt-6"} {
 		mappedModel := mappedModel
@@ -896,8 +896,8 @@ func TestOpenAICompatPreviousResponseUnavailableRecognitionIsStrict(t *testing.T
 }
 
 func TestForwardAsAnthropic_PreviousResponseUnavailableRetryFailureDoesNotLoop(t *testing.T) {
-	t.Parallel()
 	gin.SetMode(gin.TestMode)
+	t.Parallel()
 
 	unavailable := func() *http.Response {
 		return &http.Response{

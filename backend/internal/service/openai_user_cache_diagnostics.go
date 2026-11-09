@@ -27,13 +27,13 @@ import (
 
 const (
 	userCacheDiagnosticContextKey  = "sub2api_user_cache_diagnostic"
-	userCacheDiagnosticMaxItems    = 512
+	userCacheDiagnosticMaxItems    = 1024
 	userCacheDiagnosticMaxLine     = 4 << 20
 	userCacheDiagnosticMaxFile     = 16 << 20
 	userCacheDiagnosticMaxBytes    = 32 << 20
 	userCacheDiagnosticMaxEvents   = 8192
 	userCacheDiagnosticMaxAttempts = 4
-	userCacheDiagnosticMaxRecords  = 1 + 2*userCacheDiagnosticMaxAttempts
+	userCacheDiagnosticMaxRecords  = 1 + 3*userCacheDiagnosticMaxAttempts
 )
 
 type userCacheDiagnosticManager struct {
@@ -109,6 +109,27 @@ type userCacheDiagnosticAttempt struct {
 	expectsSSE         bool
 }
 
+// Keep admission independent of differing duplicate/case-insensitive JSON rules
+// in the typed Chat parser. Ambiguous requested-model carriers fail closed.
+func userCacheDiagnosticMatchesRequestedModel(body []byte, model string) bool {
+	if len(body) > userCacheDiagnosticMaxBytes || !gjson.ValidBytes(body) {
+		return false
+	}
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() {
+		return false
+	}
+	count, matched := 0, false
+	root.ForEach(func(key, value gjson.Result) bool {
+		if strings.EqualFold(key.String(), "model") {
+			count++
+			matched = key.String() == "model" && value.Type == gjson.String && value.String() == model
+		}
+		return count <= 1
+	})
+	return count == 1 && matched
+}
+
 func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic {
 	if c == nil || c.Request == nil {
 		return nil
@@ -127,16 +148,20 @@ func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic 
 	if !ok || key == nil {
 		return nil
 	}
+	// Match the requested model before admission so excluded requests consume no quota.
+	// The memoized nil above also prevents retry bodies from changing this decision.
+	if model := os.Getenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL"); model != "" && !userCacheDiagnosticMatchesRequestedModel(body, model) {
+		return nil
+	}
 	config := userCacheDiagnostics.admit(key.UserID, time.Now())
 	if config == nil {
 		return nil
 	}
 	d := &userCacheDiagnostic{config: config, traceID: generateRequestID(), apiKeyID: key.ID}
-	for _, name := range []string{"session-id", "session_id", "x-session-id"} {
-		if value := strings.TrimSpace(c.GetHeader(name)); value != "" {
-			d.sessionHash = diagnosticSHA256([]byte(value))
-			break
-		}
+	// Keep this hash aligned with usage_logs.session_id across every supported
+	// header. Body-only identities are reported separately in ingress identity.
+	if session := ExtractClientSessionID(c); session != "" {
+		d.sessionHash = diagnosticSHA256([]byte(session))
 	}
 	ctx := c.Request.Context()
 	if id, _ := ctx.Value(ctxkey.ClientRequestID).(string); strings.TrimSpace(id) != "" {
@@ -145,7 +170,7 @@ func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic 
 		d.usageRequestIDHash = diagnosticSHA256([]byte("local:" + strings.TrimSpace(id)))
 	}
 	c.Set(userCacheDiagnosticContextKey, d)
-	d.write("ingress", 0, 0, d.usageRequestIDHash, map[string]any{"body": summarizeUserCacheBody(body)})
+	d.write("ingress", 0, 0, d.usageRequestIDHash, map[string]any{"body": summarizeUserCacheBody(body), "identity": summarizeGPT61SolChatIdentity(c, body)})
 	return d
 }
 
