@@ -38,7 +38,7 @@ func TestGPT61SolChatCacheDeliveryDiagnosticHTTP(t *testing.T) {
 			})
 			server := httptest.NewServer(router)
 			defer server.Close()
-			body := `{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"PRIVATE_PROMPT"}],"stream":` + strconvBoolForUserCacheTest(stream) + `}`
+			body := `{"model":"gpt-6.1-sol","messages":[{"role":"assistant","content":"PRIVATE_ANSWER","refusal":null},{"role":"user","content":"PRIVATE_PROMPT"}],"stream":` + strconvBoolForUserCacheTest(stream) + `}`
 			response, err := server.Client().Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 			require.NoError(t, err)
 			raw, err := io.ReadAll(response.Body)
@@ -56,9 +56,11 @@ func TestGPT61SolChatCacheDeliveryDiagnosticHTTP(t *testing.T) {
 			}
 			events := userCacheDiagnosticReadEvents(t, path)
 			require.Len(t, events, 4)
-			var delivery, upstreamEvent map[string]any
+			var ingress, delivery, upstreamEvent map[string]any
 			for _, event := range events {
 				switch event["stage"] {
+				case "ingress":
+					ingress = event
 				case "chat_delivery":
 					delivery = event
 				case "upstream_response":
@@ -66,12 +68,25 @@ func TestGPT61SolChatCacheDeliveryDiagnosticHTTP(t *testing.T) {
 				}
 			}
 			require.NotNil(t, delivery)
+			require.NotNil(t, ingress)
 			require.NotNil(t, upstreamEvent)
 			require.Equal(t, true, delivery["forward_returned_success"])
 			require.Equal(t, true, delivery["downstream_delivered_complete"])
 			require.Equal(t, upstreamEvent["response_id_sha256"], delivery["consumer_response_id_sha256"])
 			require.Equal(t, upstreamEvent["trace_id"], delivery["trace_id"])
 			require.Equal(t, "off", delivery["native_mode"], "bounded diagnostics work before enabling replay")
+			tail := ingress["assistant_tail"].(map[string]any)
+			require.Equal(t, true, tail["available"])
+			items := tail["items"].([]any)
+			require.Len(t, items, 1)
+			item := items[0].(map[string]any)
+			require.EqualValues(t, 0, item["index"])
+			before := item["comparison"].(map[string]any)
+			after := delivery["assistant_comparison"].(map[string]any)
+			require.Equal(t, true, before["available"])
+			require.Equal(t, true, after["available"])
+			require.Equal(t, before["native_canonical"], after["native_canonical"], "the actual engine already normalizes empty refusal")
+			require.NotEqual(t, before["object_canonical"], after["object_canonical"], "raw object differences remain visible")
 			usage := delivery["consumer_usage"].(map[string]any)
 			require.EqualValues(t, 10000, usage["input_tokens"])
 			require.EqualValues(t, 9500, usage["cache_read_input_tokens"])
@@ -125,8 +140,10 @@ func TestGPT61SolChatCacheDeliveryDiagnosticKeepsFailures(t *testing.T) {
 			case "incomplete", "short_write", "missing_capture":
 				require.Equal(t, false, event["downstream_delivered_complete"])
 				require.NotContains(t, event, "consumer_response_id_sha256")
+				require.NotContains(t, event, "assistant_comparison")
 			case "forward_error", "missing_result":
 				require.Equal(t, false, event["forward_returned_success"])
+				require.NotContains(t, event, "assistant_comparison")
 			case "canceled":
 				require.Equal(t, true, event["context_canceled"])
 			}

@@ -89,14 +89,15 @@ func (m *userCacheDiagnosticManager) admit(userID int64, now time.Time) *userCac
 }
 
 type userCacheDiagnostic struct {
-	config             *userCacheDiagnosticConfig
-	traceID            string
-	apiKeyID           int64
-	sessionHash        string
-	usageRequestIDHash string
-	mu                 sync.Mutex
-	attempts           int
-	records            int
+	config              *userCacheDiagnosticConfig
+	traceID             string
+	apiKeyID            int64
+	assistantComparison bool
+	sessionHash         string
+	usageRequestIDHash  string
+	mu                  sync.Mutex
+	attempts            int
+	records             int
 }
 
 // Each attempt owns an immutable identity. A previous response may finish after
@@ -170,7 +171,12 @@ func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic 
 		d.usageRequestIDHash = diagnosticSHA256([]byte("local:" + strings.TrimSpace(id)))
 	}
 	c.Set(userCacheDiagnosticContextKey, d)
-	d.write("ingress", 0, 0, d.usageRequestIDHash, map[string]any{"body": summarizeUserCacheBody(body), "identity": summarizeGPT61SolChatIdentity(c, body)})
+	d.assistantComparison = userCacheDiagnosticMatchesRequestedModel(body, nativeReasoningReplayAllUsersModel)
+	fields := map[string]any{"body": summarizeUserCacheBody(body), "identity": summarizeGPT61SolChatIdentity(c, body)}
+	if d.assistantComparison {
+		fields["assistant_tail"] = d.summarizeAssistantTail(body)
+	}
+	d.write("ingress", 0, 0, d.usageRequestIDHash, fields)
 	return d
 }
 
