@@ -139,6 +139,7 @@
         </div>
         <div v-show="activeTab === 'errors'" class="overflow-hidden rounded-b-2xl">
           <OpsErrorLogTable
+            use-final-request-status
             flat
             :rows="errRows" :total="errTotal" :loading="errLoading"
             :page="errPage" :page-size="errPageSize"
@@ -912,6 +913,7 @@ const loadAdminErrors = async () => {
   errLoading.value = true
   try {
     const resp = await listErrorLogs({
+      status_scope: 'request',
       page: errPage.value,
       page_size: errPageSize.value,
       view: 'all',

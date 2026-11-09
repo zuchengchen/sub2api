@@ -887,6 +887,7 @@ const loadErrors = async () => {
   errorLoading.value = true
   try {
     const resp = await usageAPI.listMyErrorRequests({
+      status_scope: 'request',
       page: errorPage.value,
       page_size: errorPageSize.value,
       ...usageRangeQuery.value,

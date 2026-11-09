@@ -78,13 +78,15 @@ func TestOpenAINativeCompactionTerminalMissingItem(t *testing.T) {
 	require.False(t, openAINativeCompactionTerminalMissingItem(native, "response.completed", []byte(`{"type":`)))
 }
 
-// The existing #5009 guard ignores terminals with usage; a native compaction
-// turn that billed tokens but produced no item must still fail over.
-func TestOpenAINativeCompactionZeroItemsFailsOverOnHTTP(t *testing.T) {
+// With no observed usage or work, the existing missing-item recovery remains
+// available. Metered compaction is covered independently as a non-retry failure.
+func TestOpenAINativeCompactionZeroItemsWithoutUsageFailsOverOnHTTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, passthrough := range []bool{true, false} {
 		t.Run(map[bool]string{true: "passthrough", false: "oauth_transform"}[passthrough], func(t *testing.T) {
-			upstream := &httpUpstreamRecorder{resp: nativeCompactionSSEResponse(false)}
+			response := nativeCompactionSSEResponse(false)
+			response.Body = io.NopCloser(strings.NewReader(strings.Replace(nativeCompactionSSE(false), `,"usage":{"input_tokens":120,"output_tokens":30,"total_tokens":150}`, "", 1)))
+			upstream := &httpUpstreamRecorder{resp: response}
 			svc := openAIClientToolsTestService(upstream)
 			account := excelAccount()
 			account.Extra = astraHealthyTestExtra(map[string]any{"openai_passthrough": passthrough})
@@ -95,7 +97,7 @@ func TestOpenAINativeCompactionZeroItemsFailsOverOnHTTP(t *testing.T) {
 			var failoverErr *UpstreamFailoverError
 			require.True(t, errors.As(err, &failoverErr), "zero-item compaction must be a failover, got: %v", err)
 			require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
-			require.Equal(t, openAINativeCompactionMissingItemCode, gjson.GetBytes(failoverErr.ResponseBody, "error.code").String())
+			require.Equal(t, openAISilentRefusalErrorCode, gjson.GetBytes(failoverErr.ResponseBody, "error.code").String())
 			require.NotContains(t, rec.Body.String(), "response.completed", "the empty success stream must not reach Codex")
 		})
 	}

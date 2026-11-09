@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -83,9 +84,11 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 		}
 	}
 
-	raw, err := readRequestBodyChunks(req.Body, capHint, req.ContentLength)
+	progress := requestBodyReadProgress{started: time.Now()}
+	raw, err := readRequestBodyChunks(req.Body, capHint, req.ContentLength, &progress)
+	readFinishedAt := time.Now()
 	if err != nil {
-		return nil, err
+		return nil, progress.wrapError(err, readFinishedAt)
 	}
 
 	enc := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
@@ -95,7 +98,7 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 
 	decoded, err := decompressRequestBody(enc, raw)
 	if err != nil {
-		return nil, fmt.Errorf("decode Content-Encoding %q: %w", enc, err)
+		return nil, progress.wrapError(fmt.Errorf("decode Content-Encoding %q: %w", enc, err), readFinishedAt)
 	}
 
 	req.Header.Del("Content-Encoding")
@@ -108,7 +111,7 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 // Read bounded chunks as bytes arrive, then assemble the exact-size result.
 // This avoids doubling large buffers or eagerly allocating an untrusted
 // Content-Length before the corresponding bytes have arrived.
-func readRequestBodyChunks(reader io.Reader, initialCapacity int, contentLength int64) ([]byte, error) {
+func readRequestBodyChunks(reader io.Reader, initialCapacity int, contentLength int64, progress *requestBodyReadProgress) ([]byte, error) {
 	capacity := initialCapacity
 	var chunks [][]byte
 	total := 0
@@ -123,6 +126,10 @@ func readRequestBodyChunks(reader io.Reader, initialCapacity int, contentLength 
 		for n < len(chunk) && err == nil {
 			var read int
 			read, err = reader.Read(chunk[n:])
+			if read > 0 {
+				progress.receivedBytes += int64(read)
+				progress.lastProgress = time.Now()
+			}
 			n += read
 		}
 		if err != nil && err != io.EOF {

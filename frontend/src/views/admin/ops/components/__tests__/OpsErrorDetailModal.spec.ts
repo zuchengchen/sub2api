@@ -76,4 +76,24 @@ describe('OpsErrorDetailModal', () => {
     expect(wrapper.findAll('pre')).toHaveLength(2)
     expect(wrapper.text()).not.toContain('admin.ops.errorDetail.payloads.upstream_detail')
   })
+
+  it('shows local request termination alongside the provider failure', async () => {
+    mocks.getRequestErrorDetail.mockResolvedValue({
+      id: 2, created_at: '2026-11-09T10:00:00Z', phase: 'upstream', type: 'api_error',
+      status_code: 503, final_request_status: 499, upstream_status_code: 503,
+      error_owner: 'provider', error_source: 'upstream_http',
+      message: 'Downstream request was canceled before a response was sent',
+      upstream_error_message: 'provider overloaded', error_body: '',
+    })
+    const wrapper = shallowMount(OpsErrorDetailModal, {
+      props: { show: true, errorId: 2, errorType: 'request' },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('499')
+    expect(wrapper.text()).toContain('503')
+    expect(wrapper.text()).toContain('provider overloaded')
+    expect(wrapper.text()).toContain('Downstream request was canceled before a response was sent')
+    wrapper.unmount()
+  })
 })

@@ -182,7 +182,7 @@ func TestForwardAsAnthropic_StreamingGenericBareErrorBeforeOutputIsNotHiddenByFa
 	require.Contains(t, rec.Body.String(), "mixed tools failed")
 }
 
-func TestForwardAsAnthropic_BufferedResponseFailed_Failover(t *testing.T) {
+func TestForwardAsAnthropic_BufferedResponseFailedWithoutUsage_Failover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
@@ -192,6 +192,7 @@ func TestForwardAsAnthropic_BufferedResponseFailed_Failover(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	ssePayload := buildResponsesFailedSSEStream("rate_limit_error", "Rate limit reached")
+	ssePayload = strings.Replace(ssePayload, `"input_tokens":10,"output_tokens":0,"total_tokens":10`, `"input_tokens":0,"output_tokens":0,"total_tokens":0`, 1)
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,

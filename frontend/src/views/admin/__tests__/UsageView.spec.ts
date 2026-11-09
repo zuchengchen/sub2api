@@ -810,6 +810,7 @@ describe('admin UsageView errors tab filter forwarding', () => {
 
     expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining({
       view: 'all',
+      status_scope: 'request',
       model: 'gpt-5.3-codex',
       account_id: 7,
       group_id: 3,
