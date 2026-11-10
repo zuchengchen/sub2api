@@ -609,7 +609,7 @@ func TestHostedResponsesSearchBillsEachRoundWithoutFalseLongContextTier(t *testi
 	first := &OpenAIForwardResult{Model: "claude-sonnet-4", Usage: OpenAIUsage{InputTokens: 75, OutputTokens: 10}}
 	second := &OpenAIForwardResult{Model: "claude-sonnet-4", Usage: OpenAIUsage{InputTokens: 75, OutputTokens: 10}}
 	combined := mergeOpenAIWebSearchResult(mergeOpenAIWebSearchResult(nil, first), second)
-	cost, err := openAI.calculateOpenAIRecordUsageCost(context.Background(), combined, key, []string{"claude-sonnet-4"}, 1, 1, 1, 1, openAIResponsesWebSearchTokens(combined.Usage), "", &enabled, false, at)
+	cost, err := openAI.calculateOpenAIRecordUsageCost(context.Background(), combined, key, []string{"claude-sonnet-4"}, 1, 1, 1, 1, openAIResponsesWebSearchTokens(combined.Usage), "", &enabled, at)
 	require.NoError(t, err)
 	require.False(t, cost.LongContextBillingApplied)
 	require.InDelta(t, float64(150)*3e-6+float64(20)*15e-6, cost.TotalCost, 1e-12)

@@ -14,7 +14,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"go.uber.org/zap"
 )
@@ -239,7 +238,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
 	longContextBillingGate := openAILongContextBillingGate(account)
-	modelLongContextExempt := openAISubscriptionLongContextExempt(account, result)
 	// Evaluate Free Fast for every candidate before response-model selection:
 	// compare final Standard charges even when their Fast multipliers differ,
 	// while retaining Priority TotalCost and service_tier for upstream accounting.
@@ -247,14 +245,14 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	calculateCost := func(models []string, tokenRate, baseRate float64) (*CostBreakdown, error) {
 		cost, err := s.calculateOpenAIRecordUsageCost(
 			ctx, result, apiKey, models, tokenRate, imageMultiplier, videoMultiplier,
-			baseRate, tokens, serviceTier, longContextBillingGate, modelLongContextExempt, pricingAt,
+			baseRate, tokens, serviceTier, longContextBillingGate, pricingAt,
 		)
 		if err != nil || !freeFast {
 			return cost, err
 		}
 		standardCost, standardErr := s.calculateOpenAIRecordUsageCost(
 			ctx, result, apiKey, models, tokenRate, imageMultiplier, videoMultiplier,
-			baseRate, tokens, "", longContextBillingGate, modelLongContextExempt, pricingAt,
+			baseRate, tokens, "", longContextBillingGate, pricingAt,
 		)
 		if standardErr != nil && !isUsagePricingUnavailableError(standardErr) {
 			return nil, standardErr
@@ -472,7 +470,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, result.Model,
 			tokens, cost.TotalCost, pricingAt,
-			accountStatsLongContextPricingEnabled(longContextBillingGate) && !modelLongContextExempt,
+			accountStatsLongContextPricingEnabled(longContextBillingGate),
 		)
 		if len(result.hostedSearchRounds) > 0 {
 			usageLog.AccountStatsCost = responsesWebSearchAccountStatsCost(ctx, s.channelService, s.billingService, account.ID, *apiKey.GroupID, result.hostedSearchRounds, result.hostedSearchRoundCosts, cost.TotalCost, pricingAt, accountStatsLongContextPricingEnabled(longContextBillingGate))
@@ -539,6 +537,8 @@ func (s *OpenAIGatewayService) hasIdentifiedOpenAIResponsePricing(ctx context.Co
 }
 
 // openAILongContextBillingGate returns the per-account long-context opt-in.
+// OAuth and API Key accounts, including GPT-6.1 Sol subscriptions, use the same
+// account/group gates and model context thresholds for billing.
 // The flag is an OpenAI-only account setting, so other platforms (Grok) return
 // nil — "no per-account gate" — and are governed by the group toggle alone.
 // Returning a hardcoded false for them would veto the official model ladders
@@ -549,20 +549,6 @@ func openAILongContextBillingGate(account *Account) *bool {
 	}
 	enabled := account.IsOpenAILongContextBillingEnabled()
 	return &enabled
-}
-
-// openAISubscriptionLongContextExempt 按实际凭据和最终发送模型判断订阅豁免。
-// GPT-6.1 Sol 的订阅请求不再收取模型长上下文附加费；API Key 仍使用 API 价卡。
-// 使用发送模型，避免客户别名、渠道计费模型或响应模型计费切换改变上游订阅规则。
-func openAISubscriptionLongContextExempt(account *Account, result *OpenAIForwardResult) bool {
-	if !account.IsOpenAIOAuthLike() || result == nil {
-		return false
-	}
-	model := strings.TrimSpace(result.UpstreamModel)
-	if model == "" {
-		model = result.Model
-	}
-	return openai.IsGPT61SolModelSpelling(model)
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
@@ -577,7 +563,6 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	tokens UsageTokens,
 	serviceTier string,
 	longContextBillingGate *bool,
-	modelLongContextExempt bool,
 	pricingAt time.Time,
 ) (*CostBreakdown, error) {
 	if result != nil && len(result.hostedSearchRounds) > 0 {
@@ -589,7 +574,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 			if serviceTier == optionalStringValue(result.ServiceTier) {
 				roundTier = optionalStringValue(round.ServiceTier)
 			}
-			cost, err := s.calculateOpenAIRecordUsageCost(ctx, round, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, webSearchMultiplier, openAIResponsesWebSearchTokens(round.Usage), roundTier, longContextBillingGate, modelLongContextExempt, pricingAt)
+			cost, err := s.calculateOpenAIRecordUsageCost(ctx, round, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, webSearchMultiplier, openAIResponsesWebSearchTokens(round.Usage), roundTier, longContextBillingGate, pricingAt)
 			if err != nil {
 				return nil, err
 			}
@@ -663,7 +648,6 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 				serviceTier,
 				optionalStringValue(result.ReasoningEffort),
 				longContextBillingGate,
-				modelLongContextExempt,
 			)
 			if err == nil {
 				tokenCost = cost
@@ -758,7 +742,6 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 	serviceTier string,
 	reasoningEffort string,
 	longContextBillingGate *bool,
-	modelLongContextExempt bool,
 ) (*CostBreakdown, error) {
 	if s.resolver != nil && apiKey.Group != nil {
 		gid := apiKey.Group.ID
@@ -766,8 +749,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 			Ctx: ctx, Model: billingModel, GroupID: &gid, Group: apiKey.Group,
 			Tokens: tokens, RequestCount: 1, RateMultiplier: multiplier, PricingAt: pricingAt,
 			ServiceTier: serviceTier, ReasoningEffort: reasoningEffort, Resolver: s.resolver,
-			LongContextBillingEnabled:      longContextBillingGate,
-			DisableModelLongContextPricing: modelLongContextExempt,
+			LongContextBillingEnabled: longContextBillingGate,
 		})
 	}
 	return s.billingService.calculateCostWithServiceTierPolicy(
@@ -775,7 +757,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 		tokens,
 		multiplier,
 		serviceTier,
-		(longContextBillingGate == nil || *longContextBillingGate) && !modelLongContextExempt,
+		longContextBillingGate == nil || *longContextBillingGate,
 	)
 }
 
