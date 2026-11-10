@@ -60,16 +60,35 @@ func TestOAuthCustomCARefreshUsesH2AndScopedTrust(t *testing.T) {
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600))
 	t.Setenv("CODEX_CA_CERTIFICATE", caPath)
 	svc := &openaiOAuthService{tokenURL: server.URL + "/oauth/token"}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	ctx = openai.WithCodexRefreshReason(ctx, "unauthorized_recovery")
+	ctx := openai.WithCodexRefreshReason(context.Background(), "unauthorized_recovery")
 	ctx = openai.WithCodexClientUserAgent(ctx, "codex_exec/0.166.0 (Ubuntu 26.4.0; x86_64) xterm-256color (codex_exec; 0.166.0)")
+	// Each independent refresh gets its own deadline. A shared ten-second
+	// deadline could expire midway through these sequential handshakes, then
+	// an expected transport error left an unconditional capture receive stuck.
+	refresh := func(parent context.Context, token string) (*openai.TokenResponse, error) {
+		t.Helper()
+		callCtx, cancel := context.WithTimeout(parent, 10*time.Second)
+		defer cancel()
+		result, err := svc.RefreshToken(callCtx, token, "")
+		require.NoError(t, callCtx.Err(), "a request deadline is not evidence of the scripted upstream response")
+		return result, err
+	}
+	receive := func() request {
+		t.Helper()
+		select {
+		case got := <-seen:
+			return got
+		default:
+			t.Fatal("refresh returned without an observed upstream request")
+			return request{}
+		}
+	}
 	var remotes []string
 	for _, token := range []string{"synthetic-one", "synthetic-one", "synthetic-two"} {
-		result, err := svc.RefreshToken(ctx, token, "")
+		result, err := refresh(ctx, token)
 		require.NoError(t, err)
 		require.Equal(t, "fake-access", result.AccessToken)
-		got := <-seen
+		got := receive()
 		require.Equal(t, 2, got.proto)
 		require.Equal(t, "*/*", got.headers.Get("Accept"))
 		require.Equal(t, "codex_exec", got.headers.Get("originator"))
@@ -84,32 +103,32 @@ func TestOAuthCustomCARefreshUsesH2AndScopedTrust(t *testing.T) {
 	require.NotEqual(t, remotes[0], remotes[2], "distinct credentials must not share the auth connection")
 	var failed []string
 	for _, reason := range []string{"unauthorized_recovery", "forced"} {
-		_, err := svc.RefreshToken(openai.WithCodexRefreshReason(ctx, reason), "synthetic-retry", "")
+		_, err := refresh(openai.WithCodexRefreshReason(ctx, reason), "synthetic-retry")
 		require.Error(t, err)
-		got := <-seen
+		got := receive()
 		require.Equal(t, reason, got.body["refresh_reason"])
 		failed = append(failed, got.remote)
 	}
 	require.Equal(t, failed[0], failed[1], "reason changes do not replace a failed auth state")
-	_, err := svc.RefreshToken(openai.WithCodexClientUserAgent(ctx, "codex_cli_rs/0.166.0 (Windows 11; x86_64)"), "synthetic-retry", "")
+	_, err := refresh(openai.WithCodexClientUserAgent(ctx, "codex_cli_rs/0.166.0 (Windows 11; x86_64)"), "synthetic-retry")
 	require.Error(t, err)
-	require.NotEqual(t, failed[0], (<-seen).remote, "devices cannot share an auth connection")
+	require.NotEqual(t, failed[0], receive().remote, "devices cannot share an auth connection")
 	ownerA := openai.WithCodexAuthAccount(ctx, 1001)
 	ownerB := openai.WithCodexAuthAccount(ctx, 1002)
-	_, err = svc.RefreshToken(ownerA, "synthetic-retry", "")
+	_, err = refresh(ownerA, "synthetic-retry")
 	require.Error(t, err)
-	remoteA := (<-seen).remote
-	_, err = svc.RefreshToken(ownerB, "synthetic-retry", "")
+	remoteA := receive().remote
+	_, err = refresh(ownerB, "synthetic-retry")
 	require.Error(t, err)
-	remoteB := (<-seen).remote
+	remoteB := receive().remote
 	require.NotEqual(t, remoteA, remoteB, "even identical imported tokens belong to independent account auth states")
 	svc.RetireAuthClient(ownerA, "synthetic-retry", "")
-	_, err = svc.RefreshToken(ownerB, "synthetic-retry", "")
+	_, err = refresh(ownerB, "synthetic-retry")
 	require.Error(t, err)
-	require.Equal(t, remoteB, (<-seen).remote, "reloading A must preserve B's auth client")
-	_, err = svc.RefreshToken(ownerA, "synthetic-retry", "")
+	require.Equal(t, remoteB, receive().remote, "reloading A must preserve B's auth client")
+	_, err = refresh(ownerA, "synthetic-retry")
 	require.Error(t, err)
-	require.NotEqual(t, remoteA, (<-seen).remote, "unchanged credentials still get a new client after reload")
+	require.NotEqual(t, remoteA, receive().remote, "unchanged credentials still get a new client after reload")
 	mu.Lock()
 	firstHello := hellos[0]
 	mu.Unlock()

@@ -344,6 +344,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		promptCacheKey := strings.TrimSpace(values[2].String())
 		previousResponseID := strings.TrimSpace(values[3].String())
+		if err := s.validateOpenAIResponseAuthOwner(ctx, c, account, previousResponseID); err != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+		}
 		previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 		if previousResponseID != "" && previousResponseIDKind == OpenAIPreviousResponseIDKindMessageID {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(
@@ -356,6 +359,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" && !frameTurnMetadata.Exists() {
 			// The Upgrade may describe prewarm. A later frame owns its turn
 			// metadata, including an explicitly empty value.
+			if gjson.GetBytes(normalized, "generate").Type != gjson.False && gjson.Get(turnMetadata, "request_kind").String() == "prewarm" {
+				// A normal frame must not inherit the connection setup kind.
+				var stripErr error
+				turnMetadata, stripErr = sjson.Delete(turnMetadata, "request_kind")
+				if stripErr != nil {
+					return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", stripErr)
+				}
+			}
 			next, setErr := applyPayloadMutation(normalized, "client_metadata."+openAIWSTurnMetadataHeader, turnMetadata)
 			if setErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", setErr)
@@ -537,7 +548,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 		defer cancel()
 		message = restoreCodexToolNamesFromContext(c, message)
-		return clientConn.Write(writeCtx, coderws.MessageText, message)
+		err := clientConn.Write(writeCtx, coderws.MessageText, message)
+		if err == nil {
+			s.noteOpenAICodexTurnStateEvent(c, account, message)
+		}
+		return err
 	}
 
 	readClientMessage := func() ([]byte, error) {
@@ -809,6 +824,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			responseID := strings.TrimSpace(result.RequestID)
 			if responseID != "" && stateStore != nil {
 				ttl := s.openAIWSResponseStickyTTL()
+				if successfulOpenAIResponseAuthOwnerTerminal(result.UpstreamTerminalEvent) {
+					s.bindOpenAIResponseAuthOwner(ctx, c, account, responseID)
+				}
 				logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 			}
 			nextClientMessage, readErr := readClientMessage()
@@ -1119,7 +1137,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			payloadBytes = len(payload)
 		} else if nativeTurnState {
 			var stateErr error
-			payload, stateErr = applyOpenAIWSNativeTurnState(payload, turnState)
+			payload, stateErr = s.applyOpenAIWSNativeTurnStateForAccount(c, account, payload, turnState)
 			if stateErr != nil {
 				return nil, stateErr
 			}
@@ -2242,6 +2260,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		if responseID != "" && stateStore != nil {
 			ttl := s.openAIWSResponseStickyTTL()
+			if successfulOpenAIResponseAuthOwnerTerminal(result.UpstreamTerminalEvent) {
+				s.bindOpenAIResponseAuthOwner(ctx, c, account, responseID)
+			}
 			logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 			stateStore.BindResponseConn(responseID, connID, ttl)
 		}

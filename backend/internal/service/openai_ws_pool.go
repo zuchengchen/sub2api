@@ -90,6 +90,7 @@ type openAIWSAcquireRequest struct {
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
+	oauthOwner          openAIOAuthOwner
 	cookieGeneration    string
 	cookieScope         string
 	cookieSlot          int
@@ -2872,6 +2873,7 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 
 func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
+		oauthOwner:       openAIOAuthOwnerForAccount(account),
 		cookieGeneration: normalizeOpenAIWSStableIdentityHeader(headers, openAICookieWSGenerationHeader),
 		cookieScope:      normalizeOpenAIWSStableIdentityHeader(headers, openAICookieWSScopeHeader),
 		cookieSlot:       openAIWSCookieSlot(headers),

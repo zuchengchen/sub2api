@@ -689,6 +689,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	if err := s.validateOpenAIResponseAuthOwner(ctx, c, account, gjson.GetBytes(firstClientMessage, "previous_response_id").String()); err != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+	}
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
@@ -769,13 +772,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			firstClientMessage = aliasedBody
 		}
 	}
-	accountScopedFirst, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(firstClientMessage, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
-	if scopeErr != nil {
-		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
+	// Resolve full-mode IDs before account projection, then stage the same
+	// snapshot for the Upgrade headers. Native passthrough must follow the
+	// same identity sequence as ctx_pool and HTTP Responses.
+	identityFirst, identityErr := applyCodexIdentityToWSPayload(c, account, firstClientMessage)
+	if identityErr != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", identityErr)
 	}
-	if accountScoped {
-		firstClientMessage = accountScopedFirst
-	}
+	firstClientMessage = identityFirst
 	usageMeta := newOpenAIWSPassthroughUsageMeta(initialRequestModel, firstClientMessage)
 	updatedFirst, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, capturedSessionModel, firstClientMessage)
 	if policyErr != nil {
@@ -958,7 +962,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				turnState = state
 			}
 		}
-		firstClientMessage, err = applyOpenAIWSNativeTurnState(firstClientMessage, turnState)
+		firstClientMessage, err = s.applyOpenAIWSNativeTurnStateForAccount(c, account, firstClientMessage, turnState)
 		if err != nil {
 			return fmt.Errorf("apply websocket turn state: %w", err)
 		}
@@ -1037,6 +1041,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
+			if isResponseCreate {
+				if err := s.validateOpenAIResponseAuthOwner(ctx, c, account, gjson.GetBytes(payload, "previous_response_id").String()); err != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+				}
+			}
 			responseCreateAt := time.Time{}
 			acceptedTurn := false
 			if isResponseCreate {
@@ -1053,7 +1062,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			if isResponseCreate {
 				if nativeTurnState {
-					payload, filterErr = applyOpenAIWSNativeTurnState(payload, turnState)
+					payload, filterErr = s.applyOpenAIWSNativeTurnStateForAccount(c, account, payload, turnState)
 					if filterErr != nil {
 						return payload, nil, filterErr
 					}
@@ -1078,7 +1087,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					payload = aliasedBody
 				}
 			}
-			if isResponseCreate || eventType == "session.update" {
+			if isResponseCreate {
+				identityPayload, identityErr := applyCodexIdentityToWSPayload(c, account, payload)
+				if identityErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", identityErr)
+				}
+				payload = identityPayload
+			} else if eventType == "session.update" {
 				accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(payload, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 				if scopeErr != nil {
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
@@ -1322,8 +1337,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			},
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
 				if msgType == coderws.MessageText && writeErr == nil {
+					s.noteOpenAICodexTurnStateEvent(c, account, payload)
 					eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 					markOpenAIWSClientVisibleFailure(c, eventType, payload)
+					if eventType == "response.completed" || eventType == "response.done" {
+						status := gjson.GetBytes(payload, "response.status").String()
+						if status == "" || status == "completed" {
+							s.bindOpenAIResponseAuthOwner(ctx, c, account, gjson.GetBytes(payload, "response.id").String())
+						}
+					}
 				}
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
 					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)

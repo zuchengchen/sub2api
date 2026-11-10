@@ -39,6 +39,7 @@ var liveObserverStoreRetryInterval = time.Second
 var (
 	chatGPTLiveCallsURL        = "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
 	chatGPTLiveSidebandBaseURL = "wss://chatgpt.com/backend-api/codex"
+	openAILiveSidebandBaseURL  = "wss://api.openai.com/v1"
 )
 
 type liveFrameConn interface {
@@ -238,6 +239,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			UserAgent:             identity.UserAgent,
 			IPAddress:             identity.IPAddress,
 			InboundEndpoint:       identity.InboundEndpoint,
+			SidebandRoute:         liveSidebandRouteOpenAIV1,
 			AttestationCiphertext: attestationCiphertext,
 		}
 		record.UpstreamContextCiphertext, err = s.encryptLiveUpstreamContext(account.ID, created.CallID, created.upstreamHeaders)
@@ -507,6 +509,10 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 }
 
 func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *LiveCallRecord) (liveFrameConn, error) {
+	target, err := liveSidebandTarget(record)
+	if err != nil {
+		return nil, err
+	}
 	account, err := s.accountRepo.GetByID(ctx, record.AccountID)
 	if err != nil {
 		return nil, err
@@ -518,7 +524,6 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if err != nil {
 		return nil, err
 	}
-	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/live/" + url.PathEscape(record.CallID)
 	conn, status, _, err := dialOpenAIWSForAccount(withoutOpenAIWSCompression(ctx), s.cfg, openAIWSAcquireRequest{
 		WSURL: target, ProxyURL: resolveAccountProxyURL(account), Account: account,
 	}, headers, s.getOpenAIWSPassthroughDialer())
@@ -534,6 +539,24 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 		return &liveCodexWireConn{wire}, nil
 	}
 	return raw, nil
+}
+
+func liveSidebandTarget(record *LiveCallRecord) (string, error) {
+	if record == nil {
+		return "", ErrLiveUnavailable
+	}
+	var base string
+	switch record.SidebandRoute {
+	case "":
+		// Existing Redis records predate the route field. Keep their original
+		// sideband endpoint rather than moving an already-created call.
+		base = chatGPTLiveSidebandBaseURL
+	case liveSidebandRouteOpenAIV1:
+		base = openAILiveSidebandBaseURL
+	default:
+		return "", fmt.Errorf("unsupported Live sideband route: %w", ErrLiveUnavailable)
+	}
+	return strings.TrimRight(base, "/") + "/live/" + url.PathEscape(record.CallID), nil
 }
 
 func (s *OpenAIGatewayService) GetLiveCallForIdentity(

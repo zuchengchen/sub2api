@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
@@ -88,6 +89,15 @@ func (e *oauthRefreshStateUnavailableError) Unwrap() error {
 
 func newContextMutex() *contextMutex {
 	return &contextMutex{token: make(chan struct{}, 1)}
+}
+
+func (m *contextMutex) TryLock() bool {
+	select {
+	case m.token <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *contextMutex) Lock(ctx context.Context) error {
@@ -186,12 +196,30 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	requestPath := isOAuthRefreshRequestPath(ctx)
 	cacheKey := executor.CacheKey(account)
 
-	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
+	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）。受限
+	// 管理员 refresh 在 Ent 事务中已经持有 accounts 行锁；普通 OAuth
+	// 不能在等待本地 mutex 时继续持有该行锁，否则后台刷新（先 mutex、
+	// 后 CAS UPDATE 行）会形成 mutex↔row-lock 反序死锁。事务内只对
+	// ordinary managed OpenAI OAuth 做非阻塞尝试；抢不到锁按已有
+	// LockHeld 语义退出，让外层事务及时回滚。非事务请求/后台仍等待
+	// 以保持原有去重行为。
 	localMu := api.getLocalLock(cacheKey)
-	if err := localMu.Lock(ctx); err != nil {
+	if dbent.TxFromContext(ctx) != nil && isStoredOpenAIManagedOAuth(account) {
+		if !localMu.TryLock() {
+			return &OAuthRefreshResult{LockHeld: true}, nil
+		}
+	} else if err := localMu.Lock(ctx); err != nil {
 		return nil, fmt.Errorf("oauth refresh local lock: %w", err)
 	}
-	defer localMu.Unlock()
+	distributedLocked := false
+	defer func() {
+		releaseOpenAIRefreshLocksAfterTransaction(ctx, account, func() {
+			if distributedLocked {
+				api.releaseRefreshLock(ctx, cacheKey)
+			}
+			localMu.Unlock()
+		})
+	}()
 
 	// 1. 获取分布式锁
 	if api.tokenCache != nil {
@@ -207,7 +235,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			// 锁被其他 worker 持有
 			return &OAuthRefreshResult{LockHeld: true}, nil
 		} else {
-			defer api.releaseRefreshLock(ctx, cacheKey)
+			distributedLocked = true
 		}
 	}
 
@@ -228,7 +256,10 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if freshAccount.ID != account.ID {
 		return nil, fmt.Errorf("%w: account identity mismatch", errOAuthRefreshAccountRereadFailed)
 	}
-	if !freshAccount.IsActive() {
+	if account.IsOpenAIOAuth() && !sameOpenAIOAuthOwner(account, freshAccount) {
+		return nil, fmt.Errorf("%w: OAuth owner changed", errOAuthRefreshAccountStateChanged)
+	}
+	if !freshAccount.IsActive() && !isOpenAIManualRefresh(ctx, freshAccount) {
 		if requestPath {
 			return nil, fmt.Errorf("%w: account is not active", errOAuthRefreshAccountStateChanged)
 		}
@@ -257,6 +288,13 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		return &OAuthRefreshResult{
 			Account: freshAccount,
 		}, nil
+	}
+
+	// Verify the mandatory persistence capability before consuming a token.
+	if freshAccount.IsOpenAIOAuth() {
+		if _, ok := api.accountRepo.(OpenAIOAuthRefreshSuccessRepository); !ok {
+			return nil, openAIRefreshCASNotConfigured()
+		}
 	}
 
 	// 4. 执行平台特定刷新逻辑
@@ -310,7 +348,11 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 
 	// 5. 设置版本号 + 更新 DB
 	if newCredentials != nil {
+		newCredentials = shallowCopyMap(newCredentials)
 		newCredentials["_token_version"] = time.Now().UnixMilli()
+		if freshAccount.IsOpenAIOAuth() {
+			return api.persistOpenAIRefreshSuccess(ctx, attemptedAccount, newCredentials, executor, cacheKey)
+		}
 		if freshAccount.IsGrokOAuth() {
 			conditionalRepo, ok := api.accountRepo.(GrokOAuthRefreshSuccessRepository)
 			if !ok {
@@ -448,7 +490,7 @@ func (api *OAuthRefreshAPI) tryRecoverFromRefreshRace(ctx context.Context, usedA
 	if err != nil || reReadAccount == nil {
 		return nil, false
 	}
-	if usedAccount.Platform == PlatformOpenAI && (reReadAccount.ID != usedAccount.ID || !reReadAccount.IsActive() || !canRecoverOpenAIOAuth(reReadAccount) || reReadAccount.GetCredential("chatgpt_account_id") != usedAccount.GetCredential("chatgpt_account_id")) {
+	if usedAccount.Platform == PlatformOpenAI && (!sameOpenAIOAuthOwner(usedAccount, reReadAccount) || !reReadAccount.IsActive() || !canRecoverOpenAIOAuth(reReadAccount)) {
 		return nil, false
 	}
 	usedRT := usedAccount.GetCredential("refresh_token")

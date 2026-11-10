@@ -44,10 +44,10 @@ func filterOpenAIResponsesPromptCacheConfiguration(account *Account, model strin
 	if !strings.Contains(string(body), "prompt_cache_") {
 		return body, false, nil
 	}
-	// Codex internal APIs reject Platform prompt-cache options and breakpoints.
-	// Keep prompt_cache_key; strip the rest before the request leaves.
+	// Codex accepts native TTL-only options, but not Platform modes or
+	// breakpoints. Keep the two contracts separate.
 	if account != nil && account.UsesOpenAICodexProtocol() {
-		filtered, changed, err := removeOpenAIPromptCacheConfiguration(body)
+		filtered, changed, err := filterCodexPromptCacheConfiguration(body)
 		if err != nil {
 			return nil, false, fmt.Errorf("filter prompt cache configuration: %w", err)
 		}
@@ -126,6 +126,10 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 // route selection applies it stores the route plan in *tiboRunOut so Forward
 // can stamp the result after any return path.
 func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context, c *gin.Context, account *Account, body []byte, tiboRunOut **openAITiboRun) (*OpenAIForwardResult, error) {
+	if err := s.validateOpenAIResponseAuthOwner(ctx, c, account, gjson.GetBytes(body, "previous_response_id").String()); err != nil {
+		writeOpenAIResponseAuthOwnerError(c, err)
+		return nil, err
+	}
 	traceOpenAIInbound(ctx, c, account, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)

@@ -84,7 +84,7 @@ func TestCodexOAuthTrafficAcceptance(t *testing.T) {
 	var ref metadata
 	readJSON(t, filepath.Join(reference, "meta.json"), &ref)
 	require.Equal(t, "backend/tools/codexgolden", ref.Recorder)
-	require.Equal(t, 1, ref.Contract)
+	require.Equal(t, 2, ref.Contract)
 	expectedTLSMode := "system_roots_namespace"
 	if os.Getenv("CODEXGOLDEN_CUSTOM_CA") == "1" {
 		expectedTLSMode = "custom_ca_rustls_h2"

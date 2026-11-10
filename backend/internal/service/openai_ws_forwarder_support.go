@@ -50,6 +50,14 @@ func applyOpenAIWSNativeTurnState(payload []byte, turnState string) ([]byte, err
 	return sjson.SetBytes(payload, path, turnState)
 }
 
+func (s *OpenAIGatewayService) applyOpenAIWSNativeTurnStateForAccount(c *gin.Context, account *Account, payload []byte, turnState string) ([]byte, error) {
+	payload, err := applyOpenAIWSNativeTurnState(payload, turnState)
+	if err != nil {
+		return nil, err
+	}
+	return s.guardOpenAICodexTurnStatePayload(c, account, payload)
+}
+
 // openAIWSPrewarmResult 记录预热交换里入链所需的信息：官方把预热响应当作
 // last_response（from_untraced_warmup），真实请求以它为 previous_response_id
 // 锚点发送增量（通常为空尾）。
@@ -299,6 +307,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	lease.MarkPrewarmed()
 	if result.ResponseID != "" && stateStore != nil {
 		ttl := s.openAIWSResponseStickyTTL()
+		s.bindOpenAIResponseAuthOwner(ctx, c, account, result.ResponseID)
 		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, result.ResponseID, stateStore.BindResponseAccount(ctx, groupID, result.ResponseID, account.ID, ttl))
 		stateStore.BindResponseConn(result.ResponseID, lease.ConnID(), ttl)
 	}

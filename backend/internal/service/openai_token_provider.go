@@ -148,7 +148,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 				return "", errors.New("OpenAI OAuth credential state is unavailable")
 			}
 			latest, err := p.accountRepo.GetByID(ctx, account.ID)
-			if err != nil || latest == nil || latest.ID != account.ID || !latest.IsActive() || !latest.IsOpenAIOAuth() {
+			if err != nil || latest == nil || !sameOpenAIOAuthOwner(account, latest) || !latest.IsActive() {
 				return "", errors.New("OpenAI OAuth credential state is unavailable")
 			}
 			if failure := p.refreshAPI.openAIRefreshFailure(latest); failure != nil {
@@ -165,7 +165,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 
 	// 1) Try cache first.
 	if p.tokenCache != nil {
-		if token, err := p.tokenCache.GetAccessToken(ctx, cacheKey); err == nil && strings.TrimSpace(token) != "" {
+		if token, err := p.tokenCache.GetAccessToken(ctx, cacheKey); err == nil && openAICachedAccessTokenMatchesAccount(account, token) {
 			slog.Debug("openai_token_cache_hit", "account_id", account.ID)
 			return token, nil
 		} else if err != nil {
@@ -211,11 +211,15 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 			slog.Warn("openai_token_refresh_failed", "account_id", account.ID, "error", logredact.RedactText(err.Error()))
 			p.metrics.refreshFailure.Add(1)
 			refreshFailed = true
+		} else if result == nil {
+			return "", errors.New("OpenAI OAuth refresh returned no state")
+		} else if !result.LockHeld && !sameOpenAIOAuthOwner(account, result.Account) {
+			return "", errors.New("OpenAI OAuth credential owner changed")
 		} else if result.LockHeld {
 			if p.refreshPolicy.OnLockHeld == ProviderLockHeldWaitForCache {
 				p.metrics.lockContention.Add(1)
 				p.metrics.touchNow()
-				token, waitErr := p.waitForTokenAfterLockRace(ctx, cacheKey)
+				token, waitErr := p.waitForTokenAfterLockRace(ctx, account, cacheKey)
 				if waitErr != nil {
 					return "", waitErr
 				}
@@ -246,7 +250,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		} else {
 			p.metrics.lockContention.Add(1)
 			p.metrics.touchNow()
-			token, waitErr := p.waitForTokenAfterLockRace(ctx, cacheKey)
+			token, waitErr := p.waitForTokenAfterLockRace(ctx, account, cacheKey)
 			if waitErr != nil {
 				return "", waitErr
 			}
@@ -265,6 +269,9 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	// 3) Populate cache with TTL.
 	if p.tokenCache != nil {
 		latestAccount, isStale := CheckTokenVersion(ctx, account, p.accountRepo)
+		if latestAccount != nil && !sameOpenAIOAuthOwner(account, latestAccount) {
+			return "", errors.New("OpenAI OAuth credential owner changed")
+		}
 		if isStale && latestAccount != nil {
 			slog.Debug("openai_token_version_stale_use_latest", "account_id", account.ID)
 			accessToken = latestAccount.GetOpenAIAccessToken()
@@ -346,7 +353,7 @@ func (p *OpenAITokenProvider) disableAccountMissingRefreshToken(ctx context.Cont
 	)
 }
 
-func (p *OpenAITokenProvider) waitForTokenAfterLockRace(ctx context.Context, cacheKey string) (string, error) {
+func (p *OpenAITokenProvider) waitForTokenAfterLockRace(ctx context.Context, account *Account, cacheKey string) (string, error) {
 	wait := openAILockInitialWait
 	totalWaitMs := int64(0)
 	for i := 0; i < openAILockMaxAttempts; i++ {
@@ -374,7 +381,7 @@ func (p *OpenAITokenProvider) waitForTokenAfterLockRace(ctx context.Context, cac
 		p.metrics.touchNow()
 
 		token, err := p.tokenCache.GetAccessToken(ctx, cacheKey)
-		if err == nil && strings.TrimSpace(token) != "" {
+		if err == nil && openAICachedAccessTokenMatchesAccount(account, token) {
 			p.metrics.lockWaitHit.Add(1)
 			if totalWaitMs >= openAILockWarnThresholdMs {
 				slog.Warn("openai_token_lock_wait_high", "wait_ms", totalWaitMs, "attempts", i+1)

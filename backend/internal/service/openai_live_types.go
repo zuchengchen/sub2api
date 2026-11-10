@@ -13,6 +13,8 @@ const (
 	LiveControllerObserver = "observer"
 	LiveControllerProxy    = "proxy"
 	LiveControllerClosed   = "closed"
+
+	liveSidebandRouteOpenAIV1 = "openai_v1"
 )
 
 var (
@@ -67,6 +69,9 @@ type LiveCallRecord struct {
 	UserAgent       string
 	IPAddress       string
 	InboundEndpoint string
+	// Empty marks calls created before routing was recorded; those calls keep
+	// their ChatGPT backend sideband. New calls use the official API v1 route.
+	SidebandRoute string
 	// Keep the original attestation field readable by older instances.
 	AttestationCiphertext string
 	// Optional encrypted creation-time context for sideband reconnects. Redis
