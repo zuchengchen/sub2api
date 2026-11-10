@@ -169,7 +169,7 @@ func TestImportCodexSessionsCreatesAgentIdentityWithoutOAuthExpiry(t *testing.T)
 	require.Zero(t, result.Failed)
 	require.Len(t, svc.createdAccounts, 1)
 	created := svc.createdAccounts[0]
-	require.Equal(t, 50, created.Concurrency)
+	require.Equal(t, 10, created.Concurrency)
 	require.False(t, created.ConcurrencyProvided)
 	require.Nil(t, created.ExpiresAt)
 	require.Nil(t, created.AutoPauseOnExpired)
