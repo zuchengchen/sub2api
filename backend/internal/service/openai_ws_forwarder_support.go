@@ -1003,6 +1003,7 @@ func openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw string) int {
 	errType := strings.ToLower(strings.TrimSpace(errTypeRaw))
 	switch {
 	case strings.Contains(errType, "invalid_request"),
+		isOpenAIImageGenerationUserErrorType(errType),
 		strings.Contains(code, "invalid_request"),
 		strings.Contains(code, "bad_request"),
 		code == "invalid_encrypted_content",

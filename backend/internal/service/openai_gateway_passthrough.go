@@ -1457,6 +1457,9 @@ var openAIStreamErrorStatusPaths = []string{
 }
 
 func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
+	if openAIImageGenerationUserError(payload) != nil {
+		return http.StatusBadRequest
+	}
 	if isOpenAIContextWindowError(message, payload) {
 		return http.StatusBadRequest
 	}
@@ -1497,6 +1500,10 @@ func openAIStreamFailureStatus(payload []byte, message string) int {
 	}
 	semanticStatus := openAIStreamFailedEventSemanticStatus(payload, message)
 	switch semanticStatus {
+	case http.StatusBadRequest:
+		if openAIImageGenerationUserError(payload) != nil {
+			return semanticStatus
+		}
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, 529:
 		return semanticStatus
 	case http.StatusServiceUnavailable:
@@ -1614,6 +1621,9 @@ func applyOpenAIStreamFailedErrorPassthroughRule(
 }
 
 func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool {
+	if openAIImageGenerationUserError(payload) != nil {
+		return false
+	}
 	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
 		return false
 	}
@@ -1671,6 +1681,9 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 }
 
 func openAIStreamErrorEventShouldFailover(payload []byte, message string) bool {
+	if openAIImageGenerationUserError(payload) != nil {
+		return false
+	}
 	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
 		return false
 	}
@@ -1968,6 +1981,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	var replayGuard openAIResponseReplayGuard
 	codexFailureTerminal := account != nil && account.Platform == PlatformOpenAI
 	failureDelivered := false
+	var imageErrorPayload []byte
+	defer func() {
+		if failureDelivered && sawFailedEvent && !clientDisconnected {
+			markOpenAIImageGenerationStreamError(c, imageErrorPayload)
+		}
+	}()
 	suppressCurrentEvent := false
 	responseFailedPending := false
 	var bareErrorPayload []byte
@@ -2172,6 +2191,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			}
 			cyberHit := false
 			if eventType == "response.failed" || eventType == "error" {
+				if openAIImageGenerationUserError(dataBytes) != nil {
+					imageErrorPayload = append(imageErrorPayload[:0], dataBytes...)
+				} else {
+					imageErrorPayload = nil
+				}
 				if codexFailureTerminal && eventType == "error" {
 					sawBareError = true
 					bareErrorPayload = append(bareErrorPayload[:0], dataBytes...)
@@ -2532,7 +2556,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		if cyberHit || (!openAIUsageHasTokens(usage) && partial.imageCount == 0) {
 			partial = nil
 		}
-		return partial, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
+		return partial, s.writeOpenAINonStreamingProtocolError(resp, c, msg, terminalPayload)
 	}
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 	if !ok && terminalOK {
