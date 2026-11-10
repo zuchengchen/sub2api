@@ -55,7 +55,7 @@ func openAIWSDeltaItemsHash(items []json.RawMessage) []string {
 // openAIWSDeltaFieldsFingerprint 计算官方增量比较里的「非 input 字段」指纹。
 // 官方 responses_request_properties_mismatch 逐字段比较：
 // model, tools, tool_choice, parallel_tool_calls, reasoning, store, stream,
-// include, service_tier, prompt_cache_key, text；
+// include, service_tier, prompt_cache_key, prompt_cache_options, text；
 // 忽略 input, previous_response_id, stream_options, client_metadata,
 // access_programs（以及 enum tag type 与网关字段）。
 func openAIWSDeltaFieldsFingerprint(payload map[string]any) string {

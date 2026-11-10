@@ -87,7 +87,7 @@ func (e *openAIRecoveryExecutor) Refresh(ctx context.Context, account *Account) 
 func newOpenAIRecoveryFixture() (*Account, *openAIRecoveryRepo, *openAIRecoveryExecutor, *OpenAITokenProvider) {
 	account := &Account{ID: 9021, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 4, Credentials: map[string]any{
 		"access_token": "rejected-access", "refresh_token": "old-refresh",
-		"chatgpt_account_id": "same-account", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		"chatgpt_account_id": "same-account", "chatgpt_user_id": "same-user", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 	}}
 	repo := &openAIRecoveryRepo{account: snapshotOAuthRefreshAccount(account)}
 	executor := &openAIRecoveryExecutor{}

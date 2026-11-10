@@ -457,13 +457,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, mapping, maxLineSize)
 		}
 
-		// x-codex-turn-state 溯源：下游回传由 writeOpenAIPassthroughResponseHeaders
-		// 在各 handler 的写头点强制放行，铸造账号在此统一记录，供出站守卫剥离
-		// failover 换号后的跨账号回带（openai_codex_turn_state.go）。
 		s.observeOpenAICodexTicketResponseHeader(c, resp.Header)
-		if extractOpenAICodexTurnState(resp.Header) != "" {
-			s.noteOpenAICodexTurnStateProvenance(c, account)
-		}
 
 		if reqStream {
 			stashOpenAIUsageEstimateRequestBody(c, body)
@@ -1942,6 +1936,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	defer s.watchOpenAICodexTurnStateCommit(c, account)()
 
 	// SSE headers
 	c.Header("Content-Type", "text/event-stream")
@@ -2476,6 +2471,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	logOpenAISuccessMissingUsage(ctx, c, account, resp, usage, "json", false)
 
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	defer s.watchOpenAICodexTurnStateCommit(c, account)()
 
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
@@ -2577,6 +2573,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 	}
 
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	defer s.watchOpenAICodexTurnStateCommit(c, account)()
 	logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, usage, terminalType, false)
 
 	contentType := "application/json; charset=utf-8"

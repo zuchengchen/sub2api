@@ -26,7 +26,7 @@ func TestQueryUsageCodexCredits(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			account := &Account{ID: 100, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
-				Credentials: map[string]any{"chatgpt_account_id": "test-workspace"}}
+				Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-workspace"}}
 			repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{100: account}}
 			tokens := &stubQuotaTokenCache{tokens: map[string]string{OpenAITokenCacheKey(account): "test-token"}}
 			var paths []string

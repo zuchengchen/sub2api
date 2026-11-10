@@ -222,9 +222,17 @@ func (t *codexDeviceRoundTripper) RoundTrip(r *http.Request) (*http.Response, er
 		cancel()
 		return nil, err
 	}
+	var complete func() bool
+	if body, ok := resp.Body.(interface{ ResponseComplete() bool }); ok {
+		complete = body.ResponseComplete
+	}
 	decompressResponseBody(resp)
 	resp.Request = r
-	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	if complete != nil {
+		resp.Body = &codexPooledH2Body{cancelOnCloseBody: cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}, complete: complete}
+	} else {
+		resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	}
 	return resp, nil
 }
 

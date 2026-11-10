@@ -74,3 +74,29 @@ func (b *codexOwnedH2Body) Close() error {
 	})
 	return b.err
 }
+
+// codexPooledH2Body releases one stream without retiring its reusable auth,
+// login or quota client. A fully received response can outrun the last request
+// DATA Write return. Join that normal completion before canceling this attempt;
+// incomplete responses and explicit cancellation keep the immediate abort path.
+type codexPooledH2Body struct {
+	cancelOnCloseBody
+	complete func() bool
+}
+
+func (b *codexPooledH2Body) Close() error {
+	b.once.Do(func() {
+		normal := b.complete != nil && b.complete()
+		if !normal {
+			b.cancel()
+		}
+		b.readMu.Lock()
+		b.closed = true
+		b.err = b.ReadCloser.Close()
+		b.readMu.Unlock()
+		if normal {
+			b.cancel()
+		}
+	})
+	return b.err
+}

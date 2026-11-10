@@ -1718,6 +1718,13 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	switch {
 	case account.IsOpenAIOAuth():
 		authToken = strings.TrimSpace(account.GetOpenAIAccessToken())
+		if !account.IsOpenAIAgentIdentity() && !account.IsOpenAIPersonalAccessToken() && s.openAITokenProvider != nil {
+			var tokenErr error
+			authToken, tokenErr = s.openAITokenProvider.GetAccessToken(ctx, account)
+			if tokenErr != nil {
+				return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_AUTH_FAILED", "Codex models OAuth credentials are unavailable")
+			}
+		}
 		if authToken == "" && !account.IsOpenAIAgentIdentity() {
 			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_TOKEN_MISSING", "account has no Codex backend access token")
 		}

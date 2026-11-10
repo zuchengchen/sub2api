@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"sync"
 	"time"
 
@@ -58,6 +59,19 @@ func (s *gatewayAccounts) UpdateCredentials(_ context.Context, id int64, credent
 	s.account.Credentials = maps.Clone(credentials)
 	s.credentialWrites++
 	return nil
+}
+
+func (s *gatewayAccounts) UpdateOpenAIOAuthCredentialsIfUnchanged(_ context.Context, id int64, expected map[string]any, proxyID *int64, credentials map[string]any) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.account == nil || s.account.ID != id || !s.account.IsOpenAIOAuth() ||
+		!reflect.DeepEqual(s.account.Credentials, expected) || !reflect.DeepEqual(s.account.ProxyID, proxyID) {
+		return false, nil
+	}
+	s.account = cloneGatewayAccount(s.account)
+	s.account.Credentials = maps.Clone(credentials)
+	s.credentialWrites++
+	return true, nil
 }
 func (s *gatewayAccounts) UpdateExtra(_ context.Context, id int64, values map[string]any) error {
 	s.mu.Lock()

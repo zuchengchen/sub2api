@@ -180,7 +180,6 @@ var openAICodexOAuthUnsupportedFields = append([]string{
 	"top_p",
 	"frequency_penalty",
 	"presence_penalty",
-	"prompt_cache_options",
 }, openAIChatGPTInternalUnsupportedFields...)
 
 func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact bool) codexTransformResult {
@@ -240,6 +239,10 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			delete(reqBody, key)
 			result.Modified = true
 		}
+	}
+	if options, exists := reqBody["prompt_cache_options"]; exists && (opts.IsCompact || !validCodexPromptCacheOptions(options)) {
+		delete(reqBody, "prompt_cache_options")
+		result.Modified = true
 	}
 	// Nested prompt_cache_breakpoint is a Platform Responses field. Codex
 	// rejects it with "prompt_cache_breakpoint is not supported on this model".

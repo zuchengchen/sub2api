@@ -15,37 +15,39 @@ import (
 	"time"
 )
 
-const recordingContract = 1
+const recordingContract = 2
 
 var fullScenarioNames = []string{"ws_initial", "ws_tool_loop", "http_fallback_tool_loop", "http_unauthorized_refresh", "ws_unauthorized_refresh", "ws_compaction"}
 var traceOutputDir string
 
 type captureMetadata struct {
-	SourceBuildReceiptHash string            `json:"source_build_receipt_sha256,omitempty"`
-	GatewayMode            string            `json:"candidate_ingress_mode,omitempty"`
-	GatewayConfigHash      string            `json:"gateway_config_sha256,omitempty"`
-	Contract               int               `json:"recording_contract"`
-	Version                string            `json:"codex_version"`
-	Commit                 string            `json:"source_commit"`
-	BinaryHash             string            `json:"binary_sha256"`
-	ModelsHash             string            `json:"models_sha256"`
-	TLSMode                string            `json:"tls_mode"`
-	Model                  string            `json:"model"`
-	Reasoning              string            `json:"reasoning_effort"`
-	ConfigHash             string            `json:"effective_config_sha256"`
-	CAHash                 string            `json:"fixture_ca_sha256"`
-	RecordedAt             string            `json:"recorded_at"`
-	Recorder               string            `json:"recorder"`
-	Scenarios              []string          `json:"scenarios"`
-	Strace                 bool              `json:"strace_guard"`
-	Leaks                  []string          `json:"outbound_leaks"`
-	Traces                 map[string]string `json:"trace_sha256"`
+	WSEvidenceHashes         map[string]string `json:"ws_evidence_sha256"`
+	GatewayFingerprintHashes map[string]string `json:"gateway_fingerprint_evidence_sha256"`
+	SourceBuildReceiptHash   string            `json:"source_build_receipt_sha256,omitempty"`
+	GatewayMode              string            `json:"candidate_ingress_mode,omitempty"`
+	GatewayConfigHash        string            `json:"gateway_config_sha256,omitempty"`
+	Contract                 int               `json:"recording_contract"`
+	Version                  string            `json:"codex_version"`
+	Commit                   string            `json:"source_commit"`
+	BinaryHash               string            `json:"binary_sha256"`
+	ModelsHash               string            `json:"models_sha256"`
+	TLSMode                  string            `json:"tls_mode"`
+	Model                    string            `json:"model"`
+	Reasoning                string            `json:"reasoning_effort"`
+	ConfigHash               string            `json:"effective_config_sha256"`
+	CAHash                   string            `json:"fixture_ca_sha256"`
+	RecordedAt               string            `json:"recorded_at"`
+	Recorder                 string            `json:"recorder"`
+	Scenarios                []string          `json:"scenarios"`
+	Strace                   bool              `json:"strace_guard"`
+	Leaks                    []string          `json:"outbound_leaks"`
+	Traces                   map[string]string `json:"trace_sha256"`
 }
 
 func recordingConfigHash() string {
 	// Endpoints and filesystem roots are isolated per invocation. These are the
 	// behavior-affecting configuration values shared by reference and candidate.
-	config := map[string]any{"tls_mode": recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh", "sandbox": "read-only", "auth_store": "file", "updates": false, "compaction_limit": 1, "models_barrier": true, "scripted_native_output": 1, "native_response_evidence": 2}
+	config := map[string]any{"tls_mode": recorderTLSMode(), "model": "gpt-6-astra", "reasoning_effort": "xhigh", "sandbox": "read-only", "auth_store": "file", "updates": false, "compaction_limit": 1, "models_barrier": true, "scripted_native_output": 1, "native_response_evidence": 2, "ws_frame_evidence": 1, "ws_handshake_outcome_evidence": 1, "gateway_seeded_full_evidence": 1}
 	return fmt.Sprintf("%x", sha256.Sum256(mustJSON(config)))
 }
 
@@ -107,8 +109,14 @@ func finalizeCaptureTraces(dir string) error {
 		}
 		traces[path] = fmt.Sprintf("%x", sha256.Sum256(data))
 	}
+	if err := finalizeWSEvidenceHashes(dir, meta); err != nil {
+		return err
+	}
 	meta["strace_guard"] = true
 	meta["trace_sha256"] = traces
+	if err := finalizeGatewayFingerprintHashes(dir, meta); err != nil {
+		return err
+	}
 	writeJSON(filepath.Join(dir, "meta.json"), meta)
 	return nil
 }
@@ -177,6 +185,9 @@ func readCaptureMetadata(dir string) (captureMetadata, error) {
 		if leaks := checkTrace(filepath.Join(dir, path)); len(leaks) != 0 {
 			return invalid("failed retained trace: " + path)
 		}
+	}
+	if err := validateWSEvidenceHashes(dir, meta.WSEvidenceHashes); err != nil {
+		return invalid(err.Error())
 	}
 	return meta, nil
 }

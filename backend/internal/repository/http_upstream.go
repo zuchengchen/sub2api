@@ -1825,6 +1825,8 @@ func (s *httpUpstreamService) doCodexH2Uncontrolled(req *http.Request, proxyURL 
 	resp.Request = req
 	if stopOwnedAbort != nil {
 		resp.Body = &codexOwnedH2Body{ReadCloser: resp.Body, ctx: ctx, cancel: cancel, stopAbort: stopOwnedAbort, pool: pool, complete: complete}
+	} else if complete != nil {
+		resp.Body = &codexPooledH2Body{cancelOnCloseBody: cancelOnCloseBody{ReadCloser: resp.Body, cancel: closeRequest}, complete: complete}
 	} else {
 		resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: closeRequest}
 	}

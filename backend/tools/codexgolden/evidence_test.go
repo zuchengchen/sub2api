@@ -56,6 +56,7 @@ func comparatorFixture(t *testing.T, dir string) {
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, dst), data, 0600))
 	}
+	writeSyntheticWSLifecycleFixture(t, dir)
 	trace := []byte("123 connect(7, {sa_family=AF_INET, sin_port=htons(44221), sin_addr=inet_addr(\"127.0.0.1\")}, 16) = 0\n")
 	for _, path := range expectedTracePaths("backend/tools/codexgolden") {
 		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, path)), 0700))

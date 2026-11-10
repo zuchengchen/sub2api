@@ -38,6 +38,7 @@ type codexTurnEvidence struct {
 	ForkedThreadID  string
 	RootTurnID      string
 	ParentTurnID    string
+	RequestKind     string
 	// RequestID is generated once per request context, never from prompt text.
 	RequestID string
 	// ClientTurnID is the client's own turn_id (client_metadata, embedded or
@@ -65,6 +66,7 @@ func codexTurnEvidenceFromMetadataString(raw string, ev *codexTurnEvidence) {
 		name string
 		dst  *string
 	}{
+		{"request_kind", &ev.RequestKind},
 		{"session_id", &ev.ClientSessionID},
 		{"thread_id", &ev.ClientThreadID},
 		{"parent_thread_id", &ev.ParentThreadID},
@@ -93,6 +95,10 @@ func codexTurnEvidenceFromMetadataString(raw string, ev *codexTurnEvidence) {
 // collectCodexTurnEvidence gathers turn evidence from the client metadata
 // (map or gjson form), inbound headers and the request body.
 func collectCodexTurnEvidence(clientMetadata any, headers http.Header, body gjson.Result) codexTurnEvidence {
+	return collectCodexTurnEvidenceForRequest(clientMetadata, headers, body, body.Exists() && body.Get("generate").Type != gjson.False)
+}
+
+func collectCodexTurnEvidenceForRequest(clientMetadata any, headers http.Header, body gjson.Result, ignoreHeaderRequestKind bool) codexTurnEvidence {
 	var ev codexTurnEvidence
 	switch cm := clientMetadata.(type) {
 	case map[string]any:
@@ -113,6 +119,7 @@ func collectCodexTurnEvidence(clientMetadata any, headers http.Header, body gjso
 			codexTurnEvidenceFromMetadataString(cm.Raw, &ev)
 		}
 	}
+	bodyRequestKind := ev.RequestKind
 	if headers != nil {
 		codexTurnEvidenceFromMetadataString(headers.Get(openAIWSTurnMetadataHeader), &ev)
 		if ev.ClientSessionID == "" {
@@ -128,6 +135,12 @@ func collectCodexTurnEvidence(clientMetadata any, headers http.Header, body gjso
 			ev.ClientTurnID = strings.TrimSpace(headers.Get("turn-id"))
 		}
 	}
+	if ignoreHeaderRequestKind {
+		// A WebSocket Upgrade header can still describe startup prewarm.
+		// Ordinary bodies own request kind, including an omitted kind.
+		// Explicit generate=false keeps legacy header-only prewarm valid.
+		ev.RequestKind = bodyRequestKind
+	}
 	if body.Exists() {
 		ev.PromptCacheKey = strings.TrimSpace(body.Get("prompt_cache_key").String())
 		ev.InputTurnSeed = codexInputTurnSeed(body.Get("input"))
@@ -141,7 +154,8 @@ func collectCodexTurnEvidenceFromMap(decoded map[string]any, headers http.Header
 	if decoded == nil {
 		return collectCodexTurnEvidence(nil, headers, gjson.Result{})
 	}
-	ev := collectCodexTurnEvidence(decoded["client_metadata"], headers, gjson.Result{})
+	generate, hasGenerate := decoded["generate"].(bool)
+	ev := collectCodexTurnEvidenceForRequest(decoded["client_metadata"], headers, gjson.Result{}, !hasGenerate || generate)
 	if key, ok := decoded["prompt_cache_key"].(string); ok {
 		ev.PromptCacheKey = strings.TrimSpace(key)
 	}

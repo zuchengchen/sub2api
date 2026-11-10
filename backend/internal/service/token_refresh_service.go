@@ -278,6 +278,16 @@ type rateLimitedOAuthRefreshExecutor struct {
 	acquireRate func(context.Context) (func(), error)
 }
 
+// Preserve the post-persistence hook when background rate admission wraps a
+// platform executor. Interface embedding alone does not promote optional hooks.
+func (e *rateLimitedOAuthRefreshExecutor) AuthCredentialsPersisted(ctx context.Context, previous *Account) {
+	if publisher, ok := e.OAuthRefreshExecutor.(interface {
+		AuthCredentialsPersisted(context.Context, *Account)
+	}); ok {
+		publisher.AuthCredentialsPersisted(ctx, previous)
+	}
+}
+
 func (e *rateLimitedOAuthRefreshExecutor) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
 	if e == nil || e.OAuthRefreshExecutor == nil {
 		return nil, errors.New("OAuth refresh executor is not configured")
@@ -812,6 +822,9 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 	refreshWindow time.Duration,
 	gate refreshAttemptGate,
 ) error {
+	if account != nil && account.IsOpenAIOAuth() && (s.refreshAPI == nil || executor == nil) {
+		return openAIRefreshCASNotConfigured()
+	}
 	var lastErr error
 	maxRetries := s.maxRetries()
 

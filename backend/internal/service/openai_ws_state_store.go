@@ -110,16 +110,18 @@ type OpenAIWSStateStore interface {
 type defaultOpenAIWSStateStore struct {
 	cache GatewayCache
 
-	responseToAccountMu  sync.RWMutex
-	responseToAccount    map[string]openAIWSAccountBinding
-	responseOwnerMu      sync.RWMutex
-	responseOwners       map[string]openAIHTTPResponseOwnerBinding
-	responseToConnMu     sync.RWMutex
-	responseToConn       map[string]openAIWSConnBinding
-	sessionToTurnStateMu sync.RWMutex
-	sessionToTurnState   map[string]openAIWSTurnStateBinding
-	sessionToConnMu      sync.RWMutex
-	sessionToConn        map[string]openAIWSSessionConnBinding
+	responseToAccountMu      sync.RWMutex
+	responseToAccount        map[string]openAIWSAccountBinding
+	responseOwnerMu          sync.RWMutex
+	responseOwners           map[string]openAIHTTPResponseOwnerBinding
+	responseAuthOwners       map[string]openAIResponseAuthOwnerBinding
+	responseAuthOwnerPending map[string]int64
+	responseToConnMu         sync.RWMutex
+	responseToConn           map[string]openAIWSConnBinding
+	sessionToTurnStateMu     sync.RWMutex
+	sessionToTurnState       map[string]openAIWSTurnStateBinding
+	sessionToConnMu          sync.RWMutex
+	sessionToConn            map[string]openAIWSSessionConnBinding
 
 	sessionInvalidEncryptedMu sync.RWMutex
 	sessionInvalidEncrypted   map[string]openAIWSInvalidEncryptedBinding
@@ -136,6 +138,7 @@ func NewOpenAIWSStateStore(cache GatewayCache) OpenAIWSStateStore {
 		cache:                   cache,
 		responseToAccount:       make(map[string]openAIWSAccountBinding, 256),
 		responseOwners:          make(map[string]openAIHTTPResponseOwnerBinding, 256),
+		responseAuthOwners:      make(map[string]openAIResponseAuthOwnerBinding, 256),
 		responseToConn:          make(map[string]openAIWSConnBinding, 256),
 		sessionToTurnState:      make(map[string]openAIWSTurnStateBinding, 256),
 		sessionToConn:           make(map[string]openAIWSSessionConnBinding, 256),
@@ -572,6 +575,8 @@ func (s *defaultOpenAIWSStateStore) maybeCleanup() {
 
 	s.responseOwnerMu.Lock()
 	cleanupExpiredHTTPResponseOwnerBindings(s.responseOwners, now, openAIWSStateStoreCleanupMaxPerMap)
+	cleanupExpiredResponseAuthOwners(s.responseAuthOwners, now, openAIWSStateStoreCleanupMaxPerMap)
+	cleanupExpiredResponseAuthOwnerPending(s.responseAuthOwnerPending, now, openAIWSStateStoreCleanupMaxPerMap)
 	s.responseOwnerMu.Unlock()
 
 	s.responseToConnMu.Lock()

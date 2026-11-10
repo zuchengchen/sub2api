@@ -110,6 +110,7 @@ type fakeUpstream struct {
 	records             []record
 	captureErrors       []error
 	h2ReadEnds          map[int]*h2ReadEnd
+	wsCaptures          map[int]*wsConnectionEvidence
 	connHops            map[int]string
 	connHellos          map[int]*clientHello
 	seq                 int
@@ -296,21 +297,28 @@ func (f *fakeUpstream) handleObservedConn(c net.Conn, connID int, front bool, ob
 			return ""
 		}
 		if strings.EqualFold(get("upgrade"), "websocket") {
-			f.add(record{Conn: connID, ConnReq: reqIdx, Kind: "ws_handshake", Method: method, Target: target, Proto: proto, Headers: headers})
+			requestSeq := f.add(record{Conn: connID, ConnReq: reqIdx, Kind: "ws_handshake", Method: method, Target: target, Proto: proto, Headers: headers})
 			if f.scenario.RejectWebSocket {
 				const rejection = "HTTP/1.1 426 Upgrade Required\r\ncontent-length: 0\r\n\r\n"
-				if n, err := io.WriteString(c, rejection); err != nil || n != len(rejection) {
-					f.captureError(fmt.Errorf("incomplete synthetic 426 response: written=%d err=%v", n, err))
+				err := writeFixtureBytes(c, []byte(rejection))
+				f.nativeEvidence(requestSeq, connID, 426, nil, err == nil, err)
+				if err != nil {
+					f.captureError(fmt.Errorf("incomplete synthetic 426 response: %w", err))
 					return
 				}
 				f.upgrade426Responses.Add(1)
 				continue
 			}
 			if f.scenario.UnauthorizedUntilRefresh && !f.authorizedAfterRefresh(get("authorization")) {
-				writeJSONResponse(c, 401, []byte(`{"error":{"message":"token expired","type":"invalid_request_error","code":"token_expired"}}`))
+				err := writeJSONResponse(c, 401, []byte(`{"error":{"message":"token expired","type":"invalid_request_error","code":"token_expired"}}`))
+				f.nativeEvidence(requestSeq, connID, 401, nil, err == nil, err)
+				if err != nil {
+					f.captureError(fmt.Errorf("incomplete synthetic 401 upgrade response: %w", err))
+					return
+				}
 				continue
 			}
-			f.serveWebSocket(c, br, connID, get("sec-websocket-key"), get("sec-websocket-extensions"))
+			f.serveWebSocket(c, br, connID, get("sec-websocket-key"), get("sec-websocket-extensions"), requestSeq)
 			return
 		}
 		body, wireLen, err := readBody(br, get("content-length"), get("transfer-encoding"))
@@ -382,6 +390,19 @@ func (f *fakeUpstream) captureError(err error) {
 func (f *fakeUpstream) validateModelsBarrier() error {
 	f.mu.Lock()
 	err := errors.Join(f.captureErrors...)
+	for _, row := range f.records {
+		if row.Kind == "ws_handshake" {
+			err = errors.Join(err, validateWSHandshakeOutcome(row))
+			if row.NativeResponse != nil && row.NativeResponse.Status == 101 && f.wsCaptures[row.Conn] == nil {
+				err = errors.Join(err, fmt.Errorf("successful WebSocket connection %d lacks lifecycle evidence", row.Conn))
+			}
+		}
+	}
+	for id, capture := range f.wsCaptures {
+		if capture.End == "" {
+			err = errors.Join(err, fmt.Errorf("WebSocket connection %d has incomplete close evidence", id))
+		}
+	}
 	f.mu.Unlock()
 	if err != nil {
 		return err
@@ -644,7 +665,7 @@ func (f *fakeUpstream) writeSSE(c net.Conn, requestSeq, connID int, events []map
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-func (f *fakeUpstream) serveWebSocket(c net.Conn, br *bufio.Reader, connID int, key, offeredExt string) {
+func (f *fakeUpstream) serveWebSocket(c net.Conn, br *bufio.Reader, connID int, key, offeredExt string, requestSeq int) {
 	sum := sha1.Sum([]byte(key + wsGUID))
 	accept := base64.StdEncoding.EncodeToString(sum[:])
 	deflate := strings.Contains(strings.ToLower(offeredExt), "permessage-deflate")
@@ -653,22 +674,59 @@ func (f *fakeUpstream) serveWebSocket(c net.Conn, br *bufio.Reader, connID int, 
 		resp += "sec-websocket-extensions: permessage-deflate\r\n"
 	}
 	resp += "\r\n"
-	if _, err := io.WriteString(c, resp); err != nil {
+	err := writeFixtureBytes(c, []byte(resp))
+	// Direct frame-reader unit fixtures use requestSeq=0. Every real recorder
+	// entry passes its observed handshake sequence and must retain the outcome.
+	if requestSeq > 0 {
+		f.nativeEvidence(requestSeq, connID, 101, nil, err == nil, err)
+	}
+	if err != nil {
+		f.captureError(fmt.Errorf("incomplete synthetic 101 response: %w", err))
 		return
 	}
 	inflate := &inflater{}
+	f.startWSCapture(connID)
+	reader := &wsClientMessageReader{br: br, deflate: deflate, onFrame: func(frame wsFrameEvidence) error { return f.observeWSFrame(connID, frame) }}
+	end := "returned"
+	var endErr error
+	defer func() { f.finishWSCapture(connID, end, endErr, reader.info.Fragments) }()
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(120 * time.Second))
-		msg, info, err := readClientMessage(br)
+		msg, info, err := reader.Read()
 		if err != nil {
+			endErr = err
+			if errors.Is(err, io.EOF) {
+				end = "eof"
+				return
+			}
+			end = "read_error"
+			f.captureError(fmt.Errorf("WebSocket capture connection %d: %w", connID, err))
+			var protocolErr *wsProtocolError
+			if errors.As(err, &protocolErr) {
+				end = "protocol_error"
+				if writeErr := f.writeWSControl(c, connID, 8, []byte{0x03, 0xea}); writeErr != nil {
+					f.captureError(writeErr)
+				}
+			}
 			return
 		}
 		switch info.Opcode {
-		case 0x9: // ping
-			_ = writeServerFrame(c, 0xA, msg)
+		case 0x9: // Answer immediately, including between data fragments.
+			if err := f.writeWSControl(c, connID, 0xA, msg); err != nil {
+				end = "write_error"
+				endErr = err
+				f.captureError(err)
+				return
+			}
 			continue
 		case 0x8:
-			_ = writeServerFrame(c, 0x8, nil)
+			end = "peer_close"
+			// RFC 6455 section 5.5.1: echo the received valid close payload.
+			if err := f.writeWSControl(c, connID, 0x8, msg); err != nil {
+				end = "write_error"
+				endErr = err
+				f.captureError(err)
+			}
 			return
 		case 0xA:
 			continue
@@ -676,6 +734,9 @@ func (f *fakeUpstream) serveWebSocket(c net.Conn, br *bufio.Reader, connID int, 
 		if info.Compressed {
 			out, derr := inflate.inflate(msg)
 			if derr != nil {
+				end = "decompression_error"
+				endErr = derr
+				f.captureError(derr)
 				return
 			}
 			msg = out
@@ -691,78 +752,14 @@ func (f *fakeUpstream) serveWebSocket(c net.Conn, br *bufio.Reader, connID int, 
 			for _, ev := range f.scriptedEvents(msg) {
 				data, _ := json.Marshal(ev)
 				if err := writeServerFrame(c, 0x1, data); err != nil {
+					end = "write_error"
+					endErr = err
 					f.nativeEvidence(requestSeq, connID, 200, sent, false, err)
 					return
 				}
 				sent = append(sent, append(json.RawMessage(nil), data...))
 			}
 			f.nativeEvidence(requestSeq, connID, 200, sent, true, nil)
-		}
-	}
-}
-
-func readClientMessage(br *bufio.Reader) ([]byte, *frameInfo, error) {
-	var payload []byte
-	info := &frameInfo{}
-	for {
-		var hdr [2]byte
-		if _, err := io.ReadFull(br, hdr[:]); err != nil {
-			return nil, nil, err
-		}
-		fin := hdr[0]&0x80 != 0
-		opcode := int(hdr[0] & 0x0f)
-		masked := hdr[1]&0x80 != 0
-		n := uint64(hdr[1] & 0x7f)
-		wire := 2
-		switch n {
-		case 126:
-			var ext [2]byte
-			if _, err := io.ReadFull(br, ext[:]); err != nil {
-				return nil, nil, err
-			}
-			n = uint64(binary.BigEndian.Uint16(ext[:]))
-			wire += 2
-		case 127:
-			var ext [8]byte
-			if _, err := io.ReadFull(br, ext[:]); err != nil {
-				return nil, nil, err
-			}
-			n = binary.BigEndian.Uint64(ext[:])
-			wire += 8
-		}
-		var mask [4]byte
-		if masked {
-			if _, err := io.ReadFull(br, mask[:]); err != nil {
-				return nil, nil, err
-			}
-			wire += 4
-		}
-		if n > 64<<20 {
-			return nil, nil, fmt.Errorf("frame too large: %d", n)
-		}
-		data := make([]byte, n)
-		if _, err := io.ReadFull(br, data); err != nil {
-			return nil, nil, err
-		}
-		wire += int(n)
-		if masked {
-			for i := range data {
-				data[i] ^= mask[i%4]
-			}
-		}
-		if opcode >= 0x8 { // control frames are never fragmented
-			return data, &frameInfo{Opcode: opcode, Fragments: 1, Masked: masked, WireLen: wire}, nil
-		}
-		if info.Fragments == 0 {
-			info.Opcode = opcode
-			info.Masked = masked
-			info.Compressed = hdr[0]&0x40 != 0
-		}
-		info.Fragments++
-		info.WireLen += wire
-		payload = append(payload, data...)
-		if fin {
-			return payload, info, nil
 		}
 	}
 }

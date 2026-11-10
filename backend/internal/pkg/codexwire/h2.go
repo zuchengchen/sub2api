@@ -271,6 +271,12 @@ func (c *h2Conn) writeFrame(fn func(*http2.Framer) error) error {
 }
 
 func (c *h2Conn) writeFrameContext(ctx context.Context, fn func(*http2.Framer) error) error {
+	return c.writeFrameContextOnSuccess(ctx, fn, nil)
+}
+
+// onSuccess publishes completion only after the write cancellation hook is
+// stopped, while writeMu still excludes another stream from this socket.
+func (c *h2Conn) writeFrameContextOnSuccess(ctx context.Context, fn func(*http2.Framer) error, onSuccess func()) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -302,6 +308,9 @@ func (c *h2Conn) writeFrameContext(ctx context.Context, fn func(*http2.Framer) e
 		c.mu.Unlock()
 		go c.Close()
 		return err
+	}
+	if onSuccess != nil {
+		onSuccess()
 	}
 	return nil
 }
@@ -643,10 +652,9 @@ func (c *h2Conn) writeBody(st *h2Stream, body []byte) error {
 		last := off >= len(body)
 		c.mu.Unlock()
 		writeStarted := false
-		err := c.writeFrameContext(st.ctx, func(fr *http2.Framer) error {
-			writeStarted = true
-			err := fr.WriteData(st.id, last, chunk)
-			if err == nil && last {
+		var onSuccess func()
+		if last {
+			onSuccess = func() {
 				c.mu.Lock()
 				if st.sendPending {
 					st.sendPending = false
@@ -654,8 +662,11 @@ func (c *h2Conn) writeBody(st *h2Stream, body []byte) error {
 				}
 				c.mu.Unlock()
 			}
-			return err
-		})
+		}
+		err := c.writeFrameContextOnSuccess(st.ctx, func(fr *http2.Framer) error {
+			writeStarted = true
+			return fr.WriteData(st.id, last, chunk)
+		}, onSuccess)
 		if err != nil {
 			if !writeStarted {
 				// Credit was reserved before waiting for the shared writer. A

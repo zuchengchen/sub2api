@@ -260,6 +260,17 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		return
 	}
 
+	if account.IsOpenAIOAuth() && !account.IsOpenAIPersonalAccessToken() && !account.IsOpenAIAgentIdentity() &&
+		!strings.HasPrefix(strings.TrimSpace(account.GetOpenAIAccessToken()), "at-") {
+		updated, refreshErr := h.openaiOAuthService.RefreshStoredAccount(c.Request.Context(), account)
+		if refreshErr != nil {
+			response.ErrorFrom(c, refreshErr)
+			return
+		}
+		response.Success(c, dto.AccountFromService(updated))
+		return
+	}
+
 	// Use OpenAI OAuth service to refresh token
 	tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(c.Request.Context(), account)
 	if err != nil {
