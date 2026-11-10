@@ -94,6 +94,8 @@ type OpenAIImagesRequest struct {
 	Style              string
 	OutputCompression  *int
 	PartialImages      *int
+	FrameCount         *int
+	FrameDurationMS    *int
 	HasMask            bool
 	HasNativeOptions   bool
 	RequiredCapability OpenAIImagesCapability
@@ -253,6 +255,9 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 	if err := validateCompatibleImagesModel(req.Model); err != nil {
 		return nil, err
 	}
+	if err := validateOpenAIImagesAnimation(req); err != nil {
+		return nil, err
+	}
 	req.SizeTier = normalizeOpenAIImageSizeTier(req.Size)
 	req.RequiredCapability = classifyOpenAIImagesCapability(req)
 	return req, nil
@@ -293,7 +298,28 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 	req.Moderation = strings.TrimSpace(gjson.GetBytes(body, "moderation").String())
 	req.InputFidelity = strings.TrimSpace(gjson.GetBytes(body, "input_fidelity").String())
 	req.Style = strings.TrimSpace(gjson.GetBytes(body, "style").String())
-	req.HasMask = gjson.GetBytes(body, "mask").Exists()
+	mask := gjson.GetBytes(body, "mask")
+	req.HasMask = mask.Exists() && mask.Type != gjson.Null
+	for _, field := range []struct {
+		name string
+		dest **int
+	}{
+		{"frame_count", &req.FrameCount},
+		{"frame_duration_ms", &req.FrameDurationMS},
+	} {
+		value := gjson.GetBytes(body, field.name)
+		if !value.Exists() || value.Type == gjson.Null {
+			continue
+		}
+		if value.Type != gjson.Number {
+			return fmt.Errorf("%s must be an integer", field.name)
+		}
+		parsed, err := parseOpenAIImagesAnimationInteger(value.Raw, field.name)
+		if err != nil {
+			return err
+		}
+		*field.dest = parsed
+	}
 	if outputCompression := gjson.GetBytes(body, "output_compression"); outputCompression.Exists() {
 		if outputCompression.Type != gjson.Number {
 			return fmt.Errorf("invalid output_compression field type")
@@ -463,6 +489,17 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			}
 			req.PartialImages = &n
 			req.HasNativeOptions = true
+		case "frame_count", "frame_duration_ms":
+			n, err := parseOpenAIImagesAnimationInteger(value, name)
+			if err != nil {
+				return err
+			}
+			if name == "frame_count" {
+				req.FrameCount = n
+			} else {
+				req.FrameDurationMS = n
+			}
+			req.HasNativeOptions = true
 		default:
 			if isOpenAINativeImageOption(name) && value != "" {
 				req.HasNativeOptions = true
@@ -478,6 +515,38 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 
 func parseOpenAIImageDimensions(_ textproto.MIMEHeader) (int, int) {
 	return 0, 0
+}
+
+func parseOpenAIImagesAnimationInteger(value, name string) (*int, error) {
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be an integer", name)
+	}
+	return &n, nil
+}
+
+func validateOpenAIImagesAnimation(req *OpenAIImagesRequest) error {
+	if !IsGPTImageGenerationModel(req.Model) {
+		return nil
+	}
+	if !strings.EqualFold(req.OutputFormat, "gif") {
+		if req.FrameCount != nil || req.FrameDurationMS != nil {
+			return fmt.Errorf("frame_count and frame_duration_ms require output_format=gif")
+		}
+		return nil
+	}
+	if req.FrameCount != nil && (*req.FrameCount < 2 || *req.FrameCount > 16) {
+		return fmt.Errorf("frame_count must be between 2 and 16")
+	}
+	// Preserve the requested delay; the upstream handles GIF's 10 ms rounding
+	// and encoded delay cap. Do not silently clamp it in the gateway.
+	if req.FrameDurationMS != nil && *req.FrameDurationMS < 20 {
+		return fmt.Errorf("frame_duration_ms must be at least 20")
+	}
+	if req.Stream || (req.PartialImages != nil && *req.PartialImages != 0) || req.HasMask || req.OutputCompression != nil {
+		return fmt.Errorf("GIF output does not support streaming, partial images, masks, or output_compression")
+	}
+	return nil
 }
 
 func applyOpenAIImagesDefaults(req *OpenAIImagesRequest) {
@@ -594,6 +663,8 @@ func hasOpenAINativeImageOptions(exists func(path string) bool) bool {
 		"moderation",
 		"input_fidelity",
 		"partial_images",
+		"frame_count",
+		"frame_duration_ms",
 	} {
 		if exists(path) {
 			return true
@@ -604,7 +675,7 @@ func hasOpenAINativeImageOptions(exists func(path string) bool) bool {
 
 func isOpenAINativeImageOption(name string) bool {
 	switch strings.TrimSpace(strings.ToLower(name)) {
-	case "background", "quality", "style", "output_format", "output_compression", "moderation", "input_fidelity", "partial_images":
+	case "background", "quality", "style", "output_format", "output_compression", "moderation", "input_fidelity", "partial_images", "frame_count", "frame_duration_ms":
 		return true
 	default:
 		return false

@@ -84,6 +84,12 @@ func buildOpenAIImagesOAuthPayload(parsed *OpenAIImagesRequest, model string) ([
 	if parsed.PartialImages != nil {
 		payload["partial_images"] = *parsed.PartialImages
 	}
+	if parsed.FrameCount != nil {
+		payload["frame_count"] = *parsed.FrameCount
+	}
+	if parsed.FrameDurationMS != nil {
+		payload["frame_duration_ms"] = *parsed.FrameDurationMS
+	}
 	if parsed.Stream {
 		payload["stream"] = true
 	}
