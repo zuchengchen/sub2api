@@ -2,7 +2,7 @@ package service
 
 import "maps"
 
-const DefaultOpenAIOAuthConcurrency = 50
+const DefaultOpenAIOAuthConcurrency = 10
 
 // ResolveAccountCreateConcurrency preserves an explicit zero (unlimited), while
 // applying the OAuth default only when the caller omitted the field.

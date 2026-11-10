@@ -4015,9 +4015,9 @@ const handleConcurrencyInput = () => {
 
 // Change untouched defaults when entering or leaving GPT OAuth, while keeping
 // an explicitly entered concurrency across account-type changes.
-watch(isOpenAIOAuth, (enabled) => {
+watch(isOpenAIOAuth, () => {
   if (!concurrencyEdited.value) {
-    form.concurrency = enabled ? 50 : form.platform === 'grok' ? 1 : 10
+    form.concurrency = form.platform === 'grok' ? 1 : 10
   }
 })
 

@@ -20,17 +20,17 @@ func TestOpenAIOAuthCreateDefaultsPersistAndRespectOverrides(t *testing.T) {
 		wantBridge                  *bool
 		wantPolicy                  string
 	}{
-		{name: "omitted", wantConcurrency: 50, wantBridge: boolOverridePtr(true)},
+		{name: "omitted", wantConcurrency: 10, wantBridge: boolOverridePtr(true)},
 		{name: "explicit concurrency", concurrency: 7, wantConcurrency: 7, wantBridge: boolOverridePtr(true)},
 		{name: "explicit unlimited", provided: true, wantBridge: boolOverridePtr(true)},
-		{name: "disabled", extra: map[string]any{featureKeyCodexImageGenerationBridge: false}, wantConcurrency: 50, wantBridge: boolOverridePtr(false)},
-		{name: "inherit", extra: map[string]any{featureKeyCodexImageGenerationBridge: nil}, wantConcurrency: 50},
-		{name: "legacy disabled", extra: map[string]any{"codex_image_generation_bridge_enabled": false}, wantConcurrency: 50, wantBridge: boolOverridePtr(false)},
-		{name: "nested disabled", extra: map[string]any{PlatformOpenAI: map[string]any{featureKeyCodexImageGenerationBridge: false}}, wantConcurrency: 50, wantBridge: boolOverridePtr(false)},
-		{name: "nested legacy disabled", extra: map[string]any{PlatformOpenAI: map[string]any{"codex_image_generation_bridge_enabled": false}}, wantConcurrency: 50, wantBridge: boolOverridePtr(false)},
-		{name: "nested inherit", extra: map[string]any{PlatformOpenAI: map[string]any{featureKeyCodexImageGenerationBridge: nil}}, wantConcurrency: 50},
-		{name: "strip", extra: map[string]any{featureKeyCodexImageGenerationExplicitToolPolicy: "strip"}, wantConcurrency: 50, wantPolicy: "strip"},
-		{name: "nested strip", extra: map[string]any{PlatformOpenAI: map[string]any{featureKeyCodexImageGenerationExplicitToolPolicy: "strip"}}, wantConcurrency: 50, wantPolicy: "strip"},
+		{name: "disabled", extra: map[string]any{featureKeyCodexImageGenerationBridge: false}, wantConcurrency: 10, wantBridge: boolOverridePtr(false)},
+		{name: "inherit", extra: map[string]any{featureKeyCodexImageGenerationBridge: nil}, wantConcurrency: 10},
+		{name: "legacy disabled", extra: map[string]any{"codex_image_generation_bridge_enabled": false}, wantConcurrency: 10, wantBridge: boolOverridePtr(false)},
+		{name: "nested disabled", extra: map[string]any{PlatformOpenAI: map[string]any{featureKeyCodexImageGenerationBridge: false}}, wantConcurrency: 10, wantBridge: boolOverridePtr(false)},
+		{name: "nested legacy disabled", extra: map[string]any{PlatformOpenAI: map[string]any{"codex_image_generation_bridge_enabled": false}}, wantConcurrency: 10, wantBridge: boolOverridePtr(false)},
+		{name: "nested inherit", extra: map[string]any{PlatformOpenAI: map[string]any{featureKeyCodexImageGenerationBridge: nil}}, wantConcurrency: 10},
+		{name: "strip", extra: map[string]any{featureKeyCodexImageGenerationExplicitToolPolicy: "strip"}, wantConcurrency: 10, wantPolicy: "strip"},
+		{name: "nested strip", extra: map[string]any{PlatformOpenAI: map[string]any{featureKeyCodexImageGenerationExplicitToolPolicy: "strip"}}, wantConcurrency: 10, wantPolicy: "strip"},
 		{name: "OpenAI API key unchanged", accountType: AccountTypeAPIKey},
 		{name: "OpenAI setup token unchanged", accountType: AccountTypeSetupToken},
 		{name: "Claude OAuth unchanged", platform: PlatformAnthropic},
@@ -78,7 +78,7 @@ func TestOpenAIOAuthCreateDefaultsAuthenticationModesAndLegacyService(t *testing
 				Credentials: map[string]any{"auth_mode": mode},
 			})
 			require.NoError(t, err)
-			require.Equal(t, 50, created.Concurrency)
+			require.Equal(t, 10, created.Concurrency)
 			require.Equal(t, boolOverridePtr(true), created.CodexImageGenerationBridgeOverride())
 			zero := 0
 			explicit, err := NewAccountService(repo, nil).Create(context.Background(), CreateAccountRequest{
@@ -129,7 +129,7 @@ func TestOpenAIOAuthCreateDefaultsCRSCreateAndUpdate(t *testing.T) {
 			if tc.existing {
 				require.Equal(t, 8, account.Concurrency)
 			} else {
-				require.Equal(t, 50, account.Concurrency)
+				require.Equal(t, 10, account.Concurrency)
 			}
 			require.Equal(t, tc.wantBridge, account.CodexImageGenerationBridgeOverride())
 		})
