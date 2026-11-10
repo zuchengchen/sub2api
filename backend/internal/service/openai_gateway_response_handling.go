@@ -301,6 +301,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	var streamEarlyErr error
 	terminalFailurePending := false
 	failureDelivered := false
+	var imageErrorPayload []byte
+	defer func() {
+		if failureDelivered && sawFailedEvent && !clientDisconnected {
+			markOpenAIImageGenerationStreamError(c, imageErrorPayload)
+		}
+	}()
 	suppressCurrentEvent := false
 	var bareErrorPayload []byte
 	bareErrorAccountSideEffectsPending := false
@@ -562,6 +568,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			dataBytes := []byte(data)
 			eventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
+			if (eventType == "error" || eventType == "response.failed") && openAIImageGenerationUserError(dataBytes) != nil {
+				// API-key image tools need the same terminal failure contract as
+				// OAuth: a bare error must not become a generic handler fallback.
+				codexFailureTerminal = true
+			}
 			replayGuard.Observe(dataBytes, eventType)
 			if codexFailureTerminal && sawBareError && !sawResponseFailed &&
 				(eventType == "response.completed" || eventType == "response.done") {
@@ -602,6 +613,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 			cyberHit := false
 			if eventType == "response.failed" || eventType == "error" {
+				if openAIImageGenerationUserError(dataBytes) != nil {
+					imageErrorPayload = append(imageErrorPayload[:0], dataBytes...)
+				} else {
+					imageErrorPayload = nil
+				}
 				if codexFailureTerminal && eventType == "error" {
 					sawBareError = true
 					bareErrorPayload = append(bareErrorPayload[:0], dataBytes...)
@@ -1915,7 +1931,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		if cyberHit || (!openAIUsageHasTokens(usage) && partial.imageCount == 0) {
 			partial = nil
 		}
-		return partial, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
+		return partial, s.writeOpenAINonStreamingProtocolError(resp, c, msg, terminalPayload)
 	}
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 	if !ok && terminalOK {
@@ -2024,6 +2040,10 @@ func extractOpenAISSEErrorMessage(payload []byte) string {
 // stream that ended on a bare error. created_at and sequence_number are always
 // written: strict clients (grok-build, Codex) reject the frame without them.
 func buildOpenAIResponseFailedSSE(responseID, model string, createdAt int64, source []byte, fallbackMessage string) string {
+	return "event: response.failed\ndata: " + string(buildOpenAIResponseFailedEvent(responseID, model, createdAt, source, fallbackMessage)) + "\n\n"
+}
+
+func buildOpenAIResponseFailedEvent(responseID, model string, createdAt int64, source []byte, fallbackMessage string) []byte {
 	responseID = strings.TrimSpace(responseID)
 	if responseID == "" {
 		responseID = "resp_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -2049,6 +2069,15 @@ func buildOpenAIResponseFailedSSE(responseID, model string, createdAt int64, sou
 	errorBody := gin.H{"code": code, "message": message}
 	if errorType != "" {
 		errorBody["type"] = errorType
+	}
+	for _, field := range []string{"param", "moderation_details"} {
+		value := gjson.GetBytes(source, "error."+field)
+		if !value.Exists() {
+			value = gjson.GetBytes(source, "response.error."+field)
+		}
+		if value.Exists() {
+			errorBody[field] = json.RawMessage(value.Raw)
+		}
 	}
 	if createdAt <= 0 {
 		createdAt = time.Now().Unix()
@@ -2076,7 +2105,7 @@ func buildOpenAIResponseFailedSSE(responseID, model string, createdAt int64, sou
 			`,"response":{"object":"response","created_at":` + strconv.FormatInt(createdAt, 10) +
 			`,"status":"failed","output":[],"error":{"code":"upstream_error","message":"Upstream response failed"}}}`)
 	}
-	return "event: response.failed\ndata: " + string(payload) + "\n\n"
+	return payload
 }
 
 func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string, clientOutputStarted bool) ([]byte, bool) {
@@ -2147,7 +2176,12 @@ func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string
 	return updated, !bytes.Equal(updated, payload)
 }
 
-func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.Response, c *gin.Context, message string) error {
+func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.Response, c *gin.Context, message string, payload []byte) error {
+	if upstreamErr := openAIImageGenerationUserError(payload); upstreamErr != nil {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		writeOpenAIImageGenerationUserError(c, upstreamErr)
+		return upstreamErr
+	}
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
 		message = "Upstream returned an invalid non-streaming response"

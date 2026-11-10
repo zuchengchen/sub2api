@@ -121,7 +121,7 @@ func openAIImagesSSEErrorStatus(errType, code string) int {
 	case strings.Contains(errType, "not_found"), strings.Contains(code, "not_found"):
 		return http.StatusNotFound
 	case strings.Contains(errType, "invalid_request"),
-		errType == "image_generation_user_error",
+		isOpenAIImageGenerationUserErrorType(errType),
 		code == "moderation_blocked",
 		strings.Contains(code, "content_policy"),
 		strings.Contains(code, "policy_violation"),
@@ -320,6 +320,8 @@ func openAIImageOutputMIMEType(outputFormat string) string {
 		return "image/jpeg"
 	case "webp":
 		return "image/webp"
+	case "gif":
+		return "image/gif"
 	default:
 		return "image/png"
 	}
@@ -423,6 +425,12 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	}
 	if parsed.PartialImages != nil {
 		tool, _ = sjson.SetBytes(tool, "partial_images", *parsed.PartialImages)
+	}
+	if parsed.FrameCount != nil {
+		tool, _ = sjson.SetBytes(tool, "frame_count", *parsed.FrameCount)
+	}
+	if parsed.FrameDurationMS != nil {
+		tool, _ = sjson.SetBytes(tool, "frame_duration_ms", *parsed.FrameDurationMS)
 	}
 
 	maskImageURL := strings.TrimSpace(parsed.MaskImageURL)

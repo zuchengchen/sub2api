@@ -1119,6 +1119,33 @@ readLoop:
 
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
+			if imageErr := openAIImageGenerationUserError(message); imageErr != nil {
+				// Preview/format and other image user errors cannot be repaired by
+				// reconnecting or switching credentials. Keep their structured cause.
+				lease.MarkBroken()
+				if deltaApplied && stateStore != nil && sessionHash != "" {
+					stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+				}
+				s.recordOpenAIStreamUpstreamError(c, account, false, lease.HandshakeHeader("x-request-id"), "ws_error", message, imageErr.clientMessage())
+				if !clientDisconnected {
+					if reqStream {
+						MarkResponseCommitted(c)
+						markOpenAIWSClientVisibleFailure(c, eventType, message)
+						flushBufferedStreamEvents(eventType)
+						emitStreamMessage(clientMessage, true)
+						if eventType == "error" && !clientDisconnected {
+							emitStreamMessage(buildOpenAIResponseFailedEvent(responseID, originalModel, 0, message, imageErr.clientMessage()), true)
+						}
+					} else {
+						writeOpenAIImageGenerationUserError(c, imageErr)
+					}
+				}
+				upstreamTerminalEvent = eventType
+				if upstreamProgress() {
+					return partialResultWithUsage(), imageErr
+				}
+				return nil, imageErr
+			}
 		}
 
 		// A standalone capacity terminal can precede any semantic output, just
