@@ -19,6 +19,10 @@ type openAIPromptCachePreparation struct {
 // automatic path keeps implicit conversation caching enabled and adds one
 // explicit boundary after the stable developer instructions.
 func prepareOpenAIGPT56PromptCaching(body []byte, model string, auto bool) ([]byte, openAIPromptCachePreparation, error) {
+	return prepareOpenAIPromptCaching(body, model, auto, false)
+}
+
+func prepareOpenAIPromptCaching(body []byte, model string, auto, codexTTL bool) ([]byte, openAIPromptCachePreparation, error) {
 	result := openAIPromptCachePreparation{}
 	if !isOpenAIGPT56OrLaterModel(model) || len(body) == 0 {
 		return body, result, nil
@@ -36,6 +40,9 @@ func prepareOpenAIGPT56PromptCaching(body []byte, model string, auto bool) ([]by
 	canEnsureStableBoundary := hasStablePrefix && (!hasSystem || systemCanBeCanonicalized)
 	rawOptions, optionsPresent := request["prompt_cache_options"]
 	mode, optionsValid := openAIPromptCacheOptionsMode(rawOptions)
+	if codexTTL && validCodexPromptCacheOptions(rawOptions) {
+		mode, optionsValid = openAIImplicitPromptCacheMode, true
+	}
 	modified := false
 	if optionsPresent && !optionsValid {
 		delete(request, "prompt_cache_options")

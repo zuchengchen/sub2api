@@ -107,7 +107,9 @@ func (c *codexWireClientConn) Close() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
-	_ = c.conn.Close()
+	// Codex Responses drops its WebSocket owner without sending Close.
+	// Live has a separate adapter that explicitly sends code 1000.
+	_ = c.conn.CloseNow()
 	return nil
 }
 

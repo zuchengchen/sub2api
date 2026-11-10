@@ -1,12 +1,15 @@
 package service
 
 import (
+	"crypto/sha256"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // openAICodexTurnStateHeader 是 Codex 的回合状态头。上游在响应头中铸造该
@@ -18,11 +21,16 @@ const openAICodexTurnStateHeader = "x-codex-turn-state"
 // turn-state blob 是上游在"出站身份"（含 #5553 指纹收敛改写后的
 // installation/session/thread 标识）下铸造的，同账号回放自洽；跨账号回放
 // （failover 换号后客户端仍回带旧账号的 blob）是代理链独有、真实 Codex
-// 永远不会产生的矛盾信号。溯源表记录每个下游会话最近一次铸造该 blob 的
-// 账号，出站守卫据此剥离已知异账号的回带值。
+// 永远不会产生的矛盾信号。溯源表按下游会话和实际 blob 的摘要记录账号，
+// 并发线程或较晚提交的响应不得覆盖另一 blob 的来源。
 type openAICodexTurnStateOrigin struct {
-	accountID int64
-	expiresAt time.Time
+	accountID  int64
+	oauthOwner openAIOAuthOwner
+	expiresAt  time.Time
+}
+
+func openAICodexTurnStateOriginKey(seed, state string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(seed + "\x00" + state))
 }
 
 // openAICodexTurnStateSeed 返回溯源表键：API Key + 客户端原始会话标识。
@@ -57,7 +65,7 @@ func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account
 		return
 	}
 	c.Writer.Header().Set(canonical, state)
-	s.noteOpenAICodexTurnStateProvenance(c, account)
+	s.noteOpenAICodexTurnStateProvenance(c, account, state)
 }
 
 // stageOpenAICodexTurnState 将上游 turn-state 暂存到延迟提交的响应头集合
@@ -90,7 +98,7 @@ func (s *OpenAIGatewayService) noteStagedOpenAICodexTurnStateCommitted(c *gin.Co
 	if staged == nil || strings.TrimSpace(staged.Get(openAICodexTurnStateHeader)) == "" {
 		return
 	}
-	s.noteOpenAICodexTurnStateProvenance(c, account)
+	s.noteOpenAICodexTurnStateProvenance(c, account, extractOpenAICodexTurnState(staged))
 }
 
 func extractOpenAICodexTurnState(upstream http.Header) string {
@@ -100,20 +108,45 @@ func extractOpenAICodexTurnState(upstream http.Header) string {
 	return strings.TrimSpace(upstream.Get(openAICodexTurnStateHeader))
 }
 
-// noteOpenAICodexTurnStateProvenance 记录（下游会话 → 铸造账号）。
-func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context, account *Account) {
-	if s == nil || account == nil || account.ID <= 0 {
+// noteOpenAICodexTurnStateProvenance retains no raw opaque state in its map.
+func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context, account *Account, state string) {
+	if s == nil || account == nil || account.ID <= 0 || state == "" {
 		return
 	}
 	seed := openAICodexTurnStateSeed(c)
 	if seed == "" {
 		return
 	}
-	s.openaiCodexTurnStateOrigins.Store(seed, openAICodexTurnStateOrigin{
-		accountID: account.ID,
-		expiresAt: time.Now().Add(s.openAIWSSessionStickyTTL()),
+	s.openaiCodexTurnStateOrigins.Store(openAICodexTurnStateOriginKey(seed, state), openAICodexTurnStateOrigin{
+		accountID:  account.ID,
+		oauthOwner: openAIOAuthOwnerForAccount(account),
+		expiresAt:  time.Now().Add(s.openAIWSSessionStickyTTL()),
 	})
 	s.sweepOpenAICodexTurnStateOrigins()
+}
+
+// Codex learns WebSocket turn state from response.metadata.headers. Register
+// it only after this event was successfully delivered to the downstream peer.
+func (s *OpenAIGatewayService) noteOpenAICodexTurnStateEvent(c *gin.Context, account *Account, payload []byte) {
+	if gjson.GetBytes(payload, "type").String() != "response.metadata" {
+		return
+	}
+	headers := gjson.GetBytes(payload, "headers")
+	if !headers.IsObject() {
+		return
+	}
+	headers.ForEach(func(key, value gjson.Result) bool {
+		if !strings.EqualFold(key.String(), openAICodexTurnStateHeader) {
+			return true
+		}
+		for value.IsArray() {
+			value = value.Get("0")
+		}
+		if value.Type == gjson.String {
+			s.noteOpenAICodexTurnStateProvenance(c, account, strings.TrimSpace(value.Str))
+		}
+		return false
+	})
 }
 
 // guardOpenAICodexTurnStateEcho 出站守卫：客户端回带的 turn-state 若已知由
@@ -123,29 +156,49 @@ func (s *OpenAIGatewayService) guardOpenAICodexTurnStateEcho(c *gin.Context, acc
 	if s == nil || h == nil || account == nil {
 		return
 	}
-	if strings.TrimSpace(h.Get(openAICodexTurnStateHeader)) == "" {
-		return
+	state := strings.TrimSpace(h.Get(openAICodexTurnStateHeader))
+	if s.openAICodexTurnStateHasDifferentOwner(c, account, state) {
+		h.Del(openAICodexTurnStateHeader)
+	}
+}
+
+// Native WebSocket frames carry state in client_metadata instead of the
+// Upgrade header. Apply the same ownership check after filling header fallback.
+func (s *OpenAIGatewayService) guardOpenAICodexTurnStatePayload(c *gin.Context, account *Account, payload []byte) ([]byte, error) {
+	path := "client_metadata." + openAICodexTurnStateHeader
+	state := gjson.GetBytes(payload, path)
+	if state.Type == gjson.String && s.openAICodexTurnStateHasDifferentOwner(c, account, strings.TrimSpace(state.Str)) {
+		return sjson.DeleteBytes(payload, path)
+	}
+	return payload, nil
+}
+
+func (s *OpenAIGatewayService) openAICodexTurnStateHasDifferentOwner(c *gin.Context, account *Account, state string) bool {
+	if s == nil || account == nil {
+		return false
+	}
+	if state == "" {
+		return false
 	}
 	seed := openAICodexTurnStateSeed(c)
 	if seed == "" {
-		return
+		return false
 	}
-	raw, ok := s.openaiCodexTurnStateOrigins.Load(seed)
+	key := openAICodexTurnStateOriginKey(seed, state)
+	raw, ok := s.openaiCodexTurnStateOrigins.Load(key)
 	if !ok {
-		return
+		return false
 	}
 	origin, ok := raw.(openAICodexTurnStateOrigin)
 	if !ok {
-		s.openaiCodexTurnStateOrigins.Delete(seed)
-		return
+		s.openaiCodexTurnStateOrigins.Delete(key)
+		return false
 	}
 	if !origin.expiresAt.IsZero() && time.Now().After(origin.expiresAt) {
-		s.openaiCodexTurnStateOrigins.Delete(seed)
-		return
+		s.openaiCodexTurnStateOrigins.Delete(key)
+		return false
 	}
-	if origin.accountID != account.ID {
-		h.Del(openAICodexTurnStateHeader)
-	}
+	return origin.accountID != account.ID || origin.oauthOwner != openAIOAuthOwnerForAccount(account)
 }
 
 // sweepOpenAICodexTurnStateOrigins 机会式清扫过期溯源记录：每 256 次写入

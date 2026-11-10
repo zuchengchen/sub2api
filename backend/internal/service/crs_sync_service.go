@@ -608,12 +608,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				continue
 			}
 			// 🔄 Refresh OAuth token after creation
-			if refreshedCreds := s.refreshOAuthToken(ctx, account); refreshedCreds != nil {
-				previous := snapshotOAuthRefreshAccount(account)
-				if err := persistAccountCredentials(ctx, s.accountRepo, account, refreshedCreds); err == nil {
-					s.openaiOAuthService.AuthCredentialsPersisted(ctx, previous)
-				}
-			}
+			s.refreshStoredOpenAIAccount(ctx, account)
 			item.Action = "created"
 			result.Created++
 			result.Items = append(result.Items, item)
@@ -642,12 +637,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 
 		// 🔄 Refresh OAuth token after update
-		if refreshedCreds := s.refreshOAuthToken(ctx, existing); refreshedCreds != nil {
-			previous := snapshotOAuthRefreshAccount(existing)
-			if err := persistAccountCredentials(ctx, s.accountRepo, existing, refreshedCreds); err == nil {
-				s.openaiOAuthService.AuthCredentialsPersisted(ctx, previous)
-			}
-		}
+		s.refreshStoredOpenAIAccount(ctx, existing)
 
 		item.Action = "updated"
 		result.Updated++
@@ -1055,6 +1045,24 @@ func crsExportAccounts(ctx context.Context, client *http.Client, baseURL, adminT
 		return nil, errors.New("crs export failed: " + msg)
 	}
 	return &parsed, nil
+}
+
+// The imported row is already durable. Refresh it through the same coordinator
+// as request/background paths; a concurrent credential or proxy edit wins CAS.
+func (s *CRSSyncService) refreshStoredOpenAIAccount(ctx context.Context, account *Account) {
+	if s.openaiOAuthService == nil {
+		return
+	}
+	if isStoredOpenAIManagedOAuth(account) {
+		_, _ = s.openaiOAuthService.RefreshStoredAccount(ctx, account)
+		return
+	}
+	if refreshed := s.refreshOAuthToken(ctx, account); refreshed != nil {
+		previous := snapshotOAuthRefreshAccount(account)
+		if err := persistAccountCredentials(ctx, s.accountRepo, account, refreshed); err == nil {
+			s.openaiOAuthService.AuthCredentialsPersisted(ctx, previous)
+		}
+	}
 }
 
 // refreshOAuthToken attempts to refresh OAuth token for a synced account

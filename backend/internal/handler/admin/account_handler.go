@@ -1408,6 +1408,26 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
 
+	// Ordinary OpenAI OAuth refresh shares request/background locks and success
+	// CAS. PAT/agent validation and every other provider retain their own path.
+	if account.IsOpenAIOAuth() && !account.IsOpenAIPersonalAccessToken() && !account.IsOpenAIAgentIdentity() &&
+		!strings.HasPrefix(strings.TrimSpace(account.GetOpenAIAccessToken()), "at-") {
+		updated, err := h.openaiOAuthService.RefreshStoredAccount(ctx, account)
+		if err != nil {
+			service.AfterAccountCommit(ctx, func(committed context.Context) {
+				h.adminService.EnsureOpenAIPrivacy(committed, account)
+			})
+			return nil, "", err
+		}
+		service.AfterAccountCommit(ctx, func(committed context.Context) {
+			if h.tokenCacheInvalidator != nil {
+				_ = h.tokenCacheInvalidator.InvalidateToken(committed, updated)
+			}
+			h.adminService.EnsureOpenAIPrivacy(committed, updated)
+		})
+		return updated, "", nil
+	}
+
 	var newCredentials map[string]any
 
 	if account.IsOpenAI() {

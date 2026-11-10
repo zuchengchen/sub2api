@@ -185,9 +185,9 @@ func nativeJSONValue(d *json.Decoder, depth int) (any, error) {
 }
 func nativeParameters(body map[string]any) map[string]any {
 	out := map[string]any{}
-	// Fixed bfdbf01 core/client.rs:423-493. Metadata/stream_options are not
+	// Fixed e54a5713 core/client.rs:429-499. Metadata/stream_options are not
 	// semantic equality fields; no user/tool value is normalized here.
-	for _, key := range []string{"model", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "store", "stream", "include", "service_tier", "prompt_cache_key", "text"} {
+	for _, key := range []string{"model", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "store", "stream", "include", "service_tier", "prompt_cache_key", "prompt_cache_options", "text"} {
 		if value, ok := body[key]; ok {
 			out[key] = value
 		}

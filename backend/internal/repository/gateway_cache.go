@@ -420,6 +420,7 @@ func (c *gatewayCache) SaveLiveCall(ctx context.Context, record *service.LiveCal
 		"user_agent":       record.UserAgent,
 		"ip_address":       record.IPAddress,
 		"inbound_endpoint": record.InboundEndpoint,
+		"sideband_route":   record.SidebandRoute,
 		"attestation":      record.AttestationCiphertext,
 		"upstream_context": record.UpstreamContextCiphertext,
 	}
@@ -462,6 +463,7 @@ func (c *gatewayCache) GetLiveCall(ctx context.Context, callHash string) (*servi
 		UserAgent:                 values["user_agent"],
 		IPAddress:                 values["ip_address"],
 		InboundEndpoint:           values["inbound_endpoint"],
+		SidebandRoute:             values["sideband_route"],
 		AttestationCiphertext:     values["attestation"],
 		UpstreamContextCiphertext: values["upstream_context"],
 	}, nil

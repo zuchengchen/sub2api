@@ -208,6 +208,7 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 	var mu sync.Mutex
 	routes := map[string]int{}
 	var ingressObservations []gatewayIngressObservation
+	var fingerprintIngress []gatewayFingerprintIngress
 	ingressSequence := 0
 	var routeErrors []string
 	recordError := func(err error) { mu.Lock(); routeErrors = append(routeErrors, err.Error()); mu.Unlock() }
@@ -265,7 +266,7 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 		ID: id, Name: "synthetic-codexgolden", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true, Concurrency: 2,
 		ProxyID: &p.ID, Proxy: p,
 		Credentials: map[string]any{"access_token": fakeJWT(map[string]any{"exp": 4102444800, "https://api.openai.com/auth": goldenAuthClaims()}), "refresh_token": "rt-golden", "chatgpt_account_id": "acct-golden", "chatgpt_user_id": "user-golden", "expires_at": float64(4102444800)},
-		Extra:       gatewaySyntheticModelPolicyExtra(map[string]any{"codex_client_family": "exec", "codex_workspace_cwd": sb.cwd, "codex_sandbox_mode": "read-only", "openai_oauth_responses_websockets_v2_mode": "passthrough", "openai_oauth_responses_websockets_v2_enabled": true, "openai_passthrough": true}),
+		Extra:       gatewaySyntheticModelPolicyExtra(gatewayFingerprintExtra(map[string]any{"codex_client_family": "exec", "codex_workspace_cwd": sb.cwd, "codex_sandbox_mode": "read-only", "openai_oauth_responses_websockets_v2_mode": "passthrough", "openai_oauth_responses_websockets_v2_enabled": true, "openai_passthrough": true})),
 	}
 	accounts := &gatewayAccounts{account: account}
 	cache := &gatewayTokenCache{}
@@ -356,6 +357,15 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 			conn.SetReadLimit(service.ResolveOpenAIWSClientReadLimitBytes(cfg))
 			_, first, err := service.ReadOpenAIWSClientMessage(r.Context(), conn, 30*time.Second, coderws.StatusPolicyViolation, "missing first response.create message")
 			if err == nil {
+				entry, captureErr := gatewayIngressFingerprint("ws", r.Header, first)
+				if captureErr != nil {
+					recordError(captureErr)
+				} else {
+					mu.Lock()
+					entry.Sequence = len(fingerprintIngress) + 1
+					fingerprintIngress = append(fingerprintIngress, entry)
+					mu.Unlock()
+				}
 				var token string
 				token, _, err = svc.GetAccessToken(r.Context(), acc)
 				if err == nil {
@@ -376,6 +386,15 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 		}
 		body, err := requestbody.ReadRequestBodyWithPrealloc(r)
 		if err == nil {
+			entry, captureErr := gatewayIngressFingerprint("http", r.Header, body)
+			if captureErr != nil {
+				recordError(captureErr)
+			} else {
+				mu.Lock()
+				entry.Sequence = len(fingerprintIngress) + 1
+				fingerprintIngress = append(fingerprintIngress, entry)
+				mu.Unlock()
+			}
 			_, err = svc.Forward(r.Context(), c, acc, body)
 		}
 		if err != nil {
@@ -403,6 +422,7 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 	writeJSON(filepath.Join(out, "raw", sc.Name+"-tls.json"), hellos.export())
 	writeJSON(filepath.Join(out, "raw", sc.Name+"-tls-connections.json"), up.tlsConnections())
 	writeJSON(filepath.Join(out, "raw", sc.Name+"-h2-connection-ends.json"), up.h2ConnectionEnds())
+	writeJSON(filepath.Join(out, "raw", sc.Name+"-ws-connections.json"), up.wsConnections())
 	if err := up.validateModelsBarrier(); err != nil {
 		return nil, nil, nil, err
 	}
@@ -414,8 +434,15 @@ func recordGatewayScenario(bin string, sc scenario, serverTLS *tls.Config, caPat
 		return recs, hellos.export(), nil, err
 	}
 	mu.Lock()
+	fingerprintEvidence := gatewayFingerprintEvidence{Contract: gatewayFingerprintContract, Mode: string(account.GetCodexFingerprintMode()), Seed: account.GetExtraString("codex_fingerprint_seed"), Ingress: append([]gatewayFingerprintIngress(nil), fingerprintIngress...)}
 	provenance := map[string]any{"scenario": sc.Name, "candidate_ingress_mode": ingressMode, "gateway_config_sha256": configHash, "ingress_observations": ingressObservations, "upstream_upgrade_426_responses": up.upgrade426Responses.Load(), "service_routes": routes, "route_errors": routeErrors, "cli_exit_success": runErr == nil, "context_error": fmt.Sprint(ctx.Err()), "synthetic_account_id": id, "model_policy_source": "explicit_synthetic_astra_health_snapshot", "model_policy_bypassed": false, "credential_writes": accounts.credentialWrites, "proxy_targets": proxy.targets, "proxy_denied": proxy.denied}
 	mu.Unlock()
+	fingerprintProof, fingerprintErr := validateGatewayFingerprintExecution(fingerprintEvidence, recs)
+	fingerprintEvidence.Execution = fingerprintProof
+	provenance["fingerprint_evidence"] = fingerprintEvidence
+	if fingerprintErr != nil {
+		return recs, hellos.export(), provenance, fingerprintErr
+	}
 	if err := validateGatewayModeEvidence(captureMetadata{GatewayMode: ingressMode, GatewayConfigHash: configHash}, gatewayModeEvidence{Scenario: sc.Name, Upgrade426Responses: up.upgrade426Responses.Load(), Mode: ingressMode, ConfigHash: configHash, Observations: ingressObservations}, routes["WS /backend-api/codex/responses"]); err != nil {
 		return recs, hellos.export(), provenance, err
 	}

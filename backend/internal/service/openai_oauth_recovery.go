@@ -24,7 +24,7 @@ type openAIRefreshRejection struct {
 func openAIRefreshFingerprint(account *Account) [sha256.Size]byte {
 	// Do not retain raw tokens in failure state. Include auth identity as well as
 	// both tokens so reauthorization, even for the same account, restores access.
-	value, _ := json.Marshal([]string{account.Platform, account.Type, account.GetCredential("access_token"), account.GetCredential("refresh_token"), account.GetCredential("client_id"), account.GetCredential("chatgpt_account_id"), account.GetCredential(openAIAuthModeCredentialKey), account.GetCredential(openAIAuthModeLegacyCredentialKey)})
+	value, _ := json.Marshal([]string{account.Platform, account.Type, account.GetCredential("access_token"), account.GetCredential("refresh_token"), account.GetCredential("client_id"), account.GetCredential("chatgpt_account_id"), account.GetChatGPTUserID(), account.GetCredential(openAIAuthModeCredentialKey), account.GetCredential(openAIAuthModeLegacyCredentialKey)})
 	return sha256.Sum256(value)
 }
 
@@ -60,6 +60,7 @@ type openAIUnauthorizedRefreshExecutor struct {
 	OAuthRefreshExecutor
 	rejectedToken string
 	accountID     string
+	owner         openAIOAuthOwner
 }
 
 func (e *openAIUnauthorizedRefreshExecutor) AuthCredentialsPersisted(ctx context.Context, previous *Account) {
@@ -71,7 +72,7 @@ func (e *openAIUnauthorizedRefreshExecutor) AuthCredentialsPersisted(ctx context
 }
 
 func (e *openAIUnauthorizedRefreshExecutor) CanRefresh(account *Account) bool {
-	return canRecoverOpenAIOAuth(account) && e.OAuthRefreshExecutor.CanRefresh(account) && account.GetCredential("chatgpt_account_id") == e.accountID
+	return canRecoverOpenAIOAuth(account) && e.OAuthRefreshExecutor.CanRefresh(account) && account.GetCredential("chatgpt_account_id") == e.accountID && openAIOAuthOwnerForAccount(account) == e.owner
 }
 
 func (e *openAIUnauthorizedRefreshExecutor) NeedsRefresh(account *Account, _ time.Duration) bool {
@@ -88,7 +89,7 @@ func (p *OpenAITokenProvider) RefreshAfterUnauthorized(ctx context.Context, acco
 	if p == nil || p.refreshAPI == nil || p.executor == nil || !canRecoverOpenAIOAuth(account) || strings.TrimSpace(rejectedAccessToken) == "" {
 		return "", errors.New("OpenAI OAuth unauthorized recovery is unavailable")
 	}
-	executor := &openAIUnauthorizedRefreshExecutor{OAuthRefreshExecutor: p.executor, rejectedToken: rejectedAccessToken, accountID: account.GetCredential("chatgpt_account_id")}
+	executor := &openAIUnauthorizedRefreshExecutor{OAuthRefreshExecutor: p.executor, rejectedToken: rejectedAccessToken, accountID: account.GetCredential("chatgpt_account_id"), owner: openAIOAuthOwnerForAccount(account)}
 	ctx = openai.WithCodexRefreshReason(ctx, "unauthorized_recovery")
 	result, err := p.refreshAPI.RefreshIfNeeded(withOAuthRefreshRequestPath(ctx), account, executor, 0)
 	if err != nil {
@@ -100,6 +101,9 @@ func (p *OpenAITokenProvider) RefreshAfterUnauthorized(ctx context.Context, acco
 	}
 	if result == nil || result.LockHeld || result.Account == nil {
 		return "", errors.New("OpenAI OAuth refresh is already in progress")
+	}
+	if !sameOpenAIOAuthOwner(account, result.Account) {
+		return "", errors.New("OpenAI OAuth credential owner changed")
 	}
 	token := result.Account.GetOpenAIAccessToken()
 	if strings.TrimSpace(token) == "" {
@@ -126,7 +130,7 @@ func (p *OpenAITokenProvider) RecordUnauthorizedAfterRefresh(ctx context.Context
 	}
 	defer mu.Unlock()
 	latest, err := p.accountRepo.GetByID(ctx, account.ID)
-	if err != nil || latest == nil || latest.ID != account.ID || !canRecoverOpenAIOAuth(latest) || latest.GetCredential("chatgpt_account_id") != account.GetCredential("chatgpt_account_id") || latest.GetOpenAIAccessToken() != rejectedAccessToken {
+	if err != nil || latest == nil || !sameOpenAIOAuthOwner(account, latest) || !canRecoverOpenAIOAuth(latest) || latest.GetOpenAIAccessToken() != rejectedAccessToken {
 		return
 	}
 	p.refreshAPI.recordOpenAIRefreshFailure(latest, &openai.RefreshTokenError{StatusCode: http.StatusUnauthorized, Permanent: true})

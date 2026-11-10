@@ -30,6 +30,11 @@ func codexTestJWTExpiry(exp int64) string {
 	return "e30." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, exp))) + ".signature"
 }
 
+func codexTestJWTOwner(exp int64, workspace, user string) string {
+	payload := fmt.Sprintf(`{"exp":%d,"https://api.openai.com/auth":{"chatgpt_account_id":%q,"chatgpt_user_id":%q}}`, exp, workspace, user)
+	return "e30." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".signature"
+}
+
 func TestOpenAIAutomaticRefreshUsesOfficialWindow(t *testing.T) {
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"refresh_token": "synthetic-refresh", "expires_at": time.Now().Add(time.Minute).Format(time.RFC3339)}}
 	r := &OpenAITokenRefresher{}

@@ -104,7 +104,7 @@ func newQuotaRedirectingFactory(srv *httptest.Server) PrivacyClientFactory {
 func TestResetCreditUsesAccountCredentials(t *testing.T) {
 	account := &Account{
 		ID: 204, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		Credentials: map[string]any{"chatgpt_account_id": "account-reset"},
+		Credentials: map[string]any{"access_token": "fake-token", "chatgpt_account_id": "account-reset"},
 	}
 	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
 	tokenCache := &stubQuotaTokenCache{tokens: map[string]string{OpenAITokenCacheKey(account): "fake-token"}}
@@ -133,7 +133,7 @@ func TestResetCreditUsesAccountCredentials(t *testing.T) {
 func TestResetCreditTargetedSendsStableCreditAndRedeemIDs(t *testing.T) {
 	account := &Account{
 		ID: 203, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		Credentials: map[string]any{"chatgpt_account_id": "account-targeted"},
+		Credentials: map[string]any{"access_token": "fake-token", "chatgpt_account_id": "account-targeted"},
 	}
 	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
 	tokenCache := &stubQuotaTokenCache{tokens: map[string]string{OpenAITokenCacheKey(account): "fake-token"}}
@@ -280,6 +280,7 @@ func TestPrepareUpstreamCallUsesAccountCredentials(t *testing.T) {
 		Type:     AccountTypeOAuth,
 		Status:   StatusActive,
 		Credentials: map[string]any{
+			"access_token":       "fake-access-token",
 			"chatgpt_account_id": "account-quota",
 		},
 	}
@@ -453,6 +454,7 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 		Status:   StatusActive,
 		Credentials: map[string]any{
 			"chatgpt_account_id": "org-parent123",
+			"access_token":       "fake-token",
 		},
 	}
 	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{100: account}}
@@ -525,6 +527,7 @@ func TestQueryUsageResetCreditDetails401NonFatal(t *testing.T) {
 		Status:   StatusActive,
 		Credentials: map[string]any{
 			"chatgpt_account_id": "org-parent123",
+			"access_token":       "fake-token",
 		},
 	}
 	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{100: account}}

@@ -94,7 +94,7 @@ embedded frontend before compiling the server, per repository instructions.
 
 ## Evidence and comparison
 
-New captures use `recording_contract=1`. Metadata records version, source commit,
+New captures use `recording_contract=2`. Metadata records version, source commit,
 executable/catalog hashes, model/reasoning settings, TLS mode, effective fixture
 configuration and CA hashes. Native and custom-CA captures cannot be mixed.
 Reference traces are automatically retained in `traces/`, alongside raw
@@ -103,6 +103,21 @@ CLI/tool children. The comparator verifies retained trace hashes and parses the
 traces again, including split per-PID `unfinished`/`resumed` calls. Missing,
 truncated, unreadable or non-local traces fail. These files are local evidence,
 not source artifacts to commit.
+
+Contract 2 also binds every scenario's raw WebSocket frame/termination sidecar.
+The comparator checks that frame sequences explain the captured messages, retains
+interleaved ping/pong and close payloads, and compares connection termination.
+A clean EOF between messages is distinct from a completed close handshake;
+neither controls nor a close frame are invented when absent. Missing, truncated,
+unreadable, or inconsistent sidecars invalidate the capture. Data-frame digests
+and lengths remain integrity observations; message semantics and dynamic-ID
+relations are checked by the existing request comparator.
+
+Every upgrade attempt also retains the fixture's actual complete response write
+(101, 401, or 426), bound to the observed request and connection. Successful
+idle connections require lifecycle evidence even when they sent no messages.
+Failed upgrade attempts cannot claim WS frames; their status and attempt order
+remain part of comparison.
 
 HTTP/2 observations retain actual ordered headers, SETTINGS, connection windows,
 stream IDs and request indexes. An internal parser marker binds each handler to
@@ -150,6 +165,15 @@ through that entry. Missing, contradictory or incomplete mode receipts invalidat
 the capture before wire comparison. A matching configuration label alone is not
 proof that the expected mode ran, and a mode-specific wire difference remains a
 product difference to resolve.
+
+The candidate account explicitly uses full fingerprint mode and a public
+synthetic seed. Each scenario retains an identity-only ingress snapshot and
+binds it with the raw outgoing capture. Capture and comparison both recompute
+the installation identity derived from that seed, verify session rewriting,
+and check header/body identity relationships. Stored configuration labels and
+counters cannot substitute for observed transformations. Optional official
+headers remain optional; a reused WS handshake's turn/window metadata is not
+assumed to describe every later frame.
 
 The gateway may retain the requested `ctx_pool` mode after a real upstream 426
 has disabled WS for that session. A later WS ingress can then execute the

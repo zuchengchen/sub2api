@@ -49,6 +49,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	if err := s.validateOpenAIResponseAuthOwner(ctx, c, account, openAIWSPayloadString(reqBody, "previous_response_id")); err != nil {
+		writeOpenAIResponseAuthOwnerError(c, err)
+		return nil, err
+	}
+	defer s.watchOpenAICodexTurnStateCommit(c, account)()
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
@@ -113,6 +118,13 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	clientMetadata, _ := payload["client_metadata"].(map[string]any)
+	if state, ok := clientMetadata[openAICodexTurnStateHeader].(string); ok &&
+		s.openAICodexTurnStateHasDifferentOwner(c, account, strings.TrimSpace(state)) {
+		delete(clientMetadata, openAICodexTurnStateHeader)
+	}
+	if s.openAICodexTurnStateHasDifferentOwner(c, account, turnState) {
+		turnState = ""
+	}
 	if !account.IsOpenAIOAuthLike() {
 		setOpenAIWSTurnMetadata(payload, turnMetadata)
 	} else if _, exists := clientMetadata[openAIWSTurnMetadataHeader]; !exists && turnMetadata != "" {
@@ -1358,6 +1370,9 @@ readLoop:
 
 	if responseID != "" && stateStore != nil {
 		ttl := s.openAIWSResponseStickyTTL()
+		if successfulOpenAIResponseAuthOwnerTerminal(upstreamTerminalEvent) {
+			s.bindOpenAIResponseAuthOwner(ctx, c, account, responseID)
+		}
 		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 		stateStore.BindResponseConn(responseID, lease.ConnID(), ttl)
 	}

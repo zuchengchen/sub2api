@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -119,6 +120,11 @@ func compareMain(args []string) int {
 			}
 		}
 		if gatewayCapture {
+			if err := readGatewayFingerprintEvidence(*candidate, strings.TrimSuffix(name, ".jsonl"), candidateMeta, candRecords); err != nil {
+				fmt.Fprintln(os.Stderr, "compare: missing/invalid seeded full fingerprint evidence:", err)
+				invalid++
+				continue
+			}
 			if err := readGatewayModeEvidence(*candidate, strings.TrimSuffix(name, ".jsonl"), candidateMeta); err != nil {
 				fmt.Fprintln(os.Stderr, "compare: missing/invalid gateway ingress evidence:", err)
 				invalid++
@@ -158,6 +164,15 @@ func compareMain(args []string) int {
 					}
 				}
 			}
+		}
+		baseWS, baseWSErr := readWSLifecycle(*golden, strings.TrimSuffix(name, ".jsonl"), baseRecords)
+		candidateWS, candidateWSErr := readWSLifecycle(*candidate, strings.TrimSuffix(name, ".jsonl"), candRecords)
+		if baseWSErr != nil || candidateWSErr != nil {
+			fmt.Fprintf(os.Stderr, "compare: invalid WS lifecycle evidence: reference=%v candidate=%v\n", baseWSErr, candidateWSErr)
+			invalid++
+		} else if !reflect.DeepEqual(baseWS, candidateWS) {
+			fmt.Fprintf(os.Stderr, "compare: %s: WS lifecycle differs\n", name)
+			diffs++
 		}
 		diffs += compareRecords(name, baseRecords, candRecords, *verbose)
 	}

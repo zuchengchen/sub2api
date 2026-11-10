@@ -20,7 +20,7 @@ func (s *OpenAIGatewayService) reloadOpenAIOAuthHeaders(ctx context.Context, acc
 		return headers, nil, false
 	}
 	latest, err := p.accountRepo.GetByID(ctx, account.ID)
-	if err != nil || latest == nil || latest.ID != account.ID || !latest.IsActive() || !canRecoverOpenAIOAuth(latest) || latest.GetChatGPTAccountID() != expected || latest.GetOpenAIAccessToken() == "" || p.refreshAPI.openAIRefreshFailure(latest) != nil {
+	if err != nil || latest == nil || !sameOpenAIOAuthOwner(account, latest) || !latest.IsActive() || !canRecoverOpenAIOAuth(latest) || latest.GetOpenAIAccessToken() == "" || p.refreshAPI.openAIRefreshFailure(latest) != nil {
 		return headers, nil, false
 	}
 	if p.tokenCache != nil {
@@ -75,7 +75,7 @@ func (s *OpenAIGatewayService) refreshOpenAIWSAuthHeaders(ctx context.Context, a
 	}
 	if s.openAITokenProvider.accountRepo != nil {
 		latest, readErr := s.openAITokenProvider.accountRepo.GetByID(ctx, owner.ID)
-		if readErr != nil || latest == nil || latest.ID != owner.ID || !latest.IsActive() || !canRecoverOpenAIOAuth(latest) || latest.GetCredential("chatgpt_account_id") != owner.GetCredential("chatgpt_account_id") {
+		if readErr != nil || latest == nil || !sameOpenAIOAuthOwner(owner, latest) || !latest.IsActive() || !canRecoverOpenAIOAuth(latest) {
 			return nil, errors.New("OpenAI OAuth credential state is unavailable")
 		}
 		owner = latest

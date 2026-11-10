@@ -141,7 +141,7 @@ func TestOpenAITokenProvider_CacheHit(t *testing.T) {
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token": "db-token",
+			"access_token": "cached-token",
 		},
 	}
 	cacheKey := OpenAITokenCacheKey(account)
@@ -821,24 +821,26 @@ func TestOpenAITokenProvider_Real_LockRace_PollingHitsCache(t *testing.T) {
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token":  codexTestJWTExpiry(time.Now().Add(time.Minute).Unix()),
-			"refresh_token": "refresh-token",
-			"expires_at":    expiresAt,
+			"access_token":       codexTestJWTOwner(time.Now().Add(time.Minute).Unix(), "same-workspace", "same-user"),
+			"refresh_token":      "refresh-token",
+			"chatgpt_account_id": "same-workspace",
+			"expires_at":         expiresAt,
 		},
 	}
 
+	winnerToken := codexTestJWTOwner(time.Now().Add(time.Hour).Unix(), "same-workspace", "same-user")
 	cacheKey := OpenAITokenCacheKey(account)
 	go func() {
 		time.Sleep(5 * time.Millisecond)
 		cache.mu.Lock()
-		cache.tokens[cacheKey] = "winner-token"
+		cache.tokens[cacheKey] = winnerToken
 		cache.mu.Unlock()
 	}()
 
 	provider := NewOpenAITokenProvider(nil, cache, nil)
 	token, err := provider.GetAccessToken(context.Background(), account)
 	require.NoError(t, err)
-	require.Equal(t, "winner-token", token)
+	require.Equal(t, winnerToken, token)
 }
 
 func TestOpenAITokenProvider_Real_LockRace_ContextCanceled(t *testing.T) {
@@ -879,23 +881,25 @@ func TestOpenAITokenProvider_RuntimeMetrics_LockWaitHitAndSnapshot(t *testing.T)
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token":  codexTestJWTExpiry(time.Now().Add(time.Minute).Unix()),
-			"refresh_token": "refresh-token",
-			"expires_at":    expiresAt,
+			"access_token":       codexTestJWTOwner(time.Now().Add(time.Minute).Unix(), "same-workspace", "same-user"),
+			"refresh_token":      "refresh-token",
+			"chatgpt_account_id": "same-workspace",
+			"expires_at":         expiresAt,
 		},
 	}
+	winnerToken := codexTestJWTOwner(time.Now().Add(time.Hour).Unix(), "same-workspace", "same-user")
 	cacheKey := OpenAITokenCacheKey(account)
 	go func() {
 		time.Sleep(10 * time.Millisecond)
 		cache.mu.Lock()
-		cache.tokens[cacheKey] = "winner-token"
+		cache.tokens[cacheKey] = winnerToken
 		cache.mu.Unlock()
 	}()
 
 	provider := NewOpenAITokenProvider(nil, cache, nil)
 	token, err := provider.GetAccessToken(context.Background(), account)
 	require.NoError(t, err)
-	require.Equal(t, "winner-token", token)
+	require.Equal(t, winnerToken, token)
 
 	metrics := provider.SnapshotRuntimeMetrics()
 	require.GreaterOrEqual(t, metrics.RefreshRequests, int64(1))

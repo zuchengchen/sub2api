@@ -306,10 +306,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	}
 	promptCachePreparation := openAIPromptCachePreparation{}
 	if account.IsOpenAI() && isOpenAIGPT56OrLaterModel(upstreamModel) {
-		responsesBody, promptCachePreparation, err = prepareOpenAIGPT56PromptCaching(
+		responsesBody, promptCachePreparation, err = prepareOpenAIPromptCaching(
 			responsesBody,
 			upstreamModel,
 			!isResponsesShape,
+			account.UsesOpenAICodexProtocol(),
 		)
 	} else {
 		responsesBody, _, err = removeOpenAIPromptCacheConfiguration(responsesBody)
@@ -317,9 +318,8 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if err != nil {
 		return nil, fmt.Errorf("prepare GPT-5.6 prompt caching: %w", err)
 	}
-	// Chat Completions → Responses 会给 GPT-5.6+ 自动补 prompt_cache_options
-	// 和 nested prompt_cache_breakpoint。ChatGPT Codex 内部接口不认这些
-	// Platform 字段；Codex 出站一律剥掉，也不再注入 breakpoint。
+	// Platform automatic caching modes and breakpoints do not apply to Codex.
+	// Codex may carry only an explicitly supplied native TTL.
 	if account.UsesOpenAICodexProtocol() {
 		promptCachePreparation.EnsureBreakpoint = false
 	}
@@ -446,7 +446,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 	}
 	if account.UsesOpenAICodexProtocol() {
-		stripped, strippedCache, stripErr := removeOpenAIPromptCacheConfiguration(responsesBody)
+		stripped, strippedCache, stripErr := filterCodexPromptCacheConfiguration(responsesBody)
 		if stripErr != nil {
 			return nil, fmt.Errorf("strip Codex unsupported prompt cache fields: %w", stripErr)
 		}

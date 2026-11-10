@@ -294,6 +294,7 @@ type codexFingerprintIDs struct {
 	windowID                      string
 	windowNumber                  uint64
 	turnStartedAtUnixMs           int64
+	prewarmWithoutTurn            bool
 	originalBodySessionID         string
 	originalBodySessionIDCaptured bool
 	convergence                   bool
@@ -338,6 +339,7 @@ func resolveCodexFingerprintIdentity(account, source *Account, apiKeyID int64, c
 		mode:                 mode,
 		convergence:          codexFingerprintConvergenceEnabled(source),
 		promptCacheKeyPolicy: codexPromptCacheKeySessionDerived,
+		prewarmWithoutTurn:   ev.RequestKind == "prewarm" && ev.ClientTurnID == "",
 	}
 	switch strings.ToLower(strings.TrimSpace(account.GetExtraString(codexPromptCacheKeyExtraKey))) {
 	case string(codexPromptCacheKeyOmit):
@@ -407,7 +409,7 @@ func resolveCodexFingerprintIdentity(account, source *Account, apiKeyID int64, c
 		if ids.turnStartedAtUnixMs <= 0 {
 			ids.turnStartedAtUnixMs = codexUUIDv7Millis(ids.turnID)
 		}
-	} else {
+	} else if !ids.prewarmWithoutTurn {
 		identitySeed := fmt.Sprintf("%s:user:%d", codexAccountIdentityNamespace(source), apiKeyID)
 		ids.turnID, ids.turnStartedAtUnixMs = resolveCodexTurnIdentity(defaultCodexTurnClock, identitySeed, ids.threadID, ev)
 	}
@@ -586,6 +588,12 @@ func codexSandboxTagForOutboundPlatform(tag string) (string, bool) {
 func rewriteCodexFingerprintTurnMetadata(raw string, fields map[string]any, ids *codexFingerprintIDs) string {
 	return rewriteCodexTurnMetadataJSON(raw, true, func(metadata map[string]any) map[string]any {
 		updates := maps.Clone(fields)
+		if ids != nil && ids.prewarmWithoutTurn {
+			// Startup prewarm has no inference turn yet. Preserve both an
+			// explicit empty turn and omitted turn/timestamp fields.
+			delete(updates, "turn_id")
+			delete(updates, "turn_started_at_unix_ms")
+		}
 		maps.Copy(updates, codexFingerprintRelationshipFields(metadata, ids))
 		return updates
 	})
@@ -653,7 +661,9 @@ func applyCodexFingerprintToClientMetadataMap(existing map[string]any, ids *code
 	maps.Copy(existing, codexFingerprintRelationshipFields(existing, ids))
 	existing["session_id"] = ids.sessionID
 	existing["thread_id"] = ids.threadID
-	existing["turn_id"] = ids.turnID
+	if !ids.prewarmWithoutTurn {
+		existing["turn_id"] = ids.turnID
+	}
 	existing["x-codex-window-id"] = ids.windowID
 	for name, value := range map[string]string{
 		"session-id": ids.sessionID,
@@ -661,11 +671,14 @@ func applyCodexFingerprintToClientMetadataMap(existing map[string]any, ids *code
 		"turn-id":    ids.turnID,
 		"window_id":  ids.windowID,
 	} {
+		if ids.prewarmWithoutTurn && name == "turn-id" {
+			continue
+		}
 		if _, exists := existing[name]; exists {
 			existing[name] = value
 		}
 	}
-	if _, exists := existing["turn_started_at_unix_ms"]; exists {
+	if _, exists := existing["turn_started_at_unix_ms"]; exists && !ids.prewarmWithoutTurn {
 		existing["turn_started_at_unix_ms"] = ids.turnStartedAtUnixMs
 	}
 

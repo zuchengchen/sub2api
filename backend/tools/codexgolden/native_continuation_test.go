@@ -653,3 +653,43 @@ func TestNativeCompactionReplacementPreservesOnlyOriginalMetadata(t *testing.T) 
 		}
 	}
 }
+
+// The official e54a5713 client resets the incremental input when host-scoped
+// prompt cache options change. A valid new full request is still allowed.
+func TestNativeContinuationPromptCacheOptionsBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after string
+		full          bool
+		wantExit      int
+	}{
+		{name: "absent stays absent"},
+		{name: "same 12h", before: "12h", after: "12h"},
+		{name: "same 30m", before: "30m", after: "30m"},
+		{name: "changed ttl cannot use suffix", before: "12h", after: "30m", wantExit: 1},
+		{name: "reverse ttl cannot use suffix", before: "30m", after: "12h", wantExit: 1},
+		{name: "added ttl cannot use suffix", after: "12h", wantExit: 1},
+		{name: "removed ttl cannot use suffix", before: "12h", wantExit: 1},
+		{name: "changed ttl with full replay", before: "12h", after: "30m", full: true},
+		{name: "added ttl with full replay", after: "12h", full: true},
+		{name: "removed ttl with full replay", before: "12h", full: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Begin at a real generation, rather than adding options to the
+			// prewarm request (the official client leaves them absent there).
+			rows := nativeTestLifecycle(tc.full)[1:]
+			for i, ttl := range []string{tc.before, tc.after} {
+				var body map[string]any
+				require.NoError(t, json.Unmarshal(rows[i].BodyJSON, &body))
+				if i == 0 {
+					delete(body, "previous_response_id")
+				}
+				if ttl != "" {
+					body["prompt_cache_options"] = map[string]any{"ttl": ttl}
+				}
+				rows[i].BodyJSON = mustJSON(body)
+			}
+			require.Equal(t, tc.wantExit, nativeContinuationExit(rows))
+		})
+	}
+}

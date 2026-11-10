@@ -343,13 +343,13 @@ func (c *WSConn) settleDeadline(write bool) {
 	_ = set(time.Time{})
 }
 
-// Close sends a close frame and closes the transport.
+// Close is the generic empty-payload close-frame helper, then drops the transport.
 func (c *WSConn) Close() error {
 	return c.closeWithPayload(nil)
 }
 
 // CloseNormal matches Codex Live close_transport: code 1000, empty reason.
-// Responses uses Close's empty payload, so the two protocols remain distinct.
+// Responses owners use CloseNow instead; they do not initiate a close frame.
 func (c *WSConn) CloseNormal() error {
 	return c.closeWithPayload([]byte{0x03, 0xe8})
 }

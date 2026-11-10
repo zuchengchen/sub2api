@@ -99,6 +99,8 @@ func TestGatewayMetadataMissingModeCannotPassAsGatewayCapture(t *testing.T) {
 	trace, err := os.ReadFile(filepath.Join(dir, "traces", "tls.strace"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "gateway-connect.strace"), trace, 0600))
+	fingerprint, rawRows := fingerprintTestFixture(t)
+	writeFingerprintTestProof(t, dir, fingerprint, rawRows)
 	meta.Recorder = "backend/tools/codexgolden gateway"
 	writeJSON(filepath.Join(dir, "meta.json"), meta)
 	require.NoError(t, finalizeCaptureTraces(dir))

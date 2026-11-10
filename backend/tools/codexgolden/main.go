@@ -166,6 +166,9 @@ func main() {
 		if err != nil {
 			fatal(fmt.Errorf("scenario %s: %w", sc.Name, err))
 		}
+		if err := retainReferenceWSEvidence(*outDir, keepDir, sc.Name); err != nil {
+			fatal(err)
+		}
 		leaks = append(leaks, scLeaks...)
 		writeJSONL(filepath.Join(*outDir, sc.Name+".jsonl"), recs)
 		names = append(names, sc.Name)
@@ -529,6 +532,7 @@ func recordScenario(codexBin, tracer string, sc scenario, timeout time.Duration)
 		writeJSONL(filepath.Join(keepDir, sc.Name+"-raw.jsonl"), recs)
 		writeJSON(filepath.Join(keepDir, sc.Name+"-tls-connections.json"), up.tlsConnections())
 		writeJSON(filepath.Join(keepDir, sc.Name+"-h2-connection-ends.json"), up.h2ConnectionEnds())
+		writeJSON(filepath.Join(keepDir, sc.Name+"-ws-connections.json"), up.wsConnections())
 	}
 	if err := up.validateModelsBarrier(); err != nil {
 		return nil, nil, nil, err
