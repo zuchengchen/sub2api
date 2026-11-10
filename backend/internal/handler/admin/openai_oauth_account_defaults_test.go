@@ -21,7 +21,7 @@ func TestOpenAIOAuthCreateDefaultsAccountEndpoints(t *testing.T) {
 			provided                    *int
 			want                        int
 		}{
-			{name: "OAuth omitted", platform: service.PlatformOpenAI, accountType: service.AccountTypeOAuth, want: 50},
+			{name: "OAuth omitted", platform: service.PlatformOpenAI, accountType: service.AccountTypeOAuth, want: 10},
 			{name: "OAuth explicit", platform: service.PlatformOpenAI, accountType: service.AccountTypeOAuth, provided: intPtr(7), want: 7},
 			{name: "OAuth unlimited", platform: service.PlatformOpenAI, accountType: service.AccountTypeOAuth, provided: intPtr(0)},
 			{name: "API key unchanged", platform: service.PlatformOpenAI, accountType: service.AccountTypeAPIKey},
@@ -67,7 +67,7 @@ func TestOpenAIOAuthCreateDefaultsCodexImport(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, result.Created)
 		require.Len(t, svc.createdAccounts, 1)
-		want := 50
+		want := 10
 		if concurrency != nil {
 			want = *concurrency
 		}

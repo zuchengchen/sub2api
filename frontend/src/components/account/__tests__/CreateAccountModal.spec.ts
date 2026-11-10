@@ -257,10 +257,10 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   afterEach(() => vi.useRealTimers())
 
   it.each<OpenAICreateMethod>(['code', 'refresh-token', 'mobile-refresh-token', 'session', 'pat', 'agent-identity'])(
-    'defaults %s OAuth creation to concurrency 50 and Hosted image bridge', async (method) => {
+    'defaults %s OAuth creation to concurrency 10 and Hosted image bridge', async (method) => {
       const wrapper = await openCodexImportStep()
       const payload = await submitOpenAIOAuthMethod(wrapper, method)
-      expect(payload.concurrency).toBe(50)
+      expect(payload.concurrency).toBe(10)
       expect(payload.extra.codex_image_generation_bridge).toBe(true)
       expect(payload.extra).not.toHaveProperty('codex_image_generation_bridge_enabled')
       expect(payload.extra).not.toHaveProperty('codex_image_generation_explicit_tool_policy')
@@ -301,7 +301,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const concurrency = () => wrapper.get<HTMLInputElement>('[data-testid="create-account-concurrency"]')
     expect(concurrency().element.value).toBe('10')
     await selectButtonByText(wrapper, 'OpenAI')
-    expect(concurrency().element.value).toBe('50')
+    expect(concurrency().element.value).toBe('10')
     expect(wrapper.get<HTMLSelectElement>('[data-testid="create-codex-image-tool-mode"]').element.value).toBe('enabled')
     await selectButtonByText(wrapper, 'API Key')
     expect(concurrency().element.value).toBe('10')
@@ -311,7 +311,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await selectButtonByText(wrapper, 'Grok')
     expect(concurrency().element.value).toBe('1')
     await selectButtonByText(wrapper, 'OpenAI')
-    expect(concurrency().element.value).toBe('50')
+    expect(concurrency().element.value).toBe('10')
     await concurrency().setValue(17)
     await selectButtonByText(wrapper, 'API Key')
     expect(concurrency().element.value).toBe('17')
@@ -326,7 +326,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await wrapper.setProps({ show: false })
     await wrapper.setProps({ show: true })
     await selectButtonByText(wrapper, 'OpenAI')
-    expect(wrapper.get<HTMLInputElement>('[data-testid="create-account-concurrency"]').element.value).toBe('50')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="create-account-concurrency"]').element.value).toBe('10')
     expect(wrapper.get<HTMLSelectElement>('[data-testid="create-codex-image-tool-mode"]').element.value).toBe('enabled')
     wrapper.unmount()
   })
