@@ -39,13 +39,13 @@ func TestTiboHealthyGroupModelPinnedStandardCacheAndDetails(t *testing.T) {
 			require.ElementsMatch(t, []string{"gpt-6-luna", "gpt-5.6-luna", "luna", "openai/GPT5.6LUNA-max", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-terra", "gpt-image-2"}, ordinaryPinnedModelIDs(t, firstOther))
 			oldETag := firstOther.Header().Get("ETag")
 			require.NotEmpty(t, oldETag)
-			firstHealthy := requestModelForTest(handler, healthy, "", "")
+			firstHealthy := requestModelForTest(handler, healthy, "", oldETag)
 			require.Equal(t, http.StatusOK, firstHealthy.Code, firstHealthy.Body.String())
-			require.ElementsMatch(t, []string{"gpt-6-luna", "gpt-5.6-luna", "luna", "openai/GPT5.6LUNA-max", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-terra", "gpt-image-2"}, ordinaryPinnedModelIDs(t, firstHealthy),
+			require.ElementsMatch(t, []string{"gpt-6-astra", "gpt-6-sol", "gpt-6.1-terra", "gpt-image-2"}, ordinaryPinnedModelIDs(t, firstHealthy),
 				"the old Luna-only allowlist must not exclude other servable models")
 			newETag := firstHealthy.Header().Get("ETag")
 			require.NotEmpty(t, newETag)
-			require.Equal(t, oldETag, newETag)
+			require.NotEqual(t, oldETag, newETag)
 			require.Equal(t, service.CodexModelsManifestETag(firstHealthy.Body.Bytes()), newETag)
 			cached := requestModelForTest(handler, healthy, "", newETag)
 			require.Equal(t, http.StatusNotModified, cached.Code)
@@ -59,8 +59,9 @@ func TestTiboHealthyGroupModelPinnedStandardCacheAndDetails(t *testing.T) {
 			require.Empty(t, detail.Header().Get("ETag"))
 			require.JSONEq(t, `{"id":"gpt-6-sol","object":"model","created":123,"owned_by":"source-owner","retained_metadata":{"context":424242}}`, detail.Body.String())
 			for _, model := range []string{"gpt-6-luna", "gpt-5.6-luna", "luna", "openai/GPT5.6LUNA-max"} {
-				healthyDetail := requestModelForTest(handler, healthy, model, newETag)
-				require.Equal(t, http.StatusOK, healthyDetail.Code, model+": "+healthyDetail.Body.String())
+				denied := requestModelForTest(handler, healthy, model, newETag)
+				require.Equal(t, http.StatusNotFound, denied.Code, model+": "+denied.Body.String())
+				require.Contains(t, denied.Body.String(), `"code":"model_not_found"`)
 				allowed := requestModelForTest(handler, other, model, oldETag)
 				require.Equal(t, http.StatusOK, allowed.Code, model+": "+allowed.Body.String())
 			}
@@ -109,15 +110,15 @@ func TestTiboHealthyGroupModelCodexSharedCacheAndDiscoveryPaths(t *testing.T) {
 			require.ElementsMatch(t, []string{"gpt-6-luna", "gpt-5.6-luna", "luna", "openai/GPT5.6LUNA-max", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-terra", "codex-auto-review"}, codexHandlerManifestSlugs(t, firstOther))
 			oldETag := firstOther.Header().Get("ETag")
 			require.NotEmpty(t, oldETag)
-			firstHealthy := performPinnedCodexModelsRequest(t, handler, healthy, "")
+			firstHealthy := performPinnedCodexModelsRequest(t, handler, healthy, oldETag)
 			require.Equal(t, http.StatusOK, firstHealthy.Code, firstHealthy.Body.String())
-			require.ElementsMatch(t, []string{"gpt-6-luna", "gpt-5.6-luna", "luna", "openai/GPT5.6LUNA-max", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-terra", "codex-auto-review"}, codexHandlerManifestSlugs(t, firstHealthy),
-				"Luna, other models, and an already-enabled automatic model must remain visible")
+			require.ElementsMatch(t, []string{"gpt-6-astra", "gpt-6-sol", "gpt-6.1-terra", "codex-auto-review"}, codexHandlerManifestSlugs(t, firstHealthy),
+				"non-Luna models and an already-enabled automatic model must remain visible")
 			require.Contains(t, firstHealthy.Body.String(), `"context_window":424242`)
 			require.Contains(t, firstHealthy.Body.String(), `"retained_metadata":{"source":"codex"}`)
 			require.Contains(t, firstHealthy.Body.String(), `"source_marker":"shared"`)
 			newETag := firstHealthy.Header().Get("ETag")
-			require.Equal(t, oldETag, newETag)
+			require.NotEqual(t, oldETag, newETag)
 			require.Equal(t, service.CodexModelsManifestETag(firstHealthy.Body.Bytes()), newETag)
 			cached := performPinnedCodexModelsRequest(t, handler, healthy, newETag)
 			require.Equal(t, http.StatusNotModified, cached.Code)
