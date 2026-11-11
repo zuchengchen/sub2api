@@ -21,7 +21,17 @@ import (
 // Capture the actual outbound request: checking just the compatibility map
 // would miss image options discarded by later OAuth or WS transformations.
 func TestOpenAIResponsesGIFFrameControlsForward(t *testing.T) {
-	for _, transport := range []string{"http", "ws"} {
+	reference := "data:image/jpeg;base64," + encodeOpenAIImageTestJPEG(t, 32, 16)
+	for _, client := range []struct {
+		name      string
+		transport string
+		codex     bool
+	}{
+		{"generic_http", "http", false},
+		{"generic_ws", "ws", false},
+		{"codex_http", "http", true},
+		{"codex_ws", "ws", true},
+	} {
 		for _, tc := range []struct {
 			name      string
 			request   string
@@ -30,6 +40,14 @@ func TestOpenAIResponsesGIFFrameControlsForward(t *testing.T) {
 			duration  int64
 			hasFrames bool
 		}{
+			{
+				name: "reference_image_edit",
+				request: `{"model":"gpt-image-2.6-flare","input":[{"role":"user","content":[` +
+					`{"type":"input_text","text":"Edit the supplied subway-station image into a seamless looping animated GIF."},` +
+					`{"type":"input_image","image_url":"` + reference + `"}]}],` +
+					`"output_format":"gif","frame_count":8,"frame_duration_ms":100,"size":"1024x576","quality":"high"}`,
+				model: "gpt-image-2.6-flare", count: 8, duration: 100, hasFrames: true,
+			},
 			{
 				name: "top_level_flare",
 				request: `{"model":"gpt-image-2.6-flare","prompt":"draw an animation",` +
@@ -57,6 +75,13 @@ func TestOpenAIResponsesGIFFrameControlsForward(t *testing.T) {
 				model: "gpt-image-2.6-flare", count: 8, duration: 120, hasFrames: true,
 			},
 			{
+				name: "existing_format_and_choice_win",
+				request: `{"model":"gpt-image-2.6-flare","input":"draw an animation",` +
+					`"output_format":"png","frame_count":8,"frame_duration_ms":100,"tool_choice":"auto",` +
+					`"tools":[{"type":"image_generation","output_format":"gif"}]}`,
+				model: "gpt-image-2.6-flare", count: 8, duration: 100, hasFrames: true,
+			},
+			{
 				name: "omitted_fields_remain_omitted",
 				request: `{"model":"gpt-image-2.6-flare","prompt":"draw an animation",` +
 					`"output_format":"gif"}`,
@@ -70,15 +95,20 @@ func TestOpenAIResponsesGIFFrameControlsForward(t *testing.T) {
 				model: "gpt-image-2.6-flare", count: 6, duration: 250, hasFrames: true,
 			},
 		} {
-			t.Run(transport+"/"+tc.name, func(t *testing.T) {
+			t.Run(client.name+"/"+tc.name, func(t *testing.T) {
 				t.Setenv("SUB2API_IMAGES_MAIN_MODEL", "gpt-5.6-luna")
 				gin.SetMode(gin.TestMode)
 				rec := httptest.NewRecorder()
 				c, _ := gin.CreateTestContext(rec)
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 				c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
+				if client.codex {
+					c.Request.Header.Set("User-Agent", "codex_exec/0.164.0 (codex-imagegen)")
+					c.Request.Header.Set("originator", "codex_exec")
+				}
 				cfg := &config.Config{}
-				cfg.Gateway.OpenAIWS.Enabled = transport == "ws"
+				cfg.Gateway.CodexImageGenerationBridgeEnabled = client.codex
+				cfg.Gateway.OpenAIWS.Enabled = client.transport == "ws"
 				cfg.Gateway.OpenAIWS.OAuthEnabled = true
 				cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 				cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
@@ -104,7 +134,7 @@ func TestOpenAIResponsesGIFFrameControlsForward(t *testing.T) {
 					ID: 85, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
 					Schedulable: true, Concurrency: 1,
 					Credentials: map[string]any{"access_token": "test-token"},
-					Extra:       astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": transport == "ws"}),
+					Extra:       astraHealthyTestExtra(map[string]any{"responses_websockets_v2_enabled": client.transport == "ws"}),
 				}
 				_, err := svc.Forward(context.Background(), c, account, []byte(tc.request))
 				require.Error(t, err)
@@ -113,7 +143,7 @@ func TestOpenAIResponsesGIFFrameControlsForward(t *testing.T) {
 				require.Equal(t, http.StatusBadRequest, rec.Code)
 				requireImageUserErrorResponse(t, rec.Body.Bytes(), "image_generation_user_error")
 				outbound := upstream.lastBody
-				if transport == "ws" {
+				if client.transport == "ws" {
 					require.Empty(t, upstream.requests)
 					require.Len(t, conn.writes, 1)
 					outbound, err = json.Marshal(conn.writes[0])
@@ -133,6 +163,20 @@ func TestOpenAIResponsesGIFFrameControlsForward(t *testing.T) {
 				}
 				require.False(t, gjson.GetBytes(outbound, "frame_count").Exists())
 				require.False(t, gjson.GetBytes(outbound, "frame_duration_ms").Exists())
+				if IsGPTImageGenerationModel(gjson.Get(tc.request, "model").String()) {
+					choice := gjson.GetBytes(outbound, "tool_choice")
+					if supplied := gjson.Get(tc.request, "tool_choice"); supplied.Exists() {
+						require.Equal(t, supplied.String(), choice.String())
+					} else {
+						require.Equal(t, "image_generation", choice.Get("type").String(), "bridge defaults must not weaken an explicit image-model request")
+					}
+				}
+				if tc.name == "reference_image_edit" {
+					require.Equal(t, "1024x576", tool.Get("size").String())
+					require.Equal(t, "high", tool.Get("quality").String())
+					require.JSONEq(t, gjson.Get(tc.request, "input.0.content").Raw,
+						gjson.GetBytes(outbound, `input.#(role=="user").content`).Raw)
+				}
 			})
 		}
 	}
