@@ -641,15 +641,17 @@
                 <span class="text-xs">{{ row.is_vip ? t('admin.users.revokeSvip') : t('admin.users.grantSvip') }}</span>
               </button>
 
-              <!-- Toggle Status Button (not for admin) -->
+              <!-- Admin users can be re-enabled, but cannot be manually disabled. -->
               <button
-                v-if="row.role !== 'admin'"
+                type="button"
+                :disabled="row.role === 'admin' && row.status === 'active'"
+                :title="row.role === 'admin' && row.status === 'active' ? t('admin.users.adminDisableForbidden') : undefined"
                 @click="handleToggleStatus(row)"
                 :class="[
-                  'flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors',
+                  'flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                   row.status === 'active'
-                    ? 'hover:bg-orange-50 hover:text-orange-600 dark:hover:bg-orange-900/20 dark:hover:text-orange-400'
-                    : 'hover:bg-green-50 hover:text-green-600 dark:hover:bg-green-900/20 dark:hover:text-green-400'
+                    ? 'enabled:hover:bg-orange-50 enabled:hover:text-orange-600 dark:enabled:hover:bg-orange-900/20 dark:enabled:hover:text-orange-400'
+                    : 'enabled:hover:bg-green-50 enabled:hover:text-green-600 dark:enabled:hover:bg-green-900/20 dark:enabled:hover:text-green-400'
                 ]"
               >
                 <Icon v-if="row.status === 'active'" name="ban" size="sm" />
