@@ -159,10 +159,6 @@ func (s *OpenAIGatewayService) BuildGroupConfiguredCodexModelsManifest(
 	if err != nil {
 		return nil, false, fmt.Errorf("build group configured Codex models: %w", err)
 	}
-	body, _, err = filterTiboGroupModelsBody(body, group)
-	if err != nil {
-		return nil, false, fmt.Errorf("filter Tibo group Codex models: %w", err)
-	}
 	manifest := &OpenAIModelsResponse{
 		Body: body,
 		ETag: codexModelsManifestBodyETag(body),
@@ -220,11 +216,7 @@ func (s *OpenAIGatewayService) MergeGroupConfiguredCodexModels(
 		return fmt.Errorf("filter retired Codex models: %w", err)
 	}
 	body = filtered
-	body, tiboFiltered, err := filterTiboGroupModelsBody(body, group)
-	if err != nil {
-		return fmt.Errorf("filter Tibo group Codex models: %w", err)
-	}
-	if changed || retired || tiboFiltered {
+	if changed || retired {
 		manifest.Body = body
 		manifest.ETag = codexModelsManifestBodyETag(body)
 	}

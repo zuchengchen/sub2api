@@ -1,18 +1,13 @@
 package service
 
-import (
-	"encoding/json"
-	"strings"
-)
-
 const (
 	TiboWelfareGroupName = "GPT-福利"
 	TiboHealthyGroupName = "GPT-不降智"
 )
 
-// EffectiveModelAllowlist applies the customized policy to the request group,
-// never to an account shared with other groups. Keep stored admin settings
-// intact so renaming the group or reverting the policy restores those settings.
+// EffectiveModelAllowlist preserves full model access for the healthy group,
+// including Luna. Stored selections still enumerate aliases and automatic modes;
+// other groups retain their configured allowlists.
 func (g *Group) EffectiveModelAllowlist() GroupModelAllowlist {
 	if g == nil {
 		return GroupModelAllowlist{}
@@ -24,50 +19,7 @@ func (g *Group) EffectiveModelAllowlist() GroupModelAllowlist {
 			// mappings and opt in to Codex automatic modes.
 			models = append(models, g.ModelAllowlist.Models...)
 		}
-		return GroupModelAllowlist{Enabled: true, Models: models, excludeLuna: true}
+		return GroupModelAllowlist{Enabled: true, Models: models}
 	}
 	return g.ModelAllowlist
-}
-
-// Match public spellings and the identity used by OAuth forwarding. Its legacy
-// permissive aliases (for example gpt-5.6-lunatic) must not bypass admission.
-// Image requests keep their public image model; their internal Luna driver does
-// not pass through this client-facing group policy.
-func isTiboLunaModel(model string) bool {
-	name := normalizeVIPModelCandidate(model)
-	return name == "luna" || strings.HasPrefix(name, "luna-") ||
-		isLunaMinRateModel(model) || isLunaMinRateModel(normalizeKnownOpenAICodexModel(model))
-}
-
-// Apply to a private response body, before computing the client ETag. The raw
-// upstream cache is shared by groups and must retain its unfiltered catalog.
-func filterTiboGroupModelsBody(body []byte, group *Group) ([]byte, bool, error) {
-	if !group.EffectiveModelAllowlist().excludeLuna {
-		return body, false, nil
-	}
-	envelope, entries, err := modelCatalogEntries(body, "models")
-	if err != nil {
-		return nil, false, err
-	}
-	filtered := make([]json.RawMessage, 0, len(entries))
-	for _, raw := range entries {
-		var entry struct {
-			Slug string `json:"slug"`
-		}
-		if err := json.Unmarshal(raw, &entry); err != nil {
-			return nil, false, err
-		}
-		if !isTiboLunaModel(entry.Slug) {
-			filtered = append(filtered, raw)
-		}
-	}
-	if len(filtered) == len(entries) {
-		return body, false, nil
-	}
-	envelope["models"], err = json.Marshal(filtered)
-	if err != nil {
-		return nil, false, err
-	}
-	result, err := json.Marshal(envelope)
-	return result, true, err
 }
