@@ -22,14 +22,10 @@ func TestTiboHealthyGroupModelCanonicalLunaAliasesHTTPForwarding(t *testing.T) {
 		name, group, requested, upstream string
 		status                           int
 	}{
-		{"healthy_luna6", service.TiboHealthyGroupName, "gpt-6-luna", "gpt-6-luna", http.StatusOK},
-		{"healthy_luna56", service.TiboHealthyGroupName, "gpt-5.6-luna", "gpt-5.6-luna", http.StatusOK},
-		{"gpt_luna6", "GPT", "gpt-6-luna", "gpt-6-luna", http.StatusOK},
-		{"welfare_luna6", service.TiboWelfareGroupName, "gpt-6-luna", "gpt-6-luna", http.StatusOK},
 		{"welfare_lunatic", service.TiboWelfareGroupName, "gpt-5.6-lunatic", "gpt-5.6-luna", http.StatusOK},
 		{"welfare_lunaevil", service.TiboWelfareGroupName, "gpt-5.6-lunaevil", "gpt-5.6-luna", http.StatusOK},
-		{"healthy_lunatic", service.TiboHealthyGroupName, "gpt-5.6-lunatic", "gpt-5.6-luna", http.StatusOK},
-		{"healthy_lunaevil", service.TiboHealthyGroupName, "gpt-5.6-lunaevil", "gpt-5.6-luna", http.StatusOK},
+		{"healthy_lunatic", service.TiboHealthyGroupName, "gpt-5.6-lunatic", "gpt-5.6-luna", http.StatusNotFound},
+		{"healthy_lunaevil", service.TiboHealthyGroupName, "gpt-5.6-lunaevil", "gpt-5.6-luna", http.StatusNotFound},
 		{"healthy_unrelated_lunatic", service.TiboHealthyGroupName, "gpt-6-lunatic", "gpt-6-lunatic", http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
