@@ -1111,6 +1111,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	var turnInterruptFailure error
 	var rejectedFieldRetryState *openAIResponsesRejectedFieldRetryState
 	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
+		setOpenAIImageOutputRequest(c, payload)
 		responseModelObserver := &upstreamResponseModelObserver{}
 		responseModelObserver.adoptOpenAICodexTicketWatch(c)
 		turnInterrupt = &openAIWSInterruptState{}
@@ -1482,7 +1483,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				// markOpenAIWSClientVisibleFailure 与 handleOpenAIWSTerminalTransientFailure
 				// 仍要按未改写的原始 payload 判定账号状态，这正是
 				// sanitizeOpenAICapacityShedErrorCodeForClient 注释里写明的前提。
-				clientMessage := upstreamMessage
+				clientMessage := prepareOpenAIImageOutput(c, upstreamMessage)
 				if eventType == "error" || eventType == "response.failed" {
 					if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 						clientMessage = rewritten

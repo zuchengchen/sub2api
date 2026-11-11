@@ -131,6 +131,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		return nil, err
 	}
 	traceOpenAIInbound(ctx, c, account, body)
+	setOpenAIImageOutputRequest(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	// The handler reuses one context and response writer across failover

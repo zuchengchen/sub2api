@@ -1111,6 +1111,11 @@ readLoop:
 		// server_error）：Codex 对原码判致命并终止会话，改写后走客户端内置退避
 		// 重试。policy/账号状态判定仍用未改写的 message，与 ingress 路径一致。
 		clientMessage := message
+		if reqStream {
+			clientMessage = prepareOpenAIImageOutput(c, message)
+		} else {
+			observeOpenAIImageOutputModel(c, message)
+		}
 		if eventType == "error" || eventType == "response.failed" {
 			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 				clientMessage = rewritten
@@ -1390,7 +1395,7 @@ readLoop:
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
 
-		c.Data(http.StatusOK, "application/json", finalResponse)
+		c.Data(http.StatusOK, "application/json", prepareOpenAIImageOutput(c, finalResponse))
 	} else {
 		flushStreamWriter(true)
 	}

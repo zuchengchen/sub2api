@@ -230,11 +230,10 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp 
 			observer.Observe(result.Model, true)
 		}
 	}
-	clientModel := strings.TrimSpace(parsed.Model)
-	if clientModel != "" {
-		for i := range gjson.GetBytes(body, "data").Array() {
-			body, _ = sjson.SetBytes(body, fmt.Sprintf("data.%d.model", i), clientModel)
-		}
+	// A requested model is not evidence of the model used upstream. Preserve
+	// upstream declarations (including absence) and report the request separately.
+	if clientModel := strings.TrimSpace(parsed.Model); clientModel != "" {
+		body, _ = sjson.SetBytes(body, "requested_model", clientModel)
 	}
 	for i, item := range gjson.GetBytes(body, "data").Array() {
 		if actualSize := detectOpenAIImageResultSize(item.Get("b64_json").String()); actualSize != "" {
@@ -263,6 +262,6 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp 
 			contentType = upstreamType
 		}
 	}
-	c.Data(resp.StatusCode, contentType, body)
+	c.Data(resp.StatusCode, contentType, prepareOpenAIImageOutput(c, body))
 	return usage, len(results), openAIResponsesImageResultSizes(results), nil
 }

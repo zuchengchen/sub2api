@@ -742,6 +742,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				return
 			}
 			restoredData = restoreCodexToolNamesFromSSEContext(c, restoredData, eventType)
+			restoredData = prepareOpenAIImageOutput(c, restoredData)
 			if !bytes.Equal(restoredData, dataBytes) {
 				dataBytes = restoredData
 				data = string(restoredData)
@@ -1864,7 +1865,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	}
 
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
+		c.Data(resp.StatusCode, contentType, prepareOpenAIImageOutput(c, body))
 	}
 
 	return &openaiNonStreamingResult{
@@ -1906,6 +1907,9 @@ func bodyHasSSEFraming(body []byte) bool {
 
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	bodyText := string(body)
+	if openAIImageOutputRequestFromContext(c) != nil {
+		forEachOpenAISSEDataPayload(bodyText, func(data []byte) { observeOpenAIImageOutputModel(c, data) })
+	}
 	usage := s.parseSSEUsageFromBody(bodyText)
 	replayGuard := openAIResponseReplayGuardForSSE(bodyText)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
@@ -1995,7 +1999,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		// 上游的 Content-Type（text/event-stream）已复制到响应头，而 c.Data
 		// 不会覆盖已存在的 Content-Type，这里需显式设置为聚合后的类型。
 		c.Writer.Header().Set("Content-Type", contentType)
-		c.Data(resp.StatusCode, contentType, body)
+		c.Data(resp.StatusCode, contentType, prepareOpenAIImageOutput(c, body))
 	}
 
 	return &openaiNonStreamingResult{

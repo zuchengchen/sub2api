@@ -860,7 +860,8 @@ func TestOpenAIGatewayServiceForwardImages_OAuthPassesNAndReturnsAllImages(t *te
 	require.Equal(t, "draw a cat", gjson.GetBytes(upstream.lastBody, "input.0.content.0.text").String())
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "gpt-image-1", gjson.Get(rec.Body.String(), "model").String())
+	require.False(t, gjson.Get(rec.Body.String(), "model").Exists(), "a request is not an upstream model declaration")
+	require.Equal(t, "gpt-image-1", gjson.Get(rec.Body.String(), "requested_model").String())
 	require.Len(t, gjson.Get(rec.Body.String(), "data").Array(), 3)
 	require.Equal(t, "aW1hZ2UtMQ==", gjson.Get(rec.Body.String(), "data.0.b64_json").String())
 	require.Equal(t, "aW1hZ2UtMg==", gjson.Get(rec.Body.String(), "data.1.b64_json").String())
@@ -2114,7 +2115,8 @@ func TestOpenAIGatewayServiceForwardImages_OAuthStreamingHandlesOutputItemDoneFa
 	require.Equal(t, int64(1710000005), gjson.Get(completed.Data, "created_at").Int())
 	require.Equal(t, "ZmluYWw=", gjson.Get(completed.Data, "b64_json").String())
 	require.Equal(t, "data:image/png;base64,ZmluYWw=", gjson.Get(completed.Data, "url").String())
-	require.Equal(t, "gpt-image-1", gjson.Get(completed.Data, "model").String())
+	require.False(t, gjson.Get(completed.Data, "model").Exists(), "an undeclared upstream model stays unknown")
+	require.Equal(t, "gpt-image-1", gjson.Get(completed.Data, "sub2api_image.requested_model").String())
 	require.JSONEq(t, `{"images":1}`, gjson.Get(completed.Data, "usage").Raw)
 	require.NotContains(t, rec.Body.String(), "event: error")
 }

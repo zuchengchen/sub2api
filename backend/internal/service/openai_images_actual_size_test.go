@@ -44,7 +44,9 @@ func TestOpenAIGatewayServiceForwardImages_OAuthUsesDecodedOutputDimensions(t *t
 
 	require.Equal(t, "3840x2160", gjson.GetBytes(run.upstream.lastBody, "tools.0.size").String())
 	require.Equal(t, "low", gjson.GetBytes(run.upstream.lastBody, "tools.0.quality").String())
-	require.Equal(t, "1672x941", gjson.Get(run.recorder.Body.String(), "size").String())
+	require.Equal(t, "3840x2160", gjson.Get(run.recorder.Body.String(), "size").String())
+	require.Equal(t, "1672x941", gjson.Get(run.recorder.Body.String(), "data.0.sub2api_image.upstream_size").String())
+	require.True(t, gjson.Get(run.recorder.Body.String(), "data.0.sub2api_image.postprocessed").Bool())
 	require.Equal(t, "auto", gjson.Get(run.recorder.Body.String(), "quality").String())
 	require.Equal(t, []string{"1672x941"}, run.result.ImageOutputSizes)
 
@@ -60,7 +62,9 @@ func TestOpenAIGatewayServiceForwardImages_OAuthStreamingUsesDecodedOutputDimens
 	events := parseOpenAIImageTestSSEEvents(run.recorder.Body.String())
 	completed, ok := findOpenAIImageTestSSEEvent(events, "image_generation.completed")
 	require.True(t, ok)
-	require.Equal(t, "1672x941", gjson.Get(completed.Data, "size").String())
+	require.Equal(t, "3840x2160", gjson.Get(completed.Data, "size").String())
+	require.Equal(t, "1672x941", gjson.Get(completed.Data, "sub2api_image.upstream_size").String())
+	require.True(t, gjson.Get(completed.Data, "sub2api_image.postprocessed").Bool())
 	require.Equal(t, "auto", gjson.Get(completed.Data, "quality").String())
 	require.Equal(t, []string{"1672x941"}, run.result.ImageOutputSizes)
 }
