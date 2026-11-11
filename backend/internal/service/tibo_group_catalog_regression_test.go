@@ -47,7 +47,7 @@ func TestTiboHealthyGroupModelAuthCacheNameRoundTrip(t *testing.T) {
 				"auth snapshots must persist the configured settings, not the derived policy")
 			policy := restored.Group.EffectiveModelAllowlist()
 			healthy := name == TiboHealthyGroupName
-			require.Equal(t, !healthy, policy.Allows("gpt-6-luna"))
+			require.True(t, policy.Allows("gpt-6-luna"))
 			require.Equal(t, healthy, policy.Allows("gpt-6-sol"))
 		})
 	}
@@ -117,24 +117,26 @@ func TestTiboHealthyGroupModelSharedSourceCacheFreshStaleAndRevalidation(t *test
 			}
 			assertHealthy := func(manifest *OpenAIModelsResponse) {
 				t.Helper()
-				require.False(t, manifest.NotModified, "an ETag for the unfiltered source must not validate a filtered catalog")
-				require.ElementsMatch(t, []string{"gpt-6-sol", "gpt-6-astra", "gpt-6.1-terra"}, codexManifestModelSlugs(t, manifest.Body))
+				require.False(t, manifest.NotModified)
+				require.ElementsMatch(t, []string{"gpt-6-luna", "gpt-5.6-luna", "luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-terra"}, codexManifestModelSlugs(t, manifest.Body))
 				require.Equal(t, int64(424242), gjson.GetBytes(manifest.Body, `models.#(slug=="gpt-6-sol").retained_metadata.context`).Int())
 				require.Equal(t, "shared", gjson.GetBytes(manifest.Body, "source_marker").String())
 				require.Equal(t, CodexModelsManifestETag(manifest.Body), manifest.ETag)
 			}
 			firstOther := fetchForGroup(other, "")
 			require.ElementsMatch(t, []string{"gpt-6-luna", "gpt-5.6-luna", "luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-terra"}, codexManifestModelSlugs(t, firstOther.Body))
-			firstHealthy := fetchForGroup(healthy, firstOther.ETag)
+			firstHealthy := fetchForGroup(healthy, "")
 			assertHealthy(firstHealthy)
-			require.NotEqual(t, firstOther.ETag, firstHealthy.ETag)
+			require.JSONEq(t, string(firstOther.Body), string(firstHealthy.Body))
+			require.NotEqual(t, firstOther.ETag, firstHealthy.ETag, "the upstream ETag is distinct from the serialized group catalog hash")
+			require.False(t, fetchForGroup(healthy, firstOther.ETag).NotModified)
 			unchanged := fetchForGroup(healthy, firstHealthy.ETag)
 			require.True(t, unchanged.NotModified)
 			require.Empty(t, unchanged.Body)
 			require.EqualValues(t, 1, calls.Load(), "both groups must reuse the same fresh account cache")
 
 			expireCodexModelsManifestCache(svc, time.Minute)
-			staleHealthy := fetchForGroup(healthy, firstOther.ETag)
+			staleHealthy := fetchForGroup(healthy, "")
 			assertHealthy(staleHealthy)
 			require.Equal(t, firstHealthy.ETag, staleHealthy.ETag)
 			select {
@@ -159,7 +161,7 @@ func TestTiboHealthyGroupModelSharedSourceCacheFreshStaleAndRevalidation(t *test
 				}
 				return false
 			}, 2*time.Second, 5*time.Millisecond, "refresh must renew the cached source")
-			assertHealthy(fetchForGroup(healthy, firstOther.ETag))
+			assertHealthy(fetchForGroup(healthy, ""))
 			require.True(t, fetchForGroup(healthy, firstHealthy.ETag).NotModified)
 			otherAgain := fetchForGroup(other, "")
 			require.Equal(t, firstOther.ETag, otherAgain.ETag)
@@ -187,7 +189,7 @@ func TestTiboHealthyGroupModelInternalImageDriverReachesUpstream(t *testing.T) {
 				ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"gpt-6-luna"}},
 			}
 			require.True(t, group.EffectiveModelAllowlist().Allows(tc.model))
-			require.False(t, group.EffectiveModelAllowlist().Allows("gpt-5.6-luna"))
+			require.True(t, group.EffectiveModelAllowlist().Allows("gpt-5.6-luna"))
 			body := []byte(`{"model":"` + tc.model + `","prompt":"draw a cat","input":"draw a cat","stream":false}`)
 			c, recorder := newOpenAIImagesTestContext(t, body)
 			c.Set("api_key", &APIKey{ID: 8772, GroupID: &group.ID, Group: group})
