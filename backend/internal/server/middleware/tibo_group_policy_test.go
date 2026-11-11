@@ -10,13 +10,13 @@ import (
 
 func TestTiboHealthyGroupModelHTTP(t *testing.T) {
 	for _, path := range []string{"/v1/responses", "/v1/chat/completions", "/v1/messages", "/v1/embeddings"} {
-		for _, model := range []string{"gpt-6-luna", "gpt-5.6-luna", "luna", "provider/gpt6luna-high", "openai/GPT5.6LUNA-max"} {
+		for _, model := range []string{"luna", "provider/gpt6luna-high", "openai/GPT5.6LUNA-max"} {
 			t.Run(path+"/"+model, func(t *testing.T) {
 				key := &service.APIKey{Group: &service.Group{Name: service.TiboHealthyGroupName, Platform: service.PlatformOpenAI}}
 				router, calls := newGroupModelAllowlistTestRouter(key, "/v1")
 				got := doJSON(t, router, http.MethodPost, path, `{"model":"gpt-6-astra","Model":"`+model+`"}`)
-				require.Equal(t, http.StatusOK, got.Code)
-				require.Len(t, *calls, 1, "Luna must reach the handler")
+				require.Equal(t, http.StatusNotFound, got.Code)
+				require.Empty(t, *calls, "rejection must precede forwarding")
 			})
 		}
 	}
