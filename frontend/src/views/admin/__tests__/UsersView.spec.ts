@@ -313,6 +313,35 @@ describe('admin UsersView', () => {
     wrapper.unmount()
   })
 
+  it('re-enables a disabled admin while keeping manual disable unavailable', async () => {
+    listUsers.mockResolvedValue({
+      items: [createAdminUser({ role: 'admin', status: 'disabled' })],
+      total: 1, page: 1, page_size: 20, pages: 1
+    })
+    toggleStatus.mockResolvedValue(createAdminUser({ role: 'admin', status: 'active' }))
+    const wrapper = mountBulkDeleteView()
+    await flushPromises()
+
+    const enableButton = getToggleStatusButton(wrapper, 42)
+    expect(enableButton.text()).toBe('admin.users.enable')
+    expect(enableButton.attributes('disabled')).toBeUndefined()
+    await enableButton.trigger('click')
+    await flushPromises()
+
+    expect(toggleStatus.mock.calls).toEqual([[42, 'active']])
+    expect(wrapper.get('[data-test="row-state"]').text()).toBe('42:active:0')
+    expect(showSuccess).toHaveBeenCalledWith('admin.users.userEnabled')
+
+    const disableButton = getToggleStatusButton(wrapper, 42)
+    expect(disableButton.text()).toBe('admin.users.disable')
+    expect(disableButton.attributes('disabled')).toBeDefined()
+    expect(disableButton.attributes('title')).toBe('admin.users.adminDisableForbidden')
+    await disableButton.trigger('click')
+    expect(toggleStatus).toHaveBeenCalledTimes(1)
+    expect(listUsers).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
   it('keeps the row untouched when toggling status fails', async () => {
     toggleStatus.mockRejectedValue(new Error('boom'))
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
