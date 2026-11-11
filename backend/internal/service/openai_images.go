@@ -697,6 +697,9 @@ func (s *OpenAIGatewayService) ForwardImages(
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
+	if c != nil {
+		c.Set(openAIImageOutputRequestKey, &openAIImageOutputRequest{Model: parsed.Model, Size: parsed.Size, Format: parsed.OutputFormat, Background: parsed.Background})
+	}
 	policyModel := strings.TrimSpace(channelMappedModel)
 	if policyModel == "" {
 		policyModel = parsed.Model
@@ -1074,7 +1077,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 			contentType = upstreamType
 		}
 	}
-	c.Data(resp.StatusCode, contentType, body)
+	c.Data(resp.StatusCode, contentType, prepareOpenAIImageOutput(c, body))
 
 	usage, _ := extractOpenAIUsageFromJSONBytes(body)
 	return usage, extractOpenAIImageCountFromJSONBytes(body), collectOpenAIResponseImageOutputSizesFromJSONBytes(body), nil
@@ -1159,13 +1162,14 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		}
 		eventType := gjson.GetBytes(dataBytes, "type").String()
 		if direct != nil && strings.TrimSpace(direct.Model) != "" {
-			dataBytes, _ = sjson.SetBytes(dataBytes, "model", strings.TrimSpace(direct.Model))
+			dataBytes, _ = sjson.SetBytes(dataBytes, "requested_model", strings.TrimSpace(direct.Model))
 		}
 		// 原生编辑事件可能仍使用 image_generation 前缀；对外维持既有编辑事件名。
 		if strings.HasPrefix(eventType, "image_generation.") && direct.IsEdits() {
 			eventType = strings.Replace(eventType, "image_generation.", "image_edit.", 1)
 			dataBytes, _ = sjson.SetBytes(dataBytes, "type", eventType)
 		}
+		dataBytes = prepareOpenAIImageOutput(c, dataBytes)
 		if direct.ResponseFormat == "url" {
 			b64 := gjson.GetBytes(dataBytes, "b64_json").String()
 			format := gjson.GetBytes(dataBytes, "output_format").String()
@@ -1191,6 +1195,21 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		sseData.Flush(processSSEData)
 	}
 
+	var downstreamFrame bytes.Buffer
+	flushDownstreamFrame := func() {
+		if downstreamFrame.Len() == 0 {
+			return
+		}
+		if !clientDisconnected {
+			if _, err := c.Writer.Write(prepareOpenAIImageSSEOutput(c, downstreamFrame.Bytes())); err != nil {
+				clientDisconnected = true
+			} else {
+				flusher.Flush()
+				lastDownstreamWriteAt = time.Now()
+			}
+		}
+		downstreamFrame.Reset()
+	}
 	processLine := func(line []byte) {
 		if len(line) == 0 {
 			return
@@ -1200,7 +1219,12 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			firstTokenMs = &ms
 		}
 		if !clientDisconnected && direct == nil {
-			if _, writeErr := c.Writer.Write(line); writeErr != nil {
+			if openAIImageOutputRequestFromContext(c) != nil {
+				_, _ = downstreamFrame.Write(line)
+				if len(bytes.TrimSpace(line)) == 0 {
+					flushDownstreamFrame()
+				}
+			} else if _, writeErr := c.Writer.Write(line); writeErr != nil {
 				clientDisconnected = true
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Images stream client disconnected, continue draining upstream for billing")
 			} else {
@@ -1224,6 +1248,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			}
 		}
 	}
+	defer flushDownstreamFrame()
 
 	finalizeFallbackBody := func() {
 		if direct != nil {

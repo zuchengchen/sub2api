@@ -680,6 +680,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// The same request context survives scheduler failover attempts. Clear any
 	// reverse mapping installed by the prior account before processing frames.
 	setCodexToolNameReverse(c, nil)
+	setOpenAIImageOutputRequest(c, firstClientMessage)
 	if s == nil {
 		return errors.New("service is nil")
 	}
@@ -1026,7 +1027,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			return replaceOpenAIWSMessageModel(payload, upstreamModel, requestModel)
 		},
 		restoreToolNames: func(payload []byte) []byte {
-			return restoreCodexToolNamesFromContext(c, payload)
+			return prepareOpenAIImageOutput(c, restoreCodexToolNamesFromContext(c, payload))
 		},
 	}
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
@@ -1054,6 +1055,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					err := errors.New("overlapping response.create is not supported")
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
 				}
+				setOpenAIImageOutputRequest(c, payload)
 				defer func() {
 					if !acceptedTurn {
 						turnLifecycle.cancelResponseCreate()

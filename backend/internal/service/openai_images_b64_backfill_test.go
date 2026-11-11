@@ -377,5 +377,8 @@ func TestOpenAIGatewayServiceForwardImages_APIKeyLeavesURLOnlyResponseWhenDisabl
 
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, upstreamBody, rec.Body.String())
+	require.Equal(t, "https://cdn.example.com/cat.png", gjson.Get(rec.Body.String(), "data.0.url").String())
+	require.False(t, gjson.Get(rec.Body.String(), "data.0.b64_json").Exists())
+	require.False(t, gjson.Get(rec.Body.String(), "data.0.sub2api_image.postprocessed").Bool())
+	require.Contains(t, gjson.Get(rec.Body.String(), "data.0.sub2api_image.warnings").String(), "remote_image_not_processed")
 }
