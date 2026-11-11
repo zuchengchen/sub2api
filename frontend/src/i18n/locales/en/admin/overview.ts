@@ -626,6 +626,7 @@ export default {
       enable: 'Enable',
       disableUser: 'Disable User',
       enableUser: 'Enable User',
+      adminDisableForbidden: 'Admin users cannot be disabled directly to preserve access to the admin panel.',
       viewApiKeys: 'View API Keys',
       groups: 'Groups',
       apiKeys: 'API Keys',

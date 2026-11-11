@@ -602,6 +602,7 @@ export default {
       enable: '启用',
       disableUser: '禁用用户',
       enableUser: '启用用户',
+      adminDisableForbidden: '为避免失去后台访问权限，不支持直接禁用管理员用户。',
       viewApiKeys: '查看 API 密钥',
       groups: '分组',
       apiKeys: 'API密钥',
