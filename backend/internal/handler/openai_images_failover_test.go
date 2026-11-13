@@ -5,11 +5,14 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -24,7 +27,19 @@ import (
 
 type openAIImagesFailoverAccountRepo struct {
 	service.AccountRepository
-	accounts []service.Account
+	accounts     []service.Account
+	diagnosisErr error
+}
+
+func (r openAIImagesFailoverAccountRepo) ListModelAvailabilityCandidates(_ context.Context, _ *int64, platforms []string, _ bool) ([]service.Account, error) {
+	if r.diagnosisErr != nil {
+		return nil, r.diagnosisErr
+	}
+	var accounts []service.Account
+	for _, platform := range platforms {
+		accounts = append(accounts, r.accountsForPlatform(platform)...)
+	}
+	return accounts, nil
 }
 
 func (r openAIImagesFailoverAccountRepo) GetByID(_ context.Context, id int64) (*service.Account, error) {
@@ -200,4 +215,79 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 	require.Len(t, events, 2)
 	require.Equal(t, "failover", events[0].Kind)
 	require.Equal(t, "failover", events[1].Kind)
+}
+
+func TestOpenAIGatewayHandlerImages_DistinguishesUnknownModelsFromTemporaryCapacity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name           string
+		provider       bool
+		routedModel    string
+		diagnosisFails bool
+		wantStatus     int
+		wantType       string
+	}{
+		{name: "unknown_oauth_model", wantStatus: http.StatusNotFound, wantType: "model_not_found"},
+		{name: "provider_cooldown", provider: true, wantStatus: http.StatusServiceUnavailable, wantType: "api_error"},
+		{name: "mapped_known_model_cooldown", routedModel: "gpt-image-2.5", wantStatus: http.StatusServiceUnavailable, wantType: "api_error"},
+		{name: "diagnostic_failure", diagnosisFails: true, wantStatus: http.StatusServiceUnavailable, wantType: "api_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			groupID := int64(3131)
+			cooldown := time.Now().Add(time.Hour)
+			accounts := []service.Account{{
+				ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+				Status: service.StatusActive, Schedulable: true,
+				Credentials: map[string]any{"access_token": "test-token"},
+			}}
+			if tc.routedModel != "" {
+				accounts[0].RateLimitResetAt = &cooldown
+			}
+			if tc.provider {
+				accounts = append(accounts, service.Account{
+					ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+					Status: service.StatusActive, Schedulable: true, RateLimitResetAt: &cooldown,
+					Credentials: map[string]any{"model_mapping": map[string]any{"gpt-image-custom": "gpt-image-provider-custom"}},
+				})
+			}
+			repo := openAIImagesFailoverAccountRepo{accounts: accounts}
+			if tc.diagnosisFails {
+				repo.diagnosisErr = errors.New("diagnostic lookup unavailable")
+			}
+			upstream := &openAIImagesFailoverHTTPUpstream{}
+			cfg := &config.Config{RunMode: config.RunModeSimple}
+			gatewayService := service.NewOpenAIGatewayService(
+				repo, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, upstream,
+				nil, nil, nil, nil, nil, nil, nil, nil,
+			)
+			billingService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+			t.Cleanup(billingService.Stop)
+			handler := NewOpenAIGatewayHandler(
+				gatewayService, service.NewConcurrencyService(nil), billingService,
+				service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg,
+			)
+			body := []byte(`{"model":"gpt-image-custom","prompt":"draw a cat"}`)
+			req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+			if tc.routedModel != "" {
+				req = req.WithContext(service.WithCompositeRouteDecision(req.Context(), service.CompositeRouteDecision{
+					Matched: true, PublicModel: "gpt-image-custom", UpstreamModel: tc.routedModel, TargetPlatform: service.PlatformOpenAI,
+				}))
+			}
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = req
+			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+				ID: 99, GroupID: &groupID, User: &service.User{ID: 100},
+				Group: &service.Group{ID: groupID, AllowImageGeneration: true},
+			})
+			c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100})
+
+			handler.Images(c)
+
+			require.Empty(t, upstream.calls(), "selection failures must not send an upstream request")
+			require.Equal(t, tc.wantStatus, rec.Code, fmt.Sprintf("response: %s", rec.Body.String()))
+			require.Equal(t, tc.wantType, gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+		})
+	}
 }
