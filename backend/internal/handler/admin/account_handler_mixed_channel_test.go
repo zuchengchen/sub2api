@@ -263,6 +263,7 @@ func TestBulkUpdateAcceptsFilterTargetRequest(t *testing.T) {
 			"group":        "12",
 			"privacy_mode": "blocked",
 			"search":       "bulk-target",
+			"plan_type":    "prolite",
 		},
 		"schedulable": true,
 	})
@@ -275,6 +276,9 @@ func TestBulkUpdateAcceptsFilterTargetRequest(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, float64(0), resp["code"])
+	require.NotNil(t, adminSvc.lastBulkUpdateAccountInput)
+	require.NotNil(t, adminSvc.lastBulkUpdateAccountInput.Filters)
+	require.Equal(t, "prolite", adminSvc.lastBulkUpdateAccountInput.Filters.PlanType)
 }
 
 func TestBulkUpdateAcceptsDedicatedUpstreamBillingProbeSetting(t *testing.T) {

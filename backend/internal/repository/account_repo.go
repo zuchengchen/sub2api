@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	dbaccount "github.com/Wei-Shaw/sub2api/ent/account"
@@ -1047,7 +1048,7 @@ func (r *accountRepository) List(ctx context.Context, params pagination.Paginati
 	return r.ListWithFilters(ctx, params, "", "", "", "", 0, "")
 }
 
-func (r *accountRepository) accountListFilteredQuery(platform, accountType, status, search string, groupID int64, privacyMode string) *dbent.AccountQuery {
+func (r *accountRepository) accountListFilteredQuery(platform, accountType, status, search string, groupID int64, privacyMode string, planType ...string) *dbent.AccountQuery {
 	q := r.client.Account.Query()
 
 	if platform != "" {
@@ -1139,12 +1140,52 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 			}
 		}))
 	}
+	if len(planType) > 0 && strings.TrimSpace(planType[0]) != "" {
+		// These SKUs describe ChatGPT subscriptions. A Grok/Claude "pro"
+		// credential must never be included in the Pro 200 filter.
+		q = q.Where(dbaccount.PlatformEQ(service.PlatformOpenAI), accountPlanTypePredicate(planType[0]))
+	}
 
 	return q
 }
 
-func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
-	q := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode)
+func accountPlanTypePredicate(planType string) dbpredicate.Account {
+	key := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == '_' || r == '-' {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, planType)
+	aliases := []string{key}
+	switch key {
+	case "prolite", "pro100":
+		aliases = []string{"prolite", "pro100"}
+	case "pro", "chatgptpro", "pro200":
+		aliases = []string{"pro", "chatgptpro", "pro200"}
+	case "promax", "pro500":
+		aliases = []string{"promax", "pro500"}
+	}
+	return func(s *entsql.Selector) {
+		if key == "" {
+			s.Where(entsql.ExprP("FALSE"))
+			return
+		}
+		s.Where(entsql.P(func(b *entsql.Builder) {
+			b.WriteString("jsonb_typeof(").Ident(s.C(dbaccount.FieldCredentials)).WriteString("->'plan_type') = 'string' AND ")
+			b.WriteString("regexp_replace(lower(").Ident(s.C(dbaccount.FieldCredentials)).WriteString("->>'plan_type'), '[[:space:]_-]+', '', 'g') IN (")
+			for i, alias := range aliases {
+				if i > 0 {
+					b.Comma()
+				}
+				b.Arg(alias)
+			}
+			b.WriteByte(')')
+		}))
+	}
+}
+
+func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string, planType ...string) ([]service.Account, *pagination.PaginationResult, error) {
+	q := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode, planType...)
 	// Clone before Count so interceptor-appended predicates (SoftDeleteMixin's
 	// deleted_at IS NULL) don't accumulate on the shared builder and pollute the
 	// subsequent list query. Same pattern used in group_repo/user_repo
@@ -1173,8 +1214,8 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 	return outAccounts, paginationResultFromTotal(int64(total), params), nil
 }
 
-func (r *accountRepository) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, error) {
-	accounts, err := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode).All(ctx)
+func (r *accountRepository) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string, planType ...string) ([]service.Account, error) {
+	accounts, err := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode, planType...).All(ctx)
 	if err != nil {
 		return nil, err
 	}

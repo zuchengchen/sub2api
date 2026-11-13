@@ -546,6 +546,7 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { sanitizeUrl } from '@/utils/url'
 import { getFloatingPanelPosition } from '@/utils/floatingPanel'
 import { formatMultiplier } from '@/utils/formatters'
+import { openAIPlanFilterTypes, openAIPlanTypeKey } from '@/utils/planType'
 import type { Account, AccountListItem, AccountPlatform, AccountSchedulerGroupScore, AccountType, AccountUsageInfo, Proxy as AccountProxy, AdminGroup, UpstreamBillingProbeSnapshot } from '@/types'
 
 const CreateAccountModal = defineAsyncComponent(() => import('@/components/account/CreateAccountModal.vue'))
@@ -590,6 +591,7 @@ type AccountBulkEditTarget =
         group?: string
         search?: string
         privacy_mode?: string
+        plan_type?: string
         sort_by?: string
         sort_order?: AccountSortOrder
       }
@@ -695,20 +697,25 @@ const ACCOUNT_FILTER_STORAGE_KEY = 'account-filter-values'
 type AccountFilterValues = {
   platform: string
   status: string
+  plan_type: string
 }
 const loadInitialAccountFilterValues = (): AccountFilterValues => {
-  const fallback: AccountFilterValues = { platform: '', status: '' }
+  const fallback: AccountFilterValues = { platform: '', status: '', plan_type: '' }
   try {
     const raw = localStorage.getItem(ACCOUNT_FILTER_STORAGE_KEY)
     if (!raw) return fallback
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return fallback
     const values = parsed as Record<string, unknown>
+    const platform = typeof values.platform === 'string' && CONCRETE_PLATFORM_OPTIONS.some(option => option.value === values.platform)
+      ? values.platform : ''
+    const planType = typeof values.plan_type === 'string' ? openAIPlanTypeKey(values.plan_type) : ''
     return {
-      platform: typeof values.platform === 'string' && CONCRETE_PLATFORM_OPTIONS.some(option => option.value === values.platform)
-        ? values.platform : '',
+      platform,
       status: typeof values.status === 'string' && ['active', 'inactive', 'error', 'rate_limited', 'temp_unschedulable', 'unschedulable'].includes(values.status)
-        ? values.status : ''
+        ? values.status : '',
+      plan_type: (!platform || platform === 'openai') && openAIPlanFilterTypes.some(plan => plan === planType)
+        ? planType : ''
     }
   } catch {
     return fallback
@@ -1202,6 +1209,7 @@ const buildUpstreamBillingRateFilters = () => {
     group: typeof rawParams.group === 'string' ? rawParams.group : '',
     search: typeof rawParams.search === 'string' ? rawParams.search : '',
     privacy_mode: typeof rawParams.privacy_mode === 'string' ? rawParams.privacy_mode : '',
+    plan_type: typeof rawParams.plan_type === 'string' ? rawParams.plan_type : '',
     sort_by: sortState.sort_by,
     sort_order: sortState.sort_order
   }
@@ -1311,7 +1319,8 @@ const saveAccountFilterValues = () => {
   try {
     localStorage.setItem(ACCOUNT_FILTER_STORAGE_KEY, JSON.stringify({
       platform: params.platform,
-      status: params.status
+      status: params.status,
+      plan_type: params.plan_type
     }))
   } catch {
     // Filtering must remain available when browser storage is unavailable.
@@ -1481,6 +1490,7 @@ const refreshAccountsIncrementally = async () => {
         type?: string
         status?: string
         privacy_mode?: string
+        plan_type?: string
         group?: string
         search?: string
         sort_by?: string
@@ -2049,6 +2059,7 @@ const buildBulkEditFilterSnapshot = () => {
     group: typeof rawParams.group === 'string' ? rawParams.group : '',
     search: typeof rawParams.search === 'string' ? rawParams.search : '',
     privacy_mode: typeof rawParams.privacy_mode === 'string' ? rawParams.privacy_mode : '',
+    plan_type: typeof rawParams.plan_type === 'string' ? rawParams.plan_type : '',
     sort_by: typeof rawParams.sort_by === 'string' ? rawParams.sort_by : '',
     sort_order: sortOrder
   }
@@ -2125,6 +2136,7 @@ const buildAccountQueryFilters = () => ({
   status: params.status || '',
   group: params.group || '',
   privacy_mode: params.privacy_mode || '',
+  plan_type: params.plan_type || '',
   search: params.search || '',
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
@@ -2133,6 +2145,8 @@ const accountMatchesCurrentFilters = (account: Account) => {
   const filters = buildAccountQueryFilters()
   if (filters.platform && account.platform !== filters.platform) return false
   if (filters.type && account.type !== filters.type) return false
+  if (filters.plan_type && (account.platform !== 'openai' ||
+    openAIPlanTypeKey(getAccountPlanType(account)) !== openAIPlanTypeKey(filters.plan_type))) return false
   if (filters.status) {
     const now = Date.now()
     const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN

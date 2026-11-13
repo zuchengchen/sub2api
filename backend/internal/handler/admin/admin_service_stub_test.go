@@ -17,6 +17,7 @@ type stubAdminService struct {
 	accountSchedulerScoreFilterAccounts []service.Account
 	openAISchedulerScorePoolAccounts    []service.Account
 	schedulerScoreFilterCalls           int
+	schedulerScoreFilterPlanType        string
 	openAISchedulerScorePoolCalls       int
 	proxies                             []service.Proxy
 	proxyCounts                         []service.ProxyWithAccountCount
@@ -59,6 +60,7 @@ type stubAdminService struct {
 		search      string
 		groupID     int64
 		privacyMode string
+		planType    string
 		sortBy      string
 		sortOrder   string
 		calls       int
@@ -437,13 +439,17 @@ func (s *stubAdminService) BatchSetGroupRPMOverrides(_ context.Context, _ int64,
 	return nil
 }
 
-func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]service.Account, int64, error) {
+func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string, planType ...string) ([]service.Account, int64, error) {
 	s.lastListAccounts.platform = platform
 	s.lastListAccounts.accountType = accountType
 	s.lastListAccounts.status = status
 	s.lastListAccounts.search = search
 	s.lastListAccounts.groupID = groupID
 	s.lastListAccounts.privacyMode = privacyMode
+	s.lastListAccounts.planType = ""
+	if len(planType) > 0 {
+		s.lastListAccounts.planType = planType[0]
+	}
 	s.lastListAccounts.sortBy = sortBy
 	s.lastListAccounts.sortOrder = sortOrder
 	s.lastListAccounts.calls++
@@ -466,8 +472,11 @@ func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int,
 	return accounts[start:end], int64(total), nil
 }
 
-func (s *stubAdminService) ListAccountsForSchedulerScoreFilter(_ context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, error) {
+func (s *stubAdminService) ListAccountsForSchedulerScoreFilter(_ context.Context, platform, accountType, status, search string, groupID int64, privacyMode string, planType ...string) ([]service.Account, error) {
 	s.schedulerScoreFilterCalls++
+	if len(planType) > 0 {
+		s.schedulerScoreFilterPlanType = planType[0]
+	}
 	if s.accountSchedulerScoreFilterAccounts != nil {
 		return s.accountSchedulerScoreFilterAccounts, nil
 	}

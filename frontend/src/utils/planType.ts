@@ -6,8 +6,16 @@ export function normalizePlanType(value?: string | null): string {
 /** Canonical comparison key; labels may be shared by distinct SKUs. */
 export function openAIPlanTypeKey(value?: string | null): string {
   const key = normalizePlanType(value)
-  return key === 'chatgptpro' ? 'pro' : key
+  switch (key) {
+    case 'pro100': return 'prolite'
+    case 'chatgptpro':
+    case 'pro200': return 'pro'
+    case 'pro500': return 'promax'
+    default: return key
+  }
 }
+
+export const openAIPlanFilterTypes = ['plus', 'prolite', 'pro', 'promax', 'free'] as const
 
 // Wire names from openai/codex b1e72963, protocol/src/account.rs.
 export const openAIPlanTypes = [
