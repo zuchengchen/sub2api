@@ -593,6 +593,15 @@ func (s *stubAdminService) SetOpenAICreditsEnabled(ctx context.Context, id int64
 	return &account, nil
 }
 
+func (s *stubAdminService) SetOpenAIAutoResetCreditEnabled(ctx context.Context, id int64, enabled bool) (*service.Account, error) {
+	account := &service.Account{ID: id, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		Extra: map[string]any{service.OpenAIAutoResetCreditEnabledExtraKey: enabled}}
+	if enabled {
+		account.Extra[service.OpenAIAutoResetCreditOptInVersionExtraKey] = 1
+	}
+	return account, nil
+}
+
 func (s *stubAdminService) BulkUpdateAccounts(ctx context.Context, input *service.BulkUpdateAccountsInput) (*service.BulkUpdateAccountsResult, error) {
 	s.lastBulkUpdateAccountInput = input
 	if s.bulkUpdateAccountErr != nil {
