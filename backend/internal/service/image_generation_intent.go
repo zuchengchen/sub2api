@@ -338,6 +338,11 @@ func openAIRequestBodyImageGenerationToolNeedsNormalization(body []byte) bool {
 		if openAIJSONString(item.Get("type")) != "image_generation" {
 			return true
 		}
+		model := openAIJSONString(item.Get("model"))
+		if resolveOpenAIImageModelAlias(model) != model {
+			needsNormalization = true
+			return false
+		}
 		// 只有旧字段或明确的模型不兼容字段需要修正时才进入 map 修改。
 		if item.Get("format").Exists() || item.Get("compression").Exists() {
 			needsNormalization = true

@@ -137,7 +137,7 @@ func prepareOpenAIImageOutput(c *gin.Context, body []byte) []byte {
 		meta := openAIImageOutputMetadata{RequestedModel: options.Model, ReportedModel: reported, RequestedSize: options.Size, ModelStatus: "unreported"}
 		if reported != "" {
 			meta.ModelStatus = "reported"
-			if options.Model != "" && !strings.EqualFold(options.Model, reported) {
+			if expected := resolveOpenAIImageModelAlias(options.Model); expected != "" && !strings.EqualFold(expected, reported) {
 				meta.ModelStatus = "different"
 				meta.Warnings = append(meta.Warnings, "upstream_image_model_differs")
 			}

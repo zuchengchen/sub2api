@@ -1707,7 +1707,7 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 	}
 	if openAIRequestBodyImageGenerationToolNeedsNormalization(normalized) {
 		var reqBody map[string]any
-		if err := json.Unmarshal(normalized, &reqBody); err != nil {
+		if err := decodeOpenAIJSONUseNumber(normalized, &reqBody); err != nil {
 			return body, false, fmt.Errorf("normalize websocket image tool body: %w", err)
 		}
 		if normalizeOpenAIResponsesImageGenerationTools(reqBody) {

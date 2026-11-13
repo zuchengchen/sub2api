@@ -80,13 +80,15 @@ func TestCodexDirectImagesMappingBeforeRouting(t *testing.T) {
 			require.Equal(t, want, gjson.GetBytes(upstream.lastBody, "model").String())
 		})
 	}
-	for _, model := range []string{"gpt-image-1", "gpt-image-future"} {
+	for _, model := range []string{"gpt-image-1"} {
 		body, target, err := buildOpenAIImagesOAuthPayload(&OpenAIImagesRequest{Prompt: "draw"}, model)
 		require.NoError(t, err)
 		require.Equal(t, chatgptCodexURL, target)
 		require.Equal(t, "gpt-5.6-luna", gjson.GetBytes(body, "model").String())
 		require.Equal(t, model, gjson.GetBytes(body, "tools.0.model").String())
 	}
+	_, _, err := buildOpenAIImagesOAuthPayload(&OpenAIImagesRequest{Prompt: "draw"}, "gpt-image-future")
+	require.ErrorContains(t, err, "Unsupported image model")
 }
 
 func TestCodexImagesAlignmentPreservesOtherAuth(t *testing.T) {
