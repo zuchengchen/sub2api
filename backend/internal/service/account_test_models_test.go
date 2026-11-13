@@ -105,7 +105,7 @@ func TestMergeOpenAIAccountTestModelsAppendsSupportedImageModels(t *testing.T) {
 	require.Contains(t, ids, "gpt-image-2.5")
 	require.NotContains(t, ids, "custom-alias")
 	require.NotContains(t, ids, "gpt-image-*")
-	require.Equal(t, "GPT Image 2.5", display["gpt-image-2.5"])
+	require.Equal(t, "GPT Image 2.5 (Sunburst)", display["gpt-image-2.5"])
 	require.Equal(t, "GPT Image 2", display["gpt-image-2"])
 }
 

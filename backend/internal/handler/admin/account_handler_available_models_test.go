@@ -297,7 +297,7 @@ func TestAccountHandlerGetAvailableModels_OpenAIFallbackIncludesMappedImageModel
 	require.Contains(t, ids, "gpt-6-luna")
 	require.Contains(t, ids, "gpt-image-2")
 	require.Contains(t, ids, "gpt-image-2.5")
-	require.Equal(t, "GPT Image 2.5", display["gpt-image-2.5"])
+	require.Equal(t, "GPT Image 2.5 (Sunburst)", display["gpt-image-2.5"])
 }
 
 func TestAccountHandlerSyncUpstreamModels_ConfigErrorReturnsBadRequest(t *testing.T) {

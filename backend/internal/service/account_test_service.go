@@ -2843,7 +2843,7 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
 
 	payload := map[string]any{
-		"model":           modelID,
+		"model":           resolveOpenAIImageModelAlias(modelID),
 		"prompt":          prompt,
 		"n":               1,
 		"response_format": "b64_json",
@@ -2939,7 +2939,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	applyOpenAIImagesDefaults(parsed)
 
-	upstreamModel := account.GetMappedModel(parsed.Model)
+	upstreamModel := resolveOpenAIImageModelAlias(account.GetMappedModel(parsed.Model))
 	responsesBody, targetURL, err := buildOpenAIImagesOAuthPayload(parsed, upstreamModel)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build image request: %s", err.Error()))

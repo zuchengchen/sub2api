@@ -88,6 +88,30 @@ func TestOpenAIImageOutputAnimationUnknownModelAndTurnReset(t *testing.T) {
 	requireImageOutputDimensions(t, gjson.GetBytes(prepareOpenAIImageOutput(c, pngBody), "output.0.result").String(), 16, 16)
 }
 
+func TestOpenAIImageOutputAliasesKeepReportedModelEvidence(t *testing.T) {
+	for _, alias := range []string{"gpt-image-2.5", "gpt-image-2.6"} {
+		for _, reported := range []string{"", alias + "-sunburst", alias + "-flare"} {
+			t.Run(alias+"/"+reported, func(t *testing.T) {
+				c, _ := newOpenAIImagesTestContext(t, nil)
+				setOpenAIImageOutputRequest(c, []byte(fmt.Sprintf(`{"model":%q}`, alias)))
+				body := []byte(fmt.Sprintf(`{"data":[{"model":%q,"b64_json":%q}]}`, reported, encodeOpenAIImageTestPNG(t, 16, 16)))
+				output := prepareOpenAIImageOutput(c, body)
+				meta := gjson.GetBytes(output, "data.0.sub2api_image")
+				require.Equal(t, alias, meta.Get("requested_model").String())
+				require.Equal(t, reported, meta.Get("reported_model").String())
+				wantStatus := "reported"
+				if reported == "" {
+					wantStatus = "unreported"
+				} else if reported != alias+"-sunburst" {
+					wantStatus = "different"
+				}
+				require.Equal(t, wantStatus, meta.Get("model_status").String())
+				require.Equal(t, wantStatus == "different", strings.Contains(meta.Get("warnings").String(), "upstream_image_model_differs"))
+			})
+		}
+	}
+}
+
 func TestOpenAIImageOutputFormatsAndSizeBoundaries(t *testing.T) {
 	for _, tc := range []struct {
 		name, size, format, encoded string

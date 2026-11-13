@@ -56,6 +56,10 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 	diag := ModelAvailabilityDiagnosis{}
 	for i := range accounts {
 		diag.HasAccountsInPool = true
+		if OpenAIImagesEndpointFromContext(ctx) && platform == PlatformOpenAI &&
+			!accountSupportsOpenAICapabilities(ctx, &accounts[i], "", OpenAIImagesCapabilityBasic, requestedModel) {
+			continue
+		}
 		if isRetiredOpenAISubscriptionModel(&accounts[i], resolveOpenAIAccountUpstreamModelForRequest(&accounts[i], requestedModel, false)) {
 			diag.HasRetiredSubscriptionModel = true
 		}
