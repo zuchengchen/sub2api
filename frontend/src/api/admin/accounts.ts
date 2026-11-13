@@ -642,6 +642,14 @@ export async function setOpenAICreditsEnabled(id: number, enabled: boolean): Pro
   return data
 }
 
+/** Toggle automatic reset credits without replacing account settings or thresholds. */
+export async function setOpenAIAutoResetCreditEnabled(id: number, enabled: boolean): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/auto-reset-credit-enabled`, {
+    enabled
+  })
+  return data
+}
+
 /**
  * Get available models for an account
  * @param id - Account ID
@@ -1187,6 +1195,7 @@ export const accountsAPI = {
   resetTempUnschedulable,
   setSchedulable,
   setOpenAICreditsEnabled,
+  setOpenAIAutoResetCreditEnabled,
   getAvailableModels,
   syncUpstreamModels,
   syncUpstreamModelsPreview,

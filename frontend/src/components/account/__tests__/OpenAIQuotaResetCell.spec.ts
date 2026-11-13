@@ -14,6 +14,7 @@ vi.mock('@/api/admin/accounts', () => ({
   refreshOpenAIQuota: vi.fn(),
   resetOpenAIQuota: vi.fn(),
   setOpenAICreditsEnabled: vi.fn(),
+  setOpenAIAutoResetCreditEnabled: vi.fn(),
   refreshOpenAIReferrals: vi.fn(),
   sendOpenAIReferralInvite: vi.fn(),
 }))
@@ -63,9 +64,8 @@ function makeAccount(overrides: Partial<Account>): Account {
   }
 }
 
-// 第二个按钮(橙色)是 reset 按钮::disabled="resetting||loading||!canReset" :title="resetButtonTitle"
 const resetButton = (wrapper: ReturnType<typeof mount>) =>
-  wrapper.findAll('button')[1]
+  wrapper.get('[data-testid="openai-quota-reset"]')
 
 beforeEach(() => {
   vi.mocked(refreshOpenAIQuota).mockReset()
