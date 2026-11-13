@@ -85,6 +85,8 @@ export default {
       // Filter options
       allPlatforms: '全部平台',
       allTypes: '全部类型',
+      allSubscriptionTypes: '全部订阅类型',
+      openaiSubscriptionType: 'GPT 订阅类型',
       allStatus: '全部状态',
       allGroups: '全部分组',
       ungroupedGroup: '未分配分组',

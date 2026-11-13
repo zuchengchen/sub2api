@@ -74,10 +74,10 @@ func (m *mockAccountRepoForTest) Delete(ctx context.Context, id int64) error    
 func (m *mockAccountRepoForTest) List(ctx context.Context, params pagination.PaginationParams) ([]Account, *pagination.PaginationResult, error) {
 	return nil, nil, nil
 }
-func (m *mockAccountRepoForTest) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
+func (m *mockAccountRepoForTest) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string, planType ...string) ([]Account, *pagination.PaginationResult, error) {
 	return nil, nil, nil
 }
-func (m *mockAccountRepoForTest) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error) {
+func (m *mockAccountRepoForTest) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string, planType ...string) ([]Account, error) {
 	return nil, nil
 }
 func (m *mockAccountRepoForTest) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) {
