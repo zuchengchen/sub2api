@@ -85,6 +85,8 @@ export default {
       notesHint: 'Notes are optional',
       allPlatforms: 'All Platforms',
       allTypes: 'All Types',
+      allSubscriptionTypes: 'All subscription types',
+      openaiSubscriptionType: 'GPT subscription type',
       allStatus: 'All Status',
       allGroups: 'All Groups',
       ungroupedGroup: 'Ungrouped',

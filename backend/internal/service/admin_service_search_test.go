@@ -13,23 +13,28 @@ import (
 type accountRepoStubForAdminList struct {
 	accountRepoStub
 
-	listWithFiltersCalls    int
-	listWithFiltersParams   pagination.PaginationParams
-	listWithFiltersPlatform string
-	listWithFiltersType     string
-	listWithFiltersStatus   string
-	listWithFiltersSearch   string
-	listWithFiltersPrivacy  string
-	listWithFiltersAccounts []Account
-	listWithFiltersResult   *pagination.PaginationResult
-	listWithFiltersErr      error
+	listWithFiltersCalls       int
+	listWithFiltersParams      pagination.PaginationParams
+	listWithFiltersPlatform    string
+	listWithFiltersType        string
+	listWithFiltersStatus      string
+	listWithFiltersSearch      string
+	listWithFiltersPrivacy     string
+	listWithFiltersPlanType    string
+	listAllWithFiltersPlanType string
+	listWithFiltersAccounts    []Account
+	listWithFiltersResult      *pagination.PaginationResult
+	listWithFiltersErr         error
 }
 
-func (s *accountRepoStubForAdminList) ListAllWithFilters(context.Context, string, string, string, string, int64, string) ([]Account, error) {
-	return nil, nil
+func (s *accountRepoStubForAdminList) ListAllWithFilters(_ context.Context, _, _, _, _ string, _ int64, _ string, planType ...string) ([]Account, error) {
+	if len(planType) > 0 {
+		s.listAllWithFiltersPlanType = planType[0]
+	}
+	return s.listWithFiltersAccounts, nil
 }
 
-func (s *accountRepoStubForAdminList) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
+func (s *accountRepoStubForAdminList) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string, planType ...string) ([]Account, *pagination.PaginationResult, error) {
 	s.listWithFiltersCalls++
 	s.listWithFiltersParams = params
 	s.listWithFiltersPlatform = platform
@@ -37,6 +42,9 @@ func (s *accountRepoStubForAdminList) ListWithFilters(_ context.Context, params 
 	s.listWithFiltersStatus = status
 	s.listWithFiltersSearch = search
 	s.listWithFiltersPrivacy = privacyMode
+	if len(planType) > 0 {
+		s.listWithFiltersPlanType = planType[0]
+	}
 
 	if s.listWithFiltersErr != nil {
 		return nil, nil, s.listWithFiltersErr
