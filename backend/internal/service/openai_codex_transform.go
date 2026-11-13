@@ -1052,6 +1052,12 @@ func normalizeOpenAIResponsesImageGenerationTools(reqBody map[string]any) bool {
 		if !ok || strings.TrimSpace(firstNonEmptyString(toolMap["type"])) != "image_generation" {
 			continue
 		}
+		if model, ok := toolMap["model"].(string); ok {
+			if resolved := resolveOpenAIImageModelAlias(model); resolved != model {
+				toolMap["model"] = resolved
+				modified = true
+			}
+		}
 		if _, ok := toolMap["output_format"]; !ok {
 			if value := strings.TrimSpace(firstNonEmptyString(toolMap["format"])); value != "" {
 				toolMap["output_format"] = value
@@ -1275,6 +1281,7 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 	if !isOpenAIImageGenerationModel(imageModel) {
 		return false
 	}
+	imageModel = resolveOpenAIImageModelAlias(imageModel)
 
 	modified := false
 	tools, _ := reqBody["tools"].([]any)
@@ -1305,8 +1312,11 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 			modified = true
 		}
 		for _, key := range []string{
+			"n",
 			"size",
 			"quality",
+			"complexity",
+			"input_fidelity",
 			"background",
 			"output_format",
 			"output_compression",
@@ -1316,14 +1326,20 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 			"frame_count",
 			"frame_duration_ms",
 		} {
-			if value, exists := reqBody[key]; exists && value != nil {
-				if _, toolHas := toolMap[key]; !toolHas {
+			if value, exists := reqBody[key]; exists {
+				if _, toolHas := toolMap[key]; !toolHas && value != nil {
 					toolMap[key] = value
 				}
 				delete(reqBody, key)
 				modified = true
 			}
 		}
+	}
+
+	// Fields moved from the Images shape need the same model-specific cleanup
+	// as tools supplied explicitly, including alias resolution and input_fidelity.
+	if normalizeOpenAIResponsesImageGenerationTools(reqBody) {
+		modified = true
 	}
 
 	if prompt := strings.TrimSpace(firstNonEmptyString(reqBody["prompt"])); prompt != "" {

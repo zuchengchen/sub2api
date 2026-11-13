@@ -364,6 +364,7 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
+	toolModel = resolveOpenAIImageModelAlias(toolModel)
 	prompt := strings.TrimSpace(parsed.Prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
@@ -416,6 +417,7 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	}{
 		{path: "size", value: parsed.Size},
 		{path: "quality", value: parsed.Quality},
+		{path: "complexity", value: parsed.Complexity},
 		{path: "background", value: parsed.Background},
 		{path: "output_format", value: parsed.OutputFormat},
 		{path: "moderation", value: parsed.Moderation},
@@ -424,6 +426,9 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 		if trimmed := strings.TrimSpace(field.value); trimmed != "" {
 			tool, _ = sjson.SetBytes(tool, field.path, trimmed)
 		}
+	}
+	if parsed.InputFidelity != "" && !strings.HasPrefix(toolModel, "gpt-image-2") {
+		tool, _ = sjson.SetBytes(tool, "input_fidelity", parsed.InputFidelity)
 	}
 	if parsed.OutputCompression != nil {
 		tool, _ = sjson.SetBytes(tool, "output_compression", *parsed.OutputCompression)
@@ -1825,8 +1830,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if err := validateOpenAIImagesModel(requestModel); err != nil {
 		return nil, err
 	}
-	upstreamModel := account.GetMappedModel(requestModel)
+	upstreamModel := resolveOpenAIImageModelAlias(account.GetMappedModel(requestModel))
 	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
+		return nil, err
+	}
+	if err := validateOpenAICodexImagesModel(upstreamModel); err != nil {
+		writeOpenAIImagesUpstreamErrorResponse(c, err)
 		return nil, err
 	}
 	direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)

@@ -56,6 +56,12 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 	diag := ModelAvailabilityDiagnosis{}
 	for i := range accounts {
 		diag.HasAccountsInPool = true
+		// Keep compatible providers' existing capacity diagnostics unchanged.
+		// Only GPT image names use the Codex-specific model support fence.
+		if OpenAIImagesEndpointFromContext(ctx) && platform == PlatformOpenAI && isOpenAIImageGenerationModel(requestedModel) &&
+			!accountSupportsOpenAICapabilities(ctx, &accounts[i], "", OpenAIImagesCapabilityBasic, requestedModel) {
+			continue
+		}
 		if isRetiredOpenAISubscriptionModel(&accounts[i], resolveOpenAIAccountUpstreamModelForRequest(&accounts[i], requestedModel, false)) {
 			diag.HasRetiredSubscriptionModel = true
 		}

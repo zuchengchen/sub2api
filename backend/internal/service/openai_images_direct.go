@@ -27,10 +27,24 @@ func isOpenAIImagesForceResponses(ctx context.Context) bool {
 	return forced
 }
 
+// Bare version names are public gateway aliases, not upstream model IDs.
+// Resolve them after configured mappings and retain the original name for usage.
+func resolveOpenAIImageModelAlias(model string) string {
+	model = strings.TrimSpace(model)
+	switch model {
+	case "gpt-image-2.5":
+		return "gpt-image-2.5-sunburst"
+	case "gpt-image-2.6":
+		return "gpt-image-2.6-sunburst"
+	default:
+		return model
+	}
+}
+
 // 显式列出已接入的模型，不把未来模型或未知快照自动送到直调端点。
 func usesCodexDirectImages(model string) bool {
-	switch strings.TrimSpace(model) {
-	case "gpt-image-1.5", "gpt-image-2",
+	switch resolveOpenAIImageModelAlias(model) {
+	case "gpt-image-1.5", "gpt-image-1-mini", "gpt-image-2", "gpt-image-2-2026-04-21",
 		"gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
 		"gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08",
 		"gpt-image-2.6-flare", "gpt-image-2.6-sunburst":
@@ -40,10 +54,26 @@ func usesCodexDirectImages(model string) bool {
 	}
 }
 
+func validateOpenAICodexImagesModel(model string) *OpenAIImagesUpstreamError {
+	model = resolveOpenAIImageModelAlias(model)
+	// Keep the established legacy Responses bridge separate from native Images.
+	if usesCodexDirectImages(model) || model == "gpt-image-1" {
+		return nil
+	}
+	return &OpenAIImagesUpstreamError{
+		StatusCode: http.StatusBadRequest, ErrorType: "invalid_request_error", Code: "model_not_found", Param: "model",
+		Message: fmt.Sprintf("Unsupported image model %q for ChatGPT OAuth. Use gpt-image-2, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2.6-flare, or gpt-image-2.6-sunburst. Bare gpt-image-2.5 and gpt-image-2.6 select Sunburst.", model),
+	}
+}
+
 // 正式转发与后台测试共用同一份端点选择和请求构造。
 func buildOpenAIImagesOAuthPayload(parsed *OpenAIImagesRequest, model string) ([]byte, string, error) {
 	if parsed == nil {
 		return nil, "", fmt.Errorf("parsed images request is required")
+	}
+	model = resolveOpenAIImageModelAlias(model)
+	if err := validateOpenAICodexImagesModel(model); err != nil {
+		return nil, "", err
 	}
 	if !usesCodexDirectImages(model) {
 		body, err := buildOpenAIImagesResponsesRequest(parsed, model)
@@ -67,6 +97,7 @@ func buildOpenAIImagesOAuthPayload(parsed *OpenAIImagesRequest, model string) ([
 		value string
 	}{
 		{"size", parsed.Size}, {"quality", parsed.Quality},
+		{"complexity", parsed.Complexity},
 		{"background", parsed.Background}, {"output_format", parsed.OutputFormat},
 		{"moderation", parsed.Moderation}, {"input_fidelity", parsed.InputFidelity},
 		{"style", parsed.Style},
