@@ -14,32 +14,57 @@
     <div class="flex flex-wrap items-center gap-1.5">
       <slot name="pre-actions" />
 
-      <button
-        type="button"
-        class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
-        :disabled="loading || resetting"
-        :title="countButtonTitle"
-        @click="handleQuery()"
-      >
-        <svg
-          class="h-2.5 w-2.5"
-          :class="{ 'animate-spin': loading }"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
+      <div class="inline-flex items-center gap-1">
+        <button
+          type="button"
+          data-testid="reset-credit-count"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
+          :disabled="loading || resetting"
+          :title="countButtonTitle"
+          @click="handleQuery()"
         >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          <svg
+            class="h-2.5 w-2.5"
+            :class="{ 'animate-spin': loading }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+          {{ t('admin.accounts.openaiQuotaReset.count') }}<span v-if="data"> {{ availableResetCount }}</span>
+        </button>
+        <button
+          type="button"
+          role="switch"
+          data-testid="auto-reset-credit-enabled-toggle"
+          :aria-checked="autoResetEnabled"
+          :aria-label="t('admin.accounts.autoResetCredit.title')"
+          :title="autoResetToggleTitle"
+          :disabled="autoResetToggling || resetting"
+          :class="[
+            'relative inline-flex h-4 w-7 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50',
+            autoResetEnabled ? 'bg-amber-500' : 'bg-gray-200 dark:bg-dark-600'
+          ]"
+          @click="handleAutoResetToggle"
+        >
+          <span
+            :class="[
+              'pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+              autoResetEnabled ? 'translate-x-3' : 'translate-x-0'
+            ]"
           />
-        </svg>
-        {{ t('admin.accounts.openaiQuotaReset.count') }}<span v-if="data"> {{ availableResetCount }}</span>
-      </button>
+        </button>
+      </div>
 
       <button
         type="button"
+        data-testid="openai-quota-reset"
         class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-orange-600 transition-colors hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-orange-400 dark:hover:bg-orange-900/30"
         :disabled="resetting || loading || !canReset"
         :title="resetButtonTitle"
@@ -210,6 +235,17 @@
       @confirm="confirmEnableCredits"
       @cancel="showCreditsConfirm = false"
     />
+
+    <ConfirmDialog
+      :show="showAutoResetConfirm"
+      :title="t('admin.accounts.autoResetCredit.enableConfirmTitle')"
+      :message="autoResetConfirmMessage"
+      :confirm-text="t('admin.accounts.autoResetCredit.enableConfirm')"
+      :cancel-text="t('common.cancel')"
+      danger
+      @confirm="confirmEnableAutoReset"
+      @cancel="showAutoResetConfirm = false"
+    />
   </div>
 </template>
 
@@ -221,6 +257,7 @@ import {
   refreshOpenAIQuota,
   resetOpenAIQuota,
   setOpenAICreditsEnabled,
+  setOpenAIAutoResetCreditEnabled,
   type OpenAIQuotaUsage,
   type OpenAIQuotaResetResult
 } from '@/api/admin/accounts'
@@ -251,11 +288,29 @@ const showResetConfirm = ref(false)
 const showResetCreditDetails = ref(false)
 const creditsCacheWarning = ref(false)
 let quotaSnapshotVersion = 0
+const autoResetEnabledOverride = ref<boolean | null>(null)
+const autoResetToggling = ref(false)
+const showAutoResetConfirm = ref(false)
+let autoResetToggleVersion = 0
 
 type AutoResetCreditState = NonNullable<NonNullable<Account['extra']>['codex_auto_reset_credit_state']>
 const validAutoResetStatuses = new Set(['checking', 'available', 'resetting', 'success', 'no_credit', 'failed'])
 const autoResetEnabled = computed(() =>
-  props.account.extra?.auto_reset_credit_enabled === true && props.account.extra?.auto_reset_credit_opt_in_version === 1
+  autoResetEnabledOverride.value ?? (
+    props.account.extra?.auto_reset_credit_enabled === true && props.account.extra?.auto_reset_credit_opt_in_version === 1
+  )
+)
+const autoResetThresholdPercent = (value: unknown) => {
+  const threshold = Number(value)
+  return Number.isFinite(threshold) && threshold >= 0.001 && threshold <= 1
+    ? Number((threshold * 100).toFixed(1)) : 100
+}
+const autoResetConfirmMessage = computed(() => t('admin.accounts.autoResetCredit.enableConfirmMessage', {
+  threshold5h: autoResetThresholdPercent(props.account.extra?.auto_reset_credit_5h_threshold),
+  threshold7d: autoResetThresholdPercent(props.account.extra?.auto_reset_credit_7d_threshold)
+}))
+const autoResetToggleTitle = computed(() =>
+  `${t('admin.accounts.autoResetCredit.title')}: ${autoResetEnabled.value ? t('common.enabled') : t('common.disabled')}\n${autoResetConfirmMessage.value}`
 )
 const autoResetState = computed<AutoResetCreditState | null>(() => {
   if (!autoResetEnabled.value) return null
@@ -437,6 +492,7 @@ watch(
 )
 onBeforeUnmount(() => clearTimeout(autoResetGuardTimer))
 const manualResetBlockedReason = computed(() => {
+  if (autoResetToggling.value || showAutoResetConfirm.value) return 'admin.accounts.autoResetCredit.saving'
   if (autoResetEnabled.value) return 'admin.accounts.openaiQuotaReset.resetTooltipAutoEnabled'
   if (autoResetInProgress.value) return 'admin.accounts.openaiQuotaReset.resetTooltipAutoInProgress'
   return ''
@@ -613,6 +669,41 @@ const confirmEnableCredits = () => {
   void applyCreditsEnabled(true)
 }
 
+const applyAutoResetEnabled = async (enabled: boolean) => {
+  if (autoResetToggling.value || resetting.value || !visible.value) return
+  const accountID = props.account.id
+  const requestVersion = ++autoResetToggleVersion
+  autoResetToggling.value = true
+  error.value = null
+  try {
+    const updated = await setOpenAIAutoResetCreditEnabled(accountID, enabled)
+    if (props.account.id !== accountID || requestVersion !== autoResetToggleVersion) return
+    autoResetEnabledOverride.value = updated.extra?.auto_reset_credit_enabled === true &&
+      updated.extra?.auto_reset_credit_opt_in_version === 1
+    emit('account-updated', updated)
+  } catch (e) {
+    if (props.account.id !== accountID || requestVersion !== autoResetToggleVersion) return
+    error.value = extractErrorMessage(e)
+  } finally {
+    if (requestVersion === autoResetToggleVersion) autoResetToggling.value = false
+  }
+}
+
+const handleAutoResetToggle = () => {
+  if (autoResetToggling.value || resetting.value || !visible.value) return
+  if (autoResetEnabled.value) {
+    void applyAutoResetEnabled(false)
+    return
+  }
+  showAutoResetConfirm.value = true
+}
+
+const confirmEnableAutoReset = () => {
+  if (!showAutoResetConfirm.value) return
+  showAutoResetConfirm.value = false
+  void applyAutoResetEnabled(true)
+}
+
 const openResetConfirm = () => {
   if (resetting.value || loading.value) return
   if (manualResetBlockedReason.value) {
@@ -719,6 +810,28 @@ watch(
     showCreditsConfirm.value = false
   }
 )
+
+watch(
+  () => [
+    props.account.id,
+    props.account.platform,
+    props.account.type,
+    props.account.extra?.auto_reset_credit_enabled,
+    props.account.extra?.auto_reset_credit_opt_in_version,
+    props.account.extra?.auto_reset_credit_5h_threshold,
+    props.account.extra?.auto_reset_credit_7d_threshold
+  ],
+  (current, previous) => {
+    autoResetEnabledOverride.value = null
+    if (current.some((value, index) => value !== previous[index])) {
+      autoResetToggleVersion++
+      autoResetToggling.value = false
+      showAutoResetConfirm.value = false
+    }
+  },
+  { flush: 'sync' }
+)
+onBeforeUnmount(() => { autoResetToggleVersion++ })
 
 // 父组件刷新账号后，以服务端状态为准
 watch(
