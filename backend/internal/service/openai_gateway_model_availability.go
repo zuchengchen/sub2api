@@ -56,7 +56,9 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 	diag := ModelAvailabilityDiagnosis{}
 	for i := range accounts {
 		diag.HasAccountsInPool = true
-		if OpenAIImagesEndpointFromContext(ctx) && platform == PlatformOpenAI &&
+		// Keep compatible providers' existing capacity diagnostics unchanged.
+		// Only GPT image names use the Codex-specific model support fence.
+		if OpenAIImagesEndpointFromContext(ctx) && platform == PlatformOpenAI && isOpenAIImageGenerationModel(requestedModel) &&
 			!accountSupportsOpenAICapabilities(ctx, &accounts[i], "", OpenAIImagesCapabilityBasic, requestedModel) {
 			continue
 		}
