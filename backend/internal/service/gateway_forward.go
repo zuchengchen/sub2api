@@ -65,6 +65,29 @@ func retryBackoffDelay(attempt int) time.Duration {
 	return delay
 }
 
+// retryUpstreamResponseDelay keeps the existing retry budget, but never retries
+// a 429 earlier than Retry-After. If that wait cannot fit, return to the normal
+// failover/error path instead of shortening the upstream's requested delay.
+func retryUpstreamResponseDelay(resp *http.Response, attempt int, remaining time.Duration) (time.Duration, bool) {
+	delay := retryBackoffDelay(attempt)
+	if delay > remaining {
+		delay = remaining
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		now := time.Now()
+		if resetAt := parseRetryAfterResetTime(resp.Header, now); resetAt != nil && resetAt.After(now) {
+			required := resetAt.Sub(now)
+			if required > remaining {
+				return 0, false
+			}
+			if required > delay {
+				delay = required
+			}
+		}
+	}
+	return delay, delay > 0
+}
+
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
@@ -654,12 +677,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					break
 				}
 
-				delay := retryBackoffDelay(attempt)
-				remaining := maxRetryElapsed - elapsed
-				if delay > remaining {
-					delay = remaining
-				}
-				if delay <= 0 {
+				delay, retry := retryUpstreamResponseDelay(resp, attempt, maxRetryElapsed-elapsed)
+				if !retry {
 					break
 				}
 
