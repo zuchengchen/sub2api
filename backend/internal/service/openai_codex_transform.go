@@ -74,7 +74,17 @@ var codexVersionModelPrefixes = []struct {
 	{prefix: "gpt-5.6-sol", target: "gpt-5.6-sol"},
 	{prefix: "gpt-5.6-terra", target: "gpt-5.6-terra"},
 	{prefix: "gpt-5.6-luna", target: "gpt-5.6-luna"},
+	// Established Codex aliases also accept the same explicit effort/date
+	// suffixes as their target families. Unknown suffixes remain untouched.
+	{prefix: "gpt-5.5-codex", target: "gpt-5.5"},
+	{prefix: "gpt-5.4-codex", target: "gpt-5.4"},
 	{prefix: "gpt-5.3-codex", target: "gpt-5.3-codex"},
+	{prefix: "gpt-5.2-codex", target: "gpt-5.2"},
+	{prefix: "gpt-5.1-codex-max", target: "gpt-5.3-codex"},
+	{prefix: "gpt-5.1-codex-mini", target: "gpt-5.3-codex"},
+	{prefix: "gpt-5.1-codex", target: "gpt-5.3-codex"},
+	{prefix: "gpt-5-codex", target: "gpt-5.3-codex"},
+	{prefix: "codex-mini-latest", target: "gpt-5.3-codex"},
 	{prefix: "gpt-5.4-mini", target: "gpt-5.4-mini"},
 	{prefix: "gpt-5.4-nano", target: "gpt-5.4-nano"},
 	{prefix: "gpt-5.5-pro", target: "gpt-5.5-pro"},
