@@ -1651,11 +1651,11 @@ export default {
         refreshCachePersistFailed: 'Showing the live count, but its expiration details were unavailable, so the cached details were kept.',
         autoStatus: {
           checking: 'Checking',
-          available: 'Credit available',
           resetting: 'Auto-resetting',
           success: 'Auto-reset succeeded',
-          noCredit: 'No credit',
-          failed: 'Auto-reset failed'
+          failed: 'Auto-reset failed',
+          checkedAt: 'Checked: {time}',
+          errorCode: 'Error code: {code}'
         },
         confirmTitle: 'Confirm Weekly Limit Reset',
         confirmMessage: 'This will consume 1 reset credit to immediately restore the current window ({count} remaining). This action cannot be undone. Continue?'
