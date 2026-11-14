@@ -22,11 +22,19 @@ func TestTiboHealthyGroupModelCanonicalLunaAliasesHTTPForwarding(t *testing.T) {
 		name, group, requested, upstream string
 		status                           int
 	}{
-		{"welfare_lunatic", service.TiboWelfareGroupName, "gpt-5.6-lunatic", "gpt-5.6-luna", http.StatusOK},
-		{"welfare_lunaevil", service.TiboWelfareGroupName, "gpt-5.6-lunaevil", "gpt-5.6-luna", http.StatusOK},
+		// Unknown names retain their identity; the healthy group's historical
+		// Luna exclusion is a local admission policy, not a global alias rule.
+		{"welfare_lunatic", service.TiboWelfareGroupName, "gpt-5.6-lunatic", "gpt-5.6-lunatic", http.StatusOK},
+		{"welfare_lunaevil", service.TiboWelfareGroupName, "gpt-5.6-lunaevil", "gpt-5.6-lunaevil", http.StatusOK},
+		{"welfare_luna_alias", service.TiboWelfareGroupName, "openai/GPT5.6LUNA-max", "gpt-5.6-luna", http.StatusOK},
 		{"healthy_lunatic", service.TiboHealthyGroupName, "gpt-5.6-lunatic", "gpt-5.6-luna", http.StatusNotFound},
 		{"healthy_lunaevil", service.TiboHealthyGroupName, "gpt-5.6-lunaevil", "gpt-5.6-luna", http.StatusNotFound},
+		{"healthy_prefixed_lunatic", service.TiboHealthyGroupName, "provider/GPT5.6LUNATIC", "", http.StatusNotFound},
+		{"healthy_luna_alias", service.TiboHealthyGroupName, "openai/GPT5.6LUNA-max", "", http.StatusNotFound},
 		{"healthy_unrelated_lunatic", service.TiboHealthyGroupName, "gpt-6-lunatic", "gpt-6-lunatic", http.StatusOK},
+		{"healthy_private_sol", service.TiboHealthyGroupName, "gpt-5.6-sol-private", "gpt-5.6-sol-private", http.StatusOK},
+		{"healthy_future_family", service.TiboHealthyGroupName, "gpt-5.7", "gpt-5.7", http.StatusOK},
+		{"healthy_known_sol_alias", service.TiboHealthyGroupName, "gpt-5.6sol", "gpt-5.6-sol", http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			upstream := newAstraProCapturedUpstream(&http.Response{

@@ -29,13 +29,15 @@ func (g *Group) EffectiveModelAllowlist() GroupModelAllowlist {
 	return g.ModelAllowlist
 }
 
-// Match public spellings and the identity used by OAuth forwarding. Its legacy
-// permissive aliases (for example gpt-5.6-lunatic) must not bypass admission.
+// Match public spellings and the identity used by OAuth forwarding. Keep the
+// group's historical GPT-5.6 Luna prefix exclusion here: legacy spellings such
+// as gpt-5.6-lunatic stay blocked without globally rewriting unknown models.
 // Image requests keep their public image model; their internal Luna driver does
 // not pass through this client-facing group policy.
 func isTiboLunaModel(model string) bool {
 	name := normalizeVIPModelCandidate(model)
 	return name == "luna" || strings.HasPrefix(name, "luna-") ||
+		strings.HasPrefix(name, VipExclusiveModelName) ||
 		isLunaMinRateModel(model) || isLunaMinRateModel(normalizeKnownOpenAICodexModel(model))
 }
 
