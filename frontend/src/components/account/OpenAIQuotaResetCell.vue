@@ -131,6 +131,7 @@
       v-if="autoResetState"
       class="flex flex-wrap items-center gap-1 text-[10px]"
       data-testid="auto-reset-credit-state"
+      :title="autoResetStateTitle"
     >
       <span
         class="inline-flex items-center rounded px-1.5 py-0.5 font-medium"
@@ -140,16 +141,6 @@
         <span v-if="autoResetState.trigger_window" class="ml-1 tabular-nums">
           {{ autoResetState.trigger_window }}
         </span>
-      </span>
-      <span v-if="autoResetState.checked_at" class="text-gray-500 dark:text-gray-400">
-        {{ formatResetCreditExpiry(autoResetState.checked_at, 'short') }}
-      </span>
-      <span
-        v-if="autoResetState.error_code"
-        class="max-w-full truncate text-red-600 dark:text-red-400"
-        :title="autoResetState.error_code"
-      >
-        {{ autoResetState.error_code }}
       </span>
     </div>
 
@@ -294,7 +285,8 @@ const showAutoResetConfirm = ref(false)
 let autoResetToggleVersion = 0
 
 type AutoResetCreditState = NonNullable<NonNullable<Account['extra']>['codex_auto_reset_credit_state']>
-const validAutoResetStatuses = new Set(['checking', 'available', 'resetting', 'success', 'no_credit', 'failed'])
+// Credit availability is already shown by the count beside the switch.
+const visibleAutoResetStatuses = new Set(['checking', 'resetting', 'success', 'failed'])
 const autoResetEnabled = computed(() =>
   autoResetEnabledOverride.value ?? (
     props.account.extra?.auto_reset_credit_enabled === true && props.account.extra?.auto_reset_credit_opt_in_version === 1
@@ -315,28 +307,31 @@ const autoResetToggleTitle = computed(() =>
 const autoResetState = computed<AutoResetCreditState | null>(() => {
   if (!autoResetEnabled.value) return null
   const state = props.account.extra?.codex_auto_reset_credit_state
-  if (!state || typeof state !== 'object' || !validAutoResetStatuses.has(String(state.status))) return null
+  if (!state || typeof state !== 'object' || !visibleAutoResetStatuses.has(String(state.status))) return null
   return state
 })
 const autoResetStateLabel = computed(() => {
   if (!autoResetState.value?.status) return ''
-  const keyByStatus: Record<string, string> = {
-    checking: 'checking',
-    available: 'available',
-    resetting: 'resetting',
-    success: 'success',
-    no_credit: 'noCredit',
-    failed: 'failed'
+  return t(`admin.accounts.openaiQuotaReset.autoStatus.${autoResetState.value.status}`)
+})
+const autoResetStateTitle = computed(() => {
+  const state = autoResetState.value
+  if (!state) return undefined
+  const details: string[] = []
+  if (state.checked_at) {
+    details.push(t('admin.accounts.openaiQuotaReset.autoStatus.checkedAt', {
+      time: formatResetCreditExpiry(state.checked_at, 'full')
+    }))
   }
-  return t(`admin.accounts.openaiQuotaReset.autoStatus.${keyByStatus[autoResetState.value.status]}`)
+  if (state.error_code) {
+    details.push(t('admin.accounts.openaiQuotaReset.autoStatus.errorCode', { code: state.error_code }))
+  }
+  return details.join('\n') || undefined
 })
 const autoResetStateClass = computed(() => {
   switch (autoResetState.value?.status) {
-    case 'available':
-      return 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
     case 'success':
       return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-    case 'no_credit':
     case 'failed':
       return 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'
     case 'resetting':
