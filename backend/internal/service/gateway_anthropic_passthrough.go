@@ -128,12 +128,8 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 					break
 				}
 
-				delay := retryBackoffDelay(attempt)
-				remaining := maxRetryElapsed - elapsed
-				if delay > remaining {
-					delay = remaining
-				}
-				if delay <= 0 {
+				delay, retry := retryUpstreamResponseDelay(resp, attempt, maxRetryElapsed-elapsed)
+				if !retry {
 					break
 				}
 
