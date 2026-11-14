@@ -11,11 +11,11 @@ func TestTiboHealthyGroupModelPolicy(t *testing.T) {
 	group := &Group{Name: TiboHealthyGroupName, Platform: PlatformOpenAI,
 		ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"gpt-6-luna", "public-one", "codex-auto-review"}}}
 	policy := group.EffectiveModelAllowlist()
-	blocked := []string{"luna", "openai/LUNA-max", "gpt-5.6-luna", "openai/GPT5.6LUNA-max", "gpt-6-luna", "provider/gpt6luna-high", "gpt-6-luna-2026-09-01", "gpt-5.6-lunatic", "gpt-5.6-lunaevil"}
+	blocked := []string{"luna", "openai/LUNA-max", "gpt-5.6-luna", "openai/GPT5.6LUNA-max", "gpt-6-luna", "provider/gpt6luna-high", "gpt-6-luna-2026-09-01", "gpt-5.6-lunatic", "gpt-5.6-lunaevil", "provider/GPT5.6LUNATIC", "gpt-5.6lunaevil"}
 	for _, model := range blocked {
 		require.False(t, policy.Allows(model), model)
 	}
-	allowed := []string{"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-image-2", "gpt-6-lunatic", "public-one"}
+	allowed := []string{"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-image-2", "gpt-6-lunatic", "gpt-5.6-sol-private", "gpt-5.7", "public-one"}
 	for _, model := range allowed {
 		require.True(t, policy.Allows(model), model)
 	}

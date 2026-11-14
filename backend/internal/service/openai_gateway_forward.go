@@ -1531,6 +1531,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			appendOpenAIResponsesValidationDiagnostic(c, account, body, respBody, resp, diagnosticUpstreamAttempt)
 
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -1580,7 +1581,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {
 				return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
-			} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+			} else if changed && ctx.Err() == nil && !openAIStreamClientOutputStarted(c, false) && rejectedFieldRetryState.Allow(retryBody) {
 				body = retryBody
 				requestView = newOpenAIRequestView(body)
 				reqBody = nil

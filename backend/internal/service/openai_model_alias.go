@@ -32,13 +32,11 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		return normalized
 	}
 
+	// Compact aliases use the same exact base/effort rules below. If the base
+	// is unknown, return no match so the caller preserves the complete name.
+	normalized = strings.TrimSuffix(normalized, "-openai-compact")
 	if mapped := getNormalizedCodexModel(normalized); mapped != "" {
 		return mapped
-	}
-	if strings.HasSuffix(normalized, "-openai-compact") {
-		if mapped := getNormalizedCodexModel(strings.TrimSuffix(normalized, "-openai-compact")); mapped != "" {
-			return mapped
-		}
 	}
 
 	if openai.IsGPT61TerraModelSpelling(normalized) {
@@ -54,46 +52,37 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		return "gpt-6-luna"
 	}
 
-	switch {
-	case normalized == "gpt-6" || normalized == "gpt-6-astra":
+	switch normalized {
+	case "gpt-6", "gpt-6-astra":
 		return "gpt-6-astra"
-	case strings.Contains(normalized, "gpt-5.6-sol"):
+	case "gpt-5.6":
 		return "gpt-5.6-sol"
-	case strings.Contains(normalized, "gpt-5.6-terra"):
-		return "gpt-5.6-terra"
-	case strings.Contains(normalized, "gpt-5.6-luna"):
-		return "gpt-5.6-luna"
-	case normalized == "gpt-5.6":
-		return "gpt-5.6-sol"
-	case strings.HasPrefix(normalized, "gpt-5.6-"):
-		suffix := strings.TrimPrefix(normalized, "gpt-5.6-")
-		if suffix == "max" || isKnownCodexModelSuffix(suffix) {
-			return "gpt-5.6-sol"
-		}
-		return ""
-	case strings.Contains(normalized, "gpt-5.5-pro"):
-		return "gpt-5.5-pro"
-	case strings.Contains(normalized, "gpt-5.5"):
-		return "gpt-5.5"
-	case strings.Contains(normalized, "gpt-5.4-mini"):
-		return "gpt-5.4-mini"
-	case strings.Contains(normalized, "gpt-5.4-nano"):
-		return "gpt-5.4-nano"
-	case strings.Contains(normalized, "gpt-5.4"):
-		return "gpt-5.4"
-	case strings.Contains(normalized, "gpt-5.2"):
-		return "gpt-5.2"
-	case strings.Contains(normalized, "gpt-5.3-codex"):
-		return "gpt-5.3-codex"
-	case strings.Contains(normalized, "gpt-5.3"):
-		return "gpt-5.3-codex"
-	case strings.Contains(normalized, "codex"):
-		return "gpt-5.3-codex"
-	case strings.Contains(normalized, "gpt-5"):
-		return "gpt-5.4"
-	default:
-		return ""
 	}
+	// A family substring is not a model identity. In particular, the old
+	// catch-all gpt-5 match silently routed gpt-5.6sol and future/custom models
+	// to gpt-5.4. Only known family/suffix combinations may change the target.
+	for _, family := range codexVersionModelPrefixes {
+		if normalized == family.prefix {
+			return family.target
+		}
+		if suffix, ok := strings.CutPrefix(normalized, family.prefix+"-"); ok &&
+			(suffix == "max" || isKnownCodexModelSuffix(suffix)) {
+			return family.target
+		}
+	}
+	if suffix, ok := strings.CutPrefix(normalized, "gpt-5.6-"); ok &&
+		(suffix == "max" || isKnownCodexModelSuffix(suffix)) {
+		return "gpt-5.6-sol"
+	}
+	// Retain documented legacy aliases, but never infer a replacement for an
+	// unknown family. The caller preserves that model for explicit routing or
+	// an authoritative upstream model error.
+	for _, family := range []string{"gpt-5.3", "gpt-5.1", "gpt-5"} {
+		if suffix, ok := strings.CutPrefix(normalized, family+"-"); ok && isKnownCodexModelSuffix(suffix) {
+			return codexModelMap[family]
+		}
+	}
+	return ""
 }
 
 // isOpenAIGPT56Model 判断是否 GPT-5.6 系列模型；入参可为原始模型名

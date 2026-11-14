@@ -65,6 +65,29 @@ func retryBackoffDelay(attempt int) time.Duration {
 	return delay
 }
 
+// retryUpstreamResponseDelay keeps the existing retry budget, but never retries
+// a 429 earlier than Retry-After. If that wait cannot fit, return to the normal
+// failover/error path instead of shortening the upstream's requested delay.
+func retryUpstreamResponseDelay(resp *http.Response, attempt int, remaining time.Duration) (time.Duration, bool) {
+	delay := retryBackoffDelay(attempt)
+	if delay > remaining {
+		delay = remaining
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		now := time.Now()
+		if resetAt := parseRetryAfterResetTime(resp.Header, now); resetAt != nil && resetAt.After(now) {
+			required := resetAt.Sub(now)
+			if required > remaining {
+				return 0, false
+			}
+			if required > delay {
+				delay = required
+			}
+		}
+	}
+	return delay, delay > 0
+}
+
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
@@ -105,7 +128,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 	if account != nil && account.Platform == PlatformAnthropic {
-		if err := validateClaude55Request(parsed.Body.Bytes(), validationModel); err != nil {
+		if err := normalizeAndValidateClaude55Request(parsed, validationModel); err != nil {
 			MarkResponseCommitted(c)
 			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
 			return nil, err
@@ -647,19 +670,15 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 
 		// 检查是否需要通用重试（排除400，因为400已经在上面特殊处理过了）
-		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamResponse(account, resp) {
 			if attempt < maxRetryAttempts {
 				elapsed := time.Since(retryStart)
 				if elapsed >= maxRetryElapsed {
 					break
 				}
 
-				delay := retryBackoffDelay(attempt)
-				remaining := maxRetryElapsed - elapsed
-				if delay > remaining {
-					delay = remaining
-				}
-				if delay <= 0 {
+				delay, retry := retryUpstreamResponseDelay(resp, attempt, maxRetryElapsed-elapsed)
+				if !retry {
 					break
 				}
 
@@ -704,7 +723,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	defer func() { _ = resp.Body.Close() }()
 
 	// 处理重试耗尽的情况
-	if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+	if resp.StatusCode >= 400 && s.shouldRetryUpstreamResponse(account, resp) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			respBody, _ := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
@@ -732,11 +751,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					return ""
 				}(),
 			})
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-			}
+			return nil, newGatewayHTTPFailoverError(account, resp, respBody, false)
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account, reqModel)
 	}
@@ -768,11 +783,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				return ""
 			}(),
 		})
-		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-		}
+		return nil, newGatewayHTTPFailoverError(account, resp, respBody, false)
 	}
 	if resp.StatusCode >= 400 {
 		// 可选：对部分 400 触发 failover（默认关闭以保持语义）
