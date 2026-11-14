@@ -340,6 +340,10 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			s.tryTempUnschedulable(ctx, account, statusCode, responseBody) {
 			return true
 		}
+		if isAnthropicPoolQuotaExhausted(account, statusCode, responseBody) {
+			s.handleAnthropicPoolQuotaExhausted(ctx, account, headers)
+			return true
+		}
 		slog.Info("pool_mode_error_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
 	}

@@ -121,7 +121,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		}
 
 		// 透传分支禁止 400 请求体降级重试（该重试会改写请求体）
-		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamResponse(account, resp) {
 			if attempt < maxRetryAttempts {
 				elapsed := time.Since(retryStart)
 				if elapsed >= maxRetryElapsed {
@@ -175,7 +175,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+	if resp.StatusCode >= 400 && s.shouldRetryUpstreamResponse(account, resp) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			respBody, _ := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
@@ -203,11 +203,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 					return ""
 				}(),
 			})
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-			}
+			return nil, newGatewayHTTPFailoverError(account, resp, respBody, false)
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account, input.RequestModel)
 	}
@@ -239,11 +235,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 				return ""
 			}(),
 		})
-		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-		}
+		return nil, newGatewayHTTPFailoverError(account, resp, respBody, false)
 	}
 
 	if resp.StatusCode >= 400 {
