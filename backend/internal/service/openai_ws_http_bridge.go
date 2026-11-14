@@ -635,11 +635,13 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	turnStart := time.Now()
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	var resp *http.Response
+	httpAttempt := 0
 	for {
 		upstreamReq, buildErr := buildUpstreamRequest(body)
 		if buildErr != nil {
 			return nil, buildErr
 		}
+		httpAttempt++
 		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		if err != nil {
 			if turn == 1 {
@@ -660,6 +662,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
 		_ = resp.Body.Close()
+		appendOpenAIResponsesValidationDiagnostic(c, account, body, respBody, resp, httpAttempt)
 		markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, nil)
 		if resp.StatusCode == http.StatusBadRequest &&
 			extractUpstreamErrorCode(respBody) == openAIWSFallbackReasonInvalidEncryptedContent {
@@ -671,7 +674,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if retryErr != nil {
 			return nil, fmt.Errorf("normalize websocket http bridge rejected field retry: %w", retryErr)
 		}
-		if changed && rejectedFieldRetryState.Allow(retryBody) {
+		if changed && ctx.Err() == nil && rejectedFieldRetryState.Allow(retryBody) {
 			logOpenAIWSModeInfo(
 				"ingress_ws_http_bridge_rejected_field_retry account_id=%d turn=%d reason=%s",
 				account.ID,

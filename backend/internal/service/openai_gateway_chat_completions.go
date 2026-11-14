@@ -573,7 +573,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, responsesBody, respBody); retryErr != nil {
 			_ = resp.Body.Close()
 			return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
-		} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+		} else if changed && ctx.Err() == nil && !openAIStreamClientOutputStarted(c, false) && rejectedFieldRetryState.Allow(retryBody) {
 			_ = resp.Body.Close()
 			responsesBody = retryBody
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying chat_completions compatibility request after %s (account: %s)", reason, account.Name)
