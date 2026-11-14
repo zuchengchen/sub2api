@@ -502,6 +502,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// account/cache identity. Match forwardGrokResponses: one strip+retry before
 	// treating the 400 as a hard failure / failover trigger.
 	var resp *http.Response
+	encryptedRejection := false
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			if account.Platform != PlatformGrok {
@@ -514,7 +515,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				return nil, fmt.Errorf("build grok retry request: %w", err)
 			}
 		}
-		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		if account.IsOpenAIOAuthLike() {
+			resp, err, encryptedRejection = s.sendOpenAIMessagesResponsesRequest(ctx, c, account, upstreamReq, proxyURL)
+		} else {
+			resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		}
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
@@ -554,6 +559,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if encryptedRejection {
+			return handleOpenAIMessagesEncryptedRejection(ctx, c, account, resp, upstreamMsg)
+		}
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
