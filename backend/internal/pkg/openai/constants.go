@@ -146,6 +146,17 @@ func CanonicalizeOpenAIModelAliasSpelling(model string) string {
 	for _, replacement := range replacements {
 		normalized = strings.ReplaceAll(normalized, replacement.from, replacement.to)
 	}
+	// Accept the compact spellings used by clients without treating unrelated
+	// model names such as gpt-5.6solar as aliases of Sol.
+	for _, family := range []string{"sol", "terra", "luna"} {
+		compact, canonical := "gpt-5.6"+family, "gpt-5.6-"+family
+		if normalized == compact {
+			return canonical
+		}
+		if suffix, ok := strings.CutPrefix(normalized, compact+"-"); ok {
+			return canonical + "-" + suffix
+		}
+	}
 	return normalized
 }
 

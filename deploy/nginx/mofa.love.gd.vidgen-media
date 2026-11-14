@@ -26,6 +26,7 @@ server {
     server_name mofa.love.gd _;
 
     client_max_body_size 256m;
+    include /etc/nginx/snippets/sub2api-client-body-timeout.conf;
 
     ssl_certificate /etc/letsencrypt/live/mofa.love.gd-managed/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/mofa.love.gd-managed/privkey.pem;

@@ -199,11 +199,7 @@ func (s *GatewayService) forwardAsResponsesWithoutHostedWebSearch(
 			if s.rateLimitService != nil {
 				shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
 			}
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-			}
+			return nil, newGatewayHTTPFailoverError(account, resp, respBody, shouldDisable)
 		}
 
 		// Non-failover error: return Responses-formatted error to client
