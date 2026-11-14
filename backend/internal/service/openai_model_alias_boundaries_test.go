@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,12 +32,44 @@ func TestNormalizeCodexModelPreservesUnknownFamiliesAndCustomNames(t *testing.T)
 		"gpt-5.6-lunatic", "gpt-5.6-lunaevil", "provider/GPT5.6LUNATIC",
 		"gpt-5.6-sol-private", "gpt-5.5-custom", "gpt-5.5-proxy",
 		"gpt-5.4-mini-custom", "gpt-5.4-custom", "gpt-5.3-custom",
+		"gpt-5.5-codex-private-high", "gpt-5.4-codex-high-private", "gpt-5.7-codex-high",
+		"gpt-5.1-codex-max-private", "codex-mini-latest-private", "gpt-5.5-codex-high-openai-compact-private",
+		"gpt-5.5-codex-private-openai-compact", "gpt-5.6-sol-private-openai-compact",
 		"private-codex-model", "vendor/gpt-5.7", "vendor/GPT-5.6-SOL-PRIVATE",
 	} {
 		t.Run(model, func(t *testing.T) {
 			require.Empty(t, normalizeKnownOpenAICodexModel(model))
 			require.Equal(t, model, normalizeCodexModel(model))
 		})
+	}
+}
+
+func TestNormalizeCodexModelKnownCodexAliasSuffixes(t *testing.T) {
+	for _, tc := range []struct{ alias, want string }{
+		{"gpt-5.5-codex", "gpt-5.5"},
+		{"gpt-5.4-codex", "gpt-5.4"},
+		{"gpt-5.3-codex", "gpt-5.3-codex"},
+		{"gpt-5.2-codex", "gpt-5.2"},
+		{"gpt-5.1-codex", "gpt-5.3-codex"},
+		{"gpt-5.1-codex-max", "gpt-5.3-codex"},
+		{"gpt-5.1-codex-mini", "gpt-5.3-codex"},
+		{"gpt-5-codex", "gpt-5.3-codex"},
+		{"codex-mini-latest", "gpt-5.3-codex"},
+	} {
+		for _, suffix := range []string{"", "-high", "-medium", "-xhigh", "-2026-01-01", "-high-openai-compact"} {
+			model := tc.alias + suffix
+			t.Run(model, func(t *testing.T) {
+				require.Equal(t, tc.want, normalizeKnownOpenAICodexModel(model))
+				require.Equal(t, tc.want, normalizeCodexModel(model))
+				policy := GroupModelAllowlist{Enabled: true, Models: []string{tc.want}}
+				// Admission only treats GPT reasoning-suffix aliases as equivalent;
+				// bare, date and compact names retain their existing public-name policy.
+				if strings.HasPrefix(tc.alias, "gpt-") && (suffix == "-high" || suffix == "-medium" || suffix == "-xhigh") {
+					require.True(t, policy.Allows(model), "known reasoning alias must be admitted under its actual target")
+				}
+				require.False(t, policy.Allows(tc.alias+"-private-high"), "private suffixes must not inherit base admission")
+			})
+		}
 	}
 }
 

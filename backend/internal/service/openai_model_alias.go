@@ -32,13 +32,11 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		return normalized
 	}
 
+	// Compact aliases use the same exact base/effort rules below. If the base
+	// is unknown, return no match so the caller preserves the complete name.
+	normalized = strings.TrimSuffix(normalized, "-openai-compact")
 	if mapped := getNormalizedCodexModel(normalized); mapped != "" {
 		return mapped
-	}
-	if strings.HasSuffix(normalized, "-openai-compact") {
-		if mapped := getNormalizedCodexModel(strings.TrimSuffix(normalized, "-openai-compact")); mapped != "" {
-			return mapped
-		}
 	}
 
 	if openai.IsGPT61TerraModelSpelling(normalized) {
