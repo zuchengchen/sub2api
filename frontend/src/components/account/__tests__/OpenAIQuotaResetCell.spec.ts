@@ -25,7 +25,7 @@ vi.mock('vue-i18n', async () => {
     ...actual,
     useI18n: () => ({
       t: (key: string, params?: Record<string, unknown>) =>
-        params?.time ? `${key}:${params.time}` : params?.count ? `${key}:${params.count}` : key,
+        params?.time ? `${key}:${params.time}` : params?.code ? `${key}:${params.code}` : params?.count ? `${key}:${params.count}` : key,
     }),
   }
 })
@@ -496,25 +496,43 @@ describe('OpenAIQuotaResetCell 自动用卡运行态', () => {
     ['success', 'success'],
     ['no_credit', 'noCredit'],
     ['failed', 'failed'],
-  ] as const)('展示 %s 状态且不需要暴露卡标识', (status, labelKey) => {
+  ] as const)('%s 状态仅展示必要提示，诊断信息放入悬停详情', (status, labelKey) => {
+    const count = status === 'no_credit' ? 0 : 1
     const account = makeAccount({
       extra: {
         auto_reset_credit_enabled: true,
         auto_reset_credit_opt_in_version: 1,
+        codex_reset_credit_snapshot: {
+          available_count: count,
+          credits: count ? [{ expires_at: FUTURE_EXPIRY_EARLY }] : [],
+        },
         codex_auto_reset_credit_state: {
           status,
           trigger_window: '5h',
-          available_count: 1,
+          available_count: count,
           checked_at: '2099-07-03T04:05:06Z',
-          error_code: status === 'failed' ? 'RESET_FAILED' : undefined,
+          error_code: status === 'failed' ? 'RESET_FAILED' : status === 'no_credit' ? 'NO_RESET_CREDIT' : undefined,
         },
       },
     })
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    if (status === 'available' || status === 'no_credit') {
+      expect(wrapper.find('[data-testid="auto-reset-credit-state"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="reset-credit-count"]').text()).toContain(String(count))
+      expect(wrapper.get('[data-testid="auto-reset-credit-enabled-toggle"]').attributes('aria-checked')).toBe('true')
+      expect(wrapper.text()).not.toContain('NO_RESET_CREDIT')
+      wrapper.unmount()
+      return
+    }
     const state = wrapper.get('[data-testid="auto-reset-credit-state"]')
     expect(state.text()).toContain(`admin.accounts.openaiQuotaReset.autoStatus.${labelKey}`)
     expect(state.text()).toContain('5h')
     expect(state.text()).not.toContain('credit_id')
+    expect(state.text()).not.toContain('2099')
+    expect(state.text()).not.toContain('RESET_FAILED')
+    expect(state.attributes('title')).toContain('admin.accounts.openaiQuotaReset.autoStatus.checkedAt:')
+    expect(state.attributes('title')).toContain('2099')
+    if (status === 'failed') expect(state.attributes('title')).toContain('RESET_FAILED')
     wrapper.unmount()
   })
 
