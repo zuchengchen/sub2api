@@ -216,6 +216,9 @@ func stripOpenAIMessagesRejectedReasoning(body []byte) ([]byte, int, error) {
 func handleOpenAIMessagesEncryptedRejection(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, message string) (*OpenAIForwardResult, error) {
 	recordOpenAIMessagesEncryptedRecovery(c, account, resp, "http_error", 0, 0, 0)
 	setOpsUpstreamError(c, http.StatusBadRequest, "Upstream rejected encrypted reasoning content", "")
+	if strings.TrimSpace(message) == "" {
+		message = "Upstream rejected encrypted reasoning content"
+	}
 	if c != nil && ctx.Err() == nil && (c.Request == nil || c.Request.Context().Err() == nil) &&
 		!IsResponseCommitted(c) && c.Writer != nil && !c.Writer.Written() {
 		MarkResponseCommitted(c)
