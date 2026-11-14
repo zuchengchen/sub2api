@@ -28,6 +28,7 @@ func TestNormalizeCodexModelCompactGPT56Aliases(t *testing.T) {
 func TestNormalizeCodexModelPreservesUnknownFamiliesAndCustomNames(t *testing.T) {
 	for _, model := range []string{
 		"gpt-5.7", "gpt-5.60", "gpt-5.6solar", "gpt-5.6-solitude",
+		"gpt-5.6-lunatic", "gpt-5.6-lunaevil", "provider/GPT5.6LUNATIC",
 		"gpt-5.6-sol-private", "gpt-5.5-custom", "gpt-5.5-proxy",
 		"gpt-5.4-mini-custom", "gpt-5.4-custom", "gpt-5.3-custom",
 		"private-codex-model", "vendor/gpt-5.7", "vendor/GPT-5.6-SOL-PRIVATE",

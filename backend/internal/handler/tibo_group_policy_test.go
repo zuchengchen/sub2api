@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -25,6 +26,28 @@ func TestTiboHealthyGroupModelWebSocket(t *testing.T) {
 				group:         group, ingressMode: mode, secondTurnCloseExpected: true,
 			})
 		})
+	}
+}
+
+func TestTiboHealthyGroupLegacyLunaAliasesWebSocket(t *testing.T) {
+	for _, mode := range []string{service.OpenAIWSIngressModePassthrough, service.OpenAIWSIngressModeDedicated} {
+		for _, alias := range []string{"gpt-5.6-lunatic", "provider/GPT5.6LUNAEVIL"} {
+			group := wsAllowlistGroup(true, "*")
+			group.Name = service.TiboHealthyGroupName
+			t.Run(mode+"/"+alias+"/first", func(t *testing.T) {
+				runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+					firstPayload: fmt.Sprintf(`{"type":"response.create","model":%q,"stream":false}`, alias),
+					group:        group, ingressMode: mode, firstFrameCloseExpected: true,
+				})
+			})
+			t.Run(mode+"/"+alias+"/later", func(t *testing.T) {
+				runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+					firstPayload:  `{"type":"response.create","model":"gpt-5.4","stream":false}`,
+					secondPayload: fmt.Sprintf(`{"type":"response.create","model":%q,"stream":false}`, alias),
+					group:         group, ingressMode: mode, secondTurnCloseExpected: true,
+				})
+			})
+		}
 	}
 }
 
