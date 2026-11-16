@@ -30,8 +30,8 @@ const (
 const (
 	openAIAdvancedSchedulerSettingCacheTTL  = 5 * time.Second
 	openAIAdvancedSchedulerSettingDBTimeout = 2 * time.Second
-	// ponytail: cap probes added when cost ordering expands configured Top-K;
-	// use bulk acquisition if a measured workload needs a higher ceiling.
+	// Bound Redis acquisitions and DB rechecks when capacity fallback expands
+	// the preferred Top-K, including retries with a refreshed load snapshot.
 	openAIAccountSelectionProbeLimit = 64
 )
 
@@ -146,7 +146,6 @@ type openAIAccountLoadPlan struct {
 	candidateCount            int
 	topK                      int
 	loadSkew                  float64
-	includeOverflowFallback   bool
 }
 
 type openAIAccountLoadSelectionAttempt struct {
@@ -971,12 +970,6 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			accounts = append(accounts, candidate.account)
 		}
 		upstreamCostFactors = openAIUpstreamCostFactors(accounts, now, s.service.openAIOAuthSchedulingRateMultiplier(ctx))
-		for _, factor := range upstreamCostFactors {
-			if factor != openAIUpstreamCostNeutralFactor {
-				plan.includeOverflowFallback = true
-				break
-			}
-		}
 	}
 
 	// Reset 因子（use-it-or-lose-it）：按 Codex 7 天额度窗口剩余时间打分。
@@ -1102,10 +1095,13 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		if len(primary) == 0 {
 			primary = buildOpenAIWeightedSelectionOrder(ranked, req)
 		}
-		if !plan.includeOverflowFallback || groupTopK >= len(pool) {
+		if groupTopK >= len(pool) {
 			return primary
 		}
 
+		// Top-K chooses the preferred accounts, not the entire capacity pool.
+		// A busy shortlist must not hide eligible slots outside it. Keep the
+		// scored order for overflow and share the bounded probe budget below.
 		selected := make(map[int64]struct{}, len(primary))
 		for _, candidate := range primary {
 			selected[candidate.account.ID] = struct{}{}
@@ -1281,6 +1277,9 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 		}
 	}
 	for i := 0; i < len(selectionOrder); i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, compactBlocked, err
+		}
 		candidate := selectionOrder[i]
 		if candidate.account == nil {
 			continue
@@ -1369,11 +1368,15 @@ func (s *defaultOpenAIAccountScheduler) consumeOpenAISelectionDBRecheck(budget *
 func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
+	budget *openAISelectionProbeBudget,
 ) (*AccountSelectionResult, error) {
 	if !req.StickyWeighted {
 		return nil, nil
 	}
 	for _, accountID := range []int64{req.StickyPreviousAccountID, req.StickyAccountID} {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if accountID <= 0 {
 			continue
 		}
@@ -1388,6 +1391,9 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 		}
 		if !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
 			continue
+		}
+		if !s.consumeOpenAISelectionDBRecheck(budget) {
+			return nil, nil
 		}
 		account = s.service.recheckSelectedOpenAIAccountFromDB(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
 		if account == nil {
@@ -1420,7 +1426,9 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			isGrokModelQuotaBlocked(account.ID, upstreamModel, now) {
 			continue
 		}
-		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+		// If the acquisition budget is spent, this freshly validated account
+		// can still supply its original sticky WaitPlan without another probe.
+		result, _, acquireErr := s.tryAcquireOpenAIAccountSlot(ctx, account.ID, account.Concurrency, budget)
 		if acquireErr != nil {
 			return nil, acquireErr
 		}
@@ -1665,7 +1673,7 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 	budget *openAISelectionProbeBudget,
 ) openAIAccountLoadSelectionAttempt {
 	plan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, loadMap)
-	if openAICostOverflowExpanded(req, plan) {
+	if openAISelectionOverflowExpanded(req, plan) {
 		budget.enableLimit()
 	}
 	attempt := openAIAccountLoadSelectionAttempt{
@@ -1704,7 +1712,7 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 		loadReq := buildOpenAIAccountLoadRequest(filtered)
 		if freshLoadMap, loadErr := s.service.concurrencyService.GetAccountsLoadBatchFresh(ctx, loadReq); loadErr == nil {
 			freshPlan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, freshLoadMap)
-			if openAICostOverflowExpanded(req, freshPlan) {
+			if openAISelectionOverflowExpanded(req, freshPlan) {
 				budget.enableLimit()
 			}
 			if len(freshPlan.selectionOrder) > 0 {
@@ -1733,8 +1741,8 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 	return attempt
 }
 
-func openAICostOverflowExpanded(req OpenAIAccountScheduleRequest, plan openAIAccountLoadPlan) bool {
-	if !plan.includeOverflowFallback || plan.topK <= 0 {
+func openAISelectionOverflowExpanded(req OpenAIAccountScheduleRequest, plan openAIAccountLoadPlan) bool {
+	if plan.topK <= 0 {
 		return false
 	}
 	if !req.RequireCompact {
@@ -1766,6 +1774,31 @@ func buildOpenAIAccountLoadRequest(accounts []*Account) []AccountWithConcurrency
 	return loadReq
 }
 
+// Keep the preferred acquisition order intact; only waiting needs a separate
+// order. Queue pressure is normalized by real concurrency, not LoadFactor,
+// because ten slots can drain the same backlog faster than one slot.
+func openAIAccountWaitOrder(req OpenAIAccountScheduleRequest, candidates []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+	ordered := append([]openAIAccountCandidateScore(nil), candidates...)
+	pressure := func(candidate openAIAccountCandidateScore) float64 {
+		if candidate.account == nil || !candidate.loadKnown || candidate.loadInfo == nil {
+			return math.Inf(1)
+		}
+		concurrency := max(1, candidate.account.Concurrency)
+		waiting := max(0, candidate.loadInfo.WaitingCount)
+		return (float64(waiting) + 1) / float64(concurrency)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if req.RequireCompact && ordered[i].account != nil && ordered[j].account != nil {
+			iTier, jTier := openAICompactSupportTier(ordered[i].account), openAICompactSupportTier(ordered[j].account)
+			if iTier != jTier {
+				return iTier > jTier
+			}
+		}
+		return pressure(ordered[i]) < pressure(ordered[j])
+	})
+	return ordered
+}
+
 func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
@@ -1781,14 +1814,26 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 		return nil, candidateCount, topK, loadSkew, s.unavailableError(ctx, req, nil, attempt.compactBlocked, filterStats.summary("selection_order_empty"), trustedSchedulingGroupFromContext(ctx, req.GroupID))
 	}
 
-	if stickyFallback, stickyErr := s.tryFallbackToWeightedSticky(ctx, req); stickyErr != nil {
+	// Retain a full queue as the last resort so the admission layer preserves
+	// gateway_queue_full, rather than turning exhausted capacity into a model
+	// availability error. Never silently widen a full sticky queue from 3 to 100.
+	var fullQueueFallback *AccountSelectionResult
+	if stickyFallback, stickyErr := s.tryFallbackToWeightedSticky(ctx, req, budget); stickyErr != nil {
 		return nil, candidateCount, topK, loadSkew, stickyErr
 	} else if stickyFallback != nil {
-		return stickyFallback, candidateCount, topK, loadSkew, nil
+		if stickyFallback.Acquired || stickyFallback.WaitPlan == nil || s.service.concurrencyService == nil {
+			return stickyFallback, candidateCount, topK, loadSkew, nil
+		}
+		waiting, waitErr := s.service.concurrencyService.GetAccountWaitingCount(ctx, stickyFallback.Account.ID)
+		if waitErr != nil || waiting < stickyFallback.WaitPlan.MaxWaiting {
+			return stickyFallback, candidateCount, topK, loadSkew, nil
+		}
+		fullQueueFallback = stickyFallback
 	}
 
 	cfg := s.service.schedulingConfig()
 	compactBlocked := attempt.compactBlocked
+	waitOrder := openAIAccountWaitOrder(req, attempt.selectionOrder)
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	passes := 1
 	if budget != nil && budget.limited {
@@ -1797,8 +1842,25 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 	for pass := 0; pass < passes; pass++ {
 		wantAttempted := pass == 1 || pass == 3
 		wantKnownFull := pass >= 2
-		for _, candidate := range attempt.selectionOrder {
+		for _, candidate := range waitOrder {
+			if err := ctx.Err(); err != nil {
+				return nil, candidateCount, topK, loadSkew, err
+			}
 			if candidate.account == nil {
+				continue
+			}
+			if fullQueueFallback != nil && candidate.account.ID == fullQueueFallback.Account.ID {
+				continue
+			}
+			maxWaiting, timeout := cfg.FallbackMaxWaiting, cfg.FallbackWaitTimeout
+			if req.StickyWeighted && (candidate.account.ID == req.StickyAccountID || candidate.account.ID == req.StickyPreviousAccountID) {
+				// A movable previous-response owner and a session owner may be
+				// different accounts. Preserve both sticky queue limits when the
+				// first one's full queue falls through to ordinary waiting.
+				maxWaiting, timeout = cfg.StickySessionMaxWaiting, cfg.StickySessionWaitTimeout
+			}
+			queueFull := candidate.loadKnown && candidate.loadInfo != nil && candidate.loadInfo.WaitingCount >= maxWaiting
+			if queueFull && fullQueueFallback != nil {
 				continue
 			}
 			if budget != nil && budget.limited {
@@ -1813,6 +1875,9 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 				continue
 			}
 			if !s.consumeOpenAISelectionDBRecheck(budget) {
+				if fullQueueFallback != nil {
+					return fullQueueFallback, candidateCount, topK, loadSkew, nil
+				}
 				return nil, candidateCount, topK, loadSkew, s.unavailableError(ctx, req, nil, compactBlocked, filterStats.summary("selection_order_exhausted"), trustedSchedulingGroupFromContext(ctx, req.GroupID))
 			}
 			fresh = s.service.recheckSelectedOpenAIAccountFromDB(ctx, fresh, req.GroupID, req.Platform, req.RequestedModel, false, req.RequiredCapability)
@@ -1823,18 +1888,26 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 				compactBlocked = true
 				continue
 			}
-			return attachSelectionProfitGate(ctx, &AccountSelectionResult{
+			selection := attachSelectionProfitGate(ctx, &AccountSelectionResult{
 				Account: fresh,
 				WaitPlan: &AccountWaitPlan{
 					AccountID:      fresh.ID,
 					MaxConcurrency: fresh.Concurrency,
-					Timeout:        cfg.FallbackWaitTimeout,
-					MaxWaiting:     cfg.FallbackMaxWaiting,
+					Timeout:        timeout,
+					MaxWaiting:     maxWaiting,
 				},
-			}), candidateCount, topK, loadSkew, nil
+			})
+			if queueFull {
+				fullQueueFallback = selection
+				continue
+			}
+			return selection, candidateCount, topK, loadSkew, nil
 		}
 	}
 
+	if fullQueueFallback != nil {
+		return fullQueueFallback, candidateCount, topK, loadSkew, nil
+	}
 	return nil, candidateCount, topK, loadSkew, s.unavailableError(ctx, req, nil, compactBlocked, filterStats.summary("selection_order_exhausted"), trustedSchedulingGroupFromContext(ctx, req.GroupID))
 }
 

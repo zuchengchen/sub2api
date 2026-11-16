@@ -663,6 +663,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
 	needsResponses := nativeV2 || legacyCompact
 	requiredCapability := openAIResponsesRequiredCapabilityForRequest(imageIntent, needsResponses, requestPlatform)
+	queueReselection := openAIQueueReselection{
+		enabled: previousResponseID == "" && !imageIntent && !needsResponses &&
+			openAITextQueueReselectionAllowed(requestPlatform, reqModel),
+	}
 
 	// 分组利润控制：请求级装配定价上下文——pricingAt 固定本请求的
 	// D 与计费高峰因子，选号、槽位终检与全部 failover 重入共用同一门与阈值。
@@ -703,6 +707,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if queueReselection.exhausted(err) {
+				h.handleOpenAIQueueFull(c, streamStarted)
+				return
+			}
 			if len(failedAccountIDs) == 0 {
 				if legacyCompact && errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -725,6 +733,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		if selection == nil || selection.Account == nil {
+			if queueReselection.exhausted(nil) {
+				h.handleOpenAIQueueFull(c, streamStarted)
+				return
+			}
 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, requestPlatform)
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
@@ -772,7 +784,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult := h.acquireOpenAIAccountSlotWithQueueReselection(
+			c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog, nil,
+			queueReselection.enabled && scheduleDecision.Layer != "guardian_parent",
+		)
+		if slotResult == openAISlotAcquireQueueFull {
+			if queueReselection.retry(failedAccountIDs, account.ID) {
+				continue
+			}
+			h.handleOpenAIQueueFull(c, streamStarted)
+			return
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -803,6 +825,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// 从不可变的 canonical forwardBody 派生本次尝试 body 并整块剔除上游私有的加密
 		// reasoning item（含耦合的 id/summary），避免非透传上游 400 拒绝 Kiro reasoning 形态。
 		attemptBody := h.deriveOpenAIForwardAttemptBody(reqLog, forwardBody, account, &passthroughFailoverState)
+		queueReselection.enabled = false // Admission retries must never replay an upstream attempt.
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
 				if accountReleaseFunc != nil {
@@ -1311,6 +1334,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	effectiveMappedModel := preferredMappedModel
+	queueReselection := openAIQueueReselection{enabled: openAITextQueueReselectionAllowed(requestPlatform, reqModel)}
 
 	// 分组利润控制：Messages 文本入口同样请求级装门并固定 pricingAt。
 	msgPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
@@ -1348,6 +1372,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if queueReselection.exhausted(err) {
+				h.handleOpenAIQueueFull(c, streamStarted)
+				return
+			}
 			if len(failedAccountIDs) == 0 {
 				if err != nil {
 					cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
@@ -1367,6 +1395,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			}
 		}
 		if selection == nil || selection.Account == nil {
+			if queueReselection.exhausted(nil) {
+				h.handleOpenAIQueueFull(c, streamStarted)
+				return
+			}
 			cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
@@ -1377,10 +1409,19 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		account := selection.Account
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai_messages.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
-		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult := h.acquireOpenAIAccountSlotWithQueueReselection(
+			c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog, nil,
+			queueReselection.enabled && scheduleDecision.Layer != "guardian_parent",
+		)
+		if slotResult == openAISlotAcquireQueueFull {
+			if queueReselection.retry(failedAccountIDs, account.ID) {
+				continue
+			}
+			h.handleOpenAIQueueFull(c, streamStarted)
+			return
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -1412,6 +1453,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		// 应用渠道模型映射到请求体
 		forwardBody := mappedBodyForMessages(channelMappingMsg.Mapped, channelMappingMsg.MappedModel)
 		writerSizeBeforeForward := c.Writer.Size()
+		queueReselection.enabled = false
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
 				if accountReleaseFunc != nil {
@@ -2119,7 +2161,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesUserSlot(
 	return wrapReleaseOnDone(ctx, userReleaseFunc), true
 }
 
-// openAISlotAcquireResult 是账号槽位获取的三态结果。
+// openAISlotAcquireResult distinguishes written admission errors from retryable vetoes.
 type openAISlotAcquireResult int
 
 const (
@@ -2130,7 +2172,45 @@ const (
 	// 未写任何响应；调用方应经 recordOpenAIProfitVeto 把该账号加入本请求排除集
 	// 后重新选号，全池耗尽由下一轮选号返回标准 no available accounts。
 	openAISlotAcquireProfitVetoed
+	// Only opt-in text callers receive QueueFull before any error is written.
+	// Waiting timeouts and all other admission errors still return Failed.
+	openAISlotAcquireQueueFull
 )
+
+const maxOpenAIQueueReselections = 3
+
+// Queue admission can race with other requests after the scheduler checks load.
+// Retry only before the first upstream attempt, with a separate small budget
+// from upstream failover and profit vetoes. Strong continuations never opt in.
+type openAIQueueReselection struct {
+	enabled bool
+	retries int
+}
+
+func openAITextQueueReselectionAllowed(platform, model string) bool {
+	return platform == service.PlatformOpenAI && !strings.EqualFold(strings.TrimSpace(model), "codex-auto-review")
+}
+
+func (r *openAIQueueReselection) retry(excludedIDs map[int64]struct{}, accountID int64) bool {
+	if !r.enabled || r.retries >= maxOpenAIQueueReselections {
+		return false
+	}
+	if _, excluded := excludedIDs[accountID]; excluded {
+		return false
+	}
+	excludedIDs[accountID] = struct{}{}
+	r.retries++
+	return true
+}
+
+func (r *openAIQueueReselection) exhausted(err error) bool {
+	return r.enabled && r.retries > 0 && (err == nil || errors.Is(err, service.ErrNoAvailableAccounts))
+}
+
+func (h *OpenAIGatewayHandler) handleOpenAIQueueFull(c *gin.Context, streamStarted bool) {
+	h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", gatewayQueueFullCode,
+		"Too many pending requests, please retry later", streamStarted, false)
+}
 
 // openAIWSTurnPricing 持有 WebSocket 连接内「当前 turn」的计费定价时刻。
 // 由 BeforeTurn 在每个 turn 开始时冻结，AfterTurn 的用量提交读取它；turn 在
@@ -2310,6 +2390,20 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	reqLog *zap.Logger,
 	writeError openAISlotErrorWriter,
 ) (func(), openAISlotAcquireResult) {
+	return h.acquireOpenAIAccountSlotWithQueueReselection(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, writeError, false)
+}
+
+func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
+	c *gin.Context,
+	groupID *int64,
+	sessionHash string,
+	selection *service.AccountSelectionResult,
+	reqStream bool,
+	streamStarted *bool,
+	reqLog *zap.Logger,
+	writeError openAISlotErrorWriter,
+	allowQueueReselection bool,
+) (func(), openAISlotAcquireResult) {
 	if writeError == nil {
 		writeError = func(status int, errType, code, message string) {
 			h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, *streamStarted, false)
@@ -2389,6 +2483,9 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 			zap.Int64("account_id", account.ID),
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 		)
+		if allowQueueReselection {
+			return nil, openAISlotAcquireQueueFull
+		}
 		writeError(http.StatusTooManyRequests, "rate_limit_error", gatewayQueueFullCode, "Too many pending requests, please retry later")
 		return nil, openAISlotAcquireFailed
 	}
