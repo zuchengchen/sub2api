@@ -126,6 +126,7 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 // route selection applies it stores the route plan in *tiboRunOut so Forward
 // can stamp the result after any return path.
 func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context, c *gin.Context, account *Account, body []byte, tiboRunOut **openAITiboRun) (*OpenAIForwardResult, error) {
+	beginOpenAIResponsesValidation(c, body)
 	if err := s.validateOpenAIResponseAuthOwner(ctx, c, account, gjson.GetBytes(body, "previous_response_id").String()); err != nil {
 		writeOpenAIResponseAuthOwnerError(c, err)
 		return nil, err
@@ -727,6 +728,9 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				synthOptions.TurnStartedMs = attemptFingerprintIDs.turnStartedAtUnixMs
 			}
 			result, synthErr := synthesizeCodexOAuthRequest(decoded, account, upstreamModel, synthOptions)
+			if result.WebSearchInjected {
+				MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchSynthesis)
+			}
 			if synthErr != nil {
 				setOpsUpstreamError(c, http.StatusBadRequest, synthErr.Error(), "")
 				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
@@ -789,6 +793,9 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				ensureCodexOAuthInstructionsField(decoded)
 				markDecodedModified()
 			}
+		}
+		if codexResult.WebSearchHistoryInjected {
+			MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchHistory)
 		}
 		if codexResult.Error != nil {
 			writeOpenAIResponsesErrorJSON(c, http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": codexResult.Error.Error()}})

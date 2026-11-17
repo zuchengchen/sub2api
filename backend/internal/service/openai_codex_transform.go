@@ -99,6 +99,9 @@ type codexTransformResult struct {
 	PromptCacheKey  string
 	ToolNameReverse map[string]string
 	Error           error
+	// Records an actual history compatibility insertion, not a tool inferred
+	// from the final body. Used only by bounded validation diagnostics.
+	WebSearchHistoryInjected bool
 }
 
 type codexOAuthTransformOptions struct {
@@ -377,6 +380,7 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 	// compact endpoint has its own wire shape and is left untouched.
 	if !opts.IsCompact && ensureOpenAIOAuthWebSearchToolForHistory(reqBody, opts.ResponsesLite) {
 		result.Modified = true
+		result.WebSearchHistoryInjected = true
 	}
 
 	if opts.WireProfile != nil && applyCodexWireProfileInputRules(reqBody, *opts.WireProfile, opts.ResponsesLite) {

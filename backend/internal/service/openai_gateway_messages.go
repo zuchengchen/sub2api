@@ -33,6 +33,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	beginOpenAIResponsesValidation(c, body)
 	requestedModel := gjson.GetBytes(body, "model").String()
 
 	if err := validateRetiredOpenAIRequestModel(account, requestedModel, false, resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)); err != nil {
@@ -254,6 +255,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				Strict:        s.cfg != nil && s.cfg.Gateway.CodexWire.Strict,
 			}
 			result, synthErr := synthesizeCodexOAuthRequest(reqBody, account, upstreamModel, synthOptions)
+			if result.WebSearchInjected {
+				MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchSynthesis)
+			}
 			if synthErr != nil {
 				message := synthErr.Error()
 				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
@@ -275,6 +279,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			PreserveToolCallIDs:     true,
 			WireProfile:             wireProfilePtr,
 		})
+		if codexResult.WebSearchHistoryInjected {
+			MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchHistory)
+		}
 		if codexResult.Error != nil {
 			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", codexResult.Error.Error())
 			return nil, codexResult.Error
@@ -516,7 +523,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			}
 		}
 		if account.IsOpenAIOAuthLike() {
-			resp, err, encryptedRejection = s.sendOpenAIMessagesResponsesRequest(ctx, c, account, upstreamReq, proxyURL)
+			resp, err, encryptedRejection = s.sendOpenAIMessagesResponsesRequest(ctx, c, account, upstreamReq, proxyURL, responsesBody)
 		} else {
 			resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		}
@@ -559,6 +566,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if !account.IsOpenAIOAuthLike() {
+			appendOpenAIResponsesValidationDiagnostic(c, account, responsesBody, respBody, resp, 1)
+		}
 		if encryptedRejection {
 			return handleOpenAIMessagesEncryptedRejection(ctx, c, account, resp, upstreamMsg)
 		}

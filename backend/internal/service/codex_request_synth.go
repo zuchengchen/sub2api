@@ -68,6 +68,9 @@ type codexSynthResult struct {
 	Truncated bool
 	// Injected confirms the base prompt was placed as input[0].
 	Injected bool
+	// WebSearchInjected records only the hosted tool added by synthesis, so
+	// diagnostics can distinguish it from client tools and history repair.
+	WebSearchInjected bool
 }
 
 // The client compacts against the advertised window (see /models), so the
@@ -149,8 +152,9 @@ func synthesizeCodexOAuthRequest(reqBody map[string]any, account *Account, upstr
 	reqBody["input"] = input
 	result.Injected = true
 
-	reverse := codexSynthesisPrepareTools(reqBody, descriptor, hasDescriptor, capability, opts.ResponsesLite)
+	reverse, webSearchInjected := codexSynthesisPrepareTools(reqBody, descriptor, hasDescriptor, capability, opts.ResponsesLite)
 	result.ToolNameReverse = reverse
+	result.WebSearchInjected = webSearchInjected
 
 	codexSynthesisApplyDefaults(reqBody, descriptor, hasDescriptor, opts)
 	result.Modified = true
@@ -651,13 +655,36 @@ func codexSynthesisPrepareTools(
 	hasDescriptor bool,
 	capability codexCapability,
 	responsesLite bool,
-) map[string]string {
+) (map[string]string, bool) {
 	if capability == codexCapabilityGeneric && !codexSynthesisToolChoiceNone(reqBody) &&
-		!codexSynthesisHasToolType(reqBody, "web_search") && codexDescriptorSupportsWebSearch(descriptor, hasDescriptor) {
+		!codexSynthesisHasJSONOutputFormat(reqBody) && !codexSynthesisHasWebSearchTool(reqBody) &&
+		codexDescriptorSupportsWebSearch(descriptor, hasDescriptor) {
 		// Hosted search executes upstream and needs no downstream executor.
+		// JSON output requests must keep their format contract; only the
+		// implicit tool is omitted, never a tool the caller declared.
 		codexSynthesisAppendTools(reqBody, []any{map[string]any{"type": "web_search"}}, responsesLite)
+		return nil, true
 	}
-	return nil
+	return nil, false
+}
+
+// codexSynthesisHasJSONOutputFormat recognizes only Responses format objects.
+// Chat Completions response_format is converted before synthesis. Leave
+// malformed fields untouched for the normal upstream validation path.
+func codexSynthesisHasJSONOutputFormat(reqBody map[string]any) bool {
+	text, ok := reqBody["text"].(map[string]any)
+	if !ok {
+		return false
+	}
+	format, ok := text["format"].(map[string]any)
+	if !ok {
+		return false
+	}
+	formatType, ok := format["type"].(string)
+	if !ok {
+		return false
+	}
+	return formatType == "json_object" || formatType == "json_schema"
 }
 
 func codexDescriptorSupportsWebSearch(descriptor openai.CodexCatalogModel, hasDescriptor bool) bool {
@@ -678,28 +705,19 @@ func codexSynthesisToolChoiceNone(reqBody map[string]any) bool {
 	}
 }
 
-func codexSynthesisHasToolType(reqBody map[string]any, toolType string) bool {
-	has := false
-	check := func(raw any) {
-		tools, _ := raw.([]any)
-		for _, rawTool := range tools {
-			tool, ok := rawTool.(map[string]any)
-			if ok && tool["type"] == toolType {
-				has = true
-				return
-			}
-		}
+func codexSynthesisHasWebSearchTool(reqBody map[string]any) bool {
+	if openAIToolsContainWebSearch(reqBody["tools"]) {
+		return true
 	}
-	check(reqBody["tools"])
 	if input, ok := reqBody["input"].([]any); ok {
 		for _, raw := range input {
 			item, ok := raw.(map[string]any)
-			if ok && item["type"] == openAIAdditionalToolsItemType {
-				check(item["tools"])
+			if ok && item["type"] == openAIAdditionalToolsItemType && openAIToolsContainWebSearch(item["tools"]) {
+				return true
 			}
 		}
 	}
-	return has
+	return false
 }
 
 func codexSynthesisAppendTools(reqBody map[string]any, tools []any, responsesLite bool) {
