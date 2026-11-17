@@ -851,6 +851,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				return parseErr
 			}
 			currentBridgePayload = nextPayload
+			c.Set(openAIResponsesRejectedFieldRetryBudgetContextKey, &openAIResponsesRejectedFieldRetryBudget{})
 		}
 	}
 
@@ -1166,6 +1167,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		responseID := ""
 		usage := OpenAIUsage{}
+		var replayGuard openAIResponseReplayGuard
 		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
@@ -1202,12 +1204,52 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				mappedModelBytes = []byte(mappedModel)
 			}
 		}
+		canReplayTurn := func() bool {
+			return !wroteDownstream && !clientDisconnected && !turnInterrupt.requested &&
+				ctx.Err() == nil && replayGuard.CanReplay(c)
+		}
+		partialResultWithUsage := func() *OpenAIForwardResult {
+			// Preserve only metered work on an unsuccessful turn. This result
+			// goes to AfterTurn with an error, never through successful response
+			// affinity/cache publication, and does not invent token estimates.
+			imageCount := imageCounter.Count()
+			if GetOpsCyberPolicy(c) != nil || (!openAIUsageHasTokens(&usage) && imageCount == 0) {
+				return nil
+			}
+			result := &OpenAIForwardResult{
+				RequestID:                     responseID,
+				ResponseID:                    responseID,
+				Usage:                         usage,
+				Model:                         originalModel,
+				UpstreamModel:                 mappedModel,
+				UpstreamResponseModel:         responseModelObserver.Model(),
+				UpstreamResponseModelConflict: responseModelObserver.Conflict(),
+				UpstreamResponseServiceTier:   responseModelObserver.ServiceTier(),
+				ServiceTier:                   resolvedOpenAIUpstreamServiceTierFromObserver(responseModelObserver, extractOpenAIServiceTierFromBody(payload)),
+				ReasoningEffort:               ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel), payload, mappedModel),
+				RequestedReasoningEffort:      requestedReasoningEffort,
+				Stream:                        reqStream,
+				OpenAIWSMode:                  true,
+				ClientDisconnect:              clientDisconnected,
+				ResponseHeaders:               lease.HandshakeHeaders(),
+				Duration:                      time.Since(turnStart),
+				FirstTokenMs:                  firstTokenMs,
+			}
+			if imageCount > 0 {
+				result.ImageCount = imageCount
+				result.ImageSize = imageSizeTier
+				result.ImageInputSize = imageInputSize
+				result.ImageOutputSizes = imageCounter.Sizes()
+				result.BillingModel = imageBillingModel
+			}
+			return result
+		}
 		for {
 			if clientDisconnected && !turnInterrupt.requested && turnInterrupt.responseID != "" {
 				if raw := turnInterrupt.automaticRequest(); len(raw) > 0 {
 					if err := sendInterrupt(raw); err != nil {
 						lease.MarkBroken()
-						return nil, wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
+						return partialResultWithUsage(), wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
 					}
 				}
 			}
@@ -1225,7 +1267,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				if terminalResult != nil {
 					return settledTerminal(), nil
 				}
-				return nil, turnInterruptFailure
+				return partialResultWithUsage(), turnInterruptFailure
 			}
 			controls := interruptClient.controls()
 			if clientDisconnected {
@@ -1242,7 +1284,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					if raw := turnInterrupt.automaticRequest(); len(raw) > 0 {
 						if err := sendInterrupt(raw); err != nil {
 							lease.MarkBroken()
-							return nil, wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
+							return partialResultWithUsage(), wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
 						}
 					}
 					continue
@@ -1257,7 +1299,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				if err := sendInterrupt(control.payload); err != nil {
 					lease.MarkBroken()
-					return nil, wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
+					return partialResultWithUsage(), wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
 				}
 				continue
 			}
@@ -1271,7 +1313,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					if raw := turnInterrupt.automaticRequest(); len(raw) > 0 {
 						if err := sendInterrupt(raw); err != nil {
 							lease.MarkBroken()
-							return nil, wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
+							return partialResultWithUsage(), wrapOpenAIWSIngressTurnError("interrupt_write", err, true)
 						}
 					}
 					continue
@@ -1281,7 +1323,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					turnInterruptFailure = NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "websocket interruption acknowledgement missing", readErr)
 					return settledTerminal(), nil
 				}
-				return nil, wrapOpenAIWSIngressTurnError("read_upstream", fmt.Errorf("read upstream websocket event: %w", readErr), wroteDownstream || turnInterrupt.requested)
+				return partialResultWithUsage(), wrapOpenAIWSIngressTurnError("read_upstream", fmt.Errorf("read upstream websocket event: %w", readErr), !canReplayTurn())
 			}
 			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
 				upstreamMessage = normalized
@@ -1297,7 +1339,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				if !ack {
 					lease.MarkBroken()
-					return nil, turnInterruptFailure
+					return partialResultWithUsage(), turnInterruptFailure
 				}
 			}
 			if ack {
@@ -1340,36 +1382,23 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
 				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
 			}
+			replayGuard.Observe(upstreamMessage, eventType)
 			if eventType == "error" || eventType == "response.failed" {
 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
+			}
+			if eventType == "response.failed" && canReplayTurn() && rejectedFieldRetryState != nil {
+				statusCode := openAIStreamFailureStatus(upstreamMessage, extractOpenAISSEErrorMessage(upstreamMessage))
+				retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode, payload, upstreamMessage)
+				if retryErr != nil {
+					return nil, retryErr
+				}
+				if changed && canReplayTurn() && rejectedFieldRetryState.Allow(retryBody) {
+					return nil, &openAIWSRejectedFieldRetryError{body: retryBody, reason: retryReason}
+				}
 			}
 			if eventType == "error" {
 				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
-				statusCode := openAIWSRejectedFieldRetryHTTPStatus(upstreamMessage)
-				if !wroteDownstream && statusCode == http.StatusBadRequest && rejectedFieldRetryState != nil {
-					retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(
-						statusCode,
-						payload,
-						upstreamMessage,
-					)
-					if retryErr != nil {
-						return nil, fmt.Errorf("normalize websocket rejected field retry: %w", retryErr)
-					}
-					if changed && rejectedFieldRetryState.Allow(retryBody) {
-						logOpenAIWSModeInfo(
-							"ingress_ws_rejected_field_retry account_id=%d turn=%d conn_id=%s reason=%s",
-							account.ID,
-							turn,
-							truncateOpenAIWSLogValue(lease.ConnID(), openAIWSIDValueMaxLen),
-							truncateOpenAIWSLogValue(retryReason, openAIWSLogValueMaxLen),
-						)
-						return nil, &openAIWSRejectedFieldRetryError{
-							body:   append([]byte(nil), retryBody...),
-							reason: retryReason,
-						}
-					}
-				}
 				s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				if fallbackReason == openAIWSFallbackReasonInvalidEncryptedContent {
@@ -1389,7 +1418,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					turnPreviousResponseID != "" &&
 					!turnHasFunctionCallOutput &&
 					s.openAIWSIngressPreviousResponseRecoveryEnabled() &&
-					!wroteDownstream
+					canReplayTurn()
 				if recoverablePrevNotFound {
 					// 可恢复场景使用非 error 关键字日志，避免被 LegacyPrintf 误判为 ERROR 级别。
 					logOpenAIWSModeInfo(
@@ -1440,7 +1469,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						false,
 					)
 				}
-				if !wroteDownstream && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+				if canReplayTurn() && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
 					lease.MarkBroken()
 					return nil, s.newOpenAIWSRateLimitFailoverError(account, lease.HandshakeHeaders(), upstreamMessage, errMsgRaw)
 				}
@@ -1664,7 +1693,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	defer releaseSessionLease()
 
 	turn := 1
-	rejectedFieldRetryState = newOpenAIResponsesRejectedFieldRetryState(currentPayload)
+	rejectedFieldRetryState = openAIResponsesRejectedFieldRetryStateForRequest(c, currentPayload)
 	turnRetry := 0
 	turnPrevRecoveryTried := false
 	lastTurnFinishedAt := time.Time{}
@@ -1696,7 +1725,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		preferredConnID = ""
 	}
 	recoverIngressPrevResponseNotFound := func(relayErr error, turn int, connID string) bool {
-		if !isOpenAIWSIngressPreviousResponseNotFound(relayErr) {
+		if ctx.Err() != nil || !isOpenAIWSIngressPreviousResponseNotFound(relayErr) {
 			return false
 		}
 		if turnPrevRecoveryTried || !s.openAIWSIngressPreviousResponseRecoveryEnabled() {
@@ -1763,7 +1792,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return true
 	}
 	retryIngressTurn := func(relayErr error, turn int, connID string) bool {
-		if !isOpenAIWSIngressTurnRetryable(relayErr) || turnRetry >= 1 {
+		if ctx.Err() != nil || !isOpenAIWSIngressTurnRetryable(relayErr) || turnRetry >= 1 {
 			return false
 		}
 		if isStrictAffinityTurn(currentPayload) {
@@ -2191,7 +2220,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				finalErr = unwrapped
 			}
 			if hooks != nil && hooks.AfterTurn != nil {
-				hooks.AfterTurn(turn, nil, finalErr)
+				hooks.AfterTurn(turn, result, finalErr)
 			}
 			sessionLease.MarkBroken()
 			if cookieWS && turn > 1 {
@@ -2419,7 +2448,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		currentImageInputSize = nextPayload.imageInputSize
 		currentPayloadBytes = nextPayload.payloadBytes
 		currentRequestedReasoningEffort = nextPayload.requestedReasoningEffort
-		rejectedFieldRetryState = newOpenAIResponsesRejectedFieldRetryState(currentPayload)
+		c.Set(openAIResponsesRejectedFieldRetryBudgetContextKey, &openAIResponsesRejectedFieldRetryBudget{})
+		rejectedFieldRetryState = openAIResponsesRejectedFieldRetryStateForRequest(c, currentPayload)
 		storeDisabled = s.isOpenAIWSStoreDisabledInRequestRaw(currentPayload, account)
 		if !storeDisabled {
 			unpinSessionConn(sessionConnID)

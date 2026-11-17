@@ -93,67 +93,90 @@ func (s *OpenAIGatewayService) sendOpenAIMessagesResponsesRequest(
 	ctx context.Context, c *gin.Context, account *Account, request *http.Request, proxyURL string,
 	diagnosticBody []byte,
 ) (*http.Response, error, bool) {
-	// doOpenAIUpstream can replace Body/GetBody with compressed bytes. Capture
-	// the fully constructed, uncompressed request before that transport step.
+	// Capture the actual post-builder body before transport compression. The
+	// response reader must repair this body, including any encrypted recovery,
+	// rather than an earlier conversion whose input indices may differ.
 	template := request.Clone(request.Context())
-	resp, err := s.doOpenAIUpstream(request, proxyURL, account)
-	if err != nil || resp == nil || resp.StatusCode != http.StatusBadRequest {
-		return resp, err, false
+	var originalBody []byte
+	if template.GetBody != nil && template.Header.Get("Content-Encoding") == "" {
+		if reader, readErr := template.GetBody(); readErr == nil {
+			originalBody, readErr = io.ReadAll(reader)
+			_ = reader.Close()
+			if readErr != nil {
+				originalBody = nil
+			}
+		}
 	}
-	responseBody, _, complete := s.readOpenAIUpstreamErrorWithCompleteness(resp)
-	appendOpenAIResponsesValidationDiagnostic(c, account, diagnosticBody, responseBody, resp, 1)
-	if !complete || !openAIMessagesEncryptedRejection(resp.StatusCode, responseBody) {
-		return resp, nil, false
+	var attemptState *openAIRejectedFieldRetryAttempt
+	if c != nil {
+		value, _ := c.Get(openAIRejectedFieldRetryAttemptKey)
+		attemptState, _ = value.(*openAIRejectedFieldRetryAttempt)
 	}
-	if c == nil || c.GetBool(openAIMessagesEncryptedRecoveryUsedKey) ||
-		ctx.Err() != nil || IsResponseCommitted(c) || (c.Writer != nil && c.Writer.Written()) ||
-		template.GetBody == nil || template.Header.Get("Content-Encoding") != "" {
-		return resp, nil, true
+	for attempt := 1; ; attempt++ {
+		if attemptState != nil {
+			attemptState.body = originalBody
+		}
+		resp, err := s.doOpenAIUpstream(request, proxyURL, account)
+		if err != nil || resp == nil || resp.StatusCode != http.StatusBadRequest {
+			return resp, err, false
+		}
+		responseBody, _, complete := s.readOpenAIUpstreamErrorWithCompleteness(resp)
+		appendOpenAIResponsesValidationDiagnostic(c, account, diagnosticBody, responseBody, resp, attempt)
+		encryptedRejection := complete && openAIMessagesEncryptedRejection(resp.StatusCode, responseBody)
+		var replayGuard openAIResponseReplayGuard
+		replayGuard.Observe(responseBody, "error")
+		canReplay := func() bool {
+			return c != nil && ctx.Err() == nil && replayGuard.CanReplay(c) &&
+				!IsResponseCommitted(c) && (c.Writer == nil || !c.Writer.Written()) && len(originalBody) > 0
+		}
+		if !complete || !canReplay() {
+			return resp, nil, encryptedRejection
+		}
+		var retryBody []byte
+		if encryptedRejection {
+			if c.GetBool(openAIMessagesEncryptedRecoveryUsedKey) {
+				return resp, nil, true
+			}
+			var stripped int
+			retryBody, stripped, err = stripOpenAIMessagesRejectedReasoning(originalBody)
+			if err != nil || stripped == 0 || !canReplay() {
+				return resp, nil, true
+			}
+			// Preserve the existing one-shot .50 encrypted reasoning recovery.
+			c.Set(openAIMessagesEncryptedRecoveryUsedKey, true)
+			recordOpenAIMessagesEncryptedRecovery(c, account, resp, "request_recovery", stripped, len(originalBody), len(retryBody))
+		} else {
+			var changed bool
+			retryBody, _, changed, err = normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, originalBody, responseBody)
+			if err != nil {
+				return resp, err, false
+			}
+			if !changed || !canReplay() || attemptState == nil || attemptState.state == nil || !attemptState.state.Allow(retryBody) {
+				return resp, nil, false
+			}
+		}
+		_ = resp.Body.Close()
+		request = cloneOpenAIMessagesRetryRequest(template, resp, retryBody)
+		originalBody = retryBody
+		diagnosticBody = retryBody
 	}
-	var replayGuard openAIResponseReplayGuard
-	replayGuard.Observe(responseBody, "error")
-	if !replayGuard.CanReplay(c) {
-		return resp, nil, true
-	}
-	reader, err := template.GetBody()
-	if err != nil {
-		return resp, nil, true
-	}
-	originalBody, readErr := io.ReadAll(reader)
-	_ = reader.Close()
-	if readErr != nil {
-		return resp, nil, true
-	}
-	retryBody, stripped, err := stripOpenAIMessagesRejectedReasoning(originalBody)
-	if err != nil || stripped == 0 {
-		return resp, nil, true
-	}
-	// Recheck cancellation after parsing a potentially large history. Consume
-	// the budget only when a second request is actually ready to be sent.
-	if ctx.Err() != nil || !replayGuard.CanReplay(c) || IsResponseCommitted(c) || (c.Writer != nil && c.Writer.Written()) {
-		return resp, nil, true
-	}
-	c.Set(openAIMessagesEncryptedRecoveryUsedKey, true)
+
+}
+
+// Reuse the built request identity and transport destination. Rebuilding the
+// Messages conversion would regenerate history and can reintroduce a repaired
+// field or reasoning ciphertext.
+func cloneOpenAIMessagesRetryRequest(template *http.Request, resp *http.Response, body []byte) *http.Request {
 	retry := template.Clone(template.Context())
-	// A transport-level 401 recovery may already have refreshed credentials.
-	// Keep its final headers while replacing only body framing/compression.
-	if resp.Request != nil {
+	if resp != nil && resp.Request != nil {
 		retry.Header = resp.Request.Header.Clone()
 	}
 	retry.Header.Del("Content-Encoding")
 	retry.Header.Del("Content-Length")
-	retry.Body = io.NopCloser(bytes.NewReader(retryBody))
-	retry.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(retryBody)), nil }
-	retry.ContentLength = int64(len(retryBody))
-	_ = resp.Body.Close()
-	recordOpenAIMessagesEncryptedRecovery(c, account, resp, "request_recovery", stripped, len(originalBody), len(retryBody))
-	resp, err = s.doOpenAIUpstream(retry, proxyURL, account)
-	if err != nil || resp == nil || resp.StatusCode != http.StatusBadRequest {
-		return resp, err, false
-	}
-	responseBody, _, complete = s.readOpenAIUpstreamErrorWithCompleteness(resp)
-	appendOpenAIResponsesValidationDiagnostic(c, account, retryBody, responseBody, resp, 2)
-	return resp, nil, complete && openAIMessagesEncryptedRejection(resp.StatusCode, responseBody)
+	retry.Body = io.NopCloser(bytes.NewReader(body))
+	retry.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	retry.ContentLength = int64(len(body))
+	return retry
 }
 
 // Patch only reasoning ciphertext in the outbound wire body. Messages, tools,
