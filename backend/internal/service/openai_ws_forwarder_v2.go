@@ -396,6 +396,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		ForceNewConn:       forceNewConn,
 		ProxyURL:           proxyURL,
 	}
+	// This entry is HTTP ingress before any frame has been sent. Prior
+	// attempts can only reach this fresh acquire after their replay guards
+	// allowed recovery; connection-bound continuation and native WS opt out.
+	eligibleHTTPFallback := !cookieWS && previousResponseID == "" && s.openAIWSSessionDisableEnabled() &&
+		ctx.Err() == nil && !IsResponseCommitted(c) && !openAIStreamClientOutputStarted(c, false) &&
+		(c == nil || c.Writer == nil || !c.Writer.Written()) && (&openAIResponseReplayGuard{}).CanReplay(c)
+	if c != nil {
+		acquireRequest.BeforeFreshDial = s.openAIWSEdgeDialHook(getAPIKeyFromContext(c), mappedModel, eligibleHTTPFallback)
+	}
 	lease, err := s.acquireOpenAIWSWithAuthRecovery(acquireCtx, s.getOpenAIWSConnPool(), &acquireRequest)
 	if err != nil {
 		var agentDialErr *openAIWSDialError

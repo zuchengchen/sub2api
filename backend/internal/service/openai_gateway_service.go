@@ -499,6 +499,7 @@ type OpenAIGatewayService struct {
 	nativeReplayRuntime   *nativeReasoningRuntime
 
 	openaiWSPoolOnce               sync.Once
+	openaiWSEdgeBackoffOnce        sync.Once
 	openaiWSStateStoreOnce         sync.Once
 	openaiSchedulerOnce            sync.Once
 	openaiProxyStreamCircuitOnce   sync.Once
@@ -506,6 +507,7 @@ type OpenAIGatewayService struct {
 	openaiModelTransientOnce       sync.Once
 	agentIdentityTaskMu            sync.Mutex
 	openaiWSPool                   *openAIWSConnPool
+	openaiWSEdgeBackoff            *openAIWSEdgeBackoff
 	openaiWSStateStore             OpenAIWSStateStore
 	openaiScheduler                OpenAIAccountScheduler
 	openaiWSPassthroughDialer      openAIWSClientDialer
@@ -858,6 +860,7 @@ func classifyOpenAIWSReconnectReason(err error) (string, bool) {
 		"ws_unsupported",
 		"auth_failed",
 		openAIWSUpstreamForbiddenReason,
+		openAIWSEdgeBackoffReason,
 		"invalid_encrypted_content",
 		"previous_response_not_found":
 		return reason, false

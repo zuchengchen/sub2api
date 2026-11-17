@@ -790,6 +790,10 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 }
 
 func classifyOpenAIWSAcquireError(err error) string {
+	if errors.Is(err, errOpenAIWSEdgeBackoff) {
+		return openAIWSEdgeBackoffReason
+	}
+
 	if err == nil {
 		return "acquire_conn"
 	}
