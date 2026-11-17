@@ -74,6 +74,7 @@ type openAIResponsesValidationSummary struct {
 	RequestBytesBasis         string                                        `json:"request_bytes_basis"`
 	HTTPRequestContentLength  *int64                                        `json:"http_request_content_length,omitempty"`
 	HTTPContentEncoding       string                                        `json:"http_content_encoding,omitempty"`
+	HTTPCompressionPolicy     string                                        `json:"http_request_compression_policy"`
 	HTTPProtocol              string                                        `json:"http_protocol"`
 	ResponseBytes             int                                           `json:"response_bytes"`
 	Attempt                   int                                           `json:"attempt"`
@@ -127,7 +128,8 @@ func appendOpenAIResponsesValidationDiagnostic(c *gin.Context, account *Account,
 		RequestBytes: len(requestBody), ResponseBytes: len(responseBody), Attempt: attempt,
 		Transport: "http", WSHTTPBridge: c.GetBool("openai_ws_http_bridge"),
 		RequestBytesBasis: "responses_json", ToolPairingComplete: true,
-		HTTPProtocol: openAIValidationHTTPProtocol(resp.ProtoMajor),
+		HTTPProtocol:          openAIValidationHTTPProtocol(resp.ProtoMajor),
+		HTTPCompressionPolicy: openAIRequestCompressionPolicy(resp.Request),
 	}
 	if resp.Request != nil {
 		// net/http treats zero length with a non-empty Body as unknown, not as
