@@ -225,7 +225,7 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBody_SanitizesToolSchemas
 		require.NoError(t, err)
 		require.True(t, changed)
 		require.Equal(t, "object", gjson.GetBytes(normalized, "tools.0.parameters.type").String())
-		require.False(t, gjson.GetBytes(normalized, "tools.0.parameters.properties.q.pattern").Exists())
+		require.Equal(t, "^(?=.*foo).+$", gjson.GetBytes(normalized, "tools.0.parameters.properties.q.pattern").String(), "repairing an invalid root type must not remove a valid schema constraint")
 	}
 }
 
@@ -234,11 +234,12 @@ func TestNormalizeOpenAIResponseFormatSchemasBody_PreservesNonStrictOptionalFiel
 
 	normalized, changed, err := normalizeOpenAIResponseFormatSchemasBody(body)
 	require.NoError(t, err)
-	require.True(t, changed)
-	require.Equal(t, "object", gjson.GetBytes(normalized, "text.format.schema.type").String())
-	require.Equal(t, "array", gjson.GetBytes(normalized, "text.format.schema.properties.tags.type").String())
-	require.False(t, gjson.GetBytes(normalized, "text.format.schema.minProperties").Exists())
-	require.False(t, gjson.GetBytes(normalized, "text.format.schema.properties.tags.uniqueItems").Exists())
+	require.False(t, changed)
+	require.Equal(t, body, normalized)
+	require.False(t, gjson.GetBytes(normalized, "text.format.schema.type").Exists())
+	require.False(t, gjson.GetBytes(normalized, "text.format.schema.properties.tags.type").Exists())
+	require.True(t, gjson.GetBytes(normalized, "text.format.schema.minProperties").Exists())
+	require.True(t, gjson.GetBytes(normalized, "text.format.schema.properties.tags.uniqueItems").Exists())
 	require.Equal(t, int64(4), gjson.GetBytes(normalized, "text.format.schema.maxProperties").Int())
 	require.False(t, gjson.GetBytes(normalized, "text.format.schema.required").Exists())
 }
@@ -248,8 +249,9 @@ func TestNormalizeOpenAIResponseFormatSchemasBody_DoesNotExpandStrictSchema(t *t
 
 	normalized, changed, err := normalizeOpenAIResponseFormatSchemasBody(body)
 	require.NoError(t, err)
-	require.True(t, changed) // Safe type inference still applies.
-	require.Equal(t, "object", gjson.GetBytes(normalized, "response_format.json_schema.schema.type").String())
+	require.False(t, changed)
+	require.Equal(t, body, normalized)
+	require.False(t, gjson.GetBytes(normalized, "response_format.json_schema.schema.type").Exists())
 	require.False(t, gjson.GetBytes(normalized, "response_format.json_schema.schema.required").Exists())
 	require.False(t, gjson.GetBytes(normalized, "response_format.json_schema.schema.additionalProperties").Exists())
 }
@@ -267,18 +269,19 @@ func TestNormalizeOpenAIResponseFormatSchemasBody_TraversesNestedSchemaContainer
 
 	normalized, changed, err := normalizeOpenAIResponseFormatSchemasBody(body)
 	require.NoError(t, err)
-	require.True(t, changed)
-	require.Equal(t, "object", gjson.GetBytes(normalized, "text.format.schema.$defs.entry.type").String())
-	require.False(t, gjson.GetBytes(normalized, "text.format.schema.$defs.entry.minProperties").Exists())
+	require.False(t, changed)
+	require.Equal(t, body, normalized)
+	require.False(t, gjson.GetBytes(normalized, "text.format.schema.$defs.entry.type").Exists())
+	require.True(t, gjson.GetBytes(normalized, "text.format.schema.$defs.entry.minProperties").Exists())
 	require.Equal(t, int64(3), gjson.GetBytes(normalized, "text.format.schema.$defs.entry.maxProperties").Int())
-	require.Equal(t, "array", gjson.GetBytes(normalized, "text.format.schema.additionalProperties.type").String())
-	require.False(t, gjson.GetBytes(normalized, "text.format.schema.additionalProperties.uniqueItems").Exists())
-	require.Equal(t, "object", gjson.GetBytes(normalized, "text.format.schema.prefixItems.0.type").String())
-	require.False(t, gjson.GetBytes(normalized, "text.format.schema.prefixItems.0.minProperties").Exists())
-	require.Equal(t, "object", gjson.GetBytes(normalized, "text.format.schema.dependentSchemas.kind.type").String())
-	require.False(t, gjson.GetBytes(normalized, "text.format.schema.dependentSchemas.kind.uniqueItems").Exists())
-	require.Equal(t, "array", gjson.GetBytes(normalized, "text.format.schema.not.type").String())
-	require.False(t, gjson.GetBytes(normalized, "text.format.schema.not.minProperties").Exists())
+	require.False(t, gjson.GetBytes(normalized, "text.format.schema.additionalProperties.type").Exists())
+	require.True(t, gjson.GetBytes(normalized, "text.format.schema.additionalProperties.uniqueItems").Exists())
+	require.False(t, gjson.GetBytes(normalized, "text.format.schema.prefixItems.0.type").Exists())
+	require.True(t, gjson.GetBytes(normalized, "text.format.schema.prefixItems.0.minProperties").Exists())
+	require.False(t, gjson.GetBytes(normalized, "text.format.schema.dependentSchemas.kind.type").Exists())
+	require.True(t, gjson.GetBytes(normalized, "text.format.schema.dependentSchemas.kind.uniqueItems").Exists())
+	require.False(t, gjson.GetBytes(normalized, "text.format.schema.not.type").Exists())
+	require.True(t, gjson.GetBytes(normalized, "text.format.schema.not.minProperties").Exists())
 	require.False(t, gjson.GetBytes(normalized, "text.format.schema.required").Exists())
 }
 
@@ -287,12 +290,13 @@ func TestNormalizeOpenAIResponseFormatSchemasBody_PreservesExistingTypeValues(t 
 
 	normalized, changed, err := normalizeOpenAIResponseFormatSchemasBody(body)
 	require.NoError(t, err)
-	require.True(t, changed)
-	require.Equal(t, "object", gjson.GetBytes(normalized, "text.format.schema.type").String())
+	require.False(t, changed)
+	require.Equal(t, body, normalized)
+	require.False(t, gjson.GetBytes(normalized, "text.format.schema.type").Exists())
 	require.Equal(t, "object", gjson.GetBytes(normalized, "text.format.schema.properties.union.type.0").String())
 	require.Equal(t, "null", gjson.GetBytes(normalized, "text.format.schema.properties.union.type.1").String())
 	require.True(t, gjson.GetBytes(normalized, "text.format.schema.properties.custom.type").IsObject())
-	require.Equal(t, "array", gjson.GetBytes(normalized, "text.format.schema.properties.inferred.type").String())
+	require.Equal(t, gjson.Null, gjson.GetBytes(normalized, "text.format.schema.properties.inferred.type").Type)
 }
 
 func TestNormalizeOpenAIPassthroughOAuthBody_CompactRemovesUnsupportedUser(t *testing.T) {

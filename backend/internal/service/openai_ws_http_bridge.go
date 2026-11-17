@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -253,7 +255,13 @@ func prepareOpenAIWSHTTPBridgeBody(account *Account, payload []byte) ([]byte, er
 	}
 	delete(body, "type")
 	delete(body, "generate")
-	delete(body, "previous_response_id")
+	if account != nil && account.Platform == PlatformOpenAI && !account.IsOpenAIApiKey() &&
+		strings.TrimSpace(firstNonEmptyString(body["previous_response_id"])) != "" {
+		return nil, &OpenAIContinuationContextError{Param: "previous_response_id"}
+	}
+	if account == nil || account.Platform != PlatformOpenAI {
+		delete(body, "previous_response_id")
+	}
 	if isCodexOAuthAccount(account) {
 		if metadata, ok := body["client_metadata"].(map[string]any); ok {
 			delete(metadata, "x-codex-ws-stream-request-start-ms")
@@ -272,28 +280,159 @@ func prepareOpenAIWSHTTPBridgeBody(account *Account, payload []byte) ([]byte, er
 }
 
 type openAIWSToolCallReplayCollector struct {
-	items    []json.RawMessage
-	seen     map[string]struct{}
-	allItems []json.RawMessage
-	allSeen  map[string]struct{}
+	items              []json.RawMessage
+	seen               map[string]struct{}
+	allItems           []json.RawMessage
+	allSeen            map[string]int
+	allBytes           int
+	pendingOutput      map[string]struct{}
+	unidentifiedOutput bool
+	terminalOutput     bool
+	terminalSeen       bool
+	invalidOutput      bool
+	outputPositions    map[int]string
+	itemPositions      map[string]int
+	unindexedDone      bool
 }
 
 func (c *openAIWSToolCallReplayCollector) AddEvent(eventType string, message []byte) {
+	if len(message) > openAIContinuationProofMaxBytes {
+		c.invalidOutput = true
+		return
+	}
+	if strings.HasSuffix(eventType, ".delta") || eventType == "response.output_item.added" {
+		if !openAIUnambiguousJSONObject(message) {
+			c.invalidOutput = true
+			return
+		}
+		id := gjson.GetBytes(message, "item_id").String()
+		if id == "" {
+			id = gjson.GetBytes(message, "item.id").String()
+		}
+		if id == "" {
+			c.unidentifiedOutput = true
+		} else {
+			if c.pendingOutput == nil {
+				c.pendingOutput = make(map[string]struct{})
+			}
+			if len(c.pendingOutput) >= openAIContinuationProofMaxItems || len(id) > openAIContinuationProofMaxID {
+				c.invalidOutput = true
+			} else {
+				c.pendingOutput[id] = struct{}{}
+				c.observeOutputPosition(message, id, false)
+			}
+		}
+	}
 	switch strings.TrimSpace(eventType) {
 	case "response.output_item.done":
+		if !openAIUnambiguousJSONObject(message) {
+			c.invalidOutput = true
+			return
+		}
 		item := gjson.GetBytes(message, "item")
+		delete(c.pendingOutput, item.Get("id").String())
+		c.observeOutputPosition(message, openAIReplayItemKey(item), true)
 		c.addAllItem(item)
 		c.addItem(item)
 	case "response.completed", "response.done":
+		c.terminalSeen = true
+		if !openAIUnambiguousJSONObject(message) {
+			c.invalidOutput = true
+			return
+		}
 		output := gjson.GetBytes(message, "response.output")
 		if !output.IsArray() {
 			return
 		}
-		for _, item := range output.Array() {
+		c.terminalOutput = true
+		// An unrelated terminal item cannot account for an earlier output
+		// event whose identity was missing. Preserve that uncertainty.
+		for i, item := range output.Array() {
+			key := openAIReplayItemKey(item)
+			if position, found := c.itemPositions[key]; found && position != i {
+				c.invalidOutput = true
+			}
+			if observed, found := c.outputPositions[i]; found && observed != key {
+				c.invalidOutput = true
+			}
+			delete(c.pendingOutput, item.Get("id").String())
 			c.addAllItem(item)
 			c.addItem(item)
 		}
+		if len(output.Array()) != len(c.allItems) {
+			// A terminal array that omits an observed item (or repeats an item)
+			// cannot prove that the accumulated output is a complete sequence.
+			c.invalidOutput = true
+		} else if !c.invalidOutput {
+			// The terminal output array defines conversation order even when
+			// parallel output_item.done events arrived in another order.
+			for i, item := range output.Array() {
+				c.allItems[i] = json.RawMessage(append([]byte(nil), item.Raw...))
+				c.allSeen[openAIReplayItemKey(item)] = i
+			}
+		}
 	}
+}
+
+func (c *openAIWSToolCallReplayCollector) Complete() bool {
+	return c.terminalSeen && (c.terminalOutput || c.completeSparseOutputPositions()) && len(c.pendingOutput) == 0 && !c.unidentifiedOutput && !c.invalidOutput
+}
+
+// A sparse terminal has no canonical array. Only a bounded, continuous series
+// of indexed done items establishes its order. Arrival order is insufficient.
+func (c *openAIWSToolCallReplayCollector) completeSparseOutputPositions() bool {
+	if c.unindexedDone || len(c.allItems) == 0 || len(c.outputPositions) != len(c.allItems) {
+		return false
+	}
+	for position := range c.allItems {
+		key, found := c.outputPositions[position]
+		if !found {
+			return false
+		}
+		if _, found := c.allSeen[key]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *openAIWSToolCallReplayCollector) observeOutputPosition(message []byte, key string, done bool) {
+	value := gjson.GetBytes(message, "output_index")
+	if !value.Exists() {
+		if done {
+			c.unindexedDone = true
+		}
+		return
+	}
+	position, err := strconv.Atoi(value.Raw)
+	if value.Type != gjson.Number || err != nil || position < 0 || position >= openAIContinuationProofMaxItems || key == "" {
+		c.invalidOutput = true
+		return
+	}
+	if c.outputPositions == nil {
+		c.outputPositions = make(map[int]string)
+		c.itemPositions = make(map[string]int)
+	}
+	if previous, exists := c.outputPositions[position]; exists && previous != key {
+		c.invalidOutput = true
+		return
+	}
+	if previous, exists := c.itemPositions[key]; exists && previous != position {
+		c.invalidOutput = true
+		return
+	}
+	c.outputPositions[position], c.itemPositions[key] = key, position
+}
+
+func openAIReplayItemKey(item gjson.Result) string {
+	key := strings.TrimSpace(item.Get("id").String())
+	if key == "" {
+		key = strings.TrimSpace(item.Get("call_id").String())
+	}
+	if key == "" {
+		key = strings.TrimSpace(item.Raw)
+	}
+	return key
 }
 
 // Items/AllItems 返回浅拷贝头数组；正文由 collector 独立分配且此后不可变，
@@ -303,6 +442,13 @@ func (c *openAIWSToolCallReplayCollector) Items() []json.RawMessage {
 }
 
 func (c *openAIWSToolCallReplayCollector) AllItems() []json.RawMessage {
+	if !c.terminalOutput && c.completeSparseOutputPositions() && !c.invalidOutput {
+		items := make([]json.RawMessage, len(c.allItems))
+		for position := range items {
+			items[position] = c.allItems[c.allSeen[c.outputPositions[position]]]
+		}
+		return items
+	}
 	return slices.Clone(c.allItems)
 }
 
@@ -375,30 +521,41 @@ func codexBridgeOutputTurnReferences(items []json.RawMessage, source []byte) ([]
 
 func (c *openAIWSToolCallReplayCollector) addAllItem(item gjson.Result) {
 	if !item.Exists() || item.Type != gjson.JSON {
+		c.invalidOutput = true
 		return
 	}
 	raw := strings.TrimSpace(item.Raw)
 	if raw == "" || !strings.HasPrefix(raw, "{") || strings.TrimSpace(item.Get("type").String()) == "" {
+		c.invalidOutput = true
 		return
 	}
-	key := strings.TrimSpace(item.Get("id").String())
-	if key == "" {
-		key = strings.TrimSpace(item.Get("call_id").String())
+	if len(raw) > openAIContinuationProofMaxBytes || !openAIUnambiguousJSONObject([]byte(raw)) {
+		c.invalidOutput = true
+		return
 	}
-	if key == "" {
-		key = raw
-	}
+	key := openAIReplayItemKey(item)
 	if c.allSeen == nil {
-		c.allSeen = make(map[string]struct{})
+		c.allSeen = make(map[string]int)
 	}
-	if _, ok := c.allSeen[key]; ok {
+	if index, ok := c.allSeen[key]; ok {
+		if string(c.allItems[index]) != raw && !bytes.Equal(normalizeOpenAIWSJSONForCompareOrRaw(c.allItems[index]), normalizeOpenAIWSJSONForCompareOrRaw([]byte(raw))) {
+			c.invalidOutput = true
+		}
 		return
 	}
-	c.allSeen[key] = struct{}{}
+	if len(c.allItems) >= openAIContinuationProofMaxItems || c.allBytes > openAIContinuationProofMaxBytes-len(raw) {
+		c.invalidOutput = true
+		return
+	}
+	c.allSeen[key] = len(c.allItems)
+	c.allBytes += len(raw)
 	c.allItems = append(c.allItems, json.RawMessage(raw))
 }
 
 func (c *openAIWSToolCallReplayCollector) addItem(item gjson.Result) {
+	if c.invalidOutput {
+		return
+	}
 	if !item.Exists() || item.Type != gjson.JSON {
 		return
 	}
@@ -420,6 +577,10 @@ func (c *openAIWSToolCallReplayCollector) addItem(item gjson.Result) {
 		c.seen = make(map[string]struct{})
 	}
 	if _, ok := c.seen[key]; ok {
+		return
+	}
+	if len(c.items) >= openAIContinuationProofMaxItems {
+		c.invalidOutput = true
 		return
 	}
 	c.seen[key] = struct{}{}
@@ -454,6 +615,9 @@ func buildOpenAIWSHTTPBridgeErrorEvent(statusCode int, message string) []byte {
 // ended on a bare error. created_at and sequence_number are always written:
 // strict clients (grok-build, Codex) reject the frame without them.
 func buildOpenAIWSHTTPBridgeFailedEvent(responseID, model string, createdAt int64, source []byte, fallbackMessage string) []byte {
+	if isOpenAIModelUnavailableTerminalEvent(source) {
+		return buildOpenAIResponseFailedEvent(responseID, model, createdAt, source, fallbackMessage)
+	}
 	errorType := strings.TrimSpace(gjson.GetBytes(source, "error.type").String())
 	if errorType == "" {
 		errorType = strings.TrimSpace(gjson.GetBytes(source, "response.error.type").String())
@@ -527,6 +691,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	// previous turn's provenance without guessing that final tools were
 	// declared by this client; untracked search is diagnosed as unknown.
 	ResetOpenAIResponsesValidationSearchSources(c)
+	if c != nil {
+		c.Set(openAIClientToolsObservedKey, false)
+	}
 	setOpenAIImageOutputRequest(c, payload)
 	responseModelObserver := &upstreamResponseModelObserver{}
 
@@ -534,6 +701,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
+	initialReplayInput := parseRawJSONView(body).Get("input").Raw
 	grokIntentSourceBody := append([]byte(nil), body...)
 	_, grokExplicitToolsField := openAIWSHTTPBridgeRawField(grokIntentSourceBody, "tools")
 	grokExplicitToolIntent := account.Platform == PlatformGrok && hasGrokResponsesToolIntent(grokIntentSourceBody)
@@ -574,10 +742,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			LoweredTools:  loweredTools,
 		})
 	}
-	if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
+	if openAIResponsesLiteForNormalization(account, gjson.GetBytes(body, "model").String(), "", payload) {
+		recordOpenAIFinalProtocolDiagnostic(c, account, gjson.GetBytes(body, "model").String(), "", body)
 		liteBody, liteChanged, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
 		if liteErr != nil {
-			return nil, fmt.Errorf("normalize responses Lite payload: %w", liteErr)
+			setOpsUpstreamError(c, http.StatusBadRequest, liteErr.Error(), "")
+			if writeErr := writeClientMessage(buildOpenAIProtocolValidationWSEvent(liteErr)); writeErr != nil {
+				return nil, writeErr
+			}
+			return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid request parameter", liteErr)
 		}
 		if liteChanged {
 			body = liteBody
@@ -624,6 +797,13 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	actualModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	if actualModel == "" {
 		actualModel = canonicalOpenAIAccountSchedulingModel(account, originalModel)
+	}
+	if validationErr := validateOpenAIOAuthFinalRequest(c, account, actualModel, "", body); validationErr != nil {
+		setOpsUpstreamError(c, http.StatusBadRequest, validationErr.Error(), "")
+		if writeErr := writeClientMessage(buildOpenAIProtocolValidationWSEvent(validationErr)); writeErr != nil {
+			return nil, writeErr
+		}
+		return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid request parameter", validationErr)
 	}
 	SetOpsUpstreamModel(c, actualModel)
 
@@ -707,6 +887,19 @@ retryHTTPBridge:
 		} else if shouldFailover && (turn == 1 || resp.StatusCode == http.StatusTooManyRequests) {
 			return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body, respBody)
 		}
+		if account.Platform == PlatformOpenAI && isOpenAIModelUnavailableError(resp.StatusCode, respBody) {
+			setOpsUpstreamError(c, resp.StatusCode, OpenAIModelUnavailableClientMessage, "")
+			clientError := buildOpenAIResponseFailedEvent("", originalModel, 0, OpenAIModelUnavailableClientErrorBody(), OpenAIModelUnavailableClientMessage)
+			if writeErr := writeClientMessage(clientError); writeErr == nil {
+				markOpenAIWSClientVisibleFailure(c, "response.failed", clientError)
+			}
+			partial := openAIModelUnavailablePartialResult(c, resp, respBody, originalModel)
+			stampOpenAIModelErrorPartialResult(c, partial, body, originalModel, originalModel, actualModel, true, turnStart)
+			if partial != nil {
+				partial.OpenAIWSMode = true
+			}
+			return partial, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, OpenAIModelUnavailableClientMessage, nil)
+		}
 		if account.Platform != PlatformGrok && (shouldFailover || shouldCooldownOpenAITransientUpstreamError(resp.StatusCode, respBody)) {
 			s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, actualModel)
 		}
@@ -786,6 +979,8 @@ retryHTTPBridge:
 			result.wsReplayInput = replayInput
 			result.wsReplayInputExists = true
 		}
+		result.wsReplayInputComplete = replayCollector.Complete() && len(result.wsReplayInput) == len(allItems) &&
+			initialReplayInput == parseRawJSONView(body).Get("input").Raw
 		result.wsAccountFailoverReplayInput = allItems
 		if imageCount > 0 {
 			result.ImageCount = imageCount
@@ -818,6 +1013,9 @@ retryHTTPBridge:
 			failureAccountSideEffectsApplied = s.handleOpenAIWSFailureAccountSideEffects(ctx, account, mappedModel, resp.Header, bareErrorPayload)
 		}
 		upstreamTerminalEvent = "response.failed"
+		if isOpenAIModelUnavailableTerminalEvent(bareErrorPayload) {
+			setOpsUpstreamError(c, resp.StatusCode, OpenAIModelUnavailableClientMessage, "")
+		}
 		if clientDisconnected {
 			return nil
 		}
@@ -998,6 +1196,9 @@ retryHTTPBridge:
 		// 重试。账号状态与终止事件判定（下方 handleOpenAIWSTerminalTransientFailure）
 		// 仍使用未改写的 upstreamMessage。
 		clientMessage := prepareOpenAIImageOutput(c, upstreamMessage)
+		if normalized, changed := normalizeOpenAIModelUnavailableClientEvent(clientMessage); changed {
+			clientMessage = normalized
+		}
 		if eventType == "error" || eventType == "response.failed" {
 			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 				clientMessage = rewritten
@@ -1067,6 +1268,11 @@ retryHTTPBridge:
 			return resultWithUsage(), upstreamEventErr
 		}
 		if isOpenAIWSTerminalEvent(eventType) && !bareErrorPending {
+			if isOpenAIModelUnavailableTerminalEvent(upstreamMessage) {
+				upstreamTerminalEvent = "response.failed"
+				setOpsUpstreamError(c, resp.StatusCode, OpenAIModelUnavailableClientMessage, "")
+				return resultWithUsage(), NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, OpenAIModelUnavailableClientMessage, nil)
+			}
 			if eventType == "response.failed" {
 				upstreamTerminalEvent = "response.failed"
 			} else {
@@ -1106,6 +1312,9 @@ retryHTTPBridge:
 		}
 		if finalizeErr := finalizeBareError(); finalizeErr != nil {
 			return resultWithUsage(), finalizeErr
+		}
+		if isOpenAIModelUnavailableTerminalEvent(bareErrorPayload) {
+			return resultWithUsage(), NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, OpenAIModelUnavailableClientMessage, nil)
 		}
 		if scanErr := scanner.Err(); scanErr != nil {
 			return resultWithUsage(), fmt.Errorf("read upstream http bridge stream after error event: %w", scanErr)

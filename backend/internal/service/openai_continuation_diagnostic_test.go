@@ -73,7 +73,7 @@ func TestDiagnosticOAuthHTTPExplicitHistoryPreservesAssistantAndReasoning(t *tes
 func TestDiagnosticOAuthWSHTTPBridgeIncrementalHistoryPreservesAssistantAndReasoning(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := diagnosticContinuationConfig()
-	output := strings.TrimSuffix(diagnosticContinuationOutput, "]") + `,{"type":"reasoning","id":"rs_id_only","summary":[]}]`
+	output := diagnosticContinuationOutput
 	first := diagnosticContinuationSSE("resp_first", output)
 	var outputEvents strings.Builder
 	for _, item := range gjson.Parse(output).Array() {

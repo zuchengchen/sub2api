@@ -37,7 +37,8 @@ type AnthropicRequest struct {
 
 // AnthropicOutputConfig controls output generation parameters.
 type AnthropicOutputConfig struct {
-	Effort string `json:"effort,omitempty"` // "low" | "medium" | "high" | "max"
+	Effort string          `json:"effort,omitempty"` // "low" | "medium" | "high" | "max"
+	Format json.RawMessage `json:"format,omitempty"`
 }
 
 // AnthropicThinking configures extended thinking in the Anthropic API.
@@ -302,10 +303,11 @@ type ResponsesInputItem struct {
 	EncryptedContent string `json:"encrypted_content,omitempty"`
 
 	// type=function_call
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-	ID        string `json:"id,omitempty"`
+	CallID    string  `json:"call_id,omitempty"`
+	Name      string  `json:"name,omitempty"`
+	Arguments string  `json:"arguments,omitempty"`
+	Input     *string `json:"input,omitempty"` // custom_tool_call input, including an empty string
+	ID        string  `json:"id,omitempty"`
 
 	// type=function_call_output
 	Output    string `json:"output,omitempty"`
@@ -338,6 +340,18 @@ func (i *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (i ResponsesInputItem) MarshalJSON() ([]byte, error) {
+	type alias ResponsesInputItem
+	if i.Type == "custom_tool_call_output" {
+		// Empty output is a valid tool result; omitting it changes the contract.
+		return json.Marshal(struct {
+			alias
+			Output string `json:"output"`
+		}{alias(i), i.Output})
+	}
+	return json.Marshal(alias(i))
+}
+
 // ResponsesContentPart is a typed content part in a Responses message.
 type ResponsesContentPart struct {
 	Type                  string                 `json:"type"` // "input_text" | "output_text" | "refusal" | "input_image" | "input_file"
@@ -359,6 +373,9 @@ type ResponsesTool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+	// Set only by a conversion that already produced the native declaration.
+	// Preserve custom grammars and hosted-tool options outside the typed view.
+	rawDeclaration json.RawMessage
 
 	// type=namespace 的子工具列表（tools 与 children 二选一，语义相同）。
 	Tools    []ResponsesTool `json:"tools,omitempty"`
@@ -371,6 +388,14 @@ type ResponsesTool struct {
 	ToDate                   string   `json:"to_date,omitempty"`
 	EnableImageUnderstanding *bool    `json:"enable_image_understanding,omitempty"`
 	EnableVideoUnderstanding *bool    `json:"enable_video_understanding,omitempty"`
+}
+
+func (t ResponsesTool) MarshalJSON() ([]byte, error) {
+	if len(t.rawDeclaration) > 0 {
+		return append([]byte(nil), t.rawDeclaration...), nil
+	}
+	type alias ResponsesTool
+	return json.Marshal(alias(t))
 }
 
 // UnmarshalJSON 容忍字符串形式的工具声明：codex 会以 "name" 简写声明 custom 工具，
@@ -755,8 +780,10 @@ type ChatFile struct {
 
 // ChatTool describes a tool available to the model.
 type ChatTool struct {
-	Type     string        `json:"type"` // "function" | "web_search" | "code_execution" | "x_search"
-	Function *ChatFunction `json:"function,omitempty"`
+	Type           string          `json:"type"` // "function" | "web_search" | "code_execution" | "x_search"
+	Function       *ChatFunction   `json:"function,omitempty"`
+	Custom         json.RawMessage `json:"custom,omitempty"`
+	rawDeclaration json.RawMessage
 
 	// type=x_search
 	AllowedXHandles          []string `json:"allowed_x_handles,omitempty"`
@@ -765,6 +792,17 @@ type ChatTool struct {
 	ToDate                   string   `json:"to_date,omitempty"`
 	EnableImageUnderstanding *bool    `json:"enable_image_understanding,omitempty"`
 	EnableVideoUnderstanding *bool    `json:"enable_video_understanding,omitempty"`
+}
+
+func (t *ChatTool) UnmarshalJSON(data []byte) error {
+	type alias ChatTool
+	var value alias
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*t = ChatTool(value)
+	t.rawDeclaration = append(json.RawMessage(nil), data...)
+	return nil
 }
 
 // ChatFunction describes a function tool definition.
@@ -782,6 +820,27 @@ type ChatToolCall struct {
 	ID       string           `json:"id,omitempty"`
 	Type     string           `json:"type,omitempty"` // "function"
 	Function ChatFunctionCall `json:"function"`
+	Custom   *ChatCustomCall  `json:"custom,omitempty"`
+}
+
+// A native custom call has custom.input, never function.arguments. Keep the
+// historical function serialization unchanged for all other callers.
+func (t ChatToolCall) MarshalJSON() ([]byte, error) {
+	if t.Custom == nil {
+		type alias ChatToolCall
+		return json.Marshal(alias(t))
+	}
+	return json.Marshal(struct {
+		Index  *int            `json:"index,omitempty"`
+		ID     string          `json:"id,omitempty"`
+		Type   string          `json:"type,omitempty"`
+		Custom *ChatCustomCall `json:"custom"`
+	}{t.Index, t.ID, t.Type, t.Custom})
+}
+
+type ChatCustomCall struct {
+	Name  string `json:"name,omitempty"`
+	Input string `json:"input"`
 }
 
 // ChatFunctionCall contains the function name and arguments.

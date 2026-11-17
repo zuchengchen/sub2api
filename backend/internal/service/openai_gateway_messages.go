@@ -169,6 +169,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	anthropicReq.Model = upstreamModel
 	responsesReq, err := anthropicToResponses(s.cfg, &anthropicReq)
 	if err != nil {
+		writeAnthropicOutputFormatValidationError(c, err)
 		return nil, fmt.Errorf("convert anthropic to responses: %w", err)
 	}
 
@@ -231,9 +232,19 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, fmt.Errorf("marshal responses request: %w", err)
 	}
 
+	responsesLite := openAIResponsesLiteForNormalization(account, upstreamModel, c.GetHeader(responsesLiteHeader), responsesBody)
+	if responsesLite {
+		recordOpenAIFinalProtocolDiagnostic(c, account, upstreamModel, c.GetHeader(responsesLiteHeader), responsesBody)
+		normalized, _, normalizeErr := normalizeOpenAIResponsesLitePayloadForAccount(responsesBody, account)
+		if normalizeErr != nil {
+			writeOpenAIProtocolValidationError(c, normalizeErr, true)
+			return nil, normalizeErr
+		}
+		responsesBody = normalized
+	}
 	if account.UsesOpenAICodexProtocol() && account.Platform != PlatformGrok {
 		var reqBody map[string]any
-		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
+		if err := decodeOpenAIJSONUseNumber(responsesBody, &reqBody); err != nil {
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
 		var synthResult *codexSynthResult
@@ -247,7 +258,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if isCodexOAuthAccount(account) && s.codexFullSynthesisEnabled() {
 			deviceProfile, _ := codexDeviceProfileForRequest(account)
 			synthOptions := codexSynthOptions{
-				ResponsesLite: false,
+				ResponsesLite: responsesLite,
 				WireProfile:   wireProfile,
 				WireVersion:   s.codexSessionClientVersion(c, account, body),
 				Device:        deviceProfile,
@@ -274,6 +285,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 		synthesized := synthResult != nil && synthResult.Modified
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
+			ResponsesLite:           responsesLite,
 			SkipDefaultInstructions: true,
 			NativeItemIDs:           isCodexOAuthAccount(account),
 			PreserveToolCallIDs:     true,
@@ -369,7 +381,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Type == AccountTypeAPIKey {
 		if trimmedKey := strings.TrimSpace(promptCacheKey); trimmedKey != "" {
 			var reqBody map[string]any
-			if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
+			if err := decodeOpenAIJSONUseNumber(responsesBody, &reqBody); err != nil {
 				return nil, fmt.Errorf("unmarshal for prompt cache key injection: %w", err)
 			}
 			if existing, ok := reqBody["prompt_cache_key"].(string); !ok || strings.TrimSpace(existing) == "" {
@@ -438,6 +450,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 	}
 
+	if validationErr := validateOpenAIOAuthFinalRequest(c, account, upstreamModel, c.GetHeader(responsesLiteHeader), responsesBody); validationErr != nil {
+		writeOpenAIProtocolValidationError(c, validationErr, true)
+		return nil, validationErr
+	}
 	// 5. Get access token
 	token, _, err := s.getRequestCredential(ctx, c, account)
 	if err != nil {
@@ -612,7 +628,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				return nil, foErr
 			}
 			// Non-failover error: return Anthropic-formatted error to client
-			return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
+			partial, terminalErr := s.handleAnthropicErrorResponse(resp, c, account, billingModel)
+			stampOpenAIModelErrorPartialResult(c, partial, responsesBody, originalModel, billingModel, upstreamModel, clientStream, startTime)
+			return partial, terminalErr
 		}
 		if account.Platform == PlatformGrok && account.Type == AccountTypeOAuth {
 			s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.Header, resp.StatusCode)
@@ -799,6 +817,10 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			return nil, s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payload, message, upstreamModel, resp.Header)
 		}
 		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
+		if isOpenAIModelUnavailableTerminalEvent(payload) {
+			writeOpenAIModelUnavailableTerminal(c, resp.StatusCode, openAIModelErrorMessages)
+			return partialResult(), fmt.Errorf("upstream model unavailable")
+		}
 		// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
 		// 使按错误码配置的透传规则可命中。
 		if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(
@@ -1388,6 +1410,14 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					return true
 				}
 				message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
+				if isOpenAIModelUnavailableTerminalEvent(payloadBytes) {
+					if !clientDisconnected {
+						writeOpenAIModelUnavailableTerminal(c, resp.StatusCode, openAIModelErrorMessages)
+						clientOutputStarted = true
+					}
+					streamNonFailoverErr = fmt.Errorf("upstream model unavailable")
+					return true
+				}
 				errStatus, errType, errMsg := openAIStreamFailureStatus(payloadBytes, message), "api_error", message
 				if errStatus == http.StatusBadRequest {
 					errType = "invalid_request_error"

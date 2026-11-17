@@ -77,11 +77,10 @@ func shouldStripOpenAIResponsesInputNamespaces(account *Account, transport OpenA
 //     故 OAuth 非 compact 请求必须保留。
 //   - compact 端点的 schema 不含该字段，携带即 400 `Unknown parameter:
 //     input[N].namespace`（issue #4761 正文），故 compact 一律清理。
-//   - API Key 出口默认按标准 Responses API 处理并清理该字段；但当请求本身声明
-//     namespace 工具时（包括 Responses Lite 的 input[].additional_tools），上游显然
-//     使用了 namespace 扩展，此时必须保留调用项上的 namespace，否则声明与历史
-//     调用会失配并触发 Missing namespace。
-//   - 摊平模式下调用项已被改写成平名，残留 namespace 指向的声明已不存在，一律清理。
+//   - API Key 原生 Responses 保留调用/函数结果的 namespace。历史调用的工具
+//     不一定仍在本轮 tools 声明中；声明缺席不能证明该身份字段可删除。
+//   - 摊平只清理实际映射的调用及其唯一匹配的结果；保留的声明、未映射历史
+//     和未知类型仍需携带原来的 namespace。
 func shouldKeepOpenAIResponsesToolCallNamespaces(
 	account *Account,
 	transport OpenAIUpstreamTransport,
@@ -96,12 +95,12 @@ func shouldKeepOpenAIResponsesToolCallNamespaces(
 		return false
 	}
 	if account.IsOpenAIApiKey() {
-		return hasOpenAIResponsesNamespaceToolDeclaration(body)
+		return true
 	}
 	if !account.IsOpenAIOAuthLike() {
 		return false
 	}
-	return !shouldFlattenOpenAIResponsesNamespaces(account, transport, passthroughEnabled, compactPath)
+	return true
 }
 
 func hasOpenAIResponsesNamespaceToolDeclaration(body []byte) bool {
@@ -146,10 +145,9 @@ func hasOpenAIResponsesNamespaceToolDeclaration(body []byte) bool {
 	return found
 }
 
-// openAIResponsesToolCallItemTypes 是携带 namespace 的调用项类型集合。与
-// removeOpenAIResponsesRejectedNamespaceAtIndex 的反应式白名单保持一致；codex-rs
-// protocol/src/models.rs 中只有 FunctionCall 与 CustomToolCall 序列化 namespace，
-// 其余类型带该字段一定是非 Codex 客户端或历史残留，清掉才安全。
+// openAIResponsesToolCallItemTypes keeps the existing targeted namespace-retry
+// allowlist. Native FunctionCallOutput also carries namespace, but preserving
+// its identity does not expand the retry allowlist for deleting that field.
 var openAIResponsesToolCallItemTypes = map[string]bool{
 	"function_call":    true,
 	"tool_call":        true,
@@ -161,13 +159,23 @@ func isOpenAIResponsesToolCallItemType(itemType string) bool {
 	return openAIResponsesToolCallItemTypes[strings.ToLower(strings.TrimSpace(itemType))]
 }
 
+func isOpenAIResponsesNamespaceContextItemType(itemType string) bool {
+	// An unfamiliar item may carry native tool identity. Only known passive
+	// families authorize proactive cleanup; declining replay is not permission
+	// to delete an unknown family's fields. Compact still strips unconditionally.
+	return !isCodexKnownNonToolCallItemType(strings.ToLower(strings.TrimSpace(itemType)))
+}
+
 func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, error) {
 	if !bytes.Contains(body, []byte(`"namespace"`)) {
 		return body, nil
 	}
 	var requestBody map[string]any
-	if err := json.Unmarshal(body, &requestBody); err != nil {
+	if err := decodeOpenAIJSONUseNumber(body, &requestBody); err != nil {
 		return body, fmt.Errorf("decode OpenAI namespace body: %w", err)
+	}
+	if err := validateOpenAINamespaceFlattenContract(requestBody); err != nil {
+		return body, err
 	}
 	names, changed, err := apicompat.FlattenResponsesNamespacesExcept(requestBody, map[string]bool{"image_gen": true})
 	if err != nil {
@@ -176,12 +184,131 @@ func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, erro
 	if !changed {
 		return body, nil
 	}
+	rewriteOpenAIResponsesFlattenedOutputs(body, requestBody, names)
 	rebuilt, err := marshalOpenAIUpstreamJSON(requestBody)
 	if err != nil {
 		return body, fmt.Errorf("encode OpenAI namespace body: %w", err)
 	}
 	setOpenAIResponsesNamespaceNames(c, names)
 	return restoreOpenAIUpstreamJSONTopLevelOrder(body, rebuilt), nil
+}
+
+// rewriteOpenAIResponsesFlattenedOutputs follows only a unique inline call that
+// the namespace converter actually rewrote. A declaration alone cannot prove
+// the identity of an output whose call belongs to opaque earlier context.
+func rewriteOpenAIResponsesFlattenedOutputs(original []byte, body map[string]any, names map[string]apicompat.ResponsesNamespaceName) {
+	originalInput := gjson.GetBytes(original, "input")
+	input, ok := body["input"].([]any)
+	if !ok || !originalInput.IsArray() || len(names) == 0 {
+		return
+	}
+	type mappedCall struct {
+		namespace string
+		name      string
+		flatName  string
+		index     int
+	}
+	calls := make(map[string]mappedCall)
+	counts := make(map[string]int)
+	originalInput.ForEach(func(index, item gjson.Result) bool {
+		callID := item.Get("call_id")
+		if !item.IsObject() || callID.Type != gjson.String || callID.String() == "" || item.Get("type").String() == "function_call_output" {
+			return true
+		}
+		id := callID.String()
+		counts[id]++
+		i := int(index.Int())
+		if item.Get("type").String() != "function_call" || i < 0 || i >= len(input) {
+			return true
+		}
+		rewritten, ok := input[i].(map[string]any)
+		if !ok {
+			return true
+		}
+		flat, _ := rewritten["name"].(string)
+		identity, mapped := names[flat]
+		_, stillNamespaced := rewritten["namespace"]
+		if !mapped || stillNamespaced || item.Get("namespace").Type != gjson.String || item.Get("name").Type != gjson.String ||
+			identity.Namespace != item.Get("namespace").String() || identity.Name != item.Get("name").String() {
+			return true
+		}
+		calls[id] = mappedCall{namespace: identity.Namespace, name: identity.Name, flatName: flat, index: i}
+		return true
+	})
+	for i, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok || item["type"] != "function_call_output" {
+			continue
+		}
+		callID, _ := item["call_id"].(string)
+		call, mapped := calls[callID]
+		rawNamespace, namespaceExists := item["namespace"]
+		namespace, namespaceOK := rawNamespace.(string)
+		if !mapped || counts[callID] != 1 || call.index >= i || (namespaceExists && (!namespaceOK || namespace != call.namespace)) {
+			continue
+		}
+		if rawName, exists := item["name"]; exists {
+			name, ok := rawName.(string)
+			if !ok || name != call.name {
+				continue
+			}
+			item["name"] = call.flatName
+		}
+		delete(item, "namespace")
+	}
+}
+
+// FlattenResponsesNamespacesExcept handles function children. A native custom
+// child has a different input/output contract, so it must never disappear as a
+// side effect of flattening another function. Excluded namespaces stay native.
+func validateOpenAINamespaceFlattenContract(body map[string]any) error {
+	tools, _ := body["tools"].([]any)
+	willFlatten := false
+	var ambiguous *apicompat.RequestContractError
+	var unsupported *apicompat.RequestContractError
+	for index, raw := range tools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		toolType, _ := tool["type"].(string)
+		if strings.TrimSpace(toolType) != "namespace" {
+			continue
+		}
+		name, _ := tool["name"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" || name == "image_gen" {
+			continue
+		}
+		children, _ := tool["tools"].([]any)
+		alternate, _ := tool["children"].([]any)
+		if len(children) > 0 && len(alternate) > 0 && ambiguous == nil {
+			ambiguous = &apicompat.RequestContractError{Param: fmt.Sprintf("tools[%d]", index), Message: "A namespace cannot be flattened with both nonempty tools and children declarations"}
+		}
+		field := "tools"
+		if len(children) == 0 {
+			children, field = alternate, "children"
+		}
+		for childIndex, rawChild := range children {
+			child, ok := rawChild.(map[string]any)
+			childType, _ := child["type"].(string)
+			if ok && strings.TrimSpace(childType) == "function" {
+				childName, _ := child["name"].(string)
+				willFlatten = willFlatten || strings.TrimSpace(childName) != ""
+				continue
+			}
+			if unsupported == nil {
+				unsupported = &apicompat.RequestContractError{Param: fmt.Sprintf("tools[%d].%s[%d].type", index, field, childIndex), Message: "Namespace flattening cannot preserve this explicit tool type; disable namespace flattening to retain the native declaration"}
+			}
+		}
+	}
+	if willFlatten && ambiguous != nil {
+		return ambiguous
+	}
+	if willFlatten && unsupported != nil {
+		return unsupported
+	}
+	return nil
 }
 
 // stripOpenAIResponsesInputNamespaces removes namespace only from direct input
@@ -208,7 +335,7 @@ func stripOpenAIResponsesInputNamespaces(body []byte, keepToolCallNamespaces boo
 	var stripErr error
 	input.ForEach(func(_, item gjson.Result) bool {
 		if !item.IsObject() || !item.Get("namespace").Exists() ||
-			(keepToolCallNamespaces && isOpenAIResponsesToolCallItemType(item.Get("type").String())) {
+			(keepToolCallNamespaces && isOpenAIResponsesNamespaceContextItemType(item.Get("type").String())) {
 			return true
 		}
 		itemBody, err := sjson.DeleteBytes([]byte(item.Raw), "namespace")

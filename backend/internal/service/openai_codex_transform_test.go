@@ -925,12 +925,13 @@ func TestApplyCodexOAuthTransform_CompactForcesNonStreaming(t *testing.T) {
 }
 
 func TestApplyCodexOAuthTransform_NonContinuationDefaultsStoreFalseAndStripsIDs(t *testing.T) {
-	// 非续链场景：未设置 store 时默认 false，并移除 input 中的 id。
+	// Legacy compatibility input defaults store=false and strips only the
+	// known inline message's optional ID; unknown native types stay intact.
 
 	reqBody := map[string]any{
 		"model": "gpt-5.1",
 		"input": []any{
-			map[string]any{"type": "text", "id": "t1", "text": "hi"},
+			map[string]any{"type": "message", "id": "msg_optional", "role": "user", "content": "hi"},
 		},
 	}
 
@@ -953,15 +954,19 @@ func TestApplyCodexOAuthTransform_NonContinuationDefaultsStoreFalseAndStripsIDs(
 func TestFilterCodexInput_RemovesItemReferenceWhenNotPreserved(t *testing.T) {
 	input := []any{
 		map[string]any{"type": "item_reference", "id": "ref1"},
-		map[string]any{"type": "text", "id": "t1", "text": "hi"},
+		map[string]any{"type": "message", "id": "msg_optional", "role": "user", "content": "hi"},
 	}
 
+	// This direct legacy helper explicitly opts out of native references.
+	// Production native input uses PreserveNativeInput; test that below.
 	filtered := filterCodexInput(input, false)
 	require.Len(t, filtered, 1)
 	// 校验 filtered[0] 为 map，确保字段检查可靠。
 	item, ok := filtered[0].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "text", item["type"])
+	require.Equal(t, "message", item["type"])
+	require.Equal(t, "user", item["role"])
+	require.Equal(t, "hi", item["content"])
 	_, hasID := item["id"]
 	require.False(t, hasID)
 }
@@ -2239,6 +2244,43 @@ func TestFilterCodexInput_PreservesReasoningInMixedInput(t *testing.T) {
 			require.Equal(t, "fc_1", byType["function_call"][0]["call_id"])
 			require.Len(t, byType["function_call_output"], 1)
 			require.Equal(t, "fc_1", byType["function_call_output"][0]["call_id"])
+		})
+	}
+}
+
+func TestOAuthReliabilityCodexInputIdentityCleanupBoundary(t *testing.T) {
+	for _, preserveNative := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native=%v", preserveNative), func(t *testing.T) {
+			unknown := map[string]any{"type": "future_tool_call", "id": "future_id", "call_id": "future_call", "namespace": "future_namespace", "opaque": json.Number("9007199254740993")}
+			unknownBefore, err := json.Marshal(unknown)
+			require.NoError(t, err)
+			message := map[string]any{"type": "message", "id": "msg_optional", "role": "user", "content": "same content"}
+			input := []any{message, unknown}
+			if preserveNative {
+				input = append(input, map[string]any{"type": "item_reference", "id": "msg_prior"})
+			}
+			before, err := json.Marshal(input)
+			require.NoError(t, err)
+			body := map[string]any{"model": "gpt-5.1", "input": input}
+			applyCodexOAuthTransformWithOptions(body, codexOAuthTransformOptions{PreserveNativeInput: preserveNative})
+			after := body["input"].([]any)
+			require.Len(t, after, len(input))
+			unknownAfter, marshalErr := json.Marshal(after[1])
+			require.NoError(t, marshalErr)
+			require.Equal(t, unknownBefore, unknownAfter, "unknown node preserves every field and exact numeric value")
+			unknownSourceAfter, sourceErr := json.Marshal(unknown)
+			require.NoError(t, sourceErr)
+			require.Equal(t, unknownBefore, unknownSourceAfter, "transform must not mutate the source unknown node")
+			if preserveNative {
+				encoded, encodeErr := json.Marshal(after)
+				require.NoError(t, encodeErr)
+				require.Equal(t, before, encoded, "native references and identity must remain unchanged without numeric rounding")
+			} else {
+				cleaned := after[0].(map[string]any)
+				require.NotContains(t, cleaned, "id")
+				require.Equal(t, "same content", cleaned["content"])
+			}
+			require.Equal(t, "msg_optional", message["id"], "compat cleanup must not mutate the original input node")
 		})
 	}
 }

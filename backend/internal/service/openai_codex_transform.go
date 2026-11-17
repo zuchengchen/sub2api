@@ -1132,86 +1132,13 @@ func normalizeOpenAIResponseFormatSchemas(reqBody map[string]any) bool {
 	return modified
 }
 
-func normalizeOpenAIResponseJSONSchema(schema map[string]any) bool {
-	if schema == nil {
-		return false
-	}
-	modified := false
-	for _, key := range []string{"uniqueItems", "minProperties"} {
-		if _, exists := schema[key]; exists {
-			delete(schema, key)
-			modified = true
-		}
-	}
-	if rawType, exists := schema["type"]; !exists || rawType == nil {
-		switch {
-		case schema["properties"] != nil:
-			schema["type"] = "object"
-			modified = true
-		case schema["items"] != nil:
-			schema["type"] = "array"
-			modified = true
-		}
-	}
-	if properties, ok := schema["properties"].(map[string]any); ok {
-		for _, raw := range properties {
-			if child, ok := raw.(map[string]any); ok && normalizeOpenAIResponseJSONSchema(child) {
-				modified = true
-			}
-		}
-	}
-	switch items := schema["items"].(type) {
-	case map[string]any:
-		if normalizeOpenAIResponseJSONSchema(items) {
-			modified = true
-		}
-	case []any:
-		for _, raw := range items {
-			if child, ok := raw.(map[string]any); ok && normalizeOpenAIResponseJSONSchema(child) {
-				modified = true
-			}
-		}
-	}
-	for _, key := range []string{
-		"additionalProperties",
-		"additionalItems",
-		"contains",
-		"not",
-		"if",
-		"then",
-		"else",
-		"propertyNames",
-		"unevaluatedProperties",
-		"unevaluatedItems",
-	} {
-		if child, ok := schema[key].(map[string]any); ok && normalizeOpenAIResponseJSONSchema(child) {
-			modified = true
-		}
-	}
-	for _, key := range []string{"anyOf", "oneOf", "allOf", "prefixItems"} {
-		children, _ := schema[key].([]any)
-		for _, raw := range children {
-			if child, ok := raw.(map[string]any); ok && normalizeOpenAIResponseJSONSchema(child) {
-				modified = true
-			}
-		}
-	}
-	for _, key := range []string{"$defs", "definitions", "patternProperties", "dependentSchemas"} {
-		children, _ := schema[key].(map[string]any)
-		for _, raw := range children {
-			if child, ok := raw.(map[string]any); ok && normalizeOpenAIResponseJSONSchema(child) {
-				modified = true
-			}
-		}
-	}
-	if dependencies, ok := schema["dependencies"].(map[string]any); ok {
-		for _, raw := range dependencies {
-			if child, ok := raw.(map[string]any); ok && normalizeOpenAIResponseJSONSchema(child) {
-				modified = true
-			}
-		}
-	}
-	return modified
+// normalizeOpenAIResponseJSONSchema deliberately preserves the caller's schema.
+// Removing constraints or inferring object/array types changes its acceptance
+// set. No semantics-preserving rewrite is established for the historical
+// "invalid schema keyword" error, which did not identify a keyword. Keep this
+// boundary for callers; unsupported schemas must retain their parameter error.
+func normalizeOpenAIResponseJSONSchema(_ map[string]any) bool {
+	return false
 }
 
 func ensureOpenAIResponsesImageGenerationTool(reqBody map[string]any) bool {
@@ -1806,6 +1733,13 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			continue
 		}
 		typ, _ := m["type"].(string)
+		if typ != "" && !isCodexToolCallItemType(typ) && !isCodexKnownNonToolCallItemType(typ) {
+			// Unfamiliar native families have no local normalization contract.
+			// Keep their identities and payload intact; they still cannot prove
+			// complete history or authorize replay/cross-account continuation.
+			filtered = append(filtered, item)
+			continue
+		}
 
 		// Complete native reasoning is self-contained through encrypted_content.
 		// Fixed Codex bfdbf01 preserves valid prefixed IDs on these items; only
@@ -1940,6 +1874,20 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		filtered = append(filtered, newItem)
 	}
 	return filtered
+}
+
+// isCodexKnownNonToolCallItemType bounds legacy cleanup to known passive or
+// hosted items. Unknown native families must retain fields whose meaning the
+// gateway has not established. This does not classify them as replayable tools.
+func isCodexKnownNonToolCallItemType(typ string) bool {
+	switch typ {
+	case "", "message", "reasoning", "item_reference", "compaction",
+		"additional_tools", "configuration_update", "image_generation_call",
+		"web_search_call", "file_search_call", "code_interpreter_call":
+		return true
+	default:
+		return false
+	}
 }
 
 func isCodexToolCallItemType(typ string) bool {

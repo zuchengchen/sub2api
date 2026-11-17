@@ -374,6 +374,9 @@ func markOpenAIWSClientVisibleFailure(c *gin.Context, eventType string, payload 
 	}
 	code, errType, message := parseOpenAIWSErrorEventFields(payload)
 	status := openAIStreamFailureStatus(payload, message)
+	if isOpenAIModelUnavailableTerminalEvent(payload) {
+		code, errType, message, status = "model_not_found", "invalid_request_error", OpenAIModelUnavailableClientMessage, http.StatusBadRequest
+	}
 
 	if errType == "" {
 		errType = "upstream_error"

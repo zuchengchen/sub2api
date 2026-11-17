@@ -142,7 +142,7 @@ func TestOpenAIGatewayService_SetupTokenLegacy_SanitizesAndTransforms(t *testing
 		"instructions":"test",
 		"input":[
 			{"type":"custom_tool_call","id":"fc_wrong_custom","call_id":"call_custom_1","name":"apply_patch","input":"patch"},
-			{"type":"function_call_output","call_id":"call_orphan","output":"orphan"}
+			{"type":"custom_tool_call_output","call_id":"call_custom_1","output":"keep matching result"}
 		]
 	}`)
 
@@ -155,7 +155,8 @@ func TestOpenAIGatewayService_SetupTokenLegacy_SanitizesAndTransforms(t *testing
 	require.Equal(t, "max", gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "reasoning.mode").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "input.0.id").Exists())
-	require.Len(t, gjson.GetBytes(upstream.lastBody, "input").Array(), 1)
+	require.Len(t, gjson.GetBytes(upstream.lastBody, "input").Array(), 2)
+	require.Equal(t, "keep matching result", gjson.GetBytes(upstream.lastBody, "input.1.output").String())
 }
 
 // TestOpenAIGatewayService_APIKeyPassthrough_StripsInvalidReasoningItemIDs

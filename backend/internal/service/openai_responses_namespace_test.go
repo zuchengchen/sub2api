@@ -87,22 +87,21 @@ func TestShouldKeepOpenAIResponsesToolCallNamespaces(t *testing.T) {
 		{name: "oauth_http_passthrough_keeps", account: oauth, transport: OpenAIUpstreamTransportHTTPSSE, passthroughEnabled: true, want: true},
 		// compact 端点 schema 不含该字段，携带即 400 "Unknown parameter: input[N].namespace"。
 		{name: "oauth_compact_strips", account: oauth, transport: OpenAIUpstreamTransportHTTPSSE, compactPath: true, want: false},
-		// 摊平后调用项已是平名，残留 namespace 指向的声明不存在。
-		{name: "oauth_flatten_enabled_strips", account: flattenOAuth, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
+		// 摊平 converter 只清理实际映射项；其他历史项仍保留 namespace。
+		{name: "oauth_flatten_enabled_keeps_unmapped_history", account: flattenOAuth, transport: OpenAIUpstreamTransportHTTPSSE, want: true},
 		// WSv2 实际由 shouldStrip 提前短路，此处只钉住策略本身的取值。
 		{name: "oauth_wsv2_keeps", account: oauth, transport: OpenAIUpstreamTransportResponsesWebsocketV2, want: true},
 		// WSv2 + compact 是唯一「不摊平但仍必须清理」的组合，钉住 compact 判定本身，
 		// 使其不会被误当成可由 shouldFlatten 推导出的冗余分支。
 		{name: "oauth_compact_wsv2_strips", account: oauth, transport: OpenAIUpstreamTransportResponsesWebsocketV2, compactPath: true, want: false},
-		// API Key 默认按标准 Responses API 清理；请求显式声明 namespace 工具时，
-		// 自定义上游需要原样接收对应的历史调用。
-		{name: "apikey_without_namespace_tool_strips", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
+		// 本轮工具声明不能证明历史调用的 namespace 已不再需要。
+		{name: "apikey_without_namespace_tool_keeps", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, want: true},
 		{name: "apikey_with_namespace_tool_keeps", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"tools":[{"type":"namespace","name":"mcp__codex_app","tools":[]}]}`), want: true},
 		{name: "apikey_with_mixed_case_namespace_tool_keeps", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"tools":[{"type":" Namespace ","name":"mcp__codex_app","tools":[]}]}`), want: true},
 		{name: "apikey_with_lite_additional_namespace_tool_keeps", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"mcp__cua_repl","tools":[{"type":"function","name":"js"}]}]}]}`), want: true},
 		{name: "apikey_with_mixed_case_lite_carrier_keeps", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"input":[{"type":" Additional_Tools ","tools":[{"type":" Namespace ","name":"mcp__cua_repl","tools":[]}]}]}`), want: true},
-		{name: "apikey_with_lite_function_only_strips", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"function","name":"js","namespace":"mcp__cua_repl"}]}]}`), want: false},
-		{name: "apikey_function_tool_with_namespace_field_strips", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"tools":[{"type":"function","name":"automation_update","namespace":"mcp__codex_app"}]}`), want: false},
+		{name: "apikey_with_lite_function_only_keeps_history", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"function","name":"js","namespace":"mcp__cua_repl"}]}]}`), want: true},
+		{name: "apikey_function_tool_with_namespace_field_keeps_history", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"tools":[{"type":"function","name":"automation_update","namespace":"mcp__codex_app"}]}`), want: true},
 		{name: "apikey_compact_with_namespace_tool_strips", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, compactPath: true, body: []byte(`{"tools":[{"type":"namespace","name":"mcp__codex_app","tools":[]}]}`), want: false},
 		{name: "setup_token_keeps", account: setupToken, transport: OpenAIUpstreamTransportHTTPSSE, want: true},
 		{name: "nil_account", account: nil, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
@@ -231,8 +230,8 @@ func TestStripOpenAIResponsesInputNamespacesNullAndKeptPrefix(t *testing.T) {
 	}
 }
 
-// 保留模式下只有工具调用项留住 namespace：上游按 namespace 解析历史调用，
-// 而 message / reasoning / 输出项带该字段会被 schema 拒绝。
+// 保留模式下调用和函数结果留住 namespace；FunctionCallOutput.namespace
+// 是官方 Codex 原生字段，不能按普通 message/reasoning 的残留字段处理。
 func TestStripOpenAIResponsesInputNamespacesKeepsToolCallNamespaces(t *testing.T) {
 	body := []byte(`{
 		"meta":9007199254740993,
@@ -255,7 +254,9 @@ func TestStripOpenAIResponsesInputNamespacesKeepsToolCallNamespaces(t *testing.T
 	require.Equal(t, "codex_app", gjson.GetBytes(stripped, "input.1.namespace").String())
 	require.Equal(t, "mcp__codex_apps__gmail", gjson.GetBytes(stripped, "input.2.namespace").String())
 	require.Equal(t, "mcp__codex_apps__gmail", gjson.GetBytes(stripped, "input.3.namespace").String())
-	for index := 4; index < 8; index++ {
+	require.Equal(t, "leftover", gjson.GetBytes(stripped, "input.5.namespace").String())
+	require.Equal(t, "leftover", gjson.GetBytes(stripped, "input.7.namespace").String(), "unfamiliar item identity stays native")
+	for _, index := range []int{4, 6} {
 		require.False(t, gjson.GetBytes(stripped, "input."+strconv.Itoa(index)+".namespace").Exists())
 	}
 	// 大整数不得经 float64 往返。

@@ -219,7 +219,7 @@ func TestJSONSearchCompatibility_TextAndNoneControls(t *testing.T) {
 						delete(request, "tool_choice")
 						upstream, recorder, result, err = jsonSearchCompatForward(t, route, request, nil)
 						sent = requireJSONSearchCompatSuccess(t, route, stream, upstream, recorder, result, err)
-						require.True(t, jsonSearchCompatHasSearch(sent), "ordinary text requests keep hosted search")
+						require.Equal(t, route != "lite", jsonSearchCompatHasSearch(sent), "only non-Lite text requests synthesize hosted search")
 					}
 				})
 			}
@@ -293,6 +293,12 @@ func TestJSONSearchCompatibility_ExplicitSearchIsNotSilentlyRemoved(t *testing.T
 				request["tool_choice"] = "auto"
 				upstream, recorder, _, err := jsonSearchCompatForward(t, route, request, nil)
 				require.Error(t, err, "an explicit incompatible contract must not be silently turned into success")
+				if route == "lite" {
+					require.Equal(t, http.StatusBadRequest, recorder.Code)
+					require.Empty(t, upstream.bodies)
+					require.Equal(t, "input[0].tools[0].type", gjson.Get(recorder.Body.String(), "error.param").String())
+					return
+				}
 				require.Equal(t, []int{http.StatusBadRequest}, upstream.statuses)
 				require.Len(t, upstream.bodies, 1, "the deterministic rejection must not be replayed with altered tools")
 				require.True(t, jsonSearchCompatHasSearch(upstream.bodies[0]))
@@ -318,6 +324,14 @@ func TestJSONSearchCompatibility_SearchHistoryRetainsItsDeclaration(t *testing.T
 					account := newCodexSynthTestAccount(77118, AccountTypeOAuth)
 					account.Extra[codexClientCapabilityExtraKey] = "compatible"
 					upstream, recorder, result, err := jsonSearchCompatForward(t, route, request, account)
+					if route == "lite" {
+						require.Error(t, err)
+						require.Nil(t, result)
+						require.Empty(t, upstream.bodies)
+						require.Equal(t, http.StatusBadRequest, recorder.Code)
+						require.Equal(t, "input[0].type", gjson.Get(recorder.Body.String(), "error.param").String())
+						return
+					}
 					if format == "text" {
 						requireJSONSearchCompatSuccess(t, route, stream, upstream, recorder, result, err)
 					} else {

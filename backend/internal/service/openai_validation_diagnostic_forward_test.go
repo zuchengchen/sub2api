@@ -119,6 +119,17 @@ func TestOpenAIValidationDiagnosticForwardSources(t *testing.T) {
 				_, err = svc.Forward(context.Background(), c, account, body)
 			}
 			require.Error(t, err)
+			if tc.lite {
+				require.Empty(t, upstream.bodies, "known unsupported Lite declarations fail locally")
+				require.Equal(t, http.StatusBadRequest, rec.Code)
+				value, ok := c.Get(openAIFinalProtocolDiagnosticKey)
+				require.True(t, ok)
+				diagnostic := value.(openAIFinalProtocolDiagnostic)
+				require.True(t, diagnostic.FinalLite)
+				require.Equal(t, []string{"client"}, diagnostic.ToolSources)
+				require.Equal(t, []string{"additional_tools"}, diagnostic.ToolCarriers)
+				return
+			}
 			require.Len(t, upstream.bodies, 1, "validation diagnostics must not add an upstream retry")
 			require.Equal(t, http.StatusBadRequest, rec.Code)
 			events := validationForwardEvents(t, c)

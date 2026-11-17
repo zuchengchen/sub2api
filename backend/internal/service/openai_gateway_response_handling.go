@@ -720,7 +720,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					if status == http.StatusBadRequest {
 						errType = "invalid_request_error"
 					}
-					MarkOpsStreamFailure(c, errType, openAIStreamFailedEventErrorCode(dataBytes), failedMessage, status)
+					if isOpenAIModelUnavailableTerminalEvent(dataBytes) {
+						setOpsUpstreamError(c, resp.StatusCode, OpenAIModelUnavailableClientMessage, "")
+						MarkOpsStreamFailure(c, "invalid_request_error", "model_not_found", OpenAIModelUnavailableClientMessage, http.StatusBadRequest)
+					} else {
+						MarkOpsStreamFailure(c, errType, openAIStreamFailedEventErrorCode(dataBytes), failedMessage, status)
+					}
 				}
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
@@ -2141,6 +2146,9 @@ func buildOpenAIResponseFailedEvent(responseID, model string, createdAt int64, s
 			`,"response":{"object":"response","created_at":` + strconv.FormatInt(createdAt, 10) +
 			`,"status":"failed","output":[],"error":{"code":"upstream_error","message":"Upstream response failed"}}}`)
 	}
+	if normalized, changed := normalizeOpenAIModelUnavailableClientEvent(payload); changed {
+		return normalized
+	}
 	return payload
 }
 
@@ -2151,6 +2159,9 @@ func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string
 		return payload, false
 	}
 	updated := payload
+	if normalized, changed := normalizeOpenAIModelUnavailableClientEvent(updated); changed {
+		return normalized, true
+	}
 	// 容量降载码对 Codex CLI 是致命错误；事件既然要写给客户端（failover 已不可用），
 	// 就改写为客户端可重试的错误码。error 帧与 response.failed 都要改：上游降载
 	// 总是先推 error 帧再收 failed，两帧携带同一个错误。
@@ -2213,6 +2224,10 @@ func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string
 }
 
 func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.Response, c *gin.Context, message string, payload []byte) error {
+	if isOpenAIModelUnavailableTerminalEvent(payload) {
+		writeOpenAIModelUnavailableTerminal(c, resp.StatusCode, openAIModelErrorResponses)
+		return fmt.Errorf("upstream model unavailable")
+	}
 	if upstreamErr := openAIImageGenerationUserError(payload); upstreamErr != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 		writeOpenAIImageGenerationUserError(c, upstreamErr)
