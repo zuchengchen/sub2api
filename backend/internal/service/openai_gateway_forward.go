@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func shouldForwardOpenAIResponsesPromptCacheOptions(account *Account, model string, options gjson.Result) bool {
@@ -1210,28 +1211,49 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		}
 		retryBudget := s.openAIWSRetryTotalBudget()
 		retryStartedAt := time.Now()
+		wsRejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, body)
 	wsRetryLoop:
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			wsAttempts = attempt
-			wsResult, wsErr = s.forwardOpenAIWSV2(
-				ctx,
-				c,
-				account,
-				wsReqBody,
-				body,
-				clientPromptCacheKey,
-				wsExecutionScope,
-				token,
-				wsDecision,
-				isCodexCLI,
-				reqStream,
-				originalModel,
-				upstreamModel,
-				startTime,
-				attempt,
-				wsLastFailureReason,
-				&agentTaskRecoveryTried,
-			)
+			wsResult, wsErr = withOpenAIRejectedFieldRetryAttempt(c, body, wsRejectedFieldRetryState, func() (*OpenAIForwardResult, error) {
+				return s.forwardOpenAIWSV2(
+					ctx,
+					c,
+					account,
+					wsReqBody,
+					body,
+					clientPromptCacheKey,
+					wsExecutionScope,
+					token,
+					wsDecision,
+					isCodexCLI,
+					reqStream,
+					originalModel,
+					upstreamModel,
+					startTime,
+					attempt,
+					wsLastFailureReason,
+					&agentTaskRecoveryTried,
+				)
+			})
+			if signal, ok := asOpenAIRejectedFieldStreamRetrySignal(wsErr); ok {
+				// Keep the repaired final input (including the instructions item)
+				// and strip only the WS transport envelope for HTTP fallback.
+				body, err = sjson.DeleteBytes(signal.body, "type")
+				if err != nil {
+					return nil, err
+				}
+				requestView = newOpenAIRequestView(body)
+				wsReqBody, err = requestView.Decode(c)
+				reqBody = wsReqBody
+				if err != nil {
+					return nil, err
+				}
+				// Field repairs use their shared budget, independently of the
+				// existing bounded transport reconnect attempts.
+				attempt--
+				continue
+			}
 			if wsErr == nil {
 				break
 			}
@@ -1672,7 +1694,16 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		var imageOutputSizes []string
 		if reqStream {
 			stashOpenAIUsageEstimateRequestBody(c, body)
-			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
+			streamResult, err := withOpenAIRejectedFieldRetryAttempt(c, body, rejectedFieldRetryState, func() (*openaiStreamingResult, error) {
+				return s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
+			})
+			if signal, ok := asOpenAIRejectedFieldStreamRetrySignal(err); ok {
+				_ = resp.Body.Close()
+				body = signal.body
+				requestView = newOpenAIRequestView(body)
+				reqBody = nil
+				continue
+			}
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
@@ -1727,7 +1758,16 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			imageOutputSizes = streamResult.imageOutputSizes
 			searchCount = streamResult.searchCount
 		} else {
-			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
+			nonStreamResult, err := withOpenAIRejectedFieldRetryAttempt(c, body, rejectedFieldRetryState, func() (*openaiNonStreamingResult, error) {
+				return s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
+			})
+			if signal, ok := asOpenAIRejectedFieldStreamRetrySignal(err); ok {
+				_ = resp.Body.Close()
+				body = signal.body
+				requestView = newOpenAIRequestView(body)
+				reqBody = nil
+				continue
+			}
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(

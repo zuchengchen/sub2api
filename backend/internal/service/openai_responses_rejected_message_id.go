@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -12,33 +13,65 @@ import (
 
 // Match the whole validation message, retaining the ID's case. A mention of an
 // ID in an unrelated upstream error is not permission to rewrite the request.
-var openAIResponsesRejectedMessageIDPattern = regexp.MustCompile(`(?i)^invalid\s+['"](input\[(\d+)\]\.id)['"]:\s*['"]([^'"\r\n]+)['"]\.\s*expected an id that begins with ['"]msg['"]\.?$`)
+var openAIResponsesRejectedMessageIDPattern = regexp.MustCompile(`(?i)^invalid\s+(['"])(input\[(\d+)\]\.id)(['"]):\s*(['"])([^'"\r\n]+)(['"])\.\s*expected an id that begins with (['"])msg(['"])\.?$`)
+
+// This exact prefix is emitted by the provider's ApiIdParam validator. It is
+// evidence of the rejected field even when its structured code/param are absent.
+var openAIResponsesRejectedMessageIDPrefixPattern = regexp.MustCompile(`^\[ApiIdParam\] \[(input\[[0-9]+\]\.id)\] \[invalid_id_prefix\] (.+)$`)
+
+const maxOpenAIRejectedMessageIDLength = 1024
 
 func openAIResponsesRejectedMessageID(responseBody []byte) (int, string, bool) {
-	if !gjson.ValidBytes(responseBody) {
+	upstreamError, ok := normalizeOpenAIUpstreamError(responseBody)
+	if !ok {
 		return 0, "", false
 	}
-	root := parseRawJSONView(responseBody)
-	errorObject := root.Get("error")
-	if !root.IsObject() || hasDuplicateJSONObjectKeys(root) || !errorObject.IsObject() || hasDuplicateJSONObjectKeys(errorObject) {
+	return openAIResponsesRejectedMessageIDFromError(upstreamError)
+}
+
+func openAIResponsesRejectedMessageIDFromError(upstreamError openAIUpstreamError) (int, string, bool) {
+	if upstreamError.StatusCode != 0 && upstreamError.StatusCode != 400 {
 		return 0, "", false
 	}
-	if strings.TrimSpace(errorObject.Get("code").String()) != "invalid_value" {
+	if upstreamError.Type != "" && upstreamError.Type != "invalid_request_error" {
 		return 0, "", false
 	}
-	errType := errorObject.Get("type")
-	if errType.Exists() && errType.String() != "invalid_request_error" {
+	message := strings.TrimSpace(upstreamError.Message)
+	if len(message) > maxOpenAIRejectedMessageIDLength+512 || strings.ContainsAny(message, "\r\n") {
 		return 0, "", false
 	}
-	match := openAIResponsesRejectedMessageIDPattern.FindStringSubmatch(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
-	if len(match) != 4 || errorObject.Get("param").String() != match[1] {
+	prefixParam := ""
+	if prefix := openAIResponsesRejectedMessageIDPrefixPattern.FindStringSubmatch(message); len(prefix) == 3 {
+		prefixParam, message = prefix[1], prefix[2]
+	}
+	switch upstreamError.Code {
+	case "invalid_value", "invalid_id_prefix":
+	case "":
+		if prefixParam == "" {
+			return 0, "", false
+		}
+	default:
 		return 0, "", false
 	}
-	index, err := strconv.Atoi(match[2])
-	if err != nil || index < 0 || strings.HasPrefix(match[3], "msg") {
+	match := openAIResponsesRejectedMessageIDPattern.FindStringSubmatch(message)
+	if len(match) != 10 || match[1] != match[4] || match[5] != match[7] || match[8] != match[9] ||
+		(prefixParam != "" && prefixParam != match[2]) ||
+		(upstreamError.Param != "" && upstreamError.Param != match[2]) ||
+		(upstreamError.Param == "" && prefixParam == "") {
 		return 0, "", false
 	}
-	return index, match[3], true
+	index, err := strconv.Atoi(match[3])
+	rejectedID := match[6]
+	if err != nil || index < 0 || match[2] != fmt.Sprintf("input[%d].id", index) || len(rejectedID) > maxOpenAIRejectedMessageIDLength ||
+		strings.IndexFunc(rejectedID, unicode.IsControl) >= 0 || strings.HasPrefix(rejectedID, "msg") {
+		return 0, "", false
+	}
+	for _, protectedPrefix := range []string{"rs_", "fc_", "call_"} {
+		if strings.HasPrefix(rejectedID, protectedPrefix) {
+			return 0, "", false
+		}
+	}
+	return index, rejectedID, true
 }
 
 // A complete inline message can be replayed without its optional object ID.
@@ -46,20 +79,17 @@ func openAIResponsesRejectedMessageID(responseBody []byte) (int, string, bool) {
 // requests, opaque reasoning, tool call identities and references stay intact.
 func removeOpenAIResponsesRejectedMessageID(body, responseBody []byte) ([]byte, string, bool, error) {
 	index, rejectedID, matched := openAIResponsesRejectedMessageID(responseBody)
-	if !matched || !gjson.ValidBytes(body) {
+	if !matched || !openAIUnambiguousJSONObject(body) {
 		return nil, "", false, nil
 	}
 	root := parseRawJSONView(body)
-	if !root.IsObject() || hasDuplicateJSONObjectKeys(root) {
-		return nil, "", false, nil
-	}
 	input := root.Get("input")
 	if !input.IsArray() {
 		return nil, "", false, nil
 	}
 	itemPath := fmt.Sprintf("input.%d", index)
 	item := root.Get(itemPath)
-	if !item.IsObject() || hasDuplicateJSONObjectKeys(item) {
+	if !item.IsObject() {
 		return nil, "", false, nil
 	}
 	id := item.Get("id")
@@ -70,21 +100,27 @@ func removeOpenAIResponsesRejectedMessageID(body, responseBody []byte) ([]byte, 
 	if itemType.Exists() && (itemType.Type != gjson.String || itemType.String() != "message") {
 		return nil, "", false, nil
 	}
+	// Incomplete/contradictory call or reasoning items must not be repaired by
+	// treating their identities as optional message IDs.
+	for _, key := range []string{"call_id", "arguments", "output", "encrypted_content", "summary"} {
+		if item.Get(key).Exists() {
+			return nil, "", false, nil
+		}
+	}
 	switch item.Get("role").String() {
 	case "assistant", "user", "system", "developer":
 	default:
 		return nil, "", false, nil
 	}
 	content := item.Get("content")
-	if content.Type != gjson.String && !content.IsArray() {
+	if !openAIResponsesCompleteInlineMessageContent(content) {
 		return nil, "", false, nil
 	}
-	// Duplicate structural keys can hide a reference from GJSON while the
-	// upstream decoder sees the last occurrence. Decline ambiguous input items.
+	// A second occurrence could be a reference or a duplicate identity. Both
+	// make removal unsafe, even if the other item's type is currently unknown.
 	unsafeReference := false
-	input.ForEach(func(_, candidate gjson.Result) bool {
-		if candidate.IsObject() && (hasDuplicateJSONObjectKeys(candidate) ||
-			(candidate.Get("type").String() == "item_reference" && candidate.Get("id").String() == rejectedID)) {
+	input.ForEach(func(key, candidate gjson.Result) bool {
+		if int(key.Int()) != index && candidate.IsObject() && candidate.Get("id").String() == rejectedID {
 			unsafeReference = true
 			return false
 		}
@@ -98,4 +134,36 @@ func removeOpenAIResponsesRejectedMessageID(body, responseBody []byte) ([]byte, 
 		return nil, "", false, fmt.Errorf("delete rejected message ID at input[%d]: %w", index, err)
 	}
 	return retryBody, fmt.Sprintf("message ID prefix rejection at input[%d].id", index), true, nil
+}
+
+func openAIResponsesCompleteInlineMessageContent(content gjson.Result) bool {
+	if content.Type == gjson.String {
+		return true
+	}
+	if !content.IsArray() {
+		return false
+	}
+	complete := true
+	content.ForEach(func(_, part gjson.Result) bool {
+		if !part.IsObject() {
+			complete = false
+			return false
+		}
+		switch part.Get("type").String() {
+		case "input_text", "output_text":
+			complete = part.Get("text").Type == gjson.String
+		case "refusal":
+			complete = part.Get("refusal").Type == gjson.String
+		case "input_image":
+			complete = part.Get("image_url").Type == gjson.String || part.Get("file_id").Type == gjson.String
+		case "input_file":
+			complete = part.Get("file_data").Type == gjson.String || part.Get("file_id").Type == gjson.String || part.Get("file_url").Type == gjson.String
+		case "input_audio":
+			complete = part.Get("input_audio.data").Type == gjson.String && part.Get("input_audio.format").Type == gjson.String
+		default:
+			complete = false
+		}
+		return complete
+	})
+	return complete
 }

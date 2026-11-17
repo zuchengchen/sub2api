@@ -774,8 +774,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// while a non-streaming client has received no bytes. Client delivery and
 	// upstream progress are independent replay boundaries; metered usage/image
 	// results also cannot be discarded by a new attempt.
+	var replayGuard openAIResponseReplayGuard
 	upstreamProgress := func() bool {
-		return upstreamOutputStarted || openAIUsageHasTokens(usage) || imageCounter.Count() > 0
+		return replayGuard.progressed || upstreamOutputStarted || openAIUsageHasTokens(usage) || imageCounter.Count() > 0
 	}
 	replayUnsafe := func() bool { return wroteDownstream || upstreamProgress() }
 	partialResultWithUsage := func() *OpenAIForwardResult {
@@ -884,6 +885,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// disconnects, use the same timeout as a bounded total drain budget.
 	var pendingJSONDocuments [][]byte
 
+	var pendingParameterError []byte
 readLoop:
 	for {
 		markClientRequestCanceled()
@@ -921,6 +923,17 @@ readLoop:
 			}
 		}
 		markClientRequestCanceled()
+		synthesizedParameterFailure := false
+		if readErr != nil && len(pendingParameterError) > 0 && ctx.Err() == nil && !clientDisconnected {
+			// A standalone parameter error must surface without turning the
+			// following EOF into a new model execution. Only a real failed
+			// terminal can authorize targeted repair.
+			message = buildOpenAIResponseFailedEvent(responseID, originalModel, 0, pendingParameterError, extractOpenAISSEErrorMessage(pendingParameterError))
+			pendingParameterError = nil
+			readErr = nil
+			synthesizedParameterFailure = true
+			lease.MarkBroken()
+		}
 		if readErr == nil && !json.Valid(message) {
 			eventType, _, _ := parseOpenAIWSEventEnvelope(message)
 			if eventType == "" {
@@ -1094,6 +1107,7 @@ readLoop:
 			}
 			message = restoreCodexToolNamesFromContext(c, message)
 		}
+		replayGuard.Observe(message, eventType)
 		if openAIWSMessageShouldParseUsage(eventType, message) {
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
 		}
@@ -1124,6 +1138,27 @@ readLoop:
 
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
+			if eventType == "response.failed" && !synthesizedParameterFailure && !deltaApplied && !replayUnsafe() && !clientDisconnected && ctx.Err() == nil && replayGuard.CanReplay(c) {
+				// Rejection indices refer to the exact WS frame: OAuth may have
+				// inserted an instructions item, shifting the HTTP body's input.
+				wireBody := frameBytes
+				if len(wireBody) == 0 {
+					wireBody, err = json.Marshal(payload)
+					if err != nil {
+						return nil, err
+					}
+				}
+				value, _ := c.Get(openAIRejectedFieldRetryAttemptKey)
+				if attempt, _ := value.(*openAIRejectedFieldRetryAttempt); attempt != nil {
+					_, retryErr := withOpenAIRejectedFieldRetryAttempt(c, wireBody, attempt.state, func() (*OpenAIForwardResult, error) {
+						return nil, newOpenAIRejectedFieldStreamRetrySignal(c, message)
+					})
+					if retryErr != nil {
+						lease.MarkBroken()
+						return nil, retryErr
+					}
+				}
+			}
 			if imageErr := openAIImageGenerationUserError(message); imageErr != nil {
 				// Preview/format and other image user errors cannot be repaired by
 				// reconnecting or switching credentials. Keep their structured cause.
@@ -1153,6 +1188,21 @@ readLoop:
 			}
 		}
 
+		parameterErrorCode, parameterErrorType, parameterErrorMessage := parseOpenAIWSErrorEventFields(message)
+		parameterFallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(parameterErrorCode, parameterErrorType, parameterErrorMessage)
+		if eventType == "error" && len(message) <= maxOpenAIErrorNormalizationBytes &&
+			openAIStreamFailureStatus(message, parameterErrorMessage) == http.StatusBadRequest &&
+			parameterFallbackReason != "previous_response_not_found" && parameterFallbackReason != openAIWSFallbackReasonInvalidEncryptedContent &&
+			!isOpenAIContextWindowError(parameterErrorMessage, message) && GetOpsCyberPolicy(c) == nil {
+			// Keep parameter errors private until their authoritative terminal:
+			// response.failed can carry metered work absent from the bare event.
+			pendingParameterError = append(pendingParameterError[:0], message...)
+			continue
+		}
+		if isTerminalEvent {
+			pendingParameterError = nil
+		}
+
 		// A standalone capacity terminal can precede any semantic output, just
 		// like a bare error. Preserve already metered usage and image results.
 		if reqStream && eventType == "response.failed" &&
@@ -1169,7 +1219,7 @@ readLoop:
 			upstreamOutputStarted = true
 		}
 		if deltaApplied && !wroteDownstream && !upstreamOutputStarted && !clientDisconnected && ctx.Err() == nil &&
-			!openAIUsageHasTokens(usage) && imageCounter.Count() == 0 && (eventType == "error" || eventType == "response.failed") {
+			!replayGuard.progressed && !openAIUsageHasTokens(usage) && imageCounter.Count() == 0 && (eventType == "error" || eventType == "response.failed") {
 			path := "error"
 			if eventType == "response.failed" {
 				path = "response.error"

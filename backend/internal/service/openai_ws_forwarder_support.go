@@ -372,31 +372,14 @@ func markOpenAIWSClientVisibleFailure(c *gin.Context, eventType string, payload 
 	if eventType != "error" && eventType != "response.failed" {
 		return
 	}
-	prefix := "error"
-	if eventType == "response.failed" {
-		prefix = "response.error"
-	}
-	code := strings.TrimSpace(gjson.GetBytes(payload, prefix+".code").String())
-	errType := strings.TrimSpace(gjson.GetBytes(payload, prefix+".type").String())
-	message := strings.TrimSpace(gjson.GetBytes(payload, prefix+".message").String())
-	if eventType == "response.failed" && code == "" && errType == "" && message == "" {
-		prefix = "error"
-		code = strings.TrimSpace(gjson.GetBytes(payload, prefix+".code").String())
-		errType = strings.TrimSpace(gjson.GetBytes(payload, prefix+".type").String())
-		message = strings.TrimSpace(gjson.GetBytes(payload, prefix+".message").String())
-	}
-	status := int(gjson.GetBytes(payload, prefix+".status_code").Int())
-	if status == 0 {
-		status = int(gjson.GetBytes(payload, prefix+".status").Int())
-	}
-	if status == 0 && eventType == "error" {
-		status = int(gjson.GetBytes(payload, "status").Int())
-	}
-	if status == 0 {
-		status = openAIWSErrorHTTPStatusFromRaw(code, errType)
-	}
+	code, errType, message := parseOpenAIWSErrorEventFields(payload)
+	status := openAIStreamFailureStatus(payload, message)
+
 	if errType == "" {
 		errType = "upstream_error"
+		if status == http.StatusBadRequest {
+			errType = "invalid_request_error"
+		}
 	}
 	if code == "" {
 		code = strings.ReplaceAll(eventType, ".", "_")

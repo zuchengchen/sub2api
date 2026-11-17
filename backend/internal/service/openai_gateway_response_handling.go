@@ -647,6 +647,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
 				upstreamFailureRecorded := false
 				if !outputStarted && !cyberHit && replayGuard.CanReplay(c) {
+					if retryErr := newOpenAIRejectedFieldStreamRetrySignal(c, dataBytes); retryErr != nil {
+						sawFailedEvent = true
+						streamEarlyErr = retryErr
+						return
+					}
 					if compactErr := newOpenAICompactFallbackSignal(c, dataBytes, failedMessage); compactErr != nil {
 						sawFailedEvent = true
 						streamEarlyErr = compactErr
@@ -703,7 +708,19 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 							streamEarlyErr = fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
 							return
 						}
+
 					}
+				}
+				if eventType == "response.failed" && !cyberHit {
+					status := openAIStreamFailureStatus(dataBytes, failedMessage)
+					if !upstreamFailureRecorded {
+						s.recordOpenAIStreamUpstreamError(c, account, false, upstreamRequestID, "stream_failed", dataBytes, failedMessage)
+					}
+					errType := "upstream_error"
+					if status == http.StatusBadRequest {
+						errType = "invalid_request_error"
+					}
+					MarkOpsStreamFailure(c, errType, openAIStreamFailedEventErrorCode(dataBytes), failedMessage, status)
 				}
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
@@ -1817,6 +1834,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
 		return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 	}
+	if usage, failure, handled := s.handleOpenAIHTTP200JSONFailure(c, resp, account, body, false, mappedModel); handled {
+		if usage == nil {
+			return nil, failure
+		}
+		return &openaiNonStreamingResult{OpenAIUsage: usage, usage: usage, responseID: extractOpenAIResponseIDFromJSONBytes(body)}, failure
+	}
+
 	if account != nil && account.IsGrok() && isOpenAIResponsesCompactPath(c) {
 		body, err = convertGrokResponseToOpenAICompact(body)
 		if err != nil {
@@ -1920,6 +1944,9 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			msg = "Upstream compact response failed"
 		}
 		if replayGuard.CanReplay(c) {
+			if retryErr := newOpenAIRejectedFieldStreamRetrySignal(c, terminalPayload); retryErr != nil {
+				return nil, retryErr
+			}
 			if compactErr := newOpenAICompactFallbackSignal(c, terminalPayload, msg); compactErr != nil {
 				return nil, compactErr
 			}
@@ -2052,18 +2079,23 @@ func buildOpenAIResponseFailedEvent(responseID, model string, createdAt int64, s
 	if responseID == "" {
 		responseID = "resp_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	}
-	errorType := strings.TrimSpace(gjson.GetBytes(source, "error.type").String())
-	if errorType == "" {
-		errorType = strings.TrimSpace(gjson.GetBytes(source, "response.error.type").String())
+	errorSource := []byte(nil)
+	if normalized, ok := normalizeOpenAIUpstreamError(source); ok {
+		errorSource = normalized.ErrorBody
 	}
-	code := strings.TrimSpace(gjson.GetBytes(source, "error.code").String())
+
+	errorType := strings.TrimSpace(gjson.GetBytes(errorSource, "error.type").String())
+	if errorType == "" {
+		errorType = strings.TrimSpace(gjson.GetBytes(errorSource, "response.error.type").String())
+	}
+	code := strings.TrimSpace(gjson.GetBytes(errorSource, "error.code").String())
 	if code == "" {
-		code = strings.TrimSpace(gjson.GetBytes(source, "response.error.code").String())
+		code = strings.TrimSpace(gjson.GetBytes(errorSource, "response.error.code").String())
 	}
 	if code == "" {
 		code = "upstream_error"
 	}
-	message := extractOpenAISSEErrorMessage(source)
+	message := extractOpenAISSEErrorMessage(errorSource)
 	if message == "" {
 		message = strings.TrimSpace(fallbackMessage)
 	}
@@ -2074,10 +2106,10 @@ func buildOpenAIResponseFailedEvent(responseID, model string, createdAt int64, s
 	if errorType != "" {
 		errorBody["type"] = errorType
 	}
-	for _, field := range []string{"param", "moderation_details"} {
-		value := gjson.GetBytes(source, "error."+field)
+	for _, field := range []string{"param", "moderation_details", "status", "status_code"} {
+		value := gjson.GetBytes(errorSource, "error."+field)
 		if !value.Exists() {
-			value = gjson.GetBytes(source, "response.error."+field)
+			value = gjson.GetBytes(errorSource, "response.error."+field)
 		}
 		if value.Exists() {
 			errorBody[field] = json.RawMessage(value.Raw)
@@ -2190,20 +2222,31 @@ func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.R
 	if message == "" {
 		message = "Upstream returned an invalid non-streaming response"
 	}
-	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
+	status, errType := openAIStreamFailureStatus(payload, message), "upstream_error"
+	if status == http.StatusBadRequest {
+		errType = "invalid_request_error"
+	}
+	setOpsUpstreamError(c, status, message, "")
 	// body-signal compact 心跳可能已把响应头提交为 200，此时只能以
 	// response.failed 终止事件回传错误，不能再写 JSON+状态码。
 	if openAICompactClientWantsStream(c) && StopOpenAICompactSSEKeepaliveCommitted(c) {
-		writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", message)
+		MarkOpsStreamFailure(c, errType, openAIStreamFailedEventErrorCode(payload), message, status)
+		writeOpenAICompactSSEFailureMessage(c, status, errType, message)
 		return fmt.Errorf("non-streaming openai protocol error: %s", message)
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	c.JSON(http.StatusBadGateway, gin.H{
-		"error": gin.H{
-			"type":    "upstream_error",
-			"message": message,
-		},
+	errorBody := gin.H{"type": errType, "message": message}
+	if normalized, ok := normalizeOpenAIUpstreamError(payload); ok && status == http.StatusBadRequest {
+		if normalized.Code != "" {
+			errorBody["code"] = normalized.Code
+		}
+		if normalized.Param != "" {
+			errorBody["param"] = normalized.Param
+		}
+	}
+	c.JSON(status, gin.H{
+		"error": errorBody,
 	})
 	return fmt.Errorf("non-streaming openai protocol error: %s", message)
 }

@@ -637,9 +637,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 
 	turnStart := time.Now()
-	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
+	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, body)
 	var resp *http.Response
 	httpAttempt := 0
+	// A terminal-only field repair returns here with its updated wire body.
+	// Keep one state/budget across HTTP errors and HTTP-200 SSE rejections.
+retryHTTPBridge:
 	for {
 		upstreamReq, buildErr := buildUpstreamRequest(body)
 		if buildErr != nil {
@@ -722,6 +725,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 
 	responseID := ""
 	usage := OpenAIUsage{}
+	var replayGuard openAIResponseReplayGuard
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	reqStream := openAIWSPayloadBoolFromRaw(body, "stream", true)
@@ -889,6 +893,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
 		}
+		replayGuard.Observe(upstreamMessage, eventType)
 		imageCounter.AddSSEData(upstreamMessage)
 
 		if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && strings.Contains(trimmedData, mappedModel) {
@@ -948,7 +953,20 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			}
 			// A disconnected client needs this attempt drained for usage, not replayed,
 			// even when only non-semantic heartbeats were delivered.
-			if !clientDisconnected && !wroteDownstream && shouldFailover && (turn == 1 || statusCode == http.StatusTooManyRequests) {
+			if eventType == "response.failed" && !clientDisconnected && !wroteDownstream && ctx.Err() == nil && replayGuard.CanReplay(c) && statusCode == http.StatusBadRequest {
+				retryBody, _, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode, body, upstreamMessage)
+				if retryErr != nil {
+					return nil, retryErr
+				}
+				if changed && ctx.Err() == nil && replayGuard.CanReplay(c) && rejectedFieldRetryState.Allow(retryBody) {
+					stopCancelBody()
+					_ = resp.Body.Close()
+					body = retryBody
+					payloadBytes = len(body)
+					goto retryHTTPBridge
+				}
+			}
+			if (!officialOpenAIResponses || eventType != "error") && !clientDisconnected && !wroteDownstream && ctx.Err() == nil && replayGuard.CanReplay(c) && shouldFailover && (turn == 1 || statusCode == http.StatusTooManyRequests) {
 				if account.Platform == PlatformGrok {
 					return nil, newOpenAIUpstreamFailoverError(statusCode, resp.Header, upstreamMessage, errMessage, false)
 				}
@@ -1078,6 +1096,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 	}
 	if bareErrorPending {
+		// Wait for the paired authoritative terminal before considering replay.
+		// A clean EOF still permits the existing transient failover, provided
+		// every consumed frame remained free of execution and metered usage.
+		bareStatus := openAIStreamFailureStatus(bareErrorPayload, bareErrorMessage)
+		if scanner.Err() == nil && !clientDisconnected && !wroteDownstream && ctx.Err() == nil && replayGuard.CanReplay(c) &&
+			openAIStreamErrorEventShouldFailover(bareErrorPayload, bareErrorMessage) && (turn == 1 || bareStatus == http.StatusTooManyRequests) {
+			return nil, s.newOpenAIStreamFailoverErrorWithModel(c, account, true, resp.Header.Get("x-request-id"), bareErrorPayload, bareErrorMessage, mappedModel, resp.Header)
+		}
 		if finalizeErr := finalizeBareError(); finalizeErr != nil {
 			return resultWithUsage(), finalizeErr
 		}
@@ -1088,7 +1114,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 	if err := scanner.Err(); err != nil {
 		streamErr := fmt.Errorf("read upstream http bridge stream: %w", err)
-		if turn == 1 && !clientDisconnected && !wroteDownstream {
+		if turn == 1 && !clientDisconnected && !wroteDownstream && ctx.Err() == nil && replayGuard.CanReplay(c) {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, streamErr, true)
 		}
 		return resultWithUsage(), streamErr
@@ -1097,7 +1123,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if sawDone {
 		terminalErr = errors.New("upstream http bridge stream sent [DONE] before terminal event")
 	}
-	if turn == 1 && !clientDisconnected && !wroteDownstream {
+	if turn == 1 && !clientDisconnected && !wroteDownstream && ctx.Err() == nil && replayGuard.CanReplay(c) {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, terminalErr, true)
 	}
 	return resultWithUsage(), terminalErr
