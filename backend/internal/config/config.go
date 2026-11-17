@@ -1053,6 +1053,10 @@ type GatewayConfig struct {
 	// OpenAIPassthroughAllowTimeoutHeaders: OpenAI 透传模式是否放行客户端超时头
 	// 关闭（默认）可避免 x-stainless-timeout 等头导致上游提前断流。
 	OpenAIPassthroughAllowTimeoutHeaders bool `mapstructure:"openai_passthrough_allow_timeout_headers"`
+	// OpenAIRequestCompressionEnabled: opt in to zstd for Codex OAuth Responses HTTP requests.
+	// Default false: the upstream can reject valid compressed bodies with a bare 400.
+	// This setting does not change TLS, identity headers, or WebSocket compression.
+	OpenAIRequestCompressionEnabled bool `mapstructure:"openai_request_compression_enabled"`
 	// OpenAICompactModel: /responses/compact 上游使用的模型。
 	// compact 端点支持模型滞后于普通 /responses 时，可用该配置降级规避上游错误。
 	OpenAICompactModel string `mapstructure:"openai_compact_model"`
@@ -2556,6 +2560,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
+	viper.SetDefault("gateway.openai_request_compression_enabled", false)
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.5")
 	viper.SetDefault("gateway.openai_codex_ticket.enabled", false)
 	viper.SetDefault("gateway.openai_codex_ticket.target_length", 292)

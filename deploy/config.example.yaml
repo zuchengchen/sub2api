@@ -364,6 +364,13 @@ gateway:
   # OpenAI 透传模式是否放行客户端超时头（如 x-stainless-timeout）
   # 默认 false：过滤超时头，降低上游提前断流风险。
   openai_passthrough_allow_timeout_headers: false
+  # Opt in to zstd compression for OpenAI OAuth /responses HTTP requests.
+  # Default false avoids upstream bare 400 errors for otherwise valid JSON.
+  # OpenAI OAuth 的 /responses HTTP 请求默认发送原 JSON；设为 true 恢复 zstd 压缩。
+  # 仅控制 HTTP 请求体压缩，不改变身份头、TLS 或 WebSocket 行为；修改后需重启。
+  # 启用压缩仍需 openai_ws.exact_fidelity_enabled=true；默认关闭压缩不影响该保真设置。
+  # Env: GATEWAY_OPENAI_REQUEST_COMPRESSION_ENABLED=false
+  openai_request_compression_enabled: false
   # Model used for OpenAI /responses/compact upstream requests (default: gpt-5.5).
   # OpenAI /responses/compact 上游模型（默认 gpt-5.5）。
   # Use this to avoid compact failures when newer models are not yet supported by the compact endpoint.

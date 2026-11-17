@@ -3,6 +3,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +23,10 @@ type openAIRecoveryUpstream struct {
 }
 
 func (u *openAIRecoveryUpstream) Do(request *http.Request, proxy string, id int64, concurrency int) (*http.Response, error) {
+	return u.do(request, proxy, id, concurrency)
+}
+
+func (u *openAIRecoveryUpstream) DoWithTLS(request *http.Request, proxy string, id int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
 	return u.do(request, proxy, id, concurrency)
 }
 
@@ -34,40 +41,65 @@ func (b *openAIRecoveryBody) Close() error {
 }
 
 func TestOpenAIUpstream_401ReloadThenRefreshWithoutMutatingRequest(t *testing.T) {
-	account, repo, executor, provider := newOpenAIRecoveryFixture()
-	firstBody := &openAIRecoveryBody{Reader: strings.NewReader(`{"error":"unauthorized"}`)}
-	var calls int
-	var requests []*http.Request
-	upstream := &openAIRecoveryUpstream{do: func(request *http.Request, proxy string, id int64, concurrency int) (*http.Response, error) {
-		calls++
-		requests = append(requests, request)
-		require.Equal(t, account.ID, id)
-		require.Equal(t, account.Concurrency, concurrency)
-		require.Equal(t, "http://same-proxy", proxy)
-		body, err := io.ReadAll(request.Body)
-		require.NoError(t, err)
-		require.JSONEq(t, `{"model":"gpt-5.4","input":"hello"}`, string(body))
-		_ = request.Body.Close()
-		if calls <= 2 {
+	for _, compressed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "raw", true: "zstd"}[compressed], func(t *testing.T) {
+			account, repo, executor, provider := newOpenAIRecoveryFixture()
+			firstBody := &openAIRecoveryBody{Reader: strings.NewReader(`{"error":"unauthorized"}`)}
+			var calls int
+			var requests []*http.Request
+			var firstWire []byte
+			plain := []byte(`{ "model":"gpt-5.4", "input":"hello 中文" }`)
+			upstream := &openAIRecoveryUpstream{do: func(request *http.Request, proxy string, id int64, concurrency int) (*http.Response, error) {
+				calls++
+				requests = append(requests, request)
+				require.Equal(t, account.ID, id)
+				require.Equal(t, account.Concurrency, concurrency)
+				require.Equal(t, "http://same-proxy", proxy)
+				wire, err := io.ReadAll(request.Body)
+				require.NoError(t, err)
+				_ = request.Body.Close()
+				require.Equal(t, int64(len(wire)), request.ContentLength)
+				if calls == 1 {
+					firstWire = bytes.Clone(wire)
+				} else {
+					require.True(t, bytes.Equal(firstWire, wire), "401 recovery must replay identical wire bytes")
+				}
+				body := wire
+				if compressed {
+					require.Equal(t, "zstd", request.Header.Get("Content-Encoding"))
+					decoder, err := zstd.NewReader(nil)
+					require.NoError(t, err)
+					body, err = decoder.DecodeAll(wire, nil)
+					decoder.Close()
+					require.NoError(t, err)
+				} else {
+					require.Empty(t, request.Header.Get("Content-Encoding"))
+				}
+				require.True(t, bytes.Equal(plain, body), "401 recovery must preserve JSON bytes")
+				if calls <= 2 {
+					require.Equal(t, "Bearer rejected-access", request.Header.Get("Authorization"))
+					return &http.Response{StatusCode: 401, Header: make(http.Header), Body: firstBody}, nil
+				}
+				require.True(t, firstBody.closed)
+				require.Equal(t, "Bearer repaired-access", request.Header.Get("Authorization"))
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("data: done\n\n"))}, nil
+			}}
+			cfg := codexExactFidelityTestConfig(t)
+			cfg.Gateway.OpenAIRequestCompressionEnabled = compressed
+			svc := &OpenAIGatewayService{cfg: cfg, accountRepo: repo, httpUpstream: upstream, openAITokenProvider: provider}
+			request, err := http.NewRequest(http.MethodPost, chatgptCodexURL, bytes.NewReader(plain))
+			require.NoError(t, err)
+			request.Header.Set("Authorization", "Bearer rejected-access")
+			response, err := svc.doOpenAIUpstream(request, "http://same-proxy", account)
+			require.NoError(t, err)
+			defer response.Body.Close()
+			require.Equal(t, 200, response.StatusCode)
+			require.Equal(t, 3, calls)
+			require.NotSame(t, requests[0], requests[1])
 			require.Equal(t, "Bearer rejected-access", request.Header.Get("Authorization"))
-			return &http.Response{StatusCode: 401, Header: make(http.Header), Body: firstBody}, nil
-		}
-		require.True(t, firstBody.closed)
-		require.Equal(t, "Bearer repaired-access", request.Header.Get("Authorization"))
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("data: done\n\n"))}, nil
-	}}
-	svc := &OpenAIGatewayService{accountRepo: repo, httpUpstream: upstream, openAITokenProvider: provider}
-	request, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader(`{"model":"gpt-5.4","input":"hello"}`))
-	require.NoError(t, err)
-	request.Header.Set("Authorization", "Bearer rejected-access")
-	response, err := svc.doOpenAIUpstream(request, "http://same-proxy", account)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	require.Equal(t, 200, response.StatusCode)
-	require.Equal(t, 3, calls)
-	require.NotSame(t, requests[0], requests[1])
-	require.Equal(t, "Bearer rejected-access", request.Header.Get("Authorization"))
-	require.Equal(t, int32(1), executor.calls.Load())
+			require.Equal(t, int32(1), executor.calls.Load())
+		})
+	}
 }
 
 func TestOpenAIUpstream_ChangedReloadUsesSecondRejectedToken(t *testing.T) {

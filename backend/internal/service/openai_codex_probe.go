@@ -51,7 +51,9 @@ func (s *OpenAIGatewayService) doOpenAICodexProbe(req *http.Request, proxyURL st
 	}
 	// Preserve each diagnostic caller's admission and error policy. A health
 	// sample must not refresh credentials or record a permanent auth failure.
-	s.maybeCompressCodexUpstreamRequest(req, account)
+	if err := s.maybeCompressCodexUpstreamRequest(req, account); err != nil {
+		return nil, err
+	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(req.Context(), req, proxyURL, account)
 		if handled {
