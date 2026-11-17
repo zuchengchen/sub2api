@@ -595,7 +595,17 @@ const (
 )
 
 func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
-	if entry == nil || len(entry.UpstreamErrors) == 0 {
+	if entry == nil {
+		return nil
+	}
+	// Never replace an already serialized attempt chain just to add optional
+	// diagnostics. Keep legacy raw-vs-JSON precedence if both were supplied.
+	diagnostic := entry.upstreamReadDiagnostic
+	entry.upstreamReadDiagnostic = nil
+	if entry.UpstreamErrorsJSON != nil {
+		diagnostic = nil
+	}
+	if len(entry.UpstreamErrors) == 0 && diagnostic == nil {
 		return nil
 	}
 
@@ -671,6 +681,11 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		sanitized = append(sanitized, &evCopy)
 	}
 
+	// The diagnostic does not move the existing sixteen-attempt body window.
+	// It shares the final event/byte budget and is copied before queueing.
+	if diagnostic = cloneOpenAIWSReadDiagnostic(diagnostic); diagnostic != nil {
+		sanitized = append(sanitized, diagnostic)
+	}
 	sanitized, _ = boundOpsUpstreamErrors(sanitized)
 	entry.UpstreamErrorsJSON = marshalOpsUpstreamErrors(sanitized)
 	entry.UpstreamErrors = nil
