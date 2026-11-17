@@ -876,23 +876,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		return resultWithUsage()
 	}
-	incompleteAfterProgress := func(cause error) (*OpenAIForwardResult, error) {
-		if reqStream && wroteDownstream && responseID == "" && !openAIUsageHasTokens(usage) && imageCounter.Count() == 0 {
-			// Preserve the existing streaming error contract when there is no
-			// response identity or metered result to retain.
-			return nil, fmt.Errorf("upstream websocket error after downstream output: %w", cause)
-		}
-		// A locally terminated stream has no successful upstream terminal.
-		// Preserve its known attribution/usage without marking it successful.
-		upstreamTerminalEvent = "response.incomplete"
-		message := "upstream websocket ended before completing the response"
-		setOpsUpstreamError(c, http.StatusBadGateway, sanitizeUpstreamErrorMessage(cause.Error()), "")
-		if !reqStream && !clientDisconnected {
-			MarkResponseCommitted(c)
-			c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "message": message}})
-		}
-		return partialResultWithUsage(), fmt.Errorf("openai ws incomplete response after upstream progress: %w", cause)
-	}
 
 	var flusher http.Flusher
 	if reqStream {
@@ -968,6 +951,47 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				clientDisconnected,
 			)
 		}
+	}
+
+	incompleteAfterProgress := func(cause error) (*OpenAIForwardResult, error) {
+		if reqStream && wroteDownstream && responseID == "" && !openAIUsageHasTokens(usage) && imageCounter.Count() == 0 {
+			// Preserve the existing streaming error contract when there is no
+			// response identity or metered result to retain.
+			return nil, fmt.Errorf("upstream websocket error after downstream output: %w", cause)
+		}
+		// A locally terminated stream has no successful upstream terminal.
+		// Preserve its known attribution/usage without marking it successful.
+		upstreamTerminalEvent = "response.incomplete"
+		message := "upstream websocket ended before completing the response"
+		setOpsUpstreamError(c, http.StatusBadGateway, sanitizeUpstreamErrorMessage(cause.Error()), "")
+		if !reqStream && !clientDisconnected {
+			MarkResponseCommitted(c)
+			c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "message": message}})
+		}
+
+		if reqStream && imageCounter.Count() > 0 && terminalEventCount == 0 && GetOpsCyberPolicy(c) == nil {
+			// The HTTP handler settles partial image results without its generic
+			// error writer. Close this interrupted Responses turn here, retaining
+			// the image and observed response ID instead of leaving clients to
+			// infer completion from a disconnected stream.
+			clientStillWritable := func() bool {
+				return !clientDisconnected && ctx.Err() == nil &&
+					(c.Request == nil || c.Request.Context().Err() == nil)
+			}
+			if clientStillWritable() {
+				flushBufferedStreamEvents("incomplete_after_image")
+				if clientStillWritable() {
+					failure := buildOpenAIResponseFailedEvent(responseID, originalModel, 0, nil, message)
+					emitStreamMessage(failure, true)
+					if clientStillWritable() {
+						terminalEventCount++
+						MarkResponseCommitted(c)
+						markOpenAIWSClientVisibleFailure(c, "response.failed", failure)
+					}
+				}
+			}
+		}
+		return partialResultWithUsage(), fmt.Errorf("openai ws incomplete response after upstream progress: %w", cause)
 	}
 
 	// Keep per-read timeouts unchanged for connected clients. Once a client
