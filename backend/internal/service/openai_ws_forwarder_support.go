@@ -70,6 +70,47 @@ type openAIWSPrewarmResult struct {
 	OutputValid  bool
 }
 
+// This is a gateway error-settlement budget, not an upstream protocol limit.
+// It never authorizes replay or promises all future metering has arrived.
+const openAIWSPrewarmErrorSettlementTimeout = 2 * time.Second
+
+// openAIWSPrewarmTerminalError retains the final evidence after a known
+// parameter error began settlement. It is never a transport retry signal.
+type openAIWSPrewarmTerminalError struct {
+	payload    []byte
+	usage      OpenAIUsage
+	responseID string
+	cause      error
+}
+
+func (*openAIWSPrewarmTerminalError) Error() string {
+	return "openai websocket prewarm terminal error"
+}
+
+func (e *openAIWSPrewarmTerminalError) Unwrap() error { return e.cause }
+
+func openAIWSKnownParameterError(payload []byte) bool {
+	err, ok := normalizeOpenAIUpstreamError(payload)
+	if !ok || openAIStreamFailureStatus(payload, err.Message) != http.StatusBadRequest {
+		return false
+	}
+	// Preserve the existing recovery/writer policy for these dedicated families.
+	if isOpenAIModelUnavailableTerminalEvent(payload) || openAIImageGenerationUserError(payload) != nil ||
+		isOpenAIContextWindowError(err.Message, payload) {
+		return false
+	}
+	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
+		return false
+	}
+	reason, _ := classifyOpenAIWSErrorEventFromRaw(err.Code, err.Type, err.Message)
+	if reason == "previous_response_not_found" || reason == openAIWSFallbackReasonInvalidEncryptedContent {
+		return false
+	}
+	code := strings.ToLower(strings.TrimSpace(err.Code))
+	typ := strings.ToLower(strings.TrimSpace(err.Type))
+	return openAIUpstreamParameterErrorCode(code) || strings.Contains(typ, "invalid_request") || typ == "invalid_json_schema"
+}
+
 // performOpenAIWSGeneratePrewarm 在 WSv2 下执行可选的 generate=false 预热。
 // 仅限网关管理的 HTTP→WS 转换；原生客户端拥有自己的预热生命周期。
 // 返回预热结果供增量链锚定（未执行或失败时 result 为 nil）。
@@ -194,8 +235,26 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	var prewarmOutput openAIWSContinuationOutputCollector
 	prewarmEventCount := 0
 	prewarmTerminalCount := 0
+	var pendingParameterError []byte
+	var observedUsage OpenAIUsage
+	var pendingCtx context.Context
+	var pendingCancel context.CancelFunc
+	defer func() {
+		if pendingCancel != nil {
+			pendingCancel()
+		}
+	}()
 	for {
-		message, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
+		readCtx := ctx
+		if pendingCtx != nil {
+			readCtx = pendingCtx
+		}
+		message, readErr := lease.ReadMessageWithContextTimeout(readCtx, s.openAIWSReadTimeout())
+		if readErr != nil && len(pendingParameterError) > 0 {
+			lease.MarkBroken()
+			markOpenAICyberPolicyEvent(c, pendingParameterError, http.StatusSwitchingProtocols, &observedUsage)
+			return nil, &openAIWSPrewarmTerminalError{payload: pendingParameterError, usage: observedUsage, responseID: result.ResponseID, cause: ctx.Err()}
+		}
 		if readErr != nil {
 			lease.MarkBroken()
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
@@ -220,6 +279,34 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			result.ResponseID = eventResponseID
 		}
 		prewarmOutput.observe(message, eventType)
+
+		if openAIWSMessageShouldParseUsage(eventType, message) {
+			parseOpenAIWSResponseUsageFromCompletedEvent(message, &observedUsage)
+		}
+		knownParameter := (eventType == "error" || eventType == "response.failed") && openAIWSKnownParameterError(message)
+		if eventType == "error" && (knownParameter || len(pendingParameterError) > 0) {
+			// Once settlement starts, later bare errors are not an invitation to
+			// replay. Read their authoritative terminal and retain its actual usage.
+			if pendingCtx == nil {
+				pendingCtx, pendingCancel = context.WithTimeout(ctx, min(openAIWSPrewarmErrorSettlementTimeout, s.openAIWSReadTimeout()))
+			}
+			pendingParameterError = append(pendingParameterError[:0], message...)
+			// Only the selected terminal/EOF error owns settlement. A later
+			// failure can supersede an intermediate bare cyber-policy event.
+			continue
+		}
+		terminalStatus := gjson.GetBytes(message, "response.status").String()
+		successfulTerminal := (eventType == "response.completed" || eventType == "response.done") && result.ResponseID != "" &&
+			(terminalStatus == "" || terminalStatus == "completed") &&
+			gjson.GetBytes(message, "response.error").Type != gjson.JSON && gjson.GetBytes(message, "error").Type != gjson.JSON
+		if knownParameter || (len(pendingParameterError) > 0 && isOpenAIWSTerminalEvent(eventType) && !successfulTerminal) {
+			lease.MarkBroken()
+			markOpenAICyberPolicyEvent(c, message, http.StatusSwitchingProtocols, &observedUsage)
+			return nil, &openAIWSPrewarmTerminalError{payload: append([]byte(nil), message...), usage: observedUsage, responseID: result.ResponseID}
+		}
+		if isOpenAIWSTerminalEvent(eventType) {
+			pendingParameterError = nil
+		}
 
 		if prewarmEventCount <= openAIWSPrewarmEventLogHead || eventType == "error" || isOpenAIWSTerminalEvent(eventType) {
 			logOpenAIWSModeInfo(
@@ -993,6 +1080,8 @@ func openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw string) int {
 	errType := strings.ToLower(strings.TrimSpace(errTypeRaw))
 	switch {
 	case strings.Contains(errType, "invalid_request"),
+		errType == "invalid_json_schema",
+		openAIUpstreamParameterErrorCode(code),
 		isOpenAIImageGenerationUserErrorType(errType),
 		strings.Contains(code, "invalid_request"),
 		strings.Contains(code, "bad_request"),

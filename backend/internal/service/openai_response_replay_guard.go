@@ -100,7 +100,7 @@ func openAICompatPartialForwardResult(c *gin.Context, resp *http.Response, usage
 
 // Record a fixed vocabulary only. Raw transport errors can contain destination
 // URLs/addresses; neither they nor response/request payloads belong here.
-func recordOpenAIStreamReadFailure(c *gin.Context, account *Account, upstreamRequestID string, cause error) {
+func recordOpenAIStreamReadFailure(c *gin.Context, account *Account, upstreamRequestID string, cause error, replayBoundary ...OpsReplayBoundary) {
 	if c == nil || c.Request == nil || !shouldClassifyOpenAIUpstreamStreamReadError(cause, c.Request.Context()) {
 		return
 	}
@@ -120,6 +120,9 @@ func recordOpenAIStreamReadFailure(c *gin.Context, account *Account, upstreamReq
 		Platform: PlatformOpenAI, UpstreamStatusCode: http.StatusBadGateway,
 		UpstreamRequestID: strings.TrimSpace(upstreamRequestID),
 		Kind:              "stream_read_error", Stage: "response_body", Reason: reason, Message: message,
+	}
+	if len(replayBoundary) > 0 {
+		event.ReplayBoundary = &replayBoundary[0]
 	}
 	if account != nil {
 		event.Platform, event.AccountID, event.AccountName = account.Platform, account.ID, account.Name

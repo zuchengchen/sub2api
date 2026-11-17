@@ -971,8 +971,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						}
 					}
 					if requestPlatform == service.PlatformOpenAI && !service.OpenAIContinuationMaySwitchAccount(body) {
-						contextErr := service.NewOpenAIContinuationContextError(body)
-						service.WriteOpenAIContinuationContextError(c, contextErr)
+						// Valid native history can forbid account migration. Retain
+						// the upstream failure instead of inventing an input error.
+						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
@@ -2890,8 +2891,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return false
 		}
 		if account.Platform == service.PlatformOpenAI && !service.OpenAIContinuationMaySwitchAccount(wsAttemptMessage) {
-			contextErr := service.NewOpenAIContinuationContextError(wsAttemptMessage)
-			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, contextErr.Error())
+			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
 		if ctx.Err() != nil {

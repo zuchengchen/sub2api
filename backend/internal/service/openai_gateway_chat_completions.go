@@ -1123,6 +1123,7 @@ func (s *OpenAIGatewayService) newOpenAICompatBufferedReadFailoverError(
 	resp *http.Response,
 	requestID string,
 	err error,
+	replayBoundary ...OpsReplayBoundary,
 ) error {
 	var readErr *openAICompatBufferedReadError
 	if !errors.As(err, &readErr) || readErr == nil || errors.Is(readErr.cause, bufio.ErrTooLong) {
@@ -1152,7 +1153,7 @@ func (s *OpenAIGatewayService) newOpenAICompatBufferedReadFailoverError(
 	if resp != nil {
 		responseHeaders = resp.Header
 	}
-	failoverErr := s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message, responseHeaders)
+	failoverErr := s.newOpenAIStreamFailoverErrorWithModelAndReplayBoundary(c, account, false, requestID, payload, message, "", replayBoundary, responseHeaders)
 	// 保留稳定错误码，确保重试耗尽后客户端和错误透传规则仍能识别传输故障。
 	failoverErr.ResponseBody = payload
 	return failoverErr
@@ -1180,7 +1181,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	state.IncludeUsage = true
 
 	var usage OpenAIUsage
-	usageSource := "absent"
+	usageSource := OpsReplayUsageAbsent
 	var streamedBilling strings.Builder
 	var firstTokenMs *int
 	firstChunk := true
@@ -1206,6 +1207,18 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	oauthStream := isCodexOAuthAccount(account)
 	streamReadFailureCode := ""
 	streamReadRetryRequested := false
+	replayBoundarySnapshot := func(retryRequested bool) []OpsReplayBoundary {
+		if !oauthStream {
+			return nil
+		}
+		return []OpsReplayBoundary{{
+			UpstreamProgressObserved: replayGuard.progressed,
+			ClientOutputStarted:      clientOutputStarted,
+			TerminalSeen:             terminalEventType != "",
+			UsageSource:              usageSource,
+			RetryRequested:           retryRequested,
+		}}
+	}
 	defer func() {
 		if !oauthStream || streamReadFailureCode == "" {
 			return
@@ -1217,7 +1230,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			zap.Bool("upstream_progress_observed", replayGuard.progressed),
 			zap.Bool("client_output_started", clientOutputStarted),
 			zap.Bool("terminal_seen", terminalEventType != ""),
-			zap.String("usage_source", usageSource),
+			zap.String("usage_source", string(usageSource)),
 			zap.Bool("retry_requested", streamReadRetryRequested),
 		)
 	}()
@@ -1267,7 +1280,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		hadTokens := openAIUsageHasTokens(&usage)
 		applyEstimatedOpenAIUsageIfMissing(&usage, originalModel, requestBody, streamedBilling.String())
 		if !hadTokens && openAIUsageHasTokens(&usage) {
-			usageSource = "estimated"
+			usageSource = OpsReplayUsageEstimated
 		}
 		out := &OpenAIForwardResult{
 			RequestID:                     requestID,
@@ -1294,7 +1307,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		s.parseSSEUsageBytesWithType(payload, eventType, &usage)
 		if strings.Contains(string(payload), `"usage"`) {
 			if _, ok := extractOpenAIUsageFromJSONBytes(payload); ok {
-				usageSource = "upstream"
+				usageSource = OpsReplayUsageUpstream
 			}
 		}
 		if isOpenAICompatResponsesTerminalEvent(eventType) && json.Valid(payload) {
@@ -1694,7 +1707,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			IsResponseCommitted(c) || (c.Writer != nil && c.Writer.Written()) || !replayGuard.CanReplay(c) {
 			return nil
 		}
-		err := s.newOpenAICompatBufferedReadFailoverError(c, account, resp, requestID, &openAICompatBufferedReadError{cause: cause})
+		err := s.newOpenAICompatBufferedReadFailoverError(c, account, resp, requestID, &openAICompatBufferedReadError{cause: cause}, replayBoundarySnapshot(true)...)
 		var failover *UpstreamFailoverError
 		if errors.As(err, &failover) {
 			streamReadRetryRequested = true
@@ -1725,10 +1738,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			// In particular, do not estimate/bill a request that may be replayed.
 			return nil, failover
 		}
+		result := resultWithUsage()
 		if !clientDisconnected {
-			recordOpenAIStreamReadFailure(c, account, requestID, ErrOpenAIUpstreamStreamTruncated)
+			recordOpenAIStreamReadFailure(c, account, requestID, ErrOpenAIUpstreamStreamTruncated, replayBoundarySnapshot(false)...)
 		}
-		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
+		return result, fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
 	failStreamRead := func(err error, parser *openAICompatSSEFrameParser) (*OpenAIForwardResult, error) {
 		streamReadFailureCode, _ = classifyOpenAIUpstreamStreamReadError(err)
@@ -1755,8 +1769,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if failover := readFailover(err); failover != nil {
 			return nil, failover
 		}
-		recordOpenAIStreamReadFailure(c, account, requestID, err)
-		return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+		result := resultWithUsage()
+		recordOpenAIStreamReadFailure(c, account, requestID, err, replayBoundarySnapshot(false)...)
+		return result, newOpenAIUpstreamStreamReadError(err)
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)

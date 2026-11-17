@@ -1672,6 +1672,12 @@ func TestOpenAIWSPrewarmPreservesFailureClassification(t *testing.T) {
 				var failover *UpstreamFailoverError
 				require.ErrorAs(t, err, &failover)
 				require.Equal(t, http.StatusTooManyRequests, failover.StatusCode)
+			} else if tc.reason == "policy_violation" {
+				var terminal *openAIWSPrewarmTerminalError
+				require.ErrorAs(t, err, &terminal)
+				require.True(t, openAIWSKnownParameterError(terminal.payload))
+				require.Equal(t, http.StatusBadRequest, openAIStreamFailureStatus(terminal.payload, ""))
+				require.Empty(t, openAIWSSessionFallbackReason(err), "known parameter failure cannot become a transport retry")
 			} else {
 				require.Equal(t, tc.reason, openAIWSSessionFallbackReason(err))
 				require.False(t, openAIWSSessionFallbackActionFor(tc.reason).markDisable)

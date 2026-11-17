@@ -1967,6 +1967,16 @@ func parseOpsSSEFailure(body []byte) (parsedOpsError, bool) {
 			if parsed.StatusCode == 0 {
 				parsed.StatusCode = opsJSONInt(event["status"])
 			}
+			// Only the exact schema marker gains this new classification. Validate
+			// the original frame with the service's bounded, duplicate-aware parser;
+			// the generic map above must not turn an ambiguous error into a 400.
+			if (strings.EqualFold(strings.TrimSpace(parsed.Code), "invalid_json_schema") || strings.EqualFold(strings.TrimSpace(parsed.ErrorType), "invalid_json_schema")) &&
+				service.IsOpenAIInvalidJSONSchemaError(payloadBytes) {
+				parsed.ErrorType = "invalid_request_error"
+				if parsed.StatusCode == 0 {
+					parsed.StatusCode = http.StatusBadRequest
+				}
+			}
 			if parsed.ErrorType == "" {
 				parsed.ErrorType = inferResponsesFailedOpsErrorType(parsed.Code)
 			}
