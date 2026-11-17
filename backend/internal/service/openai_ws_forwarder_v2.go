@@ -612,6 +612,59 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		)
 	}
 	if err != nil {
+		var rejection *openAIWSPrewarmTerminalError
+		if errors.As(err, &rejection) {
+			safePayload := s.redactAgentIdentitySensitiveBody(ctx, account, rejection.payload)
+			message := sanitizeUpstreamErrorMessage(extractOpenAISSEErrorMessage(safePayload))
+			if ctx.Err() == nil {
+				message = s.recordOpenAIStreamUpstreamError(c, account, false, lease.HandshakeHeader("x-request-id"), "ws_error", safePayload, message)
+				status := openAIStreamFailureStatus(safePayload, message)
+				if !openAIWSKnownParameterError(safePayload) {
+					// The awaited authoritative failure can change family. Apply its
+					// existing account-state transition once, never its retry return.
+					stateCtx, stateCancel := openAIAccountStateContext(ctx)
+					s.handleOpenAIWSFailureAccountSideEffects(stateCtx, account, mappedModel, lease.HandshakeHeaders(), safePayload)
+					stateCancel()
+				}
+				switch {
+				case isOpenAIModelUnavailableTerminalEvent(safePayload):
+					writeOpenAIModelUnavailableTerminal(c, http.StatusSwitchingProtocols, openAIModelErrorResponses)
+				case isOpenAIContextWindowError(message, safePayload):
+					WriteOpenAIResponsesContextLengthExceeded(c, message)
+				case status == http.StatusBadRequest && openAIWSKnownParameterError(safePayload):
+					writeOpenAIUpstreamClientError(c, status, openAIStreamFailedEventPassthroughBody(safePayload, message), message)
+				default:
+					errorBody := gin.H{"type": "upstream_error", "code": "upstream_error", "message": message}
+					if normalized, ok := normalizeOpenAIUpstreamError(safePayload); ok {
+						for field, value := range map[string]string{"type": normalized.Type, "code": normalized.Code, "param": normalized.Param} {
+							if value != "" {
+								errorBody[field] = value
+							}
+						}
+					}
+					if openAIStreamCredentialAuthFailure(safePayload) {
+						status = http.StatusBadGateway
+						errorBody = gin.H{"type": "upstream_error", "message": "Upstream authentication failed"}
+					}
+					writeOpenAIResponsesErrorJSON(c, status, gin.H{"error": errorBody})
+				}
+			}
+			var partial *OpenAIForwardResult
+			if openAIUsageHasTokens(&rejection.usage) && GetOpsCyberPolicy(c) == nil {
+				partial = &OpenAIForwardResult{
+					RequestID: rejection.responseID, ResponseID: rejection.responseID,
+					Usage: rejection.usage, Model: originalModel, UpstreamModel: mappedModel,
+					Stream: reqStream, OpenAIWSMode: true, UpstreamTerminalEvent: "response.failed",
+					ResponseHeaders: lease.HandshakeHeaders(), Duration: time.Since(startTime),
+					ReasoningEffort: extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
+					ServiceTier:     extractOpenAIServiceTier(reqBody),
+				}
+			}
+			if rejection.cause != nil {
+				return partial, rejection.cause
+			}
+			return partial, fmt.Errorf("upstream response failed: %s", message)
+		}
 		if openAIWSSessionFallbackReason(err) == "payload_too_large" {
 			cleanExit = true
 		}
@@ -1272,6 +1325,39 @@ readLoop:
 					c.Set("openai_ws_auto_incremental_replay", true)
 				}
 				return nil, wrapOpenAIWSFallback("auto_continuation_miss", errors.New(rejection.Get("message").String()))
+			}
+		}
+
+		if eventType == "response.failed" {
+			if openAIWSKnownParameterError(message) {
+				// A known parameter rejection is terminal on HTTP ingress too.
+				// Keep the raw terminal for streaming clients (including usage),
+				// but return structured 400 JSON before non-streaming headers commit.
+				// Bare errors reach this point only after terminal/EOF settlement;
+				// schema constraints are never removed or replayed to hide rejection.
+				lease.MarkBroken()
+				if deltaApplied && stateStore != nil && sessionHash != "" {
+					stateStore.DeleteSessionDeltaChain(groupID, sessionHash)
+				}
+				upstreamTerminalEvent = "response.failed"
+				safePayload := s.redactAgentIdentitySensitiveBody(ctx, account, message)
+				errMsg := s.recordOpenAIStreamUpstreamError(c, account, false, lease.HandshakeHeader("x-request-id"), "ws_error", safePayload, extractOpenAISSEErrorMessage(safePayload))
+				if !clientDisconnected {
+					MarkResponseCommitted(c)
+					if reqStream {
+						flushBufferedStreamEvents(eventType)
+						emitStreamMessage(s.redactAgentIdentitySensitiveBody(ctx, account, clientMessage), true)
+						if !clientDisconnected {
+							markOpenAIWSClientVisibleFailure(c, eventType, safePayload)
+						}
+					} else {
+						writeOpenAIUpstreamClientError(c, http.StatusBadRequest, openAIStreamFailedEventPassthroughBody(safePayload, errMsg), errMsg)
+					}
+				}
+				if upstreamProgress() {
+					return partialResultWithUsage(), fmt.Errorf("upstream response failed: %s", errMsg)
+				}
+				return nil, fmt.Errorf("upstream response failed: %s", errMsg)
 			}
 		}
 

@@ -1466,7 +1466,8 @@ func isOpenAIUpstreamCapacityShedEvent(payload []byte) bool {
 	case "server_is_overloaded", "slow_down":
 		return true
 	}
-	if openAIUpstreamParameterErrorCode(code) && code != "invalid_request" && code != "invalid_request_error" {
+	if (openAIUpstreamParameterErrorCode(code) && code != "invalid_request" && code != "invalid_request_error") ||
+		strings.EqualFold(strings.TrimSpace(upstreamError.Type), "invalid_json_schema") {
 		return false
 	}
 	if _, _, rejectedID := openAIResponsesRejectedMessageIDFromError(upstreamError); rejectedID {
@@ -1570,7 +1571,7 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 	}
 	// A specific parameter rejection (including the proven validator prefix)
 	// outranks quoted/transient-looking user values in its diagnostic message.
-	if openAIUpstreamParameterErrorCode(code) && code != "invalid_request" && code != "invalid_request_error" {
+	if (openAIUpstreamParameterErrorCode(code) && code != "invalid_request" && code != "invalid_request_error") || errType == "invalid_json_schema" {
 		return http.StatusBadRequest
 	}
 	if _, _, rejectedID := openAIResponsesRejectedMessageIDFromError(upstreamError); rejectedID {
@@ -1608,11 +1609,23 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 func openAIUpstreamParameterErrorCode(code string) bool {
 	switch code {
 	case "invalid_request", "invalid_request_error", "invalid_value", "invalid_type", "invalid_parameter",
-		"unknown_parameter", "unsupported_parameter", "invalid_function_parameters", "array_above_max_length", "invalid_id_prefix":
+		"unknown_parameter", "unsupported_parameter", "invalid_function_parameters", "invalid_json_schema", "array_above_max_length", "invalid_id_prefix":
 		return true
 	default:
 		return false
 	}
+}
+
+// IsOpenAIInvalidJSONSchemaError lets Ops classify the current raw terminal
+// without borrowing an earlier attempt's status or trusting duplicate JSON keys.
+// Other error families retain their existing middleware classification.
+func IsOpenAIInvalidJSONSchemaError(payload []byte) bool {
+	upstreamError, ok := normalizeOpenAIUpstreamError(payload)
+	if !ok || (!strings.EqualFold(strings.TrimSpace(upstreamError.Code), "invalid_json_schema") &&
+		!strings.EqualFold(strings.TrimSpace(upstreamError.Type), "invalid_json_schema")) {
+		return false
+	}
+	return openAIStreamFailedEventSemanticStatus(payload, "") == http.StatusBadRequest
 }
 
 func openAIStreamFailureStatus(payload []byte, message string) int {
@@ -1857,6 +1870,7 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
 	kind string,
 	payload []byte,
 	message string,
+	replayBoundary ...OpsReplayBoundary,
 ) string {
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
@@ -1883,6 +1897,9 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
 			Kind:               kind,
 			Message:            message,
 			Detail:             detail,
+		}
+		if len(replayBoundary) > 0 {
+			event.ReplayBoundary = &replayBoundary[0]
 		}
 		if account != nil {
 			event.Platform = account.Platform
@@ -1916,6 +1933,20 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverErrorWithModel(
 	canonicalModel string,
 	responseHeaders ...http.Header,
 ) *UpstreamFailoverError {
+	return s.newOpenAIStreamFailoverErrorWithModelAndReplayBoundary(c, account, passthrough, upstreamRequestID, payload, message, canonicalModel, nil, responseHeaders...)
+}
+
+func (s *OpenAIGatewayService) newOpenAIStreamFailoverErrorWithModelAndReplayBoundary(
+	c *gin.Context,
+	account *Account,
+	passthrough bool,
+	upstreamRequestID string,
+	payload []byte,
+	message string,
+	canonicalModel string,
+	replayBoundary []OpsReplayBoundary,
+	responseHeaders ...http.Header,
+) *UpstreamFailoverError {
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
 		message = "OpenAI stream disconnected before completion"
@@ -1927,7 +1958,7 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverErrorWithModel(
 	statusCode, shouldDisable := s.handleOpenAIStreamTerminalAccountSideEffects(c, account, payload, message, headers, canonicalModel)
 	// 流内 failed 事件承载于 HTTP 200；使用事件的语义状态更新账号健康，
 	// 再由 failover 引擎按 StatusCode/RetryableOnSameAccount 决定恢复策略。
-	message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, upstreamRequestID, "failover", payload, message)
+	message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, upstreamRequestID, "failover", payload, message, replayBoundary...)
 	errType := "upstream_error"
 	if statusCode == http.StatusTooManyRequests {
 		errType = "rate_limit_error"

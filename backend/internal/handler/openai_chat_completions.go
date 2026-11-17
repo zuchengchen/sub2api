@@ -407,8 +407,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						}
 					}
 					if isResponsesShape && requestPlatform == service.PlatformOpenAI && !service.OpenAIContinuationMaySwitchAccount(body) {
-						contextErr := service.NewOpenAIContinuationContextError(body)
-						service.WriteOpenAIContinuationContextError(c, contextErr)
+						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					h.gatewayService.RecordOpenAIAccountSwitch()

@@ -105,9 +105,18 @@ func TestOAuthReliabilityReviewContinuationChatFailoverKeepsExternalAnchor(t *te
 			upstream.mu.Lock()
 			defer upstream.mu.Unlock()
 			require.Equal(t, []int64{1}, upstream.accountIDs, "a text-only delta is not complete history and cannot move to a new credential")
+			require.Len(t, upstream.bodies, 1)
 			require.Equal(t, "resp_external", gjson.GetBytes(upstream.bodies[0], "previous_response_id").String())
-			require.Equal(t, http.StatusBadRequest, recorder.Code)
-			require.Equal(t, "continuation_context_missing", gjson.Get(recorder.Body.String(), "error.code").String())
+			// An external anchor forbids migration; it does not make the input
+			// invalid. Retain the existing terminal mapping for this upstream 503.
+			require.Equal(t, http.StatusBadGateway, recorder.Code)
+			require.Equal(t, "upstream_error", gjson.Get(recorder.Body.String(), "error.type").String())
+			require.NotEqual(t, "continuation_context_missing", gjson.Get(recorder.Body.String(), "error.code").String())
+			events, ok := c.MustGet(service.OpsUpstreamErrorsKey).([]*service.OpsUpstreamErrorEvent)
+			require.True(t, ok)
+			require.Len(t, events, 1)
+			require.Equal(t, int64(1), events[0].AccountID)
+			require.Equal(t, http.StatusServiceUnavailable, events[0].UpstreamStatusCode)
 		})
 	}
 }

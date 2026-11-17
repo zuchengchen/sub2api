@@ -65,6 +65,9 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			// 让 ops 错误日志携带实际拉取成功的首个固定账号。
 			setOpsSelectedAccount(c, pinnedAccount.ID, pinnedAccount.Platform)
 			if err := h.gatewayService.MergeGroupConfiguredCodexModels(c.Request.Context(), apiKey.Group, pinnedManifest, ifNoneMatch); err != nil {
+				if c.Request.Context().Err() != nil {
+					return
+				}
 				recordCodexModelsManifestFailure(c, err, service.CodexModelsStageConfiguredMerge)
 				h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to build Codex models manifest")
 				return
@@ -154,6 +157,9 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			return
 		}
 		if err := h.gatewayService.MergeGroupConfiguredCodexModels(c.Request.Context(), apiKey.Group, manifest, ifNoneMatch); err != nil {
+			if c.Request.Context().Err() != nil {
+				return
+			}
 			recordCodexModelsManifestFailure(c, err, service.CodexModelsStageConfiguredMerge)
 			h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to build Codex models manifest")
 			return

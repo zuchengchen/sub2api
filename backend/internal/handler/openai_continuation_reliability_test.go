@@ -90,8 +90,10 @@ func TestOAuthReliabilityContinuationResponsesAccountFailoverRequiresPortableHis
 				require.Equal(t, http.StatusBadGateway, rec.Code)
 			} else {
 				require.Equal(t, []int64{9910}, upstream.calls())
-				require.Equal(t, http.StatusBadRequest, rec.Code)
-				require.Equal(t, "continuation_context_missing", gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
+				require.Equal(t, http.StatusBadGateway, rec.Code)
+				require.Equal(t, http.StatusBadGateway, c.GetInt(service.OpsUpstreamStatusCodeKey))
+				require.NotEqual(t, "continuation_context_missing", gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
+				require.Equal(t, "upstream_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
 			}
 		})
 	}
