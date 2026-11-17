@@ -1311,6 +1311,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 
 		persistUsagePolicyConversationFromContext(c, ops, entry)
+		service.AttachOpenAIWSReadDiagnostic(c, entry)
 		enqueueOpsErrorLog(ops, entry)
 	}
 }
@@ -1428,6 +1429,7 @@ func logOpsRecoveredUpstream(c *gin.Context, ops *service.OpsService, finalStatu
 	}
 	applyOpsLatencyFieldsFromContext(c, entry)
 	persistUsagePolicyConversationFromContext(c, ops, entry)
+	service.AttachOpenAIWSReadDiagnostic(c, entry)
 	enqueueOpsErrorLog(ops, entry)
 }
 
@@ -1618,6 +1620,9 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 	}
 
 	persistUsagePolicyConversationFromContext(c, ops, entry)
+	if !streamErr.RequestScoped && streamErr.Turn == 0 {
+		service.AttachOpenAIWSReadDiagnostic(c, entry)
+	}
 	enqueueOpsErrorLog(ops, entry)
 }
 
