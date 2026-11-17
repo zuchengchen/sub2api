@@ -135,7 +135,7 @@ func TestOpenAIStreamEchoedAccessStateMessageDoesNotDisableOrFailover(t *testing
 	require.False(t, isOpenAIUpstreamAccessStateError(message, payload))
 	require.False(t, openAIStreamFailedEventShouldFailover(payload, message))
 	status, disabled := svc.handleOpenAIStreamTerminalAccountSideEffects(nil, account, payload, message, nil)
-	require.Equal(t, http.StatusBadGateway, status)
+	require.Equal(t, http.StatusBadRequest, status)
 	require.False(t, disabled)
 	require.Zero(t, repo.setErrorCalls)
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))

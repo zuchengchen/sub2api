@@ -122,13 +122,23 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 		return nil, "", false, nil
 	}
 
-	code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(responseBody)))
-	message := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
-	param := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.param").String()))
-	if code == "invalid_value" {
-		if retryBody, reason, changed, err := removeOpenAIResponsesRejectedMessageID(body, responseBody); changed || err != nil {
-			return retryBody, reason, changed, err
-		}
+	// A validation status alone cannot authorize replay when the same
+	// response carries metered work, model output, or a hosted tool result.
+	var replayGuard openAIResponseReplayGuard
+	replayGuard.Observe(responseBody, "error")
+	if replayGuard.progressed {
+		return nil, "", false, nil
+	}
+
+	upstreamError, ok := normalizeOpenAIUpstreamError(responseBody)
+	if !ok || (upstreamError.StatusCode != 0 && upstreamError.StatusCode != http.StatusBadRequest) {
+		return nil, "", false, nil
+	}
+	code := strings.ToLower(strings.TrimSpace(upstreamError.Code))
+	message := strings.ToLower(strings.TrimSpace(upstreamError.Message))
+	param := strings.ToLower(strings.TrimSpace(upstreamError.Param))
+	if retryBody, reason, changed, err := removeOpenAIResponsesRejectedMessageID(body, responseBody); changed || err != nil {
+		return retryBody, reason, changed, err
 	}
 	if code == "invalid_function_parameters" &&
 		openAIResponsesToolParametersParamPattern.MatchString(param) &&

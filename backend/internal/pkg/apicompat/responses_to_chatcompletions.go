@@ -378,6 +378,28 @@ func resToChatHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	}
 
 	var chunks []ChatCompletionsChunk
+	// Some gateways send the complete response without text delta events.
+	// Retain that authoritative text, but never repeat text already streamed
+	// or turn a failed response into successful assistant output.
+	if !state.SawText && evt.Response != nil && evt.Type != "response.failed" {
+		var text strings.Builder
+		for _, item := range evt.Response.Output {
+			if item.Type != "message" {
+				continue
+			}
+			for _, part := range item.Content {
+				if part.Type == "output_text" {
+					text.WriteString(part.Text)
+				}
+			}
+		}
+		if text.Len() > 0 {
+			content := text.String()
+			state.SawText = true
+			chunks = append(chunks, makeChatDeltaChunk(state, ChatDelta{Content: &content}))
+		}
+	}
+
 	chunks = append(chunks, makeChatFinishChunk(state, finishReason))
 
 	if state.IncludeUsage && state.Usage != nil {

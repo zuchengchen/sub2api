@@ -462,7 +462,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 		if reqStream {
 			stashOpenAIUsageEstimateRequestBody(c, body)
-			result, handleErr := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
+			result, handleErr := withOpenAIRejectedFieldRetryAttempt(c, body, rejectedFieldRetryState, func() (*openaiStreamingResultPassthrough, error) {
+				return s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
+			})
+			if signal, ok := asOpenAIRejectedFieldStreamRetrySignal(handleErr); ok {
+				_ = resp.Body.Close()
+				body = signal.body
+				continue
+			}
 			if handleErr != nil {
 				if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
 					c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
@@ -497,7 +504,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			imageCount = result.imageCount
 			imageOutputSizes = result.imageOutputSizes
 		} else {
-			result, handleErr := s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, reqModel, upstreamPassthroughModel)
+			result, handleErr := withOpenAIRejectedFieldRetryAttempt(c, body, rejectedFieldRetryState, func() (*openaiNonStreamingResultPassthrough, error) {
+				return s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, reqModel, upstreamPassthroughModel)
+			})
+			if signal, ok := asOpenAIRejectedFieldStreamRetrySignal(handleErr); ok {
+				_ = resp.Body.Close()
+				body = signal.body
+				continue
+			}
 			if handleErr != nil {
 				if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
 					c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
@@ -1362,27 +1376,33 @@ func openAIStreamDataStartsTTFT(data, eventType string, forceOutput bool, mode s
 // openAIStreamFailedEventErrorCode 提取流内 failed 事件的错误码（小写），
 // 兼容 response.failed 的嵌套形态与裸 error 形态。
 func openAIStreamFailedEventErrorCode(payload []byte) string {
-	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
-	if code == "" {
-		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
+	upstreamError, ok := normalizeOpenAIUpstreamError(payload)
+	if !ok {
+		return ""
 	}
-	return code
+	return strings.ToLower(strings.TrimSpace(upstreamError.Code))
 }
 
 // isOpenAIUpstreamCapacityShedEvent 判断流内 failed 事件是否为上游容量降载信号。
 // 上游在容量紧张时会把请求丢进降载路径：HTTP 200 之后立刻推 event: error
 // （code=server_is_overloaded / slow_down）并以 response.failed 收尾。
 func isOpenAIUpstreamCapacityShedEvent(payload []byte) bool {
-	switch openAIStreamFailedEventErrorCode(payload) {
+	upstreamError, ok := normalizeOpenAIUpstreamError(payload)
+	if !ok {
+		return false
+	}
+	code := strings.ToLower(strings.TrimSpace(upstreamError.Code))
+	switch code {
 	case "server_is_overloaded", "slow_down":
 		return true
 	}
-	for _, path := range []string{"response.error.message", "error.message", "message"} {
-		if isOpenAICapacityShedMessage(gjson.GetBytes(payload, path).String()) {
-			return true
-		}
+	if openAIUpstreamParameterErrorCode(code) && code != "invalid_request" && code != "invalid_request_error" {
+		return false
 	}
-	return false
+	if _, _, rejectedID := openAIResponsesRejectedMessageIDFromError(upstreamError); rejectedID {
+		return false
+	}
+	return isOpenAICapacityShedMessage(upstreamError.Message)
 }
 
 func logOpenAICapacityFailoverSuppressed(
@@ -1425,7 +1445,7 @@ func sanitizeOpenAICapacityShedErrorCodeForClient(payload []byte) ([]byte, bool)
 	}
 	updated := payload
 	changed := false
-	for _, path := range []string{"response.error.code", "error.code"} {
+	for _, path := range []string{"response.error.code", "error.code", "code"} {
 		parent := strings.TrimSuffix(path, ".code")
 		if !gjson.GetBytes(updated, parent).Exists() {
 			continue
@@ -1458,61 +1478,78 @@ var openAIStreamErrorStatusPaths = []string{
 }
 
 func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
-	if openAIImageGenerationUserError(payload) != nil {
+	upstreamError, ok := normalizeOpenAIUpstreamError(payload)
+	if !ok {
+		return http.StatusBadGateway
+	}
+	payload = upstreamError.ErrorBody
+	if upstreamError.Message != "" {
+		message = upstreamError.Message
+	}
+	if openAIImageGenerationUserError(payload) != nil || isOpenAIContextWindowError(message, payload) {
 		return http.StatusBadRequest
 	}
-	if isOpenAIContextWindowError(message, payload) {
-		return http.StatusBadRequest
+	code := strings.ToLower(strings.TrimSpace(upstreamError.Code))
+	errType := strings.ToLower(strings.TrimSpace(upstreamError.Type))
+	switch upstreamError.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, 529:
+		return upstreamError.StatusCode
 	}
-
-	code := openAIStreamFailedEventErrorCode(payload)
-	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String()))
-	if errType == "" {
-		errType = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.type").String()))
-	}
-	combined := strings.TrimSpace(errType + " " + code + " " + strings.ToLower(strings.TrimSpace(message)))
-	for _, path := range openAIStreamErrorStatusPaths {
-		if status := int(gjson.GetBytes(payload, path).Int()); status == http.StatusUnauthorized ||
-			status == http.StatusForbidden || status == http.StatusTooManyRequests || status == 529 {
-			return status
-		}
-	}
-	switch {
-	case strings.Contains(combined, "rate_limit"):
-		return http.StatusTooManyRequests
-	case strings.Contains(errType, "invalid_request"):
-		return http.StatusBadRequest
-	case strings.Contains(combined, "authentication") || strings.Contains(combined, "unauthorized") || strings.Contains(combined, "invalid_api_key"):
+	if openAIStreamCredentialAuthFailure(payload) {
 		return http.StatusUnauthorized
-	case strings.Contains(combined, "permission") || strings.Contains(combined, "forbidden") || strings.Contains(combined, "access denied"):
-		return http.StatusForbidden
+	}
+	// A specific parameter rejection (including the proven validator prefix)
+	// outranks quoted/transient-looking user values in its diagnostic message.
+	if openAIUpstreamParameterErrorCode(code) && code != "invalid_request" && code != "invalid_request_error" {
+		return http.StatusBadRequest
+	}
+	if _, _, rejectedID := openAIResponsesRejectedMessageIDFromError(upstreamError); rejectedID {
+		return http.StatusBadRequest
+	}
+	// Positive capacity/rate/access signals take priority over providers which
+	// wrap all errors in invalid_request_error, preserving their retry policy.
+	switch {
+	case strings.Contains(errType+" "+code, "rate_limit"):
+		return http.StatusTooManyRequests
 	case isOpenAIUpstreamAccessStateError(message, payload):
 		return http.StatusForbidden
 	case isOpenAIUpstreamCapacityShedEvent(payload):
 		return http.StatusServiceUnavailable
+	case isOpenAITransientProcessingError(http.StatusBadRequest, message, payload):
+		return http.StatusBadGateway
+	}
+	if upstreamError.StatusCode == http.StatusBadRequest || strings.Contains(errType, "invalid_request") ||
+		openAIUpstreamParameterErrorCode(code) {
+		return http.StatusBadRequest
+	}
+	combined := strings.TrimSpace(errType + " " + code + " " + strings.ToLower(strings.TrimSpace(message)))
+	switch {
+	case strings.Contains(combined, "rate_limit"):
+		return http.StatusTooManyRequests
+	case strings.Contains(combined, "authentication") || strings.Contains(combined, "unauthorized") || strings.Contains(combined, "invalid_api_key"):
+		return http.StatusUnauthorized
+	case strings.Contains(combined, "permission") || strings.Contains(combined, "forbidden") || strings.Contains(combined, "access denied"):
+		return http.StatusForbidden
 	default:
 		return http.StatusBadGateway
 	}
 }
 
+func openAIUpstreamParameterErrorCode(code string) bool {
+	switch code {
+	case "invalid_request", "invalid_request_error", "invalid_value", "invalid_type", "invalid_parameter",
+		"unknown_parameter", "unsupported_parameter", "invalid_function_parameters", "array_above_max_length", "invalid_id_prefix":
+		return true
+	default:
+		return false
+	}
+}
+
 func openAIStreamFailureStatus(payload []byte, message string) int {
-	if len(bytes.TrimSpace(payload)) == 0 || !gjson.ValidBytes(payload) {
-		return http.StatusBadGateway
-	}
-	semanticStatus := openAIStreamFailedEventSemanticStatus(payload, message)
-	switch semanticStatus {
-	case http.StatusBadRequest:
-		if openAIImageGenerationUserError(payload) != nil {
-			return semanticStatus
-		}
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, 529:
-		return semanticStatus
-	case http.StatusServiceUnavailable:
-		if isOpenAIUpstreamCapacityShedEvent(payload) {
-			return semanticStatus
-		}
-	}
-	return http.StatusBadGateway
+	// A deterministic parameter error remains 400 on every transport. Callers
+	// with committed headers record this logical status and emit an in-band
+	// error; they must not claim to have changed the wire's HTTP 200 status.
+	return openAIStreamFailedEventSemanticStatus(payload, message)
 }
 
 // openAIStreamCredentialAuthFailure distinguishes credential failures from
@@ -1520,27 +1557,22 @@ func openAIStreamFailureStatus(payload []byte, message string) int {
 // infer credential health from free-form 403 messages: providers also use
 // permission_error/forbidden/access denied for request-scoped policy failures.
 func openAIStreamCredentialAuthFailure(payload []byte) bool {
-	if len(bytes.TrimSpace(payload)) == 0 || !gjson.ValidBytes(payload) {
+	upstreamError, ok := normalizeOpenAIUpstreamError(payload)
+	if !ok {
 		return false
 	}
-	for _, path := range openAIStreamErrorStatusPaths {
-		if int(gjson.GetBytes(payload, path).Int()) == http.StatusUnauthorized {
-			return true
-		}
+	if upstreamError.StatusCode == http.StatusUnauthorized {
+		return true
 	}
-	for _, path := range []string{"response.error.type", "error.type", "type"} {
-		errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, path).String()))
-		if errType == "authentication_error" || errType == "authentication_failed" || errType == "unauthorized_error" {
-			return true
-		}
+	switch strings.ToLower(strings.TrimSpace(upstreamError.Type)) {
+	case "authentication_error", "authentication_failed", "unauthorized_error":
+		return true
 	}
-	for _, path := range []string{"response.error.code", "error.code", "code"} {
-		switch strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, path).String())) {
-		case "invalid_api_key", "api_key_disabled", "unauthorized", "authentication_error",
-			"invalid_token", "access_token_invalid", "token_revoked", "token_invalidated",
-			"invalid_credentials", "credential_invalid":
-			return true
-		}
+	switch strings.ToLower(strings.TrimSpace(upstreamError.Code)) {
+	case "invalid_api_key", "api_key_disabled", "unauthorized", "authentication_error",
+		"invalid_token", "access_token_invalid", "token_revoked", "token_invalidated",
+		"invalid_credentials", "credential_invalid":
+		return true
 	}
 	return false
 }
@@ -1550,53 +1582,15 @@ func openAIStream403AccountFailure(payload []byte, message string) bool {
 }
 
 func openAIStreamFailedEventPassthroughBody(payload []byte, failedMessage string) []byte {
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return payload
-	}
-	if gjson.GetBytes(payload, "error").Exists() {
-		return payload
-	}
-	responseError := gjson.GetBytes(payload, "response.error")
-	if !responseError.Exists() {
-		if strings.TrimSpace(failedMessage) == "" {
-			return payload
+	if upstreamError, ok := normalizeOpenAIUpstreamError(payload); ok {
+		if upstreamError.Message == "" && strings.TrimSpace(failedMessage) != "" {
+			if body, err := sjson.SetBytes(upstreamError.ErrorBody, "error.message", strings.TrimSpace(failedMessage)); err == nil {
+				return body
+			}
 		}
-		body, err := marshalOpenAIUpstreamJSON(gin.H{
-			"error": gin.H{
-				"message": failedMessage,
-			},
-		})
-		if err != nil {
-			return payload
-		}
-		return body
+		return upstreamError.ErrorBody
 	}
-
-	errorPayload := gin.H{}
-	if errType := strings.TrimSpace(gjson.Get(responseError.Raw, "type").String()); errType != "" {
-		errorPayload["type"] = errType
-	}
-	if code := strings.TrimSpace(gjson.Get(responseError.Raw, "code").String()); code != "" {
-		errorPayload["code"] = code
-	}
-	if param := strings.TrimSpace(gjson.Get(responseError.Raw, "param").String()); param != "" {
-		errorPayload["param"] = param
-	}
-	message := strings.TrimSpace(gjson.Get(responseError.Raw, "message").String())
-	if message == "" {
-		message = strings.TrimSpace(failedMessage)
-	}
-	if message != "" {
-		errorPayload["message"] = message
-	}
-	if len(errorPayload) == 0 {
-		return payload
-	}
-	body, err := marshalOpenAIUpstreamJSON(gin.H{"error": errorPayload})
-	if err != nil {
-		return payload
-	}
-	return body
+	return payload
 }
 
 // applyOpenAIStreamFailedErrorPassthroughRule 对 response.failed 事件应用错误透传规则：
@@ -1622,6 +1616,15 @@ func applyOpenAIStreamFailedErrorPassthroughRule(
 }
 
 func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool {
+	upstreamError, ok := normalizeOpenAIUpstreamError(payload)
+	if !ok {
+		return false
+	}
+	payload = upstreamError.ErrorBody
+	if upstreamError.Message != "" {
+		message = upstreamError.Message
+	}
+
 	if openAIImageGenerationUserError(payload) != nil {
 		return false
 	}
@@ -1646,20 +1649,17 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	// A response.failed event is transported over HTTP 200. Prefer its semantic
 	// rate-limit status over a generic/invalid_request error type so it can enter
 	// the same 429 retry policy as a regular upstream HTTP response.
-	if semanticStatus == http.StatusTooManyRequests {
+	if semanticStatus == http.StatusUnauthorized || semanticStatus == http.StatusTooManyRequests || semanticStatus == 529 {
 		return true
+	}
+	if semanticStatus == http.StatusBadRequest {
+		return false
 	}
 	if isOpenAITransientProcessingError(http.StatusBadRequest, message, payload) {
 		return true
 	}
-	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
-	if code == "" {
-		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
-	}
-	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String()))
-	if errType == "" {
-		errType = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.type").String()))
-	}
+	code := upstreamError.Code
+	errType := upstreamError.Type
 	combined := strings.ToLower(strings.TrimSpace(message + " " + code + " " + errType))
 	if combined == "" {
 		return true
@@ -1682,6 +1682,15 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 }
 
 func openAIStreamErrorEventShouldFailover(payload []byte, message string) bool {
+	upstreamError, ok := normalizeOpenAIUpstreamError(payload)
+	if !ok {
+		return false
+	}
+	payload = upstreamError.ErrorBody
+	if upstreamError.Message != "" {
+		message = upstreamError.Message
+	}
+
 	if openAIImageGenerationUserError(payload) != nil {
 		return false
 	}
@@ -1698,6 +1707,8 @@ func openAIStreamErrorEventShouldFailover(payload []byte, message string) bool {
 		return true
 	}
 	switch openAIStreamFailedEventSemanticStatus(payload, message) {
+	case http.StatusBadRequest:
+		return false
 	case http.StatusForbidden:
 		return openAIStream403AccountFailure(payload, message)
 	case http.StatusUnauthorized, http.StatusTooManyRequests, 529:
@@ -2227,6 +2238,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
 				upstreamFailureRecorded := false
 				if !outputStarted && !cyberHit && replayGuard.CanReplay(c) {
+					if retryErr := newOpenAIRejectedFieldStreamRetrySignal(c, dataBytes); retryErr != nil {
+						return nil, retryErr
+					}
 					if compactErr := newOpenAICompactFallbackSignal(c, dataBytes, failedMessage); compactErr != nil {
 						return resultWithUsage(), compactErr
 					}
@@ -2277,7 +2291,19 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 							})
 							return resultWithUsage(), fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
 						}
+
 					}
+				}
+				if eventType == "response.failed" && !cyberHit {
+					status := openAIStreamFailureStatus(dataBytes, failedMessage)
+					if !upstreamFailureRecorded {
+						s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "stream_failed", dataBytes, failedMessage)
+					}
+					errType := "upstream_error"
+					if status == http.StatusBadRequest {
+						errType = "invalid_request_error"
+					}
+					MarkOpsStreamFailure(c, errType, openAIStreamFailedEventErrorCode(dataBytes), failedMessage, status)
 				}
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
@@ -2481,6 +2507,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		return s.handlePassthroughSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 	}
 
+	if usage, failure, handled := s.handleOpenAIHTTP200JSONFailure(c, resp, account, body, true, mappedModel); handled {
+		if usage == nil {
+			return nil, failure
+		}
+		return &openaiNonStreamingResultPassthrough{OpenAIUsage: usage, usage: usage, responseID: extractOpenAIResponseIDFromJSONBytes(body)}, failure
+	}
+
 	usage := &OpenAIUsage{}
 	usageParsed := false
 	if len(body) > 0 {
@@ -2542,6 +2575,9 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 			msg = "Upstream compact response failed"
 		}
 		if replayGuard.CanReplay(c) {
+			if retryErr := newOpenAIRejectedFieldStreamRetrySignal(c, terminalPayload); retryErr != nil {
+				return nil, retryErr
+			}
 			if compactErr := newOpenAICompactFallbackSignal(c, terminalPayload, msg); compactErr != nil {
 				return nil, compactErr
 			}
