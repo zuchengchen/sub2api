@@ -73,6 +73,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defaultMappedModel string,
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
+	beginOpenAIResponsesValidation(c, body)
 	cacheDiagnostic := beginUserCacheDiagnostic(c, body)
 	requestedModel := gjson.GetBytes(body, "model").String()
 
@@ -373,6 +374,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 				synthOptions.TurnStartedMs = fpIDs.turnStartedAtUnixMs
 			}
 			result, synthErr := synthesizeCodexOAuthRequest(reqBody, account, upstreamModel, synthOptions)
+			if result.WebSearchInjected {
+				MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchSynthesis)
+			}
 			if synthErr != nil {
 				if errors.Is(synthErr, ErrCodexSynthContextWindowExceeded) {
 					WriteChatCompletionsContextLengthExceeded(c, codexSynthContextLengthMessage)
@@ -394,6 +398,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			OmitPromotedSystemMessagesFromInput: !isResponsesShape && !isJSONObjectFormat,
 			WireProfile:                         wireProfilePtr,
 		})
+		if codexResult.WebSearchHistoryInjected {
+			MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchHistory)
+		}
 		if codexResult.Error != nil {
 			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", codexResult.Error.Error())
 			return nil, codexResult.Error
@@ -501,6 +508,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	var resp *http.Response
 	var cacheDiagnosticAttempt *userCacheDiagnosticAttempt
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, responsesBody)
+	diagnosticUpstreamAttempt := 0
 	for {
 		cancelUpstream()
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
@@ -536,6 +544,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			return nil, bindErr
 		}
 		cacheDiagnosticAttempt = cacheDiagnostic.upstreamRequest(account, upstreamReq)
+		diagnosticUpstreamAttempt++
 		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		cacheDiagnosticAttempt.upstreamResponse(resp, err)
 		if nativeChat.preSendFallback(err) {
@@ -549,6 +558,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 
 		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(resp)
+		appendOpenAIResponsesValidationDiagnostic(c, account, responsesBody, respBody, resp, diagnosticUpstreamAttempt)
 		if nativeChat.rejectedFallback(ctx, c, resp.StatusCode, respBody, completeErrorBody) {
 			_ = resp.Body.Close()
 			continue

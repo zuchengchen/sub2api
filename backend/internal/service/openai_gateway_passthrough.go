@@ -407,6 +407,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			probeBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(probeBody))
+			appendOpenAIResponsesValidationDiagnostic(c, account, body, probeBody, resp, diagnosticUpstreamAttempt)
 			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody); retryErr != nil {
 				return nil, fmt.Errorf("normalize passthrough rejected Responses field retry body: %w", retryErr)
 			} else if changed && ctx.Err() == nil && !openAIStreamClientOutputStarted(c, false) && rejectedFieldRetryState.Allow(retryBody) {
