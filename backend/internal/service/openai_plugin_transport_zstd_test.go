@@ -2,6 +2,8 @@ package service
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/klauspost/compress/zstd"
+	"github.com/stretchr/testify/require"
 )
 
 func zstdTestCodexAccount(t *testing.T) *Account {
@@ -22,7 +25,7 @@ func zstdTestCodexAccount(t *testing.T) *Account {
 }
 
 func TestMaybeCompressCodexUpstreamRequest_CompressesResponses(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: codexExactFidelityTestConfig(t)}
+	svc := &OpenAIGatewayService{cfg: codexCompressionOptInTestConfig(t)}
 	account := zstdTestCodexAccount(t)
 
 	plain := []byte(`{"model":"gpt-5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"stream":true}`)
@@ -31,7 +34,7 @@ func TestMaybeCompressCodexUpstreamRequest_CompressesResponses(t *testing.T) {
 		t.Fatalf("NewRequest: %v", err)
 	}
 
-	svc.maybeCompressCodexUpstreamRequest(req, account)
+	require.NoError(t, svc.maybeCompressCodexUpstreamRequest(req, account))
 
 	if got := req.Header.Get("Content-Encoding"); got != "zstd" {
 		t.Fatalf("Content-Encoding = %q, want zstd", got)
@@ -72,7 +75,7 @@ func TestMaybeCompressCodexUpstreamRequest_CompressesResponses(t *testing.T) {
 }
 
 func TestMaybeCompressCodexUpstreamRequest_SkipsNonResponsesPath(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: codexExactFidelityTestConfig(t)}
+	svc := &OpenAIGatewayService{cfg: codexCompressionOptInTestConfig(t)}
 	account := zstdTestCodexAccount(t)
 
 	for _, path := range []string{
@@ -85,7 +88,7 @@ func TestMaybeCompressCodexUpstreamRequest_SkipsNonResponsesPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewRequest %s: %v", path, err)
 		}
-		svc.maybeCompressCodexUpstreamRequest(req, account)
+		require.NoError(t, svc.maybeCompressCodexUpstreamRequest(req, account))
 		if got := req.Header.Get("Content-Encoding"); got != "" {
 			t.Fatalf("%s: Content-Encoding = %q, want empty", path, got)
 		}
@@ -97,7 +100,7 @@ func TestMaybeCompressCodexUpstreamRequest_SkipsNonResponsesPath(t *testing.T) {
 }
 
 func TestMaybeCompressCodexUpstreamRequest_SkipsNonCodexAndDisabled(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: codexExactFidelityTestConfig(t)}
+	svc := &OpenAIGatewayService{cfg: codexCompressionOptInTestConfig(t)}
 
 	apiKeyAccount := &Account{ID: 1, Type: AccountTypeAPIKey, Platform: PlatformOpenAI}
 	plain := []byte(`{"model":"gpt-5","input":[]}`)
@@ -106,7 +109,7 @@ func TestMaybeCompressCodexUpstreamRequest_SkipsNonCodexAndDisabled(t *testing.T
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	svc.maybeCompressCodexUpstreamRequest(req, apiKeyAccount)
+	require.NoError(t, svc.maybeCompressCodexUpstreamRequest(req, apiKeyAccount))
 	if got := req.Header.Get("Content-Encoding"); got != "" {
 		t.Fatalf("api-key account Content-Encoding = %q", got)
 	}
@@ -118,25 +121,27 @@ func TestMaybeCompressCodexUpstreamRequest_SkipsNonCodexAndDisabled(t *testing.T
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	svc.maybeCompressCodexUpstreamRequest(reqGrok, grokOAuth)
+	require.NoError(t, svc.maybeCompressCodexUpstreamRequest(reqGrok, grokOAuth))
 	if got := reqGrok.Header.Get("Content-Encoding"); got != "" {
 		t.Fatalf("grok oauth account Content-Encoding = %q, want empty", got)
 	}
 
 	// exact fidelity 关闭时，codex 账号也不压缩。
-	svcOff := &OpenAIGatewayService{cfg: codexExactFidelityOffTestConfig(t)}
+	disabledFidelity := codexCompressionOptInTestConfig(t)
+	disabledFidelity.Gateway.OpenAIWS.ExactFidelityEnabled = false
+	svcOff := &OpenAIGatewayService{cfg: disabledFidelity}
 	req2, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", bytes.NewReader(plain))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	svcOff.maybeCompressCodexUpstreamRequest(req2, zstdTestCodexAccount(t))
+	require.NoError(t, svcOff.maybeCompressCodexUpstreamRequest(req2, zstdTestCodexAccount(t)))
 	if got := req2.Header.Get("Content-Encoding"); got != "" {
 		t.Fatalf("disabled config Content-Encoding = %q", got)
 	}
 }
 
 func TestMaybeCompressCodexUpstreamRequest_PreservesExistingEncoding(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: codexExactFidelityTestConfig(t)}
+	svc := &OpenAIGatewayService{cfg: codexCompressionOptInTestConfig(t)}
 	account := zstdTestCodexAccount(t)
 
 	plain := []byte(`{"model":"gpt-5"}`)
@@ -145,7 +150,7 @@ func TestMaybeCompressCodexUpstreamRequest_PreservesExistingEncoding(t *testing.
 		t.Fatalf("NewRequest: %v", err)
 	}
 	req.Header.Set("Content-Encoding", "gzip")
-	svc.maybeCompressCodexUpstreamRequest(req, account)
+	require.NoError(t, svc.maybeCompressCodexUpstreamRequest(req, account))
 	if got := req.Header.Get("Content-Encoding"); got != "gzip" {
 		t.Fatalf("Content-Encoding = %q, want gzip", got)
 	}
@@ -191,7 +196,131 @@ func codexExactFidelityTestConfig(t *testing.T) *config.Config {
 	return cfg
 }
 
-func codexExactFidelityOffTestConfig(t *testing.T) *config.Config {
+func codexCompressionOptInTestConfig(t *testing.T) *config.Config {
 	t.Helper()
-	return &config.Config{}
+	cfg := codexExactFidelityTestConfig(t)
+	cfg.Gateway.OpenAIRequestCompressionEnabled = true
+	return cfg
+}
+
+type codexCompressionObservedBody struct {
+	io.Reader
+	reads  int
+	closed bool
+}
+
+func (b *codexCompressionObservedBody) Read(p []byte) (int, error) {
+	b.reads++
+	return b.Reader.Read(p)
+}
+
+func (b *codexCompressionObservedBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestMaybeCompressCodexUpstreamRequest_DefaultPreservesRawBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{name: "nil config"},
+		{name: "zero config", cfg: &config.Config{}},
+		{name: "exact fidelity remains enabled", cfg: codexExactFidelityTestConfig(t)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Exercise a multi-block body with UTF-8, escaped text and exact whitespace.
+			plain := []byte(`{ "model":"gpt-6-astra", "input":"中文 & <tag> \n` + strings.Repeat("x", 131073) + `", "store":false }`)
+			req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, bytes.NewReader(plain))
+			require.NoError(t, err)
+			observed := &codexCompressionObservedBody{Reader: req.Body}
+			req.Body = observed
+			req.Header.Set("Content-Type", "application/json")
+			svc := &OpenAIGatewayService{cfg: tc.cfg}
+			require.NoError(t, svc.maybeCompressCodexUpstreamRequest(req, zstdTestCodexAccount(t)))
+			require.Same(t, observed, req.Body, "default path must not buffer or replace the body")
+			require.Zero(t, observed.reads)
+			require.False(t, observed.closed)
+			require.Empty(t, req.Header.Get("Content-Encoding"))
+			require.Equal(t, "application/json", req.Header.Get("Content-Type"))
+			require.Equal(t, int64(len(plain)), req.ContentLength)
+			got, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(plain, got), "default body bytes changed")
+			replay, err := req.GetBody()
+			require.NoError(t, err)
+			defer replay.Close()
+			got, err = io.ReadAll(replay)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(plain, got), "raw GetBody replay bytes changed")
+		})
+	}
+}
+
+func TestMaybeCompressCodexUpstreamRequest_DefaultDoesNotReadLargeBody(t *testing.T) {
+	readErr := errors.New("the default compression policy must not read this body")
+	body := &codexCompressionObservedBody{Reader: &codexCompressionReadError{err: readErr}}
+	req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, body)
+	require.NoError(t, err)
+	req.ContentLength = 85327387
+	svc := &OpenAIGatewayService{cfg: codexExactFidelityTestConfig(t)}
+	require.NoError(t, svc.maybeCompressCodexUpstreamRequest(req, zstdTestCodexAccount(t)))
+	require.Same(t, body, req.Body)
+	require.EqualValues(t, 85327387, req.ContentLength)
+	require.Zero(t, body.reads)
+	require.False(t, body.closed)
+	require.Nil(t, req.GetBody, "default policy must preserve a non-rewindable stream")
+}
+
+func TestMaybeCompressCodexUpstreamRequest_OptInBlockBoundaries(t *testing.T) {
+	for _, size := range []int{131071, 131072, 131073, 656595} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			prefix := []byte(`{"model":"gpt-6-astra","input":"`)
+			plain := append(prefix, bytes.Repeat([]byte("x"), size-len(prefix)-2)...)
+			plain = append(plain, '"', '}')
+			require.Len(t, plain, size)
+			req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, bytes.NewReader(plain))
+			require.NoError(t, err)
+			svc := &OpenAIGatewayService{cfg: codexCompressionOptInTestConfig(t)}
+			require.NoError(t, svc.maybeCompressCodexUpstreamRequest(req, zstdTestCodexAccount(t)))
+			require.Equal(t, "zstd", req.Header.Get("Content-Encoding"))
+			wire, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			require.Equal(t, int64(len(wire)), req.ContentLength)
+			decoder, err := zstd.NewReader(nil)
+			require.NoError(t, err)
+			defer decoder.Close()
+			decoded, err := decoder.DecodeAll(wire, nil)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(plain, decoded), "opt-in compression changed JSON bytes")
+			replay, err := req.GetBody()
+			require.NoError(t, err)
+			defer replay.Close()
+			replayed, err := io.ReadAll(replay)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(wire, replayed), "compressed replay differs from first send")
+		})
+	}
+}
+
+type codexCompressionReadError struct{ err error }
+
+func (r *codexCompressionReadError) Read(p []byte) (int, error) {
+	return copy(p, `{"partial":`), r.err
+}
+
+func TestOpenAIUpstream_CompressionReadErrorNeverSends(t *testing.T) {
+	sourceErr := errors.New("synthetic body read failure")
+	body := &codexCompressionObservedBody{Reader: &codexCompressionReadError{err: sourceErr}}
+	req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, body)
+	require.NoError(t, err)
+	req.ContentLength = 100
+	// A nil upstream intentionally panics if preparation wrongly reaches transport.
+	svc := &OpenAIGatewayService{cfg: codexCompressionOptInTestConfig(t)}
+	resp, err := svc.doOpenAIUpstream(req, "", zstdTestCodexAccount(t))
+	require.Nil(t, resp)
+	require.ErrorIs(t, err, sourceErr)
+	require.True(t, body.closed)
+	require.Empty(t, req.Header.Get("Content-Encoding"))
+	require.EqualValues(t, 100, req.ContentLength, "a read failure must not become an empty POST")
 }

@@ -119,6 +119,8 @@ func TestCodexOfficial164HTTPReplayThroughGateway(t *testing.T) {
 					}
 					upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: [DONE]\n\n"))}}
 					cfg := codexProbeConfig(nil)
+					// This golden explicitly verifies the official compressed wire form.
+					cfg.Gateway.OpenAIRequestCompressionEnabled = true
 					cfg.Gateway.OpenAIWS.ForceHTTP = true
 					cfg.Gateway.CodexFullSynthesis = boolPtr(true)
 					account := &Account{ID: 90164, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,

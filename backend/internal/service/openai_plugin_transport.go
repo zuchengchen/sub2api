@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -18,7 +19,9 @@ func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
 // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
 func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
-	s.maybeCompressCodexUpstreamRequest(request, account)
+	if err := s.maybeCompressCodexUpstreamRequest(request, account); err != nil {
+		return nil, err
+	}
 	rejectedToken := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 	response, err := s.doOpenAIUpstreamOnce(request, proxyURL, account)
 	if err != nil || response == nil || response.StatusCode != http.StatusUnauthorized || s.openAITokenProvider == nil || request.Context().Err() != nil {
@@ -90,14 +93,14 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	return response, err
 }
 
-// maybeCompressCodexUpstreamRequest 复刻官方 Codex CLI 的 HTTP 请求压缩：
-// enable_request_compression 默认开启（codex-rs features/lib.rs:1449），
-// ChatGPT OAuth + OpenAI provider 的 Responses 请求体用 zstd level 3 压缩并
-// 设置 content-encoding: zstd（http-client/request.rs:209）。
-// 压缩后重写 Body/GetBody，401 重试克隆请求可复放同样的压缩字节。
-func (s *OpenAIGatewayService) maybeCompressCodexUpstreamRequest(request *http.Request, account *Account) {
+// maybeCompressCodexUpstreamRequest keeps plain JSON by default. Some valid
+// zstd frames receive a bare 400 from the Codex upstream while identical plain
+// JSON succeeds. An explicit opt-in retains the previous level-3 encoding and
+// Body/GetBody replay contract, independently of the TLS and WS settings.
+func (s *OpenAIGatewayService) maybeCompressCodexUpstreamRequest(request *http.Request, account *Account) error {
+	setOpenAIRequestCompressionPolicy(request, "ineligible")
 	if s == nil || request == nil || account == nil {
-		return
+		return nil
 	}
 	// zstd 压缩只面向真正的 OpenAI Codex(ChatGPT OAuth/SetupToken)账号。
 	// UsesOpenAICodexProtocol 只看 account.Type==OAuth,会把 grok/gemini/anthropic
@@ -105,46 +108,51 @@ func (s *OpenAIGatewayService) maybeCompressCodexUpstreamRequest(request *http.R
 	// 额外的 x-grok-model-override 头,缺头会以 400 拒绝。这里显式限定 openai 平台,
 	// 避免把 Codex 专有压缩错误套到非 openai 的 OAuth 上游。
 	if account.Platform != PlatformOpenAI {
-		return
+		return nil
 	}
-	if !account.UsesOpenAICodexProtocol() || !s.isOpenAIWSExactFidelityEnabled() {
-		return
+	if !account.UsesOpenAICodexProtocol() {
+		return nil
 	}
 	// 官方只在 Responses HTTP executor 压缩请求体（responses_request_compression）。
 	if request.URL == nil || !strings.HasSuffix(strings.TrimRight(request.URL.Path, "/"), "/responses") {
-		return
+		return nil
 	}
 	if request.Body == nil || request.Body == http.NoBody {
-		return
+		return nil
 	}
 	if strings.TrimSpace(request.Header.Get("Content-Encoding")) != "" {
-		return
+		setOpenAIRequestCompressionPolicy(request, "existing_encoding")
+		return nil
+	}
+	if s.cfg == nil || !s.cfg.Gateway.OpenAIRequestCompressionEnabled {
+		setOpenAIRequestCompressionPolicy(request, "disabled")
+		return nil
+	}
+	if !s.isOpenAIWSExactFidelityEnabled() {
+		return nil
 	}
 	raw, err := io.ReadAll(request.Body)
 	_ = request.Body.Close()
-	if err != nil || len(raw) == 0 {
+	if err != nil {
+		return fmt.Errorf("read Codex request body for compression: %w", err)
+	}
+	if len(raw) == 0 {
 		request.Body = http.NoBody
 		request.GetBody = func() (io.ReadCloser, error) { return http.NoBody, nil }
 		request.ContentLength = 0
-		return
+		return nil
 	}
 	var buf bytes.Buffer
 	zw, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedDefault))
 	if err != nil {
-		request.Body = io.NopCloser(bytes.NewReader(raw))
-		request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
-		return
+		return fmt.Errorf("prepare Codex request compression: %w", err)
 	}
 	if _, err := zw.Write(raw); err != nil {
 		_ = zw.Close()
-		request.Body = io.NopCloser(bytes.NewReader(raw))
-		request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
-		return
+		return fmt.Errorf("compress Codex request body: %w", err)
 	}
 	if err := zw.Close(); err != nil {
-		request.Body = io.NopCloser(bytes.NewReader(raw))
-		request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
-		return
+		return fmt.Errorf("finish Codex request compression: %w", err)
 	}
 	compressed := buf.Bytes()
 	request.Body = io.NopCloser(bytes.NewReader(compressed))
@@ -152,7 +160,12 @@ func (s *OpenAIGatewayService) maybeCompressCodexUpstreamRequest(request *http.R
 		return io.NopCloser(bytes.NewReader(compressed)), nil
 	}
 	request.ContentLength = int64(len(compressed))
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
 	request.Header.Set("Content-Encoding", "zstd")
+	setOpenAIRequestCompressionPolicy(request, "zstd")
+	return nil
 }
 
 func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {

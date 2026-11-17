@@ -1901,6 +1901,11 @@ func explicitRequestedReasoningEffortFromBody(body []byte) string {
 	if raw == "" {
 		raw = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
 	}
+	// Match the Messages converter: an explicit disable takes precedence over
+	// output_config.effort, and must remain visible before group-policy mapping.
+	if raw == "" && gjson.GetBytes(body, "thinking.type").String() == "disabled" {
+		return "none"
+	}
 	if raw == "" {
 		raw = strings.TrimSpace(gjson.GetBytes(body, "output_config.effort").String())
 	}
@@ -1909,11 +1914,11 @@ func explicitRequestedReasoningEffortFromBody(body []byte) string {
 
 // CanonicalRequestedReasoningEffort extracts the client-requested effort before
 // group policy rewriting and before model-family remapping (max -> xhigh).
-// Empty or unknown values return nil. "max" is preserved even for models that
-// later persist "xhigh".
+// Empty or unknown values return nil. "none" preserves an explicit disable;
+// "max" is preserved even for models that later persist "xhigh".
 func CanonicalRequestedReasoningEffort(body []byte, modelCandidates ...string) *string {
 	if raw := explicitRequestedReasoningEffortFromBody(body); raw != "" {
-		canonical := NormalizeMaxReasoningEffort(raw)
+		canonical := normalizeReasoningEffortMappingSource(raw)
 		if canonical == "" {
 			return nil
 		}
@@ -1952,7 +1957,7 @@ func canonicalReasoningEffortFromModelSuffix(model string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return NormalizeMaxReasoningEffort(parts[len(parts)-1])
+	return normalizeReasoningEffortMappingSource(parts[len(parts)-1])
 }
 
 func extractOpenAIServiceTier(reqBody map[string]any) *string {
@@ -2697,7 +2702,7 @@ func CanonicalRequestedReasoningEffortFromReqBody(reqBody map[string]any, modelC
 		}
 	}
 	if raw != "" {
-		canonical := NormalizeMaxReasoningEffort(raw)
+		canonical := normalizeReasoningEffortMappingSource(raw)
 		if canonical == "" {
 			return nil
 		}
