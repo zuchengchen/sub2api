@@ -523,6 +523,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if writeClientMessage == nil {
 		return nil, errors.New("client websocket writer is nil")
 	}
+	// Bridge payloads may already include compatibility rewrites. Clear a
+	// previous turn's provenance without guessing that final tools were
+	// declared by this client; untracked search is diagnosed as unknown.
+	ResetOpenAIResponsesValidationSearchSources(c)
 	setOpenAIImageOutputRequest(c, payload)
 	responseModelObserver := &upstreamResponseModelObserver{}
 
