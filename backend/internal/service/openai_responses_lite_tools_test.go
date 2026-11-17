@@ -435,7 +435,7 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 				"tools":[
 					{"type":"function","name":"shell","parameters":{"type":"object"}},
 					{"type":"custom","name":"exec"},
-					{"type":"tool_search"},
+					{"type":"tool_search","execution":"client"},
 					{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}
 				],
 				"input":[{"type":"message","role":"user","content":"hello"}],

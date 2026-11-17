@@ -18,7 +18,7 @@ import (
 // TestForward_OAuthWebSearchHistoryDeclaresTool drives the Codex compaction
 // shape (web_search_call history, tools:[]) through Forward and asserts the
 // body reaching chatgpt.com declares web_search (#7927): top-level for the
-// standard wire, input additional_tools for Responses Lite.
+// standard wire, including an ingress Lite header mapped to non-Lite GPT-5.5.
 func TestForward_OAuthWebSearchHistoryDeclaresTool(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -56,16 +56,10 @@ func TestForward_OAuthWebSearchHistoryDeclaresTool(t *testing.T) {
 			require.Equal(t, "none", gjson.GetBytes(forwarded, "tool_choice").String())
 			items := gjson.GetBytes(forwarded, "input").Array()
 			require.Equal(t, "compaction_trigger", items[len(items)-1].Get("type").String())
-			if !tc.lite {
-				tools := gjson.GetBytes(forwarded, "tools").Array()
-				require.Len(t, tools, 1)
-				require.Equal(t, "web_search", tools[0].Get("type").String())
-				return
-			}
-			require.False(t, gjsonToolsContainWebSearch(gjson.GetBytes(forwarded, "tools")))
-			additional := items[len(items)-2]
-			require.Equal(t, "additional_tools", additional.Get("type").String())
-			require.Equal(t, "web_search", additional.Get("tools.0.type").String())
+			require.Empty(t, s.upstream.lastReq.Header.Get(responsesLiteHeader), "final GPT-5.5 is non-Lite")
+			tools := gjson.GetBytes(forwarded, "tools").Array()
+			require.Len(t, tools, 1)
+			require.Equal(t, "web_search", tools[0].Get("type").String())
 		})
 	}
 }

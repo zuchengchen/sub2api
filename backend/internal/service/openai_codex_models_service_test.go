@@ -3203,12 +3203,11 @@ func TestFetchCodexModelsManifestAPIKeyDoesNotCacheUnexpectedColdNotModified(t *
 	account := newCodexModelsAPIKeyTestAccount("https://upstream.example")
 	for i := 0; i < 2; i++ {
 		manifest, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", "")
-		if err != nil {
-			t.Fatalf("fetch %d returned error: %v", i, err)
-		}
-		if !manifest.NotModified {
-			t.Fatalf("fetch %d: expected upstream NotModified response", i)
-		}
+		require.Error(t, err, "fetch %d must reject a cold 304", i)
+		require.Nil(t, manifest)
+		require.Equal(t, http.StatusBadGateway, infraerrors.Code(err))
+		require.Equal(t, "OPENAI_MODELS_UNEXPECTED_NOT_MODIFIED", infraerrors.Reason(err))
+		require.True(t, IsRetryableCodexModelsManifestError(err))
 	}
 	if got := calls.Load(); got != 2 {
 		t.Errorf("unexpected cold 304 was cached: upstream calls=%d, want 2", got)

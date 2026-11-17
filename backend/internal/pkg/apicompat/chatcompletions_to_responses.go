@@ -24,6 +24,17 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 // ChatCompletionsToResponsesWithMinOutputTokens converts a Chat Completions
 // request using the supplied max_output_tokens floor.
 func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, minOutputTokens int) (*ResponsesRequest, error) {
+	return chatCompletionsToResponses(req, minOutputTokens, false)
+}
+
+// ChatCompletionsToResponsesWithToolContract is the explicit strict bridge for
+// callers that must reject unsupported tool declarations instead of losing
+// them. The generic converter retains its established cross-provider policy.
+func ChatCompletionsToResponsesWithToolContract(req *ChatCompletionsRequest, minOutputTokens int) (*ResponsesRequest, error) {
+	return chatCompletionsToResponses(req, minOutputTokens, true)
+}
+
+func chatCompletionsToResponses(req *ChatCompletionsRequest, minOutputTokens int, rejectUnsupportedTools bool) (*ResponsesRequest, error) {
 	if err := openai.ValidateGPT61SolReasoningEffort(req.Model, req.ReasoningEffort); err != nil {
 		return nil, err
 	}
@@ -82,7 +93,11 @@ func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, 
 		}
 	}
 
-	if format := chatResponseFormatToResponsesTextFormat(req.ResponseFormat); len(format) > 0 {
+	format, err := chatResponseFormatToResponsesTextFormat(req.ResponseFormat)
+	if err != nil {
+		return nil, err
+	}
+	if len(format) > 0 {
 		if out.Text == nil {
 			out.Text = &ResponsesText{}
 		}
@@ -91,14 +106,20 @@ func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, 
 
 	// tools[] and legacy functions[] → ResponsesTool[]
 	if len(req.Tools) > 0 || len(req.Functions) > 0 {
-		out.Tools = convertChatToolsToResponses(req.Tools, req.Functions)
+		out.Tools, err = convertChatToolsToResponses(req.Tools, req.Functions, rejectUnsupportedTools)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// tool_choice: strings and Responses-shaped objects pass through; a named
 	// Chat choice nests the name under "function" and must be flattened.
 	// Legacy function_call needs mapping.
 	if len(req.ToolChoice) > 0 {
-		out.ToolChoice = convertChatToolChoiceToResponses(req.ToolChoice)
+		out.ToolChoice, err = convertChatToolChoiceToResponses(req.ToolChoice)
+		if err != nil {
+			return nil, err
+		}
 	} else if len(req.FunctionCall) > 0 {
 		tc, err := convertChatFunctionCallToToolChoice(req.FunctionCall)
 		if err != nil {
@@ -115,6 +136,7 @@ func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, 
 func convertChatMessagesToResponsesInput(msgs []ChatMessage) ([]ResponsesInputItem, error) {
 	var out []ResponsesInputItem
 	legacyIDs := legacyFunctionCallIDs{msgs: msgs}
+	customCalls := make(map[string]bool)
 	for _, m := range msgs {
 		switch {
 		case m.Role == "assistant" && m.FunctionCall != nil && len(m.ToolCalls) == 0:
@@ -126,9 +148,22 @@ func convertChatMessagesToResponsesInput(msgs []ChatMessage) ([]ResponsesInputIt
 		case m.Role == "function" && m.ToolCallID == "":
 			m.ToolCallID = legacyIDs.claim(m.Name)
 		}
+		if m.Role == "tool" && customCalls[m.ToolCallID] {
+			output, err := parseChatContent(m.Content)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ResponsesInputItem{Type: "custom_tool_call_output", CallID: m.ToolCallID, Output: output})
+			continue
+		}
 		items, err := chatMessageToResponsesItems(m)
 		if err != nil {
 			return nil, err
+		}
+		if m.Role == "assistant" {
+			for _, call := range m.ToolCalls {
+				customCalls[call.ID] = call.Type == "custom"
+			}
 		}
 		out = append(out, items...)
 	}
@@ -276,6 +311,14 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 
 	// Emit one function_call item per tool_call.
 	for _, tc := range m.ToolCalls {
+		if tc.Type == "custom" {
+			if tc.Custom == nil || tc.Custom.Name == "" {
+				return nil, &RequestContractError{Param: "messages", Message: "Custom tool calls require their original custom name and input"}
+			}
+			input := tc.Custom.Input
+			items = append(items, ResponsesInputItem{Type: "custom_tool_call", CallID: tc.ID, Name: tc.Custom.Name, Input: &input})
+			continue
+		}
 		args := tc.Function.Arguments
 		if args == "" {
 			args = "{}"
@@ -526,11 +569,19 @@ func stringPtr(s string) *string {
 
 // convertChatToolsToResponses maps Chat Completions tool definitions and legacy
 // function definitions to Responses API tool definitions.
-func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []ResponsesTool {
+func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction, rejectUnsupported bool) ([]ResponsesTool, error) {
 	var out []ResponsesTool
 
-	for _, t := range tools {
+	for index, t := range tools {
 		toolType := strings.ToLower(strings.TrimSpace(t.Type))
+		if toolType == "custom" {
+			custom, err := chatCustomToolToResponses(t, index)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, custom)
+			continue
+		}
 		if toolType == "x_search" {
 			out = append(out, ResponsesTool{
 				Type:                     "x_search",
@@ -544,11 +595,14 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 			continue
 		}
 		if toolType == "web_search" || toolType == "code_execution" {
-			out = append(out, ResponsesTool{Type: toolType})
+			out = append(out, ResponsesTool{Type: toolType, rawDeclaration: t.rawDeclaration})
 			continue
 		}
 		if t.Type != "function" || t.Function == nil {
-			continue
+			if !rejectUnsupported {
+				continue
+			}
+			return nil, &RequestContractError{Param: fmt.Sprintf("tools[%d].type", index), Message: "This tool cannot be represented by the Chat Completions bridge; use the Responses endpoint to preserve its execution contract"}
 		}
 		rt := ResponsesTool{
 			Type:        "function",
@@ -572,7 +626,7 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 		out = append(out, rt)
 	}
 
-	return out
+	return out, nil
 }
 
 func defaultStrictFalse(src *bool) *bool {
@@ -590,7 +644,20 @@ func defaultStrictFalse(src *bool) *bool {
 //
 // Strings ("auto", "none", "required") and objects that already use the
 // Responses shape are returned unchanged.
-func convertChatToolChoiceToResponses(raw json.RawMessage) json.RawMessage {
+func convertChatToolChoiceToResponses(raw json.RawMessage) (json.RawMessage, error) {
+	if choice, ok := uniqueRawObject(raw); ok && rawString(choice["type"]) == "custom" {
+		if nested, present := choice["custom"]; present {
+			custom, valid := uniqueRawObject(nested)
+			_, ambiguous := choice["name"]
+			if !valid || len(custom) != 1 || rawString(custom["name"]) == "" || ambiguous {
+				return nil, &RequestContractError{Param: "tool_choice", Message: "A named custom tool choice must identify one unambiguous custom name"}
+			}
+			delete(choice, "custom")
+			choice["name"] = custom["name"]
+			return json.Marshal(choice)
+		}
+		return raw, nil
+	}
 	var choice struct {
 		Type     string `json:"type"`
 		Function *struct {
@@ -598,17 +665,17 @@ func convertChatToolChoiceToResponses(raw json.RawMessage) json.RawMessage {
 		} `json:"function"`
 	}
 	if err := json.Unmarshal(raw, &choice); err != nil || choice.Type != "function" || choice.Function == nil {
-		return raw
+		return raw, nil
 	}
 	name := strings.TrimSpace(choice.Function.Name)
 	if name == "" {
-		return raw
+		return raw, nil
 	}
 	flat, err := json.Marshal(map[string]string{"type": "function", "name": name})
 	if err != nil {
-		return raw
+		return raw, err
 	}
-	return flat
+	return flat, nil
 }
 
 // convertChatFunctionCallToToolChoice maps the legacy function_call field to a

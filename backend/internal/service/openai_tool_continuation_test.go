@@ -217,8 +217,8 @@ func TestAnalyzeToolCallOutputContextCoverageBytes(t *testing.T) {
 		{
 			name: "all_outputs_covered_by_context",
 			body: map[string]any{"input": []any{
-				map[string]any{"type": "function_call", "call_id": "call_a"},
-				map[string]any{"type": "function_call_output", "call_id": "call_a"},
+				map[string]any{"type": "function_call", "call_id": "call_a", "name": "lookup", "arguments": "{}"},
+				map[string]any{"type": "function_call_output", "call_id": "call_a", "output": "synthetic result"},
 			}},
 			hasOutput:    true,
 			coversAllIDs: true,
@@ -230,7 +230,7 @@ func TestAnalyzeToolCallOutputContextCoverageBytes(t *testing.T) {
 				map[string]any{"type": "item_reference", "id": "call_a"},
 			}},
 			hasOutput:    true,
-			coversAllIDs: true,
+			coversAllIDs: false,
 		},
 		{
 			// 关键回归用例：input 内存在某一个上下文项，但另一个输出的 call_id
@@ -272,7 +272,7 @@ func TestAnalyzeToolCallOutputContextCoverageBytes(t *testing.T) {
 				map[string]any{"type": "item_reference", "id": "call_b"},
 			}},
 			hasOutput:    true,
-			coversAllIDs: true,
+			coversAllIDs: false,
 		},
 		{
 			name: "all_codex_output_types_covered",
@@ -283,7 +283,7 @@ func TestAnalyzeToolCallOutputContextCoverageBytes(t *testing.T) {
 				map[string]any{"type": "mcp_tool_call", "call_id": "call_m"},
 			}},
 			hasOutput:    true,
-			coversAllIDs: true,
+			coversAllIDs: false,
 		},
 	}
 

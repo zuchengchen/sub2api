@@ -177,7 +177,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			body = nextBody
 		}
 
-		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBodyWithMetadata(body, isOpenAIResponsesCompactPath(c), isCodexOAuthAccount(account), isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)))
+		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBodyWithMetadata(body, isOpenAIResponsesCompactPath(c), isCodexOAuthAccount(account), openAIResponsesLiteForNormalization(account, gjson.GetBytes(body, "model").String(), c.GetHeader(responsesLiteHeader), body))
 		if err != nil {
 			return nil, err
 		}
@@ -223,7 +223,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 	}
 	if account != nil && account.IsOpenAI() {
-		responsesLite := isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) || isOpenAIResponsesLiteWebSocketPayload(body)
+		responsesLite := openAIResponsesLiteForNormalization(account, gjson.GetBytes(body, "model").String(), c.GetHeader(responsesLiteHeader), body)
 		normalizedBody, normalized, normalizeErr := normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{
 			Config:        s.cfg,
 			ResponsesLite: responsesLite,
@@ -284,6 +284,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		return nil, policyErr
 	}
 	body = updatedBody
+	if validationErr := validateOpenAIOAuthFinalRequest(c, account, policyModel, c.GetHeader(responsesLiteHeader), body); validationErr != nil {
+		writeOpenAIProtocolValidationError(c, validationErr, false)
+		return nil, validationErr
+	}
 
 	apiKey := getAPIKeyFromContext(c)
 	// 同一 attempt 的最终 model/body 只判定一次，权限检查与后续图片状态设置共用该结果。
@@ -382,6 +386,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if actualModel == "" {
 			actualModel = reqModel
 		}
+		if validationErr := validateOpenAIOAuthFinalRequest(c, account, actualModel, c.GetHeader(responsesLiteHeader), body); validationErr != nil {
+			writeOpenAIProtocolValidationError(c, validationErr, false)
+			return nil, validationErr
+		}
 		SetOpsUpstreamModel(c, actualModel)
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token)
@@ -444,10 +452,18 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			// 透传模式默认保持原样代理；容量错误以及 API-key 上游的瞬时
 			// 5xx 应先触发多账号 failover，且此时尚未写入下游响应。
 			// probeBody 已在上方任务探测时读取过一次，直接复用避免重复读取。
-			if shouldFailoverOpenAIPassthroughResponse(account, resp.StatusCode, probeBody) {
+			if s.shouldFailoverOpenAIPassthroughResponse(c, account, resp.StatusCode, probeBody) {
 				return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
 			}
-			return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
+			handleErr := s.handleErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
+			if actualUsage := openAIModelUnavailableUsage(resp.StatusCode, probeBody); actualUsage != nil {
+				// A failed request can still carry provider-metered usage. Reuse
+				// the ordinary result/settlement path without authorizing replay.
+				usage = actualUsage
+				responseErr = handleErr
+				break
+			}
+			return nil, handleErr
 		}
 
 		if mapping, ok := openAIResponsesClientToolMapping(c); ok && isEventStreamResponse(resp.Header) {
@@ -482,10 +498,17 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				if signal, ok := asOpenAICompactFallbackSignal(handleErr); ok {
 					_ = resp.Body.Close()
 					compactResp, compactBody := openAICompactFallbackErrorResponse(resp, signal)
-					if shouldFailoverOpenAIPassthroughResponse(account, compactResp.StatusCode, compactBody) {
+					if s.shouldFailoverOpenAIPassthroughResponse(c, account, compactResp.StatusCode, compactBody) {
 						return nil, s.handleFailoverErrorResponsePassthrough(ctx, compactResp, c, account, body, compactBody)
 					}
-					return nil, s.handleErrorResponsePassthrough(ctx, compactResp, c, account, body, compactBody)
+					handleErr := s.handleErrorResponsePassthrough(ctx, compactResp, c, account, body, compactBody)
+					if actualUsage := openAIModelUnavailableUsage(compactResp.StatusCode, compactBody); actualUsage != nil {
+						resp = compactResp
+						usage = actualUsage
+						responseErr = handleErr
+						break
+					}
+					return nil, handleErr
 				}
 				_ = resp.Body.Close()
 				var failoverErr *UpstreamFailoverError
@@ -524,10 +547,17 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				if signal, ok := asOpenAICompactFallbackSignal(handleErr); ok {
 					_ = resp.Body.Close()
 					compactResp, compactBody := openAICompactFallbackErrorResponse(resp, signal)
-					if shouldFailoverOpenAIPassthroughResponse(account, compactResp.StatusCode, compactBody) {
+					if s.shouldFailoverOpenAIPassthroughResponse(c, account, compactResp.StatusCode, compactBody) {
 						return nil, s.handleFailoverErrorResponsePassthrough(ctx, compactResp, c, account, body, compactBody)
 					}
-					return nil, s.handleErrorResponsePassthrough(ctx, compactResp, c, account, body, compactBody)
+					handleErr := s.handleErrorResponsePassthrough(ctx, compactResp, c, account, body, compactBody)
+					if actualUsage := openAIModelUnavailableUsage(compactResp.StatusCode, compactBody); actualUsage != nil {
+						resp = compactResp
+						usage = actualUsage
+						responseErr = handleErr
+						break
+					}
+					return nil, handleErr
 				}
 				_ = resp.Body.Close()
 				var failoverErr *UpstreamFailoverError
@@ -837,12 +867,41 @@ func stripOpenAILegacyResponsesBeta(headers http.Header) {
 	}
 }
 
+// Managed passthrough has the same bounded next-account selection owner as
+// native Responses. A precise model rejection can select another account even
+// for OAuth (which cannot enable API-key pool mode). Do not create a new retry
+// signal for standalone callers or after cancellation/downstream commitment.
+func (s *OpenAIGatewayService) shouldFailoverOpenAIPassthroughResponse(c *gin.Context, account *Account, statusCode int, responseBody []byte) bool {
+	if hit, _, _ := detectOpenAICyberPolicy(responseBody); hit {
+		return false
+	}
+	if isOpenAIContextWindowError("", responseBody) {
+		return false
+	}
+	if s != nil && s.accountRepo != nil && account != nil && account.IsOpenAICompatible() &&
+		isOpenAIModelUnavailableError(statusCode, responseBody) {
+		var guard openAIResponseReplayGuard
+		guard.Observe(responseBody, "response.failed")
+		return guard.CanReplay(c) && !openAIStreamClientOutputStarted(c, false)
+	}
+	return shouldFailoverOpenAIPassthroughResponse(account, statusCode, responseBody)
+}
+
 func shouldFailoverOpenAIPassthroughResponse(account *Account, statusCode int, responseBody []byte) bool {
 	if hit, _, _ := detectOpenAICyberPolicy(responseBody); hit {
 		return false
 	}
 	if isOpenAIContextWindowError("", responseBody) {
 		return false
+	}
+	if isOpenAIModelUnavailableError(statusCode, responseBody) {
+		// A pool status override cannot replay work already represented in
+		// the rejection envelope. Observe only upstream output/actual usage.
+		var guard openAIResponseReplayGuard
+		guard.Observe(responseBody, "response.failed")
+		if !guard.CanReplay(nil) {
+			return false
+		}
 	}
 	if isOpenAIHTTPUpstreamAccessStateError(statusCode, "", responseBody) {
 		return true
@@ -1055,7 +1114,18 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	// context-window 超限是确定性请求失败（shouldFailoverOpenAIPassthroughResponse
 	// 已保证不切号），其文案对客户端可操作（如触发自动压缩）；在净化信封内保留
 	// 脱敏后的上游消息，而不是抹成通用文案。
-	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
+	if isOpenAIModelUnavailableError(resp.StatusCode, body) {
+		keepaliveCommitted := StopOpenAICompactSSEKeepaliveCommitted(c)
+		if keepaliveCommitted || c.Writer.Written() {
+			var envelope map[string]gin.H
+			_ = json.Unmarshal(OpenAIModelUnavailableClientErrorBody(), &envelope)
+			MarkOpsStreamFailure(c, "invalid_request_error", "model_not_found", OpenAIModelUnavailableClientMessage, http.StatusBadRequest)
+			writeOpenAIResponsesSSEFailure(c, http.StatusBadRequest, envelope["error"])
+		} else {
+			writeOpenAIPassthroughErrorHeaders(c.Writer.Header(), resp.Header)
+			writeOpenAIUpstreamClientError(c, http.StatusBadRequest, OpenAIModelUnavailableClientErrorBody(), OpenAIModelUnavailableClientMessage)
+		}
+	} else if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
 		writeOpenAIPassthroughErrorEnvelope(c, resp.StatusCode, resp.Header, upstreamMsg)
 	} else {
 		writeSanitizedOpenAIPassthroughError(c, resp.StatusCode, resp.Header)

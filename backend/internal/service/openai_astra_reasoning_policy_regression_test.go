@@ -77,6 +77,15 @@ func TestMessagesAstraReasoningPolicyForward(t *testing.T) {
 				upstream := &httpUpstreamRecorder{resp: openAICompatSSECompletedResponse("resp_astra_policy_fixture", tc.model)}
 				svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream, tiboRouteDisabled: true}
 				result, err := svc.ForwardAsAnthropic(ctx, c, newOpenAIOAuthNamespaceTestAccount(), body, "", "")
+				if !tc.configured {
+					require.Error(t, err)
+					require.Nil(t, result)
+					require.Equal(t, http.StatusBadRequest, recorder.Code)
+					require.Equal(t, "reasoning.effort", gjson.Get(recorder.Body.String(), "error.param").String())
+					require.Empty(t, upstream.bodies)
+					require.Equal(t, original, body)
+					return
+				}
 				require.NoError(t, err)
 				require.NotNil(t, result)
 				require.Len(t, upstream.bodies, 1, "mapping happens before sending and must not add a retry")

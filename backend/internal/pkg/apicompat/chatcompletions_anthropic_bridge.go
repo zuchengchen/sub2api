@@ -60,6 +60,13 @@ func AnthropicToChatCompletionsRequestWithMinOutputTokens(req *AnthropicRequest,
 		Messages: messages,
 		Stream:   req.Stream,
 	}
+	if req.OutputConfig != nil {
+		format, err := anthropicOutputFormatToResponsesTextFormat(req.OutputConfig.Format)
+		if err != nil {
+			return nil, err
+		}
+		out.ResponseFormat = responsesTextFormatToChatResponseFormat(format)
+	}
 
 	// Sampling params: reasoning models (gpt-5.x) reject temperature/top_p.
 	if !isReasoningModel(req.Model) {

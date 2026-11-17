@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 type openAIResponsesLiteValidationError struct {
@@ -15,6 +17,107 @@ func (e *openAIResponsesLiteValidationError) Error() string { return e.message }
 
 func newOpenAIResponsesLiteValidationError(param, format string, args ...any) error {
 	return &openAIResponsesLiteValidationError{param: param, message: fmt.Sprintf(format, args...)}
+}
+
+// validateOpenAIResponsesLiteFinalRequest checks the actual attempt after model
+// mapping, synthesis, history completion and header/metadata compatibility. It
+// is intentionally separate from the earlier namespace normalization: ingress
+// can request Lite while the mapped GPT-5.5 attempt is non-Lite. Callers render
+// this typed error as an invalid_request_error/400 before any upstream send.
+// It never deletes declarations, changes tool execution, or rewrites history.
+func validateOpenAIResponsesLiteFinalRequest(account *Account, finalModel, liteHeader string, body []byte) error {
+	if !isOpenAIResponsesLiteFinalRequest(account, finalModel, liteHeader, body) {
+		return nil
+	}
+	if !gjson.ValidBytes(body) {
+		return newOpenAIResponsesLiteValidationError("body", "responses Lite requires a valid JSON request")
+	}
+	root := gjson.ParseBytes(body)
+	if err := validateOpenAIResponsesLiteToolList(root.Get("tools"), "tools"); err != nil {
+		return err
+	}
+	var validationErr error
+	index := 0
+	input := root.Get("input")
+	if !input.IsArray() {
+		return nil
+	}
+	input.ForEach(func(_, item gjson.Result) bool {
+		param := fmt.Sprintf("input[%d]", index)
+		index++
+		switch item.Get("type").String() {
+		case openAIAdditionalToolsItemType, "tool_search_output":
+			// Both carriers declare callable tools for later turns. The
+			// contents of ordinary function/custom outputs remain opaque.
+			validationErr = validateOpenAIResponsesLiteToolList(item.Get("tools"), param+".tools")
+		case openAIWebSearchCallItemType:
+			// This history requires a hosted search declaration. Neither
+			// removing the history nor adding an unsupported Lite declaration
+			// preserves the client's request.
+			validationErr = newOpenAIResponsesLiteValidationError(param+".type", "responses Lite cannot replay hosted web_search_call history; use a compatible non-Lite request without deleting its history")
+		}
+		return validationErr == nil
+	})
+	return validationErr
+}
+
+// The traversal is limited to declaration carriers and namespace children. A
+// function schema, tool argument or result may legitimately contain any of the
+// same field names and is never inspected as a declaration. Use an explicit
+// stack so nested namespaces cannot exhaust the Go call stack; diagnostic
+// paths are bounded independently from the accepted request size.
+func validateOpenAIResponsesLiteToolList(tools gjson.Result, param string) error {
+	type declarationList struct {
+		tools gjson.Result
+		param string
+	}
+	pending := []declarationList{{tools: tools, param: param}}
+	for len(pending) > 0 {
+		list := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if !list.tools.Exists() || list.tools.Type == gjson.Null {
+			continue
+		}
+		if !list.tools.IsArray() {
+			return newOpenAIResponsesLiteValidationError(list.param, "responses Lite tool declarations must be an array")
+		}
+		var validationErr error
+		index := 0
+		list.tools.ForEach(func(_, tool gjson.Result) bool {
+			toolParam := fmt.Sprintf("%s[%d]", list.param, index)
+			index++
+			if len(toolParam) > 240 {
+				toolParam = param // retain the original carrier, never user names
+			}
+			switch tool.Get("type").String() {
+			case "namespace":
+				if len(tool.Get("tools").Array()) > 0 && len(tool.Get("children").Array()) > 0 {
+					validationErr = newOpenAIResponsesLiteValidationError(toolParam, "A namespace must not supply both nonempty tools and children declarations")
+					return false
+				}
+				// Both declaration spellings are supported by the existing
+				// namespace bridge. Validate every supplied list without choosing
+				// or deleting one when the other is empty or absent.
+				pending = append(pending,
+					declarationList{tools: tool.Get("tools"), param: toolParam + ".tools"},
+					declarationList{tools: tool.Get("children"), param: toolParam + ".children"})
+			case "tool_search":
+				execution := tool.Get("execution")
+				if execution.Type != gjson.String || execution.String() != "client" {
+					validationErr = newOpenAIResponsesLiteValidationError(toolParam+".execution", "responses Lite requires tool_search execution to be client; hosted or unspecified execution cannot be converted automatically")
+				}
+			case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "image_generation", "file_search", "code_interpreter", "mcp", "computer", "computer_use_preview", "local_shell", "shell", "apply_patch":
+				validationErr = newOpenAIResponsesLiteValidationError(toolParam+".type", "responses Lite does not support tool type %q; supported declarations are function tools, custom tools and client-executed tool search", tool.Get("type").String())
+			}
+			// Unknown private/future shapes are left for the upstream contract;
+			// absence from the public client emitter is not proof of rejection.
+			return validationErr == nil
+		})
+		if validationErr != nil {
+			return validationErr
+		}
+	}
+	return nil
 }
 
 // normalizeOpenAIResponsesLiteTools applies the Responses Lite request
@@ -71,8 +174,12 @@ func normalizeOpenAIResponsesLiteTools(reqBody map[string]any) (bool, error) {
 			namespaceTools = append(namespaceTools, rawTool)
 		case "":
 			return false, fmt.Errorf("responses Lite tool at index %d is missing type", index)
+		case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "image_generation", "file_search", "code_interpreter", "mcp", "computer", "computer_use_preview", "local_shell", "shell", "apply_patch":
+			return false, newOpenAIResponsesLiteValidationError(fmt.Sprintf("tools[%d].type", index), "responses Lite does not support top-level tool type %q at index %d", toolType, index)
 		default:
-			return false, fmt.Errorf("responses Lite does not support top-level tool type %q at index %d", toolType, index)
+			// The private protocol may add tool declarations ahead of this
+			// gateway. Preserve unknown extensions for upstream validation.
+			topLevelTools = append(topLevelTools, rawTool)
 		}
 	}
 	if len(namespaceTools) == 0 {
@@ -273,6 +380,11 @@ func normalizeOpenAIResponsesLitePayloadForAccount(body []byte, account *Account
 		return body, false, nil
 	}
 	if account.IsOpenAIOAuthLike() {
+		// The caller has already resolved that this attempt uses Lite. Validate
+		// every declaration carrier before any normalization can rewrite it.
+		if err := validateOpenAIResponsesLiteFinalRequest(account, "", "true", body); err != nil {
+			return body, false, err
+		}
 		return normalizeOpenAIResponsesLiteToolsPayload(body)
 	}
 	return normalizeOpenAIResponsesLiteParallelToolCallsPayload(body)

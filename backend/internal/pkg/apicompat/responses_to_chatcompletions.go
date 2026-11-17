@@ -56,6 +56,8 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 					Arguments: item.Arguments,
 				},
 			})
+		case "custom_tool_call":
+			toolCalls = append(toolCalls, ChatToolCall{ID: item.CallID, Type: "custom", Custom: &ChatCustomCall{Name: item.Name, Input: item.Input}})
 		case "reasoning":
 			for _, s := range item.Summary {
 				if s.Type == "summary_text" && s.Text != "" {
@@ -131,6 +133,7 @@ type ResponsesEventToChatState struct {
 	Finalized              bool        // true after finish chunk has been emitted
 	NextToolCallIndex      int         // next sequential tool_call index to assign
 	OutputIndexToToolIndex map[int]int // Responses output_index → Chat tool_calls index
+	OutputIndexToToolType  map[int]string
 	OutputIndexToArguments map[int]string
 	IncludeUsage           bool
 	Usage                  *ChatUsage
@@ -142,6 +145,7 @@ func NewResponsesEventToChatState() *ResponsesEventToChatState {
 		ID:                     generateChatCmplID(),
 		Created:                time.Now().Unix(),
 		OutputIndexToToolIndex: make(map[int]int),
+		OutputIndexToToolType:  make(map[int]string),
 		OutputIndexToArguments: make(map[int]string),
 	}
 }
@@ -158,6 +162,8 @@ func ResponsesEventToChatChunks(evt *ResponsesStreamEvent, state *ResponsesEvent
 		return resToChatHandleRefusalDelta(evt, state)
 	case "response.output_item.added":
 		return resToChatHandleOutputItemAdded(evt, state)
+	case "response.output_item.done":
+		return resToChatHandleOutputItemDone(evt, state)
 	case "response.function_call_arguments.delta",
 		// custom/freeform 工具（如新版 apply_patch）的输入增量与 function_call 参数增量同形，
 		// 均按 OutputIndex 累加到对应工具调用。
@@ -269,11 +275,24 @@ func resToChatHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 	if evt.Item == nil || (evt.Item.Type != "function_call" && evt.Item.Type != "custom_tool_call") {
 		return nil
 	}
+	if _, seen := state.OutputIndexToToolIndex[evt.OutputIndex]; seen {
+		return nil
+	}
 
 	state.SawToolCall = true
 	idx := state.NextToolCallIndex
 	state.OutputIndexToToolIndex[evt.OutputIndex] = idx
 	state.NextToolCallIndex++
+	if state.OutputIndexToToolType == nil {
+		state.OutputIndexToToolType = make(map[int]string)
+	}
+	state.OutputIndexToToolType[evt.OutputIndex] = evt.Item.Type
+	if evt.Item.Type == "custom_tool_call" {
+		state.OutputIndexToArguments[evt.OutputIndex] = evt.Item.Input
+		return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{ToolCalls: []ChatToolCall{{
+			Index: &idx, ID: evt.Item.CallID, Type: "custom", Custom: &ChatCustomCall{Name: evt.Item.Name, Input: evt.Item.Input},
+		}}})}
+	}
 
 	return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{
 		ToolCalls: []ChatToolCall{{
@@ -285,6 +304,25 @@ func resToChatHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 			},
 		}},
 	})}
+}
+
+func resToChatHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
+	if evt.Item == nil || (evt.Item.Type != "function_call" && evt.Item.Type != "custom_tool_call") {
+		return nil
+	}
+	chunks := resToChatHandleOutputItemAdded(evt, state)
+	done := &ResponsesStreamEvent{Type: "response.function_call_arguments.done", OutputIndex: evt.OutputIndex, Arguments: evt.Item.Arguments}
+	if evt.Item.Type == "custom_tool_call" {
+		done.Type, done.Input = "response.custom_tool_call_input.done", evt.Item.Input
+	}
+	return append(chunks, resToChatHandleFuncArgsDone(done, state)...)
+}
+
+func resToChatToolInputDelta(state *ResponsesEventToChatState, outputIndex, toolIndex int, value string) ChatToolCall {
+	if state.OutputIndexToToolType[outputIndex] == "custom_tool_call" {
+		return ChatToolCall{Index: &toolIndex, Custom: &ChatCustomCall{Input: value}}
+	}
+	return ChatToolCall{Index: &toolIndex, Function: ChatFunctionCall{Arguments: value}}
 }
 
 func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
@@ -299,12 +337,7 @@ func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 	state.OutputIndexToArguments[evt.OutputIndex] += evt.Delta
 
 	return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{
-		ToolCalls: []ChatToolCall{{
-			Index: &idx,
-			Function: ChatFunctionCall{
-				Arguments: evt.Delta,
-			},
-		}},
+		ToolCalls: []ChatToolCall{resToChatToolInputDelta(state, evt.OutputIndex, idx, evt.Delta)},
 	})}
 }
 
@@ -326,12 +359,7 @@ func resToChatHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 	remainder := completed[len(current):]
 	state.OutputIndexToArguments[evt.OutputIndex] = completed
 	return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{
-		ToolCalls: []ChatToolCall{{
-			Index: &idx,
-			Function: ChatFunctionCall{
-				Arguments: remainder,
-			},
-		}},
+		ToolCalls: []ChatToolCall{resToChatToolInputDelta(state, evt.OutputIndex, idx, remainder)},
 	})}
 }
 
@@ -400,6 +428,15 @@ func resToChatHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		}
 	}
 
+	if evt.Response != nil && evt.Type != "response.failed" {
+		for index := range evt.Response.Output {
+			item := &evt.Response.Output[index]
+			chunks = append(chunks, resToChatHandleOutputItemDone(&ResponsesStreamEvent{OutputIndex: index, Item: item}, state)...)
+		}
+		if evt.Response.Status == "completed" && state.SawToolCall {
+			finishReason = "tool_calls"
+		}
+	}
 	chunks = append(chunks, makeChatFinishChunk(state, finishReason))
 
 	if state.IncludeUsage && state.Usage != nil {
@@ -522,6 +559,7 @@ func generateChatCmplID() string {
 // ---------------------------------------------------------------------------
 
 type bufferedFuncCall struct {
+	Type        string
 	OutputIndex int
 	CallID      string
 	Name        string
@@ -559,15 +597,22 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 		if event.Delta != "" {
 			_, _ = a.refusal.WriteString(event.Delta)
 		}
-	case "response.output_item.added":
+	case "response.output_item.added", "response.output_item.done":
 		if event.Item != nil && (event.Item.Type == "function_call" || event.Item.Type == "custom_tool_call") {
-			idx := len(a.funcCalls)
-			a.outputIndexToFuncIdx[event.OutputIndex] = idx
-			a.funcCalls = append(a.funcCalls, bufferedFuncCall{
-				OutputIndex: event.OutputIndex,
-				CallID:      event.Item.CallID,
-				Name:        event.Item.Name,
-			})
+			idx, found := a.outputIndexToFuncIdx[event.OutputIndex]
+			if !found {
+				idx = len(a.funcCalls)
+				a.outputIndexToFuncIdx[event.OutputIndex] = idx
+				a.funcCalls = append(a.funcCalls, bufferedFuncCall{Type: event.Item.Type, OutputIndex: event.OutputIndex, CallID: event.Item.CallID, Name: event.Item.Name})
+			}
+			completed := event.Item.Arguments
+			if event.Item.Type == "custom_tool_call" {
+				completed = event.Item.Input
+			}
+			if completed != "" {
+				a.funcCalls[idx].Args.Reset()
+				_, _ = a.funcCalls[idx].Args.WriteString(completed)
+			}
 		}
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		if event.Delta != "" {
@@ -630,6 +675,10 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 	}
 
 	for i := range a.funcCalls {
+		if a.funcCalls[i].Type == "custom_tool_call" {
+			out = append(out, ResponsesOutput{Type: "custom_tool_call", CallID: a.funcCalls[i].CallID, Name: a.funcCalls[i].Name, Input: a.funcCalls[i].Args.String()})
+			continue
+		}
 		out = append(out, ResponsesOutput{
 			Type:      "function_call",
 			CallID:    a.funcCalls[i].CallID,
@@ -675,17 +724,24 @@ func (a *BufferedResponseAccumulator) SupplementResponseOutput(resp *ResponsesRe
 
 	for outputIndex := range resp.Output {
 		item := &resp.Output[outputIndex]
-		if item.Type != "function_call" || item.Arguments != "" {
+		if (item.Type != "function_call" && item.Type != "custom_tool_call") || (item.Type == "function_call" && item.Arguments != "") || (item.Type == "custom_tool_call" && item.Input != "") {
 			continue
 		}
 		for funcIndex := range a.funcCalls {
 			call := &a.funcCalls[funcIndex]
+			if call.Type != item.Type {
+				continue
+			}
 			matchesCallID := item.CallID != "" && item.CallID == call.CallID
 			if !matchesCallID && call.OutputIndex != outputIndex {
 				continue
 			}
 			if call.Args.Len() > 0 {
-				item.Arguments = call.Args.String()
+				if item.Type == "custom_tool_call" {
+					item.Input = call.Args.String()
+				} else {
+					item.Arguments = call.Args.String()
+				}
 			}
 			break
 		}

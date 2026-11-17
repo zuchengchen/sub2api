@@ -143,7 +143,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnReplaysAssistantAndEncryptedReasoning(t *tes
 func TestOpenAIWSHTTPBridgeContinuationPreservesAssistantAndEncryptedReasoning(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	output := `[{"type":"reasoning","id":"rs_encrypted","summary":[],"encrypted_content":"fixture-ciphertext"},{"type":"message","id":"msg_decision","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Chosen invariant: preserve every prior decision."}]},{"type":"function_call","id":"fc_inspect","call_id":"call_inspect","name":"inspect","arguments":"{}"},{"type":"reasoning","id":"rs_id_only","summary":[]}]`
+	output := `[{"type":"reasoning","id":"rs_encrypted","summary":[],"encrypted_content":"fixture-ciphertext"},{"type":"message","id":"msg_decision","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Chosen invariant: preserve every prior decision."}]},{"type":"function_call","id":"fc_inspect","call_id":"call_inspect","name":"inspect","arguments":"{}"}]`
 	var firstEvents strings.Builder
 	for _, item := range gjson.Parse(output).Array() {
 		_, _ = firstEvents.WriteString(`data: {"type":"response.output_item.done","item":` + item.Raw + "}\n\n")
@@ -685,7 +685,7 @@ func TestOpenAIWSHTTPBridgeAPIKeyReusesClientToolMappingWhenFollowupOmitsTools(t
 	require.Equal(t, "exec", secondTools[0].Get("name").String())
 	secondInput := gjson.GetBytes(upstream.bodies[1], "input").Array()
 	require.Len(t, secondInput, 3)
-	require.Equal(t, "run pwd", secondInput[0].String())
+	require.Equal(t, "run pwd", secondInput[0].Get("content").String())
 	require.Equal(t, "function_call", secondInput[1].Get("type").String())
 	require.Equal(t, "fc_custom_1", secondInput[1].Get("id").String())
 	require.JSONEq(t, `{"input":"pwd"}`, secondInput[1].Get("arguments").String())
@@ -767,7 +767,7 @@ func TestOpenAIWSHTTPBridgeFullCustomToolHistoryWithoutPreviousResponseIDDoesNot
 	}
 
 	writeAndRead(`{"type":"response.create","model":"gpt-5.1","input":"run pwd"}`)
-	writeAndRead(`{"type":"response.create","model":"gpt-5.1","previous_response_id":"resp_1","input":[{"role":"user","content":"continue without tool output"}]}`)
+	writeAndRead(`{"type":"response.create","model":"gpt-5.1","previous_response_id":"resp_1","input":[{"type":"custom_tool_call_output","call_id":"call_1","output":"first result"}]}`)
 	fullContext := `{"type":"response.create","model":"gpt-5.1","input":[{"type":"custom_tool_call","id":"item_1","call_id":"call_1","name":"exec","input":"pwd"},{"type":"custom_tool_call_output","call_id":"call_1","output":"/tmp"},{"role":"user","content":"continue"}]}`
 	writeAndRead(fullContext)
 	writeAndRead(fullContext)
@@ -781,10 +781,13 @@ func TestOpenAIWSHTTPBridgeFullCustomToolHistoryWithoutPreviousResponseIDDoesNot
 	}
 
 	require.Len(t, upstream.bodies, 4)
-	orphanInput := gjson.GetBytes(upstream.bodies[1], "input").Array()
-	require.Len(t, orphanInput, 2)
-	require.Equal(t, "run pwd", orphanInput[0].String())
-	require.Equal(t, "user", orphanInput[1].Get("role").String())
+	continuedInput := gjson.GetBytes(upstream.bodies[1], "input").Array()
+	require.Len(t, continuedInput, 3, "replaying a result must preserve its earlier call")
+	require.Equal(t, "run pwd", continuedInput[0].Get("content").String())
+	require.Equal(t, "custom_tool_call", continuedInput[1].Get("type").String())
+	require.Equal(t, "call_1", continuedInput[1].Get("call_id").String())
+	require.Equal(t, "custom_tool_call_output", continuedInput[2].Get("type").String())
+	require.Equal(t, "first result", continuedInput[2].Get("output").String())
 	for _, body := range upstream.bodies[2:] {
 		input := gjson.GetBytes(body, "input").Array()
 		require.Len(t, input, 3)
@@ -2433,7 +2436,7 @@ func TestOpenAIWSHTTPBridgeKeepsContinuationFramesOnHTTPWithoutPreviousResponseI
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "previous_response_id").Exists())
 	secondInput := gjson.GetBytes(upstream.bodies[1], "input").Array()
 	require.Len(t, secondInput, 3)
-	require.Equal(t, "first", secondInput[0].String())
+	require.Equal(t, "first", secondInput[0].Get("content").String())
 	require.Equal(t, "function_call", secondInput[1].Get("type").String())
 	require.Equal(t, "call_bridge_1", secondInput[1].Get("call_id").String())
 	require.Equal(t, "function_call_output", secondInput[2].Get("type").String())

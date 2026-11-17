@@ -476,7 +476,10 @@ func TestOpenAIGatewayForwardDoesNotRecurseWhenCompactFallbackAlsoFails(t *testi
 	var compactSignal *openAICompactFallbackSignal
 	require.False(t, errors.As(err, &compactSignal))
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
-	require.Contains(t, recorder.Body.String(), "model not found")
+	require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
+	require.Equal(t, "model_not_found", gjson.Get(recorder.Body.String(), "error.code").String())
+	require.Equal(t, "model", gjson.Get(recorder.Body.String(), "error.param").String())
+	require.Equal(t, OpenAIModelUnavailableClientMessage, gjson.Get(recorder.Body.String(), "error.message").String())
 	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
 	events, ok := rawEvents.([]*OpsUpstreamErrorEvent)

@@ -87,6 +87,33 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		c.Set("openai_ws_auto_incremental_reason", "disabled")
 	}
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
+	if account.IsOpenAIOAuthLike() {
+		// The HTTP Lite declaration is per request. Project it into this
+		// response.create frame, including an explicit non-Lite GPT-5.5
+		// mapping, without changing the ingress headers used by failover.
+		metadata, _ := payload["client_metadata"].(map[string]any)
+		liteHeader := ""
+		if c != nil {
+			liteHeader = c.GetHeader(responsesLiteHeader)
+		}
+		if isOpenAIResponsesLiteFinalRequest(account, openAIWSPayloadString(payload, "model"), liteHeader, bodyRaw) {
+			if metadata == nil {
+				metadata = make(map[string]any)
+				payload["client_metadata"] = metadata
+			}
+			metadata[responsesLiteWSMetadataKey] = "true"
+		} else {
+			delete(metadata, responsesLiteWSMetadataKey)
+		}
+		finalBody, marshalErr := marshalOpenAIUpstreamJSON(payload)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		if validationErr := validateOpenAIOAuthFinalRequest(c, account, openAIWSPayloadString(payload, "model"), "", finalBody); validationErr != nil {
+			writeOpenAIProtocolValidationError(c, validationErr, false)
+			return nil, validationErr
+		}
+	}
 	if c != nil && c.Request != nil && account.UsesOpenAICodexProtocol() {
 		traceHeaders := make(http.Header)
 		copyOpenAICodexTraceHeaders(traceHeaders, c.Request.Header, account)
@@ -1139,6 +1166,9 @@ readLoop:
 		} else {
 			observeOpenAIImageOutputModel(c, message)
 		}
+		if normalized, changed := normalizeOpenAIModelUnavailableClientEvent(clientMessage); changed {
+			clientMessage = normalized
+		}
 		if eventType == "error" || eventType == "response.failed" {
 			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 				clientMessage = rewritten
@@ -1404,6 +1434,19 @@ readLoop:
 		if isTerminalEvent {
 			if !clientDisconnected {
 				markOpenAIWSClientVisibleFailure(c, eventType, message)
+			}
+			if isOpenAIModelUnavailableTerminalEvent(message) {
+				upstreamTerminalEvent = "response.failed"
+				lease.MarkBroken()
+				if !clientDisconnected {
+					if !reqStream {
+						writeOpenAIModelUnavailableTerminal(c, http.StatusSwitchingProtocols, openAIModelErrorResponses)
+					} else {
+						setOpsUpstreamError(c, http.StatusSwitchingProtocols, OpenAIModelUnavailableClientMessage, "")
+						MarkResponseCommitted(c)
+					}
+				}
+				return partialResultWithUsage(), fmt.Errorf("upstream model unavailable")
 			}
 			upstreamTerminalEvent = s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
 			// A terminal event must be the final JSON document in its WS message.

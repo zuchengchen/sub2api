@@ -132,7 +132,7 @@ func (s *OpenAIGatewayService) BuildGroupConfiguredCodexModelsManifest(
 
 	visible, catalog, err := loadCodexGroupCatalogAccounts(ctx, s.accountRepo, group.ID)
 	if err != nil {
-		return nil, false, fmt.Errorf("load group configured Codex models: %w", err)
+		return nil, false, withCodexModelsFailureStage(err, CodexModelsStageGroupAccountRead)
 	}
 	configuredModels := openAIConfiguredCodexModelIDsForGroup(visible, group)
 	if len(configuredModels) == 0 {
@@ -148,7 +148,7 @@ func (s *OpenAIGatewayService) BuildGroupConfiguredCodexModelsManifest(
 		true,
 	)
 	if err != nil {
-		return nil, false, fmt.Errorf("initialize group configured Codex models: %w", err)
+		return nil, false, withCodexModelsFailureStage(err, CodexModelsStageConfiguredBuild)
 	}
 	body, _, err = mergeConfiguredCodexModelsManifest(
 		body,
@@ -157,11 +157,11 @@ func (s *OpenAIGatewayService) BuildGroupConfiguredCodexModelsManifest(
 		group.ModelAllowlistEnabled(),
 	)
 	if err != nil {
-		return nil, false, fmt.Errorf("build group configured Codex models: %w", err)
+		return nil, false, withCodexModelsFailureStage(err, CodexModelsStageConfiguredMerge)
 	}
 	body, _, err = filterTiboGroupModelsBody(body, group)
 	if err != nil {
-		return nil, false, fmt.Errorf("filter Tibo group Codex models: %w", err)
+		return nil, false, withCodexModelsFailureStage(err, CodexModelsStageGroupFilter)
 	}
 	manifest := &OpenAIModelsResponse{
 		Body: body,
@@ -193,7 +193,7 @@ func (s *OpenAIGatewayService) MergeGroupConfiguredCodexModels(
 
 	visible, accounts, err := loadCodexGroupCatalogAccounts(ctx, s.accountRepo, group.ID)
 	if err != nil {
-		return fmt.Errorf("load group configured Codex models: %w", err)
+		return withCodexModelsFailureStage(err, CodexModelsStageGroupAccountRead)
 	}
 	var configuredModels []string
 	if !group.CodexModelsManifestConfig.Enabled {
@@ -206,23 +206,23 @@ func (s *OpenAIGatewayService) MergeGroupConfiguredCodexModels(
 		group.ModelAllowlistEnabled(),
 	)
 	if err != nil {
-		return fmt.Errorf("merge group configured Codex models: %w", err)
+		return withCodexModelsFailureStage(err, CodexModelsStageConfiguredMerge)
 	}
 	if group.CodexModelsManifestConfig.Enabled && group.ModelAllowlistEnabled() {
 		body, err = orderPinnedCodexModelsBySelection(body, group.EffectiveModelAllowlist())
 		if err != nil {
-			return fmt.Errorf("order pinned Codex models: %w", err)
+			return withCodexModelsFailureStage(err, CodexModelsStagePinnedOrder)
 		}
 		changed = true
 	}
 	filtered, retired, err := filterRetiredOpenAIPublicModelsBody(body, accounts, true)
 	if err != nil {
-		return fmt.Errorf("filter retired Codex models: %w", err)
+		return withCodexModelsFailureStage(err, CodexModelsStageRetiredFilter)
 	}
 	body = filtered
 	body, tiboFiltered, err := filterTiboGroupModelsBody(body, group)
 	if err != nil {
-		return fmt.Errorf("filter Tibo group Codex models: %w", err)
+		return withCodexModelsFailureStage(err, CodexModelsStageGroupFilter)
 	}
 	if changed || retired || tiboFiltered {
 		manifest.Body = body
@@ -1942,7 +1942,18 @@ func (s *OpenAIGatewayService) refreshCachedOpenAIModels(cacheKey string, reques
 		if err != nil {
 			return nil, err
 		}
-		if manifest.NotModified && cached != nil {
+		if manifest.NotModified {
+			// A 304 is meaningful only with a retained representation. Passing a
+			// cold 304 onward leaves mapping/filtering without a body and turns
+			// an upstream protocol failure into an internal build error.
+			if cached == nil || cached.NotModified || len(cached.Body) == 0 {
+				return nil, withCodexModelsFailureStage(&codexModelsManifestUpstreamError{
+					err: infraerrors.New(http.StatusBadGateway, "OPENAI_MODELS_UNEXPECTED_NOT_MODIFIED",
+						"model discovery upstream returned 304 without a cached catalog"),
+					statusCode: http.StatusNotModified,
+					retryable:  true,
+				}, CodexModelsStageCacheRevalidation)
+			}
 			s.openAIModelsCache.set(cacheKey, cached, time.Now())
 			return cached, nil
 		}

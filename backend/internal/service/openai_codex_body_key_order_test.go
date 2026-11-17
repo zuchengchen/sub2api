@@ -76,7 +76,7 @@ func TestRestoreOpenAIUpstreamJSONTopLevelOrder(t *testing.T) {
 func TestOpenAIForwardCodexLanePreservesTopLevelKeyOrder(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	// Official serde order: model first, routing prefix ahead of input.
-	body := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"keep me","input":[{"type":"function_call_output","call_id":"call_orphan","output":"stale"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"keep me","input":[{"type":"function_call","call_id":"fc_complete","name":"inspect","arguments":"{}"},{"type":"function_call_output","call_id":"fc_complete","output":"preserve result"}]}`)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -92,9 +92,8 @@ func TestOpenAIForwardCodexLanePreservesTopLevelKeyOrder(t *testing.T) {
 	account := openAIFailoverCachedBodyTestAccount(91, "codex-order", nil)
 	account.Extra = astraHealthyTestExtra(map[string]any{"codex_client_capability": "native"})
 
-	// Orphan tool output forces the decoded-map re-encode path
-	// (markDecodedModified disables byte patches); without restoration the
-	// wire body would serialize top-level keys alphabetically.
+	// OAuth transformations must preserve top-level ordering and the full
+	// matching call/result input.
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -110,5 +109,5 @@ func TestOpenAIForwardCodexLanePreservesTopLevelKeyOrder(t *testing.T) {
 		[]string{"model", "stream", "instructions", "input", "tool_choice",
 			"parallel_tool_calls", "reasoning", "store", "include", "client_metadata"},
 		keys)
-	require.JSONEq(t, `[]`, string(gjson.GetBytes(upstream.bodies[0], "input").Raw))
+	require.JSONEq(t, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(upstream.bodies[0], "input").Raw)
 }

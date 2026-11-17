@@ -102,10 +102,21 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	upstreamModel string,
 ) *UpstreamFailoverError {
 	shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody)
+	modelReplayAllowed := true
+	if (account == nil || account.Platform != PlatformGrok) && isOpenAIModelUnavailableError(resp.StatusCode, respBody) {
+		var guard openAIResponseReplayGuard
+		guard.Observe(respBody, "response.failed")
+		modelReplayAllowed = guard.CanReplay(c) && !IsResponseCommitted(c) && !openAIStreamClientOutputStarted(c, false) && (ctx == nil || ctx.Err() == nil)
+		shouldFailover = shouldFailover && modelReplayAllowed
+	}
 	tempUnscheduled := false
 	if c != nil && account != nil && account.Platform != PlatformGrok && !shouldFailover && !IsResponseCommitted(c) && s.rateLimitService != nil {
-		tempUnscheduled = s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody, upstreamModel) == ErrorPolicyTempUnscheduled
-		shouldFailover = tempUnscheduled
+		stateCtx, cancelState := openAIAccountStateContext(ctx)
+		tempUnscheduled = s.rateLimitService.CheckErrorPolicy(stateCtx, account, resp.StatusCode, respBody, upstreamModel) == ErrorPolicyTempUnscheduled
+		cancelState()
+		// Preserve the configured scheduling side effect without allowing it
+		// to replay work which already produced output/usage or was canceled.
+		shouldFailover = tempUnscheduled && modelReplayAllowed
 	}
 	if account != nil && account.Platform == PlatformGrok {
 		shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)

@@ -25,29 +25,11 @@ type FunctionCallOutputValidation struct {
 }
 
 func isCodexToolCallContextItemType(typ string) bool {
-	switch strings.TrimSpace(typ) {
-	case "tool_call",
-		"function_call",
-		"local_shell_call",
-		"tool_search_call",
-		"custom_tool_call",
-		"mcp_tool_call":
-		return true
-	default:
-		return false
-	}
+	return openAIContinuationProofToolDirection(strings.TrimSpace(typ)) > 0
 }
 
 func isCodexToolCallOutputItemType(typ string) bool {
-	switch strings.TrimSpace(typ) {
-	case "function_call_output",
-		"tool_search_output",
-		"custom_tool_call_output",
-		"mcp_tool_call_output":
-		return true
-	default:
-		return false
-	}
+	return openAIContinuationProofToolDirection(strings.TrimSpace(typ)) < 0
 }
 
 // NeedsToolContinuation 判定请求是否需要工具调用续链处理。
@@ -230,74 +212,11 @@ type ToolCallOutputContextCoverage struct {
 // 与可重建上下文。不能复用 ValidateFunctionCallOutputContextBytes 的 HasToolCallContext：
 // 该标志只代表"存在某一个上下文项"，部分覆盖的续链仍会被上游拒绝。
 func AnalyzeToolCallOutputContextCoverageBytes(body []byte) ToolCallOutputContextCoverage {
-	coverage := ToolCallOutputContextCoverage{}
-	if len(body) == 0 {
-		return coverage
+	proof := AnalyzeOpenAIContinuationReplayProof(body)
+	return ToolCallOutputContextCoverage{
+		HasFunctionCallOutput:   proof.HasToolOutput,
+		ContextCoversAllCallIDs: proof.HasToolOutput && proof.Verdict == OpenAIContinuationProofInline,
 	}
-	input := parseRawJSONView(body).Get("input")
-	if !input.IsArray() && !input.IsObject() {
-		return coverage
-	}
-
-	missingCallID := false
-	var outputCallIDs map[string]struct{}
-	var contextIDs map[string]struct{}
-	analyzeItem := func(item gjson.Result) {
-		if !item.IsObject() {
-			return
-		}
-		itemType := item.Get("type").String()
-		switch {
-		case isCodexToolCallOutputItemType(itemType):
-			coverage.HasFunctionCallOutput = true
-			callID := strings.TrimSpace(item.Get("call_id").String())
-			if callID == "" {
-				missingCallID = true
-				return
-			}
-			if outputCallIDs == nil {
-				outputCallIDs = make(map[string]struct{})
-			}
-			outputCallIDs[callID] = struct{}{}
-		case isCodexToolCallContextItemType(itemType):
-			callID := strings.TrimSpace(item.Get("call_id").String())
-			if callID == "" {
-				return
-			}
-			if contextIDs == nil {
-				contextIDs = make(map[string]struct{})
-			}
-			contextIDs[callID] = struct{}{}
-		case itemType == "item_reference":
-			idValue := strings.TrimSpace(item.Get("id").String())
-			if idValue == "" {
-				return
-			}
-			if contextIDs == nil {
-				contextIDs = make(map[string]struct{})
-			}
-			contextIDs[idValue] = struct{}{}
-		}
-	}
-	if input.IsArray() {
-		input.ForEach(func(_, item gjson.Result) bool {
-			analyzeItem(item)
-			return true
-		})
-	} else {
-		analyzeItem(input)
-	}
-
-	if !coverage.HasFunctionCallOutput || missingCallID {
-		return coverage
-	}
-	for callID := range outputCallIDs {
-		if _, ok := contextIDs[callID]; !ok {
-			return coverage
-		}
-	}
-	coverage.ContextCoversAllCallIDs = true
-	return coverage
 }
 
 // ValidateFunctionCallOutputContext 为 handler 提供低开销校验结果：

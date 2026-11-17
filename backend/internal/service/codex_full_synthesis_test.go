@@ -293,7 +293,7 @@ func TestCodexSynthesisLitePreservesToolContracts(t *testing.T) {
 		t.Run(capability, func(t *testing.T) {
 			account := newCodexSynthTestAccount(7106, AccountTypeOAuth)
 			account.Extra[codexClientCapabilityExtraKey] = capability
-			body := []byte(`{"model":"gpt-5.5","input":[
+			body := []byte(`{"model":"gpt-5.6-terra","input":[
 				{"type":"additional_tools","role":"developer","tools":[
 					{"type":"namespace","name":"local","tools":[{"type":"function","name":"shell","parameters":{"type":"object","properties":{"command":{"type":"array","items":{"type":"string"}}},"required":["command"]}}]},
 					{"type":"custom","name":"edit","format":{"type":"text"}}
@@ -305,7 +305,7 @@ func TestCodexSynthesisLitePreservesToolContracts(t *testing.T) {
 			],"tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"shell","namespace":"local"},{"type":"custom","name":"edit"}]}}`)
 			var request map[string]any
 			require.NoError(t, json.Unmarshal(body, &request))
-			result, err := synthesizeCodexOAuthRequest(request, account, "gpt-5.5", codexSynthOptions{ResponsesLite: true, WireProfile: codexWireProfileStable})
+			result, err := synthesizeCodexOAuthRequest(request, account, "gpt-5.6-terra", codexSynthOptions{ResponsesLite: true, WireProfile: codexWireProfileStable})
 			require.NoError(t, err)
 			require.Empty(t, result.ToolNameReverse)
 			sent, err := json.Marshal(request)
@@ -315,12 +315,8 @@ func TestCodexSynthesisLitePreservesToolContracts(t *testing.T) {
 			for i, original := range gjson.GetBytes(body, "input.0.tools").Array() {
 				require.JSONEq(t, original.Raw, additional.Array()[i].Raw)
 			}
-			wantTools := 2
-			if capability == "generic" {
-				wantTools++
-				require.Equal(t, "web_search", additional.Array()[2].Get("type").String())
-			}
-			require.Len(t, additional.Array(), wantTools)
+			require.Len(t, additional.Array(), 2)
+			require.False(t, result.WebSearchInjected)
 			require.JSONEq(t, gjson.GetBytes(body, "tool_choice").Raw, gjson.GetBytes(sent, "tool_choice").Raw)
 			for i, original := range gjson.GetBytes(body, "input").Array()[1:] {
 				require.JSONEq(t, original.Raw, gjson.GetBytes(sent, "input").Array()[i+3].Raw)
