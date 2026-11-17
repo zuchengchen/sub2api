@@ -27,7 +27,9 @@ func TestResponsesEventToChatChunks_CustomToolCallInputDelta(t *testing.T) {
 	require.Len(t, chunks[0].Choices[0].Delta.ToolCalls, 1)
 	tc := chunks[0].Choices[0].Delta.ToolCalls[0]
 	assert.Equal(t, "call_patch", tc.ID)
-	assert.Equal(t, "apply_patch", tc.Function.Name)
+	require.NotNil(t, tc.Custom)
+	assert.Equal(t, "custom", tc.Type)
+	assert.Equal(t, "apply_patch", tc.Custom.Name)
 
 	chunks = ResponsesEventToChatChunks(&ResponsesStreamEvent{
 		Type:        "response.custom_tool_call_input.delta",
@@ -38,7 +40,8 @@ func TestResponsesEventToChatChunks_CustomToolCallInputDelta(t *testing.T) {
 	tc = chunks[0].Choices[0].Delta.ToolCalls[0]
 	require.NotNil(t, tc.Index)
 	assert.Equal(t, 0, *tc.Index)
-	assert.Equal(t, "*** Begin Patch", tc.Function.Arguments)
+	require.NotNil(t, tc.Custom)
+	assert.Equal(t, "*** Begin Patch", tc.Custom.Input)
 }
 
 // 原始推理文本增量 reasoning_text.delta 应像 reasoning_summary_text.delta 一样

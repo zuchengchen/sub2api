@@ -68,6 +68,7 @@ type openAIResponsesValidationItemStats struct {
 // unknown item types are counted as "other", never copied from the request.
 // It is retained with Ops errors regardless of verbose body logging settings.
 type openAIResponsesValidationSummary struct {
+	openAIFinalProtocolDiagnostic
 	RequestBytes int `json:"request_bytes"`
 	// The caller supplies structural Responses JSON. Request construction may
 	// still alter metadata or encode it; this is not a measurement of wire bytes.
@@ -130,6 +131,9 @@ func appendOpenAIResponsesValidationDiagnostic(c *gin.Context, account *Account,
 		RequestBytesBasis: "responses_json", ToolPairingComplete: true,
 		HTTPProtocol:          openAIValidationHTTPProtocol(resp.ProtoMajor),
 		HTTPCompressionPolicy: openAIRequestCompressionPolicy(resp.Request),
+	}
+	if value, ok := c.Get(openAIFinalProtocolDiagnosticKey); ok {
+		summary.openAIFinalProtocolDiagnostic, _ = value.(openAIFinalProtocolDiagnostic)
 	}
 	if resp.Request != nil {
 		// net/http treats zero length with a non-empty Body as unknown, not as

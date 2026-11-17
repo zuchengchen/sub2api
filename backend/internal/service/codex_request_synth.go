@@ -656,12 +656,15 @@ func codexSynthesisPrepareTools(
 	capability codexCapability,
 	responsesLite bool,
 ) (map[string]string, bool) {
-	if capability == codexCapabilityGeneric && !codexSynthesisToolChoiceNone(reqBody) &&
+	if !responsesLite && capability == codexCapabilityGeneric && !codexSynthesisToolChoiceNone(reqBody) &&
 		!codexSynthesisHasJSONOutputFormat(reqBody) && !codexSynthesisHasWebSearchTool(reqBody) &&
 		codexDescriptorSupportsWebSearch(descriptor, hasDescriptor) {
 		// Hosted search executes upstream and needs no downstream executor.
 		// JSON output requests must keep their format contract; only the
 		// implicit tool is omitted, never a tool the caller declared.
+		// Lite accepts client-executed tools, including declarations carried
+		// in additional_tools. Moving hosted search there does not make it
+		// client-executed, and the gateway cannot invent a client executor.
 		codexSynthesisAppendTools(reqBody, []any{map[string]any{"type": "web_search"}}, responsesLite)
 		return nil, true
 	}

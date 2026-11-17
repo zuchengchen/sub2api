@@ -144,7 +144,10 @@ func TestOpenAIUsageRegressionChatLiteRejectsUnsupportedToolWithoutDroppingInten
 	c.Request.URL.Path = "/v1/chat/completions"
 	c.Request.Header.Set(responsesLiteHeader, "true")
 	_, err := svc.ForwardAsChatCompletions(context.Background(), c, newOpenAIOAuthNamespaceTestAccount(), body, "", "")
-	require.ErrorContains(t, err, "does not support top-level tool type")
+	require.ErrorContains(t, err, `does not support tool type "image_generation"`)
+	var liteErr *openAIResponsesLiteValidationError
+	require.ErrorAs(t, err, &liteErr)
+	require.Equal(t, "tools[0].type", liteErr.param)
 	require.Equal(t, http.StatusBadRequest, c.Writer.Status())
 	require.Empty(t, upstream.requests)
 	require.Equal(t, original, body)

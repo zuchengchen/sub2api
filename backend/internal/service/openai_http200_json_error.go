@@ -59,6 +59,10 @@ func (s *OpenAIGatewayService) handleOpenAIHTTP200JSONFailure(
 			}
 		}
 		status = openAIStreamFailureStatus(body, upstreamError.Message)
+		if isOpenAIModelUnavailableError(http.StatusBadRequest, body) {
+			writeOpenAIModelUnavailableTerminal(c, resp.StatusCode, openAIModelErrorResponses)
+			return usage, fmt.Errorf("upstream model unavailable"), true
+		}
 		redacted := s.redactAgentIdentitySensitiveBody(c.Request.Context(), account, upstreamError.ErrorBody)
 		if safe, ok := normalizeOpenAIUpstreamError(redacted); ok {
 			message = sanitizeUpstreamErrorMessage(strings.TrimSpace(safe.Message))

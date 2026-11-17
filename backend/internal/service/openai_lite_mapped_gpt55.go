@@ -11,6 +11,20 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// isOpenAIResponsesLiteFinalRequest must be given the resolved upstream model
+// and the headers/body for this attempt. Ingress and catalog preferences alone
+// are insufficient: the existing GPT-5.5 compatibility step removes Lite.
+// This predicate never changes the request or the mode selected by its caller.
+func isOpenAIResponsesLiteFinalRequest(account *Account, finalModel, liteHeader string, body []byte) bool {
+	if account == nil || !account.IsOpenAIOAuthLike() || strings.TrimSpace(finalModel) == "gpt-5.5" {
+		return false
+	}
+	if strings.TrimSpace(liteHeader) != "" {
+		return isOpenAIResponsesLiteHeader(liteHeader)
+	}
+	return isOpenAIResponsesLiteWebSocketPayload(body)
+}
+
 // The account mapping changes the model, not the upstream capability header.
 // Apply at the final HTTP request boundary, after account/model resolution.
 // Never mutate the ingress headers/body: failover may select a native account.

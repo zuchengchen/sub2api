@@ -82,7 +82,9 @@ func TestNormalizeOpenAIResponsesLegacyIngressMessagesOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.False(t, gjson.GetBytes(normalized, "messages").Exists())
-	require.False(t, gjson.GetBytes(normalized, "previous_response_id").Exists())
+	// Converting the supplied messages does not prove that the stored earlier
+	// history is redundant, even when the visible tool call/result pair matches.
+	require.Equal(t, "resp_stale", gjson.GetBytes(normalized, "previous_response_id").String())
 	require.Equal(t, "system", gjson.GetBytes(normalized, "input.0.role").String())
 	require.Equal(t, "repo policy", gjson.GetBytes(normalized, "input.0.content").String())
 	require.Equal(t, "function_call", gjson.GetBytes(normalized, "input.1.type").String())

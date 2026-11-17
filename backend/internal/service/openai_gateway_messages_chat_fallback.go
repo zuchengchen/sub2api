@@ -57,7 +57,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		configuredMinOutputTokens(s.cfg),
 	)
 	if err != nil {
-		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		if !writeAnthropicOutputFormatValidationError(c, err) {
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
 		return nil, fmt.Errorf("convert anthropic to chat completions: %w", err)
 	}
 

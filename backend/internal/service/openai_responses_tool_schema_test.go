@@ -245,7 +245,7 @@ func TestOpenAIResponsesToolSchemaCapabilities_PlatformBoundary(t *testing.T) {
 		repairNullType   bool
 		removeLookaround bool
 	}{
-		{PlatformOpenAI, true, true},
+		{PlatformOpenAI, true, false},
 		{PlatformAnthropic, true, false},
 		{PlatformKimi, true, false},
 		{PlatformZhipu, true, false},
@@ -266,8 +266,7 @@ func TestSanitizeOpenAIResponsesToolSchemasForPlatform_ReplayBoundary(t *testing
 	body := []byte(`{"tools":[{"type":"function","parameters":{"type":null,"properties":{"query":{"type":"string","pattern":"(?=keep)"}}}}]}`)
 
 	// A malformed tool definition may be replayed after account failover. Every
-	// compatible account must repair it, while non-OpenAI providers retain their
-	// supported regex semantics.
+	// compatible account must repair it while retaining explicit regex semantics.
 	for _, platform := range []string{PlatformAnthropic, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax} {
 		t.Run(platform, func(t *testing.T) {
 			for attempt := 0; attempt < 2; attempt++ {
@@ -284,7 +283,7 @@ func TestSanitizeOpenAIResponsesToolSchemasForPlatform_ReplayBoundary(t *testing
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.Equal(t, "object", gjson.GetBytes(openAI, "tools.0.parameters.type").String())
-	require.False(t, gjson.GetBytes(openAI, "tools.0.parameters.properties.query.pattern").Exists())
+	require.Equal(t, "(?=keep)", gjson.GetBytes(openAI, "tools.0.parameters.properties.query.pattern").String())
 
 	unsupported, changed, err := sanitizeOpenAIResponsesToolSchemasForPlatform(body, PlatformComposite)
 	require.NoError(t, err)
@@ -510,7 +509,7 @@ func TestOpenAIResponsesToolSchemaPlatformGate_APIKeyAndOAuth(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, changed)
 			require.Equal(t, "object", gjson.GetBytes(normalized, "tools.0.parameters.type").String())
-			require.False(t, gjson.GetBytes(normalized, "tools.0.parameters.pattern").Exists())
+			require.Equal(t, "(?=drop)", gjson.GetBytes(normalized, "tools.0.parameters.pattern").String(), "both OpenAI credential types preserve the explicit pattern")
 		})
 	}
 

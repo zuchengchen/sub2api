@@ -294,3 +294,27 @@ func ValidateGPT61SolReasoningEffort(model, effort string) error {
 	}
 	return nil
 }
+
+// ValidateGPT6AstraReasoningEffort validates only confirmed unsupported intent
+// for the resolved Astra model, after configured effort mappings have run. The
+// catalog excludes none/minimal, and the observed upstream parameter error
+// names low through max. Do not raise effort or infer capabilities for unknown
+// future model spellings. Omitted and other values stay on their existing path.
+func ValidateGPT6AstraReasoningEffort(model, effort string) error {
+	canonical := CanonicalizeOpenAIModelAliasSpelling(model)
+	known := canonical == "gpt-6" || canonical == "gpt-6-astra"
+	if suffix, ok := strings.CutPrefix(canonical, "gpt-6-astra-"); ok {
+		switch suffix {
+		case "none", "minimal", "low", "medium", "high", "xhigh", "max", "openai-compact":
+			known = true
+		}
+	}
+	if !known {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "minimal":
+		return fmt.Errorf("gpt-6-astra does not support reasoning effort %q; use low, medium, high, xhigh or max, or an explicitly configured mapping", strings.ToLower(strings.TrimSpace(effort)))
+	}
+	return nil
+}

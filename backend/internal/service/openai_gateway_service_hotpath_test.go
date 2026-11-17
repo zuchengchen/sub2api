@@ -138,7 +138,7 @@ func TestOpenAIGatewayService_Forward_APIKeyMissingInstructionsKeepsLargeInputRa
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq)
-	expectedBody := `{"model":"gpt-5","stream":false,"reasoning":{"effort":"none"},"input":[{"type":"message","content":[{"type":"input_text","text":"hi","nonce":9007199254740993}]}]}`
+	expectedBody := `{"model":"gpt-5","stream":false,"reasoning":{"effort":"minimal"},"input":[{"type":"message","content":[{"type":"input_text","text":"hi","nonce":9007199254740993}]}]}`
 	require.JSONEq(t, expectedBody, string(upstream.lastBody))
 	require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
 	require.Equal(t, "9007199254740993", gjson.GetBytes(upstream.lastBody, "input.0.content.0.nonce").Raw)
@@ -777,7 +777,7 @@ func TestOpenAIGatewayService_Forward_HTTPThinkingSignatureRecoveryAndLineage(t 
 		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 		return c
 	}
-	input := `{"model":"gpt-5","stream":false,"prompt_cache_key":"issue-7700","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":[{"type":"reasoning","encrypted_content":"stale","summary":[{"type":"summary_text","text":"keep"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},{"type":"function_call_output","call_id":"call_1","output":"result"}]}`
+	input := `{"model":"gpt-5","stream":false,"prompt_cache_key":"issue-7700","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":[{"type":"reasoning","encrypted_content":"stale","summary":[{"type":"summary_text","text":"keep"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"result"}]}`
 	first, err := svc.Forward(context.Background(), newContext(), account, []byte(input))
 	require.NoError(t, err)
 	require.NotNil(t, first)
@@ -786,15 +786,23 @@ func TestOpenAIGatewayService_Forward_HTTPThinkingSignatureRecoveryAndLineage(t 
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.0.encrypted_content").Exists())
 	require.Equal(t, "keep", gjson.GetBytes(upstream.bodies[1], "input.0.summary.0.text").String())
 	require.Equal(t, "hello", gjson.GetBytes(upstream.bodies[1], "input.1.content.0.text").String())
-	require.Equal(t, "result", gjson.GetBytes(upstream.bodies[1], "input.2.output").String())
+	require.Equal(t, "result", gjson.GetBytes(upstream.bodies[1], "input.3.output").String())
 	require.Equal(t, "lookup", gjson.GetBytes(upstream.bodies[1], "tools.0.name").String())
+	for _, body := range upstream.bodies {
+		require.Equal(t, "lookup", gjson.GetBytes(body, "input.2.name").String())
+		require.Equal(t, "call_1", gjson.GetBytes(body, "input.2.call_id").String())
+		require.Equal(t, "{}", gjson.GetBytes(body, "input.2.arguments").String())
+		require.Equal(t, "call_1", gjson.GetBytes(body, "input.3.call_id").String())
+	}
 
 	second, err := svc.Forward(context.Background(), newContext(), account, []byte(input))
 	require.NoError(t, err)
 	require.NotNil(t, second)
 	require.Len(t, upstream.bodies, 3, "later turn should be stripped before its first upstream request")
 	require.False(t, gjson.GetBytes(upstream.bodies[2], "input.0.encrypted_content").Exists())
-	require.Equal(t, "result", gjson.GetBytes(upstream.bodies[2], "input.2.output").String())
+	require.Equal(t, "result", gjson.GetBytes(upstream.bodies[2], "input.3.output").String())
+	require.JSONEq(t, gjson.GetBytes(upstream.bodies[1], "input.2").Raw, gjson.GetBytes(upstream.bodies[2], "input.2").Raw)
+	require.JSONEq(t, gjson.GetBytes(upstream.bodies[1], "input.3").Raw, gjson.GetBytes(upstream.bodies[2], "input.3").Raw)
 }
 
 func TestOpenAIGatewayService_Forward_HTTPThinkingSignatureDoesNotRetryUnrelatedErrors(t *testing.T) {

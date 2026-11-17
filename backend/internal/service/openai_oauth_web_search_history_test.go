@@ -88,16 +88,11 @@ func TestEnsureOpenAIOAuthWebSearchToolForHistory(t *testing.T) {
 		{"declared via additional_tools", `{"input":[{"type":"additional_tools","tools":[{"type":"web_search"}]},` + search + `]}`, false, false, "", 0, "", nil},
 		{"no web_search_call item", `{"input":[{"type":"message","role":"user","content":"web_search_call"}],"tools":[]}`, false, false, "", 0, "", nil},
 		{"string input", `{"input":"web_search_call"}`, false, false, "", 0, "", nil},
-		{"lite inserts before compaction trigger", `{"input":[` + user + `,` + search + `,` + trigger + `]}`, true, true, "input.2.tools", 1, "none",
-			[]string{"message", "web_search_call", "additional_tools", "compaction_trigger"}},
-		{"lite appends without trigger", `{"input":` + history + `,"tool_choice":"auto"}`, true, true, "input.2.tools", 1, "none",
-			[]string{"message", "web_search_call", "additional_tools"}},
-		{"lite extends caller additional_tools", `{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"echo"}]},` + search + `,` + trigger + `],"tool_choice":"auto"}`, true, true, "input.0.tools", 2, "auto",
-			[]string{"additional_tools", "web_search_call", "compaction_trigger"}},
-		{"lite fills empty additional_tools", `{"input":[{"type":"additional_tools","role":"developer"},` + search + `]}`, true, true, "input.0.tools", 1, "none",
-			[]string{"additional_tools", "web_search_call"}},
-		{"lite keeps top-level tools untouched", `{"input":` + history + `,"tools":[{"type":"function","name":"echo"}]}`, true, true, "input.2.tools", 1, "",
-			[]string{"message", "web_search_call", "additional_tools"}},
+		{"lite preserves compaction history", `{"input":[` + user + `,` + search + `,` + trigger + `]}`, true, false, "", 0, "", nil},
+		{"lite preserves auto choice", `{"input":` + history + `,"tool_choice":"auto"}`, true, false, "", 0, "", nil},
+		{"lite preserves caller additional_tools", `{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"echo"}]},` + search + `,` + trigger + `],"tool_choice":"auto"}`, true, false, "", 0, "", nil},
+		{"lite preserves empty additional_tools", `{"input":[{"type":"additional_tools","role":"developer"},` + search + `]}`, true, false, "", 0, "", nil},
+		{"lite preserves top-level tools", `{"input":` + history + `,"tools":[{"type":"function","name":"echo"}]}`, true, false, "", 0, "", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,6 +104,12 @@ func TestEnsureOpenAIOAuthWebSearchToolForHistory(t *testing.T) {
 			require.Equal(t, tt.changed, ensureOpenAIOAuthWebSearchToolForHistory(req, tt.lite))
 			if !tt.changed {
 				require.JSONEq(t, tt.body, string(out))
+				mapOut, marshalErr := json.Marshal(req)
+				require.NoError(t, marshalErr)
+				require.JSONEq(t, tt.body, string(mapOut))
+				if tt.lite {
+					require.ErrorContains(t, validateOpenAIResponsesLiteFinalRequest(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, "gpt-6-astra", "true", out), "web_search_call history")
+				}
 				return
 			}
 			require.True(t, gjson.ValidBytes(out))

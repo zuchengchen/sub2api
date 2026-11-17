@@ -13,6 +13,9 @@ func beginOpenAIResponsesValidation(c *gin.Context, body []byte) {
 		return
 	}
 	ResetOpenAIResponsesValidationSearchSources(c)
+	carriers, _ := openAIRequestToolCategories(body)
+	c.Set(openAIClientToolsObservedKey, len(carriers) != 1 || carriers[0] != "none")
+	c.Set(openAIFinalProtocolDiagnosticKey, openAIFinalProtocolDiagnostic{})
 	root := parseRawJSONView(body)
 	if gjsonToolsContainWebSearch(root.Get("tools")) {
 		MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchClient)

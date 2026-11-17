@@ -1,74 +1,12 @@
 package service
 
-import (
-	"strings"
-)
-
 const openAIResponsesInputTextMaxChars = 10000000
 
-// sanitizeOpenAIResponsesOrphanToolOutputs removes tool-output items that have
-// no matching call or item reference anywhere in the current input. Named
-// function outputs without a call ID are standalone inputs, not orphan results.
-func sanitizeOpenAIResponsesOrphanToolOutputs(reqBody map[string]any, input []any, hasPreviousResponseID bool) bool {
-	if len(input) == 0 || hasPreviousResponseID {
-		return false
-	}
-
-	toolCallIDs := make(map[string]struct{}, len(input))
-	referenceIDs := make(map[string]struct{}, len(input))
-	for _, rawItem := range input {
-		item, ok := rawItem.(map[string]any)
-		if !ok {
-			continue
-		}
-		itemType := strings.TrimSpace(firstNonEmptyString(item["type"]))
-		if itemType == "item_reference" {
-			if id := strings.TrimSpace(firstNonEmptyString(item["id"])); id != "" {
-				referenceIDs[id] = struct{}{}
-			}
-			continue
-		}
-		if !isCodexToolCallContextItemType(itemType) {
-			continue
-		}
-		if id := strings.TrimSpace(firstNonEmptyString(item["call_id"], item["id"])); id != "" {
-			toolCallIDs[id] = struct{}{}
-		}
-	}
-
-	modified := false
-	normalized := make([]any, 0, len(input))
-	for _, rawItem := range input {
-		item, ok := rawItem.(map[string]any)
-		if !ok || !isCodexToolCallOutputItemType(strings.TrimSpace(firstNonEmptyString(item["type"]))) {
-			normalized = append(normalized, rawItem)
-			continue
-		}
-
-		callID := strings.TrimSpace(firstNonEmptyString(item["call_id"]))
-		// Codex sends externally supplied inputs (such as task delegation) as
-		// named function outputs without a preceding function call. Preserve
-		// their native type, namespace and output instead of silently dropping
-		// the request that started the turn.
-		if callID == "" && strings.TrimSpace(firstNonEmptyString(item["type"])) == "function_call_output" &&
-			strings.TrimSpace(firstNonEmptyString(item["name"])) != "" {
-			normalized = append(normalized, rawItem)
-			continue
-		}
-		_, hasToolCall := toolCallIDs[callID]
-		_, hasReference := referenceIDs[callID]
-		if callID != "" && (hasToolCall || hasReference) {
-			normalized = append(normalized, rawItem)
-			continue
-		}
-
-		modified = true
-	}
-	if !modified {
-		return false
-	}
-	reqBody["input"] = normalized
-	return true
+// sanitizeOpenAIResponsesOrphanToolOutputs is retained for compatibility with
+// callers that used to drop unmatched results. Missing continuation context is
+// an error or an upstream-owned reference, never permission to delete results.
+func sanitizeOpenAIResponsesOrphanToolOutputs(_ map[string]any, _ []any, _ bool) bool {
+	return false
 }
 
 func truncateOpenAIResponsesInputText(_ map[string]any) bool {

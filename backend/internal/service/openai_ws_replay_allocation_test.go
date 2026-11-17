@@ -20,7 +20,10 @@ func buildReplayTurnPayload(turn, itemBytes int) []byte {
 		if i > 1 {
 			_, _ = b.WriteString(",")
 		}
-		_, _ = fmt.Fprintf(&b, `{"type":"input_text","text":"turn-%d-%s"}`, i, filler)
+		_, _ = fmt.Fprintf(&b, `{"role":"user","content":"turn-%d-%s"}`, i, filler)
+		if i < turn {
+			_, _ = fmt.Fprintf(&b, `,{"type":"message","id":"msg_%d","role":"assistant","content":[]}`, i)
+		}
 	}
 	_, _ = b.WriteString(`]}`)
 	return []byte(b.String())
@@ -43,23 +46,24 @@ func TestOpenAIWSReplayStateBuildAllocationBounded(t *testing.T) {
 
 	var history []json.RawMessage
 	historyExists := false
-	delta := []json.RawMessage{json.RawMessage(`{"type":"function_call","id":"item_1","call_id":"call_1","name":"exec","arguments":"{}"}`)}
+	var observed openAIWSObservedOutputProvenance
 
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
 	for turn := 1; turn <= turns; turn++ {
-		items, exists, err := buildOpenAIWSReplayInputSequence(history, historyExists, payloads[turn-1], turn > 1)
+		items, exists, err := buildOpenAIWSReplayInputSequence(history, historyExists, payloads[turn-1], turn > 1, &observed)
 		require.NoError(t, err)
 		require.True(t, exists)
-		require.Len(t, items, turn)
+		require.Len(t, items, 2*turn-1)
 		// 保存历史 + collector 增量合并（与 ingress/bridge 保存点同构）。
+		delta := []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"type":"message","id":"msg_%d","role":"assistant","content":[]}`, turn))}
+		observed.observeCompleteOutput(delta)
 		history = combineOpenAIWSReplayItems(items, delta)
 		historyExists = true
-		// 下一轮 payload 含全部用户项但不含 collector 项，触发 sanitize+merge 路径中
-		// 最常见的 prefix 分支比较。
-		history = history[:len(history)-1]
+		// 下一轮显式包含已收集的输出，足以证明 full history 前缀；纯用户
+		// 文本重叠按增量语义保留，不用于这个零拷贝正向回归。
 	}
 
 	var after runtime.MemStats

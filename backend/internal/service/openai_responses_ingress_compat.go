@@ -58,7 +58,7 @@ func normalizeOpenAIResponsesLegacyIngressWithConfig(cfg *config.Config, body []
 			if !hasNativeInput {
 				request["input"] = legacy.input
 				applyLegacyResponsesTopLevelFields(request, legacy)
-				delete(request, "previous_response_id")
+				// Legacy input conversion does not prove that an explicit anchor is redundant.
 			}
 		}
 		// messages is not a Responses field. When native input is present but the

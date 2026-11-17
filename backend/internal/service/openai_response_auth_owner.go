@@ -37,8 +37,23 @@ type openAIResponseAuthOwnerStore interface {
 var errOpenAIResponseAuthOwnerMismatch = errors.New("previous_response_id is not available for this credential or user")
 
 func openAIResponseAuthOwnerFingerprint(account *Account) string {
-	if account == nil || !account.IsOpenAIOAuth() {
+	if account == nil || (!account.IsOpenAIOAuth() && !account.IsOpenAIApiKey()) {
 		return ""
+	}
+	if account.IsOpenAIApiKey() {
+		// API keys lack the stable OAuth owner claims that allow access-token
+		// refresh. Bind the exact credential revision and endpoint, hashing
+		// length-delimited values without retaining or logging the secret.
+		h := sha256.New()
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(account.ID))
+		_, _ = h.Write(size[:])
+		for _, part := range []string{account.Platform, account.Type, account.GetOpenAIBaseURL(), account.GetCredential("api_key")} {
+			binary.BigEndian.PutUint64(size[:], uint64(len(part)))
+			_, _ = h.Write(size[:])
+			_, _ = h.Write([]byte(part))
+		}
+		return hex.EncodeToString(h.Sum(nil))
 	}
 	owner := openAIOAuthOwnerForAccount(account)
 	h := sha256.New()
@@ -102,7 +117,7 @@ func (s *OpenAIGatewayService) validateOpenAIResponseAuthOwner(ctx context.Conte
 }
 
 func (s *OpenAIGatewayService) bindOpenAIResponseAuthOwner(ctx context.Context, c *gin.Context, account *Account, responseID string) {
-	if s == nil || account == nil || !account.IsOpenAIOAuth() || strings.TrimSpace(responseID) == "" {
+	if s == nil || account == nil || (!account.IsOpenAIOAuth() && !account.IsOpenAIApiKey()) || strings.TrimSpace(responseID) == "" {
 		return
 	}
 	store, ok := s.getOpenAIWSStateStore().(openAIResponseAuthOwnerStore)

@@ -45,7 +45,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnLaterTurn429FailsOverBeforeClientWrite(t *te
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
-	payload := []byte(`{"type":"response.create","model":"gpt-5.6-sol","previous_response_id":"resp_old","input":[{"role":"user","content":"continue"}]}`)
+	payload := []byte(`{"type":"response.create","model":"gpt-5.6-sol","input":[{"role":"user","content":"continue"}]}`)
 	writes := 0
 
 	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
