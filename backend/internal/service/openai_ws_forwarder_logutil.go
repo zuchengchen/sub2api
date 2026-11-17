@@ -199,19 +199,27 @@ func openAIWSMessageLikelyContainsToolCalls(message []byte) bool {
 }
 
 func parseOpenAIWSResponseUsageFromCompletedEvent(message []byte, usage *OpenAIUsage) {
+	parseOpenAIWSResponseUsageWithObservation(message, usage)
+}
+
+// Return only whether the existing parser observed upstream usage, including
+// zero. The observation never changes accumulation, replay or billing rules.
+func parseOpenAIWSResponseUsageWithObservation(message []byte, usage *OpenAIUsage) bool {
 	if usage == nil || len(message) == 0 || !bytes.Contains(message, []byte(`"usage"`)) {
-		return
+		return false
 	}
 	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(message); ok {
 		if openAIStreamEventTypeIsTerminal(effectiveOpenAISSEEventType(message, "")) {
 			if !openAIUsageHasTokens(&parsedUsage) && openAIUsageHasTokens(usage) {
-				return
+				return true
 			}
 			*usage = parsedUsage
 		} else {
 			mergeOpenAIUsageNonZero(usage, parsedUsage)
 		}
+		return true
 	}
+	return false
 }
 
 func parseOpenAIWSErrorEventFields(message []byte) (code string, errType string, errMessage string) {

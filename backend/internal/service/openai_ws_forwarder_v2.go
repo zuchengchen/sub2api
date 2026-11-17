@@ -764,6 +764,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	usage := &OpenAIUsage{}
+	usageObserved := false
+	upstreamTerminalSeen := false
 	cookieProbeObserver := openAICookieWSProbeObserver{enabled: cookieWS && openAICookieWSIsProbePayload(payload)}
 	imageCounter := newOpenAIImageOutputCounter()
 	// 部分上游（ChatGPT Codex WS）的 response.completed 只带 output:[]，正文仅在
@@ -964,6 +966,19 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		upstreamTerminalEvent = "response.incomplete"
 		message := "upstream websocket ended before completing the response"
 		setOpsUpstreamError(c, http.StatusBadGateway, sanitizeUpstreamErrorMessage(cause.Error()), "")
+		if !clientDisconnected && ctx.Err() == nil {
+			usageSource := OpsReplayUsageAbsent
+			if usageObserved {
+				usageSource = OpsReplayUsageUpstream
+			}
+			recordOpenAIWSReadDiagnostic(c, account, OpsReplayBoundary{
+				UpstreamProgressObserved: upstreamProgress(),
+				ClientOutputStarted:      clientOutputStarted && wroteDownstream,
+				TerminalSeen:             upstreamTerminalSeen,
+				UsageSource:              usageSource,
+				RetryRequested:           false,
+			})
+		}
 		if !reqStream && !clientDisconnected {
 			MarkResponseCommitted(c)
 			c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "message": message}})
@@ -1190,6 +1205,9 @@ readLoop:
 		isTerminalEvent := isOpenAIWSTerminalEvent(eventType)
 		if isTerminalEvent {
 			terminalEventCount++
+			if !synthesizedParameterFailure {
+				upstreamTerminalSeen = true
+			}
 		}
 		if firstTokenMs == nil && isTokenEvent {
 			ms := int(time.Since(startTime).Milliseconds())
@@ -1222,7 +1240,9 @@ readLoop:
 		}
 		replayGuard.Observe(message, eventType)
 		if openAIWSMessageShouldParseUsage(eventType, message) {
-			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
+			if observed := parseOpenAIWSResponseUsageWithObservation(message, usage); observed && !synthesizedParameterFailure {
+				usageObserved = true
+			}
 		}
 		imageCounter.AddSSEData(message)
 		// 放在用量/图片计数之后：补进 terminal 的 item 已由 output_item.done 计过，
