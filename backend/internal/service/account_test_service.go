@@ -74,6 +74,9 @@ type TestEvent struct {
 type AccountTestOptions struct {
 	ImageDataURL string
 	AudioDataURL string
+	// Called at a successful Responses terminal if an OAuth rejection affects
+	// this test. Only a confirmed proof may recover the account's stored state.
+	OnOpenAIAccessVerification func(ctx context.Context, verified bool)
 }
 
 func firstAccountTestOptions(opts []AccountTestOptions) AccountTestOptions {
@@ -538,7 +541,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	}
 
 	if account.IsOpenAI() {
-		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
+		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode), testOpts)
 	}
 
 	if account.Platform == PlatformGrok {
@@ -921,7 +924,7 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 }
 
 // testOpenAIAccountConnection tests an OpenAI account's connection
-func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string) error {
+func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string, opts ...AccountTestOptions) error {
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
 	if err := validateRetiredOpenAIRequestModel(account, modelID, false, account.GetMappedModel(modelID)); err != nil {
@@ -1094,12 +1097,23 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		proxyURL = account.Proxy.URL()
 	}
 
+	// A read-only intelligent test can run with a prepared identity. Only the
+	// ordinary connection test may attest to this account's stored credential.
+	var refreshAPI *OAuthRefreshAPI
+	if intelligentContext(ctx) == nil && s.openaiGatewayService != nil && s.openaiGatewayService.openAITokenProvider != nil {
+		refreshAPI = s.openaiGatewayService.openAITokenProvider.refreshAPI
+	}
+	rejection := refreshAPI.openAIRejectionForAccount(account)
 	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	sentAuthorization := openAITestResponseAuthorization(account, resp.Request)
+	if resp.StatusCode == http.StatusUnauthorized {
+		refreshAPI.rejectVerifiedOpenAIAccess(account, sentAuthorization)
+	}
 	if isOAuth && s.accountRepo != nil {
 		if updates, err := extractOpenAICodexProbeUpdates(resp); err == nil && len(updates) > 0 {
 			_ = s.accountRepo.UpdateExtra(ctx, account.ID, updates)
@@ -1116,7 +1130,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 				return s.sendErrorAndEnd(c, fmt.Sprintf("Agent Identity task recovery failed: %s", err.Error()))
 			}
 			c.Request = c.Request.WithContext(markAgentIdentityTaskRecoveryTried(ctx))
-			return s.testOpenAIAccountConnection(c, account, modelID, prompt, mode)
+			return s.testOpenAIAccountConnection(c, account, modelID, prompt, mode, opts...)
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
@@ -1129,8 +1143,39 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 	}
 
-	// Process SSE stream
-	return s.processOpenAIStream(c, resp.Body)
+	if refreshAPI == nil {
+		return s.processOpenAIStream(c, resp.Body)
+	}
+	onVerification := firstAccountTestOptions(opts).OnOpenAIAccessVerification
+	return s.processOpenAIStreamWithCompletion(c, resp.Body, func() {
+		if rejection == nil && refreshAPI.openAIRejectionForAccount(account) == nil {
+			return
+		}
+		verifyCtx, cancel := openAIAccountStateContext(ctx)
+		defer cancel()
+		var afterVerify func()
+		if onVerification != nil {
+			afterVerify = func() { onVerification(verifyCtx, true) }
+		}
+		if ctx.Err() == nil && refreshAPI.verifyOpenAIAccessAfterTest(verifyCtx, account, rejection, sentAuthorization, afterVerify) {
+			return
+		}
+		if onVerification != nil {
+			onVerification(verifyCtx, false)
+		}
+	})
+}
+
+// Redirects can change the destination, bearer or workspace. Attribute the
+// response to the identity on the final request reported by the transport.
+func openAITestResponseAuthorization(account *Account, sent *http.Request) string {
+	if sent == nil || sent.URL == nil || sent.Method != http.MethodPost || sent.URL.String() != chatgptCodexAPIURL {
+		return ""
+	}
+	if (sent.Host != "" && !strings.EqualFold(sent.Host, sent.URL.Host)) || sent.Header.Get("chatgpt-account-id") != account.GetChatGPTAccountID() {
+		return ""
+	}
+	return sent.Header.Get("Authorization")
 }
 
 // testGrokAccountConnection routes Grok admin connectivity tests by explicit mode first,
@@ -2728,6 +2773,10 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 
 // processOpenAIStream processes the SSE stream from OpenAI Responses API
 func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
+	return s.processOpenAIStreamWithCompletion(c, body, nil)
+}
+
+func (s *AccountTestService) processOpenAIStreamWithCompletion(c *gin.Context, body io.Reader, beforeComplete func()) error {
 	reader := bufio.NewReader(body)
 	buffered := c.Request != nil && intelligentContext(c.Request.Context()) != nil
 	var text strings.Builder
@@ -2796,6 +2845,11 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 							return s.sendErrorAndEnd(c, "OpenAI final output differs from the streamed text")
 						}
 						finalText = finalText[text.Len():]
+					}
+					// Publish confirmed account state before the client can receive
+					// test_complete and close the stream.
+					if beforeComplete != nil {
+						beforeComplete()
 					}
 					if finalText != "" {
 						s.sendEvent(c, TestEvent{Type: "content", Text: finalText})

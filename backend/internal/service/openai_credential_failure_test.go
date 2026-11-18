@@ -113,6 +113,19 @@ func TestOpenAIOAuthCredentialFailureSchedulerSkipsOnlyRejectedVersion(t *testin
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
+			// With the other account excluded, a verified token can now take
+			// a queued request in either scheduler. A later 401 removes it again.
+			api := provider.refreshAPI
+			bearer := "Bearer " + account.GetOpenAIAccessToken()
+			api.verifyOpenAIAccessAfterTest(context.Background(), account, api.openAIRejectionForAccount(account), bearer, nil)
+			selection, _, err = svc.SelectAccountWithScheduler(context.Background(), &groupID, "", "", "gpt-6-astra", map[int64]struct{}{healthy.ID: {}}, OpenAIUpstreamTransportAny, false)
+			require.NoError(t, err)
+			require.Equal(t, account.ID, selection.Account.ID)
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			api.rejectVerifiedOpenAIAccess(account, bearer)
+			require.True(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-6-astra", false))
 			reauthorized := snapshotOAuthRefreshAccount(account)
 			reauthorized.Credentials["access_token"] = "reauthorized-access"
 			reauthorized.Credentials["refresh_token"] = "reauthorized-refresh"

@@ -7,6 +7,27 @@ import (
 	"strings"
 )
 
+// Token acquisition may observe a rotation after selection. Resolve the actual
+// version before sending so a late 401 cannot invalidate a newer credential.
+func (p *OpenAITokenProvider) accountForSentOpenAIAccess(ctx context.Context, selected *Account, authorization string) *Account {
+	if p == nil || p.refreshAPI == nil || p.accountRepo == nil || selected == nil {
+		return selected
+	}
+	if _, rejected := p.refreshAPI.openAIFailures.Load(selected.ID); !rejected {
+		return selected
+	}
+	token, bearer := strings.CutPrefix(authorization, "Bearer ")
+	if !bearer || token == "" || token == selected.GetOpenAIAccessToken() || !canRecoverOpenAIOAuth(selected) {
+		return selected
+	}
+	latest, err := p.accountRepo.GetByID(ctx, selected.ID)
+	if err != nil || latest == nil || latest.ID != selected.ID || !latest.IsActive() || !canRecoverOpenAIOAuth(latest) ||
+		!sameOpenAIOAuthOwner(selected, latest) || token != latest.GetOpenAIAccessToken() {
+		return nil
+	}
+	return latest
+}
+
 // Codex's first 401 recovery step is a guarded reload of durable credentials.
 // Both Changed and Unchanged permit one replay; a missing/mismatched account
 // identity stops recovery. Only a subsequent 401 may rotate the refresh token.
@@ -59,39 +80,50 @@ func (s *OpenAIGatewayService) recoverOpenAIOAuthHeaders(ctx context.Context, ac
 
 // refreshOpenAIWSAuthHeaders also runs for delayed prewarming. Never retain an
 // old OAuth bearer in a future dial after another request rotates credentials.
-func (s *OpenAIGatewayService) refreshOpenAIWSAuthHeaders(ctx context.Context, account *Account, headers http.Header) (http.Header, error) {
+func (s *OpenAIGatewayService) refreshOpenAIWSAuthHeaders(ctx context.Context, account *Account, headers http.Header) (http.Header, *Account, error) {
 	if s.isAgentIdentityAccount(ctx, account) {
-		return s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
+		updated, err := s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
+		return updated, nil, err
 	}
 	if s.openAITokenProvider == nil {
-		return headers, nil
+		return headers, nil, nil
 	}
 	owner, err := s.openAIOAuthCredentialOwner(ctx, account)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !canRecoverOpenAIOAuth(owner) {
-		return headers, nil
+		return headers, nil, nil
 	}
 	if s.openAITokenProvider.accountRepo != nil {
 		latest, readErr := s.openAITokenProvider.accountRepo.GetByID(ctx, owner.ID)
 		if readErr != nil || latest == nil || !sameOpenAIOAuthOwner(owner, latest) || !latest.IsActive() || !canRecoverOpenAIOAuth(latest) {
-			return nil, errors.New("OpenAI OAuth credential state is unavailable")
+			return nil, nil, errors.New("OpenAI OAuth credential state is unavailable")
 		}
 		owner = latest
 	}
 	ctx = withCodexSourceBuildAuthIdentity(ctx, owner, headers)
 	token, err := s.openAITokenProvider.GetAccessToken(ctx, owner)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	updated := headers.Clone()
 	updated.Set("Authorization", "Bearer "+token)
-	return updated, nil
+	return updated, s.openAITokenProvider.accountForSentOpenAIAccess(ctx, owner, updated.Get("Authorization")), nil
 }
 
 func (s *OpenAIGatewayService) acquireOpenAIWSWithAuthRecovery(ctx context.Context, pool *openAIWSConnPool, request *openAIWSAcquireRequest) (*openAIWSConnLease, error) {
-	lease, err := pool.Acquire(ctx, *request)
+	initial := *request
+	if p := s.openAITokenProvider; p != nil {
+		initial.onUnauthorized = p.refreshAPI.rejectVerifiedOpenAIAccess
+		if initial.HeadersFactory == nil {
+			selected := request.Account
+			initial.HeadersFactory = func(ctx context.Context, h http.Header) (http.Header, *Account, error) {
+				return h, p.accountForSentOpenAIAccess(ctx, selected, h.Get("Authorization")), nil
+			}
+		}
+	}
+	lease, err := pool.Acquire(ctx, initial)
 	var dialErr *openAIWSDialError
 	if err == nil || !errors.As(err, &dialErr) || dialErr.StatusCode != http.StatusUnauthorized || ctx.Err() != nil {
 		return lease, err
@@ -103,7 +135,8 @@ func (s *OpenAIGatewayService) acquireOpenAIWSWithAuthRecovery(ctx context.Conte
 	request.Headers = headers
 	// Do not reuse another connection authenticated with the rejected token.
 	// Active leases belong to other turns and must not be closed by this retry.
-	retry := cloneOpenAIWSAcquireRequest(*request)
+	retry := cloneOpenAIWSAcquireRequest(initial)
+	retry.Headers = headers
 	retry.ForceNewConn = true
 	lease, err = pool.Acquire(ctx, retry)
 	if err == nil || !errors.As(err, &dialErr) || dialErr.StatusCode != http.StatusUnauthorized || ctx.Err() != nil {

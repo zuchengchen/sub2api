@@ -53,6 +53,12 @@ type GrokOAuthRefreshMutationRepository interface {
 	SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnchanged(ctx context.Context, id int64, expectedCredentials map[string]any, expectedProxyID *int64, until time.Time, reason string) (bool, error)
 }
 
+// OpenAIOAuthRefreshErrorRepository records a background refresh rejection
+// without changing the administrator's scheduling switch.
+type OpenAIOAuthRefreshErrorRepository interface {
+	SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(ctx context.Context, id int64, expectedCredentials map[string]any, expectedProxyID *int64, errorMsg string) (bool, error)
+}
+
 // TokenRefreshService OAuth token自动刷新服务
 // 定期检查并刷新即将过期的token
 type TokenRefreshService struct {
@@ -974,6 +980,10 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
 			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
+			var openAIError *openai.RefreshTokenError
+			if s.refreshAPI != nil && executor != nil && canRecoverOpenAIOAuth(account) && errors.As(err, &openAIError) && openAIError.Permanent {
+				return s.handleRejectedOpenAIRefresh(ctx, account, openAIError, errorMsg)
+			}
 			isGrokOAuth := account.IsGrokOAuth()
 			if !isGrokOAuth {
 				s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
@@ -1018,15 +1028,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			}
 			cacheInvalidationFailed := false
 			if account.Type == AccountTypeOAuth && (!isGrokOAuth || persistentlyBlocked) {
-				if s.cacheInvalidator == nil {
-					cacheInvalidationFailed = true
-				} else if invalidateErr := s.cacheInvalidator.InvalidateToken(ctx, account); invalidateErr != nil {
-					cacheInvalidationFailed = true
-					slog.Warn("token_refresh.invalidate_failed_token_cache_failed",
-						"account_id", account.ID,
-						"error", logredact.RedactText(invalidateErr.Error()),
-					)
-				}
+				cacheInvalidationFailed = !s.invalidateRejectedRefreshToken(ctx, account)
 			}
 			return &accountPermanentRefreshError{
 				err:                     err,
@@ -1125,6 +1127,57 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 	}
 
 	return lastErr
+}
+
+func (s *TokenRefreshService) handleRejectedOpenAIRefresh(ctx context.Context, attempted *Account, cause *openai.RefreshTokenError, errorMsg string) error {
+	// RefreshIfNeeded has released this lock. Order the whole status update
+	// with a successful test so it cannot disable access after test recovery.
+	mu := s.refreshAPI.getLocalLock(OpenAITokenCacheKey(attempted))
+	if err := mu.Lock(ctx); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+
+	latest, err := s.accountRepo.GetByID(ctx, attempted.ID)
+	if err != nil {
+		return &providerCycleContainmentRefreshError{err: fmt.Errorf("reread OpenAI account before recording refresh failure: %w", err)}
+	}
+	if latest == nil || latest.ID != attempted.ID || !latest.IsActive() {
+		return errRefreshSkipped
+	}
+	failure := s.refreshAPI.openAIRejectionForAccount(latest)
+	if failure == nil || failure.err != cause || failure.credentials != openAIRefreshFingerprint(attempted) ||
+		failure.accessVerifiedAt(latest, time.Now()) {
+		return errRefreshSkipped
+	}
+	repo, ok := s.accountRepo.(OpenAIOAuthRefreshErrorRepository)
+	if !ok {
+		return &providerConfigurationRefreshError{err: errors.New("OpenAI OAuth conditional refresh error repository is not configured")}
+	}
+	applied, err := repo.SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(ctx, attempted.ID, attempted.Credentials, attempted.ProxyID, errorMsg)
+	if err != nil {
+		return &providerCycleContainmentRefreshError{err: fmt.Errorf("record OpenAI refresh rejection: %w", err)}
+	}
+	if !applied {
+		return errRefreshSkipped
+	}
+	s.notifyAccountSchedulingBlocked(attempted, time.Time{}, "token_refresh_non_retryable")
+	return &accountPermanentRefreshError{
+		err:                     cause,
+		persistentlyBlocked:     true,
+		cacheInvalidationFailed: !s.invalidateRejectedRefreshToken(ctx, attempted),
+	}
+}
+
+func (s *TokenRefreshService) invalidateRejectedRefreshToken(ctx context.Context, account *Account) bool {
+	if s.cacheInvalidator == nil {
+		return false
+	}
+	if err := s.cacheInvalidator.InvalidateToken(ctx, account); err != nil {
+		slog.Warn("token_refresh.invalidate_failed_token_cache_failed", "account_id", account.ID, "error", logredact.RedactText(err.Error()))
+		return false
+	}
+	return true
 }
 
 func (s *TokenRefreshService) retryBackoff(accountID int64, attempt int) time.Duration {

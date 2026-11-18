@@ -22,10 +22,27 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	if err := s.maybeCompressCodexUpstreamRequest(request, account); err != nil {
 		return nil, err
 	}
-	rejectedToken := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+	sentAuthorization := request.Header.Get("Authorization")
+	rejectedToken := strings.TrimPrefix(sentAuthorization, "Bearer ")
+	responses := request.URL != nil && strings.HasSuffix(strings.TrimRight(request.URL.Path, "/"), "/responses")
+	sentAccount := account
+	if responses {
+		sentAccount = s.openAITokenProvider.accountForSentOpenAIAccess(request.Context(), account, sentAuthorization)
+	}
 	response, err := s.doOpenAIUpstreamOnce(request, proxyURL, account)
-	if err != nil || response == nil || response.StatusCode != http.StatusUnauthorized || s.openAITokenProvider == nil || request.Context().Err() != nil {
+	if err != nil || response == nil || response.StatusCode != http.StatusUnauthorized || s.openAITokenProvider == nil {
 		return response, err
+	}
+	// A Responses 401 invalidates any proof for this bearer even if the body
+	// cannot be replayed. Tool-specific 401s do not establish an inference failure.
+	if responses {
+		if !sameOpenAIResponsesAuthAttempt(request, response.Request, sentAuthorization) {
+			return response, nil
+		}
+		s.openAITokenProvider.refreshAPI.rejectVerifiedOpenAIAccess(sentAccount, sentAuthorization)
+	}
+	if request.Context().Err() != nil {
+		return response, nil
 	}
 	// Only replay bodies with an explicit rewind contract, before any response
 	// body has been passed to the caller or an SSE frame has been committed.
@@ -36,7 +53,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	if err != nil {
 		return response, nil
 	}
-	if !canRecoverOpenAIOAuth(credentialAccount) || rejectedToken == "" || rejectedToken == request.Header.Get("Authorization") {
+	if !canRecoverOpenAIOAuth(credentialAccount) || rejectedToken == "" || rejectedToken == sentAuthorization {
 		return response, nil
 	}
 	retry := request.Clone(request.Context())
@@ -57,12 +74,22 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		_ = response.Body.Close()
 	}
 	retry.Header = reloadedHeaders
+	sentAuthorization = reloadedHeaders.Get("Authorization")
 	response, err = s.doOpenAIUpstreamOnce(retry, proxyURL, account)
-	if err != nil || response == nil || response.StatusCode != http.StatusUnauthorized || request.Context().Err() != nil {
+	if err != nil || response == nil || response.StatusCode != http.StatusUnauthorized {
 		return response, err
 	}
+	if responses {
+		if !sameOpenAIResponsesAuthAttempt(retry, response.Request, sentAuthorization) {
+			return response, nil
+		}
+		s.openAITokenProvider.refreshAPI.rejectVerifiedOpenAIAccess(reloadedOwner, sentAuthorization)
+	}
+	if request.Context().Err() != nil {
+		return response, nil
+	}
 	credentialAccount = reloadedOwner
-	rejectedToken = strings.TrimPrefix(reloadedHeaders.Get("Authorization"), "Bearer ")
+	rejectedToken = strings.TrimPrefix(sentAuthorization, "Bearer ")
 	retry = request.Clone(request.Context())
 	if request.GetBody != nil {
 		retry.Body, err = request.GetBody()
@@ -85,12 +112,19 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	}
 	retry.Header.Set("Authorization", "Bearer "+token)
 	response, err = s.doOpenAIUpstreamOnce(retry, proxyURL, account)
-	if err == nil && response != nil && response.StatusCode == http.StatusUnauthorized && request.URL != nil && strings.HasSuffix(strings.TrimRight(request.URL.Path, "/"), "/responses") {
-		// A tool-specific endpoint may deny access independently of inference.
-		// Only the Responses endpoint establishes rejection of the repaired auth.
+	if err == nil && response != nil && response.StatusCode == http.StatusUnauthorized && responses && sameOpenAIResponsesAuthAttempt(retry, response.Request, "Bearer "+token) {
 		s.openAITokenProvider.RecordUnauthorizedAfterRefresh(request.Context(), credentialAccount, token)
 	}
 	return response, err
+}
+
+// A redirect can change the endpoint, omit credentials, or select a different
+// workspace. Only a 401 for the inference attempt itself is evidence about it.
+func sameOpenAIResponsesAuthAttempt(request, final *http.Request, authorization string) bool {
+	return final != nil && final.URL != nil && final.Header.Get("Authorization") == authorization &&
+		final.Method == request.Method && final.URL.String() == request.URL.String() &&
+		strings.EqualFold(final.Host, request.Host) &&
+		final.Header.Get("chatgpt-account-id") == request.Header.Get("chatgpt-account-id")
 }
 
 // maybeCompressCodexUpstreamRequest keeps plain JSON by default. Some valid
