@@ -181,6 +181,20 @@ func TestKeyPouchPostgres(t *testing.T) {
 		require.ErrorIs(t, e, service.KeyPouchIdentityConflict)
 		require.Zero(t, scalar(`SELECT count(*) FROM account_groups g JOIN accounts a ON a.id=g.account_id WHERE a.name='ambiguous@example.invalid'`))
 	})
+	t.Run("legacy token-only account blocks duplicate", func(t *testing.T) {
+		const address = "historic@example.invalid"
+		payload := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/profile":{"email":"historic@example.invalid"}}`))
+		b, e := json.Marshal(map[string]string{"access_token": "e30." + payload + ".fixture"})
+		require.NoError(t, e)
+		exec(`INSERT INTO accounts(name,platform,type,credentials) VALUES('Unrelated display label','openai','oauth',$1)`, b)
+		_, e = h.start(ctx, "legacy-email", address)
+		require.ErrorIs(t, e, service.KeyPouchIdentityConflict)
+		// The ambiguous legacy claim cannot be hidden by a well-formed duplicate.
+		insert(address, "historical-ws", "historical-user")
+		_, e = h.start(ctx, "legacy-and-indexed", address)
+		require.ErrorIs(t, e, service.KeyPouchIdentityConflict)
+		require.Zero(t, scalar(`SELECT count(*) FROM account_groups ag JOIN accounts a ON a.id=ag.account_id WHERE a.name IN ($1,'Unrelated display label')`, address))
+	})
 	t.Run("provider consent and same-email races", func(t *testing.T) {
 		const email = "new@example.invalid"
 		priv, e := rsa.GenerateKey(rand.Reader, 2048)

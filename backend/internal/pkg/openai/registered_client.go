@@ -77,8 +77,11 @@ func RefreshKeyPouchGrant(ctx context.Context, clientID, refreshToken, proxyURL 
 // Decode only after verifying a fresh ID token, or to veto inconsistent
 // metadata on an already trusted account. This function does not verify a JWT.
 type KeyPouchCredentialClaims struct {
-	Email string            `json:"email"`
-	Auth  *OpenAIAuthClaims `json:"https://api.openai.com/auth"`
+	Email   string            `json:"email"`
+	Auth    *OpenAIAuthClaims `json:"https://api.openai.com/auth"`
+	Profile struct {
+		Email string `json:"email"`
+	} `json:"https://api.openai.com/profile"`
 }
 
 func DecodeKeyPouchCredentialClaims(token string) (*KeyPouchCredentialClaims, error) {
@@ -86,7 +89,13 @@ func DecodeKeyPouchCredentialClaims(token string) (*KeyPouchCredentialClaims, er
 	if len(parts) != 3 {
 		return nil, errors.New("invalid JWT")
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	return DecodeKeyPouchCredentialPayload(parts[1])
+}
+
+// DecodeKeyPouchCredentialPayload accepts just a payload segment, so a
+// legacy lookup does not need to retrieve usable credentials from storage.
+func DecodeKeyPouchCredentialPayload(segment string) (*KeyPouchCredentialClaims, error) {
+	payload, err := base64.RawURLEncoding.DecodeString(segment)
 	if err != nil {
 		return nil, errors.New("invalid JWT payload")
 	}
@@ -98,8 +107,10 @@ func DecodeKeyPouchCredentialClaims(token string) (*KeyPouchCredentialClaims, er
 }
 
 func (c *KeyPouchCredentialClaims) AgreesWith(email, workspace, user string) bool {
-	if c.Email != "" && email != "" && !strings.EqualFold(strings.TrimSpace(c.Email), email) {
-		return false
+	for _, value := range []string{c.Email, c.Profile.Email} {
+		if value != "" && email != "" && !strings.EqualFold(strings.TrimSpace(value), email) {
+			return false
+		}
 	}
 	if c.Auth == nil {
 		return true
