@@ -43,11 +43,22 @@ func TestForwardAsAnthropic_BufferedResponseFailed_ReturnsError(t *testing.T) {
 	}
 
 	account := rawChatCompletionsTestAccount()
-	_, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 
 	require.Error(t, err, "non-cyber response.failed must return an error, not swallow as 200")
 	require.Contains(t, err.Error(), "upstream response failed")
-	require.Equal(t, http.StatusBadGateway, rec.Code, "should write 502 for non-failover failed response")
+	// The structured invalid_request_error is a deterministic 400, even when
+	// its message mentions policy. The failure and metered usage must survive.
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+	require.JSONEq(t, `{"type":"error","error":{"type":"invalid_request_error","message":"Content policy violation"}}`, rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, c.GetInt(OpsUpstreamStatusCodeKey))
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr), "a deterministic rejection cannot invite account replay")
+	require.Len(t, upstream.requests, 1, "metered failure must not execute the request twice")
+	require.NotNil(t, result, "actual upstream usage remains available for failure settlement")
+	require.Equal(t, 10, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
 }
 
 func TestForwardAsAnthropic_StreamingResponseFailed_ReturnsError(t *testing.T) {

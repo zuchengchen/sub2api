@@ -65,7 +65,9 @@ func RegisterGatewayRoutes(
 		dispatchCodexModelsGateway(c, h.OpenAIGateway.CodexModels, h.Gateway.CodexModels)
 	}
 	modelsHandler := func(c *gin.Context) {
-		if c.Query("client_version") != "" {
+		// Browser downloads select the manifest shape without pretending to
+		// be an old CLI; the existing service resolves an absent version.
+		if c.Query("client_version") != "" || c.Query("format") == "codex" {
 			codexModelsHandler(c)
 			return
 		}
