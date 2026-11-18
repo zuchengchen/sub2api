@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,7 +55,7 @@ func TestOpenAIWSOAuthRecovery_LocalHandshakeRefreshOnce(t *testing.T) {
 			svc := &OpenAIGatewayService{accountRepo: repo, openAITokenProvider: provider}
 			headers := make(http.Header)
 			headers.Set("Authorization", "Bearer rejected-access")
-			request := openAIWSAcquireRequest{Account: account, WSURL: "ws" + strings.TrimPrefix(server.URL, "http") + "/responses", Headers: headers, HeadersFactory: func(ctx context.Context, headers http.Header) (http.Header, error) {
+			request := openAIWSAcquireRequest{Account: account, WSURL: "ws" + strings.TrimPrefix(server.URL, "http") + "/responses", Headers: headers, HeadersFactory: func(ctx context.Context, headers http.Header) (http.Header, *Account, error) {
 				return svc.refreshOpenAIWSAuthHeaders(ctx, account, headers)
 			}}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -87,7 +88,7 @@ func TestOpenAIWSOAuthRecovery_LocalHandshakeRefreshOnce(t *testing.T) {
 			lease.MarkBroken()
 			lease.Release()
 			// A later dial with stale caller headers must use the durable replacement.
-			fresh, err := svc.refreshOpenAIWSAuthHeaders(ctx, account, headers)
+			fresh, _, err := svc.refreshOpenAIWSAuthHeaders(ctx, account, headers)
 			require.NoError(t, err)
 			require.Equal(t, "Bearer repaired-access", fresh.Get("Authorization"))
 			require.Zero(t, repo.setError)
@@ -97,6 +98,81 @@ func TestOpenAIWSOAuthRecovery_LocalHandshakeRefreshOnce(t *testing.T) {
 
 type openAIRecoveryLocalDialer struct {
 	url string
+}
+
+func TestOpenAIWSOAuthRecovery_VerifiedAccess401UsesDialCredentials(t *testing.T) {
+	for _, mode := range []string{"static_headers", "static_rotated_credentials", "factory_rotated_credentials"} {
+		t.Run(mode, func(t *testing.T) {
+			account, repo, executor, provider := newOpenAIRecoveryFixture()
+			svc := &OpenAIGatewayService{accountRepo: repo, openAITokenProvider: provider}
+			current := snapshotOAuthRefreshAccount(account)
+			req := openAIWSAcquireRequest{Account: account, WSURL: "wss://fixture.invalid/responses", Headers: make(http.Header)}
+			req.Headers.Set("Authorization", "Bearer "+account.GetOpenAIAccessToken())
+			if mode != "static_headers" {
+				current.Credentials["access_token"] = "fresh-dial-access"
+				require.NoError(t, repo.UpdateCredentials(context.Background(), current.ID, current.Credentials))
+			}
+			if mode == "static_rotated_credentials" {
+				req.Headers.Set("Authorization", "Bearer "+current.GetOpenAIAccessToken())
+			}
+			if mode == "factory_rotated_credentials" {
+				req.HeadersFactory = func(ctx context.Context, h http.Header) (http.Header, *Account, error) {
+					return svc.refreshOpenAIWSAuthHeaders(ctx, account, h)
+				}
+			}
+			verifyOpenAITransportTestAccess(t, provider, current)
+			calls := 0
+			pool := oauthReliabilityEdgePool(t)
+			pool.setClientDialerForTest(&oauthReliabilityEdgePoolDialer{dial: func(_ context.Context, h http.Header) (openAIWSClientConn, int, http.Header, error) {
+				calls++
+				require.Equal(t, "Bearer "+current.GetOpenAIAccessToken(), h.Get("Authorization"))
+				return nil, http.StatusUnauthorized, nil, errors.New("unauthorized")
+			}})
+			lease, err := svc.acquireOpenAIWSWithAuthRecovery(context.Background(), pool, &req)
+			require.Nil(t, lease)
+			var dialErr *openAIWSDialError
+			require.ErrorAs(t, err, &dialErr)
+			require.Equal(t, http.StatusUnauthorized, dialErr.StatusCode)
+			require.Equal(t, 1, calls)
+			require.Zero(t, executor.calls.Load())
+			require.False(t, provider.refreshAPI.openAIRejectionForAccount(current).accessVerifiedAt(current, time.Now()))
+		})
+	}
+}
+
+func TestOpenAIWSOAuthRecovery_PassthroughRevokesVerifiedAccessOnFirst401(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account, repo, executor, provider := newOpenAIRecoveryFixture()
+	account.Extra = astraHealthyTestExtra(map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough})
+	verifyOpenAITransportTestAccess(t, provider, account)
+	cfg := passthroughLifecycleConfig()
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	svc := newPassthroughLifecycleService(cfg, nil)
+	svc.accountRepo = repo
+	svc.openAITokenProvider = provider
+	var calls atomic.Int32
+	svc.openaiWSPassthroughDialer = &oauthReliabilityEdgePoolDialer{dial: func(_ context.Context, h http.Header) (openAIWSClientConn, int, http.Header, error) {
+		calls.Add(1)
+		if h.Get("Authorization") != "Bearer "+account.GetOpenAIAccessToken() {
+			return nil, 0, nil, errors.New("unexpected handshake authentication")
+		}
+		return nil, http.StatusUnauthorized, nil, errors.New("unauthorized")
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	downstream, serverErr := startPassthroughLifecycleServer(t, ctx, svc, account)
+	defer downstream.Close()
+	client := dialPassthroughLifecycleClient(t, downstream)
+	defer client.CloseNow()
+	select {
+	case err := <-serverErr:
+		require.Error(t, err)
+	case <-ctx.Done():
+		t.Fatal("passthrough auth rejection did not terminate")
+	}
+	require.Equal(t, int32(1), calls.Load())
+	require.Zero(t, executor.calls.Load())
+	require.False(t, provider.refreshAPI.openAIRejectionForAccount(account).accessVerifiedAt(account, time.Now()))
 }
 
 func (d *openAIRecoveryLocalDialer) Dial(ctx context.Context, _ string, headers http.Header, proxy string) (openAIWSClientConn, int, http.Header, error) {

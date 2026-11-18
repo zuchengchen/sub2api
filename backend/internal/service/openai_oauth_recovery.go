@@ -17,8 +17,9 @@ func (s *OpenAIGatewayService) openAIOAuthCredentialOwner(ctx context.Context, a
 }
 
 type openAIRefreshRejection struct {
-	credentials [sha256.Size]byte
-	err         *openai.RefreshTokenError
+	credentials         [sha256.Size]byte
+	err                 *openai.RefreshTokenError
+	verifiedAccessUntil time.Time
 }
 
 func openAIRefreshFingerprint(account *Account) [sha256.Size]byte {
@@ -28,7 +29,7 @@ func openAIRefreshFingerprint(account *Account) [sha256.Size]byte {
 	return sha256.Sum256(value)
 }
 
-func (api *OAuthRefreshAPI) openAIRefreshFailure(account *Account) *openai.RefreshTokenError {
+func (api *OAuthRefreshAPI) openAIRejectionForAccount(account *Account) *openAIRefreshRejection {
 	if api == nil || account == nil || !account.IsOpenAIOAuth() {
 		return nil
 	}
@@ -36,8 +37,15 @@ func (api *OAuthRefreshAPI) openAIRefreshFailure(account *Account) *openai.Refre
 	if !ok {
 		return nil
 	}
-	failure, ok := value.(openAIRefreshRejection)
+	failure, ok := value.(*openAIRefreshRejection)
 	if ok && failure.credentials == openAIRefreshFingerprint(account) {
+		return failure
+	}
+	return nil
+}
+
+func (api *OAuthRefreshAPI) openAIRefreshFailure(account *Account) *openai.RefreshTokenError {
+	if failure := api.openAIRejectionForAccount(account); failure != nil {
 		return failure.err
 	}
 	return nil
@@ -47,7 +55,79 @@ func (api *OAuthRefreshAPI) recordOpenAIRefreshFailure(account *Account, err *op
 	if api == nil || account == nil || !account.IsOpenAIOAuth() || err == nil || !err.Permanent {
 		return
 	}
-	api.openAIFailures.Store(account.ID, openAIRefreshRejection{credentials: openAIRefreshFingerprint(account), err: err})
+	api.openAIFailures.Store(account.ID, &openAIRefreshRejection{credentials: openAIRefreshFingerprint(account), err: err})
+}
+
+func (r *openAIRefreshRejection) accessVerifiedAt(account *Account, now time.Time) bool {
+	if r == nil || !now.Before(r.verifiedAccessUntil) {
+		return false
+	}
+	// An opaque token's stored expiry may have been shortened since the test.
+	expiry := openAIAccessTokenExpiresAt(account)
+	return expiry != nil && now.Before(*expiry)
+}
+
+func sentOpenAIAccessTokenMatches(account *Account, authorization string) bool {
+	token := account.GetOpenAIAccessToken()
+	return token != "" && authorization == "Bearer "+token
+}
+
+// Keep the refresh rejection even when a completed inference proves this access
+// token still works. The proof belongs to the failure observed before sending
+// the test, so a newer 401 or a credential replacement wins over a late success.
+func (api *OAuthRefreshAPI) verifyOpenAIAccessAfterTest(ctx context.Context, account *Account, before *openAIRefreshRejection, sentAuthorization string, afterVerify func()) bool {
+	if api == nil || api.accountRepo == nil || before == nil || !canRecoverOpenAIOAuth(account) ||
+		!sentOpenAIAccessTokenMatches(account, sentAuthorization) ||
+		before.credentials != openAIRefreshFingerprint(account) {
+		return false
+	}
+	// Order the successful probe against the background worker that may be
+	// publishing an account error for this same refresh rejection.
+	mu := api.getLocalLock(OpenAITokenCacheKey(account))
+	if err := mu.Lock(ctx); err != nil {
+		return false
+	}
+	defer mu.Unlock()
+	latest, err := api.accountRepo.GetByID(ctx, account.ID)
+	if err != nil || latest == nil || latest.ID != account.ID || (!latest.IsActive() && latest.Status != StatusError) ||
+		before.credentials != openAIRefreshFingerprint(latest) {
+		return false
+	}
+	expiry := openAIAccessTokenExpiresAt(account)
+	currentExpiry := openAIAccessTokenExpiresAt(latest)
+	if expiry == nil || currentExpiry == nil {
+		return false
+	}
+	if currentExpiry.Before(*expiry) {
+		expiry = currentExpiry
+	}
+	if !time.Now().Before(*expiry) {
+		return false
+	}
+	verified := *before
+	verified.verifiedAccessUntil = *expiry
+	if !api.openAIFailures.CompareAndSwap(account.ID, before, &verified) {
+		return false
+	}
+	if afterVerify != nil {
+		afterVerify()
+	}
+	return true
+}
+
+// A Responses 401 invalidates both active proof and an older probe in flight.
+// Replace the immutable snapshot even if no proof has completed yet.
+func (api *OAuthRefreshAPI) rejectVerifiedOpenAIAccess(account *Account, sentAuthorization string) {
+	for {
+		before := api.openAIRejectionForAccount(account)
+		if before == nil || !sentOpenAIAccessTokenMatches(account, sentAuthorization) {
+			return
+		}
+		rejected := &openAIRefreshRejection{credentials: before.credentials, err: before.err}
+		if api.openAIFailures.CompareAndSwap(account.ID, before, rejected) {
+			return
+		}
+	}
 }
 
 func canRecoverOpenAIOAuth(account *Account) bool {

@@ -59,10 +59,10 @@ func TestOAuthReliabilityWSEdgePoolHookRunsAfterAuthRefresh(t *testing.T) {
 	}}
 	headers := http.Header{"Authorization": {"stale-bearer"}}
 	req := openAIWSAcquireRequest{Account: account, WSURL: "wss://fixture.invalid/responses", Headers: headers,
-		HeadersFactory: func(_ context.Context, current http.Header) (http.Header, error) {
+		HeadersFactory: func(_ context.Context, current http.Header) (http.Header, *Account, error) {
 			order = append(order, "auth")
 			current.Set("Authorization", "current-bearer")
-			return current, nil
+			return current, account, nil
 		},
 		BeforeFreshDial: func(ctx context.Context, info openAIWSFreshDialInfo) (*openAIWSEdgeDialLease, error) {
 			order = append(order, "hook")
@@ -142,7 +142,7 @@ func TestOAuthReliabilityWSEdgePoolPersistentSnapshotsDropOnlyDialHook(t *testin
 	pool := oauthReliabilityEdgePool(t)
 	account := &Account{ID: 9204, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	req := openAIWSAcquireRequest{Account: account, WSURL: "wss://fixture.invalid/responses", Headers: make(http.Header),
-		HeadersFactory: func(_ context.Context, h http.Header) (http.Header, error) { return h, nil },
+		HeadersFactory: func(_ context.Context, h http.Header) (http.Header, *Account, error) { return h, nil, nil },
 		BeforeFreshDial: func(context.Context, openAIWSFreshDialInfo) (*openAIWSEdgeDialLease, error) {
 			return nil, errOpenAIWSEdgeBackoff
 		},

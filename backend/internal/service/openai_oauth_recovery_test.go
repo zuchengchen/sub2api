@@ -144,6 +144,79 @@ func TestOpenAIOAuthRecovery_PermanentRejectionFailsFastAndPreservesCredentials(
 	require.Zero(t, repo.setError, "request path rejection must not disable a newer credential version")
 }
 
+func TestOpenAIOAuthRecoveryVerifiedAccessKeepsRefreshRejected(t *testing.T) {
+	account, repo, executor, provider := newOpenAIRecoveryFixture()
+	api := provider.refreshAPI
+	ctx := context.Background()
+	expiry := time.Now().Add(2 * time.Minute).Truncate(time.Second)
+	token := codexTestJWTExpiry(expiry.Unix())
+	account.Credentials["access_token"] = token
+	repo.account = snapshotOAuthRefreshAccount(account)
+	executor.refresh = func(context.Context, *Account) (map[string]any, error) {
+		return nil, openai.NewRefreshTokenError(400, []byte(`{"error":"invalid_grant"}`))
+	}
+	_, err := provider.GetAccessToken(ctx, account)
+	require.Error(t, err)
+	before := api.openAIRejectionForAccount(account)
+	require.NotNil(t, before)
+
+	api.verifyOpenAIAccessAfterTest(context.Background(), account, before, "Bearer "+token, nil)
+	verified := api.openAIRejectionForAccount(account)
+	require.True(t, verified.accessVerifiedAt(account, expiry.Add(-time.Nanosecond)))
+	require.False(t, verified.accessVerifiedAt(account, expiry))
+	access, err := provider.GetAccessToken(ctx, account)
+	require.NoError(t, err)
+	require.Equal(t, token, access)
+	_, err = provider.RefreshAfterUnauthorized(ctx, account, token)
+	require.ErrorIs(t, err, before.err)
+	require.EqualValues(t, 1, executor.calls.Load(), "a verified access token cannot renew its rejected refresh token")
+
+	api.rejectVerifiedOpenAIAccess(account, "Bearer another-access")
+	require.Same(t, verified, api.openAIRejectionForAccount(account))
+	api.rejectVerifiedOpenAIAccess(account, "Bearer "+token)
+	api.verifyOpenAIAccessAfterTest(context.Background(), account, verified, "Bearer "+token, nil)
+	_, err = provider.GetAccessToken(ctx, account)
+	require.ErrorIs(t, err, before.err, "a late probe cannot undo a newer inference 401")
+	require.EqualValues(t, 1, executor.calls.Load())
+}
+
+func TestOpenAIOAuthRecoveryAccessProofMatchesProbeAndLifetime(t *testing.T) {
+	account, repo, _, provider := newOpenAIRecoveryFixture()
+	api := provider.refreshAPI
+	api.recordOpenAIRefreshFailure(account, &openai.RefreshTokenError{Permanent: true})
+	start := api.openAIRejectionForAccount(account)
+	header := "Bearer " + account.GetOpenAIAccessToken()
+	api.rejectVerifiedOpenAIAccess(account, header)
+	api.verifyOpenAIAccessAfterTest(context.Background(), account, start, header, nil)
+	require.False(t, api.openAIRejectionForAccount(account).accessVerifiedAt(account, time.Now()))
+
+	before := api.openAIRejectionForAccount(account)
+	changed := snapshotOAuthRefreshAccount(account)
+	changed.Credentials["refresh_token"] = "replaced"
+	api.verifyOpenAIAccessAfterTest(context.Background(), changed, before, header, nil)
+	repo.account = changed
+	var recovered bool
+	ok := api.verifyOpenAIAccessAfterTest(context.Background(), account, before, header, func() { recovered = true })
+	require.False(t, ok, "credentials changed in the database during the probe")
+	require.False(t, recovered)
+	repo.account = snapshotOAuthRefreshAccount(account)
+	for _, auth := range []string{"", "Bearer ", "Bearer another-access"} {
+		api.verifyOpenAIAccessAfterTest(context.Background(), account, before, auth, nil)
+	}
+	for _, expiry := range []string{"", time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)} {
+		noLifetime := snapshotOAuthRefreshAccount(account)
+		noLifetime.Credentials["expires_at"] = expiry
+		api.verifyOpenAIAccessAfterTest(context.Background(), noLifetime, before, header, nil)
+	}
+	require.Same(t, before, api.openAIRejectionForAccount(account))
+
+	api.verifyOpenAIAccessAfterTest(context.Background(), account, before, header, nil)
+	require.True(t, api.openAIRejectionForAccount(account).accessVerifiedAt(account, time.Now()))
+	repo.account.Credentials["expires_at"] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	_, err := provider.GetAccessToken(context.Background(), account)
+	require.ErrorIs(t, err, before.err, "the stored expiry can shorten the lifetime of verified opaque access")
+}
+
 func TestOpenAIOAuthRecovery_TransientFailureDoesNotLatchOrDisable(t *testing.T) {
 	account, repo, executor, provider := newOpenAIRecoveryFixture()
 	executor.refresh = func(context.Context, *Account) (map[string]any, error) {

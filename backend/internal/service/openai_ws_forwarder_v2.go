@@ -415,7 +415,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
-		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
+		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, *Account, error) {
 			return s.refreshOpenAIWSAuthHeaders(factoryCtx, account, headers)
 		},
 		PreferredConnID:    preferredConnID,

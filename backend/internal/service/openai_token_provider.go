@@ -151,8 +151,13 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 			if err != nil || latest == nil || !sameOpenAIOAuthOwner(account, latest) || !latest.IsActive() {
 				return "", errors.New("OpenAI OAuth credential state is unavailable")
 			}
-			if failure := p.refreshAPI.openAIRefreshFailure(latest); failure != nil {
-				return "", failure
+			if failure := p.refreshAPI.openAIRejectionForAccount(latest); failure != nil {
+				if failure.accessVerifiedAt(latest, time.Now()) {
+					// Use only the tested database credential. Its refresh token
+					// remains rejected, including inside the proactive refresh window.
+					return latest.GetOpenAIAccessToken(), nil
+				}
+				return "", failure.err
 			}
 			account = latest
 			if p.tokenCache != nil {

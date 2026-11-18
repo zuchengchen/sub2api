@@ -30,6 +30,22 @@ func TestAccountRepository_UpdateOpenAIOAuthCredentialsIfUnchanged_ExactSnapshot
 	require.Equal(t, &proxy, exec.execArgs[0][5])
 }
 
+func TestAccountRepository_SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(t *testing.T) {
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
+	repo := newAccountRepositoryWithSQL(nil, exec, nil)
+	applied, err := repo.SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(context.Background(), 42, map[string]any{"refresh_token": "observed"}, nil, "refresh rejected")
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Len(t, exec.execQueries, 1)
+	query := normalizeSQLWhitespace(exec.execQueries[0])
+	for _, part := range []string{"a.deleted_at IS NULL", "a.platform = $3", "a.type = $4", "a.credentials = $5::jsonb", "a.proxy_id IS NOT DISTINCT FROM $6", "a.status = $9", "INSERT INTO scheduler_outbox"} {
+		require.Contains(t, query, part)
+	}
+	require.NotContains(t, query, "schedulable")
+	require.Equal(t, service.StatusError, exec.execArgs[0][7])
+	require.Equal(t, service.StatusActive, exec.execArgs[0][8])
+}
+
 func TestAccountRepository_UpdateOpenAIOAuthCredentialsIfUnchanged_MissAndWriteError(t *testing.T) {
 	for _, mode := range []string{"miss", "error"} {
 		t.Run(mode, func(t *testing.T) {

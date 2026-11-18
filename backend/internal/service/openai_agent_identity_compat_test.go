@@ -270,14 +270,14 @@ func TestOpenAIWSConnPoolHeadersFactoryRunsAtDialAndStalePrewarmIsDiscarded(t *t
 		Account: &Account{Extra: astraHealthyTestExtra(nil),
 			ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
 		WSURL: "wss://example.com/v1/responses",
-		HeadersFactory: func(_ context.Context, headers http.Header) (http.Header, error) {
+		HeadersFactory: func(_ context.Context, headers http.Header) (http.Header, *Account, error) {
 			factoryCalls++
 			latestHeader = "AgentAssertion dial-" + string(rune('0'+factoryCalls))
 			if headers == nil {
 				headers = make(http.Header)
 			}
 			headers.Set("Authorization", latestHeader)
-			return headers, nil
+			return headers, nil, nil
 		},
 	}
 	ap.mu.Lock()
