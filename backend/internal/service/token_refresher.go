@@ -145,6 +145,11 @@ func codexRefreshReasonForAccount(account *Account, now time.Time) string {
 // Official managed auth prioritizes JWT exp. Only absent/unparseable exp uses
 // the eight-day last_refresh fallback; row-level expires_at is not JWT evidence.
 func codexAutomaticRefreshReason(account *Account, now time.Time) string {
+	if account.GetCredential("oauth_client_registration") == openai.KeyPouchClientRegistration {
+		if expiry := account.GetCredentialAsTime("expires_at"); expiry != nil && !expiry.After(now.Add(5*time.Minute)) {
+			return "proactive_expiry"
+		}
+	}
 	parts := strings.Split(account.GetOpenAIAccessToken(), ".")
 	if len(parts) == 3 {
 		if raw, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
