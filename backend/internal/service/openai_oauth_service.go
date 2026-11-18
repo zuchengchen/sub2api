@@ -487,6 +487,28 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
 	}
 
+	if account.GetCredential("oauth_client_registration") == openai.KeyPouchClientRegistration {
+		clientID := account.GetCredential("client_id")
+		response, err := openai.RefreshKeyPouchGrant(ctx, clientID, refreshToken, proxyURL)
+		if err != nil {
+			return nil, err
+		}
+		email, workspace, user := account.GetCredential("email"), account.GetCredential("chatgpt_account_id"), account.GetCredential("chatgpt_user_id")
+		if response.IDToken != "" {
+			claims, e := openai.DecodeKeyPouchCredentialClaims(response.IDToken)
+			if e != nil || !claims.AgreesWith(email, workspace, user) {
+				return nil, KeyPouchIdentityConflict
+			}
+		}
+		if access, e := openai.DecodeKeyPouchCredentialClaims(response.AccessToken); e == nil && !access.AgreesWith(email, workspace, user) {
+			return nil, KeyPouchIdentityConflict
+		}
+		// Identity fields verified during consent stay attached to this grant.
+		return &OpenAITokenInfo{AccessToken: response.AccessToken, RefreshToken: response.RefreshToken,
+			ClientID: clientID, ExpiresIn: int64(response.ExpiresIn),
+			ExpiresAt: openAIRefreshedTokenExpiresAt(response.AccessToken, int64(response.ExpiresIn)), refreshedAt: time.Now().UTC()}, nil
+	}
+
 	ctx = openai.WithCodexAuthAccount(ctx, account.ID)
 	if profile, ok := resolveCodexDeviceProfile(account); ok {
 		ctx = openai.WithCodexClientUserAgent(ctx, profile.UserAgent)
