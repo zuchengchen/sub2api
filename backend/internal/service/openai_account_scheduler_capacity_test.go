@@ -184,6 +184,7 @@ func TestOpenAIAccountSchedulerCapacity_HardContinuationKeepsBusyOwner(t *testin
 	require.Equal(t, owner.ID, selection.Account.ID)
 	require.False(t, selection.Acquired)
 	require.NotNil(t, selection.WaitPlan)
+	require.Nil(t, selection.TryAcquireAlternative)
 	require.Equal(t, openAIAccountScheduleLayerPreviousResponse, decision.Layer)
 	require.True(t, decision.StickyPreviousHit)
 	require.NotContains(t, acquiredIDs, available.ID, "an unavailable owner does not authorize moving a hard continuation")
@@ -428,6 +429,107 @@ func TestOpenAIAccountSchedulerCapacity_BothStickyQueuesKeepTheirLimits(t *testi
 			} else {
 				require.Equal(t, ordinary.ID, selection.Account.ID, "neither full sticky queue may be widened to the ordinary queue limit")
 				require.Equal(t, 100, selection.WaitPlan.MaxWaiting)
+			}
+		})
+	}
+}
+
+func TestOpenAIAccountSchedulerCapacity_QueuedRequestAcquiresEligibleAlternative(t *testing.T) {
+	for _, mode := range []struct {
+		name      string
+		advanced  string
+		loadBatch bool
+	}{
+		{"advanced", "true", true},
+		{"legacy_batch", "false", true},
+		{"legacy_single", "false", false},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			resetOpenAIAdvancedSchedulerSettingCacheForTest()
+			t.Cleanup(resetOpenAIAdvancedSchedulerSettingCacheForTest)
+			ctx := context.Background()
+			groupID := int64(9211)
+			owner := capacitySchedulerAccount(92111, groupID, 1, 0)
+			other := capacitySchedulerAccount(92112, groupID, 1, 20)
+			full := capacitySchedulerAccount(92118, groupID, 1, 10)
+			owner.Type, other.Type, full.Type = AccountTypeOAuth, AccountTypeOAuth, AccountTypeOAuth
+			failed := capacitySchedulerAccount(92113, groupID, 1, 0)
+			foreign := capacitySchedulerAccount(92114, groupID+1, 1, 0)
+			blocked := capacitySchedulerAccount(92115, groupID, 1, 0)
+			proxyID := int64(71)
+			blocked.ProxyID = &proxyID
+			limited := capacitySchedulerAccount(92116, groupID, 1, 0)
+			resetAt := time.Now().Add(time.Hour)
+			limited.RateLimitResetAt = &resetAt
+			unsupported := capacitySchedulerAccount(92117, groupID, 1, 0)
+			unsupported.Credentials = map[string]any{"model_mapping": map[string]any{"gpt-4o": "gpt-4o"}}
+			repo := schedulerGroupAwareOpenAIAccountRepo{schedulerTestOpenAIAccountRepo{
+				accounts: []Account{owner, full, other, failed, foreign, blocked, limited, unsupported},
+			}}
+			cfg := capacitySchedulerConfig(1)
+			cfg.Gateway.Scheduling.LoadBatchEnabled = mode.loadBatch
+			sessions := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:queued": owner.ID}}
+			allowed := map[int64]bool{owner.ID: false, full.ID: false, other.ID: false}
+			var attempts, released []int64
+			svc := &OpenAIGatewayService{
+				accountRepo:      &repo,
+				cache:            sessions,
+				cfg:              cfg,
+				rateLimitService: newOpenAIAdvancedSchedulerRateLimitService(mode.advanced),
+				concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+					acquireResults: allowed, acquiredIDs: &attempts, releasedIDs: &released,
+				}),
+				openaiProxyStreamCircuit: newOpenAIProxyStreamCircuit(openAIProxyStreamCircuitSettings{
+					failureThreshold: 1, failureWindow: time.Minute, quarantineTTL: time.Minute, maxEntries: 16,
+				}),
+			}
+			tripped, _ := svc.openaiProxyStreamCircuit.recordFailure(proxyID, time.Now())
+			require.True(t, tripped)
+			excluded := map[int64]struct{}{failed.ID: {}}
+			selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "", "queued",
+				"gpt-5.1", excluded, OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityChatCompletions, false, false, true)
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			require.NotNil(t, selection.WaitPlan)
+			require.Equal(t, owner.ID, selection.WaitPlan.AccountID)
+			require.NotNil(t, selection.TryAcquireAlternative)
+			attempts = nil
+			require.Nil(t, selection.TryAcquireAlternative(ctx), "both alternative accounts are busy")
+			if !mode.loadBatch {
+				require.Equal(t, []int64{full.ID}, attempts)
+			}
+			allowed[owner.ID], allowed[other.ID] = true, true
+			alt := selection.TryAcquireAlternative(ctx)
+			require.NotNil(t, alt)
+			require.True(t, alt.Acquired)
+			require.NotNil(t, alt.ReleaseFunc)
+			require.Equal(t, other.ID, alt.Account.ID)
+			require.Nil(t, alt.WaitPlan)
+			require.Nil(t, alt.TryAcquireAlternative)
+			alt.ReleaseFunc()
+			require.Equal(t, []int64{other.ID}, released)
+			require.NotContains(t, attempts, owner.ID)
+			require.NotContains(t, attempts, failed.ID)
+			require.NotContains(t, attempts, foreign.ID)
+			require.NotContains(t, attempts, blocked.ID)
+			require.NotContains(t, attempts, limited.ID)
+			require.NotContains(t, attempts, unsupported.ID)
+			require.Equal(t, map[int64]struct{}{failed.ID: {}}, excluded)
+			require.Equal(t, owner.ID, sessions.sessionBindings["openai:queued"])
+
+			repo.accounts = []Account{owner, blocked}
+			require.Nil(t, selection.TryAcquireAlternative(ctx), "excluding the waitable owner must not bypass proxy quarantine")
+			require.NotContains(t, attempts, blocked.ID)
+
+			if !mode.loadBatch {
+				repo.accounts = []Account{owner, other}
+				allowed[other.ID] = false
+				require.Nil(t, selection.TryAcquireAlternative(ctx))
+				allowed[other.ID] = true
+				alt = selection.TryAcquireAlternative(ctx)
+				require.NotNil(t, alt, "revisit the only alternative once every candidate has been tried")
+				require.Equal(t, other.ID, alt.Account.ID)
+				alt.ReleaseFunc()
 			}
 		})
 	}

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
@@ -137,6 +138,45 @@ func TestAcquireResponsesAccountSlotProfitRecheck(t *testing.T) {
 		require.Equal(t, openAISlotAcquireOK, result, "生图意图跳门：过贵账号照常获取（图片边界不装门）")
 		require.NotNil(t, release)
 		release()
+	})
+}
+
+func TestOpenAIQueueWaitKeepsPlaceAfterAlternateProfitVeto(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gw := &service.OpenAIGatewayService{}
+		cache := &openAIQueueAdmissionCache{canWait: true}
+		h := &OpenAIGatewayHandler{
+			gatewayService:    gw,
+			concurrencyHelper: NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, 0),
+		}
+		groupID := int64(50)
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/responses", nil).WithContext(profitSlotTestContext(t, gw, groupID, false))
+		alternateReleases := 0
+		selection := &service.AccountSelectionResult{
+			Account:  profitSlotTestAccount(1, 0.3),
+			WaitPlan: &service.AccountWaitPlan{AccountID: 1, MaxConcurrency: 1, MaxWaiting: 2, Timeout: 30 * time.Second},
+			TryAcquireAlternative: func(context.Context) *service.AccountSelectionResult {
+				return &service.AccountSelectionResult{
+					Account:  profitSlotTestAccount(2, 0.8),
+					Acquired: true,
+					ReleaseFunc: func() {
+						alternateReleases++
+						cache.availableID = 1
+					},
+				}
+			},
+		}
+		sessionHash := ""
+		streamStarted := false
+		release, result := h.acquireOpenAIAccountSlotWithQueueReselection(c, &groupID, &sessionHash, selection, false, &streamStarted, zap.NewNop(), nil, true)
+		require.Equal(t, openAISlotAcquireOK, result)
+		require.Equal(t, int64(1), selection.Account.ID)
+		require.Equal(t, 1, alternateReleases)
+		require.Equal(t, []int64{1}, cache.waitAccounts)
+		require.Equal(t, []int64{1}, cache.leftQueue)
+		release()
+		require.Equal(t, 1, cache.released)
 	})
 }
 

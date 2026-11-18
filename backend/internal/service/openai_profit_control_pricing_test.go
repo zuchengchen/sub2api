@@ -268,3 +268,13 @@ func TestOpenAIProfitControlAfterAdmissionBindEagerWithoutGate(t *testing.T) {
 	require.NoError(t, svc.BindStickySessionAfterProfitAdmission(context.Background(), &groupID, sessionHash, cheapID))
 	require.Equal(t, cheapID, cache.sessionBindings[cacheKey], "无门时保持既有 eager 绑定行为")
 }
+
+func TestOpenAIQueueSpilloverRespectsExistingSessionBinding(t *testing.T) {
+	groupID := int64(82)
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:existing": 1}}
+	svc := &OpenAIGatewayService{cache: cache}
+	require.NoError(t, svc.BindStickySessionAfterAdmission(context.Background(), &groupID, "existing", 2, true))
+	require.Equal(t, int64(1), cache.sessionBindings["openai:existing"])
+	require.NoError(t, svc.BindStickySessionAfterAdmission(context.Background(), &groupID, "first-turn", 2, true))
+	require.Equal(t, int64(2), cache.sessionBindings["openai:first-turn"])
+}
