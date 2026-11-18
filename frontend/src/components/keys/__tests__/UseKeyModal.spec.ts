@@ -830,7 +830,7 @@ describe('UseKeyModal', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://example.com/v1/models?client_version=0.158.0',
+      'https://example.com/v1/models?format=codex',
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: 'Bearer sk-composite-test' })
       })
@@ -1011,6 +1011,59 @@ describe('UseKeyModal', () => {
       }
     }
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['keys.useKeyModal.cliTabs.codexCli', 'macOS / Linux'],
+    ['keys.useKeyModal.cliTabs.codexCli', 'Windows'],
+    ['keys.useKeyModal.cliTabs.codexCliWs', 'macOS / Linux'],
+    ['keys.useKeyModal.cliTabs.codexCliWs', 'Windows']
+  ])('downloads current group models for %s on %s without pinning an old CLI', async (transport, os) => {
+    const manifest = {
+      models: [
+        { slug: 'gpt-6.2-astra', description: 'Current Astra', input_modalities: ['text', 'image'] },
+        { slug: 'gpt-6.2-sol', description: 'Current Sol', input_modalities: ['text', 'image'] }
+      ]
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(String(input).includes('client_version=0.158.0')
+        ? { models: [{ slug: 'gpt-5.5' }] }
+        : manifest)
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'sk-download-fixture', baseUrl: 'https://example.com/proxy/v1/', platform: 'openai' },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+    await wrapper.findAll('button').find((button) => button.text().trim() === transport)!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text().trim() === os)!.trigger('click')
+    await wrapper.get('[data-testid="codex-model-catalog-mode"]').setValue('file')
+    await wrapper.get('[data-testid="codex-model-catalog-fetch"]').trigger('click')
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.com/proxy/v1/models?format=codex',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-download-fixture' })
+      })
+    )
+    await wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.codexModelCatalog.download')
+    )!.trigger('click')
+    expect(saveAsMock).toHaveBeenCalledWith(expect.any(Blob), 'codex-models.json')
+    const downloaded = saveAsMock.mock.calls[0]?.[0] as Blob
+    expect(JSON.parse(await readBlobAsText(downloaded))).toEqual(manifest)
+    const config = wrapper.findAll('pre code').map((code) => code.text()).join('\n')
+    expect(config).toContain('base_url = "https://example.com/proxy/v1"')
+    expect(config).toContain('model_catalog_json = "~/.codex/codex-models.json"')
+    expect(config).not.toContain('client_version')
+    wrapper.unmount()
   })
 
   it.each([1024 * 1024 - 1, 1024 * 1024, 1024 * 1024 + 1])(

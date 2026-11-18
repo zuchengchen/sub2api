@@ -2201,6 +2201,7 @@ func (r *openAIQueueReselection) exhausted(err error) bool {
 }
 
 func (h *OpenAIGatewayHandler) handleOpenAIQueueFull(c *gin.Context, streamStarted bool) {
+	markOpsLocalAdmissionError(c, gatewayQueueFullCode)
 	h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", gatewayQueueFullCode,
 		"Too many pending requests, please retry later", streamStarted, false)
 }
@@ -2446,6 +2447,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
 	if err != nil {
 		reqLog.Warn("openai.account_slot_quick_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		status, errType, code, message := concurrencyErrorResponse(err, "account")
+		markOpsLocalAdmissionError(c, code)
 		writeError(status, errType, code, message)
 		return nil, openAISlotAcquireFailed
 	}
@@ -2479,6 +2481,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
 		if allowQueueReselection {
 			return nil, openAISlotAcquireQueueFull
 		}
+		markOpsLocalAdmissionError(c, gatewayQueueFullCode)
 		writeError(http.StatusTooManyRequests, "rate_limit_error", gatewayQueueFullCode, "Too many pending requests, please retry later")
 		return nil, openAISlotAcquireFailed
 	}
@@ -2503,6 +2506,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
 	if err != nil {
 		reqLog.Warn("openai.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		status, errType, code, message := concurrencyErrorResponse(err, "account")
+		markOpsLocalAdmissionError(c, code)
 		writeError(status, errType, code, message)
 		return nil, openAISlotAcquireFailed
 	}
@@ -3681,6 +3685,7 @@ func (h *OpenAIGatewayHandler) acquireImageGenerationSlot(c *gin.Context, stream
 	if acquired {
 		return release, true
 	}
+	markOpsLocalAdmissionError(c, gatewayConcurrencyLimitCode)
 	h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", gatewayConcurrencyLimitCode, userfacing.ImageConcurrencyExceeded, streamStarted, false)
 	return nil, false
 }
@@ -3688,6 +3693,7 @@ func (h *OpenAIGatewayHandler) acquireImageGenerationSlot(c *gin.Context, stream
 // handleConcurrencyError handles concurrency-related acquire errors.
 func (h *OpenAIGatewayHandler) handleConcurrencyError(c *gin.Context, err error, slotType string, streamStarted bool) {
 	status, errType, code, message := concurrencyErrorResponse(err, slotType)
+	markOpsLocalAdmissionError(c, code)
 	h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, streamStarted, false)
 }
 

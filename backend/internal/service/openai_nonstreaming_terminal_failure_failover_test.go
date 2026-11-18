@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
@@ -105,45 +106,82 @@ func TestNonStreamingSSEToJSON_UnclassifiedFailedEventFailsOver(t *testing.T) {
 	require.Empty(t, rec.Body.String())
 }
 
-// 「response.failed 必须回写协议错误」这一契约没有丢：明确不可重试的错误仍写 502。
+// A terminal failure remains a protocol error. Its HTTP status follows the
+// structured rejection: known request/context errors are 400, not a blanket 502.
 func TestNonStreamingSSEToJSON_NonRetryableFailedEventStillWritesProtocolError(t *testing.T) {
 	cases := []struct {
-		name    string
-		data    string
-		wantMsg string
+		name       string
+		data       string
+		wantMsg    string
+		wantStatus int
+		wantType   string
+		wantCode   string
+		wantParam  string
 	}{
 		{
-			name:    "invalid_request",
-			data:    `{"type":"response.failed","error":{"type":"invalid_request_error","code":"invalid_request","message":"unknown parameter foo"}}`,
-			wantMsg: "unknown parameter foo",
+			name:       "invalid_request",
+			data:       `{"type":"response.failed","error":{"type":"invalid_request_error","code":"invalid_request","param":"foo","message":"unknown parameter foo"}}`,
+			wantMsg:    "unknown parameter foo",
+			wantStatus: http.StatusBadRequest,
+			wantType:   "invalid_request_error",
+			wantCode:   "invalid_request",
+			wantParam:  "foo",
 		},
 		{
-			name:    "context_window",
-			data:    `{"type":"response.failed","response":{"id":"resp_failed","status":"failed","output":[],"error":{"code":"upstream_error","message":"input exceeds the context window"}}}`,
-			wantMsg: "input exceeds the context window",
+			name:       "context_window",
+			data:       `{"type":"response.failed","response":{"id":"resp_failed","status":"failed","output":[],"error":{"code":"upstream_error","message":"input exceeds the context window"}}}`,
+			wantMsg:    "input exceeds the context window",
+			wantStatus: http.StatusBadRequest,
+			wantType:   "invalid_request_error",
+			wantCode:   "upstream_error",
 		},
 		{
-			name:    "content_policy",
-			data:    `{"type":"response.failed","error":{"type":"content_policy_violation","message":"blocked by our content policy"}}`,
-			wantMsg: "blocked by our content policy",
+			name:       "content_policy",
+			data:       `{"type":"response.failed","error":{"type":"content_policy_violation","message":"blocked by our content policy"}}`,
+			wantMsg:    "blocked by our content policy",
+			wantStatus: http.StatusBadGateway,
+			wantType:   "upstream_error",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, rec := newNonStreamingFailoverContext(t)
-			svc := newNonStreamingFailoverService()
-
-			result, err := svc.handleSSEToJSON(newNonStreamingSSEResponse(), c,
-				newNonStreamingFailoverAccount(), sseTerminalBody("response.failed", tc.data), "model", "model")
-
-			require.Nil(t, result)
-			require.Error(t, err)
-			var failoverErr *UpstreamFailoverError
-			require.False(t, errors.As(err, &failoverErr), "不可重试的上游错误不得换号")
-			require.Equal(t, http.StatusBadGateway, rec.Code)
-			require.Contains(t, rec.Body.String(), tc.wantMsg)
-			require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+			for _, passthrough := range []bool{false, true} {
+				name := "converted"
+				if passthrough {
+					name = "passthrough"
+				}
+				t.Run(name, func(t *testing.T) {
+					c, rec := newNonStreamingFailoverContext(t)
+					svc := newNonStreamingFailoverService()
+					body := sseTerminalBody("response.failed", tc.data)
+					var err error
+					if passthrough {
+						var result *openaiNonStreamingResultPassthrough
+						result, err = svc.handlePassthroughSSEToJSON(newNonStreamingSSEResponse(), c,
+							newNonStreamingFailoverAccount(), body, "model", "model")
+						require.Nil(t, result)
+					} else {
+						var result *openaiNonStreamingResult
+						result, err = svc.handleSSEToJSON(newNonStreamingSSEResponse(), c,
+							newNonStreamingFailoverAccount(), body, "model", "model")
+						require.Nil(t, result)
+					}
+					require.Error(t, err)
+					var failoverErr *UpstreamFailoverError
+					require.False(t, errors.As(err, &failoverErr), "不可重试的上游错误不得换号")
+					require.True(t, c.Writer.Written(), "a final protocol error must reach the client")
+					require.Equal(t, tc.wantStatus, rec.Code)
+					require.Equal(t, tc.wantStatus, c.GetInt(OpsUpstreamStatusCodeKey))
+					require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+					require.True(t, gjson.ValidBytes(rec.Body.Bytes()))
+					require.Equal(t, tc.wantMsg, gjson.GetBytes(rec.Body.Bytes(), "error.message").String())
+					require.Equal(t, tc.wantType, gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+					require.Equal(t, tc.wantCode, gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
+					require.Equal(t, tc.wantParam, gjson.GetBytes(rec.Body.Bytes(), "error.param").String())
+					require.False(t, gjson.GetBytes(rec.Body.Bytes(), "output").Exists(), "failure must not become a successful response")
+				})
+			}
 		})
 	}
 }

@@ -1354,7 +1354,9 @@ readLoop:
 		if eventType != "error" && !isTerminalEvent && (openAIStreamDataStartsClientOutput(string(message), eventType) || openAIStreamDataStartsVisibleOutput(string(message), eventType)) {
 			upstreamOutputStarted = true
 		}
-		if deltaApplied && !wroteDownstream && !upstreamOutputStarted && !clientDisconnected && ctx.Err() == nil &&
+		// A synthesized failure only settles client error delivery; it cannot
+		// prove that the upstream rejected this delta before doing any work.
+		if deltaApplied && !synthesizedParameterFailure && !wroteDownstream && !upstreamOutputStarted && !clientDisconnected && ctx.Err() == nil &&
 			!replayGuard.progressed && !openAIUsageHasTokens(usage) && imageCounter.Count() == 0 && (eventType == "error" || eventType == "response.failed") {
 			path := "error"
 			if eventType == "response.failed" {

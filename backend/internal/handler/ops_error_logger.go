@@ -1138,6 +1138,13 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				parsed = terminal
 			}
 		}
+		localAdmission := isOpsLocalAdmissionError(c, parsed.Code)
+		if localAdmission {
+			// Responses omits error.type on the wire. Recover the logical 429
+			// only from our local rejection marker, never a provider lookalike.
+			parsed.ErrorType = "rate_limit_error"
+			parsed.StatusCode = http.StatusTooManyRequests
+		}
 		if status < 400 {
 			if parsed.StreamFailure {
 				status = inferStreamFailureStatus(c, parsed)
@@ -1277,7 +1284,9 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 		applyOpsLatencyFieldsFromContext(c, entry)
 		applyOpsUpstreamFieldsFromContext(c, entry)
-		if parsed.StreamFailure {
+		// A local admission rejection did not receive an upstream response.
+		// Keep any earlier attempt's telemetry without replacing it with 429.
+		if parsed.StreamFailure && !localAdmission {
 			if message := strings.TrimSpace(parsed.Message); message != "" {
 				entry.UpstreamErrorMessage = &message
 			}
@@ -2266,6 +2275,14 @@ func classifyOpsSeverity(errType string, status int) string {
 }
 
 func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status int) (phase string, isBusinessLimited bool, errorOwner string, errorSource string) {
+	if isOpsGatewayAdmissionCode(code) {
+		if isOpsLocalAdmissionError(c, code) {
+			return "request", true, "client", "client_request"
+		}
+		// These reserved codes can arrive from upstream too. Matching their
+		// usual prose is not proof of a local business limit or SLA exclusion.
+		return "upstream", false, "provider", "upstream_http"
+	}
 	phase = classifyOpsPhase(errType, message, code)
 	if service.IsOpsRequestScopedError(c) {
 		// 失败由请求内容决定：只按错误类型分类，上游错误上下文不参与归因。

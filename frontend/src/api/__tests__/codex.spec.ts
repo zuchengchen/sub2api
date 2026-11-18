@@ -12,7 +12,24 @@ describe('Codex models API', () => {
 
   it('builds the authenticated Codex manifest endpoint from the public API base', () => {
     expect(buildCodexModelsManifestUrl('https://example.com/api/v1/')).toBe(
-      'https://example.com/api/v1/models?client_version=0.158.0'
+      'https://example.com/api/v1/models?format=codex'
+    )
+  })
+
+  it.each([
+    ['https://example.com', 'https://example.com/v1/models?format=codex'],
+    ['https://example.com/v1/', 'https://example.com/v1/models?format=codex'],
+    ['https://example.com/gateway', 'https://example.com/gateway/v1/models?format=codex'],
+    ['https://example.com/gateway/v1/', 'https://example.com/gateway/v1/models?format=codex'],
+    ['/proxy/v1', '/proxy/v1/models?format=codex'],
+    ['', `${window.location.origin}/v1/models?format=codex`]
+  ])('lets the server select its canonical version without leaving API base %s', (baseUrl, expected) => {
+    expect(buildCodexModelsManifestUrl(baseUrl)).toBe(expected)
+  })
+
+  it('keeps an explicit client version as content negotiation for old clients', () => {
+    expect(buildCodexModelsManifestUrl('https://example.com/gateway/v1', '0.158.0')).toBe(
+      'https://example.com/gateway/v1/models?client_version=0.158.0'
     )
   })
 
@@ -59,7 +76,7 @@ describe('Codex models API', () => {
     const result = await fetchCodexModelsManifest('https://example.com/v1', 'sk-user-test')
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://example.com/v1/models?client_version=0.158.0',
+      'https://example.com/v1/models?format=codex',
       expect.objectContaining({
         headers: {
           Accept: 'application/json',

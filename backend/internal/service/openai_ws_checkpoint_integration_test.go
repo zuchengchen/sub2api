@@ -178,11 +178,17 @@ func TestHTTPToWSAutoContinuationToolAndText(t *testing.T) {
 }
 
 func TestHTTPToWSAutoContinuationRecoveryKeepsFullTools(t *testing.T) {
-	for _, mode := range []string{"anchor_miss", "failed_anchor_miss", "http_fallback", "read_retry", "missing_tool", "failed_missing_tool"} {
+	for _, mode := range []string{"anchor_miss", "failed_anchor_miss", "http_fallback", "http_fallback_after_anchor_miss", "read_retry", "missing_tool", "failed_missing_tool"} {
 		t.Run(mode, func(t *testing.T) {
 			requests := make(chan []byte, 8)
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if mode == "http_fallback_after_anchor_miss" && calls.Load() >= 2 {
+					// A rejected fresh handshake has sent no business frame. It is
+					// an authoritative transport failure, unlike a bare error + EOF.
+					w.WriteHeader(http.StatusUpgradeRequired)
+					return
+				}
 				conn, err := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
 				if err != nil {
 					return
@@ -230,31 +236,52 @@ func TestHTTPToWSAutoContinuationRecoveryKeepsFullTools(t *testing.T) {
 			defer server.Close()
 			s, a, httpUpstream := httpBridgeFixture(t, server.URL)
 			defer s.openaiWSPool.Close()
-			if mode == "http_fallback" {
+			if mode == "http_fallback_after_anchor_miss" {
 				httpUpstream.responses[0] = &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: " + string(autoContinuationEvent("resp_http", autoContinuationAnswer)) + "\n\n"))}
 			}
 			first, _ := httpBridgeContext("recover-incremental")
 			_, err := s.Forward(context.Background(), first, a, autoContinuationBody(true))
 			require.NoError(t, err)
 			<-requests
-			second, _ := httpBridgeContext("recover-incremental")
-			_, err = s.Forward(context.Background(), second, a, autoContinuationBody(true, autoContinuationCall, autoContinuationTool))
+			second, recorder := httpBridgeContext("recover-incremental")
+			body := autoContinuationBody(true, autoContinuationCall, autoContinuationTool)
+			result, err := s.Forward(context.Background(), second, a, body)
+			if mode == "http_fallback" || mode == "missing_tool" {
+				// A bare parameter error may precede metered work. EOF permits
+				// reporting that error, not treating a synthetic terminal as a
+				// confirmed pre-execution rejection and replaying the request.
+				require.Error(t, err)
+				require.Nil(t, result)
+				require.Equal(t, int32(2), calls.Load())
+				require.Zero(t, httpUpstream.callCount)
+				require.False(t, second.GetBool("openai_ws_auto_incremental_replay"))
+				require.False(t, second.GetBool("openai_ws_auto_incremental_succeeded"))
+				require.True(t, second.GetBool("openai_ws_auto_incremental_attempted"))
+				require.Contains(t, recorder.Body.String(), `"type":"response.failed"`)
+				delta := <-requests
+				require.Equal(t, "resp_1", gjson.GetBytes(delta, "previous_response_id").String())
+				require.JSONEq(t, "["+autoContinuationTool+"]", gjson.GetBytes(delta, "input").Raw)
+				return
+			}
 			require.NoError(t, err)
-			if mode != "http_fallback" {
+			require.NotNil(t, result)
+			require.True(t, result.SucceededForScheduling())
+			if mode != "http_fallback_after_anchor_miss" {
 				require.Equal(t, int32(3), calls.Load(), "one delta followed by one full replay")
 				require.Equal(t, mode != "read_retry", second.GetBool("openai_ws_auto_incremental_replay"))
 			}
 			require.True(t, second.GetBool("openai_ws_auto_incremental_attempted"), "later attempts retain evidence that this request actually applied a delta")
 			require.False(t, second.GetBool("openai_ws_auto_incremental"), "the final full request is not a delta")
 			require.False(t, second.GetBool("openai_ws_auto_incremental_succeeded"), "a full replay is not a successful delta")
-			if mode == "http_fallback" {
+			if mode == "http_fallback_after_anchor_miss" {
+				require.Equal(t, int32(2), calls.Load(), "the rejected fresh handshake sends no business frame")
 				require.Equal(t, "http_fallback", second.GetString("openai_ws_auto_incremental_reason"))
 			}
 			delta := <-requests
 			require.Equal(t, "resp_1", gjson.GetBytes(delta, "previous_response_id").String())
 			require.Len(t, gjson.GetBytes(delta, "input").Array(), 1)
 			var replay []byte
-			if mode == "http_fallback" {
+			if mode == "http_fallback_after_anchor_miss" {
 				require.Equal(t, 1, httpUpstream.callCount)
 				replay = httpUpstream.bodies[0]
 			} else {
@@ -262,7 +289,8 @@ func TestHTTPToWSAutoContinuationRecoveryKeepsFullTools(t *testing.T) {
 				replay = <-requests
 			}
 			require.False(t, gjson.GetBytes(replay, "previous_response_id").Exists())
-			require.Len(t, gjson.GetBytes(replay, "input").Array(), 4)
+			require.JSONEq(t, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(replay, "input").Raw)
+			require.JSONEq(t, gjson.GetBytes(body, "tools").Raw, gjson.GetBytes(replay, "tools").Raw)
 			require.Equal(t, "call_lookup", gjson.GetBytes(replay, "input.2.call_id").String())
 			require.Equal(t, "call_lookup", gjson.GetBytes(replay, "input.3.call_id").String())
 			require.Equal(t, "xhigh", gjson.GetBytes(replay, "reasoning.effort").String())
