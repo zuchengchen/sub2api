@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -471,6 +472,81 @@ func TestWaitForSlotWithPingTimeout_ParentContextCanceled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	var cErr *ConcurrencyError
 	require.False(t, errors.As(err, &cErr))
+}
+
+func TestWaitForSlotWithAlternative_PreservesSingleDeadlineAndHeartbeats(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cache := &helperConcurrencyCacheStub{}
+		helper := NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatComment, 2*time.Second)
+		c, rec := newHelperTestContext(http.MethodPost, "/v1/responses")
+		start := time.Now()
+		var probes []time.Duration
+		streamStarted := false
+		release, alternate, err := helper.waitForSlotWithAlternative(c, "account", 1, 1, 30*time.Second, true, &streamStarted, true, func(ctx context.Context) *service.AccountSelectionResult {
+			probes = append(probes, time.Since(start))
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.LessOrEqual(t, time.Until(deadline), time.Second)
+			return nil
+		})
+		var timeout *ConcurrencyError
+		require.ErrorAs(t, err, &timeout)
+		require.True(t, timeout.IsTimeout)
+		require.Nil(t, release)
+		require.Nil(t, alternate)
+		require.Equal(t, 30*time.Second, time.Since(start))
+		require.NotEmpty(t, probes)
+		require.LessOrEqual(t, len(probes), 6)
+		require.LessOrEqual(t, probes[0], time.Second)
+		require.Greater(t, probes[len(probes)-1], 20*time.Second)
+		require.Greater(t, cache.accountAcquireCalls, len(probes))
+		require.True(t, streamStarted)
+		require.Contains(t, rec.Body.String(), string(SSEPingFormatComment))
+	})
+}
+
+func TestWaitForSlotWithAlternative_DiscardsExpiredAcquisition(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		helper := NewConcurrencyHelper(service.NewConcurrencyService(&helperConcurrencyCacheStub{}), SSEPingFormatNone, 0)
+		c, _ := newHelperTestContext(http.MethodPost, "/v1/responses")
+		var probes, discarded, released int
+		streamStarted := false
+		release, alternate, err := helper.waitForSlotWithAlternative(c, "account", 1, 1, 30*time.Second, false, &streamStarted, true, func(ctx context.Context) *service.AccountSelectionResult {
+			probes++
+			if probes == 1 {
+				<-ctx.Done()
+				return &service.AccountSelectionResult{Account: &service.Account{ID: 2}, Acquired: true, ReleaseFunc: func() { discarded++ }}
+			}
+			return &service.AccountSelectionResult{Account: &service.Account{ID: 3}, Acquired: true, ReleaseFunc: func() { released++ }}
+		})
+		require.NoError(t, err)
+		require.NotNil(t, alternate)
+		require.EqualValues(t, 3, alternate.Account.ID)
+		require.Equal(t, 1, discarded)
+		require.Zero(t, released)
+		release()
+		require.Equal(t, 1, released)
+	})
+}
+
+func TestWaitForSlotWithAlternative_CancelReleasesInFlightAcquisition(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		helper := NewConcurrencyHelper(service.NewConcurrencyService(&helperConcurrencyCacheStub{}), SSEPingFormatNone, 0)
+		c, _ := newHelperTestContext(http.MethodPost, "/v1/responses")
+		parent, cancel := context.WithCancel(c.Request.Context())
+		defer cancel()
+		c.Request = c.Request.WithContext(parent)
+		released := 0
+		streamStarted := false
+		release, alternate, err := helper.waitForSlotWithAlternative(c, "account", 1, 1, time.Second, false, &streamStarted, true, func(ctx context.Context) *service.AccountSelectionResult {
+			cancel()
+			return &service.AccountSelectionResult{Account: &service.Account{ID: 2}, Acquired: true, ReleaseFunc: func() { released++ }}
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, release)
+		require.Nil(t, alternate)
+		require.Equal(t, 1, released)
+	})
 }
 
 func TestWaitForSlotWithPingTimeout_AcquireError(t *testing.T) {

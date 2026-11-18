@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/testutil"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -24,34 +25,49 @@ import (
 
 // The scheduler sees occupied slots with room to queue. Admission gets a newer
 // view, reproducing another request filling that queue after selection.
-type openAIQueueSchedulerCache struct{ fakeConcurrencyCache }
-
-func (*openAIQueueSchedulerCache) AcquireAccountSlot(context.Context, int64, int, string) (bool, error) {
-	return false, nil
+type openAIQueueSchedulerCache struct {
+	fakeConcurrencyCache
+	// Tests can make a different account available only after admission queues.
+	available func(int64) bool
+	released  []int64
 }
 
-func (*openAIQueueSchedulerCache) GetAccountsLoadBatch(_ context.Context, accounts []service.AccountWithConcurrency) (map[int64]*service.AccountLoadInfo, error) {
+func (c *openAIQueueSchedulerCache) AcquireAccountSlot(_ context.Context, id int64, _ int, _ string) (bool, error) {
+	return c.available != nil && c.available(id), nil
+}
+
+func (c *openAIQueueSchedulerCache) ReleaseAccountSlot(_ context.Context, id int64, _ string) error {
+	c.released = append(c.released, id)
+	return nil
+}
+
+func (c *openAIQueueSchedulerCache) GetAccountsLoadBatch(_ context.Context, accounts []service.AccountWithConcurrency) (map[int64]*service.AccountLoadInfo, error) {
 	loads := make(map[int64]*service.AccountLoadInfo, len(accounts))
 	for _, account := range accounts {
 		loads[account.ID] = &service.AccountLoadInfo{AccountID: account.ID, CurrentConcurrency: account.MaxConcurrency, LoadRate: 100}
+		if c.available != nil && c.available(account.ID) {
+			loads[account.ID] = &service.AccountLoadInfo{AccountID: account.ID}
+		}
 	}
 	return loads, nil
 }
 
 type openAIQueueAdmissionCache struct {
 	fakeConcurrencyCache
-	mu           sync.Mutex
-	availableID  int64
-	canWait      bool
-	waitAccounts []int64
-	released     int
-	decremented  int
+	mu              sync.Mutex
+	availableID     int64
+	opensOnQueue    int64
+	canWait         bool
+	waitAccounts    []int64
+	released        int
+	leftQueue       []int64
+	cancelOnDequeue context.CancelFunc
 }
 
 func (c *openAIQueueAdmissionCache) AcquireAccountSlot(_ context.Context, accountID int64, _ int, _ string) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return accountID == c.availableID, nil
+	return accountID == c.availableID || (accountID == c.opensOnQueue && len(c.waitAccounts) > 0), nil
 }
 
 func (c *openAIQueueAdmissionCache) IncrementAccountWaitCount(_ context.Context, accountID int64, _ int) (bool, error) {
@@ -61,11 +77,22 @@ func (c *openAIQueueAdmissionCache) IncrementAccountWaitCount(_ context.Context,
 	return c.canWait, nil
 }
 
-func (c *openAIQueueAdmissionCache) DecrementAccountWaitCount(context.Context, int64) error {
+func (c *openAIQueueAdmissionCache) DecrementAccountWaitCount(_ context.Context, accountID int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.decremented++
+	c.leftQueue = append(c.leftQueue, accountID)
+	if c.cancelOnDequeue != nil {
+		c.cancelOnDequeue()
+	}
 	return nil
+}
+
+// The other account becomes available while the original queue still owns
+// the request. Leaving the original queue before probing loses that slot.
+func (c *openAIQueueAdmissionCache) otherSlotOpen(accountID int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return accountID == 2 && len(c.waitAccounts) == 1 && c.waitAccounts[0] == 1 && len(c.leftQueue) == 0
 }
 
 func (c *openAIQueueAdmissionCache) ReleaseAccountSlot(context.Context, int64, string) error {
@@ -104,7 +131,8 @@ func TestOpenAIQueueAdmissionLegacyAndOptIn(t *testing.T) {
 			var release func()
 			var result openAISlotAcquireResult
 			if tc.optIn {
-				release, result = h.acquireOpenAIAccountSlotWithQueueReselection(c, nil, "", selection, false, &streamStarted, zap.NewNop(), nil, true)
+				sessionHash := ""
+				release, result = h.acquireOpenAIAccountSlotWithQueueReselection(c, nil, &sessionHash, selection, false, &streamStarted, zap.NewNop(), nil, true)
 			} else {
 				release, result = h.acquireResponsesAccountSlot(c, nil, "", selection, false, &streamStarted, zap.NewNop())
 			}
@@ -115,14 +143,14 @@ func TestOpenAIQueueAdmissionLegacyAndOptIn(t *testing.T) {
 				require.Equal(t, openAISlotAcquireQueueFull, result)
 				require.False(t, c.Writer.Written(), "the outer handler must still be able to select another account")
 				require.Empty(t, rec.Body.String())
-				require.Zero(t, cache.decremented, "a rejected queue did not increment the counter")
+				require.Empty(t, cache.leftQueue, "a rejected queue did not increment the counter")
 				return
 			}
 			require.Equal(t, openAISlotAcquireFailed, result)
 			require.Equal(t, http.StatusTooManyRequests, rec.Code)
 			if tc.canWait {
 				require.Equal(t, gatewayConcurrencyLimitCode, gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
-				require.Equal(t, 1, cache.decremented, "timeout must release its wait count exactly once")
+				require.Equal(t, []int64{1}, cache.leftQueue, "timeout must release its wait count exactly once")
 			} else {
 				require.Equal(t, gatewayQueueFullCode, gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
 			}
@@ -151,6 +179,16 @@ func (u *openAIQueueSuccessUpstream) Do(req *http.Request, _ string, accountID i
 
 func newOpenAIQueueReselectionHandler(t *testing.T, count int, admission *openAIQueueAdmissionCache) (*OpenAIGatewayHandler, *openAIQueueSuccessUpstream) {
 	t.Helper()
+	h, upstream, _ := newOpenAIQueueHandlerWithScheduler(t, count, admission, &openAIQueueSchedulerCache{}, time.Millisecond, nil)
+	return h, upstream
+}
+
+func newOpenAIQueueHandlerWithScheduler(
+	t *testing.T, count int,
+	admission *openAIQueueAdmissionCache, scheduler *openAIQueueSchedulerCache,
+	timeout time.Duration, bindings service.GatewayCache,
+) (*OpenAIGatewayHandler, *openAIQueueSuccessUpstream, *openAIWSUsageHandlerUsageLogRepoStub) {
+	t.Helper()
 	accounts := make([]service.Account, count)
 	for i := range accounts {
 		accounts[i] = service.Account{
@@ -161,21 +199,24 @@ func newOpenAIQueueReselectionHandler(t *testing.T, count int, admission *openAI
 	}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	cfg.Gateway.Scheduling = config.GatewaySchedulingConfig{
-		LoadBatchEnabled: true, StickySessionMaxWaiting: 3, StickySessionWaitTimeout: time.Millisecond,
-		FallbackMaxWaiting: 100, FallbackWaitTimeout: time.Millisecond,
+		LoadBatchEnabled: true, StickySessionMaxWaiting: 3, StickySessionWaitTimeout: timeout,
+		FallbackMaxWaiting: 100, FallbackWaitTimeout: timeout,
 	}
 	upstream := &openAIQueueSuccessUpstream{}
-	gw := service.NewOpenAIGatewayService(
-		openAIImagesFailoverAccountRepo{accounts: accounts}, nil, nil, nil, nil, nil, nil, cfg, nil,
-		service.NewConcurrencyService(&openAIQueueSchedulerCache{}), nil, nil, nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil,
-	)
-	gw.DisableOpenAITiboRouteForTest()
+	usage := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 8)}
 	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billing.Stop)
+	gw := service.NewOpenAIGatewayService(
+		openAIImagesFailoverAccountRepo{accounts: accounts}, usage, nil, nil, nil, nil, bindings, cfg, nil,
+		service.NewConcurrencyService(scheduler), service.NewBillingService(cfg, nil), nil, billing, upstream,
+		&service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil,
+	)
+	gw.StopOpenAICodexTicketHarvester()
+	gw.DisableOpenAITiboRouteForTest()
 	h := NewOpenAIGatewayHandler(gw, service.NewConcurrencyService(admission), billing,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
 	h.maxAccountSwitches = 0 // Queue admission retries have their own budget.
-	return h, upstream
+	return h, upstream, usage
 }
 
 func openAIQueueRequestContext(t *testing.T, path, body string) (*gin.Context, *httptest.ResponseRecorder) {
@@ -211,10 +252,10 @@ func TestOpenAITextHandlersQueueReselection(t *testing.T) {
 			{"recovers without upstream replay", 2, 2, http.StatusOK, []int64{1}},
 			{"exhaustion preserves queue full", 2, 0, http.StatusTooManyRequests, []int64{1, 2}},
 			{"bounded even with more accounts", 6, 6, http.StatusTooManyRequests, []int64{1, 2, 3, 4}},
-			{"wait timeout is terminal", 2, 2, http.StatusTooManyRequests, []int64{1}},
+			{"pool stays full until timeout", 2, 0, http.StatusTooManyRequests, []int64{1}},
 		} {
 			t.Run(endpoint.name+"/"+tc.name, func(t *testing.T) {
-				cache := &openAIQueueAdmissionCache{availableID: tc.availableID, canWait: tc.name == "wait timeout is terminal"}
+				cache := &openAIQueueAdmissionCache{availableID: tc.availableID, canWait: tc.name == "pool stays full until timeout"}
 				h, upstream := newOpenAIQueueReselectionHandler(t, tc.count, cache)
 				c, rec := openAIQueueRequestContext(t, endpoint.path, endpoint.body)
 				endpoint.run(h, c)
@@ -234,7 +275,138 @@ func TestOpenAITextHandlersQueueReselection(t *testing.T) {
 				}
 			})
 		}
+		t.Run(endpoint.name+"/sibling_slot_opens_while_queued", func(t *testing.T) {
+			cache := &openAIQueueAdmissionCache{canWait: true}
+			scheduler := &openAIQueueSchedulerCache{available: cache.otherSlotOpen}
+			h, upstream, usage := newOpenAIQueueHandlerWithScheduler(t, 2, cache, scheduler, 700*time.Millisecond, nil)
+			c, rec := openAIQueueRequestContext(t, endpoint.path, endpoint.body)
+			endpoint.run(h, c)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Equal(t, []int64{2}, upstream.accountIDs)
+			require.Equal(t, int64(2), c.GetInt64(opsAccountIDKey))
+			require.Len(t, usage.created, 1)
+			entry := <-usage.created
+			require.Equal(t, int64(2), entry.AccountID)
+			require.Equal(t, []int64{1}, cache.waitAccounts)
+			require.Equal(t, []int64{1}, cache.leftQueue)
+			require.Zero(t, cache.released)
+			require.Equal(t, []int64{2}, scheduler.released)
+		})
 	}
+}
+
+func TestOpenAIQueueWaitOriginalAccountOpens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cache := &openAIQueueAdmissionCache{canWait: true, opensOnQueue: 1}
+	scheduler := &openAIQueueSchedulerCache{available: cache.otherSlotOpen}
+	h, upstream, _ := newOpenAIQueueHandlerWithScheduler(t, 2, cache, scheduler, time.Second, nil)
+	c, rec := openAIQueueRequestContext(t, "/v1/responses", `{"model":"gpt-5.1","input":"hello"}`)
+	h.Responses(c)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []int64{1}, upstream.accountIDs)
+	require.Equal(t, int64(1), c.GetInt64(opsAccountIDKey))
+	require.Equal(t, []int64{1}, cache.waitAccounts)
+	require.Equal(t, []int64{1}, cache.leftQueue)
+	require.Equal(t, 1, cache.released)
+	require.Empty(t, scheduler.released)
+}
+
+func TestOpenAIQueueWaitStickyBindingAfterAlternativeAdmission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name     string
+		existing bool
+		want     int64
+	}{
+		{"new session binds to the serving account", false, 2},
+		{"existing session keeps its original account", true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bindings := testutil.NewRedisGatewayCache(t)
+			cache := &openAIQueueAdmissionCache{canWait: true}
+			scheduler := &openAIQueueSchedulerCache{available: cache.otherSlotOpen}
+			h, upstream, _ := newOpenAIQueueHandlerWithScheduler(t, 2, cache, scheduler, 700*time.Millisecond, bindings)
+			c, rec := openAIQueueRequestContext(t, "/v1/responses", `{"model":"gpt-5.1","input":"hello"}`)
+			c.Request.Header.Set("Session-Id", "queue-binding")
+			hash := h.gatewayService.GenerateSessionHash(c, nil)
+			apiKey, ok := middleware2.GetAPIKeyFromContext(c)
+			require.True(t, ok)
+			if tc.existing {
+				require.NoError(t, h.gatewayService.BindStickySession(c.Request.Context(), apiKey.GroupID, hash, 1))
+			}
+
+			h.Responses(c)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Equal(t, []int64{2}, upstream.accountIDs)
+			bound, err := bindings.GetSessionAccountID(c.Request.Context(), *apiKey.GroupID, "openai:"+hash)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, bound)
+		})
+	}
+}
+
+func TestOpenAIQueueWaitStreamingResponseAfterHeartbeat(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cache := &openAIQueueAdmissionCache{canWait: true}
+	c, rec := openAIQueueRequestContext(t, "/v1/responses", `{"model":"gpt-5.1","stream":true,"input":"hello"}`)
+	scheduler := &openAIQueueSchedulerCache{available: func(id int64) bool {
+		return c.GetInt(gatewayStreamHeartbeatBytesKey) > 0 && cache.otherSlotOpen(id)
+	}}
+	h, upstream, _ := newOpenAIQueueHandlerWithScheduler(t, 2, cache, scheduler, 2*time.Second, nil)
+	h.concurrencyHelper.pingInterval = 5 * time.Millisecond
+	h.Responses(c)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.True(t, strings.HasPrefix(rec.Body.String(), string(SSEPingFormatComment)), rec.Body.String())
+	require.Contains(t, rec.Body.String(), "response.completed")
+	require.Equal(t, []int64{2}, upstream.accountIDs)
+	require.Equal(t, []int64{2}, scheduler.released)
+	require.Equal(t, []int64{1}, cache.leftQueue)
+}
+
+func TestOpenAIQueueWaitClientDisconnectsAfterAlternativeAdmission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cache := &openAIQueueAdmissionCache{canWait: true, cancelOnDequeue: cancel}
+	scheduler := &openAIQueueSchedulerCache{available: cache.otherSlotOpen}
+	h, upstream, usage := newOpenAIQueueHandlerWithScheduler(t, 2, cache, scheduler, 700*time.Millisecond, nil)
+	c, rec := openAIQueueRequestContext(t, "/v1/responses", `{"model":"gpt-5.1","input":"hello"}`)
+	c.Request = c.Request.WithContext(ctx)
+	h.Responses(c)
+
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.Empty(t, upstream.accountIDs)
+	require.Empty(t, usage.created)
+	require.Equal(t, statusClientClosedRequest, c.Writer.Status())
+	require.Empty(t, rec.Body.String())
+	require.Equal(t, []int64{1}, cache.waitAccounts)
+	require.Equal(t, []int64{1}, cache.leftQueue)
+	require.Equal(t, []int64{2}, scheduler.released)
+	require.Zero(t, cache.released)
+}
+
+func TestOpenAIQueueWaitPreservesPreviousResponseAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cache := &openAIQueueAdmissionCache{availableID: 1, canWait: true}
+	scheduler := &openAIQueueSchedulerCache{available: cache.otherSlotOpen}
+	h, upstream, _ := newOpenAIQueueHandlerWithScheduler(t, 2, cache, scheduler, 400*time.Millisecond, nil)
+	c, rec := openAIQueueRequestContext(t, "/v1/responses", `{"model":"gpt-5.1","input":"hello"}`)
+	h.Responses(c)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	cache.availableID = 0
+	c, rec = openAIQueueRequestContext(t, "/v1/responses", `{"model":"gpt-5.1","previous_response_id":"resp_queue_success","input":"continue"}`)
+	h.Responses(c)
+	require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
+	require.Equal(t, gatewayConcurrencyLimitCode, gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
+	require.Equal(t, []int64{1}, upstream.accountIDs, "only the first turn may reach upstream")
+	require.Equal(t, int64(1), c.GetInt64(opsAccountIDKey))
+	require.Equal(t, []int64{1}, cache.waitAccounts)
+	require.Equal(t, []int64{1}, cache.leftQueue)
+	require.Empty(t, scheduler.released)
 }
 
 func TestOpenAIResponsesQueueFullPreservesPreviousResponseAccount(t *testing.T) {

@@ -178,7 +178,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
-	queueReselection := openAIQueueReselection{enabled: openAITextQueueReselectionAllowed(requestPlatform, reqModel)}
+	queueReselection := openAIQueueReselection{enabled: previousResponseID == "" && openAITextQueueReselectionAllowed(requestPlatform, reqModel)}
 
 	// 分组利润控制：chat completions 文本入口请求级装门并固定 pricingAt。
 	ccPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
@@ -251,7 +251,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireOpenAIAccountSlotWithQueueReselection(
-			c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog, nil,
+			c, apiKey.GroupID, &sessionHash, selection, reqStream, &streamStarted, reqLog, nil,
 			queueReselection.enabled && scheduleDecision.Layer != "guardian_parent",
 		)
 		if slotResult == openAISlotAcquireQueueFull {

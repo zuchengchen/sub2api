@@ -785,7 +785,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireOpenAIAccountSlotWithQueueReselection(
-			c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog, nil,
+			c, apiKey.GroupID, &sessionHash, selection, reqStream, &streamStarted, reqLog, nil,
 			queueReselection.enabled && scheduleDecision.Layer != "guardian_parent",
 		)
 		if slotResult == openAISlotAcquireQueueFull {
@@ -1426,7 +1426,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireOpenAIAccountSlotWithQueueReselection(
-			c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog, nil,
+			c, apiKey.GroupID, &sessionHash, selection, reqStream, &streamStarted, reqLog, nil,
 			queueReselection.enabled && scheduleDecision.Layer != "guardian_parent",
 		)
 		if slotResult == openAISlotAcquireQueueFull {
@@ -2181,7 +2181,7 @@ type openAIQueueReselection struct {
 }
 
 func openAITextQueueReselectionAllowed(platform, model string) bool {
-	return platform == service.PlatformOpenAI && !strings.EqualFold(strings.TrimSpace(model), "codex-auto-review")
+	return platform == service.PlatformOpenAI && !service.IsGPTImageGenerationModel(model) && !strings.EqualFold(strings.TrimSpace(model), "codex-auto-review")
 }
 
 func (r *openAIQueueReselection) retry(excludedIDs map[int64]struct{}, accountID int64) bool {
@@ -2384,13 +2384,13 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	reqLog *zap.Logger,
 	writeError openAISlotErrorWriter,
 ) (func(), openAISlotAcquireResult) {
-	return h.acquireOpenAIAccountSlotWithQueueReselection(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, writeError, false)
+	return h.acquireOpenAIAccountSlotWithQueueReselection(c, groupID, &sessionHash, selection, reqStream, streamStarted, reqLog, writeError, false)
 }
 
 func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
 	c *gin.Context,
 	groupID *int64,
-	sessionHash string,
+	sessionHash *string,
 	selection *service.AccountSelectionResult,
 	reqStream bool,
 	streamStarted *bool,
@@ -2414,20 +2414,13 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
 	ctx := service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
 	account := selection.Account
 	if selection.Acquired {
-		latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
-		if vetoed {
-			if selection.ReleaseFunc != nil {
-				selection.ReleaseFunc()
-			}
-			reqLog.Debug("openai.account_slot_profit_vetoed", zap.Int64("account_id", account.ID), zap.String("reason", reason))
+		if !h.checkOpenAIAccountSlotProfit(ctx, selection, selection.ReleaseFunc, reqLog) {
 			return nil, openAISlotAcquireProfitVetoed
 		}
-		account = latest
-		selection.Account = latest
 		// 调度器已抢槽路径无门时由选号内部完成 eager 绑定；门下选号内部
 		// 推迟绑定，这里在终检通过后补准入后绑定。
 		if selection.ProfitGateActive() {
-			if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
+			if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, *sessionHash, selection.Account.ID); err != nil {
 				reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 			}
 		}
@@ -2454,17 +2447,10 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
 	if fastAcquired {
 		// 分组利润控制：快速抢槽成功后终检。选号与抢槽之间账号
 		// 倍率可能刷新，越线则释放槽位交由调用方排除重选，不绑定粘连。
-		latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
-		if vetoed {
-			if fastReleaseFunc != nil {
-				fastReleaseFunc()
-			}
-			reqLog.Debug("openai.account_slot_profit_vetoed", zap.Int64("account_id", account.ID), zap.String("reason", reason))
+		if !h.checkOpenAIAccountSlotProfit(ctx, selection, fastReleaseFunc, reqLog) {
 			return nil, openAISlotAcquireProfitVetoed
 		}
-		account = latest
-		selection.Account = latest
-		if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
+		if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, *sessionHash, selection.Account.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
 		return wrapReleaseOnDone(ctx, fastReleaseFunc), openAISlotAcquireOK
@@ -2495,13 +2481,24 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
 	}
 	defer releaseWait()
 
-	accountReleaseFunc, err := h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
-		c,
-		account.ID,
-		selection.WaitPlan.MaxConcurrency,
-		selection.WaitPlan.Timeout,
-		reqStream,
-		streamStarted,
+	var tryAlternative func(context.Context) *service.AccountSelectionResult
+	if allowQueueReselection && selection.TryAcquireAlternative != nil {
+		tryAlternative = func(probeCtx context.Context) *service.AccountSelectionResult {
+			alternative := selection.TryAcquireAlternative(probeCtx)
+			if alternative == nil {
+				return nil
+			}
+			// A price change on a spare account must not cost us the original queue place.
+			probeCtx = service.ContextWithSelectionProfitGate(probeCtx, alternative)
+			if !h.checkOpenAIAccountSlotProfit(probeCtx, alternative, alternative.ReleaseFunc, reqLog) {
+				return nil
+			}
+			return alternative
+		}
+	}
+	accountReleaseFunc, alternative, err := h.concurrencyHelper.waitForSlotWithAlternative(
+		c, "account", account.ID, selection.WaitPlan.MaxConcurrency, selection.WaitPlan.Timeout,
+		reqStream, streamStarted, true, tryAlternative,
 	)
 	if err != nil {
 		reqLog.Warn("openai.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
@@ -2511,24 +2508,43 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithQueueReselection(
 		return nil, openAISlotAcquireFailed
 	}
 
-	// Slot acquired: no longer waiting in queue.
+	// The reservation belongs to the original account, whichever slot became free.
 	releaseWait()
-	// 分组利润控制：WaitPlan 排队成功后终检。排队期间账号倍率
-	// 可能上调，越线则释放槽位交由调用方排除重选，不绑定粘连。
-	latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
-	if vetoed {
+	if alternative != nil {
+		*selection = *alternative
+		setOpsSelectedAccount(c, selection.Account.ID, selection.Account.Platform)
+		ctx = service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
+		*sessionHash = ensureOpenAIPoolModeSessionHash(*sessionHash, selection.Account)
+		reqLog.Debug("openai.queued_account_switched", zap.Int64("queued_account_id", account.ID), zap.Int64("account_id", selection.Account.ID))
+	} else if !h.checkOpenAIAccountSlotProfit(ctx, selection, accountReleaseFunc, reqLog) {
+		return nil, openAISlotAcquireProfitVetoed
+	}
+	if err := h.gatewayService.BindStickySessionAfterAdmission(ctx, groupID, *sessionHash, selection.Account.ID, alternative != nil); err != nil {
+		reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", selection.Account.ID), zap.Error(err))
+	}
+	// Queue cleanup and session binding can finish after the client disconnects.
+	if failoverClientGone(c) {
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
 		}
-		reqLog.Debug("openai.account_slot_profit_vetoed", zap.Int64("account_id", account.ID), zap.String("reason", reason))
-		return nil, openAISlotAcquireProfitVetoed
-	}
-	account = latest
-	selection.Account = latest
-	if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
-		reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		return nil, openAISlotAcquireFailed
 	}
 	return wrapReleaseOnDone(ctx, accountReleaseFunc), openAISlotAcquireOK
+}
+
+// Recheck after acquiring the slot. A rejected lease must be released before
+// trying another account or resuming the original wait.
+func (h *OpenAIGatewayHandler) checkOpenAIAccountSlotProfit(ctx context.Context, selection *service.AccountSelectionResult, release func(), reqLog *zap.Logger) bool {
+	latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, selection.Account)
+	if vetoed {
+		if release != nil {
+			release()
+		}
+		reqLog.Debug("openai.account_slot_profit_vetoed", zap.Int64("account_id", selection.Account.ID), zap.String("reason", reason))
+		return false
+	}
+	selection.Account = latest
+	return true
 }
 
 // ResponsesWebSocket handles OpenAI Responses API WebSocket ingress endpoint
