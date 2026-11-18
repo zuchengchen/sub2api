@@ -118,6 +118,11 @@ func registerRoutes(
 
 	// API v1
 	v1 := r.Group("/api/v1")
+	if h.KeyPouchImport != nil {
+		imports := v1.Group("/internal/keypouch/imports/:job_id")
+		imports.POST("/start", h.KeyPouchImport.Start)
+		imports.POST("/complete", h.KeyPouchImport.Complete)
+	}
 
 	// 面板 API 限流器：认证接口按用户 ID、公开接口按安全客户端 IP，
 	// 防止高频刷管理面接口打爆数据库（阈值可在系统设置中调整）。

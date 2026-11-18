@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
@@ -564,6 +565,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		if account.Type == AccountTypeOAuth {
 			switch account.Platform {
 			case PlatformOpenAI:
+				// A registered public client's import consent covers the account
+				// grant; it does not request changes to upstream privacy settings.
+				if account.GetCredential("oauth_client_registration") == openai.KeyPouchClientRegistration {
+					return
+				}
 				go func() {
 					defer func() {
 						if r := recover(); r != nil {
