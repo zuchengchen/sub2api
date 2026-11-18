@@ -118,7 +118,7 @@ func TestOAuthReliabilityWSEdgeAdmissionFailureReleasesReplacement(t *testing.T)
 					return lease, nil
 				}
 				if outcome == "factory_error" {
-					req.HeadersFactory = func(context.Context, http.Header) (http.Header, error) { return nil, failure }
+					req.HeadersFactory = func(context.Context, http.Header) (http.Header, *Account, error) { return nil, nil, failure }
 				}
 				lease, err := pool.Acquire(ctx, req)
 				require.Nil(t, lease)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -255,6 +256,117 @@ func TestOpenAIUpstream_DoesNotReplaySuccessOrNonRewindableBodies(t *testing.T) 
 		_ = response.Body.Close()
 		require.Equal(t, 1, calls)
 		require.Zero(t, executor.calls.Load())
+	}
+}
+
+func verifyOpenAITransportTestAccess(t *testing.T, provider *OpenAITokenProvider, account *Account) {
+	t.Helper()
+	api := provider.refreshAPI
+	api.recordOpenAIRefreshFailure(account, &openai.RefreshTokenError{StatusCode: http.StatusUnauthorized, Permanent: true})
+	api.verifyOpenAIAccessAfterTest(context.Background(), account, api.openAIRejectionForAccount(account), "Bearer "+account.GetOpenAIAccessToken(), nil)
+	require.True(t, api.openAIRejectionForAccount(account).accessVerifiedAt(account, time.Now()))
+}
+
+func TestOpenAIUpstream_VerifiedAccess401OnNonRewindableBody(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		path          string
+		authorization string
+		status        int
+		stillVerified bool
+	}{
+		{"responses", "/responses", "Bearer rejected-access", 401, false},
+		{"tool_endpoint", "/models", "Bearer rejected-access", 401, true},
+		{"different_bearer", "/responses", "Bearer older-access", 401, true},
+		{"redirect", "/responses", "Bearer rejected-access", 401, true},
+		{"stripped_bearer", "/responses", "Bearer rejected-access", 401, true},
+		{"rate_limit", "/responses", "Bearer rejected-access", 429, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account, repo, executor, provider := newOpenAIRecoveryFixture()
+			verifyOpenAITransportTestAccess(t, provider, account)
+			calls := 0
+			upstream := &openAIRecoveryUpstream{do: func(sent *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+				calls++
+				final := sent.Clone(sent.Context())
+				switch tc.name {
+				case "redirect":
+					final.URL.Path = "/login"
+				case "stripped_bearer":
+					final.Header.Del("Authorization")
+				}
+				return &http.Response{StatusCode: tc.status, Request: final, Body: http.NoBody}, nil
+			}}
+			svc := &OpenAIGatewayService{accountRepo: repo, httpUpstream: upstream, openAITokenProvider: provider}
+			req, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex"+tc.path, io.NopCloser(strings.NewReader("{}")))
+			require.NoError(t, err)
+			req.Header.Set("Authorization", tc.authorization)
+			resp, err := svc.doOpenAIUpstream(req, "", account)
+			require.NoError(t, err)
+			require.Equal(t, tc.status, resp.StatusCode)
+			require.Equal(t, 1, calls)
+			require.Zero(t, executor.calls.Load())
+			require.Equal(t, tc.stillVerified, provider.refreshAPI.openAIRejectionForAccount(account).accessVerifiedAt(account, time.Now()))
+		})
+	}
+}
+
+func TestOpenAIUpstream_VerifiedAccess401UsesReloadedCredentials(t *testing.T) {
+	account, repo, executor, provider := newOpenAIRecoveryFixture()
+	current := snapshotOAuthRefreshAccount(account)
+	current.Credentials["access_token"] = "reloaded-access"
+	require.NoError(t, repo.UpdateCredentials(context.Background(), current.ID, current.Credentials))
+	calls := 0
+	upstream := &openAIRecoveryUpstream{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		calls++
+		if calls == 2 {
+			require.Equal(t, "Bearer reloaded-access", req.Header.Get("Authorization"))
+			verifyOpenAITransportTestAccess(t, provider, current)
+		}
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: http.NoBody}, nil
+	}}
+	svc := &OpenAIGatewayService{accountRepo: repo, httpUpstream: upstream, openAITokenProvider: provider}
+	req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+account.GetOpenAIAccessToken())
+	resp, err := svc.doOpenAIUpstream(req, "", account)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	require.Equal(t, 2, calls)
+	require.Zero(t, executor.calls.Load())
+	require.False(t, provider.refreshAPI.openAIRejectionForAccount(current).accessVerifiedAt(current, time.Now()))
+}
+
+func TestOpenAIUpstream_VerifiedAccess401PinsRotatedBearerBeforeSending(t *testing.T) {
+	for _, change := range []string{"same_owner", "other_owner", "rotation_during_request"} {
+		t.Run(change, func(t *testing.T) {
+			account, repo, executor, provider := newOpenAIRecoveryFixture()
+			current := snapshotOAuthRefreshAccount(account)
+			current.Credentials["access_token"] = "selected-after-rotation"
+			if change == "other_owner" {
+				current.Credentials["chatgpt_account_id"] = "another-workspace"
+			}
+			require.NoError(t, repo.UpdateCredentials(context.Background(), current.ID, current.Credentials))
+			verifyOpenAITransportTestAccess(t, provider, current)
+			upstream := &openAIRecoveryUpstream{do: func(*http.Request, string, int64, int) (*http.Response, error) {
+				if change == "rotation_during_request" {
+					current = snapshotOAuthRefreshAccount(current)
+					current.Credentials["refresh_token"] = "subsequent-refresh"
+					require.NoError(t, repo.UpdateCredentials(context.Background(), current.ID, current.Credentials))
+					verifyOpenAITransportTestAccess(t, provider, current)
+				}
+				return &http.Response{StatusCode: http.StatusUnauthorized, Body: http.NoBody}, nil
+			}}
+			svc := &OpenAIGatewayService{accountRepo: repo, httpUpstream: upstream, openAITokenProvider: provider}
+			req, err := http.NewRequest(http.MethodPost, chatgptCodexURL, io.NopCloser(strings.NewReader("{}")))
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer "+current.GetOpenAIAccessToken())
+			resp, err := svc.doOpenAIUpstream(req, "", account)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+			require.Zero(t, executor.calls.Load())
+			require.Equal(t, change != "same_owner", provider.refreshAPI.openAIRejectionForAccount(current).accessVerifiedAt(current, time.Now()))
+		})
 	}
 }
 

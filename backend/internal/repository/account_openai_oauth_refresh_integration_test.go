@@ -55,6 +55,48 @@ func (s *AccountRepoSuite) TestOpenAIOAuthSuccessCAS_RefreshOrConcurrentEdit() {
 	}
 }
 
+func (s *AccountRepoSuite) TestOpenAIOAuthRefreshErrorCAS_PreservesSchedulingAndRecovery() {
+	for _, mode := range []string{"enabled", "admin_disabled", "reauthorized"} {
+		s.Run(mode, func() {
+			account := mustCreateAccount(s.T(), s.client, &service.Account{
+				Name: "openai-refresh-error-" + mode, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "observed", "refresh_token": "observed-refresh"},
+			})
+			observed, err := s.repo.GetByID(s.ctx, account.ID)
+			s.Require().NoError(err)
+			switch mode {
+			case "admin_disabled":
+				s.Require().NoError(s.repo.SetSchedulable(s.ctx, account.ID, false))
+			case "reauthorized":
+				s.Require().NoError(s.repo.UpdateCredentials(s.ctx, account.ID, map[string]any{"access_token": "rotated", "refresh_token": "rotated-refresh"}))
+			}
+			applied, err := s.repo.SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(s.ctx, account.ID, observed.Credentials, observed.ProxyID, "refresh rejected")
+			s.Require().NoError(err)
+			latest, err := s.repo.GetByID(s.ctx, account.ID)
+			s.Require().NoError(err)
+			if mode == "reauthorized" {
+				s.Require().False(applied)
+				s.Require().True(latest.IsSchedulable())
+				s.Require().Equal("rotated-refresh", latest.GetOpenAIRefreshToken())
+				return
+			}
+
+			s.Require().True(applied)
+			s.Require().Equal(service.StatusError, latest.Status)
+			s.Require().False(latest.IsSchedulable())
+			s.Require().Equal(mode == "enabled", latest.Schedulable)
+			limiter := service.NewRateLimitService(s.repo, nil, nil, nil)
+			result, err := limiter.RecoverAccountAfterSuccessfulTest(s.ctx, account.ID)
+			s.Require().NoError(err)
+			s.Require().True(result.ClearedError)
+			latest, err = s.repo.GetByID(s.ctx, account.ID)
+			s.Require().NoError(err)
+			s.Require().Equal(service.StatusActive, latest.Status)
+			s.Require().Equal(mode == "enabled", latest.IsSchedulable())
+		})
+	}
+}
+
 func TestAccountRepoOpenAIOAuthSuccessCAS_OuterTransactionPublication(t *testing.T) {
 	client := testEntClient(t)
 	parentCtx := context.Background()

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1154,6 +1155,108 @@ func TestPathA_NonRetryableError(t *testing.T) {
 	require.Equal(t, 1, repo.setErrorCalls) // 应标记 error 状态
 	require.Equal(t, 0, repo.updateCalls)   // 不应更新 credentials
 	require.Equal(t, 1, invalidator.calls)  // 永久凭证失败后必须失效旧 token 缓存
+}
+
+func (r *openAIRecoveryRepo) SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(_ context.Context, id int64, expected map[string]any, proxy *int64, message string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !openAIRefreshTestStateMatches(r.account, id, expected, proxy) || !r.account.IsActive() {
+		return false, nil
+	}
+	r.account.Status = StatusError
+	r.account.ErrorMessage = message
+	r.setError++
+	return true, nil
+}
+
+func TestTokenRefreshService_OpenAIVerifiedAccessSurvivesProactiveWindow(t *testing.T) {
+	ctx := context.Background()
+	account, repo, executor, provider := newOpenAIRecoveryFixture()
+	account.Credentials["oauth_client_registration"] = openai.KeyPouchClientRegistration
+	account.Credentials["expires_at"] = time.Now().Add(3 * time.Minute).UTC().Format(time.RFC3339)
+	repo.account = snapshotOAuthRefreshAccount(account)
+	require.True(t, (&OpenAITokenRefresher{}).NeedsRefresh(account, time.Hour))
+
+	api := provider.refreshAPI
+	refreshErr := &openai.RefreshTokenError{Permanent: true, Code: "refresh_token_reused"}
+	api.recordOpenAIRefreshFailure(account, refreshErr)
+	api.verifyOpenAIAccessAfterTest(ctx, account, api.openAIRejectionForAccount(account), "Bearer "+account.GetOpenAIAccessToken(), nil)
+	invalidator := &tokenCacheInvalidatorStub{}
+	blocker := &tokenRefreshRuntimeBlocker{}
+	svc := &TokenRefreshService{accountRepo: repo, refreshAPI: api, cacheInvalidator: invalidator, runtimeBlocker: blocker}
+
+	// The candidate pager may hold an older credential version.
+	candidate := snapshotOAuthRefreshAccount(account)
+	candidate.Credentials["refresh_token"] = "older-refresh-token"
+	err := svc.refreshWithRetry(ctx, candidate, executor, executor, time.Hour)
+	require.ErrorIs(t, err, errRefreshSkipped)
+	require.Zero(t, repo.setError)
+	require.Zero(t, invalidator.calls)
+	require.Zero(t, blocker.blockCalls)
+	require.Zero(t, executor.calls.Load())
+	require.Same(t, refreshErr, api.openAIRefreshFailure(account))
+
+	// An opaque token's durable expiry can be shortened without rotating it.
+	repo.account.Credentials["expires_at"] = time.Now().Add(-time.Second).UTC().Format(time.RFC3339)
+	err = svc.refreshWithRetry(ctx, candidate, executor, executor, time.Hour)
+	require.ErrorIs(t, err, refreshErr)
+	require.Equal(t, 1, repo.setError)
+	require.Equal(t, StatusError, repo.account.Status)
+	require.True(t, repo.account.Schedulable, "refresh errors must preserve the scheduling switch")
+	require.Equal(t, 1, invalidator.calls)
+	require.Equal(t, 1, blocker.blockCalls)
+	require.Zero(t, executor.calls.Load())
+}
+
+type blockingOpenAIRefreshErrorRepo struct {
+	*openAIRecoveryRepo
+	writing chan struct{}
+	resume  chan struct{}
+}
+
+func (r *blockingOpenAIRefreshErrorRepo) SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(ctx context.Context, id int64, expected map[string]any, proxy *int64, message string) (bool, error) {
+	close(r.writing)
+	select {
+	case <-r.resume:
+		return r.openAIRecoveryRepo.SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(ctx, id, expected, proxy, message)
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func TestTokenRefreshService_OpenAIRefreshErrorOrdersSuccessfulTestAfterStatusWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	account, base, executor, _ := newOpenAIRecoveryFixture()
+	repo := &blockingOpenAIRefreshErrorRepo{openAIRecoveryRepo: base, writing: make(chan struct{}), resume: make(chan struct{})}
+	api := NewOAuthRefreshAPI(repo, nil)
+	cause := &openai.RefreshTokenError{Permanent: true}
+	api.recordOpenAIRefreshFailure(account, cause)
+	beforeTest := api.openAIRejectionForAccount(account)
+	svc := &TokenRefreshService{accountRepo: repo, refreshAPI: api}
+	job := make(chan error, 1)
+	go func() { job <- svc.refreshWithRetry(ctx, account, executor, executor, time.Hour) }()
+	select {
+	case <-repo.writing:
+	case <-ctx.Done():
+		t.Fatal("background refresh did not reach its conditional status write")
+	}
+
+	mu := api.getLocalLock(OpenAITokenCacheKey(account))
+	if mu.TryLock() {
+		mu.Unlock()
+		t.Fatal("status write must hold the lock shared with the successful test")
+	}
+	verified := make(chan struct{})
+	go func() {
+		api.verifyOpenAIAccessAfterTest(ctx, account, beforeTest, "Bearer "+account.GetOpenAIAccessToken(), nil)
+		close(verified)
+	}()
+	close(repo.resume)
+	require.ErrorIs(t, <-job, cause)
+	<-verified
+	require.True(t, api.openAIRejectionForAccount(account).accessVerifiedAt(account, time.Now()))
+	require.True(t, base.account.Schedulable)
 }
 
 // TestPathA_RetryableErrorExhausted 统一 API 路径可重试错误耗尽 → 不标记 error

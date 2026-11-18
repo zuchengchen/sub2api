@@ -892,7 +892,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	statusCode := 0
 	var handshakeHeaders http.Header
 	for {
-		headers, err = s.refreshOpenAIWSAuthHeaders(ctx, account, headers)
+		var dialCredentialOwner *Account
+		headers, dialCredentialOwner, err = s.refreshOpenAIWSAuthHeaders(ctx, account, headers)
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
@@ -919,6 +920,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			continue
 		}
 		if statusCode == http.StatusUnauthorized {
+			if p := s.openAITokenProvider; p != nil {
+				p.refreshAPI.rejectVerifiedOpenAIAccess(dialCredentialOwner, sentHeaders.Get("Authorization"))
+			}
 			if oauthRecoveryStep < 2 {
 				var recovered bool
 				if oauthRecoveryStep == 0 {

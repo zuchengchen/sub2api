@@ -1304,9 +1304,23 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	// Allow empty body, model_id is optional
 	_ = c.ShouldBindJSON(&req)
 
+	recoverAccount := func(ctx context.Context) {
+		if h.rateLimitService != nil {
+			if _, err := h.rateLimitService.RecoverAccountAfterSuccessfulTest(ctx, accountID); err != nil {
+				_ = c.Error(err)
+			}
+		}
+	}
+	checkedOAuthRejection := false
 	opts := service.AccountTestOptions{
 		ImageDataURL: req.ImageDataURL,
 		AudioDataURL: req.AudioDataURL,
+		OnOpenAIAccessVerification: func(ctx context.Context, verified bool) {
+			checkedOAuthRejection = true
+			if verified {
+				recoverAccount(ctx)
+			}
+		},
 	}
 
 	// Use AccountTestService to test the account with SSE streaming
@@ -1315,10 +1329,8 @@ func (h *AccountHandler) Test(c *gin.Context) {
 		return
 	}
 
-	if h.rateLimitService != nil {
-		if _, err := h.rateLimitService.RecoverAccountAfterSuccessfulTest(c.Request.Context(), accountID); err != nil {
-			_ = c.Error(err)
-		}
+	if !checkedOAuthRejection {
+		recoverAccount(c.Request.Context())
 	}
 }
 

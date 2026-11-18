@@ -76,7 +76,7 @@ func TestCodexOAuthIsolationOAuthRecoveryRejectsChangedUser(t *testing.T) {
 		account, _, executor, provider := auditChangedOAuthUserFixture()
 		svc := &OpenAIGatewayService{openAITokenProvider: provider}
 		headers := http.Header{"Authorization": {"Bearer rejected-access"}}
-		_, err := svc.refreshOpenAIWSAuthHeaders(context.Background(), account, headers)
+		_, _, err := svc.refreshOpenAIWSAuthHeaders(context.Background(), account, headers)
 		require.Error(t, err, "a delayed dial must rebuild its identity and request state after an owner change")
 		require.Zero(t, executor.calls.Load())
 	})

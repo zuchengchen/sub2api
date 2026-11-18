@@ -553,11 +553,13 @@ func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Acc
 	if s == nil {
 		return false
 	}
-	// The token provider already refuses this exact credential version. Keep
-	// it out of both sticky and ordinary selection; reauthorization changes
-	// the fingerprint and becomes eligible without a persistent account block.
-	if s.openAITokenProvider != nil && s.openAITokenProvider.refreshAPI.openAIRefreshFailure(account) != nil {
-		return true
+	// Sticky and ordinary selection share the token provider's access decision.
+	// Successful access verification leaves all other scheduling gates intact.
+	if s.openAITokenProvider != nil {
+		failure := s.openAITokenProvider.refreshAPI.openAIRejectionForAccount(account)
+		if failure != nil && !failure.accessVerifiedAt(account, time.Now()) {
+			return true
+		}
 	}
 	if s.openAICodexTicketBlocksAccount(account, requestedModel) {
 		return true

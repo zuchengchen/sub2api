@@ -74,10 +74,11 @@ type openAIWSAcquireRequest struct {
 	Account *Account
 	WSURL   string
 	Headers http.Header
-	// HeadersFactory is evaluated inside dialConn. It exists so credentials
-	// whose authorization is per-dial (Agent Identity) are never cached in
-	// lastAcquire or delayed prewarm state.
-	HeadersFactory func(context.Context, http.Header) (http.Header, error)
+	// HeadersFactory resolves authentication for this dial, including a fresh
+	// OAuth owner when the stored credentials have rotated. Neither its bearer
+	// nor the resolved owner is retained in a prewarm snapshot or a dial error.
+	HeadersFactory func(context.Context, http.Header) (http.Header, *Account, error)
+	onUnauthorized func(*Account, string)
 	// BeforeFreshDial is request-local. It runs after current auth headers are
 	// resolved and only when reuse could not satisfy this acquire. Persistent
 	// prewarm snapshots must clear it; ordinary clones/auth retries retain it.
@@ -2669,9 +2670,10 @@ func (p *openAIWSConnPool) dialConnBeforeOpen(ctx context.Context, req openAIWSA
 		}
 	}
 	headers := cloneHeader(req.Headers)
+	credentialOwner := req.Account
 	var err error
 	if req.HeadersFactory != nil {
-		headers, err = req.HeadersFactory(ctx, headers)
+		headers, credentialOwner, err = req.HeadersFactory(ctx, headers)
 		if err != nil {
 			return nil, err
 		}
@@ -2715,7 +2717,11 @@ func (p *openAIWSConnPool) dialConnBeforeOpen(ctx context.Context, req openAIWSA
 			return nil, err
 		}
 	}
+	sentAuthorization := headers.Get("Authorization")
 	conn, status, handshakeHeaders, err = dialOpenAIWSForAccount(ctx, p.cfg, req, headers, p.clientDialer)
+	if status == http.StatusUnauthorized && req.onUnauthorized != nil {
+		req.onUnauthorized(credentialOwner, sentAuthorization)
+	}
 	if err != nil {
 		var handshakeErr *openAIWSHandshakeError
 		var responseBody []byte
