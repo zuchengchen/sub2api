@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"maps"
 	"math"
 	"sort"
 	"strconv"
@@ -2308,7 +2309,64 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	if len(platformOverride) > 0 {
 		platform = platformOverride[0]
 	}
-	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	selection, decision, err := s.selectAccountWithScheduler(
+		ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs,
+		requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost,
+	)
+	if err != nil || selection == nil || selection.Account == nil || selection.Acquired || selection.WaitPlan == nil {
+		return selection, decision, err
+	}
+	_, guardian := openAIGuardianParentAffinityFromContext(ctx)
+	if platform != PlatformOpenAI || requiredTransport != OpenAIUpstreamTransportAny || requiredCapability != OpenAIEndpointCapabilityChatCompletions ||
+		previousResponseID != "" || requireCompact || guardian || decision.Layer == openAIAccountScheduleLayerGuardianParent ||
+		strings.EqualFold(strings.TrimSpace(requestedModel), codexAutoReviewModel) || IsGPTImageGenerationModel(requestedModel) {
+		return selection, decision, nil
+	}
+
+	excluded := make(map[int64]struct{}, len(excludedIDs)+1)
+	maps.Copy(excluded, excludedIDs)
+	excluded[selection.Account.ID] = struct{}{}
+	// Without batch load data the legacy scheduler only tries its first eligible
+	// account. Remember busy candidates across probes so each turn can try the
+	// next one. The exclusions passed by the request remain immutable.
+	rotateBusy := !s.schedulingConfig().LoadBatchEnabled && !s.isOpenAIAdvancedSchedulerEnabled(ctx)
+	probeExcluded := excluded
+	var probeMu sync.Mutex
+	selection.TryAcquireAlternative = func(waitCtx context.Context) *AccountSelectionResult {
+		if !probeMu.TryLock() {
+			return nil
+		}
+		defer probeMu.Unlock()
+		// The original account is waitable. Do not trigger the proxy quarantine's
+		// empty-pool fail-open pass or publish any speculative session binding.
+		for attempt := 0; attempt < 2 && waitCtx.Err() == nil; attempt++ {
+			other, _, err := s.selectAccountWithSchedulerOnce(
+				WithPublicModelSupportMiss404(waitCtx), groupID, "", "", requestedModel, probeExcluded,
+				requiredTransport, requiredCapability, "", false, platform, false, useUpstreamTokenCost,
+			)
+			if errors.Is(err, ErrNoAvailableAccounts) && len(probeExcluded) > len(excluded) {
+				// All alternatives have been tried. Revisit accounts that may have
+				// freed a slot since an earlier turn while still excluding the owner.
+				probeExcluded = excluded
+				continue
+			}
+			if err != nil || other == nil || other.Account == nil {
+				return nil
+			}
+			if other.Acquired && other.ReleaseFunc != nil {
+				return other
+			}
+			if rotateBusy && other.WaitPlan != nil {
+				if len(probeExcluded) == len(excluded) {
+					probeExcluded = maps.Clone(excluded)
+				}
+				probeExcluded[other.Account.ID] = struct{}{}
+			}
+			return nil
+		}
+		return nil
+	}
+	return selection, decision, nil
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(

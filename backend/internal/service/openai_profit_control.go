@@ -355,18 +355,24 @@ func (s *OpenAIGatewayService) bindOpenAIStickySessionDuringSelection(ctx contex
 // remains sticky and becomes eligible again automatically after its rate
 // recovers.
 func (s *OpenAIGatewayService) BindStickySessionAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	return s.BindStickySessionAfterAdmission(ctx, groupID, sessionHash, accountID, false)
+}
+
+// BindStickySessionAfterAdmission preserves an existing binding when another
+// account handles a queued request or the profit gate is active.
+func (s *OpenAIGatewayService) BindStickySessionAfterAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64, queueSpillover bool) error {
 	if sessionHash == "" || accountID <= 0 {
 		return nil
 	}
 	if preserveOpenAIGuardianParentBinding(ctx, sessionHash) {
 		return nil
 	}
-	if !gatewayProfitControlGateActive(ctx) {
+	if !queueSpillover && !gatewayProfitControlGateActive(ctx) {
 		return s.BindStickySession(ctx, groupID, sessionHash, accountID)
 	}
 	existingAccountID, err := s.getStickySessionAccountID(ctx, groupID, sessionHash)
 	if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
-		slog.Warn("profit_control_sticky_binding_read_failed", "group_id", derefGroupID(groupID), "account_id", accountID, "error", err)
+		slog.Warn("profit_control_sticky_binding_read_failed", "group_id", derefGroupID(groupID), "account_id", accountID, "queue_spillover", queueSpillover, "error", err)
 		return nil
 	}
 	if existingAccountID > 0 && existingAccountID != accountID {

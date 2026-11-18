@@ -384,23 +384,54 @@ func (h *ConcurrencyHelper) waitForSlotWithPing(c *gin.Context, slotType string,
 
 // waitForSlotWithPingTimeout waits for a concurrency slot with a custom timeout.
 func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType string, id int64, maxConcurrency int, timeout time.Duration, isStream bool, streamStarted *bool, tryImmediate bool) (func(), error) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+	release, _, err := h.waitForSlotWithAlternative(c, slotType, id, maxConcurrency, timeout, isStream, streamStarted, tryImmediate, nil)
+	return release, err
+}
+
+// waitForSlotWithAlternative keeps polling the queued account while a movable
+// request can also try an immediately available account within the same deadline.
+func (h *ConcurrencyHelper) waitForSlotWithAlternative(
+	c *gin.Context, slotType string, id int64, maxConcurrency int, timeout time.Duration,
+	isStream bool, streamStarted *bool, tryImmediate bool,
+	tryAlternative func(context.Context) *service.AccountSelectionResult,
+) (func(), *service.AccountSelectionResult, error) {
+	parent := c.Request.Context()
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	acquireSlot := func() (*service.AcquireResult, error) {
-		if slotType == "user" {
-			return h.concurrencyService.AcquireUserSlot(ctx, id, maxConcurrency)
+	deadline, _ := ctx.Deadline()
+	canWait := func() bool { return ctx.Err() == nil && time.Now().Before(deadline) }
+	waitError := func() error {
+		if err := parent.Err(); err != nil {
+			return err
 		}
-		return h.concurrencyService.AcquireAccountSlot(ctx, id, maxConcurrency)
+		return &ConcurrencyError{SlotType: slotType, IsTimeout: true}
+	}
+	acquire := h.concurrencyService.AcquireAccountSlot
+	if slotType == "user" {
+		acquire = h.concurrencyService.AcquireUserSlot
+	}
+	acquireSlot := func() (*service.AcquireResult, error) {
+		if !canWait() {
+			return nil, waitError()
+		}
+		result, err := acquire(ctx, id, maxConcurrency)
+		if !canWait() {
+			if result != nil && result.ReleaseFunc != nil {
+				result.ReleaseFunc()
+			}
+			return nil, waitError()
+		}
+		return result, err
 	}
 
 	if tryImmediate {
 		result, err := acquireSlot()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if result.Acquired {
-			return result.ReleaseFunc, nil
+			return result.ReleaseFunc, nil, nil
 		}
 	}
 
@@ -412,7 +443,7 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 		var ok bool
 		flusher, ok = c.Writer.(http.Flusher)
 		if !ok {
-			return nil, fmt.Errorf("streaming not supported")
+			return nil, nil, fmt.Errorf("streaming not supported")
 		}
 	}
 
@@ -424,19 +455,50 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 		pingCh = pingTicker.C
 	}
 
+	// Probe promptly once, then spread the more expensive scheduler calls over
+	// the remaining budget. A slow probe also leaves time for heartbeats and
+	// ordinary slot polling before the next probe.
+	const maxProbes = 6
+	var probeTimer *time.Timer
+	var probeCh <-chan time.Time
+	var probeInterval time.Duration
+	if tryAlternative != nil {
+		step := time.Until(deadline) / maxProbes
+		probeInterval = max(time.Second, step)
+		probeTimer = time.NewTimer(min(time.Second, step))
+		defer probeTimer.Stop()
+		probeCh = probeTimer.C
+	}
+
 	backoff := initialBackoff
 	timer := time.NewTimer(backoff)
 	defer timer.Stop()
 
+	probes := 0
 	for {
 		select {
 		case <-ctx.Done():
-			if parentErr := c.Request.Context().Err(); parentErr != nil {
-				return nil, parentErr
+			return nil, nil, waitError()
+		case <-probeCh:
+			if !canWait() {
+				return nil, nil, waitError()
 			}
-			return nil, &ConcurrencyError{
-				SlotType:  slotType,
-				IsTimeout: true,
+			probeCtx, stopProbe := context.WithTimeout(ctx, time.Second)
+			alternate := tryAlternative(probeCtx)
+			probeDeadline, _ := probeCtx.Deadline()
+			inTime := probeCtx.Err() == nil && time.Now().Before(probeDeadline)
+			stopProbe()
+			if alternate != nil {
+				if inTime && alternate.Acquired && alternate.Account != nil {
+					return alternate.ReleaseFunc, alternate, nil
+				}
+				if alternate.ReleaseFunc != nil {
+					alternate.ReleaseFunc()
+				}
+			}
+			probes++
+			if probes < maxProbes {
+				probeTimer.Reset(probeInterval)
 			}
 
 		case <-pingCh:
@@ -450,7 +512,7 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 			}
 			written, err := fmt.Fprint(c.Writer, string(h.pingFormat))
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			recordGatewayStreamHeartbeat(c, written)
 			flusher.Flush()
@@ -459,11 +521,11 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 			// Try to acquire slot
 			result, err := acquireSlot()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
 			if result.Acquired {
-				return result.ReleaseFunc, nil
+				return result.ReleaseFunc, nil, nil
 			}
 			backoff = nextBackoff(backoff)
 			timer.Reset(backoff)
