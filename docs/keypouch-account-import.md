@@ -24,9 +24,9 @@ KeyPouch 在 OVH 本机向 sub2api 提交一个邮箱和任务 ID。sub2api 查�
 | `/api/v1/internal/keypouch/imports/{job_id}/start` | `email` | `{"status":"member","account_id":1,"group_id":2}` 或 `{"status":"authorization_required","authorization_url":"…"}` |
 | `/api/v1/internal/keypouch/imports/{job_id}/complete` | `email`、`code`、`state` | `{"status":"member","account_id":1,"group_id":2}` |
 
-任务 ID 为 1 至 96 个 ASCII 字母、数字、下划线或连字符，第一个字符为字母或数字。一项任务绑定一个规范化邮箱。多个存量匹配或邮箱、用户、工作空间字段冲突时返回 409。缺失账号只有在提供方兑换成功，且 ID token 的签名、issuer、audience、nonce、有效期、已验证邮箱与该任务一致，能确定工作空间和用户后才会创建。服务端通过已有账号服务写入凭据，并在任务事务内核实成员关系。
+任务 ID 为 1 至 96 个 ASCII 字母、数字、下划线或连字符，第一个字符为字母或数字。一项任务绑定一个规范化邮箱。多个存量匹配或邮箱、用户、工作空间字段冲突时返回 409。旧记录仅带 JWT 时，服务仅比较其 payload 的身份字段以防重复。只有这些推断字段命中时返回身份冲突，供管理员补全资料。缺失账号只有在提供方兑换成功，且 ID token 的签名、issuer、audience、nonce、有效期、已验证邮箱与该任务一致，能确定工作空间和用户后才会创建。服务端通过已有账号服务写入凭据，并在任务事务内核实成员关系。
 
-在 30 分钟内重复 `start` 返回原授权地址。兑换期间返回 `409 import_in_progress` 和两秒的 `Retry-After`，继续用同任务 `start` 查询即可。失败、过期或兑换进程中断后，`start` 在租约结束后生成新的授权请求。旧授权码不能再次消费。完成后的重试只返回账户及分组 ID。错误响应仅含固定短码，例如 `{"error":"identity_mismatch"}`。授权地址、回调参数、令牌和内部密钥不得进入业务日志或用户档案。
+在 30 分钟内重复 `start` 返回原授权地址。兑换期间返回 `409 import_in_progress` 和两秒的 `Retry-After`，继续用同任务 `start` 查询即可。失败、过期或兑换进程中断后，`start` 在租约结束后生成新的授权请求。旧授权码不能再次消费。完成后的重试只返回账号及分组 ID。错误响应仅含固定短码，例如 `{"error":"identity_mismatch"}`。授权地址、回调参数、令牌和内部密钥不得进入业务日志或用户档案。
 
 数据库增量迁移为 `273_keypouch_import_jobs.sql`。任务中待授权的 state、verifier、nonce 和注册信息使用现有 `SecretEncryptor` 的 AES-GCM 密钥封装，兑换开始时清除。账号凭据只进入既有账号存储。事务内追加目标组并写调度 outbox。回滚至上一正式版本时可保留该新增表。[仓库发布要求](../AGENTS.md)
 
