@@ -73,7 +73,7 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 	parsed, err := url.Parse(baseURL)
 	official := err == nil && (strings.EqualFold(parsed.Hostname(), "api.openai.com") ||
 		(account.IsOpenAIOAuth() && strings.EqualFold(parsed.Hostname(), "chatgpt.com")))
-	if account.IsOpenAI() && (isOpenAIGPT6AstraModel(modelID) || openai.IsGPT61SolModelSpelling(modelID)) && official {
+	if account.IsOpenAI() && (openai.IsGPT62ModelSpelling(modelID) || isOpenAIGPT6AstraModel(modelID) || openai.IsGPT61SolModelSpelling(modelID)) && official {
 		defaults := map[string]json.RawMessage{
 			"supports_search_tool":  json.RawMessage("true"),
 			"apply_patch_tool_type": json.RawMessage(`"freeform"`),
@@ -89,6 +89,9 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 	}
 	if account.IsOpenAIApiKey() {
 		target := modelID
+		if openai.IsGPT62ModelSpelling(target) {
+			target = normalizeKnownOpenAICodexModel(target)
+		}
 		if isOpenAIGPT6AstraModel(target) {
 			target = "gpt-6-astra"
 		}
@@ -99,9 +102,13 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 	}
 	// API Astra publicly supports Ultrafast. OAuth must advertise it in its
 	// account manifest; a subscription label alone does not grant the capability.
-	if account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(baseURL) && isOpenAIGPT6AstraModel(modelID) {
+	if account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(baseURL) && (isOpenAIGPT6AstraModel(modelID) || openai.IsGPT62ModelSpelling(modelID)) {
 		tiers := configuredCodexServiceTiersForModel(modelID)
-		tiers = append(tiers, configuredCodexServiceTier{ID: OpenAIFastTierUltrafast, Name: "Ultrafast", Description: "Lowest latency; 6x Standard token pricing."})
+		description := "Lowest latency; 6x Standard token pricing."
+		if openai.IsGPT62ModelSpelling(modelID) {
+			description = "Ultra-low latency processing."
+		}
+		tiers = append(tiers, configuredCodexServiceTier{ID: OpenAIFastTierUltrafast, Name: "Ultrafast", Description: description})
 		encoded, err := json.Marshal(tiers)
 		if err != nil {
 			panic(err)

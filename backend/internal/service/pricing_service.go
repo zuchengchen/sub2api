@@ -74,6 +74,42 @@ var (
 		Mode:                                "chat",
 		SupportsPromptCaching:               true,
 	}
+	// GPT-6.2 catalog fallback uses the published API rates. The billing service
+	// applies this site's Astra/Sol markup independently of catalog availability.
+	openAIGPT62AstraFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken:                   8e-6,
+		InputCostPerTokenPriority:           16e-6,
+		OutputCostPerToken:                  40e-6,
+		OutputCostPerTokenPriority:          80e-6,
+		CacheCreationInputTokenCost:         10e-6,
+		CacheCreationInputTokenCostPriority: 20e-6,
+		CacheReadInputTokenCost:             0.4e-6,
+		CacheReadInputTokenCostPriority:     0.8e-6,
+		LongContextInputTokenThreshold:      272_000,
+		LongContextInputCostMultiplier:      2,
+		LongContextOutputCostMultiplier:     1.5,
+		SupportsServiceTier:                 true,
+		LiteLLMProvider:                     "openai",
+		Mode:                                "chat",
+		SupportsPromptCaching:               true,
+	}
+	openAIGPT62SolFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken:                   2e-6,
+		InputCostPerTokenPriority:           4e-6,
+		OutputCostPerToken:                  10e-6,
+		OutputCostPerTokenPriority:          20e-6,
+		CacheCreationInputTokenCost:         2.5e-6,
+		CacheCreationInputTokenCostPriority: 5e-6,
+		CacheReadInputTokenCost:             0.1e-6,
+		CacheReadInputTokenCostPriority:     0.2e-6,
+		LongContextInputTokenThreshold:      272_000,
+		LongContextInputCostMultiplier:      2,
+		LongContextOutputCostMultiplier:     1.5,
+		SupportsServiceTier:                 true,
+		LiteLLMProvider:                     "openai",
+		Mode:                                "chat",
+		SupportsPromptCaching:               true,
+	}
 	openAIGPT61TerraFallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:                   1e-6,
 		InputCostPerTokenPriority:           2e-6,
@@ -1335,6 +1371,11 @@ func (s *PricingService) buildModelLookupCandidates(modelLower string) []string 
 		// Prefer canonical model names for all other aliases (including models/xxx).
 		candidates = append([]string{normalized}, candidates...)
 	}
+	// GPT-6.2 effort/compact aliases share their base rates unless the catalog
+	// explicitly prices that alias. Preserve exact entries before the base.
+	if base := normalizeKnownOpenAICodexModel(modelLower); openai.IsGPT62ModelSpelling(base) {
+		candidates = append(candidates, base)
+	}
 
 	seen := make(map[string]struct{}, len(candidates))
 	out := make([]string, 0, len(candidates))
@@ -1598,6 +1639,18 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 			return pricing
 		}
 		model = resolved
+	}
+	if openai.IsGPT62AstraModelSpelling(model) {
+		if pricing, ok := s.pricingData["gpt-6.2-astra"]; ok {
+			return pricing
+		}
+		return openAIGPT62AstraFallbackPricing
+	}
+	if openai.IsGPT62SolModelSpelling(model) {
+		if pricing, ok := s.pricingData["gpt-6.2-sol"]; ok {
+			return pricing
+		}
+		return openAIGPT62SolFallbackPricing
 	}
 	if openai.IsGPT61TerraModelSpelling(model) {
 		if pricing, ok := s.pricingData["gpt-6.1-terra"]; ok {

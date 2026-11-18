@@ -29,6 +29,9 @@ func validateOpenAIOAuthFinalReasoning(account *Account, finalModel string, body
 		if err := openai.ValidateGPT6AstraReasoningEffort(finalModel, value.String()); err != nil {
 			return &openAIReasoningEffortValidationError{param: param, message: err.Error()}
 		}
+		if err := openai.ValidateGPT62ReasoningEffort(finalModel, value.String()); err != nil {
+			return &openAIReasoningEffortValidationError{param: param, message: err.Error()}
+		}
 	}
 	return nil
 }
