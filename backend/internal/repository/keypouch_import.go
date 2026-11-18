@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 
@@ -133,7 +134,63 @@ func (s *keyPouchImportStore) FindIdentity(ctx context.Context, email, workspace
 		}
 		match = &account
 	}
-	return match, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var matchedID int64
+	if match != nil {
+		matchedID = match.AccountID
+	}
+	if err := checkKeyPouchLegacyRecords(ctx, db, email, workspace, user, matchedID); err != nil {
+		return nil, err
+	}
+	return match, nil
+}
+
+// Older manual imports may have an arbitrary name and only an ID/access token.
+// Compare just the JWT payloads of records missing searchable metadata. This
+// is a veto even if another, fully indexed row matched. Unverified historical
+// claims alone never authorize a positive match or a membership mutation.
+func checkKeyPouchLegacyRecords(ctx context.Context, db sqlExecutor, email, workspace, user string, matchedID int64) error {
+	rows, err := db.QueryContext(ctx, `SELECT split_part(coalesce(credentials->>'id_token',''),'.',2),
+		split_part(coalesce(credentials->>'access_token',''),'.',2) FROM accounts
+		WHERE platform='openai' AND type='oauth' AND deleted_at IS NULL AND id<>$1
+		AND (nullif(trim(credentials->>'email'),'') IS NULL OR
+		     ($2<>'' AND (nullif(trim(credentials->>'chatgpt_user_id'),'') IS NULL OR
+		                   nullif(trim(credentials->>'chatgpt_account_id'),'') IS NULL)))
+		AND (position('.' in credentials->>'id_token')>0 OR position('.' in credentials->>'access_token')>0)`, matchedID, user)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var idPayload, accessPayload string
+		if err := rows.Scan(&idPayload, &accessPayload); err != nil {
+			return err
+		}
+		for _, payload := range []string{idPayload, accessPayload} {
+			claims, e := openai.DecodeKeyPouchCredentialPayload(payload)
+			if e != nil {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(claims.Email), email) || strings.EqualFold(strings.TrimSpace(claims.Profile.Email), email) {
+				return service.KeyPouchIdentityConflict
+			}
+			if claims.Auth != nil && user != "" {
+				oldUser := claims.Auth.ChatGPTUserID
+				if oldUser == "" {
+					oldUser = claims.Auth.UserID
+				}
+				if oldUser == user || (oldUser == "" && claims.Auth.ChatGPTAccountID == workspace) {
+					return service.KeyPouchIdentityConflict
+				}
+			}
+		}
+	}
+	return rows.Err()
 }
 
 // The site may have merged a credential snapshot during reauthorization. Treat
