@@ -570,6 +570,13 @@ func (s *BillingService) initFallbackPricing() {
 		CacheReadPricePerToken:     gpt6AstraOfficialCacheReadPricePerToken * gpt6AstraAPIBillingMultiplier,
 		SupportsCacheBreakdown:     false,
 	}, 2.0))
+	// GPT-6.2 keeps each series' existing site markup: Astra 1.5x, Sol 2x.
+	// Source: https://developers.openai.com/api/docs/pricing
+	for _, model := range []string{"gpt-6.2-astra", "gpt-6.2-sol"} {
+		pricing := &ModelPricing{}
+		applyGPT62APIBillingRates(model, pricing)
+		s.fallbackPrices[model] = pricingWithPriorityMultiplier(pricing, 2)
+	}
 
 	// OpenAI GPT-6.1 Terra：以官方 API 价（$1/$5/缓存读 $0.05 每百万 token）的 2 倍为基价，
 	// 与 GPT-6.x Sol 口径一致。缓存写入仍为输入价的 1.25 倍。
@@ -1249,7 +1256,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	// OpenAI（GPT-5 / Codex 族）：仅匹配已知型号，避免未知 OpenAI 型号误计价。
 	if normalized := normalizeKnownOpenAICodexModel(modelLower); normalized != "" {
 		switch normalized {
-		case "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna":
+		case "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna":
 			return s.fallbackPrices[normalized]
 		case "gpt-6-astra":
 			return s.fallbackPrices["gpt-6-astra"]
@@ -1423,7 +1430,7 @@ func (s *BillingService) getModelPricingAt(model string, pricingAt time.Time) (*
 				InputPricePerTokenPriority:         litellmPricing.InputCostPerTokenPriority,
 				OutputPricePerToken:                litellmPricing.OutputCostPerToken,
 				OutputPricePerTokenPriority:        litellmPricing.OutputCostPerTokenPriority,
-				CacheCreationPriceExplicit:         (openai.IsGPT6SolOrLunaModelSpelling(model) || openai.IsGPT61SolModelSpelling(model) || openai.IsGPT61TerraModelSpelling(model)) && litellmPricing.CacheCreationInputTokenCostExplicit,
+				CacheCreationPriceExplicit:         (openai.IsGPT62ModelSpelling(model) || openai.IsGPT6SolOrLunaModelSpelling(model) || openai.IsGPT61SolModelSpelling(model) || openai.IsGPT61TerraModelSpelling(model)) && litellmPricing.CacheCreationInputTokenCostExplicit,
 				CacheCreationPricePerToken:         litellmPricing.CacheCreationInputTokenCost,
 				CacheCreationPricePerTokenPriority: litellmPricing.CacheCreationInputTokenCostPriority,
 				CacheReadPricePerToken:             litellmPricing.CacheReadInputTokenCost,
@@ -1555,7 +1562,7 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, 
 		if input.LongContextBillingEnabled != nil {
 			applyLongContextBilling = *input.LongContextBillingEnabled
 		}
-		pricing, err := s.GetModelPricing(input.Model)
+		pricing, err := s.getModelPricingAt(input.Model, input.PricingAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1905,7 +1912,7 @@ func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *
 
 // applyModelSpecificPricingPolicyEx 与 applyModelSpecificPricingPolicy 相同，
 // 但由调用方控制是否强制 DeepSeek 官方价（forceDeepSeekRates）。
-// 保留计费时点参数以兼容现有调用；模型价卡不再按日期切换。
+// GPT-6.2 Ultrafast uses the request pricing time for its published promotion.
 // calculateTokenCost 对分组/渠道自定义定价（Source 非 LiteLLM）传 false：
 // 强制覆盖会把运营者配置的售价盖回官方价，违反自定义定价语义。
 func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing *ModelPricing, forceDeepSeekRates bool, pricingAt time.Time) *ModelPricing {
@@ -1937,6 +1944,11 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		return &cloned
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
+	if forceDeepSeekRates && openai.IsGPT62ModelSpelling(normalized) {
+		cloned := *pricing
+		applyGPT62APIBillingRates(normalized, &cloned)
+		pricing = &cloned
+	}
 	if forceDeepSeekRates && isOpenAIGPT6AstraModel(normalized) {
 		cloned := *pricing
 		applyGPT6AstraAPIBillingRates(&cloned)
@@ -1967,7 +1979,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		applyGPT6SolAPIBillingRates(&cloned)
 		pricing = &cloned
 	}
-	usesCacheWritePremium := isOpenAIGPT56Model(normalized) || openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized)
+	usesCacheWritePremium := openai.IsGPT62ModelSpelling(normalized) || isOpenAIGPT56Model(normalized) || openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized)
 	needsCacheCreationPolicy := usesCacheWritePremium && !pricing.CacheCreationPriceExplicit && (pricing.CacheCreationPricePerToken <= 0 ||
 		(pricing.InputPricePerTokenPriority > 0 && pricing.CacheCreationPricePerTokenPriority <= 0))
 	fastRatio := openAIModelFastPricingRatio(normalized)
@@ -1981,6 +1993,9 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	cloned := *pricing
 	if isOpenAIGPT6AstraModel(normalized) {
 		cloned.UltrafastMultiplier = 6
+	}
+	if openai.IsGPT62ModelSpelling(normalized) {
+		cloned.UltrafastMultiplier = gpt62UltrafastMultiplierAt(pricingAt)
 	}
 	if needsOpus55FastMultiplier {
 		multiplier := 2.0
@@ -1996,7 +2011,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	}
 	if fastRatio > 0 {
 		enforceOpenAIFastPricingRatio(&cloned, fastRatio)
-		if (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized)) && cloned.CacheCreationPriceExplicit {
+		if (openai.IsGPT62ModelSpelling(normalized) || openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized)) && cloned.CacheCreationPriceExplicit {
 			cloned.CacheCreationPricePerTokenPriority = cloned.CacheCreationPricePerToken * fastRatio
 		}
 	}
@@ -2008,7 +2023,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 // 档的模型（如 gpt-5.5-pro、gpt-5.4-mini/nano）返回 0。
 func openAIModelFastPricingRatio(normalized string) float64 {
 	switch normalized {
-	case "gpt-6-astra", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+	case "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return 2.0
 	case "gpt-5.5":
 		return 2.5
@@ -2030,6 +2045,16 @@ const (
 	gpt6AstraOfficialCacheCreationPricePerToken = 12.5e-6
 	gpt6AstraOfficialCacheReadPricePerToken     = 1e-6
 	gpt6AstraAPIBillingMultiplier               = 1.5
+
+	gpt62AstraOfficialInputPricePerToken         = 8e-6
+	gpt62AstraOfficialOutputPricePerToken        = 40e-6
+	gpt62AstraOfficialCacheCreationPricePerToken = 10e-6
+	gpt62AstraOfficialCacheReadPricePerToken     = 0.4e-6
+
+	gpt62SolOfficialInputPricePerToken         = 2e-6
+	gpt62SolOfficialOutputPricePerToken        = 10e-6
+	gpt62SolOfficialCacheCreationPricePerToken = 2.5e-6
+	gpt62SolOfficialCacheReadPricePerToken     = 0.1e-6
 
 	gpt56LunaOfficialInputPricePerToken         = 0.2e-6
 	gpt56LunaOfficialOutputPricePerToken        = 1.2e-6
@@ -2053,6 +2078,44 @@ const (
 	gpt6SolOfficialCacheReadPricePerToken     = 0.2e-6
 	gpt6SolAPIBillingMultiplier               = 2.0
 )
+
+// GPT-6.2 Ultrafast is 3x through February 28, 2027, then 6x from
+// March 1, 2027 at midnight Pacific (08:00 UTC, before the DST transition).
+func gpt62UltrafastMultiplierAt(pricingAt time.Time) float64 {
+	if pricingAt.IsZero() {
+		pricingAt = timezone.Now()
+	}
+	if pricingAt.Before(time.Date(2027, time.March, 1, 8, 0, 0, 0, time.UTC)) {
+		return 3
+	}
+	return 6
+}
+
+func applyGPT62APIBillingRates(model string, pricing *ModelPricing) {
+	if pricing == nil {
+		return
+	}
+	switch {
+	case openai.IsGPT62AstraModelSpelling(model):
+		pricing.InputPricePerToken = gpt62AstraOfficialInputPricePerToken * gpt6AstraAPIBillingMultiplier
+		pricing.OutputPricePerToken = gpt62AstraOfficialOutputPricePerToken * gpt6AstraAPIBillingMultiplier
+		pricing.CacheCreationPricePerToken = gpt62AstraOfficialCacheCreationPricePerToken * gpt6AstraAPIBillingMultiplier
+		pricing.CacheReadPricePerToken = gpt62AstraOfficialCacheReadPricePerToken * gpt6AstraAPIBillingMultiplier
+	case openai.IsGPT62SolModelSpelling(model):
+		pricing.InputPricePerToken = gpt62SolOfficialInputPricePerToken * gpt6SolAPIBillingMultiplier
+		pricing.OutputPricePerToken = gpt62SolOfficialOutputPricePerToken * gpt6SolAPIBillingMultiplier
+		pricing.CacheCreationPricePerToken = gpt62SolOfficialCacheCreationPricePerToken * gpt6SolAPIBillingMultiplier
+		pricing.CacheReadPricePerToken = gpt62SolOfficialCacheReadPricePerToken * gpt6SolAPIBillingMultiplier
+	default:
+		return
+	}
+	if pricing.LongContextInputThreshold <= 0 {
+		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
+		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
+		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
+		pricing.LongContextThresholdInclusive = false
+	}
+}
 
 func applyGPT6AstraAPIBillingRates(pricing *ModelPricing) {
 	if pricing == nil {
@@ -2145,7 +2208,7 @@ func applyGPT6SolAPIBillingRates(pricing *ModelPricing) {
 
 func openAIModelHasAPILongContextLadder(normalized string) bool {
 	switch normalized {
-	case "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+	case "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 		"gpt-5.5", "gpt-5.5-pro", "gpt-5.4":
 		return true
 	default:

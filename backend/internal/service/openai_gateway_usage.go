@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"go.uber.org/zap"
 )
@@ -749,6 +750,13 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 			Ctx: ctx, Model: billingModel, GroupID: &gid, Group: apiKey.Group,
 			Tokens: tokens, RequestCount: 1, RateMultiplier: multiplier, PricingAt: pricingAt,
 			ServiceTier: serviceTier, ReasoningEffort: reasoningEffort, Resolver: s.resolver,
+			LongContextBillingEnabled: longContextBillingGate,
+		})
+	}
+	if openai.IsGPT62ModelSpelling(billingModel) {
+		return s.billingService.CalculateCostUnified(CostInput{
+			Ctx: ctx, Model: billingModel, Tokens: tokens, RateMultiplier: multiplier,
+			PricingAt: pricingAt, ServiceTier: serviceTier, ReasoningEffort: reasoningEffort,
 			LongContextBillingEnabled: longContextBillingGate,
 		})
 	}

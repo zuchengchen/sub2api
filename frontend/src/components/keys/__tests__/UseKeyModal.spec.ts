@@ -695,7 +695,7 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).not.toContain('"name": "GPT-5.4 Nano"')
   })
 
-  it('renders GPT-5.6 and GPT-6 Astra capabilities in OpenCode config', async () => {
+  it('renders GPT-5.6 and GPT-6 family capabilities in OpenCode config', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -751,6 +751,14 @@ describe('UseKeyModal', () => {
       options: { store: false },
       variants: { low: {}, medium: {}, high: {}, xhigh: {}, max: {} }
     })
+    for (const [model, name] of [['gpt-6.2-astra', 'GPT-6.2 Astra'], ['gpt-6.2-sol', 'GPT-6.2 Sol']]) {
+      expect(models[model]).toEqual({
+        name,
+        limit: { context: 1050000, output: 128000 },
+        options: { store: false },
+        variants: { low: {}, medium: {}, high: {}, xhigh: {}, max: {} }
+      })
+    }
   })
 
   // Scenario: API Key users can fetch a routed group catalog and reference it from config.toml.
