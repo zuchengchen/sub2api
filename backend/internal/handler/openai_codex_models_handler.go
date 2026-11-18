@@ -38,6 +38,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	}
 
 	ifNoneMatch := c.GetHeader("If-None-Match")
+	pinnedDiscoveryFailed := false
 	// 固定账号分支：开启后只用选定账号拉取 manifest，不经过调度器；
 	// 全部不可用/全部失败时按 FallbackToScheduler 决定回退调度器或返回错误。
 	if apiKey.Group.Platform == service.PlatformOpenAI &&
@@ -60,6 +61,9 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 				h.errorResponse(c, infraerrors.Code(pinnedErr), "upstream_error", infraerrors.Message(pinnedErr))
 				return
 			}
+			// A failed pinned discovery may already have reached an upstream.
+			// Preserve its existing attribution if scheduler fallback also fails.
+			pinnedDiscoveryFailed = true
 			// 回退开启：跌入下方调度器循环。
 		} else {
 			// 让 ops 错误日志携带实际拉取成功的首个固定账号。
@@ -124,7 +128,17 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 				h.errorResponse(c, infraerrors.Code(lastUpstreamErr), "upstream_error", infraerrors.Message(lastUpstreamErr))
 				return
 			}
-			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", userfacing.NoAvailableOpenAIAccounts)
+			errType := "upstream_error"
+			if !pinnedDiscoveryFailed {
+				// Initial selection failed before any manifest fetch. Only typed
+				// capacity failures are excluded from SLA; repository failures
+				// remain platform errors even if their text says no accounts.
+				errType = "api_error"
+				if errors.Is(err, service.ErrNoAvailableAccounts) || errors.Is(err, service.ErrNoAvailableCompactAccounts) {
+					markOpsRoutingCapacityLimited(c)
+				}
+			}
+			h.errorResponse(c, http.StatusServiceUnavailable, errType, userfacing.NoAvailableOpenAIAccounts)
 			return
 		}
 		// 让 ops 错误日志携带实际选中的上游账号，便于定位失效账号（#4544）。
