@@ -4,8 +4,6 @@ export interface CodexModelsManifestResult {
   responseBytes: number
 }
 
-const DEFAULT_CODEX_CLIENT_VERSION = '0.158.0'
-
 function normalizeCodexBaseUrl(baseUrl: string): string {
   const fallback = typeof window !== 'undefined' ? window.location.origin : ''
   const value = (baseUrl || fallback).trim().replace(/\/+$/, '')
@@ -15,9 +13,13 @@ function normalizeCodexBaseUrl(baseUrl: string): string {
 
 export function buildCodexModelsManifestUrl(
   baseUrl: string,
-  clientVersion = DEFAULT_CODEX_CLIENT_VERSION
+  clientVersion?: string
 ): string {
-  const params = new URLSearchParams({ client_version: clientVersion })
+  // Downloads follow the server's canonical client version. An actual CLI
+  // can still request its explicit version without changing negotiation.
+  const params = new URLSearchParams(clientVersion === undefined
+    ? { format: 'codex' }
+    : { client_version: clientVersion })
   return `${buildCodexModelCatalogUrl(baseUrl)}?${params.toString()}`
 }
 
