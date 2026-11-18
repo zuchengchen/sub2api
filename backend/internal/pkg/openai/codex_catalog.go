@@ -71,6 +71,13 @@ func loadCodexCatalog() *codexCatalogIndex {
 			}
 			index.bySlug[slug] = model
 		}
+		for _, raw := range [][]byte{codexGPT62AstraMetadata, codexGPT62SolMetadata} {
+			var model CodexCatalogModel
+			if err := json.Unmarshal(raw, &model); err != nil {
+				panic(err)
+			}
+			index.bySlug[model.Slug] = model
+		}
 		codexCatalogValue = index
 	})
 	return codexCatalogValue

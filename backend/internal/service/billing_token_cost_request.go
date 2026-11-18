@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
 // TokenCostRequest 通用网关 token 计费请求。
@@ -34,7 +36,9 @@ func (s *BillingService) CalculateTokenCostForRequest(req TokenCostRequest) (*Co
 	if req.Resolver != nil && req.Group != nil {
 		return s.CalculateCostUnified(s.tokenCostInput(req, resolved))
 	}
-	if req.ReasoningEffort != "" {
+	if req.ReasoningEffort != "" || openai.IsGPT62ModelSpelling(req.Model) {
+		// GPT-6.2 Ultrafast pricing depends on the request's frozen time;
+		// retain both that instant and its service tier on the fallback path.
 		return s.CalculateCostUnified(s.tokenCostInput(req, resolved))
 	}
 	return s.CalculateCost(req.Model, req.Tokens, req.RateMultiplier)

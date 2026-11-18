@@ -38,6 +38,12 @@ func normalizeKnownOpenAICodexModel(model string) string {
 	if mapped := getNormalizedCodexModel(normalized); mapped != "" {
 		return mapped
 	}
+	if openai.IsGPT62AstraModelSpelling(normalized) {
+		return "gpt-6.2-astra"
+	}
+	if openai.IsGPT62SolModelSpelling(normalized) {
+		return "gpt-6.2-sol"
+	}
 
 	if openai.IsGPT61TerraModelSpelling(normalized) {
 		return "gpt-6.1-terra"
@@ -189,5 +195,5 @@ func firstUsageBillingModel(candidates []string) string {
 }
 
 func isOpenAIGPT6Model(model string) bool {
-	return openai.IsGPT61TerraModelSpelling(model) || isOpenAIGPT6AstraModel(model) || openai.IsGPT6SolOrLunaModelSpelling(model) || openai.IsGPT61SolModelSpelling(model)
+	return openai.IsGPT62ModelSpelling(model) || openai.IsGPT61TerraModelSpelling(model) || isOpenAIGPT6AstraModel(model) || openai.IsGPT6SolOrLunaModelSpelling(model) || openai.IsGPT61SolModelSpelling(model)
 }
