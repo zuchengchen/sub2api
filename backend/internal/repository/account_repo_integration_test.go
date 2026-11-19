@@ -1723,3 +1723,51 @@ func idsOfAccounts(accounts []service.Account) []int64 {
 	}
 	return out
 }
+
+func (s *AccountRepoSuite) TestOpenAIQuotaCooldownSurvivesStaleWritersAndRefreshesCache() {
+	a := mustCreateAccount(s.T(), s.client, &service.Account{Name: "quota-cooldown", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth})
+	cache := &schedulerCacheRecorder{}
+	s.repo.schedulerCache = cache
+	first := time.Now().UTC().Truncate(time.Second).Add(time.Minute)
+	later := first.Add(time.Hour)
+	updated, err := s.repo.SetOpenAIQuotaCooldown(s.ctx, a.ID, first, true, nil)
+	s.Require().NoError(err)
+	s.Require().True(updated)
+	provisional, err := s.repo.GetByID(s.ctx, a.ID)
+	s.Require().NoError(err)
+	updated, err = s.repo.SetOpenAIQuotaCooldown(s.ctx, a.ID, later, false, provisional.RateLimitedAt)
+	s.Require().NoError(err)
+	s.Require().True(updated)
+	s.Require().NoError(s.repo.SetRateLimited(s.ctx, a.ID, first))
+	updated, err = s.repo.SetOpenAIQuotaCooldown(s.ctx, a.ID, first, true, nil)
+	s.Require().NoError(err)
+	s.Require().False(updated)
+	cleared, err := s.repo.ClearOpenAIRateLimitIfObserved(s.ctx, provisional, false)
+	s.Require().NoError(err)
+	s.Require().False(cleared)
+	last := cache.setAccounts[len(cache.setAccounts)-1]
+	s.Require().True(last.RateLimitResetAt.Equal(later))
+	s.Require().Equal(float64(later.Unix()), last.Extra[service.OpenAIQuotaCooldownExtraKey])
+	s.Require().NoError(s.repo.ClearRateLimit(s.ctx, a.ID))
+	updated, err = s.repo.SetOpenAIQuotaCooldown(s.ctx, a.ID, later.Add(time.Hour), false, last.RateLimitedAt)
+	s.Require().NoError(err)
+	s.Require().False(updated, "a late lookup must respect an administrative clear")
+	clearedAccount, err := s.repo.GetByID(s.ctx, a.ID)
+	s.Require().NoError(err)
+	s.Require().Nil(clearedAccount.RateLimitResetAt)
+	s.Require().NotContains(clearedAccount.Extra, service.OpenAIQuotaCooldownExtraKey)
+}
+
+func TestOpenAIQuotaOutboxFailureRollsBack(t *testing.T) {
+	client := testEntClient(t)
+	a := mustCreateAccount(t, client, &service.Account{Name: "quota-outbox-rollback", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth})
+	t.Cleanup(func() { _ = client.Account.DeleteOneID(a.ID).Exec(context.Background()) })
+	repo := newAccountRepositoryWithSQL(client, &failAtomicSchedulerOutboxSQLExecutor{sqlExecutor: integrationDB}, nil)
+	changed, err := repo.SetOpenAIQuotaCooldown(context.Background(), a.ID, time.Now().Add(time.Hour), false, nil)
+	require.Error(t, err)
+	require.False(t, changed)
+	got, err := repo.GetByID(context.Background(), a.ID)
+	require.NoError(t, err)
+	require.Nil(t, got.RateLimitResetAt)
+	require.NotContains(t, got.Extra, service.OpenAIQuotaCooldownExtraKey)
+}

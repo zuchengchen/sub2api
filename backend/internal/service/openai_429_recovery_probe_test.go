@@ -145,8 +145,8 @@ func openai429RecoveryRemainingHeaders() http.Header {
 	return h
 }
 
-func openai429UsageLimitReachedBody(resetAt time.Time) []byte {
-	return []byte(fmt.Sprintf(`{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_at":%d}}`, resetAt.Unix()))
+func openai429GenericRateLimitBody(resetAt time.Time) []byte {
+	return []byte(fmt.Sprintf(`{"error":{"type":"rate_limit_exceeded","message":"Too many requests","resets_at":%d}}`, resetAt.Unix()))
 }
 
 func openai429RecoveryEligibleExtra(now time.Time) map[string]any {
@@ -280,7 +280,7 @@ func TestHandleUpstreamError_OpenAI429SoftRemainingDoesNotScheduleRecovery(t *te
 	repo.store(account)
 
 	for i := 1; i <= 29; i++ {
-		shouldDisable := svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, openai429RecoveryRemainingHeaders(), openai429UsageLimitReachedBody(time.Now().Add(time.Hour)), "gpt-5.4")
+		shouldDisable := svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, openai429RecoveryRemainingHeaders(), openai429GenericRateLimitBody(time.Now().Add(time.Hour)), "gpt-5.4")
 		require.False(t, shouldDisable, "count %d", i)
 		require.Empty(t, repo.setRateLimitedIDs, "soft 429 %d", i)
 		require.Empty(t, *calls, "soft 429 %d must not schedule recovery", i)
@@ -296,7 +296,7 @@ func TestHandleUpstreamError_OpenAI429FormalCooldownWithRemainingSchedules30s(t 
 	account := &Account{ID: 9102, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
 	repo.store(account)
 	resetAt := time.Now().Add(time.Hour)
-	body := openai429UsageLimitReachedBody(resetAt)
+	body := openai429GenericRateLimitBody(resetAt)
 
 	for i := 0; i < 29; i++ {
 		svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, openai429RecoveryRemainingHeaders(), body, "gpt-5.4")

@@ -468,7 +468,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		)
 		var dialErr *openAIWSDialError
 		if errors.As(err, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
-			s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), mappedModel)
+			s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, dialErr.ResponseHeaders, dialErr.ResponseBody, mappedModel)
+			if _, ok := openAIQuotaSignal(account, dialErr.StatusCode, dialErr.ResponseBody); ok {
+				return nil, s.newOpenAIAccountFailoverError(account, dialErr.StatusCode, dialErr.ResponseHeaders, dialErr.ResponseBody, err.Error(), true, false)
+			}
 		}
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
@@ -1339,6 +1342,17 @@ readLoop:
 			pendingParameterError = nil
 		}
 
+		if eventType == "response.failed" {
+			if _, ok := openAIQuotaSignal(account, http.StatusTooManyRequests, message); ok {
+				s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, nil, message, mappedModel)
+				if !replayUnsafe() && !clientDisconnected && ctx.Err() == nil && replayGuard.CanReplay(c) &&
+					!openAIUsageHasTokens(usage) && imageCounter.Count() == 0 {
+					lease.MarkBroken()
+					msg := s.recordOpenAIStreamUpstreamError(c, account, false, lease.HandshakeHeader("x-request-id"), "failover", message, extractOpenAISSEErrorMessage(message))
+					return nil, s.newOpenAIWSRateLimitFailoverError(account, nil, message, msg)
+				}
+			}
+		}
 		// A standalone capacity terminal can precede any semantic output, just
 		// like a bare error. Preserve already metered usage and image results.
 		if reqStream && eventType == "response.failed" &&
@@ -1471,7 +1485,10 @@ readLoop:
 			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			capacityShed := isOpenAIUpstreamCapacityShedEvent(message)
-			if capacityShed {
+			_, hardQuota := openAIQuotaSignal(account, statusCode, message)
+			if hardQuota {
+				s.recordOpenAIStreamUpstreamError(c, account, false, lease.HandshakeHeader("x-request-id"), "ws_error", message, errMsg)
+			} else if capacityShed {
 				// Preserve the semantic capacity failure after output has committed.
 				// The generic WS fallback would otherwise overwrite it with a 502.
 				statusCode = http.StatusServiceUnavailable
@@ -1499,13 +1516,17 @@ readLoop:
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
 				emitStreamMessage(clientMessage, true)
-				if capacityShed && !clientDisconnected {
+				if (hardQuota || capacityShed) && !clientDisconnected {
 					// Responses clients require a terminal event. Finish here while
 					// the typed error is available so the handler cannot append a
 					// generic response.failed that loses its retryable capacity code.
+					code := openAICapacityShedRetryableClientCode
+					if hardQuota {
+						code = string(OpenAIQuotaExhaustedReason)
+					}
 					writeOpenAIResponsesSSEFailure(c, statusCode, gin.H{
 						"type":    firstNonEmpty(errTypeRaw, "upstream_error"),
-						"code":    openAICapacityShedRetryableClientCode,
+						"code":    code,
 						"message": errMsg,
 					})
 				}

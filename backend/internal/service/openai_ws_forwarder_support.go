@@ -237,6 +237,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	prewarmTerminalCount := 0
 	var pendingParameterError []byte
 	var observedUsage OpenAIUsage
+	var prewarmReplayGuard openAIResponseReplayGuard
 	var pendingCtx context.Context
 	var pendingCancel context.CancelFunc
 	defer func() {
@@ -280,6 +281,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		}
 		prewarmOutput.observe(message, eventType)
 
+		prewarmReplayGuard.Observe(message, eventType)
 		if openAIWSMessageShouldParseUsage(eventType, message) {
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, &observedUsage)
 		}
@@ -342,6 +344,10 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			)
 			lease.MarkBroken()
 			if isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+				if prewarmReplayGuard.progressed || openAIUsageHasTokens(&observedUsage) {
+					return nil, &openAIWSPrewarmTerminalError{payload: message, usage: observedUsage, responseID: result.ResponseID}
+				}
+				s.recordOpenAIStreamUpstreamError(c, account, false, "", "failover", message, errMsg)
 				return nil, s.newOpenAIWSRateLimitFailoverError(account, nil, message, errMsg)
 			}
 			if status := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw); status == http.StatusUnauthorized || status == http.StatusForbidden {
@@ -362,6 +368,10 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 				s.handleOpenAIWSFailureAccountSideEffects(ctx, account, openAIWSPayloadString(payload, "model"), lease.HandshakeHeaders(), message)
 				status := openAIStreamFailureStatus(message, extractOpenAISSEErrorMessage(message))
 				if status == http.StatusTooManyRequests {
+					if prewarmReplayGuard.progressed || openAIUsageHasTokens(&observedUsage) {
+						return nil, &openAIWSPrewarmTerminalError{payload: message, usage: observedUsage, responseID: result.ResponseID}
+					}
+					s.recordOpenAIStreamUpstreamError(c, account, false, "", "failover", message, "prewarm rate limited")
 					return nil, s.newOpenAIWSRateLimitFailoverError(account, nil, message, "prewarm rate limited")
 				}
 				if status == http.StatusUnauthorized || status == http.StatusForbidden {
@@ -961,10 +971,14 @@ func openAIWSSemantic429Headers(_ *Account, _ string, _ http.Header) http.Header
 }
 
 func (s *OpenAIGatewayService) newOpenAIWSRateLimitFailoverError(account *Account, headers http.Header, responseBody []byte, message string) *UpstreamFailoverError {
-	return s.newOpenAIAccountFailoverError(
+	classificationHeaders := headers
+	if len(responseBody) > 0 {
+		classificationHeaders = nil
+	}
+	return s.newOpenAIAccountFailoverErrorWithClassificationHeaders(
 		account,
 		http.StatusTooManyRequests,
-		headers,
+		headers, classificationHeaders,
 		responseBody,
 		strings.TrimSpace(message),
 		false,

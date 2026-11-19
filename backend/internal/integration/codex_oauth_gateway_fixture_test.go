@@ -48,6 +48,7 @@ type codexIntegrationUpstream struct {
 	accounts       map[string]int64
 	errors         []string
 	connections    map[net.Conn]struct{}
+	quotaFirst     int64
 	failoverFirst  int64
 	soft429Seen    bool
 	cancelDone     chan struct{}
@@ -230,6 +231,17 @@ func (u *codexIntegrationUpstream) requestsWithPrefix(prefix string) []codexInte
 
 func (u *codexIntegrationUpstream) capture(r *http.Request, body []byte, ws bool) (codexIntegrationRequest, bool) {
 	marker := gjson.GetBytes(body, "input.0.content.0.text").String()
+	for _, item := range gjson.GetBytes(body, "input").Array() {
+		if item.Get("role").String() == "user" {
+			if label := item.Get("content.0.text").String(); label != "" {
+				marker = label
+			}
+		}
+	}
+	if marker == "" {
+		// A successful generate=false request may seed a delta-only business turn.
+		marker = strings.TrimPrefix(gjson.GetBytes(body, "previous_response_id").String(), "resp_warm_")
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	id, ok := u.accounts[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
@@ -278,6 +290,26 @@ func (u *codexIntegrationUpstream) serve(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		http.Error(w, "unknown synthetic account/body", 400)
 		return
+	}
+	if record.marker == "http-quota-json" || record.marker == "http-quota-sse" {
+		u.mu.Lock()
+		if u.quotaFirst == 0 {
+			u.quotaFirst = record.accountID
+		}
+		fail := u.quotaFirst == record.accountID
+		u.mu.Unlock()
+		if fail {
+			failure := `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_in_seconds":7200}}`
+			if record.marker == "http-quota-sse" {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", `{"type":"response.failed","response":{"status":"failed","error":{"code":"usage_limit_reached","resets_in_seconds":7200}}}`)
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = io.WriteString(w, failure)
+			}
+			return
+		}
 	}
 	if !u.waitIsolation(r.Context(), record.marker) {
 		http.Error(w, "isolation barrier", 500)
@@ -366,6 +398,40 @@ func (u *codexIntegrationUpstream) serveWS(w http.ResponseWriter, r *http.Reques
 			u.recordError("unexpected WS message type")
 			_ = conn.Close(websocket.StatusPolicyViolation, "expected response.create")
 			return
+		}
+		if record.marker == "quota-after-output" {
+			for _, event := range []map[string]any{
+				codexIntegrationCreated(record.marker),
+				{"type": "response.in_progress", "response": map[string]any{"usage": codexIntegrationUsageJSON()}},
+				{"type": "response.output_text.delta", "delta": "partial"},
+				{"type": "error", "error": map[string]any{"type": "usage_limit_reached", "message": "The usage limit has been reached", "resets_in_seconds": 3600}},
+			} {
+				data, _ := json.Marshal(event)
+				if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+					return
+				}
+			}
+			return
+		}
+		if strings.HasPrefix(record.marker, "quota-") {
+			u.mu.Lock()
+			if u.quotaFirst == 0 {
+				u.quotaFirst = record.accountID
+			}
+			fail := u.quotaFirst == record.accountID
+			u.mu.Unlock()
+			if fail {
+				data := []byte(`{"type":"error","error":{"code":"rate_limit_exceeded","type":"usage_limit_reached","message":"The usage limit has been reached","resets_in_seconds":7200}}`)
+				_ = conn.Write(ctx, websocket.MessageText, data)
+				return
+			}
+			if gen := gjson.GetBytes(body, "generate"); gen.Exists() && !gen.Bool() {
+				data, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_warm_" + record.marker, "status": "completed", "output": []any{}}})
+				if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+					return
+				}
+				continue
+			}
 		}
 		for _, event := range []map[string]any{codexIntegrationCreated(record.marker), codexIntegrationCompleted(record.marker)} {
 			data, _ := json.Marshal(event)

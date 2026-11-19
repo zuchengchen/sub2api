@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,6 +40,7 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // This test exercises actual routes, auth, Redis scheduling/concurrency, OAuth
@@ -70,6 +72,168 @@ func TestCodexOAuthGatewayIntegration(t *testing.T) {
 		})
 	}
 	require.Empty(t, upstream.errorsSnapshot(), "local upstream/proxy must not silently accept an unknown path or destination")
+}
+
+// Reproduce both HTTP -> WS rejection points with real OAuth scheduling,
+// upstream sockets, PostgreSQL billing and sticky state in Redis.
+func TestCodexOAuthQuotaFailoverIntegration(t *testing.T) {
+	require.NoError(t, timezone.Init("UTC"))
+	gin.SetMode(gin.TestMode)
+	for _, prewarm := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prewarm_%t", prewarm), func(t *testing.T) {
+			store := newCodexIntegrationStore(t)
+			upstream := newCodexIntegrationUpstream(t)
+			f := newCodexIntegrationGateway(t, store, upstream, "ctx_pool", prewarm)
+			for n, marker := range []string{"quota-first", "quota-followup"} {
+				req, err := http.NewRequest(http.MethodPost, f.server.URL+"/v1/responses", bytes.NewReader(codexIntegrationPayload(marker, false)))
+				require.NoError(t, err)
+				req.Header = codexIntegrationHeaders(f.failoverKey.Key)
+				req.Header.Set("User-Agent", "quota-integration/1.0")
+				resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+				require.NoError(t, err)
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+				require.Equal(t, http.StatusOK, resp.StatusCode, "%s", body)
+				require.Contains(t, string(body), `"type":"response.completed"`)
+				f.waitRows(t, f.failoverKey.ID, n+1)
+				attempts := upstream.requestsFor(marker)
+				require.NotEmpty(t, attempts)
+				winner := f.rows(t, f.failoverKey.ID)[n]
+				require.Equal(t, 100, winner.input)
+				require.Equal(t, 20, winner.output)
+				failed, billable := 0, 0
+				for _, a := range attempts {
+					require.True(t, a.websocket)
+					generate := gjson.GetBytes(a.body, "generate")
+					warm := generate.Exists() && !generate.Bool()
+					if a.accountID != winner.accountID {
+						failed++
+						require.Equal(t, prewarm, warm)
+						cooled, err := f.accountRepo.GetByID(context.Background(), a.accountID)
+						require.NoError(t, err)
+						require.NotNil(t, cooled.RateLimitResetAt)
+						require.Greater(t, time.Until(*cooled.RateLimitResetAt), time.Hour)
+					} else if !warm {
+						billable++
+					}
+				}
+				require.Equal(t, 1-n, failed, "only the first request may reach the exhausted account")
+				require.Equal(t, 1, billable, "exactly one user turn executed on the healthy account")
+			}
+			require.Empty(t, upstream.errorsSnapshot())
+		})
+	}
+}
+
+func TestCodexOAuthQuotaHTTPAndSSE(t *testing.T) {
+	require.NoError(t, timezone.Init("UTC"))
+	gin.SetMode(gin.TestMode)
+	for _, marker := range []string{"http-quota-json", "http-quota-sse"} {
+		t.Run(marker, func(t *testing.T) {
+			store := newCodexIntegrationStore(t)
+			upstream := newCodexIntegrationUpstream(t)
+			f := newCodexIntegrationGateway(t, store, upstream, "http")
+			f.completedHTTP(t, f.failoverKey, marker, "/v1/responses")
+			attempts := upstream.requestsFor(marker)
+			require.Len(t, attempts, 2)
+			require.NotEqual(t, attempts[0].accountID, attempts[1].accountID)
+			require.Equal(t, attempts[1].accountID, f.rows(t, f.failoverKey.ID)[0].accountID)
+			first, err := f.accountRepo.GetByID(context.Background(), attempts[0].accountID)
+			require.NoError(t, err)
+			require.NotNil(t, first.RateLimitResetAt)
+			require.Greater(t, time.Until(*first.RateLimitResetAt), time.Hour)
+		})
+	}
+}
+
+func TestCodexOAuthQuotaAfterOutput(t *testing.T) {
+	require.NoError(t, timezone.Init("UTC"))
+	gin.SetMode(gin.TestMode)
+	store := newCodexIntegrationStore(t)
+	upstream := newCodexIntegrationUpstream(t)
+	f := newCodexIntegrationGateway(t, store, upstream, "ctx_pool", false)
+	resp, err := f.post(context.Background(), f.failoverKey.Key, "quota-after-output", "/v1/responses")
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, 200, resp.StatusCode)
+	require.Contains(t, string(body), "partial")
+	require.Equal(t, 1, strings.Count(string(body), `"type":"response.failed"`))
+	require.Contains(t, string(body), "usage_limit_reached")
+	attempts := upstream.requestsFor("quota-after-output")
+	require.Len(t, attempts, 1)
+	f.waitRows(t, f.failoverKey.ID, 1)
+	row := f.rows(t, f.failoverKey.ID)[0]
+	require.Equal(t, attempts[0].accountID, row.accountID)
+	require.Equal(t, 100, row.input)
+	require.Equal(t, 20, row.output)
+	first, err := f.accountRepo.GetByID(context.Background(), attempts[0].accountID)
+	require.NoError(t, err)
+	require.NotNil(t, first.RateLimitResetAt)
+}
+
+func TestCodexOAuthQuotaOnOpenSocket(t *testing.T) {
+	require.NoError(t, timezone.Init("UTC"))
+	gin.SetMode(gin.TestMode)
+	for _, mode := range []string{"ctx_pool", "passthrough"} {
+		t.Run(mode, func(t *testing.T) {
+			store := newCodexIntegrationStore(t)
+			upstream := newCodexIntegrationUpstream(t)
+			f := newCodexIntegrationGateway(t, store, upstream, mode, false)
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			conn, _, err := websocket.Dial(ctx, strings.Replace(f.server.URL, "http://", "ws://", 1)+"/v1/responses", &websocket.DialOptions{HTTPHeader: codexIntegrationHeaders(f.failoverKey.Key)})
+			require.NoError(t, err)
+			defer conn.CloseNow()
+			turn := func(marker string) {
+				t.Helper()
+				require.NoError(t, conn.Write(ctx, websocket.MessageText, codexIntegrationPayload(marker, true)))
+				for {
+					_, raw, err := conn.Read(ctx)
+					require.NoError(t, err)
+					if gjson.GetBytes(raw, "type").String() == "response.completed" {
+						require.Equal(t, "resp_"+marker, gjson.GetBytes(raw, "response.id").String())
+						break
+					}
+				}
+			}
+			turn("held-start")
+			held := upstream.requestsFor("held-start")
+			require.Len(t, held, 1)
+			// Keep the socket open on A while an encrypted HTTP request exhausts
+			// that same account. B is healthy and entitled to the same model.
+			body, err := sjson.SetBytes(codexIntegrationPayload("quota-bound", false), "input.-1", map[string]any{"type": "reasoning", "summary": []any{}, "encrypted_content": "synthetic-ciphertext"})
+			require.NoError(t, err)
+			require.False(t, service.OpenAIContinuationMaySwitchAccount(body))
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.server.URL+"/v1/responses", bytes.NewReader(body))
+			require.NoError(t, err)
+			req.Header = codexIntegrationHeaders(f.failoverKey.Key)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			reply, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			require.Equal(t, 429, resp.StatusCode, "%s", reply)
+			require.Contains(t, string(reply), "Start a new conversation")
+			require.Contains(t, string(reply), "usage_limit_reached")
+			seconds, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+			require.NoError(t, err)
+			require.InDelta(t, 7200, seconds, 5)
+			refused := upstream.requestsFor("quota-bound")
+			require.Len(t, refused, 1)
+			require.Equal(t, held[0].accountID, refused[0].accountID)
+			turn("held-next")
+			next := upstream.requestsFor("held-next")
+			require.Len(t, next, 1)
+			require.NotEqual(t, held[0].accountID, next[0].accountID)
+			require.Len(t, upstream.requestsFor("held-start"), 1)
+			require.NoError(t, conn.Close(websocket.StatusNormalClosure, "done"))
+			f.waitRows(t, f.failoverKey.ID, 2)
+			require.Empty(t, upstream.errorsSnapshot())
+		})
+	}
 }
 
 type codexIntegrationStore struct {
@@ -136,7 +300,7 @@ type codexIntegrationGateway struct {
 	activeHandlers atomic.Int64
 }
 
-func newCodexIntegrationGateway(t *testing.T, store *codexIntegrationStore, upstream *codexIntegrationUpstream, mode string) *codexIntegrationGateway {
+func newCodexIntegrationGateway(t *testing.T, store *codexIntegrationStore, upstream *codexIntegrationUpstream, mode string, prewarm ...bool) *codexIntegrationGateway {
 	t.Helper()
 	ctx := context.Background()
 	cfg := &config.Config{RunMode: "standard"}
@@ -157,6 +321,7 @@ func newCodexIntegrationGateway(t *testing.T, store *codexIntegrationStore, upst
 	cfg.Gateway.Scheduling.StickySessionWaitTimeout = 2 * time.Second
 	cfg.Gateway.Scheduling.StickySessionMaxWaiting = 4
 	cfg.Gateway.Scheduling.LoadBatchEnabled = true
+	cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = len(prewarm) > 0 && prewarm[0]
 	cfg.Gateway.OpenAIWS.Enabled = mode != "http"
 	cfg.Gateway.OpenAIWS.OAuthEnabled = mode != "http"
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
@@ -217,7 +382,7 @@ func newCodexIntegrationGateway(t *testing.T, store *codexIntegrationStore, upst
 			Extra: map[string]any{
 				"openai_oauth_responses_websockets_v2_mode":    mode,
 				"openai_oauth_responses_websockets_v2_enabled": mode != "http",
-				"openai_passthrough":                           true,
+				"openai_passthrough":                           len(prewarm) == 0,
 				// Optional production tracing config, used for SQL/request correlation.
 				service.AccountExtraUpstreamRequestIDHeader: "x-request-id",
 			},

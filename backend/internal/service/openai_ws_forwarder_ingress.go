@@ -83,6 +83,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	if exhausted := s.quotaCooldownFailure(account); exhausted != nil {
+		return exhausted
+	}
 	if account.Platform == PlatformOpenAI {
 		if err := ValidateOpenAIContinuationInput(firstClientMessage); err != nil {
 			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
@@ -671,6 +674,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					return err
 				}
 			}
+			if turn > 1 {
+				if err := s.quotaFailureForWSTurn(ctx, account, currentBridgePayload.rawForHash); err != nil {
+					return err
+				}
+			}
 			if hooks != nil && hooks.BeforeTurn != nil {
 				if err := hooks.BeforeTurn(turn); err != nil {
 					return err
@@ -1097,8 +1105,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			recordOpenAIWSDialRejected(c, account, acquireErr)
 			var dialErr *openAIWSDialError
 			if errors.As(acquireErr, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
-				s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(acquireErr.Error()), canonicalModel)
-				return nil, s.newOpenAIWSRateLimitFailoverError(account, dialErr.ResponseHeaders, nil, acquireErr.Error())
+				s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, dialErr.ResponseHeaders, dialErr.ResponseBody, canonicalModel)
+				return nil, s.newOpenAIAccountFailoverError(account, dialErr.StatusCode, dialErr.ResponseHeaders, dialErr.ResponseBody, acquireErr.Error(), false, false)
 			}
 			// Handshake 403 before the first turn reaches upstream: nothing has
 			// been relayed, so the handler can replay the first frame on another
@@ -1433,6 +1441,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			replayGuard.Observe(upstreamMessage, eventType)
 			if eventType == "error" || eventType == "response.failed" {
 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
+			}
+			if eventType == "response.failed" && GetOpsCyberPolicy(c) == nil {
+				if _, hard := openAIQuotaSignal(account, http.StatusTooManyRequests, upstreamMessage); hard {
+					s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, nil, upstreamMessage, mappedModel)
+					if canReplayTurn() {
+						lease.MarkBroken()
+						return nil, s.newOpenAIWSRateLimitFailoverError(account, nil, upstreamMessage, extractOpenAISSEErrorMessage(upstreamMessage))
+					}
+				}
 			}
 			if eventType == "response.failed" && canReplayTurn() && rejectedFieldRetryState != nil {
 				statusCode := openAIStreamFailureStatus(upstreamMessage, extractOpenAISSEErrorMessage(upstreamMessage))
@@ -1887,6 +1904,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				return err
 			}
 		}
+		if turn > 1 {
+			if err := s.quotaFailureForWSTurn(ctx, account, currentIdentitySourceRaw); err != nil {
+				return err
+			}
+		}
 		if !skipBeforeTurn && hooks != nil && hooks.BeforeTurn != nil {
 			if err := hooks.BeforeTurn(turn); err != nil {
 				return err
@@ -2132,6 +2154,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if acquireErr != nil {
 				if cookieWS && turn > 1 {
 					acquireErr = wrapOpenAICookieWSCurrentTurnFailover(acquireErr, currentIdentitySourceRaw, currentTurnReplayInput, currentTurnReplayInputExists, currentOriginalModel)
+				} else if turn > 1 {
+					var f *UpstreamFailoverError
+					if errors.As(acquireErr, &f) && f.Reason == OpenAIQuotaExhaustedReason {
+						acquireErr = newOpenAIWSCurrentTurnFailoverError(f, currentIdentitySourceRaw)
+					}
 				}
 				return fmt.Errorf("acquire upstream websocket: %w", acquireErr)
 			}
@@ -2311,6 +2338,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			sessionLease.MarkBroken()
 			if cookieWS && turn > 1 {
 				finalErr = wrapOpenAICookieWSCurrentTurnFailover(finalErr, currentIdentitySourceRaw, currentTurnReplayInput, currentTurnReplayInputExists, currentOriginalModel)
+			} else if turn > 1 {
+				var f *UpstreamFailoverError
+				if errors.As(finalErr, &f) && f.Reason == OpenAIQuotaExhaustedReason {
+					finalErr = newOpenAIWSCurrentTurnFailoverError(f, currentIdentitySourceRaw)
+				}
 			}
 			return finalErr
 		}

@@ -257,6 +257,9 @@ func ProvideAccountUsageService(
 		tlsFPProfileService,
 	)
 	service.agentIdentityWS = openAIGatewayService
+	if rateLimitService != nil && openAIQuotaService != nil {
+		rateLimitService.openAIQuotaUsage = openAIQuotaService.QueryUsage
+	}
 	service.SetOpenAI429RecoveryScheduler(rateLimitService)
 	service.SetOpenAICreditsGuard(openAIGatewayService)
 	service.SetOpenAICodexProbeSender(openAIGatewayService)
