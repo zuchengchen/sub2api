@@ -560,10 +560,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			nativeCapture = NewNativeReasoningResponseCapture(resp.Body, nativeChat.runtime.limits)
 			resp.Body = nativeCapture
 		}
-		if nativeCapture != nil || (cacheDiagnosticAttempt != nil && upstreamModel == "gpt-6.1-sol") {
+		recordChatDelivery := cacheDiagnosticAttempt != nil && (upstreamModel == nativeReasoningReplayAllUsersModel ||
+			(!isResponsesShape && cacheDiagnosticAttempt.diagnostic.matchesAssistantModel(upstreamModel)))
+		if nativeCapture != nil || recordChatDelivery {
 			originalWriter := c.Writer
 			nativeDelivery = NewNativeReasoningChatCapture(originalWriter, clientStream, captureLimits)
-			if clientStream && nativeChat != nil && nativeChat.mode == NativeReasoningReplayModeReplay && nativeChat.request.Scope.Model == nativeReasoningReplayAllUsersModel {
+			if clientStream && nativeChat.canHandoffCompletedStream() {
 				nativeDelivery.onCompleteWrite = func() {
 					nativeChat.handoffCompletedStream(ctx, c, resp, nativeCapture)
 				}
@@ -587,8 +589,8 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			nativeChat.finish(ctx, c, resp, nativeCapture, nativeDelivery, handleErr)
 			_ = resp.Body.Close()
 		}
-		if cacheDiagnosticAttempt != nil && upstreamModel == "gpt-6.1-sol" {
-			cacheDiagnosticAttempt.chatDelivery(c, nativeDelivery, result, handleErr, nativeChat)
+		if recordChatDelivery {
+			cacheDiagnosticAttempt.chatDelivery(c, nativeDelivery, result, handleErr, nativeChat, upstreamModel)
 		}
 		stampOpenAIResponsesUpstreamEndpoint(c, result)
 

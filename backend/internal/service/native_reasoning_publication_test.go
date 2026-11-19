@@ -24,6 +24,72 @@ func publicationFixture(t *testing.T) (*nativeReasoningChat, NativeReasoningRepl
 	return &nativeReasoningChat{runtime: runtime, request: request, eligible: true}, request, completion
 }
 
+func bindPublicationFixture(t *testing.T, producer *nativeReasoningChat, completion NativeReasoningReplayCompletion) {
+	t.Helper()
+	wire := nativeCaptureJSON(map[string]any{"model": producer.request.Scope.Model, "input": completion.SourceInput})
+	req, err := http.NewRequest(http.MethodPost, "/responses", bytes.NewReader(wire))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer synthetic-token")
+	_, err = producer.bind(req)
+	require.NoError(t, err)
+	require.True(t, producer.eligible)
+	require.NotEmpty(t, producer.binding.sourceInputDigest)
+	producer.toolReverse = completion.ToolNameReverse
+}
+
+func TestNativeReasoningReplayPreparedAppendUsesExactHistoryBytes(t *testing.T) {
+	engine, _, request, _ := nativeReplayFixture(t)
+	request.Parameters = json.RawMessage(`{ "instructions":"<" }`)
+	request.Messages = []json.RawMessage{
+		json.RawMessage(`{                  "role":"system","content":"" }`),
+		json.RawMessage(`{"role":"user","content":"<<<"}`),
+	}
+	p, err := engine.prepare(request)
+	require.NoError(t, err)
+	// Spaces count in the first raw message and HTML escaping expands the second.
+	wantBytes := len(`{"instructions":"\u003c"}`) + len(request.Messages[0]) + len(`{"content":"\u003c\u003c\u003c","role":"user"}`)
+	require.Equal(t, wantBytes, p.bytes)
+	for _, text := range []string{"first", "different", "first"} {
+		raw := nativeCaptureJSON(map[string]any{"role": "assistant", "content": text, "refusal": nil})
+		assistant, err := nativeReplayCanonicalMessage(raw)
+		require.NoError(t, err)
+		withAssistant := request
+		withAssistant.Messages = append(append([]json.RawMessage{}, request.Messages...), assistant)
+		engine.limits.MaxHistoryBytes = wantBytes + len(assistant)
+		full, err := engine.prepare(withAssistant)
+		require.NoError(t, err)
+		key, err := p.appendAssistant(assistant, engine.limits.MaxHistoryBytes)
+		require.NoError(t, err)
+		require.Equal(t, full.keys[len(full.keys)-1], key)
+		engine.limits.MaxHistoryBytes--
+		_, err = engine.prepare(withAssistant)
+		require.ErrorIs(t, err, ErrNativeReasoningReplayCapacity)
+		_, err = p.appendAssistant(assistant, engine.limits.MaxHistoryBytes)
+		require.ErrorIs(t, err, ErrNativeReasoningReplayCapacity)
+	}
+}
+
+func TestNativeReasoningReplayPreparedAppendCountsDeliveredMessage(t *testing.T) {
+	engine, _, request, _ := nativeReplayFixture(t)
+	request.Messages = make([]json.RawMessage, nativeReplayMaxMessages-1)
+	message := json.RawMessage(`{"role":"user","content":"x"}`)
+	for i := range request.Messages {
+		request.Messages[i] = message
+	}
+	p, err := engine.prepare(request)
+	require.NoError(t, err)
+	assistant, err := nativeReplayCanonicalMessage([]byte(`{"role":"assistant","content":"x"}`))
+	require.NoError(t, err)
+	key, err := p.appendAssistant(assistant, engine.limits.MaxHistoryBytes)
+	require.NoError(t, err)
+	request.Messages = append(request.Messages, assistant)
+	full, err := engine.prepare(request)
+	require.NoError(t, err)
+	require.Equal(t, full.keys[len(full.keys)-1], key)
+	_, err = full.appendAssistant(assistant, engine.limits.MaxHistoryBytes)
+	require.ErrorIs(t, err, ErrNativeReasoningReplayInvalid)
+}
+
 func TestNativeReasoningReplayPublicationMatchesExactPreAssistantPrefix(t *testing.T) {
 	producer, request, completion := publicationFixture(t)
 	p, admitted := producer.preparePublication(context.Background())
@@ -80,7 +146,7 @@ func TestNativeReasoningReplayPublicationScopeParametersAndHistoryDoNotWait(t *t
 			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
-			require.NoError(t, producer.runtime.publications.wait(ctx, p, 32), "an unrelated or unpaired history has no publication dependency")
+			require.NoError(t, producer.runtime.publications.wait(ctx, p, nativeReplayRestoreCandidates(p.messages, 32)), "an unrelated or unpaired history has no publication dependency")
 			require.NoError(t, ctx.Err())
 		})
 	}
@@ -103,9 +169,10 @@ func TestNativeReasoningReplayPublicationParallelProducersReleaseOnlyLastTicket(
 	first.releasePublication()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	require.ErrorIs(t, first.runtime.publications.wait(ctx, p, 32), context.DeadlineExceeded)
+	candidates := nativeReplayRestoreCandidates(p.messages, 32)
+	require.ErrorIs(t, first.runtime.publications.wait(ctx, p, candidates), context.DeadlineExceeded)
 	second.releasePublication()
-	require.NoError(t, first.runtime.publications.wait(context.Background(), p, 32))
+	require.NoError(t, first.runtime.publications.wait(context.Background(), p, candidates))
 	second.releasePublication()
 	require.Empty(t, first.runtime.publications.entries)
 	require.Empty(t, first.runtime.publications.perOwner)
@@ -269,7 +336,7 @@ func TestNativeReasoningReplayPublicationNewRuntimeSafelyMissesAndFailedFinishRe
 	p, err := producer.runtime.engine.prepare(nativeReplayContinuation(request, completion))
 	require.NoError(t, err)
 	var otherProcess nativeReasoningPublications
-	require.NoError(t, otherProcess.wait(context.Background(), p, 32), "cross-process absence must not guess or poll for publication")
+	require.NoError(t, otherProcess.wait(context.Background(), p, nativeReplayRestoreCandidates(p.messages, 32)), "cross-process absence must not guess or poll for publication")
 	producer.finish(context.Background(), nil, nil, nil, nil, errors.New("synthetic failure"))
 	require.Empty(t, producer.runtime.publications.entries)
 	require.Empty(t, producer.runtime.publications.perOwner)
@@ -382,13 +449,18 @@ func TestNativeReasoningReplayPublicationCanceledProducerPendingPutSafelyMisses(
 }
 
 func TestNativeReasoningReplayPublicationRetryKeyChangeAndPrepareFailureRelease(t *testing.T) {
-	producer, _, _ := publicationFixture(t)
+	producer, _, completion := publicationFixture(t)
 	_, ok := producer.preparePublication(context.Background())
 	require.True(t, ok)
 	first := producer.publication
+	bindPublicationFixture(t, producer, completion)
+	originalBinding := producer.binding
 	producer.request.Scope.CredentialIdentity += "/new-owner"
 	_, ok = producer.preparePublication(context.Background())
 	require.True(t, ok)
+	require.Empty(t, producer.binding.sourceInputDigest)
+	require.NotEqual(t, originalBinding.history.scope, producer.binding.history.scope)
+	require.ErrorIs(t, producer.runtime.engine.commit(context.Background(), producer.request, completion, &originalBinding), ErrNativeReasoningReplayInvalid)
 	require.NotSame(t, first, producer.publication)
 	select {
 	case <-first.entry.done:
@@ -399,6 +471,7 @@ func TestNativeReasoningReplayPublicationRetryKeyChangeAndPrepareFailureRelease(
 	producer.request.Parameters = json.RawMessage(`not-json`)
 	_, ok = producer.preparePublication(context.Background())
 	require.False(t, ok)
+	require.Zero(t, producer.binding)
 	require.Empty(t, producer.runtime.publications.entries)
 	require.Empty(t, producer.runtime.publications.perOwner)
 }
@@ -527,8 +600,7 @@ func TestNativeReasoningReplayPublicationFinishOnlyHandsOffConfirmedDelivery(t *
 			_, admitted := producer.preparePublication(ctx)
 			require.True(t, admitted)
 			lease := producer.publication
-			producer.sourceInput, producer.toolReverse = completion.SourceInput, completion.ToolNameReverse
-			producer.principal = nativeReasoningTokenPrincipal("synthetic-token")
+			bindPublicationFixture(t, producer, completion)
 			wire := append([]byte("data: "), nativeCaptureJSON(map[string]any{"type": "response.completed", "response": completion.Response})...)
 			wire = append(wire, '\n', '\n')
 			if fault == "incomplete_native" {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,14 @@ const (
 	nativeReasoningPolicyTTL           = 5 * time.Second
 	nativeReasoningReplayAllUsersModel = "gpt-6.1-sol"
 )
+
+// These are exact upstream model IDs. Only GPT-6.1 Sol also supports a
+// site-wide grant through AllUsersModels.
+var modelScopedNativeReasoningReplayModels = [...]string{nativeReasoningReplayAllUsersModel, "gpt-6.2-astra", "gpt-6.2-sol"}
+
+func supportsModelScopedNativeReasoningReplay(model string) bool {
+	return slices.Contains(modelScopedNativeReasoningReplayModels[:], model)
+}
 
 // The setting is server-owned. No request body/header can enable replay or
 // choose its user scope. An empty allowlist never means every user.
@@ -141,13 +150,13 @@ func normalizeNativeReasoningPolicy(value NativeReasoningReplayRuntimeConfig) (N
 		}
 	}
 	value.UserIDs = unique
-	if len(value.ModelUserIDs) > 1 {
+	if len(value.ModelUserIDs) > len(modelScopedNativeReasoningReplayModels) {
 		return NativeReasoningReplayRuntimeConfig{}, errors.New("native reasoning replay model user scope exceeds limit")
 	}
 	if value.ModelUserIDs != nil {
 		modelUsers := make(map[string][]int64, len(value.ModelUserIDs))
 		for model, userIDs := range value.ModelUserIDs {
-			if model != nativeReasoningReplayAllUsersModel || len(userIDs) > 256 {
+			if !supportsModelScopedNativeReasoningReplay(model) || len(userIDs) > 256 {
 				return NativeReasoningReplayRuntimeConfig{}, errors.New("invalid native reasoning replay model user scope")
 			}
 			ids := append([]int64(nil), userIDs...)
@@ -307,19 +316,14 @@ func (r *nativeReasoningRuntime) modeForUserModel(ctx context.Context, userID in
 	if value.Mode == NativeReasoningReplayModeOff || (!value.ExpiresAt.IsZero() && !now.Before(value.ExpiresAt)) {
 		return NativeReasoningReplayModeOff, false
 	}
-	index := sort.Search(len(value.UserIDs), func(i int) bool { return value.UserIDs[i] >= userID })
-	if index < len(value.UserIDs) && value.UserIDs[index] == userID {
-		return value.Mode, false
+	_, modelGrant := slices.BinarySearch(value.ModelUserIDs[model], userID)
+	if _, legacyGrant := slices.BinarySearch(value.UserIDs, userID); legacyGrant {
+		// A legacy user opts into the stricter GPT-6.2 session and model
+		// checks only when also listed for the model. Preserve GPT-6.1 precedence.
+		return value.Mode, modelGrant && model != nativeReasoningReplayAllUsersModel
 	}
-	modelUsers := value.ModelUserIDs[model]
-	modelIndex := sort.Search(len(modelUsers), func(i int) bool { return modelUsers[i] >= userID })
-	if modelIndex < len(modelUsers) && modelUsers[modelIndex] == userID {
+	if modelGrant || slices.Contains(value.AllUsersModels, model) {
 		return value.Mode, true
-	}
-	for _, allowed := range value.AllUsersModels {
-		if model == allowed {
-			return value.Mode, true
-		}
 	}
 	return NativeReasoningReplayModeOff, false
 }

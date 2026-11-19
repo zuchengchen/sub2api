@@ -153,8 +153,7 @@ func (l *nativeReasoningPublicationLease) release() {
 // complete input history before its future assistant; that same prefix is the
 // candidate assistant's immediately preceding key. It is strictly shorter than
 // this request's whole history and therefore cannot wait on its own lease.
-func (p *nativeReasoningPublications) wait(ctx context.Context, prepared nativeReasoningReplayPrepared, maxLookups int) error {
-	candidates := nativeReplayRestoreCandidates(prepared.messages, maxLookups)
+func (p *nativeReasoningPublications) wait(ctx context.Context, prepared nativeReasoningReplayPrepared, candidates []int) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -197,11 +196,14 @@ func (n *nativeReasoningChat) releasePublication() {
 }
 
 func (n *nativeReasoningChat) preparePublication(ctx context.Context) (nativeReasoningReplayPrepared, bool) {
+	n.binding = nativeReasoningReplayBinding{}
 	p, err := n.runtime.engine.prepare(n.request)
 	if err != nil {
+		n.eligible = false
 		n.releasePublication()
 		return p, false
 	}
+	n.binding.history = p.nativeReasoningReplayHistory
 	key := p.keys[len(p.keys)-1]
 	if !n.publication.matches(p.owner, key) {
 		n.releasePublication()
@@ -211,12 +213,13 @@ func (n *nativeReasoningChat) preparePublication(ctx context.Context) (nativeRea
 }
 
 func (n *nativeReasoningChat) restoreAfterPublication(ctx context.Context, prepared nativeReasoningReplayPrepared) ([]NativeReasoningReplayReplacement, error) {
+	candidates := nativeReplayRestoreCandidates(prepared.messages, n.runtime.limits.MaxLookups)
 	// Waiting and the subsequent single store read share the existing I/O budget.
 	// Timeout/cancellation is a safe miss; Commit still requires complete delivery.
 	bounded, cancel := context.WithTimeout(ctx, n.runtime.limits.IOTimeout)
 	defer cancel()
-	if err := n.runtime.publications.wait(bounded, prepared, n.runtime.limits.MaxLookups); err != nil {
+	if err := n.runtime.publications.wait(bounded, prepared, candidates); err != nil {
 		return nil, err
 	}
-	return n.runtime.engine.Restore(bounded, n.request)
+	return n.runtime.engine.restorePrepared(bounded, prepared, candidates)
 }

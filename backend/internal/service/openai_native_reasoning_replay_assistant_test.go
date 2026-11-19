@@ -286,8 +286,7 @@ func TestNativeReasoningReplayAssistantMessageFinishRequiresActualDelivery(t *te
 			_, admitted := producer.preparePublication(ctx)
 			require.True(t, admitted)
 			lease := producer.publication
-			producer.sourceInput, producer.toolReverse = completion.SourceInput, completion.ToolNameReverse
-			producer.principal = nativeReasoningTokenPrincipal("synthetic-token")
+			bindPublicationFixture(t, producer, completion)
 			wire := append([]byte("data: "), nativeCaptureJSON(map[string]any{"type": "response.completed", "response": completion.Response})...)
 			wire = append(wire, '\n', '\n')
 			if fault == "incomplete_native" {

@@ -49,6 +49,47 @@ func TestNativeReasoningReplayRuntimeSettingValidation(t *testing.T) {
 	require.Equal(t, NativeReasoningReplayModeOff, got.Mode)
 }
 
+func TestNativeReasoningReplayRuntimeGPT62ModelGrants(t *testing.T) {
+	raw := `{
+		"mode":"replay","user_ids":[428],"all_users_models":["gpt-6.1-sol"],
+		"model_user_ids":{"gpt-6.1-sol":[428],"gpt-6.2-astra":[428,358,358],"gpt-6.2-sol":[358]}
+	}`
+	reader := NewSettingService(&nativeReplaySettingFixture{raw: raw}, nil)
+	config, err := reader.NativeReasoningReplayPolicy(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []int64{358, 428}, config.ModelUserIDs["gpt-6.2-astra"])
+	runtime := &nativeReasoningRuntime{engine: NewNativeReasoningReplay(nil, nil, NativeReasoningReplayLimits{}), reader: reader}
+	for _, tc := range []struct {
+		user       int64
+		model      string
+		mode       string
+		restricted bool
+	}{
+		{358, "gpt-6.2-astra", "replay", true},
+		{358, "gpt-6.2-sol", "replay", true},
+		{358, "gpt-5.5", "off", false},
+		{359, "gpt-6.2-sol", "off", false},
+		{359, "gpt-6.1-sol", "replay", true},
+		{428, "gpt-6.2-astra", "replay", true}, // Explicit opt-in for an existing legacy user.
+		{428, "gpt-6.2-sol", "replay", false},
+		{428, "gpt-6.1-sol", "replay", false},
+	} {
+		mode, restricted := runtime.modeForUserModel(context.Background(), tc.user, tc.model)
+		require.Equal(t, tc.mode, mode, "user %d, model %s", tc.user, tc.model)
+		require.Equal(t, tc.restricted, restricted, "user %d, model %s", tc.user, tc.model)
+	}
+	for _, invalid := range []string{
+		`{"mode":"replay","all_users_models":["gpt-6.2-astra"]}`,
+		`{"mode":"replay","all_users_models":["gpt-6.2-sol"]}`,
+		`{"mode":"replay","model_user_ids":{"gpt-6.2-sol-high":[358]}}`,
+		`{"mode":"replay","model_user_ids":{"GPT-6.2-ASTRA":[358]}}`,
+	} {
+		service := NewSettingService(&nativeReplaySettingFixture{raw: invalid}, nil)
+		_, err := service.NativeReasoningReplayPolicy(context.Background())
+		require.Error(t, err, invalid)
+	}
+}
+
 func TestNativeReasoningReplayRuntimeAuthorizationCacheAndFailure(t *testing.T) {
 	var reads atomic.Int64
 	var failed atomic.Bool

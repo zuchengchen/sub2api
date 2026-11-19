@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,11 +17,22 @@ import (
 )
 
 func TestGPT61SolChatCacheDeliveryDiagnosticHTTP(t *testing.T) {
+	testChatCacheDeliveryDiagnosticHTTP(t, "gpt-6.1-sol")
+}
+
+func TestGPT62ChatCacheDeliveryDiagnosticHTTP(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-astra", "gpt-6.2-sol"} {
+		t.Run(model, func(t *testing.T) { testChatCacheDeliveryDiagnosticHTTP(t, model) })
+	}
+}
+
+func testChatCacheDeliveryDiagnosticHTTP(t *testing.T, model string) {
+	t.Helper()
 	for _, stream := range []bool{false, true} {
 		t.Run(strconvBoolForUserCacheTest(stream), func(t *testing.T) {
 			path := userCacheDiagnosticTestEnv(t)
-			terminal := `{"type":"response.completed","response":{"id":"PRIVATE_RESPONSE","model":"gpt-6.1-sol","status":"completed","output":[{"id":"PRIVATE_MESSAGE","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"PRIVATE_ANSWER"}]}],"usage":{"input_tokens":10000,"input_tokens_details":{"cached_tokens":9500},"output_tokens":30,"total_tokens":10030}}}`
-			wire := "data: " + `{"type":"response.created","response":{"id":"PRIVATE_RESPONSE","model":"gpt-6.1-sol","status":"in_progress"}}` + "\n\n" +
+			terminal := fmt.Sprintf(`{"type":"response.completed","response":{"id":"PRIVATE_RESPONSE","model":%q,"status":"completed","output":[{"id":"PRIVATE_MESSAGE","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"PRIVATE_ANSWER"}]}],"usage":{"input_tokens":10000,"input_tokens_details":{"cached_tokens":9500},"output_tokens":30,"total_tokens":10030}}}`, model)
+			wire := "data: " + fmt.Sprintf(`{"type":"response.created","response":{"id":"PRIVATE_RESPONSE","model":%q,"status":"in_progress"}}`, model) + "\n\n" +
 				"data: " + `{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"PRIVATE_ANSWER"}` + "\n\n" +
 				"data: " + terminal + "\n\ndata: [DONE]\n\n"
 			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}}
@@ -38,7 +50,7 @@ func TestGPT61SolChatCacheDeliveryDiagnosticHTTP(t *testing.T) {
 			})
 			server := httptest.NewServer(router)
 			defer server.Close()
-			body := `{"model":"gpt-6.1-sol","messages":[{"role":"assistant","content":"PRIVATE_ANSWER","refusal":null},{"role":"user","content":"PRIVATE_PROMPT"}],"stream":` + strconvBoolForUserCacheTest(stream) + `}`
+			body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"assistant","content":"PRIVATE_ANSWER","refusal":null},{"role":"user","content":"PRIVATE_PROMPT"}],"stream":%t}`, model, stream)
 			response, err := server.Client().Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 			require.NoError(t, err)
 			raw, err := io.ReadAll(response.Body)
@@ -132,7 +144,7 @@ func TestGPT61SolChatCacheDeliveryDiagnosticKeepsFailures(t *testing.T) {
 			if scenario == "missing_result" {
 				result = nil
 			}
-			(&userCacheDiagnosticAttempt{diagnostic: diagnostic, accountID: 23157, attempt: 1, usageRequestIDHash: diagnostic.usageRequestIDHash}).chatDelivery(c, delivery, result, forwardErr, nil)
+			(&userCacheDiagnosticAttempt{diagnostic: diagnostic, accountID: 23157, attempt: 1, usageRequestIDHash: diagnostic.usageRequestIDHash}).chatDelivery(c, delivery, result, forwardErr, nil, "gpt-6.1-sol")
 			events := userCacheDiagnosticReadEvents(t, path)
 			require.Len(t, events, 2)
 			event := events[1]

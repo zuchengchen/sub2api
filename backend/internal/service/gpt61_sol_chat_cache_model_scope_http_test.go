@@ -320,6 +320,8 @@ func TestGPT61SolChatCacheModelScopeHTTPPolicyAndMapping(t *testing.T) {
 	canary := target
 	canary.AllUsersModels = nil
 	canary.ModelUserIDs = map[string][]int64{"gpt-6.1-sol": {101}}
+	astraCanary := target
+	astraCanary.ModelUserIDs = map[string][]int64{"gpt-6.2-astra": {101}}
 	promoted := target
 	promoted.ModelUserIDs = map[string][]int64{"gpt-6.1-sol": {101}}
 	invalidCanary := canary
@@ -327,6 +329,8 @@ func TestGPT61SolChatCacheModelScopeHTTPPolicyAndMapping(t *testing.T) {
 	invalid := target
 	invalid.AllUsersModels = []string{"*"}
 	cases := []scenario{
+		{name: "gpt62_dispatch_into_granted_model", requested: "customer-model", actual: "gpt-6.2-astra", defaultModel: "gpt-6.2-astra", policy: astraCanary, who: ordinary, replay: true, save: true},
+		{name: "gpt62_dispatch_to_ungranted_model", requested: "gpt-6.2-astra", actual: "gpt-6.2-sol", defaultModel: "gpt-6.2-sol", policy: astraCanary, who: ordinary},
 		{name: "canary_target", requested: "gpt-6.1-sol", actual: "gpt-6.1-sol", policy: canary, who: ordinary, replay: true, save: true},
 		{name: "canary_other_model_off", requested: "gpt-5.5", actual: "gpt-5.5", policy: canary, who: ordinary},
 		{name: "ordinary_target_before_promotion_off", requested: "gpt-6.1-sol", actual: "gpt-6.1-sol", policy: canary, who: gpt61ScopeHTTPClient{102, 502, "synthetic-session", "", ""}},

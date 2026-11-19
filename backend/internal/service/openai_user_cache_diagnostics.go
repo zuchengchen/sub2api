@@ -27,6 +27,7 @@ import (
 
 const (
 	userCacheDiagnosticContextKey  = "sub2api_user_cache_diagnostic"
+	userCacheDiagnosticIngressKey  = "sub2api_user_cache_diagnostic_ingress"
 	userCacheDiagnosticMaxItems    = 1024
 	userCacheDiagnosticMaxLine     = 4 << 20
 	userCacheDiagnosticMaxFile     = 16 << 20
@@ -35,6 +36,40 @@ const (
 	userCacheDiagnosticMaxAttempts = 4
 	userCacheDiagnosticMaxRecords  = 1 + 3*userCacheDiagnosticMaxAttempts
 )
+
+type userCacheDiagnosticIngress struct {
+	body      []byte
+	oversized map[string]any
+}
+
+// RememberUserCacheDiagnosticIngress captures the first body before a Chat
+// rewrite for the active user's bounded sample. Admission still occurs at the
+// forwarding boundary, so a rejected request never spends a sample slot.
+func RememberUserCacheDiagnosticIngress(c *gin.Context, userID int64, body []byte) {
+	if c == nil {
+		return
+	}
+	if _, decided := c.Get(userCacheDiagnosticContextKey); decided {
+		return
+	}
+	if _, exists := c.Get(userCacheDiagnosticIngressKey); exists {
+		return
+	}
+	if userCacheDiagnostics.available(userID, time.Now(), false) == nil {
+		return
+	}
+	if len(body) > userCacheDiagnosticMaxBytes {
+		// Model-filtered samples require an original parse. Pin that rejection
+		// before a later rewrite can make the request small enough to parse.
+		if os.Getenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL") != "" {
+			c.Set(userCacheDiagnosticContextKey, (*userCacheDiagnostic)(nil))
+			return
+		}
+		c.Set(userCacheDiagnosticIngressKey, userCacheDiagnosticIngress{oversized: summarizeUserCacheBody(body)})
+		return
+	}
+	c.Set(userCacheDiagnosticIngressKey, userCacheDiagnosticIngress{body: body})
+}
 
 type userCacheDiagnosticManager struct {
 	mu        sync.Mutex
@@ -56,6 +91,10 @@ var userCacheDiagnosticFileMu sync.Mutex
 // A mandatory absolute expiry and a maximum of 100 requests prevent accidental
 // long-running capture. Missing, invalid, or expired configuration fails closed.
 func (m *userCacheDiagnosticManager) admit(userID int64, now time.Time) *userCacheDiagnosticConfig {
+	return m.available(userID, now, true)
+}
+
+func (m *userCacheDiagnosticManager) available(userID int64, now time.Time, consume bool) *userCacheDiagnosticConfig {
 	rawUser := strings.TrimSpace(os.Getenv("SUB2_USER_CACHE_DIAGNOSTIC_USER_ID"))
 	if rawUser == "" || rawUser != strconv.FormatInt(userID, 10) || userID <= 0 {
 		return nil
@@ -84,20 +123,22 @@ func (m *userCacheDiagnosticManager) admit(userID int64, now time.Time) *userCac
 	if m.config == nil || !now.Before(m.config.until) || m.config.used >= m.config.limit {
 		return nil
 	}
-	m.config.used++
+	if consume {
+		m.config.used++
+	}
 	return m.config
 }
 
 type userCacheDiagnostic struct {
-	config              *userCacheDiagnosticConfig
-	traceID             string
-	apiKeyID            int64
-	assistantComparison bool
-	sessionHash         string
-	usageRequestIDHash  string
-	mu                  sync.Mutex
-	attempts            int
-	records             int
+	config             *userCacheDiagnosticConfig
+	traceID            string
+	apiKeyID           int64
+	assistantModel     string
+	sessionHash        string
+	usageRequestIDHash string
+	mu                 sync.Mutex
+	attempts           int
+	records            int
 }
 
 // Each attempt owns an immutable identity. A previous response may finish after
@@ -112,23 +153,33 @@ type userCacheDiagnosticAttempt struct {
 
 // Keep admission independent of differing duplicate/case-insensitive JSON rules
 // in the typed Chat parser. Ambiguous requested-model carriers fail closed.
-func userCacheDiagnosticMatchesRequestedModel(body []byte, model string) bool {
+func userCacheDiagnosticRequestedModel(body []byte) string {
 	if len(body) > userCacheDiagnosticMaxBytes || !gjson.ValidBytes(body) {
-		return false
+		return ""
 	}
 	root := gjson.ParseBytes(body)
 	if !root.IsObject() {
-		return false
+		return ""
 	}
-	count, matched := 0, false
+	var model string
+	count := 0
 	root.ForEach(func(key, value gjson.Result) bool {
 		if strings.EqualFold(key.String(), "model") {
 			count++
-			matched = key.String() == "model" && value.Type == gjson.String && value.String() == model
+			if key.String() == "model" && value.Type == gjson.String {
+				model = value.String()
+			}
 		}
 		return count <= 1
 	})
-	return count == 1 && matched
+	if count != 1 {
+		return ""
+	}
+	return model
+}
+
+func (d *userCacheDiagnostic) matchesAssistantModel(upstreamModel string) bool {
+	return d != nil && d.assistantModel != "" && d.assistantModel == upstreamModel
 }
 
 func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic {
@@ -149,9 +200,19 @@ func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic 
 	if !ok || key == nil {
 		return nil
 	}
+	var bodySummary map[string]any
+	if raw, stored := c.Get(userCacheDiagnosticIngressKey); stored {
+		original, ok := raw.(userCacheDiagnosticIngress)
+		c.Set(userCacheDiagnosticIngressKey, nil)
+		if !ok {
+			return nil
+		}
+		body, bodySummary = original.body, original.oversized
+	}
 	// Match the requested model before admission so excluded requests consume no quota.
 	// The memoized nil above also prevents retry bodies from changing this decision.
-	if model := os.Getenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL"); model != "" && !userCacheDiagnosticMatchesRequestedModel(body, model) {
+	model := os.Getenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL")
+	if model != "" && userCacheDiagnosticRequestedModel(body) != model {
 		return nil
 	}
 	config := userCacheDiagnostics.admit(key.UserID, time.Now())
@@ -171,9 +232,16 @@ func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic 
 		d.usageRequestIDHash = diagnosticSHA256([]byte("local:" + strings.TrimSpace(id)))
 	}
 	c.Set(userCacheDiagnosticContextKey, d)
-	d.assistantComparison = userCacheDiagnosticMatchesRequestedModel(body, nativeReasoningReplayAllUsersModel)
-	fields := map[string]any{"body": summarizeUserCacheBody(body), "identity": summarizeGPT61SolChatIdentity(c, body)}
-	if d.assistantComparison {
+	if bodySummary == nil {
+		bodySummary = summarizeUserCacheBody(body)
+	}
+	fields := map[string]any{"body": bodySummary, "identity": summarizeGPT61SolChatIdentity(c, body)}
+	if model == "" {
+		model = userCacheDiagnosticRequestedModel(body)
+	}
+	if supportsModelScopedNativeReasoningReplay(model) && (model == nativeReasoningReplayAllUsersModel || gjson.GetBytes(body, "messages").IsArray()) {
+		// A parsed model can point into the entire request; retain only its name.
+		d.assistantModel = strings.Clone(model)
 		fields["assistant_tail"] = d.summarizeAssistantTail(body)
 	}
 	d.write("ingress", 0, 0, d.usageRequestIDHash, fields)

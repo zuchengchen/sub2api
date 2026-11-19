@@ -108,8 +108,14 @@ type nativeReasoningChatAuthorization struct {
 	userID, apiKeyID int64
 }
 
+// The original 6.1 integration also uses thread identity under its legacy user
+// grant. Other models opt in to it through an explicit model grant.
+func usesThreadScopedNativeChat(model string, modelRestricted bool) bool {
+	return (modelRestricted || model == nativeReasoningReplayAllUsersModel) && supportsModelScopedNativeReasoningReplay(model)
+}
+
 func (a nativeReasoningChatAuthorization) targetReplayEnabled() bool {
-	return a.mode == NativeReasoningReplayModeReplay && a.model == nativeReasoningReplayAllUsersModel && a.userID > 0 && a.apiKeyID > 0
+	return a.mode == NativeReasoningReplayModeReplay && a.userID > 0 && a.apiKeyID > 0 && usesThreadScopedNativeChat(a.model, a.modelRestricted)
 }
 
 func (s *OpenAIGatewayService) resolveNativeReasoningChatAuthorization(c *gin.Context, actualModel string) nativeReasoningChatAuthorization {
@@ -137,7 +143,7 @@ type nativeReasoningChat struct {
 	messages           []json.RawMessage
 	request            NativeReasoningReplayRequest
 	references         []NativeReasoningReplayReference
-	sourceInput        json.RawMessage
+	binding            nativeReasoningReplayBinding
 	toolReverse        map[string]string
 	principal          string
 	eligible           bool
@@ -168,23 +174,31 @@ func (s *OpenAIGatewayService) beginNativeReasoningChat(c *gin.Context, account 
 	}
 	mode := authorization.mode
 	authorizedModel := ""
+	threadScoped := usesThreadScopedNativeChat(authorization.model, authorization.modelRestricted)
 	if authorization.modelRestricted {
-		authorizedModel = authorization.model
-		if authorizedModel != nativeReasoningReplayAllUsersModel {
+		if !threadScoped {
 			return nil
 		}
+		authorizedModel = authorization.model
 	}
 	session := ExtractClientSessionID(c)
-	if authorization.model == nativeReasoningReplayAllUsersModel {
+	if threadScoped {
+		namespace := "gpt61-chat/v1:"
+		if authorization.model != nativeReasoningReplayAllUsersModel {
+			if !gjson.GetBytes(body, "messages").IsArray() {
+				return nil
+			}
+			// A legacy session comes directly from a sanitized client header.
+			// The NUL makes this namespace unreachable through that grant.
+			namespace = "gpt62-chat/v1:\x00"
+		}
 		clientSession, thread, valid := gpt61SolChatExplicitIdentity(c, body)
 		if !valid {
 			return nil
 		}
-		// Explicit session and thread identify separate conversations. Use a
-		// framed pair and a new target-only namespace; old cache entries safely
-		// miss instead of crossing a thread or a changed identity parser.
+		// Frame both values so overlapping session/thread names cannot alias.
 		framed, _ := json.Marshal([2]string{clientSession, thread})
-		session = "gpt61-chat/v1:" + nativeReplayDigest(framed)
+		session = namespace + nativeReplayDigest(framed)
 	}
 	if session == "" || len(body) > s.nativeReplayRuntime.limits.MaxHistoryBytes {
 		return nil
@@ -207,10 +221,7 @@ func (n *nativeReasoningChat) prepare(ctx context.Context, c *gin.Context, accou
 	if n == nil {
 		return body
 	}
-	n.references = nil
-	n.sourceInput = nil
-	n.principal = ""
-	n.eligible = false
+	n.resetAttempt()
 	n.request.Scope.Model = gjson.GetBytes(body, "model").String()
 	n.request.Scope.CredentialIdentity = nativeReasoningCredentialIdentity(c, account, token)
 	if n.request.Scope.Model == "" || n.request.Scope.CredentialIdentity == "" || (n.authorizedModel != "" && n.request.Scope.Model != n.authorizedModel) {
@@ -250,6 +261,13 @@ func (n *nativeReasoningChat) prepare(ctx context.Context, c *gin.Context, accou
 	return next
 }
 
+func (n *nativeReasoningChat) resetAttempt() {
+	n.references = nil
+	n.binding = nativeReasoningReplayBinding{}
+	n.principal = ""
+	n.eligible = false
+}
+
 func cloneNativeReasoningToolReverse(source map[string]string) map[string]string {
 	if len(source) == 0 {
 		return nil
@@ -269,7 +287,7 @@ func (n *nativeReasoningChat) prepareRequest(ctx context.Context, c *gin.Context
 	if n == nil {
 		return req, nil
 	}
-	n.references, n.sourceInput, n.eligible = nil, nil, false
+	n.resetAttempt()
 	if req == nil || req.GetBody == nil {
 		n.releasePublication()
 		return req, nil
@@ -324,7 +342,10 @@ func (n *nativeReasoningChat) bind(req *http.Request) (*http.Request, error) {
 	if !input.IsArray() || len(input.Raw) > n.runtime.limits.MaxHistoryBytes {
 		return n.unverifiableRequest(req)
 	}
-	n.sourceInput = bytes.Clone([]byte(input.Raw))
+	digest, err := NativeReasoningReplayInputDigest([]byte(input.Raw))
+	if err != nil {
+		return n.unverifiableRequest(req)
+	}
 	n.principal = nativeReasoningTokenPrincipal(req.Header.Get("Authorization"))
 	if len(n.references) > 0 {
 		if n.principal == "" {
@@ -332,11 +353,13 @@ func (n *nativeReasoningChat) bind(req *http.Request) (*http.Request, error) {
 		}
 		req = req.WithContext(context.WithValue(req.Context(), nativeReasoningAuthGuardKey{}, &nativeReasoningAuthGuard{principal: n.principal}))
 	}
+	n.binding.sourceInputDigest = digest
 	return req, nil
 }
 
 func (n *nativeReasoningChat) unverifiableRequest(req *http.Request) (*http.Request, error) {
 	n.eligible = false
+	n.binding = nativeReasoningReplayBinding{}
 	n.releasePublication()
 	if len(n.references) > 0 {
 		return req, errNativeReasoningProjectionUnavailable
@@ -350,8 +373,7 @@ func (n *nativeReasoningChat) preSendFallback(err error) bool {
 	}
 	n.fallbackTried = true
 	n.replayDisabled = true
-	n.references = nil
-	n.eligible = false
+	n.resetAttempt()
 	return true
 }
 
@@ -392,9 +414,19 @@ func (n *nativeReasoningChat) rejectedFallback(ctx context.Context, c *gin.Conte
 	}
 	n.fallbackTried = true
 	n.replayDisabled = true
-	n.references = nil
-	n.eligible = false
+	n.resetAttempt()
 	return true
+}
+
+func (n *nativeReasoningChat) canHandoffCompletedStream() bool {
+	if n == nil || !n.eligible || n.mode != NativeReasoningReplayModeReplay {
+		return false
+	}
+	model := n.request.Scope.Model
+	if n.authorizedModel != "" && n.authorizedModel != model {
+		return false
+	}
+	return usesThreadScopedNativeChat(model, n.authorizedModel != "")
 }
 
 // handoffCompletedStream runs only after the capture has accepted a complete
@@ -403,7 +435,7 @@ func (n *nativeReasoningChat) rejectedFallback(ctx context.Context, c *gin.Conte
 // that protocol boundary. This does not commit: finish still verifies handler
 // success, final captures, policy and the actual upstream principal.
 func (n *nativeReasoningChat) handoffCompletedStream(ctx context.Context, c *gin.Context, response *http.Response, upstream *NativeReasoningResponseCapture) {
-	if n == nil || !n.eligible || n.mode != NativeReasoningReplayModeReplay || n.request.Scope.Model != nativeReasoningReplayAllUsersModel || n.publication == nil || n.publicationContext != nil || upstream == nil || ctx.Err() != nil || c == nil || c.Request == nil || c.Request.Context().Err() != nil || c.Writer.Status() != http.StatusOK || GetOpsCyberPolicy(c) != nil || response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+	if !n.canHandoffCompletedStream() || n.publication == nil || n.publicationContext != nil || upstream == nil || ctx.Err() != nil || c == nil || c.Request == nil || c.Request.Context().Err() != nil || c.Writer.Status() != http.StatusOK || GetOpsCyberPolicy(c) != nil || response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return
 	}
 	if upstream.InvalidEncryptedContent() || (response.Request != nil && nativeReasoningTokenPrincipal(response.Request.Header.Get("Authorization")) != n.principal) {
@@ -454,5 +486,5 @@ func (n *nativeReasoningChat) finish(ctx context.Context, c *gin.Context, respon
 		}
 		defer cancel()
 	}
-	_ = n.runtime.engine.Commit(commitCtx, n.request, NativeReasoningReplayCompletion{Response: native, DeliveredAssistant: assistant, DeliveredComplete: true, ToolNameReverse: n.toolReverse, SourceInput: n.sourceInput})
+	_ = n.runtime.engine.commit(commitCtx, n.request, NativeReasoningReplayCompletion{Response: native, DeliveredAssistant: assistant, DeliveredComplete: true, ToolNameReverse: n.toolReverse}, &n.binding)
 }
