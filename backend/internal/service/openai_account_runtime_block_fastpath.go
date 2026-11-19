@@ -151,6 +151,10 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s.rateLimitService != nil {
 		s.rateLimitService.maybeHandleOpenAITeamLinkedError(stateCtx, account, statusCode, responseBody)
 	}
+	if e, ok := openAIQuotaSignal(account, statusCode, responseBody); ok && s.rateLimitService != nil {
+		s.rateLimitService.handleOpenAIQuotaExhausted(stateCtx, account, e, headers)
+		return true
+	}
 	stateCtx = withTempUnschedulableModel(stateCtx, canonicalModel)
 	if s.rateLimitService != nil && len(canonicalModel) > 0 && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel[0], statusCode, responseBody) {
 		return true
@@ -552,6 +556,9 @@ func (s *OpenAIGatewayService) clearOpenAIAccountRuntimeBlockIfUnchanged(account
 func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Account, requestedModel string, requireCompact bool) bool {
 	if s == nil {
 		return false
+	}
+	if !s.rateLimitService.openAIQuotaDeadlineForAccount(account).IsZero() {
+		return true
 	}
 	// Sticky and ordinary selection share the token provider's access decision.
 	// Successful access verification leaves all other scheduling gates intact.

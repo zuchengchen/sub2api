@@ -947,8 +947,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		s.handleOpenAIWSDialTransientFailure(ctx, account, capturedSessionModel, dialErr)
 		recordOpenAIWSDialRejected(c, account, dialErr)
 		if statusCode == http.StatusTooManyRequests {
-			s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), capturedSessionModel)
-			return s.newOpenAIWSRateLimitFailoverError(account, handshakeHeaders, nil, err.Error())
+			s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, handshakeHeaders, dialErr.ResponseBody, capturedSessionModel)
+			return s.newOpenAIAccountFailoverError(account, dialErr.StatusCode, handshakeHeaders, dialErr.ResponseBody, err.Error(), false, false)
 		}
 		// The relay has not started: the handler can replay the first frame on
 		// another account instead of closing with "authentication failed".
@@ -1019,6 +1019,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 
 	completedTurns := atomic.Int32{}
 	turnLifecycle := newOpenAIWSPassthroughTurnLifecycle(true)
+	var currentClientCreate atomic.Pointer[[]byte]
 	var acceptedTurnStartedAt atomic.Pointer[time.Time]
 	clientFrameConn := &openAIWSClientFrameConn{
 		interruptReader:      openAIWSExistingInterruptClientReader(c, clientConn),
@@ -1064,6 +1065,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					err := errors.New("overlapping response.create is not supported")
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
 				}
+				rawCreate := append([]byte(nil), payload...)
+				currentClientCreate.Store(&rawCreate)
 				setOpenAIImageOutputRequest(c, payload)
 				defer func() {
 					if !acceptedTurn {
@@ -1129,6 +1132,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					if err := hooks.BeforeRequest(turnNo, payload, requestModelForThisFrame); err != nil {
 						return payload, nil, err
 					}
+				}
+				if err := s.quotaFailureForWSTurn(ctx, account, payload); err != nil {
+					return payload, nil, err
 				}
 				if hooks != nil && hooks.BeforeTurn != nil {
 					if err := hooks.BeforeTurn(turnNo); err != nil {
@@ -1361,6 +1367,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					}
 				}
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
+					currentClientCreate.Store(nil)
 					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)
 				}
 			},
@@ -1391,14 +1398,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return nil
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
-				isPreOutputRateLimit := eventType == "error" && !wroteDownstream && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw)
+				var guard openAIResponseReplayGuard
+				guard.Observe(payload, eventType)
+				_, hardQuota := openAIQuotaSignal(account, http.StatusTooManyRequests, payload)
+				quotaTerminal := eventType == "error" || (eventType == "response.failed" && hardQuota)
+				isPreOutputRateLimit := quotaTerminal && !wroteDownstream && !guard.progressed && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw)
 				if (eventType == "error" || eventType == "response.failed") && !failureAccountSideEffectsApplied && !isPreOutputRateLimit {
 					failureAccountSideEffectsApplied = s.handleOpenAIWSFailureAccountSideEffects(ctx, account, capturedSessionModel, handshakeHeaders, payload)
 				}
-				if eventType != "error" {
-					return nil
-				}
-				if wroteDownstream || !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+				if !isPreOutputRateLimit {
 					return nil
 				}
 				s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw, capturedSessionModel)
@@ -1410,6 +1418,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
 				)
 				if completedTurns.Load() > 0 {
+					if hardQuota {
+						failure := s.newOpenAIWSRateLimitFailoverError(account, nil, payload, errMsgRaw)
+						if current := currentClientCreate.Load(); current != nil {
+							return newOpenAIWSCurrentTurnFailoverError(failure, *current)
+						}
+						return newOpenAIWSCurrentTurnFailoverError(failure, nil)
+					}
 					return NewOpenAIWSClientCloseError(
 						coderws.StatusTryAgainLater,
 						"upstream rate limit exceeded; please reconnect",

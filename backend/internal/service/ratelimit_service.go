@@ -41,6 +41,9 @@ type RateLimitService struct {
 	openaiTeamLinkedMu     sync.Mutex
 	openaiTeamLinkedRecent map[string]time.Time
 
+	openAIQuotaUntil sync.Map // account ID -> confirmed deadline
+	openAIQuotaUsage func(context.Context, int64) (*OpenAIQuotaUsage, error)
+
 	openai429RecoveryMu     sync.Mutex
 	openai429RecoveryStates map[int64]*openai429RecoveryState
 	openai429RecoverySlots  chan struct{}
@@ -61,6 +64,7 @@ type SuccessfulTestRecoveryResult struct {
 
 // AccountRecoveryOptions 控制账号恢复时的附加行为。
 type AccountRecoveryOptions struct {
+	afterTest       bool
 	InvalidateToken bool
 }
 
@@ -331,6 +335,10 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	// Team 联动熔断必须先于池模式/自定义错误码/临时不可调度的各类早退；
 	// 同请求内与 fastpath 调用点的重复触发由方法内去重吸收。
 	s.maybeHandleOpenAITeamLinkedError(ctx, account, statusCode, responseBody)
+	if e, ok := openAIQuotaSignal(account, statusCode, responseBody); ok {
+		s.handleOpenAIQuotaExhausted(ctx, account, e, headers)
+		return true
+	}
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
 
 	// 池模式默认不标记本地账号状态；但管理员显式配置的临时不可调度规则优先。
@@ -1745,9 +1753,17 @@ func (s *RateLimitService) samplePassiveUsageFromHeaders(ctx context.Context, ac
 
 // ClearRateLimit 清除账号的限流状态
 func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) error {
+	observed, present := s.openAIQuotaUntil.Load(accountID)
 	if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
 		return err
 	}
+	if present {
+		s.openAIQuotaUntil.CompareAndDelete(accountID, observed)
+	}
+	return s.clearOtherRateLimitState(ctx, accountID)
+}
+
+func (s *RateLimitService) clearOtherRateLimitState(ctx context.Context, accountID int64) error {
 	if err := s.accountRepo.ClearModelRateLimits(ctx, accountID); err != nil {
 		return err
 	}
@@ -1794,6 +1810,22 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 		}
 	}
 
+	if options.afterTest && account.IsOpenAIOAuth() && hasRecoverableRuntimeState(account) {
+		if !s.openAIQuotaDeadlineForAccount(account).IsZero() {
+			return result, nil
+		}
+		if repo, ok := s.accountRepo.(openAIQuotaCooldownRepository); ok {
+			cleared, err := repo.ClearOpenAIRateLimitIfObserved(ctx, account, true)
+			if err != nil || !cleared {
+				return result, err
+			}
+			if err := s.clearOtherRateLimitState(ctx, accountID); err != nil {
+				return result, err
+			}
+			result.ClearedRateLimit = true
+			return result, nil
+		}
+	}
 	if hasRecoverableRuntimeState(account) {
 		if err := s.ClearRateLimit(ctx, accountID); err != nil {
 			return nil, err
@@ -1813,7 +1845,7 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 // RecoverAccountAfterSuccessfulTest 将一次成功测试视为正常请求，
 // 按需恢复 error / rate-limit / overload / temp-unsched / model-rate-limit 等运行时状态。
 func (s *RateLimitService) RecoverAccountAfterSuccessfulTest(ctx context.Context, accountID int64) (*SuccessfulTestRecoveryResult, error) {
-	return s.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{})
+	return s.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{afterTest: true})
 }
 
 func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID int64) error {

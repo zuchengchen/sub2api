@@ -407,6 +407,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						}
 					}
 					if isResponsesShape && requestPlatform == service.PlatformOpenAI && !service.OpenAIContinuationMaySwitchAccount(body) {
+						markOpenAIQuotaBoundHistory(c, failoverErr, switchCount+1)
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}

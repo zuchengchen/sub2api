@@ -65,7 +65,7 @@ func (s *RateLimitService) scheduleOpenAI429RecoveryProbe(account *Account, rese
 		return
 	}
 	now := time.Now()
-	if !openAIAccountEligibleFor429RecoveryProbe(account, now) {
+	if !s.openAIQuotaDeadlineForAccount(account).IsZero() || !openAIAccountEligibleFor429RecoveryProbe(account, now) {
 		s.cancelOpenAI429RecoveryProbe(account.ID)
 		return
 	}
@@ -175,7 +175,7 @@ func (s *RateLimitService) fireOpenAI429RecoveryProbe(accountID int64) {
 	defer cancel()
 
 	account, err := s.accountRepo.GetByID(ctx, accountID)
-	if err != nil || account == nil || !openAIAccountEligibleFor429RecoveryProbe(account, time.Now()) {
+	if err != nil || account == nil || !s.openAIQuotaDeadlineForAccount(account).IsZero() || !openAIAccountEligibleFor429RecoveryProbe(account, time.Now()) {
 		s.cancelOpenAI429RecoveryProbe(accountID)
 		slog.Info("openai_429_recovery_probe_stopped", "account_id", accountID, "reason", "ineligible")
 		return
@@ -206,8 +206,8 @@ func (s *RateLimitService) fireOpenAI429RecoveryProbe(accountID int64) {
 				mergeAccountExtra(latest, buildCodexUsageExtraUpdates(ParseCodexRateLimitHeaders(result.Headers), time.Now()))
 			}
 		}
-		if openAIAccountEligibleFor429RecoveryProbe(latest, time.Now()) {
-			s.recoverAfterOpenAI429ProbeSuccess(ctx, accountID, model)
+		if s.openAIQuotaDeadlineForAccount(latest).IsZero() && openAIAccountEligibleFor429RecoveryProbe(latest, time.Now()) {
+			s.recoverAfterOpenAI429ProbeSuccess(ctx, account, model)
 			slog.Info("openai_429_recovery_probe_success", "account_id", accountID, "model", model, "status", result.Status)
 		} else {
 			s.cancelOpenAI429RecoveryProbe(accountID)
@@ -290,11 +290,20 @@ func (s *RateLimitService) rescheduleOpenAI429RecoveryProbe(accountID int64) {
 	})
 }
 
-func (s *RateLimitService) recoverAfterOpenAI429ProbeSuccess(ctx context.Context, accountID int64, model string) {
+func (s *RateLimitService) recoverAfterOpenAI429ProbeSuccess(ctx context.Context, account *Account, model string) {
+	accountID := account.ID
 	if s == nil || s.accountRepo == nil || accountID <= 0 {
 		return
 	}
-	if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
+	if repo, ok := s.accountRepo.(openAIQuotaCooldownRepository); ok {
+		if account.RateLimitedAt == nil || account.RateLimitResetAt == nil {
+			return
+		}
+		cleared, err := repo.ClearOpenAIRateLimitIfObserved(ctx, account, false)
+		if err != nil || !cleared {
+			return
+		}
+	} else if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
 		slog.Warn("openai_429_recovery_clear_rate_limit_failed", "account_id", accountID, "error", err)
 		return
 	}

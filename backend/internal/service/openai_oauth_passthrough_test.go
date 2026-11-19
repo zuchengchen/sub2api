@@ -1601,7 +1601,8 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 			}(),
 			expectFailover: true,
 			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
-				require.Empty(t, repo.rateLimitCalls)
+				require.Len(t, repo.rateLimitCalls, 1)
+				require.WithinDuration(t, time.Now().Add(7*24*time.Hour), repo.rateLimitCalls[0], 5*time.Second)
 				require.Empty(t, repo.overloadCalls)
 			},
 		},

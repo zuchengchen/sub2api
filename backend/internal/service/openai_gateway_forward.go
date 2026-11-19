@@ -96,6 +96,9 @@ func isOpenAIGPT56OrLaterModel(model string) bool {
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 
+	if exhausted := s.quotaCooldownFailure(account); exhausted != nil {
+		return nil, exhausted
+	}
 	if err := validateRetiredOpenAIRequestModel(account, gjson.GetBytes(body, "model").String(), isOpenAIResponsesCompactPath(c), ""); err != nil {
 		writeOpenAIResponsesErrorJSON(c, http.StatusNotFound, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "model_not_found", "message": err.Error()}})
 		return nil, err
