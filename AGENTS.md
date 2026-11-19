@@ -4,6 +4,12 @@ These instructions apply to all AI agents and contributors working in this
 repository. Follow them unless the repository owner explicitly requests a
 different workflow for a specific task.
 
+## Agent Collaboration
+
+For every task, delegate work to sub-agents whenever practical. Run independent
+investigations, edits, reviews, and checks in parallel. Coordinate edits to
+shared files and run dependent steps in order.
+
 ## Remotes
 
 - `upstream` is the original repository: `https://github.com/Wei-Shaw/sub2api.git`.
@@ -62,8 +68,9 @@ different workflow for a specific task.
 
 ## Releasing Customized Changes
 
-This is the only allowed production-deploy path. A user request to 部署,
-deploy, or 上线 means this full sequence, not a binary hot-copy.
+This is the only production deployment workflow. A request to 部署, deploy, or
+上线 authorizes every step through production verification, including any pull
+requests, merges, and pushes to `origin` required for the release.
 
 1. Develop and test changes on `feature/*` or `fix/*` branches.
 2. Merge them into `dev-czc` and run the appropriate integration tests.
@@ -81,9 +88,9 @@ deploy, or 上线 means this full sequence, not a binary hot-copy.
    for a complete GitHub Release. Title form: `# czc-vYYYY.MM.DD.N (X.Y.Z.W)`.
 6. Merge the VERSION bump and release notes into `dev-czc`, then into
    `main-czc`.
-7. Run release checks on `main-czc`, create the annotated `czc-*` tag on that
-   commit, push the tag, and publish the matching GitHub Release from the
-   notes file.
+7. Run release checks on `main-czc` and create the annotated `czc-*` tag on
+   the verified commit. Push `dev-czc`, `main-czc`, and the tag to `origin`,
+   then publish the matching GitHub Release from the notes file.
 8. Build the production binary **from that tag** with `-tags embed` (see
    Server Builds), including `-X main.ReleaseURL` for the origin `czc-*`
    GitHub Release. Backup `/opt/sub2api/sub2api` as
