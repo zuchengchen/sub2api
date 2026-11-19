@@ -1262,6 +1262,7 @@ func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int
 }
 
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {
+	clearQuota := captureOpenAIQuotaClear(s.runtimeBlocker, id)
 	if err := s.accountRepo.ClearError(ctx, id); err != nil {
 		return nil, err
 	}
@@ -1279,6 +1280,7 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 		return nil, err
 	}
 	AfterAccountCommit(ctx, func(context.Context) {
+		clearQuota()
 		if s.runtimeBlocker != nil {
 			s.runtimeBlocker.ClearAccountSchedulingBlock(id)
 		}
@@ -1309,9 +1311,11 @@ func (s *adminServiceImpl) SetOpenAICreditsEnabled(ctx context.Context, id int64
 	// 管理员手动确认启用点数：解除当前限流（多为额度用尽所致），账号立即恢复调度。
 	// 若上游点数也已耗尽，下一次请求的 429 会按正常路径重新限流。
 	if enabled && account.RateLimitResetAt != nil && time.Now().Before(*account.RateLimitResetAt) {
+		clearQuota := captureOpenAIQuotaClear(s.runtimeBlocker, id)
 		if err := s.accountRepo.ClearRateLimit(ctx, id); err != nil {
 			return nil, err
 		}
+		clearQuota()
 		if s.runtimeBlocker != nil {
 			s.runtimeBlocker.ClearAccountSchedulingBlock(id)
 		}

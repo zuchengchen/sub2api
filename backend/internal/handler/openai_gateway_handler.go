@@ -726,6 +726,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				return
 			}
 			if lastFailoverErr != nil {
+				logOpenAIQuotaRouting(c, lastFailoverErr, "no_eligible_account", 0, switchCount+1)
 				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
 			} else {
 				h.handleFailoverExhaustedSimple(c, 502, streamStarted)
@@ -733,6 +734,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		if selection == nil || selection.Account == nil {
+			if lastFailoverErr != nil && lastFailoverErr.Reason == service.OpenAIQuotaExhaustedReason {
+				logOpenAIQuotaRouting(c, lastFailoverErr, "no_eligible_account", 0, switchCount+1)
+				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
+				return
+			}
 			if queueReselection.exhausted(nil) {
 				h.handleOpenAIQueueFull(c, streamStarted)
 				return
@@ -832,6 +838,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
+			logOpenAIQuotaRouting(c, lastFailoverErr, "next_account", account.ID, switchCount+1)
 			return h.gatewayService.Forward(c.Request.Context(), c, account, attemptBody)
 		}()
 		var cyberBlockBodyHTTP []byte
@@ -929,6 +936,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						return
 					}
 					if !openAIForwardMayFailover(c, writerSizeBeforeForward, failoverErr) {
+						logOpenAIQuotaRouting(c, failoverErr, "response_committed", 0, switchCount+1)
 						h.gatewayService.ObserveOpenAIAccountHealthFailure(c.Request.Context(), account, err)
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
@@ -971,6 +979,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						}
 					}
 					if requestPlatform == service.PlatformOpenAI && !service.OpenAIContinuationMaySwitchAccount(body) {
+						markOpenAIQuotaBoundHistory(c, failoverErr, switchCount+1)
 						// Valid native history can forbid account migration. Retain
 						// the upstream failure instead of inventing an input error.
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
@@ -980,11 +989,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
 					if switchCount >= maxAccountSwitches {
+						logOpenAIQuotaRouting(c, failoverErr, "switch_budget_exhausted", 0, switchCount+1)
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
 					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+						logOpenAIQuotaRouting(c, failoverErr, "switch_budget_exhausted", 0, switchCount+1)
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -2911,6 +2922,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return false
 		}
 		if account.Platform == service.PlatformOpenAI && !service.OpenAIContinuationMaySwitchAccount(wsAttemptMessage) {
+			markOpenAIQuotaBoundHistory(c, failoverErr, switchCount+1)
 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
@@ -2921,11 +2933,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr
 		if switchCount >= maxAccountSwitches {
+			logOpenAIQuotaRouting(c, failoverErr, "switch_budget_exhausted", 0, switchCount+1)
 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
 		switchCount++
 		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+			logOpenAIQuotaRouting(c, failoverErr, "switch_budget_exhausted", 0, switchCount)
 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
@@ -2982,6 +2996,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if lastFailoverErr != nil {
+				logOpenAIQuotaRouting(c, lastFailoverErr, "no_eligible_account", 0, switchCount+1)
 				closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
 			} else {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
@@ -2990,6 +3005,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		if selection == nil || selection.Account == nil {
 			if lastFailoverErr != nil {
+				logOpenAIQuotaRouting(c, lastFailoverErr, "no_eligible_account", 0, switchCount+1)
 				closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
 			} else {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
@@ -3395,6 +3411,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		for {
+			logOpenAIQuotaRouting(c, lastFailoverErr, "next_account", account.ID, switchCount+1)
 			err := h.gatewayService.ProxyResponsesWebSocketFromClient(ctx, c, wsConn, account, token, wsFirstMessage, hooks)
 			if err == nil {
 				reqLog.Info("openai.websocket_ingress_closed", zap.Int64("account_id", account.ID))
@@ -3410,6 +3427,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				retryPayload, retryCurrentTurn := service.OpenAIWSCurrentTurnRetryPayload(err)
 				nextAttemptMessage, retrySafe := openAIWSNextAttemptMessage(wsAttemptMessage, retryPayload, retryCurrentTurn)
 				if !retrySafe {
+					markOpenAIQuotaBoundHistory(c, failoverErr, switchCount+1)
 					closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 					return
 				}
@@ -3713,9 +3731,39 @@ func (h *OpenAIGatewayHandler) handleConcurrencyError(c *gin.Context, err error,
 	h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, streamStarted, false)
 }
 
+const quotaBoundHistoryMessage = "This conversation is tied to an upstream account whose quota is exhausted. Start a new conversation or wait for its quota to reset."
+
+func logOpenAIQuotaRouting(c *gin.Context, f *service.UpstreamFailoverError, decision string, nextID int64, attempt int) {
+	if f == nil || f.Reason != service.OpenAIQuotaExhaustedReason {
+		return
+	}
+	requestLogger(c, "gateway.quota").Error("openai.quota_routing",
+		zap.Int64("account_id", f.QuotaAccountID), zap.Time("cooldown_until", f.QuotaResetAt),
+		zap.String("decision", decision), zap.Int64("next_account_id", nextID), zap.Int("attempt", attempt))
+}
+
+func markOpenAIQuotaBoundHistory(c *gin.Context, f *service.UpstreamFailoverError, attempt int) {
+	if f != nil && f.Reason == service.OpenAIQuotaExhaustedReason {
+		f.ClientMessage = quotaBoundHistoryMessage
+		logOpenAIQuotaRouting(c, f, "account_bound_history", 0, attempt)
+	}
+}
+
 func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
 	if failoverErr == nil {
 		h.handleFailoverExhaustedSimple(c, http.StatusBadGateway, streamStarted)
+		return
+	}
+	if failoverErr.Reason == service.OpenAIQuotaExhaustedReason {
+		message := failoverErr.ClientMessage
+		if message == "" {
+			message = "Upstream account quota exhausted. Please retry after the quota resets."
+		}
+		if !c.Writer.Written() {
+			applyFailoverRetryAfter(c, failoverErr)
+		}
+		service.SetOpsUpstreamError(c, http.StatusTooManyRequests, message, "")
+		h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", string(failoverErr.Reason), message, streamStarted, false)
 		return
 	}
 	if writeOpenAIModelUnavailableExhausted(c, failoverErr, streamStarted, false) {
@@ -3857,6 +3905,11 @@ func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError
 
 func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailoverError) {
 	if c == nil {
+		return
+	}
+	if failoverErr != nil && failoverErr.Reason == service.OpenAIQuotaExhaustedReason && !failoverErr.QuotaResetAt.IsZero() {
+		seconds := failoverErr.QuotaResetAt.Unix() - time.Now().Unix()
+		c.Header("Retry-After", strconv.FormatInt(max(1, seconds), 10))
 		return
 	}
 	if failoverErr != nil {
@@ -4261,6 +4314,12 @@ func closeOpenAIWSFailoverExhausted(c *gin.Context, conn *coderws.Conn, failover
 				intendedStatus = http.StatusTooManyRequests
 				errorType = "rate_limit_error"
 				message = "upstream rate limit exceeded, please retry later"
+				if failoverErr.Reason == service.OpenAIQuotaExhaustedReason {
+					message = "Upstream quota exhausted. Retry after " + failoverErr.QuotaResetAt.UTC().Format(time.RFC3339) + "."
+					if failoverErr.ClientMessage == quotaBoundHistoryMessage {
+						message = "Start a new conversation or retry after " + failoverErr.QuotaResetAt.UTC().Format(time.RFC3339) + "."
+					}
+				}
 				closeStatus = coderws.StatusTryAgainLater
 			case 529, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 				intendedStatus = failoverErr.StatusCode

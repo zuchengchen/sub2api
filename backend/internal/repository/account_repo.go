@@ -2377,7 +2377,9 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
 	now := time.Now()
 	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
+		Where(dbaccount.IDEQ(id), dbaccount.Or(
+			dbaccount.PlatformNEQ(service.PlatformOpenAI), dbaccount.TypeNEQ(service.AccountTypeOAuth),
+			dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLT(resetAt))).
 		SetRateLimitedAt(now).
 		SetRateLimitResetAt(resetAt).
 		Save(ctx)
@@ -2389,6 +2391,64 @@ func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetA
 	}
 	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
+}
+
+// SetOpenAIQuotaCooldown records the provider deadline and scheduling state in
+// one row update. A quota lookup may only extend the generation it observed.
+func (r *accountRepository) SetOpenAIQuotaCooldown(ctx context.Context, id int64, until time.Time, provisional bool, expected *time.Time) (bool, error) {
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+		UPDATE accounts SET rate_limit_reset_at = GREATEST(rate_limit_reset_at, $2),
+			rate_limited_at = clock_timestamp(), updated_at = NOW(),
+			extra = COALESCE(extra, '{}'::jsonb) || jsonb_build_object($3::text, GREATEST($4::bigint,
+				CASE WHEN rate_limit_reset_at > NOW() AND jsonb_typeof(extra -> $3::text) = 'number'
+					THEN (extra ->> $3::text)::numeric ELSE 0 END), $6::text, $7::boolean)
+		WHERE id = $1 AND deleted_at IS NULL AND platform = 'openai' AND type = 'oauth'
+			AND ($5::timestamptz IS NULL OR rate_limited_at = $5)
+			AND (NOT $7 OR rate_limit_reset_at IS NULL OR rate_limit_reset_at <= NOW()
+				OR COALESCE(extra -> $3::text, '0'::jsonb) <= to_jsonb(EXTRACT(EPOCH FROM NOW())::bigint))
+			AND (NOT $7 AND extra -> $6::text = 'true'::jsonb OR rate_limit_reset_at IS NULL OR rate_limit_reset_at < $2
+				OR (CASE WHEN jsonb_typeof(extra -> $3::text) = 'number' THEN extra -> $3::text ELSE '0'::jsonb END) < to_jsonb($4::bigint))
+		RETURNING id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id)
+		SELECT $8, updated.id FROM updated`,
+		id, until, service.OpenAIQuotaCooldownExtraKey, until.Unix(), expected, service.OpenAIQuotaProvisionalExtraKey, provisional, service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return n > 0, nil
+}
+
+// ClearOpenAIRateLimitIfObserved is shared by the generic recovery probe
+// and a fresh quota lookup. A simultaneous 429 or credential type change wins.
+func (r *accountRepository) ClearOpenAIRateLimitIfObserved(ctx context.Context, a *service.Account, clearOverload bool) (bool, error) {
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+		UPDATE accounts SET rate_limited_at = NULL, rate_limit_reset_at = NULL,
+			extra = extra - $5::text - $6::text, updated_at = NOW(),
+			overload_until = CASE WHEN $7 THEN NULL ELSE overload_until END
+		WHERE id = $1 AND platform = 'openai' AND type = $2 AND deleted_at IS NULL
+			AND rate_limited_at IS NOT DISTINCT FROM $3::timestamptz AND rate_limit_reset_at IS NOT DISTINCT FROM $4::timestamptz
+		RETURNING id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id)
+		SELECT $8, updated.id FROM updated`,
+		a.ID, a.Type, a.RateLimitedAt, a.RateLimitResetAt, service.OpenAIQuotaCooldownExtraKey, service.OpenAIQuotaProvisionalExtraKey, clearOverload, service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, a.ID)
+	return n > 0, nil
 }
 
 // SetRateLimitedIfLater atomically extends an account-level rate limit. Grok
@@ -2694,12 +2754,10 @@ func (r *accountRepository) ClearRateLimit(ctx context.Context, id int64) error 
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.ClearRateLimit(ctx, id)
 	}
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		ClearRateLimitedAt().
-		ClearRateLimitResetAt().
-		ClearOverloadUntil().
-		Save(ctx)
+	_, err := clientFromContext(ctx, r.client).ExecContext(ctx, `
+		UPDATE accounts SET rate_limited_at = NULL, rate_limit_reset_at = NULL, overload_until = NULL,
+			extra = extra - $2::text - $3::text, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL`, id, service.OpenAIQuotaCooldownExtraKey, service.OpenAIQuotaProvisionalExtraKey)
 	if err != nil {
 		return err
 	}

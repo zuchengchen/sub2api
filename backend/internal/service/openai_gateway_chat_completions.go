@@ -73,6 +73,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defaultMappedModel string,
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
+	if exhausted := s.quotaCooldownFailure(account); exhausted != nil {
+		return nil, exhausted
+	}
 	beginOpenAIResponsesValidation(c, body)
 	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
 	if isResponsesShape && account != nil && account.Platform == PlatformOpenAI {

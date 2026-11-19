@@ -481,6 +481,14 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 	shouldDisable bool,
 	retryableOnSameAccount bool,
 ) *UpstreamFailoverError {
+	if e, ok := openAIQuotaSignal(account, statusCode, responseBody); ok {
+		until, _ := openAIQuotaDeadline(e, classificationHeaders, time.Now())
+		if parked := s.quotaCooldownFailure(account); parked != nil {
+			until = parked.QuotaResetAt
+		}
+		return &UpstreamFailoverError{StatusCode: statusCode, ResponseBody: responseBody, ResponseHeaders: responseHeaders,
+			Reason: OpenAIQuotaExhaustedReason, Scope: GatewayFailureScopeAccount, QuotaAccountID: account.ID, QuotaResetAt: until}
+	}
 	oauth429Retry := s.shouldRetryOpenAIOAuth429OnSameAccountWithResponse(account, statusCode, shouldDisable, classificationHeaders, responseBody)
 	failoverErr := newOpenAIUpstreamFailoverError(
 		statusCode,
@@ -953,6 +961,9 @@ func (s *OpenAIGatewayService) handleErrorResponseWithPolicyChecked(
 		Detail:             upstreamDetail,
 	})
 	if shouldDisable {
+		if _, hard := openAIQuotaSignal(account, resp.StatusCode, body); hard {
+			return nil, s.newOpenAIAccountFailoverError(account, resp.StatusCode, resp.Header, body, upstreamMsg, true, false)
+		}
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
@@ -1183,6 +1194,9 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		Detail:             upstreamDetail,
 	})
 	if shouldDisable {
+		if _, hard := openAIQuotaSignal(account, resp.StatusCode, body); hard {
+			return nil, s.newOpenAIAccountFailoverError(account, resp.StatusCode, resp.Header, body, upstreamMsg, true, false)
+		}
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,

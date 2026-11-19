@@ -1580,7 +1580,7 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 	// Positive capacity/rate/access signals take priority over providers which
 	// wrap all errors in invalid_request_error, preserving their retry policy.
 	switch {
-	case strings.Contains(errType+" "+code, "rate_limit"):
+	case code == string(OpenAIQuotaExhaustedReason), errType == string(OpenAIQuotaExhaustedReason), strings.Contains(errType+" "+code, "rate_limit"):
 		return http.StatusTooManyRequests
 	case isOpenAIUpstreamAccessStateError(message, payload):
 		return http.StatusForbidden
@@ -1886,6 +1886,15 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
 		detail = truncateString(string(payload), maxBytes)
 	}
 	if c != nil {
+		if kind != "failover" && c.Request != nil {
+			if _, hard := openAIQuotaSignal(account, statusCode, payload); hard {
+				if f := s.quotaCooldownFailure(account); f != nil {
+					logger.FromContext(c.Request.Context()).Error("openai.quota_routing",
+						zap.Int64("account_id", account.ID), zap.Time("cooldown_until", f.QuotaResetAt),
+						zap.String("decision", "replay_boundary_reached"), zap.String("stage", kind))
+				}
+			}
+		}
 		setOpsUpstreamError(c, statusCode, message, detail)
 		event := OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
@@ -1978,7 +1987,7 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverErrorWithModelAndReplayBou
 		classificationHeaders = nil
 	}
 	failoverErr := s.newOpenAIAccountFailoverErrorWithClassificationHeaders(account, statusCode, headers, classificationHeaders, payload, message, shouldDisable, retryableOnSameAccount)
-	if failoverErr.IsCredentialFailure() || failoverErr.RequestScopedTransient {
+	if failoverErr.IsCredentialFailure() || failoverErr.RequestScopedTransient || failoverErr.Reason == OpenAIQuotaExhaustedReason {
 		return failoverErr
 	}
 	// Preserve the existing generic envelope for unclassified stream failures;
