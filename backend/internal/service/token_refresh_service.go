@@ -235,6 +235,9 @@ func (s *TokenRefreshService) Stop() {
 			s.runCancel()
 		}
 		close(s.stopCh)
+		if s.refreshAPI != nil {
+			s.refreshAPI.StopOpenAIAccessVerification()
+		}
 	})
 	s.wg.Wait()
 	slog.Info("token_refresh.service_stopped")
@@ -979,7 +982,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
-			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
+			errorMsg := nonRetryableTokenRefreshMessage(err)
 			var openAIError *openai.RefreshTokenError
 			if s.refreshAPI != nil && executor != nil && canRecoverOpenAIOAuth(account) && errors.As(err, &openAIError) && openAIError.Permanent {
 				return s.handleRejectedOpenAIRefresh(ctx, account, openAIError, errorMsg)
@@ -1127,6 +1130,10 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 	}
 
 	return lastErr
+}
+
+func nonRetryableTokenRefreshMessage(err error) string {
+	return "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
 }
 
 func (s *TokenRefreshService) handleRejectedOpenAIRefresh(ctx context.Context, attempted *Account, cause *openai.RefreshTokenError, errorMsg string) error {

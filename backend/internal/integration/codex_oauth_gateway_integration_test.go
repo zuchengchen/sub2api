@@ -25,6 +25,7 @@ import (
 	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -54,6 +55,8 @@ func TestCodexOAuthGatewayIntegration(t *testing.T) {
 			t.Run("auth_rejection_has_no_egress_or_charge", f.testRejection)
 			if mode == "http" {
 				t.Run("sse_complete_and_duplicate_terminal", f.testHTTPComplete)
+				t.Run("rejected_refresh_recovers_without_an_admin_test", f.testAutomaticAccessVerification)
+				t.Run("restart_recovers_a_persisted_refresh_error", f.testPersistedAccessVerification)
 				t.Run("same_account_cross_user_identity", f.testHTTPIsolation)
 				t.Run("cancel_preserves_observed_usage", f.testHTTPCancel)
 				t.Run("soft_429_retries_same_account_once_before_success", f.testHTTPSoft429)
@@ -117,6 +120,10 @@ type codexIntegrationGateway struct {
 	mode           string
 	server         *httptest.Server
 	gateway        *service.OpenAIGatewayService
+	refreshAPI     *service.OAuthRefreshAPI
+	tokens         *service.OpenAITokenProvider
+	accountRepo    service.AccountRepository
+	accountTests   *service.AccountTestService
 	workers        *service.UsageRecordWorkerPool
 	concurrency    *service.ConcurrencyService
 	slots          service.ConcurrencyCache
@@ -178,7 +185,7 @@ func newCodexIntegrationGateway(t *testing.T, store *codexIntegrationStore, upst
 	usageBilling := repository.NewUsageBillingRepository(store.ent, store.db)
 	proxyRepo := repository.NewProxyRepository(store.ent, store.db)
 	settings := service.NewSettingService(repository.NewSettingRepository(store.ent), cfg)
-	f := &codexIntegrationGateway{store: store, upstream: upstream, mode: mode, expected: make(map[int64]int)}
+	f := &codexIntegrationGateway{store: store, upstream: upstream, mode: mode, accountRepo: accounts, expected: make(map[int64]int)}
 	group := &service.Group{Name: "integration-shared-" + mode, Platform: service.PlatformOpenAI, Status: service.StatusActive, SubscriptionType: service.SubscriptionTypeStandard, RateMultiplier: 2}
 	require.NoError(t, groups.Create(ctx, group))
 	failoverGroup := &service.Group{Name: "integration-failover-" + mode, Platform: service.PlatformOpenAI, Status: service.StatusActive, SubscriptionType: service.SubscriptionTypeStandard, RateMultiplier: 2}
@@ -268,7 +275,9 @@ func newCodexIntegrationGateway(t *testing.T, store *codexIntegrationStore, upst
 	t.Cleanup(oauth.Stop)
 	tokenCache := repository.NewTokenCache(store.redis)
 	tokenProvider := service.NewOpenAITokenProvider(accounts, tokenCache, oauth)
-	tokenProvider.SetRefreshAPI(service.NewOAuthRefreshAPI(accounts, tokenCache), service.NewOpenAITokenRefresher(oauth, accounts))
+	f.tokens = tokenProvider
+	f.refreshAPI = service.NewOAuthRefreshAPI(accounts, tokenCache)
+	tokenProvider.SetRefreshAPI(f.refreshAPI, service.NewOpenAITokenRefresher(oauth, accounts))
 	snapshot := service.NewSchedulerSnapshotService(schedulerCache, repository.NewSchedulerOutboxRepository(store.db), accounts, groups, cfg)
 	snapshot.Start()
 	t.Cleanup(snapshot.Stop)
@@ -280,8 +289,12 @@ func newCodexIntegrationGateway(t *testing.T, store *codexIntegrationStore, upst
 	t.Cleanup(deferred.Stop)
 	rateLimit := service.NewRateLimitService(accounts, usage, cfg, repository.NewTempUnschedCache(store.redis))
 	rateLimit.SetSettingService(settings)
-	f.gateway = service.NewOpenAIGatewayService(accounts, usage, usageBilling, users, subs, rates, repository.NewGatewayCache(store.redis), cfg, snapshot, f.concurrency, service.NewBillingService(cfg, nil), rateLimit, billingCache, repository.NewHTTPUpstream(cfg), deferred, tokenProvider, nil, nil, nil, nil, settings, nil)
+	httpUpstream := repository.NewHTTPUpstream(cfg)
+	f.gateway = service.NewOpenAIGatewayService(accounts, usage, usageBilling, users, subs, rates, repository.NewGatewayCache(store.redis), cfg, snapshot, f.concurrency, service.NewBillingService(cfg, nil), rateLimit, billingCache, httpUpstream, deferred, tokenProvider, nil, nil, nil, nil, settings, nil)
 	t.Cleanup(func() { f.gateway.StopOpenAICodexTicketHarvester(); f.gateway.CloseOpenAIWSPool() })
+	f.accountTests = service.ProvideAccountTestService(accounts, nil, nil, httpUpstream, cfg, nil, f.gateway, settings, nil)
+	refreshWorker := service.ProvideTokenRefreshService(accounts, nil, oauth, nil, nil, schedulerCache, cfg, nil, nil, proxyRepo, f.refreshAPI, f.gateway, f.accountTests)
+	t.Cleanup(refreshWorker.Stop)
 	f.workers = service.NewUsageRecordWorkerPoolWithOptions(service.UsageRecordWorkerPoolOptions{WorkerCount: 2, QueueSize: 32, TaskTimeout: 10 * time.Second, OverflowPolicy: config.UsageRecordOverflowPolicySync})
 	t.Cleanup(f.workers.Stop)
 	h := handler.NewOpenAIGatewayHandler(f.gateway, f.concurrency, billingCache, keyService, f.workers, nil, nil, nil, cfg)
@@ -370,6 +383,62 @@ func (f *codexIntegrationGateway) testHTTPComplete(t *testing.T) {
 	f.completedHTTP(t, f.keys[0], "http-duplicate-terminal", "/backend-api/codex/responses")
 	require.Len(t, f.upstream.requestsFor("http-complete"), 1)
 	require.Len(t, f.upstream.requestsFor("http-duplicate-terminal"), 1)
+}
+
+// Only the token endpoint refusal is simulated here. The access check must
+// reach the local TLS upstream using the stored account and its configured proxy.
+type rejectedCodexIntegrationRefresh struct{ service.OpenAITokenRefresher }
+
+func (rejectedCodexIntegrationRefresh) NeedsRefresh(*service.Account, time.Duration) bool {
+	return true
+}
+
+func (rejectedCodexIntegrationRefresh) Refresh(context.Context, *service.Account) (map[string]any, error) {
+	return nil, &openai.RefreshTokenError{StatusCode: http.StatusBadRequest, Code: "invalid_grant", Permanent: true}
+}
+
+func (f *codexIntegrationGateway) testAutomaticAccessVerification(t *testing.T) {
+	ctx := context.Background()
+	account := f.accounts[0]
+	numberOfRequests := f.upstream.requestCount()
+	_, err := f.refreshAPI.RefreshIfNeeded(ctx, account, &rejectedCodexIntegrationRefresh{}, 0)
+	var rejection *openai.RefreshTokenError
+	require.ErrorAs(t, err, &rejection)
+	require.Eventually(t, func() bool {
+		token, err := f.tokens.GetAccessToken(ctx, account)
+		return err == nil && token == account.GetOpenAIAccessToken()
+	}, 12*time.Second, 10*time.Millisecond, "the verified access token must be usable without an admin test")
+	require.Equal(t, numberOfRequests+1, f.upstream.requestCount(), "one automatic text check")
+	require.Len(t, f.rows(t, f.keys[0].ID), f.expected[f.keys[0].ID], "the automatic check must not be billed to a user")
+	f.completedHTTP(t, f.keys[0], "http-after-access-verification", "/v1/responses")
+	rows := f.rows(t, f.keys[0].ID)
+	require.Equal(t, account.ID, rows[len(rows)-1].accountID)
+}
+
+func (f *codexIntegrationGateway) testPersistedAccessVerification(t *testing.T) {
+	ctx := context.Background()
+	account := f.accounts[1]
+	// Simulate a previous process that stopped after persisting the error.
+	// The new coordinator has no in-memory rejection or successful test.
+	const persistedError = "Token refresh failed (non-retryable): OpenAI OAuth credentials permanently rejected; sign in again"
+	writer := f.accountRepo.(service.OpenAIOAuthRefreshErrorRepository)
+	written, err := writer.SetOpenAIOAuthRefreshErrorIfCredentialsUnchanged(ctx, account.ID, account.Credentials, account.ProxyID, persistedError)
+	require.NoError(t, err)
+	require.True(t, written)
+	held, err := f.accountRepo.GetByID(ctx, account.ID)
+	require.NoError(t, err)
+	require.Equal(t, service.StatusError, held.Status)
+
+	before := f.upstream.requestCount()
+	restarted := service.NewOAuthRefreshAPI(f.accountRepo, repository.NewTokenCache(f.store.redis))
+	restarted.StartOpenAIAccessVerification(f.accountTests)
+	t.Cleanup(restarted.StopOpenAIAccessVerification)
+	require.Eventually(t, func() bool {
+		current, err := f.accountRepo.GetByID(ctx, account.ID)
+		return err == nil && current.IsActive() && current.Schedulable && current.ErrorMessage == ""
+	}, 12*time.Second, 10*time.Millisecond)
+	require.Equal(t, before+1, f.upstream.requestCount())
+	require.Len(t, f.rows(t, f.keys[0].ID), f.expected[f.keys[0].ID])
 }
 
 func (f *codexIntegrationGateway) testHTTPIsolation(t *testing.T) {

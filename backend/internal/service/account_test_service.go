@@ -1172,10 +1172,35 @@ func openAITestResponseAuthorization(account *Account, sent *http.Request) strin
 	if sent == nil || sent.URL == nil || sent.Method != http.MethodPost || sent.URL.String() != chatgptCodexAPIURL {
 		return ""
 	}
-	if (sent.Host != "" && !strings.EqualFold(sent.Host, sent.URL.Host)) || sent.Header.Get("chatgpt-account-id") != account.GetChatGPTAccountID() {
+	if sent.Host != "" && !strings.EqualFold(sent.Host, sent.URL.Host) {
 		return ""
 	}
-	return sent.Header.Get("Authorization")
+	workspace, ok := openAITestIdentityHeader(sent.Header, "chatgpt-account-id")
+	if !ok || workspace != account.GetChatGPTAccountID() {
+		return ""
+	}
+	authorization, ok := openAITestIdentityHeader(sent.Header, "Authorization")
+	if !ok {
+		return ""
+	}
+	return authorization
+}
+
+// A test may only attest to an unambiguous identity. Transports can preserve
+// header casing on the wire, including duplicate spellings of the same name.
+func openAITestIdentityHeader(headers http.Header, name string) (string, bool) {
+	var value string
+	found := false
+	for key, values := range headers {
+		if !strings.EqualFold(name, key) {
+			continue
+		}
+		if found || len(values) != 1 {
+			return "", false
+		}
+		value, found = values[0], true
+	}
+	return value, true
 }
 
 // testGrokAccountConnection routes Grok admin connectivity tests by explicit mode first,
@@ -2777,8 +2802,32 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 }
 
 func (s *AccountTestService) processOpenAIStreamWithCompletion(c *gin.Context, body io.Reader, beforeComplete func()) error {
+	var onDelta func(string)
+	if c.Request == nil || intelligentContext(c.Request.Context()) == nil {
+		onDelta = func(delta string) {
+			s.sendEvent(c, TestEvent{Type: "content", Text: delta})
+		}
+	}
+	text, err := readOpenAIAccountTestStream(body, onDelta)
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
+	// Publish confirmed account state before the client can receive
+	// test_complete and close the stream.
+	if beforeComplete != nil {
+		beforeComplete()
+	}
+	if text != "" {
+		s.sendEvent(c, TestEvent{Type: "content", Text: text})
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}
+
+// With a live consumer, return the suffix that hasn't already been sent.
+// Background diagnostics pass nil to read the complete, reconciled output.
+func readOpenAIAccountTestStream(body io.Reader, onDelta func(string)) (string, error) {
 	reader := bufio.NewReader(body)
-	buffered := c.Request != nil && intelligentContext(c.Request.Context()) != nil
 	var text strings.Builder
 	var completedOutput intelligentCompletedOutput
 	terminalError := func(data map[string]any, eventType string) error {
@@ -2786,7 +2835,7 @@ func (s *AccountTestService) processOpenAIStreamWithCompletion(c *gin.Context, b
 		for _, value := range []any{response["error"], data["error"]} {
 			if errData, ok := value.(map[string]any); ok {
 				if message, ok := errData["message"].(string); ok && message != "" {
-					return s.sendErrorAndEnd(c, message)
+					return errors.New(message)
 				}
 			}
 		}
@@ -2799,7 +2848,7 @@ func (s *AccountTestService) processOpenAIStreamWithCompletion(c *gin.Context, b
 				message += ": " + reason
 			}
 		}
-		return s.sendErrorAndEnd(c, message)
+		return errors.New(message)
 	}
 
 	for {
@@ -2810,7 +2859,7 @@ func (s *AccountTestService) processOpenAIStreamWithCompletion(c *gin.Context, b
 		if line != "" && sseDataPrefix.MatchString(line) {
 			jsonStr := sseDataPrefix.ReplaceAllString(line, "")
 			if jsonStr == "[DONE]" {
-				return s.sendErrorAndEnd(c, "Stream ended before response.completed")
+				return "", errors.New("Stream ended before response.completed")
 			}
 			var data map[string]any
 			if json.Unmarshal([]byte(jsonStr), &data) == nil {
@@ -2820,52 +2869,43 @@ func (s *AccountTestService) processOpenAIStreamWithCompletion(c *gin.Context, b
 				case "response.output_text.delta":
 					if delta, ok := data["delta"].(string); ok && delta != "" {
 						if len(delta) > intelligentCaptureTextLimit-text.Len() {
-							return s.sendErrorAndEnd(c, "Account test output is too large")
+							return "", errors.New("Account test output is too large")
 						}
 						_, _ = text.WriteString(delta)
-						if !buffered {
-							s.sendEvent(c, TestEvent{Type: "content", Text: delta})
+						if onDelta != nil {
+							onDelta(delta)
 						}
 					}
 				case "response.completed", "response.done":
 					if !intelligentResponsesTerminalSuccessful(data) {
-						return terminalError(data, eventType)
+						return "", terminalError(data, eventType)
 					}
 					finalText, present, truncated := completedOutput.terminalText(data)
 					if !present {
 						finalText = text.String()
 					}
 					if truncated || len(finalText) > intelligentCaptureTextLimit {
-						return s.sendErrorAndEnd(c, "Account test output is too large")
+						return "", errors.New("Account test output is too large")
 					}
-					if !buffered {
+					if onDelta != nil {
 						// Live TestEvent content is append-only. Emit only the
 						// missing suffix; a conflicting final cannot replace it.
 						if !strings.HasPrefix(finalText, text.String()) {
-							return s.sendErrorAndEnd(c, "OpenAI final output differs from the streamed text")
+							return "", errors.New("OpenAI final output differs from the streamed text")
 						}
 						finalText = finalText[text.Len():]
 					}
-					// Publish confirmed account state before the client can receive
-					// test_complete and close the stream.
-					if beforeComplete != nil {
-						beforeComplete()
-					}
-					if finalText != "" {
-						s.sendEvent(c, TestEvent{Type: "content", Text: finalText})
-					}
-					s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
-					return nil
+					return finalText, nil
 				case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
-					return terminalError(data, eventType)
+					return "", terminalError(data, eventType)
 				}
 			}
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
-				return s.sendErrorAndEnd(c, "Stream ended before response.completed")
+				return "", errors.New("Stream ended before response.completed")
 			}
-			return s.sendErrorAndEnd(c, fmt.Sprintf("Stream read error: %s", readErr.Error()))
+			return "", fmt.Errorf("Stream read error: %w", readErr)
 		}
 	}
 }
