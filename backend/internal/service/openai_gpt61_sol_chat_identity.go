@@ -7,7 +7,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -243,11 +242,12 @@ func gpt61SolChatExplicitIdentity(c *gin.Context, body []byte) (session, thread 
 	return session, thread, session != "" && thread != ""
 }
 
-// enabled is a server policy decision, never a client-controlled value.
-func stageGPT61SolChatClientSession(c *gin.Context, account *Account, body []byte, actualModel string, enabled bool) func() {
+// GPT Chat grants share the original 6.1 session/thread rules.
+// enabled is the server's decision for this upstream model and authenticated key.
+func stageGPTChatClientSession(c *gin.Context, account *Account, body []byte, actualModel string, enabled bool) func() {
 	if !enabled || c == nil || c.Request == nil || !isCodexOAuthAccount(account) ||
 		account.IsOpenAIPersonalAccessToken() || account.IsOpenAIAgentIdentity() ||
-		!openai.IsGPT61SolModelSpelling(actualModel) || !gjson.GetBytes(body, "messages").IsArray() {
+		!isCanonicalGPTChatModel(actualModel) || !gjson.GetBytes(body, "messages").IsArray() {
 		return stageCodexHTTPClientSession(c, account, body)
 	}
 	value, _ := c.Get("api_key")

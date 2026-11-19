@@ -133,6 +133,19 @@ func nativeReplayConvertedInput(t testing.TB, req NativeReasoningReplayRequest) 
 func TestNativeReasoningReplayRoundTripProductionConversion(t *testing.T) {
 	r, store, req, completion := nativeReplayFixture(t)
 	require.NoError(t, r.Commit(context.Background(), req, completion))
+	prepared, err := r.prepare(req)
+	require.NoError(t, err)
+	sourceDigest, err := NativeReasoningReplayInputDigest(completion.SourceInput)
+	require.NoError(t, err)
+	binding := nativeReasoningReplayBinding{history: prepared.nativeReasoningReplayHistory, sourceInputDigest: sourceDigest}
+	require.NoError(t, r.commit(context.Background(), req, completion, &binding))
+	// Existing Redis entries must still be addressable after an upgrade.
+	// These hashes come from this synthetic fixture on czc-v2026.11.19.2.
+	const owner = "89e9deaa3d7ca33efa828c64ebb7331e1a62757dbc5d31019e4a300226a64bd5"
+	const key = "dc45846f3b15fbb22d59e67919c108c62072fb54334299c9b525dabe05550eab"
+	require.Len(t, store.values, 1)
+	require.Contains(t, store.values, owner+key)
+	require.Equal(t, "ae3c6ce2df2fbfeb56ff5520063d50a99d34e9a22bb5315f6efd76cd9ea01b25", store.values[owner+key].Digest)
 	for _, value := range store.values {
 		require.NotContains(t, value.Ciphertext, "opaque-synthetic")
 		require.NotContains(t, value.Ciphertext, "Checking")

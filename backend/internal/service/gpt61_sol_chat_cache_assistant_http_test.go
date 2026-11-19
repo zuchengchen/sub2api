@@ -32,3 +32,22 @@ func TestGPT61SolChatCacheAssistantHTTPWithoutToolsOrOpaque(t *testing.T) {
 		})
 	}
 }
+
+func TestGPTChatLateSystemAfterAssistantHTTP(t *testing.T) {
+	h := newNativeTrafficHarness(t, "replay")
+	h.modelOverride = "gpt-6.1-sol"
+	h.outputOverrides = map[int][]json.RawMessage{1: nativeTrafficAssistantOutput(1, true), 2: nativeTrafficAssistantOutput(2, true)}
+	history := nativeTrafficInitialHistory()
+	first, err := h.call(history, true, "")
+	require.NoError(t, err)
+	history = append(nativeTrafficContinue(history, first),
+		json.RawMessage(`{"role":"system","content":"New directive for this turn."}`),
+		json.RawMessage(`{"role":"user","content":"Continue."}`))
+	_, err = h.call(history, true, "")
+	require.NoError(t, err)
+	rows, _, _, puts := h.snapshot()
+	require.Len(t, rows, 2)
+	nativeAssistantRequireNewTurnStablePrefix(t, rows[0], rows[1])
+	require.Zero(t, nativeTrafficCompareOutputBlock(rows[1].Body, rows[0].Output, true, false))
+	require.Equal(t, 2, puts)
+}

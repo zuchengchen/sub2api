@@ -108,7 +108,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if nativeChat != nil {
 		defer nativeChat.releasePublication()
 	}
-	body = s.rewriteOpenAIClientLocalTimeForRequest(c, account, body)
+	body = s.rewriteOpenAIClientLocalTimeForModel(c, account, body, nativeReplayModel)
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -119,7 +119,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
-	restoreClientSession := stageGPT61SolChatClientSession(c, account, body, nativeReplayModel, nativeReplayAuthorization.targetReplayEnabled())
+	restoreClientSession := stageGPTChatClientSession(c, account, body, nativeReplayModel, nativeReplayAuthorization.targetReplayEnabled())
 	defer restoreClientSession()
 	s.codexWireProfileForRequest(c, account, body)
 
@@ -229,8 +229,19 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	}
 
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
+	var clientChatCacheKey string
+	if !isResponsesShape && account.IsOpenAI() && supportsOpenAIChatPromptCacheKey(upstreamModel) {
+		// A client can send a session header for account affinity and a
+		// different prompt_cache_key for the reusable prefix.
+		if supplied := gjson.GetBytes(body, "prompt_cache_key"); supplied.Type == gjson.String {
+			clientChatCacheKey = strings.TrimSpace(supplied.Str)
+		}
+		if promptCacheKey == "" {
+			promptCacheKey = clientChatCacheKey
+		}
+	}
 	compatPromptCacheInjected := false
-	if promptCacheKey == "" && !isResponsesShape && (account.UsesOpenAICodexProtocol() || account.IsOpenAIApiKey()) && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
+	if promptCacheKey == "" && !isResponsesShape && (account.UsesOpenAICodexProtocol() || account.IsOpenAIApiKey()) && supportsCompatPromptCacheRouting(account, upstreamModel, getAPIKeyIDFromContext(c)) {
 		promptCacheKey = deriveCompatPromptCacheKey(&chatReq, upstreamModel)
 		compatPromptCacheInjected = promptCacheKey != ""
 		if compatPromptCacheInjected && account.IsOpenAIApiKey() {
@@ -299,6 +310,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 		}
 		responsesReq.Model = upstreamModel
+		responsesReq.PromptCacheKey = clientChatCacheKey
 		normalizeResponsesRequestServiceTier(responsesReq)
 		responsesBody, err = json.Marshal(responsesReq)
 		if err != nil {
@@ -560,10 +572,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			nativeCapture = NewNativeReasoningResponseCapture(resp.Body, nativeChat.runtime.limits)
 			resp.Body = nativeCapture
 		}
-		if nativeCapture != nil || (cacheDiagnosticAttempt != nil && upstreamModel == "gpt-6.1-sol") {
+		recordChatDelivery := cacheDiagnosticAttempt != nil && (upstreamModel == nativeReasoningReplayAllUsersModel ||
+			(!isResponsesShape && cacheDiagnosticAttempt.diagnostic.matchesAssistantModel(upstreamModel)))
+		if nativeCapture != nil || recordChatDelivery {
 			originalWriter := c.Writer
 			nativeDelivery = NewNativeReasoningChatCapture(originalWriter, clientStream, captureLimits)
-			if clientStream && nativeChat != nil && nativeChat.mode == NativeReasoningReplayModeReplay && nativeChat.request.Scope.Model == nativeReasoningReplayAllUsersModel {
+			if clientStream && nativeChat.canHandoffCompletedStream() {
 				nativeDelivery.onCompleteWrite = func() {
 					nativeChat.handoffCompletedStream(ctx, c, resp, nativeCapture)
 				}
@@ -587,8 +601,8 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			nativeChat.finish(ctx, c, resp, nativeCapture, nativeDelivery, handleErr)
 			_ = resp.Body.Close()
 		}
-		if cacheDiagnosticAttempt != nil && upstreamModel == "gpt-6.1-sol" {
-			cacheDiagnosticAttempt.chatDelivery(c, nativeDelivery, result, handleErr, nativeChat)
+		if recordChatDelivery {
+			cacheDiagnosticAttempt.chatDelivery(c, nativeDelivery, result, handleErr, nativeChat, upstreamModel)
 		}
 		stampOpenAIResponsesUpstreamEndpoint(c, result)
 

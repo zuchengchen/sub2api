@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
@@ -14,6 +15,34 @@ import (
 // v2 always shards by the first user message so parallel conversations that
 // share a system/tools prefix do not collapse onto one OAuth account.
 const compatPromptCacheKeyPrefix = "compat_cc2_"
+
+// The public prompt-cache API starts with GPT-4o. Routing related requests
+// by cache key does not authorize previous_response_id or native state replay.
+func supportsOpenAIChatPromptCacheKey(model string) bool {
+	if !isCanonicalGPTChatModel(model) {
+		return false
+	}
+	version, _, _ := strings.Cut(strings.TrimPrefix(model, "gpt-"), "-")
+	if version == "4o" || version == "4.1" || version == "4.5" {
+		return true
+	}
+	if version[0] < '0' || version[0] > '9' {
+		// The classifier requires an exact pinned catalog entry for named GPTs.
+		return true
+	}
+	major, _, _ := strings.Cut(version, ".")
+	n, err := strconv.Atoi(major)
+	return err == nil && n >= 5
+}
+
+// Older compatibility routes have a narrower contract that also controls
+// history trimming and response-ID reuse. Extend just the cache-routing hint
+// on genuine OpenAI transports. Third-party Responses servers retain their
+// previously supported wire fields.
+func supportsCompatPromptCacheRouting(account *Account, model string, apiKeyID int64) bool {
+	return shouldAutoInjectPromptCacheKeyForCompat(model) ||
+		(apiKeyID > 0 && account != nil && (account.UsesOpenAICodexProtocol() || isOfficialOpenAICodexAccount(account)) && supportsOpenAIChatPromptCacheKey(model))
+}
 
 func shouldAutoInjectPromptCacheKeyForCompat(model string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(model))
@@ -35,13 +64,14 @@ func deriveCompatPromptCacheKey(req *apicompat.ChatCompletionsRequest, mappedMod
 		return ""
 	}
 
-	normalizedModel := normalizeCodexModel(strings.TrimSpace(mappedModel))
-	if normalizedModel == "" {
-		normalizedModel = normalizeCodexModel(strings.TrimSpace(req.Model))
-	}
+	normalizedModel := strings.TrimSpace(mappedModel)
 	if normalizedModel == "" {
 		normalizedModel = strings.TrimSpace(req.Model)
 	}
+	if normalizedModel == "" {
+		return ""
+	}
+	normalizedModel = normalizeCodexModel(normalizedModel)
 
 	seedParts := make([]string, 0, 12)
 	appendCompatPromptCacheSeedPart(&seedParts, "model", normalizedModel)

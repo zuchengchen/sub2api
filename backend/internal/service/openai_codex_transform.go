@@ -328,11 +328,12 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		result.PromptCacheKey = strings.TrimSpace(v)
 	}
 
-	// ChatGPT internal Codex endpoint does not accept role:"system".
-	// Mirror its text into instructions because Codex OAuth requires it. Some
-	// callers must also keep the guidance in input as developer (notably
-	// Responses JSON object mode), while Chat Completions compatibility can
-	// omit text-only messages after promoting them losslessly.
+	// Codex accepts developer messages. Keep new GPT instructions at their
+	// original turn before promoting the leading system text. JSON object mode
+	// also retains that leading text in input for upstream validation.
+	if keepCodexLateSystemMessagesInPlace(reqBody, normalizedModel) {
+		result.Modified = true
+	}
 	if extractSystemMessagesFromInput(reqBody, opts.OmitPromotedSystemMessagesFromInput) {
 		result.Modified = true
 	}
@@ -1386,6 +1387,34 @@ func extractTextFromContent(content any) string {
 	default:
 		return ""
 	}
+}
+
+// Later system messages must retain their authority and position. Moving
+// them into top-level instructions would change the prefix of earlier turns.
+func keepCodexLateSystemMessagesInPlace(request map[string]any, model string) bool {
+	input, _ := request["input"].([]any)
+	if len(input) == 0 || !isCanonicalGPTChatModel(model) {
+		return false
+	}
+	previous, _ := request["previous_response_id"].(string)
+	leading := strings.TrimSpace(previous) == "" && request["conversation"] == nil
+	changed := false
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		role, _ := item["role"].(string)
+		kind, _ := item["type"].(string)
+		if kind == openAIAdditionalToolsItemType && role == "" {
+			continue // A leading Lite tool declaration precedes the conversation.
+		}
+		if (kind != "" && kind != "message") || (role != "system" && role != "developer") {
+			leading = false
+		}
+		if role == "system" && !leading {
+			item["role"] = "developer"
+			changed = true
+		}
+	}
+	return changed
 }
 
 // extractSystemMessagesFromInput scans input for role=="system" and mirrors

@@ -132,7 +132,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			compatPromptCacheInjected = true
 		}
 	}
-	if promptCacheKey == "" && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
+	compatReplayGuardEnabled := shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
+	if promptCacheKey == "" && supportsCompatPromptCacheRouting(account, upstreamModel, apiKeyID) {
 		promptCacheKey = promptCacheKeyFromAnthropicMetadataSession(&anthropicReq)
 		if promptCacheKey == "" {
 			promptCacheKey = deriveAnthropicCacheControlPromptCacheKey(&anthropicReq)
@@ -149,7 +150,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		compatPromptCacheInjected = promptCacheKey != ""
 	}
 	compatReplayTrimmed := false
-	compatReplayGuardEnabled := shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
 	compatContinuationEnabled := openAICompatContinuationEnabled(account, upstreamModel)
 	previousResponseID := ""
 	if compatContinuationEnabled {
@@ -380,6 +380,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// path behave more like a native Responses client.
 	if account.Type == AccountTypeAPIKey {
 		if trimmedKey := strings.TrimSpace(promptCacheKey); trimmedKey != "" {
+			if compatPromptCacheInjected && !compatReplayGuardEnabled {
+				trimmedKey = isolateOpenAISessionID(apiKeyID, trimmedKey)
+			}
 			var reqBody map[string]any
 			if err := decodeOpenAIJSONUseNumber(responsesBody, &reqBody); err != nil {
 				return nil, fmt.Errorf("unmarshal for prompt cache key injection: %w", err)

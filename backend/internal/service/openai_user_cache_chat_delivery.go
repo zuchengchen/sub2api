@@ -11,7 +11,7 @@ import (
 // independently of the upstream diagnostic reader. It does not assert that a
 // remote client read the bytes. Join its response ID and usage with the upstream
 // terminal record before treating a post-terminal read error as settled.
-func (a *userCacheDiagnosticAttempt) chatDelivery(c *gin.Context, delivery *NativeReasoningChatCapture, result *OpenAIForwardResult, forwardErr error, native *nativeReasoningChat) {
+func (a *userCacheDiagnosticAttempt) chatDelivery(c *gin.Context, delivery *NativeReasoningChatCapture, result *OpenAIForwardResult, forwardErr error, native *nativeReasoningChat, upstreamModel string) {
 	if a == nil || a.diagnostic == nil || a.attempt < 1 || a.attempt > userCacheDiagnosticMaxAttempts || c == nil || c.Request == nil {
 		return
 	}
@@ -48,7 +48,7 @@ func (a *userCacheDiagnosticAttempt) chatDelivery(c *gin.Context, delivery *Nati
 		delivery.mu.Unlock()
 		delivery.writeMu.Unlock()
 	}
-	if d.assistantComparison && assistantForComparison != nil && fields["forward_returned_success"] == true {
+	if d.matchesAssistantModel(upstreamModel) && assistantForComparison != nil && fields["forward_returned_success"] == true {
 		fields["assistant_comparison"] = d.summarizeAssistant(assistantForComparison)
 	}
 	usageID := a.usageRequestIDHash

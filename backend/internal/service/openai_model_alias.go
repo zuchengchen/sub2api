@@ -1,10 +1,28 @@
 package service
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
+
+// Match GPT text model IDs as they appear on the wire. An alias may
+// grant access only after routing resolves it to the actual upstream model.
+var gptChatModelID = regexp.MustCompile(`^gpt-[1-9][0-9]*(\.[0-9]+)*o?(-[a-z0-9]+)*$`)
+
+func isCanonicalGPTChatModel(model string) bool {
+	if len(model) > 256 || !strings.HasPrefix(model, "gpt-") || !isOfficialOpenAICodexCatalogModel(model) {
+		return false
+	}
+	if gptChatModelID.MatchString(model) {
+		return true
+	}
+	// The pinned OpenAI catalog also contains named GPT models such as
+	// Daybreak. Lookup accepts aliases, so require the actual published slug.
+	entry, ok := openai.CodexCatalogModelForSlug(model)
+	return ok && entry.Slug == model
+}
 
 func lastOpenAIModelSegment(model string) string {
 	model = strings.TrimSpace(model)

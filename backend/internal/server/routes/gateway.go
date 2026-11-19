@@ -526,6 +526,9 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 				if upstreamModel := strings.TrimSpace(decision.UpstreamModel); upstreamModel != "" && upstreamModel != model && gjson.ValidBytes(body) {
 					if _, modelPath := requestmodel.JSONModelPathForRoute(routePath, body); modelPath != "" {
 						if rewritten, rewriteErr := sjson.SetBytes(body, modelPath, upstreamModel); rewriteErr == nil {
+							if decision.Endpoint == service.CompositeRouteEndpointChatCompletions {
+								service.RememberUserCacheDiagnosticIngress(c, apiKey.UserID, body)
+							}
 							body = rewritten
 						}
 					}

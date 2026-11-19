@@ -52,6 +52,21 @@ func userCacheDiagnosticReadEvents(t *testing.T, path string) []map[string]any {
 	return events
 }
 
+func userCacheDiagnosticSingleChatAttempt(t *testing.T, path string) map[string]map[string]any {
+	t.Helper()
+	events := userCacheDiagnosticReadEvents(t, path)
+	require.Len(t, events, 4)
+	require.Equal(t, "ingress", events[0]["stage"])
+	require.Equal(t, "upstream_request", events[1]["stage"])
+	byStage := make(map[string]map[string]any, len(events))
+	for _, event := range events {
+		byStage[event["stage"].(string)] = event
+	}
+	require.Contains(t, byStage, "upstream_response")
+	require.Contains(t, byStage, "chat_delivery")
+	return byStage
+}
+
 func TestUserCacheDiagnosticAdmissionBoundaries(t *testing.T) {
 	userCacheDiagnosticTestEnv(t)
 	now := time.Now()
@@ -134,17 +149,13 @@ func TestUserCacheDiagnosticHTTPHookPreservesResponseAndRedacts(t *testing.T) {
 			for _, secret := range []string{"SYSTEM_SECRET", "PROMPT_SECRET", "TOOL_SECRET", "RESPONSE_SECRET", "REASON_ID_SECRET", "SUMMARY_SECRET", "ENCRYPTED_SECRET", "USAGE_SECRET", "REQUEST_SECRET", "SESSION_SECRET", "oauth-token", "EXPECTED_ANSWER"} {
 				require.NotContains(t, string(raw), secret)
 			}
-			events := userCacheDiagnosticReadEvents(t, path)
-			require.Len(t, events, 3)
-			require.Equal(t, "ingress", events[0]["stage"])
-			require.Equal(t, "upstream_request", events[1]["stage"])
-			require.Equal(t, "upstream_response", events[2]["stage"])
-			require.Equal(t, "response.completed", events[2]["terminal"])
-			usage := events[2]["usage"].(map[string]any)["response.usage"].(map[string]any)
+			response := userCacheDiagnosticSingleChatAttempt(t, path)["upstream_response"]
+			require.Equal(t, "response.completed", response["terminal"])
+			usage := response["usage"].(map[string]any)["response.usage"].(map[string]any)
 			require.EqualValues(t, 10000, usage["input_tokens"])
 			require.EqualValues(t, 9500, usage["input_tokens_details.cached_tokens"])
 			require.EqualValues(t, 250, usage["output_tokens_details.reasoning_tokens"])
-			item := events[2]["output_items"].(map[string]any)["0"].(map[string]any)
+			item := response["output_items"].(map[string]any)["0"].(map[string]any)
 			require.Equal(t, "reasoning", item["type"])
 			require.NotNil(t, item["encrypted_content"])
 			info, err := os.Stat(path)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -25,15 +27,23 @@ const (
 	nativeReasoningReplayAllUsersModel = "gpt-6.1-sol"
 )
 
+// These are the existing exact per-model allowlists. The optional family-wide
+// grant is evaluated separately against the final GPT Chat model.
+var modelScopedNativeReasoningReplayModels = [...]string{nativeReasoningReplayAllUsersModel, "gpt-6.2-astra", "gpt-6.2-sol"}
+
+func supportsModelScopedNativeReasoningReplay(model string) bool {
+	return slices.Contains(modelScopedNativeReasoningReplayModels[:], model)
+}
+
 // The setting is server-owned. No request body/header can enable replay or
 // choose its user scope. An empty allowlist never means every user.
-// AllUsersModels is an explicit, narrowly validated model authorization.
 type NativeReasoningReplayRuntimeConfig struct {
-	Mode           string             `json:"mode"`
-	UserIDs        []int64            `json:"user_ids"`
-	AllUsersModels []string           `json:"all_users_models,omitempty"`
-	ModelUserIDs   map[string][]int64 `json:"model_user_ids,omitempty"`
-	ExpiresAt      time.Time          `json:"expires_at,omitempty"`
+	Mode              string             `json:"mode"`
+	UserIDs           []int64            `json:"user_ids"`
+	AllUsersModels    []string           `json:"all_users_models,omitempty"`
+	AllUsersGPTModels bool               `json:"all_users_gpt_models,omitempty"`
+	ModelUserIDs      map[string][]int64 `json:"model_user_ids,omitempty"`
+	ExpiresAt         time.Time          `json:"expires_at,omitempty"`
 }
 
 type NativeReasoningReplayRuntimeReader interface {
@@ -141,13 +151,13 @@ func normalizeNativeReasoningPolicy(value NativeReasoningReplayRuntimeConfig) (N
 		}
 	}
 	value.UserIDs = unique
-	if len(value.ModelUserIDs) > 1 {
+	if len(value.ModelUserIDs) > len(modelScopedNativeReasoningReplayModels) {
 		return NativeReasoningReplayRuntimeConfig{}, errors.New("native reasoning replay model user scope exceeds limit")
 	}
 	if value.ModelUserIDs != nil {
 		modelUsers := make(map[string][]int64, len(value.ModelUserIDs))
 		for model, userIDs := range value.ModelUserIDs {
-			if model != nativeReasoningReplayAllUsersModel || len(userIDs) > 256 {
+			if !supportsModelScopedNativeReasoningReplay(model) || len(userIDs) > 256 {
 				return NativeReasoningReplayRuntimeConfig{}, errors.New("invalid native reasoning replay model user scope")
 			}
 			ids := append([]int64(nil), userIDs...)
@@ -200,6 +210,19 @@ func (s *SettingService) NativeReasoningReplayPolicy(ctx context.Context) (Nativ
 	canonical, err := nativeReplayCanonicalObject([]byte(raw))
 	if err != nil {
 		return off, errors.New("invalid native reasoning replay setting object")
+	}
+	// encoding/json matches struct fields without regard to case and accepts
+	// null for a bool. Require an unambiguous literal for the site-wide grant.
+	const familyField = "all_users_gpt_models"
+	validFamilyGrant := true
+	gjson.ParseBytes(canonical).ForEach(func(key, value gjson.Result) bool {
+		if strings.EqualFold(key.Str, familyField) {
+			validFamilyGrant = key.Str == familyField && (value.Type == gjson.True || value.Type == gjson.False)
+		}
+		return validFamilyGrant
+	})
+	if !validFamilyGrant {
+		return off, errors.New("invalid native reasoning replay GPT model scope")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(canonical))
 	decoder.DisallowUnknownFields()
@@ -307,19 +330,17 @@ func (r *nativeReasoningRuntime) modeForUserModel(ctx context.Context, userID in
 	if value.Mode == NativeReasoningReplayModeOff || (!value.ExpiresAt.IsZero() && !now.Before(value.ExpiresAt)) {
 		return NativeReasoningReplayModeOff, false
 	}
-	index := sort.Search(len(value.UserIDs), func(i int) bool { return value.UserIDs[i] >= userID })
-	if index < len(value.UserIDs) && value.UserIDs[index] == userID {
-		return value.Mode, false
-	}
-	modelUsers := value.ModelUserIDs[model]
-	modelIndex := sort.Search(len(modelUsers), func(i int) bool { return modelUsers[i] >= userID })
-	if modelIndex < len(modelUsers) && modelUsers[modelIndex] == userID {
+	if value.AllUsersGPTModels && isCanonicalGPTChatModel(model) {
 		return value.Mode, true
 	}
-	for _, allowed := range value.AllUsersModels {
-		if model == allowed {
-			return value.Mode, true
-		}
+	_, modelGrant := slices.BinarySearch(value.ModelUserIDs[model], userID)
+	if _, legacyGrant := slices.BinarySearch(value.UserIDs, userID); legacyGrant {
+		// A legacy user opts into the stricter GPT-6.2 session and model
+		// checks only when also listed for the model. Preserve GPT-6.1 precedence.
+		return value.Mode, modelGrant && model != nativeReasoningReplayAllUsersModel
+	}
+	if modelGrant || slices.Contains(value.AllUsersModels, model) {
+		return value.Mode, true
 	}
 	return NativeReasoningReplayModeOff, false
 }
