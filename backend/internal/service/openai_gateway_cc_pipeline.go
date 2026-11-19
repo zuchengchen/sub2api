@@ -16,6 +16,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -189,6 +191,58 @@ func (s *OpenAIGatewayService) resolveCCFallbackTarget(account *Account) (apiKey
 	return apiKey, targetURL, nil
 }
 
+// Responses and Messages conversion can drop client cache hints. Keep the
+// input and its already converted Chat view available until the upstream
+// endpoint is known. These hints affect only the public prompt_cache_key.
+type rawChatPromptCacheInput struct {
+	body      []byte
+	chat      *apicompat.ChatCompletionsRequest
+	anthropic *apicompat.AnthropicRequest
+}
+
+func (input rawChatPromptCacheInput) apply(c *gin.Context, account *Account, targetURL string, outbound []byte) ([]byte, error) {
+	if !account.IsOpenAIApiKey() || !isOfficialOpenAIModelsBaseURL(targetURL) {
+		return outbound, nil
+	}
+	model := parseRawJSONView(outbound).Get("model").String()
+	if !supportsOpenAIChatPromptCacheKey(model) {
+		return outbound, nil
+	}
+	var key string
+	if supplied := parseRawJSONView(input.body).Get("prompt_cache_key"); supplied.Exists() {
+		// Direct Chat already forwards the field verbatim, including values
+		// the upstream may wish to reject. Restore valid keys after conversion.
+		if input.chat == nil || supplied.Type != gjson.String || strings.TrimSpace(supplied.Str) == "" {
+			return outbound, nil
+		}
+		key = supplied.Str
+	} else {
+		keyID := getAPIKeyIDFromContext(c)
+		if keyID <= 0 {
+			return outbound, nil
+		}
+		seed := explicitOpenAIHeaderSessionID(c)
+		if seed == "" {
+			seed = promptCacheKeyFromAnthropicMetadataSession(input.anthropic)
+		}
+		if seed == "" {
+			chat := input.chat
+			if chat == nil {
+				chat = &apicompat.ChatCompletionsRequest{}
+				if err := json.Unmarshal(input.body, chat); err != nil {
+					return outbound, nil
+				}
+			}
+			seed = deriveCompatPromptCacheKey(chat, model)
+		}
+		if seed == "" {
+			return outbound, nil
+		}
+		key = isolateOpenAISessionID(keyID, seed)
+	}
+	return sjson.SetBytes(outbound, "prompt_cache_key", key)
+}
+
 // sendCCUpstreamRequest 构建并发送 CC 上游请求：分离的上游 context、OpenAI HTTP
 // profile、标准头（含流式 Accept 切换）、客户端 header 白名单透传、自定义 UA 与
 // 账号级 header 覆写，最后经代理发出。传输层失败（DNS/TCP/TLS，无 HTTP 响应）
@@ -205,7 +259,12 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	bearerToken string,
 	userAgent string,
 	grokCacheIdentity string,
+	cacheInput rawChatPromptCacheInput,
 ) (*http.Response, error) {
+	body, err := cacheInput.apply(c, account, targetURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("set Chat prompt cache key: %w", err)
+	}
 	// DeepSeek thinking mode 要求历史 assistant 回传 reasoning_content。
 	// Responses→CC 回退在加密-only / 缺 reasoning item 且缓存未命中时会漏掉该
 	// 字段，上游 400 "The `reasoning_content` in the thinking mode must be

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -195,6 +196,30 @@ func TestDeriveOpenAIContentSessionSeed_ResponsesAPI_InputArray(t *testing.T) {
 	seed := deriveOpenAIContentSessionSeed(body)
 	require.Contains(t, seed, "|system=")
 	require.Contains(t, seed, "|first_user=")
+}
+
+func TestDeriveOpenAIContentSessionSeed_ResponsesHistoryAfterFirstUser(t *testing.T) {
+	const prefix = `{"role":"developer","content":"Stable instructions"},`
+	const history = `,{"role":"assistant","content":"OK"},{"role":"developer","content":"New context"},{"role":"system","content":"For this turn only"},{"role":"user","content":"Continue"}`
+	for _, model := range []string{"gpt-4o", "gpt-5.4", "gpt-6.1-terra", "gpt-6.2-astra", "gpt-6.2-sol"} {
+		t.Run(model, func(t *testing.T) {
+			for _, anchor := range []string{
+				`{"role":"user","content":"First question"}`,
+				`{"type":"message","role":"user","content":[{"type":"input_text","text":"First question"}]}`,
+				`{"type":"input_text","text":"First question"}`,
+			} {
+				first := []byte(fmt.Sprintf(`{"model":%q,"input":[%s%s]}`, model, prefix, anchor))
+				later := []byte(fmt.Sprintf(`{"model":%q,"input":[%s%s%s]}`, model, prefix, anchor, history))
+				want := referenceDeriveOpenAIContentSessionSeed(first)
+				require.Equal(t, want, deriveOpenAIContentSessionSeed(first), "retain pre-upgrade first-turn keys")
+				require.Equal(t, want, deriveOpenAIContentSessionSeed(later), "a later instruction cannot change the first turn")
+			}
+		})
+	}
+	for _, model := range []string{"grok-4", "claude-sonnet", "gpt-oss-20b", "gpt-image-2"} {
+		body := []byte(fmt.Sprintf(`{"model":%q,"input":[%s{"role":"user","content":"First question"}%s]}`, model, prefix, history))
+		require.Equal(t, referenceDeriveOpenAIContentSessionSeed(body), deriveOpenAIContentSessionSeed(body), model)
+	}
 }
 
 func TestDeriveOpenAIContentSessionSeed_ResponsesAPI_WithInstructions(t *testing.T) {

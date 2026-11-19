@@ -31,9 +31,7 @@ func TestUserCacheDiagnosticStreamingRequestWithoutReliableContentType(t *testin
 				require.Equal(t, 100, result.Usage.InputTokens)
 				require.Equal(t, 64, result.Usage.CacheReadInputTokens)
 				require.Equal(t, contentType, upstream.resp.Header.Get("Content-Type"), "diagnostics must not rewrite the upstream headers")
-				events := userCacheDiagnosticReadEvents(t, path)
-				require.Len(t, events, 3)
-				response := events[2]
+				response := userCacheDiagnosticSingleChatAttempt(t, path)["upstream_response"]
 				require.Equal(t, "response.completed", response["terminal"])
 				require.Equal(t, false, response["partial_event"])
 				require.Equal(t, false, response["read_error"])

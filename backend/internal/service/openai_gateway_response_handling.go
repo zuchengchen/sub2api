@@ -1547,8 +1547,17 @@ func logOpenAISuccessMissingUsage(ctx context.Context, c *gin.Context, account *
 }
 
 func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
+	value, imageGen := openAIUsageSourcesFromJSONBytes(body)
+	usage, ok := openAIUsageFromGJSON(value)
+	if ok {
+		mergeHostedImageGenToolUsage(imageGen, &usage)
+	}
+	return usage, ok
+}
+
+func openAIUsageSourcesFromJSONBytes(body []byte) (gjson.Result, gjson.Result) {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
-		return OpenAIUsage{}, false
+		return gjson.Result{}, gjson.Result{}
 	}
 	// 部分 OpenAI 兼容上游（例如 Cline API）会将标准响应包在 data 字段中：
 	// {"data":{"choices": [...], "usage": {...}}, "success":true}。
@@ -1564,12 +1573,11 @@ func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 		{usagePath: "data.response.usage", imageUsagePath: "data.response.tool_usage.image_gen"},
 	}
 	for _, candidate := range candidates {
-		if usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, candidate.usagePath)); ok {
-			mergeHostedImageGenToolUsage(gjson.GetBytes(body, candidate.imageUsagePath), &usage)
-			return usage, true
+		if usage := gjson.GetBytes(body, candidate.usagePath); usage.IsObject() {
+			return usage, gjson.GetBytes(body, candidate.imageUsagePath)
 		}
 	}
-	return OpenAIUsage{}, false
+	return gjson.Result{}, gjson.Result{}
 }
 
 // openAIResponsesCompletedEventIsEmpty reports whether a response.completed /
@@ -1766,21 +1774,30 @@ func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 }
 
 func openAICacheReadTokensFromUsage(value gjson.Result) int {
+	return max(int(openAICacheReadTokenField(value).Int()), 0)
+}
+
+func openAICacheReadTokenField(value gjson.Result) gjson.Result {
 	for _, nested := range []gjson.Result{
 		value.Get("input_tokens_details.cached_tokens"),
 		value.Get("prompt_tokens_details.cached_tokens"),
 	} {
 		if nested.Exists() {
-			return max(int(nested.Int()), 0)
+			return nested
 		}
 	}
 
-	return firstPositiveGJSONInt(
-		value.Get("cache_read_input_tokens"),
-		value.Get("cache_read_tokens"),
-		value.Get("cached_tokens"),
-		value.Get("prompt_cache_hit_tokens"), // DeepSeek：prompt_tokens = hit + miss
-	)
+	var first gjson.Result
+	for _, key := range []string{"cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens"} {
+		field := value.Get(key)
+		if int(field.Int()) > 0 {
+			return field
+		}
+		if !first.Exists() {
+			first = field
+		}
+	}
+	return first
 }
 
 func openAICacheCreationTokensFromUsage(value gjson.Result) int {

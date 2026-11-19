@@ -336,7 +336,7 @@ func TestGPT61SolChatCacheResolverPriority(t *testing.T) {
 			require.Equal(t, tc.turn, resolved.evidence.ClientTurnID)
 			require.Equal(t, tc.source, resolved.sessionSource)
 			original := c.Request.Header.Clone()
-			restore := stageGPT61SolChatClientSession(c, gpt61ChatCacheAccount("credential-one"), tc.body, "gpt-6.1-sol", true)
+			restore := stageGPTChatClientSession(c, gpt61ChatCacheAccount("credential-one"), tc.body, "gpt-6.1-sol", true)
 			converted := collectCodexTurnEvidence(nil, c.Request.Header, gjson.Result{})
 			require.Equal(t, resolved.evidence.ClientSessionID, converted.ClientSessionID)
 			require.Equal(t, resolved.evidence.ClientThreadID, converted.ClientThreadID)
@@ -349,7 +349,7 @@ func TestGPT61SolChatCacheResolverPriority(t *testing.T) {
 	t.Run("mismatched_timestamp_dropped", func(t *testing.T) {
 		body := gpt61ChatCacheMeta(t, map[string]any{"session_id": "s", "turn_id": "body-turn"})
 		c := gpt61ChatCacheContext(body, headers)
-		restore := stageGPT61SolChatClientSession(c, gpt61ChatCacheAccount("credential-one"), body, "gpt-6.1-sol", true)
+		restore := stageGPTChatClientSession(c, gpt61ChatCacheAccount("credential-one"), body, "gpt-6.1-sol", true)
 		defer restore()
 		require.EqualValues(t, 0, collectCodexTurnEvidence(nil, c.Request.Header, gjson.Result{}).ClientTurnStartedAtMs)
 	})
@@ -383,7 +383,7 @@ func TestGPT61SolChatCacheInvalidIdentityAndAnonymous(t *testing.T) {
 				original := c.Request.Header.Clone()
 				_, _, valid := gpt61SolChatExplicitIdentity(c, tc.body)
 				require.False(t, valid)
-				restore := stageGPT61SolChatClientSession(c, gpt61ChatCacheAccount("credential-one"), tc.body, "gpt-6.1-sol", true)
+				restore := stageGPTChatClientSession(c, gpt61ChatCacheAccount("credential-one"), tc.body, "gpt-6.1-sol", true)
 				sessions = append(sessions, c.Request.Header.Get("session-id"))
 				require.Empty(t, c.Request.Header.Get(openAIWSTurnMetadataHeader))
 				restore()
@@ -398,7 +398,7 @@ func TestGPT61SolChatCacheInvalidIdentityAndAnonymous(t *testing.T) {
 		c := gpt61ChatCacheContext(body, nil)
 		_, _, valid := gpt61SolChatExplicitIdentity(c, body)
 		require.False(t, valid)
-		restore := stageGPT61SolChatClientSession(c, gpt61ChatCacheAccount("credential-one"), body, "gpt-6.1-sol", true)
+		restore := stageGPTChatClientSession(c, gpt61ChatCacheAccount("credential-one"), body, "gpt-6.1-sol", true)
 		defer restore()
 		require.Equal(t, "turn-only", collectCodexTurnEvidence(nil, c.Request.Header, gjson.Result{}).ClientTurnID)
 	})
@@ -408,7 +408,7 @@ func TestGPT61SolChatCacheNilHeaderRestoration(t *testing.T) {
 	body := gpt61ChatCacheMeta(t, map[string]any{"session_id": "explicit"})
 	c := gpt61ChatCacheContext(body, nil)
 	c.Request.Header = nil
-	restore := stageGPT61SolChatClientSession(c, gpt61ChatCacheAccount("credential-one"), body, "gpt-6.1-sol", true)
+	restore := stageGPTChatClientSession(c, gpt61ChatCacheAccount("credential-one"), body, "gpt-6.1-sol", true)
 	require.Equal(t, "explicit", c.Request.Header.Get("session-id"))
 	restore()
 	require.Nil(t, c.Request.Header)
@@ -439,7 +439,8 @@ func TestGPT61SolChatCacheGateBoundaries(t *testing.T) {
 		body        []byte
 	}{
 		{name: "disabled", model: "gpt-6.1-sol"},
-		{name: "other_model", model: "gpt-6-astra", enabled: true},
+		{name: "gpt_model_without_grant", model: "gpt-6-astra"},
+		{name: "non_gpt_model", model: "o3", enabled: true},
 		{name: "native_responses", model: "gpt-6.1-sol", enabled: true, body: []byte(`{"model":"gpt-6.1-sol","input":[]}`)},
 		{name: "no_key", model: "gpt-6.1-sol", enabled: true, modify: func(c *gin.Context, _ *Account) { c.Set("api_key", &APIKey{UserID: 7007}) }},
 		{name: "no_user", model: "gpt-6.1-sol", enabled: true, modify: func(c *gin.Context, _ *Account) { c.Set("api_key", &APIKey{ID: 707}) }},
@@ -465,7 +466,7 @@ func TestGPT61SolChatCacheGateBoundaries(t *testing.T) {
 			oldRestore := stageCodexHTTPClientSession(c, a, body)
 			legacy := c.Request.Header.Clone()
 			oldRestore()
-			restore := stageGPT61SolChatClientSession(c, a, body, tc.model, tc.enabled)
+			restore := stageGPTChatClientSession(c, a, body, tc.model, tc.enabled)
 			require.Equal(t, legacy, c.Request.Header, "disabled/out-of-scope path must preserve legacy staging")
 			require.NotEqual(t, "same-alias", c.Request.Header.Get("session-id"))
 			require.Empty(t, c.Request.Header.Get(openAIWSTurnMetadataHeader))

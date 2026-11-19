@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -183,10 +184,25 @@ type nativeReasoningReplayEnvelope struct {
 	ExpiresAt int64                       `json:"expires_at"`
 }
 
-type nativeReasoningReplayPrepared struct {
+const nativeReplayMaxMessages = 4096
+
+// Kept only for the current outbound attempt. The marshaled SHA-256 state lets
+// delivery append one message without retaining or reparsing the whole history.
+type nativeReasoningReplayHistory struct {
 	owner, scope, parameters string
-	messages                 []json.RawMessage
-	keys                     []string
+	chain                    []byte
+	messageCount, bytes      int
+}
+
+type nativeReasoningReplayPrepared struct {
+	nativeReasoningReplayHistory
+	messages []json.RawMessage
+	keys     []string
+}
+
+type nativeReasoningReplayBinding struct {
+	history           nativeReasoningReplayHistory
+	sourceInputDigest string
 }
 
 func (r *NativeReasoningReplay) prepare(req NativeReasoningReplayRequest) (nativeReasoningReplayPrepared, error) {
@@ -196,13 +212,12 @@ func (r *NativeReasoningReplay) prepare(req NativeReasoningReplayRequest) (nativ
 	}
 	s := req.Scope
 	if s.UserID <= 0 || s.APIKeyID <= 0 || s.SessionID == "" || s.Model == "" || s.CredentialIdentity == "" ||
-		len(s.SessionID) > 4096 || len(s.Model) > 256 || len(s.CredentialIdentity) > 4096 || len(req.Messages) == 0 || len(req.Messages) > 4096 {
+		len(s.SessionID) > 4096 || len(s.Model) > 256 || len(s.CredentialIdentity) > 4096 || len(req.Messages) == 0 || len(req.Messages) > nativeReplayMaxMessages {
 		return p, ErrNativeReasoningReplayInvalid
 	}
 	// Frame every hash field so neither concatenation nor JSON formatting can
 	// alias different identities, parameters, message boundaries, or histories.
-	scope, _ := json.Marshal(s)
-	p.scope = nativeReplayDigest(scope)
+	p.scope = nativeReplayScopeDigest(s)
 	owner, _ := json.Marshal(s.UserID)
 	p.owner = nativeReplayDigest(append([]byte("native-replay-owner/v1\x00"), owner...))
 	if len(req.Parameters) > r.limits.MaxHistoryBytes {
@@ -237,13 +252,46 @@ func (r *NativeReasoningReplay) prepare(req NativeReasoningReplayRequest) (nativ
 		nativeReplayHashField(chain, message)
 		p.keys = append(p.keys, hex.EncodeToString(chain.Sum(nil)))
 	}
+	p.chain, err = chain.(encoding.BinaryMarshaler).MarshalBinary()
+	if err != nil {
+		return p, ErrNativeReasoningReplayUnavailable
+	}
+	p.messageCount, p.bytes = len(req.Messages), total
 	return p, nil
+}
+
+func nativeReplayScopeDigest(s NativeReasoningReplayScope) string {
+	scope, _ := json.Marshal(s)
+	return nativeReplayDigest(scope)
+}
+
+func (h *nativeReasoningReplayHistory) appendAssistant(assistant json.RawMessage, maxBytes int) (string, error) {
+	if h.messageCount <= 0 || h.messageCount >= nativeReplayMaxMessages {
+		return "", ErrNativeReasoningReplayInvalid
+	}
+	// The public Commit appends an already canonical assistant to its history.
+	// Its raw and canonical byte lengths are consequently identical.
+	if len(assistant) > maxBytes-h.bytes {
+		return "", ErrNativeReasoningReplayCapacity
+	}
+	chain := sha256.New()
+	if err := chain.(encoding.BinaryUnmarshaler).UnmarshalBinary(h.chain); err != nil {
+		return "", ErrNativeReasoningReplayInvalid
+	}
+	nativeReplayHashField(chain, assistant)
+	return hex.EncodeToString(chain.Sum(nil)), nil
 }
 
 // Commit is called only after successful client delivery. It never stores
 // partial/cancelled/failed output. The exact native array stays opaque; Decrypt
 // is used only for our own application envelope, never for encrypted_content.
 func (r *NativeReasoningReplay) Commit(ctx context.Context, req NativeReasoningReplayRequest, completion NativeReasoningReplayCompletion) error {
+	return r.commit(ctx, req, completion, nil)
+}
+
+// Only the Chat adapter supplies a binding, prepared from the same request and
+// finalized against the actual outbound input before sending it.
+func (r *NativeReasoningReplay) commit(ctx context.Context, req NativeReasoningReplayRequest, completion NativeReasoningReplayCompletion, binding *nativeReasoningReplayBinding) error {
 	if !completion.DeliveredComplete || ctx.Err() != nil {
 		return ErrNativeReasoningReplayInvalid
 	}
@@ -253,12 +301,21 @@ func (r *NativeReasoningReplay) Commit(ctx context.Context, req NativeReasoningR
 	if len(completion.Response)+len(completion.DeliveredAssistant) > r.limits.MaxEntryBytes {
 		return ErrNativeReasoningReplayCapacity
 	}
-	if len(completion.SourceInput) > r.limits.MaxHistoryBytes {
-		return ErrNativeReasoningReplayCapacity
-	}
-	sourceDigest, err := NativeReasoningReplayInputDigest(completion.SourceInput)
-	if err != nil {
-		return err
+	var sourceDigest string
+	if binding == nil {
+		if len(completion.SourceInput) > r.limits.MaxHistoryBytes {
+			return ErrNativeReasoningReplayCapacity
+		}
+		var err error
+		sourceDigest, err = NativeReasoningReplayInputDigest(completion.SourceInput)
+		if err != nil {
+			return err
+		}
+	} else {
+		if binding.sourceInputDigest == "" || binding.history.scope != nativeReplayScopeDigest(req.Scope) {
+			return ErrNativeReasoningReplayInvalid
+		}
+		sourceDigest = binding.sourceInputDigest
 	}
 	assistant, err := nativeReplayCanonicalMessage(completion.DeliveredAssistant)
 	if err != nil {
@@ -268,14 +325,24 @@ func (r *NativeReasoningReplay) Commit(ctx context.Context, req NativeReasoningR
 	if err != nil {
 		return err
 	}
-	withAssistant := req
-	withAssistant.Messages = append(append([]json.RawMessage(nil), req.Messages...), assistant)
-	p, err := r.prepare(withAssistant)
-	if err != nil {
-		return err
+	var history nativeReasoningReplayHistory
+	var key string
+	if binding == nil {
+		withAssistant := req
+		withAssistant.Messages = append(append([]json.RawMessage(nil), req.Messages...), assistant)
+		p, err := r.prepare(withAssistant)
+		if err != nil {
+			return err
+		}
+		history, key = p.nativeReasoningReplayHistory, p.keys[len(p.keys)-1]
+	} else {
+		history = binding.history
+		key, err = history.appendAssistant(assistant, r.limits.MaxHistoryBytes)
+		if err != nil {
+			return err
+		}
 	}
-	key := p.keys[len(p.keys)-1]
-	record := nativeReasoningReplayRecord{Version: 1, ScopeDigest: p.scope, ParameterDigest: p.parameters,
+	record := nativeReasoningReplayRecord{Version: 1, ScopeDigest: history.scope, ParameterDigest: history.parameters,
 		HistoryDigest: key, SourceInputDigest: sourceDigest, Assistant: assistant, Output: output, ToolNameReverse: completion.ToolNameReverse}
 	rawRecord, err := json.Marshal(record)
 	if err != nil {
@@ -299,7 +366,7 @@ func (r *NativeReasoningReplay) Commit(ctx context.Context, req NativeReasoningR
 	}
 	ioCtx, cancel := context.WithTimeout(ctx, r.limits.IOTimeout)
 	defer cancel()
-	return r.store.PutNativeReasoningReplay(ioCtx, NativeReasoningReplayWrite{Owner: p.owner, Key: key,
+	return r.store.PutNativeReasoningReplay(ioCtx, NativeReasoningReplayWrite{Owner: history.owner, Key: key,
 		NativeReasoningReplayValue: NativeReasoningReplayValue{Digest: digest, Ciphertext: ciphertext}}, r.limits)
 }
 
@@ -312,7 +379,10 @@ func (r *NativeReasoningReplay) Restore(ctx context.Context, req NativeReasoning
 	if err != nil {
 		return nil, err
 	}
-	candidates := nativeReplayRestoreCandidates(p.messages, r.limits.MaxLookups)
+	return r.restorePrepared(ctx, p, nativeReplayRestoreCandidates(p.messages, r.limits.MaxLookups))
+}
+
+func (r *NativeReasoningReplay) restorePrepared(ctx context.Context, p nativeReasoningReplayPrepared, candidates []int) ([]NativeReasoningReplayReplacement, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}

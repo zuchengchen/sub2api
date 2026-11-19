@@ -8,9 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -76,6 +79,7 @@ func oauthReliabilityRunLiteChannelMappedHandler(t *testing.T, route, source, ta
 	c, recorder := newOpenAIResponsesFailoverTestContext(t, context.Background())
 	key, ok := middleware2.GetAPIKeyFromContext(c)
 	require.True(t, ok)
+	key.UserID = key.User.ID
 	key.Group.AllowMessagesDispatch = true
 	mapping := map[string]string{}
 	if target != "" {
@@ -169,6 +173,51 @@ func oauthReliabilityRunLiteChannelMappedHandler(t *testing.T, route, source, ta
 	}
 	require.Equal(t, wantIngressLite, c.GetHeader(oauthReliabilityLiteMappingHeader), "final transport compatibility must preserve the ingress capability")
 	return oauthReliabilityLiteMappingResult{context: c, recorder: recorder, upstream: upstream, usage: usage, logs: observedLogs}
+}
+
+func TestChatCacheDiagnosticChannelMappingUsesOriginalModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, target, filter string
+		wantSample, wantTail         bool
+	}{
+		{"target_filter_rejects_alias", "public-sol", "gpt-6.2-sol", "gpt-6.2-sol", false, false},
+		{"alias_filter_keeps_general_usage", "public-sol", "gpt-6.2-sol", "public-sol", true, false},
+		{"eligible_models_mapped_to_each_other", "gpt-6.2-astra", "gpt-6.2-sol", "", true, true},
+		{"matching_model", "gpt-6.2-sol", "gpt-6.2-sol", "gpt-6.2-sol", true, true},
+		{"other_gpt_mapped", "gpt-6-astra", "gpt-5.6-sol", "gpt-6-astra", true, true},
+		{"other_gpt_matching", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", true, true},
+		{"non_gpt_mapped", "claude-sonnet-4-5", "gpt-5.6-sol", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cache.jsonl")
+			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_USER_ID", "100")
+			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_PATH", path)
+			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_UNTIL", time.Now().Add(time.Minute).UTC().Format(time.RFC3339))
+			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_MAX_REQUESTS", "1")
+			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL", tc.filter)
+			r := oauthReliabilityRunLiteChannelMappedHandler(t, "chat", tc.source, tc.target, false, false, false)
+			require.Equal(t, http.StatusOK, r.recorder.Code, r.diagnostic())
+			require.Len(t, r.upstream.bodies, 1)
+			require.Equal(t, tc.target, gjson.GetBytes(r.upstream.bodies[0], "model").String())
+			raw, err := os.ReadFile(path)
+			if !tc.wantSample {
+				require.ErrorIs(t, err, os.ErrNotExist)
+				return
+			}
+			require.NoError(t, err)
+			events := map[string]gjson.Result{}
+			for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+				event := gjson.Parse(line)
+				events[event.Get("stage").String()] = event
+			}
+			require.True(t, events["ingress"].Exists())
+			require.True(t, events["upstream_response"].Exists())
+			require.Equal(t, tc.wantTail, events["ingress"].Get("assistant_tail").Exists())
+			require.Equal(t, tc.source == tc.target, events["chat_delivery"].Exists())
+			require.Equal(t, tc.source == tc.target, events["chat_delivery"].Get("assistant_comparison.available").Bool())
+			require.NotContains(t, string(raw), "retain declared tool")
+		})
+	}
 }
 
 // OAuth GPT-5.5 is already retired at account selection. A channel mapping must

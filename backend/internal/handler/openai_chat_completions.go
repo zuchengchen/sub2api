@@ -91,6 +91,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		respondOpenAIReasoningEffortPolicyError(c, err, h.errorResponse)
 		return
 	} else if changed {
+		service.RememberUserCacheDiagnosticIngress(c, apiKey.UserID, body)
 		body = cappedBody
 	}
 	reqStream, ok := parseOpenAICompatibleStream(body)
@@ -285,6 +286,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 		forwardBody := body
 		if channelMapping.Mapped {
+			service.RememberUserCacheDiagnosticIngress(c, apiKey.UserID, body)
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 		}
 		writerSizeBeforeForward := c.Writer.Size()

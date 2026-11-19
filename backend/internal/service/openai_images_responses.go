@@ -1212,12 +1212,14 @@ func openAIImagesToolUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 		return OpenAIUsage{}, false
 	}
 	imageInputTokens, _ := boundedJSONNonNegativeInt(value.Get("input_tokens_details.image_tokens"))
-	return OpenAIUsage{
+	usage := OpenAIUsage{
 		InputTokens:       inputTokens,
 		ImageInputTokens:  min(imageInputTokens, inputTokens),
 		OutputTokens:      outputTokens,
 		ImageOutputTokens: imageOutputTokens,
-	}, true
+	}
+	setOpenAIImagesCacheUsage(&usage, value, value.Get("input_tokens_details.cached_tokens"))
+	return usage, true
 }
 
 // boundedJSONNonNegativeInt parses integral JSON exponent notation without
@@ -1986,7 +1988,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	writerSizeBeforeResponse := OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 	if parsed.Stream {
 		if direct {
-			usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesStreamingResponse(resp, c, startTime, parsed)
+			usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesStreamingResponse(resp, c, startTime, parsed, upstreamModel)
 		} else {
 			usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), upstreamModel)
 		}

@@ -636,8 +636,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	defer inflightRelease()
 
-	// Generate session hash (header first; fallback to prompt_cache_key)
-	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
+	textModel := forwardModel
+	if imageIntent {
+		textModel = ""
+	}
+	sessionHash := h.gatewayService.GenerateResponsesAccountSessionHash(c, sessionHashBody, textModel)
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
 	}

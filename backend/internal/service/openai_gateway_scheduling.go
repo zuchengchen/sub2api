@@ -163,11 +163,21 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 // sticky seed with the client-requested model so switching models does not
 // inherit a stale account binding (grok2api affinityKey pattern).
 func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) string {
+	return s.GenerateResponsesAccountSessionHash(c, body, "")
+}
+
+// GenerateResponsesAccountSessionHash additionally accepts a validated Codex
+// thread for authenticated GPT text account selection. Other consumers of
+// GenerateSessionHash retain their original session scopes.
+func (s *OpenAIGatewayService) GenerateResponsesAccountSessionHash(c *gin.Context, body []byte, textModel string) string {
 	if c == nil {
 		return ""
 	}
 
 	sessionID := explicitOpenAIRequestSessionID(c, body)
+	if sessionID == "" && textModel != "" {
+		sessionID = gptAccountConversationSeed(c, body, textModel)
+	}
 	if sessionID == "" && len(body) > 0 {
 		sessionID = deriveOpenAIContentSessionSeed(body)
 	}
@@ -179,9 +189,77 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 		sessionID = grokStickyAffinitySeed(sessionID, body)
 	}
 
-	currentHash, legacyHash := deriveOpenAISessionHashes(sessionID)
+	return openAIAccountSessionHash(c, sessionID)
+}
+
+func openAIAccountSessionHash(c *gin.Context, seed string) string {
+	currentHash, legacyHash := deriveOpenAISessionHashes(seed)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
 	return currentHash
+}
+
+// Only the account scheduler consumes this seed. Client metadata is not a
+// substitute for the existing authorization and history checks on replay.
+func gptAccountConversationSeed(c *gin.Context, body []byte, model string) string {
+	if c == nil || c.Request == nil || len(body) > gpt61SolChatIdentityMaxBodyBytes || !isCanonicalGPTChatModel(model) {
+		return ""
+	}
+	key := getAPIKeyFromContext(c)
+	if key == nil || key.ID <= 0 || key.UserID <= 0 {
+		return ""
+	}
+	platform, ok := ResolvedTargetPlatformFromContext(c.Request.Context())
+	if !ok {
+		platform = PlatformFromAPIKey(key)
+	}
+	if platform != "" && platform != PlatformOpenAI {
+		return ""
+	}
+	if !hasGPTAccountConversationCarrier(c, body) {
+		return ""
+	}
+	identity := resolveGPT61SolChatIdentity(c, body)
+	if !identity.valid {
+		return ""
+	}
+	session, thread := identity.evidence.ClientSessionID, identity.evidence.ClientThreadID
+	if thread == "" {
+		// A parent or turn cannot distinguish a stable child thread. Only an
+		// explicit Codex metadata session can stand alone in this fallback.
+		if session == "" || identity.evidence.ParentThreadID != "" {
+			return ""
+		}
+		switch identity.sessionSource {
+		case "body:client_metadata", "body:turn_metadata", "header:turn_metadata":
+			thread = session
+		default:
+			return ""
+		}
+	}
+	if session == "" {
+		session = thread
+	}
+	// The strict parser excludes NUL from session and thread values.
+	return fmt.Sprintf("gpt-account-thread/v1\x00%d\x00%d\x00%s\x00%s", key.UserID, key.ID, session, thread)
+}
+
+// Borrow the input and inspect only the identity carriers. Ordinary Chat and
+// clients sending only per-turn metadata never decode the full history here.
+func hasGPTAccountConversationCarrier(c *gin.Context, body []byte) bool {
+	if c.GetHeader("thread-id") != "" {
+		return true
+	}
+	hasID := func(metadata gjson.Result) bool {
+		return metadata.Get("session_id").Str != "" || metadata.Get("thread_id").Str != ""
+	}
+	if raw := c.GetHeader(openAIWSTurnMetadataHeader); raw != "" && len(raw) <= gpt61SolChatIdentityMaxMetadataBytes && hasID(gjson.Parse(raw)) {
+		return true
+	}
+	metadata := parseRawJSONView(body).Get("client_metadata")
+	if !metadata.IsObject() || len(metadata.Raw) > gpt61SolChatIdentityMaxMetadataBytes {
+		return false
+	}
+	return hasID(metadata) || hasID(gjson.Parse(metadata.Get(openAIWSTurnMetadataHeader).Str))
 }
 
 // GenerateChatCompletionsSessionHash keeps one Chat Completions conversation on
@@ -205,13 +283,14 @@ func (s *OpenAIGatewayService) GenerateChatCompletionsSessionHash(c *gin.Context
 	if model == "" {
 		model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	}
-	if shouldAutoInjectPromptCacheKeyForCompat(model) {
+	if seed := gptAccountConversationSeed(c, body, model); seed != "" {
+		return openAIAccountSessionHash(c, seed)
+	}
+	if shouldAutoInjectPromptCacheKeyForCompat(model) || supportsOpenAIChatPromptCacheKey(model) {
 		var request apicompat.ChatCompletionsRequest
 		if err := json.Unmarshal(body, &request); err == nil {
 			if seed := deriveCompatPromptCacheKey(&request, model); seed != "" {
-				currentHash, legacyHash := deriveOpenAISessionHashes(seed)
-				attachOpenAILegacySessionHashToGin(c, legacyHash)
-				return currentHash
+				return openAIAccountSessionHash(c, seed)
 			}
 		}
 	}

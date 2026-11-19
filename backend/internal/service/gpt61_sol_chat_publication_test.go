@@ -52,8 +52,7 @@ func TestGPT61SolChatCachePublicationCompletionWriteBoundary(t *testing.T) {
 					_, admitted := producer.preparePublication(ctx)
 					require.True(t, admitted)
 					lease := producer.publication
-					producer.sourceInput, producer.toolReverse = completion.SourceInput, completion.ToolNameReverse
-					producer.principal = nativeReasoningTokenPrincipal("synthetic-token")
+					bindPublicationFixture(t, producer, completion)
 					wire := append(append([]byte("data: "), nativeCaptureJSON(map[string]any{"type": "response.completed", "response": completion.Response})...), '\n', '\n')
 					if fault == "incomplete_native" {
 						wire = []byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_synthetic\"}}\n\n")
