@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -254,27 +255,32 @@ func TestOpenAIAccessProbeWorkerRecoversOnlyItsRefreshErrorAfterCooldown(t *test
 		stored := store.accounts[a.ID]
 		stored.Status, stored.ErrorMessage = StatusError, nonRetryableTokenRefreshMessage(denial)
 		stored.RateLimitResetAt = &reset
-		calls := 0
+		var calls atomic.Int32
 		api.startOpenAIAccessVerification(func(ctx context.Context, got *Account) openAIAccessProbeResult {
-			calls++
+			calls.Add(1)
 			return verifiedOpenAIAccessProbe(ctx, got)
 		})
 		defer api.StopOpenAIAccessVerification()
 		synctest.Wait()
-		require.Zero(t, calls, "a new rejection cannot override an existing cooldown")
+		require.Zero(t, calls.Load(), "a new rejection cannot override an existing cooldown")
 		time.Sleep(time.Minute)
 		synctest.Wait()
-		require.Equal(t, 1, calls)
-		require.Equal(t, 1, store.clearCalls)
-		require.Equal(t, StatusError, stored.Status)
-		require.False(t, api.openAIRejectionForAccount(a).accessVerifiedAt(a, time.Now()))
+		require.EqualValues(t, 1, calls.Load())
+		store.mu.Lock()
+		attempts, status := store.clearCalls, stored.Status
 		store.clearFailure = nil
+		store.mu.Unlock()
+		require.Equal(t, 1, attempts)
+		require.Equal(t, StatusError, status)
+		require.False(t, api.openAIRejectionForAccount(a).accessVerifiedAt(a, time.Now()))
 		time.Sleep(openAIAccessProbeBackoff[0])
 		synctest.Wait()
-		require.Equal(t, 2, calls)
-		require.Equal(t, StatusActive, stored.Status)
-		require.Empty(t, stored.ErrorMessage)
-		require.Equal(t, &reset, stored.RateLimitResetAt)
+		require.EqualValues(t, 2, calls.Load())
+		recovered, err := store.GetByID(context.Background(), a.ID)
+		require.NoError(t, err)
+		require.Equal(t, StatusActive, recovered.Status)
+		require.Empty(t, recovered.ErrorMessage)
+		require.Equal(t, &reset, recovered.RateLimitResetAt)
 		require.True(t, api.openAIRejectionForAccount(a).autoVerified)
 		require.Same(t, denial, api.openAIRefreshFailure(a))
 	})
