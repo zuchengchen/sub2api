@@ -196,10 +196,11 @@ type CheckMixedChannelRequest struct {
 // AccountWithConcurrency extends Account with real-time concurrency info
 type AccountWithConcurrency struct {
 	*dto.Account
-	simpleMode         bool                         `json:"-"`
-	CurrentConcurrency int                          `json:"current_concurrency"`
-	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
-	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
+	simpleMode                    bool                         `json:"-"`
+	CurrentConcurrency            int                          `json:"current_concurrency"`
+	SchedulerScore                *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
+	SchedulerScores               []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
+	OpenAIAccessAutoVerifiedUntil *time.Time                   `json:"openai_access_auto_verified_until,omitempty"`
 	// 以下字段仅对 Anthropic OAuth/SetupToken 账号有效，且仅在启用相应功能时返回
 	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"` // 当前窗口费用
 	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
@@ -963,6 +964,9 @@ func (h *AccountHandler) GetByID(c *gin.Context) {
 	}
 
 	result := h.buildAccountResponseWithRuntime(c.Request.Context(), account)
+	if h.accountTestService != nil {
+		result.OpenAIAccessAutoVerifiedUntil = h.accountTestService.OpenAIAccessAutoVerifiedUntil(account)
+	}
 	if h.accountTestService != nil && account != nil && account.IsGrok() {
 		result.GrokModelDiagnostics = h.accountTestService.GetGrokModelDiagnostics(c.Request.Context(), account)
 	}

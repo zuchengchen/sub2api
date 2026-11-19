@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -142,6 +143,7 @@ type OAuthRefreshAPI struct {
 	lockTTL        time.Duration
 	localLocks     sync.Map // key: cacheKey string -> value: *contextMutex
 	openAIFailures sync.Map // account ID -> credential-scoped OpenAI rejection
+	accessVerifier atomic.Pointer[openAIAccessVerifier]
 }
 
 // NewOAuthRefreshAPI 创建统一刷新 API

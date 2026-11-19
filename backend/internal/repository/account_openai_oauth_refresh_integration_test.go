@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -93,6 +94,99 @@ func (s *AccountRepoSuite) TestOpenAIOAuthRefreshErrorCAS_PreservesSchedulingAnd
 			s.Require().NoError(err)
 			s.Require().Equal(service.StatusActive, latest.Status)
 			s.Require().Equal(mode == "enabled", latest.IsSchedulable())
+		})
+	}
+}
+
+func (s *AccountRepoSuite) TestOpenAIAccessProbeStartupPagesOnlyRecoverableErrors() {
+	const message = "Token refresh failed (non-retryable): OpenAI OAuth credentials permanently rejected; sign in again"
+	add := func(name string, mutate func(*dbent.AccountCreate)) int64 {
+		create := s.client.Account.Create().SetName(name).SetPlatform(service.PlatformOpenAI).
+			SetType(service.AccountTypeOAuth).SetStatus(service.StatusError).
+			SetSchedulable(true).SetErrorMessage(message)
+		if mutate != nil {
+			mutate(create)
+		}
+		row, err := create.Save(s.ctx)
+		s.Require().NoError(err)
+		return row.ID
+	}
+
+	cursor := add("before-cursor", nil)
+	first := add("first-matching", nil)
+	add("manual-stop", func(b *dbent.AccountCreate) { b.SetSchedulable(false) })
+	add("other-failure", func(b *dbent.AccountCreate) { b.SetErrorMessage("operator isolation") })
+	add("active", func(b *dbent.AccountCreate) { b.SetStatus(service.StatusActive) })
+	add("other-platform", func(b *dbent.AccountCreate) { b.SetPlatform(service.PlatformAnthropic) })
+	add("api-key", func(b *dbent.AccountCreate) { b.SetType(service.AccountTypeAPIKey) })
+	add("deleted", func(b *dbent.AccountCreate) { b.SetDeletedAt(time.Now()) })
+	second := add("second-matching", nil)
+	for _, expected := range []int64{first, second} {
+		page, err := s.repo.ListOpenAIOAuthRefreshErrors(s.ctx, cursor, 1, message)
+		s.Require().NoError(err)
+		s.Require().Len(page, 1)
+		s.Require().Equal(expected, page[0].ID)
+		cursor = page[0].ID
+	}
+	page, err := s.repo.ListOpenAIOAuthRefreshErrors(s.ctx, cursor, 1, message)
+	s.Require().NoError(err)
+	s.Require().Empty(page)
+}
+
+func (s *AccountRepoSuite) TestOpenAIAccessProbeCAS_RecoversOnlyMatchingRefreshError() {
+	const refreshMessage = "Token refresh failed (non-retryable): OpenAI OAuth credentials permanently rejected; sign in again"
+	for _, mode := range []string{"matching", "new_credentials", "new_proxy", "new_error", "manually_stopped", "already_active"} {
+		s.Run(mode, func() {
+			account := mustCreateAccount(s.T(), s.client, &service.Account{
+				Name: "openai-access-probe-" + mode, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "observed", "refresh_token": "observed-refresh"},
+				Status:      service.StatusError, ErrorMessage: refreshMessage, Schedulable: true,
+			})
+			observed, err := s.repo.GetByID(s.ctx, account.ID)
+			s.Require().NoError(err)
+			// Persist a separate cooldown that a credential check cannot clear.
+			_, err = s.repo.sql.ExecContext(s.ctx, "UPDATE accounts SET rate_limit_reset_at = now() + interval '1 hour' WHERE id = $1", account.ID)
+			s.Require().NoError(err)
+			switch mode {
+			case "new_credentials":
+				s.Require().NoError(s.repo.UpdateCredentials(s.ctx, account.ID, map[string]any{"access_token": "rotated", "refresh_token": "new-refresh"}))
+			case "new_proxy":
+				proxy, proxyErr := s.client.Proxy.Create().SetName("openai-access-probe-proxy").SetProtocol("http").SetHost("127.0.0.1").SetPort(12345).SetStatus(service.StatusActive).Save(s.ctx)
+				s.Require().NoError(proxyErr)
+				_, err = s.repo.sql.ExecContext(s.ctx, "UPDATE accounts SET proxy_id = $1 WHERE id = $2", proxy.ID, account.ID)
+				s.Require().NoError(err)
+			case "new_error":
+				_, err = s.repo.sql.ExecContext(s.ctx, "UPDATE accounts SET error_message = 'operator isolation' WHERE id = $1", account.ID)
+				s.Require().NoError(err)
+			case "manually_stopped":
+				s.Require().NoError(s.repo.SetSchedulable(s.ctx, account.ID, false))
+			case "already_active":
+				s.Require().NoError(s.repo.ClearError(s.ctx, account.ID))
+			}
+			before, err := s.repo.GetByID(s.ctx, account.ID)
+			s.Require().NoError(err)
+			_, err = s.repo.sql.ExecContext(s.ctx, "DELETE FROM scheduler_outbox WHERE account_id = $1", account.ID)
+			s.Require().NoError(err)
+			applied, err := s.repo.ClearOpenAIOAuthRefreshErrorIfCredentialsUnchanged(s.ctx, account.ID, observed.Credentials, observed.ProxyID, refreshMessage)
+			s.Require().NoError(err)
+			s.Require().Equal(mode == "matching", applied)
+			after, err := s.repo.GetByID(s.ctx, account.ID)
+			s.Require().NoError(err)
+			s.Require().Equal(before.Schedulable, after.Schedulable)
+			s.Require().Equal(before.Credentials, after.Credentials)
+			s.Require().Equal(before.RateLimitResetAt, after.RateLimitResetAt)
+			var events int
+			err = scanSingleRow(s.ctx, s.repo.sql, "SELECT COUNT(*) FROM scheduler_outbox WHERE event_type = $1 AND account_id = $2", []any{service.SchedulerOutboxEventAccountChanged, account.ID}, &events)
+			s.Require().NoError(err)
+			if applied {
+				s.Require().Equal(service.StatusActive, after.Status)
+				s.Require().Empty(after.ErrorMessage)
+				s.Require().Equal(1, events)
+			} else {
+				s.Require().Equal(before.Status, after.Status)
+				s.Require().Equal(before.ErrorMessage, after.ErrorMessage)
+				s.Require().Zero(events)
+			}
 		})
 	}
 }
