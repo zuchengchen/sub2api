@@ -50,9 +50,11 @@ func TestOpenAITextAccountAffinitySurvivesReplacedHistory(t *testing.T) {
 		{"/v1/chat/completions", "messages", (*OpenAIGatewayHandler).ChatCompletions},
 	} {
 		t.Run(endpoint.items, func(t *testing.T) {
-			scheduler := &openAIQueueSchedulerCache{available: func(id int64) bool { return id == 2 }}
-			h, upstream, _ := newOpenAIQueueHandlerWithScheduler(t, 2, &openAIQueueAdmissionCache{}, scheduler, time.Second, testutil.NewRedisGatewayCache(t))
-			forward := func(userID int64, question, metadata, thread string) {
+			bindings := testutil.NewRedisGatewayCache(t)
+			scheduler := &openAIQueueSchedulerCache{available: func(int64) bool { return true }}
+			h, upstream, _ := newOpenAIQueueHandlerWithScheduler(t, 2, &openAIQueueAdmissionCache{}, scheduler, time.Second, bindings)
+			var originalHash string
+			forward := func(userID int64, question, metadata, thread string, expectedAccount int64) {
 				t.Helper()
 				body := fmt.Sprintf(`{"model":"gpt-5.1",%s%q:[{"role":"user","content":%q}]}`, metadata, endpoint.items, question)
 				c, rec := openAIQueueRequestContext(t, endpoint.path, body)
@@ -63,13 +65,38 @@ func TestOpenAITextAccountAffinitySurvivesReplacedHistory(t *testing.T) {
 				if thread != "" {
 					c.Request.Header.Set("thread-id", thread)
 				}
+				var hash string
+				if endpoint.items == "input" {
+					hash = h.gatewayService.GenerateResponsesAccountSessionHash(c, []byte(body), "gpt-5.1")
+				} else {
+					hash = h.gatewayService.GenerateChatCompletionsSessionHash(c, []byte(body), "gpt-5.1")
+				}
+				require.NotEmpty(t, hash)
+				ctx := c.Request.Context()
+				// Keep the load snapshot constant. Only the first user's existing
+				// binding can select the lower-priority account.
+				if originalHash == "" {
+					originalHash = hash
+					require.NoError(t, h.gatewayService.BindStickySession(ctx, key.GroupID, hash, expectedAccount))
+				}
+				bound, err := bindings.GetSessionAccountID(ctx, *key.GroupID, "openai:"+hash)
+				if userID == 100 {
+					require.Equal(t, originalHash, hash)
+					require.NoError(t, err)
+					require.Equal(t, expectedAccount, bound)
+				} else {
+					require.NotEqual(t, originalHash, hash)
+					require.ErrorIs(t, err, service.ErrStickySessionNotFound)
+				}
 				endpoint.run(h, c)
 				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				bound, err = bindings.GetSessionAccountID(ctx, *key.GroupID, "openai:"+hash)
+				require.NoError(t, err)
+				require.Equal(t, expectedAccount, bound)
 			}
-			forward(100, "Original first turn", `"client_metadata":{"session_id":"thread-a"},`, "")
-			scheduler.available = func(int64) bool { return true }
-			forward(100, "Summary after compaction", "", "thread-a")
-			forward(101, "Summary after compaction", "", "thread-a")
+			forward(100, "Original first turn", `"client_metadata":{"session_id":"thread-a"},`, "", 2)
+			forward(100, "Summary after compaction", "", "thread-a", 2)
+			forward(101, "Summary after compaction", "", "thread-a", 1)
 			require.Equal(t, []int64{2, 2, 1}, upstream.accountIDs)
 		})
 	}
