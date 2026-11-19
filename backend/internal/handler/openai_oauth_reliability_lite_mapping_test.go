@@ -176,15 +176,17 @@ func oauthReliabilityRunLiteChannelMappedHandler(t *testing.T, route, source, ta
 }
 
 func TestChatCacheDiagnosticChannelMappingUsesOriginalModel(t *testing.T) {
-	const target = "gpt-6.2-sol"
 	for _, tc := range []struct {
-		name, source, filter string
-		wantSample, wantTail bool
+		name, source, target, filter string
+		wantSample, wantTail         bool
 	}{
-		{"target_filter_rejects_alias", "public-sol", target, false, false},
-		{"alias_filter_keeps_general_usage", "public-sol", "public-sol", true, false},
-		{"eligible_models_mapped_to_each_other", "gpt-6.2-astra", "", true, true},
-		{"matching_model", target, target, true, true},
+		{"target_filter_rejects_alias", "public-sol", "gpt-6.2-sol", "gpt-6.2-sol", false, false},
+		{"alias_filter_keeps_general_usage", "public-sol", "gpt-6.2-sol", "public-sol", true, false},
+		{"eligible_models_mapped_to_each_other", "gpt-6.2-astra", "gpt-6.2-sol", "", true, true},
+		{"matching_model", "gpt-6.2-sol", "gpt-6.2-sol", "gpt-6.2-sol", true, true},
+		{"other_gpt_mapped", "gpt-6-astra", "gpt-5.6-sol", "gpt-6-astra", true, true},
+		{"other_gpt_matching", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", true, true},
+		{"non_gpt_mapped", "claude-sonnet-4-5", "gpt-5.6-sol", "", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "cache.jsonl")
@@ -193,10 +195,10 @@ func TestChatCacheDiagnosticChannelMappingUsesOriginalModel(t *testing.T) {
 			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_UNTIL", time.Now().Add(time.Minute).UTC().Format(time.RFC3339))
 			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_MAX_REQUESTS", "1")
 			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL", tc.filter)
-			r := oauthReliabilityRunLiteChannelMappedHandler(t, "chat", tc.source, target, false, false, false)
+			r := oauthReliabilityRunLiteChannelMappedHandler(t, "chat", tc.source, tc.target, false, false, false)
 			require.Equal(t, http.StatusOK, r.recorder.Code, r.diagnostic())
 			require.Len(t, r.upstream.bodies, 1)
-			require.Equal(t, target, gjson.GetBytes(r.upstream.bodies[0], "model").String())
+			require.Equal(t, tc.target, gjson.GetBytes(r.upstream.bodies[0], "model").String())
 			raw, err := os.ReadFile(path)
 			if !tc.wantSample {
 				require.ErrorIs(t, err, os.ErrNotExist)
@@ -211,7 +213,8 @@ func TestChatCacheDiagnosticChannelMappingUsesOriginalModel(t *testing.T) {
 			require.True(t, events["ingress"].Exists())
 			require.True(t, events["upstream_response"].Exists())
 			require.Equal(t, tc.wantTail, events["ingress"].Get("assistant_tail").Exists())
-			require.Equal(t, tc.source == target, events["chat_delivery"].Exists())
+			require.Equal(t, tc.source == tc.target, events["chat_delivery"].Exists())
+			require.Equal(t, tc.source == tc.target, events["chat_delivery"].Get("assistant_comparison.available").Bool())
 			require.NotContains(t, string(raw), "retain declared tool")
 		})
 	}

@@ -26,11 +26,18 @@ func TestGPT62ChatCacheDeliveryDiagnosticHTTP(t *testing.T) {
 	}
 }
 
+func TestGPTFamilyChatCacheDeliveryDiagnosticHTTP(t *testing.T) {
+	for _, model := range []string{"gpt-5.4-mini", "gpt-6.1-terra"} {
+		t.Run(model, func(t *testing.T) { testChatCacheDeliveryDiagnosticHTTP(t, model) })
+	}
+}
+
 func testChatCacheDeliveryDiagnosticHTTP(t *testing.T, model string) {
 	t.Helper()
 	for _, stream := range []bool{false, true} {
 		t.Run(strconvBoolForUserCacheTest(stream), func(t *testing.T) {
 			path := userCacheDiagnosticTestEnv(t)
+			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL", model)
 			terminal := fmt.Sprintf(`{"type":"response.completed","response":{"id":"PRIVATE_RESPONSE","model":%q,"status":"completed","output":[{"id":"PRIVATE_MESSAGE","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"PRIVATE_ANSWER"}]}],"usage":{"input_tokens":10000,"input_tokens_details":{"cached_tokens":9500},"output_tokens":30,"total_tokens":10030}}}`, model)
 			wire := "data: " + fmt.Sprintf(`{"type":"response.created","response":{"id":"PRIVATE_RESPONSE","model":%q,"status":"in_progress"}}`, model) + "\n\n" +
 				"data: " + `{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"PRIVATE_ANSWER"}` + "\n\n" +
@@ -66,22 +73,8 @@ func testChatCacheDeliveryDiagnosticHTTP(t *testing.T, model string) {
 				require.Equal(t, "PRIVATE_RESPONSE", gjson.GetBytes(raw, "id").String())
 				require.Equal(t, "stop", gjson.GetBytes(raw, "choices.0.finish_reason").String())
 			}
-			events := userCacheDiagnosticReadEvents(t, path)
-			require.Len(t, events, 4)
-			var ingress, delivery, upstreamEvent map[string]any
-			for _, event := range events {
-				switch event["stage"] {
-				case "ingress":
-					ingress = event
-				case "chat_delivery":
-					delivery = event
-				case "upstream_response":
-					upstreamEvent = event
-				}
-			}
-			require.NotNil(t, delivery)
-			require.NotNil(t, ingress)
-			require.NotNil(t, upstreamEvent)
+			events := userCacheDiagnosticSingleChatAttempt(t, path)
+			ingress, delivery, upstreamEvent := events["ingress"], events["chat_delivery"], events["upstream_response"]
 			require.Equal(t, true, delivery["forward_returned_success"])
 			require.Equal(t, true, delivery["downstream_delivered_complete"])
 			require.Equal(t, upstreamEvent["response_id_sha256"], delivery["consumer_response_id_sha256"])

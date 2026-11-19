@@ -20,7 +20,8 @@ const contentStablePrefixSessionSeedPrefix = "compat_csp_"
 // OpenAI-format request body. Only fields constant across conversation turns
 // are included: model, tools/functions definitions, the leading system/developer
 // prompt prefix in Chat messages, instructions (Responses API), and the first
-// user message.
+// user message. GPT Responses requests share the first turn's binding even
+// when later turns append developer or system messages.
 // Supports both Chat Completions (messages) and Responses API (input).
 func deriveOpenAIContentSessionSeed(body []byte) string {
 	if len(body) == 0 {
@@ -148,6 +149,7 @@ scanRoot:
 			_, _ = b.WriteString("|input=")
 			_, _ = b.WriteString(inp.String())
 		} else if inp.IsArray() {
+			stopAfterFirstUser := isCanonicalGPTChatModel(canonicalizeOpenAIModelAliasSpelling(fields[modelField].String()))
 			inp.ForEach(func(_, item gjson.Result) bool {
 				role := item.Get("role").String()
 				switch role {
@@ -172,7 +174,9 @@ scanRoot:
 					}
 					firstUserCaptured = true
 				}
-				return true
+				// Keep the original first-turn seed bytes for existing sticky
+				// bindings. Later instructions are part of the appended history.
+				return !stopAfterFirstUser || !firstUserCaptured
 			})
 		}
 	}

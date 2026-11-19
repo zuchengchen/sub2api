@@ -310,6 +310,7 @@ func TestGPT61SolChatCacheModelScopeHTTPPolicyAndMapping(t *testing.T) {
 	}
 	ordinary := gpt61ScopeHTTPClient{101, 501, "synthetic-session", "WorkBuddy/1.0", ""}
 	target := service.NativeReasoningReplayRuntimeConfig{Mode: "replay", UserIDs: []int64{428}, AllUsersModels: []string{"gpt-6.1-sol"}}
+	family := service.NativeReasoningReplayRuntimeConfig{Mode: "replay", AllUsersGPTModels: true}
 	legacy := service.NativeReasoningReplayRuntimeConfig{Mode: "replay", UserIDs: []int64{428}}
 	expired := target
 	expired.ExpiresAt = time.Now().Add(-time.Minute)
@@ -329,6 +330,16 @@ func TestGPT61SolChatCacheModelScopeHTTPPolicyAndMapping(t *testing.T) {
 	invalid := target
 	invalid.AllUsersModels = []string{"*"}
 	cases := []scenario{
+		{name: "family_56_luna", requested: "gpt-5.6-luna", actual: "gpt-5.6-luna", policy: family, who: ordinary, replay: true, save: true},
+		{name: "family_61_terra", requested: "gpt-6.1-terra", actual: "gpt-6.1-terra", policy: family, who: ordinary, replay: true, save: true},
+		{name: "family_named_catalog_model", requested: "gpt-daybreak-blue-latest", actual: "gpt-daybreak-blue-latest", policy: family, who: ordinary, replay: true, save: true},
+		{name: "family_61_sol", requested: "gpt-6.1-sol", actual: "gpt-6.1-sol", policy: family, who: ordinary, replay: true, save: true},
+		{name: "family_62_sol", requested: "gpt-6.2-sol", actual: "gpt-6.2-sol", policy: family, who: ordinary, replay: true, save: true},
+		{name: "family_62_astra", requested: "gpt-6.2-astra", actual: "gpt-6.2-astra", policy: family, who: ordinary, replay: true, save: true},
+		{name: "family_normalized_alias", requested: "gpt-6", actual: "gpt-6-astra", policy: family, who: ordinary, replay: true, save: true},
+		{name: "family_dispatch_into_gpt", requested: "customer-model", actual: "gpt-5.6-sol", defaultModel: "gpt-5.6-sol", policy: family, who: ordinary, replay: true, save: true},
+		{name: "family_dispatch_out_of_gpt", requested: "gpt-6-astra", actual: "o3", defaultModel: "o3", policy: family, who: ordinary},
+		{name: "family_other_openai_model", requested: "o3", actual: "o3", policy: family, who: ordinary},
 		{name: "gpt62_dispatch_into_granted_model", requested: "customer-model", actual: "gpt-6.2-astra", defaultModel: "gpt-6.2-astra", policy: astraCanary, who: ordinary, replay: true, save: true},
 		{name: "gpt62_dispatch_to_ungranted_model", requested: "gpt-6.2-astra", actual: "gpt-6.2-sol", defaultModel: "gpt-6.2-sol", policy: astraCanary, who: ordinary},
 		{name: "canary_target", requested: "gpt-6.1-sol", actual: "gpt-6.1-sol", policy: canary, who: ordinary, replay: true, save: true},

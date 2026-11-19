@@ -242,12 +242,12 @@ func gpt61SolChatExplicitIdentity(c *gin.Context, body []byte) (session, thread 
 	return session, thread, session != "" && thread != ""
 }
 
-// The model-scoped Chat bridges share the original 6.1 session/thread rules.
+// GPT Chat grants share the original 6.1 session/thread rules.
 // enabled is the server's decision for this upstream model and authenticated key.
-func stageGPT61SolChatClientSession(c *gin.Context, account *Account, body []byte, actualModel string, enabled bool) func() {
+func stageGPTChatClientSession(c *gin.Context, account *Account, body []byte, actualModel string, enabled bool) func() {
 	if !enabled || c == nil || c.Request == nil || !isCodexOAuthAccount(account) ||
 		account.IsOpenAIPersonalAccessToken() || account.IsOpenAIAgentIdentity() ||
-		!supportsModelScopedNativeReasoningReplay(actualModel) || !gjson.GetBytes(body, "messages").IsArray() {
+		!isCanonicalGPTChatModel(actualModel) || !gjson.GetBytes(body, "messages").IsArray() {
 		return stageCodexHTTPClientSession(c, account, body)
 	}
 	value, _ := c.Get("api_key")

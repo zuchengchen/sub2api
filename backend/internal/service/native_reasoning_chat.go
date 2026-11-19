@@ -111,7 +111,7 @@ type nativeReasoningChatAuthorization struct {
 // The original 6.1 integration also uses thread identity under its legacy user
 // grant. Other models opt in to it through an explicit model grant.
 func usesThreadScopedNativeChat(model string, modelRestricted bool) bool {
-	return (modelRestricted || model == nativeReasoningReplayAllUsersModel) && supportsModelScopedNativeReasoningReplay(model)
+	return model == nativeReasoningReplayAllUsersModel || (modelRestricted && isCanonicalGPTChatModel(model))
 }
 
 func (a nativeReasoningChatAuthorization) targetReplayEnabled() bool {
@@ -183,18 +183,21 @@ func (s *OpenAIGatewayService) beginNativeReasoningChat(c *gin.Context, account 
 	}
 	session := ExtractClientSessionID(c)
 	if threadScoped {
-		namespace := "gpt61-chat/v1:"
-		if authorization.model != nativeReasoningReplayAllUsersModel {
-			if !gjson.GetBytes(body, "messages").IsArray() {
-				return nil
-			}
-			// A legacy session comes directly from a sanitized client header.
-			// The NUL makes this namespace unreachable through that grant.
-			namespace = "gpt62-chat/v1:\x00"
+		if authorization.model != nativeReasoningReplayAllUsersModel && !gjson.GetBytes(body, "messages").IsArray() {
+			return nil
 		}
 		clientSession, thread, valid := gpt61SolChatExplicitIdentity(c, body)
 		if !valid {
 			return nil
+		}
+		// Preserve the namespaces used by existing grants. The new family
+		// namespace has a NUL that cannot occur in a raw legacy session header.
+		namespace := "gpt-chat/v1:\x00"
+		switch authorization.model {
+		case nativeReasoningReplayAllUsersModel:
+			namespace = "gpt61-chat/v1:"
+		case "gpt-6.2-astra", "gpt-6.2-sol":
+			namespace = "gpt62-chat/v1:\x00"
 		}
 		// Frame both values so overlapping session/thread names cannot alias.
 		framed, _ := json.Marshal([2]string{clientSession, thread})

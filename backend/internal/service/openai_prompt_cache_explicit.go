@@ -29,10 +29,13 @@ func prepareOpenAIPromptCaching(body []byte, model string, auto, codexTTL bool) 
 	}
 
 	var request map[string]any
-	if err := json.Unmarshal(body, &request); err != nil {
+	if err := decodeOpenAIJSONUseNumber(body, &request); err != nil {
 		return nil, result, err
 	}
 
+	// Prepare the same leading Codex prefix on every turn. A later system
+	// message remains at its own position and cannot invalidate that prefix.
+	modified := codexTTL && keepCodexLateSystemMessagesInPlace(request, model)
 	input, _ := request["input"].([]any)
 	hasStablePrefix := openAIInputHasReusableStableTextPrefix(input)
 	hasBreakpoint := openAIInputHasPromptCacheBreakpoint(input)
@@ -43,7 +46,6 @@ func prepareOpenAIPromptCaching(body []byte, model string, auto, codexTTL bool) 
 	if codexTTL && validCodexPromptCacheOptions(rawOptions) {
 		mode, optionsValid = openAIImplicitPromptCacheMode, true
 	}
-	modified := false
 	if optionsPresent && !optionsValid {
 		delete(request, "prompt_cache_options")
 		modified = true
@@ -64,7 +66,7 @@ func prepareOpenAIPromptCaching(body []byte, model string, auto, codexTTL bool) 
 		modified = true
 	}
 	if !optionsPresent && !hasBreakpoint {
-		return body, result, nil
+		return marshalOpenAIPromptCachePreparation(body, request, modified, result)
 	}
 
 	result.Enabled = true

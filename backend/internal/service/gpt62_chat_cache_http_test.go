@@ -82,11 +82,21 @@ func TestGPT62ChatCacheHTTPModelUsers(t *testing.T) {
 }
 
 func TestGPT62ChatCacheHTTPReplayIsolation(t *testing.T) {
-	h := newGPT61ScopeHTTPHarness(t, gpt62ChatCachePolicy(), nil, "")
+	testChatCacheHTTPReplayIsolation(t, gpt62ChatCachePolicy(), "gpt-6.2-astra", "gpt-6.2-sol")
+}
+
+func TestGPTFamilyChatCacheHTTPReplayIsolation(t *testing.T) {
+	policy := &gpt61ScopeHTTPPolicy{config: service.NativeReasoningReplayRuntimeConfig{Mode: "replay", AllUsersGPTModels: true}}
+	testChatCacheHTTPReplayIsolation(t, policy, "gpt-5.6-sol", "gpt-6-astra")
+}
+
+func testChatCacheHTTPReplayIsolation(t *testing.T, policy *gpt61ScopeHTTPPolicy, model, otherModel string) {
+	t.Helper()
+	h := newGPT61ScopeHTTPHarness(t, policy, nil, "")
 	owner := gpt61ScopeHTTPClient{user: 101, key: 501}
 	firstThread := gpt61BodyCarrier("flat", "shared-session", "thread-a")
 	initial := nativeTrafficInitialHistory()
-	first, firstRow, err := h.callWithRequest(initial, "gpt-6.2-astra", true, owner, firstThread)
+	first, firstRow, err := h.callWithRequest(initial, model, true, owner, firstThread)
 	require.NoError(t, err)
 	continued := nativeTrafficContinue(initial, first)
 	edited := append([]json.RawMessage(nil), continued...)
@@ -103,12 +113,12 @@ func TestGPT62ChatCacheHTTPReplayIsolation(t *testing.T) {
 		who                 gpt61ScopeHTTPClient
 		history             []json.RawMessage
 	}{
-		{"other_authorized_model", "gpt-6.2-sol", "thread-a", owner, continued},
-		{"other_thread", "gpt-6.2-astra", "thread-b", owner, continued},
-		{"other_authorized_user", "gpt-6.2-astra", "thread-a", otherUser, continued},
-		{"other_key", "gpt-6.2-astra", "thread-a", otherKey, continued},
-		{"other_upstream_credential", "gpt-6.2-astra", "thread-a", otherCredential, continued},
-		{"edited_history", "gpt-6.2-astra", "thread-a", owner, edited},
+		{"other_authorized_model", otherModel, "thread-a", owner, continued},
+		{"other_thread", model, "thread-b", owner, continued},
+		{"other_authorized_user", model, "thread-a", otherUser, continued},
+		{"other_key", model, "thread-a", otherKey, continued},
+		{"other_upstream_credential", model, "thread-a", otherCredential, continued},
+		{"edited_history", model, "thread-a", owner, edited},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, row, err := h.callWithRequest(tc.history, tc.model, true, tc.who, gpt61BodyCarrier("flat", "shared-session", tc.thread))
@@ -116,8 +126,41 @@ func TestGPT62ChatCacheHTTPReplayIsolation(t *testing.T) {
 			gpt61BodyRequireRestored(t, row)
 		})
 	}
-	_, original, err := h.callWithRequest(continued, "gpt-6.2-astra", true, owner, firstThread)
+	_, original, err := h.callWithRequest(continued, model, true, owner, firstThread)
 	require.NoError(t, err)
 	gpt61BodyRequireRestored(t, original, firstRow)
+	for _, path := range []string{"client_metadata.session_id", "client_metadata.thread_id"} {
+		firstID := gjson.GetBytes(firstRow.Body, path).String()
+		require.NotEmpty(t, firstID, path)
+		require.Equal(t, firstID, gjson.GetBytes(original.Body, path).String(), path)
+	}
 	h.assertNoForwardErrors(t)
+}
+
+func TestGPTFamilyChatCacheHTTPAnonymousHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		decorate func(map[string]any, http.Header)
+	}{
+		{"messages_only", nil},
+		{"prompt_cache_key_only", func(body map[string]any, _ http.Header) { body["prompt_cache_key"] = "shared-cache-hint" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := &gpt61ScopeHTTPPolicy{config: service.NativeReasoningReplayRuntimeConfig{Mode: "replay", AllUsersGPTModels: true}}
+			h := newGPT61ScopeHTTPHarness(t, policy, nil, "")
+			history := nativeTrafficInitialHistory()
+			who := gpt61ScopeHTTPClient{user: 103, key: 503}
+			for range 2 {
+				assistant, row, err := h.callWithRequest(history, "gpt-5.6-sol", false, who, tc.decorate)
+				require.NoError(t, err)
+				gpt61BodyRequireRestored(t, row)
+				history = nativeTrafficContinue(history, assistant)
+			}
+			h.assertNoForwardErrors(t)
+			h.store.mu.Lock()
+			defer h.store.mu.Unlock()
+			require.Zero(t, h.store.gets)
+			require.Zero(t, h.store.puts)
+		})
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -26,8 +27,8 @@ const (
 	nativeReasoningReplayAllUsersModel = "gpt-6.1-sol"
 )
 
-// These are exact upstream model IDs. Only GPT-6.1 Sol also supports a
-// site-wide grant through AllUsersModels.
+// These are the existing exact per-model allowlists. The optional family-wide
+// grant is evaluated separately against the final GPT Chat model.
 var modelScopedNativeReasoningReplayModels = [...]string{nativeReasoningReplayAllUsersModel, "gpt-6.2-astra", "gpt-6.2-sol"}
 
 func supportsModelScopedNativeReasoningReplay(model string) bool {
@@ -36,13 +37,13 @@ func supportsModelScopedNativeReasoningReplay(model string) bool {
 
 // The setting is server-owned. No request body/header can enable replay or
 // choose its user scope. An empty allowlist never means every user.
-// AllUsersModels is an explicit, narrowly validated model authorization.
 type NativeReasoningReplayRuntimeConfig struct {
-	Mode           string             `json:"mode"`
-	UserIDs        []int64            `json:"user_ids"`
-	AllUsersModels []string           `json:"all_users_models,omitempty"`
-	ModelUserIDs   map[string][]int64 `json:"model_user_ids,omitempty"`
-	ExpiresAt      time.Time          `json:"expires_at,omitempty"`
+	Mode              string             `json:"mode"`
+	UserIDs           []int64            `json:"user_ids"`
+	AllUsersModels    []string           `json:"all_users_models,omitempty"`
+	AllUsersGPTModels bool               `json:"all_users_gpt_models,omitempty"`
+	ModelUserIDs      map[string][]int64 `json:"model_user_ids,omitempty"`
+	ExpiresAt         time.Time          `json:"expires_at,omitempty"`
 }
 
 type NativeReasoningReplayRuntimeReader interface {
@@ -210,6 +211,19 @@ func (s *SettingService) NativeReasoningReplayPolicy(ctx context.Context) (Nativ
 	if err != nil {
 		return off, errors.New("invalid native reasoning replay setting object")
 	}
+	// encoding/json matches struct fields without regard to case and accepts
+	// null for a bool. Require an unambiguous literal for the site-wide grant.
+	const familyField = "all_users_gpt_models"
+	validFamilyGrant := true
+	gjson.ParseBytes(canonical).ForEach(func(key, value gjson.Result) bool {
+		if strings.EqualFold(key.Str, familyField) {
+			validFamilyGrant = key.Str == familyField && (value.Type == gjson.True || value.Type == gjson.False)
+		}
+		return validFamilyGrant
+	})
+	if !validFamilyGrant {
+		return off, errors.New("invalid native reasoning replay GPT model scope")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(canonical))
 	decoder.DisallowUnknownFields()
 	var value NativeReasoningReplayRuntimeConfig
@@ -315,6 +329,9 @@ func (r *nativeReasoningRuntime) modeForUserModel(ctx context.Context, userID in
 	value := r.policy(ctx, now)
 	if value.Mode == NativeReasoningReplayModeOff || (!value.ExpiresAt.IsZero() && !now.Before(value.ExpiresAt)) {
 		return NativeReasoningReplayModeOff, false
+	}
+	if value.AllUsersGPTModels && isCanonicalGPTChatModel(model) {
+		return value.Mode, true
 	}
 	_, modelGrant := slices.BinarySearch(value.ModelUserIDs[model], userID)
 	if _, legacyGrant := slices.BinarySearch(value.UserIDs, userID); legacyGrant {

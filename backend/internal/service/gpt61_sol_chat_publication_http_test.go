@@ -68,6 +68,8 @@ func TestGPT61SolChatCachePublicationImmediateDONECloseHTTP(t *testing.T) {
 		{"ordinary_target_tools", "gpt-6.1-sol", "replay", "after_done_close", false, true, true},
 		{"astra_scoped_done", "gpt-6.2-astra", "replay", "after_done_close", false, true, true},
 		{"sol_scoped_done", "gpt-6.2-sol", "replay", "after_done_close", false, true, true},
+		{"gpt_family_done", "gpt-6-astra", "replay", "after_done_close", false, true, true},
+		{"gpt_family_cancel_before_done", "gpt-6-astra", "replay", "before_done_close", false, true, false},
 		{"astra_legacy_done", "gpt-6.2-astra", "replay", "after_done_close", false, false, false},
 		{"sol_scoped_cancel_before_done", "gpt-6.2-sol", "replay", "before_done_close", false, true, false},
 		{"target_assistant", "gpt-6.1-sol", "replay", "after_done_close", true, false, true},
@@ -87,7 +89,9 @@ func TestGPT61SolChatCachePublicationImmediateDONECloseHTTP(t *testing.T) {
 			if tc.ordinary {
 				policy := gpt61ScopeAllUsersPolicy()
 				policy.config.Mode = tc.mode
-				if tc.model != "gpt-6.1-sol" {
+				if tc.model == "gpt-6-astra" {
+					policy.config.AllUsersGPTModels = true
+				} else if tc.model != "gpt-6.1-sol" {
 					policy.config.ModelUserIDs = map[string][]int64{tc.model: {101}}
 				}
 				h := newGPT61ScopeHTTPHarness(t, policy, nil, "")

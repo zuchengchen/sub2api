@@ -850,7 +850,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	var imageCount int
 	var firstTokenMs *int
 	if parsed.Stream && isEventStreamResponse(resp.Header) {
-		streamUsage, streamCount, streamSizes, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime, nil)
+		streamUsage, streamCount, streamSizes, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime, nil, upstreamModel)
 		if err != nil {
 			if streamCount > 0 {
 				return &OpenAIForwardResult{
@@ -893,7 +893,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			ImageOutputSizes: imageOutputSizes,
 		}, nil
 	} else {
-		nonStreamUsage, nonStreamCount, nonStreamSizes, err := s.handleOpenAIImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed)
+		nonStreamUsage, nonStreamCount, nonStreamSizes, err := s.handleOpenAIImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed, upstreamModel)
 		if err != nil {
 			return nil, err
 		}
@@ -1070,6 +1070,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	c *gin.Context,
 	account *Account,
 	parsed *OpenAIImagesRequest,
+	upstreamModel string,
 ) (OpenAIUsage, int, []string, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
@@ -1085,7 +1086,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	}
 	c.Data(resp.StatusCode, contentType, prepareOpenAIImageOutput(c, body))
 
-	usage, _ := extractOpenAIUsageFromJSONBytes(body)
+	usage, _ := extractOpenAIImagesUsageFromJSONBytes(body, IsGPTImageGenerationModel(upstreamModel))
 	return usage, extractOpenAIImageCountFromJSONBytes(body), collectOpenAIResponseImageOutputSizesFromJSONBytes(body), nil
 }
 
@@ -1094,6 +1095,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	c *gin.Context,
 	startTime time.Time,
 	direct *OpenAIImagesRequest,
+	upstreamModel string,
 ) (OpenAIUsage, int, []string, *int, error) {
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
@@ -1109,6 +1111,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	}
 
 	usage := OpenAIUsage{}
+	gptImage := IsGPTImageGenerationModel(upstreamModel)
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	clientDisconnected := false
@@ -1145,7 +1148,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 				dataBytes, _ = sjson.SetBytes(dataBytes, "size", size)
 			}
 		}
-		mergeOpenAIUsage(&usage, dataBytes)
+		mergeOpenAIUsage(&usage, dataBytes, gptImage)
 		imageCounter.AddSSEData(dataBytes)
 		if direct == nil || string(dataBytes) == "[DONE]" {
 			return
@@ -1267,7 +1270,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		if len(body) == 0 {
 			return
 		}
-		mergeOpenAIUsage(&usage, body)
+		mergeOpenAIUsage(&usage, body, gptImage)
 		imageCounter.AddJSONResponse(body)
 	}
 
@@ -1425,27 +1428,87 @@ func extractOpenAIImagesBillableCountFromJSONBytes(body []byte) int {
 	return 0
 }
 
-func mergeOpenAIUsage(dst *OpenAIUsage, body []byte) {
+func mergeOpenAIUsage(dst *OpenAIUsage, body []byte, gptImage bool) {
 	if dst == nil {
 		return
 	}
-	if parsed, ok := extractOpenAIUsageFromJSONBytes(body); ok {
-		if parsed.InputTokens > 0 {
-			dst.InputTokens = parsed.InputTokens
-		}
-		if parsed.OutputTokens > 0 {
-			dst.OutputTokens = parsed.OutputTokens
-		}
-		if parsed.CacheReadInputTokens > 0 {
-			dst.CacheReadInputTokens = parsed.CacheReadInputTokens
-		}
-		if parsed.ImageInputTokens > 0 {
-			dst.ImageInputTokens = parsed.ImageInputTokens
-		}
-		if parsed.ImageOutputTokens > 0 {
-			dst.ImageOutputTokens = parsed.ImageOutputTokens
-		}
+	parsed, cacheReported := extractOpenAIImagesUsageFromJSONBytes(body, gptImage)
+	if parsed.InputTokens > 0 {
+		dst.InputTokens = parsed.InputTokens
 	}
+	if parsed.OutputTokens > 0 {
+		dst.OutputTokens = parsed.OutputTokens
+	}
+	if cacheReported {
+		dst.CacheReadInputTokens = parsed.CacheReadInputTokens
+		dst.ImageCacheReadTokens = parsed.ImageCacheReadTokens
+	}
+	if parsed.ImageInputTokens > 0 {
+		dst.ImageInputTokens = parsed.ImageInputTokens
+	}
+	if parsed.ImageOutputTokens > 0 {
+		dst.ImageOutputTokens = parsed.ImageOutputTokens
+	}
+}
+
+func extractOpenAIImagesUsageFromJSONBytes(body []byte, gptImage bool) (usage OpenAIUsage, cacheReported bool) {
+	if !gptImage {
+		usage, _ = extractOpenAIUsageFromJSONBytes(body)
+		return usage, usage.CacheReadInputTokens > 0
+	}
+	value, imageGen := openAIUsageSourcesFromJSONBytes(body)
+	usage, ok := openAIUsageFromGJSON(value)
+	if !ok {
+		return OpenAIUsage{}, false
+	}
+	// Attribute cache before the existing hosted-tool image input/output fallback.
+	// A hosted tool's input is a separate meter from the enclosing model's cache.
+	cacheReported = setOpenAIImagesCacheUsage(&usage, value, openAICacheReadTokenField(value))
+	mergeHostedImageGenToolUsage(imageGen, &usage)
+	return usage, cacheReported
+}
+
+// An Images upstream may report an aggregate, per-modality counters, or both.
+// Keep both cache fields from this snapshot together. An authoritative zero
+// replaces a prior SSE observation, while an absent or invalid report does not.
+func setOpenAIImagesCacheUsage(usage *OpenAIUsage, value, cachedTotal gjson.Result) bool {
+	usage.CacheReadInputTokens, usage.ImageCacheReadTokens = 0, 0
+	details := value.Get("input_tokens_details")
+	parts := details.Get("cached_tokens_details")
+	if !cachedTotal.Exists() && !parts.IsObject() {
+		return false
+	}
+	input := value.Get("input_tokens")
+	if !input.Exists() || (input.Int() == 0 && usage.InputTokens > 0) {
+		input = value.Get("prompt_tokens")
+	}
+	inputLimit, ok := boundedJSONNonNegativeInt(input)
+	if !ok {
+		return false
+	}
+	inputLimit = min(inputLimit, max(usage.InputTokens, 0))
+	imageInput, _ := boundedJSONNonNegativeInt(details.Get("image_tokens"))
+	imageInput = min(imageInput, inputLimit)
+	imageCached, imageOK := boundedJSONNonNegativeInt(parts.Get("image_tokens"))
+	imageCached = min(imageCached, imageInput)
+	if cachedTotal.Exists() {
+		total, valid := boundedJSONNonNegativeInt(cachedTotal)
+		if !valid {
+			return false
+		}
+		usage.CacheReadInputTokens = min(total, inputLimit)
+		usage.ImageCacheReadTokens = min(imageCached, usage.CacheReadInputTokens)
+		return true
+	}
+	textCached, textOK := boundedJSONNonNegativeInt(parts.Get("text_tokens"))
+	textLimit := inputLimit - imageInput
+	if reportedText := details.Get("text_tokens"); reportedText.Exists() {
+		textInput, _ := boundedJSONNonNegativeInt(reportedText)
+		textLimit = min(textLimit, textInput)
+	}
+	usage.ImageCacheReadTokens = imageCached
+	usage.CacheReadInputTokens = imageCached + min(textCached, textLimit)
+	return imageOK || textOK
 }
 
 func extractOpenAIImageCountFromJSONBytes(body []byte) int {

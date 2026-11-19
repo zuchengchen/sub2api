@@ -30,6 +30,32 @@
 
 空用户列表不表示所有用户。可添加 RFC3339 格式的 `expires_at`；到期后关闭。设置缺失、非法或读取失败均回退关闭。设置缓存最多 5 秒，修改对随后请求生效；已开始的请求沿用其开始时确定的模式。
 
+### 全站 GPT 对话模型
+
+在运行**支持本字段的版本**后，给现有配置增加 `"all_users_gpt_models": true` 并使用 `replay` 模式，即可覆盖现有和以后注册的用户。以下是只启用此范围的最小配置。有既有名单或到期时间的站点应合并字段，保留原值。
+
+```json
+{"mode":"replay","all_users_gpt_models":true}
+```
+
+网关按最终发给 OpenAI 的 GPT 对话模型判断，覆盖 GPT-4o、GPT-5、GPT-6 的文本模型变体和内置官方目录里的具名 GPT 对话模型。映射到其他模型、图像生成、实时音频和转录走各自的协议。授权覆盖全站时，每次恢复仍绑定用户、API Key、会话、线程、实际上游模型和上游凭据。对于已经开启的 GPT-6.1 Sol 和 GPT-6.2 会话，继续使用各自已有的记录格式。
+
+只发 `messages` 的 Chat 客户端也可以使用提示缓存。在支持该字段的 OpenAI 上游，网关从开头的指令、工具和首条用户消息派生稳定的缓存路由键。客户端也可以用会话头指定对话，同时用单独的 `prompt_cache_key` 指定可复用前缀。原生推理状态另需可验证的会话标识和完全匹配的历史。首次请求、前缀变化和上游缓存到期均会影响实际的 `cached_tokens`。[OpenAI 提示缓存说明](https://developers.openai.com/api/docs/guides/prompt-caching)
+
+在 Chat 转 Codex Responses 时，追加的系统指令会以 `developer` 消息留在原位置。网关进行时区换算时使用消息自带的日期、时钟和源时区。无法确定唯一时刻的历史保留客户端原文。使用完整消息数组的 GPT Responses 客户端即使在后续轮次追加系统或开发者指令，也能继续沿用首轮的账号路由。对于没有显式会话标识的原生 Responses 请求，字符串和消息数组仍按各自的历史规则选择账号，从一种格式切换到另一种时可能需要重新预热。
+
+移除 `all_users_gpt_models` 或改为 `false` 可撤回这项全站授权，其他已有范围按原配置执行。回滚到早期二进制前先还原此前保存的完整配置，旧版本会拒绝不认识的字段。
+
+生产设置已经处于 `replay` 时，可以在发版后用一条更新合并新字段。先保存原配置以便回退，并确认到期时间覆盖计划的启用时段。
+
+```sql
+UPDATE settings
+SET value = (value::jsonb || '{"all_users_gpt_models":true}'::jsonb)::text, updated_at = NOW()
+WHERE key = 'openai_native_reasoning_replay_config' AND value::jsonb->>'mode' = 'replay';
+```
+
+### 按用户或单一模型授权
+
 按模型选择用户时，可以在已有配置中添加目标模型的名单。例如，保留用户 428 的旧授权，给用户 358 开启 `gpt-6.1-sol`。
 
 ```json
@@ -54,7 +80,7 @@
 
 `all_users_models` 目前只接受一个精确模型名 `gpt-6.1-sol`；空列表不开放任何额外用户，其他模型、通配符、重复项和非法配置均关闭。授权按账号映射及规范化后的实际上游模型判断，并在最终出站请求准备时再次核对。`user_ids` 保留原有模型范围，因此上例中的用户 428 继续使用原有规则，其他用户只在目标模型的适用协议路径开启。会话、用户/Key、上游凭据、完整状态及资源上限仍是独立条件；模型授权不代表每次都能恢复。
 
-`mode` 和 `expires_at` 同时约束三种作用域。撤回某位用户的一款 6.2 灰度时，从对应模型的名单中移除该用户即可。若该用户也在 `user_ids`，该模型随即回到旧授权路径。回滚二进制前恢复先前保存的设置，旧版本会拒绝含 6.2 模型键的配置。移除 `all_users_models` 可撤回 6.1 的全用户授权，`mode: off` 可关闭全部续接。
+`mode` 和 `expires_at` 约束所有授权范围。未开全站 GPT 授权时，从对应模型名单中移除用户即可撤回该用户的 6.2 灰度。若该用户也在 `user_ids`，该模型随即回到旧授权路径。回滚二进制前恢复先前保存的设置，旧版本会拒绝含 6.2 模型键的配置。移除 `all_users_models` 可撤回 6.1 的全用户授权，`mode: off` 可关闭全部续接。
 
 例如，先读取并保存原值，再在经过授权的数据库会话中启用单用户观察：
 
@@ -118,4 +144,6 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
 
 在同一用户、API Key、实际上游模型、上游账号和会话内，比较上下文规模与请求间隔相近的连续 Chat 请求。分别报告每条会话的首轮和续接轮。按 `100.0 * SUM(cache_read_tokens) / NULLIF(SUM(input_tokens + cache_creation_tokens + cache_read_tokens), 0)` 计算输入 token 的加权命中百分比，再核对上游原始用量、`restored_groups`、费用和延迟。采样字段和完整交付的判断方法见[单用户缓存诊断](user-cache-diagnostics.md)。
 
-生产采用正式 `czc-*` 标签与 GitHub Release 部署，按 AGENTS.md 重建前端并执行 embed 构建。初期仅单用户灰度，出错先关闭开关，必要时恢复已校验的旧标签备份，并重新检查版本、首页及 origin 发布链接。
+GPT Image 需按图像接口单独核对。对于官方 GPT-Image-2 和 GPT-Image-2.5，缓存输入定价适用于 Responses 的图像生成工具，入口为直接 Images API 时按其自身价格计算。官方 Responses 用量不列出这些图像缓存 token。兼容上游若提供图像工具自己的缓存明细，按该工具实际报告记录。主对话模型的缓存读取量属于主模型。[OpenAI 图像用量说明](https://developers.openai.com/api/docs/guides/image-generation#cached-input-pricing)
+
+生产采用正式 `czc-*` 标签与 GitHub Release 部署，按 AGENTS.md 重建前端并执行 embed 构建。上线后按模型和入站协议比较同规模对话的后续轮次。需要回退时，恢复之前保存的完整开关配置，必要时恢复已校验的旧标签备份，并重新检查版本、首页及 origin 发布链接。

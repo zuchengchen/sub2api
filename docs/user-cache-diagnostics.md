@@ -36,9 +36,9 @@ SUB2_USER_CACHE_DIAGNOSTIC_MAX_REQUESTS=30
 - `ingress`：认证用户、API Key、请求关联哈希、会话哈希，以及转换前的字段和消息摘要。
 - `upstream_request`：上游账号、尝试序号、实际发送请求的字段/消息摘要和会话相关请求头的进程内 HMAC。
 - `upstream_response`：HTTP 状态、终态类型、上游原始数值用量、输出项类型，以及加密推理项的长度和哈希。
-- `chat_delivery` 记录实际消费者的返回状态、用量、成功写出的响应 ID 与 assistant 哈希，以及原生续接模式、资格和恢复组数。上游为 `gpt-6.1-sol` 的兼容转换路径支持该事件。`gpt-6.2-sol` 和 `gpt-6.2-astra` 要求入站含 Chat `messages` 数组，且入站与出站精确匹配同一模型。原生续接关闭时也可在已开启的有界诊断中观察交付。
+- `chat_delivery` 记录实际消费者的返回状态、用量、成功写出的响应 ID 与 assistant 哈希，以及原生续接模式、资格和恢复组数。上游为 `gpt-6.1-sol` 的兼容转换路径沿用既有采样范围。其他 GPT 对话模型要求入站含 Chat `messages` 数组，且入站与出站精确匹配同一模型。原生续接关闭时也可在已开启的有界诊断中观察交付。
 
-三款目标模型的 `ingress.assistant_tail` 包含最多 4 条最近的入站 assistant 消息的位置和字段摘要。6.2 仅为带 `messages` 数组的 Chat 输入采集这些字段。请求成功、下游完整写出且该次尝试的出站模型与入站精确模型一致时，`chat_delivery.assistant_comparison` 使用相同规则记录已交付的 assistant。
+GPT 对话模型的 `ingress.assistant_tail` 包含最多 4 条最近的入站 assistant 消息的位置和字段摘要。`gpt-6.1-sol` 以外的 GPT 模型仅为带 `messages` 数组的 Chat 输入采集这些字段。请求成功、下游完整写出且该次尝试的出站模型与入站精确模型一致时，`chat_delivery.assistant_comparison` 使用相同规则记录已交付的 assistant。
 二者直接调用原生续接使用的消息归一化函数，同时保留完整 JSON 摘要，区分引擎已经允许的空字段表示差异。
 固定字段只记录存在性、JSON 类型、长度及 HMAC；未知字段只记录数量和整体 HMAC，不记录未知字段名。
 HMAC 使用不落盘的进程随机密钥，并绑定用户、API Key 和用途；只允许在同一进程及既有会话、账号、模型条件下比较。

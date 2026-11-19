@@ -516,11 +516,11 @@ func TestForwardAsAnthropic_AutoDerivesPromptCacheKeyWhenMessagesDispatchHasNoSe
 	require.Equal(t, generateSessionUUID(isolateOpenAISessionID(0, cacheKey)), upstream.lastReq.Header.Get("session_id"))
 }
 
-func TestForwardAsAnthropic_GPT6AstraPromptCacheIdentityStableAcrossAppendedTurns(t *testing.T) {
+func TestForwardAsAnthropic_GPTPromptCacheIdentityStableAcrossAppendedTurns(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Parallel()
 
-	for _, mappedModel := range []string{"gpt-6-astra", "gpt-6"} {
+	for _, mappedModel := range []string{"gpt-6-astra", "gpt-6", "gpt-4o", "gpt-6.1-terra"} {
 		mappedModel := mappedModel
 		t.Run(mappedModel, func(t *testing.T) {
 			t.Parallel()
@@ -528,6 +528,7 @@ func TestForwardAsAnthropic_GPT6AstraPromptCacheIdentityStableAcrossAppendedTurn
 			upstream := &httpUpstreamRecorder{responses: []*http.Response{
 				openAICompatSSECompletedResponse("resp_gpt6_first", mappedModel),
 				openAICompatSSECompletedResponse("resp_gpt6_second", mappedModel),
+				openAICompatSSECompletedResponse("resp_another_user", mappedModel),
 			}}
 			svc := &OpenAIGatewayService{
 				httpUpstream: upstream,
@@ -554,6 +555,7 @@ func TestForwardAsAnthropic_GPT6AstraPromptCacheIdentityStableAcrossAppendedTurn
 				c, _ := gin.CreateTestContext(rec)
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 				c.Request.Header.Set("Content-Type", "application/json")
+				c.Set("api_key", &APIKey{ID: 101, UserID: 1})
 
 				result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", mappedModel)
 				require.NoError(t, err)
@@ -572,11 +574,20 @@ func TestForwardAsAnthropic_GPT6AstraPromptCacheIdentityStableAcrossAppendedTurn
 			secondSessionID := upstream.requests[1].Header.Get("session_id")
 			require.NotEmpty(t, firstSessionID)
 			require.Equal(t, firstSessionID, secondSessionID)
+			if !shouldAutoInjectPromptCacheKeyForCompat(mappedModel) {
+				require.False(t, gjson.GetBytes(upstream.bodies[1], "previous_response_id").Exists())
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(bodies[0]))
+				c.Set("api_key", &APIKey{ID: 102, UserID: 2})
+				_, err := svc.ForwardAsAnthropic(context.Background(), c, account, bodies[0], "", mappedModel)
+				require.NoError(t, err)
+				require.NotEqual(t, firstCacheKey, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+			}
 		})
 	}
 }
 
-func TestForwardAsAnthropic_DoesNotAutoDerivePromptCacheKeyForNonCodexModel(t *testing.T) {
+func TestForwardAsAnthropic_NoGPT4oPromptCacheKeyWithoutAuthenticatedTenant(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()

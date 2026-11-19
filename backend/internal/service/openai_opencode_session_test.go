@@ -500,7 +500,7 @@ func TestOpenCodeSessionForwardedByRawChatCompletionsAfterAccountOverride(t *tes
 	resp, err := svc.sendCCUpstreamRequest(
 		context.Background(), c, account,
 		"https://opencode.ai/zen/v1/chat/completions", []byte(`{"model":"gpt-5"}`),
-		false, "token", "", "",
+		false, "token", "", "", rawChatPromptCacheInput{},
 	)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())

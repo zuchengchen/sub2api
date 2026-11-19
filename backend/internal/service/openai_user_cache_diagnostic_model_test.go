@@ -60,11 +60,11 @@ func TestUserCacheDiagnosticOriginalSurvivesMultipleRewrites(t *testing.T) {
 }
 
 func TestUserCacheDiagnosticRemembersIngressOnlyInActiveWindow(t *testing.T) {
-	body := []byte(`{"model":"gpt-6.2-sol","messages":[]}`)
+	body := []byte(`{"model":"gpt-6.1-terra","messages":[]}`)
 	for _, condition := range []string{"disabled", "expired", "wrong_user", "exhausted"} {
 		t.Run(condition, func(t *testing.T) {
 			userCacheDiagnosticTestEnv(t)
-			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL", "")
+			t.Setenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL", "gpt-6.1-terra")
 			userID := int64(428)
 			switch condition {
 			case "disabled":
@@ -81,6 +81,7 @@ func TestUserCacheDiagnosticRemembersIngressOnlyInActiveWindow(t *testing.T) {
 			RememberUserCacheDiagnosticIngress(c, userID, body)
 			_, stored := c.Get(userCacheDiagnosticIngressKey)
 			require.False(t, stored)
+			require.Nil(t, beginUserCacheDiagnostic(c, body))
 		})
 	}
 }
@@ -158,6 +159,17 @@ func TestUserCacheDiagnosticAssistantModelScope(t *testing.T) {
 		{"different_6_2", `{"model":"gpt-6.2-sol","messages":[]}`, "gpt-6.2-astra", true, false},
 		{"mapped_to_6_1", `{"model":"gpt-6.2-astra","messages":[]}`, "gpt-6.1-sol", true, false},
 		{"mapped_from_6_1", `{"model":"gpt-6.1-sol","messages":[]}`, "gpt-6.2-astra", true, false},
+		{"gpt_4o", `{"model":"gpt-4o","messages":[]}`, "gpt-4o", true, true},
+		{"gpt_5_mini", `{"model":"gpt-5.4-mini","messages":[]}`, "gpt-5.4-mini", true, true},
+		{"other_gpt", `{"model":"gpt-6.1-terra","messages":[]}`, "gpt-6.1-terra", true, true},
+		{"other_gpt_mapped", `{"model":"gpt-6.1-terra","messages":[]}`, "gpt-5.4-mini", true, false},
+		{"other_gpt_responses_shape", `{"model":"gpt-5.4-mini","input":[]}`, "gpt-5.4-mini", false, false},
+		{"non_gpt", `{"model":"claude-sonnet-4-5","messages":[]}`, "claude-sonnet-4-5", false, false},
+		{"non_gpt_mapped_to_gpt", `{"model":"claude-sonnet-4-5","messages":[]}`, "gpt-5.4-mini", false, false},
+		{"gpt_mapped_to_non_gpt", `{"model":"gpt-5.4-mini","messages":[]}`, "claude-sonnet-4-5", true, false},
+		{"gpt_image", `{"model":"gpt-image-2","messages":[]}`, "gpt-image-2", false, false},
+		{"gpt_audio", `{"model":"gpt-4o-audio-preview","messages":[]}`, "gpt-4o-audio-preview", false, false},
+		{"provider_prefix", `{"model":"openai/gpt-5.4-mini","messages":[]}`, "gpt-5.4-mini", false, false},
 		{"mapped_alias", `{"model":"public-model","messages":[]}`, "gpt-6.2-sol", false, false},
 		{"case_alias", `{"model":"GPT-6.2-SOL","messages":[]}`, "gpt-6.2-sol", false, false},
 		{"space", `{"model":" gpt-6.2-sol ","messages":[]}`, "gpt-6.2-sol", false, false},

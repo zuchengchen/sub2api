@@ -209,8 +209,11 @@ func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic 
 		}
 		body, bodySummary = original.body, original.oversized
 	}
-	// Match the requested model before admission so excluded requests consume no quota.
-	// The memoized nil above also prevents retry bodies from changing this decision.
+	// Only parse the model for a live sample. A nonmatching request spends no
+	// quota, and its memoized rejection also applies to retries.
+	if userCacheDiagnostics.available(key.UserID, time.Now(), false) == nil {
+		return nil
+	}
 	model := os.Getenv("SUB2_USER_CACHE_DIAGNOSTIC_MODEL")
 	if model != "" && userCacheDiagnosticRequestedModel(body) != model {
 		return nil
@@ -239,7 +242,7 @@ func beginUserCacheDiagnostic(c *gin.Context, body []byte) *userCacheDiagnostic 
 	if model == "" {
 		model = userCacheDiagnosticRequestedModel(body)
 	}
-	if supportsModelScopedNativeReasoningReplay(model) && (model == nativeReasoningReplayAllUsersModel || gjson.GetBytes(body, "messages").IsArray()) {
+	if isCanonicalGPTChatModel(model) && (model == nativeReasoningReplayAllUsersModel || gjson.GetBytes(body, "messages").IsArray()) {
 		// A parsed model can point into the entire request; retain only its name.
 		d.assistantModel = strings.Clone(model)
 		fields["assistant_tail"] = d.summarizeAssistantTail(body)

@@ -90,6 +90,44 @@ func TestNativeReasoningReplayRuntimeGPT62ModelGrants(t *testing.T) {
 	}
 }
 
+func TestNativeReasoningReplayRuntimeAllUsersGPTModels(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		setting     string
+		user        int64
+		model, mode string
+		restricted  bool
+	}{
+		{`{"mode":"replay","all_users_gpt_models":true}`, 1, "gpt-4o", "replay", true},
+		{`{"mode":"replay","all_users_gpt_models":true}`, 987654, "gpt-6.1-terra", "replay", true},
+		{`{"mode":"observe","all_users_gpt_models":true}`, 2, "gpt-6.2-sol", "observe", true},
+		{`{"mode":"replay","user_ids":[2],"all_users_gpt_models":true}`, 2, "gpt-5.5", "replay", true},
+		{`{"mode":"replay","user_ids":[2],"all_users_gpt_models":true}`, 2, "other", "replay", false},
+		{`{"mode":"replay","all_users_gpt_models":true}`, 0, "gpt-5.5", "off", false},
+		{`{"mode":"replay","all_users_gpt_models":true}`, 3, "grok-4.5", "off", false},
+		{`{"mode":"replay","all_users_gpt_models":false}`, 3, "gpt-6.2-astra", "off", false},
+		{`{"mode":"off","all_users_gpt_models":true}`, 2, "gpt-5.5", "off", false},
+		{`{"mode":"replay","all_users_gpt_models":true,"expires_at":"2000-01-01T00:00:00Z"}`, 2, "gpt-5.5", "off", false},
+	} {
+		reader := NewSettingService(&nativeReplaySettingFixture{raw: tc.setting}, nil)
+		r := &nativeReasoningRuntime{engine: NewNativeReasoningReplay(nil, nil, NativeReasoningReplayLimits{}), reader: reader}
+		mode, restricted := r.modeForUserModel(ctx, tc.user, tc.model)
+		require.Equal(t, tc.mode, mode, "%s %s", tc.setting, tc.model)
+		require.Equal(t, tc.restricted, restricted, "%s %s", tc.setting, tc.model)
+	}
+	for _, raw := range []string{
+		`{"mode":"replay","all_users_gpt_models":"true"}`,
+		`{"mode":"replay","all_users_gpt_models":null}`,
+		`{"mode":"replay","ALL_USERS_GPT_MODELS":true}`,
+		`{"mode":"replay","all_users_gpt_models":false,"ALL_USERS_GPT_MODELS":true}`,
+		`{"mode":"replay","all_users_gpt_models":true,"all_users_gpt_models":false}`,
+	} {
+		reader := NewSettingService(&nativeReplaySettingFixture{raw: raw}, nil)
+		_, err := reader.NativeReasoningReplayPolicy(ctx)
+		require.Error(t, err)
+	}
+}
+
 func TestNativeReasoningReplayRuntimeAuthorizationCacheAndFailure(t *testing.T) {
 	var reads atomic.Int64
 	var failed atomic.Bool

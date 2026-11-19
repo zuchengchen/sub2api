@@ -48,6 +48,17 @@ func (s *OpenAIGatewayService) openaiClientLocalTimeRewriteEnabled() bool {
 }
 
 func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeForRequest(c *gin.Context, account *Account, body []byte) []byte {
+	return s.rewriteOpenAIClientLocalTimeForModel(c, account, body, "")
+}
+
+func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeIfEnabled(account *Account, body []byte) []byte {
+	return s.rewriteOpenAIClientLocalTimeForModel(nil, account, body, "")
+}
+
+func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeForModel(c *gin.Context, account *Account, body []byte, model string) []byte {
+	if len(body) == 0 || account == nil || !account.IsOpenAI() || !s.openaiClientLocalTimeRewriteEnabled() {
+		return body
+	}
 	// A native WS session sends base instructions only in its prewarm. Later
 	// deltas and tool outputs still describe that same client's environment.
 	// Identify the client from the request, rather than requiring every frame
@@ -56,11 +67,8 @@ func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeForRequest(c *gin.Con
 	if isCodexOAuthAccount(account) && c != nil && openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) {
 		return body
 	}
-	return s.rewriteOpenAIClientLocalTimeIfEnabled(account, body)
-}
-
-func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeIfEnabled(account *Account, body []byte) []byte {
-	if len(body) == 0 || account == nil || !account.IsOpenAI() || !s.openaiClientLocalTimeRewriteEnabled() {
+	hasTimezone := bytes.Contains(body, []byte("timezone")) || bytes.Contains(body, []byte("time_zone"))
+	if !hasTimezone && !bytes.Contains(body, []byte("current_")) && !bytes.Contains(body, []byte("local_date")) {
 		return body
 	}
 	if codexInputCarriesBaseInstructions(body) {
@@ -68,7 +76,19 @@ func (s *OpenAIGatewayService) rewriteOpenAIClientLocalTimeIfEnabled(account *Ac
 		// gateway or its exit proxy. Keep them intact across retries and turns.
 		return body
 	}
+	if model == "" {
+		if requested := openAIRequestPayloadView(body).Get("model"); requested.Type == gjson.String && requested.Str != "" {
+			model = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requested.Str))
+		}
+	}
+	gpt := isCanonicalGPTChatModel(model)
+	if gpt && (!hasTimezone || (!bytes.Contains(body, []byte("current_time")) && !bytes.Contains(body, []byte("user_location")))) {
+		return body
+	}
 	resolution := s.resolveOpenAIRequestTimezone(context.Background(), account)
+	if gpt {
+		return rewriteGPTClientLocalTimes(body, resolution.Timezone)
+	}
 	next, _ := rewriteOpenAIClientLocalTimeContextWith(body, openAILocalTimeContextFor(resolution.Timezone))
 	return next
 }
@@ -82,6 +102,7 @@ func (s *OpenAIGatewayService) resolveOpenAIRequestTimezone(ctx context.Context,
 	return OpenAIRequestTimezoneResolution{Timezone: openAIOutboundTimezoneName, Source: "fallback", Fallback: true}
 }
 
+// Other models retain the original request-time substitution policy.
 func rewriteOpenAIClientLocalTimeContextWith(body []byte, ctx openAILocalTimeContext) ([]byte, bool) {
 	if len(body) == 0 {
 		return body, false

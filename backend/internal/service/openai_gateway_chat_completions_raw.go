@@ -50,7 +50,7 @@ var openaiCCRawAllowedHeaders = map[string]bool{
 //   - 流式响应 SSE 直接透传给客户端（上游 chunk 已是 CC 格式）
 //   - 非流式响应 JSON 直接透传，仅按需提取 usage
 //   - 不应用 codex OAuth transform（APIKey 路径无 OAuth）
-//   - 不注入 prompt_cache_key（OAuth 专属机制）
+//   - 官方 GPT Chat 端点支持缓存路由键，第三方直转按原协议发送
 //
 // 调用入口：openai_gateway_chat_completions.go::ForwardAsChatCompletions
 // 在函数顶部按 openai_compat.ShouldUseResponsesAPI 分流。
@@ -221,7 +221,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletionsWithStartTime(
 	if managedNonReasoning {
 		reasoningEffort = nil
 	}
-	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, upstreamBody, clientStream, token, customUA, grokCacheIdentity)
+	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, upstreamBody, clientStream, token, customUA, grokCacheIdentity, rawChatPromptCacheInput{body: body})
 	if err != nil {
 		return nil, err
 	}

@@ -102,6 +102,9 @@ func applyNativeReasoningProjection(body []byte, replacements []NativeReasoningR
 	if err != nil {
 		return body, nil, err
 	}
+	var model string
+	_ = json.Unmarshal(request["model"], &model)
+	systemAsDeveloper := isCanonicalGPTChatModel(model)
 	input, err := nativeReasoningProjectionItems(request["input"])
 	if err != nil {
 		return body, nil, err
@@ -151,7 +154,7 @@ func applyNativeReasoningProjection(body []byte, replacements []NativeReasoningR
 		// PreserveToolCallIDs. They must identify the same unique structural span
 		// or exactly one span; no fuzzy fallback or nearby-message search exists.
 		for _, preserve := range []bool{false, true} {
-			fragment, before, after, nerr := nativeReasoningProjectionExpected(replacement, forward, preserve)
+			fragment, before, after, nerr := nativeReasoningProjectionExpected(replacement, forward, preserve, systemAsDeveloper)
 			if nerr != nil {
 				continue
 			}
@@ -329,7 +332,7 @@ func nativeReasoningProjectionMessageOnly(r NativeReasoningReplayReplacement, fr
 	return message
 }
 
-func nativeReasoningProjectionExpected(r NativeReasoningReplayReplacement, forward map[string]string, preserve bool) ([]json.RawMessage, json.RawMessage, json.RawMessage, error) {
+func nativeReasoningProjectionExpected(r NativeReasoningReplayReplacement, forward map[string]string, preserveCallIDs, systemAsDeveloper bool) ([]json.RawMessage, json.RawMessage, json.RawMessage, error) {
 	transform := func(raw json.RawMessage) (json.RawMessage, error) {
 		if len(raw) == 0 {
 			return nil, nil
@@ -342,12 +345,17 @@ func nativeReasoningProjectionExpected(r NativeReasoningReplayReplacement, forwa
 		if decodeOpenAIJSONUseNumber(canonical, &item) != nil {
 			return nil, ErrNativeReasoningReplayInvalid
 		}
+		// A retained GPT system message is sent as developer. Its position and
+		// entire normalized contents must still match the neighboring wire item.
+		if systemAsDeveloper && item["type"] == "message" && item["role"] == "system" {
+			item["role"] = "developer"
+		}
 		if item["type"] == "function_call" || item["type"] == "custom_tool_call" {
 			name, _ := item["name"].(string)
 			item["name"] = nativeReasoningProjectionName(name, forward)
 		}
 		items, _ := normalizeCodexMessageContentText([]any{item})
-		items = filterCodexInputWithOptions(items, codexInputFilterOptions{PreserveReferences: true, PreserveCallIDs: preserve})
+		items = filterCodexInputWithOptions(items, codexInputFilterOptions{PreserveReferences: true, PreserveCallIDs: preserveCallIDs})
 		if len(items) != 1 {
 			return nil, ErrNativeReasoningReplayInvalid
 		}
