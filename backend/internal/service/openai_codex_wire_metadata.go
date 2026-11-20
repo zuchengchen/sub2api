@@ -15,11 +15,21 @@ import (
 
 // HTTP and WebSocket share logical turn metadata. Transport-only fields are
 // added by the corresponding projection, without inventing client capabilities.
-func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, account *Account, kind string) {
-	applyCodexWireMetadata(payload, wsHeaders, account, kind, true)
+func applyCodexWireLaneMetadata(payload map[string]any, wsHeaders http.Header, account *Account, kind string, standardResponses bool) {
+	if payload == nil || account == nil {
+		return
+	}
+	applyCodexWireMetadata(payload, wsHeaders, account, kind, !standardResponses)
+	cm := payload["client_metadata"].(map[string]any)
+	if standardResponses {
+		delete(cm, responsesLiteWSMetadataKey)
+	}
+	if _, exists := cm["x-codex-ws-stream-request-start-ms"]; !exists {
+		cm["x-codex-ws-stream-request-start-ms"] = strconv.FormatInt(time.Now().UnixMilli(), 10)
+	}
 }
 
-func applyCodexWireMetadata(payload map[string]any, wsHeaders http.Header, account *Account, kind string, websocket bool) {
+func applyCodexWireMetadata(payload map[string]any, wsHeaders http.Header, account *Account, kind string, withWSLiteDefaults bool) {
 	if payload == nil || account == nil {
 		return
 	}
@@ -135,7 +145,7 @@ func applyCodexWireMetadata(payload map[string]any, wsHeaders http.Header, accou
 		}
 	}
 
-	if !websocket {
+	if !withWSLiteDefaults {
 		return
 	}
 	// 官方 use_responses_lite 是模型级属性（models-manager catalog）：lite
@@ -163,9 +173,6 @@ func applyCodexWireMetadata(payload map[string]any, wsHeaders http.Header, accou
 				cm["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
 			}
 		}
-	}
-	if _, exists := cm["x-codex-ws-stream-request-start-ms"]; !exists {
-		cm["x-codex-ws-stream-request-start-ms"] = strconv.FormatInt(time.Now().UnixMilli(), 10)
 	}
 }
 

@@ -830,7 +830,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		!legacyCompactRequest {
 		projectCodexOutboundHeaders(req.Header, false)
 	}
-	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
+	if err := applyOpenAIStandardResponsesCompatibility(req, account, body); err != nil {
 		return nil, err
 	}
 	return req, nil

@@ -83,7 +83,7 @@ func TestCodexHTTPMetadataLeavesAPIKeyAndNativeWSProjectionUnchanged(t *testing.
 	require.Empty(t, req.Header.Get(responsesLiteHeader))
 	var frame map[string]any
 	require.NoError(t, decodeOpenAIJSONUseNumber(original, &frame))
-	applyCodexWireLaneMetadata(frame, nil, liteTestAccount(nil), "turn")
+	applyCodexWireLaneMetadata(frame, nil, liteTestAccount(nil), "turn", false)
 	require.True(t, liteMarkerValue(t, frame))
 	raw, err := json.Marshal(frame)
 	require.NoError(t, err)

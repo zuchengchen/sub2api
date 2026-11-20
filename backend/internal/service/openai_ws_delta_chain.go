@@ -65,7 +65,16 @@ func openAIWSDeltaFieldsFingerprint(payload map[string]any) string {
 	props := make(map[string]any, len(payload))
 	for key, value := range payload {
 		switch key {
-		case "input", "previous_response_id", "stream_options", "client_metadata", "access_programs", "type", "background":
+		case "client_metadata":
+			// Per-turn metadata varies freely, but a Lite response ID may
+			// only anchor another request using the same upstream protocol.
+			metadata, _ := value.(map[string]any)
+			marker, _ := metadata[responsesLiteWSMetadataKey].(string)
+			if isOpenAIResponsesLiteHeader(marker) {
+				props[key] = map[string]string{responsesLiteWSMetadataKey: "true"}
+			}
+			continue
+		case "input", "previous_response_id", "stream_options", "access_programs", "type", "background":
 			continue
 		case "generate":
 			if generate, ok := value.(bool); ok && !generate {

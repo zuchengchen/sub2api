@@ -692,7 +692,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 
 		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(resp)
-		appendOpenAIResponsesValidationDiagnostic(c, account, responsesBody, respBody, resp, diagnosticUpstreamAttempt)
+		diagnosticBody := responsesBody
+		if nativeChat != nil && nativeChat.searchReplay != nil {
+			diagnosticBody = nativeChat.searchReplay.body
+		}
+		appendOpenAIResponsesValidationDiagnostic(c, account, diagnosticBody, respBody, resp, diagnosticUpstreamAttempt)
 		if nativeChat.rejectedFallback(ctx, c, resp.StatusCode, respBody, completeErrorBody) {
 			_ = resp.Body.Close()
 			continue

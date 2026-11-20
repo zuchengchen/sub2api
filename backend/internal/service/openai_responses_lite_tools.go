@@ -19,12 +19,9 @@ func newOpenAIResponsesLiteValidationError(param, format string, args ...any) er
 	return &openAIResponsesLiteValidationError{param: param, message: fmt.Sprintf(format, args...)}
 }
 
-// validateOpenAIResponsesLiteFinalRequest checks the actual attempt after model
-// mapping, synthesis, history completion and header/metadata compatibility. It
-// is intentionally separate from the earlier namespace normalization: ingress
-// can request Lite while the mapped GPT-5.5 attempt is non-Lite. Callers render
-// this typed error as an invalid_request_error/400 before any upstream send.
-// It never deletes declarations, changes tool execution, or rewrites history.
+// Validate the tool contract for a payload marked as Lite. Protocol selection
+// handles hosted search history before callers reach this check. A payload
+// still marked as Lite must satisfy the upstream contract on its own.
 func validateOpenAIResponsesLiteFinalRequest(account *Account, finalModel, liteHeader string, body []byte) error {
 	if !isOpenAIResponsesLiteFinalRequest(account, finalModel, liteHeader, body) {
 		return nil

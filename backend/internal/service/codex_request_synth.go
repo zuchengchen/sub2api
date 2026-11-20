@@ -749,7 +749,7 @@ func codexSynthesisPrepareTools(
 	responsesLite bool,
 ) (map[string]string, bool) {
 	if !responsesLite && capability == codexCapabilityGeneric && !codexSynthesisToolChoiceNone(reqBody) &&
-		!codexSynthesisHasJSONOutputFormat(reqBody) && !codexSynthesisHasWebSearchTool(reqBody) &&
+		!codexSynthesisHasJSONOutputFormat(reqBody) && codexSynthesisNeedsWebSearchTool(reqBody) &&
 		codexDescriptorSupportsWebSearch(descriptor, hasDescriptor) {
 		// Hosted search executes upstream and needs no downstream executor.
 		// JSON output requests must keep their format contract; only the
@@ -800,19 +800,29 @@ func codexSynthesisToolChoiceNone(reqBody map[string]any) bool {
 	}
 }
 
-func codexSynthesisHasWebSearchTool(reqBody map[string]any) bool {
+func codexSynthesisNeedsWebSearchTool(reqBody map[string]any) bool {
 	if openAIToolsContainWebSearch(reqBody["tools"]) {
-		return true
+		return false
 	}
 	if input, ok := reqBody["input"].([]any); ok {
 		for _, raw := range input {
 			item, ok := raw.(map[string]any)
-			if ok && item["type"] == openAIAdditionalToolsItemType && openAIToolsContainWebSearch(item["tools"]) {
-				return true
+			if !ok {
+				continue
+			}
+			switch item["type"] {
+			case openAIWebSearchCallItemType:
+				// The OAuth transform supplies the cached-only declaration for
+				// replay and preserves the caller's tool selection.
+				return false
+			case openAIAdditionalToolsItemType:
+				if openAIToolsContainWebSearch(item["tools"]) {
+					return false
+				}
 			}
 		}
 	}
-	return false
+	return true
 }
 
 func codexSynthesisAppendTools(reqBody map[string]any, tools []any, responsesLite bool) {

@@ -24,7 +24,6 @@ func TestOAuthReliabilityFinalLiteHTTPRejectsBeforeUpstream(t *testing.T) {
 				{"nested_hosted", `"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"private_name","tools":[{"type":"image_generation"}]}]}]`, "input[0].tools[0].tools[0].type"},
 				{"hosted_tool_search", `"tools":[{"type":"tool_search","execution":"server"}]`, "tools[0].execution"},
 				{"implicit_tool_search", `"tools":[{"type":"tool_search"}]`, "tools[0].execution"},
-				{"required_history", `"input":[{"type":"web_search_call","id":"ws_fixture","status":"completed","action":{"type":"search","query":"private query"}}]`, "input[0].type"},
 			}
 			if route == "messages" {
 				cases = []struct{ name, fields, param string }{{"converted_hosted", `"messages":[{"role":"user","content":"fixture"}],"max_tokens":32,"tools":[{"type":"web_search_20250305","name":"web_search"}]`, "tools[0].type"}}
@@ -60,6 +59,184 @@ func TestOAuthReliabilityFinalLiteHTTPRejectsBeforeUpstream(t *testing.T) {
 			}
 		}
 	}
+}
+
+const oauthLiteSearchHistoryItem = `{"type":"web_search_call","id":"ws_history","status":"completed","action":{"type":"search","query":"fixture","sources":[{"type":"url","url":"https://example.org"}]}}`
+
+func TestOAuthLiteHostedSearchHistoryForwardedOnStandardHTTP(t *testing.T) {
+	pinCodexTestVersion(t, "0.166.0")
+	for _, tc := range []struct {
+		route, path    string
+		header, marker bool
+		stream         bool
+		historyIndex   int
+	}{
+		{"responses", "/v1/responses", true, true, true, 184},
+		{"metadata_with_image_bridge", "/v1/responses", false, true, true, 1},
+		{"passthrough", "/v1/responses", false, true, false, 1},
+		{"chat", "/v1/chat/completions", true, false, false, 1},
+	} {
+		t.Run(tc.route, func(t *testing.T) {
+			var input []json.RawMessage
+			for i := 0; i < tc.historyIndex; i++ {
+				input = append(input, json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":[{"type":"input_text","text":"turn %d"}]}`, i)))
+			}
+			input = append(input, json.RawMessage(oauthLiteSearchHistoryItem))
+			if tc.route == "passthrough" {
+				input = append(input,
+					json.RawMessage(`{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"catalog","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}]}`),
+					json.RawMessage(`{"type":"function_call","id":"fc_lookup","call_id":"call_lookup","namespace":"catalog","name":"lookup","arguments":"{}"}`),
+					json.RawMessage(`{"type":"function_call_output","call_id":"call_lookup","namespace":"catalog","output":"retained"}`))
+			}
+			input = append(input, json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}`))
+			request := map[string]any{
+				"model": "gpt-6-astra", "instructions": "fixture", "stream": tc.stream,
+				"input": input, "tools": []any{}, "parallel_tool_calls": false,
+				"reasoning": map[string]string{"context": "all_turns"},
+			}
+			if tc.route != "responses" {
+				request["tool_choice"] = "auto"
+			}
+			if tc.marker {
+				request["client_metadata"] = map[string]string{responsesLiteWSMetadataKey: "true", "fixture_key": "keep"}
+			}
+			body, err := json.Marshal(request)
+			require.NoError(t, err)
+			original := bytes.Clone(body)
+			c, recorder := oauthReliabilityContractContext(tc.path, body)
+			if tc.header {
+				c.Request.Header.Set(responsesLiteHeader, "true")
+			}
+			account := newCodexSynthTestAccount(9232, AccountTypeOAuth)
+			account.Extra["openai_passthrough"] = tc.route == "passthrough"
+			upstream := &httpUpstreamRecorder{resp: openAICompatSSECompletedResponse("resp_history", "gpt-6-astra")}
+			svc := &OpenAIGatewayService{cfg: codexSynthEnabledConfig(), httpUpstream: upstream, tiboRouteDisabled: true}
+			if tc.route == "metadata_with_image_bridge" {
+				svc.cfg.Gateway.ForceCodexCLI = true
+				svc.cfg.Gateway.CodexImageGenerationBridgeEnabled = true
+			}
+			result, err := oauthReliabilityContractForward(svc, c, account, tc.route, body)
+			require.NoError(t, err, recorder.Body.String())
+			require.NotNil(t, result)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.Len(t, upstream.bodies, 1)
+			require.Equal(t, astraProCodexResponsesURL, upstream.lastReq.URL.String())
+			require.Empty(t, upstream.lastReq.Header.Get(responsesLiteHeader))
+			sent := gjson.ParseBytes(upstream.lastBody)
+			require.False(t, sent.Get("client_metadata."+responsesLiteWSMetadataKey).Exists())
+			if tc.marker {
+				require.Equal(t, "keep", sent.Get("client_metadata.fixture_key").String())
+			}
+			require.Equal(t, "gpt-6-astra", sent.Get("model").String())
+			require.Equal(t, "all_turns", sent.Get("reasoning.context").String())
+			require.Equal(t, gjson.False, sent.Get("parallel_tool_calls").Type)
+			require.JSONEq(t, `[{"type":"web_search","external_web_access":false}]`, sent.Get("tools").Raw)
+			if tc.route == "passthrough" {
+				require.Equal(t, "auto", sent.Get("tool_choice").String(), "caller-declared tools remain callable")
+			} else {
+				require.Equal(t, "none", sent.Get("tool_choice").String())
+			}
+			// Generic synthesis can prepend its Codex instructions. Every
+			// caller item must still follow them in order, including input[184].
+			sentInput := sent.Get("input").Array()
+			require.GreaterOrEqual(t, len(sentInput), len(input))
+			for i, item := range sentInput[len(sentInput)-len(input):] {
+				require.JSONEq(t, string(input[i]), item.Raw)
+			}
+			require.Equal(t, original, body)
+			require.Equal(t, tc.header, isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)))
+			value, _ := c.Get(openAIFinalProtocolDiagnosticKey)
+			require.False(t, value.(openAIFinalProtocolDiagnostic).FinalLite)
+		})
+	}
+}
+
+func TestOAuthLiteHostedSearchHistoryCompactHTTP(t *testing.T) {
+	for _, passthrough := range []bool{false, true} {
+		for _, native := range []bool{false, true} {
+			t.Run(fmt.Sprintf("passthrough=%t/native=%t", passthrough, native), func(t *testing.T) {
+				path := "/v1/responses/compact"
+				body := []byte(`{"model":"gpt-6-astra","instructions":"fixture","input":[` + oauthLiteSearchHistoryItem + `],"tools":[]}`)
+				upstream := &httpUpstreamRecorder{resp: newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"id":"resp_compact","status":"completed","output":[{"type":"compaction","encrypted_content":"fixture"}],"usage":{"input_tokens":1,"output_tokens":1}}`)}
+				if native {
+					path = "/v1/responses"
+					var err error
+					body, err = sjson.SetBytes(body, "stream", true)
+					require.NoError(t, err)
+					body, err = sjson.SetRawBytes(body, "input.-1", []byte(`{"type":"compaction_trigger"}`))
+					require.NoError(t, err)
+					upstream.responses = []*http.Response{
+						newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"context_length_exceeded","message":"context window exceeded"}}`),
+						nativeCompactionSSEResponse(true),
+					}
+				}
+				c, recorder := oauthReliabilityContractContext(path, body)
+				c.Request.Header.Set(responsesLiteHeader, "true")
+				if native {
+					MarkOpenAINativeCompactionV2(c)
+				}
+				account := newOpenAIOAuthNamespaceTestAccount()
+				account.Extra["openai_passthrough"] = passthrough
+				svc := newOpenAIRejectedFieldTestService(upstream)
+				if native {
+					svc.cfg.Gateway.OpenAICompactModel = "gpt-6-sol"
+				}
+				result, err := svc.Forward(c.Request.Context(), c, account, body)
+				require.NoError(t, err, recorder.Body.String())
+				require.NotNil(t, result)
+				if native {
+					require.Len(t, upstream.bodies, 2)
+					require.Equal(t, "gpt-6-sol", gjson.GetBytes(upstream.bodies[1], "model").String())
+				} else {
+					require.Len(t, upstream.bodies, 1)
+				}
+				require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.bodies[0], "model").String())
+				for i, wire := range upstream.bodies {
+					require.Empty(t, upstream.requests[i].Header.Get(responsesLiteHeader))
+					require.JSONEq(t, oauthLiteSearchHistoryItem, gjson.GetBytes(wire, `input.#(type=="web_search_call")`).Raw)
+					if native {
+						require.Equal(t, astraProCodexResponsesURL, upstream.requests[i].URL.String())
+						require.JSONEq(t, `[{"type":"web_search","external_web_access":false}]`, gjson.GetBytes(wire, "tools").Raw)
+						require.Equal(t, "none", gjson.GetBytes(wire, "tool_choice").String())
+						items := gjson.GetBytes(wire, "input").Array()
+						require.Equal(t, "compaction_trigger", items[len(items)-1].Get("type").String())
+					} else {
+						require.Equal(t, astraProCodexResponsesURL+"/compact", upstream.requests[i].URL.String())
+						require.Empty(t, gjson.GetBytes(wire, "tools").Array())
+						require.False(t, gjson.GetBytes(wire, "tool_choice").Exists())
+					}
+				}
+				require.Equal(t, "true", c.GetHeader(responsesLiteHeader))
+			})
+		}
+	}
+}
+
+func TestOAuthLiteHostedSearchHistoryFailoverPreservesAPIKeyRequest(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-astra","stream":false,"input":[` + oauthLiteSearchHistoryItem + `],"tools":[],"tool_choice":"auto","client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}}`)
+	original := bytes.Clone(body)
+	c := newOpenAIRejectedFieldTestContext(body)
+	c.Request.Header.Set(responsesLiteHeader, "true")
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusServiceUnavailable, `{"error":{"code":"server_error","message":"temporarily unavailable"}}`),
+		openAICompatSSECompletedResponse("resp_fallback", "gpt-6-astra"),
+	}}
+	svc := newOpenAIRejectedFieldTestService(upstream)
+	_, err := svc.Forward(c.Request.Context(), c, newOpenAIOAuthNamespaceTestAccount(), body)
+	var failover *UpstreamFailoverError
+	require.ErrorAs(t, err, &failover)
+	result, err := svc.Forward(c.Request.Context(), c, newOpenAIRejectedFieldTestAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 2)
+	require.Empty(t, upstream.requests[0].Header.Get(responsesLiteHeader))
+	require.Equal(t, "none", gjson.GetBytes(upstream.bodies[0], "tool_choice").String())
+	require.Equal(t, "true", upstream.requests[1].Header.Get(responsesLiteHeader))
+	require.True(t, isOpenAIResponsesLiteWebSocketPayload(upstream.bodies[1]))
+	require.JSONEq(t, "[]", gjson.GetBytes(upstream.bodies[1], "tools").Raw)
+	require.Equal(t, "auto", gjson.GetBytes(upstream.bodies[1], "tool_choice").String())
+	require.JSONEq(t, oauthLiteSearchHistoryItem, gjson.GetBytes(upstream.bodies[1], "input.0").Raw)
+	require.Equal(t, original, body)
 }
 
 func TestOAuthReliabilityFinalLiteSynthesisAcrossHTTPEntrypoints(t *testing.T) {

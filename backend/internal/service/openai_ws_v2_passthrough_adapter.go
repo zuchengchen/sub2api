@@ -754,7 +754,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		firstClientMessage = s.ReplaceModelInBody(firstClientMessage, capturedSessionModel)
 	}
 	firstClientMessage = s.rewriteOpenAIClientLocalTimeForRequest(c, account, firstClientMessage)
-	preparedFirst, preflightErr := prepareOpenAIFinalWSProtocol(c, account, capturedSessionModel, firstClientMessage)
+	var webSearchHistory openAIWSWebSearchHistory
+	preparedFirst, preflightErr := prepareOpenAIFinalWSProtocol(c, account, capturedSessionModel, firstClientMessage, webSearchHistory.begin(account, firstClientMessage))
 	if preflightErr != nil {
 		return s.writeOpenAIProtocolValidationWS(ctx, c, clientConn, hooks, preflightErr)
 	}
@@ -1187,7 +1188,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				payload = s.ReplaceModelInBody(payload, model)
 			}
 			if isResponseCreate {
-				prepared, preflightErr := prepareOpenAIFinalWSProtocol(c, account, model, payload)
+				prepared, preflightErr := prepareOpenAIFinalWSProtocol(c, account, model, payload, webSearchHistory.begin(account, payload))
 				if preflightErr != nil {
 					return payload, nil, s.writeOpenAIProtocolValidationWS(ctx, c, clientConn, hooks, preflightErr)
 				}
@@ -1362,18 +1363,24 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			},
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
-				if msgType == coderws.MessageText && writeErr == nil {
+				if msgType != coderws.MessageText {
+					return
+				}
+				completedResponseID := ""
+				if writeErr == nil {
 					s.noteOpenAICodexTurnStateEvent(c, account, payload)
 					eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 					markOpenAIWSClientVisibleFailure(c, eventType, payload)
-					if eventType == "response.completed" || eventType == "response.done" {
+					if successfulOpenAIResponseAuthOwnerTerminal(eventType) {
 						status := gjson.GetBytes(payload, "response.status").String()
 						if status == "" || status == "completed" {
-							s.bindOpenAIResponseAuthOwner(ctx, c, account, gjson.GetBytes(payload, "response.id").String())
+							completedResponseID = gjson.GetBytes(payload, "response.id").String()
+							s.bindOpenAIResponseAuthOwner(ctx, c, account, completedResponseID)
 						}
 					}
 				}
-				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
+				if openAIWSPassthroughIsTerminalOutput(payload) {
+					webSearchHistory.complete(completedResponseID, writeErr == nil)
 					currentClientCreate.Store(nil)
 					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)
 				}
