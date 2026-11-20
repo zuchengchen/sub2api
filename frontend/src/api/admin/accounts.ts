@@ -969,6 +969,7 @@ export interface OpenAIQuotaUsage {
   rate_limit_reset_credits?: OpenAIRateLimitResetCredits | null
   credits?: OpenAICredits | null
   fetched_at: number
+  query_started_at_us?: number
 }
 
 export interface OpenAICredits {

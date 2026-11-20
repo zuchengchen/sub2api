@@ -722,6 +722,9 @@ func lockAndMergeAccountProbeExtra(
 	); err != nil {
 		return nil, err
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -740,6 +743,9 @@ func lockAndMergeAccountProbeExtra(
 		}
 	}
 	extra := service.MergeOpenAICodexTicketExtra(copyJSONMap(normalizeJSONMap(account.Extra)), currentExtra)
+	if err := mergeCodexCreditSnapshots(ctx, client, account, extra, currentExtra, identityUnchanged); err != nil {
+		return nil, err
+	}
 	// Preserve the latest attempt under the row lock; a stale admin form must
 	// not erase the card reservation used to deduplicate automatic resets.
 	delete(extra, service.OpenAIAutoResetCreditStateExtraKey)
@@ -2952,7 +2958,7 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 			return err
 		}
 	}
-	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
+	extraExpression := "COALESCE(extra, '{}'::jsonb) || " + accountExtraPatchSQL(updates)
 	if clearProbeSnapshot {
 		extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
 	}

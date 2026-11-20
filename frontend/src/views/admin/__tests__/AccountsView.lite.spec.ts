@@ -4,6 +4,7 @@ import { defineComponent } from 'vue'
 
 import AccountsView from '../AccountsView.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
+import OpenAIQuotaResetCell from '@/components/account/OpenAIQuotaResetCell.vue'
 
 const {
   listAccounts,
@@ -67,6 +68,7 @@ const DataTableStub = defineComponent({
     <div>
       <div v-for="row in data" :key="row.id" :data-account-name="row.name">
         <slot name="cell-groups" :row="row" />
+        <slot name="cell-usage" :row="row" />
         <slot name="cell-actions" :row="row" />
       </div>
     </div>
@@ -93,7 +95,7 @@ const AccountStatsModalStub = defineComponent({
   template: '<div data-test="stats-account">{{ show ? account?.name : "" }}</div>'
 })
 
-function mountView(stubActionMenu = true) {
+function mountView(stubActionMenu = true, renderQuota = false) {
   return mount(AccountsView, {
     attachTo: document.body,
     global: {
@@ -123,7 +125,7 @@ function mountView(stubActionMenu = true) {
         AccountStatusIndicator: true,
         AccountTodayStatsCell: true,
         AccountGroupsCell: AccountGroupsCellStub,
-        AccountUsageCell: true,
+        AccountUsageCell: renderQuota ? OpenAIQuotaResetCell : true,
         UpstreamBillingRateCell: true,
         HelpTooltip: true,
         Icon: true,
@@ -233,6 +235,123 @@ describe('admin AccountsView lite account list', () => {
       expect.objectContaining({ lite: '1' }),
       expect.objectContaining({ etag: null })
     )
+    wrapper.unmount()
+  })
+
+  it('reads only the visible GPT credit snapshots every five minutes with list auto-refresh off', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    const other = { ...listRow, id: 43, platform: 'anthropic', type: 'apikey' }
+    const page = { page: 1, page_size: 20, total: 2, pages: 1 }
+    listAccounts.mockResolvedValue({ ...page, items: [listRow, other] })
+    const snapshots = {
+      codex_reset_credit_snapshot: { available_count: 0, credits: [], fetched_at: 100 },
+      codex_credits_snapshot: { credits: { has_credits: true, unlimited: false, balance: '123' }, fetched_at: 100 }
+    }
+    listWithEtag.mockResolvedValueOnce({
+      notModified: false, etag: 'quota-1',
+      data: { ...page, items: [
+        { ...other, name: 'unrelated update' },
+        { ...listRow, name: 'another update', extra: { ...snapshots, unrelated: true } }
+      ] }
+    })
+    const wrapper = mountView(true, true)
+    await flushPromises()
+    getBatchTodayStatsWithEtag.mockClear()
+    expect(wrapper.get('[data-testid="codex-credits"] span').text()).toBe('—')
+    await vi.advanceTimersByTimeAsync(299_999)
+    expect(listWithEtag).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(listWithEtag).toHaveBeenCalledTimes(1)
+    expect(wrapper.getComponent(DataTableStub).props('data')).toEqual([{ ...listRow, extra: snapshots }, other])
+    expect(wrapper.get('[data-testid="reset-credit-count"]').text()).toContain('count0')
+    expect(wrapper.get('[data-testid="codex-credits"] span').text()).toBe('123')
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(listWithEtag).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({ lite: '1' }), expect.objectContaining({ etag: 'quota-1' }))
+    expect(getBatchTodayStatsWithEtag).not.toHaveBeenCalled()
+    expect(listAccounts).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it.each([
+    { type: 'apikey', hiddenColumns: [] },
+    { type: 'oauth', hiddenColumns: ['usage'] }
+  ])('skips the five-minute poll for $type rows with hidden columns $hiddenColumns', async ({ type, hiddenColumns }) => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    localStorage.setItem('account-hidden-columns', JSON.stringify(hiddenColumns))
+    listAccounts.mockResolvedValue({ items: [{ ...listRow, type }], total: 1, pages: 1 })
+    const wrapper = mountView()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(listWithEtag).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('uses the full list timer once auto-refresh is enabled and resets the partial-list ETag', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    localStorage.setItem('account-auto-refresh', JSON.stringify({ enabled: false, interval_seconds: 10 }))
+    const wrapper = mountView()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(listWithEtag).toHaveBeenCalledTimes(1)
+    await wrapper.get('button[title="admin.accounts.autoRefresh"]').trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.enableAutoRefresh')!.trigger('click')
+    document.body.click()
+    const extra = { codex_reset_credit_snapshot: { available_count: 0, fetched_at: 101 } }
+    listWithEtag.mockResolvedValueOnce({ notModified: false, etag: 'full', data: {
+      items: [{ ...listRow, extra }], total: 1, pages: 1
+    } })
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(listWithEtag).toHaveBeenCalledTimes(2)
+    expect(listWithEtag).toHaveBeenLastCalledWith(1, 20, expect.anything(), expect.objectContaining({ etag: null }))
+    expect(wrapper.getComponent(DataTableStub).props('data')).toMatchObject([{ extra }])
+    await vi.advanceTimersByTimeAsync(288_999)
+    const beforeFiveMinutes = listWithEtag.mock.calls.length
+    await vi.advanceTimersByTimeAsync(1)
+    expect(listWithEtag).toHaveBeenCalledTimes(beforeFiveMinutes)
+    wrapper.unmount()
+  })
+
+  it('keeps the credit poll idle while the tab is hidden or an account editor is open', async () => {
+    vi.useFakeTimers()
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    const wrapper = mountView()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(300_000)
+    hidden.mockReturnValue(false)
+    await wrapper.findAll('button').find(button => button.text().includes('common.edit'))!.trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(listWithEtag).not.toHaveBeenCalled()
+    wrapper.getComponent(EditAccountModalStub).vm.$emit('close')
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(listWithEtag).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(listWithEtag).toHaveBeenCalledTimes(1)
+  })
+
+  it('discards a credit snapshot response after a filter change, even when both lists contain the same row', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    let finish!: (value: unknown) => void
+    listWithEtag.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(300_000)
+    const signal = listWithEtag.mock.calls[0][3].signal
+    const filters = wrapper.getComponent({ name: 'AccountTableFilters' })
+    filters.vm.$emit('update:filters', { platform: 'openai' })
+    filters.vm.$emit('change')
+    expect(signal.aborted).toBe(true)
+    const snapshot = { available_count: 0, credits: [], fetched_at: 10 }
+    listAccounts.mockResolvedValue({ items: [{ ...listRow, extra: { codex_reset_credit_snapshot: snapshot } }], total: 1, pages: 1 })
+    await vi.advanceTimersByTimeAsync(300)
+    finish({ notModified: false, etag: 'stale', data: { items: [listRow] } })
+    await flushPromises()
+    expect(wrapper.getComponent(DataTableStub).props('data')).toMatchObject([{ extra: { codex_reset_credit_snapshot: snapshot } }])
     wrapper.unmount()
   })
 

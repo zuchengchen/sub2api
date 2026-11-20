@@ -501,13 +501,10 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 		{ExpiresAt: "2026-07-04T04:05:06Z"},
 	}, usage.RateLimitResetCredits.Credits)
 	require.NoError(t, svc.CacheResetCreditsSnapshot(ctx, 100, usage.RateLimitResetCredits))
-	require.Equal(t, &OpenAIRateLimitResetCredits{
-		AvailableCount: 2,
-		Credits: []OpenAIRateLimitResetCreditDetail{
-			{ExpiresAt: "2026-07-03T04:05:06Z"},
-			{ExpiresAt: "2026-07-04T04:05:06Z"},
-		},
-	}, repo.extraUpdates[100][openaiQuotaResetCreditsKey])
+	require.Positive(t, usage.QueryStartedAt)
+	require.Equal(t, usage.QueryStartedAt, usage.RateLimitResetCredits.QueryStartedAt)
+	require.Equal(t, usage.FetchedAt, usage.RateLimitResetCredits.FetchedAt)
+	require.Equal(t, usage.RateLimitResetCredits, repo.extraUpdates[100][openaiQuotaResetCreditsKey])
 
 	encoded, err := json.Marshal(usage)
 	require.NoError(t, err)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -53,6 +54,71 @@ func TestQueryUsageCodexCredits(t *testing.T) {
 			require.JSONEq(t, tc.want, string(encoded))
 			require.Equal(t, []string{"/backend-api/wham/usage", "/backend-api/wham/rate-limit-reset-credits"}, paths)
 			require.Zero(t, repo.extraUpdateCalls, "read-only query must not write account state")
+		})
+	}
+}
+
+func TestRefreshCreditSnapshots(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		usageStatus   int
+		detailsStatus int
+	}{
+		{"both snapshots share one write", http.StatusOK, http.StatusOK},
+		{"points survive unavailable card details", http.StatusOK, http.StatusServiceUnavailable},
+		{"failed query preserves both snapshots", http.StatusServiceUnavailable, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
+				Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-workspace"}}
+			repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+			tokens := &stubQuotaTokenCache{tokens: map[string]string{OpenAITokenCacheKey(account): "test-token"}}
+			var requests []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests = append(requests, r.Method+" "+r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/backend-api/wham/usage":
+					w.WriteHeader(tc.usageStatus)
+					_, _ = w.Write([]byte(`{"credits":{"has_credits":true,"balance":"23.75"},"rate_limit_reset_credits":{"available_count":1}}`))
+				case "/backend-api/wham/rate-limit-reset-credits":
+					w.WriteHeader(tc.detailsStatus)
+					_, _ = w.Write([]byte(`{"available_count":1,"credits":[{"id":"private-card","expires_at":"2028-01-01T00:00:00Z"}]}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			svc := NewOpenAIQuotaService(repo, nil, NewOpenAITokenProvider(repo, tokens, nil), newQuotaRedirectingFactory(srv), nil)
+			before := time.Now().UnixMicro()
+			err := svc.RefreshCreditSnapshots(context.Background(), account.ID)
+			if tc.usageStatus != http.StatusOK {
+				require.Error(t, err)
+				require.Equal(t, []string{"GET /backend-api/wham/usage"}, requests)
+				require.Zero(t, repo.extraUpdateCalls)
+				return
+			}
+			require.Equal(t, []string{"GET /backend-api/wham/usage", "GET /backend-api/wham/rate-limit-reset-credits"}, requests)
+			require.Equal(t, 1, repo.extraUpdateCalls)
+			updates := repo.extraUpdates[account.ID]
+			points := updates[openaiQuotaCreditsKey].(openAICreditsSnapshot)
+			require.Equal(t, "23.75", *points.Credits.Balance)
+			require.GreaterOrEqual(t, points.QueryStartedAt, before)
+			if tc.detailsStatus != http.StatusOK {
+				require.Error(t, err)
+				require.Len(t, updates, 1)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, updates, 2)
+			cards := updates[openaiQuotaResetCreditsKey].(*OpenAIRateLimitResetCredits)
+			require.Equal(t, 1, cards.AvailableCount)
+			require.Equal(t, "2028-01-01T00:00:00Z", cards.Credits[0].ExpiresAt)
+			require.Equal(t, points.FetchedAt, cards.FetchedAt)
+			require.Equal(t, points.QueryStartedAt, cards.QueryStartedAt)
+			raw, err := json.Marshal(updates)
+			require.NoError(t, err)
+			require.NotContains(t, string(raw), "private-card")
 		})
 	}
 }

@@ -562,6 +562,7 @@ export default {
         pointsAvailable: '可用',
         pointsTooltip: '点击查询 Codex 点数余额和重置次数',
         pointsUpdatedAt: '余额查询时间：{time}',
+        countUpdatedAt: '次数查询时间：{time}',
         pointsCachePersistFailed: '已显示实时点数，但缓存保存失败，请重新查询。',
         reset: '重置',
         countTooltipLoad: '点击查询剩余重置次数和点数余额',

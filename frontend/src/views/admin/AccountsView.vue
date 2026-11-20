@@ -539,7 +539,7 @@ import AccountPriorityCell from '@/components/account/AccountPriorityCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { fetchAllAccountIds } from '@/utils/accountSelection'
-import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey, buildOpenAIAstraPolicyRefreshKey } from '@/utils/accountUsageRefresh'
+import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey, buildOpenAIAstraPolicyRefreshKey, buildOpenAIQuotaCreditsRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -767,8 +767,14 @@ const autoRefreshIntervals = [5, 10, 15, 30] as const
 const autoRefreshEnabled = ref(false)
 const autoRefreshIntervalSeconds = ref<(typeof autoRefreshIntervals)[number]>(30)
 const autoRefreshCountdown = ref(0)
-const autoRefreshETag = ref<string | null>(null)
-const autoRefreshFetching = ref(false)
+const OPENAI_QUOTA_SNAPSHOT_REFRESH_MS = 5 * 60_000
+let autoRefreshETag: string | null = null
+let accountListRefreshController: AbortController | null = null
+const resetAccountListRefresh = () => {
+  accountListRefreshController?.abort()
+  accountListRefreshController = null
+  autoRefreshETag = null
+}
 const AUTO_REFRESH_SILENT_WINDOW_MS = 15000
 const autoRefreshSilentUntil = ref(0)
 const hasPendingListSync = ref(false)
@@ -1033,15 +1039,11 @@ if (typeof window !== 'undefined') {
 }
 
 const setAutoRefreshEnabled = (enabled: boolean) => {
+  // Snapshot-only polls apply two fields. A full refresh needs its own first response.
+  resetAccountListRefresh()
   autoRefreshEnabled.value = enabled
   saveAutoRefreshToStorage()
-  if (enabled) {
-    autoRefreshCountdown.value = autoRefreshIntervalSeconds.value
-    resumeAutoRefresh()
-  } else {
-    pauseAutoRefresh()
-    autoRefreshCountdown.value = 0
-  }
+  autoRefreshCountdown.value = enabled ? autoRefreshIntervalSeconds.value : 0
 }
 
 const setAutoRefreshInterval = (seconds: (typeof autoRefreshIntervals)[number]) => {
@@ -1172,7 +1174,7 @@ useSwipeSelect(accountTableRef, {
 }, swipeVirtualContext)
 
 const resetAutoRefreshCache = () => {
-  autoRefreshETag.value = null
+  resetAccountListRefresh()
   upstreamBillingRateETag.value = null
 }
 
@@ -1414,6 +1416,7 @@ const isAnyModalOpen = computed(() => {
 })
 
 const enterAutoRefreshSilentWindow = () => {
+  resetAccountListRefresh()
   autoRefreshSilentUntil.value = Date.now() + AUTO_REFRESH_SILENT_WINDOW_MS
   autoRefreshCountdown.value = autoRefreshIntervalSeconds.value
 }
@@ -1433,6 +1436,7 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
     current.overload_until !== next.overload_until ||
     current.temp_unschedulable_until !== next.temp_unschedulable_until ||
+    buildOpenAIQuotaCreditsRefreshKey(current) !== buildOpenAIQuotaCreditsRefreshKey(next) ||
     buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next) ||
     buildOpenAIAstraPolicyRefreshKey(current) !== buildOpenAIAstraPolicyRefreshKey(next) ||
     buildGrokUsageRefreshKey(current) !== buildGrokUsageRefreshKey(next)
@@ -1477,31 +1481,44 @@ const mergeAccountsIncrementally = (nextRows: Account[]) => {
   }
 }
 
-const refreshAccountsIncrementally = async () => {
-  if (autoRefreshFetching.value) return
+const isOpenAIOAuthRow = (row: Account) => row.platform === 'openai' && row.type === 'oauth'
+
+const applyOpenAIQuotaSnapshots = (nextRows: Account[]) => {
+  const quotaRows = new Map(nextRows.filter(isOpenAIOAuthRow).map(row => [row.id, row]))
+  for (const row of accounts.value) {
+    const next = quotaRows.get(row.id)
+    if (!next || !isOpenAIOAuthRow(row)) continue
+    if ((next.extra?.codex_reset_credit_owner_changed_at_us ?? 0) < (row.extra?.codex_reset_credit_owner_changed_at_us ?? 0)) continue
+    if (buildOpenAIQuotaCreditsRefreshKey(row) === buildOpenAIQuotaCreditsRefreshKey(next)) continue
+    row.extra = {
+      ...row.extra,
+      codex_reset_credit_owner_changed_at_us: next.extra?.codex_reset_credit_owner_changed_at_us,
+      codex_reset_credit_snapshot: next.extra?.codex_reset_credit_snapshot,
+      codex_credits_snapshot: next.extra?.codex_credits_snapshot
+    }
+  }
+}
+
+const accountListRefreshBlocked = () => document.hidden || loading.value || isAnyModalOpen.value ||
+  menu.show || showAccountToolsDropdown.value || showAutoRefreshDropdown.value
+
+const refreshAccountsIncrementally = async (quotaSnapshotsOnly = false) => {
+  if (accountListRefreshController) return
   syncAccountListDerivedParams()
-  autoRefreshFetching.value = true
+  const controller = new AbortController()
+  accountListRefreshController = controller
   try {
     const result = await adminAPI.accounts.listWithEtag(
       pagination.page,
       pagination.page_size,
-      toRaw(params) as {
-        platform?: string
-        type?: string
-        status?: string
-        privacy_mode?: string
-        plan_type?: string
-        group?: string
-        search?: string
-        sort_by?: string
-        sort_order?: AccountSortOrder
-
-      },
-      { etag: autoRefreshETag.value }
+      toRaw(params),
+      { etag: autoRefreshETag, signal: controller.signal }
     )
-
-    if (result.etag) {
-      autoRefreshETag.value = result.etag
+    if (controller.signal.aborted || accountListRefreshBlocked() || inAutoRefreshSilentWindow()) return
+    autoRefreshETag = result.etag
+    if (quotaSnapshotsOnly) {
+      if (!result.notModified && result.data) applyOpenAIQuotaSnapshots(result.data.items)
+      return
     }
     if (!result.notModified && result.data) {
       pagination.total = result.data.total || 0
@@ -1513,9 +1530,9 @@ const refreshAccountsIncrementally = async () => {
 
     await refreshTodayStatsBatch()
   } catch (error) {
-    console.error('Auto refresh failed:', error)
+    if (!controller.signal.aborted) console.error('Auto refresh failed:', error)
   } finally {
-    autoRefreshFetching.value = false
+    if (accountListRefreshController === controller) accountListRefreshController = null
   }
 }
 
@@ -1589,13 +1606,15 @@ const syncPendingListChanges = async () => {
   usageManualRefreshToken.value += 1
 }
 
-const { pause: pauseAutoRefresh, resume: resumeAutoRefresh } = useIntervalFn(
+const { resume: startAccountListRefresh } = useIntervalFn(
   async () => {
-    if (!autoRefreshEnabled.value) return
-    if (document.hidden) return
-    if (loading.value || autoRefreshFetching.value) return
-    if (isAnyModalOpen.value) return
-    if (menu.show || showAccountToolsDropdown.value || showAutoRefreshDropdown.value) return
+    if (accountListRefreshController || accountListRefreshBlocked()) return
+    if (!autoRefreshEnabled.value) {
+      if (isColumnVisible('usage') && accounts.value.some(isOpenAIOAuthRow) && !inAutoRefreshSilentWindow()) {
+        await refreshAccountsIncrementally(true)
+      }
+      return
+    }
     if (inAutoRefreshSilentWindow()) {
       autoRefreshCountdown.value = Math.max(
         0,
@@ -1612,7 +1631,7 @@ const { pause: pauseAutoRefresh, resume: resumeAutoRefresh } = useIntervalFn(
 
     autoRefreshCountdown.value -= 1
   },
-  1000,
+  () => autoRefreshEnabled.value ? 1000 : OPENAI_QUOTA_SNAPSHOT_REFRESH_MS,
   { immediate: false }
 )
 
@@ -2499,6 +2518,8 @@ onMounted(async () => {
     }
   }
 
+  autoRefreshCountdown.value = autoRefreshEnabled.value ? autoRefreshIntervalSeconds.value : 0
+  startAccountListRefresh()
   load()
   loadUpstreamBillingProbeGlobalState()
   const [proxiesResult, groupsResult] = await Promise.allSettled([
@@ -2518,16 +2539,10 @@ onMounted(async () => {
   window.addEventListener('scroll', handleScroll, true)
   window.addEventListener('resize', handleViewportResize)
   document.addEventListener('click', handleClickOutside)
-
-  if (autoRefreshEnabled.value) {
-    autoRefreshCountdown.value = autoRefreshIntervalSeconds.value
-    resumeAutoRefresh()
-  } else {
-    pauseAutoRefresh()
-  }
 })
 
 onUnmounted(() => {
+  resetAccountListRefresh()
   upstreamBillingRateAbortController?.abort()
   if (usageBatchFlushTimer !== null) {
     clearTimeout(usageBatchFlushTimer)

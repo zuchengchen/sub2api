@@ -1629,6 +1629,7 @@ export default {
         pointsAvailable: 'Available',
         pointsTooltip: 'Click to query Codex points and reset credits',
         pointsUpdatedAt: 'Balance checked: {time}',
+        countUpdatedAt: 'Reset credits checked: {time}',
         pointsCachePersistFailed: 'Showing live points, but the cache could not be saved. Query again.',
         reset: 'Reset',
         countTooltipLoad: 'Click to load the available reset-credit count and points balance',

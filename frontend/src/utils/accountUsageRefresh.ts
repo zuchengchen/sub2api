@@ -34,6 +34,13 @@ export const buildOpenAIAstraPolicyRefreshKey = (account: Pick<Account, 'platfor
   return [account.openai_oauth_model_policy, account.codex_turn_tickets].map(serializeSnapshotRefreshValue).join('|')
 }
 
+export const buildOpenAIQuotaCreditsRefreshKey = (account: Pick<Account, 'platform' | 'type' | 'extra'>): string => {
+  if (account.platform !== 'openai' || account.type !== 'oauth') return ''
+  const extra = account.extra
+  return [extra?.codex_reset_credit_owner_changed_at_us, extra?.codex_reset_credit_snapshot, extra?.codex_credits_snapshot]
+    .map(serializeSnapshotRefreshValue).join('|')
+}
+
 export const buildOpenAIUsageRefreshKey = (account: Pick<Account, 'id' | 'platform' | 'type' | 'updated_at' | 'last_used_at' | 'rate_limit_reset_at' | 'extra'>): string => {
   if (account.platform !== 'openai' || account.type !== 'oauth') {
     return ''

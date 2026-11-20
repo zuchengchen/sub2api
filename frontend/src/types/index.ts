@@ -1355,7 +1355,10 @@ export interface Account {
     codex_reset_credit_snapshot?: {
       available_count?: number
       credits?: { expires_at?: string }[]
+      fetched_at?: number
+      query_started_at_us?: number
     }
+    codex_reset_credit_owner_changed_at_us?: number
     auto_reset_credit_enabled?: boolean
     auto_reset_credit_opt_in_version?: number
     auto_reset_credit_5h_threshold?: number
@@ -1371,6 +1374,7 @@ export interface Account {
     codex_credits_snapshot?: {
       credits: { has_credits: boolean; unlimited: boolean; balance: string | null } | null
       fetched_at: number
+      query_started_at_us?: number
     }
     codex_referral_snapshot?: import('./openaiReferrals').OpenAIReferralEligibility | null
     // 额度用尽后是否允许上游消耗点数；缺省为 false（用尽即 429 限流）。

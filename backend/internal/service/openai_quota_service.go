@@ -61,6 +61,8 @@ type OpenAIRateLimitResetCreditDetail struct {
 type OpenAIRateLimitResetCredits struct {
 	AvailableCount int                                `json:"available_count"`
 	Credits        []OpenAIRateLimitResetCreditDetail `json:"credits,omitempty"`
+	FetchedAt      int64                              `json:"fetched_at,omitempty"`
+	QueryStartedAt int64                              `json:"query_started_at_us,omitempty"`
 }
 
 // OpenAICredits is the spendable Codex credit balance from /wham/usage.
@@ -74,8 +76,9 @@ type OpenAICredits struct {
 }
 
 type openAICreditsSnapshot struct {
-	Credits   *OpenAICredits `json:"credits"`
-	FetchedAt int64          `json:"fetched_at"`
+	Credits        *OpenAICredits `json:"credits"`
+	FetchedAt      int64          `json:"fetched_at"`
+	QueryStartedAt int64          `json:"query_started_at_us,omitempty"`
 }
 
 // OpenAIQuotaUsage is the typed projection of /wham/usage we expose to the UI.
@@ -91,7 +94,12 @@ type OpenAIQuotaUsage struct {
 	RateLimitResetCredits *OpenAIRateLimitResetCredits `json:"rate_limit_reset_credits,omitempty"`
 	Credits               *OpenAICredits               `json:"credits,omitempty"`
 	FetchedAt             int64                        `json:"fetched_at"`
+	QueryStartedAt        int64                        `json:"query_started_at_us,omitempty"`
 	autoResetCandidates   []openAIAutoResetCreditCandidate
+}
+
+func (u *OpenAIQuotaUsage) creditsSnapshot() openAICreditsSnapshot {
+	return openAICreditsSnapshot{Credits: u.Credits, FetchedAt: u.FetchedAt, QueryStartedAt: u.QueryStartedAt}
 }
 
 // OpenAIQuotaResetCredit captures the redeemed credit metadata returned by the
@@ -147,10 +155,22 @@ func NewOpenAIQuotaService(
 	}
 }
 
+type openAIQuotaJobKey struct{}
+
+func withOpenAIQuotaJob(ctx context.Context, job string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, openAIQuotaJobKey{}, job)
+}
+
 // QueryUsage fetches the latest rate-limit/usage snapshot for the given OpenAI
 // OAuth account. Returns infraerrors so the handler layer can map them to
 // stable error codes / HTTP statuses.
 func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	// A slow poll can finish after a manual refresh or a post-redemption read.
+	// Both observations use the same start time to order their writes.
+	queryStartedAt := time.Now().UnixMicro()
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -188,8 +208,8 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 				continue
 			}
 			status := resp.StatusCode
-			if isOpenAIAutoResetContext(ctx) {
-				slog.Warn("openai_quota_query_failed", "account_id", accountID, "status", status, "source", "auto_reset")
+			if job, ok := ctx.Value(openAIQuotaJobKey{}).(string); ok {
+				slog.Warn("openai_quota_query_failed", "account_id", accountID, "status", status, "source", job)
 				return nil, infraerrors.Newf(mapUpstreamStatus(status), "OPENAI_QUOTA_UPSTREAM_ERROR", "upstream returned %d", status)
 			}
 			body := truncate(s.redactQuotaErrorBody(ctx, accountID, resp.String()), 240)
@@ -199,6 +219,7 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 		break
 	}
 
+	payload.QueryStartedAt = queryStartedAt
 	payload.FetchedAt = time.Now().Unix()
 	details := s.queryResetCreditDetails(callCtx, client, accessToken, chatGPTAccountID, fedRAMP, accountID)
 	if details != nil {
@@ -217,7 +238,27 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 			payload.RateLimitResetCredits.AvailableCount = details.AvailableCreditCount
 		}
 	}
+	if credits := payload.RateLimitResetCredits; credits != nil {
+		credits.FetchedAt = payload.FetchedAt
+		credits.QueryStartedAt = queryStartedAt
+	}
 	return &payload, nil
+}
+
+// RefreshCreditSnapshots updates the two balances displayed on the account row.
+// A missing card detail must not prevent a successfully queried points balance
+// from being saved, or clear the last usable inventory of reset cards.
+func (s *OpenAIQuotaService) RefreshCreditSnapshots(ctx context.Context, accountID int64) error {
+	usage, err := s.QueryUsage(withOpenAIQuotaJob(ctx, "credit_refresh"), accountID)
+	if err != nil {
+		return err
+	}
+	updates := map[string]any{openaiQuotaCreditsKey: usage.creditsSnapshot()}
+	detailsErr := addResetCreditsSnapshot(updates, usage.RateLimitResetCredits)
+	if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
+		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_CACHE_WRITE_FAILED", "failed to save quota snapshots").WithCause(err)
+	}
+	return detailsErr
 }
 
 // CacheResetCreditsSnapshot persists a complete reset-credit snapshot after an
@@ -241,7 +282,7 @@ func (s *OpenAIQuotaService) CacheCreditsSnapshot(ctx context.Context, accountID
 		return infraerrors.New(http.StatusBadGateway, "OPENAI_QUOTA_EMPTY_USAGE", "openai quota query returned an empty result")
 	}
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
-		openaiQuotaCreditsKey: openAICreditsSnapshot{Credits: usage.Credits, FetchedAt: usage.FetchedAt},
+		openaiQuotaCreditsKey: usage.creditsSnapshot(),
 	}); err != nil {
 		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_CACHE_WRITE_FAILED", "failed to cache Codex credits").WithCause(err)
 	}
@@ -257,7 +298,7 @@ func (s *OpenAIQuotaService) CachePostResetSnapshot(ctx context.Context, account
 	if updates == nil {
 		updates = make(map[string]any)
 	}
-	updates[openaiQuotaCreditsKey] = openAICreditsSnapshot{Credits: usage.Credits, FetchedAt: usage.FetchedAt}
+	updates[openaiQuotaCreditsKey] = usage.creditsSnapshot()
 	return s.cacheResetCreditsSnapshot(
 		ctx,
 		accountID,
@@ -266,7 +307,7 @@ func (s *OpenAIQuotaService) CachePostResetSnapshot(ctx context.Context, account
 	)
 }
 
-func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, accountID int64, credits *OpenAIRateLimitResetCredits, updates map[string]any) error {
+func addResetCreditsSnapshot(updates map[string]any, credits *OpenAIRateLimitResetCredits) error {
 	if credits == nil || (credits.AvailableCount > 0 && len(credits.Credits) == 0) {
 		return infraerrors.New(
 			http.StatusBadGateway,
@@ -274,10 +315,17 @@ func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, acco
 			"failed to refresh reset-credit expiration details; cached data was preserved",
 		)
 	}
+	updates[openaiQuotaResetCreditsKey] = credits
+	return nil
+}
+
+func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, accountID int64, credits *OpenAIRateLimitResetCredits, updates map[string]any) error {
 	if updates == nil {
 		updates = make(map[string]any, 1)
 	}
-	updates[openaiQuotaResetCreditsKey] = credits
+	if err := addResetCreditsSnapshot(updates, credits); err != nil {
+		return err
+	}
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
 		return infraerrors.New(
 			http.StatusInternalServerError,

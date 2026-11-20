@@ -58,23 +58,6 @@ type openAIAutoResetQuota interface {
 	ResetCreditTargeted(ctx context.Context, accountID int64, creditID, redeemRequestID string) (*OpenAIQuotaResetResult, error)
 }
 
-type openAIAutoResetContextKey struct{}
-
-func withOpenAIAutoResetContext(ctx context.Context) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, openAIAutoResetContextKey{}, true)
-}
-
-func isOpenAIAutoResetContext(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	value, _ := ctx.Value(openAIAutoResetContextKey{}).(bool)
-	return value
-}
-
 type openAIAutoResetRecovery interface {
 	RecoverAccountState(ctx context.Context, accountID int64, options AccountRecoveryOptions) (*SuccessfulTestRecoveryResult, error)
 }
@@ -269,7 +252,7 @@ type openAIAutoResetAssessment struct {
 }
 
 func (s *OpenAIQuotaAutoResetService) evaluateAccount(ctx context.Context, accountID int64) error {
-	ctx = withOpenAIAutoResetContext(ctx)
+	ctx = withOpenAIQuotaJob(ctx, "auto_reset")
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil || account == nil {
 		return err
