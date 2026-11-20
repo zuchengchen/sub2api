@@ -646,13 +646,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		cacheObserver = service.NewResponsesCacheDiagnosticObserver(c, apiKey)
 	}
 	var cacheSample *service.ResponsesCacheDiagnostic
+	var cacheTrialOutcome service.ResponsesStatelessCacheOutcome
+	defer func() { cacheTrialOutcome.Publish() }()
 	var lastDiagnosticModel string
 	var lastDiagnosticAccount int64
 	var lastDiagnosticErr error
 	if cacheObserver != nil {
 		// An exhausted failover may return from account selection, after the
 		// last Forward. Keep its error until the logical request ends.
-		defer func() { cacheSample.Finish(lastDiagnosticAccount, nil, lastDiagnosticErr) }()
+		defer func() {
+			cacheTrialOutcome.AttachDiagnostic(cacheSample)
+			cacheSample.Finish(lastDiagnosticAccount, nil, lastDiagnosticErr)
+		}()
 	}
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
@@ -866,7 +871,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			logOpenAIQuotaRouting(c, lastFailoverErr, "next_account", account.ID, switchCount+1)
 			return h.gatewayService.Forward(c.Request.Context(), c, account, attemptBody)
 		}()
+		cacheTrialOutcome.Capture(c, result, err)
 		if cacheSample != nil {
+			cacheTrialOutcome.AttachDiagnostic(cacheSample)
 			lastDiagnosticErr = err
 			if result != nil || err == nil {
 				// Read metering before the usage worker can process the result.

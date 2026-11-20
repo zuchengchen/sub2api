@@ -1597,6 +1597,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 		account,
 		nil,
 		0,
+		nil,
 	)
 	elapsed := time.Since(start)
 	require.Error(t, err)
@@ -1643,7 +1644,7 @@ func TestOpenAIWSPrewarmSingleExchangeAcrossReconnect(t *testing.T) {
 		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 		capture := &openAIWSCaptureConn{events: [][]byte{[]byte(`{"type":"response.completed","response":{"id":"resp_warm"}}`)}}
 		lease := &openAIWSConnLease{conn: newOpenAIWSConn("new-connection", account.ID, capture, nil)}
-		_, err := svc.performOpenAIWSGeneratePrewarm(context.Background(), c, lease, OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2}, map[string]any{"model": "gpt-5.5"}, "", nil, nil, account, nil, 0)
+		_, err := svc.performOpenAIWSGeneratePrewarm(context.Background(), c, lease, OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2}, map[string]any{"model": "gpt-5.5"}, "", nil, nil, account, nil, 0, nil)
 		require.NoError(t, err)
 		require.Len(t, capture.writes, 1-attempt)
 	}
@@ -1666,7 +1667,7 @@ func TestOpenAIWSPrewarmPreservesFailureClassification(t *testing.T) {
 				ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 			capture := &openAIWSCaptureConn{events: [][]byte{[]byte(tc.event)}}
 			lease := &openAIWSConnLease{conn: newOpenAIWSConn("conn", account.ID, capture, nil)}
-			_, err := svc.performOpenAIWSGeneratePrewarm(context.Background(), c, lease, OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2}, map[string]any{"model": "gpt-5.5"}, "", nil, nil, account, nil, 0)
+			_, err := svc.performOpenAIWSGeneratePrewarm(context.Background(), c, lease, OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2}, map[string]any{"model": "gpt-5.5"}, "", nil, nil, account, nil, 0, nil)
 			require.Error(t, err)
 			if tc.reason == "quota" {
 				var failover *UpstreamFailoverError

@@ -325,6 +325,18 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if err := normalizeCodexRequestMetadataMap(payload, wsHeaders, account); err != nil {
 		return nil, fmt.Errorf("normalize websocket metadata: %w", err)
 	}
+	planPrewarm := attempt == 1 && previousResponseID == "" &&
+		decision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 && s.shouldPrewarmOpenAIWS(c, account, payload) &&
+		s.openAIWSSessionPrewarmPending(resolveOpenAIWSSessionScope(c, account, bodyRaw))
+	var prewarmTrial *responsesStatelessCacheAttempt
+	if planPrewarm {
+		prewarmTrial = responsesStatelessCacheForAttempt(c, account, payload, executionScope, cookieWS)
+		if prewarmTrial != nil {
+			// This arm can already affect the new socket's handshake. Include
+			// failed dials and later fallbacks in intention-to-treat metrics.
+			c.Set(responsesStatelessCacheAssignmentKey, prewarmTrial.arm)
+		}
+	}
 	// normalizeCodexRequestMetadataMap 会按旧习惯把 session_id / x-codex-installation-id
 	// 重新写回头部（legacy compact 依赖它们，不能从源头删除），因此 WS 握手同样
 	// 必须在归一化之后重新执行终态线序收口，与 HTTP 路径同一规则。
@@ -337,10 +349,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		// （request_kind=prewarm、turn_id 空、无 turn 专属键）。仅当本连接接下来
 		// 确实会发 prewarm 帧时才投影——新拨的连接 IsPrewarmed=false，必然走
 		// performOpenAIWSGeneratePrewarm 的同组门槛。
-		if attempt == 1 && s.shouldPrewarmOpenAIWS(c, account, payload) &&
-			decision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 &&
-			strings.TrimSpace(previousResponseID) == "" &&
-			s.openAIWSSessionPrewarmPending(resolveOpenAIWSSessionScope(c, account, bodyRaw)) {
+		if planPrewarm && (prewarmTrial == nil || prewarmTrial.arm == "control_prewarm") {
 			shadow := map[string]any{
 				"model":     payload["model"],
 				"reasoning": payload["reasoning"],
@@ -612,6 +621,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			account,
 			stateStore,
 			groupID,
+			prewarmTrial,
 		)
 	}
 	if err != nil {
@@ -754,6 +764,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			resolvePayloadBytes(),
 		)
 		return nil, wrapOpenAIWSFallback("write_request", writeErr)
+	}
+	if prewarmTrial != nil && prewarmTrial.skipped {
+		c.Set(responsesStatelessCacheActionKey, "full_input_written")
 	}
 	if debugEnabled {
 		logOpenAIWSModeDebug(

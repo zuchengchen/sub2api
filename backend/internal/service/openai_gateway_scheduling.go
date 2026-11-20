@@ -170,6 +170,7 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 // thread for authenticated GPT text account selection. Other consumers of
 // GenerateSessionHash retain their original session scopes.
 func (s *OpenAIGatewayService) GenerateResponsesAccountSessionHash(c *gin.Context, body []byte, textModel string) string {
+	stageResponsesStatelessCacheTrial(c, body, textModel)
 	return s.responsesAccountSessionHash(c, body, textModel, responsesCacheAffinityEnabled(c, textModel))
 }
 
