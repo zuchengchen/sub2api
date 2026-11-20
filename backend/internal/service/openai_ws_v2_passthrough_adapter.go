@@ -827,6 +827,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	usageMeta.captureRequestedReasoningEffort(originalFirstClientMessage, capturedSessionModel)
 	_, initialUpstreamModel := usageMeta.turnModels(initialRequestModel)
 	SetOpsUpstreamModel(c, initialUpstreamModel)
+	if hooks != nil && hooks.ObserveClientTurn != nil {
+		hooks.ObserveClientTurn(1, originalFirstClientMessage, initialUpstreamModel)
+	}
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
 	if err != nil {
 		return fmt.Errorf("build ws url: %w", err)
@@ -1059,13 +1062,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			responseCreateAt := time.Time{}
 			acceptedTurn := false
+			var rawCreate []byte
 			if isResponseCreate {
 				responseCreateAt = time.Now()
 				if !turnLifecycle.beginResponseCreate(clientFrameConn.markTurnStarted) {
 					err := errors.New("overlapping response.create is not supported")
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
 				}
-				rawCreate := append([]byte(nil), payload...)
+				rawCreate = append([]byte(nil), payload...)
 				currentClientCreate.Store(&rawCreate)
 				setOpenAIImageOutputRequest(c, payload)
 				defer func() {
@@ -1217,6 +1221,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
 				_, actualModel := usageMeta.turnModels(requestModelForThisFrame)
 				SetOpsUpstreamModel(c, actualModel)
+				if hooks != nil && hooks.ObserveClientTurn != nil {
+					hooks.ObserveClientTurn(turnNo, rawCreate, actualModel)
+				}
 				responseCreateAtCopy := responseCreateAt
 				acceptedTurnStartedAt.Store(&responseCreateAtCopy)
 				acceptedTurn = true

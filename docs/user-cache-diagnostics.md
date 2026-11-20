@@ -1,4 +1,39 @@
-# 单用户 Chat Completions 缓存诊断
+# 单用户 GPT 缓存诊断
+
+## 原生 Responses 的试点和验收
+
+对使用 `/v1/responses` 的 GPT 文本客户端，在服务环境中设置
+`SUB2_RESPONSES_CACHE_AFFINITY_SCOPE=key:<本站密钥的数字 ID>` 可为一把密钥启用增强的会话路由。
+先在同一把密钥、同一模型和相近任务上记录基线。验收通过后可设为 `all`，移除此变量可还原原有路由。
+环境变量在服务进程启动时生效，请按生产发布流程安排重启。采样和路由开关可以独立启停。
+
+试点也会在原生 Responses 转 Codex OAuth 时保留可验证的完整函数调用配对。客户端回送上游的
+`function_call.id=fc_…`、`call_id=call_…` 以及对应工具结果时，网关可以将它们与上游连接保存的历史逐项比较。
+只有当前凭据、执行作用域和完整历史均匹配时才会使用增量续接。内容变动时继续发送完整历史。
+
+能配置客户端或中转时，优先透传真实会话的 `session-id`，同一对话在 HTTP 各轮及每次 WebSocket 握手上使用相同值。
+并行子线程各有自己的 `thread-id`。完整历史按原顺序发送，只追加新项。
+也可在同一密钥的「使用密钥 → Claude Code」复制 Messages 配置，用一条新对话作对照。
+
+原生 Responses 采样使用以下独立配置，和下面的 Chat 采样各有自己的限额和输出文件。
+目录由服务用户独占（`0700`），每个窗口选用新文件。模型填实际路由到的 GPT 文本模型。
+
+```text
+SUB2_RESPONSES_CACHE_DIAGNOSTIC_USER_ID=<本站用户数字 ID>
+SUB2_RESPONSES_CACHE_DIAGNOSTIC_API_KEY_ID=<该用户的密钥数字 ID>
+SUB2_RESPONSES_CACHE_DIAGNOSTIC_MODELS=gpt-6.1-sol
+SUB2_RESPONSES_CACHE_DIAGNOSTIC_PATH=/opt/sub2api/data/cache-diagnostics/responses-<UTC时间>.jsonl
+SUB2_RESPONSES_CACHE_DIAGNOSTIC_UNTIL=<未来一小时内的 UTC RFC3339 时间>
+SUB2_RESPONSES_CACHE_DIAGNOSTIC_MAX_REQUESTS=100
+```
+
+按窗口和经过 HMAC 的会话、线程标识比较相邻轮次，检查账号是否切换，以及客户端原始请求中的 instructions、tools 与历史 input 项的摘要是否变化。WebSocket 样本还记录本窗口的连接编号和该连接收到的轮次。同一连接可以服务多个线程。匿名 HTTP 请求和无法关联的重连单列。片段或带 `previous_response_id` 的增量输入与全量历史分别比较。对于 HTTP 转上游 WebSocket 的请求，`http_ws_incremental.reason` 记录网关检查点的判定，例如历史项不匹配的 `input_mismatch`、请求字段变化的 `request_property_changed`，或成功选中增量的 `incremental`。实际缓存读取仍以返回用量为准。窗口结束后诊断会停止，跨窗口的摘要不能关联。
+
+每次入站请求最多 32 MiB，最多记录 1024 个历史项，摘要输入预算为 4 MiB。单个值超过 256 KiB 时仅提供原始字节的 HMAC。遇到截断或无法生成规范化摘要的标记时，只比较有完整证据的部分。每个文件最多 16 MiB。采样名额按入场计数，最终路由到其他模型或产生媒体结果的请求会占用名额，但不会写入样本。
+
+用可关联的生产记录比较改动前后至少 100 个同类续轮，首轮与轮次未知的请求单列。按实际模型、入站接口、输入 token 长度档分组，汇总缓存读取 token，除以普通输入、缓存写入和缓存读取 token 的总和。上游诊断的 `usage.input_tokens` 已含缓存部分，该口径直接用缓存读取除以总输入。`zero_or_unreported` 单列。同步核对错误率、流式完成、工具调用配对和重复扣费。满足试点目标后扩大范围，再观察一个完整的 24 小时业务周期。
+
+## Chat Completions 转 Responses
 
 这项诊断观察现有请求，不产生额外上游调用，不调整缓存标识、协议转换、调度或计费。
 适用于 `/v1/chat/completions` 转 Responses 的路径，覆盖流式和非流式响应。

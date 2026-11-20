@@ -1698,6 +1698,46 @@ func normalizeCodexFilterCallID(itemType, id string, preserve bool) string {
 	return normalizeCodexCallIDForItemType(itemType, id)
 }
 
+// The Codex HTTP tool-loop wire uses fc_* for the item and call_* for its
+// correlation with the tool result. Rewriting the latter changes an exact
+// copy of the upstream output and invalidates the WebSocket checkpoint.
+// Only complete inline pairs get this spelling. Authorization and the
+// checkpoint's full history, credential and connection checks remain separate.
+func codexResponsesHaveNativeFunctionPairs(proof OpenAIContinuationReplayProof, body []byte, decoded map[string]any) bool {
+	if proof.Calls == 0 || proof.Calls != proof.Outputs || proof.HasPreviousResponseID || proof.HasConversation || proof.HasItemReference {
+		return false
+	}
+	if proof.Verdict != OpenAIContinuationProofInline {
+		if proof.Reason != "credential_or_hosted_state" || proof.ToolContextUnproven {
+			return false
+		}
+		// A caller can include complete encrypted reasoning with the tool
+		// loop. Check the inline structure on the current credential only.
+		// This result is never used to move or retrieve any upstream state.
+		if analyzeOpenAIContinuationReplayProof(body, true).Verdict != OpenAIContinuationProofInline {
+			return false
+		}
+	}
+	input, _ := decoded["input"].([]any)
+	functionCalls := 0
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		if item["type"] != "function_call" {
+			continue
+		}
+		id, _ := item["id"].(string)
+		callID, _ := item["call_id"].(string)
+		if !strings.HasPrefix(id, "fc_") || len(id) <= len("fc_") || len(id) > codexCallIDMaxLength ||
+			!strings.HasPrefix(callID, "call_") || len(callID) <= len("call_") || len(callID) > codexCallIDMaxLength {
+			return false
+		}
+		functionCalls++
+	}
+	// Each call must be a native function. The proof already matched every
+	// output to its unique, preceding call of the right kind.
+	return functionCalls == proof.Calls
+}
+
 func codexItemReferenceIDMappings(input []any, preserveCallIDs bool) map[string]string {
 	mappings := make(map[string]string)
 	ambiguous := make(map[string]struct{})

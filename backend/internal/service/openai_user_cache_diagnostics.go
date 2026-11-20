@@ -106,19 +106,8 @@ func (m *userCacheDiagnosticManager) available(userID int64, now time.Time, cons
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if signature != m.signature {
-		m.signature, m.config = signature, nil
-		until, err := time.Parse(time.RFC3339, rawUntil)
-		if err != nil || !filepath.IsAbs(path) || !now.Before(until) || until.Sub(now) > time.Hour {
-			return nil
-		}
-		limit := 30
-		if rawLimit != "" {
-			limit, err = strconv.Atoi(rawLimit)
-			if err != nil || limit < 1 || limit > 100 {
-				return nil
-			}
-		}
-		m.config = &userCacheDiagnosticConfig{userID: userID, path: path, until: until, limit: limit}
+		m.signature = signature
+		m.config = newUserCacheDiagnosticConfig(userID, path, rawUntil, rawLimit, now)
 	}
 	if m.config == nil || !now.Before(m.config.until) || m.config.used >= m.config.limit {
 		return nil
@@ -127,6 +116,21 @@ func (m *userCacheDiagnosticManager) available(userID int64, now time.Time, cons
 		m.config.used++
 	}
 	return m.config
+}
+
+func newUserCacheDiagnosticConfig(userID int64, path, rawUntil, rawLimit string, now time.Time) *userCacheDiagnosticConfig {
+	until, err := time.Parse(time.RFC3339, rawUntil)
+	if err != nil || !filepath.IsAbs(path) || !now.Before(until) || until.Sub(now) > time.Hour {
+		return nil
+	}
+	limit := 30
+	if rawLimit != "" {
+		limit, err = strconv.Atoi(rawLimit)
+		if err != nil || limit < 1 || limit > 100 {
+			return nil
+		}
+	}
+	return &userCacheDiagnosticConfig{userID: userID, path: path, until: until, limit: limit}
 }
 
 type userCacheDiagnostic struct {
@@ -271,6 +275,10 @@ func (d *userCacheDiagnostic) write(stage string, accountID int64, attempt int, 
 	for k, v := range fields {
 		event[k] = v
 	}
+	appendUserCacheDiagnosticEvent(d.config.path, d.config.until, event)
+}
+
+func appendUserCacheDiagnosticEvent(path string, until time.Time, event any) {
 	raw, err := json.Marshal(event)
 	if err != nil || len(raw) > 512<<10 {
 		return
@@ -279,10 +287,10 @@ func (d *userCacheDiagnostic) write(stage string, accountID int64, attempt int, 
 	defer userCacheDiagnosticFileMu.Unlock()
 	// The operator selects a private directory. Refuse existing symlinks,
 	// devices and broadly-readable files; do not overwrite or chmod them.
-	if !time.Now().Before(d.config.until) {
+	if !time.Now().Before(until) {
 		return
 	}
-	before, err := os.Lstat(d.config.path)
+	before, err := os.Lstat(path)
 	if info := before; err == nil {
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size()+int64(len(raw)+1) > userCacheDiagnosticMaxFile {
 			return
@@ -294,7 +302,7 @@ func (d *userCacheDiagnostic) write(stage string, accountID int64, attempt int, 
 	if os.IsNotExist(err) {
 		flags |= os.O_CREATE | os.O_EXCL
 	}
-	file, err := os.OpenFile(d.config.path, flags, 0600)
+	file, err := os.OpenFile(path, flags, 0600)
 	if err != nil {
 		return
 	}
@@ -304,7 +312,7 @@ func (d *userCacheDiagnostic) write(stage string, accountID int64, attempt int, 
 	opened, err := file.Stat()
 	if err != nil || !opened.Mode().IsRegular() || opened.Mode().Perm()&0077 != 0 ||
 		opened.Size()+int64(len(raw)+1) > userCacheDiagnosticMaxFile ||
-		(before != nil && !os.SameFile(before, opened)) || !time.Now().Before(d.config.until) {
+		(before != nil && !os.SameFile(before, opened)) || !time.Now().Before(until) {
 		return
 	}
 	_, _ = file.Write(append(raw, '\n'))

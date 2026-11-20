@@ -263,6 +263,9 @@ type OpenAIWSIngressHooks struct {
 	TurnStarted             func(turn int, startedAt time.Time)
 	BeforeTurn              func(turn int) error
 	BeforeRequest           func(turn int, payload []byte, originalModel string) error
+	// ObserveClientTurn receives an admitted turn and the model chosen by
+	// this transport. The handler retains the client frame across retries.
+	ObserveClientTurn func(turn int, raw []byte, upstreamModel string)
 	// MapRequestModel resolves the current turn's client model to the model
 	// that must be written into the upstream response.create frame.
 	MapRequestModel func(turn int, originalModel string) (string, error)
