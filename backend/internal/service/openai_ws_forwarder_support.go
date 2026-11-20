@@ -126,6 +126,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	account *Account,
 	stateStore OpenAIWSStateStore,
 	groupID int64,
+	trial *responsesStatelessCacheAttempt,
 ) (*openAIWSPrewarmResult, error) {
 	if s == nil {
 		return nil, nil
@@ -212,6 +213,12 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	if !s.beginOpenAIWSSessionPrewarm(resolveOpenAIWSSessionScope(c, account, bodyRaw)) {
 		return nil, nil
 	}
+	// Both arms passed the same fresh-lease, frame-size and reservation gates.
+	// A skipped prewarm has no response ID. The caller writes its full input.
+	if trial != nil && trial.arm != "control_prewarm" {
+		trial.skipped = true
+		return nil, nil
+	}
 
 	var prewarmWriteErr error
 	if len(prewarmFrame) > 0 {
@@ -228,6 +235,9 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			truncateOpenAIWSLogValue(prewarmWriteErr.Error(), openAIWSLogValueMaxLen),
 		)
 		return nil, wrapOpenAIWSFallback("prewarm_write", prewarmWriteErr)
+	}
+	if trial != nil {
+		c.Set(responsesStatelessCacheActionKey, "prewarm_written")
 	}
 	logOpenAIWSModeInfo("prewarm_write_sent account_id=%d conn_id=%s payload_bytes=%d", account.ID, connID, len(prewarmPayloadJSON))
 
