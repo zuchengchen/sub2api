@@ -10,12 +10,14 @@ import (
 
 func TestFilterSchedulerCredentialsKeepsSubscriptionPlanType(t *testing.T) {
 	filtered := filterSchedulerCredentials(map[string]any{
-		"plan_type":     "plus",
-		"access_token":  "secret-access-token",
-		"refresh_token": "secret-refresh-token",
+		"plan_type":         "plus",
+		"subscription_tier": "supergrok_heavy",
+		"access_token":      "secret-access-token",
+		"refresh_token":     "secret-refresh-token",
 	})
 
 	require.Equal(t, "plus", filtered["plan_type"])
+	require.Equal(t, "supergrok_heavy", filtered["subscription_tier"])
 	require.NotContains(t, filtered, "access_token")
 	require.NotContains(t, filtered, "refresh_token")
 }

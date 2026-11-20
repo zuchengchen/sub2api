@@ -329,48 +329,58 @@ func isKnownGrokFreeAccount(account *Account) bool {
 	paidSignal := false
 	inferredFreeSignal := false
 	if billing, err := grokBillingSnapshotFromExtra(account.Extra); err == nil && billing != nil {
-		if tier := strings.TrimSpace(billing.Plan); tier != "" {
-			if isGrokFreeSubscriptionTier(tier) {
-				freeSignal = true
-			} else if !isGrokUnknownSubscriptionTier(tier) {
-				paidSignal = true
-			}
-		}
+		applyGrokSubscriptionTierSignal(billing.Plan, &freeSignal, &paidSignal)
 		// Usage % or a monthly dollar cap is evidence of a paid plan.
 		if billing.UsagePercent != nil || billing.UsedPercent != nil ||
 			(billing.MonthlyLimitCents != nil && *billing.MonthlyLimitCents > 0) {
 			paidSignal = true
 		}
-		// Empty plan + successful monthly observation → inferred free (no paid plan/limit).
-		if strings.TrimSpace(billing.MonthlyUpdatedAt) != "" ||
-			(billing.StatusCode >= http.StatusOK && billing.StatusCode < http.StatusMultipleChoices &&
-				!billing.Partial && len(billing.FailedWindows) == 0) {
+		// SuperGrok Heavy unified billing returns HTTP 200 with an empty plan and
+		// a $0 monthly cap. That schema is not proof of Free; inferring Free here
+		// excludes paid accounts from media once the slim scheduler projection
+		// drops the JWT. Classic Free probes still omit this flag.
+		if !billing.IsUnifiedBillingUser &&
+			(strings.TrimSpace(billing.MonthlyUpdatedAt) != "" ||
+				(billing.StatusCode >= http.StatusOK && billing.StatusCode < http.StatusMultipleChoices &&
+					!billing.Partial && len(billing.FailedWindows) == 0)) {
 			inferredFreeSignal = true
 		}
 	}
 	if snapshot, err := grokQuotaSnapshotFromExtra(account.Extra); err == nil && snapshot != nil {
-		if tier := strings.TrimSpace(snapshot.SubscriptionTier); tier != "" {
-			if isGrokFreeSubscriptionTier(tier) {
-				freeSignal = true
-			} else if !isGrokUnknownSubscriptionTier(tier) {
-				paidSignal = true
-			}
-		}
+		applyGrokSubscriptionTierSignal(snapshot.SubscriptionTier, &freeSignal, &paidSignal)
+		applyGrokSubscriptionTierSignal(snapshot.PlanFrom45Responses, &freeSignal, &paidSignal)
 		if snapshot.Tokens != nil && snapshot.Tokens.Limit != nil &&
 			xai.IsGrokFreeRolling24hTokenLimit(*snapshot.Tokens.Limit) {
 			inferredFreeSignal = true
 		}
 	}
-	// Only credentials subscription_tier is authoritative here (not plan_type / extra keys).
-	if tier := strings.TrimSpace(account.GetCredential("subscription_tier")); tier != "" {
-		if isGrokFreeSubscriptionTier(tier) {
-			freeSignal = true
-		} else if !isGrokUnknownSubscriptionTier(tier) {
-			paidSignal = true
-		}
+	// Credentials win over extra. Scheduler projections strip the JWT, so
+	// subscription_tier on credentials or extra is the remaining paid-tier
+	// signal for media admission. plan_type is ignored (OpenAI-shaped).
+	credTier := strings.TrimSpace(account.GetCredential("subscription_tier"))
+	applyGrokSubscriptionTierSignal(credTier, &freeSignal, &paidSignal)
+	if credTier == "" {
+		applyGrokSubscriptionTierSignal(account.GetExtraString("subscription_tier"), &freeSignal, &paidSignal)
 	}
 	// Explicit paid evidence always wins over an inferred Free signal.
 	return !paidSignal && (freeSignal || inferredFreeSignal)
+}
+
+func applyGrokSubscriptionTierSignal(tier string, freeSignal, paidSignal *bool) {
+	if freeSignal == nil || paidSignal == nil {
+		return
+	}
+	tier = strings.TrimSpace(tier)
+	if tier == "" {
+		return
+	}
+	if isGrokFreeSubscriptionTier(tier) {
+		*freeSignal = true
+		return
+	}
+	if !isGrokUnknownSubscriptionTier(tier) {
+		*paidSignal = true
+	}
 }
 
 func isGrokFreeSubscriptionTier(tier string) bool {
