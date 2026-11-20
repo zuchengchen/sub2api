@@ -373,6 +373,89 @@ func TestBuildSchedulerMetadataAccount_KeepsGrokMediaEligibility(t *testing.T) {
 		require.Equal(t, "billing_forbidden", reason)
 		require.NotNil(t, got.Extra["grok_billing_snapshot"])
 	})
+
+	t.Run("unified billing heavy remains eligible without jwt", func(t *testing.T) {
+		account := service.Account{
+			ID:       45,
+			Platform: service.PlatformGrok,
+			Type:     service.AccountTypeOAuth,
+			Credentials: map[string]any{
+				"access_token":      "drop-me",
+				"subscription_tier": "supergrok_heavy",
+			},
+			Extra: map[string]any{
+				"subscription_tier": "supergrok_heavy",
+				"grok_billing_snapshot": map[string]any{
+					"status_code":             200,
+					"weekly_status_code":      200,
+					"monthly_status_code":     200,
+					"monthly_updated_at":      "2026-11-20T01:23:23Z",
+					"monthly_limit_cents":     0,
+					"is_unified_billing_user": true,
+				},
+				"unused_large_field": "drop-me",
+			},
+		}
+
+		got := buildSchedulerMetadataAccount(account)
+
+		require.Empty(t, got.GetCredential("access_token"))
+		require.Equal(t, "supergrok_heavy", got.GetCredential("subscription_tier"))
+		require.Equal(t, "supergrok_heavy", got.GetExtraString("subscription_tier"))
+		eligible, reason := got.GrokMediaGenerationEligibility()
+		require.True(t, eligible)
+		require.Equal(t, "billing_inconclusive", reason)
+		require.True(t, got.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilityGrokMediaGeneration))
+	})
+
+	t.Run("unified billing snapshot alone remains eligible on slim projection", func(t *testing.T) {
+		account := service.Account{
+			ID:       46,
+			Platform: service.PlatformGrok,
+			Type:     service.AccountTypeOAuth,
+			Credentials: map[string]any{
+				"access_token": "drop-me",
+			},
+			Extra: map[string]any{
+				"grok_billing_snapshot": map[string]any{
+					"status_code":             200,
+					"monthly_updated_at":      "2026-11-20T01:23:23Z",
+					"monthly_limit_cents":     0,
+					"is_unified_billing_user": true,
+				},
+			},
+		}
+
+		got := buildSchedulerMetadataAccount(account)
+
+		require.Empty(t, got.GetCredential("access_token"))
+		require.Empty(t, got.GetCredential("subscription_tier"))
+		eligible, reason := got.GrokMediaGenerationEligibility()
+		require.True(t, eligible)
+		require.Equal(t, "billing_inconclusive", reason)
+		require.True(t, got.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilityGrokMediaGeneration))
+	})
+
+	t.Run("blank billing without paid schema stays ineligible", func(t *testing.T) {
+		account := service.Account{
+			ID:       47,
+			Platform: service.PlatformGrok,
+			Type:     service.AccountTypeOAuth,
+			Extra: map[string]any{
+				"grok_billing_snapshot": map[string]any{
+					"status_code":        200,
+					"monthly_updated_at": "2026-11-20T01:23:23Z",
+				},
+			},
+		}
+
+		got := buildSchedulerMetadataAccount(account)
+
+		eligible, reason := got.GrokMediaGenerationEligibility()
+		require.False(t, eligible)
+		require.Equal(t, "billing_free_tier", reason)
+		require.False(t, got.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilityGrokMediaGeneration))
+	})
 }
 
 func TestBuildSchedulerMetadataAccount_KeepsSlimGroupMembership(t *testing.T) {

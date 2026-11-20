@@ -14,6 +14,7 @@ import (
 
 func TestGrokMediaGenerationEligibility(t *testing.T) {
 	weeklyUsagePercent := 12.5
+	zeroMonthlyLimit := 0.0
 	forbiddenBilling := &xai.BillingSummary{
 		StatusCode:        http.StatusForbidden,
 		WeeklyStatusCode:  http.StatusForbidden,
@@ -47,6 +48,10 @@ func TestGrokMediaGenerationEligibility(t *testing.T) {
 		{name: "non oauth grok account stays eligible", account: &Account{Platform: PlatformGrok, Type: AccountTypeAPIKey}, want: true, wantReason: "non_oauth"},
 		{name: "unobserved oauth fails closed", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth}, want: false, wantReason: "billing_unobserved"},
 		{name: "inconclusive successful billing remains eligible", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Extra: map[string]any{grokBillingExtraKey: &xai.BillingSummary{StatusCode: http.StatusOK, Partial: true}}}, want: true, wantReason: "billing_inconclusive"},
+		{name: "successful empty billing without paid schema is free", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Extra: map[string]any{grokBillingExtraKey: &xai.BillingSummary{StatusCode: http.StatusOK, MonthlyUpdatedAt: "2026-11-20T01:23:23Z"}}}, want: false, wantReason: "billing_free_tier"},
+		{name: "unified billing empty plan remains eligible", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Extra: map[string]any{grokBillingExtraKey: &xai.BillingSummary{StatusCode: http.StatusOK, WeeklyStatusCode: http.StatusOK, MonthlyStatusCode: http.StatusOK, MonthlyUpdatedAt: "2026-11-20T01:23:23Z", IsUnifiedBillingUser: true, MonthlyLimitCents: &zeroMonthlyLimit}}}, want: true, wantReason: "billing_inconclusive"},
+		{name: "credentials subscription_tier keeps heavy eligible without jwt", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Credentials: map[string]any{"subscription_tier": "supergrok_heavy"}, Extra: map[string]any{grokBillingExtraKey: &xai.BillingSummary{StatusCode: http.StatusOK, MonthlyUpdatedAt: "2026-11-20T01:23:23Z"}}}, want: true, wantReason: "billing_inconclusive"},
+		{name: "extra subscription_tier keeps heavy eligible without jwt", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Extra: map[string]any{"subscription_tier": "supergrok_heavy", grokBillingExtraKey: &xai.BillingSummary{StatusCode: http.StatusOK, MonthlyUpdatedAt: "2026-11-20T01:23:23Z"}}}, want: true, wantReason: "billing_inconclusive"},
 		{name: "weekly paid usage is eligible without inferring from period type", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Extra: map[string]any{grokBillingExtraKey: weeklyAllowance}}, want: true, wantReason: "eligible"},
 		{name: "billing forbidden is rejected", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Extra: map[string]any{grokBillingExtraKey: forbiddenBilling}}, want: false, wantReason: "billing_forbidden"},
 		{name: "weekly billing forbidden is rejected after partial success", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Extra: map[string]any{grokBillingExtraKey: weeklyForbidden}}, want: false, wantReason: "billing_forbidden"},
