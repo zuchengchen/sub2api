@@ -234,6 +234,14 @@ func TestOpenAIWSDeltaFieldsFingerprint(t *testing.T) {
 	if openAIWSDeltaFieldsFingerprint(payload) != fp1 {
 		t.Fatal("fingerprint must ignore input/metadata/prev_id/stream_options")
 	}
+	payload["client_metadata"] = map[string]any{responsesLiteWSMetadataKey: "true"}
+	lite := openAIWSDeltaFieldsFingerprint(payload)
+	if lite == fp1 {
+		t.Fatal("a standard Responses checkpoint must not supply the previous_response_id for Lite")
+	}
+	chain := &openAIWSDeltaChainState{ResponseID: "resp_lite", FieldsFP: lite}
+	require.Equal(t, "request_property_changed", resolveOpenAIWSDelta(chain, 1, fp1, nil).Reason)
+	delete(payload, "client_metadata")
 	payload["model"] = "gpt-6"
 	if openAIWSDeltaFieldsFingerprint(payload) == fp1 {
 		t.Fatal("model change must alter fingerprint")

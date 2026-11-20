@@ -154,6 +154,7 @@ type nativeTrafficRow struct {
 	AuthorizationHash  string            `json:"authorization_sha256"`
 	WireSHA256         string            `json:"wire_sha256"`
 	BodyEncoding       string            `json:"body_encoding"`
+	ResponsesLite      string            `json:"responses_lite,omitempty"`
 	Body               json.RawMessage   `json:"body"`
 	Output             []json.RawMessage `json:"scripted_output"`
 	Remote             string            `json:"remote_address"`
@@ -189,6 +190,8 @@ type nativeTrafficHarness struct {
 	pureToolSecondRound  bool                      // Test-only fixture: no new opaque item in the middle tool turn.
 	outputOverrides      map[int][]json.RawMessage // Test-only complete assistant output fixtures.
 	modelOverride        string                    // Test-only explicit upstream model; default remains gpt-6-astra.
+	responsesLite        bool
+	toolChoice           string
 }
 
 func nativeTrafficJSON(v any) json.RawMessage {
@@ -273,7 +276,7 @@ func newNativeTrafficHarness(t *testing.T, mode string, decorators ...func(servi
 			rejected = json.RawMessage(`{"error":{"code":"invalid_encrypted_content","message":"synthetic SSE failure"}}`)
 		}
 		authHash := sha256.Sum256([]byte(r.Header.Get("Authorization")))
-		h.rows = append(h.rows, nativeTrafficRow{Body: body, Output: output, Remote: r.RemoteAddr, Terminal: !truncated && status == 200 && !sseRejected, WireSHA256: hex.EncodeToString(wireHash[:]), BodyEncoding: r.Header.Get("Content-Encoding"), Status: status, ErrorBody: rejected, PartialBeforeError: partial && sseRejected, AuthorizationHash: hex.EncodeToString(authHash[:])})
+		h.rows = append(h.rows, nativeTrafficRow{Body: body, Output: output, Remote: r.RemoteAddr, Terminal: !truncated && status == 200 && !sseRejected, WireSHA256: hex.EncodeToString(wireHash[:]), BodyEncoding: r.Header.Get("Content-Encoding"), ResponsesLite: r.Header.Get("X-OpenAI-Internal-Codex-Responses-Lite"), Status: status, ErrorBody: rejected, PartialBeforeError: partial && sseRejected, AuthorizationHash: hex.EncodeToString(authHash[:])})
 		h.mu.Unlock()
 		if status == http.StatusBadRequest {
 			w.Header().Set("Content-Type", "application/json")
@@ -472,15 +475,23 @@ func (h *nativeTrafficHarness) callStatus(history []json.RawMessage, stream bool
 	}
 	h.mu.Lock()
 	model := h.modelOverride
+	responsesLite, toolChoice := h.responsesLite, h.toolChoice
 	h.mu.Unlock()
 	if model == "" {
 		model = "gpt-6-astra"
 	}
-	body := nativeTrafficJSON(map[string]any{"model": model, "messages": history, "stream": stream, "stream_options": map[string]any{"include_usage": true}, "tools": tools, "reasoning_effort": effort, "parallel_tool_calls": true})
+	payload := map[string]any{"model": model, "messages": history, "stream": stream, "stream_options": map[string]any{"include_usage": true}, "tools": tools, "reasoning_effort": effort, "parallel_tool_calls": true}
+	if toolChoice != "" {
+		payload["tool_choice"] = toolChoice
+	}
+	body := nativeTrafficJSON(payload)
 	req, err := http.NewRequest(http.MethodPost, h.server.URL+"/v1/chat/completions", bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("session-id", "synthetic-replay-session")
+	if responsesLite {
+		req.Header.Set("X-OpenAI-Internal-Codex-Responses-Lite", "true")
+	}
 	if identity == "other-session" {
 		req.Header.Set("session-id", "other-synthetic-session")
 	}
@@ -540,7 +551,7 @@ func (h *nativeTrafficHarness) checkAssistant(message apicompat.ChatMessage) {
 				} `json:"summary"`
 			}
 			require.NoError(t, json.Unmarshal(raw, &item))
-			require.Contains(t, []string{"message", "reasoning"}, item.Type)
+			require.Contains(t, []string{"message", "reasoning", "web_search_call"}, item.Type)
 			for _, part := range item.Content {
 				text += part.Text
 			}

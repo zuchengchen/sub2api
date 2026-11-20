@@ -186,7 +186,8 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	prewarmPayload["generate"] = false
 	// 官方 prewarm 画像：request_kind=prewarm、turn_id 空串、无 turn 专属键。
 	if account.UsesOpenAICodexProtocol() && s.isOpenAIWSExactFidelityEnabled() {
-		applyCodexWireLaneMetadata(prewarmPayload, nil, account, "prewarm")
+		standardResponses := openAIResponsesMustUseStandard(account, openAIWSPayloadString(payload, "model"), bodyRaw)
+		applyCodexWireLaneMetadata(prewarmPayload, nil, account, "prewarm", standardResponses)
 	}
 	// 预热帧的 input 就是将要发送的逻辑项——记录下来作为增量链 baseline。
 	prewarmSentItems := openAIWSDeltaWireItems(bodyRaw, prewarmPayload["input"])

@@ -149,9 +149,18 @@ type nativeReasoningChat struct {
 	eligible           bool
 	replayDisabled     bool
 	fallbackTried      bool
+	searchReplay       *nativeReasoningSearchReplay
 	publication        *nativeReasoningPublicationLease
 	publicationContext context.Context
 	publicationCancel  context.CancelFunc
+}
+
+// A retry may rebuild the original Chat projection without the restored
+// search. Keep the previous diagnostic state with the attempt that changed it.
+type nativeReasoningSearchReplay struct {
+	body             []byte
+	previousSources  any
+	previousProtocol any
 }
 
 func (s *OpenAIGatewayService) beginNativeReasoningChat(c *gin.Context, account *Account, body []byte, authorization nativeReasoningChatAuthorization) *nativeReasoningChat {
@@ -290,6 +299,11 @@ func (n *nativeReasoningChat) prepareRequest(ctx context.Context, c *gin.Context
 	if n == nil {
 		return req, nil
 	}
+	if previous := n.searchReplay; previous != nil {
+		c.Set(openAIResponsesValidationSearchContextKey, previous.previousSources)
+		c.Set(openAIFinalProtocolDiagnosticKey, previous.previousProtocol)
+		n.searchReplay = nil
+	}
 	n.resetAttempt()
 	if req == nil || req.GetBody == nil {
 		n.releasePublication()
@@ -309,6 +323,16 @@ func (n *nativeReasoningChat) prepareRequest(ctx context.Context, c *gin.Context
 	}
 	wire := n.prepare(ctx, c, account, token, raw)
 	if !bytes.Equal(wire, raw) {
+		// Native output is restored after both the OAuth tool transform and
+		// the HTTP header projection. Reconcile the final input with both.
+		restoredSearch := openAIResponsesHasWebSearchHistory(wire)
+		var injected bool
+		if restoredSearch {
+			wire, injected, err = ensureOpenAIOAuthWebSearchToolForHistoryBody(wire, false)
+			if err != nil {
+				return req, err
+			}
+		}
 		if req.Body != nil {
 			_ = req.Body.Close()
 		}
@@ -319,6 +343,18 @@ func (n *nativeReasoningChat) prepareRequest(ctx context.Context, c *gin.Context
 			req.Header.Set("Content-Length", strconv.Itoa(len(wire)))
 		}
 		setOpenAICodexRoutingHintFromBody(req.Header, account, wire)
+		if restoredSearch {
+			if err := applyOpenAIStandardResponsesCompatibility(req, account, wire); err != nil {
+				return req, err
+			}
+			sources, _ := c.Get(openAIResponsesValidationSearchContextKey)
+			protocol, _ := c.Get(openAIFinalProtocolDiagnosticKey)
+			n.searchReplay = &nativeReasoningSearchReplay{body: wire, previousSources: sources, previousProtocol: protocol}
+			if injected {
+				MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchHistory)
+			}
+			recordOpenAIFinalProtocolDiagnostic(c, account, n.request.Scope.Model, req.Header.Get(responsesLiteHeader), wire)
+		}
 	}
 	return n.bind(req)
 }

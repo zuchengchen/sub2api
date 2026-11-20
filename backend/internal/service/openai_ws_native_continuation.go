@@ -3,9 +3,34 @@ package service
 import (
 	"crypto/sha256"
 	"strings"
+	"sync/atomic"
 
 	"github.com/tidwall/gjson"
 )
+
+// A response.create delta can omit the hosted history that selected standard
+// Responses for its parent. Keep only the last successful response on this
+// connection. The passthrough transport reads and writes on separate goroutines.
+type openAIWSWebSearchHistory struct {
+	active         atomic.Bool
+	lastResponseID atomic.Pointer[string]
+}
+
+func (h *openAIWSWebSearchHistory) begin(account *Account, payload []byte) bool {
+	lastID := h.lastResponseID.Load()
+	inheritsHistory := lastID != nil && openAIContinuationMatchesObservedResponse(payload, *lastID)
+	hasHistory := account.IsOpenAIOAuthLike() && (inheritsHistory || openAIResponsesHasWebSearchHistory(payload))
+	h.active.Store(hasHistory)
+	return hasHistory
+}
+
+func (h *openAIWSWebSearchHistory) complete(responseID string, success bool) {
+	if !success || responseID == "" || !h.active.Load() {
+		h.lastResponseID.Store(nil)
+		return
+	}
+	h.lastResponseID.Store(&responseID)
+}
 
 type openAIWSContinuationFingerprint struct {
 	Digest [sha256.Size]byte

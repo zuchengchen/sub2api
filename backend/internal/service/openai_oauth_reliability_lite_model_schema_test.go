@@ -33,7 +33,7 @@ func TestOAuthReliabilityLiteOmitsImplicitHostedSearch(t *testing.T) {
 				_, injected := codexSynthesisPrepareTools(body, openai.CodexCatalogModel{}, false, codexCapabilityGeneric, lite)
 				want := !lite && format == ""
 				require.Equal(t, want, injected)
-				require.Equal(t, want, codexSynthesisHasWebSearchTool(body))
+				require.Equal(t, want, openAIToolsContainWebSearch(body["tools"]))
 			})
 		}
 	}
@@ -105,7 +105,7 @@ func TestOAuthReliabilityLiteFinalModeHonorsMappedGPT55(t *testing.T) {
 		request, err := http.NewRequest(http.MethodPost, "https://fixture.invalid/responses", bytes.NewReader(body))
 		require.NoError(t, err)
 		request.Header.Set(responsesLiteHeader, "true")
-		require.NoError(t, applyMappedGPT55LiteCompatibility(request, account, body))
+		require.NoError(t, applyOpenAIStandardResponsesCompatibility(request, account, body))
 		outbound, err := io.ReadAll(request.Body)
 		require.NoError(t, err)
 		require.False(t, isOpenAIResponsesLiteHeader(request.Header.Get(responsesLiteHeader)))

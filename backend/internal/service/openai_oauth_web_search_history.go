@@ -15,13 +15,10 @@ import (
 // Codex's local context compaction sends the full history with tools:[], so
 // every compaction after a web search fails (#7927).
 //
-// Declare a cached-only web_search tool for non-Lite requests. Lite rejects
-// hosted declarations in additional_tools as well as at the top level. Leave
-// its history untouched; final Lite validation reports the incompatible
-// web_search_call instead of deleting history or fabricating a client tool.
-// Callers must supply the final mode after model mapping, including the
-// existing mapped-GPT55 exception. When a non-Lite caller declared no tools,
-// pin tool_choice to "none" so the declaration cannot enable new searches.
+// Standard Responses can replay that history with a cached-only web_search
+// declaration. Lite rejects hosted declarations in every carrier. Callers
+// resolve the outbound mode before applying this repair and keep the legacy
+// /responses/compact schema separate from /responses compaction turns.
 
 const (
 	openAIWebSearchCallItemType      = "web_search_call"
@@ -33,6 +30,27 @@ const (
 var openAIWebSearchHistoryTool = map[string]any{
 	"type":                "web_search",
 	"external_web_access": false,
+}
+
+// Only direct input items name a replayed call. Most requests omit this type
+// entirely. JSON unicode escapes can spell a field or its value, so candidate
+// bodies use a read-only JSON view without copying the history.
+func openAIResponsesHasWebSearchHistory(body []byte) bool {
+	if !bytes.Contains(body, []byte(openAIWebSearchCallItemType)) && !bytes.Contains(body, []byte(`\u`)) {
+		return false
+	}
+	input := parseRawJSONView(body).Get("input")
+	if !input.IsArray() {
+		return false
+	}
+	found := false
+	input.ForEach(func(_, item gjson.Result) bool {
+		found = item.IsObject() && item.Get("type").Str == openAIWebSearchCallItemType
+		return !found
+	})
+	// GJSON can extract fields from incomplete documents. A malformed request
+	// still needs its normal JSON validation error.
+	return found && gjson.ValidBytes(body)
 }
 
 func isOpenAIWebSearchToolType(toolType string) bool {
@@ -78,82 +96,82 @@ func ensureOpenAIOAuthWebSearchToolForHistory(reqBody map[string]any, responsesL
 	if !ok {
 		return false
 	}
+	tools, toolsAreArray := reqBody["tools"].([]any)
+	if (reqBody["tools"] != nil && !toolsAreArray) || openAIToolsContainWebSearch(tools) {
+		return false
+	}
 	hasWebSearchCall := false
-	callerDeclaredTools := false
+	callerDeclaredTools := len(tools) > 0
 	for _, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
 		if !ok {
 			continue
 		}
-		switch strings.TrimSpace(firstNonEmptyString(item["type"])) {
+		switch item["type"] {
 		case openAIWebSearchCallItemType:
 			hasWebSearchCall = true
-		case openAIAdditionalToolsItemType:
-			if openAIToolsContainWebSearch(item["tools"]) {
+		case openAIAdditionalToolsItemType, "tool_search_output":
+			declared, isArray := item["tools"].([]any)
+			if (item["tools"] != nil && !isArray) || openAIToolsContainWebSearch(declared) {
 				return false
 			}
-			if tools, _ := item["tools"].([]any); len(tools) > 0 {
-				callerDeclaredTools = true
-			}
+			callerDeclaredTools = callerDeclaredTools || len(declared) > 0
 		}
 	}
-	if !hasWebSearchCall || openAIToolsContainWebSearch(reqBody["tools"]) {
+	if !hasWebSearchCall {
 		return false
 	}
-	tools, _ := reqBody["tools"].([]any)
-	callerDeclaredTools = callerDeclaredTools || len(tools) > 0
-
-	reqBody["tools"] = append(tools, cloneOpenAIWebSearchHistoryTool())
 	if !callerDeclaredTools {
-		if choice, exists := reqBody["tool_choice"]; !exists || shouldPinOpenAIWebSearchHistoryToolChoice(choice) {
-			reqBody["tool_choice"] = "none"
+		// With an empty tool set, a required/forced choice cannot be
+		// satisfied by the caller's tools. Adding search would turn it into
+		// an executable action which the caller never declared.
+		if !shouldPinOpenAIWebSearchHistoryToolChoice(reqBody["tool_choice"]) {
+			return false
 		}
+		reqBody["tool_choice"] = "none"
 	}
+	reqBody["tools"] = append(tools, cloneOpenAIWebSearchHistoryTool())
 	return true
 }
 
 // ensureOpenAIOAuthWebSearchToolForHistoryBody is the raw-body variant used by
 // the passthrough and WebSocket paths; it avoids decoding the whole body.
 func ensureOpenAIOAuthWebSearchToolForHistoryBody(body []byte, responsesLite bool) ([]byte, bool, error) {
-	if responsesLite || len(body) == 0 || !bytes.Contains(body, []byte(openAIWebSearchCallItemType)) {
+	if responsesLite || !openAIResponsesHasWebSearchHistory(body) {
 		return body, false, nil
 	}
-	input := gjson.GetBytes(body, "input")
-	if !input.IsArray() {
+	root := parseRawJSONView(body)
+	tools := root.Get("tools")
+	if (tools.Type != gjson.Null && !tools.IsArray()) || gjsonToolsContainWebSearch(tools) {
 		return body, false, nil
 	}
-	items := input.Array()
-	hasWebSearchCall := false
-	callerDeclaredTools := false
-	for _, item := range items {
-		switch strings.TrimSpace(item.Get("type").String()) {
-		case openAIWebSearchCallItemType:
-			hasWebSearchCall = true
-		case openAIAdditionalToolsItemType:
+	callerDeclaredTools := tools.Get("0").Exists()
+	skipRepair := false
+	root.Get("input").ForEach(func(_, item gjson.Result) bool {
+		switch item.Get("type").Str {
+		case openAIAdditionalToolsItemType, "tool_search_output":
 			itemTools := item.Get("tools")
-			if gjsonToolsContainWebSearch(itemTools) {
-				return body, false, nil
+			if (itemTools.Type != gjson.Null && !itemTools.IsArray()) || gjsonToolsContainWebSearch(itemTools) {
+				skipRepair = true
+				return false
 			}
-			if itemTools.IsArray() && len(itemTools.Array()) > 0 {
-				callerDeclaredTools = true
-			}
+			callerDeclaredTools = callerDeclaredTools || itemTools.Get("0").Exists()
 		}
-	}
-	if !hasWebSearchCall {
+		return true
+	})
+	if skipRepair {
 		return body, false, nil
 	}
-	tools := gjson.GetBytes(body, "tools")
-	if gjsonToolsContainWebSearch(tools) {
+	choice := root.Get("tool_choice")
+	if !callerDeclaredTools && !shouldPinOpenAIWebSearchHistoryToolChoice(choice.String()) {
 		return body, false, nil
 	}
-	topLevelTools := tools.IsArray() && len(tools.Array()) > 0
-	callerDeclaredTools = callerDeclaredTools || topLevelTools
 
 	var (
 		next []byte
 		err  error
 	)
-	if topLevelTools {
+	if tools.IsArray() {
 		next, err = sjson.SetBytes(body, "tools.-1", cloneOpenAIWebSearchHistoryTool())
 	} else {
 		next, err = sjson.SetBytes(body, "tools", []any{cloneOpenAIWebSearchHistoryTool()})
@@ -161,13 +179,10 @@ func ensureOpenAIOAuthWebSearchToolForHistoryBody(body []byte, responsesLite boo
 	if err != nil {
 		return body, false, fmt.Errorf("declare web_search tool for web_search_call history: %w", err)
 	}
-	if !callerDeclaredTools {
-		choice := gjson.GetBytes(next, "tool_choice")
-		if !choice.Exists() || choice.Type == gjson.Null || (choice.Type == gjson.String && shouldPinOpenAIWebSearchHistoryToolChoice(choice.String())) {
-			next, err = sjson.SetBytes(next, "tool_choice", "none")
-			if err != nil {
-				return body, false, fmt.Errorf("pin tool_choice for web_search_call history: %w", err)
-			}
+	if !callerDeclaredTools && choice.Str != "none" {
+		next, err = sjson.SetBytes(next, "tool_choice", "none")
+		if err != nil {
+			return body, false, fmt.Errorf("pin tool_choice for web_search_call history: %w", err)
 		}
 	}
 	return next, true, nil
@@ -177,12 +192,12 @@ func gjsonToolsContainWebSearch(tools gjson.Result) bool {
 	if !tools.IsArray() {
 		return false
 	}
-	for _, tool := range tools.Array() {
-		if isOpenAIWebSearchToolType(tool.Get("type").String()) {
-			return true
-		}
-	}
-	return false
+	found := false
+	tools.ForEach(func(_, tool gjson.Result) bool {
+		found = isOpenAIWebSearchToolType(tool.Get("type").Str)
+		return !found
+	})
+	return found
 }
 
 func cloneOpenAIWebSearchHistoryTool() map[string]any {

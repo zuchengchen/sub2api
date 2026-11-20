@@ -248,6 +248,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		requestedReasoningEffort *string
 	}
 	ingressSessionOriginalModel := ""
+	var webSearchHistory openAIWSWebSearchHistory
 
 	applyPayloadMutation := func(current []byte, path string, value any) ([]byte, error) {
 		next, err := sjson.SetBytes(current, path, value)
@@ -460,7 +461,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			normalized = next
 		}
-		prepared, preflightErr := prepareOpenAIFinalWSProtocol(c, account, upstreamModel, normalized)
+		prepared, preflightErr := prepareOpenAIFinalWSProtocol(c, account, upstreamModel, normalized, webSearchHistory.begin(account, normalized))
 		if preflightErr != nil {
 			return openAIWSClientPayload{}, s.writeOpenAIProtocolValidationWS(ctx, c, clientConn, hooks, preflightErr)
 		}
@@ -1388,7 +1389,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				upstreamMessage = normalized
 			}
 
-			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+			eventType, eventResponseID, eventResponse := parseOpenAIWSEventEnvelope(upstreamMessage)
 			ack, interruptErr := turnInterrupt.observe(upstreamMessage, eventType, eventResponseID)
 			if interruptErr != nil {
 				turnInterruptFailure = NewOpenAIWSClientCloseError(coderws.StatusProtocolError, "invalid websocket interruption acknowledgement", interruptErr)
@@ -1623,6 +1624,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 				}
 				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
+				status := eventResponse.Get("status").String()
+				delivered := !clientDisconnected && !turnInterrupt.requested
+				webSearchHistory.complete(eventResponse.Get("id").String(), delivered && successfulOpenAIResponseAuthOwnerTerminal(terminalEvent) && (status == "" || status == "completed"))
 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
 				if clientDisconnected && !turnInterrupt.requested {
 					lease.MarkBroken()
@@ -2484,6 +2488,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			lastTurnClean = true
 			lastTurnResponseID = ""
+			webSearchHistory.complete("", false)
 			lastTurnReplayInput = nil
 			lastTurnReplayInputExists = false
 			lastTurnHistoryComplete = false
