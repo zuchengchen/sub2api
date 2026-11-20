@@ -113,11 +113,20 @@ func gpt61SolChatClaudeSession(root gjson.Result) (string, bool) {
 // It preserves collectCodexTurnEvidence precedence. Invalid/ambiguous recognized
 // metadata fails closed instead of interpreting a cache hint as a session.
 func resolveGPT61SolChatIdentity(c *gin.Context, body []byte) gpt61SolChatIdentity {
+	return parseGPT61SolChatIdentity(c, body, true)
+}
+
+func parseGPT61SolChatIdentity(c *gin.Context, body []byte, includeInputEvidence bool) gpt61SolChatIdentity {
 	result := gpt61SolChatIdentity{}
 	if c == nil || c.Request == nil || len(body) > gpt61SolChatIdentityMaxBodyBytes || !utf8.Valid(body) || !gjson.ValidBytes(body) {
 		return result
 	}
-	root := gjson.ParseBytes(body)
+	var root gjson.Result
+	if includeInputEvidence {
+		root = gjson.ParseBytes(body)
+	} else {
+		root = parseRawJSONView(body)
+	}
 	if !root.IsObject() || hasDuplicateJSONObjectKeys(root) {
 		return result
 	}
@@ -159,7 +168,12 @@ func resolveGPT61SolChatIdentity(c *gin.Context, body []byte) gpt61SolChatIdenti
 			return result
 		}
 	}
-	result.evidence = collectCodexTurnEvidence(bodyMeta, headers, root)
+	if includeInputEvidence {
+		result.evidence = collectCodexTurnEvidence(bodyMeta, headers, root)
+	} else {
+		// Account routing needs only the explicit identity carriers.
+		result.evidence = collectCodexTurnEvidenceForRequest(bodyMeta, headers, gjson.Result{}, root.Get("generate").Type != gjson.False)
+	}
 	ev := &result.evidence
 	if ev.ClientSessionID == "" && ev.ClientThreadID == "" {
 		for _, name := range clientSessionIDHeaders {

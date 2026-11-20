@@ -131,8 +131,10 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 // can stamp the result after any return path.
 func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context, c *gin.Context, account *Account, body []byte, tiboRunOut **openAITiboRun) (*OpenAIForwardResult, error) {
 	beginOpenAIResponsesValidation(c, body)
+	var inputProof OpenAIContinuationReplayProof
 	if account != nil && account.Platform == PlatformOpenAI {
-		if err := ValidateOpenAIContinuationInput(body); err != nil {
+		inputProof = AnalyzeOpenAIContinuationReplayProof(body)
+		if err := validateOpenAIContinuationInputProof(inputProof); err != nil {
 			writeOpenAIContinuationContextError(c, err)
 			return nil, err
 		}
@@ -781,13 +783,19 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			}
 			markDecodedModified()
 		} else {
+			preserveCallIDs := nativeInput
+			if !nativeInput && !isCompactRequest && !imageIntent && isCodexOAuthAccount(account) &&
+				responsesCacheAffinityEnabled(c, upstreamModel) && c.Request.URL != nil &&
+				strings.HasSuffix(strings.TrimRight(c.Request.URL.Path, "/"), "/responses") {
+				preserveCallIDs = codexResponsesHaveNativeFunctionPairs(inputProof, body, decoded)
+			}
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                          isCodexCLI,
 				NativeItemIDs:                       isCodexOAuthAccount(account),
 				IsCompact:                           isCompactRequest,
 				SkipDefaultInstructions:             synthesized || cookieWS || nativeInput,
 				PreserveNativeInput:                 nativeInput,
-				PreserveToolCallIDs:                 nativeInput,
+				PreserveToolCallIDs:                 preserveCallIDs,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 				ResponsesLite:                       responsesLite,
 				WireProfile:                         wireProfilePtr,

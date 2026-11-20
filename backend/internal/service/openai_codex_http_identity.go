@@ -15,8 +15,8 @@ func stageCodexHTTPClientSession(c *gin.Context, account *Account, body []byte) 
 	if c == nil || c.Request == nil || account == nil || !account.UsesOpenAICodexProtocol() {
 		return restore
 	}
-	parsed := gjson.ParseBytes(body)
-	ev := collectCodexTurnEvidence(parsed.Get("client_metadata"), c.Request.Header, parsed)
+	parsed := parseRawJSONView(body)
+	ev := collectCodexTurnEvidence(parsed.Get("client_metadata"), c.Request.Header, gjson.Result{})
 	session := firstNonEmptyString(ev.ClientSessionID, ev.ClientThreadID)
 	thread := firstNonEmptyString(ev.ClientThreadID, session)
 	if session != "" {
@@ -24,10 +24,17 @@ func stageCodexHTTPClientSession(c *gin.Context, account *Account, body []byte) 
 	} else if ev.ClientTurnID != "" {
 		c.Set("codex_http_session_scope", "turn:"+ev.ClientTurnID)
 	}
-	if ev.ClientSessionID != "" || ev.ClientThreadID != "" || ev.ClientTurnID != "" {
+	if session != "" {
 		return restore
 	}
-	session = strings.TrimSpace(extractClaudeCodeSessionID(c, body))
+	if useResponsesClaudeHTTPIdentity(c, account, parsed) {
+		session = validatedResponsesClaudeSession(c, body)
+	} else if ev.ClientTurnID == "" {
+		session = strings.TrimSpace(extractClaudeCodeSessionID(c, body))
+	}
+	if session == "" && ev.ClientTurnID != "" {
+		return restore
+	}
 	if session == "" {
 		session = codexAnonymousRequestSession(c)
 	}
