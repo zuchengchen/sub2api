@@ -645,7 +645,9 @@
               <button
                 type="button"
                 :disabled="row.role === 'admin' && row.status === 'active'"
-                :title="row.role === 'admin' && row.status === 'active' ? t('admin.users.adminDisableForbidden') : undefined"
+                :title="row.status === 'disabled'
+                  ? t('admin.users.enableUserHint')
+                  : row.role === 'admin' ? t('admin.users.adminDisableForbidden') : undefined"
                 @click="handleToggleStatus(row)"
                 :class="[
                   'flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors disabled:cursor-not-allowed disabled:opacity-50',

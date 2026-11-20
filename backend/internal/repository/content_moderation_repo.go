@@ -17,6 +17,8 @@ type contentModerationRepository struct {
 	db *sql.DB
 }
 
+var _ service.ContentModerationBulkDispositionRepository = (*contentModerationRepository)(nil)
+
 type contentModerationQueryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
@@ -862,14 +864,57 @@ ORDER BY key_id`, service.SettingKeyContentModerationConfig)
 }
 
 func (r *contentModerationRepository) DisableUserIfActive(ctx context.Context, userID int64) (bool, error) {
-	result, err := r.db.ExecContext(ctx, `
-UPDATE users SET status = 'disabled', updated_at = NOW()
-WHERE id = $1 AND status = 'active' AND deleted_at IS NULL`, userID)
+	// A permanent disposition supersedes a usage-policy cooldown. Report only a
+	// change from active so an already disabled user keeps the same audit result.
+	var wasActive bool
+	err := r.db.QueryRowContext(ctx, `
+WITH target AS (
+    SELECT id, status FROM users
+    WHERE id = $1 AND deleted_at IS NULL
+      AND (status = 'active' OR (status = 'disabled' AND usage_policy_unban_at IS NOT NULL))
+    FOR UPDATE
+)
+UPDATE users AS u
+SET status = 'disabled', usage_policy_unban_at = NULL, updated_at = NOW()
+FROM target
+WHERE u.id = target.id
+RETURNING target.status = 'active'`, userID).Scan(&wasActive)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("disable cyber policy user: %w", err)
 	}
-	changed, err := result.RowsAffected()
-	return changed > 0, err
+	return wasActive, nil
+}
+
+func (r *contentModerationRepository) DisableActiveAPIKeysForDisabledUser(ctx context.Context, userID int64) ([]string, error) {
+	// Recheck the parent under the same row lock used by reactivation. A
+	// revocation waiting behind an unban must leave the restored keys usable.
+	rows, err := r.db.QueryContext(ctx, `
+WITH disabled_user AS (
+    SELECT id FROM users
+    WHERE id = $1 AND status = 'disabled' AND usage_policy_unban_at IS NULL AND deleted_at IS NULL
+    FOR UPDATE
+)
+UPDATE api_keys AS k
+SET status = 'disabled', updated_at = NOW()
+FROM disabled_user
+WHERE k.user_id = disabled_user.id AND k.status = 'active' AND k.deleted_at IS NULL
+RETURNING k.key`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("disable cyber policy user API keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
 }
 
 func (r *contentModerationRepository) DisableAPIKeyIfActive(ctx context.Context, apiKeyID int64) (string, bool, error) {

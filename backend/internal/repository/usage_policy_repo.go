@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 )
 
 type usagePolicyRepository struct {
@@ -195,7 +196,14 @@ func (r *usagePolicyRepository) UnbanDueUsers(ctx context.Context, limit int) ([
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin usage policy unban: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var ids []int64
+	err = tx.QueryRowContext(ctx, `
 WITH due AS (
     SELECT id
     FROM users
@@ -206,23 +214,24 @@ WITH due AS (
     ORDER BY usage_policy_unban_at ASC
     LIMIT $1
     FOR UPDATE SKIP LOCKED
+), unbanned AS (
+    UPDATE users AS u
+    SET status = 'active', usage_policy_unban_at = NULL, updated_at = NOW()
+    FROM due
+    WHERE u.id = due.id
+    RETURNING u.id
 )
-UPDATE users AS u
-SET status = 'active', usage_policy_unban_at = NULL, updated_at = NOW()
-FROM due
-WHERE u.id = due.id
-RETURNING u.id`, limit)
+SELECT ARRAY(SELECT id FROM unbanned)`, limit).Scan(pq.Array(&ids))
 	if err != nil {
 		return nil, fmt.Errorf("unban due usage policy users: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+	if len(ids) > 0 {
+		if err := restoreBannedAPIKeys(ctx, tx, ids); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit usage policy unban: %w", err)
+	}
+	return ids, nil
 }

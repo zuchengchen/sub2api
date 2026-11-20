@@ -117,6 +117,8 @@ type UserUpdateFields struct {
 	AllowedGroups bool
 	// RestrictPublicGroups 覆盖 restrict_public_groups 列。
 	RestrictPublicGroups bool
+	// 显式解封也修复用户已经启用、密钥仍被封禁的历史记录。
+	RestoreBannedAPIKeys bool
 }
 
 // BalanceChange 记录一次余额变更前后的值。
@@ -142,7 +144,7 @@ type UserRepository interface {
 	GetByIDIncludeDeleted(ctx context.Context, id int64) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetFirstAdmin(ctx context.Context) (*User, error)
-	// Update 只写 fields 中显式声明的列，其余列保持库中当前值。
+	// Update 只写 fields 中显式声明的用户字段。解封时一并恢复该用户被封的 API Key。
 	Update(ctx context.Context, user *User, fields UserUpdateFields) error
 	Delete(ctx context.Context, id int64) error
 	GetUserAvatar(ctx context.Context, userID int64) (*UserAvatar, error)
