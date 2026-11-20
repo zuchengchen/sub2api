@@ -67,3 +67,52 @@ func TestAdminService_UpdateUser_NoInvalidateWhenRPMLimitUnchanged(t *testing.T)
 	require.NoError(t, err)
 	require.Empty(t, invalidator.userIDs, "只改 username 不应触发认证缓存失效")
 }
+
+func TestAdminService_UpdateUser_InvalidatesAuthCacheAfterConcurrentStatusChange(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		requested     string
+		statusAtWrite string
+	}{
+		{"enable after concurrent ban", StatusActive, StatusDisabled},
+		{"disable after concurrent unban", StatusDisabled, StatusActive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The snapshot already matches the request; the stored row changed before Update.
+			const userID int64 = 42
+			storedStatus := tc.statusAtWrite
+			invalidator := &authCacheInvalidatorStub{}
+			repo := &mockUserRepo{
+				getByIDUser: &User{ID: userID, Status: tc.requested},
+				updateFn: func(_ context.Context, user *User) error {
+					require.Empty(t, invalidator.userIDs)
+					require.NotEqual(t, storedStatus, user.Status)
+					storedStatus = user.Status
+					return nil
+				},
+			}
+			svc := &adminServiceImpl{userRepo: repo, authCacheInvalidator: invalidator}
+
+			_, err := svc.UpdateUser(context.Background(), userID, &UpdateUserInput{Status: tc.requested})
+			require.NoError(t, err)
+			require.Len(t, repo.updateFields, 1)
+			require.True(t, repo.updateFields[0].Status)
+			require.Equal(t, tc.requested, storedStatus)
+			require.Equal(t, []int64{userID}, invalidator.userIDs)
+		})
+	}
+}
+
+func TestAdminService_UpdateUser_FailedStatusWritePreservesAuthCache(t *testing.T) {
+	const userID int64 = 42
+	repo := &mockUserRepo{
+		getByIDUser: &User{ID: userID, Status: StatusDisabled},
+		updateFn:    func(context.Context, *User) error { return ErrUserNotFound },
+	}
+	invalidator := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{userRepo: repo, authCacheInvalidator: invalidator}
+
+	_, err := svc.UpdateUser(context.Background(), userID, &UpdateUserInput{Status: StatusActive})
+	require.ErrorIs(t, err, ErrUserNotFound)
+	require.Empty(t, invalidator.userIDs)
+}

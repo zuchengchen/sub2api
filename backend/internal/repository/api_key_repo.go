@@ -404,6 +404,23 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey, fiel
 	return nil
 }
 
+// Both manual and timed unbans lift all risk-control key bans for the locked users.
+func restoreBannedAPIKeys(ctx context.Context, tx sqlExecutor, userIDs []int64) error {
+	_, err := tx.ExecContext(ctx, `
+UPDATE api_keys
+SET status = CASE
+        WHEN expires_at <= NOW() THEN 'expired'
+        WHEN quota > 0 AND quota_used >= quota THEN 'quota_exhausted'
+        ELSE 'active'
+    END,
+    updated_at = NOW()
+WHERE user_id = ANY($1) AND deleted_at IS NULL AND status = 'disabled'`, pq.Array(userIDs))
+	if err != nil {
+		return fmt.Errorf("restore banned API keys: %w", err)
+	}
+	return nil
+}
+
 func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 	// 存在唯一键约束 生成tombstone key 用来释放原key，长度远小于 128，满足 schema 限制
 	tombstoneKey := fmt.Sprintf("__deleted__%d__%d", id, time.Now().UnixNano())

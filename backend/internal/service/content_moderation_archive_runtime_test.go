@@ -90,6 +90,10 @@ func (*moderationDispositionRetryTestRepo) DisableAPIKeyIfActive(context.Context
 	return "", false, nil
 }
 
+func (*moderationDispositionRetryTestRepo) DisableActiveAPIKeysForDisabledUser(context.Context, int64) ([]string, error) {
+	return nil, nil
+}
+
 func (r *moderationDispositionRetryTestRepo) UpdateLogDispositionByArchiveID(_ context.Context, archiveID, status, target string, transitioned, autoBanned bool, violationCount int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

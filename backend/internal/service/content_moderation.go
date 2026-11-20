@@ -565,6 +565,11 @@ type ContentModerationDispositionRepository interface {
 	DisableAPIKeyIfActive(ctx context.Context, apiKeyID int64) (credential string, transitioned bool, err error)
 }
 
+type ContentModerationBulkDispositionRepository interface {
+	ContentModerationDispositionRepository
+	DisableActiveAPIKeysForDisabledUser(ctx context.Context, userID int64) ([]string, error)
+}
+
 type ContentModerationDispositionCountRepository interface {
 	CountFlaggedByUserSinceExcludingArchive(ctx context.Context, userID int64, since time.Time, excludeCyberPolicy bool, archiveID string) (int, error)
 }
@@ -1368,11 +1373,9 @@ func (s *ContentModerationService) UnbanUser(ctx context.Context, userID int64) 
 		}
 		return nil, fmt.Errorf("get content moderation unban user: %w", err)
 	}
-	if user.Status != StatusActive {
-		user.Status = StatusActive
-		if err := s.userRepo.Update(ctx, user, UserUpdateFields{Status: true}); err != nil {
-			return nil, fmt.Errorf("update content moderation unban user: %w", err)
-		}
+	user.Status = StatusActive
+	if err := s.userRepo.Update(ctx, user, UserUpdateFields{Status: true, RestoreBannedAPIKeys: true}); err != nil {
+		return nil, fmt.Errorf("update content moderation unban user: %w", err)
 	}
 	if s.authCacheInvalidator != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
@@ -3508,11 +3511,14 @@ func (s *ContentModerationService) applyCyberPolicyDisposition(ctx context.Conte
 	} else {
 		log.DispositionStatus = "already_disabled"
 	}
-	// 账号已停用，立即终止全部在途对话，再吊销所有活跃 Key 并逐 Key
+	// 用户已停用，立即终止全部在途对话，再吊销所有活跃 Key 并逐 Key
 	// 失效认证缓存。顺序不能反：先掐断流，再封新请求入口。
 	s.terminateCyberPolicyUserConversations(ctx, in.UserID)
-	s.revokeCyberPolicyUserAPIKeys(ctx, in.UserID)
-	if transitioned && s.authCacheInvalidator != nil {
+	revokeErr := s.revokeCyberPolicyUserAPIKeys(ctx, in.UserID)
+	if revokeErr != nil {
+		slog.Warn("content_moderation.cyber_api_key_revoke_failed", "user_id", in.UserID, "error", revokeErr)
+	}
+	if (transitioned || revokeErr != nil) && s.authCacheInvalidator != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, in.UserID)
 	}
 	return transitioned, nil
@@ -3534,42 +3540,57 @@ func (s *ContentModerationService) terminateCyberPolicyUserConversations(ctx con
 // revokeCyberPolicyUserAPIKeys 吊销该用户全部活跃 API Key 并按凭据失效
 // 认证缓存。仅依赖用户级缓存失效时，L1 缓存 TTL 内其他 Key 仍可通过
 // 认证（生产观测约一个 TTL 窗口的尾巴）；逐 Key 吊销消除该窗口。
-func (s *ContentModerationService) revokeCyberPolicyUserAPIKeys(ctx context.Context, userID int64) {
-	if s == nil || userID <= 0 {
-		return
-	}
-	lister, ok := s.apiKeyRepo.(interface {
-		ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error)
-	})
-	if !ok {
-		return
-	}
-	keys, err := lister.ListAllByUserID(ctx, userID, APIKeyListFilters{Status: StatusActive})
-	if err != nil {
-		slog.Warn("content_moderation.cyber_api_key_revoke_list_failed",
-			"user_id", userID, "error", err)
-		return
+func (s *ContentModerationService) revokeCyberPolicyUserAPIKeys(ctx context.Context, userID int64) error {
+	if s == nil {
+		return errors.New("content moderation disposition repository unavailable")
 	}
 	revoked := 0
-	for _, key := range keys {
-		credential, transitioned, err := s.disableCyberPolicyAPIKey(ctx, key.ID)
-		if err != nil {
-			slog.Warn("content_moderation.cyber_api_key_revoke_failed",
-				"user_id", userID, "api_key_id", key.ID, "error", err)
-			continue
-		}
-		if !transitioned {
-			continue
-		}
+	recordRevoked := func(credential string) {
 		revoked++
 		if s.authCacheInvalidator != nil && credential != "" {
 			s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, credential)
 		}
 	}
+	var err error
+	if repo, ok := s.dispositionRepo.(ContentModerationBulkDispositionRepository); ok {
+		keys, err := repo.DisableActiveAPIKeysForDisabledUser(ctx, userID)
+		if err != nil {
+			return err
+		}
+		for _, key := range keys {
+			recordRevoked(key)
+		}
+	} else {
+		err = s.disableCyberPolicyUserAPIKeysIndividually(ctx, userID, recordRevoked)
+	}
 	if revoked > 0 {
 		slog.Info("content_moderation.cyber_api_keys_revoked",
 			"user_id", userID, "revoked_keys", revoked)
 	}
+	return err
+}
+
+func (s *ContentModerationService) disableCyberPolicyUserAPIKeysIndividually(ctx context.Context, userID int64, recordRevoked func(string)) error {
+	lister, ok := s.apiKeyRepo.(apiKeyAllByUserIDLister)
+	if !ok {
+		return errors.New("API key repository does not support listing all keys for a user")
+	}
+	keys, err := lister.ListAllByUserID(ctx, userID, APIKeyListFilters{Status: StatusActive})
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, key := range keys {
+		credential, transitioned, err := s.disableCyberPolicyAPIKey(ctx, key.ID)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("disable API key %d: %w", key.ID, err))
+			continue
+		}
+		if transitioned {
+			recordRevoked(credential)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func (s *ContentModerationService) disableCyberPolicyUser(ctx context.Context, userID int64) (bool, error) {
