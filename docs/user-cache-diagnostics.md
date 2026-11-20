@@ -188,3 +188,5 @@ SUB2_RESPONSES_STATELESS_CACHE_TRIAL_UNTIL=<截止时间，UTC RFC3339>
 网关对符合条件的逻辑请求随机分组，一组保留预热，另一组在同一上游传输上直接发送客户端的完整输入生成回答。两组均保留显式缓存提示，每个无身份请求保持独立。重试沿用原分组。截止时间到达后，新请求按原流程执行。若对照结果支持，可单独用 `key:<本站密钥数字ID>:full` 在相同条件下固定选择直接生成。清除模式设置并重启即可关闭。
 
 逐轮原生诊断启用时，`stateless_cache_trial` 包含分组、成功写出的帧类型、最终传输方式和可用的首 token 耗时。生产日志中的 `responses_stateless_cache_trial_totals` 是进程内随机试验的累计数字，按分组和总输入长度档汇总，每十个请求或下一次跨过一分钟的完成事件输出。按每次服务启动分开读取最新快照。用两组实际缓存读取 token 除以各自的总输入 token，同时比较错误、回退和首 token 耗时。完整发送或完成预热的标记仅表示网关执行了该动作。
+
+当日志配置屏蔽 Info 时，服务会把同一份累计快照以单行 JSON 写到标准输出。使用 systemd 部署时，可用 `journalctl -u sub2api --grep=responses_stateless_cache_trial_totals -o cat` 查看，每个进程取 `events` 最大的一条。

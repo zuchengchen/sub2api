@@ -1,7 +1,10 @@
 package service
 
 import (
+	"encoding/json"
+	"io"
 	"maps"
+	"os"
 	"sync"
 	"time"
 
@@ -141,5 +144,20 @@ func (o ResponsesStatelessCacheOutcome) Publish() {
 	snapshot := maps.Clone(statelessTrialMeters.buckets)
 	events := statelessTrialMeters.events
 	statelessTrialMeters.Unlock()
-	logger.L().Info("responses_stateless_cache_trial_totals", zap.Int("events", events), zap.Any("buckets", snapshot))
+	writeResponsesCacheTrialSnapshot(logger.L(), os.Stdout, events, snapshot)
+}
+
+func writeResponsesCacheTrialSnapshot(log *zap.Logger, stdout io.Writer, events int, buckets map[string]responsesCacheTrialTotals) {
+	const message = "responses_stateless_cache_trial_totals"
+	if entry := log.Check(zap.InfoLevel, message); entry != nil {
+		entry.Write(zap.Int("events", events), zap.Any("buckets", buckets))
+		return
+	}
+	// An explicitly enabled trial must remain observable at error-only log
+	// levels. Write the same fixed counters in one line without request fields.
+	_ = json.NewEncoder(stdout).Encode(struct {
+		Message string                               `json:"msg"`
+		Events  int                                  `json:"events"`
+		Buckets map[string]responsesCacheTrialTotals `json:"buckets"`
+	}{message, events, buckets})
 }
