@@ -292,6 +292,30 @@ describe('EditAccountModal', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('allows clearing the concurrency before entering and saving 20', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset().mockResolvedValue({ ...account, concurrency: 20 })
+    const wrapper = mountModal(account)
+    const input = wrapper.get<HTMLInputElement>('#edit-account-concurrency')
+    const form = wrapper.get<HTMLFormElement>('#edit-account-form').element
+
+    expect(input.element.value).toBe('1')
+    input.element.value = ''
+    await input.trigger('input')
+    expect(input.element.value).toBe('')
+    expect(input.element.validity.valueMissing).toBe(true)
+    form.requestSubmit()
+    await flushPromises()
+    expect(updateAccountMock).not.toHaveBeenCalled()
+
+    await input.setValue('2')
+    await input.setValue(input.element.value + '0')
+    form.requestSubmit()
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({ concurrency: 20 }))
+    wrapper.unmount()
+  })
+
   it('does not render Cookie WS recovery in the edit dialog', async () => {
     const account = buildAccount()
     account.type = 'oauth'
