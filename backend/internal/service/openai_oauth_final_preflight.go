@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -28,14 +26,14 @@ type openAIFinalProtocolDiagnostic struct {
 	ToolSearchExecution []string `json:"tool_search_execution"`
 }
 
-// Keep the existing API-key normalization contract. The new protocol preflight
-// is OAuth-only, and the established GPT-5.5 compatibility step disables Lite.
+// Choose the protocol for this account attempt before normalizing its tools.
 func openAIResponsesLiteForNormalization(account *Account, model, header string, body []byte) bool {
 	if account == nil || !account.IsOpenAI() {
 		return false
 	}
 	if account.IsOpenAIOAuthLike() {
-		return isOpenAIResponsesLiteFinalRequest(account, model, header, body)
+		return isOpenAIResponsesLiteFinalRequest(account, model, header, body) &&
+			!openAIResponsesMustUseStandard(account, model, body)
 	}
 	return isOpenAIResponsesLiteHeader(header) || isOpenAIResponsesLiteWebSocketPayload(body)
 }
@@ -105,7 +103,7 @@ func openAIRequestToolCategories(body []byte) (carriers, execution []string) {
 func recordOpenAIFinalProtocolDiagnostic(c *gin.Context, account *Account, model, liteHeader string, body []byte) openAIFinalProtocolDiagnostic {
 	carriers, execution := openAIRequestToolCategories(body)
 	d := openAIFinalProtocolDiagnostic{
-		FinalLite:    isOpenAIResponsesLiteFinalRequest(account, model, liteHeader, body),
+		FinalLite:    account.IsOpenAIOAuthLike() && openAIResponsesLiteForNormalization(account, model, liteHeader, body),
 		ToolCarriers: carriers, ToolSearchExecution: execution,
 	}
 	if c != nil {
@@ -142,7 +140,10 @@ func validateOpenAIOAuthFinalRequest(c *gin.Context, account *Account, model, li
 		return nil
 	}
 	d := recordOpenAIFinalProtocolDiagnostic(c, account, model, liteHeader, body)
-	err := validateOpenAIResponsesLiteFinalRequest(account, model, liteHeader, body)
+	var err error
+	if d.FinalLite {
+		err = validateOpenAIResponsesLiteFinalRequest(account, model, liteHeader, body)
+	}
 	if err == nil {
 		err = validateOpenAIOAuthFinalReasoning(account, model, body)
 	}
@@ -203,11 +204,18 @@ func (s *OpenAIGatewayService) writeOpenAIProtocolValidationWS(ctx context.Conte
 // Model mapping and configured reasoning policy must precede this function.
 // Preserve the caller's bytes on failure; an explicit declaration is never
 // dropped to make a Lite attempt acceptable.
-func prepareOpenAIFinalWSProtocol(c *gin.Context, account *Account, model string, body []byte) ([]byte, error) {
-	if account != nil && account.IsOpenAIOAuthLike() && strings.TrimSpace(model) == "gpt-5.5" && isOpenAIResponsesLiteWebSocketPayload(body) {
-		out, err := sjson.DeleteBytes(body, "client_metadata."+responsesLiteWSMetadataKey)
+func prepareOpenAIFinalWSProtocol(c *gin.Context, account *Account, model string, body []byte, webSearchHistory bool) ([]byte, error) {
+	if webSearchHistory || openAIResponsesMustUseStandard(account, model, body) {
+		out, err := removeOpenAIResponsesLiteMetadata(body)
 		if err != nil {
 			return body, err
+		}
+		out, injected, err := ensureOpenAIOAuthWebSearchToolForHistoryBody(out, false)
+		if err != nil {
+			return body, err
+		}
+		if injected {
+			MarkOpenAIResponsesValidationSearchSource(c, OpenAIResponsesValidationSearchHistory)
 		}
 		body = out
 	}

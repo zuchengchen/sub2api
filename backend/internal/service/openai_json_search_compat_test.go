@@ -324,16 +324,8 @@ func TestJSONSearchCompatibility_SearchHistoryRetainsItsDeclaration(t *testing.T
 					account := newCodexSynthTestAccount(77118, AccountTypeOAuth)
 					account.Extra[codexClientCapabilityExtraKey] = "compatible"
 					upstream, recorder, result, err := jsonSearchCompatForward(t, route, request, account)
-					if route == "lite" {
-						require.Error(t, err)
-						require.Nil(t, result)
-						require.Empty(t, upstream.bodies)
-						require.Equal(t, http.StatusBadRequest, recorder.Code)
-						require.Equal(t, "input[0].type", gjson.Get(recorder.Body.String(), "error.param").String())
-						return
-					}
 					if format == "text" {
-						requireJSONSearchCompatSuccess(t, route, stream, upstream, recorder, result, err)
+						requireJSONSearchCompatSuccess(t, "responses", stream, upstream, recorder, result, err)
 					} else {
 						// History repair is a separate compatibility requirement. Do not
 						// discard that history/declaration to promise JSON-mode success.
@@ -342,6 +334,7 @@ func TestJSONSearchCompatibility_SearchHistoryRetainsItsDeclaration(t *testing.T
 						require.Contains(t, recorder.Body.String(), "Web Search cannot be used with JSON mode.")
 					}
 					require.Len(t, upstream.bodies, 1)
+					require.Empty(t, upstream.headers[0].Get(responsesLiteHeader))
 					sent := upstream.bodies[0]
 					declarations := jsonSearchCompatDeclarations(sent)
 					require.Len(t, declarations, 1)

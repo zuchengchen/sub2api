@@ -261,9 +261,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			liteModel = fallback
 		}
 	}
-	responsesLite := openAIResponsesLiteForNormalization(account, liteModel, c.GetHeader(responsesLiteHeader), body)
+	liteHeader := strings.TrimSpace(c.GetHeader(responsesLiteHeader))
+	responsesLite := openAIResponsesLiteForNormalization(account, liteModel, liteHeader, body)
 	if responsesLite {
-		recordOpenAIFinalProtocolDiagnostic(c, account, liteModel, c.GetHeader(responsesLiteHeader), body)
+		recordOpenAIFinalProtocolDiagnostic(c, account, liteModel, liteHeader, body)
 		liteBody, changed, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
 		if liteErr != nil {
 			writeOpenAIProtocolValidationError(c, liteErr, false)
@@ -561,10 +562,15 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
 	}
 	codexImageGenerationBridgeEnabled := isCodexCLI &&
-		!isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) &&
+		!isOpenAIResponsesLiteHeader(liteHeader) &&
 		imageGenerationAllowed &&
 		codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip &&
 		s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
+	if codexImageGenerationBridgeEnabled && liteHeader == "" && account.IsOpenAIOAuthLike() && openAIResponsesHasWebSearchHistory(body) {
+		// Clients can also declare Lite in frame metadata. Replaying a search
+		// on standard Responses must preserve their image tool preferences.
+		codexImageGenerationBridgeEnabled = !isOpenAIResponsesLiteWebSocketPayload(body)
+	}
 	var imageIntent bool
 	canonicalImageIntent := resolveOpenAIImageIntentHint(c, reqModel, canonicalImageIntentBody, IsImageGenerationIntent)
 	if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
@@ -1097,7 +1103,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		imageSizeTier = imageCfg.SizeTier
 		imageInputSize = imageCfg.InputSize
 	}
-	if validationErr := validateOpenAIOAuthFinalRequest(c, account, upstreamModel, c.GetHeader(responsesLiteHeader), body); validationErr != nil {
+	if validationErr := validateOpenAIOAuthFinalRequest(c, account, upstreamModel, liteHeader, body); validationErr != nil {
 		writeOpenAIProtocolValidationError(c, validationErr, false)
 		return nil, validationErr
 	}
@@ -1503,7 +1509,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, body)
 	diagnosticUpstreamAttempt := 0
 	for {
-		if validationErr := validateOpenAIOAuthFinalRequest(c, account, upstreamModel, c.GetHeader(responsesLiteHeader), body); validationErr != nil {
+		if validationErr := validateOpenAIOAuthFinalRequest(c, account, upstreamModel, liteHeader, body); validationErr != nil {
 			writeOpenAIProtocolValidationError(c, validationErr, false)
 			return nil, validationErr
 		}
@@ -2113,7 +2119,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 			req.Header.Del("session_id")
 		}
 	}
-	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
+	if err := applyOpenAIStandardResponsesCompatibility(req, account, body); err != nil {
 		return nil, err
 	}
 	return req, nil

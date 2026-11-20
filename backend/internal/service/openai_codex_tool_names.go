@@ -98,7 +98,7 @@ func collectOpenAIResponsesToolNameFields(reqBody map[string]any) []codexToolNam
 				}
 			}
 			if toolType == "namespace" {
-				collectTools(tool["tools"])
+				collectTools(codexNamespaceChildTools(tool))
 			}
 		}
 	}
@@ -132,7 +132,7 @@ func collectOpenAIResponsesToolNameFields(reqBody map[string]any) []codexToolNam
 				continue
 			}
 			typ := strings.ToLower(strings.TrimSpace(firstNonEmptyString(item["type"])))
-			if typ == "additional_tools" {
+			if isOpenAIResponsesToolDeclarationItem(typ) {
 				collectTools(item["tools"])
 			}
 			if typ == "function_call" {

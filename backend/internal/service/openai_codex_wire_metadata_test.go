@@ -22,7 +22,7 @@ func liteMarkerValue(t *testing.T, payload map[string]any) bool {
 // （否则上游因 marker/context 不配对接连拒绝，生产冒烟实测）。
 func TestCodexWireLiteMarker_OmittedWithoutAllTurns(t *testing.T) {
 	payload := map[string]any{"model": "gpt-5.6-luna"}
-	applyCodexWireLaneMetadata(payload, nil, liteTestAccount(map[string]any{}), "turn")
+	applyCodexWireLaneMetadata(payload, nil, liteTestAccount(map[string]any{}), "turn", false)
 	if liteMarkerValue(t, payload) {
 		t.Fatalf("lite marker emitted without reasoning.context=all_turns")
 	}
@@ -34,7 +34,7 @@ func TestCodexWireLiteMarker_EmittedWithAllTurns(t *testing.T) {
 		"model":     "gpt-5.6-luna",
 		"reasoning": map[string]any{"effort": "low", "context": "all_turns"},
 	}
-	applyCodexWireLaneMetadata(payload, nil, liteTestAccount(map[string]any{}), "turn")
+	applyCodexWireLaneMetadata(payload, nil, liteTestAccount(map[string]any{}), "turn", false)
 	if !liteMarkerValue(t, payload) {
 		t.Fatalf("lite marker missing with reasoning.context=all_turns")
 	}
@@ -46,7 +46,7 @@ func TestCodexWireLiteMarker_DisabledByAccount(t *testing.T) {
 		"model":     "gpt-5.6-luna",
 		"reasoning": map[string]any{"context": "all_turns"},
 	}
-	applyCodexWireLaneMetadata(payload, nil, liteTestAccount(map[string]any{"codex_responses_lite": "false"}), "turn")
+	applyCodexWireLaneMetadata(payload, nil, liteTestAccount(map[string]any{"codex_responses_lite": "false"}), "turn", false)
 	if liteMarkerValue(t, payload) {
 		t.Fatalf("lite marker emitted despite codex_responses_lite=false")
 	}
@@ -55,7 +55,7 @@ func TestCodexWireLiteMarker_DisabledByAccount(t *testing.T) {
 // extra=true 强制开启：缺 reasoning 时补齐 context=all_turns 并下发标记。
 func TestCodexWireLiteMarker_ForcedInjectsContext(t *testing.T) {
 	payload := map[string]any{"model": "gpt-5.6-luna"}
-	applyCodexWireLaneMetadata(payload, nil, liteTestAccount(map[string]any{"codex_responses_lite": "true"}), "turn")
+	applyCodexWireLaneMetadata(payload, nil, liteTestAccount(map[string]any{"codex_responses_lite": "true"}), "turn", false)
 	if !liteMarkerValue(t, payload) {
 		t.Fatalf("lite marker missing with codex_responses_lite=true")
 	}

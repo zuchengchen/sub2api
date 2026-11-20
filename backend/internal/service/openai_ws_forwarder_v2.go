@@ -89,14 +89,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
 	if account.IsOpenAIOAuthLike() {
 		// The HTTP Lite declaration is per request. Project it into this
-		// response.create frame, including an explicit non-Lite GPT-5.5
-		// mapping, without changing the ingress headers used by failover.
+		// response.create frame after choosing the protocol for the mapped
+		// model and complete input. Failover still sees the original headers.
 		metadata, _ := payload["client_metadata"].(map[string]any)
 		liteHeader := ""
 		if c != nil {
 			liteHeader = c.GetHeader(responsesLiteHeader)
 		}
-		if isOpenAIResponsesLiteFinalRequest(account, openAIWSPayloadString(payload, "model"), liteHeader, bodyRaw) {
+		if openAIResponsesLiteForNormalization(account, openAIWSPayloadString(payload, "model"), liteHeader, bodyRaw) {
 			if metadata == nil {
 				metadata = make(map[string]any)
 				payload["client_metadata"] = metadata
@@ -344,7 +344,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		// 精确保真：turn-state 挪进 client_metadata（真实客户端不在握手上发），
 		// 再补齐官方 turn-metadata/client_metadata 的行为字段全集。
 		relocateCodexWSTurnState(wsHeaders, payload)
-		applyCodexWireLaneMetadata(payload, wsHeaders, account, "turn")
+		// Use the full logical request for both projections. An inferred
+		// continuation can later reduce the wire input to an empty tail.
+		standardResponses := openAIResponsesMustUseStandard(account, openAIWSPayloadString(payload, "model"), bodyRaw)
+		applyCodexWireLaneMetadata(payload, wsHeaders, account, "turn", standardResponses)
 		// 官方 WS 连接为 prewarm 而建：握手头的 turn-metadata 是 prewarm 画像
 		// （request_kind=prewarm、turn_id 空、无 turn 专属键）。仅当本连接接下来
 		// 确实会发 prewarm 帧时才投影——新拨的连接 IsPrewarmed=false，必然走
@@ -362,7 +365,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 					}(),
 				},
 			}
-			applyCodexWireLaneMetadata(shadow, wsHeaders, account, "prewarm")
+			applyCodexWireLaneMetadata(shadow, wsHeaders, account, "prewarm", standardResponses)
 		}
 		// 官方 ResponseCreateWsRequest 恒发 prompt_cache_key（client.rs
 		// prompt_cache_key_policy：SessionDerived——root 会话即握手 session-id）。

@@ -521,21 +521,25 @@ func normalizeCodexToolChoice(reqBody map[string]any) bool {
 		}
 		return modified
 	}
-	if codexToolsContainType(reqBody["tools"], choiceType) || codexInputAdditionalToolsContainType(reqBody["input"], choiceType) {
+	if codexToolsContainType(reqBody["tools"], choiceType) || codexInputToolsContainType(reqBody["input"], choiceType) {
 		return modified
 	}
 	reqBody["tool_choice"] = "auto"
 	return true
 }
 
-func codexInputAdditionalToolsContainType(rawInput any, toolType string) bool {
+func isOpenAIResponsesToolDeclarationItem(itemType string) bool {
+	return itemType == openAIAdditionalToolsItemType || itemType == "tool_search_output"
+}
+
+func codexInputToolsContainType(rawInput any, toolType string) bool {
 	input, ok := rawInput.([]any)
 	if !ok || strings.TrimSpace(toolType) == "" {
 		return false
 	}
 	for _, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
-		if !ok || strings.TrimSpace(firstNonEmptyString(item["type"])) != "additional_tools" {
+		if !ok || !isOpenAIResponsesToolDeclarationItem(firstNonEmptyString(item["type"])) {
 			continue
 		}
 		if codexToolsContainType(item["tools"], toolType) {
@@ -569,17 +573,17 @@ func codexRequestContainsFunctionName(reqBody map[string]any, name string) bool 
 	if codexToolsContainFunctionName(reqBody["tools"], name) {
 		return true
 	}
-	return codexInputAdditionalToolsContainFunctionName(reqBody["input"], name)
+	return codexInputToolsContainFunctionName(reqBody["input"], name)
 }
 
-func codexInputAdditionalToolsContainFunctionName(rawInput any, name string) bool {
+func codexInputToolsContainFunctionName(rawInput any, name string) bool {
 	input, ok := rawInput.([]any)
 	if !ok || strings.TrimSpace(name) == "" {
 		return false
 	}
 	for _, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
-		if !ok || strings.TrimSpace(firstNonEmptyString(item["type"])) != "additional_tools" {
+		if !ok || !isOpenAIResponsesToolDeclarationItem(firstNonEmptyString(item["type"])) {
 			continue
 		}
 		if codexToolsContainFunctionName(item["tools"], name) {
@@ -1933,7 +1937,9 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			}
 		}
 
-		if !opts.PreserveReferences {
+		// A hosted search result identifies the already executed call even
+		// when this turn has no tools and only replays its history.
+		if !opts.PreserveReferences && typ != openAIWebSearchCallItemType {
 			ensureCopy()
 			delete(newItem, "id")
 		} else if id, ok := m["id"].(string); ok {

@@ -742,19 +742,21 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			LoweredTools:  loweredTools,
 		})
 	}
-	if openAIResponsesLiteForNormalization(account, gjson.GetBytes(body, "model").String(), "", payload) {
-		recordOpenAIFinalProtocolDiagnostic(c, account, gjson.GetBytes(body, "model").String(), "", body)
-		liteBody, liteChanged, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
-		if liteErr != nil {
-			setOpsUpstreamError(c, http.StatusBadRequest, liteErr.Error(), "")
-			if writeErr := writeClientMessage(buildOpenAIProtocolValidationWSEvent(liteErr)); writeErr != nil {
-				return nil, writeErr
-			}
-			return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid request parameter", liteErr)
+	// The bridge can expand a proven delta before reaching this point. Select
+	// the protocol from the actual history that will be sent over HTTP.
+	bridgeModel := gjson.GetBytes(body, "model").String()
+	if account.IsOpenAIOAuthLike() {
+		body, err = prepareOpenAIFinalWSProtocol(c, account, bridgeModel, body, false)
+	} else if openAIResponsesLiteForNormalization(account, bridgeModel, "", payload) {
+		recordOpenAIFinalProtocolDiagnostic(c, account, bridgeModel, "", body)
+		body, _, err = normalizeOpenAIResponsesLitePayloadForAccount(body, account)
+	}
+	if err != nil {
+		setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
+		if writeErr := writeClientMessage(buildOpenAIProtocolValidationWSEvent(err)); writeErr != nil {
+			return nil, writeErr
 		}
-		if liteChanged {
-			body = liteBody
-		}
+		return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid request parameter", err)
 	}
 
 	buildUpstreamRequest := func(requestBody []byte) (*http.Request, error) {
@@ -770,11 +772,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if buildErr != nil {
 			return nil, buildErr
 		}
-		if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
-			upstreamReq.Header.Set(responsesLiteHeader, "true")
+		markerSource := payload
+		if account.IsOpenAIOAuthLike() {
+			// The HTTP builder removes any inherited Upgrade header for a
+			// standard-only attempt. Project this OAuth turn's final declaration.
+			markerSource = requestBody
 		}
-		if err := applyMappedGPT55LiteCompatibility(upstreamReq, account, requestBody); err != nil {
-			return nil, err
+		if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(markerSource) {
+			upstreamReq.Header.Set(responsesLiteHeader, "true")
 		}
 		return upstreamReq, nil
 	}
