@@ -221,6 +221,89 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     expect(points(wrapper).attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
+
+  it('keeps live values when an older list response arrives and accepts newer samples independently', async () => {
+    const credits = (balance: string) => ({ has_credits: true, unlimited: false, balance })
+    const resets = (count: number) => ({
+      available_count: count, credits: Array.from({ length: count }, () => ({ expires_at: FUTURE_EXPIRY_EARLY }))
+    })
+    const accountAt = (resetTime: number | undefined, pointsTime: number) => makeAccount({ extra: {
+      codex_reset_credit_snapshot: { ...resets(0), fetched_at: resetTime },
+      codex_credits_snapshot: { credits: credits('3'), fetched_at: pointsTime }
+    } })
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({}) } })
+    vi.mocked(refreshOpenAIQuota).mockResolvedValue({
+      rate_limit_reset_credits: resets(1), credits: credits('8'), fetched_at: 10,
+      cache_persisted: true, credits_cache_persisted: true
+    })
+    await points(wrapper).trigger('click')
+    await flushPromises()
+    const count = wrapper.get('[data-testid="reset-credit-count"]')
+    await wrapper.setProps({ account: accountAt(undefined, 9) })
+    expect(count.text()).toContain('count1')
+    expect(points(wrapper).get('span').text()).toBe('8')
+    await wrapper.setProps({ account: accountAt(11, 10) })
+    expect(count.text()).toContain('count0')
+    expect(count.attributes('title')).toContain('admin.accounts.openaiQuotaReset.countUpdatedAt:')
+    expect(points(wrapper).get('span').text()).toBe('8')
+    await wrapper.setProps({ account: accountAt(11, 12) })
+    expect(points(wrapper).get('span').text()).toBe('3')
+    wrapper.unmount()
+  })
+
+  it.each([
+    { listStart: 10_000_001, expectedCount: 1, expectedBalance: '8' },
+    { listStart: 10_000_003, expectedCount: 0, expectedBalance: '3' }
+  ])('orders a pending manual query and same-second list sample by query start ($listStart)', async ({
+    listStart, expectedCount, expectedBalance
+  }) => {
+    let finish!: (result: OpenAIQuotaRefreshResult) => void
+    vi.mocked(refreshOpenAIQuota).mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({}) } })
+    await points(wrapper).trigger('click')
+    await wrapper.setProps({ account: makeAccount({ extra: {
+      codex_reset_credit_snapshot: { available_count: 0, fetched_at: 10, query_started_at_us: listStart },
+      codex_credits_snapshot: { credits: { has_credits: true, unlimited: false, balance: '3' }, fetched_at: 10, query_started_at_us: listStart }
+    } }) })
+    finish({
+      rate_limit_reset_credits: { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }] },
+      credits: { has_credits: true, unlimited: false, balance: '8' },
+      fetched_at: 10, query_started_at_us: 10_000_002, cache_persisted: true, credits_cache_persisted: true
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="reset-credit-count"]').text()).toContain(`count${expectedCount}`)
+    expect(points(wrapper).get('span').text()).toBe(expectedBalance)
+    wrapper.unmount()
+  })
+
+  it('clears both values on an upstream identity change and ignores the previous identity’s late response', async () => {
+    const count = { available_count: 1, credits: [{ expires_at: FUTURE_EXPIRY_EARLY }], fetched_at: 10, query_started_at_us: 10_000_001 }
+    const pointsSnapshot = { credits: { has_credits: true, unlimited: false, balance: '4' }, fetched_at: 10, query_started_at_us: 10_000_001 }
+    const oldAccount = makeAccount({ extra: { codex_reset_credit_snapshot: count, codex_credits_snapshot: pointsSnapshot } })
+    let finish!: (result: OpenAIQuotaRefreshResult) => void
+    vi.mocked(refreshOpenAIQuota).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: oldAccount } })
+    const countButton = wrapper.get('[data-testid="reset-credit-count"]')
+    expect(countButton.text()).toContain('count1')
+    expect(points(wrapper).get('span').text()).toBe('4')
+    await points(wrapper).trigger('click')
+    const newOwner = { codex_reset_credit_owner_changed_at_us: 10_000_005 }
+    await wrapper.setProps({ account: makeAccount({ extra: newOwner }) })
+    finish({ ...pointsSnapshot, rate_limit_reset_credits: count, cache_persisted: true, credits_cache_persisted: true })
+    await flushPromises()
+    await wrapper.setProps({ account: oldAccount })
+    expect(countButton.text()).not.toContain('count1')
+    expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(points(wrapper).get('span').text()).toBe('—')
+    await wrapper.setProps({ account: makeAccount({ extra: {
+      ...newOwner,
+      codex_reset_credit_snapshot: { ...count, query_started_at_us: 10_000_006 },
+      codex_credits_snapshot: { ...pointsSnapshot, query_started_at_us: 10_000_006 }
+    } }) })
+    expect(countButton.text()).toContain('count1')
+    expect(points(wrapper).get('span').text()).toBe('4')
+    wrapper.unmount()
+  })
 })
 
 describe('OpenAIQuotaResetCell — 重置次数', () => {

@@ -394,10 +394,11 @@ export interface BatchAccountUsageResponse {
   errors: Record<string, string>
 }
 
-export async function getBatchUsage(accountIds: number[], force?: boolean): Promise<BatchAccountUsageResponse> {
+export async function getBatchUsage(accountIds: number[], force?: boolean, source?: 'passive'): Promise<BatchAccountUsageResponse> {
   const { data } = await apiClient.post<BatchAccountUsageResponse>('/admin/accounts/usage/batch', {
     account_ids: accountIds,
-    force: force === true
+    force: force === true,
+    source
   })
   return data
 }
@@ -969,6 +970,7 @@ export interface OpenAIQuotaUsage {
   rate_limit_reset_credits?: OpenAIRateLimitResetCredits | null
   credits?: OpenAICredits | null
   fetched_at: number
+  query_started_at_us?: number
 }
 
 export interface OpenAICredits {

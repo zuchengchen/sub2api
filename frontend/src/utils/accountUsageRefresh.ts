@@ -34,6 +34,19 @@ export const buildOpenAIAstraPolicyRefreshKey = (account: Pick<Account, 'platfor
   return [account.openai_oauth_model_policy, account.codex_turn_tickets].map(serializeSnapshotRefreshValue).join('|')
 }
 
+export const buildOpenAIQuotaCreditsRefreshKey = (account: Pick<Account, 'platform' | 'type' | 'extra'>): string => {
+  if (account.platform !== 'openai' || account.type !== 'oauth') return ''
+  const extra = account.extra
+  return [extra?.codex_reset_credit_owner_changed_at_us, extra?.codex_reset_credit_snapshot, extra?.codex_credits_snapshot]
+    .map(serializeSnapshotRefreshValue).join('|')
+}
+
+export const openAIUsageWindowFields = [
+  'codex_usage_observed_at_us', 'codex_usage_updated_at',
+  'codex_5h_used_percent', 'codex_5h_reset_at', 'codex_5h_reset_after_seconds', 'codex_5h_window_minutes',
+  'codex_7d_used_percent', 'codex_7d_reset_at', 'codex_7d_reset_after_seconds', 'codex_7d_window_minutes'
+] as const
+
 export const buildOpenAIUsageRefreshKey = (account: Pick<Account, 'id' | 'platform' | 'type' | 'updated_at' | 'last_used_at' | 'rate_limit_reset_at' | 'extra'>): string => {
   if (account.platform !== 'openai' || account.type !== 'oauth') {
     return ''
@@ -45,15 +58,8 @@ export const buildOpenAIUsageRefreshKey = (account: Pick<Account, 'id' | 'platfo
     account.updated_at,
     account.last_used_at,
     account.rate_limit_reset_at,
-    extra.codex_usage_updated_at,
-    extra.codex_5h_used_percent,
-    extra.codex_5h_reset_at,
-    extra.codex_5h_reset_after_seconds,
-    extra.codex_5h_window_minutes,
-    extra.codex_7d_used_percent,
-    extra.codex_7d_reset_at,
-    extra.codex_7d_reset_after_seconds,
-    extra.codex_7d_window_minutes
+    extra.codex_reset_credit_owner_changed_at_us,
+    ...openAIUsageWindowFields.map(key => extra[key])
   ].map(normalizeUsageRefreshValue).join('|')
 }
 

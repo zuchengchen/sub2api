@@ -193,6 +193,11 @@ func TestLockAndMergeAccountProbeExtraPreservesOpenCodeGoManagedState(t *testing
 				WithArgs(tt.account.ID, tt.account.Platform, tt.account.Type, string(credentials), nil).
 				WillReturnRows(sqlmock.NewRows(openCodeGoMergeMockColumns()).
 					AddRow(false, false, tt.proxyUnchanged, nil, nil, nil, nil, nil, nil, tt.groupUnchanged, tt.databaseAuto, tt.databaseSnapshot, nil))
+			if tt.account.IsOpenAIOAuth() {
+				mock.ExpectQuery("SELECT CASE WHEN platform = 'openai'").
+					WithArgs(tt.account.ID).
+					WillReturnRows(sqlmock.NewRows([]string{"oauth_credentials"}).AddRow(nil))
+			}
 
 			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, tt.account, nil, nil)
 			require.NoError(t, err)

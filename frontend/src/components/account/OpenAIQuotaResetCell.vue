@@ -279,6 +279,12 @@ const showResetConfirm = ref(false)
 const showResetCreditDetails = ref(false)
 const creditsCacheWarning = ref(false)
 let quotaSnapshotVersion = 0
+let legacySnapshotVersion = 0
+const quotaQueryOrder = (sample?: { query_started_at_us?: number; fetched_at?: number } | null) =>
+  sample?.query_started_at_us ?? (sample?.fetched_at ?? 0) * 1_000_000
+let quotaOwnerChangedAt = props.account.extra?.codex_reset_credit_owner_changed_at_us ?? 0
+let resetCreditsQueryOrder = Math.max(quotaOwnerChangedAt, quotaQueryOrder(props.account.extra?.codex_reset_credit_snapshot))
+let pointsQueryOrder = Math.max(quotaOwnerChangedAt, quotaQueryOrder(props.account.extra?.codex_credits_snapshot))
 const autoResetEnabledOverride = ref<boolean | null>(null)
 const autoResetToggling = ref(false)
 const showAutoResetConfirm = ref(false)
@@ -343,6 +349,7 @@ const autoResetStateClass = computed(() => {
 
 const readCachedCredits = (account: Account) => {
   const snapshot = account.extra?.codex_credits_snapshot
+  if (quotaQueryOrder(snapshot) < (account.extra?.codex_reset_credit_owner_changed_at_us ?? 0)) return null
   const credits = snapshot?.credits
   if (!credits || typeof credits.has_credits !== 'boolean' || typeof credits.unlimited !== 'boolean') return null
   if (credits.balance != null && typeof credits.balance !== 'string') return null
@@ -407,13 +414,12 @@ const updateCredits = (usage: OpenAIQuotaUsage | null) => {
 }
 
 // Rehydrate the card from the persisted snapshot. Credits that already expired
-// are dropped and the count is clamped to what remains: the snapshot has no
-// freshness signal, so an unfiltered read would offer to consume credits that no
-// longer exist. A snapshot claiming credits with no usable expiration left is
-// treated as absent, which keeps the reset button gated on a live query.
+// are dropped and the count is clamped to what remains. A snapshot claiming
+// credits with no usable expiration left is treated as absent.
 const readCachedResetCredits = (account: Account): OpenAIQuotaUsage | null => {
   const cached = account.extra?.codex_reset_credit_snapshot
   if (!cached || typeof cached !== 'object' || Array.isArray(cached)) return null
+  if (quotaQueryOrder(cached) < (account.extra?.codex_reset_credit_owner_changed_at_us ?? 0)) return null
 
   const { available_count: count, credits: rawCredits } = cached as {
     available_count?: unknown
@@ -440,7 +446,7 @@ const readCachedResetCredits = (account: Account): OpenAIQuotaUsage | null => {
   // report "unknown" so the operator re-queries instead of trusting it.
   if (count > 0 && availableCount <= 0) return null
   return {
-    fetched_at: 0,
+    fetched_at: cached.fetched_at ?? 0,
     rate_limit_reset_credits: {
       available_count: availableCount,
       credits
@@ -521,7 +527,11 @@ const resetButtonTitle = computed(() => {
 // Tooltip differs between "click to load" (no data yet) and "click to refresh".
 const countButtonTitle = computed(() => {
   if (!data.value) return t('admin.accounts.openaiQuotaReset.countTooltipLoad')
-  return t('admin.accounts.openaiQuotaReset.countTooltipRefresh')
+  const title = t('admin.accounts.openaiQuotaReset.countTooltipRefresh')
+  const fetchedAt = data.value.fetched_at
+  return fetchedAt > 0 ? [title, t('admin.accounts.openaiQuotaReset.countUpdatedAt', {
+    time: new Date(fetchedAt * 1000).toLocaleString()
+  })].join('\n') : title
 })
 
 const truncatedError = computed(() => {
@@ -593,6 +603,7 @@ const handleQuery = async () => {
   if (loading.value || resetting.value) return
   const accountID = props.account.id
   const snapshotVersion = quotaSnapshotVersion
+  const legacyVersion = legacySnapshotVersion
   loading.value = true
   creditsCacheWarning.value = false
   error.value = null
@@ -602,8 +613,16 @@ const handleQuery = async () => {
   try {
     const result = await refreshOpenAIQuota(accountID)
     if (props.account.id !== accountID || quotaSnapshotVersion !== snapshotVersion) return
-    updateCredits(result)
-    creditsCacheWarning.value = result.credits_cache_persisted === false
+    // Older servers cannot order an in-flight read against an unversioned card change.
+    if (!result.query_started_at_us && legacyVersion !== legacySnapshotVersion) return
+    const queryOrder = quotaQueryOrder(result)
+    if (queryOrder >= pointsQueryOrder) {
+      pointsQueryOrder = queryOrder
+      updateCredits(result)
+      creditsCacheWarning.value = result.credits_cache_persisted === false
+    }
+    if (queryOrder < resetCreditsQueryOrder) return
+    resetCreditsQueryOrder = queryOrder
     // The upstream read succeeded even when the snapshot write was rejected, so
     // the live count is always adopted. Only the persisted view is left alone,
     // which keeps the displayed expirations consistent with what is stored.
@@ -635,15 +654,16 @@ const creditsToggleTitle = computed(() =>
 const applyCreditsEnabled = async (enabled: boolean) => {
   if (creditsToggling.value) return
   const accountID = props.account.id
+  const ownerChangedAt = quotaOwnerChangedAt
   creditsToggling.value = true
   error.value = null
   try {
     const updated = await setOpenAICreditsEnabled(accountID, enabled)
-    if (props.account.id !== accountID) return
+    if (props.account.id !== accountID || quotaOwnerChangedAt !== ownerChangedAt) return
     creditsEnabledOverride.value = enabled
     emit('account-updated', updated)
   } catch (e) {
-    if (props.account.id !== accountID) return
+    if (props.account.id !== accountID || quotaOwnerChangedAt !== ownerChangedAt) return
     error.value = extractErrorMessage(e)
   } finally {
     if (props.account.id === accountID) creditsToggling.value = false
@@ -725,18 +745,27 @@ const confirmReset = async () => {
   }
   resetting.value = true
   const accountID = props.account.id
+  const ownerChangedAt = quotaOwnerChangedAt
   creditsCacheWarning.value = false
   error.value = null
   resetMessage.value = null
   resetWarning.value = null
   try {
     const result: OpenAIQuotaResetResult = await resetOpenAIQuota(accountID)
-    if (props.account.id !== accountID) return
-    updateCredits(result.quota ?? null)
+    if (props.account.id !== accountID || quotaOwnerChangedAt !== ownerChangedAt) return
+    const queryOrder = quotaQueryOrder(result.quota)
+    if (!result.quota) updateCredits(null)
+    else if (queryOrder >= pointsQueryOrder) {
+      pointsQueryOrder = queryOrder
+      updateCredits(result.quota)
+    }
     showResetCreditDetails.value = false
     if (result.cache_refreshed && result.quota) {
-      data.value = result.quota
-      cachedData.value = result.quota
+      if (queryOrder >= resetCreditsQueryOrder) {
+        resetCreditsQueryOrder = queryOrder
+        data.value = result.quota
+        cachedData.value = result.quota
+      }
     } else {
       // A credit was consumed but the post-reset count could not be read back.
       // Whatever we still hold is one generation stale, so report the count as
@@ -757,7 +786,7 @@ const confirmReset = async () => {
       })
     }
   } catch (e) {
-    if (props.account.id !== accountID) return
+    if (props.account.id !== accountID || quotaOwnerChangedAt !== ownerChangedAt) return
     error.value = extractErrorMessage(e)
   } finally {
     if (props.account.id === accountID) resetting.value = false
@@ -767,17 +796,46 @@ const confirmReset = async () => {
 watch(
   [
     () => JSON.stringify(props.account.extra?.codex_reset_credit_snapshot ?? null),
-    () => JSON.stringify(props.account.extra?.codex_credits_snapshot ?? null)
-  ],
-  ([resetSnapshot, creditsSnapshot], [previousResetSnapshot, previousCreditsSnapshot]) => {
-    quotaSnapshotVersion++
-    if (resetSnapshot !== previousResetSnapshot) {
-      cachedData.value = readCachedResetCredits(props.account)
-      data.value = cachedData.value
+    () => JSON.stringify(props.account.extra?.codex_credits_snapshot ?? null),
+    () => props.account.extra?.codex_reset_credit_owner_changed_at_us ?? 0
+  ] as const,
+  ([resetSnapshot, creditsSnapshot, ownerChangedAt], [previousResetSnapshot, previousCreditsSnapshot]) => {
+    if (ownerChangedAt < quotaOwnerChangedAt) return
+    const newOwner = ownerChangedAt > quotaOwnerChangedAt
+    if (newOwner) {
+      quotaSnapshotVersion++
+      quotaOwnerChangedAt = ownerChangedAt
+      resetCreditsQueryOrder = ownerChangedAt
+      pointsQueryOrder = ownerChangedAt
+      data.value = null
+      cachedData.value = null
+      creditsData.value = null
       showResetConfirm.value = false
       showResetCreditDetails.value = false
+      showCreditsConfirm.value = false
+      creditsEnabledOverride.value = null
+      creditsCacheWarning.value = false
+      error.value = null
+      resetWarning.value = null
+      resetMessage.value = null
     }
-    if (creditsSnapshot !== previousCreditsSnapshot) {
+    const resetOrder = quotaQueryOrder(props.account.extra?.codex_reset_credit_snapshot)
+    const pointsOrder = quotaQueryOrder(props.account.extra?.codex_credits_snapshot)
+    if ((newOwner || resetSnapshot !== previousResetSnapshot) && (!resetCreditsQueryOrder || resetOrder > resetCreditsQueryOrder)) {
+      if (!resetOrder) legacySnapshotVersion++
+      resetCreditsQueryOrder = resetOrder
+      const previousCount = availableResetCount.value
+      const previousExpirations = resetCreditExpirations.value.join('|')
+      cachedData.value = readCachedResetCredits(props.account)
+      data.value = cachedData.value
+      if (previousCount !== availableResetCount.value || previousExpirations !== resetCreditExpirations.value.join('|')) {
+        showResetConfirm.value = false
+        showResetCreditDetails.value = false
+      }
+    }
+    if ((newOwner || creditsSnapshot !== previousCreditsSnapshot) && (!pointsQueryOrder || pointsOrder > pointsQueryOrder)) {
+      if (!pointsOrder) legacySnapshotVersion++
+      pointsQueryOrder = pointsOrder
       creditsData.value = readCachedCredits(props.account)
       creditsCacheWarning.value = false
     }
@@ -789,6 +847,10 @@ watch(
   () => props.account.id,
   () => {
     // Account row may be reused across paginated lists; reset local state.
+    quotaSnapshotVersion++
+    quotaOwnerChangedAt = props.account.extra?.codex_reset_credit_owner_changed_at_us ?? 0
+    resetCreditsQueryOrder = Math.max(quotaOwnerChangedAt, quotaQueryOrder(props.account.extra?.codex_reset_credit_snapshot))
+    pointsQueryOrder = Math.max(quotaOwnerChangedAt, quotaQueryOrder(props.account.extra?.codex_credits_snapshot))
     cachedData.value = readCachedResetCredits(props.account)
     data.value = cachedData.value
     creditsData.value = readCachedCredits(props.account)
@@ -811,6 +873,7 @@ watch(
     props.account.id,
     props.account.platform,
     props.account.type,
+    props.account.extra?.codex_reset_credit_owner_changed_at_us,
     props.account.extra?.auto_reset_credit_enabled,
     props.account.extra?.auto_reset_credit_opt_in_version,
     props.account.extra?.auto_reset_credit_5h_threshold,

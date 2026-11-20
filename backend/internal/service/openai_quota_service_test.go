@@ -501,13 +501,10 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 		{ExpiresAt: "2026-07-04T04:05:06Z"},
 	}, usage.RateLimitResetCredits.Credits)
 	require.NoError(t, svc.CacheResetCreditsSnapshot(ctx, 100, usage.RateLimitResetCredits))
-	require.Equal(t, &OpenAIRateLimitResetCredits{
-		AvailableCount: 2,
-		Credits: []OpenAIRateLimitResetCreditDetail{
-			{ExpiresAt: "2026-07-03T04:05:06Z"},
-			{ExpiresAt: "2026-07-04T04:05:06Z"},
-		},
-	}, repo.extraUpdates[100][openaiQuotaResetCreditsKey])
+	require.Positive(t, usage.QueryStartedAt)
+	require.Equal(t, usage.QueryStartedAt, usage.RateLimitResetCredits.QueryStartedAt)
+	require.Equal(t, usage.FetchedAt, usage.RateLimitResetCredits.FetchedAt)
+	require.Equal(t, usage.RateLimitResetCredits, repo.extraUpdates[100][openaiQuotaResetCreditsKey])
 
 	encoded, err := json.Marshal(usage)
 	require.NoError(t, err)
@@ -650,6 +647,16 @@ func TestCachePostResetSnapshot(t *testing.T) {
 	require.Equal(t, openAICreditsSnapshot{Credits: usage.Credits, FetchedAt: 123}, repo.extraUpdates[100][openaiQuotaCreditsKey])
 	require.Equal(t, 0.0, repo.extraUpdates[100]["codex_5h_used_percent"])
 	require.Equal(t, 0.0, repo.extraUpdates[100]["codex_7d_used_percent"])
+
+	// A post-redemption window must supersede the pre-redemption reading
+	// even when the separate card inventory endpoint is unavailable.
+	usage.QueryStartedAt = time.Now().UnixMicro()
+	usage.RateLimitResetCredits = nil
+	require.Error(t, svc.CachePostResetSnapshot(context.Background(), 100, usage))
+	require.Equal(t, 2, repo.extraUpdateCalls)
+	require.NotContains(t, repo.extraUpdates[100], openaiQuotaResetCreditsKey)
+	require.Equal(t, usage.QueryStartedAt, repo.extraUpdates[100]["codex_usage_observed_at_us"])
+	require.Equal(t, 0.0, repo.extraUpdates[100]["codex_5h_used_percent"])
 }
 
 func TestResetCreditValidationDoesNotContactUpstream(t *testing.T) {
