@@ -582,7 +582,7 @@ func (s *OpenAIQuotaAutoResetService) assessExtra(account *Account, config OpenA
 }
 
 func (s *OpenAIQuotaAutoResetService) assessUsage(usage *OpenAIQuotaUsage, account *Account, config OpenAIAutoResetCreditConfig, now time.Time) openAIAutoResetAssessment {
-	updates := buildOpenAIAutoResetUsageUpdates(usage, now)
+	updates := buildOpenAIQuotaUsageWindowUpdates(usage, now)
 	utilization5h, _ := resolveOpenAIQuotaUtilization(updates, "5h", now)
 	utilization7d, _ := resolveOpenAIQuotaUtilization(updates, "7d", now)
 	return s.buildAssessment(account, config, utilization5h, utilization7d)
@@ -629,37 +629,8 @@ func joinOpenAIAutoResetWindows(fiveHour, sevenDay bool) string {
 	}
 }
 
-func buildOpenAIAutoResetUsageUpdates(usage *OpenAIQuotaUsage, now time.Time) map[string]any {
-	if usage == nil || usage.RateLimit == nil {
-		return nil
-	}
-	sampledAt := now
-	if usage.FetchedAt > 0 {
-		sampledAt = time.Unix(usage.FetchedAt, 0)
-	}
-	normalizeWindow := func(window *OpenAIRateLimitWindow) *OpenAIRateLimitWindow {
-		if window == nil {
-			return nil
-		}
-		copy := *window
-		if copy.ResetAt > 0 {
-			copy.ResetAfterSeconds = copy.ResetAt - sampledAt.Unix()
-			if copy.ResetAfterSeconds < 0 {
-				copy.ResetAfterSeconds = 0
-			}
-		}
-		return &copy
-	}
-	copy := *usage
-	rateLimit := *usage.RateLimit
-	rateLimit.PrimaryWindow = normalizeWindow(rateLimit.PrimaryWindow)
-	rateLimit.SecondaryWindow = normalizeWindow(rateLimit.SecondaryWindow)
-	copy.RateLimit = &rateLimit
-	return buildOpenAIQuotaUsageWindowUpdates(&copy, sampledAt)
-}
-
 func (s *OpenAIQuotaAutoResetService) persistFreshUsage(ctx context.Context, accountID int64, usage *OpenAIQuotaUsage, now time.Time) error {
-	updates := buildOpenAIAutoResetUsageUpdates(usage, now)
+	updates := buildOpenAIQuotaUsageWindowUpdates(usage, now)
 	if len(updates) > 0 {
 		if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
 			return err

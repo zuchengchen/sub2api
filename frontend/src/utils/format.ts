@@ -389,12 +389,11 @@ export function formatCompactNumber(
  * @param targetDate 目标日期字符串或 Date 对象
  * @returns 倒计时字符串，如 "2h 41m", "3d 5h", "15m"
  */
-export function formatCountdown(targetDate: string | Date | null | undefined): string | null {
+export function formatCountdown(targetDate: string | Date | null | undefined, now = Date.now()): string | null {
   if (!targetDate) return null
 
-  const now = new Date()
   const target = new Date(targetDate)
-  const diffMs = target.getTime() - now.getTime()
+  const diffMs = target.getTime() - now
 
   // 如果目标时间已过或无效
   if (diffMs <= 0 || isNaN(diffMs)) return null

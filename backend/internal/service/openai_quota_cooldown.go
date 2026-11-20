@@ -157,8 +157,8 @@ func (s *RateLimitService) refreshOpenAIQuotaDeadline(id int64, provisional time
 		return
 	}
 	limits := usage.RateLimit
-	if limits.Allowed && !limits.LimitReached && limits.PrimaryWindow != nil && limits.PrimaryWindow.UsedPercent < 100 &&
-		(limits.SecondaryWindow == nil || limits.SecondaryWindow.UsedPercent < 100) {
+	if limits.Allowed && !limits.LimitReached && snapshot != nil && snapshot.PrimaryUsedPercent != nil && *snapshot.PrimaryUsedPercent < 100 &&
+		(limits.SecondaryWindow == nil || (snapshot.SecondaryUsedPercent != nil && *snapshot.SecondaryUsedPercent < 100)) {
 		cleared, err := repo.ClearOpenAIRateLimitIfObserved(ctx, account, false)
 		if err == nil && cleared {
 			s.openAIQuotaUntil.CompareAndDelete(id, provisional)

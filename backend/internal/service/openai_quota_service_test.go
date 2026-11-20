@@ -647,6 +647,16 @@ func TestCachePostResetSnapshot(t *testing.T) {
 	require.Equal(t, openAICreditsSnapshot{Credits: usage.Credits, FetchedAt: 123}, repo.extraUpdates[100][openaiQuotaCreditsKey])
 	require.Equal(t, 0.0, repo.extraUpdates[100]["codex_5h_used_percent"])
 	require.Equal(t, 0.0, repo.extraUpdates[100]["codex_7d_used_percent"])
+
+	// A post-redemption window must supersede the pre-redemption reading
+	// even when the separate card inventory endpoint is unavailable.
+	usage.QueryStartedAt = time.Now().UnixMicro()
+	usage.RateLimitResetCredits = nil
+	require.Error(t, svc.CachePostResetSnapshot(context.Background(), 100, usage))
+	require.Equal(t, 2, repo.extraUpdateCalls)
+	require.NotContains(t, repo.extraUpdates[100], openaiQuotaResetCreditsKey)
+	require.Equal(t, usage.QueryStartedAt, repo.extraUpdates[100]["codex_usage_observed_at_us"])
+	require.Equal(t, 0.0, repo.extraUpdates[100]["codex_5h_used_percent"])
 }
 
 func TestResetCreditValidationDoesNotContactUpstream(t *testing.T) {

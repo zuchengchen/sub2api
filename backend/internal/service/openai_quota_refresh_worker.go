@@ -13,15 +13,15 @@ import (
 )
 
 const (
-	openAICreditRefreshInterval   = 5 * time.Minute
-	openAIQuotaRefreshPageSize    = 100
-	openAIQuotaRefreshConcurrency = 4
-	openAIQuotaRefreshLockKey     = "jobs:openai-quota-credit-refresh"
-	openAIQuotaRefreshLease       = time.Minute
+	openAIQuotaSnapshotRefreshInterval = 5 * time.Minute
+	openAIQuotaRefreshPageSize         = 100
+	openAIQuotaRefreshConcurrency      = 4
+	openAIQuotaRefreshLockKey          = "jobs:openai-quota-credit-refresh"
+	openAIQuotaRefreshLease            = time.Minute
 )
 
-type openAICreditSnapshotRefresher interface {
-	RefreshCreditSnapshots(ctx context.Context, accountID int64) error
+type openAIQuotaSnapshotRefresher interface {
+	RefreshQuotaSnapshots(ctx context.Context, accountID int64) error
 }
 
 type openAIQuotaRefreshLock interface {
@@ -33,7 +33,7 @@ type openAIQuotaRefreshLock interface {
 // assignment of gateway traffic and of permission to spend reset cards or points.
 type OpenAIQuotaRefreshWorker struct {
 	pager  OAuthRefreshCandidatePager
-	quota  openAICreditSnapshotRefresher
+	quota  openAIQuotaSnapshotRefresher
 	locks  openAIQuotaRefreshLock
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -59,7 +59,7 @@ func (w *OpenAIQuotaRefreshWorker) start() {
 	w.done = make(chan struct{})
 	go func() {
 		defer close(w.done)
-		ticker := time.NewTicker(openAICreditRefreshInterval)
+		ticker := time.NewTicker(openAIQuotaSnapshotRefreshInterval)
 		defer ticker.Stop()
 		for ctx.Err() == nil {
 			if err := w.run(ctx); err != nil && ctx.Err() == nil {
@@ -93,8 +93,8 @@ func (w *OpenAIQuotaRefreshWorker) run(ctx context.Context) error {
 
 	// The slot outlives a short scan, so a peer whose ticker started later
 	// cannot repeat it. The renewable run lock also covers scans spanning slots.
-	slotKey := fmt.Sprintf("%s:%d", openAIQuotaRefreshLockKey, time.Now().Truncate(openAICreditRefreshInterval).Unix())
-	locked, err = w.locks.TryAcquireLeaderLock(ctx, slotKey, owner, openAICreditRefreshInterval)
+	slotKey := fmt.Sprintf("%s:%d", openAIQuotaRefreshLockKey, time.Now().Truncate(openAIQuotaSnapshotRefreshInterval).Unix())
+	locked, err = w.locks.TryAcquireLeaderLock(ctx, slotKey, owner, openAIQuotaSnapshotRefreshInterval)
 	if err != nil || !locked {
 		return err
 	}
@@ -136,7 +136,7 @@ func (w *OpenAIQuotaRefreshWorker) refreshAll(ctx context.Context) error {
 					return
 				}
 				callCtx, cancel := context.WithTimeout(ctx, time.Minute)
-				err := w.quota.RefreshCreditSnapshots(callCtx, id)
+				err := w.quota.RefreshQuotaSnapshots(callCtx, id)
 				cancel()
 				if err != nil && ctx.Err() == nil {
 					slog.Warn("openai_quota_refresh_account_failed", "account_id", id, "error_code", infraerrors.Reason(err))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -33,6 +34,33 @@ type OpenAIRateLimitWindow struct {
 	LimitWindowSeconds int64   `json:"limit_window_seconds"`
 	ResetAfterSeconds  int64   `json:"reset_after_seconds"`
 	ResetAt            int64   `json:"reset_at"`
+	missingUsedPercent bool
+	missingResetAfter  bool
+}
+
+// A partial upstream window can omit a percentage or reset deadline. Keep
+// that distinct from an observed 0% or a window that actually resets now.
+func (w *OpenAIRateLimitWindow) UnmarshalJSON(data []byte) error {
+	var fields struct {
+		UsedPercent        *float64 `json:"used_percent"`
+		LimitWindowSeconds int64    `json:"limit_window_seconds"`
+		ResetAfterSeconds  *int64   `json:"reset_after_seconds"`
+		ResetAt            int64    `json:"reset_at"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*w = OpenAIRateLimitWindow{
+		LimitWindowSeconds: fields.LimitWindowSeconds, ResetAt: fields.ResetAt,
+		missingUsedPercent: fields.UsedPercent == nil, missingResetAfter: fields.ResetAfterSeconds == nil,
+	}
+	if fields.UsedPercent != nil {
+		w.UsedPercent = *fields.UsedPercent
+	}
+	if fields.ResetAfterSeconds != nil {
+		w.ResetAfterSeconds = *fields.ResetAfterSeconds
+	}
+	return nil
 }
 
 // OpenAIRateLimit is a rate-limit envelope (primary + optional secondary window).
@@ -100,6 +128,15 @@ type OpenAIQuotaUsage struct {
 
 func (u *OpenAIQuotaUsage) creditsSnapshot() openAICreditsSnapshot {
 	return openAICreditsSnapshot{Credits: u.Credits, FetchedAt: u.FetchedAt, QueryStartedAt: u.QueryStartedAt}
+}
+
+func (u *OpenAIQuotaUsage) usageSnapshotUpdates() map[string]any {
+	updates := buildOpenAIQuotaUsageWindowUpdates(u, time.Now())
+	if updates == nil {
+		updates = make(map[string]any)
+	}
+	updates[openaiQuotaCreditsKey] = u.creditsSnapshot()
+	return updates
 }
 
 // OpenAIQuotaResetCredit captures the redeemed credit metadata returned by the
@@ -245,20 +282,14 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 	return &payload, nil
 }
 
-// RefreshCreditSnapshots updates the two balances displayed on the account row.
-// A missing card detail must not prevent a successfully queried points balance
-// from being saved, or clear the last usable inventory of reset cards.
-func (s *OpenAIQuotaService) RefreshCreditSnapshots(ctx context.Context, accountID int64) error {
-	usage, err := s.QueryUsage(withOpenAIQuotaJob(ctx, "credit_refresh"), accountID)
+// RefreshQuotaSnapshots saves all quota data from one scheduled read. If
+// card details are unavailable, the balance and observed windows still update.
+func (s *OpenAIQuotaService) RefreshQuotaSnapshots(ctx context.Context, accountID int64) error {
+	usage, err := s.QueryUsage(withOpenAIQuotaJob(ctx, "quota_refresh"), accountID)
 	if err != nil {
 		return err
 	}
-	updates := map[string]any{openaiQuotaCreditsKey: usage.creditsSnapshot()}
-	detailsErr := addResetCreditsSnapshot(updates, usage.RateLimitResetCredits)
-	if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
-		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_CACHE_WRITE_FAILED", "failed to save quota snapshots").WithCause(err)
-	}
-	return detailsErr
+	return s.cacheResetCreditsSnapshot(ctx, accountID, usage.RateLimitResetCredits, usage.usageSnapshotUpdates())
 }
 
 // CacheResetCreditsSnapshot persists a complete reset-credit snapshot after an
@@ -274,16 +305,13 @@ func (s *OpenAIQuotaService) CacheResetCreditsSnapshot(ctx context.Context, acco
 	return s.cacheResetCreditsSnapshot(ctx, accountID, credits, nil)
 }
 
-// CacheCreditsSnapshot stores the queried row's display snapshot independently
-// of reset-credit expiration details. A successful read with absent credits
-// replaces the previous balance with unknown, never with a fabricated zero.
+// CacheCreditsSnapshot stores the balance and any observed windows from a
+// manual refresh independently of reset-credit expiration details.
 func (s *OpenAIQuotaService) CacheCreditsSnapshot(ctx context.Context, accountID int64, usage *OpenAIQuotaUsage) error {
 	if usage == nil {
 		return infraerrors.New(http.StatusBadGateway, "OPENAI_QUOTA_EMPTY_USAGE", "openai quota query returned an empty result")
 	}
-	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
-		openaiQuotaCreditsKey: usage.creditsSnapshot(),
-	}); err != nil {
+	if err := s.accountRepo.UpdateExtra(ctx, accountID, usage.usageSnapshotUpdates()); err != nil {
 		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_CACHE_WRITE_FAILED", "failed to cache Codex credits").WithCause(err)
 	}
 	return nil
@@ -294,17 +322,7 @@ func (s *OpenAIQuotaService) CachePostResetSnapshot(ctx context.Context, account
 	if usage == nil {
 		return s.cacheResetCreditsSnapshot(ctx, accountID, nil, nil)
 	}
-	updates := buildOpenAIQuotaUsageWindowUpdates(usage, time.Now())
-	if updates == nil {
-		updates = make(map[string]any)
-	}
-	updates[openaiQuotaCreditsKey] = usage.creditsSnapshot()
-	return s.cacheResetCreditsSnapshot(
-		ctx,
-		accountID,
-		usage.RateLimitResetCredits,
-		updates,
-	)
+	return s.cacheResetCreditsSnapshot(ctx, accountID, usage.RateLimitResetCredits, usage.usageSnapshotUpdates())
 }
 
 func addResetCreditsSnapshot(updates map[string]any, credits *OpenAIRateLimitResetCredits) error {
@@ -323,45 +341,22 @@ func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, acco
 	if updates == nil {
 		updates = make(map[string]any, 1)
 	}
-	if err := addResetCreditsSnapshot(updates, credits); err != nil {
-		return err
+	detailsErr := addResetCreditsSnapshot(updates, credits)
+	if len(updates) == 0 {
+		return detailsErr
 	}
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
 		return infraerrors.New(
 			http.StatusInternalServerError,
 			"OPENAI_QUOTA_CACHE_WRITE_FAILED",
-			"failed to cache reset-credit details",
+			"failed to save quota snapshots",
 		).WithCause(err)
 	}
-	return nil
+	return detailsErr
 }
 
 func buildOpenAIQuotaUsageWindowUpdates(usage *OpenAIQuotaUsage, now time.Time) map[string]any {
-	if usage == nil || usage.RateLimit == nil {
-		return nil
-	}
-	rateLimit := usage.RateLimit
-	snapshot := &OpenAICodexUsageSnapshot{UpdatedAt: now.UTC().Format(time.RFC3339)}
-	applyWindow := func(window *OpenAIRateLimitWindow, primary bool) {
-		if window == nil {
-			return
-		}
-		used := window.UsedPercent
-		resetAfter := int(window.ResetAfterSeconds)
-		windowMinutes := int(window.LimitWindowSeconds / 60)
-		if primary {
-			snapshot.PrimaryUsedPercent = &used
-			snapshot.PrimaryResetAfterSeconds = &resetAfter
-			snapshot.PrimaryWindowMinutes = &windowMinutes
-		} else {
-			snapshot.SecondaryUsedPercent = &used
-			snapshot.SecondaryResetAfterSeconds = &resetAfter
-			snapshot.SecondaryWindowMinutes = &windowMinutes
-		}
-	}
-	applyWindow(rateLimit.PrimaryWindow, true)
-	applyWindow(rateLimit.SecondaryWindow, false)
-	return buildCodexUsageExtraUpdates(snapshot, now)
+	return buildCodexUsageExtraUpdates(codexUsageSnapshotFromQuota(usage, now), now)
 }
 
 func (s *OpenAIQuotaService) queryResetCreditDetails(ctx context.Context, client *req.Client, accessToken, chatGPTAccountID string, fedRAMP bool, accountID int64) *openAIRateLimitResetCreditDetails {

@@ -303,7 +303,11 @@
           </template>
           <template #cell-status="{ row }">
             <div class="flex items-center gap-1.5">
-              <AccountStatusIndicator :account="row" @show-temp-unsched="handleShowTempUnsched" />
+              <AccountStatusIndicator
+                :account="row"
+                :now="isOpenAIOAuthRow(row) && row.rate_limit_reset_at ? accountListNow : undefined"
+                @show-temp-unsched="handleShowTempUnsched"
+              />
             </div>
           </template>
           <template #cell-schedulable="{ row }">
@@ -339,7 +343,7 @@
               :batched-usage-loading="usageBatchLoadingByAccountId[String(row.id)] === true"
               :request-batched-usage="isDesktopViewport ? queueBatchedUsage : null"
               @account-updated="handleAccountUpdated"
-              @usage-loaded="handleAccountUsageLoaded(row.id, $event)"
+              @usage-loaded="handleAccountUsageLoaded(row, $event)"
             />
           </template>
           <template #cell-proxy="{ row }">
@@ -389,7 +393,7 @@
             <UpstreamBillingRateCell
               :account="row"
               :global-probe-enabled="upstreamBillingProbeGloballyEnabled"
-              :now="upstreamBillingNow"
+              :now="accountListNow"
               :probing="probingUpstreamBilling.has(row.id)"
               @probe="handleProbeUpstreamBilling(row)"
             />
@@ -539,7 +543,7 @@ import AccountPriorityCell from '@/components/account/AccountPriorityCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { fetchAllAccountIds } from '@/utils/accountSelection'
-import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey, buildOpenAIAstraPolicyRefreshKey, buildOpenAIQuotaCreditsRefreshKey } from '@/utils/accountUsageRefresh'
+import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey, buildOpenAIAstraPolicyRefreshKey, buildOpenAIQuotaCreditsRefreshKey, openAIUsageWindowFields } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -661,11 +665,11 @@ const menu = reactive<{show:boolean, acc:Account|null, anchorRect:DOMRect|null}>
 const exportingData = ref(false)
 const probingUpstreamBilling = reactive(new Set<number>())
 const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
-const upstreamBillingNow = ref(Date.now())
+const accountListNow = ref(Date.now())
 const upstreamBillingRateETag = ref<string | null>(null)
 const upstreamBillingRateRefreshing = ref(false)
 let upstreamBillingRateAbortController: AbortController | null = null
-useIntervalFn(() => { upstreamBillingNow.value = Date.now() }, 60_000)
+useIntervalFn(() => { accountListNow.value = Date.now() }, 60_000)
 
 // Account tools dropdown
 const showAccountToolsDropdown = ref(false)
@@ -795,6 +799,7 @@ const usageBatchRequestTokenByAccountId = ref<Record<string, number>>({})
 const usageBatchCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
 const USAGE_BATCH_CACHE_TTL = 5 * 60 * 1000
 const pendingUsageBatchIds = new Set<number>()
+const pendingPassiveUsageBatchIds = new Set<number>()
 let usageBatchFlushTimer: ReturnType<typeof setTimeout> | null = null
 let queuedUsageBatchForce = false
 let usageBatchRequestToken = 0
@@ -827,18 +832,21 @@ const setUsageBatchState = (accountID: number, usage: AccountUsageInfo | null, e
   }
 }
 
-const handleAccountUsageLoaded = (accountID: number, usage: AccountUsageInfo) => {
-  if (usageBatchByAccountId.value[String(accountID)] === usage) return
+const handleAccountUsageLoaded = (account: Account, usage: AccountUsageInfo) => {
+  const accountID = account.id
+  const key = String(accountID)
+  if (usageBatchByAccountId.value[key] === usage) return
+  // A row can finish a manual query while a background batch is still reading.
+  if (isOpenAIOAuthRow(account) && usage.source !== 'passive' && accountListRefreshController) {
+    resetAccountListRefresh()
+  }
+  usageBatchRequestTokenByAccountId.value[key] = ++usageBatchRequestToken
+  usageBatchCache.set(accountID, { data: usage, ts: Date.now() })
+  setUsageBatchLoading(accountID, false)
   setUsageBatchState(accountID, usage, null)
 }
 
-const flushQueuedUsageBatch = async () => {
-  usageBatchFlushTimer = null
-  const accountIDs = Array.from(pendingUsageBatchIds)
-  const force = queuedUsageBatchForce
-  pendingUsageBatchIds.clear()
-  queuedUsageBatchForce = false
-
+const fetchUsageBatch = async (accountIDs: number[], force: boolean, source?: 'passive') => {
   if (accountIDs.length === 0) return
 
   const requestTokensByAccount = accountIDs.reduce<Record<string, number>>((acc, accountID) => {
@@ -847,7 +855,7 @@ const flushQueuedUsageBatch = async () => {
   }, {})
 
   try {
-    const result = await adminAPI.accounts.getBatchUsage(accountIDs, force)
+    const result = await adminAPI.accounts.getBatchUsage(accountIDs, force, source)
 
     const usageMap = result.usage ?? {}
     const errorMap = result.errors ?? {}
@@ -892,7 +900,16 @@ const flushQueuedUsageBatch = async () => {
   }
 }
 
-const queueBatchedUsage = (account: Account, options?: { force?: boolean }) => {
+const flushQueuedUsageBatch = () => {
+  usageBatchFlushTimer = null
+  void fetchUsageBatch([...pendingUsageBatchIds], queuedUsageBatchForce)
+  void fetchUsageBatch([...pendingPassiveUsageBatchIds], false, 'passive')
+  pendingUsageBatchIds.clear()
+  pendingPassiveUsageBatchIds.clear()
+  queuedUsageBatchForce = false
+}
+
+const queueBatchedUsage = (account: Account, options?: { force?: boolean; source?: 'passive' }) => {
   if (!isDesktopViewport.value) return
   if (!accountSupportsBatchUsage(account)) return
 
@@ -920,8 +937,14 @@ const queueBatchedUsage = (account: Account, options?: { force?: boolean }) => {
     [key]: ++usageBatchRequestToken
   }
   setUsageBatchLoading(cacheKey, true)
-  pendingUsageBatchIds.add(cacheKey)
-  queuedUsageBatchForce = queuedUsageBatchForce || force
+  // An explicit query in this batch takes precedence over a local snapshot read.
+  if (options?.source === 'passive') {
+    if (!pendingUsageBatchIds.has(cacheKey)) pendingPassiveUsageBatchIds.add(cacheKey)
+  } else {
+    pendingPassiveUsageBatchIds.delete(cacheKey)
+    pendingUsageBatchIds.add(cacheKey)
+    queuedUsageBatchForce = queuedUsageBatchForce || force
+  }
 
   if (usageBatchFlushTimer !== null) return
   usageBatchFlushTimer = setTimeout(() => {
@@ -1039,7 +1062,7 @@ if (typeof window !== 'undefined') {
 }
 
 const setAutoRefreshEnabled = (enabled: boolean) => {
-  // Snapshot-only polls apply two fields. A full refresh needs its own first response.
+  // Quota polls apply only the GPT quota state. A full refresh needs its own first response.
   resetAccountListRefresh()
   autoRefreshEnabled.value = enabled
   saveAutoRefreshToStorage()
@@ -1269,7 +1292,7 @@ const applyUpstreamBillingRateSnapshots = async (
 
   if (changed) {
     accounts.value = nextAccounts
-    upstreamBillingNow.value = Date.now()
+    accountListNow.value = Date.now()
   }
 }
 
@@ -1371,7 +1394,7 @@ const handleSort = (key: string, order: AccountSortOrder) => {
 
 watch(loading, (isLoading, wasLoading) => {
   if (wasLoading && !isLoading) {
-    upstreamBillingNow.value = Date.now()
+    accountListNow.value = Date.now()
   }
   if (wasLoading && !isLoading && pendingTodayStatsRefresh.value) {
     pendingTodayStatsRefresh.value = false
@@ -1451,6 +1474,31 @@ const syncAccountRefs = (nextAccount: Account) => {
   if (menu.acc?.id === nextAccount.id) menu.acc = nextAccount
 }
 
+const isOpenAIOAuthRow = (row: Account) => row.platform === 'openai' && row.type === 'oauth'
+
+const openAIUsageObservedAt = (row: Account) => {
+  const observedAt = row.extra?.codex_usage_observed_at_us
+  if (typeof observedAt === 'number' && Number.isSafeInteger(observedAt) && observedAt > 0) return observedAt
+  return (Date.parse(row.extra?.codex_usage_updated_at ?? '') || 0) * 1000
+}
+
+const openAIWindowSnapshot = (row: Account) =>
+  Object.fromEntries(openAIUsageWindowFields.map(key => [key, row.extra?.[key]]))
+
+const keepLatestOpenAIWindows = (current: Account, next: Account): Account => {
+  if (!isOpenAIOAuthRow(current) || !isOpenAIOAuthRow(next)) return next
+  const currentOwner = current.extra?.codex_reset_credit_owner_changed_at_us ?? 0
+  const nextOwner = next.extra?.codex_reset_credit_owner_changed_at_us ?? 0
+  if (nextOwner < currentOwner) return current
+  if (nextOwner > currentOwner || openAIUsageObservedAt(next) >= openAIUsageObservedAt(current)) return next
+  return {
+    ...next,
+    rate_limited_at: current.rate_limited_at,
+    rate_limit_reset_at: current.rate_limit_reset_at,
+    extra: { ...next.extra, ...openAIWindowSnapshot(current) }
+  }
+}
+
 const mergeAccountsIncrementally = (nextRows: Account[]) => {
   const currentRows = accounts.value
   const currentByID = new Map(currentRows.map(row => [row.id, row]))
@@ -1461,10 +1509,11 @@ const mergeAccountsIncrementally = (nextRows: Account[]) => {
       changed = true
       return nextRow
     }
-    if (shouldReplaceAutoRefreshRow(currentRow, nextRow)) {
+    const updated = keepLatestOpenAIWindows(currentRow, nextRow)
+    if (shouldReplaceAutoRefreshRow(currentRow, updated)) {
       changed = true
-      syncAccountRefs(nextRow)
-      return nextRow
+      syncAccountRefs(updated)
+      return updated
     }
     return currentRow
   })
@@ -1481,17 +1530,20 @@ const mergeAccountsIncrementally = (nextRows: Account[]) => {
   }
 }
 
-const isOpenAIOAuthRow = (row: Account) => row.platform === 'openai' && row.type === 'oauth'
-
 const applyOpenAIQuotaSnapshots = (nextRows: Account[]) => {
   const quotaRows = new Map(nextRows.filter(isOpenAIOAuthRow).map(row => [row.id, row]))
   for (const row of accounts.value) {
-    const next = quotaRows.get(row.id)
-    if (!next || !isOpenAIOAuthRow(row)) continue
-    if ((next.extra?.codex_reset_credit_owner_changed_at_us ?? 0) < (row.extra?.codex_reset_credit_owner_changed_at_us ?? 0)) continue
-    if (buildOpenAIQuotaCreditsRefreshKey(row) === buildOpenAIQuotaCreditsRefreshKey(next)) continue
+    const incoming = quotaRows.get(row.id)
+    if (!incoming || !isOpenAIOAuthRow(row)) continue
+    const next = keepLatestOpenAIWindows(row, incoming)
+    if (row.rate_limited_at === next.rate_limited_at && row.rate_limit_reset_at === next.rate_limit_reset_at &&
+      openAIUsageWindowFields.every(key => row.extra?.[key] === next.extra?.[key]) &&
+      buildOpenAIQuotaCreditsRefreshKey(row) === buildOpenAIQuotaCreditsRefreshKey(next)) continue
+    row.rate_limited_at = next.rate_limited_at
+    row.rate_limit_reset_at = next.rate_limit_reset_at
     row.extra = {
       ...row.extra,
+      ...openAIWindowSnapshot(next),
       codex_reset_credit_owner_changed_at_us: next.extra?.codex_reset_credit_owner_changed_at_us,
       codex_reset_credit_snapshot: next.extra?.codex_reset_credit_snapshot,
       codex_credits_snapshot: next.extra?.codex_credits_snapshot
@@ -1526,7 +1578,7 @@ const refreshAccountsIncrementally = async (quotaSnapshotsOnly = false) => {
       mergeAccountsIncrementally(result.data.items || [])
       hasPendingListSync.value = false
     }
-    upstreamBillingNow.value = Date.now()
+    accountListNow.value = Date.now()
 
     await refreshTodayStatsBatch()
   } catch (error) {
@@ -1610,7 +1662,7 @@ const { resume: startAccountListRefresh } = useIntervalFn(
   async () => {
     if (accountListRefreshController || accountListRefreshBlocked()) return
     if (!autoRefreshEnabled.value) {
-      if (isColumnVisible('usage') && accounts.value.some(isOpenAIOAuthRow) && !inAutoRefreshSilentWindow()) {
+      if ((isColumnVisible('usage') || isColumnVisible('status')) && accounts.value.some(isOpenAIOAuthRow) && !inAutoRefreshSilentWindow()) {
         await refreshAccountsIncrementally(true)
       }
       return
@@ -2248,7 +2300,7 @@ const patchAccountInList = (updatedAccount: Account) => {
 const patchUpstreamBillingSnapshot = (accountID: number, snapshot: UpstreamBillingProbeSnapshot) => {
   const account = accounts.value.find(item => item.id === accountID)
   if (!account) return
-  upstreamBillingNow.value = Date.now()
+  accountListNow.value = Date.now()
   patchAccountInList({
     ...account,
     ...(typeof snapshot.synced_rate_multiplier === 'number'
@@ -2549,6 +2601,7 @@ onUnmounted(() => {
     usageBatchFlushTimer = null
   }
   pendingUsageBatchIds.clear()
+  pendingPassiveUsageBatchIds.clear()
   window.removeEventListener('scroll', handleScroll, true)
   window.removeEventListener('resize', handleViewportResize)
   document.removeEventListener('click', handleClickOutside)

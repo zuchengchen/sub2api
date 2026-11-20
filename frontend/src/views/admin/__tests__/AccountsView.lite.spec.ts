@@ -4,13 +4,16 @@ import { defineComponent } from 'vue'
 
 import AccountsView from '../AccountsView.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
-import OpenAIQuotaResetCell from '@/components/account/OpenAIQuotaResetCell.vue'
+import UsageProgressBar from '@/components/account/UsageProgressBar.vue'
+import { i18n } from '@/i18n'
 
 const {
   listAccounts,
   listWithEtag,
   getById,
   getBatchTodayStatsWithEtag,
+  getBatchUsage,
+  getUsage,
   getUpstreamBillingProbeSettings,
   getAllProxies,
   getAllGroups,
@@ -22,6 +25,8 @@ const {
   listWithEtag: vi.fn(),
   getById: vi.fn(),
   getBatchTodayStatsWithEtag: vi.fn(),
+  getBatchUsage: vi.fn(),
+  getUsage: vi.fn(),
   getUpstreamBillingProbeSettings: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
@@ -37,6 +42,8 @@ vi.mock('@/api/admin', () => ({
       getById,
       listWithEtag,
       getBatchTodayStatsWithEtag,
+      getBatchUsage,
+      getUsage,
       getUpstreamBillingProbeSettings,
       delete: vi.fn(),
       batchClearError: vi.fn(),
@@ -68,6 +75,7 @@ const DataTableStub = defineComponent({
     <div>
       <div v-for="row in data" :key="row.id" :data-account-name="row.name">
         <slot name="cell-groups" :row="row" />
+        <slot name="cell-status" :row="row" />
         <slot name="cell-usage" :row="row" />
         <slot name="cell-actions" :row="row" />
       </div>
@@ -122,10 +130,10 @@ function mountView(stubActionMenu = true, renderQuota = false) {
         BulkEditAccountModal: true,
         PlatformTypeBadge: true,
         AccountCapacityCell: true,
-        AccountStatusIndicator: true,
+        AccountStatusIndicator: !renderQuota,
         AccountTodayStatsCell: true,
         AccountGroupsCell: AccountGroupsCellStub,
-        AccountUsageCell: renderQuota ? OpenAIQuotaResetCell : true,
+        AccountUsageCell: !renderQuota,
         UpstreamBillingRateCell: true,
         HelpTooltip: true,
         Icon: true,
@@ -164,6 +172,8 @@ describe('admin AccountsView lite account list', () => {
     listWithEtag.mockReset().mockResolvedValue({ notModified: true, etag: 'compact-etag', data: null })
     getById.mockReset().mockResolvedValue(fullAccount)
     getBatchTodayStatsWithEtag.mockReset().mockResolvedValue({ notModified: false, etag: null, data: { stats: {} } })
+    getBatchUsage.mockReset().mockResolvedValue({ usage: {}, errors: {} })
+    getUsage.mockReset()
     getUpstreamBillingProbeSettings.mockReset().mockResolvedValue({ enabled: true })
     getAllProxies.mockReset().mockResolvedValue([])
     getAllGroups.mockReset().mockResolvedValue([{ id: 7, name: 'codex', platform: 'openai' }])
@@ -238,44 +248,125 @@ describe('admin AccountsView lite account list', () => {
     wrapper.unmount()
   })
 
-  it('reads only the visible GPT credit snapshots every five minutes with list auto-refresh off', async () => {
+  it('refreshes the visible GPT quota windows, 429 state and credits from local data every five minutes', async () => {
+    vi.spyOn(i18n.global, 't').mockImplementation((key) => String(key))
     vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-20T00:00:00Z'))
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
     const other = { ...listRow, id: 43, platform: 'anthropic', type: 'apikey' }
     const page = { page: 1, page_size: 20, total: 2, pages: 1 }
-    listAccounts.mockResolvedValue({ ...page, items: [listRow, other] })
+    listAccounts.mockResolvedValue({ ...page, items: [{ ...listRow, extra: {} }, other] })
     const snapshots = {
       codex_reset_credit_snapshot: { available_count: 0, credits: [], fetched_at: 100 },
-      codex_credits_snapshot: { credits: { has_credits: true, unlimited: false, balance: '123' }, fetched_at: 100 }
+      codex_credits_snapshot: { credits: { has_credits: true, unlimited: false, balance: '123' }, fetched_at: 100 },
+      codex_usage_updated_at: '2026-11-20T00:04:50Z',
+      codex_usage_observed_at_us: Date.parse('2026-11-20T00:04:50Z') * 1000,
+      codex_5h_used_percent: 23, codex_5h_reset_at: '2026-11-20T04:00:00Z',
+      codex_7d_used_percent: 45, codex_7d_reset_at: '2026-11-24T12:00:00Z'
     }
+    const rateLimitedUntil = '2026-11-20T00:06:30Z'
     listWithEtag.mockResolvedValueOnce({
       notModified: false, etag: 'quota-1',
       data: { ...page, items: [
         { ...other, name: 'unrelated update' },
-        { ...listRow, name: 'another update', extra: { ...snapshots, unrelated: true } }
+        { ...listRow, name: 'another update', rate_limit_reset_at: rateLimitedUntil, extra: { ...snapshots, unrelated: true } }
       ] }
     })
     const wrapper = mountView(true, true)
     await flushPromises()
+    await vi.advanceTimersByTimeAsync(0)
+    await flushPromises()
+    expect(getBatchUsage.mock.calls).toEqual([[[42], false, 'passive']])
     getBatchTodayStatsWithEtag.mockClear()
+    getBatchUsage.mockClear().mockResolvedValueOnce({ usage: { 42: {
+      five_hour: { utilization: 23, resets_at: snapshots.codex_5h_reset_at, window_stats: { requests: 3, tokens: 42, cost: 1 } },
+      seven_day: { utilization: 45, resets_at: snapshots.codex_7d_reset_at, window_stats: { requests: 30, tokens: 420, cost: 10 } }
+    } }, errors: {} })
     expect(wrapper.get('[data-testid="codex-credits"] span').text()).toBe('—')
     await vi.advanceTimersByTimeAsync(299_999)
     expect(listWithEtag).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(listWithEtag).toHaveBeenCalledTimes(1)
-    expect(wrapper.getComponent(DataTableStub).props('data')).toEqual([{ ...listRow, extra: snapshots }, other])
+    expect(wrapper.getComponent(DataTableStub).props('data')).toEqual([{ ...listRow, rate_limit_reset_at: rateLimitedUntil, extra: snapshots }, other])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(getBatchUsage).toHaveBeenCalledTimes(1)
+    expect(getBatchUsage).toHaveBeenCalledWith([42], false, 'passive')
+    const [fiveHour, sevenDay] = wrapper.findAllComponents(UsageProgressBar)
+    expect(fiveHour.props()).toMatchObject({ utilization: 23, resetsAt: snapshots.codex_5h_reset_at, windowStats: { tokens: 42 } })
+    expect(sevenDay.props()).toMatchObject({ utilization: 45, resetsAt: snapshots.codex_7d_reset_at, windowStats: { tokens: 420 } })
+    expect(wrapper.text()).toContain('admin.accounts.status.rateLimited')
     expect(wrapper.get('[data-testid="reset-credit-count"]').text()).toContain('count0')
     expect(wrapper.get('[data-testid="codex-credits"] span').text()).toBe('123')
     await vi.advanceTimersByTimeAsync(300_000)
+    expect(wrapper.text()).not.toContain('admin.accounts.status.rateLimited')
+    expect(getBatchUsage).toHaveBeenCalledTimes(1)
     expect(listWithEtag).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({ lite: '1' }), expect.objectContaining({ etag: 'quota-1' }))
     expect(getBatchTodayStatsWithEtag).not.toHaveBeenCalled()
     expect(listAccounts).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
+  it.each([false, true])('preserves newer windows and accepts independent credits with full auto-refresh %s', async (enabled) => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    localStorage.setItem('account-auto-refresh', JSON.stringify({ enabled, interval_seconds: 5 }))
+    const interval = enabled ? 6_000 : 300_000
+    const updatedAt = '2026-11-20T01:00:00Z'
+    const observedAt = Date.parse(updatedAt) * 1000 + 50
+    const rateLimitedUntil = '2026-11-20T05:00:00Z'
+    const current = {
+      ...listRow, rate_limit_reset_at: rateLimitedUntil,
+      extra: { codex_usage_updated_at: updatedAt, codex_usage_observed_at_us: observedAt, codex_5h_used_percent: 95 }
+    }
+    const credits = { available_count: 3, fetched_at: 100 }
+    const stale = {
+      ...current, rate_limit_reset_at: null,
+      extra: { ...current.extra, codex_usage_observed_at_us: observedAt - 1, codex_5h_used_percent: 1, codex_reset_credit_snapshot: credits }
+    }
+    listAccounts.mockResolvedValue({ items: [current], total: 1, pages: 1 })
+    listWithEtag.mockResolvedValueOnce({ notModified: false, etag: 'old', data: { items: [stale], total: 1, pages: 1 } })
+    const wrapper = mountView()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(interval)
+    expect(wrapper.getComponent(DataTableStub).props('data')).toMatchObject([{
+      rate_limit_reset_at: rateLimitedUntil,
+      extra: { codex_5h_used_percent: 95, codex_usage_observed_at_us: observedAt, codex_reset_credit_snapshot: credits }
+    }])
+    const newOwner = { ...stale, extra: { codex_reset_credit_owner_changed_at_us: observedAt + 1 } }
+    listWithEtag.mockResolvedValueOnce({ notModified: false, etag: 'new-owner', data: { items: [newOwner], total: 1, pages: 1 } })
+    await vi.advanceTimersByTimeAsync(interval)
+    expect(wrapper.getComponent(DataTableStub).props('data')).toEqual([newOwner])
+    wrapper.unmount()
+  })
+
+  it('keeps an explicit upstream query available on an empty row and discards an older list response', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    let finish!: (value: unknown) => void
+    let finishBatch!: (value: unknown) => void
+    listWithEtag.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    getBatchUsage.mockReturnValueOnce(new Promise(resolve => { finishBatch = resolve }))
+    const wrapper = mountView(true, true)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(getBatchUsage.mock.calls).toEqual([[[42], false, 'passive']])
+    expect(getUsage).not.toHaveBeenCalled()
+    const signal = listWithEtag.mock.calls[0][3].signal
+    getUsage.mockResolvedValueOnce({ five_hour: { utilization: 48, resets_at: null } })
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.usageWindow.activeQuery')!.trigger('click')
+    await flushPromises()
+    expect(getUsage.mock.calls).toEqual([[42, 'active', true]])
+    expect(signal.aborted).toBe(true)
+    finish({ notModified: false, etag: 'older', data: { items: [{ ...listRow, extra: { codex_5h_used_percent: 1 } }] } })
+    finishBatch({ usage: { 42: { source: 'passive', five_hour: { utilization: 1, resets_at: null } } } })
+    await flushPromises()
+    expect(wrapper.getComponent(UsageProgressBar).props('utilization')).toBe(48)
+    wrapper.unmount()
+  })
+
   it.each([
     { type: 'apikey', hiddenColumns: [] },
-    { type: 'oauth', hiddenColumns: ['usage'] }
+    { type: 'oauth', hiddenColumns: ['usage', 'status'] }
   ])('skips the five-minute poll for $type rows with hidden columns $hiddenColumns', async ({ type, hiddenColumns }) => {
     vi.useFakeTimers()
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)

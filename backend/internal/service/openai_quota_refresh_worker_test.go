@@ -22,7 +22,7 @@ func (f quotaRefreshTestPager) ListOAuthRefreshCandidatePage(ctx context.Context
 
 type quotaRefreshTestQuery func(context.Context, int64) error
 
-func (f quotaRefreshTestQuery) RefreshCreditSnapshots(ctx context.Context, id int64) error {
+func (f quotaRefreshTestQuery) RefreshQuotaSnapshots(ctx context.Context, id int64) error {
 	return f(ctx, id)
 }
 
@@ -153,7 +153,7 @@ func TestOpenAIQuotaRefreshWorkerKeepsOwnershipAcrossSlots(t *testing.T) {
 		first.start()
 		defer first.Stop()
 		synctest.Wait()
-		time.Sleep(2 * openAICreditRefreshInterval)
+		time.Sleep(2 * openAIQuotaSnapshotRefreshInterval)
 		synctest.Wait()
 		require.Greater(t, locks.renewals.Load(), int32(1))
 		peer := OpenAIQuotaRefreshWorker{

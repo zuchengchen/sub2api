@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -58,15 +59,20 @@ func TestQueryUsageCodexCredits(t *testing.T) {
 	}
 }
 
-func TestRefreshCreditSnapshots(t *testing.T) {
+func TestRefreshQuotaSnapshots(t *testing.T) {
+	resetAt := time.Now().UTC().Truncate(time.Second).Add(time.Hour)
+	windows := fmt.Sprintf(`{"primary_window":{"used_percent":71.5,"limit_window_seconds":604800,"reset_after_seconds":7200},
+		"secondary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":30,"reset_at":%d}}`, resetAt.Unix())
 	for _, tc := range []struct {
 		name          string
 		usageStatus   int
 		detailsStatus int
+		windows       string
 	}{
-		{"both snapshots share one write", http.StatusOK, http.StatusOK},
-		{"points survive unavailable card details", http.StatusOK, http.StatusServiceUnavailable},
-		{"failed query preserves both snapshots", http.StatusServiceUnavailable, 0},
+		{"all snapshots share one write", http.StatusOK, http.StatusOK, windows},
+		{"missing windows preserve previous readings", http.StatusOK, http.StatusOK, "null"},
+		{"points and windows survive unavailable card details", http.StatusOK, http.StatusServiceUnavailable, windows},
+		{"failed query preserves all snapshots", http.StatusServiceUnavailable, 0, "null"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
@@ -80,7 +86,7 @@ func TestRefreshCreditSnapshots(t *testing.T) {
 				switch r.URL.Path {
 				case "/backend-api/wham/usage":
 					w.WriteHeader(tc.usageStatus)
-					_, _ = w.Write([]byte(`{"credits":{"has_credits":true,"balance":"23.75"},"rate_limit_reset_credits":{"available_count":1}}`))
+					_, _ = fmt.Fprintf(w, `{"credits":{"has_credits":true,"balance":"23.75"},"rate_limit_reset_credits":{"available_count":1},"rate_limit":%s}`, tc.windows)
 				case "/backend-api/wham/rate-limit-reset-credits":
 					w.WriteHeader(tc.detailsStatus)
 					_, _ = w.Write([]byte(`{"available_count":1,"credits":[{"id":"private-card","expires_at":"2028-01-01T00:00:00Z"}]}`))
@@ -91,7 +97,7 @@ func TestRefreshCreditSnapshots(t *testing.T) {
 			defer srv.Close()
 			svc := NewOpenAIQuotaService(repo, nil, NewOpenAITokenProvider(repo, tokens, nil), newQuotaRedirectingFactory(srv), nil)
 			before := time.Now().UnixMicro()
-			err := svc.RefreshCreditSnapshots(context.Background(), account.ID)
+			err := svc.RefreshQuotaSnapshots(context.Background(), account.ID)
 			if tc.usageStatus != http.StatusOK {
 				require.Error(t, err)
 				require.Equal(t, []string{"GET /backend-api/wham/usage"}, requests)
@@ -104,13 +110,22 @@ func TestRefreshCreditSnapshots(t *testing.T) {
 			points := updates[openaiQuotaCreditsKey].(openAICreditsSnapshot)
 			require.Equal(t, "23.75", *points.Credits.Balance)
 			require.GreaterOrEqual(t, points.QueryStartedAt, before)
+			if tc.windows == windows {
+				require.Equal(t, 0.0, updates["codex_5h_used_percent"])
+				require.Equal(t, 71.5, updates["codex_7d_used_percent"])
+				require.Equal(t, resetAt.Format(time.RFC3339), updates["codex_5h_reset_at"])
+				require.Equal(t, time.Unix(points.FetchedAt+7200, 0).UTC().Format(time.RFC3339), updates["codex_7d_reset_at"])
+				require.Equal(t, points.QueryStartedAt, updates["codex_usage_observed_at_us"])
+			} else {
+				require.Len(t, updates, 2)
+				require.NotContains(t, updates, "codex_usage_observed_at_us")
+			}
 			if tc.detailsStatus != http.StatusOK {
 				require.Error(t, err)
-				require.Len(t, updates, 1)
+				require.NotContains(t, updates, openaiQuotaResetCreditsKey)
 				return
 			}
 			require.NoError(t, err)
-			require.Len(t, updates, 2)
 			cards := updates[openaiQuotaResetCreditsKey].(*OpenAIRateLimitResetCredits)
 			require.Equal(t, 1, cards.AvailableCount)
 			require.Equal(t, "2028-01-01T00:00:00Z", cards.Credits[0].ExpiresAt)

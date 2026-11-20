@@ -77,6 +77,7 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 var schedulerNeutralExtraKeys = map[string]struct{}{
 	service.OpenAIAutoResetCreditStateExtraKey: {},
 	"codex_usage_updated_at":                   {},
+	codexUsageObservedAtKey:                    {},
 	"codex_credits_snapshot":                   {},
 	"codex_referral_snapshot":                  {},
 	"grok_billing_snapshot":                    {},
@@ -743,7 +744,7 @@ func lockAndMergeAccountProbeExtra(
 		}
 	}
 	extra := service.MergeOpenAICodexTicketExtra(copyJSONMap(normalizeJSONMap(account.Extra)), currentExtra)
-	if err := mergeCodexCreditSnapshots(ctx, client, account, extra, currentExtra, identityUnchanged); err != nil {
+	if err := mergeCodexQuotaSnapshots(ctx, client, account, extra, currentExtra, identityUnchanged); err != nil {
 		return nil, err
 	}
 	// Preserve the latest attempt under the row lock; a stale admin form must
@@ -2905,6 +2906,7 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		return scoped.UpdateExtra(ctx, id, updates)
 	}
 	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
+	updates = versionCodexWindowUpdates(updates)
 	if len(updates) == 0 {
 		return nil
 	}
