@@ -495,9 +495,13 @@ func pruneOpenAITiboWindow(times []time.Time, now time.Time) []time.Time {
 	return append(times[:0], times[cut:]...)
 }
 
-// DisableOpenAITiboRouteForTest keeps unit fixtures on the pre-Tibo path.
+// DisableOpenAITiboRouteForTest runs during fixture setup, before serving any
+// requests. The constructor has already started the harvester, and its probes
+// can still be reading the routing flag after the harvester itself exits.
 func (s *OpenAIGatewayService) DisableOpenAITiboRouteForTest() {
 	if s != nil {
+		s.StopOpenAICodexTicketHarvester()
+		s.openaiTiboProbeWG.Wait()
 		s.tiboRouteDisabled = true
 	}
 }
