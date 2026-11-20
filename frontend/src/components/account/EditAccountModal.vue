@@ -1758,9 +1758,15 @@
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
-          <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" class="input"
-            @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
+          <label for="edit-account-concurrency" class="input-label">{{ t('admin.accounts.concurrency') }}</label>
+          <input
+            id="edit-account-concurrency"
+            v-model.number="form.concurrency"
+            type="number"
+            min="1"
+            required
+            class="input"
+          />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
@@ -4346,7 +4352,7 @@ const form = reactive({
   name: '',
   notes: '',
   proxy_id: null as number | null,
-  concurrency: 1,
+  concurrency: 1 as number | '',
   load_factor: null as number | null,
   priority: 1,
   rate_multiplier: 1,
