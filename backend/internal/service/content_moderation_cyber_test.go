@@ -93,6 +93,10 @@ func (r *cyberOrderingTestRepo) DisableAPIKeyIfActive(context.Context, int64) (s
 	return "", false, nil
 }
 
+func (*cyberOrderingTestRepo) DisableActiveAPIKeysForDisabledUser(context.Context, int64) ([]string, error) {
+	return nil, nil
+}
+
 func (r *cyberOrderingTestRepo) snapshot() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -111,12 +115,14 @@ func (r *cyberOrderingTestRepo) snapshotEmailSents() []bool {
 
 type cyberDispositionTestRepo struct {
 	contentModerationTestRepo
-	dispositionMu    sync.Mutex
-	userActive       bool
-	keyActive        bool
-	keyCredential    string
-	disableUserCalls int
-	disableKeyCalls  int
+	dispositionMu       sync.Mutex
+	userActive          bool
+	keyActive           bool
+	keyCredential       string
+	disableUserCalls    int
+	disableKeyCalls     int
+	revokeUserKeysCalls int
+	revokeUserKeysErr   error
 }
 
 func (r *cyberDispositionTestRepo) DisableUserIfActive(context.Context, int64) (bool, error) {
@@ -139,6 +145,13 @@ func (r *cyberDispositionTestRepo) DisableAPIKeyIfActive(context.Context, int64)
 	}
 	r.keyActive = false
 	return r.keyCredential, true, nil
+}
+
+func (r *cyberDispositionTestRepo) DisableActiveAPIKeysForDisabledUser(context.Context, int64) ([]string, error) {
+	r.dispositionMu.Lock()
+	defer r.dispositionMu.Unlock()
+	r.revokeUserKeysCalls++
+	return nil, r.revokeUserKeysErr
 }
 
 func cyberPolicyScope() *ContentModerationScopeSnapshot {
@@ -326,6 +339,7 @@ func TestRecordCyberPolicyEvent_AdminDisablesOnlyTriggeringAPIKey(t *testing.T) 
 	require.Equal(t, "disabled", logs[0].DispositionStatus)
 	require.Equal(t, 0, repo.disableUserCalls)
 	require.Equal(t, 1, repo.disableKeyCalls)
+	require.Zero(t, repo.revokeUserKeysCalls)
 	require.Empty(t, invalidator.userIDs)
 	require.Equal(t, []string{"sk-triggering"}, invalidator.keys)
 }

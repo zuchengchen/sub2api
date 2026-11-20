@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -92,4 +93,62 @@ func TestUserRepository_DeleteUser_AtomicWithAPIKeys(t *testing.T) {
 	require.NoError(t, integrationDB.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM deleted_api_key_audits WHERE user_id = $1`, user.ID).Scan(&auditCount))
 	require.Zero(t, auditCount, "提交后也不得保留被删 Key 的凭据材料")
+}
+
+func TestAdminService_DeleteUser_LocksUserBeforeAPIKeys(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client := testEntClient(t)
+	users := NewUserRepository(client, integrationDB)
+	keys := NewAPIKeyRepository(client, integrationDB)
+	admin := service.NewAdminService(nil, users, nil, nil, nil, keys, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	user := mustCreateUser(t, client, &service.User{Status: service.StatusDisabled})
+	t.Cleanup(func() {
+		_, _ = integrationDB.Exec("DELETE FROM users WHERE id = $1", user.ID)
+	})
+	key := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Status: service.StatusAPIKeyDisabled})
+
+	// Hold the parent row as an unban does, then let the real deletion begin.
+	unbanTx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = unbanTx.Rollback() }()
+	var unbanPID int
+	require.NoError(t, unbanTx.QueryRowContext(ctx,
+		"UPDATE users SET status = 'active' WHERE id = $1 RETURNING pg_backend_pid()", user.ID).Scan(&unbanPID))
+	var deleteErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		deleteErr = admin.DeleteUser(ctx, user.ID)
+	}()
+	t.Cleanup(func() { <-done })
+	require.Eventually(t, func() bool {
+		var blocked bool
+		err := integrationDB.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))
+		)`, unbanPID).Scan(&blocked)
+		return err == nil && blocked
+	}, 5*time.Second, 10*time.Millisecond, "deletion should be waiting on the user")
+
+	// The unban can still take the key lock immediately while deletion waits for the parent.
+	var keyID int64
+	require.NoError(t, unbanTx.QueryRowContext(ctx,
+		"SELECT id FROM api_keys WHERE id = $1 FOR UPDATE NOWAIT", key.ID).Scan(&keyID))
+	require.Equal(t, key.ID, keyID)
+	_, err = unbanTx.ExecContext(ctx, "UPDATE api_keys SET status = 'active' WHERE id = $1", key.ID)
+	require.NoError(t, err)
+	// A key committed before deletion gets the parent lock must be included in its list.
+	_, err = unbanTx.ExecContext(ctx, "INSERT INTO api_keys (user_id, key, name) VALUES ($1, $2, 'concurrent key')",
+		user.ID, fmt.Sprintf("sk-concurrent-delete-%d", user.ID))
+	require.NoError(t, err)
+	require.NoError(t, unbanTx.Commit())
+
+	<-done
+	require.NoError(t, deleteErr)
+	var deletedKeys, totalKeys int
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		"SELECT count(deleted_at), count(*) FROM api_keys WHERE user_id = $1", user.ID).Scan(&deletedKeys, &totalKeys))
+	require.Equal(t, 2, totalKeys)
+	require.Equal(t, totalKeys, deletedKeys)
+	require.ErrorIs(t, admin.DeleteUser(ctx, user.ID), service.ErrUserNotFound)
 }

@@ -626,6 +626,7 @@ export default {
       enable: 'Enable',
       disableUser: 'Disable User',
       enableUser: 'Enable User',
+      enableUserHint: 'Enabling this user also lifts any risk-control bans on their API keys.',
       adminDisableForbidden: 'Admin users cannot be disabled directly to preserve access to the admin panel.',
       viewApiKeys: 'View API Keys',
       groups: 'Groups',

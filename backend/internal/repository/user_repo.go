@@ -246,25 +246,18 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 		return nil
 	}
 
-	// 使用 ent 事务包裹用户更新与 allowed_groups 同步，避免跨层事务不一致。
-	tx, err := r.client.Tx(ctx)
+	// 用户、分组权限和被封的 Key 共享同一个事务。
+	txClient := clientFromContext(ctx, r.client)
+	tx, err := txClient.Tx(ctx)
 	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
 		return err
 	}
 
-	var txClient *dbent.Client
 	txCtx := ctx
 	if err == nil {
 		defer func() { _ = tx.Rollback() }()
 		txClient = tx.Client()
 		txCtx = dbent.NewTxContext(ctx, tx)
-	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前事务 client 并由调用方负责提交/回滚。
-		if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
-			txClient = existingTx.Client()
-		} else {
-			txClient = r.client
-		}
 	}
 
 	// 邮箱唯一性锁与查重只在本次确实要改邮箱时才做：不改邮箱的更新既不需要
@@ -286,7 +279,13 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 		}
 	}
 
-	existing, err := clientFromContext(txCtx, txClient).User.Get(txCtx, userIn.ID)
+	activating := fields.Status && userIn.Status == service.StatusActive
+	query := txClient.User.Query().Where(dbuser.IDEQ(userIn.ID))
+	if activating {
+		// 与风控吊销密钥共用用户行锁，以锁内的状态判断是否发生解封。
+		query.ForUpdate()
+	}
+	existing, err := query.Only(txCtx)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
@@ -357,13 +356,15 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 		return err
 	}
 
-	if fields.Status && userIn.Status == service.StatusActive {
-		exec := txAwareSQLExecutor(txCtx, r.sql, r.client)
-		if exec != nil {
-			if _, err := exec.ExecContext(txCtx, `
+	if activating {
+		if _, err := txClient.ExecContext(txCtx, `
 UPDATE users SET usage_policy_unban_at = NULL
 WHERE id = $1 AND usage_policy_unban_at IS NOT NULL`, userIn.ID); err != nil {
-				return fmt.Errorf("clear usage policy unban timestamp: %w", err)
+			return fmt.Errorf("clear usage policy unban timestamp: %w", err)
+		}
+		if existing.Status == service.StatusDisabled || fields.RestoreBannedAPIKeys {
+			if err := restoreBannedAPIKeys(txCtx, txClient, []int64{userIn.ID}); err != nil {
+				return err
 			}
 		}
 	}

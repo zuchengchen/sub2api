@@ -11,8 +11,10 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
+	entuser "github.com/Wei-Shaw/sub2api/ent/user"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -215,7 +217,6 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	}
 
 	oldConcurrency := user.Concurrency
-	oldStatus := user.Status
 	oldRole := user.Role
 	oldRPMLimit := user.RPMLimit
 	oldAllowedGroups := append([]int64(nil), user.AllowedGroups...)
@@ -305,9 +306,11 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	}
 
 	if s.authCacheInvalidator != nil {
+		// 读取用户后可能发生并发封禁或解封，每次显式写入状态都要刷新该用户的 Key 鉴权缓存。
 		// RPMLimit 直接参与 billing_cache_service.checkRPM 的三级级联，
 		// allowed_groups 参与 API Key 专属分组授权判断；不失效缓存会让修改在一个 L2 TTL 内失去效果。
-		if user.Concurrency != oldConcurrency || user.Status != oldStatus || user.Role != oldRole || user.RPMLimit != oldRPMLimit || user.RestrictPublicGroups != oldRestrictPublicGroups || !sameInt64Set(user.AllowedGroups, oldAllowedGroups) {
+		if fields.Status || user.Concurrency != oldConcurrency || user.Role != oldRole || user.RPMLimit != oldRPMLimit ||
+			user.RestrictPublicGroups != oldRestrictPublicGroups || !sameInt64Set(user.AllowedGroups, oldAllowedGroups) {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, user.ID)
 		}
 	}
@@ -387,36 +390,46 @@ func sameInt64Set(a, b []int64) bool {
 }
 
 func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
-	// Protect admin users: cannot delete admin accounts
-	user, err := s.userRepo.GetByID(ctx, id)
-	if err != nil {
-		return err
-	}
-	if user.Role == "admin" {
-		return infraerrors.BadRequest("ADMIN_DELETE_FORBIDDEN", "cannot delete admin user; change the role to user first")
-	}
-
-	apiKeys, err := s.listUserAPIKeysForDeletion(ctx, id)
-	if err != nil {
-		return err
-	}
-
+	var tx *dbent.Tx
+	var role string
+	opCtx := ctx
 	if s.entClient != nil {
-		tx, err := s.entClient.Tx(ctx)
+		var err error
+		tx, err = s.entClient.Tx(ctx)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-
-		opCtx := dbent.NewTxContext(ctx, tx)
-		if err := s.deleteUserWithAPIKeys(opCtx, id, apiKeys); err != nil {
-			return err
+		opCtx = dbent.NewTxContext(ctx, tx)
+		// 解封同样先锁用户再更新 Key。取得行锁后再判断管理员角色、列出当前的 Key。
+		role, err = tx.User.Query().Where(entuser.IDEQ(id), entuser.DeletedAtIsNil()).
+			ForUpdate().Select(entuser.FieldRole).String(opCtx)
+		if dbent.IsNotFound(err) {
+			return ErrUserNotFound.WithCause(err)
 		}
-		if err := tx.Commit(); err != nil {
+		if err != nil {
 			return err
 		}
 	} else {
-		if err := s.deleteUserWithAPIKeys(ctx, id, apiKeys); err != nil {
+		user, err := s.userRepo.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		role = user.Role
+	}
+	if role == RoleAdmin {
+		return infraerrors.BadRequest("ADMIN_DELETE_FORBIDDEN", "cannot delete admin user; change the role to user first")
+	}
+
+	apiKeys, err := s.listUserAPIKeysForDeletion(opCtx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.deleteUserWithAPIKeys(opCtx, id, apiKeys); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
 			return err
 		}
 	}
@@ -435,6 +448,15 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 func (s *adminServiceImpl) listUserAPIKeysForDeletion(ctx context.Context, userID int64) ([]APIKey, error) {
 	if s.apiKeyRepo == nil {
 		return nil, nil
+	}
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		var keys []APIKey
+		err := tx.APIKey.Query().Where(apikey.UserIDEQ(userID), apikey.DeletedAtIsNil()).
+			Order(apikey.ByID()).Select(apikey.FieldID, apikey.FieldKey).Scan(ctx, &keys)
+		if err != nil {
+			return nil, fmt.Errorf("list user api keys: %w", err)
+		}
+		return keys, nil
 	}
 
 	const pageSize = 1000

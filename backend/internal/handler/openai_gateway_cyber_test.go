@@ -33,6 +33,10 @@ func (r *blockingCyberDispositionRepo) DisableAPIKeyIfActive(context.Context, in
 	return "", false, nil
 }
 
+func (*blockingCyberDispositionRepo) DisableActiveAPIKeysForDisabledUser(context.Context, int64) ([]string, error) {
+	return nil, nil
+}
+
 // newTestGinContext builds a bare gin.Context backed by an httptest recorder.
 func newTestGinContext() *gin.Context {
 	gin.SetMode(gin.TestMode)

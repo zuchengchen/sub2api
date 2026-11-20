@@ -145,8 +145,9 @@ type contentModerationTestHashCache struct {
 }
 
 type contentModerationTestUserRepo struct {
-	user    *User
-	updated []User
+	user          *User
+	updated       []User
+	updatedFields []UserUpdateFields
 }
 
 func (r *contentModerationTestUserRepo) Create(ctx context.Context, user *User) error {
@@ -179,6 +180,7 @@ func (r *contentModerationTestUserRepo) Update(ctx context.Context, user *User, 
 	}
 	clone := *user
 	r.updated = append(r.updated, clone)
+	r.updatedFields = append(r.updatedFields, fields)
 	r.user = &clone
 	return nil
 }
@@ -850,34 +852,23 @@ func TestBuildContentModerationAccountDisabledEmailBody_ContainsBanDetails(t *te
 	require.Contains(t, body, "Sub2API &lt;Admin&gt;")
 }
 
-func TestContentModerationUnbanUser_ActivatesUserAndInvalidatesAuthCache(t *testing.T) {
-	userRepo := &contentModerationTestUserRepo{user: &User{ID: 1001, Email: "user@example.com", Status: StatusDisabled}}
-	invalidator := &contentModerationTestAuthCacheInvalidator{}
-	repo := &contentModerationTestRepo{}
-	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, invalidator, nil)
+func TestContentModerationUnbanUser_RestoresBannedKeysAndInvalidatesAuthCache(t *testing.T) {
+	for _, status := range []string{StatusDisabled, StatusActive} {
+		t.Run(status, func(t *testing.T) {
+			userRepo := &contentModerationTestUserRepo{user: &User{ID: 1001, Status: status}}
+			invalidator := &contentModerationTestAuthCacheInvalidator{}
+			svc := NewContentModerationService(nil, &contentModerationTestRepo{}, nil, nil, userRepo, nil, invalidator, nil)
 
-	result, err := svc.UnbanUser(context.Background(), 1001)
+			result, err := svc.UnbanUser(context.Background(), 1001)
 
-	require.NoError(t, err)
-	require.Equal(t, int64(1001), result.UserID)
-	require.Equal(t, StatusActive, result.Status)
-	require.Len(t, userRepo.updated, 1)
-	require.Equal(t, StatusActive, userRepo.updated[0].Status)
-	require.Equal(t, []int64{1001}, invalidator.userIDs)
-}
-
-func TestContentModerationUnbanUser_ActiveUserOnlyInvalidatesAuthCache(t *testing.T) {
-	userRepo := &contentModerationTestUserRepo{user: &User{ID: 1001, Email: "user@example.com", Status: StatusActive}}
-	invalidator := &contentModerationTestAuthCacheInvalidator{}
-	repo := &contentModerationTestRepo{}
-	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, invalidator, nil)
-
-	result, err := svc.UnbanUser(context.Background(), 1001)
-
-	require.NoError(t, err)
-	require.Equal(t, StatusActive, result.Status)
-	require.Empty(t, userRepo.updated)
-	require.Equal(t, []int64{1001}, invalidator.userIDs)
+			require.NoError(t, err)
+			require.Equal(t, int64(1001), result.UserID)
+			require.Equal(t, StatusActive, result.Status)
+			require.Equal(t, []UserUpdateFields{{Status: true, RestoreBannedAPIKeys: true}}, userRepo.updatedFields)
+			require.Equal(t, StatusActive, userRepo.user.Status)
+			require.Equal(t, []int64{1001}, invalidator.userIDs)
+		})
+	}
 }
 
 func TestContentModerationUpdateConfig_CyberPolicyExcludeFromBanCount(t *testing.T) {
