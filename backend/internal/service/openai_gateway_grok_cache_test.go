@@ -898,6 +898,32 @@ func TestGrokFreeMessagesFunctionToolCacheRouteRequiresKnownFreeTier(t *testing.
 			wantMix: true,
 		},
 		{
+			name: "unified billing blank plan is not free cache",
+			account: func() *Account {
+				a := healthyGrokOAuthGatewayTestAccount(9114, "access-token")
+				a.Extra = map[string]any{grokBillingExtraKey: map[string]any{
+					"status_code":             http.StatusOK,
+					"source":                  "billing_probe",
+					"monthly_updated_at":      "2026-11-20T01:23:23Z",
+					"monthly_limit_cents":     0,
+					"is_unified_billing_user": true,
+				}}
+				return a
+			}(),
+		},
+		{
+			name: "heavy credential tier is not free cache",
+			account: func() *Account {
+				a := healthyGrokOAuthGatewayTestAccount(9115, "access-token")
+				a.Credentials["subscription_tier"] = "supergrok_heavy"
+				a.Extra = map[string]any{grokBillingExtraKey: map[string]any{
+					"status_code":        http.StatusOK,
+					"monthly_updated_at": "2026-11-20T01:23:23Z",
+				}}
+				return a
+			}(),
+		},
+		{
 			name: "free rolling token quota",
 			account: func() *Account {
 				a := healthyGrokOAuthGatewayTestAccount(9112, "access-token")

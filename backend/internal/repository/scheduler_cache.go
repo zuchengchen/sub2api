@@ -1264,7 +1264,9 @@ func filterSchedulerCredentials(credentials map[string]any) map[string]any {
 	}
 	// Candidate-list admission evaluates the account override before hydrating
 	// the full account. Dropping it silently falls back to the platform threshold.
-	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold"}
+	// subscription_tier is required for Grok media eligibility: the projection
+	// strips access_token, so JWT cannot identify SuperGrok Heavy vs Free.
+	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type", "subscription_tier", "account_scheduling_threshold"}
 	filtered := make(map[string]any)
 	for _, key := range keys {
 		if value, ok := credentials[key]; ok && value != nil {
@@ -1357,6 +1359,10 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		service.UpstreamBillingProbeExtraKey,
 		service.GrokMediaEligibleExtraKey,
 		"grok_billing_snapshot",
+		// Grok media eligibility on this projection cannot read the JWT.
+		// Keep the operator-visible paid-tier label so SuperGrok Heavy is
+		// not inferred as Free from an empty unified billing snapshot.
+		"subscription_tier",
 	}
 	filtered := make(map[string]any)
 	for _, key := range keys {
