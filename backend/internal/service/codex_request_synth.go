@@ -3,9 +3,11 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -512,12 +514,19 @@ func codexSynthesisConfiguredEnvironment(account *Account, reqBody map[string]an
 	if !isCodexOAuthAccount(account) {
 		return codexDeviceProfile{}
 	}
+	cwd := strings.TrimSpace(account.GetExtraString(codexWorkspaceCWDExtraKey))
+	mode := strings.TrimSpace(account.GetExtraString(codexSandboxModeExtraKey))
+	timezone := strings.TrimSpace(account.GetExtraString(codexTimezoneExtraKey))
+	if cwd == "" && mode == "" && timezone == "" {
+		return codexDeviceProfile{}
+	}
 	// Keep client-provided context authoritative, including unmarked context
-	// from custom Codex providers. Do not put a conflicting account default
-	// ahead of it, or interpret tool results as environment declarations.
-	texts := []string{firstNonEmptyString(reqBody["instructions"])}
-	if text, ok := reqBody["input"].(string); ok {
-		texts = append(texts, text)
+	// from custom Codex providers. A quoted tag in later conversation leaves
+	// the account-supplied messages in the replayed prefix.
+	instructions, _ := reqBody["instructions"].(string)
+	inputText, _ := reqBody["input"].(string)
+	if codexSynthesisContextDeclaration(instructions) || codexSynthesisContextDeclaration(inputText) {
+		return codexDeviceProfile{}
 	}
 	input, _ := reqBody["input"].([]any)
 	for _, raw := range input {
@@ -535,27 +544,110 @@ func codexSynthesisConfiguredEnvironment(account *Account, reqBody map[string]an
 				return codexDeviceProfile{}
 			}
 		}
-		texts = append(texts, extractTextFromContent(item["content"]))
-	}
-	for _, text := range texts {
-		if strings.Contains(text, "<environment_context") || strings.Contains(text, "<permissions instructions>") {
+		if codexSynthesisHasContextContent(item["content"]) {
 			return codexDeviceProfile{}
 		}
 	}
 	var environment codexDeviceProfile
-	if cwd := strings.TrimSpace(account.GetExtraString(codexWorkspaceCWDExtraKey)); strings.HasPrefix(cwd, "/") && !strings.Contains(cwd, "..") && filepath.Clean(cwd) == cwd {
+	if strings.HasPrefix(cwd, "/") && !strings.Contains(cwd, "..") && filepath.Clean(cwd) == cwd {
 		environment.WorkspaceCWD = cwd
 	}
-	switch mode := strings.TrimSpace(account.GetExtraString(codexSandboxModeExtraKey)); mode {
+	switch mode {
 	case "read-only", "workspace-write", "danger-full-access":
 		environment.SandboxMode = mode
 	}
-	if timezone := strings.TrimSpace(account.GetExtraString(codexTimezoneExtraKey)); timezone != "" {
+	if timezone != "" {
 		if _, err := time.LoadLocation(timezone); err == nil {
 			environment.Timezone = timezone
 		}
 	}
 	return environment
+}
+
+func codexSynthesisHasContextContent(content any) bool {
+	switch value := content.(type) {
+	case string:
+		return codexSynthesisContextDeclaration(value)
+	case []any:
+		for _, raw := range value {
+			part, _ := raw.(map[string]any)
+			switch part["type"] {
+			case "text", "input_text", "output_text":
+				text, _ := part["text"].(string)
+				if codexSynthesisContextDeclaration(text) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// Unmarked Codex context occupies a complete text part. Adjacent declarations
+// may share a part, but ordinary prose and separate parts cannot complete one.
+func codexSynthesisContextDeclaration(text string) bool {
+	text = strings.TrimSpace(text)
+	for {
+		var body, rest string
+		var closed bool
+		switch {
+		case strings.HasPrefix(text, "<environment_context>"):
+			body, rest, closed = strings.Cut(text[len("<environment_context>"):], "</environment_context>")
+			if !closed || !codexSynthesisHasEnvironmentFields(body) {
+				return false
+			}
+		case strings.HasPrefix(text, "<permissions instructions>"):
+			body, rest, closed = strings.Cut(text[len("<permissions instructions>"):], "</permissions instructions>")
+			if !closed || strings.TrimSpace(body) == "" || strings.Contains(body, "<permissions instructions>") {
+				return false
+			}
+		default:
+			return false
+		}
+		text = strings.TrimSpace(rest)
+		if text == "" {
+			return true
+		}
+	}
+}
+
+// Environment fields are XML elements (cwd, shell, timezone, etc.). Allow
+// client extensions while requiring well-formed elements and no bare prose.
+func codexSynthesisHasEnvironmentFields(body string) bool {
+	body = strings.TrimSpace(body)
+	if !strings.HasPrefix(body, "<") {
+		return false
+	}
+	decoder := xml.NewDecoder(strings.NewReader(body))
+	hasField := false
+	depth := 0
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return hasField
+		}
+		if err != nil {
+			return false
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			// Limit the XML decoder's nesting stack for client-supplied text.
+			if depth == 64 {
+				return false
+			}
+			depth++
+			hasField = true
+		case xml.EndElement:
+			depth--
+		case xml.CharData:
+			if depth == 0 && len(bytes.TrimSpace(token)) != 0 {
+				return false
+			}
+		case xml.Comment:
+		default:
+			return false
+		}
+	}
 }
 
 func codexSynthesisPermissionsText(environment codexDeviceProfile) string {
