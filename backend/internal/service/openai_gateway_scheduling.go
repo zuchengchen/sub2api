@@ -163,20 +163,32 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 // sticky seed with the client-requested model so switching models does not
 // inherit a stale account binding (grok2api affinityKey pattern).
 func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) string {
-	return s.GenerateResponsesAccountSessionHash(c, body, "")
+	return s.responsesAccountSessionHash(c, body, "", false)
 }
 
 // GenerateResponsesAccountSessionHash additionally accepts a validated Codex
 // thread for authenticated GPT text account selection. Other consumers of
 // GenerateSessionHash retain their original session scopes.
 func (s *OpenAIGatewayService) GenerateResponsesAccountSessionHash(c *gin.Context, body []byte, textModel string) string {
+	return s.responsesAccountSessionHash(c, body, textModel, responsesCacheAffinityEnabled(c, textModel))
+}
+
+func (s *OpenAIGatewayService) responsesAccountSessionHash(c *gin.Context, body []byte, textModel string, scoped bool) string {
 	if c == nil {
 		return ""
 	}
 
+	if scoped {
+		c.Set(responsesCacheAffinityContextKey, true)
+	}
 	sessionID := explicitOpenAIRequestSessionID(c, body)
 	if sessionID == "" && textModel != "" {
 		sessionID = gptAccountConversationSeed(c, body, textModel)
+	}
+	if sessionID == "" && scoped {
+		if session := validatedResponsesClaudeSession(c, body); session != "" {
+			sessionID = gptAccountThreadSeed(getAPIKeyFromContext(c), session, session)
+		}
 	}
 	if sessionID == "" && len(body) > 0 {
 		sessionID = deriveOpenAIContentSessionSeed(body)
@@ -198,27 +210,35 @@ func openAIAccountSessionHash(c *gin.Context, seed string) string {
 	return currentHash
 }
 
-// Only the account scheduler consumes this seed. Client metadata is not a
-// substitute for the existing authorization and history checks on replay.
-func gptAccountConversationSeed(c *gin.Context, body []byte, model string) string {
-	if c == nil || c.Request == nil || len(body) > gpt61SolChatIdentityMaxBodyBytes || !isCanonicalGPTChatModel(model) {
-		return ""
+func gptAccountConversationKey(c *gin.Context, model string) *APIKey {
+	if c == nil || c.Request == nil || !isCanonicalGPTChatModel(model) {
+		return nil
 	}
 	key := getAPIKeyFromContext(c)
 	if key == nil || key.ID <= 0 || key.UserID <= 0 {
-		return ""
+		return nil
 	}
 	platform, ok := ResolvedTargetPlatformFromContext(c.Request.Context())
 	if !ok {
 		platform = PlatformFromAPIKey(key)
 	}
 	if platform != "" && platform != PlatformOpenAI {
+		return nil
+	}
+	return key
+}
+
+// Only the account scheduler consumes this seed. Client metadata is not a
+// substitute for the existing authorization and history checks on replay.
+func gptAccountConversationSeed(c *gin.Context, body []byte, model string) string {
+	key := gptAccountConversationKey(c, model)
+	if key == nil || len(body) > gpt61SolChatIdentityMaxBodyBytes {
 		return ""
 	}
 	if !hasGPTAccountConversationCarrier(c, body) {
 		return ""
 	}
-	identity := resolveGPT61SolChatIdentity(c, body)
+	identity := parseGPT61SolChatIdentity(c, body, false)
 	if !identity.valid {
 		return ""
 	}
@@ -239,7 +259,10 @@ func gptAccountConversationSeed(c *gin.Context, body []byte, model string) strin
 	if session == "" {
 		session = thread
 	}
-	// The strict parser excludes NUL from session and thread values.
+	return gptAccountThreadSeed(key, session, thread)
+}
+
+func gptAccountThreadSeed(key *APIKey, session, thread string) string {
 	return fmt.Sprintf("gpt-account-thread/v1\x00%d\x00%d\x00%s\x00%s", key.UserID, key.ID, session, thread)
 }
 
@@ -319,9 +342,18 @@ func grokStickyAffinitySeed(sessionID string, body []byte) string {
 // 当未携带 session_id/conversation_id/prompt_cache_key 时，使用 fallbackSeed 生成稳定哈希。
 // 该方法用于 WS ingress，避免会话信号缺失时发生跨账号漂移。
 func (s *OpenAIGatewayService) GenerateSessionHashWithFallback(c *gin.Context, body []byte, fallbackSeed string) string {
-	sessionHash := s.GenerateSessionHash(c, body)
-	if sessionHash != "" {
-		return sessionHash
+	return s.GenerateResponsesWSAccountSessionHash(c, body, "", fallbackSeed)
+}
+
+// GenerateResponsesWSAccountSessionHash applies the native GPT rules on enabled
+// keys. Older clients keep the original content and last-resort ingress bindings.
+func (s *OpenAIGatewayService) GenerateResponsesWSAccountSessionHash(c *gin.Context, body []byte, textModel, fallbackSeed string) string {
+	scoped := responsesCacheAffinityEnabled(c, textModel)
+	if !scoped {
+		textModel = ""
+	}
+	if hash := s.responsesAccountSessionHash(c, body, textModel, scoped); hash != "" {
+		return hash
 	}
 
 	seed := strings.TrimSpace(fallbackSeed)
@@ -329,9 +361,7 @@ func (s *OpenAIGatewayService) GenerateSessionHashWithFallback(c *gin.Context, b
 		return ""
 	}
 
-	currentHash, legacyHash := deriveOpenAISessionHashes(seed)
-	attachOpenAILegacySessionHashToGin(c, legacyHash)
-	return currentHash
+	return openAIAccountSessionHash(c, seed)
 }
 
 func resolveOpenAIUpstreamOriginator(c *gin.Context, isOfficialClient bool) string {

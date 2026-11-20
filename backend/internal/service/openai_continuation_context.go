@@ -29,7 +29,10 @@ func (e *OpenAIContinuationContextError) Error() string {
 // Native anchors/references retain their upstream resolution and existing
 // tenant/credential checks. Neither is proof of portable, complete history.
 func ValidateOpenAIContinuationInput(body []byte) error {
-	proof := AnalyzeOpenAIContinuationReplayProof(body)
+	return validateOpenAIContinuationInputProof(AnalyzeOpenAIContinuationReplayProof(body))
+}
+
+func validateOpenAIContinuationInputProof(proof OpenAIContinuationReplayProof) error {
 	if proof.HasPreviousResponseID || proof.HasConversation || proof.HasItemReference {
 		return nil
 	}

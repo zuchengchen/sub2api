@@ -641,6 +641,19 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		textModel = ""
 	}
 	sessionHash := h.gatewayService.GenerateResponsesAccountSessionHash(c, sessionHashBody, textModel)
+	var cacheObserver *service.ResponsesCacheDiagnosticObserver
+	if requestPlatform == service.PlatformOpenAI && !imageIntent && !legacyCompact && !nativeV2 {
+		cacheObserver = service.NewResponsesCacheDiagnosticObserver(c, apiKey)
+	}
+	var cacheSample *service.ResponsesCacheDiagnostic
+	var lastDiagnosticModel string
+	var lastDiagnosticAccount int64
+	var lastDiagnosticErr error
+	if cacheObserver != nil {
+		// An exhausted failover may return from account selection, after the
+		// last Forward. Keep its error until the logical request ends.
+		defer func() { cacheSample.Finish(lastDiagnosticAccount, nil, lastDiagnosticErr) }()
+	}
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
 	}
@@ -834,6 +847,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// 从不可变的 canonical forwardBody 派生本次尝试 body 并整块剔除上游私有的加密
 		// reasoning item（含耦合的 id/summary），避免非透传上游 400 拒绝 Kiro reasoning 形态。
 		attemptBody := h.deriveOpenAIForwardAttemptBody(reqLog, forwardBody, account, &passthroughFailoverState)
+		if cacheObserver != nil {
+			model := service.ResolveOpenAIAccountUpstreamModelForRequest(account, forwardModel, false)
+			if cacheSample == nil && model != lastDiagnosticModel {
+				cacheSample = cacheObserver.Begin(sessionHashBody, model, "http")
+			}
+			lastDiagnosticModel = model
+			lastDiagnosticAccount = account.ID
+			cacheSample.RecordAttempt(account.ID, model)
+		}
 		queueReselection.enabled = false // Admission retries must never replay an upstream attempt.
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -844,6 +866,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			logOpenAIQuotaRouting(c, lastFailoverErr, "next_account", account.ID, switchCount+1)
 			return h.gatewayService.Forward(c.Request.Context(), c, account, attemptBody)
 		}()
+		if cacheSample != nil {
+			lastDiagnosticErr = err
+			if result != nil || err == nil {
+				// Read metering before the usage worker can process the result.
+				cacheSample.ObserveHTTPIncremental(c, result)
+				cacheSample.Finish(account.ID, result, err)
+			}
+		}
 		var cyberBlockBodyHTTP []byte
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockBodyHTTP = sessionHashBody
@@ -2745,6 +2775,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 
+	var cacheTurns *responsesWSCacheDiagnostics
+	if openAICompatibleRequestPlatform(ctx, apiKey) == service.PlatformOpenAI {
+		if observer := service.NewResponsesCacheDiagnosticObserver(c, apiKey); observer != nil {
+			cacheTurns = newResponsesWSCacheDiagnostics(observer, firstMessage)
+			defer cacheTurns.close()
+		}
+	}
 	var imagePolicyErr error
 	firstMessage, imagePolicyErr = service.StripOpenAIImageGenerationToolsIfDisabled(apiKey.Group, nil, firstMessage)
 	if imagePolicyErr != nil {
@@ -2875,9 +2912,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return nil
 	}
 
-	sessionHash := h.gatewayService.GenerateSessionHashWithFallback(
-		c,
-		firstMessage,
+	textModel := wsForwardModel
+	if imageIntent {
+		textModel = ""
+	}
+	sessionHash := h.gatewayService.GenerateResponsesWSAccountSessionHash(
+		c, firstMessage, textModel,
 		openAIWSIngressFallbackSessionSeed(subject.UserID, apiKey.ID, apiKey.GroupID),
 	)
 	ctx = service.WithOpenAIGuardianParentAffinity(ctx, c, firstMessage, reqModel)
@@ -3290,6 +3330,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return checkSimpleModeTurnBilling()
 			},
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
+				if cacheTurns != nil {
+					cacheTurns.finishTurn(turn, result, turnErr)
+				}
 				turnStart := getTurnStart(turn)
 				cyberBlockBody := takeCyberTurnBody(turn)
 				// 每次 attempt 都清 cyber mark；failover 链结束前保留 recorded guard，
@@ -3399,6 +3442,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				})
 			},
 		}
+		if cacheTurns != nil {
+			hooks.ObserveClientTurn = cacheTurns.observeTurn
+		}
 
 		wsFirstMessage := wsAttemptMessage
 		// Preserve explicit native continuation. A missing scheduler affinity is
@@ -3415,7 +3461,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 		for {
 			logOpenAIQuotaRouting(c, lastFailoverErr, "next_account", account.ID, switchCount+1)
+			if cacheTurns != nil {
+				cacheTurns.startAttempt(account.ID)
+			}
 			err := h.gatewayService.ProxyResponsesWebSocketFromClient(ctx, c, wsConn, account, token, wsFirstMessage, hooks)
+			if cacheTurns != nil {
+				cacheTurns.lastErr = err
+			}
 			if err == nil {
 				reqLog.Info("openai.websocket_ingress_closed", zap.Int64("account_id", account.ID))
 				return

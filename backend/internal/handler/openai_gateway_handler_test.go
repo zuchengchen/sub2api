@@ -3070,6 +3070,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 
 	apiKey := &service.APIKey{
 		ID:      1801,
+		UserID:  1701,
 		GroupID: &groupID,
 		User:    &service.User{ID: 1701, Status: service.StatusActive},
 	}
