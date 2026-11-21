@@ -9,7 +9,112 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
+
+func TestCodexExecNotificationContinuationProof(t *testing.T) {
+	const (
+		call    = `{"type":"custom_tool_call","call_id":"c","name":"exec","input":"synthetic"}`
+		result  = `{"type":"custom_tool_call_output","call_id":"c","id":"ctco_result","output":[{"type":"input_text","text":"complete"}]}`
+		notice1 = `{"type":"custom_tool_call_output","call_id":"c","id":"ctco_first","name":"exec","output":"progress"}`
+		notice2 = `{"type":"custom_tool_call_output","call_id":"c","id":"ctco_second","name":"exec","output":"progress"}`
+		reason  = `{"type":"reasoning","summary":[],"encrypted_content":"synthetic"}`
+		agent   = `{"type":"agent_message","author":"/one","recipient":"/two","content":[{"type":"input_text","text":"header"},{"type":"encrypted_content","encrypted_content":"synthetic"}]}`
+		other   = `{"type":"function_call","call_id":"d","name":"other","arguments":"{}"}`
+		reply   = `{"type":"function_call_output","call_id":"d","output":"done"}`
+	)
+	request := func(items ...string) []byte {
+		return []byte(`{"input":[` + strings.Join(items, ",") + `]}`)
+	}
+	for _, tc := range []struct {
+		name    string
+		items   []string
+		outputs int
+	}{
+		{"notify_only", []string{call, notice1}, 1},
+		{"notify_then_result", []string{call, notice1, notice2, result}, 3},
+		{"result_then_notify", []string{call, result, notice1, notice2}, 3},
+		{"parallel_interleaved", []string{reason, call, other, notice1, agent, reply, result, notice2}, 4},
+		{"pending_sibling", []string{reason, other, call, result, agent, notice1}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := request(tc.items...)
+			original := bytes.Clone(body)
+			proof := AnalyzeOpenAIContinuationReplayProof(body)
+			require.True(t, proof.HasCodexExecNotification)
+			require.True(t, proof.CodexExecNotificationContextCovered, "%+v", proof)
+			require.False(t, proof.ToolContextUnproven)
+			require.Equal(t, tc.outputs, proof.Outputs)
+			require.NoError(t, ValidateOpenAIContinuationInput(body))
+			require.False(t, OpenAIContinuationMaySwitchAccount(body))
+			require.False(t, openAIContinuationStartsCompleteHistory(body))
+			require.Equal(t, original, body)
+		})
+	}
+	for _, scope := range []string{`null`, `""`, `"functions"`} {
+		namespaced := strings.Replace(call, `"name"`, `"namespace":`+scope+`,"name"`, 1)
+		t.Run("default_namespace_"+scope, func(t *testing.T) {
+			require.True(t, isCodexExecNotificationCall(gjson.Parse(namespaced)))
+			require.True(t, AnalyzeOpenAIContinuationReplayProof(request(namespaced, notice1, result)).CodexExecNotificationContextCovered)
+		})
+	}
+	t.Run("ordinary_one_to_one", func(t *testing.T) {
+		for _, singleResult := range []string{result, strings.Replace(result, `"output"`, `"name":"exec","output"`, 1)} {
+			proof := AnalyzeOpenAIContinuationReplayProof(request(call, singleResult))
+			require.Equal(t, OpenAIContinuationProofInline, proof.Verdict)
+			require.False(t, proof.HasCodexExecNotification)
+		}
+	})
+	for name, items := range map[string][]string{
+		"no_call":               {notice1},
+		"notification_before":   {notice1, call, result},
+		"wrong_call_id":         {call, strings.Replace(notice1, `"c"`, `"unknown"`, 1)},
+		"missing_call_id":       {strings.Replace(notice1, `"call_id":"c",`, "", 1)},
+		"malformed_call_id":     {call, strings.Replace(notice1, `"c"`, "47", 1)},
+		"other_family":          {strings.Replace(other, `"d"`, `"c"`, 1), notice1},
+		"other_tool":            {strings.Replace(call, `"exec"`, `"apply_patch"`, 1), notice1},
+		"non_default_namespace": {strings.Replace(call, `"name"`, `"namespace":"mcp__server","name"`, 1), notice1, result},
+		"result_namespace":      {call, strings.Replace(notice1, `"name"`, `"namespace":"foreign","name"`, 1), result},
+		"nontext_notice_before": {call, strings.Replace(notice1, `"progress"`, `[]`, 1), notice2},
+		"nontext_notice_after":  {call, notice1, strings.Replace(notice2, `"progress"`, `[]`, 1)},
+		"blank_named":           {call, strings.Replace(notice1, `"progress"`, `"  "`, 1), result},
+		"two_terminal_results":  {reason, call, result, notice1, strings.Replace(result, "ctco_result", "ctco_other", 1)},
+		"duplicate_call":        {call, notice1, call},
+		"duplicate_item_id":     {reason, call, result, notice1, notice1},
+		"orphan_sibling":        {reason, call, notice1, result, reply},
+		"orphan_after_agent":    {agent, call, notice1, result, reply},
+		"notify_after_orphan":   {agent, reply, call, result, notice1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := request(items...)
+			proof := AnalyzeOpenAIContinuationReplayProof(body)
+			require.True(t, proof.ToolContextUnproven, "%+v", proof)
+			require.False(t, proof.CodexExecNotificationContextCovered)
+			require.Error(t, ValidateOpenAIContinuationInput(body))
+			require.False(t, openAIContinuationProofPermitsReplay(proof))
+		})
+	}
+	for name, body := range map[string][]byte{
+		"anchored":             []byte(`{"previous_response_id":"resp_existing","input":[` + notice1 + `]}`),
+		"conversation":         []byte(`{"conversation":"conv_existing","input":[` + call + `,` + notice1 + `]}`),
+		"reference":            request(call, notice1, `{"type":"item_reference","id":"remote"}`),
+		"unknown_dependency":   request(call, notice1, `{"type":"future_native_item"}`),
+		"opaque_dependency":    request(call, notice1, `{"type":"message","role":"user","content":[{"type":"input_file","file_id":"remote"}]}`),
+		"invalid_agent_part":   request(call, notice1, `{"type":"agent_message","author":"one","recipient":"two","content":[{"type":"file","file_id":"remote"}]}`),
+		"agent_reference":      request(call, notice1, strings.Replace(agent, `"recipient"`, `"file_id":"remote","recipient"`, 1)),
+		"agent_part_reference": request(call, notice1, strings.Replace(agent, `"encrypted_content":"synthetic"`, `"file_id":"remote","encrypted_content":"synthetic"`, 1)),
+		"invalid_reasoning":    request(call, notice1, `{"type":"reasoning","encrypted_content":"synthetic","file_id":"remote"}`),
+		"standalone_delegate":  request(call, notice1, `{"type":"function_call_output","name":"create_thread","output":"message"}`),
+		"legacy_agent_orphan":  request(agent, call, result, reply),
+	} {
+		t.Run(name, func(t *testing.T) {
+			proof := AnalyzeOpenAIContinuationReplayProof(body)
+			require.False(t, proof.CodexExecNotificationContextCovered)
+			require.NoError(t, ValidateOpenAIContinuationInput(body))
+			require.False(t, OpenAIContinuationMaySwitchAccount(body))
+		})
+	}
+}
 
 func TestOAuthReliabilityContinuationProofInlineFamilies(t *testing.T) {
 	cases := map[string]string{

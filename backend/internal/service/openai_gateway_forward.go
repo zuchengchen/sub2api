@@ -342,6 +342,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 		needsOpenAIResponsesClientToolAdaptation(body) {
 		adaptedBody, mapping, adaptErr := adaptOpenAIResponsesClientTools(body)
 		if adaptErr != nil {
+			writeOpenAIChatConversionContractError(c, adaptErr)
 			return nil, fmt.Errorf("adapt DeepSeek Responses client tools: %w", adaptErr)
 		}
 		body = adaptedBody
@@ -383,7 +384,14 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 	if account.IsOpenCodeGo() && IsOpenCodeUnsupportedModel(routingModel) {
 		return nil, writeOpenCodeUnsupportedModelError(c, false, routingModel)
 	}
-	switch s.resolveUpstreamProtocolFor(ctx, account, APIProtocolResponses, routingModel) {
+	upstreamProtocol := s.resolveUpstreamProtocolFor(ctx, account, APIProtocolResponses, routingModel)
+	if upstreamProtocol != APIProtocolResponses {
+		if err := codexExecNotificationConversionError(body); err != nil {
+			writeOpenAIProtocolValidationError(c, err, false)
+			return nil, err
+		}
+	}
+	switch upstreamProtocol {
 	case APIProtocolAnthropic:
 		// Responses 客户端 × Anthropic 上游：转成 Anthropic 请求走原生端点。不能落到
 		// raw-CC 分支——其 URL 构造会把 anthropic base 当 CC base 用。
@@ -790,6 +798,10 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 			markDecodedModified()
 		} else {
 			preserveCallIDs := nativeInput
+			var execNotificationIDs map[string]bool
+			if !nativeInput && isCodexOAuthAccount(account) {
+				execNotificationIDs = codexExecNotificationIDs(parseRawJSONView(body).Get("input"))
+			}
 			if !nativeInput && !isCompactRequest && !imageIntent && isCodexOAuthAccount(account) &&
 				responsesCacheAffinityEnabled(c, upstreamModel) && c.Request.URL != nil &&
 				strings.HasSuffix(strings.TrimRight(c.Request.URL.Path, "/"), "/responses") {
@@ -802,6 +814,7 @@ func (s *OpenAIGatewayService) forwardOpenAIResponsesAttempt(ctx context.Context
 				SkipDefaultInstructions:             synthesized || cookieWS || nativeInput,
 				PreserveNativeInput:                 nativeInput,
 				PreserveToolCallIDs:                 preserveCallIDs,
+				ExecNotificationIDs:                 execNotificationIDs,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 				ResponsesLite:                       responsesLite,
 				WireProfile:                         wireProfilePtr,

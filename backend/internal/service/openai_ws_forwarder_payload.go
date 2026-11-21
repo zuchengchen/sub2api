@@ -900,6 +900,11 @@ func openAIWSRawPayloadHasToolCallOutput(payload []byte) bool {
 	return false
 }
 
+func openAIWSHasCodexExecNotification(payload []byte) bool {
+	ids, malformedID := collectCodexExecNotificationIDs(parseRawJSONView(payload).Get("input"))
+	return len(ids) > 0 || malformedID
+}
+
 // openAIWSObservedOutputProvenance is local to one ingress connection and its
 // current complete response chain. Client input never adds evidence to this set.
 // Only full collector output from a successful turn may be observed by callers.

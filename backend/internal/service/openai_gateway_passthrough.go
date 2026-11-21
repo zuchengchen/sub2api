@@ -50,6 +50,13 @@ func adaptOpenAIResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesCl
 		}
 		return body, apicompat.ResponsesClientToolMapping{}, fmt.Errorf("decode OpenAI Responses client tools trailing data: %w", err)
 	}
+	// The adapter is a no-op without declarations. With declarations it
+	// lowers every custom result to a function result, including notifications.
+	if declarations, _ := requestBody["tools"].([]any); len(declarations) > 0 {
+		if err := codexExecNotificationConversionError(body); err != nil {
+			return body, apicompat.ResponsesClientToolMapping{}, err
+		}
+	}
 	mapping, changed, err := apicompat.AdaptResponsesClientTools(requestBody)
 	if err != nil || !changed {
 		return body, mapping, err
@@ -251,6 +258,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		!isOpenAIResponsesCompactPath(c) && needsOpenAIResponsesClientToolAdaptation(body) {
 		adaptedBody, mapping, adaptErr := adaptOpenAIResponsesClientTools(body)
 		if adaptErr != nil {
+			writeOpenAIChatConversionContractError(c, adaptErr)
 			return nil, adaptErr
 		}
 		body = adaptedBody

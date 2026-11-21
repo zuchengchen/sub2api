@@ -27,6 +27,11 @@ type OpenAIContinuationReplayProof struct {
 	HasOpaqueState        bool
 	HasPreviousResponseID bool
 	HasConversation       bool
+	// Codex exec can send named notifications in addition to its tool result.
+	// Coverage means each tool result can be traced to a call in this input.
+	// It never authorizes a replay, an account switch or removing an anchor.
+	HasCodexExecNotification            bool
+	CodexExecNotificationContextCovered bool
 	// A local call/result contradiction is separate from opaque state, which
 	// may be valid on its owning credential but cannot prove portability.
 	ToolContextUnproven bool
@@ -41,10 +46,12 @@ const (
 )
 
 type openAIContinuationProofCall struct {
-	kind      string
-	name      string
-	namespace string
-	used      bool
+	kind                 string
+	name                 string
+	namespace            string
+	used                 bool
+	acceptsNotifications bool
+	hasNotification      bool
 }
 
 // AnalyzeOpenAIContinuationReplayProof requires ordered, unique, inline calls
@@ -101,15 +108,25 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 	itemIDs := make(map[string]struct{})
 	items := 0
 	unresolvedPrecedingContext := false
+	agentMessageSeen := false
+	unmatchedOutputAfterAgentMessage := false
+	// An unmatched outgoing call does not make an incoming result an orphan.
+	// Track dependency coverage independently from replay eligibility and from
+	// the first diagnostic, which may simply describe encrypted reasoning.
+	coveragePossible := !proof.HasPreviousResponseID && proof.Reason == ""
+	declineReplay := func(reason string) {
+		if proof.Reason == "" {
+			proof.Reason = reason
+		}
+	}
 	decline := func(reason string) {
+		coveragePossible = false
 		switch reason {
 		case "missing_preceding_call",
 			"duplicate_item_id", "duplicate_call_id", "duplicate_output", "tool_family_mismatch", "tool_identity_mismatch":
 			proof.ToolContextUnproven = true
 		}
-		if proof.Reason == "" {
-			proof.Reason = reason
-		}
+		declineReplay(reason)
 	}
 	analyze := func(item gjson.Result) bool {
 		items++
@@ -136,11 +153,14 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 			decline("unresolved_item_reference")
 			return true
 		}
-		ownedReasoning := sameOwner && openAIContinuationProofOwnedOpaqueItem(item, kind)
+		ownedReasoning := openAIContinuationProofOwnedOpaqueItem(item, kind)
+		agentMessage := kind == "agent_message" && codexExecNotificationInlineAgentMessage(item)
 		if openAIContinuationProofHasOpaqueState(item) {
 			proof.HasOpaqueState = true
-			if !ownedReasoning {
+			if !ownedReasoning && !agentMessage {
 				decline("credential_or_hosted_state")
+			} else if !sameOwner || !ownedReasoning {
+				declineReplay("credential_or_hosted_state")
 			}
 		}
 		if id := item.Get("id"); id.Exists() && id.Type != gjson.Null {
@@ -154,7 +174,13 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 		}
 		direction := openAIContinuationProofToolDirection(kind)
 		if direction == 0 {
-			if !ownedReasoning && !openAIContinuationProofPassiveItem(item, kind) {
+			if agentMessage {
+				// A native agent message carries text and cannot supply a tool
+				// call in a notification history. Other requests historically
+				// defer unpaired outputs following this wire type to the upstream.
+				agentMessageSeen = true
+				declineReplay("unsupported_or_incomplete_item")
+			} else if !ownedReasoning && !openAIContinuationProofPassiveItem(item, kind) {
 				// Known passive items cannot stand in for a missing tool call,
 				// even when their content is opaque or incomplete. Only an
 				// unfamiliar wire family leaves the preceding call uncertain.
@@ -199,32 +225,39 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 		callID := item.Get("call_id")
 		if kind == "function_call_output" && (!callID.Exists() || callID.Type == gjson.Null) &&
 			openAIContinuationProofString(item.Get("name"), true) && openAIContinuationProofOutput(item, kind) {
+			coveragePossible = false
 			return true
 		}
 		if !openAIContinuationProofString(callID, true) {
+			if hasCodexExecNotificationPayload(item) {
+				decline("missing_preceding_call")
+				return true
+			}
 			decline("missing_or_invalid_call_id")
 			return true
 		}
 		id := callID.String()
 		if direction > 0 {
-			if _, duplicate := calls[id]; duplicate {
+			if call, duplicate := calls[id]; duplicate {
+				call.acceptsNotifications = false
+				calls[id] = call
 				decline("duplicate_call_id")
 				return true
 			}
 			// Recognizable calls remain context when their schema is outside
 			// this local replay proof; do not fabricate a missing-call error.
-			calls[id] = openAIContinuationProofCall{kind: kind, name: item.Get("name").String(), namespace: item.Get("namespace").String()}
+			call := openAIContinuationProofCall{kind: kind, name: item.Get("name").String(), namespace: item.Get("namespace").String()}
 			if kind == "computer_call" && item.Get("action.type").String() != "screenshot" {
 				// Other action variants remain native. Do not mistake a schema
 				// we have not fully proved for an absent preceding call.
 				decline("unsupported_typed_call")
-				calls[id] = openAIContinuationProofCall{kind: kind}
-				return true
-			}
-			if !openAIContinuationProofCallComplete(item, kind) {
+				call = openAIContinuationProofCall{kind: kind}
+			} else if !openAIContinuationProofCallComplete(item, kind) {
 				decline("incomplete_call")
-				return true
+			} else {
+				call.acceptsNotifications = isDefaultCodexExec(kind, call.name, call.namespace)
 			}
+			calls[id] = call
 			return true
 		}
 		if !openAIContinuationProofOutput(item, kind) {
@@ -233,15 +266,14 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 		}
 		call, found := calls[id]
 		if !found {
-			if unresolvedPrecedingContext {
+			if (unresolvedPrecedingContext || agentMessageSeen) && !isCodexExecNotificationOutput(item) {
+				if agentMessageSeen && !unresolvedPrecedingContext {
+					unmatchedOutputAfterAgentMessage = true
+				}
 				decline("unresolved_preceding_context")
 			} else {
 				decline("missing_preceding_call")
 			}
-			return true
-		}
-		if call.used {
-			decline("duplicate_output")
 			return true
 		}
 		if !openAIContinuationProofMatchingKinds(call.kind, kind) {
@@ -255,7 +287,23 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 				return true
 			}
 		}
-		call.used = true
+		if call.acceptsNotifications && isCodexExecNotificationOutput(item) {
+			// Notifications may arrive before or after the ordinary result and
+			// never consume it. Codex sends the ordinary result without a name.
+			call.hasNotification = true
+		} else {
+			named := item.Get("name").Type != gjson.Null
+			if call.used || (call.hasNotification && named) {
+				decline("duplicate_output")
+				return true
+			}
+			call.used = true
+			if named {
+				// Preserve an ordinary one-to-one custom result with an optional
+				// name while keeping it outside the multi-output exception.
+				call.acceptsNotifications = false
+			}
+		}
 		calls[id] = call
 		return true
 	}
@@ -265,9 +313,19 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 		analyze(input)
 	}
 	for _, call := range calls {
-		if !call.used {
-			decline("missing_call_output")
+		if call.hasNotification && call.acceptsNotifications {
+			proof.HasCodexExecNotification = true
 		}
+		if !call.used && !call.hasNotification {
+			declineReplay("missing_call_output")
+		}
+	}
+	if proof.HasCodexExecNotification {
+		if unmatchedOutputAfterAgentMessage {
+			decline("missing_preceding_call")
+		}
+		proof.CodexExecNotificationContextCovered = coveragePossible
+		declineReplay("codex_exec_notification")
 	}
 	if proof.Reason != "" {
 		return proof
@@ -277,6 +335,69 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 		proof.Verdict, proof.Reason = OpenAIContinuationProofInline, "complete_inline_tool_context"
 	}
 	return proof
+}
+
+// Codex's top-level custom exec tool accepts its default namespace in any of
+// the spellings supported by ToolName::is_default_namespace. Other custom
+// tools named exec keep their normal one-call/one-result contract.
+func isCodexExecNotificationCall(item gjson.Result) bool {
+	return isDefaultCodexExec(item.Get("type").Str, item.Get("name").Str, item.Get("namespace").String()) &&
+		openAIContinuationProofString(item.Get("call_id"), true) &&
+		openAIContinuationProofCallComplete(item, "custom_tool_call")
+}
+
+func isDefaultCodexExec(kind, name, namespace string) bool {
+	return kind == "custom_tool_call" && name == "exec" && (namespace == "" || namespace == "functions")
+}
+
+// A candidate is only a wire shape. The ordered call lookup above decides if
+// it belongs to a known exec call. Codex can stamp individual output item IDs.
+func isCodexExecNotificationOutput(item gjson.Result) bool {
+	return hasCodexExecNotificationPayload(item) && openAIContinuationProofString(item.Get("call_id"), true)
+}
+
+func hasCodexExecNotificationPayload(item gjson.Result) bool {
+	if item.Get("type").Str != "custom_tool_call_output" || item.Get("name").Str != "exec" ||
+		item.Get("namespace").Type != gjson.Null || item.Get("status").Type != gjson.Null {
+		return false
+	}
+	output := item.Get("output")
+	return output.Type == gjson.String && strings.TrimSpace(output.Str) != ""
+}
+
+// The native agent_message envelope supports text or encrypted text parts.
+// These messages are passive for call pairing even when they are not portable.
+func codexExecNotificationInlineAgentMessage(item gjson.Result) bool {
+	content := item.Get("content")
+	if !openAIContinuationProofString(item.Get("author"), true) || !openAIContinuationProofString(item.Get("recipient"), true) || !content.IsArray() {
+		return false
+	}
+	valid := true
+	item.ForEach(func(key, value gjson.Result) bool {
+		switch key.Str {
+		case "type", "id", "author", "recipient", "content":
+		case "internal_chat_message_metadata_passthrough":
+			valid = !openAIContinuationProofHasOpaqueState(value)
+		default:
+			valid = false
+		}
+		return valid
+	})
+	if !valid {
+		return false
+	}
+	content.ForEach(func(_, part gjson.Result) bool {
+		switch part.Get("type").Str {
+		case "input_text":
+			valid = part.Get("text").Type == gjson.String && !openAIContinuationProofHasOpaqueState(part)
+		case "encrypted_content":
+			valid = part.Get("encrypted_content").Str != "" && !openAIContinuationProofHasOtherOpaqueState(part)
+		default:
+			valid = false
+		}
+		return valid
+	})
+	return valid
 }
 
 // Positive is a call, negative an output, zero a non-tool or unknown item.
@@ -466,23 +587,24 @@ func openAIContinuationProofPassiveItem(item gjson.Result, kind string) bool {
 }
 
 func openAIContinuationProofOwnedOpaqueItem(item gjson.Result, kind string) bool {
-	if (kind != "reasoning" && kind != "compaction") || item.Get("encrypted_content").Type != gjson.String || item.Get("encrypted_content").String() == "" {
-		return false
-	}
-	valid := true
+	return (kind == "reasoning" || kind == "compaction") && item.Get("encrypted_content").Str != "" && !openAIContinuationProofHasOtherOpaqueState(item)
+}
+
+// The caller has already recognized the item's own encrypted_content field.
+func openAIContinuationProofHasOtherOpaqueState(item gjson.Result) bool {
+	found := false
 	item.ForEach(func(key, value gjson.Result) bool {
-		if key.String() == "encrypted_content" {
+		switch key.Str {
+		case "encrypted_content":
 			return true
-		}
-		switch key.String() {
 		case "encrypted_function_args", "file_id", "container_id", "approval_request_id", "caller", "environment":
-			valid = false
+			found = true
 		default:
-			valid = !openAIContinuationProofHasOpaqueState(value)
+			found = openAIContinuationProofHasOpaqueState(value)
 		}
-		return valid
+		return !found
 	})
-	return valid
+	return found
 }
 
 // Follow actual JSON objects, never JSON-looking strings in tool results or

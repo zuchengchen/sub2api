@@ -197,25 +197,25 @@ func ValidateFunctionCallOutputContextBytes(body []byte) FunctionCallOutputValid
 	return result
 }
 
-// ToolCallOutputContextCoverage 描述 input 中工具输出与可重建上下文的覆盖关系，
-// 用于判断剥离 previous_response_id 后上游能否仅凭 input 重建工具续链。
+// ToolCallOutputContextCoverage reports whether an unanchored input already
+// supplies the calls needed by its outputs. Removing an explicit anchor or
+// replaying a turn requires a separate complete-history and ownership proof.
 type ToolCallOutputContextCoverage struct {
-	HasFunctionCallOutput bool
-	// ContextCoversAllCallIDs 表示每个工具输出的 call_id 都能在 input 内找到
-	// 同 call_id 的工具调用上下文项或同 id 的 item_reference，且不存在缺失 call_id 的输出。
-	// 任一输出无法由 input 自身重建时为 false，此时剥离 previous_response_id 会导致
-	// 上游以 "No tool call found for function call output" 拒绝请求。
+	HasFunctionCallOutput   bool
 	ContextCoversAllCallIDs bool
 }
 
-// AnalyzeToolCallOutputContextCoverageBytes 全量扫描 input，按 call_id 精确匹配工具输出
-// 与可重建上下文。不能复用 ValidateFunctionCallOutputContextBytes 的 HasToolCallContext：
-// 该标志只代表"存在某一个上下文项"，部分覆盖的续链仍会被上游拒绝。
+func openAIInputCoversToolOutputs(proof OpenAIContinuationReplayProof) bool {
+	return proof.HasToolOutput && (proof.Verdict == OpenAIContinuationProofInline || proof.CodexExecNotificationContextCovered)
+}
+
+// AnalyzeToolCallOutputContextCoverageBytes matches each result to a preceding
+// call. ValidateFunctionCallOutputContextBytes only checks whether any call exists.
 func AnalyzeToolCallOutputContextCoverageBytes(body []byte) ToolCallOutputContextCoverage {
 	proof := AnalyzeOpenAIContinuationReplayProof(body)
 	return ToolCallOutputContextCoverage{
 		HasFunctionCallOutput:   proof.HasToolOutput,
-		ContextCoversAllCallIDs: proof.HasToolOutput && proof.Verdict == OpenAIContinuationProofInline,
+		ContextCoversAllCallIDs: openAIInputCoversToolOutputs(proof),
 	}
 }
 

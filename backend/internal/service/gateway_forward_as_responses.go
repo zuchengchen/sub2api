@@ -49,6 +49,10 @@ func (s *GatewayService) forwardAsResponsesWithoutHostedWebSearch(
 ) (*ForwardResult, error) {
 	startTime := time.Now()
 
+	if err := codexExecNotificationConversionError(body); err != nil {
+		writeOpenAIProtocolValidationError(c, err, false)
+		return nil, err
+	}
 	normalizedBody, normalized, err := normalizeOpenAIResponsesLegacyIngressWithConfig(s.cfg, body)
 	if err != nil {
 		return nil, err

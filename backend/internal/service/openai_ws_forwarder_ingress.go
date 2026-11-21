@@ -719,9 +719,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			bridgePayloadRaw := currentBridgePayload.payloadRaw
 			bridgePayloadBytes := currentBridgePayload.payloadBytes
-			toolOutputCoverage := AnalyzeToolCallOutputContextCoverageBytes(currentBridgePayload.payloadRaw)
+			toolProof := AnalyzeOpenAIContinuationReplayProof(bridgePayloadRaw)
+			if turn > 1 && account.Platform == PlatformOpenAI && currentBridgePayload.previousResponseID == "" {
+				if err := validateOpenAIContinuationInputProof(toolProof); err != nil && openAIWSHasCodexExecNotification(bridgePayloadRaw) {
+					return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+				}
+			}
 			needsBridgeReplay := currentBridgePayload.previousResponseID != "" ||
-				(toolOutputCoverage.HasFunctionCallOutput && !toolOutputCoverage.ContextCoversAllCallIDs)
+				(toolProof.HasToolOutput && !openAIInputCoversToolOutputs(toolProof))
 			bridgeChainMatches := bridgeLastResponseID != "" && (openAIContinuationMatchesObservedResponse(currentBridgePayload.payloadRaw, bridgeLastResponseID) || (currentBridgePayload.previousResponseID == "" && needsBridgeReplay))
 			turnHistoryComplete := !turnHistoryFiltered && (openAIContinuationStartsCompleteHistory(currentBridgePayload.payloadRaw) || (bridgeChainMatches && bridgeHistoryComplete))
 			if !bridgeChainMatches || !turnHistoryComplete {
@@ -1980,18 +1985,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		currentToolProof := AnalyzeOpenAIContinuationReplayProof(currentPayload)
 		if toolSignals.HasFunctionCallOutput {
-			toolSignals.HasToolCallContext = currentToolProof.Verdict == OpenAIContinuationProofInline
+			toolSignals.HasToolCallContext = openAIInputCoversToolOutputs(currentToolProof)
 		}
 		hasFunctionCallOutput := toolSignals.HasFunctionCallOutput
-		// store=false + function_call_output 场景必须有续链锚点。
-		// 若客户端未传 previous_response_id，优先回填上一轮响应 ID，避免上游报 call_id 无法关联。
+		// Store-disabled clients can omit the anchor for a pending tool result.
+		// A progress notification alone cannot identify the preceding response.
 		if shouldInferIngressFunctionCallOutputPreviousResponseID(
 			storeDisabled,
 			turn,
 			toolSignals,
 			currentPreviousResponseID,
 			expectedPrev,
-		) {
+		) && (account.Platform != PlatformOpenAI || !openAIWSHasCodexExecNotification(currentPayload)) {
 			updatedPayload, setPrevErr := setPreviousResponseIDToRawPayload(currentPayload, expectedPrev)
 			if setPrevErr != nil {
 				logOpenAIWSModeInfo(
