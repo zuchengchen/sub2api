@@ -116,6 +116,7 @@ func provideCleanup(
 	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
+	openAIQuotaRefresh *service.OpenAIQuotaRefreshWorker,
 	contentModeration *service.ContentModerationService,
 	pluginManager *service.PluginManager,
 	usagePolicyService *service.UsagePolicyService,
@@ -132,6 +133,12 @@ func provideCleanup(
 			{"OpenAIQuotaAutoResetService", func() error {
 				if openAIAutoReset != nil {
 					openAIAutoReset.Stop()
+				}
+				return nil
+			}},
+			{"OpenAIQuotaRefreshWorker", func() error {
+				if openAIQuotaRefresh != nil {
+					openAIQuotaRefresh.Stop()
 				}
 				return nil
 			}},

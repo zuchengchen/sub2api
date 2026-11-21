@@ -135,6 +135,7 @@ type OpenAICodexUsageSnapshot struct {
 	SecondaryWindowMinutes      *int     `json:"secondary_window_minutes,omitempty"`
 	PrimaryOverSecondaryPercent *float64 `json:"primary_over_secondary_percent,omitempty"`
 	UpdatedAt                   string   `json:"updated_at,omitempty"`
+	queryStartedAt              int64    // Unix microseconds for quota reads that may finish out of order.
 }
 
 // NormalizedCodexLimits contains normalized 5h/7d rate limit data

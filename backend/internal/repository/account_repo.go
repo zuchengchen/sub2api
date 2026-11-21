@@ -77,6 +77,7 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 var schedulerNeutralExtraKeys = map[string]struct{}{
 	service.OpenAIAutoResetCreditStateExtraKey: {},
 	"codex_usage_updated_at":                   {},
+	codexUsageObservedAtKey:                    {},
 	"codex_credits_snapshot":                   {},
 	"codex_referral_snapshot":                  {},
 	"grok_billing_snapshot":                    {},
@@ -722,6 +723,9 @@ func lockAndMergeAccountProbeExtra(
 	); err != nil {
 		return nil, err
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -740,6 +744,9 @@ func lockAndMergeAccountProbeExtra(
 		}
 	}
 	extra := service.MergeOpenAICodexTicketExtra(copyJSONMap(normalizeJSONMap(account.Extra)), currentExtra)
+	if err := mergeCodexQuotaSnapshots(ctx, client, account, extra, currentExtra, identityUnchanged); err != nil {
+		return nil, err
+	}
 	// Preserve the latest attempt under the row lock; a stale admin form must
 	// not erase the card reservation used to deduplicate automatic resets.
 	delete(extra, service.OpenAIAutoResetCreditStateExtraKey)
@@ -2899,6 +2906,7 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		return scoped.UpdateExtra(ctx, id, updates)
 	}
 	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
+	updates = versionCodexWindowUpdates(updates)
 	if len(updates) == 0 {
 		return nil
 	}
@@ -2952,7 +2960,7 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 			return err
 		}
 	}
-	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
+	extraExpression := "COALESCE(extra, '{}'::jsonb) || " + accountExtraPatchSQL(updates)
 	if clearProbeSnapshot {
 		extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
 	}

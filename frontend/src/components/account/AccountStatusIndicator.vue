@@ -169,6 +169,7 @@ const { t } = useI18n()
 
 const props = defineProps<{
   account: Account
+  now?: number
 }>()
 
 const emit = defineEmits<{
@@ -178,7 +179,7 @@ const emit = defineEmits<{
 // Computed: is rate limited (429)
 const isRateLimited = computed(() => {
   if (!props.account.rate_limit_reset_at) return false
-  return new Date(props.account.rate_limit_reset_at) > new Date()
+  return Date.parse(props.account.rate_limit_reset_at) > (props.now ?? Date.now())
 })
 
 type AccountModelStatusItem = {
@@ -278,7 +279,7 @@ const isQuotaExceeded = computed(() => {
 
 // Computed: countdown text for rate limit (429)
 const rateLimitCountdown = computed(() => {
-  return formatCountdown(props.account.rate_limit_reset_at)
+  return formatCountdown(props.account.rate_limit_reset_at, props.now)
 })
 
 const rateLimitResumeText = computed(() => {

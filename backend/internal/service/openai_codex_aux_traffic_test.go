@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -22,6 +23,34 @@ func TestCodexUsageSnapshotFromQuota(t *testing.T) {
 	require.Equal(t, 3600, *snap.SecondaryResetAfterSeconds)
 	require.NotEmpty(t, buildCodexUsageExtraUpdates(snap, now))
 	require.Nil(t, codexUsageSnapshotFromQuota(&OpenAIQuotaUsage{}, now))
+}
+
+func TestCodexUsageSnapshotFromPartialQuota(t *testing.T) {
+	sampledAt := time.Unix(1_800_000_000, 0).UTC()
+	var usage OpenAIQuotaUsage
+	require.NoError(t, json.Unmarshal([]byte(`{"rate_limit":{
+		"primary_window":{"used_percent":100,"limit_window_seconds":18000},
+		"secondary_window":null}}`), &usage))
+	usage.FetchedAt = sampledAt.Unix()
+	usage.QueryStartedAt = sampledAt.Add(-3 * time.Second).UnixMicro()
+	updates := buildOpenAIQuotaUsageWindowUpdates(&usage, sampledAt.Add(time.Minute))
+	require.Equal(t, 100.0, updates["codex_5h_used_percent"])
+	require.NotContains(t, updates, "codex_5h_reset_at")
+	require.NotContains(t, updates, "codex_7d_used_percent")
+	require.Equal(t, sampledAt.Format(time.RFC3339), updates["codex_usage_updated_at"])
+	require.Equal(t, usage.QueryStartedAt, updates["codex_usage_observed_at_us"])
+
+	require.NoError(t, json.Unmarshal([]byte(`{"rate_limit":{
+		"primary_window":{"limit_window_seconds":18000,"reset_after_seconds":0},
+		"secondary_window":{}}}`), &usage))
+	updates = buildOpenAIQuotaUsageWindowUpdates(&usage, sampledAt.Add(time.Minute))
+	require.NotContains(t, updates, "codex_5h_used_percent")
+	require.Equal(t, sampledAt.Format(time.RFC3339), updates["codex_5h_reset_at"])
+	require.NotContains(t, updates, "codex_7d_used_percent")
+	require.NotContains(t, updates, "codex_7d_reset_at")
+
+	require.NoError(t, json.Unmarshal([]byte(`{"rate_limit":{"primary_window":{},"secondary_window":null}}`), &usage))
+	require.Nil(t, buildOpenAIQuotaUsageWindowUpdates(&usage, sampledAt))
 }
 
 func TestShouldEnrichOpenAITokenOnRefresh_OncePerDay(t *testing.T) {

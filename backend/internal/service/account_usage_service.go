@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	openaipkg "github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
@@ -460,6 +461,15 @@ func (s *AccountUsageService) GetUsageForAccount(ctx context.Context, account *A
 // Anthropic OAuth/SetupToken 统一走 passive 链路，其他账号复用现有主动查询逻辑。
 // 单个账号失败不会中断整批请求，错误会按账号返回。
 func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []int64, force bool) (map[int64]*UsageInfo, map[int64]string, error) {
+	return s.getUsageBatch(ctx, accountIDs, force, false)
+}
+
+// GetPassiveUsageBatch reads stored observations and local usage logs for the account list.
+func (s *AccountUsageService) GetPassiveUsageBatch(ctx context.Context, accountIDs []int64) (map[int64]*UsageInfo, map[int64]string, error) {
+	return s.getUsageBatch(ctx, accountIDs, false, true)
+}
+
+func (s *AccountUsageService) getUsageBatch(ctx context.Context, accountIDs []int64, force, passiveOnly bool) (map[int64]*UsageInfo, map[int64]string, error) {
 	uniqueIDs := make([]int64, 0, len(accountIDs))
 	seen := make(map[int64]struct{}, len(accountIDs))
 	for _, accountID := range accountIDs {
@@ -511,11 +521,15 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 			var usage *UsageInfo
 			var usageErr error
 			var preparedAt time.Time
-			if supportsAnthropicPassiveUsage(account) {
+			switch {
+			case passiveOnly && account.IsOpenAIOAuth():
+				preparedAt = time.Now()
+				usage = storedOpenAIUsage(account, preparedAt)
+			case passiveOnly || supportsAnthropicPassiveUsage(account):
 				usage, usageErr = s.getPassiveUsageForAccount(gctx, account)
-			} else if account.IsOpenAIOAuth() {
+			case account.IsOpenAIOAuth():
 				usage, preparedAt = s.getOpenAIUsageSnapshot(gctx, account, force)
-			} else {
+			default:
 				usage, usageErr = s.getUsageForAccount(gctx, account, force)
 			}
 
@@ -543,7 +557,7 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 }
 
 // GetPassiveUsage 从 Account.Extra 中的被动采样数据构建 UsageInfo，不调用外部 API。
-// 仅适用于 Anthropic OAuth / SetupToken 账号。
+// 支持 OpenAI OAuth 和 Anthropic OAuth / SetupToken 账号。
 func (s *AccountUsageService) GetPassiveUsage(ctx context.Context, accountID int64) (*UsageInfo, error) {
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
@@ -554,8 +568,14 @@ func (s *AccountUsageService) GetPassiveUsage(ctx context.Context, accountID int
 }
 
 func (s *AccountUsageService) getPassiveUsageForAccount(ctx context.Context, account *Account) (*UsageInfo, error) {
+	if account != nil && account.IsOpenAIOAuth() {
+		now := time.Now()
+		usage := storedOpenAIUsage(account, now)
+		s.addOpenAIWindowStats(ctx, []openAIUsageWindows{{accountID: account.ID, usage: usage, now: now}})
+		return usage, nil
+	}
 	if !supportsAnthropicPassiveUsage(account) {
-		return nil, fmt.Errorf("passive usage only supported for Anthropic OAuth/SetupToken accounts")
+		return nil, infraerrors.BadRequest("PASSIVE_USAGE_UNSUPPORTED", "passive usage is supported for OpenAI OAuth and Anthropic OAuth/SetupToken accounts")
 	}
 
 	// 复用 estimateSetupTokenUsage 构建 5h 窗口（OAuth 和 SetupToken 逻辑一致）
@@ -584,6 +604,17 @@ func (s *AccountUsageService) getPassiveUsageForAccount(ctx context.Context, acc
 	}
 
 	return info, nil
+}
+
+func storedOpenAIUsage(account *Account, now time.Time) *UsageInfo {
+	usage := &UsageInfo{Source: "passive"}
+	if raw, ok := account.Extra["codex_usage_updated_at"].(string); ok {
+		if sampledAt, err := parseTime(raw); err == nil {
+			usage.UpdatedAt = &sampledAt
+		}
+	}
+	applyExtraToUsage(usage, account.Extra, now)
+	return usage
 }
 
 func applySyntheticWindowStats(info *UsageInfo, extra map[string]any) {
@@ -761,25 +792,33 @@ func codexUsageSnapshotFromQuota(usage *OpenAIQuotaUsage, now time.Time) *OpenAI
 	if usage == nil || usage.RateLimit == nil {
 		return nil
 	}
-	snapshot := &OpenAICodexUsageSnapshot{UpdatedAt: now.UTC().Format(time.RFC3339)}
+	sampledAt := now
+	if usage.FetchedAt > 0 {
+		sampledAt = time.Unix(usage.FetchedAt, 0)
+	}
+	snapshot := &OpenAICodexUsageSnapshot{
+		UpdatedAt:      sampledAt.UTC().Format(time.RFC3339Nano),
+		queryStartedAt: usage.QueryStartedAt,
+	}
 	set := func(w *OpenAIRateLimitWindow, used **float64, reset, minutes **int) bool {
 		if w == nil {
 			return false
 		}
-		u := w.UsedPercent
-		*used = &u
-		r := int(w.ResetAfterSeconds)
-		if r <= 0 && w.ResetAt > 0 {
-			r = int(w.ResetAt - now.Unix())
+		if !w.missingUsedPercent {
+			*used = &w.UsedPercent
 		}
-		if r >= 0 {
+		if w.ResetAt > 0 {
+			r := max(0, int(w.ResetAt-sampledAt.Unix()))
+			*reset = &r
+		} else if !w.missingResetAfter && w.ResetAfterSeconds >= 0 {
+			r := int(w.ResetAfterSeconds)
 			*reset = &r
 		}
 		if w.LimitWindowSeconds > 0 {
 			m := int(w.LimitWindowSeconds / 60)
 			*minutes = &m
 		}
-		return true
+		return *used != nil || *reset != nil
 	}
 	hasPrimary := set(usage.RateLimit.PrimaryWindow, &snapshot.PrimaryUsedPercent, &snapshot.PrimaryResetAfterSeconds, &snapshot.PrimaryWindowMinutes)
 	hasSecondary := set(usage.RateLimit.SecondaryWindow, &snapshot.SecondaryUsedPercent, &snapshot.SecondaryResetAfterSeconds, &snapshot.SecondaryWindowMinutes)

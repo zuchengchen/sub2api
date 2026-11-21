@@ -15,7 +15,7 @@ import (
 )
 
 func TestUpdateExtraCodexDisplaySnapshotsAvoidSchedulerOutbox(t *testing.T) {
-	for _, key := range []string{"codex_credits_snapshot", "codex_referral_snapshot"} {
+	for _, key := range []string{codexCreditsSnapshotKey, codexResetCreditSnapshotKey, "codex_referral_snapshot"} {
 		for _, tc := range []struct {
 			name             string
 			value            any
@@ -41,7 +41,7 @@ func TestUpdateExtraCodexDisplaySnapshotsAvoidSchedulerOutbox(t *testing.T) {
 				// 未显式关闭 codex_fingerprint_mode 的 extra 补丁都会原子保留/补铸
 				// 指纹种子（缺失按 full 处理），UpdateExtra 因而走带 CASE 的 SQL。
 				updateSQL := "UPDATE accounts SET extra = " +
-					ensureCodexFingerprintSeedSQL("COALESCE(extra, '{}'::jsonb) || $1::jsonb") +
+					ensureCodexFingerprintSeedSQL("COALESCE(extra, '{}'::jsonb) || "+accountExtraPatchSQL(updates)) +
 					", updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL"
 				mock.ExpectExec(regexp.QuoteMeta(updateSQL)).
 					WithArgs(string(payload), int64(27)).WillReturnResult(sqlmock.NewResult(0, 1))

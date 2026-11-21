@@ -85,7 +85,7 @@ func TestBuildCodexUsageExtraUpdates_UsesSnapshotUpdatedAt(t *testing.T) {
 		SecondaryUsedPercent:       &secondaryUsed,
 		SecondaryResetAfterSeconds: &secondaryReset,
 		SecondaryWindowMinutes:     &secondaryWindow,
-		UpdatedAt:                  "2026-02-16T10:00:00Z",
+		UpdatedAt:                  "2026-02-16T10:00:00.123456789Z",
 	}
 
 	updates := buildCodexUsageExtraUpdates(snapshot, time.Date(2026, 2, 20, 8, 0, 0, 0, time.UTC))
@@ -95,6 +95,10 @@ func TestBuildCodexUsageExtraUpdates_UsesSnapshotUpdatedAt(t *testing.T) {
 
 	if got := updates["codex_usage_updated_at"]; got != "2026-02-16T10:00:00Z" {
 		t.Fatalf("codex_usage_updated_at = %v, want %s", got, "2026-02-16T10:00:00Z")
+	}
+	observedAt := time.Date(2026, 2, 16, 10, 0, 0, 123456000, time.UTC).UnixMicro()
+	if got := updates["codex_usage_observed_at_us"]; got != observedAt {
+		t.Fatalf("codex_usage_observed_at_us = %v, want %d", got, observedAt)
 	}
 	if got := updates["codex_5h_reset_at"]; got != "2026-02-16T11:00:00Z" {
 		t.Fatalf("codex_5h_reset_at = %v, want %s", got, "2026-02-16T11:00:00Z")

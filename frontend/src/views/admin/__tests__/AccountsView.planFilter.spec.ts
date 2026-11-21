@@ -187,7 +187,7 @@ describe('account subscription plan filtering', () => {
     await flushPromises()
     await vi.advanceTimersByTimeAsync(6000)
     expect(api.listWithEtag).toHaveBeenCalledWith(1, 20,
-      expect.objectContaining({ plan_type: 'pro' }), { etag: null })
+      expect.objectContaining({ plan_type: 'pro' }), { etag: null, signal: expect.any(AbortSignal) })
 
     api.list.mockResolvedValue({
       items: [{ ...account, credentials: { plan_type: 'plus' } }], total: 1, pages: 1
@@ -195,7 +195,7 @@ describe('account subscription plan filtering', () => {
     await wrapper.get(planSelect).setValue('plus')
     await vi.advanceTimersByTimeAsync(6000)
     expect(api.listWithEtag).toHaveBeenLastCalledWith(1, 20,
-      expect.objectContaining({ plan_type: 'plus' }), { etag: null })
+      expect.objectContaining({ plan_type: 'plus' }), { etag: null, signal: expect.any(AbortSignal) })
     api.probeUpstreamBillingBatch.mockResolvedValue([{ account_id: 42, snapshot: { status: 'unsupported' } }])
     await wrapper.get('[data-test="select-page"]').trigger('click')
     await wrapper.get('[data-test="probe-billing"]').trigger('click')

@@ -94,22 +94,29 @@ type openAIUsageWindows struct {
 func (s *AccountUsageService) addOpenAIWindowStats(ctx context.Context, pending []openAIUsageWindows) {
 	windows := make([]AccountWindowQuery, 0, len(pending))
 	for _, item := range pending {
-		sevenDayStart := codexWindowStatsStart(item.usage.SevenDay, 7*24*time.Hour, item.now)
-		windows = append(windows, AccountWindowQuery{
+		if item.usage.Source == "passive" && item.usage.FiveHour == nil && item.usage.SevenDay == nil {
+			continue
+		}
+		window := AccountWindowQuery{
 			AccountID: item.accountID, StartTime: codexWindowStatsStart(item.usage.FiveHour, 5*time.Hour, item.now),
-			SecondaryStartTime: &sevenDayStart,
-		})
+		}
+		if item.usage.SevenDay != nil || item.usage.Source != "passive" {
+			sevenDayStart := codexWindowStatsStart(item.usage.SevenDay, 7*24*time.Hour, item.now)
+			window.SecondaryStartTime = &sevenDayStart
+		}
+		windows = append(windows, window)
 	}
 	stats := s.GetAccountWindowStatsForAccounts(ctx, windows)
 	for _, item := range pending {
 		value := stats[item.accountID]
-		if value.Primary != nil {
+		// Local usage counts cannot establish an unobserved quota percentage.
+		if value.Primary != nil && (item.usage.FiveHour != nil || item.usage.Source != "passive") {
 			if item.usage.FiveHour == nil {
 				item.usage.FiveHour = &UsageProgress{Utilization: 0}
 			}
 			item.usage.FiveHour.WindowStats = windowStatsFromAccountStats(value.Primary)
 		}
-		if value.Secondary != nil {
+		if value.Secondary != nil && (item.usage.SevenDay != nil || item.usage.Source != "passive") {
 			if item.usage.SevenDay == nil {
 				item.usage.SevenDay = &UsageProgress{Utilization: 0}
 			}

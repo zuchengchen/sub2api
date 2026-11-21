@@ -44,3 +44,8 @@ func sameOpenAIOAuthOwner(expected, actual *Account) bool {
 	return expected != nil && actual != nil && expected.IsOpenAIOAuth() && actual.IsOpenAIOAuth() &&
 		openAIOAuthOwnerForAccount(expected) == openAIOAuthOwnerForAccount(actual)
 }
+
+// SameOpenAIOAuthOwner reports whether account observations can survive an OAuth credential update.
+func SameOpenAIOAuthOwner(expected, actual *Account) bool {
+	return sameOpenAIOAuthOwner(expected, actual)
+}
