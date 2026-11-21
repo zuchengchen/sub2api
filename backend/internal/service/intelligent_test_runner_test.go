@@ -8,14 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolveIntelligentTestModelDefaultsChatGPTToGpt6Astra(t *testing.T) {
+func TestResolveIntelligentTestModel(t *testing.T) {
 	t.Parallel()
 	oauth := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
-	require.Equal(t, "gpt-6-astra", resolveIntelligentTestModel(oauth, ""))
-	require.Equal(t, "gpt-6-astra", resolveIntelligentTestModel(oauth, "  "))
-	require.Equal(t, "gpt-5.3-codex", resolveIntelligentTestModel(oauth, "gpt-5.3-codex"))
-	require.Equal(t, "", resolveIntelligentTestModel(&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, ""))
-	require.Equal(t, "", resolveIntelligentTestModel(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, ""))
+	require.Equal(t, "gpt-6.2-astra", resolveIntelligentTestModel(oauth, "pelican", "  "))
+	require.Equal(t, "gpt-6-astra", resolveIntelligentTestModel(oauth, "candy", ""))
+	require.Equal(t, "gpt-6-astra", resolveIntelligentTestModel(oauth, "tibo", ""))
+	require.Equal(t, "gpt-6-astra", resolveIntelligentTestModel(oauth, "pelican", "gpt-6-astra"))
+	require.Equal(t, "gpt-5.3-codex", resolveIntelligentTestModel(oauth, "pelican", "gpt-5.3-codex"))
+	require.Empty(t, resolveIntelligentTestModel(&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, "pelican", ""))
+	require.Empty(t, resolveIntelligentTestModel(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, "pelican", ""))
 }
 
 func TestPelicanUsesHTTPTransport(t *testing.T) {
@@ -30,6 +32,7 @@ func TestPelicanUsesHTTPTransport(t *testing.T) {
 
 func TestApplyIntelligentPayloadPromptPinsReasoningByTestType(t *testing.T) {
 	t.Parallel()
+	oauth := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	for _, tc := range []struct {
 		testType string
 		effort   string
@@ -42,18 +45,19 @@ func TestApplyIntelligentPayloadPromptPinsReasoningByTestType(t *testing.T) {
 	} {
 		t.Run(tc.testType, func(t *testing.T) {
 			ctx := context.WithValue(context.Background(), intelligentRunKey{}, &intelligentRunContext{prompt: "test prompt", testType: tc.testType})
+			model := resolveIntelligentTestModel(oauth, tc.testType, "")
 
-			responses := createOpenAITestPayload("gpt-6-astra", true)
+			responses := createOpenAITestPayload(model, true)
 			applyIntelligentPayloadPrompt(ctx, responses)
 			raw, err := json.Marshal(responses)
 			require.NoError(t, err)
-			require.Equal(t, "gpt-6-astra", responses["model"])
+			require.Equal(t, model, responses["model"])
 			require.Equal(t, map[string]any{"effort": tc.effort}, responses["reasoning"])
 			require.Contains(t, string(raw), `"text":"test prompt"`)
 
-			chat := createOpenAIChatCompletionsTestPayload("gpt-6-astra", "hi")
+			chat := createOpenAIChatCompletionsTestPayload(model, "hi")
 			applyIntelligentPayloadPrompt(ctx, chat)
-			require.Equal(t, "gpt-6-astra", chat["model"])
+			require.Equal(t, model, chat["model"])
 			require.Equal(t, tc.effort, chat["reasoning_effort"])
 			require.Nil(t, chat["reasoning"])
 

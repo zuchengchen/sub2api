@@ -1,10 +1,13 @@
 package repository
 
 import (
+	"context"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
@@ -46,14 +49,23 @@ func TestListPelicanCandidatesSQLRequiresSchedulableAndPrefers292(t *testing.T) 
 	require.Contains(t, body, "rate_limit_reset_at")
 	require.Contains(t, body, "temp_unschedulable_until")
 	require.Contains(t, body, "codex_7d_used_percent")
-	require.Contains(t, body, "codex_turn_ticket:gpt-6-astra")
-	require.Contains(t, body, "codex_tibo_verdict:http")
 	require.Contains(t, body, "AS has_healthy_http")
 	require.Contains(t, body, "AS has_ticket")
 	require.Contains(t, body, "COALESCE((a.extra->$5->>'length')::int, 0) = 292")
 	require.Contains(t, body, "a.type = ANY($3)")
 	require.NotContains(t, body, "https://ai8.my/v1")
 	require.NotContains(t, body, "AS preferred")
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery(regexp.QuoteMeta("g.platform=$2 AND g.name=$4")).
+		WithArgs("active", "openai", `{"oauth","setup-token"}`, "GPT-不降智", "codex_turn_ticket:gpt-6.2-astra", "codex_tibo_verdict:http").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "has_healthy_http", "has_ticket"}).AddRow(42, true, false))
+	candidates, err := (&intelligentTestRepository{db: db}).ListPelicanCandidates(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []service.PelicanCandidate{{ID: 42, HasHealthyHTTP: true}}, candidates)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestListPelicanSlotAttemptsSQLIncludesRetries(t *testing.T) {

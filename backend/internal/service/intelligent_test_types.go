@@ -198,11 +198,11 @@ type PelicanSlotAttempt struct {
 	HasSVG    bool
 }
 
-// PelicanCandidate is a schedulable GPT-PRO OAuth or setup-token account
-// eligible for the timer. HasHealthyHTTP means Tibo currently treats this
-// account's HTTP path as not degraded. HasTicket means it has an unexpired
-// 292 gpt-6-astra ticket and its harvest cookies. HasWS means this process
-// currently holds a verified Cookie websocket for it.
+// PelicanCandidate is a schedulable OAuth or setup-token account in the
+// public Pelican group. HasHealthyHTTP means Tibo currently treats this
+// account's HTTP path as healthy. HasTicket means it has an unexpired
+// 292 ticket for the Pelican model and its harvest cookies. HasWS means
+// this process currently holds a verified Cookie websocket for it.
 type PelicanCandidate struct {
 	ID             int64
 	HasHealthyHTTP bool

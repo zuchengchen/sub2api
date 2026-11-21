@@ -24,12 +24,10 @@ type intelligentRunContext struct {
 	capture  *intelligentCapture
 }
 
-// ChatGPT Codex plan-gates gpt-5.3-codex and gpt-5.4. Empty ChatGPT OAuth
-// intelligent tests use gpt-6-astra with explicit reasoning: xhigh for Tibo,
-// low for other tests. Omitting reasoning.effort lets Codex default to medium.
 const (
-	// IntelligentTestPublicGroupName 是智能测试公开结果所属的分组，不代表计费优惠。
-	IntelligentTestPublicGroupName        = "gpt-pro"
+	// IntelligentTestPublicGroupName is the account group used by the public Pelican test.
+	IntelligentTestPublicGroupName        = TiboHealthyGroupName
+	PelicanTestDefaultModel               = "gpt-6.2-astra"
 	intelligentTestDefaultCodexModel      = "gpt-6-astra"
 	intelligentTestDefaultReasoningEffort = "low"
 	intelligentCaptureRawLimit            = 256 << 10
@@ -37,29 +35,30 @@ const (
 	intelligentCaptureUpstreamLimit       = 64 << 20
 )
 
-// Only an empty selection receives the protocol default. Explicit choices
-// remain observable even when the upstream rejects the requested model.
 func pelicanTestGroupName(account *Account) string {
 	if account == nil {
 		return ""
 	}
 	for _, group := range account.Groups {
-		if group != nil && strings.EqualFold(strings.TrimSpace(group.Name), IntelligentTestPublicGroupName) {
-			return strings.TrimSpace(group.Name)
+		if group != nil && group.Platform == PlatformOpenAI && group.Name == IntelligentTestPublicGroupName {
+			return group.Name
 		}
 	}
 	return ""
 }
 
-func resolveIntelligentTestModel(account *Account, configured string) string {
-	model := strings.TrimSpace(configured)
-	if model != "" {
+// A saved model or per-run override takes precedence over the current default.
+func resolveIntelligentTestModel(account *Account, testType, configured string) string {
+	if model := strings.TrimSpace(configured); model != "" {
 		return model
 	}
-	if account != nil && account.IsOpenAIOAuthLike() {
-		return intelligentTestDefaultCodexModel
+	if !account.IsOpenAIOAuthLike() {
+		return ""
 	}
-	return model
+	if testType == "pelican" {
+		return PelicanTestDefaultModel
+	}
+	return intelligentTestDefaultCodexModel
 }
 
 func intelligentContext(ctx context.Context) *intelligentRunContext {
@@ -147,7 +146,7 @@ func (s *AccountTestService) RunIntelligentTest(ctx context.Context, r *Intellig
 	if r.ConfigSnapshot == nil {
 		return errors.New("missing configuration")
 	}
-	r.Model = resolveIntelligentTestModel(account, r.ConfigSnapshot.Model)
+	r.Model = resolveIntelligentTestModel(account, r.TestType, r.ConfigSnapshot.Model)
 	if err := validateIntelligentTextModel(account.GetMappedModel(r.Model)); err != nil {
 		r.Status = "request_error"
 		return err

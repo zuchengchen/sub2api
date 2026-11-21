@@ -128,6 +128,13 @@ describe('asynchronous quick tests', () => {
 })
 
 describe('independent settings and persisted status', () => {
+  it('suggests the Pelican model and shows the OAuth default for each test', () => {
+    const wrapper = mount(TestSettingsPanel, { props: { settings: structuredClone(settings) } })
+    expect(wrapper.get('input[list="intelligent-models-pelican"]').attributes('placeholder')).toContain('gpt-6.2-astra')
+    expect(wrapper.get('input[list="intelligent-models-candy"]').attributes('placeholder')).toContain('gpt-6-astra')
+    expect(wrapper.find('#intelligent-models-pelican option[value="gpt-6.2-astra"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
   it('saves an explicit no-unit rule instead of silently inferring the candy unit', async () => {
     vi.mocked(intelligentTestsAPI.saveSetting).mockImplementation(async value => value)
     const wrapper = mount(TestSettingsPanel, { props: { settings: structuredClone(settings) } })

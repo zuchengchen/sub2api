@@ -11,8 +11,11 @@
         </div>
       </div>
       <div class="mt-4 grid gap-4 sm:grid-cols-2">
-        <label class="block text-sm">模型<input v-model.trim="setting.config.model" class="input mt-2" :list="`intelligent-models-${setting.test_type}`" placeholder="留空：ChatGPT OAuth 使用 gpt-6-astra" maxlength="200" />
-          <datalist :id="`intelligent-models-${setting.test_type}`"><option v-for="model in modelSuggestions" :key="model" :value="model" /></datalist>
+        <label class="block text-sm">模型<input v-model.trim="setting.config.model" class="input mt-2" :list="`intelligent-models-${setting.test_type}`" :placeholder="`留空时 ChatGPT OAuth 使用 ${setting.test_type === 'pelican' ? PELICAN_TEST_DEFAULTS.model : defaultOAuthModel}`" maxlength="200" />
+          <datalist :id="`intelligent-models-${setting.test_type}`">
+            <option v-if="setting.test_type === 'pelican'" :value="PELICAN_TEST_DEFAULTS.model" />
+            <option v-for="model in modelSuggestions" :key="model" :value="model" />
+          </datalist>
           <span class="mt-1 block text-xs text-gray-500">OpenAI 测试推理强度固定为 {{ setting.test_type === 'tibo' ? 'xhigh' : 'low' }}。</span>
         </label>
         <label class="block text-sm">超时（秒）<input v-model.number="setting.config.timeout_seconds" type="number" class="input mt-2" min="30" max="600" required /></label>
@@ -45,6 +48,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { intelligentTestsAPI, type TestSetting, type TestRecord } from '@/api/intelligentTests'
+import { PELICAN_TEST_DEFAULTS } from '@/constants/pelicanTest'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { testName } from './display'
 import TestAssessment from './TestAssessment.vue'
@@ -61,7 +65,8 @@ const dirty = new Set<string>()
 const trialOutputs = ref<Record<string, string>>({}), previews = ref<Record<string, TestRecord | undefined>>({}), previewing = ref('')
 function markDirty(type: string) { dirty.add(type); saved.value = ''; previews.value[type] = undefined }
 // Suggestions remain editable; explicit choices are preserved by the runner.
-const modelSuggestions = ['gpt-6-astra', 'gpt-5.2', 'gpt-5.3-codex', 'gpt-5.4', 'gpt-5.5', 'claude-sonnet-4-5-20250929', 'gemini-2.0-flash']
+const defaultOAuthModel = 'gpt-6-astra'
+const modelSuggestions = [defaultOAuthModel, 'gpt-5.2', 'gpt-5.3-codex', 'gpt-5.4', 'gpt-5.5', 'claude-sonnet-4-5-20250929', 'gemini-2.0-flash']
 watch(() => props.settings, value => {
   drafts.value = value.map(item => {
     const existing = drafts.value.find(draft => draft.test_type === item.test_type)
