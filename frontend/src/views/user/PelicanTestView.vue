@@ -3,7 +3,7 @@
     <div class="space-y-6">
       <div>
         <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 lg:hidden">{{ t('nav.pelicanTest') }}</h1>
-        <p class="mt-2 max-w-3xl text-sm leading-relaxed text-gray-500 dark:text-gray-400 lg:mt-0">{{ t('pelicanTest.subtitle') }}</p>
+        <p class="mt-2 max-w-3xl text-sm leading-relaxed text-gray-500 dark:text-gray-400 lg:mt-0">{{ t('pelicanTest.subtitle', PELICAN_TEST_DEFAULTS) }}</p>
       </div>
 
       <div v-if="loading" class="flex justify-center py-16"><LoadingSpinner /></div>
@@ -47,11 +47,11 @@
             </div>
             <div>
               <dt class="text-xs text-gray-400">{{ t('pelicanTest.group') }}</dt>
-              <dd class="mt-1 text-gray-800 dark:text-gray-100">{{ selected.group_name || 'GPT-PRO' }}</dd>
+              <dd class="mt-1 text-gray-800 dark:text-gray-100">{{ selected.group_name || PELICAN_TEST_DEFAULTS.group }}</dd>
             </div>
             <div>
               <dt class="text-xs text-gray-400">{{ t('pelicanTest.model') }}</dt>
-              <dd class="mt-1 text-gray-800 dark:text-gray-100">{{ selected.model || 'gpt-6-astra' }}</dd>
+              <dd class="mt-1 text-gray-800 dark:text-gray-100">{{ selected.model || PELICAN_TEST_DEFAULTS.model }}</dd>
             </div>
             <div>
               <dt class="text-xs text-gray-400">{{ t('pelicanTest.reasoning') }}</dt>
@@ -74,6 +74,7 @@ import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import { pelicanTestsAPI, type PelicanTestItem } from '@/api/pelicanTests'
+import { PELICAN_TEST_DEFAULTS } from '@/constants/pelicanTest'
 import { extractApiErrorMessage } from '@/utils/apiError'
 
 const { t } = useI18n()

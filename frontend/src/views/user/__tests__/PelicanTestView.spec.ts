@@ -51,7 +51,7 @@ function mountView() {
 describe('PelicanTestView', () => {
   it('selects a complete result and labels interrupted attempts without rendering partial HTML', async () => {
     const base = {
-      model: 'gpt-6-astra', group_name: 'GPT-PRO', reasoning_effort: 'low',
+      model: 'gpt-6.2-astra', group_name: 'GPT-不降智', reasoning_effort: 'low',
       prompt: 'draw', created_at: '2026-09-24T06:00:00Z', duration_ms: 90053
     }
     vi.mocked(pelicanTestsAPI.list).mockResolvedValue({
@@ -80,7 +80,7 @@ describe('PelicanTestView', () => {
     vi.mocked(pelicanTestsAPI.list).mockResolvedValue({
       items: [{
         id: 1, status: 'completed', html: '<html><svg></svg></html>', preview_issue: 'scripts_removed',
-        model: 'gpt-6-astra', group_name: 'GPT-PRO', reasoning_effort: 'low',
+        model: 'gpt-6.2-astra', group_name: 'GPT-不降智', reasoning_effort: 'low',
         prompt: 'draw', created_at: '2026-09-24T06:00:00Z', duration_ms: 100000
       }], total: 1, page: 1, page_size: 96
     })
@@ -99,8 +99,8 @@ describe('PelicanTestView', () => {
           status: 'completed',
           html: '<html><body><svg id="latest" viewBox="0 0 1 1"></svg></body></html>',
           prompt: '创建一个HTML，内容是SVG绘制一个火烈鸟骑自行车的2D动画',
-          model: 'gpt-6-astra',
-          group_name: 'GPT-PRO',
+          model: '',
+          group_name: '',
           reasoning_effort: 'low',
           created_at: '2026-09-20T02:50:00Z',
           finished_at: '2026-09-20T02:50:12Z',
@@ -130,6 +130,8 @@ describe('PelicanTestView', () => {
     expect(wrapper.get('h1').classes()).toContain('lg:hidden')
     expect(wrapper.findAll('iframe')).toHaveLength(1)
     expect(wrapper.find('iframe').attributes('srcdoc')).toContain('id="latest"')
+    expect(wrapper.get('dl').text()).toContain('GPT-不降智')
+    expect(wrapper.get('dl').text()).toContain('gpt-6.2-astra')
     expect(wrapper.text()).toContain('火烈鸟')
     const buttons = wrapper.findAll('button')
     expect(buttons).toHaveLength(2)
@@ -139,6 +141,8 @@ describe('PelicanTestView', () => {
     expect(timeColumn?.className).toContain('flex-col')
     await buttons[1].trigger('click')
     expect(wrapper.find('iframe').attributes('srcdoc')).toContain('id="older"')
+    expect(wrapper.get('dl').text()).toContain('GPT-PRO')
+    expect(wrapper.get('dl').text()).toContain('gpt-6-astra')
     expect(wrapper.text()).toContain('鹈鹕')
     expect(wrapper.text()).not.toContain('开始测试')
     expect(wrapper.text()).not.toContain('重新测试')

@@ -560,7 +560,7 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 		return
 	}
 	if len(cands) == 0 {
-		slog.Info("scheduled pelican skipped: no schedulable GPT-PRO ChatGPT OAuth account")
+		slog.Info("scheduled pelican skipped: no schedulable account", "group", IntelligentTestPublicGroupName)
 		return
 	}
 	s.markPelicanLiveWS(cands)
@@ -591,7 +591,7 @@ func (s *IntelligentTestService) runScheduledPelicanAt(ctx context.Context, now 
 	req := IntelligentTestEnqueue{
 		AccountIDs:     []int64{picked},
 		TestTypes:      []string{"pelican"},
-		Models:         map[string]string{"pelican": intelligentTestDefaultCodexModel},
+		Models:         map[string]string{"pelican": PelicanTestDefaultModel},
 		Prompts:        map[string]string{"pelican": intelligentAnimalHTMLPrompt(animal)},
 		IdempotencyKey: pelicanAttemptKey(now, len(attempts)),
 		Source:         IntelligentTestSourcePelicanSchedule,
