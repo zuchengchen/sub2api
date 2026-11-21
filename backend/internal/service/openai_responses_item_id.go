@@ -75,8 +75,8 @@ func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
 	return sanitizeOpenAIResponsesInputItemIDsForAccount(body, nil)
 }
 
-// The Codex backend uses the fixed client's prefix_suffix identity contract.
-// Public API and compatible providers keep their existing namespace validation.
+// The Codex backend uses the client's prefix_suffix identity contract. Native
+// API-key relays also preserve each output ID in a Codex exec notification chain.
 func sanitizeOpenAIResponsesInputItemIDsForAccount(body []byte, account *Account) ([]byte, bool, error) {
 	codexNative := isCodexOAuthAccount(account)
 	input := parseRawJSONView(body).Get("input")
@@ -92,6 +92,8 @@ func sanitizeOpenAIResponsesInputItemIDsForAccount(body []byte, account *Account
 	}
 
 	items := make([]inputItem, 0)
+	var notificationIDs map[string]bool
+	checkedNotificationIDs := false
 	input.ForEach(func(_, item gjson.Result) bool {
 		parsed := inputItem{raw: item.Raw}
 		if item.IsObject() {
@@ -104,6 +106,15 @@ func sanitizeOpenAIResponsesInputItemIDsForAccount(body []byte, account *Account
 				parsed.stripID = !completeReasoning && shouldStripOpenAIResponsesInputItemID(trimmedItemType, id.String())
 				if codexNative {
 					parsed.stripID = !hasNativeCodexInputItemID(id.String())
+				} else if parsed.stripID && account != nil && account.IsOpenAIApiKey() &&
+					trimmedItemType == "custom_tool_call_output" && strings.HasPrefix(id.Str, "ctco_") && len(id.Str) > len("ctco_") {
+					// Each notification has its own item identity while sharing
+					// a call_id. A native Responses relay needs both to resume.
+					if !checkedNotificationIDs {
+						notificationIDs = codexExecNotificationIDs(input)
+						checkedNotificationIDs = true
+					}
+					parsed.stripID = !notificationIDs[item.Get("call_id").Str]
 				}
 			}
 			// A reference with no usable id cannot point at an upstream item.

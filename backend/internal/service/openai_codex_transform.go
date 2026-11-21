@@ -113,6 +113,7 @@ type codexOAuthTransformOptions struct {
 	IsCompact               bool
 	SkipDefaultInstructions bool
 	PreserveToolCallIDs     bool
+	ExecNotificationIDs     map[string]bool
 	// Enabled by the actual Codex OAuth destination, not by generic legacy
 	// helper callers or SetupToken paths sharing parts of this transform.
 	NativeItemIDs bool
@@ -354,9 +355,10 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			result.Modified = true
 		}
 		input = filterCodexInputWithOptions(input, codexInputFilterOptions{
-			PreserveReferences: needsToolContinuation,
-			PreserveCallIDs:    opts.PreserveToolCallIDs,
-			NativeItemIDs:      opts.NativeItemIDs,
+			PreserveReferences:  needsToolContinuation,
+			PreserveCallIDs:     opts.PreserveToolCallIDs,
+			ExecNotificationIDs: opts.ExecNotificationIDs,
+			NativeItemIDs:       opts.NativeItemIDs,
 		})
 		if reordered, moved := ensureCodexBaseInstructionsFirst(input); moved {
 			input = reordered
@@ -1680,8 +1682,9 @@ func isInstructionsEmpty(reqBody map[string]any) bool {
 }
 
 type codexInputFilterOptions struct {
-	PreserveReferences bool
-	PreserveCallIDs    bool
+	PreserveReferences  bool
+	PreserveCallIDs     bool
+	ExecNotificationIDs map[string]bool
 	// Only the Codex backend transform opts into its prefix_suffix identity
 	// contract; direct compatibility helper callers retain their legacy policy.
 	NativeItemIDs bool
@@ -1695,8 +1698,11 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 	})
 }
 
-func normalizeCodexFilterCallID(itemType, id string, preserve bool) string {
-	if preserve && len(id) <= codexCallIDMaxLength {
+func (opts codexInputFilterOptions) normalizedCallID(itemType, id string) string {
+	if opts.ExecNotificationIDs[id] && (itemType == "custom_tool_call" || itemType == "custom_tool_call_output") {
+		return id
+	}
+	if opts.PreserveCallIDs && len(id) <= codexCallIDMaxLength {
 		return id
 	}
 	return normalizeCodexCallIDForItemType(itemType, id)
@@ -1742,7 +1748,7 @@ func codexResponsesHaveNativeFunctionPairs(proof OpenAIContinuationReplayProof, 
 	return functionCalls == proof.Calls
 }
 
-func codexItemReferenceIDMappings(input []any, preserveCallIDs bool) map[string]string {
+func codexItemReferenceIDMappings(input []any, opts codexInputFilterOptions) map[string]string {
 	mappings := make(map[string]string)
 	ambiguous := make(map[string]struct{})
 	for _, rawItem := range input {
@@ -1758,7 +1764,7 @@ func codexItemReferenceIDMappings(input []any, preserveCallIDs bool) map[string]
 		if rawCallID == "" {
 			continue
 		}
-		normalized := normalizeCodexFilterCallID(itemType, rawCallID, preserveCallIDs)
+		normalized := opts.normalizedCallID(itemType, rawCallID)
 		if existing, exists := mappings[rawCallID]; exists && existing != normalized {
 			delete(mappings, rawCallID)
 			ambiguous[rawCallID] = struct{}{}
@@ -1803,7 +1809,7 @@ func codexInputCallIDs(input []any) map[string]struct{} {
 
 func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []any {
 	filtered := make([]any, 0, len(input))
-	referenceIDMappings := codexItemReferenceIDMappings(input, opts.PreserveCallIDs)
+	referenceIDMappings := codexItemReferenceIDMappings(input, opts)
 	inputItemIDs := codexInputItemIDs(input)
 	inputCallIDs := codexInputCallIDs(input)
 	for _, item := range input {
@@ -1846,7 +1852,7 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		// 仅修正真正的 tool/function call 标识，避免误改普通 message/reasoning id；
 		// 若 item_reference 指向 legacy call_* 标识，则仅修正该引用本身。
 		fixCallIDPrefix := func(id string) string {
-			return normalizeCodexFilterCallID(typ, id, opts.PreserveCallIDs)
+			return opts.normalizedCallID(typ, id)
 		}
 
 		if typ == "item_reference" {

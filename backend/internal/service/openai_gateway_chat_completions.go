@@ -138,6 +138,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	}
 
 	if account.Platform == PlatformGrok {
+		if isResponsesShape {
+			if err := codexExecNotificationConversionError(body); err != nil {
+				writeOpenAIProtocolValidationError(c, err, false)
+				return nil, err
+			}
+		}
 		if account.IsGrokOAuth() {
 			cleanedBody, cleanErr := sanitizeGrokChatSyntheticReasoningHistory(body)
 			if cleanErr != nil {
@@ -180,6 +186,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, writeOpenCodeUnsupportedModelError(c, false, routingModel)
 	}
 	upstreamProtocol := s.resolveUpstreamProtocolFor(ctx, account, inbound, routingModel)
+	if isResponsesShape && upstreamProtocol != APIProtocolResponses {
+		if err := codexExecNotificationConversionError(body); err != nil {
+			writeOpenAIProtocolValidationError(c, err, false)
+			return nil, err
+		}
+	}
 	if isResponsesShape && account.Platform == PlatformOpenAI && upstreamProtocol != APIProtocolResponses {
 		proof := AnalyzeOpenAIContinuationReplayProof(body)
 		if proof.HasPreviousResponseID || proof.HasConversation || proof.HasItemReference {
@@ -435,8 +447,13 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			}
 		}
 		synthesized := synthResult != nil && synthResult.Modified
+		var execNotificationIDs map[string]bool
+		if isResponsesShape && isCodexOAuthAccount(account) {
+			execNotificationIDs = codexExecNotificationIDs(parseRawJSONView(responsesBody).Get("input"))
+		}
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
 			ResponsesLite:                       responsesLite,
+			ExecNotificationIDs:                 execNotificationIDs,
 			NativeItemIDs:                       isCodexOAuthAccount(account),
 			SkipDefaultInstructions:             !isResponsesShape || synthesized,
 			OmitPromotedSystemMessagesFromInput: !isResponsesShape && !isJSONObjectFormat,
@@ -733,6 +750,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			!account.routesByModel() &&
 			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
 			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {
+			if isResponsesShape {
+				if err := codexExecNotificationConversionError(body); err != nil {
+					writeOpenAIProtocolValidationError(c, err, false)
+					return nil, err
+				}
+			}
 			if isResponsesShape && !OpenAIContinuationMaySwitchAccount(body) {
 				contextErr := NewOpenAIContinuationContextError(body)
 				writeOpenAIContinuationContextError(c, contextErr)
