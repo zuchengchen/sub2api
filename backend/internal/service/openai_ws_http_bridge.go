@@ -703,18 +703,31 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 	initialReplayInput := parseRawJSONView(body).Get("input").Raw
 	grokIntentSourceBody := append([]byte(nil), body...)
-	_, grokExplicitToolsField := openAIWSHTTPBridgeRawField(grokIntentSourceBody, "tools")
+	tools := parseRawJSONView(body).Get("tools")
+	explicitTools := tools.Exists()
 	grokExplicitToolIntent := account.Platform == PlatformGrok && hasGrokResponsesToolIntent(grokIntentSourceBody)
 	var clientToolMapping apicompat.ResponsesClientToolMapping
 	functionToolUpstream := (account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey) || account.Platform == PlatformGrok
 	if functionToolUpstream {
+		inheritedState, _ := openAIWSHTTPBridgeToolStateFromContext(c)
+		// An explicit tools field replaces the inherited mapping. With no
+		// effective declarations the API-key adapter forwards native history.
+		lowersHistory := (tools.IsArray() && tools.Get("0").Exists()) || (!explicitTools && hasResponsesClientToolMapping(inheritedState.ClientMapping))
+		if account.Platform == PlatformGrok || lowersHistory {
+			if validationErr := codexExecNotificationConversionError(body); validationErr != nil {
+				setOpsUpstreamError(c, http.StatusBadRequest, validationErr.Error(), "")
+				if writeErr := writeClientMessage(buildOpenAIProtocolValidationWSEvent(validationErr)); writeErr != nil {
+					return nil, writeErr
+				}
+				return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid request parameter", validationErr)
+			}
+		}
 		if account.Platform == PlatformGrok {
 			body, err = sanitizeGrokResponsesInput(body)
 			if err != nil {
 				return nil, fmt.Errorf("sanitize Grok WS HTTP bridge input: %w", err)
 			}
 		}
-		inheritedState, _ := openAIWSHTTPBridgeToolStateFromContext(c)
 		inheritedLoweredTools := decodeOpenAIWSHTTPBridgeLoweredTools(inheritedState.LoweredTools)
 		body, clientToolMapping, err = adaptResponsesClientToolsForFunctionUpstreamWithMapping(
 			body,
@@ -725,7 +738,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if err != nil {
 			return nil, fmt.Errorf("adapt %s client tools: %w", openAIWSHTTPBridgeToolUpstreamName(account), err)
 		}
-		if account.Platform == PlatformGrok && !grokExplicitToolsField && !grokExplicitToolIntent && len(inheritedLoweredTools) > 0 && hasGrokResponsesToolIntent(body) {
+		if account.Platform == PlatformGrok && !explicitTools && !grokExplicitToolIntent && len(inheritedLoweredTools) > 0 && hasGrokResponsesToolIntent(body) {
 			// This continuation omitted tools, so the pre-adapter source cannot
 			// represent the effective inherited declarations. Cache routing must
 			// see the rehydrated tool intent or it will replace client functions

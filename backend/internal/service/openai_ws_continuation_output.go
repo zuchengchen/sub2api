@@ -160,6 +160,7 @@ func (c *openAIWSContinuationOutputCollector) finish(output gjson.Result) ([]ope
 func openAIWSContinuationToolsComplete(items []gjson.Result, pending map[[sha256.Size]byte]string) bool {
 	expected := make(map[[sha256.Size]byte]string, len(pending))
 	seen := make(map[[sha256.Size]byte]bool, len(pending))
+	var execNotificationCalls map[[sha256.Size]byte]bool
 	for id, kind := range pending {
 		expected[id], seen[id] = kind, true
 	}
@@ -176,6 +177,11 @@ func openAIWSContinuationToolsComplete(items []gjson.Result, pending map[[sha256
 			}
 			key := sha256.Sum256([]byte(id))
 			if strings.HasSuffix(kind, "_output") {
+				// An exec notification can precede or follow the actual result.
+				// Keep the full input on this socket without inferring an anchor.
+				if isCodexExecNotificationOutput(item) && (execNotificationCalls[key] || pending[key] == kind) {
+					return false
+				}
 				output := item.Get("output")
 				validOutput := output.Type == gjson.String || output.IsArray()
 				if kind == "tool_search_output" {
@@ -188,6 +194,12 @@ func openAIWSContinuationToolsComplete(items []gjson.Result, pending map[[sha256
 			} else {
 				if seen[key] {
 					return false
+				}
+				if kind == "custom_tool_call" && isCodexExecNotificationCall(item) {
+					if execNotificationCalls == nil {
+						execNotificationCalls = make(map[[sha256.Size]byte]bool)
+					}
+					execNotificationCalls[key] = true
 				}
 				resultKind := kind + "_output"
 				if kind == "local_shell_call" {

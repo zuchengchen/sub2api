@@ -1057,6 +1057,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
 			if isResponseCreate {
+				if account.Platform == PlatformOpenAI && openAIWSHasCodexExecNotification(payload) {
+					if err := ValidateOpenAIContinuationInput(payload); err != nil {
+						return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+					}
+				}
 				if err := s.validateOpenAIResponseAuthOwner(ctx, c, account, gjson.GetBytes(payload, "previous_response_id").String()); err != nil {
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
 				}
