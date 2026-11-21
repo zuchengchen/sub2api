@@ -61,7 +61,7 @@ func TestRunScheduledPelicanEnqueuesRandomAnimalPrompt(t *testing.T) {
 	require.Len(t, repo.enqueued[0].AccountIDs, 1)
 	require.Contains(t, []int64{11, 12}, repo.enqueued[0].AccountIDs[0])
 	require.Equal(t, []string{"pelican"}, repo.enqueued[0].TestTypes)
-	require.Equal(t, "gpt-6-astra", repo.enqueued[0].Models["pelican"])
+	require.Equal(t, "gpt-6.2-astra", repo.enqueued[0].Models["pelican"])
 	prompt := repo.enqueued[0].Prompts["pelican"]
 	require.Contains(t, prompt, "骑自行车的2D动画")
 	require.Contains(t, prompt, "不要使用任何skill")

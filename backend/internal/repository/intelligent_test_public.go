@@ -144,8 +144,7 @@ func (r *intelligentTestRepository) ListPelicanCandidates(ctx context.Context) (
 	// Same schedulable gates as normal OpenAI routing, plus skip 5h/7d quota
 	// exhaustion. HTTP health is the persisted Tibo HTTP verdict (not stale).
 	// A valid ticket is an unexpired 292 with its harvest cookies.
-	// Candidates are GPT-PRO OAuth / setup-token accounts.
-	const astraTicket = `codex_turn_ticket:gpt-6-astra`
+	const astraTicket = "codex_turn_ticket:" + service.PelicanTestDefaultModel
 	const tiboHTTP = `codex_tibo_verdict:http`
 	rows, err := r.db.QueryContext(ctx, `
 SELECT DISTINCT a.id,
@@ -170,7 +169,7 @@ JOIN groups g ON g.id=ag.group_id
 WHERE a.deleted_at IS NULL AND a.status=$1 AND a.platform=$2
   AND a.type = ANY($3)
   AND a.parent_account_id IS NULL AND a.schedulable=true
-  AND g.deleted_at IS NULL AND g.status=$1 AND lower(g.name)=$4
+  AND g.deleted_at IS NULL AND g.status=$1 AND g.platform=$2 AND g.name=$4
   AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= NOW())
   AND (a.overload_until IS NULL OR a.overload_until <= NOW())
   AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= NOW())
@@ -240,16 +239,16 @@ WHERE t.test_type='pelican' AND t.status NOT IN ('queued','running','cancelled')
   AND COALESCE(t.finished_at, t.created_at) >= NOW() - INTERVAL '24 hours'
   AND EXISTS (
     SELECT 1 FROM account_groups ag JOIN groups g ON g.id=ag.group_id
-    WHERE ag.account_id=a.id AND g.deleted_at IS NULL AND lower(g.name)=$1
+    WHERE ag.account_id=a.id AND g.deleted_at IS NULL AND g.platform=$2 AND g.name=$1
   )`
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) `+base, service.IntelligentTestPublicGroupName).Scan(&out.Total); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) `+base, service.IntelligentTestPublicGroupName, service.PlatformOpenAI).Scan(&out.Total); err != nil {
 		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT t.id,t.status,t.result,t.model,t.created_at,t.finished_at,t.duration_ms,
-COALESCE(NULLIF(t.config_snapshot#>>'{execution,group_name}',''),'GPT-PRO'),
+COALESCE(NULLIF(t.config_snapshot#>>'{execution,group_name}',''),$1),
 COALESCE(NULLIF(t.config_snapshot#>>'{execution,reasoning_effort}',''),'low'),
 COALESCE(NULLIF(t.input,''),NULLIF(t.config_snapshot->>'prompt',''),'')
-`+base+` ORDER BY t.id DESC LIMIT $2 OFFSET $3`, service.IntelligentTestPublicGroupName, f.PageSize, (f.Page-1)*f.PageSize)
+`+base+` ORDER BY t.id DESC LIMIT $3 OFFSET $4`, service.IntelligentTestPublicGroupName, service.PlatformOpenAI, f.PageSize, (f.Page-1)*f.PageSize)
 	if err != nil {
 		return nil, err
 	}
