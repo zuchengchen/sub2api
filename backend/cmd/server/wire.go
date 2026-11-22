@@ -117,6 +117,7 @@ func provideCleanup(
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	openAIQuotaRefresh *service.OpenAIQuotaRefreshWorker,
+	openAIImportChecks *service.OpenAIAccountImportChecks,
 	contentModeration *service.ContentModerationService,
 	pluginManager *service.PluginManager,
 	usagePolicyService *service.UsagePolicyService,
@@ -139,6 +140,12 @@ func provideCleanup(
 			{"OpenAIQuotaRefreshWorker", func() error {
 				if openAIQuotaRefresh != nil {
 					openAIQuotaRefresh.Stop()
+				}
+				return nil
+			}},
+			{"OpenAIAccountImportChecks", func() error {
+				if openAIImportChecks != nil {
+					openAIImportChecks.Stop()
 				}
 				return nil
 			}},

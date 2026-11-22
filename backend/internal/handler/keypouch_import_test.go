@@ -128,7 +128,7 @@ func TestKeyPouchPostgres(t *testing.T) {
 	cfg.Totp.EncryptionKey = strings.Repeat("34", 32)
 	cipher, err := repository.NewAESEncryptor(cfg)
 	require.NoError(t, err)
-	admin := service.NewAdminService(cfg, nil, repository.NewAdminGroupRepository(client, db), repository.NewAdminAccountRepository(client, db, nil), nil, nil, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	admin := service.NewAdminService(cfg, nil, repository.NewAdminGroupRepository(client, db), repository.NewAdminAccountRepository(client, db, nil), nil, nil, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	newHandler := func() *KeyPouchImportHandler {
 		h := NewKeyPouchImportHandler(repository.NewKeyPouchImportStore(client), admin, service.NewOpenAIOAuthService(nil, nil), cipher, nil)
 		h.registration = func(context.Context) (openai.KeyPouchRegistration, error) { return testKeyPouchApp, nil }

@@ -529,7 +529,9 @@ func (s *OpenAIGatewayService) openAITiboAccountState(accountID int64) *openAITi
 	if state := s.loadOpenAITiboAccountState(accountID); state != nil {
 		return state
 	}
-	raw, _ := s.openaiTiboRoutes.LoadOrStore(accountID, &openAITiboAccountState{accountID: accountID})
+	// A listing that started before a new account was saved may miss it.
+	// Stamp new state before publishing it so that listing cannot prune it.
+	raw, _ := s.openaiTiboRoutes.LoadOrStore(accountID, &openAITiboAccountState{accountID: accountID, lastUsedAt: time.Now()})
 	state, _ := raw.(*openAITiboAccountState)
 	return state
 }
@@ -558,7 +560,9 @@ func (s *OpenAIGatewayService) openAITiboRequestVerdicts(ctx context.Context, ac
 	state.lastUsedAt = now
 	s.seedOpenAITiboStateLocked(state, account.Extra, now, cfg)
 	var wait <-chan struct{}
-	if skip := openAITiboAccountSkipReason(account, now); skip == "" {
+	// Agent Identity probes run on the background workers so forwarding can use
+	// the current verdict immediately.
+	if !account.IsOpenAIAgentIdentity() && openAITiboAccountSkipReason(account, now) == "" {
 		if state.http.cold() {
 			if state.http.inflight {
 				wait = state.http.done
@@ -588,15 +592,15 @@ func (s *OpenAIGatewayService) openAITiboRequestVerdicts(ctx context.Context, ac
 	return state.http.effective(now, cfg)
 }
 
-// probeOpenAITiboHTTP sends the Tibo probe once over the account's own proxy
-// and token (not the Cookie harvest proxy). It never changes account state.
+// probeOpenAITiboHTTP sends the Tibo probe once with the account's own
+// credentials and proxy, then returns the observed sample to the caller.
 func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account *Account) openAITiboProbeSample {
 	unknown := openAITiboProbeSample{verdict: openAITiboUnknown}
 	if s == nil || s.httpUpstream == nil || account == nil {
 		return unknown
 	}
 	token, _, err := s.GetAccessToken(ctx, account)
-	if err != nil || token == "" {
+	if err != nil || (token == "" && !account.IsOpenAIAgentIdentity()) {
 		return unknown
 	}
 	body, err := json.Marshal(openAITiboProbePayload())
@@ -614,7 +618,10 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 	if !account.IsOpenAIApiKey() {
 		req.Host = "chatgpt.com"
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header, err = s.buildOpenAIAuthenticationHeaders(ctx, account, token)
+	if err != nil {
+		return unknown
+	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Content-Type", "application/json")
 	if !account.IsOpenAIApiKey() {

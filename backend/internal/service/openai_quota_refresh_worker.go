@@ -16,12 +16,18 @@ const (
 	openAIQuotaSnapshotRefreshInterval = 5 * time.Minute
 	openAIQuotaRefreshPageSize         = 100
 	openAIQuotaRefreshConcurrency      = 4
+	openAIQuotaRefreshTimeout          = time.Minute
 	openAIQuotaRefreshLockKey          = "jobs:openai-quota-credit-refresh"
 	openAIQuotaRefreshLease            = time.Minute
 )
 
 type openAIQuotaSnapshotRefresher interface {
 	RefreshQuotaSnapshots(ctx context.Context, accountID int64) error
+}
+
+func shouldRefreshOpenAIQuotaSnapshots(account *Account, now time.Time) bool {
+	return account != nil && account.IsOpenAIOAuth() && account.IsActive() && !account.IsSyntheticUITest() &&
+		(!account.AutoPauseOnExpired || account.ExpiresAt == nil || now.Before(*account.ExpiresAt))
 }
 
 type openAIQuotaRefreshLock interface {
@@ -135,7 +141,7 @@ func (w *OpenAIQuotaRefreshWorker) refreshAll(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return
 				}
-				callCtx, cancel := context.WithTimeout(ctx, time.Minute)
+				callCtx, cancel := context.WithTimeout(ctx, openAIQuotaRefreshTimeout)
 				err := w.quota.RefreshQuotaSnapshots(callCtx, id)
 				cancel()
 				if err != nil && ctx.Err() == nil {
@@ -162,8 +168,7 @@ func (w *OpenAIQuotaRefreshWorker) refreshAll(ctx context.Context) error {
 		}
 		for i := range page.Accounts {
 			a := &page.Accounts[i]
-			if !a.IsOpenAIOAuth() || !a.IsActive() || a.IsSyntheticUITest() ||
-				(a.AutoPauseOnExpired && a.ExpiresAt != nil && !time.Now().Before(*a.ExpiresAt)) {
+			if !shouldRefreshOpenAIQuotaSnapshots(a, time.Now()) {
 				continue
 			}
 			select {
