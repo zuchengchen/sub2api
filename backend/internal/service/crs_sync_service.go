@@ -22,6 +22,7 @@ type CRSSyncService struct {
 	proxyRepo          ProxyRepository
 	oauthService       *OAuthService
 	openaiOAuthService *OpenAIOAuthService
+	openAIImportChecks *OpenAIAccountImportChecks
 	cfg                *config.Config
 }
 
@@ -31,12 +32,14 @@ func NewCRSSyncService(
 	oauthService *OAuthService,
 	openaiOAuthService *OpenAIOAuthService,
 	cfg *config.Config,
+	openAIImportChecks *OpenAIAccountImportChecks,
 ) *CRSSyncService {
 	return &CRSSyncService{
 		accountRepo:        accountRepo,
 		proxyRepo:          proxyRepo,
 		oauthService:       oauthService,
 		openaiOAuthService: openaiOAuthService,
+		openAIImportChecks: openAIImportChecks,
 		cfg:                cfg,
 	}
 }
@@ -609,6 +612,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			// 🔄 Refresh OAuth token after creation
 			s.refreshStoredOpenAIAccount(ctx, account)
+			s.openAIImportChecks.schedule(ctx, account)
 			item.Action = "created"
 			result.Created++
 			result.Items = append(result.Items, item)

@@ -474,13 +474,13 @@
       </template>
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
-    <CreateAccountModal v-if="mountedModals.showCreate" :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
+    <CreateAccountModal v-if="mountedModals.showCreate" :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="handleAccountsImported" />
     <EditAccountModal v-if="mountedModals.showEdit" :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal v-if="mountedModals.showReAuth" :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal v-if="mountedModals.showTest" :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal v-if="mountedModals.showStats" :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
-    <SyncFromCrsModal v-if="mountedModals.showSync" :show="showSync" @close="showSync = false" @synced="reload" />
+    <SyncFromCrsModal v-if="mountedModals.showSync" :show="showSync" @close="showSync = false" @synced="handleAccountsImported" />
     <ImportDataModal v-if="mountedModals.showImportData" :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
       v-if="mountedModals.showBulkEdit"
@@ -771,7 +771,10 @@ const autoRefreshIntervals = [5, 10, 15, 30] as const
 const autoRefreshEnabled = ref(false)
 const autoRefreshIntervalSeconds = ref<(typeof autoRefreshIntervals)[number]>(30)
 const autoRefreshCountdown = ref(0)
-const OPENAI_QUOTA_SNAPSHOT_REFRESH_MS = 5 * 60_000
+const OPENAI_ACCOUNT_SNAPSHOT_REFRESH_MS = 5 * 60_000
+const OPENAI_IMPORT_SNAPSHOT_REFRESH_MS = 5_000
+const OPENAI_IMPORT_SNAPSHOT_REFRESH_WINDOW_MS = 2 * 60_000
+const openAIImportRefreshUntil = ref(0)
 let autoRefreshETag: string | null = null
 let accountListRefreshController: AbortController | null = null
 const resetAccountListRefresh = () => {
@@ -1062,7 +1065,7 @@ if (typeof window !== 'undefined') {
 }
 
 const setAutoRefreshEnabled = (enabled: boolean) => {
-  // Quota polls apply only the GPT quota state. A full refresh needs its own first response.
+  // The GPT snapshot poll and full list refresh need separate initial responses.
   resetAccountListRefresh()
   autoRefreshEnabled.value = enabled
   saveAutoRefreshToStorage()
@@ -1216,13 +1219,13 @@ const load = async (options: AccountLoadOptions = {}) => {
   if (options.refreshTodayStats !== false) await refreshTodayStatsBatch()
 }
 
-const reload = async () => {
+const reload = async (options: AccountLoadOptions = {}) => {
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
   await baseReload()
-  await refreshTodayStatsBatch()
+  if (options.refreshTodayStats !== false) await refreshTodayStatsBatch()
 }
 
 const buildUpstreamBillingRateFilters = () => {
@@ -1530,12 +1533,16 @@ const mergeAccountsIncrementally = (nextRows: Account[]) => {
   }
 }
 
-const applyOpenAIQuotaSnapshots = (nextRows: Account[]) => {
-  const quotaRows = new Map(nextRows.filter(isOpenAIOAuthRow).map(row => [row.id, row]))
+const applyOpenAIAccountSnapshots = (nextRows: Account[]) => {
+  const openAIRows = new Map(nextRows.filter(isOpenAIOAuthRow).map(row => [row.id, row]))
   for (const row of accounts.value) {
-    const incoming = quotaRows.get(row.id)
+    const incoming = openAIRows.get(row.id)
     if (!incoming || !isOpenAIOAuthRow(row)) continue
     const next = keepLatestOpenAIWindows(row, incoming)
+    if (buildOpenAIAstraPolicyRefreshKey(row) !== buildOpenAIAstraPolicyRefreshKey(next)) {
+      row.codex_turn_tickets = next.codex_turn_tickets
+      row.openai_oauth_model_policy = next.openai_oauth_model_policy
+    }
     if (row.rate_limited_at === next.rate_limited_at && row.rate_limit_reset_at === next.rate_limit_reset_at &&
       openAIUsageWindowFields.every(key => row.extra?.[key] === next.extra?.[key]) &&
       buildOpenAIQuotaCreditsRefreshKey(row) === buildOpenAIQuotaCreditsRefreshKey(next)) continue
@@ -1554,7 +1561,7 @@ const applyOpenAIQuotaSnapshots = (nextRows: Account[]) => {
 const accountListRefreshBlocked = () => document.hidden || loading.value || isAnyModalOpen.value ||
   menu.show || showAccountToolsDropdown.value || showAutoRefreshDropdown.value
 
-const refreshAccountsIncrementally = async (quotaSnapshotsOnly = false) => {
+const refreshAccountsIncrementally = async (openAISnapshotsOnly = false) => {
   if (accountListRefreshController) return
   syncAccountListDerivedParams()
   const controller = new AbortController()
@@ -1568,8 +1575,8 @@ const refreshAccountsIncrementally = async (quotaSnapshotsOnly = false) => {
     )
     if (controller.signal.aborted || accountListRefreshBlocked() || inAutoRefreshSilentWindow()) return
     autoRefreshETag = result.etag
-    if (quotaSnapshotsOnly) {
-      if (!result.notModified && result.data) applyOpenAIQuotaSnapshots(result.data.items)
+    if (openAISnapshotsOnly) {
+      if (!result.notModified && result.data) applyOpenAIAccountSnapshots(result.data.items)
       return
     }
     if (!result.notModified && result.data) {
@@ -1661,6 +1668,9 @@ const syncPendingListChanges = async () => {
 const { resume: startAccountListRefresh } = useIntervalFn(
   async () => {
     if (accountListRefreshController || accountListRefreshBlocked()) return
+    if (openAIImportRefreshUntil.value && Date.now() >= openAIImportRefreshUntil.value) {
+      openAIImportRefreshUntil.value = 0
+    }
     if (!autoRefreshEnabled.value) {
       if ((isColumnVisible('usage') || isColumnVisible('status')) && accounts.value.some(isOpenAIOAuthRow) && !inAutoRefreshSilentWindow()) {
         await refreshAccountsIncrementally(true)
@@ -1683,7 +1693,10 @@ const { resume: startAccountListRefresh } = useIntervalFn(
 
     autoRefreshCountdown.value -= 1
   },
-  () => autoRefreshEnabled.value ? 1000 : OPENAI_QUOTA_SNAPSHOT_REFRESH_MS,
+  () => {
+    if (autoRefreshEnabled.value) return 1000
+    return openAIImportRefreshUntil.value ? OPENAI_IMPORT_SNAPSHOT_REFRESH_MS : OPENAI_ACCOUNT_SNAPSHOT_REFRESH_MS
+  },
   { immediate: false }
 )
 
@@ -2198,7 +2211,18 @@ const handleBulkUpdated = () => {
   clearSelection()
   reload()
 }
-const handleDataImported = () => { showImportData.value = false; reload() }
+const handleAccountsImported = async () => {
+  const previousAccountIDs = new Set(accounts.value.map(row => row.id))
+  await reload({ refreshTodayStats: false })
+  if (accounts.value.some(row => isOpenAIOAuthRow(row) && !previousAccountIDs.has(row.id))) {
+    openAIImportRefreshUntil.value = Date.now() + OPENAI_IMPORT_SNAPSHOT_REFRESH_WINDOW_MS
+  }
+  await refreshTodayStatsBatch()
+}
+const handleDataImported = () => {
+  showImportData.value = false
+  return handleAccountsImported()
+}
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
 const ACCOUNT_PRIVACY_MODE_UNSET_QUERY_VALUE = '__unset__'
 const buildAccountQueryFilters = () => ({
