@@ -19,7 +19,7 @@ func (s *UserRepoSuite) TestUnbanAPIKeys() {
 	moderationRepo := NewContentModerationRepository(integrationDB)
 	moderation, err := service.ProvideContentModerationService(nil, moderationRepo, nil, nil, s.repo, nil, auth, nil, keys, nil)
 	s.Require().NoError(err)
-	admin := service.NewAdminService(nil, s.repo, nil, nil, nil, keys, nil, nil, nil, nil, nil, nil, nil, s.client, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	admin := service.NewAdminService(nil, s.repo, nil, nil, nil, keys, nil, nil, nil, nil, nil, nil, nil, s.client, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	usagePolicy := NewUsagePolicyRepository(integrationDB)
 	now := time.Now().UTC().Truncate(time.Second)
 	past, future := now.Add(-time.Hour), now.Add(time.Hour)

@@ -111,7 +111,7 @@ function mountView(stubActionMenu = true, renderQuota = false) {
         AppLayout: { template: '<div><slot /></div>' },
         TablePageLayout: { template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>' },
         DataTable: DataTableStub,
-        AccountTableActions: { template: '<div><slot name="after" /></div>' },
+        AccountTableActions: { name: 'AccountTableActions', template: '<div><slot name="after" /></div>' },
         AccountTableFilters: true,
         AccountBulkActionsBar: true,
         Pagination: true,
@@ -303,6 +303,67 @@ describe('admin AccountsView lite account list', () => {
     expect(listWithEtag).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({ lite: '1' }), expect.objectContaining({ etag: 'quota-1' }))
     expect(getBatchTodayStatsWithEtag).not.toHaveBeenCalled()
     expect(listAccounts).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('shows a newly created GPT account’s quota, credits and Tibo result on the import poll', async () => {
+    vi.spyOn(i18n.global, 't').mockImplementation((key) => String(key))
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-20T00:00:00Z'))
+    const other = { ...listRow, id: 43, platform: 'anthropic', type: 'apikey' }
+    listAccounts.mockResolvedValueOnce({ items: [other], total: 1, pages: 1 })
+    const wrapper = mountView(true, true)
+    await flushPromises()
+    wrapper.getComponent({ name: 'AccountTableActions' }).vm.$emit('create')
+    await flushPromises()
+    const createModal = wrapper.getComponent({ name: 'CreateAccountModal' })
+    const page = { total: 2, pages: 1 }
+    listAccounts.mockResolvedValueOnce({ ...page, items: [listRow, other] })
+    createModal.vm.$emit('created')
+    createModal.vm.$emit('close')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(0)
+    getBatchTodayStatsWithEtag.mockClear()
+
+    const snapshots = {
+      codex_5h_used_percent: 23,
+      codex_usage_updated_at: '2026-11-20T00:00:03Z',
+      codex_reset_credit_snapshot: { available_count: 1, credits: [{ expires_at: '2026-11-27T00:00:00Z' }], fetched_at: 100 },
+      codex_credits_snapshot: { credits: { has_credits: true, unlimited: false, balance: '123' }, fetched_at: 100 }
+    }
+    const accountWithQuota = { ...listRow, extra: snapshots }
+    listWithEtag.mockResolvedValueOnce({
+      notModified: false, etag: 'quota', data: { ...page, items: [accountWithQuota, other] }
+    })
+    getBatchUsage.mockResolvedValueOnce({ usage: { 42: { five_hour: { utilization: 23, resets_at: null } } }, errors: {} })
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(wrapper.getComponent(UsageProgressBar).props('utilization')).toBe(23)
+    expect(wrapper.get('[data-testid="reset-credit-count"] span').text()).toBe('1')
+    expect(wrapper.get('[data-testid="codex-credits"] span').text()).toBe('123')
+    expect(wrapper.find('[data-testid="tibo-routes"]').exists()).toBe(false)
+
+    const accountWithTibo = {
+      ...accountWithQuota,
+      codex_turn_tickets: [{
+        model: 'gpt-6-astra',
+        tibo_routes: [{ route: 'http', verdict: 'healthy', recent_samples: [{ verdict: 'healthy' }] }]
+      }]
+    }
+    listWithEtag.mockResolvedValueOnce({
+      notModified: false, etag: 'tibo', data: { ...page, items: [accountWithTibo, other] }
+    })
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(listWithEtag).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({ lite: '1' }), expect.objectContaining({ etag: 'quota' }))
+    expect(wrapper.find('[data-testid="tibo-dot"][data-verdict="healthy"]').exists()).toBe(true)
+    expect(getUsage).not.toHaveBeenCalled()
+    expect(getBatchUsage.mock.calls).toEqual([[[42], false, 'passive'], [[42], false, 'passive']])
+    expect(getBatchTodayStatsWithEtag).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(110_000)
+    listWithEtag.mockClear()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(listWithEtag).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

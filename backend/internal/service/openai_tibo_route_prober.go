@@ -80,9 +80,8 @@ func (s *OpenAIGatewayService) startOpenAITiboProbeCtxLocked(parent context.Cont
 	return done
 }
 
-// runOpenAITiboProbe runs detached from any request (a cancelled request must
-// not discard the verdict); parent is the harvester context for tick probes
-// and context.Background otherwise.
+// runOpenAITiboProbe runs detached from HTTP requests. Its parent is the
+// background worker's context or context.Background for request-triggered probes.
 func (s *OpenAIGatewayService) runOpenAITiboProbe(parent context.Context, state *openAITiboAccountState, route openAITiboRoute, account *Account, acquired bool) {
 	ctx, cancel := context.WithTimeout(parent, openAITiboProbeTimeout)
 	defer cancel()
@@ -523,6 +522,38 @@ func (s *OpenAIGatewayService) latestOpenAITiboAccount(ctx context.Context, acco
 	return &current, nil
 }
 
+// probeNewOpenAIOAuthAccount starts the first Tibo probe without waiting for
+// enrollment or startup jitter. It shares the normal probe state and reloads
+// the account after obtaining a slot so it sees the current proxy and holds.
+func (s *OpenAIGatewayService) probeNewOpenAIOAuthAccount(ctx context.Context, account *Account) {
+	if s == nil || account == nil || account.ID <= 0 || !account.IsOpenAIOAuth() || ctx.Err() != nil {
+		return
+	}
+	s.openaiCodexTicketLifecycleMu.Lock()
+	if s.openaiCodexTicketStopped || s.accountRepo == nil || s.httpUpstream == nil || !s.openAITiboRouteApplies(account) {
+		s.openaiCodexTicketLifecycleMu.Unlock()
+		return
+	}
+	state := s.openAITiboAccountState(account.ID)
+	state.mu.Lock()
+	now := time.Now()
+	state.lastUsedAt = now
+	var done <-chan struct{} = state.http.done
+	// An import may include historical data. Only a sample of the newly
+	// created account satisfies its initial probe.
+	if done == nil && (state.http.cold() || state.http.lastSampleAt.Before(account.CreatedAt)) {
+		done = s.startOpenAITiboProbeCtxLocked(ctx, state, openAITiboRouteHTTP, nil, true, s.openAITiboRouteConfig(), now)
+	}
+	state.mu.Unlock()
+	s.openaiCodexTicketLifecycleMu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+	}
+}
+
 // probeOpenAITiboRoutes is the harvester-tick hook: probe due HTTP routes of
 // enrolled Tibo-routed accounts in the background, including idle ones.
 func (s *OpenAIGatewayService) probeOpenAITiboRoutes(ctx context.Context) {
@@ -756,7 +787,9 @@ func (s *OpenAIGatewayService) forceOpenAITiboDegraded(account *Account, route o
 	samples := append([]openAITiboRecentSample(nil), r.recent...)
 	if route == openAITiboRouteHTTP {
 		r.nextProbeAt = now
-		s.startOpenAITiboProbeLocked(state, route, account, false, cfg, now)
+		if !account.IsOpenAIAgentIdentity() {
+			s.startOpenAITiboProbeLocked(state, route, account, false, cfg, now)
+		}
 	}
 	state.mu.Unlock()
 	if changed {

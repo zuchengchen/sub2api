@@ -101,7 +101,7 @@ func TestAdminService_DeleteUser_LocksUserBeforeAPIKeys(t *testing.T) {
 	client := testEntClient(t)
 	users := NewUserRepository(client, integrationDB)
 	keys := NewAPIKeyRepository(client, integrationDB)
-	admin := service.NewAdminService(nil, users, nil, nil, nil, keys, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	admin := service.NewAdminService(nil, users, nil, nil, nil, keys, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	user := mustCreateUser(t, client, &service.User{Status: service.StatusDisabled})
 	t.Cleanup(func() {
 		_, _ = integrationDB.Exec("DELETE FROM users WHERE id = $1", user.ID)

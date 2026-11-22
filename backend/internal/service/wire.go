@@ -972,6 +972,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGrokTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
+	NewOpenAIAccountImportChecks,
 	ProvideOpenAIQuotaAutoResetService,
 	ProvideOpenAIQuotaRefreshWorker,
 	ProvideGrokQuotaService,
