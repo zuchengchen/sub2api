@@ -319,6 +319,7 @@ type OpenAIForwardResult struct {
 	wsReplayInputExists          bool
 	wsReplayInputComplete        bool
 	wsAccountFailoverReplayInput []json.RawMessage
+	wsHTTPResponseOwnerID        string
 }
 
 // HasHostedSearchRounds reports whether the result carries billed hosted

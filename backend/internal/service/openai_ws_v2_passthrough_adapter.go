@@ -1363,9 +1363,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			},
 			BeforeClientWrite: func(msgType coderws.MessageType, payload []byte) {
-				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
+				if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+					return
+				}
+				eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+				if msgType == coderws.MessageText && isOpenAIWSTerminalEvent(eventType) {
 					turnLifecycle.beginTerminalWrite()
 				}
+				s.bindOpenAIWSHTTPResponse(ctx, c, account, "", eventType, payload)
 			},
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
 				if msgType != coderws.MessageText {
