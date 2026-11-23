@@ -793,6 +793,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	var firstTokenMs *int
 	upstreamOutputStarted := false
 	responseID := ""
+	boundHTTPResponseID := ""
 	interruptState := &openAIWSInterruptState{}
 	interruptReader := &openAIWSInterruptReader{lease: lease}
 	defer interruptReader.close()
@@ -1563,6 +1564,9 @@ readLoop:
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 		}
 
+		if isTerminalEvent && !clientDisconnected && !interruptState.requested {
+			boundHTTPResponseID = s.bindOpenAIWSHTTPResponse(ctx, c, account, connID, eventType, message)
+		}
 		if reqStream {
 			// 与 HTTP firstOutputStage 同口径的提交点：首个客户端可见事件
 			// （delta/可见输出/reasoning item.added 等）到达即放行缓冲并提交
@@ -1671,7 +1675,7 @@ readLoop:
 		flushStreamWriter(true)
 	}
 
-	if responseID != "" && stateStore != nil {
+	if responseID != "" && responseID != boundHTTPResponseID && stateStore != nil {
 		ttl := s.openAIWSResponseStickyTTL()
 		if successfulOpenAIResponseAuthOwnerTerminal(upstreamTerminalEvent) {
 			s.bindOpenAIResponseAuthOwner(ctx, c, account, responseID)

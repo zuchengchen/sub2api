@@ -935,6 +935,7 @@ retryHTTPBridge:
 	}
 
 	responseID := ""
+	boundHTTPResponseID := ""
 	usage := OpenAIUsage{}
 	var replayGuard openAIResponseReplayGuard
 	imageCounter := newOpenAIImageOutputCounter()
@@ -988,6 +989,7 @@ retryHTTPBridge:
 			ResponseHeaders:               cloneHeader(resp.Header),
 			Duration:                      time.Since(turnStart),
 			FirstTokenMs:                  firstTokenMs,
+			wsHTTPResponseOwnerID:         boundHTTPResponseID,
 		}
 		allItems := replayCollector.AllItems()
 		// previous_response_id is removed by the HTTP bridge, so same-account
@@ -1243,6 +1245,9 @@ retryHTTPBridge:
 				pendingClientMessages = append(pendingClientMessages, append([]byte(nil), clientMessage...))
 				pendingClientMessageBytes += int64(len(clientMessage))
 			} else {
+				if isOpenAIWSTerminalEvent(eventType) {
+					boundHTTPResponseID = s.bindOpenAIWSHTTPResponse(ctx, c, account, "", eventType, upstreamMessage)
+				}
 				// Keep the client connection alive without committing this attempt
 				// or exposing its staged lifecycle metadata.
 				var messages [][]byte

@@ -887,7 +887,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				bridgeObservedFailoverOutput.observeCompleteOutput(result.wsAccountFailoverReplayInput)
 			}
 			bridgeLastResponseID = responseID
-			if responseID != "" && stateStore != nil {
+			if responseID != "" && responseID != result.wsHTTPResponseOwnerID && stateStore != nil {
 				ttl := s.openAIWSResponseStickyTTL()
 				if successfulOpenAIResponseAuthOwnerTerminal(result.UpstreamTerminalEvent) {
 					s.bindOpenAIResponseAuthOwner(ctx, c, account, responseID)
@@ -1565,6 +1565,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if eventType == "response.failed" {
 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
 			}
+			boundHTTPResponseID := ""
 			if !clientDisconnected {
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
@@ -1594,6 +1595,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 						clientMessage = rewritten
 					}
+				}
+				if isTerminalEvent && !turnInterrupt.requested {
+					boundHTTPResponseID = s.bindOpenAIWSHTTPResponse(ctx, c, account, lease.ConnID(), eventType, upstreamMessage)
 				}
 				if err := writeClientMessage(clientMessage); err != nil {
 					if isOpenAIWSClientDisconnectError(err) {
@@ -1676,6 +1680,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					ResponseHeaders:               lease.HandshakeHeaders(),
 					Duration:                      time.Since(turnStart),
 					FirstTokenMs:                  firstTokenMs,
+					wsHTTPResponseOwnerID:         boundHTTPResponseID,
 				}
 				if replayInput := replayCollector.AllItems(); len(replayInput) > 0 {
 					result.wsReplayInput = replayInput
@@ -2430,7 +2435,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		}
 
-		if responseID != "" && stateStore != nil {
+		if responseID != "" && responseID != result.wsHTTPResponseOwnerID && stateStore != nil {
 			ttl := s.openAIWSResponseStickyTTL()
 			if successfulOpenAIResponseAuthOwnerTerminal(result.UpstreamTerminalEvent) {
 				s.bindOpenAIResponseAuthOwner(ctx, c, account, responseID)
