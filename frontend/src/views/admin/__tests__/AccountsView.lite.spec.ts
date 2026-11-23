@@ -168,7 +168,7 @@ const fullAccount = {
 describe('admin AccountsView lite account list', () => {
   beforeEach(() => {
     localStorage.clear()
-    listAccounts.mockReset().mockResolvedValue({ items: [listRow], total: 1, page: 1, page_size: 20, pages: 1 })
+    listAccounts.mockReset().mockResolvedValue({ items: [listRow], total: 1, page: 1, page_size: 50, pages: 1 })
     listWithEtag.mockReset().mockResolvedValue({ notModified: true, etag: 'compact-etag', data: null })
     getById.mockReset().mockResolvedValue(fullAccount)
     getBatchTodayStatsWithEtag.mockReset().mockResolvedValue({ notModified: false, etag: null, data: { stats: {} } })
@@ -185,15 +185,20 @@ describe('admin AccountsView lite account list', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
-  it('keeps lite=1 on the initial list request', async () => {
+  it('requests 50 lite rows on the first page with the standard site default', async () => {
+    vi.stubGlobal('__APP_CONFIG__', {
+      table_default_page_size: 20,
+      table_page_size_options: [10, 20, 50, 100]
+    })
     const wrapper = mountView()
     await flushPromises()
 
     expect(listAccounts).toHaveBeenCalledWith(
       1,
-      20,
+      50,
       expect.objectContaining({ lite: '1' }),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
@@ -241,7 +246,7 @@ describe('admin AccountsView lite account list', () => {
 
     expect(listWithEtag).toHaveBeenCalledWith(
       1,
-      20,
+      50,
       expect.objectContaining({ lite: '1' }),
       expect.objectContaining({ etag: null })
     )
@@ -254,7 +259,7 @@ describe('admin AccountsView lite account list', () => {
     vi.setSystemTime(new Date('2026-11-20T00:00:00Z'))
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
     const other = { ...listRow, id: 43, platform: 'anthropic', type: 'apikey' }
-    const page = { page: 1, page_size: 20, total: 2, pages: 1 }
+    const page = { page: 1, page_size: 50, total: 2, pages: 1 }
     listAccounts.mockResolvedValue({ ...page, items: [{ ...listRow, extra: {} }, other] })
     const snapshots = {
       codex_reset_credit_snapshot: { available_count: 0, credits: [], fetched_at: 100 },
@@ -300,7 +305,7 @@ describe('admin AccountsView lite account list', () => {
     await vi.advanceTimersByTimeAsync(300_000)
     expect(wrapper.text()).not.toContain('admin.accounts.status.rateLimited')
     expect(getBatchUsage).toHaveBeenCalledTimes(1)
-    expect(listWithEtag).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({ lite: '1' }), expect.objectContaining({ etag: 'quota-1' }))
+    expect(listWithEtag).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ lite: '1' }), expect.objectContaining({ etag: 'quota-1' }))
     expect(getBatchTodayStatsWithEtag).not.toHaveBeenCalled()
     expect(listAccounts).toHaveBeenCalledTimes(1)
     wrapper.unmount()
@@ -354,7 +359,7 @@ describe('admin AccountsView lite account list', () => {
       notModified: false, etag: 'tibo', data: { ...page, items: [accountWithTibo, other] }
     })
     await vi.advanceTimersByTimeAsync(4_999)
-    expect(listWithEtag).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({ lite: '1' }), expect.objectContaining({ etag: 'quota' }))
+    expect(listWithEtag).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ lite: '1' }), expect.objectContaining({ etag: 'quota' }))
     expect(wrapper.find('[data-testid="tibo-dot"][data-verdict="healthy"]').exists()).toBe(true)
     expect(getUsage).not.toHaveBeenCalled()
     expect(getBatchUsage.mock.calls).toEqual([[[42], false, 'passive'], [[42], false, 'passive']])
@@ -457,7 +462,7 @@ describe('admin AccountsView lite account list', () => {
     } })
     await vi.advanceTimersByTimeAsync(11_000)
     expect(listWithEtag).toHaveBeenCalledTimes(2)
-    expect(listWithEtag).toHaveBeenLastCalledWith(1, 20, expect.anything(), expect.objectContaining({ etag: null }))
+    expect(listWithEtag).toHaveBeenLastCalledWith(1, 50, expect.anything(), expect.objectContaining({ etag: null }))
     expect(wrapper.getComponent(DataTableStub).props('data')).toMatchObject([{ extra }])
     await vi.advanceTimersByTimeAsync(288_999)
     const beforeFiveMinutes = listWithEtag.mock.calls.length

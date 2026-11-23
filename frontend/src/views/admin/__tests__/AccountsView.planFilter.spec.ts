@@ -93,7 +93,7 @@ describe('account subscription plan filtering', () => {
     vi.clearAllMocks()
     localStorage.clear()
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
-    api.list.mockResolvedValue({ items: [account], total: 1, page: 1, page_size: 20, pages: 1 })
+    api.list.mockResolvedValue({ items: [account], total: 1, page: 1, page_size: 50, pages: 1 })
     api.listWithEtag.mockResolvedValue({ notModified: true, etag: 'plan-etag', data: null })
     api.getUpstreamBillingRatesWithEtag.mockResolvedValue({ notModified: true, etag: 'rate-etag', data: null })
     api.getBatchTodayStatsWithEtag.mockResolvedValue({ notModified: false, etag: null, data: { stats: {} } })
@@ -109,7 +109,7 @@ describe('account subscription plan filtering', () => {
   })
 
   it('offers the requested tiers and resets pagination and selection when a plan changes', async () => {
-    api.list.mockResolvedValue({ items: [account], total: 21, page: 1, page_size: 20, pages: 2 })
+    api.list.mockResolvedValue({ items: [account], total: 51, page: 1, page_size: 50, pages: 2 })
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.get(planSelect).findAll('option').map(option => option.text())).toEqual([
@@ -124,14 +124,14 @@ describe('account subscription plan filtering', () => {
     await vi.advanceTimersByTimeAsync(350)
     await flushPromises()
 
-    expect(api.list).toHaveBeenLastCalledWith(1, 20,
+    expect(api.list).toHaveBeenLastCalledWith(1, 50,
       expect.objectContaining({ plan_type: 'prolite', lite: '1' }), expect.any(Object))
     expect(wrapper.get('[data-test="selected-count"]').text()).toBe('0')
     expect(JSON.parse(localStorage.getItem('account-filter-values')!)).toMatchObject({ plan_type: 'prolite' })
 
     await wrapper.get(planSelect).setValue('')
     await vi.advanceTimersByTimeAsync(350)
-    expect(api.list).toHaveBeenLastCalledWith(1, 20,
+    expect(api.list).toHaveBeenLastCalledWith(1, 50,
       expect.objectContaining({ plan_type: '' }), expect.any(Object))
   })
 
@@ -144,7 +144,7 @@ describe('account subscription plan filtering', () => {
     localStorage.setItem('account-filter-values', JSON.stringify({ platform, plan_type: saved }))
     const wrapper = mountView()
     await flushPromises()
-    expect(api.list).toHaveBeenCalledWith(1, 20,
+    expect(api.list).toHaveBeenCalledWith(1, 50,
       expect.objectContaining({ platform, plan_type: expected }), expect.any(Object))
     expect(wrapper.find(planSelect).exists()).toBe(platform !== 'grok')
   })
@@ -157,7 +157,7 @@ describe('account subscription plan filtering', () => {
     await platformSelect.setValue('grok')
     await vi.advanceTimersByTimeAsync(350)
     expect(wrapper.find(planSelect).exists()).toBe(false)
-    expect(api.list).toHaveBeenLastCalledWith(1, 20,
+    expect(api.list).toHaveBeenLastCalledWith(1, 50,
       expect.objectContaining({ platform: 'grok', plan_type: '' }), expect.any(Object))
     await platformSelect.setValue('')
     expect((wrapper.get(planSelect).element as HTMLSelectElement).value).toBe('')
@@ -186,7 +186,7 @@ describe('account subscription plan filtering', () => {
     const wrapper = mountView()
     await flushPromises()
     await vi.advanceTimersByTimeAsync(6000)
-    expect(api.listWithEtag).toHaveBeenCalledWith(1, 20,
+    expect(api.listWithEtag).toHaveBeenCalledWith(1, 50,
       expect.objectContaining({ plan_type: 'pro' }), { etag: null, signal: expect.any(AbortSignal) })
 
     api.list.mockResolvedValue({
@@ -194,13 +194,13 @@ describe('account subscription plan filtering', () => {
     })
     await wrapper.get(planSelect).setValue('plus')
     await vi.advanceTimersByTimeAsync(6000)
-    expect(api.listWithEtag).toHaveBeenLastCalledWith(1, 20,
+    expect(api.listWithEtag).toHaveBeenLastCalledWith(1, 50,
       expect.objectContaining({ plan_type: 'plus' }), { etag: null, signal: expect.any(AbortSignal) })
     api.probeUpstreamBillingBatch.mockResolvedValue([{ account_id: 42, snapshot: { status: 'unsupported' } }])
     await wrapper.get('[data-test="select-page"]').trigger('click')
     await wrapper.get('[data-test="probe-billing"]').trigger('click')
     await flushPromises()
-    expect(api.getUpstreamBillingRatesWithEtag).toHaveBeenCalledWith(1, 20,
+    expect(api.getUpstreamBillingRatesWithEtag).toHaveBeenCalledWith(1, 50,
       expect.objectContaining({ plan_type: 'plus' }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 
