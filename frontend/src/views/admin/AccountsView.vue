@@ -518,6 +518,7 @@ import { adminAPI } from '@/api/admin'
 import { CONCRETE_PLATFORM_OPTIONS } from '@/constants/platforms'
 import { useAccountTodayStats } from '@/composables/useAccountTodayStats'
 import { accountUsageShowsTodayStats } from '@/utils/accountTodayStats'
+import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useTableLoader } from '@/composables/useTableLoader'
 import { useSwipeSelect, type SwipeSelectVirtualContext } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -1121,6 +1122,7 @@ const {
   handlePageSizeChange: baseHandlePageSizeChange
 } = useTableLoader<AccountListItem, any>({
   fetchFn: adminAPI.accounts.list,
+  pageSize: getPersistedPageSize(50),
   initialParams: {
     ...loadInitialAccountFilterValues(),
     type: '',

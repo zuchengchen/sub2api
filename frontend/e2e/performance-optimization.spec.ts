@@ -64,7 +64,8 @@ async function prepare(page: Page, initialRows = [row(1)]) {
         state.list304++
         return route.fulfill({ status: 304, headers: { ETag: '"list"' } })
       }
-      return json(route, { items: state.rows, total: state.total, page: Number(url.searchParams.get('page') || 1), page_size: 20, pages: Math.ceil(state.total / 20) }, { ETag: '"list"' })
+      const pageSize = Number(url.searchParams.get('page_size') || 20)
+      return json(route, { items: state.rows, total: state.total, page: Number(url.searchParams.get('page') || 1), page_size: pageSize, pages: Math.ceil(state.total / pageSize) }, { ETag: '"list"' })
     }
     if (/\/admin\/accounts\/\d+$/.test(path)) return json(route, state.rows.find(account => account.id === Number(path.split('/').pop())) || row(1))
     if (path.endsWith('/stats') && path.includes('/accounts/')) return json(route, {
@@ -168,7 +169,7 @@ test('today stats: pure OAuth, mixed rows, columns, 304, pagination, filter, man
   await expect.poll(() => state.list304).toBe(1)
   expect(state.today).toEqual([])
   state.rows = [row(1), row(2, 'anthropic', 'apikey'), row(3, 'anthropic', 'bedrock'), row(4, 'openai', 'apikey')]
-  state.total = 21
+  state.total = 51
   await refresh(page)
   await expect.poll(() => state.today.length).toBe(1)
   expect(state.today[0].ids).toEqual([2, 3])
