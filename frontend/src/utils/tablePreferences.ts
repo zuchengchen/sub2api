@@ -62,12 +62,8 @@ export const getConfiguredTablePageSizeOptions = (): number[] => {
   return unique.length > 0 ? unique : [...DEFAULT_TABLE_PAGE_SIZE_OPTIONS]
 }
 
-export const normalizeTablePageSize = (value: unknown): number => {
-  const normalized = parsePageSizeForSelection(value)
-  const defaultSize = getConfiguredTableDefaultPageSize()
+export const normalizeTablePageSize = (value: unknown, fallback = getConfiguredTableDefaultPageSize()): number => {
+  const normalized = parsePageSizeForSelection(value) ?? fallback
   const options = getConfiguredTablePageSizeOptions()
-  if (normalized !== null) {
-    return normalizePageSizeToOptions(normalized, options)
-  }
-  return normalizePageSizeToOptions(defaultSize, options)
+  return normalizePageSizeToOptions(normalized, options)
 }
