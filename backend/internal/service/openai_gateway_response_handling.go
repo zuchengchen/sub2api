@@ -1683,6 +1683,67 @@ func (s *OpenAIGatewayService) BindOpenAIHTTPResponseOwner(
 	)
 }
 
+func (s *OpenAIGatewayService) bindHTTPResponseOwner(ctx context.Context, groupID, accountID int64, responseID string, owner openAIHTTPResponseOwner) {
+	if err := s.BindOpenAIHTTPResponseOwner(ctx, groupID, responseID, owner.userID, owner.apiKeyID); err != nil {
+		logger.L().Warn(
+			"openai.http_bind_response_owner_failed",
+			zap.Int64("group_id", groupID),
+			zap.Int64("account_id", accountID),
+			zap.Int64("user_id", owner.userID),
+			zap.Int64("api_key_id", owner.apiKeyID),
+			zap.String("response_id", truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen)),
+			zap.Error(err),
+		)
+	}
+}
+
+// bindOpenAIWSHTTPResponse publishes the completed response's routing and
+// ownership before the client can use its ID in a new HTTP request.
+func (s *OpenAIGatewayService) bindOpenAIWSHTTPResponse(ctx context.Context, c *gin.Context, account *Account, connID, eventType string, payload []byte) string {
+	if !successfulOpenAIResponseAuthOwnerTerminal(eventType) || (!account.IsOpenAIOAuth() && !account.IsOpenAIApiKey()) || !gjson.ValidBytes(payload) {
+		return ""
+	}
+	event := gjson.ParseBytes(payload)
+	response := event.Get("response")
+	if hasDuplicateJSONObjectKeys(event) || hasDuplicateJSONObjectKeys(response) || event.Get("error").Type != gjson.Null || response.Get("error").Type != gjson.Null {
+		return ""
+	}
+	status := response.Get("status").String()
+	id := response.Get("id")
+	responseID := strings.TrimSpace(id.String())
+	if (status != "" && status != "completed") || id.Type != gjson.String || responseID == "" {
+		return ""
+	}
+	userID, apiKeyID := openAIResponseDownstreamOwner(c)
+	if userID <= 0 || apiKeyID <= 0 {
+		return ""
+	}
+	store := s.getOpenAIWSStateStore()
+	authStore, ok := store.(openAIResponseAuthOwnerStore)
+	if !ok {
+		return ""
+	}
+	bindCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAIWSStateStoreRedisTimeout)
+	defer cancel()
+	// The upstream credential binding keeps the first origin for an ID.
+	s.bindOpenAIResponseAuthOwner(bindCtx, c, account, responseID)
+	groupID := getOpenAIGroupIDFromContext(c)
+	origin, found, err := authStore.getResponseAuthOwner(bindCtx, groupID, responseID)
+	if err != nil || !found || origin.UserID != userID || origin.Owner != openAIResponseAuthOwnerFingerprint(account) {
+		return ""
+	}
+	ttl := s.openAIWSResponseStickyTTL()
+	if err := store.BindResponseAccount(bindCtx, groupID, responseID, account.ID, ttl); err != nil {
+		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, err)
+		return ""
+	}
+	if connID != "" {
+		store.BindResponseConn(responseID, connID, ttl)
+	}
+	s.bindHTTPResponseOwner(bindCtx, groupID, account.ID, responseID, openAIHTTPResponseOwner{userID: userID, apiKeyID: apiKeyID})
+	return responseID
+}
+
 func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *gin.Context, account *Account, responseID string) {
 	if s == nil || account == nil || account.ID <= 0 {
 		return
@@ -1712,17 +1773,7 @@ func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *g
 	logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, store.BindResponseAccount(bindCtx, groupID, responseID, account.ID, ttl))
 	if rawOwner, ok := c.Get(openAIHTTPResponseOwnerContextKey); ok {
 		if owner, ok := rawOwner.(openAIHTTPResponseOwner); ok && owner.userID > 0 && owner.apiKeyID > 0 {
-			if err := s.BindOpenAIHTTPResponseOwner(bindCtx, groupID, responseID, owner.userID, owner.apiKeyID); err != nil {
-				logger.L().Warn(
-					"openai.http_bind_response_owner_failed",
-					zap.Int64("group_id", groupID),
-					zap.Int64("account_id", account.ID),
-					zap.Int64("user_id", owner.userID),
-					zap.Int64("api_key_id", owner.apiKeyID),
-					zap.String("response_id", truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen)),
-					zap.Error(err),
-				)
-			}
+			s.bindHTTPResponseOwner(bindCtx, groupID, account.ID, responseID, owner)
 		}
 	}
 }
