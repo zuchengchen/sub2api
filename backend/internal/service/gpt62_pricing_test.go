@@ -63,14 +63,17 @@ func TestGPT62BillingAcrossSourcesTiersAndContextBoundary(t *testing.T) {
 			model                      string
 			input, output, write, read float64
 		}{
-			{"gpt-6.2-astra", 12e-6, 60e-6, 15e-6, 0.6e-6},
-			{"gpt-6.2-sol", 4e-6, 20e-6, 5e-6, 0.2e-6},
+			{"gpt-6.2-astra", 8e-6, 40e-6, 10e-6, 0.4e-6},
+			{"gpt-6.2-sol", 2e-6, 10e-6, 2.5e-6, 0.1e-6},
 		} {
 			for _, model := range []string{tc.model, "openai/" + tc.model + "-max", tc.model + "-openai-compact"} {
 				t.Run(source+"/"+model, func(t *testing.T) {
 					for _, prompt := range []int{271999, 272000, 272001} {
-						for tier, multiplier := range map[string]float64{"": 1, "fast": 2, "priority": 2, "ultrafast": 3} {
-							tokens := UsageTokens{InputTokens: prompt - 3000, CacheReadTokens: 2000, CacheCreationTokens: 1000, OutputTokens: 500}
+						for tier, multiplier := range map[string]float64{"": 1, "fast": 2, "priority": 2, "flex": 0.5, "ultrafast": 3} {
+							tokens := UsageTokens{
+								InputTokens: prompt - 3000, CacheReadTokens: 2000, OutputTokens: 500,
+								CacheCreationTokens: 1000, CacheCreation30mTokens: 400, CacheCreation12hTokens: 600,
+							}
 							cost, err := svc.CalculateCostUnified(CostInput{
 								Ctx: context.Background(), Model: model, Tokens: tokens, RateMultiplier: 0.05,
 								ServiceTier: tier, PricingAt: time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC),
@@ -83,7 +86,8 @@ func TestGPT62BillingAcrossSourcesTiersAndContextBoundary(t *testing.T) {
 							}
 							require.InDelta(t, float64(tokens.InputTokens)*tc.input*inputMultiplier*multiplier, cost.InputCost, 1e-10, tier)
 							require.InDelta(t, 500*tc.output*outputMultiplier*multiplier, cost.OutputCost, 1e-10, tier)
-							require.InDelta(t, 1000*tc.write*inputMultiplier*multiplier, cost.CacheCreationCost, 1e-10, tier)
+							cacheWriteCost := (400*tc.write + 600*tc.input*2.5) * inputMultiplier * multiplier
+							require.InDelta(t, cacheWriteCost, cost.CacheCreationCost, 1e-10, tier)
 							require.InDelta(t, 2000*tc.read*inputMultiplier*multiplier, cost.CacheReadCost, 1e-10, tier)
 							require.InDelta(t, cost.TotalCost*0.05, cost.ActualCost, 1e-10)
 							require.Equal(t, prompt > 272000, cost.LongContextBillingApplied)
@@ -181,7 +185,10 @@ func TestGPT62GatewayFallbacksPreserveRequestPricingTime(t *testing.T) {
 	svc := NewBillingService(&config.Config{}, nil)
 	gateway := &OpenAIGatewayService{billingService: svc}
 	ctx := context.Background()
-	for _, model := range []string{"gpt-6.2-astra", "gpt-6.2-sol"} {
+	for _, model := range []string{
+		"gpt-6.2-astra", "gpt-6.2-astra-2026-11-01", "gpt-6.2-astra-high-openai-compact",
+		"gpt-6.2-sol", "gpt-6.2-sol-2026-11-01", "gpt-6.2-sol-high-openai-compact",
+	} {
 		for _, tc := range []struct {
 			at   time.Time
 			mult float64
@@ -223,8 +230,8 @@ func TestGPT62PricingDoesNotCaptureOtherModels(t *testing.T) {
 		model string
 		input float64
 	}{
-		{"gpt-6-astra", 15e-6},
-		{"gpt-6.1-sol", 4e-6},
+		{"gpt-6-astra", 10e-6},
+		{"gpt-6.1-sol", 2e-6},
 	} {
 		p, err := svc.GetModelPricing(tc.model)
 		require.NoError(t, err)

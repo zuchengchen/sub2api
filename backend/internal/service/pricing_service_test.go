@@ -98,10 +98,10 @@ const gpt6AstraCatalogJSON = `{
 
 func TestBillingServiceGPT6AstraUsesOfficialPricingAcrossTiersAndLongContext(t *testing.T) {
 	svc := NewBillingService(&config.Config{}, newStubPricingServiceFromJSON(t, gpt6AstraCatalogJSON))
-	const billedInput = 15e-6
-	const billedCacheCreation = 18.75e-6
-	const billedCacheRead = 1.5e-6
-	const billedOutput = 75e-6
+	const billedInput = 10e-6
+	const billedCacheCreation = 12.5e-6
+	const billedCacheRead = 1e-6
+	const billedOutput = 50e-6
 	boundaryTokens := UsageTokens{InputTokens: 100_000, CacheCreationTokens: 100_000, CacheReadTokens: 72_000, OutputTokens: 10}
 	boundary, err := svc.CalculateCost("gpt-6-astra", boundaryTokens, 1)
 	require.NoError(t, err)
@@ -146,14 +146,14 @@ func TestGPT6AstraDedicatedFallbacksUseOfficialRates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pricing, err := tt.svc.GetModelPricing("gpt-6-astra")
 			require.NoError(t, err)
-			require.InDelta(t, 15e-6, pricing.InputPricePerToken, 1e-12)
-			require.InDelta(t, 30e-6, pricing.InputPricePerTokenPriority, 1e-12)
-			require.InDelta(t, 75e-6, pricing.OutputPricePerToken, 1e-12)
-			require.InDelta(t, 150e-6, pricing.OutputPricePerTokenPriority, 1e-12)
-			require.InDelta(t, 18.75e-6, pricing.CacheCreationPricePerToken, 1e-12)
-			require.InDelta(t, 37.5e-6, pricing.CacheCreationPricePerTokenPriority, 1e-12)
-			require.InDelta(t, 1.5e-6, pricing.CacheReadPricePerToken, 1e-12)
-			require.InDelta(t, 3e-6, pricing.CacheReadPricePerTokenPriority, 1e-12)
+			require.InDelta(t, 10e-6, pricing.InputPricePerToken, 1e-12)
+			require.InDelta(t, 20e-6, pricing.InputPricePerTokenPriority, 1e-12)
+			require.InDelta(t, 50e-6, pricing.OutputPricePerToken, 1e-12)
+			require.InDelta(t, 100e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+			require.InDelta(t, 12.5e-6, pricing.CacheCreationPricePerToken, 1e-12)
+			require.InDelta(t, 25e-6, pricing.CacheCreationPricePerTokenPriority, 1e-12)
+			require.InDelta(t, 1e-6, pricing.CacheReadPricePerToken, 1e-12)
+			require.InDelta(t, 2e-6, pricing.CacheReadPricePerTokenPriority, 1e-12)
 			require.Equal(t, 272_000, pricing.LongContextInputThreshold)
 			require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
 			require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
@@ -396,9 +396,13 @@ func TestGPT56DedicatedFallbacksUseOfficialRates(t *testing.T) {
 			pricing, err := svc.GetModelPricing(tt.model)
 			require.NoError(t, err)
 			assertGPT56FallbackPricing(t, pricing, tt.input, tt.cached, tt.cacheWrite, tt.output)
-			require.Equal(t, 272000, pricing.LongContextInputThreshold)
-			require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
-			require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+			if tt.model == "gpt-5.6-luna" {
+				require.Equal(t, 272000, pricing.LongContextInputThreshold)
+				require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
+				require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+			} else {
+				require.Zero(t, pricing.LongContextInputThreshold)
+			}
 		})
 	}
 }
@@ -511,6 +515,20 @@ func TestGetModelPricing_Gpt53CodexFallbackStillUsesGpt52Codex(t *testing.T) {
 
 	got := svc.GetModelPricing("gpt-5.3-codex")
 	require.Same(t, gpt52CodexPricing, got)
+}
+
+func TestGetModelPricing_UnknownGPTUsesUpstreamDefaultPricing(t *testing.T) {
+	gpt54Pricing := &LiteLLMModelPricing{InputCostPerToken: 2.5e-6}
+	lunaPricing := &LiteLLMModelPricing{InputCostPerToken: 0.4e-6}
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"gpt-5.4":    gpt54Pricing,
+			"gpt-6-luna": lunaPricing,
+		},
+	}
+
+	require.Same(t, gpt54Pricing, svc.GetModelPricing("gpt-future-test-model"))
+	require.Same(t, lunaPricing, svc.GetModelPricing("gpt-6-luna"))
 }
 
 func TestGetModelPricing_OpenAIFallbackMatchedLoggedAsInfo(t *testing.T) {

@@ -73,6 +73,36 @@ func TestPricingOverride_FieldLevelMergeKeepsOtherFields(t *testing.T) {
 	require.InDelta(t, 5.0/3.0, patched.LongContextInputCostMultiplier, 1e-9)
 }
 
+func TestGPTCacheWrite12hDefaultAndPricingOverride(t *testing.T) {
+	const catalog = `{
+		"gpt-5.6-sol": {"input_cost_per_token": 5e-6, "cache_creation_input_token_cost_above_12hr": 10e-6},
+		"gpt-6-luna": {"input_cost_per_token": 1e-7, "cache_creation_input_token_cost_above_12hr": 2e-6}
+	}`
+	tokens := UsageTokens{CacheCreationTokens: 1000, CacheCreation12hTokens: 1000}
+	for _, tc := range []struct {
+		name, override string
+		want           float64
+	}{
+		{"upstream derived price", `{}`, 0.0125},
+		{"operator override", `{"gpt-5.6-sol": {"cache_creation_input_token_cost_above_12hr": 7e-6}}`, 0.007},
+		{"explicit free writes", `{"gpt-5.6-sol": {"cache_creation_input_token_cost_above_12hr": 0}}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newPricingServiceWithOverride(t, tc.override)
+			var err error
+			svc.pricingData, err = svc.parsePricingData([]byte(catalog))
+			require.NoError(t, err)
+			billing := NewBillingService(&config.Config{}, svc)
+			cost, err := billing.CalculateCost("openai/gpt-5.6-sol", tokens, 1)
+			require.NoError(t, err)
+			require.InDelta(t, tc.want, cost.CacheCreationCost, 1e-12)
+			luna, err := billing.CalculateCost("gpt-6-luna", tokens, 1)
+			require.NoError(t, err)
+			require.InDelta(t, 0.002, luna.CacheCreationCost, 1e-12)
+		})
+	}
+}
+
 func TestPricingOverride_NullFieldValueRemovesField(t *testing.T) {
 	svc := newPricingServiceWithOverride(t, `{"gpt-5.5": {
 		"input_cost_per_token_above_272k_tokens": null,

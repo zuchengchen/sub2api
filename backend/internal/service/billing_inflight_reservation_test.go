@@ -142,7 +142,7 @@ func TestInflightEstimate_GroupPerRequestPricing(t *testing.T) {
 	require.InDelta(t, (1000*in+500*out)*2, est, 1e-12)
 }
 
-func TestInflightEstimate_GPT6AstraUsesForkBillingRatesWithoutLongContextSurcharge(t *testing.T) {
+func TestInflightEstimate_GPT6AstraUsesUpstreamRatesWithoutLongContextSurcharge(t *testing.T) {
 	svc := newInflightEstimateGateway(t, nil)
 	svc.cfg.Billing.InflightReservation.MaxInputTokens = 400000
 	groupID := int64(22)
@@ -155,7 +155,7 @@ func TestInflightEstimate_GPT6AstraUsesForkBillingRatesWithoutLongContextSurchar
 	require.True(t, priced)
 	// Reservation is deliberately a base-rate approximation; actual usage billing
 	// may apply the separate long-context ladder after the request completes.
-	require.InDelta(t, 272001*15e-6+1000*75e-6, est, 1e-9)
+	require.InDelta(t, 272001*10e-6+1000*50e-6, est, 1e-9)
 }
 
 func TestInflightEstimate_UnpricedIsReportedAndNonMeteredIsNot(t *testing.T) {

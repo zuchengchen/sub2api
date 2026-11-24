@@ -58,14 +58,14 @@ var (
 		SupportsPromptCaching:   true,
 	}
 	openAIGPT6AstraFallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:                   1.5e-05,
-		InputCostPerTokenPriority:           3e-05,
-		OutputCostPerToken:                  7.5e-05,
-		OutputCostPerTokenPriority:          1.5e-04,
-		CacheCreationInputTokenCost:         1.875e-05,
-		CacheCreationInputTokenCostPriority: 3.75e-05,
-		CacheReadInputTokenCost:             1.5e-06,
-		CacheReadInputTokenCostPriority:     3e-06,
+		InputCostPerToken:                   1e-05,
+		InputCostPerTokenPriority:           2e-05,
+		OutputCostPerToken:                  5e-05,
+		OutputCostPerTokenPriority:          1e-04,
+		CacheCreationInputTokenCost:         1.25e-05,
+		CacheCreationInputTokenCostPriority: 2.5e-05,
+		CacheReadInputTokenCost:             1e-06,
+		CacheReadInputTokenCostPriority:     2e-06,
 		LongContextInputTokenThreshold:      272_000,
 		LongContextInputCostMultiplier:      2,
 		LongContextOutputCostMultiplier:     1.5,
@@ -74,8 +74,6 @@ var (
 		Mode:                                "chat",
 		SupportsPromptCaching:               true,
 	}
-	// GPT-6.2 catalog fallback uses the published API rates. The billing service
-	// applies this site's Astra/Sol markup independently of catalog availability.
 	openAIGPT62AstraFallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:                   8e-6,
 		InputCostPerTokenPriority:           16e-6,
@@ -128,14 +126,14 @@ var (
 		SupportsPromptCaching:               true,
 	}
 	openAIGPT61SolFallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:                   4e-6,
-		InputCostPerTokenPriority:           8e-6,
-		OutputCostPerToken:                  20e-6,
-		OutputCostPerTokenPriority:          40e-6,
-		CacheCreationInputTokenCost:         5e-6,
-		CacheCreationInputTokenCostPriority: 10e-6,
-		CacheReadInputTokenCost:             0.2e-6,
-		CacheReadInputTokenCostPriority:     0.4e-6,
+		InputCostPerToken:                   2e-6,
+		InputCostPerTokenPriority:           4e-6,
+		OutputCostPerToken:                  10e-6,
+		OutputCostPerTokenPriority:          20e-6,
+		CacheCreationInputTokenCost:         2.5e-6,
+		CacheCreationInputTokenCostPriority: 5e-6,
+		CacheReadInputTokenCost:             0.1e-6,
+		CacheReadInputTokenCostPriority:     0.2e-6,
 		LongContextInputTokenThreshold:      272_000,
 		LongContextInputCostMultiplier:      2,
 		LongContextOutputCostMultiplier:     1.5,
@@ -145,14 +143,14 @@ var (
 		SupportsPromptCaching:               true,
 	}
 	openAIGPT6SolFallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:                   4e-6,
-		InputCostPerTokenPriority:           8e-6,
-		OutputCostPerToken:                  20e-6,
-		OutputCostPerTokenPriority:          40e-6,
-		CacheCreationInputTokenCost:         5e-6,
-		CacheCreationInputTokenCostPriority: 10e-6,
-		CacheReadInputTokenCost:             0.4e-6,
-		CacheReadInputTokenCostPriority:     0.8e-6,
+		InputCostPerToken:                   2e-6,
+		InputCostPerTokenPriority:           4e-6,
+		OutputCostPerToken:                  10e-6,
+		OutputCostPerTokenPriority:          20e-6,
+		CacheCreationInputTokenCost:         2.5e-6,
+		CacheCreationInputTokenCostPriority: 5e-6,
+		CacheReadInputTokenCost:             0.2e-6,
+		CacheReadInputTokenCostPriority:     0.4e-6,
 		LongContextInputTokenThreshold:      272_000,
 		LongContextInputCostMultiplier:      2,
 		LongContextOutputCostMultiplier:     1.5,
@@ -274,7 +272,7 @@ var (
 // tokenPriceOverrides tracks explicit nonnegative rates from pricing.override_file.
 // Keep this provenance with the parsed card so billing never rereads the file.
 type tokenPriceOverrides struct {
-	input, output, cacheRead bool
+	input, output, cacheRead, cacheWrite12h bool
 }
 
 // LiteLLMModelPricing LiteLLM价格数据结构
@@ -1063,9 +1061,10 @@ func tokenPriceOverridesFromPatch(patch json.RawMessage) tokenPriceOverrides {
 		return json.Unmarshal(fields[field], &rate) == nil && rate != nil && *rate >= 0
 	}
 	return tokenPriceOverrides{
-		input:     explicitRate("input_cost_per_token"),
-		output:    explicitRate("output_cost_per_token"),
-		cacheRead: explicitRate("cache_read_input_token_cost"),
+		input:         explicitRate("input_cost_per_token"),
+		output:        explicitRate("output_cost_per_token"),
+		cacheRead:     explicitRate("cache_read_input_token_cost"),
+		cacheWrite12h: explicitRate("cache_creation_input_token_cost_above_12hr"),
 	}
 }
 
@@ -1712,13 +1711,21 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 // 2. gpt-5.2-20251222 -> gpt-5.2（去掉日期版本号）
 // 3. gpt-5.3-codex -> gpt-5.2-codex
 // 4. gpt-5.4* -> 业务静态兜底价
-// 5. 最终回退到 DefaultTestModel (gpt-6-luna)
+// 5. 最终回退到上游默认计费型号 gpt-5.4
 func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 	if resolved := resolveOpenAIImageModelAlias(model); resolved != model {
 		if pricing, ok := s.pricingData[resolved]; ok {
 			return pricing
 		}
 		model = resolved
+	}
+	// Resolve known reasoning and compact aliases to the routed model's card
+	// after checking for an explicit price entry.
+	if base := normalizeOpenAIPricingAlias(model); base != model {
+		if pricing, ok := s.pricingData[base]; ok {
+			return pricing
+		}
+		model = base
 	}
 	if openai.IsGPT62AstraModelSpelling(model) {
 		if pricing, ok := s.pricingData["gpt-6.2-astra"]; ok {
@@ -1843,14 +1850,25 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		return nil
 	}
 
-	// 最终回退到 DefaultTestModel
-	defaultModel := strings.ToLower(openai.DefaultTestModel)
+	// 计费兜底使用上游默认型号，与本地账号测试模型独立。
+	const defaultModel = "gpt-5.4"
 	if pricing, ok := s.pricingData[defaultModel]; ok {
 		logger.LegacyPrintf("service.pricing", "[Pricing] OpenAI fallback to default model %s -> %s", model, defaultModel)
 		return pricing
 	}
 
 	return nil
+}
+
+func normalizeOpenAIPricingAlias(model string) string {
+	base := normalizeKnownOpenAICodexModel(model)
+	switch base {
+	case "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.6-sol", "gpt-5.6-terra",
+		"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra":
+		return base
+	default:
+		return model
+	}
 }
 
 // generateOpenAIModelVariants 生成 OpenAI 模型的回退变体列表
