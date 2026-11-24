@@ -25,7 +25,7 @@ func (s *AccountRepoSuite) TestAutoResetCreditTogglePreservesExtra() {
 		Name: "automatic-reset-toggle", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: extra,
 	})
 	s.False(service.ResolveOpenAIAutoResetCreditConfig(account).Enabled, "legacy enabled flag requires fresh opt-in")
-	svc := service.NewAdminService(nil, nil, nil, s.repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, s.client, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewAdminService(nil, nil, nil, s.repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, s.client, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	for _, enabled := range []bool{true, false, true} {
 		updated, err := svc.SetOpenAIAutoResetCreditEnabled(s.ctx, account.ID, enabled)

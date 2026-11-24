@@ -320,8 +320,5 @@ func rememberGrokObservedSnapshot(account *Account, snap *GrokObservedModelsSnap
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return
 	}
-	if account.Extra == nil {
-		account.Extra = map[string]any{}
-	}
-	account.Extra[grokObservedModelsExtraKey] = decoded
+	mergeAccountExtra(account, map[string]any{grokObservedModelsExtraKey: decoded})
 }

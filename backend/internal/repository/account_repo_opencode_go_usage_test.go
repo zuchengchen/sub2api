@@ -199,7 +199,7 @@ func TestLockAndMergeAccountProbeExtraPreservesOpenCodeGoManagedState(t *testing
 					WillReturnRows(sqlmock.NewRows([]string{"oauth_credentials"}).AddRow(nil))
 			}
 
-			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, tt.account, nil, nil)
+			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, tt.account, service.AccountBillingSettingsUpdate{})
 			require.NoError(t, err)
 			if tt.wantAuto == nil {
 				require.NotContains(t, got, service.OpenCodeGoUsageAutoRefreshExtraKey)

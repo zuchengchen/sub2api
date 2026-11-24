@@ -22,7 +22,7 @@ func TestTiboHealthyGroupModelWebSocket(t *testing.T) {
 		t.Run(mode+"/later", func(t *testing.T) {
 			runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
 				firstPayload:  `{"type":"response.create","model":"gpt-5.4","stream":false}`,
-				secondPayload: `{"type":"response.create","model":"gpt-5.4","Model":"gpt6luna-high","stream":false}`,
+				secondPayload: `{"type":"response.create","model":"gpt6luna-high","stream":false}`,
 				group:         group, ingressMode: mode, secondTurnCloseExpected: true,
 			})
 		})

@@ -193,6 +193,30 @@ func setAccountModelRateLimitSnapshot(account *Account, scope string, resetAt ti
 	account.Extra = extra
 }
 
+// clearAccountModelRateLimitSnapshot 从本账号对象的 Extra 快照中删除指定 scope，
+// 让当前实例立刻停止跳过该模型，而不必等下一次快照重建。
+// 与 setAccountModelRateLimitSnapshot 一样写时复制，不修改可能共享的旧 map。
+func clearAccountModelRateLimitSnapshot(account *Account, scope string) {
+	if account == nil || strings.TrimSpace(scope) == "" {
+		return
+	}
+	oldLimits, ok := account.Extra[modelRateLimitsKey].(map[string]any)
+	if !ok {
+		return
+	}
+	if _, exists := oldLimits[scope]; !exists {
+		return
+	}
+	limits := make(map[string]any, len(oldLimits))
+	maps.Copy(limits, oldLimits)
+	delete(limits, scope)
+
+	extra := make(map[string]any, len(account.Extra))
+	maps.Copy(extra, account.Extra)
+	extra[modelRateLimitsKey] = limits
+	account.Extra = extra
+}
+
 // IsSchedulableForModel 结合模型级限流判断是否可调度。
 // 保持旧签名以兼容既有调用方；默认使用 context.Background()。
 func (a *Account) IsSchedulableForModel(requestedModel string) bool {

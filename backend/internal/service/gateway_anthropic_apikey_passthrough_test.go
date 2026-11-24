@@ -1216,6 +1216,8 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_MissingTerminalEventReturnsEr
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing terminal event")
 	require.NotNil(t, result)
+	require.Equal(t, 11, result.usage.InputTokens)
+	require.Equal(t, 5, result.usage.OutputTokens)
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_MessageStopHeaderThenDisconnectIsIncomplete(t *testing.T) {
@@ -1293,13 +1295,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_PreservesSSEFieldsAndMultilin
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 11, result.usage.InputTokens)
-	output := rec.Body.String()
-	require.Contains(t, output, ": passthrough comment\n")
-	require.Contains(t, output, "id: upstream-9\n")
-	require.Contains(t, output, "retry: 1800\n")
-	require.Contains(t, output, "data: {\"type\":\"message_start\",\"message\":{\ndata: \"usage\":{\"input_tokens\":11}}}\n")
-	require.Contains(t, output, "x-vendor-field: passthrough\n")
-	require.Contains(t, output, "event: error\ndata: {\"type\":\"error\"")
+	require.Equal(t, body+"\n", rec.Body.String())
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuccess(t *testing.T) {
@@ -1462,7 +1458,7 @@ func TestAnthropicSSEEvent_BlockWithDataPreservesFields(t *testing.T) {
 
 func TestGatewayService_ParseSSEUsagePassthrough_MessageStartFallbacks(t *testing.T) {
 	usage := &ClaudeUsage{}
-	data := `{"type":"message_start","message":{"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cached_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}}}}`
+	data := `{"type":"message_start","message":{"usage":{"input_tokens":12,"cache_read_input_tokens":0,"cached_tokens":9,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}}}}`
 
 	parseSSEUsagePassthrough(data, usage)
 
@@ -1516,6 +1512,75 @@ func TestGatewayService_ParseSSEUsagePassthrough_FallbackFromUsageNode(t *testin
 	require.Equal(t, 3, usage.CacheCreationInputTokens)
 }
 
+func TestGatewayService_ParseSSEUsagePassthrough_OtherEventCacheCreation(t *testing.T) {
+	tests := []struct {
+		name          string
+		start         string
+		snapshots     []string
+		wantAggregate int
+	}{
+		{
+			name:          "omitted aggregate merges partial TTL snapshots",
+			snapshots:     []string{`{"cache_creation":{"ephemeral_5m_input_tokens":2}}`, `{"cache_creation":{"ephemeral_5m_input_tokens":null,"ephemeral_1h_input_tokens":1}}`},
+			wantAggregate: 3,
+		},
+		{
+			name:          "null aggregate falls back to TTL",
+			snapshots:     []string{`{"cache_creation_input_tokens":null,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}}`},
+			wantAggregate: 3,
+		},
+		{
+			name:          "explicit zero retains raw TTL",
+			snapshots:     []string{`{"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}}`},
+			wantAggregate: 3,
+		},
+		{
+			name:          "previous explicit aggregate survives null",
+			start:         `{"cache_creation_input_tokens":9}`,
+			snapshots:     []string{`{"cache_creation_input_tokens":null,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}}`},
+			wantAggregate: 9,
+		},
+		{
+			name:          "previous explicit zero survives omitted aggregate",
+			start:         `{"cache_creation_input_tokens":0}`,
+			snapshots:     []string{`{"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}}`},
+			wantAggregate: 3,
+		},
+		{
+			name:          "explicit zero preserves previous aggregate",
+			start:         `{"cache_creation_input_tokens":9}`,
+			snapshots:     []string{`{"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}}`},
+			wantAggregate: 9,
+		},
+	}
+	for _, test := range tests {
+		for _, location := range []string{"usage", "message.usage", "null usage with message.usage"} {
+			t.Run(test.name+"/"+location, func(t *testing.T) {
+				usage := &ClaudeUsage{}
+				if test.start != "" {
+					parseSSEUsagePassthrough(`{"type":"message_start","message":{"usage":`+test.start+`}}`, usage)
+				}
+				for _, snapshot := range test.snapshots {
+					data := `{"type":"content_block_delta","usage":` + snapshot + `}`
+					switch location {
+					case "message.usage":
+						data = `{"type":"content_block_delta","message":{"usage":` + snapshot + `}}`
+					case "null usage with message.usage":
+						data = `{"type":"content_block_delta","usage":null,"message":{"usage":` + snapshot + `}}`
+					}
+					parseSSEUsagePassthrough(data, usage)
+					previous := *usage
+					parseSSEUsagePassthrough(data, usage)
+					require.Equal(t, previous, *usage, "repeated cumulative snapshots must be idempotent")
+				}
+				require.Equal(t, test.wantAggregate, usage.CacheCreationInputTokens)
+				require.Equal(t, 2, usage.CacheCreation5mTokens)
+				require.Equal(t, 1, usage.CacheCreation1hTokens)
+			})
+		}
+	}
+}
+
 func TestParseClaudeUsageFromResponseBody(t *testing.T) {
 	t.Run("empty or missing usage", func(t *testing.T) {
 		got := parseClaudeUsageFromResponseBody(nil)
@@ -1528,7 +1593,7 @@ func TestParseClaudeUsageFromResponseBody(t *testing.T) {
 	})
 
 	t.Run("parse all usage fields and fallback", func(t *testing.T) {
-		body := []byte(`{"usage":{"input_tokens":21,"output_tokens":34,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cached_tokens":13,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":8}}}`)
+		body := []byte(`{"usage":{"input_tokens":21,"output_tokens":34,"cache_read_input_tokens":0,"cached_tokens":13,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":8}}}`)
 		got := parseClaudeUsageFromResponseBody(body)
 		require.Equal(t, 21, got.InputTokens)
 		require.Equal(t, 34, got.OutputTokens)

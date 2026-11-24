@@ -3,14 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AdminAccessKeysSettings from '../AdminAccessKeysSettings.vue'
 import zh from '@/i18n/locales/zh/adminAccessKeys'
 import en from '@/i18n/locales/en/adminAccessKeys'
-const mountSettings = () => mount(AdminAccessKeysSettings)
-vi.mock('vue-i18n', () => ({ useI18n: () => ({
-  t: (key: string, values: Record<string, unknown> = {}) => {
-    const message = zh[key.replace('adminAccessKeys.', '') as keyof typeof zh]
-    if (!message) throw new Error(`缺少翻译：${key}`)
-    return message.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name]))
-  }
-}) }))
+import { createI18n } from 'vue-i18n'
+const mountSettings = () => mount(AdminAccessKeysSettings, { global: { plugins: [createI18n({ legacy: false, locale: 'zh', messages: { zh: { adminAccessKeys: zh }, en: { adminAccessKeys: en } } })], stubs: { teleport: true } } })
 import { getAllIncludingInactive } from '@/api/admin/groups'
 const mocks = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), update: vi.fn(), rotate: vi.fn(), revoke: vi.fn(), deleteRecord: vi.fn(), stepUp: vi.fn((fn: () => unknown) => fn()) }))
 vi.mock('@/api/admin/adminAccessKeys', () => mocks)

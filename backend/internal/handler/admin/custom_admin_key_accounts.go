@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,7 +25,7 @@ func scopedAdminAccountDTO(a *service.Account, p adminaccess.Policy) gin.H {
 			groups = append(groups, g)
 		}
 	}
-	result := gin.H{"id": a.ID, "name": a.Name, "notes": a.Notes, "platform": a.Platform, "type": a.Type, "status": a.Status, "schedulable": a.Schedulable, "concurrency": a.Concurrency, "priority": a.Priority, "group_ids": groups}
+	result := gin.H{"id": a.ID, "name": a.Name, "notes": a.Notes, "platform": a.Platform, "type": a.Type, "status": a.Status, "schedulable": a.Schedulable, "concurrency": a.Concurrency, "priority": a.Priority, "group_ids": groups, "expires_at": a.ExpiresAt, "rate_limit_reset_at": a.RateLimitResetAt, "overload_until": a.OverloadUntil, "temp_unschedulable_until": a.TempUnschedulableUntil}
 	// 兼容原账户读取结构，仅返回模型映射，凭证及扩展字段继续脱敏。
 	if p.AllowsAccount("accounts.read", resource) {
 		if policy := a.OpenAIOAuthModelPolicy(); policy != nil {
@@ -45,7 +46,32 @@ func scopedAdminAccountDTO(a *service.Account, p adminaccess.Policy) gin.H {
 		}
 		result["credentials"] = gin.H{"model_mapping": mapping}
 	}
+	if p.AllowsAccount("accounts.identity.read", resource) {
+		identity := scopedAdminAccountIdentityDTO(a)
+		credentials, _ := result["credentials"].(gin.H)
+		if credentials != nil {
+			for key, value := range identity["credentials"].(gin.H) {
+				credentials[key] = value
+			}
+			identity["credentials"] = credentials
+		}
+		maps.Copy(result, identity)
+	}
 	return result
+}
+
+func scopedAdminAccountIdentityDTO(a *service.Account) gin.H {
+	credentials := gin.H{}
+	for _, key := range []string{"email", "plan_type", "subscription_expires_at"} {
+		if value, ok := a.Credentials[key].(string); ok {
+			credentials[key] = value
+		}
+	}
+	extra := gin.H{}
+	if email, ok := a.Extra["email"].(string); ok {
+		extra["email"] = email
+	}
+	return gin.H{"id": a.ID, "credentials": credentials, "extra": extra, "created_at": a.CreatedAt}
 }
 
 // ScopedAdminKeyAccounts 在原处理器前完成独立授权和安全输出。
@@ -79,7 +105,17 @@ func (h *AccountHandler) ScopedAdminKeyAccounts(c *gin.Context) {
 		if size < 1 || size > 100 {
 			size = 20
 		}
-		accounts, total, err := api.ScopedAdminList(ctx, pagination.PaginationParams{Page: page, PageSize: size}, c.Query("platform"), c.Query("type"), c.Query("status"), c.Query("search"))
+		groupID := int64(0)
+		// 空分组筛选与省略参数均表示不按分组筛选。
+		if raw := c.Query("group"); raw != "" {
+			var err error
+			groupID, err = strconv.ParseInt(raw, 10, 64)
+			if err != nil || groupID < -1 {
+				response.BadRequest(c, "分组筛选无效")
+				return
+			}
+		}
+		accounts, total, err := api.ScopedAdminList(ctx, pagination.PaginationParams{Page: page, PageSize: size}, c.Query("platform"), c.Query("type"), c.Query("status"), c.Query("search"), groupID)
 		if err != nil {
 			response.Error(c, 503, "账户查询失败")
 			return
@@ -90,14 +126,24 @@ func (h *AccountHandler) ScopedAdminKeyAccounts(c *gin.Context) {
 				items = append(items, scopedAdminAccountDTO(&accounts[i], principal.Policy))
 			}
 		}
-		response.Success(c, gin.H{"items": items, "total": total, "page": page, "page_size": size})
+		response.Paginated(c, items, total, page, size)
 		return
 	}
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+
 	if (path == base+"/:id" || path == base+"/:id/models") && c.Request.Method == "GET" {
 		a, err := h.adminService.GetAccount(ctx, id)
-		if err != nil || a == nil || !principal.Policy.AllowsAccount("accounts.read", adminaccess.Account{ID: id, GroupIDs: accountGroupIDs(a), Type: accountType(a), Platform: accountPlatform(a)}) {
-			response.Error(c, 404, "账户不存在")
+		if err != nil || a == nil {
+			response.NotFound(c, "账号不存在")
+			return
+		}
+		resource := scopedAccountResource(a)
+		if !principal.Policy.AllowsAccount("accounts.read", resource) {
+			if path == base+"/:id" && principal.Policy.AllowsAccount("accounts.identity.read", resource) {
+				response.Success(c, scopedAdminAccountIdentityDTO(a))
+				return
+			}
+			response.NotFound(c, "账号不存在")
 			return
 		}
 		if path == base+"/:id/models" {

@@ -30,7 +30,6 @@ const (
 	vertexLockWaitTime            = 200 * time.Millisecond
 	vertexAnthropicVersion        = "vertex-2023-10-16"
 	vertexGlobalHost              = "aiplatform.googleapis.com"
-	vertexAuthModeAPIKey          = "apikey"
 )
 
 var (
@@ -61,13 +60,6 @@ type vertexTokenResponse struct {
 
 func (a *Account) IsVertexServiceAccount() bool {
 	return a != nil && a.Type == AccountTypeServiceAccount
-}
-
-// IsVertexAPIKey 判断 Gemini 平台的 Vertex 账号是否使用 API Key 认证（credentials.auth_mode=apikey）。
-// Anthropic 平台的 Vertex 账号只支持 Service Account JSON。
-func (a *Account) IsVertexAPIKey() bool {
-	return a.IsVertexServiceAccount() && a.Platform == PlatformGemini &&
-		strings.TrimSpace(a.GetCredential("auth_mode")) == vertexAuthModeAPIKey
 }
 
 func (a *Account) VertexProjectID() string {

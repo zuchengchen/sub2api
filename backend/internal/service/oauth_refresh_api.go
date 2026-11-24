@@ -42,6 +42,8 @@ const (
 	defaultRefreshLockTTL                   = 60 * time.Second
 	defaultRefreshLockReleaseTimeout        = 2 * time.Second
 	defaultRefreshPostPersistCleanupTimeout = 2 * time.Second
+	defaultOpenAIRefreshPersistTimeout      = 10 * time.Second
+	defaultRefreshRepositorySyncTimeout     = 2 * time.Second
 )
 
 var (
@@ -238,6 +240,19 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			return &OAuthRefreshResult{LockHeld: true}, nil
 		} else {
 			distributedLocked = true
+			if isStoredOpenAIManagedOAuth(account) {
+				// A valid rotation must have time to reach the credential CAS and
+				// release the lease even if enrichment uses its whole deadline.
+				budget := api.lockTTL - defaultOpenAIRefreshPersistTimeout -
+					defaultRefreshRepositorySyncTimeout - defaultRefreshPostPersistCleanupTimeout -
+					defaultRefreshLockReleaseTimeout - maxTokenRefreshLockSafetyMargin
+				if budget <= 0 {
+					return nil, &providerConfigurationRefreshError{err: errors.New("OpenAI OAuth refresh lock lease is too short for credential persistence")}
+				}
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, budget)
+				defer cancel()
+			}
 		}
 	}
 
@@ -302,6 +317,15 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	// 4. 执行平台特定刷新逻辑
 	attemptedAccount := snapshotOAuthRefreshAccount(freshAccount)
 	newCredentials, refreshErr := executor.Refresh(ctx, freshAccount)
+	if refreshErr == nil && hasOpenAIRefreshCredentials(attemptedAccount, newCredentials) {
+		// The upstream rotation is irreversible. Cancellation of optional
+		// enrichment must not discard its result or cause an old-token retry.
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultOpenAIRefreshPersistTimeout)
+		defer cancel()
+		newCredentials = shallowCopyMap(newCredentials)
+		newCredentials["_token_version"] = time.Now().UnixMilli()
+		return api.persistOpenAIRefreshSuccess(persistCtx, attemptedAccount, newCredentials, executor, cacheKey)
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		// A provider implementation may ignore cancellation and return late
 		// credentials. Never persist them after the attempt/cycle boundary.
@@ -419,13 +443,6 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			)
 			return nil, fmt.Errorf("%w: %v", errOAuthRefreshCredentialPersist, updateErr)
 		}
-		if freshAccount.IsOpenAIOAuth() {
-			if publisher, ok := executor.(interface {
-				AuthCredentialsPersisted(context.Context, *Account)
-			}); ok {
-				publisher.AuthCredentialsPersisted(ctx, attemptedAccount)
-			}
-		}
 	}
 
 	if requestPath && freshAccount.Platform == PlatformGrok {
@@ -439,6 +456,16 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		NewCredentials: newCredentials,
 		Account:        freshAccount,
 	}, nil
+}
+
+func hasOpenAIRefreshCredentials(account *Account, credentials map[string]any) bool {
+	if !isStoredOpenAIManagedOAuth(account) {
+		return false
+	}
+	accessToken, _ := credentials["access_token"].(string)
+	refreshToken, _ := credentials["refresh_token"].(string)
+	return strings.TrimSpace(accessToken) != "" && strings.TrimSpace(refreshToken) != "" &&
+		(accessToken != account.GetOpenAIAccessToken() || refreshToken != account.GetOpenAIRefreshToken())
 }
 
 func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey string) {

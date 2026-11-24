@@ -226,6 +226,7 @@ func (r *finalizationLeaseRepoStub) renewalCount() int {
 }
 
 type billingOutboxPostProcessorStub struct {
+	mu      sync.Mutex
 	calls   int
 	command *BillingOutboxCommand
 	result  *UsageBillingApplyResult
@@ -233,6 +234,8 @@ type billingOutboxPostProcessorStub struct {
 }
 
 func (s *billingOutboxPostProcessorStub) Finalize(_ context.Context, command *BillingOutboxCommand, result *UsageBillingApplyResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.calls++
 	s.command = command
 	s.result = result

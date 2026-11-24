@@ -361,8 +361,10 @@ func TestHandleStreamingResponse_GrokPingOnlyUpstreamTimesOut(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	source := newGrokScriptedBody(nil, grokTestPingFrame, 100*time.Millisecond)
 	defer source.Close()
+	stopSource := time.AfterFunc(5*time.Second, func() { _ = source.Close() })
+	defer stopSource.Stop()
 	account := &Account{ID: 37, Name: "grok-oauth", Platform: PlatformGrok, Type: AccountTypeOAuth}
-	resp := newGrokTestStreamResponse(newGrokResponsesBillingPingFilterBody(source, account, defaultMaxLineSize))
+	resp := newGrokTestStreamResponse(newGrokResponsesBillingPingFilterBody(source, account, defaultMaxLineSize, nil))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -397,7 +399,7 @@ func TestHandleStreamingResponse_GrokSteadyProgressOutlivesIdleTimeout(t *testin
 	source := newGrokScriptedBody(steps, "", 0)
 	defer source.Close()
 	account := &Account{ID: 38, Name: "grok-oauth", Platform: PlatformGrok, Type: AccountTypeOAuth}
-	resp := newGrokTestStreamResponse(newGrokResponsesBillingPingFilterBody(source, account, defaultMaxLineSize))
+	resp := newGrokTestStreamResponse(newGrokResponsesBillingPingFilterBody(source, account, defaultMaxLineSize, nil))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)

@@ -212,13 +212,22 @@
             <div class="text-sm">
               <div class="flex items-center gap-1.5">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('keys.today') }}:</span>
-                <span class="font-medium text-gray-900 dark:text-white">
+                <span
+                  v-if="usageLoading && !usageStats[row.id]"
+                  data-test="usage-pending"
+                  class="inline-block h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-dark-600"
+                />
+                <span v-else class="font-medium text-gray-900 dark:text-white">
                   ${{ (usageStats[row.id]?.today_actual_cost ?? 0).toFixed(4) }}
                 </span>
               </div>
               <div class="mt-0.5 flex items-center gap-1.5">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('keys.total') }}:</span>
-                <span class="font-medium text-gray-900 dark:text-white">
+                <span
+                  v-if="usageLoading && !usageStats[row.id]"
+                  class="inline-block h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-dark-600"
+                />
+                <span v-else class="font-medium text-gray-900 dark:text-white">
                   ${{ (usageStats[row.id]?.total_actual_cost ?? 0).toFixed(4) }}
                 </span>
               </div>
@@ -403,6 +412,7 @@
               <!-- Import to CC Switch Button -->
               <button
                 v-if="!publicSettings?.hide_ccs_import_button"
+                :disabled="ccSwitchCatalogLoading"
                 @click="importToCcswitch(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
               >
@@ -1082,6 +1092,25 @@
     />
 
     <!-- Use Key Modal -->
+    <BaseDialog
+      :show="!!ccSwitchCatalog"
+      :title="t('keys.importToCcSwitch')"
+      @close="ccSwitchCatalog = null"
+    >
+      <label class="block text-sm">
+        {{ t('keys.useKeyModal.codexModelCatalog.chooseAvailableModel') }}
+        <select v-model="ccSwitchCatalogChoice" class="input mt-2">
+          <option value="" disabled>{{ t('keys.useKeyModal.codexModelCatalog.model') }}</option>
+          <option v-for="slug in ccSwitchCatalog?.models" :key="slug" :value="slug">{{ slug }}</option>
+        </select>
+      </label>
+      <template #footer>
+        <button class="btn btn-primary" type="button" :disabled="!ccSwitchCatalogChoice" @click="importCcSwitchCatalogChoice">
+          {{ t('keys.importToCcSwitch') }}
+        </button>
+      </template>
+    </BaseDialog>
+
     <UseKeyModal
       :show="showUseKeyModal"
       :api-key="selectedKey?.key || ''"
@@ -1194,12 +1223,15 @@ import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
+import { fetchCodexModelsManifest } from '@/api/codex'
+import { DEFAULT_CODEX_EXPORT_MODEL, parseCodexCatalogModels } from '@/utils/codexCatalogConfig'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import { platformBadgeLightClass } from '@/utils/platformColors'
 import { KEY_GROUP_PROVIDERS, KEY_GROUP_PROVIDER_ICONS, getKeyGroupProvider, type KeyGroupProvider } from '@/utils/keyGroupProviders'
 import {
   CC_SWITCH_USAGE_SCRIPT,
   buildCcSwitchImportDeeplink,
+  resolveCcSwitchImportConfig,
   type CcSwitchClientType
 } from '@/utils/ccswitchImport'
 
@@ -1344,6 +1376,7 @@ const submitting = ref(false)
 const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
 const usageStats = ref<Record<string, BatchApiKeyUsageStats>>({})
+const usageLoading = ref(false)
 const userGroupRates = ref<Record<number, number>>({})
 
 const pagination = ref({
@@ -1368,6 +1401,10 @@ const showDeleteDialog = ref(false)
 const showResetQuotaDialog = ref(false)
 const showResetRateLimitDialog = ref(false)
 const showUseKeyModal = ref(false)
+const ccSwitchCatalog = ref<{ key: ApiKey; baseUrl: string; models: string[] } | null>(null)
+const ccSwitchCatalogLoading = ref(false)
+const ccSwitchCatalogChoice = ref('')
+let ccSwitchCatalogController: AbortController | undefined
 const showColumnDropdown = ref(false)
 const selectedKey = ref<ApiKey | null>(null)
 const copiedKeyId = ref<number | null>(null)
@@ -1564,6 +1601,7 @@ const loadApiKeys = async () => {
   abortController = controller
   const { signal } = controller
   loading.value = true
+  usageLoading.value = false
   try {
     // Build filters
     const filters: {
@@ -1588,18 +1626,10 @@ const loadApiKeys = async () => {
     pagination.value.total = response.total
     pagination.value.pages = response.pages
 
-    // Load usage stats for all API keys in the list
+    // 用量统计要聚合 30 天的 usage_logs，可能比列表慢很多：不阻塞表格渲染，单独加载
+    usageLoading.value = response.items.length > 0
     if (response.items.length > 0) {
-      const keyIds = response.items.map((k) => k.id)
-      try {
-        const usageResponse = await usageAPI.getDashboardApiKeysUsage(keyIds, { signal })
-        if (signal.aborted) return
-        usageStats.value = usageResponse.stats
-      } catch (e) {
-        if (!isAbortError(e)) {
-          console.error('Failed to load usage stats:', e)
-        }
-      }
+      void loadUsageStats(response.items.map((k) => k.id), signal)
     }
   } catch (error) {
     if (isAbortError(error)) {
@@ -1609,6 +1639,22 @@ const loadApiKeys = async () => {
   } finally {
     if (abortController === controller) {
       loading.value = false
+    }
+  }
+}
+
+const loadUsageStats = async (keyIds: number[], signal: AbortSignal) => {
+  try {
+    const usageResponse = await usageAPI.getDashboardApiKeysUsage(keyIds, { signal })
+    if (signal.aborted) return
+    usageStats.value = usageResponse.stats
+  } catch (e) {
+    if (!isAbortError(e)) {
+      console.error('Failed to load usage stats:', e)
+    }
+  } finally {
+    if (!signal.aborted) {
+      usageLoading.value = false
     }
   }
 }
@@ -1988,12 +2034,44 @@ const resetRateLimitUsage = async () => {
   }
 }
 
-const importToCcswitch = (row: ApiKey) => {
-  executeCcsImport(row, 'claude')
+const importToCcswitch = async (row: ApiKey) => {
+  if (ccSwitchCatalogLoading.value) return
+  const baseUrl = displayApiEndpoint.value || window.location.origin
+  if (resolveCcSwitchImportConfig(row.group?.platform, baseUrl).app !== 'codex') {
+    executeCcsImport(row, 'claude', baseUrl)
+    return
+  }
+  const controller = new AbortController()
+  ccSwitchCatalogController = controller
+  ccSwitchCatalogLoading.value = true
+  try {
+    const manifest = await fetchCodexModelsManifest(baseUrl, row.key, controller.signal)
+    if (controller.signal.aborted) return
+    const slugs = [...new Set(parseCodexCatalogModels(manifest.content).map(model => model.slug))]
+    if (slugs.includes(DEFAULT_CODEX_EXPORT_MODEL)) {
+      executeCcsImport(row, 'claude', baseUrl, DEFAULT_CODEX_EXPORT_MODEL)
+    } else if (slugs.length) {
+      ccSwitchCatalogChoice.value = ''
+      ccSwitchCatalog.value = { key: row, baseUrl, models: slugs }
+    } else {
+      appStore.showError(t('keys.useKeyModal.codexModelCatalog.errorDescription'))
+    }
+  } catch {
+    if (!controller.signal.aborted) appStore.showError(t('keys.useKeyModal.codexModelCatalog.errorDescription'))
+  } finally {
+    ccSwitchCatalogLoading.value = false
+    ccSwitchCatalogController = undefined
+  }
 }
 
-const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
-  const baseUrl = displayApiEndpoint.value || window.location.origin
+const importCcSwitchCatalogChoice = () => {
+  const catalog = ccSwitchCatalog.value
+  if (!catalog || !catalog.models.includes(ccSwitchCatalogChoice.value)) return
+  executeCcsImport(catalog.key, 'claude', catalog.baseUrl, ccSwitchCatalogChoice.value)
+  ccSwitchCatalog.value = null
+}
+
+const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType, baseUrl: string, codexModel?: string) => {
   const platform = row.group?.platform || 'anthropic'
 
   const usageScript = CC_SWITCH_USAGE_SCRIPT
@@ -2004,6 +2082,7 @@ const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
     clientType,
     providerName,
     apiKey: row.key,
+    codexModel,
     usageScript
   })
 
@@ -2045,6 +2124,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  ccSwitchCatalogController?.abort()
   document.removeEventListener('click', closeGroupSelector)
   if (resetTimer) clearInterval(resetTimer)
 })

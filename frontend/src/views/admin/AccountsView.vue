@@ -211,12 +211,12 @@
           @select-all-results="handleSelectAllResults"
           @toggle-schedulable="handleBulkToggleSchedulable"
         />
-        <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden" :aria-busy="loading" :inert="loading && accounts.length > 0">
         <DataTable
           ref="dataTableRef"
           :columns="cols"
           :data="accounts"
-          :loading="loading"
+          :loading="loading && accounts.length === 0"
           row-key="id"
           :server-side-sort="true"
           @sort="handleSort"
@@ -244,24 +244,37 @@
           </template>
           <template #cell-name="{ row, value }">
             <div class="flex flex-col">
-              <HelpTooltip
-                v-if="accountHomepageUrl(row)"
-                :content="accountHomepageUrl(row)"
-                width-class="w-max max-w-sm break-all"
-                class="-ml-1 self-start"
-              >
-                <template #trigger>
-                  <a
-                    :href="accountHomepageUrl(row)"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="border-b border-dotted border-gray-300 font-medium text-gray-900 dark:border-dark-600 dark:text-white"
-                  >
-                    {{ value }}
-                  </a>
-                </template>
-              </HelpTooltip>
-              <span v-else class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+              <div class="flex items-center gap-1">
+                <HelpTooltip
+                  v-if="accountHomepageUrl(row)"
+                  :content="accountHomepageUrl(row)"
+                  width-class="w-max max-w-sm break-all"
+                  class="-ml-1 self-start"
+                >
+                  <template #trigger>
+                    <a
+                      :href="accountHomepageUrl(row)"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="border-b border-dotted border-gray-300 font-medium text-gray-900 dark:border-dark-600 dark:text-white"
+                    >
+                      {{ value }}
+                    </a>
+                  </template>
+                </HelpTooltip>
+                <span v-else class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+                <button
+                  v-if="row.type === 'apikey'"
+                  type="button"
+                  class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-blue-600 hover:bg-blue-50 disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
+                  :title="t('admin.accounts.upstreamBilling.saveGroup')"
+                  :aria-label="t('admin.accounts.upstreamBilling.saveGroup')"
+                  :disabled="syncingUpstreamGroup.has(row.id)"
+                  @click.stop="syncUpstreamGroup(row)"
+                >
+                  <Icon name="refresh" size="xs" :class="{ 'animate-spin': syncingUpstreamGroup.has(row.id) }" />
+                </button>
+              </div>
               <span
                 v-if="accountDisplayEmail(row)"
                 class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]"
@@ -544,7 +557,7 @@ import AccountPriorityCell from '@/components/account/AccountPriorityCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { fetchAllAccountIds } from '@/utils/accountSelection'
-import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey, buildOpenAIAstraPolicyRefreshKey, buildOpenAIQuotaCreditsRefreshKey, openAIUsageWindowFields } from '@/utils/accountUsageRefresh'
+import { buildAccountUsageRefreshKey, buildGrokUsageRefreshKey, buildOpenAIAstraPolicyRefreshKey, buildOpenAIQuotaCreditsRefreshKey, openAIUsageWindowFields } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -665,6 +678,7 @@ const togglingSchedulable = ref<number | null>(null)
 const menu = reactive<{show:boolean, acc:Account|null, anchorRect:DOMRect|null}>({ show: false, acc: null, anchorRect: null })
 const exportingData = ref(false)
 const probingUpstreamBilling = reactive(new Set<number>())
+const syncingUpstreamGroup = reactive(new Set<number>())
 const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
 const accountListNow = ref(Date.now())
 const upstreamBillingRateETag = ref<string | null>(null)
@@ -800,7 +814,7 @@ const usageBatchByAccountId = ref<Record<string, AccountUsageInfo | null>>({})
 const usageBatchErrorByAccountId = ref<Record<string, string | null>>({})
 const usageBatchLoadingByAccountId = ref<Record<string, boolean>>({})
 const usageBatchRequestTokenByAccountId = ref<Record<string, number>>({})
-const usageBatchCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
+const usageBatchCache = new Map<number, { data: AccountUsageInfo; ts: number; refreshKey: string }>()
 const USAGE_BATCH_CACHE_TTL = 5 * 60 * 1000
 const pendingUsageBatchIds = new Set<number>()
 const pendingPassiveUsageBatchIds = new Set<number>()
@@ -845,7 +859,7 @@ const handleAccountUsageLoaded = (account: Account, usage: AccountUsageInfo) => 
     resetAccountListRefresh()
   }
   usageBatchRequestTokenByAccountId.value[key] = ++usageBatchRequestToken
-  usageBatchCache.set(accountID, { data: usage, ts: Date.now() })
+  usageBatchCache.set(accountID, { data: usage, ts: Date.now(), refreshKey: buildAccountUsageRefreshKey(account) })
   setUsageBatchLoading(accountID, false)
   setUsageBatchState(accountID, usage, null)
 }
@@ -853,6 +867,10 @@ const handleAccountUsageLoaded = (account: Account, usage: AccountUsageInfo) => 
 const fetchUsageBatch = async (accountIDs: number[], force: boolean, source?: 'passive') => {
   if (accountIDs.length === 0) return
 
+  const requestedIDs = new Set(accountIDs)
+  const refreshKeys = new Map(accounts.value
+    .filter((account) => requestedIDs.has(account.id))
+    .map((account) => [account.id, buildAccountUsageRefreshKey(account)]))
   const requestTokensByAccount = accountIDs.reduce<Record<string, number>>((acc, accountID) => {
     acc[String(accountID)] = usageBatchRequestTokenByAccountId.value[String(accountID)] ?? 0
     return acc
@@ -878,7 +896,7 @@ const fetchUsageBatch = async (accountIDs: number[], force: boolean, source?: 'p
       nextErrors[key] = errorMap[key] ?? null
       nextLoading[key] = false
       if (usage) {
-        usageBatchCache.set(accountID, { data: usage, ts: now })
+        usageBatchCache.set(accountID, { data: usage, ts: now, refreshKey: refreshKeys.get(accountID) ?? '' })
       } else {
         usageBatchCache.delete(accountID)
       }
@@ -925,7 +943,7 @@ const queueBatchedUsage = (account: Account, options?: { force?: boolean; source
     usageBatchCache.delete(cacheKey)
   } else {
     const cached = usageBatchCache.get(cacheKey)
-    if (cached && Date.now() - cached.ts < USAGE_BATCH_CACHE_TTL) {
+    if (cached && cached.refreshKey === buildAccountUsageRefreshKey(account) && Date.now() - cached.ts < USAGE_BATCH_CACHE_TTL) {
       setUsageBatchState(cacheKey, cached.data, null)
       setUsageBatchLoading(cacheKey, false)
       return
@@ -1465,7 +1483,7 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.overload_until !== next.overload_until ||
     current.temp_unschedulable_until !== next.temp_unschedulable_until ||
     buildOpenAIQuotaCreditsRefreshKey(current) !== buildOpenAIQuotaCreditsRefreshKey(next) ||
-    buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next) ||
+    buildAccountUsageRefreshKey(current) !== buildAccountUsageRefreshKey(next) ||
     buildOpenAIAstraPolicyRefreshKey(current) !== buildOpenAIAstraPolicyRefreshKey(next) ||
     buildGrokUsageRefreshKey(current) !== buildGrokUsageRefreshKey(next)
   )
@@ -2358,6 +2376,26 @@ const handleAccountUpdated = (updatedAccount: Account) => {
   patchAccountInList(updatedAccount)
   enterAutoRefreshSilentWindow()
 }
+const syncUpstreamGroup = async (account: AccountListItem) => {
+  if (syncingUpstreamGroup.has(account.id)) return
+  syncingUpstreamGroup.add(account.id)
+  try {
+    const result = await adminAPI.accounts.syncUpstreamGroup(account.id, account.updated_at)
+    if (result.changed) {
+      const current = accounts.value.find(item => item.id === account.id)
+      if (current?.updated_at === account.updated_at) {
+        handleAccountUpdated({ ...current, ...result.account })
+      }
+      appStore.showSuccess(t('admin.accounts.upstreamBilling.groupSynced'))
+    } else {
+      appStore.showInfo(t('admin.accounts.upstreamBilling.groupUnchanged'))
+    }
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.upstreamBilling.groupFailed')))
+  } finally {
+    syncingUpstreamGroup.delete(account.id)
+  }
+}
 const formatExportTimestamp = () => {
   const now = new Date()
   const pad2 = (value: number) => String(value).padStart(2, '0')
@@ -2438,7 +2476,16 @@ const handleDuplicateAccount = async (a: Account) => {
     duplicatingAccountIDs.delete(a.id)
   }
 }
+const lastManualRefreshAt = new Map<number, number>()
+const MANUAL_REFRESH_WARN_INTERVAL_MS = 60_000
+
 const handleRefresh = async (a: Account) => {
+  // 只提醒不阻拦：短时间内反复手动刷新可能与后台自动刷新竞争同一份轮换令牌
+  const lastAt = lastManualRefreshAt.get(a.id)
+  if (lastAt !== undefined && Date.now() - lastAt < MANUAL_REFRESH_WARN_INTERVAL_MS) {
+    appStore.showWarning(t('admin.accounts.refreshTokenFrequentWarning'))
+  }
+  lastManualRefreshAt.set(a.id, Date.now())
   try {
     const result = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(result.account)

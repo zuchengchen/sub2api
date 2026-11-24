@@ -1,6 +1,9 @@
 import type { GroupPlatform } from '@/types'
+import { buildCodexApiKeyAuthConfig } from '@/utils/codexAuthConfig'
 
-export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.5'
+import { DEFAULT_CODEX_EXPORT_MODEL } from '@/utils/codexCatalogConfig'
+
+export const OPENAI_CC_SWITCH_CODEX_MODEL = DEFAULT_CODEX_EXPORT_MODEL
 export const GROK_CC_SWITCH_MODEL = 'grok-4.5'
 
 export type CcSwitchClientType = 'claude'
@@ -18,6 +21,7 @@ export interface CcSwitchImportDeeplinkInput {
   providerName: string
   apiKey: string
   usageScript: string
+  codexModel?: string
 }
 
 /**
@@ -60,6 +64,7 @@ export function resolveCcSwitchImportConfig(
 ): CcSwitchImportConfig {
   switch (platform || 'anthropic') {
     case 'openai':
+    case 'composite':
       return {
         app: 'codex',
         // CC Switch's Codex provider appends the OpenAI-compatible path itself.
@@ -83,6 +88,7 @@ export function resolveCcSwitchImportConfig(
 
 export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput): string {
   const config = resolveCcSwitchImportConfig(input.platform, input.baseUrl)
+  const model = config.app === 'codex' ? input.codexModel || config.model : config.model
   const entries: [string, string][] = [
     ['resource', 'provider'],
     ['app', config.app],
@@ -96,8 +102,26 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
     ['usageAutoInterval', '30']
   ]
 
-  if (config.model) {
-    entries.splice(2, 0, ['model', config.model])
+  if (model) {
+    entries.splice(2, 0, ['model', model])
+  }
+
+  if (config.app === 'codex') {
+    // CC Switch's embedded-config import preserves provider auth and headers.
+    // It deliberately leaves global [features] settings to the user.
+    const codexConfig = `model_provider = "sub2api"
+model = ${JSON.stringify(model)}
+web_search = "live"
+
+[model_providers.sub2api]
+name = "Sub2API"
+base_url = ${JSON.stringify(config.endpoint)}
+wire_api = "responses"
+${buildCodexApiKeyAuthConfig(input.apiKey)}
+`
+    const payload = JSON.stringify({ config: codexConfig })
+    const bytes = new TextEncoder().encode(payload)
+    entries.push(['config', btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))])
   }
 
   return `ccswitch://v1/import?${new URLSearchParams(entries).toString()}`

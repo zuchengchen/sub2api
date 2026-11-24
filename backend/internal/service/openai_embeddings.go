@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -218,7 +219,7 @@ func extractOpenAIEmbeddingsUsage(body []byte) OpenAIUsage {
 		usage.Get("output_tokens"),
 	)
 	cacheReadTokens := openAICacheReadTokensFromUsage(usage)
-	cacheCreationTokens := openAICacheCreationTokensFromUsage(usage)
+	cacheCreationTokens, cache30m, cache12h := openai.CacheCreationTokensFromUsage(usage)
 	// 多模态 embedding（如 doubao-embedding-vision）回传图文 token 拆分，
 	// 用于图文不同价计费；纯文本 embedding 该字段为 0，行为不变。
 	imageInputTokens := firstPositiveGJSONInt(
@@ -226,11 +227,13 @@ func extractOpenAIEmbeddingsUsage(body []byte) OpenAIUsage {
 		usage.Get("input_tokens_details.image_tokens"),
 	)
 	return OpenAIUsage{
-		InputTokens:              inputTokens,
-		ImageInputTokens:         imageInputTokens,
-		OutputTokens:             outputTokens,
-		CacheReadInputTokens:     cacheReadTokens,
-		CacheCreationInputTokens: cacheCreationTokens,
+		InputTokens:                 inputTokens,
+		ImageInputTokens:            imageInputTokens,
+		OutputTokens:                outputTokens,
+		CacheReadInputTokens:        cacheReadTokens,
+		CacheCreationInputTokens:    cacheCreationTokens,
+		CacheCreation30mInputTokens: cache30m,
+		CacheCreation12hInputTokens: cache12h,
 	}
 }
 

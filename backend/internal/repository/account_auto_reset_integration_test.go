@@ -53,7 +53,7 @@ func TestAutoResetAccountEditPreservesLatestAttemptUnderRowLock(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		close(entered)
-		done <- repo.UpdateWithAccountBillingSettings(ctx, staleEdit, nil, nil, nil)
+		done <- repo.UpdateWithAccountBillingSettings(ctx, staleEdit, service.AccountBillingSettingsUpdate{})
 	}()
 	<-entered
 	select {

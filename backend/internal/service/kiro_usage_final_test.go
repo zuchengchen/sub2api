@@ -114,3 +114,31 @@ func TestMergeAnthropicUsage_CacheCreationBreakdown(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "cache_creation\"")
 }
+
+func TestAnthropicUsageFinalClearsUnrepeatedTTLAndLegacyAliases(t *testing.T) {
+	start := `{"type":"message_start","message":{"usage":{"input_tokens":8,"prompt_tokens":24,"cache_read_input_tokens":4,"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_1h_input_tokens":12}}}}`
+	final := `{"type":"message_delta","usage":{"input_tokens":0,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"cached_tokens":4,"usage_final":true}}`
+	standard := &GatewayService{}
+	for _, parse := range []func(string, *ClaudeUsage){standard.parseSSEUsage, parseSSEUsagePassthrough} {
+		var usage ClaudeUsage
+		parse(start, &usage)
+		parse(final, &usage)
+		require.Zero(t, usage.InputTokens)
+		require.Zero(t, usage.CacheReadInputTokens)
+		require.Zero(t, usage.CacheCreationInputTokens)
+		require.Zero(t, usage.CacheCreation1hTokens)
+		require.Equal(t, 2, usage.OutputTokens)
+	}
+
+	var startEvent, finalEvent apicompat.AnthropicStreamEvent
+	require.NoError(t, json.Unmarshal([]byte(start), &startEvent))
+	require.NoError(t, json.Unmarshal([]byte(final), &finalEvent))
+	var usage ClaudeUsage
+	mergeAnthropicUsage(&usage, startEvent.Message.Usage)
+	mergeAnthropicUsage(&usage, *finalEvent.Usage)
+	require.Zero(t, usage.InputTokens)
+	require.Zero(t, usage.CacheReadInputTokens)
+	require.Zero(t, usage.CacheCreationInputTokens)
+	require.Zero(t, usage.CacheCreation1hTokens)
+	require.Equal(t, 2, usage.OutputTokens)
+}

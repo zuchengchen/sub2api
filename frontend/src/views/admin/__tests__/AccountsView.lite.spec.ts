@@ -18,8 +18,10 @@ const {
   getAllProxies,
   getAllGroups,
   refreshCredentials,
+  syncUpstreamGroup,
   showError,
-  showWarning
+  showWarning,
+  showSuccess
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
@@ -31,8 +33,10 @@ const {
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
   refreshCredentials: vi.fn(),
+  syncUpstreamGroup: vi.fn(),
   showError: vi.fn(),
-  showWarning: vi.fn()
+  showWarning: vi.fn(),
+  showSuccess: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -49,7 +53,8 @@ vi.mock('@/api/admin', () => ({
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
       toggleSchedulable: vi.fn(),
-      refreshCredentials
+      refreshCredentials,
+      syncUpstreamGroup
     },
     proxies: { getAll: getAllProxies },
     groups: { getAll: getAllGroups }
@@ -57,7 +62,7 @@ vi.mock('@/api/admin', () => ({
 }))
 
 vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({ showError, showWarning, showSuccess: vi.fn(), showInfo: vi.fn() })
+  useAppStore: () => ({ showError, showWarning, showSuccess, showInfo: vi.fn() })
 }))
 
 vi.mock('@/stores/auth', () => ({
@@ -70,15 +75,16 @@ vi.mock('vue-i18n', async () => {
 })
 
 const DataTableStub = defineComponent({
-  props: { data: { type: Array, default: () => [] } },
+  props: { data: { type: Array, default: () => [] }, loading: Boolean },
   template: `
     <div>
-      <div v-for="row in data" :key="row.id" :data-account-name="row.name">
+      <template v-if="!loading"><div v-for="row in data" :key="row.id" :data-account-name="row.name">
+        <slot name="cell-name" :row="row" :value="row.name" />
         <slot name="cell-groups" :row="row" />
         <slot name="cell-status" :row="row" />
         <slot name="cell-usage" :row="row" />
         <slot name="cell-actions" :row="row" />
-      </div>
+      </div></template>
     </div>
   `
 })
@@ -111,7 +117,7 @@ function mountView(stubActionMenu = true, renderQuota = false) {
         AppLayout: { template: '<div><slot /></div>' },
         TablePageLayout: { template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>' },
         DataTable: DataTableStub,
-        AccountTableActions: { name: 'AccountTableActions', template: '<div><slot name="after" /></div>' },
+        AccountTableActions: { name: 'AccountTableActions', template: '<div><button data-test="manual-refresh" @click="$emit(\'refresh\')" /><slot name="after" /></div>' },
         AccountTableFilters: true,
         AccountBulkActionsBar: true,
         Pagination: true,
@@ -178,14 +184,35 @@ describe('admin AccountsView lite account list', () => {
     getAllProxies.mockReset().mockResolvedValue([])
     getAllGroups.mockReset().mockResolvedValue([{ id: 7, name: 'codex', platform: 'openai' }])
     refreshCredentials.mockReset()
+    syncUpstreamGroup.mockReset()
     showError.mockReset()
     showWarning.mockReset()
+    showSuccess.mockReset()
   })
 
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('saves upstream group text for just the selected account and its observed version', async () => {
+    const selected = { ...listRow, type: 'apikey', updated_at: '2026-11-24T10:00:00Z' }
+    const other = { ...selected, id: 43, name: 'other upstream' }
+    const saved = { id: selected.id, name: 'upstream group', notes: 'upstream notes', updated_at: '2026-11-24T10:01:00Z' }
+    listAccounts.mockResolvedValueOnce({ items: [selected, other], total: 2, pages: 1 })
+    syncUpstreamGroup.mockResolvedValueOnce({ account: saved, changed: true })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-account-name="compact row"] [aria-label="admin.accounts.upstreamBilling.saveGroup"]').trigger('click')
+    await flushPromises()
+
+    expect(syncUpstreamGroup.mock.calls).toEqual([[selected.id, selected.updated_at]])
+    expect(getById).not.toHaveBeenCalled()
+    expect(wrapper.getComponent(DataTableStub).props('data')).toEqual([{ ...selected, ...saved }, other])
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.upstreamBilling.groupSynced')
+    wrapper.unmount()
   })
 
   it('requests 50 lite rows on the first page with the standard site default', async () => {
@@ -202,6 +229,35 @@ describe('admin AccountsView lite account list', () => {
       expect.objectContaining({ lite: '1' }),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
+    wrapper.unmount()
+  })
+
+  it('keeps existing rows mounted and busy while a manual list refresh is pending', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const row = wrapper.get('[data-account-name="compact row"]').element
+    let finish: (value: unknown) => void = () => {}
+    listAccounts.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await wrapper.get('[data-test="manual-refresh"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(DataTableStub).props('loading')).toBe(false)
+    expect(wrapper.get('[data-account-name="compact row"]').element).toBe(row)
+    expect(wrapper.find('[aria-busy="true"]').attributes()).toHaveProperty('inert')
+    finish({ items: [{ ...listRow, name: 'updated row' }], total: 1, page: 1, page_size: 20, pages: 1 })
+    await flushPromises()
+    expect(wrapper.get('[data-account-name="updated row"]').element).toBe(row)
+    expect(wrapper.find('[aria-busy="true"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('still shows initial loading when no rows are available', async () => {
+    let finish: (value: unknown) => void = () => {}
+    listAccounts.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.getComponent(DataTableStub).props('loading')).toBe(true)
+    finish({ items: [listRow], total: 1, page: 1, page_size: 20, pages: 1 })
+    await flushPromises()
     wrapper.unmount()
   })
 

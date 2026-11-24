@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"strings"
 
@@ -61,42 +60,6 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	}
 	tx = nil
 	return result, nil
-}
-
-func (r *usageBillingRepository) ApplyAndStageOutboxFinalization(ctx context.Context, cmd *service.UsageBillingCommand, binding service.UsageBillingOutboxBinding) (*service.UsageBillingApplyResult, error) {
-	result, err := r.Apply(ctx, cmd)
-	if err != nil {
-		return nil, err
-	}
-	if r == nil || r.db == nil || binding.OutboxID <= 0 {
-		return result, nil
-	}
-	payload, err := json.Marshal(result)
-	if err != nil {
-		return nil, err
-	}
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE billing_attempt_outbox
-		SET status = 'finalization_pending', apply_result = $1::jsonb, updated_at = NOW()
-		WHERE id = $2 AND leased_by = $3 AND status IN ('processing', 'pending')
-	`, payload, binding.OutboxID, binding.WorkerID)
-	if err != nil {
-		return nil, err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return nil, service.ErrBillingOutboxClaimLost
-	}
-	return result, nil
-}
-
-func (r *usageBillingRepository) ApplyBatchAndStageOutboxFinalizations(ctx context.Context, items []service.UsageBillingBatchItem) ([]service.UsageBillingBatchOutcome, error) {
-	out := make([]service.UsageBillingBatchOutcome, 0, len(items))
-	for _, item := range items {
-		result, err := r.ApplyAndStageOutboxFinalization(ctx, &item.Command, item.Binding)
-		out = append(out, service.UsageBillingBatchOutcome{Result: result, Err: err})
-	}
-	return out, nil
 }
 
 func (r *usageBillingRepository) claimUsageBillingKey(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) (bool, error) {
@@ -189,7 +152,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	return nil
 }
 
-func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD float64) error {
+func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD any) error {
 	const updateSQL = `
 		UPDATE user_subscriptions us
 		SET
@@ -249,9 +212,9 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 	return newBalance, false, nil
 }
 
-func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID int64, amount float64) (bool, error) {
-	var exhausted bool
-	err := tx.QueryRowContext(ctx, `
+// usageBillingAPIKeyQuotaUpdate 累加 Key 已用额度（$1），本次累加从未达额度跨到达到额度时把 active 状态置为额度耗尽。
+// 参数：$1=金额 $2=api_key_id $3=active 状态 $4=额度耗尽状态。
+const usageBillingAPIKeyQuotaUpdate = `
 		UPDATE api_keys
 		SET quota_used = quota_used + $1,
 			status = CASE
@@ -263,7 +226,11 @@ func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID 
 				ELSE status
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL`
+
+func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID int64, amount float64) (bool, error) {
+	var exhausted bool
+	err := tx.QueryRowContext(ctx, usageBillingAPIKeyQuotaUpdate+`
 		RETURNING quota > 0 AND quota_used >= quota AND quota_used - $1 < quota
 	`, amount, apiKeyID, service.StatusAPIKeyActive, service.StatusAPIKeyQuotaExhausted).Scan(&exhausted)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -275,7 +242,7 @@ func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID 
 	return exhausted, nil
 }
 
-func incrementUsageBillingAPIKeyRateLimit(ctx context.Context, tx *sql.Tx, apiKeyID int64, cost float64) error {
+func incrementUsageBillingAPIKeyRateLimit(ctx context.Context, tx *sql.Tx, apiKeyID int64, cost any) error {
 	res, err := tx.ExecContext(ctx, `
 		UPDATE api_keys SET
 			usage_5h = CASE WHEN window_5h_start IS NOT NULL AND window_5h_start + INTERVAL '5 hours' <= NOW() THEN $1 ELSE usage_5h + $1 END,

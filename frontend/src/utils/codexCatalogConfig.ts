@@ -1,3 +1,5 @@
+export const DEFAULT_CODEX_EXPORT_MODEL = 'gpt-6.2-sol'
+
 export interface CodexCatalogReasoningLevel {
   effort?: unknown
 }

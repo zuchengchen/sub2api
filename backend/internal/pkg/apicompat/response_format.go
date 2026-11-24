@@ -34,6 +34,11 @@ func chatResponseFormatToResponsesTextFormat(raw json.RawMessage) (json.RawMessa
 		return nil, &RequestContractError{Param: "response_format.json_schema", Message: "response_format.json_schema must not override the output format type"}
 	}
 	schema["type"] = rawJSONString("json_schema")
+	// Chat Completions defaults strict to false while Responses defaults to strict,
+	// so make the intended mode explicit to avoid the upstream rejecting the schema.
+	if _, ok := schema["strict"]; !ok {
+		schema["strict"] = json.RawMessage("false")
+	}
 
 	out, err := json.Marshal(schema)
 	if err != nil {

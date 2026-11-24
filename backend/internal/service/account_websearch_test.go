@@ -108,7 +108,7 @@ func TestGetWebSearchEmulationMode_SupportedPlatforms(t *testing.T) {
 	for _, platform := range []string{
 		PlatformAnthropic, PlatformOpenAI, PlatformGrok,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax,
-		PlatformOpenCodeGo, PlatformAntigravity,
+		PlatformOpenCodeGo, PlatformCommandCode, PlatformCline,
 	} {
 		t.Run(platform, func(t *testing.T) {
 			for _, mode := range []string{WebSearchModeEnabled, WebSearchModeDisabled, WebSearchModeDefault} {
@@ -124,12 +124,16 @@ func TestGetWebSearchEmulationMode_SupportedPlatforms(t *testing.T) {
 }
 
 func TestGetWebSearchEmulationMode_OtherPlatform(t *testing.T) {
-	a := &Account{
-		Platform: PlatformGemini,
-		Type:     AccountTypeAPIKey,
-		Extra:    map[string]any{featureKeyWebSearchEmulation: "enabled"},
+	for _, platform := range []string{PlatformGemini, PlatformAntigravity, PlatformTypeSafe} {
+		t.Run(platform, func(t *testing.T) {
+			a := &Account{
+				Platform: platform,
+				Type:     AccountTypeAPIKey,
+				Extra:    map[string]any{featureKeyWebSearchEmulation: WebSearchModeEnabled},
+			}
+			require.Equal(t, WebSearchModeDefault, a.GetWebSearchEmulationMode())
+		})
 	}
-	require.Equal(t, WebSearchModeDefault, a.GetWebSearchEmulationMode())
 }
 
 func TestGetWebSearchEmulationMode_NonAPIKeyType(t *testing.T) {

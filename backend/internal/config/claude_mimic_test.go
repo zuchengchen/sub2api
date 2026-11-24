@@ -3,12 +3,13 @@ package config
 import (
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
 
 func validClaudeMimic() ClaudeMimicConfig {
 	return ClaudeMimicConfig{
-		UserAgentVersion:        "2.1.283",
+		UserAgentVersion:        claude.CLICurrentVersion,
 		StainlessOS:             "Linux",
 		StainlessArch:           "x64",
 		StainlessLang:           "js",

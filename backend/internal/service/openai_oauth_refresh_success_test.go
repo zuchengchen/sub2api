@@ -36,48 +36,6 @@ func openAIRefreshTestStateMatches(account *Account, id int64, expected map[stri
 	return account != nil && account.ID == id && account.IsOpenAIOAuth() && reflect.DeepEqual(account.Credentials, expected) && reflect.DeepEqual(account.ProxyID, proxy)
 }
 
-func (r *refreshAPIAccountRepo) UpdateOpenAIOAuthCredentialsIfUnchanged(_ context.Context, id int64, expected map[string]any, proxy *int64, credentials map[string]any) (bool, error) {
-	r.successCASCalls++
-	r.lastExpectedCredentials = shallowCopyMap(expected)
-	r.lastExpectedProxyID = proxy
-	if r.beforeSuccessCAS != nil {
-		r.beforeSuccessCAS(r)
-	}
-	if r.updateErr != nil {
-		return false, r.updateErr
-	}
-	if !openAIRefreshTestStateMatches(r.account, id, expected, proxy) {
-		return false, nil
-	}
-	r.updateCalls++
-	r.updateCredentialsCalls++
-	r.account = snapshotOAuthRefreshAccount(r.account)
-	r.account.Credentials = shallowCopyMap(credentials)
-	return true, nil
-}
-
-func (r *tokenRefreshAccountRepo) UpdateOpenAIOAuthCredentialsIfUnchanged(_ context.Context, id int64, expected map[string]any, proxy *int64, credentials map[string]any) (bool, error) {
-	r.conditionalSuccessCalls++
-	if r.conditionalSuccessErr != nil {
-		return false, r.conditionalSuccessErr
-	}
-	if r.updateErr != nil {
-		return false, r.updateErr
-	}
-	account := r.accountsByID[id]
-	if !openAIRefreshTestStateMatches(account, id, expected, proxy) {
-		return false, nil
-	}
-	r.updateCalls++
-	r.updateCredentialsCalls++
-	account.Credentials = shallowCopyMap(credentials)
-	r.lastAccount = account
-	if r.cancelOnUpdate != nil {
-		r.cancelOnUpdate()
-	}
-	return true, nil
-}
-
 type openAIRefreshCASRepo struct {
 	openAIRecoveryRepo
 	casCalls            int

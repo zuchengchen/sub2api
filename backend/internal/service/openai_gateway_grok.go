@@ -222,9 +222,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 			maxLineSize = s.cfg.Gateway.MaxLineSize
 		}
-		resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, maxLineSize)
+		resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, maxLineSize, s.cfg)
 		if hasGrokResponsesClientToolMapping(clientToolMapping) {
-			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, clientToolMapping, maxLineSize)
+			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, clientToolMapping, maxLineSize, s.cfg)
 		}
 		stashOpenAIUsageEstimateRequestBody(c, patchedBody)
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
@@ -1666,13 +1666,7 @@ func (s *OpenAIGatewayService) updateGrokUsageSnapshotWithRateLimit(ctx context.
 		stateCtx, cancel = openAIAccountStateContext(ctx)
 		defer cancel()
 	}
-	// Account pointers on the request path are per-request copies (Redis/DB decode),
-	// not a shared in-process cache. Mutating Extra here matches token refresh /
-	// rate-limit writers; do not reuse the same *Account across goroutines.
-	if account.Extra == nil {
-		account.Extra = map[string]any{}
-	}
-	account.Extra[grokQuotaSnapshotExtraKey] = snapshot
+	mergeAccountExtra(account, map[string]any{grokQuotaSnapshotExtraKey: snapshot})
 	if s.accountRepo != nil {
 		_ = s.accountRepo.UpdateExtra(stateCtx, accountID, updates)
 	}

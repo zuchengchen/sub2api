@@ -2,9 +2,13 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"strconv"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -68,6 +72,11 @@ func executeAdminIdempotentWithTimeout(
 }
 
 func adminActorScope(c *gin.Context) string {
+	if principal := adminaccess.FromContext(c.Request.Context()); principal != nil {
+		policy, _ := json.Marshal(principal.Policy)
+		digest := sha256.Sum256(policy)
+		return "admin-key:" + principal.KeyID + ":" + hex.EncodeToString(digest[:])
+	}
 	actorScope := "admin:0"
 	if subject, ok := middleware2.GetAuthSubjectFromContext(c); ok {
 		actorScope = "admin:" + strconv.FormatInt(subject.UserID, 10)

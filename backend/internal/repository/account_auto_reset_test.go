@@ -35,7 +35,7 @@ func TestLockAndMergeAccountExtraPreservesLatestAutoResetAttempt(t *testing.T) {
 					service.OpenAIAutoResetCreditStateExtraKey:   map[string]any{"status": "success", "attempt_credit_hash": "stale"},
 				},
 			}
-			extra, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil)
+			extra, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, service.AccountBillingSettingsUpdate{})
 			require.NoError(t, err)
 			require.Equal(t, false, extra[service.OpenAIAutoResetCreditEnabledExtraKey])
 			if current == `{}` {

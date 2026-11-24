@@ -31,6 +31,23 @@ func TestBuildOpenAIWSCurrentTurnRetryPayloadRejectsOrphanToolOutput(t *testing.
 	require.Nil(t, retryPayload)
 }
 
+func TestOpenAIWSCurrentTurnRetryUsesOriginalIdentity(t *testing.T) {
+	const originalInput = `{"type":"message","role":"user","content":"continue","internal_chat_message_metadata_passthrough":{"turn_id":"client-turn"}}`
+	original := []byte(`{"type":"response.create","model":"public","input":[` + originalInput + `]}`)
+	const projectedInput = `{"type":"message","role":"user","content":"continue","internal_chat_message_metadata_passthrough":{"turn_id":"projected-turn"}}`
+	projected := []json.RawMessage{json.RawMessage(projectedInput)}
+	retry, safe, err := buildOpenAIWSCurrentTurnRetryPayload(original, projected, true, "public")
+	require.NoError(t, err)
+	require.True(t, safe)
+	require.JSONEq(t, string(original), string(retry))
+
+	anchored := []byte(`{"type":"response.create","model":"public","previous_response_id":"resp_prior","input":[` + originalInput + `]}`)
+	retry, safe, err = buildOpenAIWSCurrentTurnRetryPayload(anchored, projected, true, "public")
+	require.NoError(t, err)
+	require.False(t, safe)
+	require.Empty(t, retry)
+}
+
 func TestProxyOpenAIWSHTTPBridgeTurnLaterTurn429FailsOverBeforeClientWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

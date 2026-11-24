@@ -87,6 +87,8 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // pluginManager
 		nil, // usagePolicyService
 		nil, // billingOutboxWorker
+		nil, // balanceNotify
+		nil, // digestSessions
 		nil, // runtime
 	)
 

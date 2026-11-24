@@ -45,7 +45,7 @@ func TestGPT61TerraIdentityAndEffort(t *testing.T) {
 		require.Equal(t, "gpt-6.1-terra", chatConverted.Model)
 		require.Equal(t, effort, chatConverted.Reasoning.Effort)
 		require.Len(t, chatConverted.Tools, 1)
-		require.NoError(t, validateGPT61SolCompatRequest([]byte(`{"reasoning":{"effort":"`+effort+`"}}`), model))
+		require.NoError(t, validateGPT61CompatRequest([]byte(`{"reasoning":{"effort":"`+effort+`"}}`), model))
 	}
 	for _, model := range []string{"gpt-6.1-terra", "gpt-6.1-terra-openai-compact", "openai/gpt_6.1_terra"} {
 		require.Equal(t, "gpt-6.1-terra", normalizeKnownOpenAICodexModel(model))
