@@ -35,7 +35,6 @@ func newRequestFieldConflictTestRouter(apiKey *service.APIKey) (*gin.Engine, *[]
 	}
 	for _, path := range []string{
 		"/v1/messages", "/v1/responses", "/v1/chat/completions", "/v1/images/edits", "/v1/live",
-		"/v1beta/models/*modelAction",
 	} {
 		router.POST(path, handler)
 	}
@@ -107,10 +106,6 @@ func TestRejectConflictingRequestFieldsErrorFormats(t *testing.T) {
 	anthropic := doJSON(t, router, http.MethodPost, "/v1/messages", body)
 	if !strings.Contains(anthropic.Body.String(), `"type":"error"`) || !strings.Contains(anthropic.Body.String(), `"type":"invalid_request_error"`) {
 		t.Fatalf("unexpected Anthropic error format: %s", anthropic.Body.String())
-	}
-	google := doJSON(t, router, http.MethodPost, "/v1beta/models/gemini-2.5-pro:generateContent", body)
-	if google.Code != http.StatusBadRequest || !strings.Contains(google.Body.String(), `"status":"INVALID_ARGUMENT"`) {
-		t.Fatalf("unexpected Google error format: %d %s", google.Code, google.Body.String())
 	}
 }
 

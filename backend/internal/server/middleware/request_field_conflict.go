@@ -69,27 +69,20 @@ func RejectConflictingRequestFields() gin.HandlerFunc {
 	}
 }
 
-// writeGatewayInvalidRequest 按入口协议输出 invalid_request_error：
-// Gemini 原生（/v1beta、/antigravity/v1beta）用 Google 格式，Messages 入口用
-// Anthropic 格式，其余用 OpenAI 格式。协议划分与 groupModelAllowlistErrorWriter
-// 相同；不复用它，是因为现有的 Anthropic / OpenAI 写入器把非 404/403 的状态写成
-// api_error / model_not_found。
+// writeGatewayInvalidRequest 为 Messages 入口返回 Anthropic 格式，其余使用 OpenAI 格式。
 func writeGatewayInvalidRequest(c *gin.Context, status int, message string) {
 	path := ""
 	if c.Request != nil && c.Request.URL != nil {
 		path = c.Request.URL.Path
 	}
-	switch {
-	case strings.HasPrefix(path, "/v1beta") || strings.HasPrefix(path, "/antigravity/v1beta"):
-		GoogleErrorWriter(c, status, message)
-	case strings.Contains(path, "/messages"):
+	if strings.Contains(path, "/messages") {
 		c.JSON(status, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": "invalid_request_error", "message": message},
 		})
-	default:
-		c.JSON(status, gin.H{
-			"error": gin.H{"type": "invalid_request_error", "message": message},
-		})
+		return
 	}
+	c.JSON(status, gin.H{
+		"error": gin.H{"type": "invalid_request_error", "message": message},
+	})
 }
