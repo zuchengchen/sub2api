@@ -441,14 +441,14 @@ func TestOpenAIGatewayService_APIKeyPassthrough_StructuredErrorHardening(t *test
 		require.NotContains(t, body, "tok-abcdef")
 	})
 
-	t.Run("non-scalar code is not forwarded", func(t *testing.T) {
+	t.Run("context recovery code replaces a non-scalar upstream code", func(t *testing.T) {
 		rec, c := newOpenAIPassthroughErrorTestContext()
 		forwardOpenAIPassthroughErrorForTest(t, c, http.StatusBadRequest,
 			`{"error":{"message":"Your input exceeds the context window of this model.","type":"invalid_request_error","code":{"internal_token":"tok-abcdef"}}}`,
 			map[string]any{"api_key": "sk-test"})
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 		body := rec.Body.String()
-		require.False(t, gjson.Get(body, "error.code").Exists())
+		require.Equal(t, OpenAIContextLengthExceededCode, gjson.Get(body, "error.code").String())
 		require.NotContains(t, body, "tok-abcdef")
 		require.Contains(t, gjson.Get(body, "error.message").String(), "exceeds the context window")
 	})

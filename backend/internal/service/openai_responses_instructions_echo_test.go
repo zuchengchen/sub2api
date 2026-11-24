@@ -58,7 +58,7 @@ func instructionsEchoForward(t *testing.T, account *Account, upstream *httpUpstr
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 	c.Request.Header.Set("User-Agent", "OpenAI/Python 2.8.0")
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream, tiboRouteDisabled: true}
 	result, err := svc.Forward(context.Background(), c, account, []byte(body))
 	return result, rec, err
 }
@@ -122,7 +122,7 @@ func TestOpenAIResponsesInstructionsEchoRestoreHelpers(t *testing.T) {
 }
 
 func TestOpenAIGatewayService_OAuthPassthrough_CodexBlankInstructionsForwardedAsIs(t *testing.T) {
-	for _, raw := range []string{`""`, `" "`, `{"text":"x"}`} {
+	for _, raw := range []string{`""`, `" "`} {
 		t.Run(raw, func(t *testing.T) {
 			upstream := instructionsEchoUpstream(raw)
 			result, rec, err := instructionsEchoForward(t, instructionsEchoOAuthAccount(true), upstream,
@@ -132,6 +132,21 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexBlankInstructionsForwardedAs
 			require.Equal(t, http.StatusOK, rec.Code)
 			require.JSONEq(t, raw, gjson.GetBytes(upstream.lastBody, "instructions").Raw)
 			require.JSONEq(t, raw, sseResponseInstructions(t, rec.Body.String(), "response.completed").Raw)
+		})
+	}
+}
+
+func TestOpenAIGatewayService_OAuthPassthrough_CodexRejectsNonStringInstructions(t *testing.T) {
+	for _, raw := range []string{`{"text":"x"}`, `[]`, `null`, `1`, `true`} {
+		t.Run(raw, func(t *testing.T) {
+			upstream := instructionsEchoUpstream("null")
+			result, rec, err := instructionsEchoForward(t, instructionsEchoOAuthAccount(true), upstream,
+				`{"model":"gpt-5.3-codex","stream":true,"instructions":`+raw+`,"input":[{"type":"message","role":"user","content":"Hi"}]}`)
+			require.ErrorContains(t, err, "instructions_not_string")
+			require.Nil(t, result)
+			require.Empty(t, upstream.requests)
+			require.Equal(t, http.StatusForbidden, rec.Code)
+			require.Equal(t, "forbidden_error", gjson.Get(rec.Body.String(), "error.type").String())
 		})
 	}
 }

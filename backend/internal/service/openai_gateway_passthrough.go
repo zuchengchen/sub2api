@@ -163,15 +163,24 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	if account != nil && account.UsesOpenAICodexProtocol() {
-		if isOpenAICodexModel(reqModel) && !gjson.GetBytes(body, "instructions").Exists() &&
-			!codexInputCarriesBaseInstructions(body) &&
-			(!openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) ||
-				!codexInputLeadsWithDeveloperMessage(body)) {
-			nextBody, setErr := sjson.SetBytes(body, "instructions", defaultCodexSynthInstructions(reqModel))
-			if setErr != nil {
-				return nil, fmt.Errorf("set passthrough codex instructions: %w", setErr)
+		if isOpenAICodexModel(reqModel) {
+			instructions := gjson.GetBytes(body, "instructions")
+			if instructions.Exists() && instructions.Type != gjson.String {
+				MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+				writeOpenAIResponsesErrorJSON(c, http.StatusForbidden, gin.H{"error": gin.H{
+					"type": "forbidden_error", "message": "OpenAI codex passthrough requires instructions to be a string",
+				}})
+				return nil, errors.New("openai passthrough rejected before upstream: instructions_not_string")
 			}
-			body = nextBody
+			if !instructions.Exists() && !codexInputCarriesBaseInstructions(body) &&
+				(!openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) ||
+					!codexInputLeadsWithDeveloperMessage(body)) {
+				nextBody, setErr := sjson.SetBytes(body, "instructions", defaultCodexSynthInstructions(reqModel))
+				if setErr != nil {
+					return nil, fmt.Errorf("set passthrough codex instructions: %w", setErr)
+				}
+				body = nextBody
+			}
 		}
 
 		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBodyWithMetadata(body, isOpenAIResponsesCompactPath(c), isCodexOAuthAccount(account), openAIResponsesLiteForNormalization(account, gjson.GetBytes(body, "model").String(), c.GetHeader(responsesLiteHeader), body))

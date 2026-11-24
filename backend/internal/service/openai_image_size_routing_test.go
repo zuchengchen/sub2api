@@ -436,34 +436,47 @@ func TestSelectAccountWithSchedulerForImages_StickyAccountUnderSizeRouting(t *te
 	}
 }
 
-func TestSelectAccountWithSchedulerForImages_BusyStickyAccountMatchesUnroutedSelection(t *testing.T) {
+func TestSelectAccountWithSchedulerForImages_BusyStickyAccountSpilloverKeepsBinding(t *testing.T) {
 	for _, mode := range openAIImageSizeSchedulerModes {
 		t.Run(mode.name, func(t *testing.T) {
+			const stickyID, alternativeID int64 = 81151, 81152
 			groupID := int64(93013)
 			sessionHash := "image-size-busy-sticky"
-			selectWith := func(ctx context.Context) (int64, bool) {
+			selectWith := func(ctx context.Context) *AccountSelectionResult {
 				accounts := []Account{
-					newOpenAIImageSizeTestAccount(81151, 0),
-					newOpenAIImageSizeTestAccount(81152, 9, "4K"),
+					newOpenAIImageSizeTestAccount(stickyID, 0),
+					newOpenAIImageSizeTestAccount(alternativeID, 9, "4K"),
 				}
 				for i := range accounts {
 					accounts[i].GroupIDs = []int64{groupID}
 				}
-				cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:" + sessionHash: 81151}}
+				cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:" + sessionHash: stickyID}}
 				concurrency := schedulerTestConcurrencyCache{
-					acquireResults: map[int64]bool{81151: false},
-					loadMap:        map[int64]*AccountLoadInfo{81151: {AccountID: 81151, LoadRate: 100}},
+					acquireResults: map[int64]bool{stickyID: false},
+					loadMap:        map[int64]*AccountLoadInfo{stickyID: {AccountID: stickyID, LoadRate: 100}},
 				}
 				svc := newOpenAIImageSizeSchedulerTestService(mode, accounts, cache, concurrency)
+				svc.cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = true
 				selection, _, err := svc.SelectAccountWithSchedulerForImages(ctx, &groupID, sessionHash, "gpt-image-2", nil, OpenAIImagesCapabilityNative)
 				require.NoError(t, err)
+				require.NotNil(t, selection)
 				require.NotNil(t, selection.Account)
-				return selection.Account.ID, selection.Acquired
+				require.Equal(t, stickyID, cache.sessionBindings["openai:"+sessionHash])
+				return selection
 			}
-			routedID, routedAcquired := selectWith(WithOpenAIImageSizeRouting(context.Background(), ""))
-			unroutedID, unroutedAcquired := selectWith(context.Background())
-			require.Equal(t, unroutedID, routedID, "a busy sticky account is waited on or escaped exactly as without size routing")
-			require.Equal(t, unroutedAcquired, routedAcquired)
+			routed := selectWith(WithOpenAIImageSizeRouting(context.Background(), ""))
+			require.Equal(t, alternativeID, routed.Account.ID)
+			require.True(t, routed.Acquired)
+
+			unrouted := selectWith(context.Background())
+			if mode.advanced {
+				require.Equal(t, alternativeID, unrouted.Account.ID)
+				require.True(t, unrouted.Acquired)
+				return
+			}
+			require.Equal(t, stickyID, unrouted.Account.ID)
+			require.False(t, unrouted.Acquired)
+			require.NotNil(t, unrouted.WaitPlan)
 		})
 	}
 }

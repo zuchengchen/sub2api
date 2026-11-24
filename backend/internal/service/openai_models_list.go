@@ -174,7 +174,8 @@ func projectAccountModelsBody(body []byte, account *Account, group *Group, codex
 // the shared response, and never synthesizes models absent from this account.
 func projectAccountModelAliases(body []byte, account *Account, group *Group, codex bool) ([]byte, error) {
 	passthrough := account.IsOpenAIPassthroughEnabled()
-	if (passthrough && !account.IsOpenAIPassthroughModelFilterEnabled()) || len(account.GetModelMapping()) == 0 {
+	mapping := account.modelEligibilityMapping()
+	if len(mapping) == 0 {
 		return body, nil
 	}
 	field, idField := "data", "id"
@@ -214,8 +215,8 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 			candidates = append(candidates, id)
 		}
 	}
-	aliases := make([]string, 0, len(account.GetModelMapping()))
-	for alias := range account.GetModelMapping() {
+	aliases := make([]string, 0, len(mapping))
+	for alias := range mapping {
 		aliases = append(aliases, alias)
 	}
 	sort.Strings(aliases)

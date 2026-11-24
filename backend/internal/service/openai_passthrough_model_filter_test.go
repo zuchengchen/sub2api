@@ -158,9 +158,11 @@ func TestOpenAIPassthroughModelFilterPreservesForwardBody(t *testing.T) {
 func TestOpenAIPassthroughModelFilterGroupCatalog(t *testing.T) {
 	accounts := passthroughModelFilterAccounts(true, 2)
 	accounts[0].Extra["openai_passthrough_model_filter"] = true
+	accounts[1].Extra = map[string]any{"openai_passthrough": true, "openai_passthrough_model_filter": true}
 	svc := &GatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts}}
 	groupID := int64(17)
 	models := svc.GetAvailableModels(context.Background(), &groupID, PlatformOpenAI)
 	require.ElementsMatch(t, []string{"qwen3.8-max", "gpt-6.1-sol"}, models,
 		"a restricted passthrough account must not contribute the unrestricted default catalog")
+	require.Empty(t, accounts[1].GetModelMapping(), "eligibility does not restore OAuth model rewriting")
 }

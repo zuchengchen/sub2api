@@ -372,8 +372,8 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 		return nil, fmt.Errorf("parsed images request is required")
 	}
 	toolModel = resolveOpenAIImageModelAlias(toolModel)
-	if parsed.MarkupImageURL != "" || parsed.MarkupUpload != nil || parsed.SVG != nil || parsed.FrameCount != nil || parsed.FrameDurationMS != nil {
-		return nil, fmt.Errorf("markup, SVG author options and GIF frame controls require the native Images endpoint")
+	if parsed.MarkupImageURL != "" || parsed.MarkupUpload != nil || parsed.SVG != nil {
+		return nil, fmt.Errorf("markup and SVG author options require the native Images endpoint")
 	}
 	prompt := strings.TrimSpace(parsed.Prompt)
 	if prompt == "" {

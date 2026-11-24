@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -365,6 +367,13 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		}
 		reqBody["input"] = input
 		result.Modified = true
+	} else if ok && opts.NativeItemIDs {
+		// Native history bypasses the compatibility filter. Compact an inline
+		// declaration and its references without filtering unrelated items.
+		if normalized := normalizeCodexNativeAdditionalToolsIDs(input); normalized != nil {
+			reqBody["input"] = normalized
+			result.Modified = true
+		}
 	} else if inputStr, ok := reqBody["input"].(string); ok {
 		// ChatGPT codex endpoint requires input to be a list, not a string.
 		// Convert string input to the expected message array format.
@@ -1824,7 +1833,7 @@ func normalizeCodexAdditionalToolsID(id string) string {
 }
 
 func codexAdditionalToolsIDMappings(input []any) map[string]string {
-	mappings := make(map[string]string)
+	var mappings map[string]string
 	for _, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
 		if !ok || item["type"] != "additional_tools" {
@@ -1832,11 +1841,37 @@ func codexAdditionalToolsIDMappings(input []any) map[string]string {
 		}
 		if id, ok := item["id"].(string); ok {
 			if normalizedID := normalizeCodexAdditionalToolsID(id); normalizedID != id {
+				if mappings == nil {
+					mappings = make(map[string]string)
+				}
 				mappings[id] = normalizedID
 			}
 		}
 	}
 	return mappings
+}
+
+func normalizeCodexNativeAdditionalToolsIDs(input []any) []any {
+	mappings := codexAdditionalToolsIDMappings(input)
+	if len(mappings) == 0 {
+		return nil
+	}
+	normalized := slices.Clone(input)
+	for i, rawItem := range input {
+		item, _ := rawItem.(map[string]any)
+		if item["type"] != "additional_tools" && item["type"] != "item_reference" {
+			continue
+		}
+		id, _ := item["id"].(string)
+		replacement, ok := mappings[id]
+		if !ok {
+			continue
+		}
+		updated := maps.Clone(item)
+		updated["id"] = replacement
+		normalized[i] = updated
+	}
+	return normalized
 }
 
 // The passthrough/WebSocket compatibility path must not decode and re-encode

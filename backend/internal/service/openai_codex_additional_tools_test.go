@@ -38,7 +38,7 @@ func TestFilterCodexInput_AdditionalToolsDeclarationID(t *testing.T) {
 			require.Equal(t, "at_discovery", gjson.GetBytes(encoded, "0.id").String())
 			require.Equal(t, "tool_search", gjson.GetBytes(encoded, "0.tools.0.type").String())
 			require.Equal(t, preserveReferences, gjson.GetBytes(encoded, "1.id").Exists())
-			require.False(t, gjson.GetBytes(encoded, "2.id").Exists())
+			require.Equal(t, "rs_history", gjson.GetBytes(encoded, "2.id").String())
 			require.Equal(t, "sealed", gjson.GetBytes(encoded, "2.encrypted_content").String())
 			require.Equal(t, preserveReferences, gjson.GetBytes(encoded, "3.id").Exists())
 			after, err := json.Marshal(input)
@@ -150,6 +150,41 @@ func TestOpenAIResponsesCompatibility_AdditionalToolsUUID(t *testing.T) {
 	})
 }
 
+func TestApplyCodexOAuthTransform_NativeAdditionalToolsUUID(t *testing.T) {
+	const uuid = "at_00112233-4455-4677-8899-aabbccddeeff"
+	const compact = "at_00112233445546778899aabbccddeeff"
+	const body = `{"model":"gpt-6.1-sol","stream":true,"store":false,"instructions":"","input":[` +
+		`{"type":"message","role":"developer","content":[{"type":"input_text","text":"Native instructions"}],"id":"msg_prompt"},` +
+		`{"type":"item_reference","id":"` + uuid + `"},` +
+		`{"type":"additional_tools","id":"` + uuid + `","role":"developer","tools":[{"type":"tool_search","execution":"client"}]},` +
+		`{"type":"additional_tools","id":"at_opaque","role":"developer","tools":[]},` +
+		`{"type":"future_item","id":"` + uuid + `","call_id":"vendor","sequence":9007199254740993},` +
+		`{"type":"tool_search_call","id":"tsc_id","call_id":"tsc_pair","execution":"client","arguments":"{}"},` +
+		`{"type":"tool_search_output","call_id":"tsc_pair","tools":[]}]}`
+	var request map[string]any
+	require.NoError(t, decodeOpenAIJSONUseNumber([]byte(body), &request))
+	input := request["input"].([]any)
+	before, err := json.Marshal(input)
+	require.NoError(t, err)
+	opts := codexOAuthTransformOptions{NativeItemIDs: true, PreserveNativeInput: true, SkipDefaultInstructions: true}
+	result := applyCodexOAuthTransformWithOptions(request, opts)
+	require.NoError(t, result.Error)
+	require.True(t, result.Modified)
+	after, err := json.Marshal(request["input"])
+	require.NoError(t, err)
+	// The first two occurrences are the reference and its declaration. The
+	// unknown item carries the same string but has its own identity contract.
+	require.Equal(t, strings.Replace(string(before), uuid, compact, 2), string(after))
+	original, err := json.Marshal(input)
+	require.NoError(t, err)
+	require.Equal(t, before, original)
+	result = applyCodexOAuthTransformWithOptions(request, opts)
+	require.NoError(t, result.Error)
+	again, err := json.Marshal(request["input"])
+	require.NoError(t, err)
+	require.Equal(t, after, again)
+}
+
 func TestOpenAIGatewayService_OAuthAdditionalToolsDeclarationID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, passthrough := range []bool{false, true} {
@@ -180,7 +215,7 @@ func TestOpenAIGatewayService_OAuthAdditionalToolsDeclarationID(t *testing.T) {
 						Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 						Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 					}}
-					svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+					svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream, tiboRouteDisabled: true}
 					account := &Account{
 						ID: 8752, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 						Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"},
@@ -199,13 +234,14 @@ func TestOpenAIGatewayService_OAuthAdditionalToolsDeclarationID(t *testing.T) {
 
 					require.NoError(t, err)
 					require.NotNil(t, result)
+					require.Len(t, upstream.requests, 1)
 					require.Equal(t, "https://chatgpt.com/backend-api/codex/responses", upstream.lastReq.URL.String())
 					wantID := "at_00112233445546778899aabbccddeeff"
 					require.Equal(t, wantID, gjson.GetBytes(upstream.lastBody, "input.0.id").String())
 					require.Equal(t, "at_00112233-4455-4677-8899-aabbccddeeff", gjson.GetBytes(body, "input.0.id").String())
 					require.JSONEq(t, gjson.GetBytes(body, "input.0.tools").Raw, gjson.GetBytes(upstream.lastBody, "input.0.tools").Raw)
-					require.Equal(t, passthrough, gjson.GetBytes(upstream.lastBody, "input.1.id").Exists())
-					require.Equal(t, passthrough, gjson.GetBytes(upstream.lastBody, "input.2.id").Exists())
+					require.Equal(t, "msg_history", gjson.GetBytes(upstream.lastBody, "input.1.id").String())
+					require.Equal(t, "rs_history", gjson.GetBytes(upstream.lastBody, "input.2.id").String())
 					require.Equal(t, "sealed", gjson.GetBytes(upstream.lastBody, "input.2.encrypted_content").String())
 					require.Contains(t, recorder.Body.String(), `"type":"tool_search_call"`)
 					require.Contains(t, recorder.Body.String(), `"call_id":"tsc_discovery"`)

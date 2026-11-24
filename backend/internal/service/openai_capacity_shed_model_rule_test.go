@@ -98,6 +98,7 @@ func TestOpenAICapacityShedModelRule_StreamReaders(t *testing.T) {
 
 func TestOpenAICapacityShedModelRule_HTTP(t *testing.T) {
 	account := openAICapacityShedModelRuleAccount(AccountTypeOAuth)
+	account.Extra = map[string]any{"openai_passthrough": true}
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &OpenAIGatewayService{rateLimitService: &RateLimitService{accountRepo: repo}}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -105,7 +106,7 @@ func TestOpenAICapacityShedModelRule_HTTP(t *testing.T) {
 	body := []byte(`{"error":{"code":"server_is_overloaded","message":"overloaded"}}`)
 	err := svc.handleFailoverErrorResponsePassthrough(context.Background(),
 		&http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}}, c, account,
-		[]byte(`{"model":"alias"}`), body)
+		[]byte(`{"model":"gpt-6.1-sol"}`), body)
 	var failover *UpstreamFailoverError
 	require.ErrorAs(t, err, &failover)
 	require.False(t, failover.RetryableOnSameAccount)

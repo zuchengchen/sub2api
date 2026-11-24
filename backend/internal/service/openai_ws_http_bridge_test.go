@@ -2566,7 +2566,7 @@ func TestOpenAIWSHTTPBridge_IdleTimeoutClosesClientSession(t *testing.T) {
 
 func TestProxyOpenAIWSHTTPBridgeTurn_StagesCodexFingerprint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	run := func(account *Account, session string) (*http.Request, *codexFingerprintIDs) {
+	run := func(account *Account, session string) (http.Header, []byte, *codexFingerprintIDs) {
 		sse := `data: {"type":"response.completed","response":{"id":"resp_fp","model":"gpt-5.5","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"
 		upstream := &httpUpstreamRecorder{resp: &http.Response{
 			StatusCode: http.StatusOK,
@@ -2593,22 +2593,28 @@ func TestProxyOpenAIWSHTTPBridgeTurn_StagesCodexFingerprint(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.NotNil(t, upstream.lastReq)
-		return upstream.lastReq, stagedCodexFingerprintIDs(c, account)
+		return upstream.lastReq.Header, upstream.lastBody, stagedCodexFingerprintIDs(c, account)
 	}
 
 	full := newTestOAuthAccount(7101, map[string]any{"codex_fingerprint_mode": "full"})
-	first, ids := run(full, "test-client-session")
+	first, firstBody, ids := run(full, "test-client-session")
 	require.NotNil(t, ids)
-	require.Equal(t, ids.sessionID, first.Header.Get("session-id"))
-	require.Equal(t, ids.installationID, first.Header.Get("x-codex-installation-id"))
-	same, _ := run(full, "test-client-session")
-	require.Equal(t, first.Header.Get("session-id"), same.Header.Get("session-id"))
-	other, _ := run(full, "other-client-session")
-	require.NotEqual(t, first.Header.Get("session-id"), other.Header.Get("session-id"))
+	require.Equal(t, ids.sessionID, first.Get("session-id"))
+	require.Equal(t, ids.sessionID, gjson.GetBytes(firstBody, "client_metadata.session_id").String())
+	require.Equal(t, ids.installationID, gjson.GetBytes(firstBody, "client_metadata.x-codex-installation-id").String())
+	require.Empty(t, first.Get("x-codex-installation-id"))
+	require.Empty(t, first.Get("session_id"))
+	same, _, _ := run(full, "test-client-session")
+	require.Equal(t, first.Get("session-id"), same.Get("session-id"))
+	other, _, _ := run(full, "other-client-session")
+	require.NotEqual(t, first.Get("session-id"), other.Get("session-id"))
 
 	off := newTestOAuthAccount(7102, map[string]any{"codex_fingerprint_mode": "off"})
-	unscoped, offIDs := run(off, "")
+	unscoped, unscopedBody, offIDs := run(off, "")
 	require.Nil(t, offIDs)
-	require.Empty(t, unscoped.Header.Get("session-id"))
-	require.Empty(t, unscoped.Header.Get("session_id"))
+	require.NotEmpty(t, unscoped.Get("session-id"))
+	require.Equal(t, unscoped.Get("session-id"), gjson.GetBytes(unscopedBody, "client_metadata.session_id").String())
+	require.Empty(t, unscoped.Get("session_id"))
+	another, _, _ := run(off, "")
+	require.NotEqual(t, unscoped.Get("session-id"), another.Get("session-id"))
 }

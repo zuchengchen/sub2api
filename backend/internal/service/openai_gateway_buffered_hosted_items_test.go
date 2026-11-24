@@ -240,8 +240,9 @@ func TestBufferedCompat_EmptyTerminalOutputKeepsAccumulatedItems(t *testing.T) {
 		out := forwardBufferedHostedItems(t, "/v1/chat/completions", chatBody(customTool), customSSE)
 		calls := gjson.Get(out, "choices.0.message.tool_calls").Array()
 		require.Len(t, calls, 1, out)
-		require.Equal(t, "exec", calls[0].Get("function.name").String())
-		require.Equal(t, "dir", calls[0].Get("function.arguments").String())
+		require.Equal(t, "custom", calls[0].Get("type").String(), out)
+		require.Equal(t, "exec", calls[0].Get("custom.name").String(), out)
+		require.Equal(t, "dir", calls[0].Get("custom.input").String(), out)
 	})
 }
 
@@ -298,8 +299,8 @@ func TestBufferedCompat_GrokSearchCountFromRebuiltHostedItems(t *testing.T) {
 	}
 }
 
-// The output of a failed terminal only feeds the error payload, so hosted items
-// reported before the failure must not change the payload recorded for ops.
+// Metered failures preserve the usage for settlement and the original payload
+// for ops, including when the stream reported hosted items before the failure.
 func TestBufferedCompat_FailedTerminalKeepsErrorPayload(t *testing.T) {
 	const failed = `{"type":"response.failed","response":{"id":"resp_err","object":"response","status":"failed","error":{"type":"rate_limit_error","message":"Rate limit reached"},"output":[],"usage":{"input_tokens":10,"output_tokens":0,"total_tokens":10}}}`
 	plain := bufferedItemsSSE(bufferedHostedItemsCreated, failed)
@@ -308,7 +309,8 @@ func TestBufferedCompat_FailedTerminalKeepsErrorPayload(t *testing.T) {
 	recordedPayload := func(t *testing.T, path, requestBody, sse string) string {
 		t.Helper()
 		gin.SetMode(gin.TestMode)
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
 		body := []byte(requestBody)
 		c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 		c.Request.Header.Set("Content-Type", "application/json")
@@ -320,14 +322,21 @@ func TestBufferedCompat_FailedTerminalKeepsErrorPayload(t *testing.T) {
 			cfg:          cfg,
 		}
 		account := bufferedHostedItemsOAuthAccount()
+		var result *OpenAIForwardResult
 		var err error
 		if path == "/v1/chat/completions" {
-			_, err = svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+			result, err = svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 		} else {
-			_, err = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+			result, err = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 		}
 		var failoverErr *UpstreamFailoverError
-		require.ErrorAs(t, err, &failoverErr)
+		require.ErrorContains(t, err, "Rate limit reached")
+		require.NotErrorAs(t, err, &failoverErr)
+		require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
+		require.Equal(t, "Rate limit reached", gjson.Get(rec.Body.String(), "error.message").String())
+		require.NotNil(t, result)
+		require.Equal(t, 10, result.Usage.InputTokens)
+		require.Zero(t, result.Usage.OutputTokens)
 		events, _ := c.Get(OpsUpstreamErrorsKey)
 		recorded, _ := events.([]*OpsUpstreamErrorEvent)
 		require.NotEmpty(t, recorded)
@@ -339,9 +348,8 @@ func TestBufferedCompat_FailedTerminalKeepsErrorPayload(t *testing.T) {
 		"/v1/chat/completions": bufferedHostedItemsChatBody,
 	} {
 		t.Run(path, func(t *testing.T) {
-			want := recordedPayload(t, path, requestBody, plain)
-			require.Contains(t, want, `"output":[]`)
-			require.Equal(t, want, recordedPayload(t, path, requestBody, withHosted))
+			require.Equal(t, failed, recordedPayload(t, path, requestBody, plain))
+			require.Equal(t, failed, recordedPayload(t, path, requestBody, withHosted))
 		})
 	}
 }
@@ -672,7 +680,9 @@ func TestBufferedCompat_DeltasWithoutOutputIndexJoinTheirItem(t *testing.T) {
 			`{"type":"response.output_item.done","output_index":0,"item":{"type":"custom_tool_call","call_id":"call_1","name":"exec","input":""}}`,
 			bufferedHostedItemsCompleted)
 		out := forwardBufferedHostedItems(t, "/v1/chat/completions", customBody, sse)
-		require.Equal(t, "dir", gjson.Get(out, "choices.0.message.tool_calls.0.function.arguments").String(), out)
+		calls := gjson.Get(out, "choices.0.message.tool_calls").Array()
+		require.Len(t, calls, 1, out)
+		require.Equal(t, "dir", calls[0].Get("custom.input").String(), out)
 		require.Equal(t, "plan", gjson.Get(out, "choices.0.message.reasoning_content").String(), out)
 	})
 }

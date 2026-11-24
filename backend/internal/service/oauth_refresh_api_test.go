@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -710,37 +711,39 @@ func (c *openAIRotationClientStub) RefreshTokenWithClientID(context.Context, str
 }
 
 func TestRefreshIfNeeded_OpenAIEnrichmentTimeoutKeepsRotatedCredentials(t *testing.T) {
-	account := openAIRefreshTestAccount()
-	account.Credentials["expires_at"] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
-	repo := &refreshAPIAccountRepo{account: account, respectReadContext: true}
-	client := &openAIRotationClientStub{}
-	oauthService := NewOpenAIOAuthService(nil, client)
-	defer oauthService.Stop()
-	privacyCalls := 0
-	oauthService.SetPrivacyClientFactory(func(string) (*req.Client, error) {
-		return req.C().WrapRoundTripFunc(func(req.RoundTripper) req.RoundTripFunc {
-			return func(request *req.Request) (*req.Response, error) {
-				privacyCalls++
-				<-request.Context().Done()
-				return nil, request.Context().Err()
-			}
-		}), nil
+	synctest.Test(t, func(t *testing.T) {
+		account := openAIRefreshTestAccount()
+		account.Credentials["access_token"] = codexTestJWTExpiry(time.Now().Add(-time.Minute).Unix())
+		repo := &refreshAPIAccountRepo{account: account, respectReadContext: true}
+		client := &openAIRotationClientStub{}
+		oauthService := NewOpenAIOAuthService(nil, client)
+		defer oauthService.Stop()
+		privacyCalls := 0
+		oauthService.SetPrivacyClientFactory(func(string) (*req.Client, error) {
+			return req.C().WrapRoundTripFunc(func(req.RoundTripper) req.RoundTripFunc {
+				return func(request *req.Request) (*req.Response, error) {
+					privacyCalls++
+					<-request.Context().Done()
+					return nil, request.Context().Err()
+				}
+			}), nil
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		executor := NewOpenAITokenRefresher(oauthService, repo)
+
+		result, err := NewOAuthRefreshAPI(repo, nil).RefreshIfNeeded(ctx, account, executor, time.Hour)
+
+		require.NoError(t, err)
+		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+		require.Positive(t, privacyCalls, "optional enrichment must be the operation that exhausts the context")
+		require.Equal(t, 1, client.rotationCalls)
+		require.True(t, result.Refreshed)
+		require.Equal(t, "rotated-refresh", result.Account.GetOpenAIRefreshToken())
+		require.Equal(t, "rotated-refresh", repo.account.GetOpenAIRefreshToken())
+		require.Equal(t, 1, repo.openAISuccessCASCalls)
+		require.NoError(t, repo.openAIPersistCtxErr)
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	executor := NewOpenAITokenRefresher(oauthService, repo)
-
-	result, err := NewOAuthRefreshAPI(repo, nil).RefreshIfNeeded(ctx, account, executor, time.Hour)
-
-	require.NoError(t, err)
-	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
-	require.Positive(t, privacyCalls, "optional enrichment must be the operation that exhausts the context")
-	require.Equal(t, 1, client.rotationCalls)
-	require.True(t, result.Refreshed)
-	require.Equal(t, "rotated-refresh", result.Account.GetOpenAIRefreshToken())
-	require.Equal(t, "rotated-refresh", repo.account.GetOpenAIRefreshToken())
-	require.Equal(t, 1, repo.openAISuccessCASCalls)
-	require.NoError(t, repo.openAIPersistCtxErr)
 }
 
 func TestRefreshIfNeeded_OpenAILockLeaseReservesPersistenceBudget(t *testing.T) {

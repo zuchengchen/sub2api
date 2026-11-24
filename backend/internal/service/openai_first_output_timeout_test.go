@@ -578,12 +578,13 @@ func TestOpenAINativeFirstOutputStageOverflowAfterSemanticDeltaDoesNotReplay(t *
 	}}
 	svc := &OpenAIGatewayService{tiboRouteDisabled: true, cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
 	const lineSize = 1024*1024 - 256
-	// Complete metadata events stay staged until visible output arrives. Each
-	// event fits the transport cap; their cumulative size exceeds the stage cap.
+	// Complete metadata events fill the stage. The first semantic delta still
+	// fits the per-event transport cap, but pushes the stage over its limit.
 	prefix := `data: {"type":"response.in_progress","response":{"id":"resp_staged","padding":"`
 	suffix := `"}}`
 	line := prefix + strings.Repeat("x", lineSize-len(prefix)-len(suffix)) + suffix
-	body := strings.Repeat(line+"\n\n", 9)
+	delta := `data: {"type":"response.output_text.delta","delta":"` + strings.Repeat("x", lineSize) + `"}`
+	body := strings.Repeat(line+"\n\n", 8) + delta + "\n\n"
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -617,7 +618,7 @@ func TestOpenAINativeFirstOutputEventLimitFailsOverWithoutAttemptBytes(t *testin
 				SSEEventMaxBytes:                explicitLimit,
 			}}
 			svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
-			line := `data: {"type":"response.output_text.delta","delta":"` + strings.Repeat("x", 700) + `"}`
+			line := `data: {"type":"response.in_progress","response":{"id":"resp_private","padding":"` + strings.Repeat("x", 700) + `"}}`
 			// No blank line: several individually legal lines form one oversized
 			// event, which must fail before the independent 8 MiB stage limit.
 			body := strings.Repeat(line+"\n", 4)
@@ -645,6 +646,32 @@ func TestOpenAINativeFirstOutputEventLimitFailsOverWithoutAttemptBytes(t *testin
 			require.Empty(t, rec.Header().Values("X-Ratelimit-Remaining-Requests"))
 		})
 	}
+}
+
+func TestOpenAINativeFirstOutputEventLimitAfterSemanticDeltaDiscardsAttemptBytes(t *testing.T) {
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		OpenAIFirstOutputTimeoutSeconds: 30,
+		MaxLineSize:                     2048,
+		SSEEventMaxBytes:                1024,
+	}}
+	svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
+	line := `data: {"type":"response.output_text.delta","delta":"` + strings.Repeat("x", 700) + `"}`
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": []string{"request-private"}},
+		Body:       io.NopCloser(strings.NewReader(strings.Repeat(line+"\n", 4))),
+	}
+
+	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "model", "model")
+	var failover *UpstreamFailoverError
+	require.ErrorIs(t, err, errSSETransportLimit)
+	require.NotErrorAs(t, err, &failover)
+	require.Contains(t, rec.Body.String(), "response_too_large")
+	require.NotContains(t, rec.Body.String(), "response.output_text.delta")
+	require.Empty(t, rec.Header().Get("X-Request-Id"))
 }
 
 func TestOpenAINativeFirstOutputScannerRejectsOversizedLineWithoutLeak(t *testing.T) {

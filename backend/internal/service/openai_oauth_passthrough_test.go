@@ -2823,16 +2823,13 @@ func TestOpenAIGatewayService_OAuthPassthrough_GroupForceOpenAIUltrafastOverride
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
 	body := []byte(`{"model":"gpt-6.1-sol","stream":true,"instructions":"test","input":"hi","service_tier":"priority"}`)
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
-	}}
+	upstream := &httpUpstreamRecorder{resp: openAICompatSSECompletedResponse("resp_group_ultrafast", "gpt-6.1-sol")}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc.DisableOpenAITiboRouteForTest()
 	account := &Account{
 		ID: 123, Name: "oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:       map[string]any{"openai_passthrough": true}, Status: StatusActive, Schedulable: true,
+		Extra:       astraHealthyTestExtra(map[string]any{"openai_passthrough": true}), Status: StatusActive, Schedulable: true,
 		RateMultiplier: f64p(1),
 	}
 	ctx := context.WithValue(context.Background(), ctxkey.Group, &Group{
@@ -2843,6 +2840,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_GroupForceOpenAIUltrafastOverride
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
 	require.Equal(t, OpenAIFastTierUltrafast, gjson.GetBytes(upstream.lastBody, "service_tier").String())
 	require.NotNil(t, result.ServiceTier)
 	require.Equal(t, OpenAIFastTierUltrafast, *result.ServiceTier)
@@ -2853,13 +2851,13 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIUltrafast(t *testing.T
 	account := &Account{
 		ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:       map[string]any{"openai_passthrough": false, "openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff},
+		Extra:       astraHealthyTestExtra(map[string]any{"openai_passthrough": false, "openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff}),
 		Status:      StatusActive, Schedulable: true, RateMultiplier: f64p(1),
 	}
 	ctx := context.WithValue(context.Background(), ctxkey.Group, &Group{
 		ID: 7, Platform: PlatformOpenAI, Status: StatusActive, Hydrated: true, ForceOpenAIUltrafast: true,
 	})
-	forward := func(t *testing.T, settings *OpenAIFastPolicySettings, inputBody []byte) (*OpenAIForwardResult, *httpUpstreamRecorder, error) {
+	forward := func(t *testing.T, settings *OpenAIFastPolicySettings, inputBody []byte) (*OpenAIForwardResult, *httpUpstreamRecorder, int, error) {
 		t.Helper()
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
@@ -2871,14 +2869,15 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIUltrafast(t *testing.T
 			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 		}}
 		svc := newOpenAIGatewayServiceWithSettings(t, settings)
+		svc.DisableOpenAITiboRouteForTest()
 		svc.cfg = &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}}
 		svc.httpUpstream = upstream
 		result, err := svc.Forward(ctx, c, account, inputBody)
-		return result, upstream, err
+		return result, upstream, rec.Code, err
 	}
 
 	t.Run("injects missing tier", func(t *testing.T) {
-		result, upstream, err := forward(t, DefaultOpenAIFastPolicySettings(),
+		result, upstream, _, err := forward(t, DefaultOpenAIFastPolicySettings(),
 			[]byte(`{"model":"gpt-6.1-sol","stream":false,"input":[{"type":"text","text":"hi"}]}`))
 		require.NoError(t, err)
 		require.Equal(t, OpenAIFastTierUltrafast, gjson.GetBytes(upstream.lastBody, "service_tier").String())
@@ -2887,7 +2886,7 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIUltrafast(t *testing.T
 	})
 
 	t.Run("overrides client priority", func(t *testing.T) {
-		result, upstream, err := forward(t, DefaultOpenAIFastPolicySettings(),
+		result, upstream, _, err := forward(t, DefaultOpenAIFastPolicySettings(),
 			[]byte(`{"model":"gpt-6.1-sol","stream":false,"service_tier":"fast","input":[{"type":"text","text":"hi"}]}`))
 		require.NoError(t, err)
 		require.Equal(t, OpenAIFastTierUltrafast, gjson.GetBytes(upstream.lastBody, "service_tier").String())
@@ -2896,7 +2895,7 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIUltrafast(t *testing.T
 	})
 
 	t.Run("global ultrafast filter remains authoritative", func(t *testing.T) {
-		result, upstream, err := forward(t, &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{{
+		result, upstream, _, err := forward(t, &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{{
 			ServiceTier: OpenAIFastTierUltrafast, Action: BetaPolicyActionFilter, Scope: BetaPolicyScopeAll,
 		}}}, []byte(`{"model":"gpt-6.1-sol","stream":false,"input":[{"type":"text","text":"hi"}]}`))
 		require.NoError(t, err)
@@ -2905,7 +2904,7 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIUltrafast(t *testing.T
 	})
 
 	t.Run("global force_priority downgrades the forced ultrafast", func(t *testing.T) {
-		result, upstream, err := forward(t, &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{{
+		result, upstream, _, err := forward(t, &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{{
 			ServiceTier: OpenAIFastTierUltrafast, Action: OpenAIFastPolicyActionForcePriority, Scope: BetaPolicyScopeAll,
 		}}}, []byte(`{"model":"gpt-6.1-sol","stream":false,"input":[{"type":"text","text":"hi"}]}`))
 		require.NoError(t, err)
@@ -2915,11 +2914,12 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIUltrafast(t *testing.T
 	})
 
 	t.Run("global ultrafast block rejects with 403", func(t *testing.T) {
-		_, upstream, err := forward(t, &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{{
+		_, upstream, status, err := forward(t, &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{{
 			ServiceTier: OpenAIFastTierUltrafast, Action: BetaPolicyActionBlock, Scope: BetaPolicyScopeAll,
 		}}}, []byte(`{"model":"gpt-6.1-sol","stream":false,"input":[{"type":"text","text":"hi"}]}`))
 		var blocked *OpenAIFastBlockedError
 		require.ErrorAs(t, err, &blocked)
+		require.Equal(t, http.StatusForbidden, status)
 		require.Nil(t, upstream.lastReq)
 	})
 }

@@ -125,8 +125,8 @@ const toolSearchNoopSSE = "data: {\"type\":\"response.completed\",\"response\":{
 // function_call; both must carry the same upstream name.
 func TestForwardAsAnthropic_CodexOAuthRevealedToolNameMatchesReplay(t *testing.T) {
 	for _, tc := range []struct{ name, want string }{
-		{"python", "python__sub2api"},
-		{"Python", "python__sub2api"},
+		{"python", "python__custom"},
+		{"Python", "python__custom"},
 		{"Echo", "Echo"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,6 +137,7 @@ func TestForwardAsAnthropic_CodexOAuthRevealedToolNameMatchesReplay(t *testing.T
 			upstream, _ := forwardMessagesToolSearch(t, codexOAuthToolSearchAccount(), body, toolSearchNoopSSE, "gpt-6-astra")
 
 			var declared, replayed []string
+			var callID, outputCallID string
 			for _, item := range gjson.GetBytes(upstream.lastBody, "input").Array() {
 				switch item.Get("type").String() {
 				case "tool_search_output":
@@ -145,10 +146,15 @@ func TestForwardAsAnthropic_CodexOAuthRevealedToolNameMatchesReplay(t *testing.T
 					}
 				case "function_call":
 					replayed = append(replayed, item.Get("name").String())
+					callID = item.Get("call_id").String()
+				case "function_call_output":
+					outputCallID = item.Get("call_id").String()
 				}
 			}
 			require.Equal(t, []string{tc.want}, declared)
 			require.Equal(t, []string{tc.want}, replayed)
+			require.NotEmpty(t, callID)
+			require.Equal(t, callID, outputCallID)
 		})
 	}
 }

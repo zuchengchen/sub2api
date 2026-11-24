@@ -14,8 +14,9 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-func TestOAuthReliabilityContractToolSchemaPatternsPreservedAcrossForwarding(t *testing.T) {
-	const schema = `{"type":"object","properties":{"code":{"type":"string","pattern":"^(?=a)[a-z]+$"},"tail":{"type":"string","pattern":"(?<!bad)ok"}},"required":["code"],"additionalProperties":false}`
+func TestOAuthReliabilityContractToolSchemaPatternsByEntrypoint(t *testing.T) {
+	const schema = `{"type":"object","properties":{"code":{"type":"string","pattern":"^(?=a)[a-z]+$"},"tail":{"type":"string","pattern":"(?<!bad)ok"},"safe":{"type":"string","pattern":"^[a-z]+$"}},"required":["code"],"additionalProperties":false}`
+	const sanitizedSchema = `{"type":"object","properties":{"code":{"type":"string"},"tail":{"type":"string"},"safe":{"type":"string","pattern":"^[a-z]+$"}},"required":["code"],"additionalProperties":false}`
 	for _, route := range []string{"responses", "passthrough", "chat", "messages"} {
 		for _, stream := range []bool{false, true} {
 			for _, rejected := range []bool{false, true} {
@@ -33,7 +34,7 @@ func TestOAuthReliabilityContractToolSchemaPatternsPreservedAcrossForwarding(t *
 					original := bytes.Clone(body)
 					response := oauthReliabilityContractSSE(oauthReliabilityContractCompleted)
 					if rejected {
-						response = newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"type":"invalid_request_error","code":"invalid_function_parameters","param":"tools[0].parameters.properties.code.pattern","message":"Unsupported pattern"}}`)
+						response = newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"type":"invalid_request_error","code":"invalid_function_parameters","param":"tools[0].parameters.properties.safe.pattern","message":"Unsupported pattern"}}`)
 					}
 					upstream := &httpUpstreamRecorder{resp: response}
 					account := newOpenAIOAuthNamespaceTestAccount()
@@ -51,9 +52,11 @@ func TestOAuthReliabilityContractToolSchemaPatternsPreservedAcrossForwarding(t *
 					}
 					require.Len(t, upstream.bodies, 1, "schema rejection must not authorize relaxing the pattern or another execution")
 					forwarded := gjson.GetBytes(upstream.lastBody, `tools.#(name=="lookup").parameters`)
-					require.JSONEq(t, schema, forwarded.Raw)
-					require.Equal(t, "^(?=a)[a-z]+$", forwarded.Get("properties.code.pattern").String())
-					require.Equal(t, "(?<!bad)ok", forwarded.Get("properties.tail.pattern").String())
+					want := sanitizedSchema
+					if route == "chat" {
+						want = schema
+					}
+					require.JSONEq(t, want, forwarded.Raw)
 					require.Equal(t, original, body)
 				})
 			}

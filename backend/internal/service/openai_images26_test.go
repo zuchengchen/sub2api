@@ -171,16 +171,20 @@ func TestGPTImage26NativeOptions(t *testing.T) {
 		require.NoError(t, err)
 		payload, _, err := buildOpenAIImagesOAuthPayload(parsed, parsed.Model)
 		require.NoError(t, err)
+		responsesPayload, err := buildOpenAIImagesResponsesRequest(parsed, parsed.Model)
 		if parsed.OutputFormat == "gif" {
 			require.EqualValues(t, 2, gjson.GetBytes(payload, "frame_count").Int())
 			require.EqualValues(t, 100, gjson.GetBytes(payload, "frame_duration_ms").Int())
+			require.NoError(t, err)
+			require.Equal(t, "gif", gjson.GetBytes(responsesPayload, "tools.0.output_format").String())
+			require.EqualValues(t, 2, gjson.GetBytes(responsesPayload, "tools.0.frame_count").Int())
+			require.EqualValues(t, 100, gjson.GetBytes(responsesPayload, "tools.0.frame_duration_ms").Int())
 		} else {
 			require.Equal(t, "gpt-6-astra", gjson.GetBytes(payload, "svg.model").String())
 			require.Equal(t, "high", gjson.GetBytes(payload, "svg.reasoning.effort").String())
 			require.False(t, gjson.GetBytes(payload, "svg.ignored").Exists())
+			require.ErrorContains(t, err, "native Images endpoint", "SVG author options require the native Images endpoint")
 		}
-		_, err = buildOpenAIImagesResponsesRequest(parsed, parsed.Model)
-		require.ErrorContains(t, err, "native Images endpoint", "native options must not disappear during a legacy fallback")
 		upstream := &httpUpstreamRecorder{resp: openAIImagesJSONResponse()}
 		_, err = newOpenAIImagesTestService(upstream).ForwardImages(context.Background(), c, newOpenAIImagesAPIKeyAccount(), body, parsed, "")
 		require.NoError(t, err)
@@ -188,12 +192,15 @@ func TestGPTImage26NativeOptions(t *testing.T) {
 	}
 	for _, multipartInput := range []bool{false, true} {
 		t.Run(fmt.Sprintf("markup/multipart=%t", multipartInput), func(t *testing.T) {
-			body := []byte(`{"model":"gpt-image-2.6-flare","prompt":"edit","complexity":"low","images":[{"image_url":"data:image/png;base64,aW1hZ2U="}],"markup":{"image_url":"data:image/png;base64,bWFya3Vw"}}`)
+			body := []byte(`{"model":"gpt-image-2.6-flare","prompt":"edit","complexity":"low","output_format":"gif","frame_count":2,"frame_duration_ms":100,"images":[{"image_url":"data:image/png;base64,aW1hZ2U="}],"markup":{"image_url":"data:image/png;base64,bWFya3Vw"}}`)
 			contentType := "application/json"
 			if multipartInput {
 				var buf bytes.Buffer
 				writer := multipart.NewWriter(&buf)
-				for key, value := range map[string]string{"model": "gpt-image-2.6-flare", "prompt": "edit", "complexity": "low", "frame_count": "2", "frame_duration_ms": "100"} {
+				for key, value := range map[string]string{
+					"model": "gpt-image-2.6-flare", "prompt": "edit", "complexity": "low",
+					"output_format": "gif", "frame_count": "2", "frame_duration_ms": "100",
+				} {
 					require.NoError(t, writer.WriteField(key, value))
 				}
 				for _, name := range []string{"image", "markup"} {
@@ -219,6 +226,9 @@ func TestGPTImage26NativeOptions(t *testing.T) {
 			require.Equal(t, "https://chatgpt.com/backend-api/codex/images/edits", target)
 			require.Equal(t, "data:image/png;base64,bWFya3Vw", gjson.GetBytes(payload, "markup.image_url").String())
 			require.Equal(t, "low", gjson.GetBytes(payload, "complexity").String())
+			require.Equal(t, "gif", gjson.GetBytes(payload, "output_format").String())
+			require.EqualValues(t, 2, gjson.GetBytes(payload, "frame_count").Int())
+			require.EqualValues(t, 100, gjson.GetBytes(payload, "frame_duration_ms").Int())
 			require.Len(t, gjson.GetBytes(parsed.ModerationBody(), "images").Array(), 2)
 			_, err = buildOpenAIImagesResponsesRequest(parsed, parsed.Model)
 			require.ErrorContains(t, err, "native Images endpoint")

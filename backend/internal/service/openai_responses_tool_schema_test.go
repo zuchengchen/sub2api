@@ -763,7 +763,7 @@ func TestOpenAIResponsesToolSchemaPlatformGate_APIKeyAndOAuth(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, changed)
 			require.Equal(t, "object", gjson.GetBytes(normalized, "tools.0.parameters.type").String())
-			require.Equal(t, "(?=drop)", gjson.GetBytes(normalized, "tools.0.parameters.pattern").String(), "both OpenAI credential types preserve the explicit pattern")
+			require.False(t, gjson.GetBytes(normalized, "tools.0.parameters.pattern").Exists(), "both OpenAI credential types remove unsupported patterns")
 		})
 	}
 

@@ -550,6 +550,10 @@ func (a *Account) GetModelMapping() map[string]string {
 	if a.IsOpenAIOAuth() {
 		return nil
 	}
+	return a.getStoredModelMapping()
+}
+
+func (a *Account) getStoredModelMapping() map[string]string {
 	runtimeVersion := xai.RuntimeModelMappingVersion()
 	credentialsPtr := mapPtr(a.Credentials)
 	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
@@ -599,7 +603,9 @@ func (a *Account) PrepareSharedSnapshot() {
 	if a == nil {
 		return
 	}
-	a.GetModelMapping()
+	if !a.IsOpenAIOAuth() || a.IsOpenAIPassthroughModelFilterEnabled() {
+		a.getStoredModelMapping()
+	}
 	a.modelMappingCacheShared = true
 }
 
@@ -745,12 +751,9 @@ func (a *Account) isModelMappingSupported(requestedModel string) bool {
 	// credentials 里常残留旧的非空 model_mapping，若不在此放行，透传账号会被
 	// model_mapping 白名单错误排除出候选集，导致 no available accounts / 404（issue #4936）。
 	if a.IsOpenAIPassthroughEnabled() {
-		if !a.IsOpenAIPassthroughModelFilterEnabled() {
-			return true
-		}
 		// Explicit opt-in filters candidates by source keys only. Forward still
 		// ignores mapping targets and preserves the passthrough request body.
-		mapping := a.GetModelMapping()
+		mapping := a.modelEligibilityMapping()
 		return len(mapping) == 0 || mappingSupportsRequestedModel(mapping, strings.TrimSpace(requestedModel))
 	}
 	mapping := a.GetModelMapping()
@@ -764,6 +767,18 @@ func (a *Account) isModelMappingSupported(requestedModel string) bool {
 		return true // 无映射 = 允许所有
 	}
 	return mappingSupportsRequestedModel(mapping, requestedModel)
+}
+
+// modelEligibilityMapping supplies the source keys used for model selection and
+// advertisement. OAuth passthrough can explicitly opt into these restrictions.
+func (a *Account) modelEligibilityMapping() map[string]string {
+	if !a.IsOpenAIPassthroughEnabled() {
+		return a.GetModelMapping()
+	}
+	if a.IsOpenAIPassthroughModelFilterEnabled() {
+		return a.getStoredModelMapping()
+	}
+	return nil
 }
 
 // GetMappedModel 获取映射后的模型名（支持通配符，最长优先匹配）

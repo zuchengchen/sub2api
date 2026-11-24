@@ -106,11 +106,17 @@ func TestOpenAIResponsesOrphanPrecheckPreservesSanitizer(t *testing.T) {
 			require.Equal(t, expected, actual)
 
 			account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+			// The legacy item-identity sanitizer is independent of orphan cleanup.
+			// Run it on the original bytes so duplicate keys have the same meaning.
+			reference, _, err := sanitizeOpenAIResponsesInputItemIDsForAccount([]byte(body), account)
+			require.NoError(t, err)
+			var wantIntegrated map[string]any
+			require.NoError(t, decodeOpenAIJSONUseNumber(reference, &wantIntegrated))
 			normalized, _, err := normalizeOpenAIResponsesWebSocketCompatibilityBody([]byte(body), account, false)
 			require.NoError(t, err)
 			var integrated map[string]any
 			require.NoError(t, decodeOpenAIJSONUseNumber(normalized, &integrated))
-			require.Equal(t, expected, integrated)
+			require.Equal(t, wantIntegrated, integrated)
 		})
 	}
 }
