@@ -229,7 +229,7 @@ func TestOpenAICacheWriteTTLPrices(t *testing.T) {
 		p, err := service.GetModelPricing("gpt-6-astra")
 		require.NoError(t, err)
 		cost := service.computeTokenBreakdown(p, UsageTokens{CacheCreationTokens: 1_000_000, CacheCreation12hTokens: 1_000_000}, 1, "ultrafast", false)
-		require.InDelta(t, 225, cost.CacheCreationCost, 1e-12)
+		require.InDelta(t, 150, cost.CacheCreationCost, 1e-12)
 	})
 	t.Run("explicit free 12h", func(t *testing.T) {
 		p := *base

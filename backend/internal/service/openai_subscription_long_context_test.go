@@ -11,11 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// gpt61SolTestBillingMultiplier 对应定制价卡（6043851a4）：gpt-6.1-sol / gpt-6-sol
-// 默认价卡（含远程目录官方价）强制按官方 API 价的 2 倍计费。下方用例的单价均写官方价，
-// 断言时统一乘以该倍率。
-const gpt61SolTestBillingMultiplier = 2.0
-
 // 同时覆盖远程目录更新、静态兜底、旧计费入口和分组入口，校验真实扣款与账号成本。
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionLongContext(t *testing.T) {
 	for _, catalog := range []bool{false, true} {
@@ -59,12 +54,12 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionLongContext(t *test
 							// TestOpenAIGatewayServiceRecordUsage_GroupAndAccountLongContextMustBothAllow），
 							// 无分组时仅由账号开关决定。
 							wantLong := accountEnabled && groupMode != "分组关闭"
-							inputFactor, outputFactor, tierFactor := 1.0, 1.0, gpt61SolTestBillingMultiplier
+							inputFactor, outputFactor, tierFactor := 1.0, 1.0, 1.0
 							if wantLong {
 								inputFactor, outputFactor = 2, 1.5
 							}
 							if tier == "priority" {
-								tierFactor *= 2
+								tierFactor = 2
 							}
 							log := usageRepo.lastLog
 							require.NotNil(t, log)
@@ -122,7 +117,7 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextAcrossModelNames(t *
 			})
 			require.NoError(t, err)
 			require.True(t, usageRepo.lastLog.LongContextBillingApplied)
-			require.InDelta(t, 1.23*gpt61SolTestBillingMultiplier, usageRepo.lastLog.TotalCost, 1e-12)
+			require.InDelta(t, 1.23, usageRepo.lastLog.TotalCost, 1e-12)
 		})
 	}
 }
@@ -138,7 +133,7 @@ func TestCalculateCostUnified_GPT61SolLongContextPreservesCustomIntervals(t *tes
 		}
 		cost, err := service.CalculateCostUnified(input)
 		require.NoError(t, err)
-		require.InDelta(t, 1.2*gpt61SolTestBillingMultiplier, cost.TotalCost, 1e-12)
+		require.InDelta(t, 1.2, cost.TotalCost, 1e-12)
 		require.True(t, cost.LongContextBillingApplied)
 		if withResolver {
 			input.Resolved = &ResolvedPricing{
@@ -161,12 +156,13 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.
 	for _, totalInput := range []int{271999, 272000, 272001} {
 		for _, accountType := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
 			for _, cache := range []struct {
-				name  string
-				read  int
-				write int
+				name               string
+				read, write        int
+				write30m, write12h int
 			}{
 				{name: "无缓存"},
 				{name: "含缓存", read: 80000, write: 20000},
+				{name: "含两种 TTL 的缓存", read: 80000, write: 20000, write30m: 5000, write12h: 15000},
 			} {
 				t.Run(fmt.Sprintf("%s/%d/%s", accountType, totalInput, cache.name), func(t *testing.T) {
 					usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
@@ -175,17 +171,18 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.
 					err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 						Result: &OpenAIForwardResult{RequestID: "boundary", Model: "gpt-6.1-sol", Duration: time.Second,
 							Usage: OpenAIUsage{InputTokens: totalInput, OutputTokens: 1000,
-								CacheReadInputTokens: cache.read, CacheCreationInputTokens: cache.write}},
+								CacheReadInputTokens: cache.read, CacheCreationInputTokens: cache.write,
+								CacheCreation30mInputTokens: cache.write30m, CacheCreation12hInputTokens: cache.write12h}},
 						APIKey: openAIRecordUsageAPIKeyWithGroup(svc, 1, true), User: &User{ID: 2},
 						Account: &Account{ID: 3, Platform: PlatformOpenAI, Type: accountType,
 							Extra: map[string]any{openAILongContextBillingEnabledKey: true}},
 					})
 					require.NoError(t, err)
 					wantLong := totalInput > 272000
-					wantInput := float64(totalInput-cache.read-cache.write) * 2e-6 * gpt61SolTestBillingMultiplier
-					wantRead := float64(cache.read) * 0.1e-6 * gpt61SolTestBillingMultiplier
-					wantWrite := float64(cache.write) * 2.5e-6 * gpt61SolTestBillingMultiplier
-					wantOutput := 0.01 * gpt61SolTestBillingMultiplier
+					wantInput := float64(totalInput-cache.read-cache.write) * 2e-6
+					wantRead := float64(cache.read) * 0.1e-6
+					wantWrite := float64(cache.write-cache.write12h)*2.5e-6 + float64(cache.write12h)*5e-6
+					wantOutput := 0.01
 					if wantLong {
 						wantInput *= 2
 						wantRead *= 2
@@ -194,6 +191,8 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.
 					}
 					log := usageRepo.lastLog
 					require.NotNil(t, log)
+					require.Equal(t, cache.write30m, log.CacheCreation30mTokens)
+					require.Equal(t, cache.write12h, log.CacheCreation12hTokens)
 					require.Equal(t, wantLong, log.LongContextBillingApplied)
 					require.InDelta(t, wantInput, log.InputCost, 1e-12)
 					require.InDelta(t, wantRead, log.CacheReadCost, 1e-12)
@@ -234,7 +233,7 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextSurvivesRepricing(t 
 	})
 	require.NoError(t, err)
 	// 响应模型改用较低的缓存价；免费 Fast 再按标准档扣款，两次重算均须保留长上下文倍率。
-	const standardCost = ((220000*2e-6+80000*0.1e-6)*2 + 2000*10e-6*1.5) * gpt61SolTestBillingMultiplier
+	const standardCost = (220000*2e-6+80000*0.1e-6)*2 + 2000*10e-6*1.5
 	require.InDelta(t, standardCost*2, usageRepo.lastLog.TotalCost, 1e-12)
 	require.InDelta(t, standardCost*1.1, usageRepo.lastLog.ActualCost, 1e-12)
 	require.InDelta(t, standardCost*1.1, userRepo.lastAmount, 1e-12)
