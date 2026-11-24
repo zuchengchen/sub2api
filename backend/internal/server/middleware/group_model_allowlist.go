@@ -113,7 +113,10 @@ func isResponsesWebSocketRoute(c *gin.Context) bool {
 func groupModelAllowlistModelsFromBody(c *gin.Context) ([]string, bool) {
 	body, err := httputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
-		AbortRequestBodyReadFailure(c, err)
+		if RejectRequestBodyReadError(c, "middleware.group_model_allowlist", err) {
+			return nil, false
+		}
+		AbortWithRequestBodyReadFailure(c, "middleware.group_model_allowlist", err)
 		return nil, false
 	}
 	requestmodel.ResetRequestBody(c.Request, body)

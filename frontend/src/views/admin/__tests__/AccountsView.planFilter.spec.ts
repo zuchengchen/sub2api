@@ -14,7 +14,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: { accounts: api, proxies: { getAll: api.getAll }, groups: { getAll: api.getAll } }
 }))
 vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({ showError: vi.fn(), showSuccess: vi.fn(), showInfo: vi.fn() })
+  useAppStore: () => ({ showError: vi.fn(), showWarning: vi.fn(), showSuccess: vi.fn(), showInfo: vi.fn() })
 }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ token: 'test-token' }) }))
 vi.mock('vue-i18n', async () => ({

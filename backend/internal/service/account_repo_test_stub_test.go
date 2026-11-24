@@ -161,6 +161,9 @@ func (m *mockAccountRepoForTest) ClearTempUnschedulable(ctx context.Context, id 
 	return nil
 }
 func (m *mockAccountRepoForTest) ClearRateLimit(ctx context.Context, id int64) error { return nil }
+func (m *mockAccountRepoForTest) ClearModelRateLimit(ctx context.Context, id int64, scope string) error {
+	return nil
+}
 func (m *mockAccountRepoForTest) ClearModelRateLimits(ctx context.Context, id int64) error {
 	return nil
 }

@@ -178,6 +178,14 @@ var (
 		Mode:                                "chat",
 		SupportsPromptCaching:               true,
 	}
+	// Fable/Mythos 5.2 share the official price card, including both cache TTLs:
+	// https://platform.claude.com/docs/en/about-claude/pricing
+	claude52FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 8e-6, OutputCostPerToken: 40e-6,
+		CacheCreationInputTokenCost: 10e-6, CacheCreationInputTokenCostAbove1hr: 16e-6,
+		CacheReadInputTokenCost: 0.2e-6,
+		LiteLLMProvider:         "anthropic", Mode: "chat", SupportsPromptCaching: true,
+	}
 	claudeOpus55FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken: 4e-6, OutputCostPerToken: 20e-6,
 		CacheCreationInputTokenCost: 5e-6, CacheCreationInputTokenCostAbove1hr: 8e-6,
@@ -189,7 +197,7 @@ var (
 	claudeSonnet55FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken: 2e-6, OutputCostPerToken: 10e-6,
 		CacheCreationInputTokenCost: 2.5e-6, CacheCreationInputTokenCostAbove1hr: 4e-6,
-		CacheReadInputTokenCost: 0.2e-6,
+		CacheReadInputTokenCost: 0.1e-6,
 		LiteLLMProvider:         "anthropic", Mode: "chat", SupportsPromptCaching: true,
 	}
 	claudeHaiku55FallbackPricing = &LiteLLMModelPricing{
@@ -263,30 +271,38 @@ var (
 	}
 )
 
+// tokenPriceOverrides tracks explicit nonnegative rates from pricing.override_file.
+// Keep this provenance with the parsed card so billing never rereads the file.
+type tokenPriceOverrides struct {
+	input, output, cacheRead bool
+}
+
 // LiteLLMModelPricing LiteLLM价格数据结构
 // 只保留我们需要的字段，使用指针来处理可能缺失的值
 type LiteLLMModelPricing struct {
-	CacheCreationInputTokenCostExplicit bool    `json:"-"`
-	InputCostPerToken                   float64 `json:"input_cost_per_token"`
-	InputCostPerTokenPriority           float64 `json:"input_cost_per_token_priority"`
-	OutputCostPerToken                  float64 `json:"output_cost_per_token"`
-	OutputCostPerTokenPriority          float64 `json:"output_cost_per_token_priority"`
-	CacheCreationInputTokenCost         float64 `json:"cache_creation_input_token_cost"`
-	CacheCreationInputTokenCostPriority float64 `json:"cache_creation_input_token_cost_priority"`
-	CacheCreationInputTokenCostAbove1hr float64 `json:"cache_creation_input_token_cost_above_1hr"`
-	CacheReadInputTokenCost             float64 `json:"cache_read_input_token_cost"`
-	CacheReadInputTokenCostPriority     float64 `json:"cache_read_input_token_cost_priority"`
-	LongContextInputTokenThreshold      int     `json:"long_context_input_token_threshold,omitempty"`
-	LongContextInputCostMultiplier      float64 `json:"long_context_input_cost_multiplier,omitempty"`
-	LongContextOutputCostMultiplier     float64 `json:"long_context_output_cost_multiplier,omitempty"`
-	SupportsServiceTier                 bool    `json:"supports_service_tier"`
-	LiteLLMProvider                     string  `json:"litellm_provider"`
-	Mode                                string  `json:"mode"`
-	SupportsPromptCaching               bool    `json:"supports_prompt_caching"`
-	OutputCostPerImage                  float64 `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
-	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
-	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
-	CacheReadInputImageTokenCost        float64 `json:"cache_read_input_image_token_cost"`
+	CacheCreationInputTokenCostExplicit  bool `json:"-"`
+	priceOverrides                       tokenPriceOverrides
+	InputCostPerToken                    float64  `json:"input_cost_per_token"`
+	InputCostPerTokenPriority            float64  `json:"input_cost_per_token_priority"`
+	OutputCostPerToken                   float64  `json:"output_cost_per_token"`
+	OutputCostPerTokenPriority           float64  `json:"output_cost_per_token_priority"`
+	CacheCreationInputTokenCost          float64  `json:"cache_creation_input_token_cost"`
+	CacheCreationInputTokenCostPriority  float64  `json:"cache_creation_input_token_cost_priority"`
+	CacheCreationInputTokenCostAbove1hr  float64  `json:"cache_creation_input_token_cost_above_1hr"`
+	CacheCreationInputTokenCostAbove12hr *float64 `json:"cache_creation_input_token_cost_above_12hr"`
+	CacheReadInputTokenCost              float64  `json:"cache_read_input_token_cost"`
+	CacheReadInputTokenCostPriority      float64  `json:"cache_read_input_token_cost_priority"`
+	LongContextInputTokenThreshold       int      `json:"long_context_input_token_threshold,omitempty"`
+	LongContextInputCostMultiplier       float64  `json:"long_context_input_cost_multiplier,omitempty"`
+	LongContextOutputCostMultiplier      float64  `json:"long_context_output_cost_multiplier,omitempty"`
+	SupportsServiceTier                  bool     `json:"supports_service_tier"`
+	LiteLLMProvider                      string   `json:"litellm_provider"`
+	Mode                                 string   `json:"mode"`
+	SupportsPromptCaching                bool     `json:"supports_prompt_caching"`
+	OutputCostPerImage                   float64  `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
+	OutputCostPerImageToken              float64  `json:"output_cost_per_image_token"` // 图片输出 token 价格
+	InputCostPerImageToken               float64  `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
+	CacheReadInputImageTokenCost         float64  `json:"cache_read_input_image_token_cost"`
 	// CacheStorageCostPerTokenPerHour 显式上下文缓存存储单价（每 token 每小时，USD），一般由定价覆盖文件提供，
 	// 配置后优先于内置价（见 BillingService.CacheStoragePricePerTokenHour）。
 	CacheStorageCostPerTokenPerHour float64 `json:"cache_storage_cost_per_token_per_hour"`
@@ -305,33 +321,35 @@ type PricingRemoteClient interface {
 
 // LiteLLMRawEntry 用于解析原始JSON数据
 type LiteLLMRawEntry struct {
-	InputCostPerToken                   *float64 `json:"input_cost_per_token"`
-	InputCostPerTokenPriority           *float64 `json:"input_cost_per_token_priority"`
-	OutputCostPerToken                  *float64 `json:"output_cost_per_token"`
-	OutputCostPerTokenPriority          *float64 `json:"output_cost_per_token_priority"`
-	CacheCreationInputTokenCost         *float64 `json:"cache_creation_input_token_cost"`
-	CacheCreationInputTokenCostPriority *float64 `json:"cache_creation_input_token_cost_priority"`
-	CacheCreationInputTokenCostAbove1hr *float64 `json:"cache_creation_input_token_cost_above_1hr"`
-	CacheReadInputTokenCost             *float64 `json:"cache_read_input_token_cost"`
-	CacheReadInputTokenCostPriority     *float64 `json:"cache_read_input_token_cost_priority"`
-	LongContextInputTokenThreshold      *int     `json:"long_context_input_token_threshold"`
-	LongContextInputCostMultiplier      *float64 `json:"long_context_input_cost_multiplier"`
-	LongContextOutputCostMultiplier     *float64 `json:"long_context_output_cost_multiplier"`
-	SupportsServiceTier                 bool     `json:"supports_service_tier"`
-	LiteLLMProvider                     string   `json:"litellm_provider"`
-	Mode                                string   `json:"mode"`
-	SupportsPromptCaching               bool     `json:"supports_prompt_caching"`
-	OutputCostPerImage                  *float64 `json:"output_cost_per_image"`
-	OutputCostPerImageToken             *float64 `json:"output_cost_per_image_token"`
-	InputCostPerImageToken              *float64 `json:"input_cost_per_image_token"`
-	CacheReadInputImageTokenCost        *float64 `json:"cache_read_input_image_token_cost"`
-	CacheStorageCostPerTokenPerHour     *float64 `json:"cache_storage_cost_per_token_per_hour"`
+	InputCostPerToken                    *float64 `json:"input_cost_per_token"`
+	InputCostPerTokenPriority            *float64 `json:"input_cost_per_token_priority"`
+	OutputCostPerToken                   *float64 `json:"output_cost_per_token"`
+	OutputCostPerTokenPriority           *float64 `json:"output_cost_per_token_priority"`
+	CacheCreationInputTokenCost          *float64 `json:"cache_creation_input_token_cost"`
+	CacheCreationInputTokenCostPriority  *float64 `json:"cache_creation_input_token_cost_priority"`
+	CacheCreationInputTokenCostAbove1hr  *float64 `json:"cache_creation_input_token_cost_above_1hr"`
+	CacheCreationInputTokenCostAbove12hr *float64 `json:"cache_creation_input_token_cost_above_12hr"`
+	CacheReadInputTokenCost              *float64 `json:"cache_read_input_token_cost"`
+	CacheReadInputTokenCostPriority      *float64 `json:"cache_read_input_token_cost_priority"`
+	LongContextInputTokenThreshold       *int     `json:"long_context_input_token_threshold"`
+	LongContextInputCostMultiplier       *float64 `json:"long_context_input_cost_multiplier"`
+	LongContextOutputCostMultiplier      *float64 `json:"long_context_output_cost_multiplier"`
+	SupportsServiceTier                  bool     `json:"supports_service_tier"`
+	LiteLLMProvider                      string   `json:"litellm_provider"`
+	Mode                                 string   `json:"mode"`
+	SupportsPromptCaching                bool     `json:"supports_prompt_caching"`
+	OutputCostPerImage                   *float64 `json:"output_cost_per_image"`
+	OutputCostPerImageToken              *float64 `json:"output_cost_per_image_token"`
+	InputCostPerImageToken               *float64 `json:"input_cost_per_image_token"`
+	CacheReadInputImageTokenCost         *float64 `json:"cache_read_input_image_token_cost"`
+	CacheStorageCostPerTokenPerHour      *float64 `json:"cache_storage_cost_per_token_per_hour"`
 }
 
 // PricingService 动态价格服务
 type PricingService struct {
 	cfg          *config.Config
 	remoteClient PricingRemoteClient
+	updateMu     sync.Mutex // serialize downloads, publication and custom layer rebuilds
 	mu           sync.RWMutex
 	pricingData  map[string]*LiteLLMModelPricing
 	lastUpdated  time.Time
@@ -374,7 +392,10 @@ func (s *PricingService) Initialize() error {
 	// 启动定时更新
 	s.startUpdateScheduler()
 
-	logger.LegacyPrintf("service.pricing", "[Pricing] Service initialized with %d models", len(s.pricingData))
+	s.mu.RLock()
+	modelCount := len(s.pricingData)
+	s.mu.RUnlock()
+	logger.LegacyPrintf("service.pricing", "[Pricing] Service initialized with %d models", modelCount)
 	return nil
 }
 
@@ -447,25 +468,10 @@ func (s *PricingService) checkAndUpdatePricing() error {
 		return s.downloadPricingData()
 	}
 
-	// 如果配置了哈希URL，通过远程哈希检查是否有更新
-	if s.cfg.Pricing.HashURL != "" {
-		remoteHash, err := s.fetchRemoteHash()
-		if err != nil {
-			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash on startup: %v", err)
-			return nil // 已加载本地文件，哈希获取失败不影响启动
-		}
-
-		s.mu.RLock()
-		localHash := s.localHash
-		s.mu.RUnlock()
-
-		if localHash == "" || remoteHash != localHash {
-			logger.LegacyPrintf("service.pricing", "[Pricing] Remote hash differs on startup (local=%s remote=%s), downloading...",
-				localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
-			if err := s.downloadPricingData(); err != nil {
-				logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
-			}
-		}
+	// 如果配置了哈希URL，通过远程哈希检查是否有更新。本地文件已加载，服务已可用，
+	// 校验放到后台做：远端慢或不通时不挡启动与监听（fetchRemoteHash 请求挂住时会一直等到客户端超时）。
+	if strings.TrimSpace(s.cfg.Pricing.HashURL) != "" && strings.TrimSpace(s.cfg.Pricing.RemoteURL) != "" {
+		s.wg.Go(s.checkRemoteHashOnStartup)
 		return nil
 	}
 
@@ -488,6 +494,27 @@ func (s *PricingService) checkAndUpdatePricing() error {
 	return nil
 }
 
+// checkRemoteHashOnStartup 启动后在后台比对远程哈希，不同则下载；失败只记日志，沿用已加载的本地文件。
+func (s *PricingService) checkRemoteHashOnStartup() {
+	remoteHash, err := s.fetchRemoteHash()
+	if err != nil {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash on startup: %v", err)
+		return
+	}
+
+	s.mu.RLock()
+	localHash := s.localHash
+	s.mu.RUnlock()
+
+	if localHash == "" || !strings.EqualFold(remoteHash, localHash) {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Remote hash differs on startup (local=%s remote=%s), downloading...",
+			localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
+		if err := s.downloadPricingData(); err != nil {
+			logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
+		}
+	}
+}
+
 // syncWithRemote 与远程同步（基于哈希校验）
 func (s *PricingService) syncWithRemote() error {
 	// 如果配置了哈希URL，从远程获取哈希进行比对
@@ -502,7 +529,7 @@ func (s *PricingService) syncWithRemote() error {
 		localHash := s.localHash
 		s.mu.RUnlock()
 
-		if localHash == "" || remoteHash != localHash {
+		if localHash == "" || !strings.EqualFold(remoteHash, localHash) {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Remote hash differs (local=%s remote=%s), downloading new version...",
 				localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
 			return s.downloadPricingData()
@@ -600,6 +627,9 @@ func (s *PricingService) reloadIfCustomFilesChanged() {
 // reloadCustomPricingLayers 读取本地目录缓存并重新叠加 fallback/override，只替换内存数据
 // 与叠加层指纹。
 func (s *PricingService) reloadCustomPricingLayers() error {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+
 	pricingFile := s.getPricingFilePath()
 	// 定价层文件可能在读取期间被替换。只有构建前后指纹一致时才提交，
 	// 否则丢弃这次混合快照并重试，避免短暂应用不匹配的 fallback/override。
@@ -643,6 +673,9 @@ func (s *PricingService) reloadCustomPricingLayers() error {
 
 // downloadPricingData 从远程下载价格数据
 func (s *PricingService) downloadPricingData() error {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+
 	remoteURL, err := s.validatePricingURL(s.cfg.Pricing.RemoteURL)
 	if err != nil {
 		return err
@@ -680,20 +713,12 @@ func (s *PricingService) downloadPricingData() error {
 		return fmt.Errorf("parse pricing data: %w", err)
 	}
 
-	// 保存到本地文件
-	pricingFile := s.getPricingFilePath()
-	if err := os.WriteFile(pricingFile, body, 0644); err != nil {
-		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to save file: %v", err)
+	if err := writePricingFile(s.getPricingFilePath(), body); err != nil {
+		return fmt.Errorf("save local pricing data: %w", err)
 	}
-
-	// 使用远程哈希作为同步锚点，防止重复下载
-	// 当远程哈希不可用时，回退到数据本身的哈希
-	syncHash := dataHashStr
-	if remoteHash != "" {
-		syncHash = remoteHash
-	}
-	hashFile := s.getHashFilePath()
-	if err := os.WriteFile(hashFile, []byte(syncHash+"\n"), 0644); err != nil {
+	// This hash always describes the bytes that were fetched and published.
+	// A stale hash endpoint must not mark a different body as up to date.
+	if err := writePricingFile(s.getHashFilePath(), []byte(dataHashStr+"\n")); err != nil {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to save hash: %v", err)
 	}
 
@@ -702,12 +727,32 @@ func (s *PricingService) downloadPricingData() error {
 	warnDroppedLongContextLadders(s.pricingData, data)
 	s.pricingData = data
 	s.lastUpdated = time.Now()
-	s.localHash = syncHash
+	s.localHash = dataHashStr
 	s.customFilesHash = customFilesHash
 	s.mu.Unlock()
 
 	logger.LegacyPrintf("service.pricing", "[Pricing] Downloaded %d models successfully", len(data))
 	return nil
+}
+
+func writePricingFile(path string, body []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".pricing-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	if err := file.Chmod(0644); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.Write(body); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
 }
 
 // parsePricingData 解析价格数据（处理各种格式）
@@ -717,7 +762,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 	if err := json.Unmarshal(body, &rawData); err != nil {
 		return nil, fmt.Errorf("parse raw JSON: %w", err)
 	}
-	rawData = s.applyPricingOverrides(rawData)
+	rawData, priceOverrides := s.applyPricingOverrides(rawData)
 
 	result := make(map[string]*LiteLLMModelPricing)
 	skipped := 0
@@ -742,6 +787,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		}
 
 		pricing := &LiteLLMModelPricing{
+			priceOverrides:        priceOverrides[modelName],
 			LiteLLMProvider:       entry.LiteLLMProvider,
 			Mode:                  entry.Mode,
 			SupportsPromptCaching: entry.SupportsPromptCaching,
@@ -770,6 +816,9 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		}
 		if entry.CacheCreationInputTokenCostAbove1hr != nil {
 			pricing.CacheCreationInputTokenCostAbove1hr = *entry.CacheCreationInputTokenCostAbove1hr
+		}
+		if entry.CacheCreationInputTokenCostAbove12hr != nil && *entry.CacheCreationInputTokenCostAbove12hr >= 0 {
+			pricing.CacheCreationInputTokenCostAbove12hr = entry.CacheCreationInputTokenCostAbove12hr
 		}
 		if entry.CacheReadInputTokenCost != nil {
 			pricing.CacheReadInputTokenCost = *entry.CacheReadInputTokenCost
@@ -982,11 +1031,12 @@ func warnOrphanCacheTierFields(entries []string) {
 // 文件的解析都经过 parsePricingData，因此 override 是最高优先级的数据源。这里只修补
 // 已存在的条目：目录/回退里都没有的模型由 mergeOverrideOnlyModels 在两层数据合并后
 // 统一并入——若在此处抢先建条目，纯 override 条目会挡住回退文件中同名完整条目的合并。
-func (s *PricingService) applyPricingOverrides(rawData map[string]json.RawMessage) map[string]json.RawMessage {
+func (s *PricingService) applyPricingOverrides(rawData map[string]json.RawMessage) (map[string]json.RawMessage, map[string]tokenPriceOverrides) {
 	overrides := s.loadPricingOverrideEntries()
 	if len(overrides) == 0 {
-		return rawData
+		return rawData, nil
 	}
+	priceOverrides := make(map[string]tokenPriceOverrides, len(overrides))
 	for name, patch := range overrides {
 		base, ok := rawData[name]
 		if !ok {
@@ -998,8 +1048,25 @@ func (s *PricingService) applyPricingOverrides(rawData map[string]json.RawMessag
 			continue
 		}
 		rawData[name] = merged
+		priceOverrides[name] = tokenPriceOverridesFromPatch(patch)
 	}
-	return rawData
+	return rawData, priceOverrides
+}
+
+func tokenPriceOverridesFromPatch(patch json.RawMessage) tokenPriceOverrides {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(patch, &fields) != nil {
+		return tokenPriceOverrides{}
+	}
+	explicitRate := func(field string) bool {
+		var rate *float64
+		return json.Unmarshal(fields[field], &rate) == nil && rate != nil && *rate >= 0
+	}
+	return tokenPriceOverrides{
+		input:     explicitRate("input_cost_per_token"),
+		output:    explicitRate("output_cost_per_token"),
+		cacheRead: explicitRate("cache_read_input_token_cost"),
+	}
 }
 
 // loadPricingOverrideEntries 读取 override 文件的原始条目。未配置返回 nil；
@@ -1495,6 +1562,19 @@ func (s *PricingService) extractBaseName(model string) string {
 // matchByModelFamily 基于模型系列匹配
 func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	model = normalizeAntigravityClaudeTierAlias(model)
+	var claude52Model string
+	switch {
+	case claude.IsFable52(model):
+		claude52Model = "claude-fable-5-2"
+	case claude.IsMythos52(model):
+		claude52Model = "claude-mythos-5-2"
+	}
+	if claude52Model != "" {
+		if pricing, ok := s.pricingData[claude52Model]; ok {
+			return pricing
+		}
+		return claude52FallbackPricing
+	}
 	if claude.IsOpus55(model) {
 		if pricing, ok := s.pricingData["claude-opus-5-5"]; ok {
 			return pricing

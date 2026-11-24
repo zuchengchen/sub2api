@@ -68,7 +68,7 @@ func NewGatewayHandler(
 	cfg *config.Config,
 	settingService *service.SettingService,
 ) *GatewayHandler {
-	pingInterval := time.Duration(0)
+	pingInterval := defaultPingInterval
 	maxAccountSwitches := 10
 	if cfg != nil {
 		pingInterval = time.Duration(cfg.Concurrency.PingInterval) * time.Second
@@ -128,7 +128,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// 读取请求体
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
-		writeRequestBodyReadFailure(c, reqLog, err, h.errorResponse)
+		if handleRequestBodyReadError(c, reqLog, err) {
+			return
+		}
+		status, message := requestBodyReadFailure(reqLog, c.Request, err)
+		h.errorResponse(c, status, "invalid_request_error", message)
 		return
 	}
 
@@ -586,6 +590,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if fs.ForceCacheBilling {
 				requestCtx = service.WithForceCacheBilling(requestCtx)
 			}
+			if channelMapping.Mapped {
+				// 选号按客户端模型，转发按渠道映射后的模型：模型级账号状态按选号模型记录。
+				requestCtx = service.WithGatewaySchedulingModel(requestCtx, reqModel)
+			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
 			result, err = h.gatewayService.Forward(requestCtx, c, account, attemptParsedReq)
@@ -631,6 +639,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				forceCacheBilling := fs.ForceCacheBilling
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
 				sessionID := service.ExtractClientSessionID(c)
+				channelUsageFields := clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel)
 				h.submitMandatoryUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 					if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 						Result:             result,
@@ -648,7 +657,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						RequestPayloadHash: requestPayloadHash,
 						ForceCacheBilling:  forceCacheBilling,
 						APIKeyService:      h.apiKeyService,
-						ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+						ChannelUsageFields: channelUsageFields,
 					}); err != nil {
 						logger.L().With(
 							zap.String("component", "handler.gateway.messages"),
@@ -743,8 +752,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// - 粘性账号因负载/RPM 被跳过、选中了其他账号：不覆盖原绑定，
 			//   下次请求粘性账号恢复后仍可命中
 			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID) {
-				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
-					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				// Forward has completed; finish the bounded write even if the client disconnects.
+				bindCtx, cancelBind := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 5*time.Second)
+				bindErr := h.gatewayService.BindStickySession(bindCtx, currentAPIKey.GroupID, sessionKey, account.ID)
+				cancelBind()
+				if bindErr != nil {
+					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(bindErr))
 				}
 			}
 
@@ -806,7 +819,24 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	// Get available models from account configurations for the selected group platform.
-	availableModels := filterAccessible(h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform))
+	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
+	if platform == service.PlatformAnthropic {
+		var group *service.Group
+		if apiKey != nil {
+			group = apiKey.Group
+		}
+		source := availableModels
+		if group != nil && group.ModelAllowlistEnabled() {
+			source = modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
+		} else if len(source) == 0 {
+			source = defaultModelIDsForPlatform(platform)
+		}
+		expanded := h.gatewayService.ExpandAnthropicLongContextModels(c.Request.Context(), group, source)
+		if len(availableModels) > 0 || len(expanded) > len(source) || (group != nil && group.ModelAllowlistEnabled()) {
+			availableModels = expanded
+		}
+	}
+	availableModels = filterAccessible(availableModels)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
 		source := modelListingSource(platform, availableModels, filterAccessible(defaultModelIDsForPlatform(platform)))
 		writeAllowlistedModelsList(c, platform, apiKey.Group.EffectiveModelAllowlist().FilterForListing(source))
@@ -1752,7 +1782,11 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	// 读取请求体
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
-		writeRequestBodyReadFailure(c, reqLog, err, h.errorResponse)
+		if handleRequestBodyReadError(c, reqLog, err) {
+			return
+		}
+		status, message := requestBodyReadFailure(reqLog, c.Request, err)
+		h.errorResponse(c, status, "invalid_request_error", message)
 		return
 	}
 

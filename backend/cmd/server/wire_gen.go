@@ -183,7 +183,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	openAIReferralClient := repository.NewOpenAIReferralClient(privacyClientFactory)
 	openAIQuotaService := service.ProvideOpenAIQuotaService(accountRepository, proxyRepository, openAITokenProvider, privacyClientFactory, openAIReferralClient, openAIGatewayService)
 	openAIAccountImportChecks := service.NewOpenAIAccountImportChecks(accountRepository, openAIQuotaService, openAIGatewayService)
-	adminService := service.NewAdminService(configConfig, userRepository, adminGroupRepository, adminAccountRepository, proxyRepository, apiKeyRepository, redeemCodeRepository, userGroupRateRepository, userRPMCache, billingCacheService, proxyExitInfoProber, proxyLatencyCache, apiKeyAuthCacheInvalidator, client, settingService, subscriptionService, userSubscriptionRepository, privacyClientFactory, openAIGatewayService, affiliateService, compositeModelRouteRepository, compositeRouteResolver, channelService, openAIAccountImportChecks)
+	adminService := service.NewAdminService(configConfig, userRepository, adminGroupRepository, adminAccountRepository, proxyRepository, apiKeyRepository, redeemCodeRepository, userGroupRateRepository, userRPMCache, billingCacheService, proxyExitInfoProber, proxyLatencyCache, apiKeyAuthCacheInvalidator, client, settingService, subscriptionService, userSubscriptionRepository, privacyClientFactory, openAIGatewayService, affiliateService, compositeModelRouteRepository, compositeRouteResolver, channelService, openAIAccountImportChecks, serviceUserPlatformQuotaRepository)
 	adminUserHandler := admin.NewUserHandler(adminService, concurrencyService, serviceUserPlatformQuotaRepository, billingCache, totpService, userService, settingService)
 	groupCapacityService := service.NewGroupCapacityService(accountRepository, groupRepository, concurrencyService, sessionLimitCache, rpmCache)
 	groupHandler := admin.NewGroupHandlerWithConfig(adminService, dashboardService, groupCapacityService, configConfig)
@@ -350,7 +350,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, cnProviderBalanceCheckService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, openAIRequestTimezoneRefreshWorker, usageCleanupService, pricingService, billingCacheService, subscriptionService, oAuthService, openAIOAuthService, grokOAuthService, openAIGatewayService, backupService, channelMonitorRunner, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, openAIQuotaRefreshWorker, openAIAccountImportChecks, contentModerationService, pluginManager, usagePolicyService, billingOutboxWorker, runtime)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, cnProviderBalanceCheckService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, openAIRequestTimezoneRefreshWorker, usageCleanupService, pricingService, billingCacheService, subscriptionService, oAuthService, openAIOAuthService, grokOAuthService, openAIGatewayService, backupService, channelMonitorRunner, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, openAIQuotaRefreshWorker, openAIAccountImportChecks, contentModerationService, pluginManager, usagePolicyService, billingOutboxWorker, balanceNotifyService, digestSessionStore, runtime)
 	application := &Application{
 		Server:        httpServer,
 		PluginManager: pluginManager,
@@ -428,6 +428,8 @@ func provideCleanup(
 	pluginManager *service.PluginManager,
 	usagePolicyService *service.UsagePolicyService,
 	billingOutboxWorker *service.BillingOutboxWorker,
+	balanceNotify *service.BalanceNotifyService,
+	digestSessions *service.DigestSessionStore,
 	runtime *workerruntime.Runtime,
 ) func() {
 	return func() {
@@ -456,6 +458,16 @@ func provideCleanup(
 			{"BillingOutboxWorker", func() error {
 				if billingOutboxWorker != nil {
 					billingOutboxWorker.Stop()
+				}
+				return nil
+			}},
+			{"BalanceNotifyService", func() error {
+				balanceNotify.Stop()
+				return nil
+			}},
+			{"DigestSessionStore", func() error {
+				if digestSessions != nil {
+					digestSessions.Close()
 				}
 				return nil
 			}},

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-import type { ApiKey } from '@/types'
+import type { ApiKey, Group } from '@/types'
 import { keysAPI } from '@/api'
 import KeysView from '../KeysView.vue'
 
@@ -159,7 +159,7 @@ const TablePageLayoutStub = {
 
 const DataTableStub = {
   name: 'DataTable',
-  props: { columns: Array, data: Array, selectedKeys: Array, selectable: Boolean },
+  props: { columns: Array, data: Array, selectedKeys: Array, selectable: Boolean, loading: Boolean },
   emits: ['sort', 'update:selectedKeys'],
   template: `
     <div>
@@ -179,6 +179,9 @@ const DataTableStub = {
         <slot name="cell-actions" :row="row" />
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
+        </div>
+        <div data-test="usage">
+          <slot name="cell-usage" :row="row" />
         </div>
         <div
           v-if="columns.some((col) => col.key === 'last_used_ip')"
@@ -298,6 +301,43 @@ describe('user KeysView column settings', () => {
     getAvailableGroups.mockResolvedValue([])
     getUserGroupRates.mockResolvedValue({})
     isCurrentStep.mockReturnValue(false)
+  })
+
+  it.each(['openai', 'composite'] as const)('uses the %s key catalog for CC Switch import', async (platform) => {
+    const key = { ...createApiKey(), group_id: 7, group: { id: 7, name: 'Codex group', platform } as Group }
+    listKeys.mockResolvedValueOnce({ items: [key], total: 1, page: 1, page_size: 20, pages: 1 })
+    getPublicSettings.mockResolvedValueOnce({ api_base_url: 'https://example.com/v1' })
+    const fetchCatalog = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ models: [{ slug: 'gpt-6.2-astra' }] })
+    ))
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const wrapper = await mountView()
+    try {
+      await getButtonByText(wrapper, 'keys.importToCcSwitch').trigger('click')
+      await flushPromises()
+      expect(fetchCatalog).toHaveBeenCalledWith(
+        'https://example.com/v1/models?format=codex',
+        expect.objectContaining({ headers: expect.objectContaining({ Authorization: `Bearer ${key.key}` }) })
+      )
+      expect(open).not.toHaveBeenCalled()
+      const dialog = wrapper.get('[role="dialog"]')
+      const importButton = dialog.get<HTMLButtonElement>('button.btn-primary')
+      expect(importButton.element.disabled).toBe(true)
+      await dialog.get('select').setValue('gpt-6.2-astra')
+      await importButton.trigger('click')
+      const [link, target] = open.mock.lastCall ?? []
+      const params = new URL(link as string).searchParams
+      expect(target).toBe('_self')
+      expect(params.get('model')).toBe('gpt-6.2-astra')
+      const { config } = JSON.parse(atob(params.get('config')!))
+      expect(config).toContain('base_url = "https://example.com/v1"')
+      expect(config).toContain('web_search = "live"')
+      expect(config).toContain('x-openai-actor-authorization')
+    } finally {
+      wrapper.unmount()
+      fetchCatalog.mockRestore()
+      open.mockRestore()
+    }
   })
 
   it.each([
@@ -663,6 +703,36 @@ describe('user KeysView column settings', () => {
       await getButtonByText(wrapper, 'common.edit').trigger('click')
       expect(wrapper.find('[data-tour="key-form-provider"]').exists()).toBe(false)
       expect(optionIds(wrapper)).toHaveLength(9)
+    })
+  })
+
+  describe('usage stats loading', () => {
+    it('renders the key list without waiting for slow usage stats', async () => {
+      let resolveUsage!: (value: { stats: Record<string, unknown> }) => void
+      getDashboardApiKeysUsage.mockReturnValue(new Promise((resolve) => { resolveUsage = resolve }))
+      const wrapper = await mountView()
+
+      const table = wrapper.findComponent({ name: 'DataTable' })
+      expect(table.props('loading')).toBe(false)
+      expect(table.props('data')).toHaveLength(1)
+      expect(wrapper.find('[data-test="usage-pending"]').exists()).toBe(true)
+
+      resolveUsage({
+        stats: { 1: { api_key_id: 1, today_actual_cost: 0.5, total_actual_cost: 12.25 } },
+      })
+      await flushPromises()
+      expect(wrapper.find('[data-test="usage-pending"]').exists()).toBe(false)
+      expect(wrapper.get('[data-test="usage"]').text()).toContain('$12.2500')
+    })
+
+    it('stops showing usage placeholders when the usage request fails', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+      getDashboardApiKeysUsage.mockRejectedValue(new Error('timeout'))
+      const wrapper = await mountView()
+
+      expect(wrapper.find('[data-test="usage-pending"]').exists()).toBe(false)
+      expect(wrapper.get('[data-test="usage"]').text()).toContain('$0.0000')
+      consoleError.mockRestore()
     })
   })
 })

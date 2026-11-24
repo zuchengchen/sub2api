@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -284,6 +285,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if !gjson.ValidBytes(trimmed) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 		}
+		// 帧内重复字段会让这里 gjson 读到的首个值与后续重编码/上游读到的值分叉
+		// （GHSA-p3r4-jcm3-2hph），在读取任何字段之前拒绝。
+		if field, conflict := requestmodel.ConflictingField("application/json", trimmed); conflict {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, fmt.Sprintf("websocket request payload declares field %.64q more than once", field), nil)
+		}
 
 		values := gjson.GetManyBytes(trimmed, "type", "model", "prompt_cache_key", "previous_response_id")
 		eventType := strings.TrimSpace(values[0].String())
@@ -481,7 +487,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				logOpenAIWSModeInfo("ingress_ws_codex_image_tool_stripped_by_policy account_id=%d", account.ID)
 			}
 		}
-		imageIntent := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, originalModel, normalized, account.Platform)
+		imageIntent := IsImageGenerationIntentForPlatformValidated(openAIResponsesEndpoint, originalModel, normalized, account.Platform)
 		if imageIntent && !imageGenerationAllowed {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
 		}
@@ -676,7 +682,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			if turn > 1 {
-				if err := s.quotaFailureForWSTurn(ctx, account, currentBridgePayload.rawForHash); err != nil {
+				if err := s.quotaFailureForWSTurn(ctx, account, currentBridgePayload.rawForHash, currentBridgePayload.originalModel); err != nil {
 					return err
 				}
 			}
@@ -817,6 +823,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if bridgeErr != nil && isOpenAIWSSessionPreempted(ctx) {
 				return errOpenAIWSSessionPreempted
 			}
+			if result != nil {
+				// The HTTP payload can contain a policy rewrite or replayed configuration from an earlier turn.
+				result.RequestedReasoningEffort = currentBridgePayload.requestedReasoningEffort
+			}
 			if hooks != nil && hooks.AfterTurn != nil {
 				hooks.AfterTurn(turn, result, bridgeErr)
 			}
@@ -824,9 +834,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				var failoverErr *UpstreamFailoverError
 				if turn > 1 && errors.As(bridgeErr, &failoverErr) && failoverErr != nil {
 					retryPayload, retrySafe, retryPayloadErr := buildOpenAIWSCurrentTurnRetryPayload(
-						currentBridgePayload.accountIdentitySourceRaw,
+						currentBridgePayload.rawForHash,
 						turnAccountFailoverInput,
-						turnAccountFailoverInputExists && turnHistoryComplete,
+						result == nil && turnAccountFailoverInputExists && turnHistoryComplete,
 						currentBridgePayload.originalModel,
 					)
 					if retryPayloadErr != nil {
@@ -1784,6 +1794,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	defer releaseSessionLease()
 
 	turn := 1
+	defer func() {
+		var failoverErr *UpstreamFailoverError
+		var currentTurnErr *openAIWSCurrentTurnFailoverError
+		if turn > 1 && errors.As(returnErr, &failoverErr) && !errors.As(returnErr, &currentTurnErr) {
+			// A later error with no proven replay payload closes the client
+			// connection instead of forwarding the initial turn again.
+			returnErr = newOpenAIWSCurrentTurnFailoverError(returnErr, nil)
+		}
+	}()
 	rejectedFieldRetryState = openAIResponsesRejectedFieldRetryStateForRequest(c, currentPayload)
 	turnRetry := 0
 	turnPrevRecoveryTried := false
@@ -1922,7 +1941,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		if turn > 1 {
-			if err := s.quotaFailureForWSTurn(ctx, account, currentIdentitySourceRaw); err != nil {
+			if err := s.quotaFailureForWSTurn(ctx, account, currentClientPayload, currentOriginalModel); err != nil {
 				return err
 			}
 		}
@@ -2175,10 +2194,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				if cookieWS && turn > 1 {
 					acquireErr = wrapOpenAICookieWSCurrentTurnFailover(acquireErr, currentIdentitySourceRaw, currentTurnReplayInput, currentTurnReplayInputExists, currentOriginalModel)
 				} else if turn > 1 {
-					var f *UpstreamFailoverError
-					if errors.As(acquireErr, &f) && f.Reason == OpenAIQuotaExhaustedReason {
-						acquireErr = newOpenAIWSCurrentTurnFailoverError(f, currentIdentitySourceRaw)
-					}
+					acquireErr = wrapProvenOpenAIWSCurrentTurnFailover(acquireErr, currentClientPayload, currentTurnReplayInput, currentTurnReplayInputExists && currentTurnHistoryComplete, currentOriginalModel)
 				}
 				return fmt.Errorf("acquire upstream websocket: %w", acquireErr)
 			}
@@ -2189,6 +2205,28 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			} else {
 				unpinSessionConn(sessionConnID)
 			}
+		}
+		if account.IsOpenAIOAuthLike() && sessionLease.initializedWithoutWebSearch() && openAIWSWebSearchDeclared(currentPayload) {
+			if !currentTurnReplayInputExists || !openAIContinuationReplayInputProof(currentPayload, currentTurnReplayInput, currentTurnHistoryComplete, true) {
+				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, openAIWSWebSearchReconnectMessage, nil)
+			}
+			fullPayload, err := setOpenAIWSPayloadInputSequence(RemovePreviousResponseIDFromBody(currentPayload), currentTurnReplayInput, true)
+			if err != nil {
+				return fmt.Errorf("rebuild websocket input for web search activation: %w", err)
+			}
+			logOpenAIWSModeInfo("ingress_ws_web_search_activation account_id=%d turn=%d action=reconnect", account.ID, turn)
+			resetSessionLease(true)
+			acquiredLease, acquireErr := acquireTurnLease(turn, "", false, true)
+			if acquireErr != nil {
+				return fmt.Errorf("acquire upstream websocket for web search activation: %w", acquireErr)
+			}
+			sessionLease = acquiredLease
+			sessionConnID = strings.TrimSpace(sessionLease.ConnID())
+			pinSessionConn(sessionConnID)
+			currentPayload = fullPayload
+			currentPayloadBytes = len(fullPayload)
+			currentPreviousResponseID = ""
+			forcePreferredConn = false
 		}
 		// Official Codex never pings upstream between turns; a dead socket shows
 		// up on the next write and goes through the normal retry path.
@@ -2359,10 +2397,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if cookieWS && turn > 1 {
 				finalErr = wrapOpenAICookieWSCurrentTurnFailover(finalErr, currentIdentitySourceRaw, currentTurnReplayInput, currentTurnReplayInputExists, currentOriginalModel)
 			} else if turn > 1 {
-				var f *UpstreamFailoverError
-				if errors.As(finalErr, &f) && f.Reason == OpenAIQuotaExhaustedReason {
-					finalErr = newOpenAIWSCurrentTurnFailoverError(f, currentIdentitySourceRaw)
-				}
+				noOutputOrUsage := result == nil
+				finalErr = wrapProvenOpenAIWSCurrentTurnFailover(finalErr, currentClientPayload, currentTurnReplayInput, noOutputOrUsage && currentTurnReplayInputExists && currentTurnHistoryComplete, currentOriginalModel)
 			}
 			return finalErr
 		}

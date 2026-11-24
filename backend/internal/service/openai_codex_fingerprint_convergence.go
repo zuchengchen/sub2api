@@ -542,7 +542,7 @@ func applyCodexIdentityToWSPayload(c *gin.Context, account *Account, payload []b
 	if codexFingerprintConvergenceEnabled(source) {
 		ids = resolveCodexFingerprintIDsForRawBody(c, account, nil, payload)
 	}
-	next, _, err := applyCodexAccountIdentityClientMetadataRaw(payload, source, getAPIKeyIDFromContext(c))
+	next, _, err := applyCodexAccountIdentityClientMetadataRaw(payload, source, getAPIKeyIDFromContext(c), codexClientSessionID(c))
 	if err != nil {
 		return payload, err
 	}

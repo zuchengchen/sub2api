@@ -122,6 +122,8 @@ func provideCleanup(
 	pluginManager *service.PluginManager,
 	usagePolicyService *service.UsagePolicyService,
 	billingOutboxWorker *service.BillingOutboxWorker,
+	balanceNotify *service.BalanceNotifyService,
+	digestSessions *service.DigestSessionStore,
 	runtime *workerruntime.Runtime,
 ) func() {
 	return func() {
@@ -152,6 +154,16 @@ func provideCleanup(
 			{"BillingOutboxWorker", func() error {
 				if billingOutboxWorker != nil {
 					billingOutboxWorker.Stop()
+				}
+				return nil
+			}},
+			{"BalanceNotifyService", func() error {
+				balanceNotify.Stop()
+				return nil
+			}},
+			{"DigestSessionStore", func() error {
+				if digestSessions != nil {
+					digestSessions.Close()
 				}
 				return nil
 			}},

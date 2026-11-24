@@ -19,20 +19,27 @@ func logRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error)
 
 type gatewayErrorWriter func(*gin.Context, int, string, string)
 
-// writeRequestBodyReadFailure logs the bounded failure reason and writes the
-// classified client response (413 / 408 / 400).
+// writeRequestBodyReadFailure logs the failure and writes the endpoint's error envelope.
 func writeRequestBodyReadFailure(c *gin.Context, reqLog *zap.Logger, err error, write gatewayErrorWriter) {
 	if write == nil {
-		return
-	}
-	if maxErr, ok := extractMaxBytesError(err); ok {
-		write(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 		return
 	}
 	var req *http.Request
 	if c != nil {
 		req = c.Request
 	}
+	status, message := requestBodyReadFailure(reqLog, req, err)
+	write(c, status, "invalid_request_error", message)
+}
+
+func requestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error) (int, string) {
+	failure := pkghttputil.DescribeRequestBodyReadFailure(req, err)
+	if failure.Kind == pkghttputil.RequestBodyReadErrorMaxBytes {
+		return failure.Status, failure.ClientMessage()
+	}
 	logRequestBodyReadFailure(reqLog, req, err)
-	write(c, pkghttputil.RequestBodyReadHTTPStatus(err), "invalid_request_error", pkghttputil.RequestBodyReadErrorMessage(err))
+	if failure.Kind == pkghttputil.RequestBodyReadErrorTimeout {
+		return failure.Status, failure.ClientMessage()
+	}
+	return pkghttputil.RequestBodyReadHTTPStatus(err), pkghttputil.RequestBodyReadErrorMessage(err)
 }

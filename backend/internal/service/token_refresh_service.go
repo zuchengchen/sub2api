@@ -916,7 +916,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 		cancelAttempt()
 		releaseAttempt()
 		persistedAfterAttemptDeadline := attemptTimedOut && credentialsPersisted && err == nil
-		if attemptTimedOut && !persistedAfterAttemptDeadline && !isProviderScopedTerminalRefreshError(err) {
+		if attemptTimedOut && !shortCircuit && !persistedAfterAttemptDeadline && !isProviderScopedTerminalRefreshError(err) {
 			cause := err
 			if cause == nil {
 				cause = context.DeadlineExceeded

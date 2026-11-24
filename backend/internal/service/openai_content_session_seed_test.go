@@ -201,7 +201,7 @@ func TestDeriveOpenAIContentSessionSeed_ResponsesAPI_InputArray(t *testing.T) {
 func TestDeriveOpenAIContentSessionSeed_ResponsesHistoryAfterFirstUser(t *testing.T) {
 	const prefix = `{"role":"developer","content":"Stable instructions"},`
 	const history = `,{"role":"assistant","content":"OK"},{"role":"developer","content":"New context"},{"role":"system","content":"For this turn only"},{"role":"user","content":"Continue"}`
-	for _, model := range []string{"gpt-4o", "gpt-5.4", "gpt-6.1-terra", "gpt-6.2-astra", "gpt-6.2-sol"} {
+	for _, model := range []string{"gpt-4o", "gpt-5.4", "gpt-6.1-terra", "gpt-6.2-astra", "gpt-6.2-sol", "grok-4", "claude-sonnet", "gpt-oss-20b", "gpt-image-2"} {
 		t.Run(model, func(t *testing.T) {
 			for _, anchor := range []string{
 				`{"role":"user","content":"First question"}`,
@@ -215,10 +215,6 @@ func TestDeriveOpenAIContentSessionSeed_ResponsesHistoryAfterFirstUser(t *testin
 				require.Equal(t, want, deriveOpenAIContentSessionSeed(later), "a later instruction cannot change the first turn")
 			}
 		})
-	}
-	for _, model := range []string{"grok-4", "claude-sonnet", "gpt-oss-20b", "gpt-image-2"} {
-		body := []byte(fmt.Sprintf(`{"model":%q,"input":[%s{"role":"user","content":"First question"}%s]}`, model, prefix, history))
-		require.Equal(t, referenceDeriveOpenAIContentSessionSeed(body), deriveOpenAIContentSessionSeed(body), model)
 	}
 }
 
@@ -433,15 +429,19 @@ func referenceDeriveOpenAIContentSessionSeed(body []byte) string {
 			_, _ = b.WriteString("|input=")
 			_, _ = b.WriteString(inp.String())
 		} else if inp.IsArray() {
+			systemPrefixOpen := true
 			inp.ForEach(func(_, item gjson.Result) bool {
 				role := item.Get("role").String()
 				switch role {
 				case "system", "developer":
-					_, _ = b.WriteString("|system=")
-					if c := item.Get("content"); c.Exists() {
-						_, _ = b.WriteString(normalizeCompatSeedJSON(json.RawMessage(c.Raw)))
+					if systemPrefixOpen {
+						_, _ = b.WriteString("|system=")
+						if c := item.Get("content"); c.Exists() {
+							_, _ = b.WriteString(normalizeCompatSeedJSON(json.RawMessage(c.Raw)))
+						}
 					}
 				case "user":
+					systemPrefixOpen = false
 					if !firstUserCaptured {
 						_, _ = b.WriteString("|first_user=")
 						if c := item.Get("content"); c.Exists() {
@@ -449,6 +449,8 @@ func referenceDeriveOpenAIContentSessionSeed(body []byte) string {
 						}
 						firstUserCaptured = true
 					}
+				default:
+					systemPrefixOpen = false
 				}
 				if !firstUserCaptured && item.Get("type").String() == "input_text" {
 					_, _ = b.WriteString("|first_user=")

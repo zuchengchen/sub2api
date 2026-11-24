@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -174,6 +175,52 @@ func TestOpenAIGatewayHandlerResponses_AstraProBoth403NoDowngrade(t *testing.T) 
 	require.NotEqual(t, http.StatusOK, rec.Code, "all-403 must never surface a 200 to the client")
 	require.Equal(t, http.StatusBadGateway, rec.Code)
 	require.Equal(t, "upstream_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+}
+
+func TestOpenAIGatewayHandlerResponses_CodexContextFollowsUpstream(t *testing.T) {
+	for _, credentialType := range []string{service.AccountTypeOAuth, service.AccountTypeAPIKey} {
+		t.Run(credentialType, func(t *testing.T) {
+			const body = `{"model":"gpt-5.4","stream":false,"input":[{"type":"function_call_output","namespace":"agent","name":"ide_context","output":"active file"},{"role":"user","content":"hello"}]}`
+			upstream := newAstraProCapturedUpstream(&http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp_context","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
+			})
+			account := service.Account{
+				ID: 1, Platform: service.PlatformOpenAI, Type: credentialType,
+				Status: service.StatusActive, Schedulable: true,
+				Credentials: map[string]any{"access_token": "fixture-token", "api_key": "fixture-key"},
+			}
+			cfg := &config.Config{RunMode: config.RunModeSimple}
+			billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+			t.Cleanup(billing.Stop)
+			gateway := service.NewOpenAIGatewayService(
+				&openAIWSUsageHandlerAccountRepoStub{account: account}, nil, nil, nil, nil, nil, nil, cfg,
+				nil, nil, nil, nil, billing, upstream, nil, nil, nil, nil, nil, nil, nil, nil,
+			)
+			gateway.DisableOpenAITiboRouteForTest()
+			h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(nil), billing,
+				service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
+			c, rec := newAstraProFailoverContext(t, body)
+			h.Responses(c)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			_, _, bodies := upstream.snapshot()
+			require.Len(t, bodies, 1)
+			input := gjson.GetBytes(bodies[0], "input").Array()
+			if credentialType == service.AccountTypeOAuth {
+				for _, item := range input {
+					if item.Get("type").Str == "function_call_output" && item.Get("name").Str == "ide_context" {
+						require.Equal(t, "active file", item.Get("output").Str)
+						return
+					}
+				}
+				t.Fatalf("native context item missing from %s", gjson.GetBytes(bodies[0], "input").Raw)
+			}
+			require.Equal(t, "user", input[0].Get("role").Str)
+			require.Equal(t, "<external_ide_context>active file</external_ide_context>", input[0].Get("content.0.text").Str)
+		})
+	}
 }
 
 // passthrough -> non-passthrough drops only the encrypted *input* reasoning item;

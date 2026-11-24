@@ -14,7 +14,33 @@
 
 已有旧版全权密钥时，页面显示兼容折叠区，可轮换或删除。页面不再提供新建旧版全权密钥的入口；应将自动化任务迁移到受限密钥。
 
-## 账户规则如何匹配
+## 自动化查询与操作权限
+
+以下账号权限均放在资源规则中，按同一规则的分组、账号类型和平台校验；分组权限只按分组和平台校验。升级不会给已有密钥自动增加这些权限。
+
+| 权限 | 用途 |
+| --- | --- |
+| `accounts.identity.read` | 账号邮箱、套餐、订阅到期及创建时间；账号列表还需要 `accounts.read`。只有身份权限时，详情只返回 ID 和获授权的身份字段 |
+| `accounts.options.write` | 创建 OpenAI OAuth 账号时写入已列明的身份和连接选项 |
+| `accounts.rate.write` | 创建/修改账号计费倍率 |
+| `groups.list.read` | 所选分组的 ID、名称、平台与状态，不含费率或模型配置 |
+| `groups.capacity.read` | 所选启用分组的容量；统计整个分组，不按账号类型裁剪 |
+| `openai.quota.read` | OpenAI 额度、点数及重置次数查询和展示快照刷新 |
+| `openai.quota.reset` | 执行 OpenAI 上游额度重置，可能消耗可用次数 |
+| `openai.referrals.read` | 查询邀请资格与名额并刷新展示快照 |
+| `openai.referrals.invite` | 实际发送邀请；不由邀请查询权限附带授予 |
+
+简易模式继续沿用原有管理接口限制。按分组授权的基础列表、模型配置与容量接口在标准模式下可用。
+
+`openai.tokens.refresh` 是独立的**全站权限**：仅刷新调用方提交的 OpenAI 令牌并返回新令牌，不读取服务器已有账号凭证。指定代理需要 `proxies.read`，代理须存在、启用且在有效期内；无效代理不会静默回退为直连。它与 `accounts.refresh`（刷新已保存的授权账号凭证）不同。
+
+账号列表接受 `group` 筛选，省略或 `group=` 表示不指定分组，`-1` 表示未分组；筛选不会扩大授权范围。分页返回 `items/total/page/page_size/pages`。
+
+受限 OpenAI 额度刷新只调用额度查询接口。重置额度和发送邀请需要相应操作权限。写操作的响应分别检查额度或邀请读取权限，身份字段另行验权。
+
+`accounts.options.write` 仅开放创建 OpenAI OAuth 账号时的 `extra.email`、`openai_oauth_responses_websockets_v2_mode`、`openai_oauth_responses_websockets_v2_enabled` 和 `openai_long_context_billing_enabled`，不能任意写入 `extra`、额度快照或声明隐私设置成功。为兼容已有客户端，字符串 `privacy_mode` 入参会被移除，隐私状态仍由服务端原流程确认。创建倍率独立需要 `accounts.rate.write`，写入凭证及身份元数据仍遵循对应凭证权限。
+
+## 账号规则如何匹配
 
 对于同一项账户操作，一条规则内部必须同时满足以下条件（AND）：
 

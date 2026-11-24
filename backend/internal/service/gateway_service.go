@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -304,17 +305,20 @@ func extractSystemPreviewFromBody(body []byte) string {
 
 	switch {
 	case sys.IsArray():
-		for _, item := range sys.Array() {
+		var preview string
+		sys.ForEach(func(_, item gjson.Result) bool {
 			if !item.IsObject() {
-				continue
+				return true
 			}
 			if strings.EqualFold(item.Get("type").String(), "text") {
 				if t := item.Get("text").String(); strings.TrimSpace(t) != "" {
-					return t
+					preview = t
+					return false
 				}
 			}
-		}
-		return ""
+			return true
+		})
+		return preview
 	case sys.Type == gjson.String:
 		return sys.String()
 	default:
@@ -351,7 +355,7 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 
 	h := make([]string, 0, len(interesting))
 	for _, k := range interesting {
-		if v := req.Header.Get(k); v != "" {
+		if v := getHeaderRaw(req.Header, k); v != "" {
 			h = append(h, fmt.Sprintf("%s=%q", k, safeHeaderValueForLog(k, v)))
 		}
 	}
@@ -384,6 +388,64 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 		sysPreview,
 		strings.Join(h, " "),
 	)
+}
+
+// claudeMimicDebugLine defers building the diagnostics line until an error
+// path actually needs it. The line is read only on Claude Code credential-scope
+// errors, so building it eagerly cost every OAuth request a header walk, a
+// system-prompt scan and several fmt.Sprintf calls for nothing.
+type claudeMimicDebugLine struct {
+	once            sync.Once
+	req             *http.Request
+	body            []byte
+	account         *Account
+	tokenType       string
+	mimicClaudeCode bool
+	line            string
+}
+
+func newClaudeMimicDebugLine(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) *claudeMimicDebugLine {
+	return &claudeMimicDebugLine{
+		req:             req,
+		body:            body,
+		account:         account,
+		tokenType:       tokenType,
+		mimicClaudeCode: mimicClaudeCode,
+	}
+}
+
+func (l *claudeMimicDebugLine) String() string {
+	if l == nil {
+		return ""
+	}
+	l.once.Do(func() {
+		l.line = buildClaudeMimicDebugLine(l.req, l.body, l.account, l.tokenType, l.mimicClaudeCode)
+		// Drop references so the request/body are not retained after use.
+		l.req, l.body, l.account = nil, nil, nil
+	})
+	return l.line
+}
+
+// claudeMimicDebugLineFromContext returns the stored diagnostics line, building
+// it on first use. It also accepts a plain string for compatibility.
+func claudeMimicDebugLineFromContext(c interface {
+	Get(string) (any, bool)
+}) string {
+	if c == nil {
+		return ""
+	}
+	v, ok := c.Get(claudeMimicDebugInfoKey)
+	if !ok {
+		return ""
+	}
+	switch line := v.(type) {
+	case *claudeMimicDebugLine:
+		return line.String()
+	case string:
+		return line
+	default:
+		return ""
+	}
 }
 
 func logClaudeMimicDebug(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) {
@@ -657,6 +719,11 @@ type ClaudeUsage struct {
 	CacheCreation5mTokens    int // 5分钟缓存创建token（来自嵌套 cache_creation 对象）
 	CacheCreation1hTokens    int // 1小时缓存创建token（来自嵌套 cache_creation 对象）
 	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
+
+	cacheCreationInputTokensPresent     bool
+	cacheCreationInputTokensFromDetails bool
+	promptTotalTokens                   int
+	promptTotalPresent                  bool
 }
 
 // ForwardResult 转发结果
@@ -710,10 +777,18 @@ type ForwardResult struct {
 	AudioUsage         *AudioUsage
 	// CacheStorageTokenHours 显式上下文缓存的存储量（缓存 token 数 × 存储小时数），按计费模型的
 	// 存储单价折算为费用后叠加在 token 费用之上。
-	CacheStorageTokenHours float64
+	CacheStorageTokenHours  float64
+	UpstreamPriceMultiplier float64
 
 	hostedSearchRounds     []*ForwardResult
 	hostedSearchRoundCosts []*CostBreakdown
+}
+
+func (r *ForwardResult) upstreamPriceFactor() float64 {
+	if r == nil || r.UpstreamPriceMultiplier <= 0 {
+		return 1
+	}
+	return r.UpstreamPriceMultiplier
 }
 
 // GatewayFailureStage identifies which request stage failed. The zero value is
@@ -770,6 +845,7 @@ type UpstreamFailoverError struct {
 	NextAccountAction        NextAccountAction
 	ClientStatusCode         int
 	ClientMessage            string
+	StreamFailedFrame        *OpenAIStreamFailedFrame // 触发本次 failover 的流内 failed/error 帧；耗尽时用于错误透传规则匹配
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -1525,16 +1601,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	hasAnyMapping := false
 
 	for _, acc := range accounts {
-		// Passthrough routing accepts models independently of model_mapping, so a
-		// stale mapping on a passthrough account must not narrow the public list.
-		// Treat it like an unmapped account: skip its mapping here and let
-		// supplementUnmappedOpenAIModels contribute the default set. Mappings on
-		// the ordinary accounts in the same group still count.
-		if platform == PlatformOpenAI && acc.IsOpenAIPassthroughEnabled() {
-			continue
-		}
-
-		mapping := acc.GetModelMapping()
+		mapping := acc.modelEligibilityMapping()
 		for model := range mapping {
 			if validateRetiredOpenAIRequestModel(&acc, model, false, "") != nil {
 				hasAnyMapping = true

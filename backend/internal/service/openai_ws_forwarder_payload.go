@@ -1057,6 +1057,35 @@ func setOpenAIWSPayloadInputSequence(
 	return sjson.SetRawBytes(payload, "input", inputRaw)
 }
 
+func wrapProvenOpenAIWSCurrentTurnFailover(err error, payload []byte, input []json.RawMessage, completeHistory bool, originalModel string) error {
+	var failover *UpstreamFailoverError
+	if !errors.As(err, &failover) {
+		return err
+	}
+	retry, safe, buildErr := buildOpenAIWSCurrentTurnRetryPayload(payload, input, completeHistory, originalModel)
+	if buildErr != nil || !safe {
+		retry = nil
+	}
+	return newOpenAIWSCurrentTurnFailoverError(err, retry)
+}
+
+// A raw relay cannot reconstruct implicit history across a connection. Only
+// retry a frame which explicitly starts a new, self-contained turn.
+func openAIWSIndependentRetryPayload(payload []byte, originalModel string) []byte {
+	originalModel = strings.TrimSpace(originalModel)
+	if originalModel == "" || !gjson.GetBytes(payload, "input").Exists() || !OpenAIContinuationMaySwitchAccount(payload) {
+		return nil
+	}
+	if gjson.GetBytes(payload, "model").Str == originalModel {
+		return payload
+	}
+	retry, err := sjson.SetBytes(payload, "model", originalModel)
+	if err != nil {
+		return nil
+	}
+	return retry
+}
+
 func buildOpenAIWSCurrentTurnRetryPayload(
 	payload []byte,
 	fullInput []json.RawMessage,
@@ -1065,6 +1094,16 @@ func buildOpenAIWSCurrentTurnRetryPayload(
 ) ([]byte, bool, error) {
 	if !fullInputExists {
 		return nil, false, nil
+	}
+	// Preserve explicit original input for a new root. A reconstructed history
+	// may contain turn references already scoped to the prior credential.
+	if retry := openAIWSIndependentRetryPayload(payload, originalModel); len(retry) > 0 {
+		return retry, true, nil
+	}
+	for _, item := range fullInput {
+		if gjson.GetBytes(item, "internal_chat_message_metadata_passthrough.turn_id").Str != "" {
+			return nil, false, nil
+		}
 	}
 	retryPayload, err := setOpenAIWSPayloadInputSequence(payload, fullInput, true)
 	if err != nil {

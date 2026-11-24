@@ -29,6 +29,39 @@ type countTokensRuntimeStateRepo struct {
 	setErrorCalls    int
 }
 
+func TestPrepareOpenAIInputTokensCountRequestValidatesAndOmitsOutputEffort(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	for _, tc := range []struct {
+		preference string
+		rejected   string
+	}{
+		{preference: `"thinking":{"type":"adaptive"}`},
+		{preference: `"output_config":{"effort":"high"}`},
+		{preference: `"output_config":{"effort":"max"}`},
+		{preference: `"thinking":{"type":"disabled"}`, rejected: "none"},
+		{preference: `"output_config":{"effort":"none"}`, rejected: "none"},
+		{preference: `"output_config":{"effort":"minimal"}`, rejected: "minimal"},
+	} {
+		t.Run(tc.preference, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"hello"}],` + tc.preference + `}`)
+			prepared, err := prepareOpenAIInputTokensCountRequest(body, account, "")
+			if tc.rejected != "" {
+				require.ErrorContains(t, err, fmt.Sprintf("gpt-6.1-sol does not support reasoning effort %q", tc.rejected))
+				require.Nil(t, prepared)
+				return
+			}
+			require.NoError(t, err)
+			encoded, err := json.Marshal(prepared.Request)
+			require.NoError(t, err)
+			require.Equal(t, "gpt-6.1-sol", prepared.Request.Model)
+			require.Contains(t, string(prepared.Request.Input), "hello")
+			for _, field := range []string{"reasoning", "reasoning_effort", "output_config", "thinking"} {
+				require.False(t, gjson.GetBytes(encoded, field).Exists(), field)
+			}
+		})
+	}
+}
+
 func (r *countTokensRuntimeStateRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, _ string) error {
 	r.tempUnschedCalls++
 	return nil

@@ -6,8 +6,9 @@ import {
   resetPlatformCatalog,
   setPlatformCatalog
 } from '@/constants/platformCatalog'
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, previewUpstreamGroup, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
+  previewUpstreamGroup: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
@@ -32,6 +33,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
+      previewUpstreamGroup,
       checkMixedChannelRisk: checkMixedChannelRiskMock,
     },
     settings: {
@@ -1090,6 +1092,41 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('images_url_to_b64_json')
   })
 
+  it('writes restricted image size tiers into extra', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="openai-image-size-tier-1K"]').setValue(false)
+    await wrapper.get('[data-testid="openai-image-size-tier-2K"]').setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_image_size_tiers).toEqual(['4K'])
+  })
+
+  it('removes image size tiers from extra when every tier is selected again', async () => {
+    const account = buildAccount()
+    account.extra = { openai_image_size_tiers: ['1K', '2K'] }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const tier4K = wrapper.get('[data-testid="openai-image-size-tier-4K"]')
+    expect((tier4K.element as HTMLInputElement).checked).toBe(false)
+    await tier4K.setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toBeDefined()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_image_size_tiers')
+  })
+
   it('hides the Codex namespace flatten toggle for non-OAuth OpenAI accounts', async () => {
     const account = buildAccount()
     const wrapper = mountModal(account)
@@ -1339,6 +1376,61 @@ describe('EditAccountModal', () => {
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.upstream_billing_probe_enabled).toBe(true)
+  })
+
+  it('opts into group sync independently and clears it when probing stops', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    const group = wrapper.get('[data-testid="upstream-billing-group-sync"]')
+    const probe = wrapper.get('[data-testid="upstream-billing-auto-probe"]')
+    const rate = wrapper.get('[data-testid="upstream-billing-rate-sync"]')
+    expect(group.attributes('aria-checked')).toBe('false')
+    await group.trigger('click')
+    expect(probe.attributes('aria-checked')).toBe('true')
+    expect(rate.attributes('aria-checked')).toBe('false')
+    await wrapper.get('form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.lastCall?.[1]).toMatchObject({
+      upstream_billing_group_sync_enabled: true, upstream_billing_rate_sync_enabled: false
+    })
+    await probe.trigger('click')
+    expect(group.attributes('aria-checked')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('only fills untouched fields and ignores a preview for an edited connection', async () => {
+    const account = buildAccount()
+    const wrapper = mountModal(account)
+    const button = wrapper.findAll('button').find(candidate =>
+      candidate.text() === 'admin.accounts.upstreamBilling.syncGroup'
+    )
+    expect(button).toBeDefined()
+    const name = wrapper.get<HTMLInputElement>('[data-tour="edit-account-form-name"]')
+    const notes = wrapper.get<HTMLTextAreaElement>('textarea[placeholder="admin.accounts.notesPlaceholder"]')
+    const baseURL = wrapper.get<HTMLInputElement>('[data-testid="api-key-base-url"]')
+    let resolvePreview!: (value: {name: string; notes: string}) => void
+    const deferredPreview = () => new Promise(resolve => { resolvePreview = resolve })
+    previewUpstreamGroup.mockReset().mockImplementation(deferredPreview)
+
+    await button!.trigger('click')
+    expect(previewUpstreamGroup.mock.lastCall?.[0]).toEqual({ account_id: account.id })
+    await name.setValue('manually edited')
+    await name.setValue(account.name)
+    resolvePreview({ name: 'upstream name', notes: 'upstream notes' })
+    await flushPromises()
+    expect(name.element.value).toBe(account.name)
+    expect(notes.element.value).toBe('upstream notes')
+
+    await button!.trigger('click')
+    const signal = previewUpstreamGroup.mock.lastCall?.[1]
+    await baseURL.setValue('https://new-upstream.example/v1')
+    expect(signal.aborted).toBe(true)
+    resolvePreview({ name: 'old connection', notes: 'old connection notes' })
+    await flushPromises()
+    expect(name.element.value).toBe(account.name)
+    expect(notes.element.value).toBe('upstream notes')
+    expect(button!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
   })
 
   it('enabling rate sync also enables probing and stops submitting a manual rate', async () => {

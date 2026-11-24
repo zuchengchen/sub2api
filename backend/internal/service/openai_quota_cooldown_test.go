@@ -124,7 +124,7 @@ func TestOpenAIQuotaCooldownMissingResetCoalescesAndRechecks(t *testing.T) {
 			gateway.ReportOpenAIAccountScheduleResult(&stale, "gpt-5.2", true, nil)
 			require.True(t, gateway.isOpenAIAccountRequestRuntimeBlocked(&stale, "gpt-5.2", false))
 			raw := []byte(`{"type":"response.create","model":"gpt-5.2","input":"second turn"}`)
-			payload, wrapped := OpenAIWSCurrentTurnRetryPayload(gateway.quotaFailureForWSTurn(ctx, &stale, raw))
+			payload, wrapped := OpenAIWSCurrentTurnRetryPayload(gateway.quotaFailureForWSTurn(ctx, &stale, raw, "gpt-5.2"))
 			require.True(t, wrapped)
 			require.Equal(t, raw, payload)
 			fail := gateway.newOpenAIAccountFailoverError(&a, 429, nil, body, "", false, true)

@@ -173,7 +173,9 @@ func projectAccountModelsBody(body []byte, account *Account, group *Group, codex
 // projectAccountModelAliases retains the source entry's metadata, never changes
 // the shared response, and never synthesizes models absent from this account.
 func projectAccountModelAliases(body []byte, account *Account, group *Group, codex bool) ([]byte, error) {
-	if account.IsOpenAIPassthroughEnabled() || len(account.GetModelMapping()) == 0 {
+	passthrough := account.IsOpenAIPassthroughEnabled()
+	mapping := account.modelEligibilityMapping()
+	if len(mapping) == 0 {
 		return body, nil
 	}
 	field, idField := "data", "id"
@@ -213,8 +215,8 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 			candidates = append(candidates, id)
 		}
 	}
-	aliases := make([]string, 0, len(account.GetModelMapping()))
-	for alias := range account.GetModelMapping() {
+	aliases := make([]string, 0, len(mapping))
+	for alias := range mapping {
 		aliases = append(aliases, alias)
 	}
 	sort.Strings(aliases)
@@ -233,6 +235,10 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 			continue
 		}
 		target, matched := account.ResolveMappedModel(id)
+		if passthrough {
+			// Filtering changes eligibility, never the upstream/public model name.
+			target, matched = id, account.IsModelSupported(id)
+		}
 		raw, available := byID[strings.TrimSpace(target)]
 		if !matched || !available {
 			continue

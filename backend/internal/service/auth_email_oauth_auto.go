@@ -74,6 +74,7 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	if isReservedEmail(email) {
 		return nil, nil, ErrEmailReserved
 	}
+	// 精确黑名单只拦新建账号（见 createEmailOAuthUser），已有账号能否登录由账号状态决定。
 	if err := s.validateRegistrationEmailPolicy(ctx, email); err != nil {
 		return nil, nil, err
 	}

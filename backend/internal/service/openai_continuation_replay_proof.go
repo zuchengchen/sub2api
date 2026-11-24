@@ -180,12 +180,12 @@ func analyzeOpenAIContinuationReplayProof(body []byte, sameOwner bool) OpenAICon
 				// defer unpaired outputs following this wire type to the upstream.
 				agentMessageSeen = true
 				declineReplay("unsupported_or_incomplete_item")
-			} else if !ownedReasoning && !openAIContinuationProofPassiveItem(item, kind) {
+			} else if !ownedReasoning && !openAIContinuationProofPassiveItem(item, kind, sameOwner) {
 				// Known passive items cannot stand in for a missing tool call,
 				// even when their content is opaque or incomplete. Only an
 				// unfamiliar wire family leaves the preceding call uncertain.
 				switch kind {
-				case "message", "reasoning", "compaction", "additional_tools", "configuration_update":
+				case "message", "reasoning", "compaction", "additional_tools", "configuration_update", openAIWebSearchCallItemType:
 				default:
 					unresolvedPrecedingContext = true
 				}
@@ -567,7 +567,7 @@ func openAIContinuationProofContent(content gjson.Result) bool {
 	return complete
 }
 
-func openAIContinuationProofPassiveItem(item gjson.Result, kind string) bool {
+func openAIContinuationProofPassiveItem(item gjson.Result, kind string, sameOwner bool) bool {
 	switch kind {
 	case "message":
 		role := item.Get("role").String()
@@ -582,6 +582,30 @@ func openAIContinuationProofPassiveItem(item gjson.Result, kind string) bool {
 		return item.Get("role").String() == "developer" && item.Get("tools").IsArray()
 	case "configuration_update":
 		return item.Get("reasoning").IsObject()
+	case "reasoning":
+		summary := item.Get("summary")
+		if !sameOwner || !summary.IsArray() || !summary.Get("0").Exists() {
+			return false
+		}
+		complete := true
+		summary.ForEach(func(_, part gjson.Result) bool {
+			complete = part.Get("type").Str == "summary_text" && part.Get("text").Type == gjson.String
+			return complete
+		})
+		return complete
+	case openAIWebSearchCallItemType:
+		// A complete tool record can be replayed by its existing OAuth owner.
+		// Merely naming the item's ID does not provide its history.
+		if !sameOwner || item.Get("status").Str != "completed" || !openAIContinuationProofString(item.Get("id"), true) {
+			return false
+		}
+		action := item.Get("action")
+		switch action.Get("type").Str {
+		case "search":
+			return action.Get("query").Type == gjson.String || openAIContinuationProofStringArray(action.Get("queries"))
+		case "open_page", "find_in_page":
+			return openAIContinuationProofString(action.Get("url"), false)
+		}
 	}
 	return false
 }

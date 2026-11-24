@@ -201,6 +201,21 @@ func TestResponsesToChatCompletionsRequest_TextFormatJsonSchema(t *testing.T) {
 	}`, string(out.ResponseFormat))
 }
 
+func TestResponsesToChatCompletionsRequestPreservesValidStop(t *testing.T) {
+	for _, raw := range []string{`"end"`, `["end","finish"]`, `["end",null]`, `null`, `42`} {
+		t.Run(raw, func(t *testing.T) {
+			request := &ResponsesRequest{Input: json.RawMessage(`"hello"`), Stop: json.RawMessage(raw)}
+			chat, err := ResponsesToChatCompletionsRequest(request)
+			require.NoError(t, err)
+			if raw == `"end"` || raw == `["end","finish"]` {
+				require.JSONEq(t, raw, string(chat.Stop))
+			} else {
+				require.Empty(t, chat.Stop)
+			}
+		})
+	}
+}
+
 func TestResponsesToChatCompletionsRequest_ParallelToolCalls(t *testing.T) {
 	parallel := false
 	req := &ResponsesRequest{

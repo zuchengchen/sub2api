@@ -226,7 +226,9 @@ func TestOrdinaryTurnStillTimesOutAfterStreamInterval(t *testing.T) {
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 
 	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-6-astra","stream":true,"input":"hello"}`))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "stream data interval timeout")
-	require.Contains(t, rec.Body.String(), "stream_timeout")
+	var failover *UpstreamFailoverError
+	require.ErrorAs(t, err, &failover)
+	require.True(t, failover.SafeToFailoverAfterWrite)
+	require.Contains(t, string(failover.ResponseBody), "stream idle timeout before model output")
+	require.Empty(t, rec.Body.String())
 }

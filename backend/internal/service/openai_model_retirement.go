@@ -118,7 +118,11 @@ func supportsOpenAIRequestModel(account *Account, requestedModel string, require
 	if validateRetiredOpenAIRequestModel(account, requestedModel, requireCompact, "") != nil {
 		return false
 	}
-	if isRetiredOpenAISubscriptionModel(account, resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)) {
+	target := resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
+	if isRetiredOpenAISubscriptionModel(account, target) {
+		return false
+	}
+	if account.IsOpenAIOAuthLike() && account.IsOpenAIPassthroughEnabled() && !isOpenAICodexPassthroughModel(target) {
 		return false
 	}
 	return account.isModelMappingSupported(requestedModel)

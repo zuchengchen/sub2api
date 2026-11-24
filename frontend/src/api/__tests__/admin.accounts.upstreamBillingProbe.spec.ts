@@ -12,9 +12,11 @@ vi.mock('@/api/client', () => ({
 
 import {
   getUpstreamBillingProbeSettings,
+  previewUpstreamGroup,
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
   setUpstreamBillingProbeEnabled,
+  syncUpstreamGroup,
   updateUpstreamBillingProbeSettings
 } from '@/api/admin/accounts'
 
@@ -49,5 +51,23 @@ describe('admin account upstream billing probe API', () => {
     expect(put).toHaveBeenCalledWith('/admin/accounts/7/upstream-billing-probe', { enabled: true })
     expect(post).toHaveBeenNthCalledWith(1, '/admin/accounts/7/upstream-billing-probe')
     expect(post).toHaveBeenNthCalledWith(2, '/admin/accounts/upstream-billing-probe/batch', { account_ids: [7] })
+  })
+
+  it('maps upstream group text to editable fields and skips empty values', async () => {
+    const source = { account_id: 7 }
+    post.mockResolvedValueOnce({ data: { group_name: '标准组', group_description: '共享账号' } })
+    await expect(previewUpstreamGroup(source)).resolves.toEqual({ name: '标准组', notes: '共享账号' })
+    post.mockResolvedValueOnce({ data: { group_name: '标准组', group_description: '' } })
+    await expect(previewUpstreamGroup(source)).resolves.toEqual({ name: '标准组' })
+    expect(post).toHaveBeenCalledWith('/admin/accounts/upstream-billing-probe/group-preview', source, { signal: undefined })
+  })
+
+  it('passes the observed account version to the dedicated group save endpoint', async () => {
+    const version = '2026-11-24T10:00:00Z'
+    const result = { account: { id: 7, name: '标准组' }, changed: true }
+    post.mockResolvedValueOnce({ data: result })
+
+    await expect(syncUpstreamGroup(7, version)).resolves.toEqual(result)
+    expect(post).toHaveBeenCalledWith('/admin/accounts/7/upstream-billing-probe/group-sync', { expected_updated_at: version })
   })
 })

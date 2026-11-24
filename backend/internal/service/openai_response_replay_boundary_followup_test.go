@@ -58,8 +58,7 @@ func TestGatewayAudit_CompatMeteredResultRetainsBillingMetadata(t *testing.T) {
 							cacheKey := gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String()
 							require.NotEmpty(t, cacheKey)
 							bound := svc.getOpenAICompatSessionResponseID(c.Request.Context(), c, account, cacheKey)
-							digestBindings := 0
-							svc.openaiCompatAnthropicDigestSessions.Range(func(_, _ any) bool { digestBindings++; return true })
+							digestBindings := svc.openaiCompatAnthropicDigestSessions.ItemCount()
 							if success {
 								require.Equal(t, "resp_synthetic_followup", bound)
 								require.Equal(t, 1, digestBindings)

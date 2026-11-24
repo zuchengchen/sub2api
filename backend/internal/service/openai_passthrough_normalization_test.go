@@ -219,13 +219,14 @@ func TestNormalizeOpenAIResponsesWebSocketCompatibilityBody_ReasoningModeAccount
 }
 
 func TestNormalizeOpenAIResponsesWebSocketCompatibilityBody_SanitizesToolSchemas(t *testing.T) {
-	body := []byte(`{"type":"response.create","tools":[{"type":"function","name":"search","parameters":{"type":null,"properties":{"q":{"type":"string","pattern":"^(?=.*foo).+$"}}}}]}`)
+	body := []byte(`{"type":"response.create","tools":[{"type":"function","name":"search","parameters":{"type":null,"properties":{"q":{"type":"string","pattern":"^(?=.*foo).+$"},"limit":{"type":"string","pattern":"^[0-9]+$"}}}}]}`)
 	for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
 		normalized, changed, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(body, &Account{Platform: PlatformOpenAI, Type: accountType}, false)
 		require.NoError(t, err)
 		require.True(t, changed)
 		require.Equal(t, "object", gjson.GetBytes(normalized, "tools.0.parameters.type").String())
-		require.Equal(t, "^(?=.*foo).+$", gjson.GetBytes(normalized, "tools.0.parameters.properties.q.pattern").String(), "repairing an invalid root type must not remove a valid schema constraint")
+		require.False(t, gjson.GetBytes(normalized, "tools.0.parameters.properties.q.pattern").Exists())
+		require.Equal(t, "^[0-9]+$", gjson.GetBytes(normalized, "tools.0.parameters.properties.limit.pattern").String())
 	}
 }
 
@@ -363,21 +364,4 @@ func TestNormalizeOpenAIPassthroughOAuthBody_ArrayInputUnchanged(t *testing.T) {
 	require.True(t, input.IsArray())
 	require.Len(t, input.Array(), 1)
 	require.Equal(t, "message", input.Array()[0].Get("type").String())
-}
-
-func TestDetectOpenAIPassthroughInstructionsRejectReason(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		body string
-		want string
-	}{
-		{name: "missing is optional", body: `{"model":"gpt-5.1-codex"}`, want: ""},
-		{name: "non string remains rejected", body: `{"instructions":{"text":"invalid"}}`, want: "instructions_not_string"},
-		{name: "empty remains rejected", body: `{"instructions":"  "}`, want: "instructions_empty"},
-		{name: "non empty remains accepted", body: `{"instructions":"client guidance"}`, want: ""},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, detectOpenAIPassthroughInstructionsRejectReason("gpt-5.1-codex", []byte(tt.body)))
-		})
-	}
 }

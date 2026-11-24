@@ -40,6 +40,15 @@ func codexAccountIdentitySource(c *gin.Context, fallback *Account) *Account {
 	return fallback
 }
 
+// codexClientSessionID returns the client's own session header, before any
+// outbound rewrite.
+func codexClientSessionID(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	return extractClientSessionID(c.Request.Header)
+}
+
 // codexAccountIdentityNamespace returns a stable, credential-scoped namespace.
 // Multiple local rows that use the same ChatGPT account intentionally share the
 // same namespace. Setup tokens use an irreversible bearer fingerprint because
@@ -186,7 +195,21 @@ func scopeCodexAccountTurnMetadata(raw string, account *Account, apiKeyID int64)
 	})
 }
 
-func applyCodexAccountIdentityClientMetadataMap(requestBody map[string]any, account *Account, apiKeyID int64) bool {
+// codexPromptCacheKeyKind scopes a prompt_cache_key that names the client's
+// session in the session namespace, so it stays equal to the scoped session.
+// Codex derives the key from its session-id header, which matches
+// client_metadata.session_id except on an ephemeral fork such as thread/sample:
+// the fork names itself in the metadata but keeps its parent's header and key.
+func codexPromptCacheKeyKind(promptCacheKey, bodySessionID, clientSessionID string) string {
+	for _, sessionID := range []string{bodySessionID, clientSessionID} {
+		if strings.TrimSpace(sessionID) != "" && promptCacheKey == sessionID {
+			return "session"
+		}
+	}
+	return "prompt-cache"
+}
+
+func applyCodexAccountIdentityClientMetadataMap(requestBody map[string]any, account *Account, apiKeyID int64, clientSessionID string) bool {
 	if requestBody == nil || codexAccountIdentityNamespace(account) == "" {
 		return false
 	}
@@ -203,10 +226,7 @@ func applyCodexAccountIdentityClientMetadataMap(requestBody map[string]any, acco
 		}
 	}
 	if raw, ok := requestBody["prompt_cache_key"].(string); ok && strings.TrimSpace(raw) != "" {
-		kind := "prompt-cache"
-		if strings.TrimSpace(originalBodySessionID) != "" && raw == originalBodySessionID {
-			kind = "session"
-		}
+		kind := codexPromptCacheKeyKind(raw, originalBodySessionID, clientSessionID)
 		next := scopeCodexAccountIdentityValue(account, apiKeyID, kind, raw)
 		if next != raw {
 			requestBody["prompt_cache_key"] = next
@@ -241,7 +261,7 @@ func applyCodexAccountIdentityClientMetadataMap(requestBody map[string]any, acco
 // subobjects and input turn references. All replacements use original offsets
 // and one output allocation, preserving user content and input key order without
 // repeatedly copying a potentially multi-megabyte conversation.
-func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, apiKeyID int64) ([]byte, bool, error) {
+func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, apiKeyID int64, clientSessionID string) ([]byte, bool, error) {
 	if len(body) == 0 || codexAccountIdentityNamespace(account) == "" {
 		return body, false, nil
 	}
@@ -279,10 +299,7 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 	}
 	if promptCacheKey := root.Get("prompt_cache_key"); promptCacheKey.Type == gjson.String && strings.TrimSpace(promptCacheKey.String()) != "" {
 		raw := promptCacheKey.String()
-		kind := "prompt-cache"
-		if strings.TrimSpace(originalBodySessionID) != "" && raw == originalBodySessionID {
-			kind = "session"
-		}
+		kind := codexPromptCacheKeyKind(raw, originalBodySessionID, clientSessionID)
 		scoped := scopeCodexAccountIdentityValue(account, apiKeyID, kind, raw)
 		if scoped != raw {
 			add(promptCacheKey, []byte(strconv.Quote(scoped)))

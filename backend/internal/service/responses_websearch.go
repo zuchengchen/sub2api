@@ -1162,20 +1162,7 @@ func addResponsesWebSearchCost(total, next *CostBreakdown) *CostBreakdown {
 }
 
 func openAIResponsesWebSearchTokens(usage OpenAIUsage) UsageTokens {
-	input := usage.InputTokens - usage.CacheReadInputTokens - usage.CacheCreationInputTokens
-	if input < 0 {
-		input = 0
-	}
-	imageInput := usage.ImageInputTokens - usage.ImageCacheReadTokens
-	if imageInput < 0 {
-		imageInput = 0
-	}
-	return UsageTokens{
-		InputTokens: input, OutputTokens: usage.OutputTokens,
-		ImageInputTokens: imageInput, ImageCacheReadTokens: usage.ImageCacheReadTokens,
-		CacheCreationTokens: usage.CacheCreationInputTokens, CacheReadTokens: usage.CacheReadInputTokens,
-		ImageOutputTokens: usage.ImageOutputTokens,
-	}
+	return usage.billingUsageTokens()
 }
 
 func responsesWebSearchAccountStatsCost[T any](ctx context.Context, channels *ChannelService, billing *BillingService, accountID, groupID int64, rounds []*T, roundCosts []*CostBreakdown, _ float64, pricingAt time.Time, longContext bool) *float64 {
@@ -1227,7 +1214,7 @@ func responsesWebSearchAccountStatsCost[T any](ctx context.Context, channels *Ch
 		if count < 1 {
 			count = 1
 		}
-		cost := resolveAccountStatsCost(ctx, channels, billing, accountID, groupID, upstreamModel, tokens, count, roundCost, tier, pricingAt, longContext, effort)
+		cost := resolveAccountStatsCost(ctx, channels, billing, accountID, groupID, upstreamModel, tokens, count, roundCost, tier, pricingAt, longContext, 1, effort)
 		if cost == nil {
 			return nil
 		}

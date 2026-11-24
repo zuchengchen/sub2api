@@ -46,7 +46,18 @@
       class="space-y-5"
     >
       <div>
-        <label class="input-label">{{ t('admin.accounts.accountName') }}</label>
+        <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <label class="input-label mb-0">{{ t('admin.accounts.accountName') }}</label>
+          <UpstreamGroupSyncButton
+            v-if="form.type === 'apikey'"
+            v-model:name="form.name"
+            v-model:notes="form.notes"
+            :source="upstreamGroupSource"
+            allow-auto
+            :auto="upstreamGroupSyncEnabled"
+            @update:auto="setUpstreamGroupSync"
+          />
+        </div>
         <input
           v-model="form.name"
           type="text"
@@ -55,6 +66,9 @@
           :placeholder="t('admin.accounts.enterAccountName')"
           data-tour="account-form-name"
         />
+        <p v-if="form.type === 'apikey' && upstreamGroupSyncEnabled" class="input-hint">
+          {{ t('admin.accounts.upstreamBilling.autoSyncGroupHint') }}
+        </p>
       </div>
       <div>
         <label class="input-label">{{ t('admin.accounts.notes') }}</label>
@@ -121,19 +135,6 @@
           >
             <PlatformIcon platform="grok" size="sm" />
             Grok
-          </button>
-          <button
-            type="button"
-            @click="selectTypeSafePlatform()"
-            :class="[
-              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
-              form.platform === 'typesafe'
-                ? 'bg-white text-sky-700 shadow-sm dark:bg-dark-600 dark:text-sky-300'
-                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
-            ]"
-          >
-            <PlatformIcon platform="typesafe" size="sm" />
-            TypeSafe / Jev
           </button>
         </div>
         <!-- 国产厂商：Kimi / Zhipu GLM / DeepSeek / MiniMax -->
@@ -2559,6 +2560,7 @@
           </div>
           <button
             type="button"
+            data-testid="create-openai-passthrough-toggle"
             @click="openaiPassthroughEnabled = !openaiPassthroughEnabled"
             :class="[
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
@@ -2573,6 +2575,20 @@
             />
           </button>
         </div>
+        <label v-if="openaiPassthroughEnabled" class="mt-3 flex items-start gap-2">
+          <input
+            v-model="openaiPassthroughModelFilterEnabled"
+            type="checkbox"
+            data-testid="create-openai-passthrough-model-filter"
+            class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span class="text-sm">
+            {{ t('admin.accounts.openai.passthroughModelFilter') }}
+            <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
+            </span>
+          </span>
+        </label>
       </div>
 
       <!-- OpenAI Codex namespace 工具摊平（兼容开关，仅 OAuth） -->
@@ -2973,6 +2989,14 @@
         </button>
       </div>
 
+      <!-- OpenAI images: size tier routing -->
+      <div
+        v-if="form.platform === 'openai'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <OpenAIImageSizeTiersField v-model="openAIImageSizeTiers" />
+      </div>
+
       <div>
         <div class="flex items-center justify-between">
           <div>
@@ -3184,6 +3208,13 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
+import UpstreamGroupSyncButton from '@/components/account/UpstreamGroupSyncButton.vue'
+import OpenAIImageSizeTiersField from '@/components/account/OpenAIImageSizeTiersField.vue'
+import {
+  OPENAI_IMAGE_SIZE_TIERS,
+  applyOpenAIImageSizeTiersToExtra,
+  type OpenAIImageSizeTier
+} from '@/components/account/openaiImageSizeTiers'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
@@ -3294,7 +3325,6 @@ const baseUrlHint = computed(() => {
 
 const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
-  if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
   // Grok 与多协议供应商没有对应的说明文案；通用文案指 Claude Console Key。
   if (form.platform === 'grok' || isMultiProtocolPlatform.value) return ''
   return t('admin.accounts.apiKeyHint')
@@ -3405,7 +3435,15 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const upstreamGroupSyncEnabled = ref(false)
+function setUpstreamGroupSync(enabled: boolean) {
+  upstreamGroupSyncEnabled.value = enabled
+  if (enabled) upstreamBillingAutoProbeEnabled.value = true
+}
 const upstreamBillingAutoProbeEnabled = ref(true)
+watch(upstreamBillingAutoProbeEnabled, (enabled) => {
+  if (!enabled) upstreamGroupSyncEnabled.value = false
+})
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）账号类型、API 协议与端点 ──
 // 多协议供应商（国产厂商与走通用表单的供应商）的接入模式；OpenCode 用 openCodeAccountMode。
@@ -3532,13 +3570,6 @@ function selectOpenCodeGoPlatform() {
   resetAdaptiveBaseUrls('opencode_go', openCodeAccountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(openCodeAccountMode.value))
 }
-function selectTypeSafePlatform() {
-  form.platform = 'typesafe'
-  form.type = 'apikey'
-  accountCategory.value = 'apikey'
-  apiKeyBaseUrl.value = 'https://api.typesafe.ai'
-  allowedModels.value = ['jev-latest']
-}
 function selectGenericMultiProtocolPlatform(platform: string) {
   form.platform = platform
   form.type = 'apikey'
@@ -3608,11 +3639,22 @@ function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol
   apiKeyBaseUrl.value = preset.url
 }
 
-const syncPreviewCredentials = computed(() => {
-  if (!apiKeyValue.value) return undefined
-  const baseUrl = isMultiProtocolPlatform.value && apiProtocol.value === 'adaptive'
+const previewBaseUrl = computed(() =>
+  isMultiProtocolPlatform.value && apiProtocol.value === 'adaptive'
     ? adaptiveBaseUrls.value.chat_completions.trim() || apiKeyBaseUrl.value.trim()
     : apiKeyBaseUrl.value.trim()
+)
+
+const upstreamGroupSource = computed(() => {
+  const baseURL = previewBaseUrl.value
+  const apiKey = apiKeyValue.value.trim()
+  return baseURL && apiKey
+    ? { platform: form.platform, base_url: baseURL, api_key: apiKey, proxy_id: form.proxy_id }
+    : null
+})
+
+const syncPreviewCredentials = computed(() => {
+  if (!apiKeyValue.value) return undefined
   const modelMapping = buildModelMappingObject(
     modelRestrictionMode.value,
     allowedModels.value,
@@ -3621,7 +3663,7 @@ const syncPreviewCredentials = computed(() => {
   return {
     platform: form.platform,
     type: form.type,
-    base_url: baseUrl || undefined,
+    base_url: previewBaseUrl.value || undefined,
     api_key: apiKeyValue.value,
     ...(modelMapping ? { model_mapping: modelMapping } : {})
   }
@@ -3709,6 +3751,7 @@ const applyGrokOAuthUpstreamConfig = (credentials: Record<string, unknown>) => {
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(true)
 const openaiPassthroughEnabled = ref(false)
+const openaiPassthroughModelFilterEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(true)
@@ -3717,6 +3760,7 @@ const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 // Images 非流式响应缺 b64_json 时由网关下载 url 回填（仅 OpenAI API Key）。
 const openAIImagesUrlToB64JsonEnabled = ref(false)
+const openAIImageSizeTiers = ref<OpenAIImageSizeTier[]>([...OPENAI_IMAGE_SIZE_TIERS])
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openAICompatibleProviderSelection = ref<OpenAICompatibleProviderSelection>('custom')
 const isOpenAICompatibleProviderManaged = computed(
@@ -3933,7 +3977,7 @@ const openAIWSModeHintKey = computed(() =>
 )
 
 const isOpenAIModelRestrictionDisabled = computed(() =>
-  form.platform === 'openai' && openaiPassthroughEnabled.value
+  form.platform === 'openai' && openaiPassthroughEnabled.value && !openaiPassthroughModelFilterEnabled.value
 )
 
 const mixedChannelWarningMessageText = computed(() => {
@@ -4127,6 +4171,7 @@ watch(
     }
     if (newPlatform !== 'openai') {
       openaiPassthroughEnabled.value = false
+      openaiPassthroughModelFilterEnabled.value = false
       openaiFlattenNamespacesEnabled.value = false
       openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_CTX_POOL
@@ -4144,6 +4189,7 @@ watch(
     headerOverrideEnabled.value = false
     headerOverrideRows.value = []
     openAIImagesUrlToB64JsonEnabled.value = false
+    openAIImageSizeTiers.value = [...OPENAI_IMAGE_SIZE_TIERS]
     grokOAuthCustomBaseUrlEnabled.value = false
     grokOAuthBaseUrl.value = ''
     // Reset OAuth states
@@ -4498,6 +4544,7 @@ const resetForm = () => {
   apiKeyValue.value = ''
   upstreamRequestIdHeader.value = ''
   upstreamBillingAutoProbeEnabled.value = true
+  upstreamGroupSyncEnabled.value = false
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null
@@ -4522,11 +4569,13 @@ const resetForm = () => {
   headerOverrideEnabled.value = false
   headerOverrideRows.value = []
   openAIImagesUrlToB64JsonEnabled.value = false
+  openAIImageSizeTiers.value = [...OPENAI_IMAGE_SIZE_TIERS]
   grokOAuthCustomBaseUrlEnabled.value = false
   grokOAuthBaseUrl.value = ''
   interceptWarmupRequests.value = false
   autoPauseOnExpired.value = true
   openaiPassthroughEnabled.value = false
+  openaiPassthroughModelFilterEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = true
   openAILongContextBillingTouched.value = false
@@ -4620,6 +4669,11 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     delete extra.openai_passthrough
     delete extra.openai_oauth_passthrough
   }
+  if (openaiPassthroughEnabled.value && openaiPassthroughModelFilterEnabled.value) {
+    extra.openai_passthrough_model_filter = true
+  } else {
+    delete extra.openai_passthrough_model_filter
+  }
   // 缺省即保留 namespace，不写空值，避免 extra 里堆积默认项
   if (form.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {
     extra.openai_responses_flatten_namespaces = true
@@ -4679,6 +4733,7 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   } else {
     delete extra.images_url_to_b64_json
   }
+  applyOpenAIImageSizeTiersToExtra(extra, openAIImageSizeTiers.value)
 
   return Object.keys(extra).length > 0 ? extra : undefined
 }
@@ -5022,6 +5077,7 @@ const handleSubmit = async () => {
     group_ids: form.group_ids,
     extra: withUpstreamRequestIdHeader(extra),
     upstream_billing_probe_enabled: upstreamBillingAutoProbeEnabled.value,
+    upstream_billing_group_sync_enabled: upstreamGroupSyncEnabled.value,
     auto_pause_on_expired: autoPauseOnExpired.value
   })
 }
@@ -5140,6 +5196,7 @@ const createAccountAndFinish = async (
     // 上游倍率探测对全部 API-key 平台开放；
     // 非 apikey 类型（bedrock/oauth）不传，后端不动作。
     upstream_billing_probe_enabled: type === 'apikey' ? upstreamBillingAutoProbeEnabled.value : undefined,
+    upstream_billing_group_sync_enabled: type === 'apikey' ? upstreamGroupSyncEnabled.value : undefined,
     auto_pause_on_expired: autoPauseOnExpired.value
   })
 }

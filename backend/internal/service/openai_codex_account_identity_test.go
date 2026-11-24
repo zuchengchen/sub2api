@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func TestCodexInputTurnReferencesFollowAccountIdentity(t *testing.T) {
@@ -29,7 +32,7 @@ func TestCodexInputTurnReferencesFollowAccountIdentity(t *testing.T) {
 		account *Account
 		key     int64
 	}{{accountA, 7}, {accountB, 7}, {accountA, 8}} {
-		scoped, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, selection.account, selection.key)
+		scoped, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, selection.account, selection.key, "")
 		require.NoError(t, err)
 		require.True(t, changed)
 		require.Equal(t, original, body, "retry/failover must retain the original identity source")
@@ -48,13 +51,13 @@ func TestCodexInputTurnReferencesFollowAccountIdentity(t *testing.T) {
 		require.Equal(t, historical, gjson.GetBytes(scoped, "input.2.output").String())
 		var mapped map[string]any
 		require.NoError(t, json.Unmarshal(body, &mapped))
-		require.True(t, applyCodexAccountIdentityClientMetadataMap(mapped, selection.account, selection.key))
+		require.True(t, applyCodexAccountIdentityClientMetadataMap(mapped, selection.account, selection.key, ""))
 		encoded, err := json.Marshal(mapped)
 		require.NoError(t, err)
 		require.JSONEq(t, string(scoped), string(encoded), "raw and decoded entry points must use identical mappings")
 	}
 	setup := &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Credentials: map[string]any{"access_token": "setup"}}
-	scoped, _, err := applyCodexAccountIdentityClientMetadataRaw(body, setup, 7)
+	scoped, _, err := applyCodexAccountIdentityClientMetadataRaw(body, setup, 7, "")
 	require.NoError(t, err)
 	require.Equal(t, current, gjson.GetBytes(scoped, "input.1.internal_chat_message_metadata_passthrough.turn_id").String())
 }
@@ -73,7 +76,7 @@ func BenchmarkCodexAccountIdentityConversation(b *testing.B) {
 			b.SetBytes(int64(len(body)))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				result, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 7)
+				result, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 7, "")
 				if err != nil || !changed || len(result) == 0 {
 					b.Fatal("identity rewrite did not execute", err)
 				}
@@ -87,13 +90,13 @@ func TestCodexRequestBodyIdentityNamespaceIsStablePerOAuthAccount(t *testing.T) 
 	account11 := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "chatgpt-account-11"}}
 	account19 := &Account{ID: 19, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "chatgpt-account-19"}}
 
-	first, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account11, 77)
+	first, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account11, 77, "")
 	require.NoError(t, err)
 	require.True(t, changed)
-	firstAgain, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account11, 77)
+	firstAgain, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account11, 77, "")
 	require.NoError(t, err)
 	require.True(t, changed)
-	second, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account19, 77)
+	second, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account19, 77, "")
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.JSONEq(t, string(first), string(firstAgain))
@@ -319,7 +322,7 @@ func TestCodexAccountIdentityParentHeaderMatchesBody(t *testing.T) {
 			c.Request.Header.Set("x-codex-parent-thread-id", convTestParentThread)
 			body := []byte(`{"model":"gpt-5.5","input":[],"client_metadata":{"session_id":"` + convTestSession + `","thread_id":"` + convTestThread + `","parent_thread_id":"` + convTestParentThread + `"}}`)
 			ids := resolveCodexFingerprintIDsForRawBody(c, account, nil, body)
-			scoped, _, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 13)
+			scoped, _, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 13, "")
 			require.NoError(t, err)
 			projected, _, err := applyCodexFingerprintClientMetadataRaw(scoped, ids)
 			require.NoError(t, err)
@@ -344,5 +347,69 @@ func TestCodexAccountIdentityParentHeaderMatchesBody(t *testing.T) {
 		headers.Set("x-codex-parent-thread-id", convTestParentThread)
 		applyCodexAccountIdentityHeaders(headers, account, 13)
 		require.Equal(t, convTestParentThread, headers.Get("x-codex-parent-thread-id"))
+	}
+}
+
+// An ephemeral Codex fork, such as thread/sample, names itself in
+// client_metadata.session_id but keeps its parent's session-id header and
+// prompt_cache_key. Upstream, the fork must keep the parent's cache key.
+func TestCodexForkKeepsParentPromptCacheKeyUpstream(t *testing.T) {
+	for _, passthrough := range []bool{false, true} {
+		t.Run(map[bool]string{false: "transformed", true: "passthrough"}[passthrough], func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			forward := func(promptCacheKey, bodySessionID string) (http.Header, []byte) {
+				t.Helper()
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+				c.Request.Header.Set("User-Agent", "codex_cli_rs/0.167.0")
+				c.Request.Header.Set("originator", "codex_cli_rs")
+				c.Request.Header.Set("session-id", "parent-session")
+				body := []byte(`{"model":"gpt-5.6-sol","stream":false,"input":[{"type":"message","role":"user","content":"hi"}]}`)
+				body, err := sjson.SetBytes(body, "prompt_cache_key", promptCacheKey)
+				require.NoError(t, err)
+				body, err = sjson.SetBytes(body, "client_metadata.session_id", bodySessionID)
+				require.NoError(t, err)
+
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
+					Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+				}}
+				svc := &OpenAIGatewayService{
+					cfg:           &config.Config{},
+					httpUpstream:  upstream,
+					toolCorrector: NewCodexToolCorrector(),
+				}
+				account := newTestOAuthAccount(4501, map[string]any{"openai_oauth_passthrough": passthrough})
+				account.Status = StatusActive
+				account.Schedulable = true
+				account.Concurrency = 1
+				account.Credentials = map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"}
+
+				_, err = svc.Forward(context.Background(), c, account, body)
+				require.NoError(t, err)
+				require.NotNil(t, upstream.lastReq)
+				return upstream.lastReq.Header, upstream.lastBody
+			}
+
+			parentHeader, parentBody := forward("parent-session", "parent-session")
+			parentKey := gjson.GetBytes(parentBody, "prompt_cache_key").String()
+			require.NotEqual(t, "parent-session", parentKey, "the key is account-scoped")
+			require.Equal(t, gjson.GetBytes(parentBody, "client_metadata.session_id").String(), parentKey)
+
+			forkHeader, forkBody := forward("parent-session", "fork-session")
+			require.Equal(t, parentKey, gjson.GetBytes(forkBody, "prompt_cache_key").String(),
+				"a fork keeps its parent's upstream cache key")
+			require.Equal(t, parentHeader.Get("session_id"), forkHeader.Get("session_id"))
+			require.NotEqual(t,
+				gjson.GetBytes(parentBody, "client_metadata.session_id").String(),
+				gjson.GetBytes(forkBody, "client_metadata.session_id").String(),
+				"the fork keeps its own session identity",
+			)
+
+			_, customBody := forward("caller-cache-key", "parent-session")
+			require.NotEqual(t, parentKey, gjson.GetBytes(customBody, "prompt_cache_key").String(),
+				"a caller-chosen key keeps its own namespace")
+		})
 	}
 }

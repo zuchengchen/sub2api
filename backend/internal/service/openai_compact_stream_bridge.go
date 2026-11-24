@@ -100,14 +100,11 @@ func writeOpenAICompactSSEBridge(c *gin.Context, statusCode int, finalResponse [
 // response.failed 终止事件回传。仅用于心跳已提交 200、无法再按 HTTP 状态码
 // 回传错误的场景。
 func writeOpenAICompactSSEFailure(c *gin.Context, statusCode int, errorBody []byte) {
-	message := ""
-	if len(errorBody) > 0 {
-		message = sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(errorBody)))
+	fields := openAIResponsesErrorFields(errorBody)
+	if fields["message"] == "" {
+		fields["message"] = "Upstream compact request failed with HTTP " + strconv.Itoa(statusCode)
 	}
-	if message == "" {
-		message = "Upstream compact request failed with HTTP " + strconv.Itoa(statusCode)
-	}
-	writeOpenAICompactSSEFailureMessage(c, statusCode, "upstream_error", message)
+	writeOpenAIResponsesSSEFailure(c, statusCode, fields)
 }
 
 // writeOpenAICompactSSEFailureMessage 写出 response.failed 终止事件。Codex 对
@@ -136,14 +133,21 @@ func writeOpenAIResponsesErrorAfterKeepalive(c *gin.Context, statusCode int, bod
 	if !StopOpenAICompactSSEKeepaliveCommitted(c) {
 		return false
 	}
-	errorBody := gin.H{"message": sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))}
-	for _, field := range []string{"type", "code", "param"} {
-		if value := gjson.GetBytes(body, "error."+field); value.Type == gjson.String {
-			errorBody[field] = value.String()
+	writeOpenAIResponsesSSEFailure(c, statusCode, openAIResponsesErrorFields(body))
+	return true
+}
+
+func openAIResponsesErrorFields(body []byte) gin.H {
+	fields := gin.H{"message": sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))}
+	for _, field := range []string{"type", "param"} {
+		if value := openAIPassthroughClientErrorField(nil, gjson.GetBytes(body, "error."+field)); value != "" {
+			fields[field] = value
 		}
 	}
-	writeOpenAIResponsesSSEFailure(c, statusCode, errorBody)
-	return true
+	if code := openAIPassthroughClientErrorCode(nil, body); code != "" {
+		fields["code"] = code
+	}
+	return fields
 }
 
 func writeOpenAIResponsesSSEFailure(c *gin.Context, statusCode int, errorBody gin.H) {
@@ -159,7 +163,11 @@ func writeOpenAIResponsesSSEFailure(c *gin.Context, statusCode int, errorBody gi
 		if code == "" {
 			code = "upstream_error"
 		}
-		errorBody["code"] = code
+	}
+	errorBody["code"] = code
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "server_is_overloaded", "slow_down":
+		errorBody["code"] = openAICapacityShedRetryableClientCode
 	}
 	message, _ := errorBody["message"].(string)
 	if message == "" {

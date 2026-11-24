@@ -147,10 +147,13 @@ docs/*
 !docs/runtime-customizations-release-notes.md
 !docs/admin-api-keys.md
 !docs/codex-oauth-compatibility.md
+!docs/agent-resource-safety.md
+!docs/moego-json-batching.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/ASYNC_IMAGE_TASKS.md
+!docs/OPENAI_IMAGES_CODEX.md
 !docs/COMPOSITE_GROUPS.md
 !docs/PLUGIN_DEVELOPMENT.md
 !docs/channel-monitor-v2-safe-defaults.md

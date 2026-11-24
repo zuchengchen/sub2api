@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/imroc/req/v3"
 )
@@ -308,6 +309,9 @@ func (s *OpenAIQuotaService) CacheResetCreditsSnapshot(ctx context.Context, acco
 // CacheCreditsSnapshot stores the balance and any observed windows from a
 // manual refresh independently of reset-credit expiration details.
 func (s *OpenAIQuotaService) CacheCreditsSnapshot(ctx context.Context, accountID int64, usage *OpenAIQuotaUsage) error {
+	if err := scopedAccountIDAccess(ctx, s.accountRepo, accountID, scopedAccountOperation(ctx, "openai.quota.read")); err != nil {
+		return err
+	}
 	if usage == nil {
 		return infraerrors.New(http.StatusBadGateway, "OPENAI_QUOTA_EMPTY_USAGE", "openai quota query returned an empty result")
 	}
@@ -319,6 +323,7 @@ func (s *OpenAIQuotaService) CacheCreditsSnapshot(ctx context.Context, accountID
 
 // CachePostResetSnapshot persists the credits and usage windows observed after a reset.
 func (s *OpenAIQuotaService) CachePostResetSnapshot(ctx context.Context, accountID int64, usage *OpenAIQuotaUsage) error {
+	ctx = WithScopedAdminAccountOperation(ctx, "openai.quota.reset")
 	if usage == nil {
 		return s.cacheResetCreditsSnapshot(ctx, accountID, nil, nil)
 	}
@@ -338,6 +343,9 @@ func addResetCreditsSnapshot(updates map[string]any, credits *OpenAIRateLimitRes
 }
 
 func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, accountID int64, credits *OpenAIRateLimitResetCredits, updates map[string]any) error {
+	if err := scopedAccountIDAccess(ctx, s.accountRepo, accountID, scopedAccountOperation(ctx, "openai.quota.read")); err != nil {
+		return err
+	}
 	if updates == nil {
 		updates = make(map[string]any, 1)
 	}
@@ -426,6 +434,10 @@ func (s *OpenAIQuotaService) ResetCreditTargeted(ctx context.Context, accountID 
 }
 
 func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, creditID, redeemRequestID string, targeted bool) (*OpenAIQuotaResetResult, error) {
+	ctx = WithScopedAdminAccountOperation(ctx, "openai.quota.reset")
+	if err := scopedAccountIDAccess(ctx, s.accountRepo, accountID, "openai.quota.reset"); err != nil {
+		return nil, err
+	}
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -503,6 +515,9 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 	if account == nil {
 		return "", "", "", false, infraerrors.New(http.StatusNotFound, "OPENAI_QUOTA_ACCOUNT_NOT_FOUND", "account not found")
 	}
+	if err := scopedAccountAccess(ctx, account, scopedAccountOperation(ctx, "openai.quota.read")); err != nil {
+		return "", "", "", false, err
+	}
 	if account.Platform != PlatformOpenAI {
 		return "", "", "", false, infraerrors.New(http.StatusBadRequest, "OPENAI_QUOTA_INVALID_PLATFORM", "account is not an OpenAI account")
 	}
@@ -560,6 +575,9 @@ func (s *OpenAIQuotaService) recoverAgentIdentityTask(ctx context.Context, accou
 	if err != nil || account == nil {
 		return fmt.Errorf("account is unavailable")
 	}
+	if scopeErr := scopedAccountAccess(ctx, account, scopedAccountOperation(ctx, "openai.quota.read")); scopeErr != nil {
+		return scopeErr
+	}
 	if !account.IsOpenAIAgentIdentity() {
 		return nil
 	}
@@ -580,10 +598,19 @@ func (s *OpenAIQuotaService) isAgentIdentityAccount(ctx context.Context, account
 func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, accountID int64, accessToken, chatGPTAccountID string, fedRAMP bool) (map[string]string, string, error) {
 	headers := buildCodexCommonHeaders(accessToken, chatGPTAccountID, fedRAMP)
 	if s == nil || s.accountRepo == nil {
+		if adminaccess.FromContext(ctx) != nil {
+			return nil, "", infraerrors.NotFound("SCOPED_ACCOUNT_NOT_FOUND", "账户不存在")
+		}
 		return headers, "", nil
 	}
 	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if scopeErr := scopedAccountAccess(ctx, account, scopedAccountOperation(ctx, "openai.quota.read")); scopeErr != nil {
+		return nil, "", scopeErr
+	}
 	if err != nil || account == nil {
+		if adminaccess.FromContext(ctx) != nil {
+			return nil, "", infraerrors.NotFound("SCOPED_ACCOUNT_NOT_FOUND", "账户不存在")
+		}
 		if strings.TrimSpace(accessToken) == "" {
 			return nil, "", fmt.Errorf("agent identity account credentials are unavailable")
 		}

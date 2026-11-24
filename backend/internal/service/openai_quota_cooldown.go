@@ -179,7 +179,7 @@ func (s *OpenAIGatewayService) quotaCooldownFailure(a *Account) *UpstreamFailove
 
 // Long-lived sockets can retain an account snapshot from before another replica
 // saw a quota error. Consult the shared scheduler before sending a new turn.
-func (s *OpenAIGatewayService) quotaFailureForWSTurn(ctx context.Context, a *Account, payload []byte) error {
+func (s *OpenAIGatewayService) quotaFailureForWSTurn(ctx context.Context, a *Account, payload []byte, originalModel string) error {
 	if a == nil || !a.IsOpenAIOAuth() {
 		return nil
 	}
@@ -192,7 +192,8 @@ func (s *OpenAIGatewayService) quotaFailureForWSTurn(ctx context.Context, a *Acc
 	if failure == nil {
 		return nil
 	}
-	return newOpenAIWSCurrentTurnFailoverError(failure, payload)
+	retry := openAIWSIndependentRetryPayload(payload, originalModel)
+	return newOpenAIWSCurrentTurnFailoverError(failure, retry)
 }
 
 // captureQuotaClear invalidates only the local deadline observed before an

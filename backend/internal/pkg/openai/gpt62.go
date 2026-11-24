@@ -45,6 +45,18 @@ func IsGPT62ModelSpelling(model string) bool {
 	return IsGPT62AstraModelSpelling(model) || IsGPT62SolModelSpelling(model)
 }
 
+// GPT62ModelID returns the published model ID for recognized aliases.
+func GPT62ModelID(model string) string {
+	switch {
+	case IsGPT62SolModelSpelling(model):
+		return "gpt-6.2-sol"
+	case IsGPT62AstraModelSpelling(model):
+		return "gpt-6.2-astra"
+	default:
+		return ""
+	}
+}
+
 // CodexGPT62Metadata returns the official descriptor for a recognized 6.2 model.
 // The embedded bytes are immutable; callers must not modify them.
 func CodexGPT62Metadata(model string) []byte {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildModelMappingObject, getModelsByPlatform, getPresetMappingsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
-import { BUILTIN_PLATFORM_CATALOG, resetPlatformCatalog, setPlatformCatalog } from '@/constants/platformCatalog'
+import { BUILTIN_PLATFORM_CATALOG, isKnownPlatform, resetPlatformCatalog, setPlatformCatalog } from '@/constants/platformCatalog'
 
 describe('useModelWhitelist', () => {
   it('平台清单中没有内置模型列表的多协议供应商不预填白名单', () => {
@@ -104,6 +104,27 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('claude')).toContain('claude-opus-5-5')
     expect(getModelsByPlatform('claude')).toContain('claude-sonnet-5-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-4-8')
+  })
+
+  it.each([
+    ['claude-fable-5-2', 'Fable 5.2'],
+    ['claude-mythos-5-2', 'Mythos 5.2']
+  ])('preserves %s in Anthropic and Bedrock model presets', (model, label) => {
+    for (const platform of ['claude', 'anthropic']) {
+      const models = getModelsByPlatform(platform)
+      expect(models).toContain(model)
+      expect(buildModelMappingObject('whitelist', models, [])?.[model]).toBe(model)
+      expect(getPresetMappingsByPlatform(platform)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label, from: model, to: model })
+      ]))
+    }
+    expect(getPresetMappingsByPlatform('bedrock')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label, from: model, to: `anthropic.${model}` })
+    ]))
+  })
+
+  it.each(['gemini', 'antigravity', 'typesafe'])('keeps the retired %s platform out of the catalog', (platform) => {
+    expect(isKnownPlatform(platform)).toBe(false)
   })
 
   it('Claude Sonnet 5.5 预设使用各平台的官方模型 ID', () => {

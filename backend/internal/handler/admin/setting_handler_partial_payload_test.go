@@ -3,9 +3,11 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/stretchr/testify/require"
@@ -42,18 +44,23 @@ func TestUpdateSettingsPartialPayloadKeepsUnsentKeys(t *testing.T) {
 // Claude Code 版本三项曾在保存时被写成零值：自动同步变 false、手动版本变空，
 // 导致任意一次后台保存都会关掉版本自动同步。
 func TestUpdateSettingsPartialPayloadKeepsClaudeCodeVersionSettings(t *testing.T) {
+	manualVersion := claude.CLICurrentVersion
+	var major, minor, patch int
+	_, err := fmt.Sscanf(manualVersion, "%d.%d.%d", &major, &minor, &patch)
+	require.NoError(t, err)
+	syncedVersion := fmt.Sprintf("%d.%d.%d", major, minor, patch+1)
 	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
-		service.SettingKeyClaudeCodeClientVersion:          "2.1.280",
-		service.SettingKeyClaudeCodeClientVersionSynced:    "2.1.281",
+		service.SettingKeyClaudeCodeClientVersion:          manualVersion,
+		service.SettingKeyClaudeCodeClientVersionSynced:    syncedVersion,
 		service.SettingKeyClaudeCodeVersionAutoSyncEnabled: "true",
 	})
 
 	rec := doUpdateSettings(t, h, map[string]any{"risk_control_enabled": true}, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	require.Equal(t, "2.1.280", repo.values[service.SettingKeyClaudeCodeClientVersion])
+	require.Equal(t, manualVersion, repo.values[service.SettingKeyClaudeCodeClientVersion])
 	require.Equal(t, "true", repo.values[service.SettingKeyClaudeCodeVersionAutoSyncEnabled])
-	require.Equal(t, "2.1.281", repo.values[service.SettingKeyClaudeCodeClientVersionSynced])
+	require.Equal(t, syncedVersion, repo.values[service.SettingKeyClaudeCodeClientVersionSynced])
 }
 
 func TestUpdateSettingsWritesClaudeCodeVersionSettingsWhenSent(t *testing.T) {
@@ -62,12 +69,12 @@ func TestUpdateSettingsWritesClaudeCodeVersionSettingsWhenSent(t *testing.T) {
 	})
 
 	rec := doUpdateSettings(t, h, map[string]any{
-		"claude_code_client_version":            "2.1.279",
+		"claude_code_client_version":            claude.CLICurrentVersion,
 		"claude_code_version_auto_sync_enabled": false,
 	}, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	require.Equal(t, "2.1.279", repo.values[service.SettingKeyClaudeCodeClientVersion])
+	require.Equal(t, claude.CLICurrentVersion, repo.values[service.SettingKeyClaudeCodeClientVersion])
 	require.Equal(t, "false", repo.values[service.SettingKeyClaudeCodeVersionAutoSyncEnabled])
 }
 

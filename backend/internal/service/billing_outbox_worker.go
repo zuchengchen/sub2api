@@ -391,12 +391,10 @@ func (w *BillingOutboxWorker) processApplyBatch(ctx context.Context, records []B
 	return handled, nil
 }
 
-// processApplyBatchBatched 把整轮记录按用户分片拆成多个批量事务（每分片
-// 一个事务）：同一分片的多条记录共享一个事务，行锁与 advisory 锁的作用域
-// 都只覆盖本分片事务，不再横跨整轮——热点用户的行锁不会拖住整轮、其他
-// 分片的轮次也不会被整轮持锁阻塞。不同分片的批量事务并发执行（组并行上限
-// billingOutboxApplyGroupParallelism），逐条失败仍通过 savepoint 隔离（仓库内），
-// 重试与去重 Ack 语义不变。整轮 applyCtx（30s 总时限）在所有组之间共享。
+// processApplyBatchBatched 按用户分片并行结算。仓库在每个分片内按用户开启
+// 事务，同一用户的记录共享事务，行锁和 advisory 锁在该事务结束时释放。
+// 可安全回滚的用户批次由仓库逐条原子重试。分片共用 applyCtx 的 30 秒时限，
+// 并发上限为 billingOutboxApplyGroupParallelism。
 func (w *BillingOutboxWorker) processApplyBatchBatched(ctx context.Context, records []BillingOutboxRecord, batchRepo UsageBillingBatchFinalizationRepository) (int, error) {
 	items := make([]UsageBillingBatchItem, 0, len(records))
 	// 校验失败的记录不进批量事务，直接按 terminal 落库，与逐条路径一致。
@@ -444,12 +442,9 @@ func (w *BillingOutboxWorker) processApplyBatchBatched(ctx context.Context, reco
 
 	applyCtx, applyCancel := context.WithTimeout(ctx, billingOutboxApplyTimeout)
 	defer applyCancel()
-	// 分片组并行：不同分片的批量事务并发执行。同一用户必在同一分片，组内
-	// 单个事务天然保持用户级串行；每个事务只取一把 advisory 锁（按组分片），
-	// 组间无共享锁、无嵌套获取，并发取不同分片锁不可能死锁。注入值经
-	// clampApplyGroupParallelism 收敛（<1 回退默认 32，超上限截断 128），防误
-	// 注入导致 goroutine/DB 事务爆炸。错误聚合保留第一错误语义（并发下由
-	// 互斥保护）。
+	// Run separate shards in parallel. The repository serializes settlement
+	// within a shard across worker instances. Keep the concurrency cap so a
+	// large claim cannot open an unbounded number of DB transactions.
 	var firstErr error
 	var errMu sync.Mutex
 	handledMu := sync.Mutex{}
@@ -492,13 +487,9 @@ func clampApplyGroupParallelism(v int) int {
 	return v
 }
 
-// applyBatchGroup 在单个分片事务内应用一组批量记录：同用户串行由 repository
-// 侧事务级 pg_advisory_xact_lock 保证（跨实例生效，随事务提交/回滚自动
-// 释放），worker 不再持有任何进程内锁。outcome 处理无嵌套加锁死锁风险；
-// 逐条失败经 savepoint 隔离（仓库内），outcome 处理与串行路径一致。返回
-// 组级错误（批量事务失败时非 nil；组内逐条失败只落库不返回）与本组实际
-// 消化（转入 finalization / Ack 成功 / 失败落库）的记录数；Ack 失败的不
-// 计入，防止背压语义把"拉满但零进展"误判为积压。
+// applyBatchGroup settles one shard and handles each queue row's outcome. The
+// repository commits one user at a time and falls back to atomic single-item
+// settlement when a rolled-back batch contains an item error.
 func (w *BillingOutboxWorker) applyBatchGroup(ctx context.Context, group billingShardGroup, items []UsageBillingBatchItem, records []BillingOutboxRecord, batchRepo UsageBillingBatchFinalizationRepository) (int, error) {
 	groupItems := make([]UsageBillingBatchItem, len(group.indexes))
 	for gi, idx := range group.indexes {

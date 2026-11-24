@@ -94,13 +94,14 @@ type openAIUsageWindows struct {
 func (s *AccountUsageService) addOpenAIWindowStats(ctx context.Context, pending []openAIUsageWindows) {
 	windows := make([]AccountWindowQuery, 0, len(pending))
 	for _, item := range pending {
-		if item.usage.Source == "passive" && item.usage.FiveHour == nil && item.usage.SevenDay == nil {
+		includeMissing := item.usage.Source != "passive" || item.usage.ErrorCode == errorCodeQuotaRefreshFailed
+		if !includeMissing && item.usage.FiveHour == nil && item.usage.SevenDay == nil {
 			continue
 		}
 		window := AccountWindowQuery{
 			AccountID: item.accountID, StartTime: codexWindowStatsStart(item.usage.FiveHour, 5*time.Hour, item.now),
 		}
-		if item.usage.SevenDay != nil || item.usage.Source != "passive" {
+		if item.usage.SevenDay != nil || includeMissing {
 			sevenDayStart := codexWindowStatsStart(item.usage.SevenDay, 7*24*time.Hour, item.now)
 			window.SecondaryStartTime = &sevenDayStart
 		}
@@ -109,16 +110,17 @@ func (s *AccountUsageService) addOpenAIWindowStats(ctx context.Context, pending 
 	stats := s.GetAccountWindowStatsForAccounts(ctx, windows)
 	for _, item := range pending {
 		value := stats[item.accountID]
+		includeMissing := item.usage.Source != "passive" || item.usage.ErrorCode == errorCodeQuotaRefreshFailed
 		// Local usage counts cannot establish an unobserved quota percentage.
-		if value.Primary != nil && (item.usage.FiveHour != nil || item.usage.Source != "passive") {
+		if value.Primary != nil && (item.usage.FiveHour != nil || includeMissing) {
 			if item.usage.FiveHour == nil {
-				item.usage.FiveHour = &UsageProgress{Utilization: 0}
+				item.usage.FiveHour = &UsageProgress{UtilizationUnknown: true}
 			}
 			item.usage.FiveHour.WindowStats = windowStatsFromAccountStats(value.Primary)
 		}
-		if value.Secondary != nil && (item.usage.SevenDay != nil || item.usage.Source != "passive") {
+		if value.Secondary != nil && (item.usage.SevenDay != nil || includeMissing) {
 			if item.usage.SevenDay == nil {
-				item.usage.SevenDay = &UsageProgress{Utilization: 0}
+				item.usage.SevenDay = &UsageProgress{UtilizationUnknown: true}
 			}
 			item.usage.SevenDay.WindowStats = windowStatsFromAccountStats(value.Secondary)
 		}

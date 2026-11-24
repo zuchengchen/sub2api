@@ -170,12 +170,17 @@ func bindOpenAIReasoningEffortPolicyForMessagesRequest(c *gin.Context, apiKey *s
 	effort := gjson.GetBytes(body, "output_config.effort")
 	explicitEffort := effort.Exists() && effort.Type == gjson.String && strings.TrimSpace(effort.String()) != ""
 	explicitDisabled := gjson.GetBytes(body, "thinking.type").String() == "disabled"
-	if !explicitEffort && !explicitDisabled {
+	isCNTarget := service.IsCNProvider(effectiveAPIKeyPlatform(c, apiKey))
+	if (isCNTarget && !explicitEffort) || (!isCNTarget && !explicitEffort && !explicitDisabled) {
 		return
 	}
 	maxEffort, mappings, overLimit, ok := openAIReasoningEffortPolicyForRequest(c, apiKey)
 	if !ok {
 		return
 	}
-	c.Request = c.Request.WithContext(service.WithOpenAIReasoningEffortPolicy(c.Request.Context(), maxEffort, mappings, overLimit))
+	if isCNTarget {
+		c.Request = c.Request.WithContext(service.WithOpenAIReasoningEffortPolicy(c.Request.Context(), maxEffort, mappings, overLimit))
+		return
+	}
+	c.Request = c.Request.WithContext(service.WithOpenAIReasoningEffortPolicyForMessages(c.Request.Context(), body, maxEffort, mappings, overLimit))
 }
