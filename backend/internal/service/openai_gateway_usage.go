@@ -763,7 +763,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 			LongContextBillingEnabled: longContextBillingGate,
 		})
 	}
-	if openai.IsGPT62ModelSpelling(billingModel) {
+	if openai.IsGPT62ModelSpelling(normalizeOpenAIPricingAlias(billingModel)) {
 		return s.billingService.CalculateCostUnified(CostInput{
 			Ctx: ctx, Model: billingModel, Tokens: tokens, RateMultiplier: multiplier,
 			PricingAt: pricingAt, ServiceTier: serviceTier, ReasoningEffort: reasoningEffort,

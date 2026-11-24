@@ -551,7 +551,7 @@ func (s *BillingService) initFallbackPricing() {
 	}
 
 	// OpenAI GPT-5.4（业务指定价格）
-	s.fallbackPrices["gpt-5.4"] = applyOpenAIAPILongContextLadder("gpt-5.4", &ModelPricing{
+	s.fallbackPrices["gpt-5.4"] = &ModelPricing{
 		InputPricePerToken:             2.5e-6,  // $2.5 per MTok
 		InputPricePerTokenPriority:     5e-6,    // $5 per MTok
 		OutputPricePerToken:            15e-6,   // $15 per MTok
@@ -560,74 +560,105 @@ func (s *BillingService) initFallbackPricing() {
 		CacheReadPricePerToken:         0.25e-6, // $0.25 per MTok
 		CacheReadPricePerTokenPriority: 0.5e-6,  // $0.5 per MTok
 		SupportsCacheBreakdown:         false,
-	})
+	}
 	// OpenAI GPT-5.5 官方价格；Fast 为标准价 2.5 倍。
 	// Source: https://platform.openai.com/docs/pricing
-	s.fallbackPrices["gpt-5.5"] = applyOpenAIAPILongContextLadder("gpt-5.5", pricingWithPriorityMultiplier(&ModelPricing{
+	s.fallbackPrices["gpt-5.5"] = pricingWithPriorityMultiplier(&ModelPricing{
 		InputPricePerToken:  5e-6,
 		OutputPricePerToken: 30e-6,
 		// 官方未列独立 cache-write 价；内部出现 cache creation token 时按输入价兜底。
 		CacheCreationPricePerToken: 5e-6,
 		CacheReadPricePerToken:     0.5e-6,
 		SupportsCacheBreakdown:     false,
-	}, 2.5))
-	// GPT-5.5 Pro 当前不提供 Fast；保留标准、Flex 和长上下文 fallback 价格。
-	s.fallbackPrices["gpt-5.5-pro"] = applyOpenAIAPILongContextLadder("gpt-5.5-pro", &ModelPricing{
+	}, 2.5)
+	// GPT-5.5 Pro 的静态回退价覆盖标准档。
+	s.fallbackPrices["gpt-5.5-pro"] = &ModelPricing{
 		InputPricePerToken:  30e-6,
 		OutputPricePerToken: 180e-6,
 		// 官方未列独立 cached-input/cache-write 价；内部出现对应 token 时按输入价兜底。
 		CacheCreationPricePerToken: 30e-6,
 		CacheReadPricePerToken:     30e-6,
 		SupportsCacheBreakdown:     false,
-	})
-
-	// OpenAI GPT-6 Astra：以官方 API 价的 1.5 倍为基价。缓存写入仍为输入价的 1.25 倍。
-	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
-	// Source: https://developers.openai.com/api/docs/models/gpt-6-astra
-	s.fallbackPrices["gpt-6-astra"] = applyOpenAIAPILongContextLadder("gpt-6-astra", pricingWithPriorityMultiplier(&ModelPricing{
-		InputPricePerToken:         gpt6AstraOfficialInputPricePerToken * gpt6AstraAPIBillingMultiplier,
-		OutputPricePerToken:        gpt6AstraOfficialOutputPricePerToken * gpt6AstraAPIBillingMultiplier,
-		CacheCreationPricePerToken: gpt6AstraOfficialCacheCreationPricePerToken * gpt6AstraAPIBillingMultiplier,
-		CacheReadPricePerToken:     gpt6AstraOfficialCacheReadPricePerToken * gpt6AstraAPIBillingMultiplier,
-		SupportsCacheBreakdown:     false,
-	}, 2.0))
-	// GPT-6.2 keeps each series' existing site markup: Astra 1.5x, Sol 2x.
-	// Source: https://developers.openai.com/api/docs/pricing
-	for _, model := range []string{"gpt-6.2-astra", "gpt-6.2-sol"} {
-		pricing := &ModelPricing{}
-		applyGPT62APIBillingRates(model, pricing)
-		s.fallbackPrices[model] = pricingWithPriorityMultiplier(pricing, 2)
 	}
 
-	// OpenAI GPT-6.1 Terra：以官方 API 价（$1/$5/缓存读 $0.05 每百万 token）的 2 倍为基价，
-	// 与 GPT-6.x Sol 口径一致。缓存写入仍为输入价的 1.25 倍。
-	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
-	s.fallbackPrices["gpt-6.1-terra"] = applyOpenAIAPILongContextLadder("gpt-6.1-terra", pricingWithPriorityMultiplier(&ModelPricing{
-		InputPricePerToken:         gpt61TerraOfficialInputPricePerToken * gpt6SolAPIBillingMultiplier,
-		OutputPricePerToken:        gpt61TerraOfficialOutputPricePerToken * gpt6SolAPIBillingMultiplier,
-		CacheCreationPricePerToken: gpt61TerraOfficialCacheCreationPricePerToken * gpt6SolAPIBillingMultiplier,
-		CacheReadPricePerToken:     gpt61TerraOfficialCacheReadPricePerToken * gpt6SolAPIBillingMultiplier,
-	}, 2.0))
-	// OpenAI GPT-6.1 Sol：以官方 API 价的 2 倍为基价。缓存写入仍为输入价的 1.25 倍。
-	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
-	// Source: https://developers.openai.com/api/docs/models/gpt-6.1-sol
-	s.fallbackPrices["gpt-6.1-sol"] = applyOpenAIAPILongContextLadder("gpt-6.1-sol", pricingWithPriorityMultiplier(&ModelPricing{
-		InputPricePerToken:         gpt61SolOfficialInputPricePerToken * gpt6SolAPIBillingMultiplier,
-		OutputPricePerToken:        gpt61SolOfficialOutputPricePerToken * gpt6SolAPIBillingMultiplier,
-		CacheCreationPricePerToken: gpt61SolOfficialCacheCreationPricePerToken * gpt6SolAPIBillingMultiplier,
-		CacheReadPricePerToken:     gpt61SolOfficialCacheReadPricePerToken * gpt6SolAPIBillingMultiplier,
-	}, 2.0))
-	// OpenAI GPT-6 Sol：以官方 API 价的 2 倍为基价。缓存写入仍为输入价的 1.25 倍。
-	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
-	// Source: https://developers.openai.com/api/docs/models/gpt-6-sol
-	s.fallbackPrices["gpt-6-sol"] = applyOpenAIAPILongContextLadder("gpt-6-sol", pricingWithPriorityMultiplier(&ModelPricing{
-		InputPricePerToken:         gpt6SolOfficialInputPricePerToken * gpt6SolAPIBillingMultiplier,
-		OutputPricePerToken:        gpt6SolOfficialOutputPricePerToken * gpt6SolAPIBillingMultiplier,
-		CacheCreationPricePerToken: gpt6SolOfficialCacheCreationPricePerToken * gpt6SolAPIBillingMultiplier,
-		CacheReadPricePerToken:     gpt6SolOfficialCacheReadPricePerToken * gpt6SolAPIBillingMultiplier,
-	}, 2.0))
+	s.fallbackPrices["gpt-6-astra"] = &ModelPricing{
+		InputPricePerToken:                 10e-6,
+		InputPricePerTokenPriority:         20e-6,
+		OutputPricePerToken:                50e-6,
+		OutputPricePerTokenPriority:        100e-6,
+		CacheCreationPricePerToken:         12.5e-6,
+		CacheCreationPricePerTokenPriority: 25e-6,
+		CacheReadPricePerToken:             1e-6,
+		CacheReadPricePerTokenPriority:     2e-6,
+		LongContextInputThreshold:          272_000,
+		LongContextInputMultiplier:         2,
+		LongContextOutputMultiplier:        1.5,
+	}
+
+	// GPT-6.1 Terra official rates, 2026-10-26.
+	s.fallbackPrices["gpt-6.1-terra"] = &ModelPricing{
+		InputPricePerToken:                 1e-6,
+		InputPricePerTokenPriority:         2e-6,
+		OutputPricePerToken:                5e-6,
+		OutputPricePerTokenPriority:        10e-6,
+		CacheCreationPricePerToken:         1.25e-6,
+		CacheCreationPricePerTokenPriority: 2.5e-6,
+		CacheReadPricePerToken:             0.05e-6,
+		CacheReadPricePerTokenPriority:     0.1e-6,
+		CacheCreationPriceExplicit:         true,
+		LongContextInputThreshold:          272_000,
+		LongContextInputMultiplier:         2,
+		LongContextOutputMultiplier:        1.5,
+	}
+
+	// GPT-6.2 Astra shares the 272K context threshold of the GPT-6 series.
+	s.fallbackPrices["gpt-6.2-astra"] = &ModelPricing{
+		InputPricePerToken:                 8e-6,
+		InputPricePerTokenPriority:         16e-6,
+		OutputPricePerToken:                40e-6,
+		OutputPricePerTokenPriority:        80e-6,
+		CacheCreationPricePerToken:         10e-6,
+		CacheCreationPricePerTokenPriority: 20e-6,
+		CacheReadPricePerToken:             0.4e-6,
+		CacheReadPricePerTokenPriority:     0.8e-6,
+		CacheCreationPriceExplicit:         true,
+		LongContextInputThreshold:          272_000,
+		LongContextInputMultiplier:         2,
+		LongContextOutputMultiplier:        1.5,
+	}
+	s.fallbackPrices["gpt-6.1-sol"] = &ModelPricing{
+		InputPricePerToken:                 2e-6,
+		InputPricePerTokenPriority:         4e-6,
+		OutputPricePerToken:                10e-6,
+		OutputPricePerTokenPriority:        20e-6,
+		CacheCreationPricePerToken:         2.5e-6,
+		CacheCreationPricePerTokenPriority: 5e-6,
+		CacheReadPricePerToken:             0.1e-6,
+		CacheReadPricePerTokenPriority:     0.2e-6,
+		CacheCreationPriceExplicit:         true,
+		LongContextInputThreshold:          272_000,
+		LongContextInputMultiplier:         2,
+		LongContextOutputMultiplier:        1.5,
+	}
+	// GPT-6.2 Sol shares the static token rates of 6.1 Sol. Request-specific
+	// tier policies are applied to a copy after resolving the model.
+	s.fallbackPrices["gpt-6.2-sol"] = s.fallbackPrices["gpt-6.1-sol"]
+	s.fallbackPrices["gpt-6-sol"] = &ModelPricing{
+		InputPricePerToken:                 2e-6,
+		InputPricePerTokenPriority:         4e-6,
+		OutputPricePerToken:                10e-6,
+		OutputPricePerTokenPriority:        20e-6,
+		CacheCreationPricePerToken:         2.5e-6,
+		CacheCreationPricePerTokenPriority: 5e-6,
+		CacheReadPricePerToken:             0.2e-6,
+		CacheReadPricePerTokenPriority:     0.4e-6,
+		CacheCreationPriceExplicit:         true,
+		LongContextInputThreshold:          272_000,
+		LongContextInputMultiplier:         2,
+		LongContextOutputMultiplier:        1.5,
+	}
 	// OpenAI GPT-5.6 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
-	s.fallbackPrices["gpt-5.6-sol"] = applyOpenAIAPILongContextLadder("gpt-5.6-sol", &ModelPricing{
+	s.fallbackPrices["gpt-5.6-sol"] = &ModelPricing{
 		InputPricePerToken:                 5e-6,
 		InputPricePerTokenPriority:         10e-6,
 		OutputPricePerToken:                30e-6,
@@ -636,8 +667,8 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreationPricePerTokenPriority: 12.5e-6,
 		CacheReadPricePerToken:             0.5e-6,
 		CacheReadPricePerTokenPriority:     1e-6,
-	})
-	s.fallbackPrices["gpt-5.6-terra"] = applyOpenAIAPILongContextLadder("gpt-5.6-terra", &ModelPricing{
+	}
+	s.fallbackPrices["gpt-5.6-terra"] = &ModelPricing{
 		InputPricePerToken:                 2e-6,
 		InputPricePerTokenPriority:         4e-6,
 		OutputPricePerToken:                12e-6,
@@ -646,16 +677,11 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreationPricePerTokenPriority: 5e-6,
 		CacheReadPricePerToken:             0.2e-6,
 		CacheReadPricePerTokenPriority:     0.4e-6,
-	})
-	// OpenAI GPT-5.6 Luna：以官方 API 价的 2 倍为基价。缓存写入仍为输入价的 1.25 倍。
-	// prompt 超过 272K 后在该基价上再叠官方长上下文阶梯（输入/缓存 2 倍、输出 1.5 倍）。
-	// gpt-6-luna 使用同一张价卡，不按 GPT-6 Luna 更低的官方价计费。
-	gpt56LunaBilledPrice := applyOpenAIAPILongContextLadder("gpt-5.6-luna", pricingWithPriorityMultiplier(&ModelPricing{
-		InputPricePerToken:         gpt56LunaOfficialInputPricePerToken * gpt56LunaAPIBillingMultiplier,
-		OutputPricePerToken:        gpt56LunaOfficialOutputPricePerToken * gpt56LunaAPIBillingMultiplier,
-		CacheCreationPricePerToken: gpt56LunaOfficialCacheCreationPricePerToken * gpt56LunaAPIBillingMultiplier,
-		CacheReadPricePerToken:     gpt56LunaOfficialCacheReadPricePerToken * gpt56LunaAPIBillingMultiplier,
-	}, 2.0))
+	}
+	// GPT-5.6 Luna 和 GPT-6 Luna 使用同一套站内定价。
+	gpt56LunaBilledPrice := &ModelPricing{}
+	applyGPT56LunaAPIBillingRates(gpt56LunaBilledPrice)
+	gpt56LunaBilledPrice = pricingWithPriorityMultiplier(gpt56LunaBilledPrice, 2)
 	s.fallbackPrices["gpt-5.6-luna"] = gpt56LunaBilledPrice
 	gpt6LunaBilledPrice := *gpt56LunaBilledPrice
 	s.fallbackPrices["gpt-6-luna"] = &gpt6LunaBilledPrice
@@ -1533,15 +1559,23 @@ func (s *BillingService) getModelPricingAt(model string, pricingAt time.Time) (*
 			price5m := litellmPricing.CacheCreationInputTokenCost
 			price1h := litellmPricing.CacheCreationInputTokenCostAbove1hr
 			enableBreakdown := price1h > 0 && price1h > price5m
+			price12h := litellmPricing.CacheCreationInputTokenCostAbove12hr
+			// Use the upstream billing formula for default GPT rates and keep
+			// explicit operator prices and the Luna catalog policy.
+			if price12h != nil && !litellmPricing.priceOverrides.cacheWrite12h &&
+				strings.HasPrefix(lastSegment(normalizeModelNameForPricing(model)), "gpt-") && !isLunaBilledAsGPT56Model(model) {
+				price12h = nil
+			}
+			cacheWriteModel := normalizeOpenAIPricingAlias(model)
 			return s.applyModelSpecificPricingPolicyEx(model, &ModelPricing{
 				priceOverrides:                     litellmPricing.priceOverrides,
 				InputPricePerToken:                 litellmPricing.InputCostPerToken,
 				InputPricePerTokenPriority:         litellmPricing.InputCostPerTokenPriority,
 				OutputPricePerToken:                litellmPricing.OutputCostPerToken,
 				OutputPricePerTokenPriority:        litellmPricing.OutputCostPerTokenPriority,
-				CacheCreationPriceExplicit:         (openai.IsGPT62ModelSpelling(model) || openai.IsGPT6SolOrLunaModelSpelling(model) || openai.IsGPT61SolModelSpelling(model) || openai.IsGPT61TerraModelSpelling(model)) && litellmPricing.CacheCreationInputTokenCostExplicit,
+				CacheCreationPriceExplicit:         (openai.IsGPT62ModelSpelling(cacheWriteModel) || openai.IsGPT6SolOrLunaModelSpelling(cacheWriteModel) || openai.IsGPT61SolModelSpelling(cacheWriteModel) || openai.IsGPT61TerraModelSpelling(cacheWriteModel)) && litellmPricing.CacheCreationInputTokenCostExplicit,
 				CacheCreationPricePerToken:         litellmPricing.CacheCreationInputTokenCost,
-				CacheCreation12hPricePerToken:      litellmPricing.CacheCreationInputTokenCostAbove12hr,
+				CacheCreation12hPricePerToken:      price12h,
 				CacheCreationPricePerTokenPriority: litellmPricing.CacheCreationInputTokenCostPriority,
 				CacheReadPricePerToken:             litellmPricing.CacheReadInputTokenCost,
 				CacheReadPricePerTokenPriority:     litellmPricing.CacheReadInputTokenCostPriority,
@@ -2059,22 +2093,15 @@ func (s *BillingService) calculateCostInternalWithPolicy(
 	return s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, longContextBillingEnabled), nil
 }
 
-// applyModelSpecificPricingPolicy 对目录数据做模型特定修正：DeepSeek 官方价
-// 强制覆盖；GPT-5.6 缺 cache_write 价时按官方规则补 1.25 倍输入价；Fast/priority
-// 档按业务倍率改写（本地/远程目录的 priority 价可能沿用官方旧口径）。长上下文
-// 阶梯不在此处补齐：一律由目录数据（above_XXXk 折算或显式 long_context_* 字段）
-// 驱动。分组/渠道自定义定价用 applyModelSpecificPricingPolicyEx 关闭
-// DeepSeek 官方价强制覆盖，保留运营者配置。
+// applyModelSpecificPricingPolicy 使用 DeepSeek 官方价和 Luna 的站内价，
+// 并按模型处理缓存写入及 Fast 档位。
 func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *ModelPricing) *ModelPricing {
 	return s.applyModelSpecificPricingPolicyEx(model, pricing, true, time.Time{})
 }
 
-// applyModelSpecificPricingPolicyEx 与 applyModelSpecificPricingPolicy 相同，
-// 但由调用方控制是否强制 DeepSeek 官方价（forceDeepSeekRates）。
-// GPT-6.2 Ultrafast uses the request pricing time for its published promotion.
-// calculateTokenCost 对分组/渠道自定义定价（Source 非 LiteLLM）传 false：
-// 强制覆盖会把运营者配置的售价盖回官方价，违反自定义定价语义。
-func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing *ModelPricing, forceDeepSeekRates bool, pricingAt time.Time) *ModelPricing {
+// applyModelSpecificPricingPolicyEx 允许分组和渠道覆盖默认单价。
+// GPT-6.2 的 Ultra Fast 促销按请求计费时点计算。
+func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing *ModelPricing, useDefaultPrices bool, pricingAt time.Time) *ModelPricing {
 	if pricing == nil {
 		return nil
 	}
@@ -2087,7 +2114,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	// 官方后续保留了 Pro 服务及其计费方式，Pro 不按日期切换成 Flash 价。
 	// 高峰时段倍率不在本函数处理，由 calculateTokenCost 按 deepseekPeakMultiplierAt
 	// 对默认价卡另行叠加（分组/渠道自定义定价不叠加）。
-	if forceDeepSeekRates && isDeepSeekModel(model) {
+	if useDefaultPrices && isDeepSeekModel(model) {
 		cloned := *pricing
 		inputPrice, outputPrice, cacheReadPrice := deepseekFlashOffPeakInputPrice, deepseekFlashOffPeakOutputPrice, deepseekFlashOffPeakCacheRead
 		if isDeepSeekProModel(model) {
@@ -2105,39 +2132,10 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		return &cloned
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
-	if forceDeepSeekRates && openai.IsGPT62ModelSpelling(normalized) {
-		cloned := *pricing
-		applyGPT62APIBillingRates(normalized, &cloned)
-		pricing = &cloned
-	}
-	if forceDeepSeekRates && isOpenAIGPT6AstraModel(normalized) {
-		cloned := *pricing
-		applyGPT6AstraAPIBillingRates(&cloned)
-		pricing = &cloned
-	}
-	// 目录里的 gpt-6-luna 官方价更低。默认价卡强制改写成 5.6 Luna 的 2 倍官价；
-	// 分组/渠道自定义定价（forceDeepSeekRates=false）保持运营者配置。
-	if forceDeepSeekRates && (isOpenAIGPT56LunaModel(normalized) || isLunaBilledAsGPT56Model(model)) {
+	// 两代 Luna 的默认价都按 GPT-5.6 Luna 官方价的两倍计算。
+	if useDefaultPrices && (isOpenAIGPT56LunaModel(normalized) || isLunaBilledAsGPT56Model(model)) {
 		cloned := *pricing
 		applyGPT56LunaAPIBillingRates(&cloned)
-		pricing = &cloned
-	}
-	// 目录里的 gpt-6.1-sol / gpt-6-sol 是官方 API 价。默认价卡强制改写成 2 倍官价；
-	// 分组/渠道自定义定价（forceDeepSeekRates=false）保持运营者配置。
-	if forceDeepSeekRates && (openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(model)) {
-		cloned := *pricing
-		applyGPT61SolAPIBillingRates(&cloned)
-		pricing = &cloned
-	}
-	if forceDeepSeekRates && (openai.IsGPT61TerraModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(model)) {
-		cloned := *pricing
-		applyGPT61TerraAPIBillingRates(&cloned)
-		pricing = &cloned
-	}
-	if forceDeepSeekRates && (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT6SolOrLunaModelSpelling(model)) &&
-		!isOpenAIGPT6LunaModel(normalized) && !isOpenAIGPT6LunaModel(model) {
-		cloned := *pricing
-		applyGPT6SolAPIBillingRates(&cloned)
 		pricing = &cloned
 	}
 	usesCacheWritePremium := openai.IsGPT62ModelSpelling(normalized) || isOpenAIGPT56Model(normalized) || isOpenAIGPT6AstraModel(normalized) || openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized)
@@ -2146,6 +2144,17 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	fastRatio := openAIModelFastPricingRatio(normalized)
 	if fastRatio <= 0 && isOpenAIGPT6LunaModel(model) {
 		fastRatio = 2
+	}
+	if fastRatio <= 0 && useDefaultPrices {
+		// These catalog IDs follow upstream Fast rates independently of
+		// Codex routing aliases.
+		modelID := canonicalizeOpenAIModelAliasSpelling(model)
+		switch {
+		case strings.HasPrefix(modelID, "gpt-5-mini-"), strings.HasPrefix(modelID, "gpt-5-nano-"):
+			fastRatio = 2
+		case modelID == "gpt-5.5-cyber", strings.HasPrefix(modelID, "gpt-5.5-cyber-"):
+			fastRatio = 2.5
+		}
 	}
 	needsOpus55FastMultiplier := claude.IsOpus55(model) && pricing.FastMultiplier == nil
 	if !needsCacheCreationPolicy && fastRatio <= 0 && !needsOpus55FastMultiplier {
@@ -2167,7 +2176,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 			cloned.CacheCreationPricePerTokenPriority = cloned.InputPricePerTokenPriority * 1.25
 		}
 	}
-	if usesCacheWritePremium && cloned.CacheCreation12hPricePerToken == nil && (forceDeepSeekRates || !cloned.CacheCreationPriceExplicit) {
+	if usesCacheWritePremium && cloned.CacheCreation12hPricePerToken == nil && (useDefaultPrices || !cloned.CacheCreationPriceExplicit) {
 		price := cloned.InputPricePerToken * 2.5
 		cloned.CacheCreation12hPricePerToken = &price
 	}
@@ -2202,43 +2211,11 @@ const (
 	openAIAPILongContextInputMultiplier     = 2.0
 	openAIAPILongContextOutputMultiplier    = 1.5
 
-	gpt6AstraOfficialInputPricePerToken         = 10e-6
-	gpt6AstraOfficialOutputPricePerToken        = 50e-6
-	gpt6AstraOfficialCacheCreationPricePerToken = 12.5e-6
-	gpt6AstraOfficialCacheReadPricePerToken     = 1e-6
-	gpt6AstraAPIBillingMultiplier               = 1.5
-
-	gpt62AstraOfficialInputPricePerToken         = 8e-6
-	gpt62AstraOfficialOutputPricePerToken        = 40e-6
-	gpt62AstraOfficialCacheCreationPricePerToken = 10e-6
-	gpt62AstraOfficialCacheReadPricePerToken     = 0.4e-6
-
-	gpt62SolOfficialInputPricePerToken         = 2e-6
-	gpt62SolOfficialOutputPricePerToken        = 10e-6
-	gpt62SolOfficialCacheCreationPricePerToken = 2.5e-6
-	gpt62SolOfficialCacheReadPricePerToken     = 0.1e-6
-
 	gpt56LunaOfficialInputPricePerToken         = 0.2e-6
 	gpt56LunaOfficialOutputPricePerToken        = 1.2e-6
 	gpt56LunaOfficialCacheCreationPricePerToken = 0.25e-6
 	gpt56LunaOfficialCacheReadPricePerToken     = 0.02e-6
 	gpt56LunaAPIBillingMultiplier               = 2.0
-
-	gpt61SolOfficialInputPricePerToken         = 2e-6
-	gpt61SolOfficialOutputPricePerToken        = 10e-6
-	gpt61SolOfficialCacheCreationPricePerToken = 2.5e-6
-	gpt61SolOfficialCacheReadPricePerToken     = 0.1e-6
-
-	gpt61TerraOfficialInputPricePerToken         = 1e-6
-	gpt61TerraOfficialOutputPricePerToken        = 5e-6
-	gpt61TerraOfficialCacheCreationPricePerToken = 1.25e-6
-	gpt61TerraOfficialCacheReadPricePerToken     = 0.05e-6
-
-	gpt6SolOfficialInputPricePerToken         = 2e-6
-	gpt6SolOfficialOutputPricePerToken        = 10e-6
-	gpt6SolOfficialCacheCreationPricePerToken = 2.5e-6
-	gpt6SolOfficialCacheReadPricePerToken     = 0.2e-6
-	gpt6SolAPIBillingMultiplier               = 2.0
 )
 
 // GPT-6.2 Ultrafast is 3x through February 28, 2027, then 6x from
@@ -2251,50 +2228,6 @@ func gpt62UltrafastMultiplierAt(pricingAt time.Time) float64 {
 		return 3
 	}
 	return 6
-}
-
-func applyGPT62APIBillingRates(model string, pricing *ModelPricing) {
-	if pricing == nil {
-		return
-	}
-	switch {
-	case openai.IsGPT62AstraModelSpelling(model):
-		pricing.InputPricePerToken = gpt62AstraOfficialInputPricePerToken * gpt6AstraAPIBillingMultiplier
-		pricing.OutputPricePerToken = gpt62AstraOfficialOutputPricePerToken * gpt6AstraAPIBillingMultiplier
-		pricing.CacheCreationPricePerToken = gpt62AstraOfficialCacheCreationPricePerToken * gpt6AstraAPIBillingMultiplier
-		pricing.CacheReadPricePerToken = gpt62AstraOfficialCacheReadPricePerToken * gpt6AstraAPIBillingMultiplier
-	case openai.IsGPT62SolModelSpelling(model):
-		pricing.InputPricePerToken = gpt62SolOfficialInputPricePerToken * gpt6SolAPIBillingMultiplier
-		pricing.OutputPricePerToken = gpt62SolOfficialOutputPricePerToken * gpt6SolAPIBillingMultiplier
-		pricing.CacheCreationPricePerToken = gpt62SolOfficialCacheCreationPricePerToken * gpt6SolAPIBillingMultiplier
-		pricing.CacheReadPricePerToken = gpt62SolOfficialCacheReadPricePerToken * gpt6SolAPIBillingMultiplier
-	default:
-		return
-	}
-	if pricing.LongContextInputThreshold <= 0 {
-		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
-		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
-		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
-		pricing.LongContextThresholdInclusive = false
-	}
-}
-
-func applyGPT6AstraAPIBillingRates(pricing *ModelPricing) {
-	if pricing == nil {
-		return
-	}
-	m := gpt6AstraAPIBillingMultiplier
-	pricing.InputPricePerToken = gpt6AstraOfficialInputPricePerToken * m
-	pricing.OutputPricePerToken = gpt6AstraOfficialOutputPricePerToken * m
-	pricing.CacheCreationPricePerToken = gpt6AstraOfficialCacheCreationPricePerToken * m
-	pricing.CacheReadPricePerToken = gpt6AstraOfficialCacheReadPricePerToken * m
-	// 1.5× 官方价是基价；目录未给出阶梯时补齐 API 272K 阶梯，已有阈值则保留。
-	if pricing.LongContextInputThreshold <= 0 {
-		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
-		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
-		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
-		pricing.LongContextThresholdInclusive = false
-	}
 }
 
 func applyGPT56LunaAPIBillingRates(pricing *ModelPricing) {
@@ -2313,88 +2246,6 @@ func applyGPT56LunaAPIBillingRates(pricing *ModelPricing) {
 		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
 		pricing.LongContextThresholdInclusive = false
 	}
-}
-
-func applyGPT61SolAPIBillingRates(pricing *ModelPricing) {
-	if pricing == nil {
-		return
-	}
-	m := gpt6SolAPIBillingMultiplier
-	pricing.InputPricePerToken = gpt61SolOfficialInputPricePerToken * m
-	pricing.OutputPricePerToken = gpt61SolOfficialOutputPricePerToken * m
-	pricing.CacheCreationPricePerToken = gpt61SolOfficialCacheCreationPricePerToken * m
-	pricing.CacheReadPricePerToken = gpt61SolOfficialCacheReadPricePerToken * m
-	// 2× 官方价是基价；目录未给出阶梯时补齐 API 272K 阶梯，已有阈值则保留。
-	if pricing.LongContextInputThreshold <= 0 {
-		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
-		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
-		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
-		pricing.LongContextThresholdInclusive = false
-	}
-}
-
-func applyGPT61TerraAPIBillingRates(pricing *ModelPricing) {
-	if pricing == nil {
-		return
-	}
-	m := gpt6SolAPIBillingMultiplier
-	pricing.InputPricePerToken = gpt61TerraOfficialInputPricePerToken * m
-	pricing.OutputPricePerToken = gpt61TerraOfficialOutputPricePerToken * m
-	pricing.CacheCreationPricePerToken = gpt61TerraOfficialCacheCreationPricePerToken * m
-	pricing.CacheReadPricePerToken = gpt61TerraOfficialCacheReadPricePerToken * m
-	if pricing.LongContextInputThreshold <= 0 {
-		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
-		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
-		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
-		pricing.LongContextThresholdInclusive = false
-	}
-}
-
-func applyGPT6SolAPIBillingRates(pricing *ModelPricing) {
-	if pricing == nil {
-		return
-	}
-	m := gpt6SolAPIBillingMultiplier
-	pricing.InputPricePerToken = gpt6SolOfficialInputPricePerToken * m
-	pricing.OutputPricePerToken = gpt6SolOfficialOutputPricePerToken * m
-	pricing.CacheCreationPricePerToken = gpt6SolOfficialCacheCreationPricePerToken * m
-	pricing.CacheReadPricePerToken = gpt6SolOfficialCacheReadPricePerToken * m
-	// 2× 官方价是基价；目录未给出阶梯时补齐 API 272K 阶梯，已有阈值则保留。
-	if pricing.LongContextInputThreshold <= 0 {
-		pricing.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
-		pricing.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
-		pricing.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
-		pricing.LongContextThresholdInclusive = false
-	}
-}
-
-func openAIModelHasAPILongContextLadder(normalized string) bool {
-	switch normalized {
-	case "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-		"gpt-5.5", "gpt-5.5-pro", "gpt-5.4":
-		return true
-	default:
-		return false
-	}
-}
-
-// applyOpenAIAPILongContextLadder 在目录未给出长上下文阶梯时，按 OpenAI API
-// 口径补齐：prompt（input+cache）超过 272K 后整单输入/缓存 2 倍、输出 1.5 倍。
-// 目录已有阈值时不覆盖。克隆后再写，避免污染共享 fallbackPrices。
-func applyOpenAIAPILongContextLadder(model string, pricing *ModelPricing) *ModelPricing {
-	if pricing == nil || pricing.LongContextInputThreshold > 0 {
-		return pricing
-	}
-	normalized := normalizeKnownOpenAICodexModel(model)
-	if !openAIModelHasAPILongContextLadder(normalized) && !isOpenAIGPT6LunaModel(model) {
-		return pricing
-	}
-	cloned := *pricing
-	cloned.LongContextInputThreshold = openAIAPILongContextInputTokenThreshold
-	cloned.LongContextInputMultiplier = openAIAPILongContextInputMultiplier
-	cloned.LongContextOutputMultiplier = openAIAPILongContextOutputMultiplier
-	cloned.LongContextThresholdInclusive = false
-	return &cloned
 }
 
 // enforceOpenAIFastPricingRatio 把 priority 档价格改写为「标准价 × ratio」。
