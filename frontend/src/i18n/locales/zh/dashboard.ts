@@ -182,6 +182,7 @@ export default {
         claudeCode: 'Claude Code',
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
+        codexCliHttp: 'Codex CLI (HTTP)',
         grokCli: 'Grok CLI',
         systemOne: 'System One',
         opencode: 'OpenCode'

@@ -109,6 +109,7 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
   if (config.app === 'codex') {
     // CC Switch's embedded-config import preserves provider auth and headers.
     // It deliberately leaves global [features] settings to the user.
+    const websocketConfig = input.platform === 'openai' ? 'supports_websockets = true\n' : ''
     const codexConfig = `model_provider = "sub2api"
 model = ${JSON.stringify(model)}
 web_search = "live"
@@ -117,7 +118,7 @@ web_search = "live"
 name = "Sub2API"
 base_url = ${JSON.stringify(config.endpoint)}
 wire_api = "responses"
-${buildCodexApiKeyAuthConfig(input.apiKey)}
+${websocketConfig}${buildCodexApiKeyAuthConfig(input.apiKey)}
 `
     const payload = JSON.stringify({ config: codexConfig })
     const bytes = new TextEncoder().encode(payload)

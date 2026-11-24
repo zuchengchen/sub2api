@@ -52,11 +52,26 @@ describe('ccswitchImport utils', () => {
     expect(params.get('configFormat')).toBe('json')
     expect(payload.config).toContain(`base_url = "${endpoint}"`)
     expect(payload.config).toContain(`model = "${OPENAI_CC_SWITCH_CODEX_MODEL}"`)
+    expect(payload.config).toContain('wire_api = "responses"\nsupports_websockets = true\n')
     expect(payload.config.split('[model_providers.')[0]).toContain('web_search = "live"')
     expect(payload.config).toContain('requires_openai_auth = false')
     expect(payload.config).toContain('experimental_bearer_token = "sk-test"')
     expect(payload.config).toContain('"x-openai-actor-authorization" = "local-image-extension"')
     // Global feature choices are preserved by CC Switch, not imported per provider.
+    expect(payload.config).not.toContain('[features]')
+  })
+
+  it('keeps Composite CC Switch Codex imports on HTTP Responses', () => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      platform: 'composite',
+      clientType: 'claude'
+    }))
+
+    expect(params.get('app')).toBe('codex')
+    const payload = JSON.parse(atob(params.get('config') || '')) as { config: string }
+    expect(payload.config).toContain('wire_api = "responses"')
+    expect(payload.config).not.toContain('supports_websockets')
     expect(payload.config).not.toContain('[features]')
   })
 
