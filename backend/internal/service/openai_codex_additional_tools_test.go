@@ -240,7 +240,12 @@ func TestOpenAIGatewayService_OAuthAdditionalToolsDeclarationID(t *testing.T) {
 					require.Equal(t, wantID, gjson.GetBytes(upstream.lastBody, "input.0.id").String())
 					require.Equal(t, "at_00112233-4455-4677-8899-aabbccddeeff", gjson.GetBytes(body, "input.0.id").String())
 					require.JSONEq(t, gjson.GetBytes(body, "input.0.tools").Raw, gjson.GetBytes(upstream.lastBody, "input.0.tools").Raw)
-					require.Equal(t, "msg_history", gjson.GetBytes(upstream.lastBody, "input.1.id").String())
+					messageID := gjson.GetBytes(upstream.lastBody, "input.1.id")
+					if passthrough {
+						require.Equal(t, "msg_history", messageID.String())
+					} else {
+						require.False(t, messageID.Exists())
+					}
 					require.Equal(t, "rs_history", gjson.GetBytes(upstream.lastBody, "input.2.id").String())
 					require.Equal(t, "sealed", gjson.GetBytes(upstream.lastBody, "input.2.encrypted_content").String())
 					require.Contains(t, recorder.Body.String(), `"type":"tool_search_call"`)

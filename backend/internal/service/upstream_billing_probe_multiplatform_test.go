@@ -124,12 +124,12 @@ func TestUpstreamBillingGroupPreview(t *testing.T) {
 		want                        BillingGroupInfo
 	}{
 		{
-			name: "group details", platform: PlatformGemini, accountType: AccountTypeAPIKey,
+			name: "group details", platform: PlatformAnthropic, accountType: AccountTypeAPIKey,
 			fields: `,"group_name":"标准组","group_description":"支持推理模型"`,
 			want:   BillingGroupInfo{Name: "标准组", Description: "支持推理模型"},
 		},
 		{
-			name: "existing relay account", platform: PlatformAntigravity, accountType: AccountTypeUpstream,
+			name: "name only", platform: PlatformGrok, accountType: AccountTypeAPIKey,
 			fields: `,"group_name":"Relay"`, want: BillingGroupInfo{Name: "Relay"},
 		},
 		{name: "older upstream", platform: PlatformOpenAI, accountType: AccountTypeAPIKey},

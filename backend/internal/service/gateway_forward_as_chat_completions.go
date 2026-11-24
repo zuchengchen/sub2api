@@ -270,10 +270,14 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		}
 
 		observer.ObserveAnthropic([]byte(payload))
-		streamStatus.observe(&event, payload)
-		if streamStatus.upstreamErrType != "" {
-			break
+		if event.Type == "error" {
+			upstreamErr := parseAnthropicStreamErrorEvent(payload)
+			logAnthropicStreamErrorEvent("forward_as_cc buffered: upstream error event", requestID, upstreamErr)
+			_ = resp.Body.Close()
+			writeGatewayCCError(c, upstreamErr.Status, upstreamErr.Type, upstreamErr.Message)
+			return nil, fmt.Errorf("upstream stream error: %s: %s", upstreamErr.Type, upstreamErr.Message)
 		}
+		streamStatus.observe(&event, payload)
 
 		// message_start carries the initial response structure and cache usage
 		if event.Type == "message_start" && event.Message != nil {

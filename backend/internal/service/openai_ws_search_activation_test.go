@@ -23,20 +23,21 @@ func TestOpenAIWSIngressWebSearchActivation(t *testing.T) {
 	const toolOutput = `[{"type":"function_call_output","call_id":"fc_lookup","output":"42"}]`
 	const firstOutput = `[{"type":"reasoning","id":"rs_first","summary":[{"type":"summary_text","text":"Keep this reasoning"}]},{"type":"message","id":"msg_first","role":"assistant","content":[{"type":"output_text","text":"Keep this answer"}]},{"type":"function_call","id":"fc_lookup","call_id":"fc_lookup","name":"lookup","arguments":"{}"}]`
 	for _, tc := range []struct {
-		name          string
-		accountType   string
-		firstFields   string
-		firstInput    string
-		firstOutput   string
-		nextFields    string
-		nextInput     string
-		nextPrevious  string
-		wantReconnect bool
-		wantFailClose bool
-		wantTypes     []string
+		name               string
+		accountType        string
+		firstFields        string
+		firstInput         string
+		firstOutput        string
+		nextFields         string
+		nextInput          string
+		nextPrevious       string
+		wantReconnect      bool
+		wantFailClose      bool
+		wantTypes          []string
+		wantStandardSearch bool
 	}{
 		{name: "empty OAuth prewarm", accountType: AccountTypeOAuth, firstFields: `,"generate":false`, nextFields: search, nextInput: userInput, wantReconnect: true, wantTypes: []string{"message"}},
-		{name: "Lite search history injection", accountType: AccountTypeOAuth, firstFields: `,"generate":false`, nextFields: `,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}`, nextInput: `[{"type":"web_search_call","id":"ws_history","status":"completed","action":{"type":"search","query":"example"}},{"type":"message","role":"user","content":"continue"}]`, wantReconnect: true, wantTypes: []string{"web_search_call", "message", "additional_tools"}},
+		{name: "Lite search history reconnects with standard Responses", accountType: AccountTypeOAuth, firstFields: `,"generate":false`, nextFields: `,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}`, nextInput: `[{"type":"web_search_call","id":"ws_history","status":"completed","action":{"type":"search","query":"example"}},{"type":"message","role":"user","content":"continue"}]`, wantReconnect: true, wantTypes: []string{"web_search_call", "message"}, wantStandardSearch: true},
 		{name: "tool continuation preserves all output", accountType: AccountTypeOAuth, firstFields: `,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]`, firstInput: `[{"type":"message","role":"user","content":"Run lookup for my original question"}]`, firstOutput: firstOutput, nextFields: search, nextInput: toolOutput, wantReconnect: true, wantTypes: []string{"message", "reasoning", "message", "function_call", "function_call_output"}},
 		{name: "search initialized socket", accountType: AccountTypeOAuth, firstFields: search, nextFields: search, nextInput: userInput},
 		{name: "API key provider", accountType: AccountTypeAPIKey, firstFields: `,"generate":false`, nextFields: search, nextInput: userInput},
@@ -153,6 +154,11 @@ func TestOpenAIWSIngressWebSearchActivation(t *testing.T) {
 				types = append(types, item.Get("type").String())
 			}
 			require.Equal(t, tc.wantTypes, types)
+			if tc.wantStandardSearch {
+				require.False(t, isOpenAIResponsesLiteWebSocketPayload(forwarded))
+				require.Equal(t, "web_search", gjson.GetBytes(forwarded, "tools.0.type").String())
+				require.Equal(t, "none", gjson.GetBytes(forwarded, "tool_choice").String())
+			}
 			if tc.firstOutput != "" {
 				require.Contains(t, string(forwarded), "Run lookup for my original question")
 				require.Contains(t, string(forwarded), "Keep this reasoning")

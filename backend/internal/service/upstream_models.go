@@ -670,7 +670,10 @@ func upstreamModelRegistryBaseURL(account *Account) string {
 	case account.IsGrok():
 		return account.GetGrokBaseURL()
 	case account.IsAnthropic():
-		return account.GetBaseURL()
+		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
+			return baseURL
+		}
+		return "https://api.anthropic.com"
 	default:
 		return strings.TrimSpace(account.GetCredential("base_url"))
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -1081,66 +1082,77 @@ func TestTokenRefreshService_PersistedSuccessCrossingAttemptDeadlineStaysSuccess
 	require.Equal(t, 1, scheduler.setAccountCalls)
 }
 
-func TestTokenRefreshService_OpenAIRotationSurvivesAttemptDeadline(t *testing.T) {
-	for _, unified := range []bool{false, true} {
-		name := "fallback"
-		if unified {
-			name = "unified"
-		}
-		t.Run(name, func(t *testing.T) {
-			account := openAIRefreshTestAccount()
-			repo := &tokenRefreshAccountRepo{snapshotReads: true, respectReadContext: true}
-			repo.accountsByID = map[int64]*Account{account.ID: account}
-			invalidator := &tokenCacheInvalidatorStub{}
-			svc := &TokenRefreshService{
-				accountRepo:            repo,
-				cfg:                    &config.TokenRefreshConfig{MaxRetries: 3},
-				refreshPolicy:          DefaultBackgroundRefreshPolicy(),
-				cacheInvalidator:       invalidator,
-				attemptTimeoutOverride: 10 * time.Millisecond,
-			}
-			if unified {
-				svc.refreshAPI = NewOAuthRefreshAPI(repo, nil)
-			}
-			executor := &refreshAPIExecutorStub{
-				needsRefresh:     true,
-				credentials:      map[string]any{"access_token": "rotated-access", "refresh_token": "rotated-refresh"},
-				onRefreshContext: func(ctx context.Context) { <-ctx.Done() },
-			}
-
-			err := svc.refreshWithRetry(context.Background(), account, executor, executor, time.Hour)
-
-			require.NoError(t, err)
-			require.Equal(t, 1, executor.refreshCalls, "received rotation must not be retried after the attempt deadline")
-			require.Equal(t, 1, repo.openAISuccessCASCalls)
-			require.NoError(t, repo.openAIPersistCtxErr)
-			require.False(t, repo.openAIPersistDeadline.IsZero())
-			require.LessOrEqual(t, time.Until(repo.openAIPersistDeadline), 10*time.Second)
-			require.Equal(t, "rotated-refresh", repo.accountsByID[account.ID].GetOpenAIRefreshToken())
-			require.Equal(t, 1, invalidator.calls)
-			require.NoError(t, invalidator.ctxErr)
-			require.Zero(t, repo.setErrorCalls)
-			require.Zero(t, repo.setTempUnschedCalls)
-		})
+func TestTokenRefreshService_OpenAIRequiresSharedRefreshAPI(t *testing.T) {
+	account := openAIRefreshTestAccount()
+	repo := &tokenRefreshAccountRepo{}
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+	svc := &TokenRefreshService{accountRepo: repo}
+	executor := &refreshAPIExecutorStub{
+		needsRefresh: true,
+		credentials:  map[string]any{"access_token": "rotated-access", "refresh_token": "rotated-refresh"},
 	}
+
+	err := svc.refreshWithRetry(context.Background(), account, executor, executor, time.Hour)
+
+	var configurationError *providerConfigurationRefreshError
+	require.ErrorAs(t, err, &configurationError)
+	require.Zero(t, executor.refreshCalls)
+	require.Zero(t, repo.openAISuccessCASCalls)
+	require.Zero(t, repo.updateCalls)
+	require.Zero(t, repo.setErrorCalls)
+	require.Zero(t, repo.setTempUnschedCalls)
+	require.Equal(t, "old-refresh", repo.accountsByID[account.ID].GetOpenAIRefreshToken())
+}
+
+func TestTokenRefreshService_OpenAIRotationSurvivesAttemptDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		account := openAIRefreshTestAccount()
+		repo := &tokenRefreshAccountRepo{snapshotReads: true, respectReadContext: true}
+		repo.accountsByID = map[int64]*Account{account.ID: account}
+		invalidator := &tokenCacheInvalidatorStub{}
+		svc := &TokenRefreshService{
+			refreshAPI:             NewOAuthRefreshAPI(repo, nil),
+			accountRepo:            repo,
+			cfg:                    &config.TokenRefreshConfig{MaxRetries: 3},
+			refreshPolicy:          DefaultBackgroundRefreshPolicy(),
+			cacheInvalidator:       invalidator,
+			attemptTimeoutOverride: 10 * time.Millisecond,
+		}
+		executor := &refreshAPIExecutorStub{
+			needsRefresh:     true,
+			credentials:      map[string]any{"access_token": "rotated-access", "refresh_token": "rotated-refresh"},
+			onRefreshContext: func(ctx context.Context) { <-ctx.Done() },
+		}
+
+		err := svc.refreshWithRetry(context.Background(), account, executor, executor, time.Hour)
+
+		require.NoError(t, err)
+		require.Equal(t, 1, executor.refreshCalls, "received rotation must not be retried after the attempt deadline")
+		require.Equal(t, 1, repo.openAISuccessCASCalls)
+		require.NoError(t, repo.openAIPersistCtxErr)
+		require.False(t, repo.openAIPersistDeadline.IsZero())
+		require.LessOrEqual(t, time.Until(repo.openAIPersistDeadline), 10*time.Second)
+		require.Equal(t, "rotated-refresh", repo.accountsByID[account.ID].GetOpenAIRefreshToken())
+		require.Equal(t, 1, invalidator.calls)
+		require.NoError(t, invalidator.ctxErr)
+		require.Zero(t, repo.setErrorCalls)
+		require.Zero(t, repo.setTempUnschedCalls)
+	})
 }
 
 func TestTokenRefreshService_OpenAIPersistenceFailureDoesNotRetryUpstream(t *testing.T) {
-	for _, unified := range []bool{false, true} {
-		for _, expireAttempt := range []bool{false, true} {
-			name := fmt.Sprintf("unified=%t/expired=%t", unified, expireAttempt)
-			t.Run(name, func(t *testing.T) {
+	for _, expireAttempt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired=%t", expireAttempt), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
 				account := openAIRefreshTestAccount()
 				repo := &tokenRefreshAccountRepo{snapshotReads: true, respectReadContext: true, conditionalSuccessErr: errors.New("database unavailable")}
 				repo.accountsByID = map[int64]*Account{account.ID: account}
 				svc := &TokenRefreshService{
+					refreshAPI:             NewOAuthRefreshAPI(repo, nil),
 					accountRepo:            repo,
 					cfg:                    &config.TokenRefreshConfig{MaxRetries: 3},
 					refreshPolicy:          DefaultBackgroundRefreshPolicy(),
 					attemptTimeoutOverride: 10 * time.Millisecond,
-				}
-				if unified {
-					svc.refreshAPI = NewOAuthRefreshAPI(repo, nil)
 				}
 				executor := &refreshAPIExecutorStub{
 					needsRefresh: true,
@@ -1161,42 +1173,36 @@ func TestTokenRefreshService_OpenAIPersistenceFailureDoesNotRetryUpstream(t *tes
 				require.Zero(t, repo.setErrorCalls)
 				require.Zero(t, repo.setTempUnschedCalls)
 			})
-		}
+		})
 	}
 }
 
 func TestTokenRefreshService_OpenAIParentCancellationStillPersists(t *testing.T) {
-	for _, unified := range []bool{false, true} {
-		t.Run(fmt.Sprintf("unified=%t", unified), func(t *testing.T) {
-			account := openAIRefreshTestAccount()
-			repo := &tokenRefreshAccountRepo{snapshotReads: true, respectReadContext: true}
-			repo.accountsByID = map[int64]*Account{account.ID: account}
-			invalidator := &tokenCacheInvalidatorStub{}
-			svc := &TokenRefreshService{
-				accountRepo: repo, cfg: &config.TokenRefreshConfig{MaxRetries: 3},
-				refreshPolicy: DefaultBackgroundRefreshPolicy(), cacheInvalidator: invalidator,
-			}
-			if unified {
-				svc.refreshAPI = NewOAuthRefreshAPI(repo, nil)
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			executor := &refreshAPIExecutorStub{
-				needsRefresh: true, onRefresh: cancel,
-				credentials: map[string]any{"access_token": "rotated-access", "refresh_token": "rotated-refresh"},
-			}
-
-			err := svc.refreshWithRetry(ctx, account, executor, executor, time.Hour)
-
-			require.ErrorIs(t, err, context.Canceled)
-			require.Equal(t, 1, executor.refreshCalls)
-			require.Equal(t, 1, repo.openAISuccessCASCalls)
-			require.NoError(t, repo.openAIPersistCtxErr)
-			require.Equal(t, "rotated-refresh", repo.accountsByID[account.ID].GetOpenAIRefreshToken())
-			require.Equal(t, 1, invalidator.calls)
-			require.NoError(t, invalidator.ctxErr)
-		})
+	account := openAIRefreshTestAccount()
+	repo := &tokenRefreshAccountRepo{snapshotReads: true, respectReadContext: true}
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+	invalidator := &tokenCacheInvalidatorStub{}
+	svc := &TokenRefreshService{
+		refreshAPI:  NewOAuthRefreshAPI(repo, nil),
+		accountRepo: repo, cfg: &config.TokenRefreshConfig{MaxRetries: 3},
+		refreshPolicy: DefaultBackgroundRefreshPolicy(), cacheInvalidator: invalidator,
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	executor := &refreshAPIExecutorStub{
+		needsRefresh: true, onRefresh: cancel,
+		credentials: map[string]any{"access_token": "rotated-access", "refresh_token": "rotated-refresh"},
+	}
+
+	err := svc.refreshWithRetry(ctx, account, executor, executor, time.Hour)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, executor.refreshCalls)
+	require.Equal(t, 1, repo.openAISuccessCASCalls)
+	require.NoError(t, repo.openAIPersistCtxErr)
+	require.Equal(t, "rotated-refresh", repo.accountsByID[account.ID].GetOpenAIRefreshToken())
+	require.Equal(t, 1, invalidator.calls)
+	require.NoError(t, invalidator.ctxErr)
 }
 
 func TestPathA_ParentCancellationAfterPersistStillSynchronizesCacheState(t *testing.T) {
