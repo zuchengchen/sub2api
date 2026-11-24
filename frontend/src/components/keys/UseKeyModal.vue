@@ -364,7 +364,7 @@ const defaultClientTab = computed(() => {
   if (props.claudeCodeOnly) return 'claude'
   switch (props.platform) {
     case 'openai':
-      return 'codex'
+      return 'codex-ws'
     case 'grok':
       return 'grok'
     default:
@@ -449,8 +449,8 @@ const clientTabs = computed((): TabConfig[] => {
   switch (props.platform) {
     case 'openai': {
       const tabs: TabConfig[] = [
-        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
         { id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon },
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCliHttp'), icon: TerminalIcon },
       ]
       if (props.allowMessagesDispatch) {
         tabs.push({ id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon })

@@ -1769,6 +1769,50 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('codex_image_generation_bridge')
   })
 
+  it.each([
+    { scenario: 'OAuth without extra', type: 'oauth', extra: undefined, mode: 'ctx_pool' },
+    { scenario: 'SetupToken without a mode', type: 'setup-token', extra: {}, mode: 'ctx_pool' },
+    {
+      scenario: 'OAuth with explicit off',
+      type: 'oauth',
+      extra: { openai_oauth_responses_websockets_v2_mode: 'off' },
+      mode: 'off'
+    },
+    {
+      scenario: 'OAuth with a legacy opt-out',
+      type: 'oauth',
+      extra: { openai_ws_enabled: false },
+      mode: 'off'
+    },
+    {
+      scenario: 'OAuth with force HTTP',
+      type: 'oauth',
+      extra: { openai_ws_force_http: true },
+      mode: 'ctx_pool'
+    },
+    { scenario: 'API Key without a mode', type: 'apikey', extra: {}, mode: 'off' }
+  ])('keeps the WebSocket mode when saving ordinary edits for $scenario', async ({ type, extra, mode }) => {
+    const account = { ...buildAccount(), type, extra }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="edit-openai-ws-mode-select"]').element.value).toBe(mode)
+
+    await wrapper.get('input[type="text"]').setValue('Renamed OpenAI')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const wsExtraPrefix = type === 'apikey' ? 'openai_apikey' : 'openai_oauth'
+    const savedExtra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(savedExtra).toMatchObject({
+      [`${wsExtraPrefix}_responses_websockets_v2_mode`]: mode,
+      [`${wsExtraPrefix}_responses_websockets_v2_enabled`]: mode !== 'off'
+    })
+    expect(savedExtra.openai_ws_force_http).toBe(extra?.openai_ws_force_http)
+  })
+
   it('setup-token account can select and submit OAuth WS mode', async () => {
     const account = buildOpenAISetupTokenAccount()
     updateAccountMock.mockReset()

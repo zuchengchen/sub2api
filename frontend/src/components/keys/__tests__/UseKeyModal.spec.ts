@@ -384,7 +384,7 @@ describe('UseKeyModal', () => {
     expect(codeBlocks.join('\n')).toContain('experimental_bearer_token = "sk-grok-codex-test"')
   })
 
-  it('keeps legacy OpenAI Codex config available when selected', async () => {
+  it('keeps HTTP and legacy authentication available for OpenAI Codex', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -404,6 +404,10 @@ describe('UseKeyModal', () => {
       }
     })
 
+    const httpTab = wrapper.findAll('button').find((button) =>
+      button.text().trim() === 'keys.useKeyModal.cliTabs.codexCliHttp'
+    )
+    await httpTab!.trigger('click')
     await wrapper.get('[data-testid="codex-auth-mode-legacy"]').trigger('click')
     await nextTick()
 
@@ -474,7 +478,7 @@ describe('UseKeyModal', () => {
     expect(claudeConfig).toContain('ANTHROPIC_BASE_URL="https://example.com"')
   })
 
-  it('defaults to API Key Mode with native image generation in OpenAI Codex config', async () => {
+  it('defaults OpenAI Codex to WebSocket and API Key Mode with native image generation', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -502,6 +506,9 @@ describe('UseKeyModal', () => {
 
     expect(apiKeyMode.attributes('aria-checked')).toBe('true')
     expect(configToml).toBeDefined()
+    expect(configToml).toContain('wire_api = "responses"')
+    expect(configToml).toContain('supports_websockets = true')
+    expect(configToml?.split('[features]\n')[1]).toContain('responses_websockets_v2 = true')
     expect(configToml).toContain('requires_openai_auth = false')
     expect(configToml?.split('[model_providers.')[0]).toContain('web_search = "live"')
     expect(configToml).toContain('experimental_bearer_token = "sk-test"')
@@ -603,8 +610,10 @@ describe('UseKeyModal', () => {
       }
     })
 
-    const apiKeyMode = wrapper.get('[data-testid="codex-auth-mode-api-key"]')
-    await apiKeyMode.trigger('click')
+    const httpTab = wrapper.findAll('button').find((button) =>
+      button.text().trim() === 'keys.useKeyModal.cliTabs.codexCliHttp'
+    )
+    await httpTab!.trigger('click')
 
     const wsTab = wrapper.findAll('button').find((button) =>
       button.text().includes('keys.useKeyModal.cliTabs.codexCliWs')
@@ -997,7 +1006,7 @@ describe('UseKeyModal', () => {
       }
     })
 
-    for (const transport of ['keys.useKeyModal.cliTabs.codexCli', 'keys.useKeyModal.cliTabs.codexCliWs']) {
+    for (const transport of ['keys.useKeyModal.cliTabs.codexCliHttp', 'keys.useKeyModal.cliTabs.codexCliWs']) {
       await wrapper.findAll('button').find((button) => button.text().trim() === transport)!.trigger('click')
       for (const os of ['macOS / Linux', 'Windows']) {
         await wrapper.findAll('button').find((button) => button.text().trim() === os)!.trigger('click')
@@ -1057,8 +1066,8 @@ describe('UseKeyModal', () => {
   })
 
   it.each([
-    ['keys.useKeyModal.cliTabs.codexCli', 'macOS / Linux'],
-    ['keys.useKeyModal.cliTabs.codexCli', 'Windows'],
+    ['keys.useKeyModal.cliTabs.codexCliHttp', 'macOS / Linux'],
+    ['keys.useKeyModal.cliTabs.codexCliHttp', 'Windows'],
     ['keys.useKeyModal.cliTabs.codexCliWs', 'macOS / Linux'],
     ['keys.useKeyModal.cliTabs.codexCliWs', 'Windows']
   ])('downloads current group models for %s on %s without pinning an old CLI', async (transport, os) => {
